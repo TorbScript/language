@@ -1,0 +1,34 @@
+/** What went wrong with which path. */
+public type IoError with Show {
+  path: String
+  message: String
+
+  fn show(self): String {
+    "{path}: {message}"
+  }
+}
+
+/**
+ * A file that is open. It has an identity (the handle of the operating system), so it is a `shared type`:
+ *
+ *     const text = using File.open(path)? { file => file.readAll() }
+ *
+ * Most code does not need one: the functions without `self` read and write whole files.
+ */
+public native shared type File with Close {
+  native fn open(path: String): Result<File, IoError>
+  native fn readAll(var self): Result<String, IoError>
+  native fn close(var self)
+
+  native fn readText(path: String): Result<String, IoError>
+  native fn writeText(path: String, text: String): Result<Void, IoError>
+
+  /** Line by line. The file is never in memory as a whole. */
+  native fn lines(path: String): Result<Iterable<String>, IoError>
+
+  native fn exists(path: String): Bool
+  native fn isDirectory(path: String): Bool
+
+  /** The names of the entries of a directory, sorted. */
+  native fn list(path: String): Result<List<String>, IoError>
+}

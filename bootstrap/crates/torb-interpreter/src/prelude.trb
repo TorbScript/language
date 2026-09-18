@@ -1,0 +1,53 @@
+/**
+ * The part of the standard library that the bootstrap interpreter runs as TorbScript. Everything else it knows is
+ * native (see natives.rs); the real standard library in `std/` is not loaded.
+ */
+
+public type Ordering {
+  case Less
+  case Equal
+  case Greater
+
+  fn reversed(self): Ordering {
+    match self {
+      .Less => Ordering.Greater
+      .Equal => Ordering.Equal
+      .Greater => Ordering.Less
+    }
+  }
+}
+
+public type NumberParseError {
+  text: String
+}
+
+public type NumberRangeError {
+  message: String
+}
+
+public type IoError {
+  path: String
+  message: String
+
+  fn show(self): String {
+    "{path}: {message}"
+  }
+}
+
+public fn unless(condition: Bool, body: () => Void) {
+  if !condition {
+    body()
+  }
+}
+
+public fn retry<Value, Failure>(times: Int, action: () => Result<Value, Failure>): Result<Value, Failure> {
+  var attempt = 1
+  while true {
+    const result = action()
+    if result.isOk() || attempt >= times {
+      return result
+    }
+    attempt = attempt + 1
+  }
+  action()
+}

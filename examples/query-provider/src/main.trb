@@ -11,7 +11,7 @@ type User {
 const minAge = 18
 const initial = "A"
 
-// --- In memory: `Iterable.filter(predicate: (value: T) => Bool)` - the closures are executed ---------------
+// --- In memory: `Iterable.filter(predicate: (value: Item) => Bool)` - the closures are executed ---------------
 
 const localUsers = [
   User(1, "Ada", 36, active: true),
@@ -22,19 +22,19 @@ const localUsers = [
 const local = localUsers
   .filter { _.age >= minAge && _.active }
   .filter { _.name.startsWith(initial) }
-  .sortBy { _.name }
+  .sorted { _.name }
   .take(10)
   .toList()                              // In memory, the pipeline is lazy until a terminal operation
 
 print local                             // [User(id: 1, name: "Ada", ...)]
 
-// --- Database: `Query.filter(predicate: Expression<(row: T) => Bool>)` - the closures are translated -----------------
+// --- Database: `Query.filter(predicate: Expression<(row: Row) => Bool>)` - the closures are translated -----------------
 // Same code. The parameter type decides how the argument is read.
 
 const remote = Query<User>("users")
   .filter { _.age >= minAge && _.active }
   .filter { _.name.startsWith(initial) }
-  .sortBy { _.name }
+  .sorted { _.name }
   .take(10)
 
 match remote.toSql() {
@@ -50,7 +50,7 @@ match remote.toSql() {
 // --- What a provider does not understand is its error, at runtime ----------------------------------------------
 
 fn isLucky(name: String): Bool {
-  name.length() % 7 == 0
+  name.chars().count() % 7 == 0
 }
 
 const unsupported = Query<User>("users").filter { isLucky(_.name) }
@@ -63,9 +63,9 @@ print unsupported.toSql()                // Error(Unsupported("main.isLucky()"))
 //   _.age >= limit
 // }
 
-// var counter = ArrayList<Int>()
+// var counter: List<Int> = []
 // Query<User>("users").filter { _.id == counter.length() }
-//                                       // Compile error: captured `counter` is not `ToData`
+//                                       // Compile error: captured `counter` is not `Encode`
 
 // --- Quotations are values ---------------------------------------------------------------------------------------
 

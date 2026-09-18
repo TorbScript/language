@@ -1,0 +1,102 @@
+use Show, From from "./convert"
+use Iterable from "./iteration"
+
+/**
+ * The result of an operation that can fail.
+ *
+ * The postfix `?` operator unwraps `Ok` or returns the `Error` from the surrounding function.
+ * If the error types differ, the error is converted with `From`.
+ *
+ * `map`, `flatMap`, `forEach` mean the same as everywhere else (see "One Vocabulary" in CONCEPT.md) and work
+ * on the `Ok` side. A Result is a value, not a pipeline: they run immediately.
+ */
+public type Result<Value, Failure> {
+  case Ok(value: Value)
+  case Error(error: Failure)
+
+  fn isOk(self): Bool {
+    match self {
+      Ok(_) => true
+      Error(_) => false
+    }
+  }
+
+  fn isError(self): Bool {
+    !isOk()
+  }
+
+  fn map<Output>(self, transform: (value: Value) => Output): Result<Output, Failure> {
+    match self {
+      Ok(value) => .Ok(transform(value))
+      Error(error) => .Error(error)
+    }
+  }
+
+  fn mapError<OtherFailure>(self, transform: (error: Failure) => OtherFailure): Result<Value, OtherFailure> {
+    match self {
+      Ok(value) => .Ok(value)
+      Error(error) => .Error(transform(error))
+    }
+  }
+
+  fn flatMap<Output>(self, transform: (value: Value) => Result<Output, Failure>): Result<Output, Failure> {
+    match self {
+      Ok(value) => transform(value)
+      Error(error) => .Error(error)
+    }
+  }
+
+  fn forEach(self, action: (value: Value) => Void) {
+    if const Ok(value) = self {
+      action(value)
+    }
+  }
+
+  fn toList(self): List<Value> {
+    ok().toList()
+  }
+
+  fn ok(self): Value? {
+    match self {
+      Ok(value) => Some(value)
+      Error(_) => None
+    }
+  }
+
+  fn orElse(self, fallback: lazy Value): Value {
+    match self {
+      Ok(value) => value
+      Error(_) => fallback
+    }
+  }
+
+  fn expect(self, message: String): Value where Failure: Show {
+    match self {
+      Ok(value) => value
+      Error(error) => panic "{message}: {error}"
+    }
+  }
+}
+
+/**
+ * All or the first error: `lines.map { Int.parse(_) }.to<Result<List<Int>, NumberParseError>>()`
+ * Stops pulling at the first `Error`. This is what `traverse`/`sequence` is in languages with higher-kinded types.
+ */
+extend<Value, Failure, Target: From<Iterable<Value>>> Result<Target, Failure> with From<Iterable<Result<Value, Failure>>> {
+  fn from(value: Iterable<Result<Value, Failure>>): Result<Target, Failure> {
+    var failure: Failure? = None
+    const target = Target.from(value.mapWhile { item =>
+      match item {                       // The pipeline is lazy: this runs while `Target.from` pulls
+        Ok(success) => Some(success)
+        Error(error) => {
+          failure = Some(error)
+          None
+        }
+      }
+    })
+    match failure {
+      Some(error) => Error(error)
+      .None => Ok(target)
+    }
+  }
+}

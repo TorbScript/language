@@ -1,0 +1,164 @@
+use Compare, Hash from "./compare"
+use From from "./convert"
+use Add from "./operators"
+use Collector, groupingBy from "./collectors"
+use Mapped, Filtered, FilterMapped, MappedWhile, FlatMapped, Taken, Skipped, TakenWhile, Zipped, Sorted from "./stages"
+
+/** A cursor over a sequence. Iterators are stateful values: whoever pulls from one holds it in a `var`. */
+public trait Iterator<Item> {
+  fn next(var self): Item?
+}
+
+public trait Length {
+  fn length(self): Int
+
+  fn isEmpty(self): Bool {
+    length() == 0
+  }
+
+  fn isNotEmpty(self): Bool {
+    !isEmpty()
+  }
+}
+
+/**
+ * Everything that works with `for ... in` and the spread operator (`...`). Only `iterator` is required.
+ *
+ * A pipeline has three parts, like in Java and Rust:
+ *
+ *     source            .filter { ... }.map { ... }.take(10)          .toList()
+ *     any Iterable      lazy stages: nothing runs, nothing is stored   terminal operation: pulls the values through
+ *
+ * Stages are values (an `Iterable` again), so a pipeline can be passed around, extended and iterated more than once.
+ * Where the values end up is decided by the terminal operation alone - usually `collect` with a `Collector`.
+ */
+public trait Iterable<Item> {
+  fn iterator(self): Iterator<Item>
+
+  // --- Lazy stages -----------------------------------------------------------------------------
+
+  fn map<Output>(self, transform: (value: Item) => Output): Iterable<Output> {
+    Mapped(self, transform)
+  }
+
+  fn filter(self, predicate: (value: Item) => Bool): Iterable<Item> {
+    Filtered(self, predicate)
+  }
+
+  fn flatMap<Output>(self, transform: (value: Item) => Iterable<Output>): Iterable<Output> {
+    FlatMapped(self, transform)
+  }
+
+  /** `map` and `filter` in one: keeps the values of all `Some`. The bridge for functions that return an Option. */
+  fn filterMap<Output>(self, transform: (value: Item) => Output?): Iterable<Output> {
+    FilterMapped(self, transform)
+  }
+
+  /** Like `filterMap`, but ends the pipeline at the first `None`. */
+  fn mapWhile<Output>(self, transform: (value: Item) => Output?): Iterable<Output> {
+    MappedWhile(self, transform)
+  }
+
+  fn take(self, amount: Int): Iterable<Item> {
+    Taken(self, amount)
+  }
+
+  fn skip(self, amount: Int): Iterable<Item> {
+    Skipped(self, amount)
+  }
+
+  fn takeWhile(self, predicate: (value: Item) => Bool): Iterable<Item> {
+    TakenWhile(self, predicate)
+  }
+
+  fn zip<Output>(self, other: Iterable<Output>): Iterable<(Item, Output)> {
+    Zipped(self, other)
+  }
+
+  /** `(0, first), (1, second), ...` */
+  fn indexed(self): Iterable<(Int, Item)> {
+    Zipped(0.., self)
+  }
+
+  /** Lazy as a stage, but has to buffer all values as soon as it is iterated. */
+  fn sorted<Key: Compare>(self, by: (value: Item) => Key): Iterable<Item> {
+    Sorted(self, by)
+  }
+
+  // --- Terminal operations ------------------------------------------------------------------------
+
+  /** The general terminal operation. See `std/collectors`. */
+  fn collect<Output>(self, collector: Collector<Item, Output>): Output {
+    var accumulator = collector.start()
+    for value in self {
+      accumulator.add(value)
+    }
+    accumulator.finish()
+  }
+
+  /**
+   * Collects into whatever can be created from an Iterable: `.to<Set<Int>>()`, or
+   * `const names: List<String> = pipeline.to()`. No special trait needed, this is plain `From<Iterable<Item>>`.
+   */
+  fn to<Target: From<Iterable<Item>>>(self): Target {
+    Target.from(self)
+  }
+
+  fn toList(self): List<Item> {
+    to<List<Item>>()
+  }
+
+  fn toSet(self): Set<Item> where Item: Hash {
+    to<Set<Item>>()
+  }
+
+  fn forEach(self, action: (value: Item) => Void) {
+    for value in self {
+      action(value)
+    }
+  }
+
+  fn fold<State>(self, initial: State, combine: (State, Item) => State): State {
+    var state = initial
+    for value in self {
+      state = combine(state, value)
+    }
+    state
+  }
+
+  /** Stops pulling as soon as a value is found. */
+  fn find(self, predicate: (value: Item) => Bool): Item? {
+    for value in self {
+      if predicate(value) {
+        return Some(value)
+      }
+    }
+    None
+  }
+
+  fn first(self): Item? {
+    var cursor = iterator()              // `next` needs a `var` path, a temporary is not one
+    cursor.next()
+  }
+
+  fn any(self, predicate: (value: Item) => Bool): Bool {
+    find(predicate).isSome()
+  }
+
+  fn all(self, predicate: (value: Item) => Bool): Bool {
+    !any { !predicate(_) }
+  }
+
+  fn count(self): Int {
+    fold(0) { total, _ => total + 1 }
+  }
+
+  fn sum(self): Item where Item: Add + From<Int> {
+    fold(Item.from(0)) { a, b => a + b }
+  }
+
+  /** Shorthand for `collect(groupingBy(key))` */
+  fn groupBy<Key: Hash>(self, key: (value: Item) => Key): Map<Key, List<Item>> {
+    collect(groupingBy(key))
+  }
+}

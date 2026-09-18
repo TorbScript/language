@@ -1,0 +1,487 @@
+use Span, SourceText from "./source"
+use Diagnostic from "./diagnostic"
+use Token, TokenKind, TextPart, Keyword, DocComment from "./token"
+
+/**
+ * Source text to tokens. The lexer never fails: what it does not understand becomes a diagnostic and is skipped.
+ */
+public type Lexed {
+  tokens: List<Token>
+  docs: List<DocComment>
+  diagnostics: List<Diagnostic>
+}
+
+public fn lex(source: SourceText): Lexed {
+  lexRange(source, Span(0, source.text.byteLength()))
+}
+
+/** Lexes a part of a file (the expressions inside of string literals). Spans stay relative to the file. */
+public fn lexRange(source: SourceText, range: Span): Lexed {
+  var lexer = Lexer(source, position: source.indexAt(range.start), end: source.indexAt(range.end))
+  lexer.run()
+  Lexed(removeInsignificantNewlines(lexer.tokens), lexer.docs, lexer.diagnostics)
+}
+
+/** Longest first. The last three are not part of the language, but they get a better message than "unexpected character". */
+const punctuationTable: List<(String, TokenKind)> = [
+  ("...", TokenKind.Ellipsis),
+  ("..=", TokenKind.DotDotEqual),
+  ("..", TokenKind.DotDot),
+  ("?.", TokenKind.QuestionDot),
+  ("??", TokenKind.QuestionQuestion),
+  ("=>", TokenKind.Arrow),
+  ("==", TokenKind.EqualEqual),
+  ("!=", TokenKind.BangEqual),
+  ("<=", TokenKind.LessEqual),
+  (">=", TokenKind.GreaterEqual),
+  ("&&", TokenKind.AndAnd),
+  ("||", TokenKind.OrOr),
+  (".", TokenKind.Dot),
+  ("?", TokenKind.Question),
+  ("=", TokenKind.Equal),
+  ("!", TokenKind.Bang),
+  ("<", TokenKind.Less),
+  (">", TokenKind.Greater),
+  ("+", TokenKind.Plus),
+  ("-", TokenKind.Minus),
+  ("*", TokenKind.Star),
+  ("/", TokenKind.Slash),
+  ("%", TokenKind.Percent),
+  (",", TokenKind.Comma),
+  (":", TokenKind.Colon),
+  ("(", TokenKind.ParenOpen),
+  (")", TokenKind.ParenClose),
+  ("[", TokenKind.BracketOpen),
+  ("]", TokenKind.BracketClose),
+  ("\{", TokenKind.BraceOpen),
+  ("\}", TokenKind.BraceClose),
+  ("|", TokenKind.Pipe),
+  (";", TokenKind.Newline),
+  ("&", TokenKind.AndAnd),
+  ("^", TokenKind.Star),
+]
+
+fn isAsciiDigit(character: Char): Bool {
+  character >= '0' && character <= '9'
+}
+
+fn isHexDigit(character: Char): Bool {
+  isAsciiDigit(character) || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F')
+}
+
+fn isWordStart(character: Char): Bool {
+  character == '_' || character.isLetter()
+}
+
+fn isWordPart(character: Char): Bool {
+  character == '_' || character.isLetter() || character.isDigit()
+}
+
+/** The text of a doc comment: without the comment markers and the star in front of every line. */
+fn docText(comment: String): String {
+  const inner = comment[3..(comment.byteLength() - 2)]
+  const lines = inner.split("\n").map({ stripMargin(_) }).toList()
+  String.join(lines, separator: "\n").trim()
+}
+
+fn stripMargin(line: String): String {
+  var text = line
+  while text.endsWith("\r") {
+    text = text[..(text.byteLength() - 1)]
+  }
+  var offset = 0
+  for character in text.chars() {
+    if !character.isWhitespace() {
+      break
+    }
+    offset = offset + character.byteLength()
+  }
+  const rest = text[offset..]
+  if !rest.startsWith("*") {
+    return text
+  }
+  if rest.startsWith("* ") {
+    return rest[2..]
+  }
+  rest[1..]
+}
+
+type Lexer {
+  source: SourceText
+  /** Index into `source.characters` */
+  var position: Int
+  end: Int
+  var tokens: List<Token> = []
+  var docs: List<DocComment> = []
+  var diagnostics: List<Diagnostic> = []
+
+  fn run(var self) {
+    while const Some(character) = peek() {
+      const start = position
+      match character {
+        '\n' => {
+          position = position + 1
+          push(TokenKind.Newline, start)
+        }
+        _ if character.isWhitespace() => {
+          position = position + 1
+        }
+        '/' if peekAt(1) == Some('/') => skipLineComment()
+        '/' if peekAt(1) == Some('*') => skipBlockComment()
+        '"' => textLiteral(start, raw: false)
+        'r' if peekAt(1) == Some('"') => {
+          position = position + 1
+          textLiteral(start, raw: true)
+        }
+        '\'' => characterLiteral(start)
+        _ if isAsciiDigit(character) => number(start)
+        _ if isWordStart(character) => word(start)
+        _ => punctuation(start, character)
+      }
+    }
+    push(TokenKind.EndOfFile, end)
+  }
+
+  fn peek(self): Char? {
+    peekAt(0)
+  }
+
+  fn peekAt(self, offset: Int): Char? {
+    const index = position + offset
+    if index < end {
+      Some(source.characters[index])
+    } else {
+      None
+    }
+  }
+
+  /** Does the rest of the input start with this text? */
+  fn isAt(self, text: String): Bool {
+    var index = position
+    for expected in text.chars() {
+      if index >= end || source.characters[index] != expected {
+        return false
+      }
+      index = index + 1
+    }
+    true
+  }
+
+  /** The span from a character index to the current position. */
+  fn spanFrom(self, start: Int): Span {
+    Span(source.offsets[start], source.offsets[position])
+  }
+
+  fn push(var self, kind: TokenKind, start: Int) {
+    tokens.add(Token(kind, spanFrom(start)))
+  }
+
+  fn error(var self, message: String, start: Int) {
+    const last = position.max(start + 1).min(source.characters.length())
+    diagnostics.add(Diagnostic.error(message, Span(source.offsets[start], source.offsets[last])))
+  }
+
+  fn skipLineComment(var self) {
+    while const Some(character) = peek() {
+      if character == '\n' {
+        return
+      }
+      position = position + 1
+    }
+  }
+
+  /** Block comments do not nest: the first star-slash ends the comment. */
+  fn skipBlockComment(var self) {
+    const start = position
+    position = position + 2
+    while position < end {
+      if isAt("*/") {
+        position = position + 2
+        const comment = source.slice(start, position)
+        if comment.startsWith("/**") && comment.byteLength() > 4 {
+          docs.add(DocComment(docText(comment), spanFrom(start)))
+        }
+        return
+      }
+      position = position + 1
+    }
+    error("This comment is never closed", start)
+  }
+
+  fn word(var self, start: Int) {
+    while const Some(character) = peek() {
+      if !isWordPart(character) {
+        break
+      }
+      position = position + 1
+    }
+    const kind = match Keyword.fromText(source.slice(start, position)) {
+      Some(keyword) => TokenKind.Reserved(keyword)
+      .None => TokenKind.Identifier
+    }
+    push(kind, start)
+  }
+
+  fn number(var self, start: Int) {
+    const isAfterDot = tokens.last()?.kind == Some(TokenKind.Dot)
+    if isAt("0x") || isAt("0b") {
+      position = position + 2
+      digits({ isHexDigit(_) })
+      push(TokenKind.IntegerLiteral, start)
+      return
+    }
+    digits({ isAsciiDigit(_) })
+    var kind = TokenKind.IntegerLiteral
+    // `tuple.0.1` and `1..5` are not floats, `16.megabytes()` is a call on an integer
+    const hasFraction = !isAfterDot && peek() == Some('.') && (peekAt(1).map({ isAsciiDigit(_) }) ?? false)
+    if hasFraction {
+      position = position + 1
+      digits({ isAsciiDigit(_) })
+      kind = TokenKind.FloatLiteral
+    }
+    if !isAfterDot && (peek() == Some('e') || peek() == Some('E')) {
+      const sign = if peekAt(1) == Some('+') || peekAt(1) == Some('-') { 1 } else { 0 }
+      if peekAt(1 + sign).map({ isAsciiDigit(_) }) ?? false {
+        position = position + 1 + sign
+        digits({ isAsciiDigit(_) })
+        kind = TokenKind.FloatLiteral
+      }
+    }
+    push(kind, start)
+  }
+
+  fn digits(var self, accepts: (Char) => Bool) {
+    while const Some(character) = peek() {
+      if character != '_' && !accepts(character) {
+        break
+      }
+      position = position + 1
+    }
+  }
+
+  fn characterLiteral(var self, start: Int) {
+    position = position + 1
+    const value = match peek() {
+      Some('\\') => {
+        position = position + 1
+        escape()
+      }
+      Some(character) if character != '\'' && character != '\n' => {
+        position = position + 1
+        Some(character)
+      }
+      _ => None
+    }
+    if peek() != Some('\'') {
+      error("A character literal contains exactly one character and ends with `'`", start)
+      return
+    }
+    position = position + 1
+    match value {
+      Some(value) => push(TokenKind.CharLiteral(value), start)
+      .None => error("This character literal is empty", start)
+    }
+  }
+
+  /** Reads what follows a `\`. */
+  fn escape(var self): Char? {
+    const start = position - 1
+    const character = peek()?
+    position = position + 1
+    const result = match character {
+      'n' => '\n'
+      'r' => '\r'
+      't' => '\t'
+      '0' => '\0'
+      '\\' | '"' | '\'' | '{' | '}' => character
+      'u' if peek() == Some('{') => unicodeEscape(start)?
+      _ => {
+        error("Unknown escape sequence `\\{character}`", start)
+        character
+      }
+    }
+    Some(result)
+  }
+
+  /** `\u{1F44B}`. The position is at the `{`. `None` if the `}` is missing. */
+  fn unicodeEscape(var self, start: Int): Char? {
+    var close = position
+    while close < end && source.characters[close] != '}' {
+      close = close + 1
+    }
+    if close >= end {
+      return None
+    }
+    const hexDigits = source.slice(position + 1, close)
+    position = close + 1
+    const code = Int.parseDigits(hexDigits, radix: 16).ok().flatMap({ Char.tryFrom(_).ok() })
+    match code {
+      Some(code) => Some(code)
+      .None => {
+        error("This is not a Unicode scalar value", start)
+        Some('\u{FFFD}')
+      }
+    }
+  }
+
+  /** `"..."`, `"""..."""`, and their raw variants `r"..."`, `r"""..."""`. The position is at the first quote. */
+  fn textLiteral(var self, start: Int, raw: Bool) {
+    const quotes = if isAt("\"\"\"") { "\"\"\"" } else { "\"" }
+    const isMultiLine = quotes != "\""
+    position = position + quotes.byteLength()
+    var parts: List<TextPart> = []
+    var literal: List<Char> = []
+    while true {
+      const character = match peek() {
+        Some(character) => character
+        .None => {
+          error("This string is never closed", start)
+          return
+        }
+      }
+      if isAt(quotes) {
+        position = position + quotes.byteLength()
+        break
+      }
+      if character == '\n' && !isMultiLine {
+        error("This string is never closed. Multi-line strings use `\"\"\"`", start)
+        return
+      }
+      position = position + 1
+      if character == '\\' && !raw {
+        if const Some(escaped) = escape() {
+          literal.add(escaped)
+        }
+      } else if character == '{' && !raw {
+        const expressionStart = position
+        if !skipInterpolation() {
+          error("This `\{` inside of a string is never closed. A literal brace is written `\\\{`", start)
+          return
+        }
+        if literal.isNotEmpty() {
+          parts.add(TextPart.Literal(String.from(literal)))
+          literal.clear()
+        }
+        parts.add(TextPart.Expression(Span(source.offsets[expressionStart], source.offsets[position - 1])))
+      } else {
+        literal.add(character)
+      }
+    }
+    if literal.isNotEmpty() || parts.isEmpty() {
+      parts.add(TextPart.Literal(String.from(literal)))
+    }
+    push(TokenKind.TextLiteral(parts), start)
+  }
+
+  /** Moves behind the `}` that closes an interpolation. Braces and strings inside of it may nest. */
+  fn skipInterpolation(var self): Bool {
+    var depth = 1
+    while const Some(character) = peek() {
+      position = position + 1
+      match character {
+        '{' => {
+          depth = depth + 1
+        }
+        '}' => {
+          depth = depth - 1
+          if depth == 0 {
+            return true
+          }
+        }
+        '"' => skipNestedString()
+        '\n' => {
+          return false
+        }
+        _ => {}
+      }
+    }
+    false
+  }
+
+  fn skipNestedString(var self) {
+    while const Some(inner) = peek() {
+      position = position + 1
+      if inner == '\\' && peek().isSome() {
+        position = position + 1
+      } else if inner == '"' {
+        return
+      }
+    }
+  }
+
+  fn punctuation(var self, start: Int, character: Char) {
+    const (text, kind) = match punctuationTable.find({ (text, _) => isAt(text) }) {
+      Some(entry) => entry
+      .None => {
+        position = position + 1
+        error("Unexpected character `{character}`", start)
+        return
+      }
+    }
+    position = position + text.byteLength()
+    match text {
+      ";" => error("There are no semicolons. A statement ends at the end of its line", start)
+      "&" | "^" => error("There is no `{text}` operator", start)
+      _ => push(kind, start)
+    }
+  }
+}
+
+/**
+ * Line breaks only end a statement if they are not inside of `(` or `[`, not after a token that needs a right side,
+ * and not before a token that needs a left side.
+ */
+fn removeInsignificantNewlines(tokens: List<Token>): List<Token> {
+  var result: List<Token> = []
+  // The flag marks the body of a `match`: there a line that starts with `.` is an arm (`.Circle(r) => ...`)
+  var brackets: List<(TokenKind, Bool)> = []
+  var pendingMatch: Int? = None
+  var index = 0
+  while index < tokens.length() {
+    const token = tokens[index]
+    match token.kind {
+      .Reserved(.Match) => {
+        // `text.match(...)` and `match: value` are names
+        const isAfterDot = result.last()?.kind == Some(TokenKind.Dot) || result.last()?.kind == Some(TokenKind.QuestionDot)
+        const isLabel = tokens.get(index + 1)?.kind == Some(TokenKind.Colon)
+        if !isAfterDot && !isLabel {
+          pendingMatch = Some(brackets.length())
+        }
+      }
+      .BraceOpen => {
+        const isMatchBody = pendingMatch == Some(brackets.length())
+        if isMatchBody {
+          pendingMatch = None
+        }
+        brackets.add((token.kind, isMatchBody))
+      }
+      .ParenOpen | .BracketOpen => brackets.add((token.kind, false))
+      .ParenClose | .BracketClose | .BraceClose => {
+        const _ = brackets.removeAt(brackets.length() - 1)
+      }
+      .Newline => {
+        var next = index
+        while tokens[next].kind == TokenKind.Newline {
+          next = next + 1
+        }
+        const (innermost, isMatchBody) = brackets.last() ?? (TokenKind.BraceOpen, false)
+        const isInsideBrackets = innermost == TokenKind.ParenOpen || innermost == TokenKind.BracketOpen
+        const startsArm = isMatchBody && tokens[next].kind == TokenKind.Dot
+        const isAfter = match result.last() {
+          Some(previous) => previous.kind.continuesLineAfter() || previous.kind == TokenKind.Newline
+          .None => true
+        }
+        const isBefore = tokens[next].kind.continuesLineBefore() && !startsArm
+        index = next
+        if !(isInsideBrackets || isAfter || isBefore) {
+          result.add(token)
+        }
+        continue
+      }
+      _ => {}
+    }
+    result.add(token)
+    index = index + 1
+  }
+  result
+}

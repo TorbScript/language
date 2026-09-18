@@ -1,0 +1,75 @@
+use test, group from "std/test"
+use SourceText, LineIndex, Span from "../src/syntax/source"
+use TokenKind, TextPart, Keyword from "../src/syntax/token"
+use lex, lexRange from "../src/syntax/lexer"
+
+fn kinds(text: String): List<TokenKind> {
+  const lexed = lex(SourceText.of(text))
+  assert(lexed.diagnostics.isEmpty())
+  lexed.tokens.map({ _.kind }).toList()
+}
+
+fn messages(text: String): List<String> {
+  lex(SourceText.of(text)).diagnostics.map({ _.message }).toList()
+}
+
+group "Lexer" {
+  test "numbers, ranges and tuple indices" {
+    assert(kinds("1..5") == [TokenKind.IntegerLiteral, TokenKind.DotDot, TokenKind.IntegerLiteral, TokenKind.EndOfFile])
+    assert(kinds("1.5e3") == [TokenKind.FloatLiteral, TokenKind.EndOfFile])
+    assert(kinds("16.megabytes") == [TokenKind.IntegerLiteral, TokenKind.Dot, TokenKind.Identifier, TokenKind.EndOfFile])
+    assert(kinds("0xFF 1_000") == [TokenKind.IntegerLiteral, TokenKind.IntegerLiteral, TokenKind.EndOfFile])
+    assert(kinds("pair.0.1").length() == 6)
+  }
+
+  test "keywords are reserved, `from` is not" {
+    assert(kinds("const from") == [TokenKind.Reserved(Keyword.Const), TokenKind.Identifier, TokenKind.EndOfFile])
+  }
+
+  test "interpolation may contain strings" {
+    const tokens = kinds("\"a: \{map[\"a\"]\} \\\{literal\}\"")
+    const expected = [
+      TextPart.Literal("a: "),
+      TextPart.Expression(Span(5, 13)),
+      TextPart.Literal(" \{literal\}"),
+    ]
+    assert(tokens[0] == TokenKind.TextLiteral(expected))
+  }
+
+  test "escapes" {
+    assert(kinds("'\\n'")[0] == TokenKind.CharLiteral('\n'))
+    assert(kinds("'\\u\{1F44B\}'")[0] == TokenKind.CharLiteral('👋'))
+    assert(messages("'\\q'") == ["Unknown escape sequence `\\q`"])
+  }
+
+  test "line breaks that do not end a statement are removed" {
+    assert(kinds("a\nb").length() == 4)
+    assert(kinds("a +\nb").length() == 4)
+    assert(kinds("a\n  .b").length() == 4)
+    assert(kinds("f(\na,\nb\n)").length() == 7)
+    assert(kinds("/* a /* not nested */ x // y") == [TokenKind.Identifier, TokenKind.EndOfFile])
+  }
+
+  test "a part of a file keeps the offsets of the file" {
+    const source = SourceText.of("print \"ß \{name\}\"")
+    const lexed = lexRange(source, Span(11, 15))
+    assert(lexed.tokens[0].span == Span(11, 15))
+    assert(lexed.tokens.length() == 2)
+  }
+
+  test "problems are reported and skipped" {
+    assert(messages("a; b") == ["There are no semicolons. A statement ends at the end of its line"])
+    assert(messages("\"open") == ["This string is never closed"])
+    assert(messages("§") == ["Unexpected character `§`"])
+  }
+}
+
+group "LineIndex" {
+  test "counts characters, not bytes" {
+    const lines = LineIndex.of("äö = 1\nb = 2")
+    assert(lines.lineAndColumn(0) == (line: 1, column: 1))
+    assert(lines.lineAndColumn(4) == (line: 1, column: 3))
+    assert(lines.lineAndColumn(9) == (line: 2, column: 1))
+    assert(lines.lineAndColumn(999) == (line: 2, column: 6))
+  }
+}

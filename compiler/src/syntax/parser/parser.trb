@@ -1,0 +1,241 @@
+use Span, SourceText from "../source"
+use Diagnostic from "../diagnostic"
+use Token, TokenKind, Keyword, DocComment from "../token"
+use Name, SourceFile from "../ast"
+use lex from "../lexer"
+use parseStatementsUntil from "./statements"
+
+/** The result of parsing one file. The tree is always there, even if there are diagnostics. */
+public type Parsed {
+  file: SourceFile
+  diagnostics: List<Diagnostic>
+}
+
+/**
+ * Recursive descent parser. It always produces a tree; problems become diagnostics and `Invalid` nodes.
+ *
+ * The grammar lives in functions that take a `var parser: Parser` (`parseExpression`, `parsePattern`, ...), one file
+ * per part of the language. This type is only the cursor they share.
+ */
+public fn parse(source: SourceText): Parsed {
+  const lexed = lex(source)
+  var parser = Parser(source, lexed.tokens, docs: lexed.docs)
+  const statements = parseStatementsUntil(parser, TokenKind.EndOfFile)
+  var diagnostics = lexed.diagnostics.addedAll(parser.diagnostics)
+  diagnostics.sort({ _.span.start })
+  Parsed(SourceFile(statements), diagnostics)
+}
+
+/**
+ * A cursor over the tokens of a file. It is a value: speculation is "keep a copy, try, and assign the copy back if it
+ * did not work out".
+ */
+public type Parser {
+  source: SourceText
+  /** Ends with `EndOfFile` */
+  tokens: List<Token>
+  docs: List<DocComment> = []
+  /** The first doc comment that was not looked at yet */
+  var nextDoc: Int = 0
+  var position: Int = 0
+  var diagnostics: List<Diagnostic> = []
+  /**
+   * `false` in the heads of `if`/`for`/`while`/`match` and in the arguments of a command call: there a `{` that
+   * follows an expression belongs to the statement, not to the expression.
+   */
+  var allowsTrailingClosures: Bool = true
+
+  fn token(self): Token {
+    tokens[position]
+  }
+
+  fn kind(self): TokenKind {
+    tokens[position].kind
+  }
+
+  fn kindAt(self, offset: Int): TokenKind {
+    tokens[(position + offset).min(tokens.length() - 1)].kind
+  }
+
+  fn span(self): Span {
+    tokens[position].span
+  }
+
+  fn previousSpan(self): Span {
+    tokens[(position - 1).max(0)].span
+  }
+
+  /** The source text of a span. */
+  fn text(self, of: Span): String {
+    source.text[of.start..of.end]
+  }
+
+  /** The doc comment directly in front of the current token (nothing but whitespace in between). */
+  fn takeDoc(var self): String? {
+    const start = span().start
+    var found: DocComment? = None
+    while nextDoc < docs.length() && docs[nextDoc].span.end <= start {
+      found = Some(docs[nextDoc])
+      nextDoc = nextDoc + 1
+    }
+    const doc = found?
+    if source.text[doc.span.end..start].isBlank() {
+      Some(doc.text)
+    } else {
+      None
+    }
+  }
+
+  fn isAt(self, expected: TokenKind): Bool {
+    kind() == expected
+  }
+
+  fn isAtAny(self, expected: List<TokenKind>): Bool {
+    expected.contains(kind())
+  }
+
+  fn isAtKeyword(self, keyword: Keyword): Bool {
+    kind() == TokenKind.Reserved(keyword)
+  }
+
+  /** `from`, `as` and `by` are contextual keywords. */
+  fn isAtWord(self, word: String): Bool {
+    isAt(TokenKind.Identifier) && text(span()) == word
+  }
+
+  /** Where a statement, a member or a match arm has to end. */
+  fn isAtEndOfStatement(self): Bool {
+    isAtAny([TokenKind.Newline, TokenKind.BraceClose, TokenKind.EndOfFile])
+  }
+
+  fn bump(var self): Token {
+    const current = token()
+    if position < tokens.length() - 1 {
+      position = position + 1
+    }
+    current
+  }
+
+  fn eat(var self, expected: TokenKind): Bool {
+    const isFound = isAt(expected)
+    if isFound {
+      bump()
+    }
+    isFound
+  }
+
+  fn eatKeyword(var self, keyword: Keyword): Bool {
+    eat(TokenKind.Reserved(keyword))
+  }
+
+  fn expect(var self, expected: TokenKind): Bool {
+    if eat(expected) {
+      return true
+    }
+    errorHere("Expected {expected.describe()}, found {kind().describe()}")
+    false
+  }
+
+  fn skipNewlines(var self) {
+    while eat(TokenKind.Newline) {
+    }
+  }
+
+  fn errorHere(var self, message: String) {
+    error(message, span())
+  }
+
+  fn error(var self, message: String, at: Span) {
+    // One problem per position is enough, the rest are usually consequences
+    if diagnostics.last()?.span == Some(at) {
+      return
+    }
+    diagnostics.add(Diagnostic.error(message, at))
+  }
+
+  /** Did something go wrong since this copy of the parser was taken? */
+  fn hasFailedSince(self, earlier: Parser): Bool {
+    diagnostics.length() > earlier.diagnostics.length()
+  }
+
+  fn withTrailingClosures<Output>(var self, allowed: Bool, parseInner: (var parser: Parser) => Output): Output {
+    const before = allowsTrailingClosures
+    allowsTrailingClosures = allowed
+    const output = parseInner(self)
+    allowsTrailingClosures = before
+    output
+  }
+
+  fn name(var self): Name {
+    const at = span()
+    if eat(TokenKind.Identifier) {
+      return Name(text(at), at)
+    }
+    match kind() {
+      .Reserved(_) => {
+        errorHere("`{text(at)}` is a keyword and cannot be used as a name here")
+        bump()
+      }
+      _ => errorHere("Expected a name, found {kind().describe()}")
+    }
+    Name("", at)
+  }
+
+  /** After a `.` and as a label, keywords are ordinary names. */
+  fn nameOrKeyword(var self): Name {
+    const at = span()
+    match kind() {
+      .Reserved(_) => {
+        bump()
+        Name(text(at), at)
+      }
+      _ => name()
+    }
+  }
+
+  /** Comma-separated items up to `close`. A trailing comma is fine. */
+  fn commaSeparated<Item>(var self, close: TokenKind, parseItem: (var parser: Parser) => Item): List<Item> {
+    var items: List<Item> = []
+    skipNewlines()
+    while !isAt(close) && !isAt(TokenKind.EndOfFile) {
+      const before = position
+      items.add(parseItem(self))
+      skipNewlines()
+      if !eat(TokenKind.Comma) {
+        break
+      }
+      skipNewlines()
+      if position == before {
+        bump()
+      }
+    }
+    expect(close)
+    items
+  }
+
+  /** Skips the rest of a broken statement. Balanced braces are skipped as a whole. */
+  fn recoverToLineEnd(var self) {
+    var depth = 0
+    while true {
+      match kind() {
+        .EndOfFile => {
+          return
+        }
+        .Newline if depth == 0 => {
+          return
+        }
+        .BraceClose if depth == 0 => {
+          return
+        }
+        .BraceOpen => {
+          depth = depth + 1
+        }
+        .BraceClose => {
+          depth = depth - 1
+        }
+        _ => {}
+      }
+      bump()
+    }
+  }
+}

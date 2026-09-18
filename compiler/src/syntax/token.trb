@@ -1,0 +1,207 @@
+use Span from "./source"
+
+public type Token {
+  kind: TokenKind
+  span: Span
+}
+
+/** A doc comment. Doc comments are not tokens: the parser attaches them to the declaration that follows them. */
+public type DocComment {
+  /** Without the comment markers and the margin of stars. Markdown. */
+  text: String
+  span: Span
+}
+
+public type TextPart {
+  case Literal(text: String)
+  /** The source range between `{` and `}`. The parser parses it. */
+  case Expression(span: Span)
+}
+
+public type TokenKind {
+  case Identifier
+  case Reserved(keyword: Keyword)
+  case IntegerLiteral
+  case FloatLiteral
+  case CharLiteral(value: Char)
+  /** A string literal. Interpolated expressions are kept as source ranges. */
+  case TextLiteral(parts: List<TextPart>)
+
+  // Brackets
+  case ParenOpen
+  case ParenClose
+  case BracketOpen
+  case BracketClose
+  case BraceOpen
+  case BraceClose
+
+  // Punctuation
+  case Comma
+  case Colon
+  case Dot
+  case DotDot
+  case DotDotEqual
+  case Ellipsis
+  case Arrow
+  case Question
+  case QuestionDot
+  case QuestionQuestion
+
+  // Operators
+  case Equal
+  case EqualEqual
+  case BangEqual
+  case Bang
+  case Less
+  case LessEqual
+  case Greater
+  case GreaterEqual
+  case AndAnd
+  case OrOr
+  /** Only in patterns and literal types: `1 | 2 | 3` */
+  case Pipe
+  case Plus
+  case Minus
+  case Star
+  case Slash
+  case Percent
+
+  /** A line break that ends a statement. Line breaks that do not are removed by the lexer. */
+  case Newline
+  case EndOfFile
+
+  /** A line that ends with one of these continues on the next line. */
+  fn continuesLineAfter(self): Bool {
+    match self {
+      .Comma | .Colon | .Dot | .QuestionDot | .Arrow | .Equal | .EqualEqual | .BangEqual | .Less | .LessEqual | .GreaterEqual => true
+      .AndAnd | .OrOr | .QuestionQuestion | .Plus | .Minus | .Star | .Slash | .Percent | .ParenOpen | .BracketOpen => true
+      _ => false
+    }
+  }
+
+  /** A line that starts with one of these continues the previous line. */
+  fn continuesLineBefore(self): Bool {
+    match self {
+      .Dot | .QuestionDot | .AndAnd | .OrOr | .QuestionQuestion | .Plus | .Star | .Slash | .Percent => true
+      .EqualEqual | .BangEqual | .LessEqual | .GreaterEqual | .Equal => true
+      .Reserved(Keyword.With) | .Reserved(Keyword.Where) | .Reserved(Keyword.Else) => true
+      _ => false
+    }
+  }
+
+  /** For messages: "Expected a type, found `)`" */
+  fn describe(self): String {
+    match self {
+      .Identifier => "a name"
+      .Reserved(_) => "a keyword"
+      .IntegerLiteral | .FloatLiteral => "a number"
+      .CharLiteral(_) => "a character"
+      .TextLiteral(_) => "a string"
+      .ParenOpen => "`(`"
+      .ParenClose => "`)`"
+      .BracketOpen => "`[`"
+      .BracketClose => "`]`"
+      .BraceOpen => "`\{`"
+      .BraceClose => "`\}`"
+      .Comma => "`,`"
+      .Colon => "`:`"
+      .Dot => "`.`"
+      .DotDot => "`..`"
+      .DotDotEqual => "`..=`"
+      .Ellipsis => "`...`"
+      .Arrow => "`=>`"
+      .Question => "`?`"
+      .QuestionDot => "`?.`"
+      .QuestionQuestion => "`??`"
+      .Equal => "`=`"
+      .EqualEqual => "`==`"
+      .BangEqual => "`!=`"
+      .Bang => "`!`"
+      .Less => "`<`"
+      .LessEqual => "`<=`"
+      .Greater => "`>`"
+      .GreaterEqual => "`>=`"
+      .AndAnd => "`&&`"
+      .OrOr => "`||`"
+      .Pipe => "`|`"
+      .Plus => "`+`"
+      .Minus => "`-`"
+      .Star => "`*`"
+      .Slash => "`/`"
+      .Percent => "`%`"
+      .Newline => "the end of the line"
+      .EndOfFile => "the end of the file"
+    }
+  }
+}
+
+public type Keyword {
+  case Const
+  case Var
+  case Fn
+  case Type
+  case Trait
+  case Extend
+  case Foreign
+  case Case
+  case Use
+  case Public
+  case Private
+  case Native
+  case Shared
+  case Lazy
+  case If
+  case Else
+  case Match
+  case For
+  case In
+  case While
+  case Break
+  case Continue
+  case Return
+  case True
+  case False
+  case SelfValue
+  case SelfType
+  case With
+  case Where
+
+  /** `from`, `as` and `by` are contextual: they are ordinary identifiers for the lexer. */
+  fn fromText(text: String): Keyword? {
+    const keyword: Keyword = match text {
+      "const" => .Const
+      "var" => .Var
+      "fn" => .Fn
+      "type" => .Type
+      "trait" => .Trait
+      "extend" => .Extend
+      "foreign" => .Foreign
+      "case" => .Case
+      "use" => .Use
+      "public" => .Public
+      "private" => .Private
+      "native" => .Native
+      "shared" => .Shared
+      "lazy" => .Lazy
+      "if" => .If
+      "else" => .Else
+      "match" => .Match
+      "for" => .For
+      "in" => .In
+      "while" => .While
+      "break" => .Break
+      "continue" => .Continue
+      "return" => .Return
+      "true" => .True
+      "false" => .False
+      "self" => .SelfValue
+      "Self" => .SelfType
+      "with" => .With
+      "where" => .Where
+      _ => {
+        return None
+      }
+    }
+    Some(keyword)
+  }
+}

@@ -7,7 +7,7 @@ const gravity = Vector2(0.0, 9.81)
 public fn movement(world: World, deltaTime: Float): World {
   world.mapEntities([ComponentKind.Transform, ComponentKind.Velocity]) {
     match (entity.position(), entity.velocity()) {
-      (Some(position), Some(velocity)) => entity.attach(Transform(position + velocity * deltaTime))
+      (Some(position), Some(velocity)) => entity.attached(Transform(position + velocity * deltaTime))
       _ => entity
     }
   }
@@ -16,7 +16,7 @@ public fn movement(world: World, deltaTime: Float): World {
 public fn falling(world: World, deltaTime: Float): World {
   world.mapEntities([ComponentKind.Velocity]) {
     const velocity = entity.velocity() ?? Vector2.zero
-    entity.attach(Velocity(velocity + gravity * deltaTime))
+    entity.attached(Velocity(velocity + gravity * deltaTime))
   }
 }
 
@@ -28,7 +28,7 @@ public fn collisions(world: World, deltaTime: Float): World {
     if hits == 0 {
       return current                     // Returns from the closure, not from `collisions`
     }
-    current.update(body.id) { damage(entity, amount: hits * 10) }
+    current.updated(body.id) { damage(entity, amount: hits * 10) }
   }
 }
 
@@ -36,7 +36,7 @@ public fn collisions(world: World, deltaTime: Float): World {
 public fn cleanup(world: World, deltaTime: Float): World {
   world.query(ComponentKind.Health)
     .filter { (_.health() ?? 0) <= 0 }
-    .fold(world) { current, entity => current.despawn(entity.id) }
+    .fold(world) { current, entity => current.despawned(entity.id) }
 }
 
 /** Systems are values: build new ones out of existing ones. */
@@ -57,14 +57,14 @@ fn touches(a: Entity, b: Entity): Bool {
 
 fn radius(entity: Entity): Float? {
   match entity.components.get(ComponentKind.Collider) {
-    Some(Collider(radius)) => Some(radius)
+    Some(.Collider(radius)) => Some(radius)
     _ => None
   }
 }
 
 fn damage(entity: Entity, amount: Int): Entity {
   match entity.components.get(ComponentKind.Health) {
-    Some(Health(current, maximum)) => entity.attach(Health((current - amount).max(0), maximum))
+    Some(.Health(current, maximum)) => entity.attached(Health((current - amount).max(0), maximum))
     _ => entity
   }
 }

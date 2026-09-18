@@ -4,22 +4,22 @@ public type QueryError {
   case Unsupported(what: String)
 }
 
-/** A piece of SQL with the values for its `?` placeholders. */
+/** A piece of SQL with the values for its `?` placeholders. The driver binds them with its own `Encoder`. */
 public type Fragment {
   sql: String
-  parameters: List<Data> = []
+  parameters: List<Encode> = []
 
   fn raw(sql: String): Fragment {
     Fragment(sql)
   }
 
-  fn parameter(value: Data): Fragment {
+  fn parameter(value: Encode): Fragment {
     Fragment("?", [value])
   }
 
   /** `a.join(" AND ", b)` -> `(a AND b)` */
   fn join(self, keyword: String, other: Fragment): Fragment {
-    Fragment("({sql} {keyword} {other.sql})", parameters + other.parameters)
+    Fragment("({sql} {keyword} {other.sql})", parameters.addedAll(other.parameters))
   }
 
   fn wrap(self, before: String, after: String = ""): Fragment {
@@ -27,37 +27,37 @@ public type Fragment {
   }
 }
 
-public fn translate(node: ExpressionNode, captures: List<Data>): Result<Fragment, QueryError> {
+public fn translate(node: ExpressionNode, captures: List<Encode>): Result<Fragment, QueryError> {
   match node {
     // `_.age`: a field of the row parameter is a column
-    Field(Parameter(_, _, _), name, _) => Ok(Fragment.raw(name))
+    .Field(.Parameter(_, _, _), name, _) => Ok(Fragment.raw(name))
 
     // Values never end up in the SQL text, always in the parameters
-    Literal(value, _) => Ok(Fragment.parameter(value))
-    Captured(index, _, _) => Ok(Fragment.parameter(captures[index]))
+    .Literal(value, _) => Ok(Fragment.parameter(value))
+    .Captured(index, _, _) => Ok(Fragment.parameter(captures[index]))
 
-    Unary(Not, operand, _) => Ok(translate(operand, captures)?.wrap("NOT (", ")"))
-    Unary(Negate, operand, _) => Ok(translate(operand, captures)?.wrap("-"))
+    .Unary(.Not, operand, _) => Ok(translate(operand, captures)?.wrap("NOT (", ")"))
+    .Unary(.Negate, operand, _) => Ok(translate(operand, captures)?.wrap("-"))
 
-    Binary(operator, left, right, _) => {
+    .Binary(operator, left, right, _) => {
       const a = translate(left, captures)?
       const b = translate(right, captures)?
       Ok(a.join(keyword(operator), b))
     }
 
     // A few methods this provider knows
-    Call(Some(target), _, "startsWith", [prefix], _) => {
+    .Call(Some(target), _, "startsWith", [prefix], _) => {
       const column = translate(target, captures)?
       Ok(column.join("LIKE", translate(prefix, captures)?.wrap("", " || '%'")))
     }
-    Call(Some(target), _, "contains", [part], _) => {
+    .Call(Some(target), _, "contains", [part], _) => {
       const column = translate(target, captures)?
       Ok(column.join("LIKE", translate(part, captures)?.wrap("'%' || ", " || '%'")))
     }
-    Call(Some(target), _, "toLowerCase", [], _) => Ok(translate(target, captures)?.wrap("LOWER(", ")"))
-    Call(Some(target), _, "isSome", [], _) => Ok(translate(target, captures)?.wrap("", " IS NOT NULL"))
+    .Call(Some(target), _, "toLowerCase", [], _) => Ok(translate(target, captures)?.wrap("LOWER(", ")"))
+    .Call(Some(target), _, "isSome", [], _) => Ok(translate(target, captures)?.wrap("", " IS NOT NULL"))
 
-    Conditional(condition, then, otherwise, _) => {
+    .Conditional(condition, then, otherwise, _) => {
       const c = translate(condition, captures)?
       const t = translate(then, captures)?
       const o = translate(otherwise, captures)?
@@ -65,25 +65,25 @@ public fn translate(node: ExpressionNode, captures: List<Data>): Result<Fragment
     }
 
     // Everything else - and every node kind that is added in the future
-    Call(_, owner, method, _, _) => Error(Unsupported("{owner}.{method}()"))
+    .Call(_, owner, method, _, _) => Error(Unsupported("{owner}.{method}()"))
     _ => Error(Unsupported("this kind of expression"))
   }
 }
 
 fn keyword(operator: BinaryOperator): String {
   match operator {
-    Add => "+"
-    Subtract => "-"
-    Multiply => "*"
-    Divide => "/"
-    Remainder => "%"
-    Equal => "="
-    NotEqual => "<>"
-    Less => "<"
-    LessOrEqual => "<="
-    Greater => ">"
-    GreaterOrEqual => ">="
-    And => "AND"
-    Or => "OR"
+    .Add => "+"
+    .Subtract => "-"
+    .Multiply => "*"
+    .Divide => "/"
+    .Remainder => "%"
+    .Equal => "="
+    .NotEqual => "<>"
+    .Less => "<"
+    .LessOrEqual => "<="
+    .Greater => ">"
+    .GreaterOrEqual => ">="
+    .And => "AND"
+    .Or => "OR"
   }
 }

@@ -1,6 +1,6 @@
 use Vector2 from "../math/vector2"
 
-/** Components are immutable values. Systems replace them instead of changing them. */
+/** Components have no `var` fields. Systems replace them instead of changing them. */
 public type Component {
   case Transform(position: Vector2, rotation: Float = 0.0)
   case Velocity(value: Vector2)
@@ -12,12 +12,12 @@ public type Component {
   /** Components are stored by kind, an entity has at most one component of each kind. */
   fn kind(self): ComponentKind {
     match self {
-      Transform(_, _) => ComponentKind.Transform
-      Velocity(_) => ComponentKind.Velocity
-      Sprite(_, _) => ComponentKind.Sprite
-      Health(_, _) => ComponentKind.Health
-      Collider(_) => ComponentKind.Collider
-      Tag(_) => ComponentKind.Tag
+      .Transform(_, _) => ComponentKind.Transform
+      .Velocity(_) => ComponentKind.Velocity
+      .Sprite(_, _) => ComponentKind.Sprite
+      .Health(_, _) => ComponentKind.Health
+      .Collider(_) => ComponentKind.Collider
+      .Tag(_) => ComponentKind.Tag
     }
   }
 }
@@ -35,14 +35,26 @@ public type EntityId = Int
 
 public type Entity {
   id: EntityId
-  components: Map<ComponentKind, Component> = [:]
+  private(var) components: Map<ComponentKind, Component> = [:]
 
-  fn attach(self, component: Component): Entity {
-    copy(components: components.set(component.kind(), component))
+  fn attach(var self, component: Component) {
+    components[component.kind()] = component
   }
 
-  fn detach(self, kind: ComponentKind): Entity {
-    copy(components: components.remove(kind))
+  fn detach(var self, kind: ComponentKind) {
+    components.remove(kind)
+  }
+
+  fn attached(self, component: Component): Entity {
+    var result = self
+    result.attach(component)
+    result
+  }
+
+  fn detached(self, kind: ComponentKind): Entity {
+    var result = self
+    result.detach(kind)
+    result
   }
 
   fn has(self, kind: ComponentKind): Bool {
@@ -51,21 +63,21 @@ public type Entity {
 
   fn position(self): Vector2? {
     match components.get(ComponentKind.Transform) {
-      Some(Transform(position, _)) => Some(position)
+      Some(.Transform(position, _)) => Some(position)
       _ => None
     }
   }
 
   fn velocity(self): Vector2? {
     match components.get(ComponentKind.Velocity) {
-      Some(Velocity(value)) => Some(value)
+      Some(.Velocity(value)) => Some(value)
       _ => None
     }
   }
 
   fn health(self): Int? {
     match components.get(ComponentKind.Health) {
-      Some(Health(current, _)) => Some(current)
+      Some(.Health(current, _)) => Some(current)
       _ => None
     }
   }

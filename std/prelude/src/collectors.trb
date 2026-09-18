@@ -1,0 +1,205 @@
+/**
+ * Collectors decide where the values of a pipeline end up:
+ *
+ *     employees.collect(groupingBy { _.department }.then(averaging { _.salary }))
+ *     words.collect(joining(", "))
+ *
+ * A `Collector` is a description. `start()` creates a fresh `Accumulator` for one run (held in a `var`),
+ * values are pushed into it one by one, `finish()` produces the result. Because values are pushed, the same
+ * collectors work for everything that produces values over time: iterables, channels, event streams.
+ */
+
+use Compare, Hash from "./compare"
+use From from "./convert"
+use Add from "./operators"
+
+public trait Accumulator<Item, Output> {
+  fn add(var self, value: Item)
+  fn finish(self): Output
+}
+
+public trait Collector<Item, Output> {
+  fn start(self): Accumulator<Item, Output>
+}
+
+// --- Collecting into collections ------------------------------------------------------------------
+
+/**
+ * Collects into any type that can be created from an Iterable (`From<Iterable<Item>>`, the `FromIterator` of Rust):
+ *
+ *     groupingBy { _.department }.then(into<Set<Employee>>())
+ */
+/** Type arguments can be given from the left, the rest is inferred: `into<Set<Employee>>()` */
+public fn into<Target: From<Iterable<Item>>, Item>(): Collector<Item, Target> {
+  IntoCollector<Item, Target>()
+}
+
+public fn listing<Item>(): Collector<Item, List<Item>> {
+  into<List<Item>>()
+}
+
+type IntoCollector<Item, Target: From<Iterable<Item>>> with Collector<Item, Target> {
+  fn start(self): Accumulator<Item, Target> {
+    IntoAccumulator<Item, Target>()
+  }
+}
+
+/** Buffers in a List and converts once at the end. */
+type IntoAccumulator<Item, Target: From<Iterable<Item>>> with Accumulator<Item, Target> {
+  private var items: List<Item> = []
+
+  fn add(var self, value: Item) {
+    items.add(value)
+  }
+
+  fn finish(self): Target {
+    Target.from(items)
+  }
+}
+
+// --- Writing collectors the functional way: a fold with a final step -------------------------------
+
+/**
+ * `State` is the starting point of every run. Every run works on its own copy.
+ *
+ *     fn counting<Item>(): Collector<Item, Int> {
+ *       collector(0, finish: { _ }) { count, _ => count + 1 }
+ *     }
+ */
+public fn collector<Item, State, Output>(
+  initial: State,
+  finish: (State) => Output,
+  step: (State, Item) => State,
+): Collector<Item, Output> {
+  FoldCollector(initial, step, finish)
+}
+
+type FoldCollector<Item, State, Output> with Collector<Item, Output> {
+  initial: State
+  step: (State, Item) => State
+  complete: (State) => Output
+
+  fn start(self): Accumulator<Item, Output> {
+    FoldAccumulator(initial, step, complete)
+  }
+}
+
+type FoldAccumulator<Item, State, Output> with Accumulator<Item, Output> {
+  var state: State
+  step: (State, Item) => State
+  complete: (State) => Output
+
+  fn add(var self, value: Item) {
+    state = step(state, value)
+  }
+
+  fn finish(self): Output {
+    complete(state)
+  }
+}
+
+// --- Aggregates ------------------------------------------------------------------------------------------
+
+public fn counting<Item>(): Collector<Item, Int> {
+  collector(0, finish: { _ }) { count, _ => count + 1 }
+}
+
+public fn summing<Item, Total: Add + From<Int>>(value: (value: Item) => Total): Collector<Item, Total> {
+  collector(Total.from(0), finish: { _ }) { sum, item => sum + value(item) }
+}
+
+/** `None` for an empty pipeline. */
+public fn averaging<Item>(value: (value: Item) => Float): Collector<Item, Float?> {
+  collector((0.0, 0), finish: { state => if state.1 == 0 { None } else { Some(state.0 / Float.from(state.1)) } }) {
+    state, item => (state.0 + value(item), state.1 + 1)
+  }
+}
+
+public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, Item?> {
+  const initial: Item? = None
+  collector(initial, finish: { _ }) { best, item =>
+    match best {
+      Some(current) if key(current) <= key(item) => best
+      _ => Some(item)
+    }
+  }
+}
+
+public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, Item?> {
+  const initial: Item? = None
+  collector(initial, finish: { _ }) { best, item =>
+    match best {
+      Some(current) if key(current) >= key(item) => best
+      _ => Some(item)
+    }
+  }
+}
+
+public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Collector<String, String> {
+  const initial: String? = None
+  collector(initial, finish: { text => prefix + (text ?? "") + suffix }) { text, part =>
+    match text {
+      Some(existing) => Some(existing + separator + part)
+      .None => Some(part)
+    }
+  }
+}
+
+/** `(matching, rest)` */
+public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Collector<Item, (List<Item>, List<Item>)> {
+  const initial: (List<Item>, List<Item>) = ([], [])
+  collector(initial, finish: { _ }) { lists, item =>
+    if predicate(item) { (lists.0.added(item), lists.1) } else { (lists.0, lists.1.added(item)) }
+  }
+}
+
+// --- Grouping, with a downstream collector per group -----------------------------------------------------------
+
+/**
+ *     groupingBy { _.department }                              // Map<String, List<Employee>>
+ *     groupingBy { _.department }.then(counting())             // Map<String, Int>
+ *     groupingBy { _.department }.then(maxBy { _.salary }) // Map<String, Employee?>
+ */
+public fn groupingBy<Item, Key: Hash>(key: (value: Item) => Key): Grouping<Item, Key> {
+  Grouping(key)
+}
+
+public type Grouping<Item, Key: Hash> with Collector<Item, Map<Key, List<Item>>> {
+  key: (value: Item) => Key
+
+  fn start(self): Accumulator<Item, Map<Key, List<Item>>> {
+    then(listing()).start()
+  }
+
+  fn then<Output>(self, downstream: Collector<Item, Output>): Collector<Item, Map<Key, Output>> {
+    GroupingInto(key, downstream)
+  }
+}
+
+type GroupingInto<Item, Key: Hash, Output> with Collector<Item, Map<Key, Output>> {
+  key: (value: Item) => Key
+  downstream: Collector<Item, Output>
+
+  fn start(self): Accumulator<Item, Map<Key, Output>> {
+    GroupingAccumulator(key, downstream)
+  }
+}
+
+/** A collector that is more than a fold is written as a type with `var` fields: here one accumulator per group. */
+type GroupingAccumulator<Item, Key: Hash, Output> with Accumulator<Item, Map<Key, Output>> {
+  key: (value: Item) => Key
+  downstream: Collector<Item, Output>
+  var groups: Map<Key, Accumulator<Item, Output>> = [:]
+
+  fn add(var self, value: Item) {
+    const group = key(value)
+    if !groups.containsKey(group) {
+      groups[group] = downstream.start()
+    }
+    groups[group].add(value)           // Through the path. `var copy = groups[group]` would fill a copy.
+  }
+
+  fn finish(self): Map<Key, Output> {
+    groups.map { entry => (entry.0, entry.1.finish()) }.to<Map<Key, Output>>()
+  }
+}

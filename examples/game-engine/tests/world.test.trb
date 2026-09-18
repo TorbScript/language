@@ -1,4 +1,4 @@
-use test, group, expect from "std/test"
+use test, group from "std/test"
 use Vector2 from "../src/math/vector2"
 use ComponentKind from "../src/ecs/component"
 use World from "../src/ecs/world"
@@ -6,19 +6,20 @@ use scene from "../src/scene"
 use movement, cleanup from "../src/systems"
 
 // `test` and `group` are ordinary functions: fn test(name: String, body: () => Void)
+// There are no matchers: `assert` takes an `Expression<Bool>`, so a failure shows the source and the values of both sides.
 
 group "Vector2" {
   test "adds component-wise" {
-    expect(Vector2(1.0, 2.0) + Vector2(3.0, 4.0)).toEqual Vector2(4.0, 6.0)
+    assert(Vector2(1.0, 2.0) + Vector2(3.0, 4.0) == Vector2(4.0, 6.0))
   }
 
   test "normalizes to length 1" {
-    expect(Vector2(3.0, 4.0).normalized().length()).toBeCloseTo 1.0
+    assert(Vector2(3.0, 4.0).normalized().length().isCloseTo(1.0))
   }
 
   test "converts from tuples" {
     const v: Vector2 = (1.0, 2.0).into()
-    expect(v).toEqual Vector2(1.0, 2.0)
+    assert(v == Vector2(1.0, 2.0))
   }
 }
 
@@ -37,17 +38,17 @@ group "World" {
   test "is not changed by systems" {
     const next = movement(world, deltaTime: 1.0)
 
-    expect(next).not.toEqual world
-    expect(world.query(ComponentKind.Transform).first()?.position()).toEqual Some(Vector2.zero)
+    assert(next != world)
+    assert(world.query(ComponentKind.Transform).first()?.position() == Some(Vector2.zero))
   }
 
   test "movement applies velocity" {
     const moved = movement(world, deltaTime: 0.5).query(ComponentKind.Velocity).first()
 
-    expect(moved?.position()).toEqual Some(Vector2(5.0, 0.0))
+    assert(moved?.position() == Some(Vector2(5.0, 0.0)))
   }
 
   test "cleanup removes dead entities" {
-    expect(cleanup(world, deltaTime: 0.0).entities.length()).toBe 1
+    assert(cleanup(world, deltaTime: 0.0).entities.length() == 1)
   }
 }

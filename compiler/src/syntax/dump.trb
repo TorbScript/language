@@ -1,0 +1,40 @@
+use Lexed from "./lexer"
+use Token, TokenKind, TextPart from "./token"
+
+/**
+ * One line per token and diagnostic, in a format that is easy to compare. The bootstrap toolchain prints the same
+ * format (`torb tokens`), which is how this lexer is tested against it.
+ */
+public fn dumpTokens(lexed: Lexed): List<String> {
+  var lines: List<String> = []
+  for token in lexed.tokens {
+    lines.add("{token.span.start}..{token.span.end} {dumpKind(token.kind)}")
+  }
+  for diagnostic in lexed.diagnostics {
+    lines.add("error {diagnostic.span.start}..{diagnostic.span.end} {diagnostic.message}")
+  }
+  lines
+}
+
+fn dumpKind(kind: TokenKind): String {
+  match kind {
+    .Reserved(keyword) => "Reserved({keyword})"
+    .CharLiteral(value) => "CharLiteral({Int.from(value)})"
+    .TextLiteral(parts) => {
+      const dumped = parts.map({ dumpPart(_) }).toList()
+      "TextLiteral[{String.join(dumped, separator: ", ")}]"
+    }
+    _ => "{kind}"
+  }
+}
+
+fn dumpPart(part: TextPart): String {
+  match part {
+    .Literal(text) => "Literal(\"{escape(text)}\")"
+    .Expression(span) => "Expression({span.start}..{span.end})"
+  }
+}
+
+fn escape(text: String): String {
+  text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r")
+}

@@ -1,0 +1,26 @@
+/**
+ * A `type` is a value: assigning it, passing it and capturing it is a copy. A `shared type` is the exception -
+ * its instances have an identity and everybody who holds one sees the same object. Resources (`File`, `Socket`,
+ * `Channel`, `Window`) are declared as `shared type`.
+ *
+ * `Shared<Value>` is the ad hoc version: it puts a value in a place that can be held by several owners.
+ *
+ *     var pages: Shared<Map<String, Page>> = Shared([:])
+ *     var renderer = Renderer(cache: pages)
+ *     var preloader = Preloader(cache: pages)      // Both work on the same map
+ *
+ * The usual rule applies: no `var` path, no mutation. A `const` binding or a parameter that is not `var` is a
+ * read-only view of the object (it can still change, but not through this path).
+ * Shared objects never cross task boundaries.
+ */
+/** `true` if both are the same object. (`==` is about content and does not exist for shared objects.) */
+public native fn isSame<Object>(first: Object, second: Object): Bool
+
+public shared type Shared<Value> {
+  var value: Value
+
+  /** `counter.update { count => count + 1 }` */
+  fn update(var self, change: (value: Value) => Value) {
+    value = change(value)
+  }
+}

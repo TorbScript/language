@@ -5,28 +5,47 @@ use Component, ComponentKind, Entity, EntityId from "./component"
 public type System = (world: World, deltaTime: Float) => World
 
 /**
- * The complete game state as one immutable value.
- * Cheap to keep around (structural sharing), so replays, undo and rollback netcode are just lists of worlds.
+ * The complete game state as one value. A copy shares everything with the original until it is changed (the
+ * entity map is a trie), so replays, undo and rollback netcode are just lists of worlds.
  */
 public type World {
-  entities: Map<EntityId, Entity> = [:]
-  time: Float = 0.0
-  private nextId: EntityId = 1
+  private(var) entities: Map<EntityId, Entity> = [:]
+  private(var) time: Float = 0.0
+  private var nextId: EntityId = 1
 
-  fn spawn(self, ...components: Component): World {
-    const entity = components.fold(Entity(nextId)) { result, component => result.attach(component) }
-    copy(entities: entities.set(entity.id, entity), nextId: nextId + 1)
-  }
+  // --- In place: building a world -------------------------------------------------------------------
 
-  fn despawn(self, id: EntityId): World {
-    copy(entities: entities.remove(id))
-  }
-
-  fn update(self, id: EntityId, change: (entity: Entity) => Entity): World {
-    match entities.get(id) {
-      Some(entity) => copy(entities: entities.set(id, change(entity)))
-      None => self
+  fn spawn(var self, ...components: Component) {
+    var entity = Entity(nextId)
+    for component in components {
+      entity.attach(component)
     }
+    entities[entity.id] = entity
+    nextId = nextId + 1
+  }
+
+  fn despawn(var self, id: EntityId) {
+    entities.remove(id)
+  }
+
+  fn update(var self, id: EntityId, change: (entity: Entity) => Entity) {
+    if const Some(entity) = entities.get(id) {
+      entities[id] = change(entity)
+    }
+  }
+
+  // --- Changed copies: what systems return ----------------------------------------------------------------
+
+  fn despawned(self, id: EntityId): World {
+    var result = self
+    result.despawn(id)
+    result
+  }
+
+  fn updated(self, id: EntityId, change: (entity: Entity) => Entity): World {
+    var result = self
+    result.update(id, change)
+    result
   }
 
   /** All entities that have all of the given components. Lazy: systems decide what to do with them. */
@@ -36,12 +55,12 @@ public type World {
 
   /** Applies `change` to every entity that has all of the given components. */
   fn mapEntities(self, kinds: List<ComponentKind>, change: (entity: Entity) => Entity): World {
-    query(...kinds).fold(self) { world, entity => world.update(entity.id, change) }
+    query(...kinds).fold(self) { world, entity => world.updated(entity.id, change) }
   }
 
-  fn step(self, systems: List<System>, deltaTime: Float): World {
-    systems
-      .fold(self) { world, system => system(world, deltaTime) }
-      .copy(time: time + deltaTime)
+  fn stepped(self, systems: List<System>, deltaTime: Float): World {
+    var next = systems.fold(self) { world, system => system(world, deltaTime) }
+    next.time = time + deltaTime
+    next
   }
 }

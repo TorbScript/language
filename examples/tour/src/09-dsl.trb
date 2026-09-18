@@ -3,10 +3,10 @@
 
 // --- An HTML builder -----------------------------------------------------------------
 
-var type Element {
+type Element {
   tag: String
-  private var attributes: MutableMap<String, String> = HashMap()
-  private var children: MutableList<Node> = ArrayList()
+  private var attributes: Map<String, String> = [:]
+  private var children: List<Node> = []
 
   fn attribute(var self, name: String, value: String) {
     attributes[name] = value
@@ -19,7 +19,7 @@ var type Element {
   // One generic child function...
   fn element(var self, tag: String, build: (var self: Element) => Void) {
     var child = Element(tag)
-    build(child)                         // The receiver is passed as the first argument
+    build(child)                         // The receiver is passed as the first argument and changed in place
     children.add(Node.Child(child))
   }
 
@@ -36,14 +36,14 @@ var type Element {
   }
 }
 
-var type Node {
+type Node {
   case Text(content: String)
   case Child(element: Element)
 
   fn render(self, indent: String): String {
     match self {
-      Text(content) => "{indent}{content}"
-      Child(element) => element.render(indent)
+      .Text(content) => "{indent}{content}"
+      .Child(element) => element.render(indent)
     }
   }
 }
@@ -71,15 +71,15 @@ const page = html {
 print page.render()
 
 // --- Property commands ----------------------------------------------------------------
-// "Calling" a field that is not callable writes it: `port 8080` is `port = 8080`,
-// and `limits { ... }` applies the receiver closure to the field's value. No setters, no section methods.
+// A command on a field never calls it, it writes it: `port 8080` is `port = 8080`, `onStart { ... }` assigns the
+// closure, and `limits { ... }` applies the receiver closure to the field's value. No setters, no section methods.
 
-var type Limits {
+type Limits {
   var maxConnections: Int = 100
   var timeoutSeconds: Int = 30
 }
 
-var type ServerOptions {
+type ServerOptions {
   var host: String = "localhost"
   var port: Int = 8080
   var tls: Bool = false
@@ -100,16 +100,17 @@ const options = serve {
   limits {
     maxConnections 500
   }
-  onStart = { print "started" }          // A callable field is called by `onStart { ... }`, so assign it
+  onStart { print "started" }            // Assigns the closure. Calling a function in a field needs `()`.
 }
 options.onStart()
 
 // --- Only the innermost receiver is implicit ---------------------------------------------
 
-const explicit = html { root =>          // Naming the parameter gives access to an outer receiver
+const explicit = html { root =>          // Naming the parameter gives the receiver a name
+  root.attribute "lang", "en"
   root.div {
     text "inside the div"                // `self` is the div
-    root.attribute "lang", "en"               // The outer receiver must be named
-    // attribute "lang", "en"                 // Would set the attribute on the div
+    // attribute "lang", "en"            // Would set the attribute on the div
+    // root.attribute "lang", "en"       // Compile error: `root` is being changed by `div` right now
   }
 }

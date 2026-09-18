@@ -1,0 +1,368 @@
+use Span from "./source"
+
+/**
+ * The syntax tree. It mirrors the source: nothing is resolved, desugared or checked here.
+ * Every node that a message can point to carries its span.
+ */
+public type SourceFile {
+  statements: List<Statement>
+}
+
+public type Name {
+  text: String
+  span: Span
+}
+
+// --- Declarations -------------------------------------------------------------------------------------------------------
+
+public type Visibility {
+  /** Members: public. Top-level declarations: private to the file. */
+  case Default
+  case Public
+  case Private
+  /** `private(var)`: everybody reads, only the type writes. */
+  case PrivateVar
+}
+
+public type Modifiers {
+  visibility: Visibility = Visibility.Default
+  isNative: Bool = false
+  isShared: Bool = false
+}
+
+public type Declaration {
+  /** The doc comment in front of the declaration */
+  doc: String?
+  modifiers: Modifiers
+  kind: DeclarationKind
+  span: Span
+}
+
+public type DeclarationKind {
+  case Use(declaration: UseDeclaration)
+  case Function(declaration: FunctionDeclaration)
+  case Type(declaration: TypeDeclaration)
+  case Alias(declaration: AliasDeclaration)
+  case Trait(declaration: TraitDeclaration)
+  case Extend(declaration: ExtendDeclaration)
+  case Foreign(declaration: ForeignDeclaration)
+}
+
+public type UseDeclaration {
+  items: UseItems
+  source: UseSource
+}
+
+public type UseSource {
+  /** `from "./file"`, `from "std/fs"` */
+  case Module(path: String)
+  /** `use Some, None from Option`: cases of a type */
+  case Type(path: List<Name>)
+}
+
+public type UseItems {
+  case Names(names: List<Name>)
+  /** `use * as http from "..."` */
+  case All(alias: Name)
+  /** `use "./text-extensions"`: only what the module adds to types with `extend` */
+  case OnlyExtensions
+}
+
+public type GenericParameter {
+  /** `<const Size: Int>`: a value instead of a type. Its type is the only item of `bounds`. */
+  isConst: Bool
+  name: Name
+  bounds: List<TypeReference>
+  default: TypeReference?
+}
+
+public type WhereClause {
+  subject: TypeReference
+  bounds: List<TypeReference>
+}
+
+public type FunctionDeclaration {
+  name: Name
+  generics: List<GenericParameter>
+  parameters: List<Parameter>
+  returnType: TypeReference?
+  whereClauses: List<WhereClause>
+  /** `None` for `native` functions and for requirements of a trait. */
+  body: Block?
+}
+
+public type Parameter {
+  doc: String?
+  name: Name
+  isVar: Bool
+  /** `...items: Item` */
+  isVariadic: Bool
+  /** `self` and `var self` have no annotation. */
+  annotation: TypeReference?
+  default: Expression?
+}
+
+public type TypeDeclaration {
+  name: Name
+  generics: List<GenericParameter>
+  traits: List<TypeReference>
+  /** `with Add, Compare by value` */
+  delegate: Name?
+  whereClauses: List<WhereClause>
+  members: List<Member>
+}
+
+public type AliasDeclaration {
+  name: Name
+  generics: List<GenericParameter>
+  target: TypeReference
+}
+
+public type TraitDeclaration {
+  name: Name
+  generics: List<GenericParameter>
+  supertraits: List<TypeReference>
+  members: List<Member>
+}
+
+public type ExtendDeclaration {
+  generics: List<GenericParameter>
+  target: TypeReference
+  traits: List<TypeReference>
+  whereClauses: List<WhereClause>
+  members: List<Member>
+}
+
+public type ForeignDeclaration {
+  library: String
+  members: List<Member>
+}
+
+public type Member {
+  doc: String?
+  modifiers: Modifiers
+  kind: MemberKind
+  span: Span
+}
+
+public type MemberKind {
+  case Field(field: Field)
+  case Constant(binding: Binding)
+  case Function(declaration: FunctionDeclaration)
+  case Case(declaration: CaseDeclaration)
+}
+
+public type Field {
+  /** Only for the fields of a case. The doc comment of a field of a type belongs to its `Member`. */
+  doc: String?
+  name: Name
+  isVar: Bool
+  annotation: TypeReference
+  default: Expression?
+}
+
+public type CaseDeclaration {
+  name: Name
+  fields: List<Field>
+}
+
+// --- Types --------------------------------------------------------------------------------------------------------------
+
+public type TypeReference {
+  kind: TypeKind
+  span: Span
+}
+
+public type TypeKind {
+  /** `List<Item>`, `http.Response`, `Self` */
+  case Named(path: List<Name>, arguments: List<TypeReference>)
+  /** `Item?` */
+  case Optional(inner: TypeReference)
+  /** `(Int, String)`, `(lowest: Int, highest: Int)` */
+  case TupleType(fields: List<TupleTypeField>)
+  /** `"online" | "offline"`. A single literal is also a const argument: `Array<Float, 16>` */
+  case Literals(values: List<Expression>)
+  /** `Show + Encode`: a value that implements all of these traits */
+  case Intersection(members: List<TypeReference>)
+  case FunctionType(parameters: List<FunctionTypeParameter>, result: TypeReference)
+  /** `lazy Value`, only as the type of a parameter */
+  case Lazy(inner: TypeReference)
+  case Invalid
+}
+
+public type TupleTypeField {
+  label: Name?
+  annotation: TypeReference
+}
+
+public type FunctionTypeParameter {
+  name: Name?
+  isVar: Bool
+  annotation: TypeReference
+}
+
+// --- Statements ---------------------------------------------------------------------------------------------------------
+
+public type Block {
+  statements: List<Statement>
+  span: Span
+}
+
+public type Statement {
+  kind: StatementKind
+  span: Span
+}
+
+public type StatementKind {
+  case Declare(declaration: Declaration)
+  case Bind(binding: Binding)
+  case Assign(target: Expression, value: Expression)
+  case For(pattern: Pattern, iterable: Expression, body: Block)
+  case While(condition: Condition, body: Block)
+  case Return(value: Expression?)
+  case Break
+  case Continue
+  case Evaluate(expression: Expression)
+}
+
+/** `const x: Int = 1`, `var (a, b) = pair` */
+public type Binding {
+  isVar: Bool
+  pattern: Pattern
+  annotation: TypeReference?
+  value: Expression
+}
+
+/** The head of `if` and `while`: an expression, or a pattern binding (`if const Some(x) = lookup()`). */
+public type Condition {
+  case Test(expression: Expression)
+  case Bind(isVar: Bool, pattern: Pattern, value: Expression)
+}
+
+// --- Expressions --------------------------------------------------------------------------------------------------------
+
+public type Expression {
+  kind: ExpressionKind
+  span: Span
+}
+
+public type ExpressionKind {
+  case IntegerLiteral(text: String)
+  case FloatLiteral(text: String)
+  case BoolLiteral(value: Bool)
+  case CharLiteral(value: Char)
+  case TextLiteral(segments: List<TextSegment>)
+  /** A name, including `_`, `_2`, `self` and `Self` */
+  case Name(text: String)
+  /** `.Circle`: a case of the type that is expected here */
+  case ImplicitMember(name: Name)
+  /** `List<Int>` in front of `.of(...)` or `(...)` */
+  case Generic(target: Expression, arguments: List<TypeReference>)
+  /** `(1, "one")`, `(lowest: 1, highest: 9)` */
+  case TupleLiteral(items: List<Argument>)
+  case ListLiteral(items: List<Argument>)
+  case MapLiteral(entries: List<(Expression, Expression)>)
+  case Member(target: Expression, name: Name, isOptional: Bool)
+  case Index(target: Expression, index: Expression)
+  case Call(callee: Expression, arguments: List<Argument>, style: CallStyle)
+  case Unary(operator: PrefixOperator, operand: Expression)
+  case Binary(operator: InfixOperator, left: Expression, right: Expression)
+  case RangeLiteral(start: Expression?, end: Expression?, isInclusive: Bool)
+  /** Postfix `?` */
+  case Try(inner: Expression)
+  case Closure(closure: Closure)
+  case If(condition: Condition, then: Block, otherwise: Expression?)
+  case Match(subject: Expression, arms: List<MatchArm>)
+  /** Only as the body of a match arm and as the `else` of an `if` */
+  case Block(block: Block)
+  case Invalid
+}
+
+public type TextSegment {
+  case Literal(text: String)
+  case Interpolated(expression: Expression)
+}
+
+public type CallStyle {
+  /** `f(a, b)`, possibly with a trailing closure */
+  case Parentheses
+  /** `f a, b` */
+  case Command
+}
+
+public type Argument {
+  label: Name?
+  /** `...items` */
+  isSpread: Bool
+  value: Expression
+}
+
+public type Closure {
+  parameters: List<ClosureParameter>
+  body: Block
+}
+
+public type ClosureParameter {
+  pattern: Pattern
+  annotation: TypeReference?
+}
+
+public type MatchArm {
+  pattern: Pattern
+  guard: Expression?
+  body: Expression
+}
+
+public type PrefixOperator {
+  case Negate
+  case Not
+}
+
+public type InfixOperator {
+  case Add
+  case Subtract
+  case Multiply
+  case Divide
+  case Remainder
+  case Equal
+  case NotEqual
+  case Less
+  case LessOrEqual
+  case Greater
+  case GreaterOrEqual
+  case And
+  case Or
+  /** `??` */
+  case Coalesce
+}
+
+// --- Patterns -----------------------------------------------------------------------------------------------------------
+
+public type Pattern {
+  kind: PatternKind
+  span: Span
+}
+
+public type PatternKind {
+  case Wildcard
+  /** A bare name always binds. Cases are written `.Case` or `Type.Case`. */
+  case Binding(name: String)
+  case Literal(value: Expression)
+  case RangePattern(start: Expression, end: Expression, isInclusive: Bool)
+  case TuplePattern(items: List<Pattern>)
+  /** `[first, ...rest]` */
+  case ListPattern(items: List<Pattern>, rest: RestPattern?)
+  /** `Some(x)`, `Shape.Circle(radius)`, `Point(x, y)` */
+  case Variant(path: List<Name>, fields: List<Pattern>)
+  /** `.Circle(radius)`, `.Empty`: a case of the type of the value */
+  case ImplicitVariant(name: Name, fields: List<Pattern>)
+  /** `1 | 2 | 3` */
+  case Alternatives(patterns: List<Pattern>)
+  case Invalid
+}
+
+public type RestPattern {
+  /** Number of patterns in front of the rest */
+  position: Int
+  name: Name?
+}

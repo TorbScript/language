@@ -1,0 +1,81 @@
+use File, IoError from "std/fs"
+use Process from "std/process"
+use SourceText, LineIndex from "./syntax/source"
+use lex from "./syntax/lexer"
+use parse from "./syntax/parser/parser"
+use dumpTokens from "./syntax/dump"
+use collectSourceFiles from "./cli/files"
+use renderDiagnostic from "./cli/render"
+
+/**
+ * The TorbScript toolchain, written in TorbScript. Until it can compile itself it is run by the bootstrap
+ * interpreter: `torb run compiler tokens <file>`.
+ */
+fn printUsage() {
+  printError "torb - the TorbScript toolchain (self-hosted)"
+  printError ""
+  printError "Usage:"
+  printError "  torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)"
+  printError "  torb tokens <file>     Print the tokens of a file"
+  printError "  torb ast <file>        Print the syntax tree of a file"
+}
+
+fn printTokens(path: String): Result<Void, IoError> {
+  const text = File.readText(path)?
+  for line in dumpTokens(lex(SourceText.of(text))) {
+    print line
+  }
+  Ok(Void)
+}
+
+/** The generated `Show` of the tree. The bootstrap toolchain prints the same format (`torb ast`). */
+fn printTree(path: String): Result<Void, IoError> {
+  const text = File.readText(path)?
+  const parsed = parse(SourceText.of(text))
+  print parsed.file
+  for diagnostic in parsed.diagnostics {
+    print "error {diagnostic.span.start}..{diagnostic.span.end} {diagnostic.message}"
+  }
+  Ok(Void)
+}
+
+/** Returns the number of problems. */
+fn checkSyntax(paths: List<String>): Result<Int, IoError> {
+  const files = collectSourceFiles(paths)?
+  var problems = 0
+  var filesWithProblems = 0
+  for path in files {
+    const text = File.readText(path)?
+    const parsed = parse(SourceText.of(text))
+    if parsed.diagnostics.isEmpty() {
+      continue
+    }
+    filesWithProblems = filesWithProblems + 1
+    problems = problems + parsed.diagnostics.length()
+    const lines = LineIndex.of(text)
+    for diagnostic in parsed.diagnostics {
+      printError renderDiagnostic(path, lines, diagnostic)
+      printError ""
+    }
+  }
+  if problems == 0 {
+    print "{files.length()} files, no problems"
+  } else {
+    printError "{problems} problems in {filesWithProblems} of {files.length()} files"
+  }
+  Ok(problems)
+}
+
+match Process.arguments() {
+  ["parse", first, ...more] => {
+    if checkSyntax([first, ...more])? > 0 {
+      Process.exit(1)
+    }
+  }
+  ["tokens", path] => printTokens(path)?
+  ["ast", path] => printTree(path)?
+  _ => {
+    printUsage()
+    Process.exit(2)
+  }
+}

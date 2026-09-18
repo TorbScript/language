@@ -3,8 +3,8 @@
 
 const KEYWORDS = new Set([
   'if', 'else', 'match', 'for', 'in', 'while', 'break', 'continue', 'return',
-  'const', 'var', 'fn', 'type', 'trait', 'extend', 'case', 'use', 'from', 'as',
-  'public', 'private', 'native', 'async', 'open', 'lazy', 'with', 'where', 'by',
+  'const', 'var', 'fn', 'type', 'trait', 'extend', 'foreign', 'case', 'use', 'from', 'as',
+  'public', 'private', 'native', 'shared', 'lazy', 'with', 'where', 'by',
 ]);
 const LITERALS = new Set(['true', 'false', 'None', 'Void', 'self', 'Self']);
 const BUILTINS = new Set(['print', 'panic', 'assert', 'do', 'spawn', 'Some', 'Ok', 'Error']);

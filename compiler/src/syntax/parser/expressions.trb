@@ -1,0 +1,509 @@
+use Span from "../source"
+use TokenKind, Keyword, TextPart from "../token"
+use Expression, ExpressionKind, Argument, CallStyle, Closure, ClosureParameter, MatchArm, TextSegment from "../ast"
+use InfixOperator, PrefixOperator, Name, TypeReference from "../ast"
+use lexRange from "../lexer"
+use Parser from "./parser"
+use parseBlock, parseBlockAfterBrace, parseCondition, parseHeadExpression from "./statements"
+use parseType, isNameOrKeyword from "./types"
+use parsePattern from "./patterns"
+
+// Binding power of the infix operators, higher binds tighter. Comparisons and ranges do not chain.
+const comparisonPower = 3
+const coalescePower = 4
+const rangePower = 5
+
+fn infixOperator(kind: TokenKind): (Int, InfixOperator)? {
+  const found = match kind {
+    .OrOr => (1, InfixOperator.Or)
+    .AndAnd => (2, InfixOperator.And)
+    .EqualEqual => (comparisonPower, InfixOperator.Equal)
+    .BangEqual => (comparisonPower, InfixOperator.NotEqual)
+    .Less => (comparisonPower, InfixOperator.Less)
+    .LessEqual => (comparisonPower, InfixOperator.LessOrEqual)
+    .Greater => (comparisonPower, InfixOperator.Greater)
+    .GreaterEqual => (comparisonPower, InfixOperator.GreaterOrEqual)
+    .QuestionQuestion => (coalescePower, InfixOperator.Coalesce)
+    .Plus => (6, InfixOperator.Add)
+    .Minus => (6, InfixOperator.Subtract)
+    .Star => (7, InfixOperator.Multiply)
+    .Slash => (7, InfixOperator.Divide)
+    .Percent => (7, InfixOperator.Remainder)
+    _ => {
+      return None
+    }
+  }
+  Some(found)
+}
+
+fn isComparison(kind: TokenKind): Bool {
+  match infixOperator(kind) {
+    Some((power, _)) => power == comparisonPower
+    .None => false
+  }
+}
+
+public fn parseExpression(var parser: Parser): Expression {
+  parseBinary(parser, minimum: 0)
+}
+
+/**
+ * An expression in _command position_ (start of a statement, right of `=`, after `return` and `=>`):
+ * `print "Hello"`, `route "/health", to: "health"`, `const user = Email.parse text`.
+ */
+public fn parseCommandExpression(var parser: Parser): Expression {
+  const beforeCommand = parser
+  const start = parser.span()
+  if const Some(callee) = parseCommandPath(parser) {
+    if startsCommandArgument(parser) {
+      return parseCommandCall(parser, start, callee)
+    }
+  }
+  parser = beforeCommand
+  parseExpression(parser)
+}
+
+/** `print`, `Email.parse`, `root.attribute` */
+fn parseCommandPath(var parser: Parser): Expression? {
+  const isName = match parser.kind() {
+    .Identifier | .Reserved(.SelfValue | .SelfType) => true
+    _ => false
+  }
+  if !isName {
+    return None
+  }
+  const start = parser.span()
+  var path = Expression(ExpressionKind.Name(parser.text(start)), start)
+  parser.bump()
+  while parser.isAt(TokenKind.Dot) && isNameOrKeyword(parser.kindAt(1)) {
+    parser.bump()
+    const name = parser.nameOrKeyword()
+    path = Expression(ExpressionKind.Member(path, name, isOptional: false), start.to(parser.previousSpan()))
+  }
+  Some(path)
+}
+
+/**
+ * What can follow the callee of a command call. `(`, `[`, `-` and `!` cannot: `f [1]` is always indexing and
+ * `f -1` is always a subtraction.
+ */
+fn startsCommandArgument(parser: Parser): Bool {
+  const isLabel = parser.kindAt(1) == TokenKind.Colon
+  match parser.kind() {
+    .Identifier => !["as", "by", "from"].contains(parser.text(parser.span())) || isLabel
+    .IntegerLiteral | .FloatLiteral | .CharLiteral(_) | .TextLiteral(_) => true
+    .Reserved(.True | .False | .SelfValue | .SelfType | .If | .Match) => true
+    // A label that is a keyword: `move from: a, to: b`
+    .Reserved(_) => isLabel
+    _ => false
+  }
+}
+
+fn parseCommandCall(var parser: Parser, start: Span, callee: Expression): Expression {
+  var arguments = parser.withTrailingClosures(false, { parser =>
+    var first = [parseArgument(parser)]
+    while parser.eat(TokenKind.Comma) {
+      first.add(parseArgument(parser))
+    }
+    first
+  })
+  checkArgumentOrder(parser, arguments)
+  // The `{` belongs to the command, like the `{` after the head of an `if`
+  if parser.allowsTrailingClosures && parser.isAt(TokenKind.BraceOpen) {
+    arguments.add(Argument(None, isSpread: false, value: parseClosure(parser)))
+    if parser.isAtAny([TokenKind.Dot, TokenKind.QuestionDot, TokenKind.BraceOpen]) {
+      parser.errorHere("The `\{ ... \}` in front of this belongs to the command call, like the `\{` after the head of an `if`. To pass a closure to one of the arguments, call the command with parentheses: `print(list.map \{ ... \})`")
+      parser.recoverToLineEnd()
+    }
+  }
+  Expression(ExpressionKind.Call(callee, arguments, CallStyle.Command), start.to(parser.previousSpan()))
+}
+
+/** Labeled arguments follow the positional ones. (A trailing closure is added after this check.) */
+fn checkArgumentOrder(var parser: Parser, arguments: List<Argument>) {
+  var hasLabel = false
+  for argument in arguments {
+    if argument.label.isSome() {
+      hasLabel = true
+    } else if hasLabel {
+      parser.error("Positional arguments come first, labeled arguments follow them: `connect(host, timeout: 10)`", argument.value.span)
+      return
+    }
+  }
+}
+
+fn parseArgument(var parser: Parser): Argument {
+  const isSpread = parser.eat(TokenKind.Ellipsis)
+  var label: Name? = None
+  if isNameOrKeyword(parser.kind()) && parser.kindAt(1) == TokenKind.Colon {
+    label = Some(parser.nameOrKeyword())
+    parser.bump()
+  }
+  Argument(label, isSpread, parseExpression(parser))
+}
+
+fn isAtRange(parser: Parser, minimum: Int): Bool {
+  parser.isAtAny([TokenKind.DotDot, TokenKind.DotDotEqual]) && minimum <= rangePower
+}
+
+fn parseBinary(var parser: Parser, minimum: Int): Expression {
+  const start = parser.span()
+  // `..end`: a range without a start
+  var left = if isAtRange(parser, minimum) { parseRange(parser, start, None) } else { parseUnary(parser) }
+  while true {
+    if isAtRange(parser, minimum) {
+      left = parseRange(parser, start, Some(left))
+      continue
+    }
+    const (power, operator) = match infixOperator(parser.kind()) {
+      Some((power, operator)) if power >= minimum => (power, operator)
+      _ => {
+        break
+      }
+    }
+    parser.bump()
+    // `??` groups to the right, everything else to the left
+    const right = parseBinary(parser, minimum: if power == coalescePower { power } else { power + 1 })
+    left = Expression(ExpressionKind.Binary(operator, left, right), start.to(parser.previousSpan()))
+    if power == comparisonPower && isComparison(parser.kind()) {
+      parser.errorHere("Comparisons do not chain. Use `&&`: `a < b && b < c`")
+    }
+  }
+  left
+}
+
+/** `0..10`, `0..=10`, `1..` (open end), `..10` (open start) */
+fn parseRange(var parser: Parser, start: Span, left: Expression?): Expression {
+  const isInclusive = parser.isAt(TokenKind.DotDotEqual)
+  parser.bump()
+  const closers = [
+    TokenKind.ParenClose,
+    TokenKind.BracketClose,
+    TokenKind.BraceClose,
+    TokenKind.BraceOpen,
+    TokenKind.Comma,
+    TokenKind.Newline,
+    TokenKind.EndOfFile,
+  ]
+  const end = if parser.isAtAny(closers) { None } else { Some(parseBinary(parser, minimum: rangePower + 1)) }
+  Expression(ExpressionKind.RangeLiteral(left, end, isInclusive), start.to(parser.previousSpan()))
+}
+
+fn parseUnary(var parser: Parser): Expression {
+  const start = parser.span()
+  const operator = match parser.kind() {
+    .Minus => PrefixOperator.Negate
+    .Bang => PrefixOperator.Not
+    _ => {
+      return parsePostfix(parser)
+    }
+  }
+  parser.bump()
+  const operand = parseUnary(parser)
+  Expression(ExpressionKind.Unary(operator, operand), start.to(parser.previousSpan()))
+}
+
+fn parsePostfix(var parser: Parser): Expression {
+  const start = parser.span()
+  var expression = parsePrimaryExpression(parser)
+  while true {
+    const kind = match parser.kind() {
+      .Dot | .QuestionDot => {
+        const isOptional = parser.isAt(TokenKind.QuestionDot)
+        parser.bump()
+        // `pair.0`
+        const name = if parser.isAt(TokenKind.IntegerLiteral) {
+          const index = parser.bump().span
+          Name(parser.text(index), index)
+        } else {
+          parser.nameOrKeyword()
+        }
+        ExpressionKind.Member(expression, name, isOptional)
+      }
+      .ParenOpen => {
+        parser.bump()
+        const arguments = parser.withTrailingClosures(true, { parser => parser.commaSeparated(TokenKind.ParenClose, parseArgument) })
+        checkArgumentOrder(parser, arguments)
+        ExpressionKind.Call(expression, arguments, CallStyle.Parentheses)
+      }
+      .BracketOpen => {
+        parser.bump()
+        const index = parser.withTrailingClosures(true, parseExpression)
+        if parser.isAt(TokenKind.Comma) {
+          parser.errorHere("`name [...]` is always indexing. To pass a list to a command call, use parentheses: `print([1, 2])`")
+          parser.recoverToLineEnd()
+          return Expression(ExpressionKind.Invalid, start.to(parser.previousSpan()))
+        }
+        parser.expect(TokenKind.BracketClose)
+        ExpressionKind.Index(expression, index)
+      }
+      .Question => {
+        parser.bump()
+        ExpressionKind.Try(expression)
+      }
+      .Less => match parseGenericArguments(parser) {
+        Some(arguments) => ExpressionKind.Generic(expression, arguments)
+        .None => {
+          return expression
+        }
+      }
+      .BraceOpen if parser.allowsTrailingClosures && takesTrailingClosure(expression) => {
+        const closure = Argument(None, isSpread: false, value: parseClosure(parser))
+        match expression.kind {
+          .Call(callee, arguments, CallStyle.Parentheses) => ExpressionKind.Call(callee, arguments.added(closure), CallStyle.Parentheses)
+          _ => ExpressionKind.Call(expression, [closure], CallStyle.Parentheses)
+        }
+      }
+      _ => {
+        return expression
+      }
+    }
+    expression = Expression(kind, start.to(parser.previousSpan()))
+  }
+  expression
+}
+
+/** `html { ... }`, `list.map { ... }`, `fold(0) { ... }`, `load<Config> { ... }` - but not `1 { ... }`. */
+fn takesTrailingClosure(expression: Expression): Bool {
+  match expression.kind {
+    .Name(_) | .Member(_, _, _) | .Generic(_, _) => true
+    // One trailing closure per call
+    .Call(_, arguments, CallStyle.Parentheses) => match arguments.last() {
+      Some(last) => !(last.label.isNone() && isClosure(last.value) && last.value.span.end == expression.span.end)
+      .None => true
+    }
+    _ => false
+  }
+}
+
+fn isClosure(expression: Expression): Bool {
+  match expression.kind {
+    .Closure(_) => true
+    _ => false
+  }
+}
+
+/**
+ * `<` starts generic arguments if what follows parses as types, is closed by `>`, and the token after that cannot
+ * continue a comparison. Otherwise it is "less than". Decided without knowing what the names mean.
+ */
+fn parseGenericArguments(var parser: Parser): List<TypeReference>? {
+  const beforeArguments = parser
+  parser.bump()
+  var arguments = [parseType(parser)]
+  while parser.eat(TokenKind.Comma) {
+    arguments.add(parseType(parser))
+  }
+  const isClosed = parser.eat(TokenKind.Greater)
+  const followers = [
+    TokenKind.ParenOpen,
+    TokenKind.ParenClose,
+    TokenKind.BracketClose,
+    TokenKind.BraceOpen,
+    TokenKind.BraceClose,
+    TokenKind.Colon,
+    TokenKind.Comma,
+    TokenKind.Dot,
+    TokenKind.Question,
+    TokenKind.EqualEqual,
+    TokenKind.BangEqual,
+    TokenKind.Newline,
+    TokenKind.EndOfFile,
+  ]
+  if isClosed && parser.isAtAny(followers) && !parser.hasFailedSince(beforeArguments) {
+    return Some(arguments)
+  }
+  parser = beforeArguments
+  None
+}
+
+public fn parsePrimaryExpression(var parser: Parser): Expression {
+  const start = parser.span()
+  const kind = match parser.kind() {
+    .IntegerLiteral => {
+      parser.bump()
+      ExpressionKind.IntegerLiteral(parser.text(start).replace("_", ""))
+    }
+    .FloatLiteral => {
+      parser.bump()
+      ExpressionKind.FloatLiteral(parser.text(start).replace("_", ""))
+    }
+    .CharLiteral(value) => {
+      parser.bump()
+      ExpressionKind.CharLiteral(value)
+    }
+    .TextLiteral(parts) => {
+      parser.bump()
+      ExpressionKind.TextLiteral(parseTextSegments(parser, parts))
+    }
+    .Reserved(.True) => {
+      parser.bump()
+      ExpressionKind.BoolLiteral(true)
+    }
+    .Reserved(.False) => {
+      parser.bump()
+      ExpressionKind.BoolLiteral(false)
+    }
+    .Identifier | .Reserved(.SelfValue | .SelfType) => {
+      parser.bump()
+      ExpressionKind.Name(parser.text(start))
+    }
+    // `.Circle(2.0)`, `.Empty`: a case of the expected type
+    .Dot if parser.kindAt(1) == TokenKind.Identifier => {
+      parser.bump()
+      ExpressionKind.ImplicitMember(parser.name())
+    }
+    .ParenOpen => {
+      parser.bump()
+      const items = parser.withTrailingClosures(true, { parser => parser.commaSeparated(TokenKind.ParenClose, parseArgument) })
+      if items.length() == 1 && items[0].label.isNone() && !items[0].isSpread {
+        items[0].value.kind
+      } else {
+        ExpressionKind.TupleLiteral(items)
+      }
+    }
+    .BracketOpen => parser.withTrailingClosures(true, parseListOrMap)
+    .BraceOpen => {
+      return parseClosure(parser)
+    }
+    .Reserved(.If) => parseIf(parser)
+    .Reserved(.Match) => parseMatch(parser)
+    other => {
+      parser.errorHere("Expected an expression, found {other.describe()}")
+      ExpressionKind.Invalid
+    }
+  }
+  Expression(kind, start.to(parser.previousSpan()))
+}
+
+/** `[1, 2, ...more]`, `["a": 1]`, `[]`, `[:]` */
+fn parseListOrMap(var parser: Parser): ExpressionKind {
+  parser.bump()
+  parser.skipNewlines()
+  if parser.isAt(TokenKind.Colon) && parser.kindAt(1) == TokenKind.BracketClose {
+    parser.bump()
+    parser.bump()
+    return ExpressionKind.MapLiteral([])
+  }
+  var entries: List<(Expression, Expression)> = []
+  const items = parser.commaSeparated(TokenKind.BracketClose, { parser =>
+    const isSpread = parser.eat(TokenKind.Ellipsis)
+    const value = parseExpression(parser)
+    if !isSpread && parser.eat(TokenKind.Colon) {
+      entries.add((value, parseExpression(parser)))
+    }
+    Argument(None, isSpread, value)
+  })
+  if entries.isEmpty() {
+    return ExpressionKind.ListLiteral(items)
+  }
+  if entries.length() != items.length() {
+    parser.error("Every entry of a map literal is `key: value`", parser.previousSpan())
+  }
+  ExpressionKind.MapLiteral(entries)
+}
+
+/** The expressions inside of a string literal are source ranges. They are lexed and parsed like a file of their own. */
+fn parseTextSegments(var parser: Parser, parts: List<TextPart>): List<TextSegment> {
+  var segments: List<TextSegment> = []
+  for part in parts {
+    match part {
+      .Literal(text) => segments.add(TextSegment.Literal(text))
+      .Expression(range) => {
+        const lexed = lexRange(parser.source, range)
+        var inner = Parser(parser.source, lexed.tokens)
+        const expression = parseExpression(inner)
+        if !inner.isAt(TokenKind.EndOfFile) {
+          inner.errorHere("Expected `\}` after the expression. A literal brace is written `\\\{`")
+        }
+        parser.diagnostics.addAll(lexed.diagnostics)
+        parser.diagnostics.addAll(inner.diagnostics)
+        segments.add(TextSegment.Interpolated(expression))
+      }
+    }
+  }
+  segments
+}
+
+/** `{ ... }`, `{ value => ... }`, `{ a, b => ... }`, `{ user: User => ... }`. The position is at the `{`. */
+public fn parseClosure(var parser: Parser): Expression {
+  const start = parser.span()
+  parser.bump()
+  parser.skipNewlines()
+  const parameters = parseClosureParameters(parser) ?? []
+  const body = parseBlockAfterBrace(parser, start)
+  Expression(ExpressionKind.Closure(Closure(parameters, body)), body.span)
+}
+
+/** Parameters are recognized by trying: they are there if a list of patterns is followed by `=>`. */
+fn parseClosureParameters(var parser: Parser): List<ClosureParameter>? {
+  const beforeParameters = parser
+  var parameters: List<ClosureParameter> = []
+  while true {
+    const pattern = parsePattern(parser)
+    const annotation = if parser.eat(TokenKind.Colon) { Some(parseType(parser)) } else { None }
+    parameters.add(ClosureParameter(pattern, annotation))
+    if !parser.eat(TokenKind.Comma) {
+      break
+    }
+  }
+  if parser.hasFailedSince(beforeParameters) || !parser.eat(TokenKind.Arrow) {
+    parser = beforeParameters
+    return None
+  }
+  Some(parameters)
+}
+
+/** The position is at `if`. */
+fn parseIf(var parser: Parser): ExpressionKind {
+  parser.bump()
+  const condition = parseCondition(parser)
+  const then = parseBlock(parser)
+  if !parser.eatKeyword(Keyword.Else) {
+    return ExpressionKind.If(condition, then, otherwise: None)
+  }
+  const start = parser.span()
+  const kind = if parser.isAtKeyword(Keyword.If) { parseIf(parser) } else { ExpressionKind.Block(parseBlock(parser)) }
+  ExpressionKind.If(condition, then, otherwise: Some(Expression(kind, start.to(parser.previousSpan()))))
+}
+
+fn parseMatch(var parser: Parser): ExpressionKind {
+  parser.bump()
+  const subject = parseHeadExpression(parser)
+  var arms: List<MatchArm> = []
+  if !parser.expect(TokenKind.BraceOpen) {
+    return ExpressionKind.Match(subject, arms)
+  }
+  while true {
+    parser.skipNewlines()
+    if parser.isAt(TokenKind.BraceClose) || parser.isAt(TokenKind.EndOfFile) {
+      break
+    }
+    const before = parser.position
+    arms.add(parser.withTrailingClosures(true, parseMatchArm))
+    parser.eat(TokenKind.Comma)
+    if !parser.isAtEndOfStatement() {
+      parser.errorHere("Expected the end of the match arm, found {parser.kind().describe()}")
+      parser.recoverToLineEnd()
+    }
+    if parser.position == before {
+      parser.bump()
+    }
+  }
+  parser.expect(TokenKind.BraceClose)
+  ExpressionKind.Match(subject, arms)
+}
+
+/** `pattern => value`, `pattern if guard => value`, `pattern => { statements }` */
+fn parseMatchArm(var parser: Parser): MatchArm {
+  const pattern = parsePattern(parser)
+  const guard = if parser.eatKeyword(Keyword.If) { Some(parseHeadExpression(parser)) } else { None }
+  parser.expect(TokenKind.Arrow)
+  parser.skipNewlines()
+  if !parser.isAt(TokenKind.BraceOpen) {
+    return MatchArm(pattern, guard, parseCommandExpression(parser))
+  }
+  // The body of an arm is a block, not a closure - like the body of an `if`
+  const block = parseBlock(parser)
+  MatchArm(pattern, guard, Expression(ExpressionKind.Block(block), block.span))
+}

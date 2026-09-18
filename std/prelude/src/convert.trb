@@ -1,0 +1,33 @@
+/** Infallible conversion. Implement this one, `Into` comes for free. */
+public trait From<Source> {
+  fn from(value: Source): Self
+}
+
+public trait Into<Target> {
+  fn into(self): Target
+}
+
+extend<Source, Target> Source with Into<Target> where Target: From<Source> {
+  fn into(self): Target {
+    Target.from(self)
+  }
+}
+
+/** Fallible conversion. */
+public trait TryFrom<Source, Failure> {
+  fn tryFrom(value: Source): Result<Self, Failure>
+}
+
+/** Fallible conversion from text: `Int.parse "42"`, `Email.parse "info@example.test"` */
+public trait Parse<Failure> {
+  fn parse(text: String): Result<Self, Failure>
+}
+
+/**
+ * Used by string interpolation. Generated for every `type`.
+ * A `shared trait`, so that objects with an identity (connections, files) can be printed, too.
+ * `Equals` and `Hash` are not: `==` always compares content. For identity there is `isSame(a, b)`.
+ */
+public shared trait Show {
+  fn show(self): String
+}

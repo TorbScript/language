@@ -1,7 +1,7 @@
 // DRAFT - see "Concurrency" in CONCEPT.md
 
-use * as http from "std/net/http"
-use HttpError from "std/net/http"
+use * as http from "std/http"
+use HttpError from "std/http"
 use sleep from "std/time"
 
 type User {
@@ -13,40 +13,41 @@ type Post {
   title: String
 }
 
-// Calling an `async fn` returns a `Task<T>`. `await()` is a method on Task and composes with `?`.
-async fn fetchUser(id: Int): Result<User, HttpError> {
+// There is no `async` keyword. A function that returns a `Task` may `await()`, and its body produces the value.
+// `await()` is a method on Task and composes with `?`.
+fn fetchUser(id: Int): Task<Result<User, HttpError>> {
   const response = http.get("https://example.test/users/{id}").await()?
   response.json<User>()
 }
 
-async fn fetchPosts(userId: Int): Result<List<Post>, HttpError> {
+fn fetchPosts(userId: Int): Task<Result<List<Post>, HttpError>> {
   const response = http.get("https://example.test/users/{userId}/posts").await()?
   response.json<List<Post>>()
 }
 
 // Sequential
-async fn loadProfile(id: Int): Result<String, HttpError> {
+fn loadProfile(id: Int): Task<Result<String, HttpError>> {
   const user = fetchUser(id).await()?
   const posts = fetchPosts(user.id).await()?
   Ok("{user.name} wrote {posts.length()} posts")
 }
 
 // Concurrent: start both tasks, then wait for both
-async fn loadProfileFast(id: Int): Result<String, HttpError> {
+fn loadProfileFast(id: Int): Task<Result<String, HttpError>> {
   const (userResult, postsResult) = all(fetchUser(id), fetchPosts(id)).await()
   const user = userResult?
   const posts = postsResult?
   Ok("{user.name} wrote {posts.length()} posts")
 }
 
-// Parallel computation. Values of a plain `type` are shared freely between tasks.
+// Parallel computation. Values are copied into tasks, which is cheap: slices and copies share their storage.
 const numbers = List.from(1..=1_000_000)
-const chunks = [numbers.slice(0, 500_000), numbers.slice(500_000)]
+const chunks = [numbers[0..500_000], numbers[500_000..]]
 
 // Stages are lazy: without `toList()` nothing would be spawned until somebody iterates - one task at a time.
 const tasks = chunks.map { chunk => spawn { chunk.sum() } }.toList()   // List<Task<Int>>, all running
 
-// Channels connect tasks. Mutable objects never cross task boundaries.
+// Channels connect tasks. A `Channel` is a `shared type`; other shared objects never cross task boundaries.
 const channel = Channel<Int>(capacity: 10)
 
 const producer = spawn {

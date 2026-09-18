@@ -1,0 +1,225 @@
+// Traits with default methods, implemented at the declaration and afterwards
+trait Shape {
+  fn area(self): Float
+
+  fn describe(self): String {
+    "{name()} with area {area()}"
+  }
+
+  fn name(self): String {
+    "Shape"
+  }
+}
+
+type Square with Shape {
+  side: Float
+
+  fn area(self): Float {
+    side * side
+  }
+}
+
+type Circle {
+  radius: Float
+}
+
+extend Circle with Shape {
+  fn area(self): Float {
+    3.0 * radius * radius
+  }
+
+  fn name(self): String {
+    "Circle"
+  }
+}
+
+const shapes: List<Shape> = [Square(2), Circle(1.0)]
+for shape in shapes {
+  print shape.describe()
+}
+
+// Extension methods on built-in types
+extend String {
+  fn shout(self): String {
+    "{toUpperCase()}!"
+  }
+}
+
+print "hello".shout()
+
+// Errors: `?` converts through the case that wraps the error
+type ConfigError {
+  message: String
+}
+
+type AppError {
+  case Config(cause: ConfigError)
+  case Startup(message: String)
+}
+
+fn loadConfig(path: String): Result<Int, ConfigError> {
+  if path.isEmpty() {
+    return Error(ConfigError("no path"))
+  }
+  Ok(path.byteLength())
+}
+
+fn start(path: String): Result<Int, AppError> {
+  const size = loadConfig(path)?
+  Ok(size * 2)
+}
+
+print start("app.trb"), start("")
+print AppError.from(ConfigError("direct"))
+
+// Lazy parameters are evaluated at most once, and only when used
+var evaluations = 0
+
+fn expensive(): Int {
+  evaluations = evaluations + 1
+  42
+}
+
+fn pick(useIt: Bool, value: lazy Int): Int {
+  if useIt {
+    value + value
+  } else {
+    0
+  }
+}
+
+print pick(false, expensive()), pick(true, expensive()), evaluations
+print None ?? expensive(), Some(1).orElse(expensive()), evaluations
+
+// Receiver closures, property commands and `var` parameters of closures: the configuration DSL
+type Database {
+  var url: String = ""
+  var poolSize: Int = 1
+}
+
+type Server {
+  var port: Int = 80
+  var database: Database = Database()
+  var routes: List<String> = []
+  var onStart: () => String = { "default" }
+
+  fn route(var self, path: String) {
+    routes.add(path)
+  }
+}
+
+fn server(configure: (var self: Server) => Void): Server {
+  var result = Server()
+  configure(result)
+  result
+}
+
+const configured = server {
+  port 8080
+  database {
+    url "postgres://localhost"
+    poolSize 4
+  }
+  route "/health"
+  route "/users"
+  onStart { "started on {port}" }
+}
+print configured.port, configured.database, configured.routes, configured.onStart()
+
+// Value semantics: copies are independent, paths change in place
+type Counter {
+  var count: Int = 0
+
+  fn increment(var self) {
+    count = count + 1
+  }
+}
+
+var counters = [Counter(), Counter()]
+var first = counters[0]
+first.increment()
+counters[1].increment()
+counters[1].increment()
+print first.count, counters.map({ _.count })
+
+var samples = [5, 3, 9, 1, 7]
+samples[1..4].sort()
+print samples, samples[..2], samples.sorted({ 0 - _ })
+
+fn fill(var target: List<Int>, amount: Int) {
+  for index in 0..amount {
+    target.add(index)
+  }
+}
+
+var buffer: List<Int> = []
+fill(buffer, 3)
+const snapshot = buffer
+fill(buffer, 2)
+print snapshot, buffer
+
+// Patterns
+fn classify(values: List<Int>): String {
+  match values {
+    [] => "empty"
+    [only] => "one: {only}"
+    [first, ...rest] if rest.length() > 2 => "many, starting with {first}"
+    [first, ..., last] => "from {first} to {last}"
+  }
+}
+
+print classify([]), classify([1]), classify([1, 2, 3]), classify([1, 2, 3, 4, 5])
+
+const (quotient, remainder) = (7 / 2, 7 % 2)
+const range = (lowest: 1, highest: 9)
+print quotient, remainder, range.lowest, range.1, range
+
+// Local functions are hoisted and capture their scope
+fn outer(limit: Int): List<Int> {
+  var seen: List<Int> = []
+  visit(0)
+
+  fn visit(value: Int) {
+    if value < limit {
+      seen.add(value)
+      visit(value + 1)
+    }
+  }
+  seen
+}
+
+print outer(4)
+
+// Sets and maps iterate in insertion order
+var tags = Set.of("b", "a", "b", "c")
+tags.remove("a")
+print tags, tags.contains("c"), tags.union(["z"]).length()
+const lengths = ["one", "three"].map({ (_, _.byteLength()) }).toMap()
+print lengths, lengths.keys(), lengths["three"]
+
+// Cases: `.Case` where the type is known, `Type.Case` everywhere, or imported by name
+type Signal {
+  case Red
+  case Green
+  case Blinking(interval: Int)
+
+  fn next(self): Signal {
+    match self {
+      .Red => .Green
+      .Green => .Blinking(2)
+      .Blinking(_) => .Red
+    }
+  }
+}
+
+use Red, Blinking from Signal
+
+var signal: Signal = .Red
+signal = signal.next()
+print signal, signal == .Green, signal.next(), Blinking(5).next() == Red
+signal = .Blinking(7)
+const described = match signal {
+  .Blinking(interval) if interval > 5 => "slow"
+  other => "something else: {other}"
+}
+print described

@@ -39,14 +39,14 @@ const systems: List<System> = [
 
 const frameTime = 1.0 / 60.0
 
-// The loop is the only place with mutable state: one `var` holding the current immutable world.
-async fn run(start: World, seconds: Float): List<World> {
+// The loop is the only place with state: one `var` holding the current world.
+fn run(start: World, seconds: Float): Task<List<World>> {
   var world = start
-  var history = ArrayList<World>()       // Worlds share structure, keeping all of them is cheap
+  var history: List<World> = []          // Worlds share their storage, keeping all of them is cheap
 
   while world.time < seconds {
     const frameStart = Clock.now()
-    world = world.step(systems, frameTime)
+    world = world.stepped(systems, frameTime)
     history.add(world)
 
     const remaining = frameTime - (Clock.now() - frameStart).seconds()
@@ -54,7 +54,7 @@ async fn run(start: World, seconds: Float): List<World> {
       sleep(remaining).await()
     }
   }
-  history.toList()
+  history
 }
 
 const history = run(initial, seconds: 5.0).await()

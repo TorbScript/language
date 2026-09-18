@@ -1,8 +1,8 @@
-// --- Value types: `type` is immutable ------------------------------------------
+// --- Types are values: the binding decides about mutation -----------------------
 
 type Point {
-  x: Int
-  y: Int
+  var x: Int                           // `var` fields can be changed - through a `var` path
+  var y: Int
 
   // Static constant
   const origin = Point(0, 0)
@@ -12,7 +12,14 @@ type Point {
     x * y
   }
 
-  fn translate(self, deltaX: Int = 0, deltaY: Int = 0): Point {
+  // A verb changes the value in place and says so: `var self`
+  fn translate(var self, deltaX: Int = 0, deltaY: Int = 0) {
+    x = x + deltaX
+    y = y + deltaY
+  }
+
+  // Its participle returns a changed copy
+  fn translated(self, deltaX: Int = 0, deltaY: Int = 0): Point {
     copy(x: x + deltaX, y: y + deltaY)
   }
 
@@ -24,22 +31,30 @@ type Point {
 
 var p = Point(x: 10, y: 20)          // The constructor is generated from the fields
 const q = Point(10, 20)              // Positional works too
-// p.x = 20                          // Compile error: a `type` is immutable (unless it is a `var type`)
+
+p.x = 15                             // `p` is a `var`
+p.translate(deltaY: 10)
+// q.x = 20                          // Compile error: `q` is a `const`
+// q.translate(deltaX: 5)            // Compile error: `translate` needs a `var`. Did you mean `translated`?
+const r = q.translated(deltaX: 5)    // Participles work everywhere
 p = p.copy(y: 30)                    // `copy` is generated
-p = p.translate(deltaX: 5)
+
+var other = p                        // Assigning is copying: two values, no aliasing
+other.x = 0
+print p.x                            // Still 15
 
 print "p = {p}, area = {p.area()}"   // `Show` is generated: Point(x: 15, y: 30)
 print p == Point(15, 30)             // `Equals` is generated and structural: true
 print Point.area(q)                  // Methods are static functions taking `self` first
-print [p, q].map(Point.area).toList()
+print([p, q].map(Point.area).toList())    // Not `print [...]`: that would be indexing
 
-// --- Mutable reference types: `var type` -------------------------------------
+// --- Fields are const unless marked `var` ---------------------------------------------
 
-var type Counter {
-  var count: Int = 0                 // Fields are const unless marked `var`
-  step: Int = 1
+type Counter {
+  var count: Int = 0
+  step: Int = 1                      // Never changes, not even in a `var` counter
 
-  fn increment(var self) {           // Mutating methods declare `var self`
+  fn increment(var self) {
     count = count + step
   }
 
@@ -51,17 +66,59 @@ var type Counter {
 var counter = Counter(step: 2)       // Fields with defaults can be omitted
 counter.increment()
 counter.count = 10
+// counter.step = 3                  // Compile error: `step` is not a `var` field
 
 const frozen = Counter()
 print frozen.isZero()
 // frozen.increment()                // Compile error: `var self` method through a const binding
 // frozen.count = 1                  // Compile error: assignment through a const binding
 
-// A `var` parameter allows mutation through the parameter
+// A `var` parameter works on the caller's value. The argument has to be a `var` path.
 fn incrementTwice(var target: Counter) {
   target.increment()
   target.increment()
 }
+
+incrementTwice(counter)
+print counter.count                  // 14
+// incrementTwice(frozen)            // Compile error: `frozen` is a `const`
+
+// --- The copy trap -------------------------------------------------------------------
+
+var counters = [Counter(), Counter()]
+
+var first = counters[0]              // A copy
+first.increment()                    // Changes the copy. The list still holds two zeros.
+
+counters[0].increment()              // Through the path: changes the element in place
+counters.update(1) { element =>
+  element.increment()
+}
+
+// for element in counters {
+//   element.increment()             // Compile error: the loop variable is a `const`
+// }
+
+// --- Identity: `shared type` ------------------------------------------------------------
+
+// The exception for everything that has an identity: resources, windows, connections.
+// Assigning a shared object does not copy it, everybody who holds it sees the same object.
+shared type Connection {
+  url: String
+  private(var) sent: Int = 0
+
+  fn send(var self, message: String) {
+    sent = sent + 1
+  }
+}
+
+var connection = Connection("tcp://example.test")
+var sameConnection = connection      // The same object
+sameConnection.send("hello")
+print connection.sent                // 1
+
+const readOnly = connection          // Same rule as everywhere: no `var` path, no mutation
+// readOnly.send("nope")             // Compile error
 
 // --- Construction without logic: factories, parse, From/Into -----------------
 
@@ -81,12 +138,12 @@ type Email with Parse<ParseError> {
   }
 
   fn domain(self): String {
-    value.substring(value.indexOf("@").expect("Validated in parse") + 1)
+    value.substringAfter("@").expect("Validated in parse")
   }
 }
 
 // const invalid = Email("nope")     // Compile error: constructor is not accessible
-const email = Email.parse "Info@Example.test"
+const email = Email.parse("Info@Example.test")
 match email {
   Ok(address) => print "Domain: {address.domain()}"
   Error(error) => print "Invalid: {error.message}"
@@ -123,10 +180,10 @@ type Percent with TryFrom<Int, ParseError> {
 
 // --- Visibility ---------------------------------------------------------------
 
-var type Account {
+type Account {
   owner: String                                        // Members are public unless marked `private`
   private(var) balance: Int = 0                         // The `var` is private: everybody reads, only Account writes
-  private var history: MutableList<String> = ArrayList()     // `private`: invisible from outside
+  private var history: List<String> = []                    // `private`: invisible from outside
 
   fn deposit(var self, amount: Int) {
     balance = balance + amount
@@ -164,7 +221,7 @@ const bound = rectangle.area         // Bound to `rectangle`: () => Int
 print bound()
 
 // An instance field can hold a function, too. The call looks the same.
-var type Button {
+type Button {
   label: String
   var onClick: () => Void = {}
 }
@@ -179,7 +236,7 @@ button.onClick()
 
 type UserId = Int
 type Handler = (request: String) => String
-type Pair<T> = (T, T)
+type Pair<Value> = (Value, Value)
 type Sample = Float32                   // Say why the width matters instead of redefining `Float`
 
 // Aliases are transparent: a UserId is an Int

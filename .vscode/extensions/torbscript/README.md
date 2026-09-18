@@ -34,7 +34,7 @@ ln -s "$PWD/.vscode/extensions/torbscript" ~/.vscode/extensions/torbscript
 
 ## What the grammar knows
 
-- `//`, nested `/* */`, `/** */` doc comments
+- `//`, `/* */`, `/** */` doc comments
 - Strings with `{interpolation}` (nested, full highlighting inside), `\{` escapes, `"""` multi-line strings,
   raw strings (`r"..."`, `r"""..."""`), chars
 - Declarations (`fn`, `type`, `trait`, `extend`, `case`, `const`, `var`), modifiers, control flow,

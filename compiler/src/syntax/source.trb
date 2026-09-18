@@ -1,0 +1,99 @@
+/** A range of bytes in a source file. */
+public type Span {
+  start: Int
+  end: Int
+
+  /** The span that covers both. */
+  fn to(self, other: Span): Span {
+    Span(start.min(other.start), end.max(other.end))
+  }
+}
+
+/**
+ * The text of a file, prepared for the lexer: the characters, and the byte offset of every character.
+ * Positions inside of the lexer are character indices, spans are byte offsets (that is what `text[from..to]` takes).
+ */
+public type SourceText {
+  text: String
+  characters: List<Char>
+  /** One entry per character, plus the length of the text at the end */
+  offsets: List<Int>
+
+  fn of(text: String): SourceText {
+    const characters = text.chars().toList()
+    var offsets: List<Int> = []
+    var offset = 0
+    for character in characters {
+      offsets.add(offset)
+      offset = offset + character.byteLength()
+    }
+    offsets.add(offset)
+    SourceText(text, characters, offsets)
+  }
+
+  /** The index of the character that starts at this byte offset. */
+  fn indexAt(self, offset: Int): Int {
+    var low = 0
+    var high = offsets.length() - 1
+    while low < high {
+      const middle = (low + high) / 2
+      if offsets[middle] < offset {
+        low = middle + 1
+      } else {
+        high = middle
+      }
+    }
+    low
+  }
+
+  /** The text between two character indices. */
+  fn slice(self, from: Int, to: Int): String {
+    text[offsets[from]..offsets[to]]
+  }
+}
+
+/** Translates byte offsets to lines and columns. Both start at 1, columns count characters. */
+public type LineIndex {
+  private text: String
+  private lineStarts: List<Int>
+
+  fn of(text: String): LineIndex {
+    var lineStarts = [0]
+    var offset = 0
+    for character in text.chars() {
+      offset = offset + character.byteLength()
+      if character == '\n' {
+        lineStarts.add(offset)
+      }
+    }
+    Self(text, lineStarts)
+  }
+
+  fn lineAndColumn(self, offset: Int): (line: Int, column: Int) {
+    const target = offset.min(text.byteLength())
+    // The last line that starts at or before the offset
+    var low = 0
+    var high = lineStarts.length()
+    while low + 1 < high {
+      const middle = (low + high) / 2
+      if lineStarts[middle] <= target {
+        low = middle
+      } else {
+        high = middle
+      }
+    }
+    const column = text[lineStarts[low]..target].chars().count()
+    (line: low + 1, column: column + 1)
+  }
+
+  /** The text of a line (starting at 1), without its line break. */
+  fn lineText(self, line: Int): String {
+    const start = lineStarts[line - 1]
+    const end = lineStarts.get(line) ?? text.byteLength()
+    var result = text[start..end]
+    while result.endsWith("\n") || result.endsWith("\r") {
+      result = result[0..(result.byteLength() - 1)]
+    }
+    result
+  }
+}

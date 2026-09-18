@@ -42,8 +42,8 @@ fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
 
 match readPort(["port": "80a"]) {
   Ok(port) => print "Port {port}"
-  Error(Missing(key)) => print "{key} is missing"
-  Error(Invalid(key, reason)) => print "{key} is invalid: {reason}"
+  Error(.Missing(key)) => print "{key} is missing"
+  Error(.Invalid(key, reason)) => print "{key} is invalid: {reason}"
 }
 
 // --- Error conversion with From -------------------------------------------------
@@ -53,11 +53,8 @@ type AppError {
   case Startup(message: String)
 }
 
-extend AppError with From<ConfigError> {
-  fn from(value: ConfigError): AppError {
-    AppError.Config(value)
-  }
-}
+// A case with exactly one field, whose type no other case wraps, generates `From`:
+// `AppError.from(configError)` is `AppError.Config(configError)`. That is all `?` needs.
 
 fn start(settings: Map<String, String>): Result<Void, AppError> {
   const port = readPort(settings)?       // ConfigError is converted to AppError through `From`

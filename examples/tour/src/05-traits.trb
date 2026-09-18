@@ -47,12 +47,12 @@ trait Greeter with Named {
 }
 
 // Bounds: inline or with `where`
-fn largestArea<T: Shape>(shapes: List<T>): Float {
+fn largestArea<Item: Shape>(shapes: List<Item>): Float {
   shapes.map { _.area() }.fold(0.0) { a, b => a.max(b) }
 }
 
-fn printSorted<T>(items: List<T>) where T: Compare + Show {
-  const sorted = items.sortBy { _ }      // Not inside the `for` head: there a `{` starts the body
+fn printSorted<Item>(items: List<Item>) where Item: Compare + Show {
+  const sorted = items.sorted { _ }      // Not inside the `for` head: there a `{` starts the body
   for item in sorted {
     print item
   }
@@ -92,28 +92,28 @@ type CaseInsensitive with Equals, Hash {
 }
 
 // Generic extension with a condition
-extend<T> List<T> where T: Shape {
+extend<Item> List<Item> where Item: Shape {
   fn totalArea(self): Float {
     map { _.area() }.sum()
   }
 }
 
-print [Square(1.0), Square(2.0)].totalArea()
+print([Square(1.0), Square(2.0)].totalArea())
 
 // Indexing is a trait, too
-var type Grid<T> with MutableIndexed<(Int, Int), T> {
+type Grid<Cell> with MutableIndexed<(Int, Int), Cell> {
   width: Int
-  private var cells: Array<T>
+  private var cells: List<Cell>
 
-  fn filled(width: Int, height: Int, value: T): Grid<T> {
-    Self(width, Array.filled(width * height, value))
+  fn filled(width: Int, height: Int, value: Cell): Grid<Cell> {
+    Self(width, List.filled(width * height, value))
   }
 
-  fn get(self, key: (Int, Int)): T? {
+  fn get(self, key: (Int, Int)): Cell? {
     cells.get(key.1 * width + key.0)
   }
 
-  fn set(var self, key: (Int, Int), value: T) {
+  fn set(var self, key: (Int, Int), value: Cell) {
     cells[key.1 * width + key.0] = value
   }
 }

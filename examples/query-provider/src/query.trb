@@ -3,16 +3,16 @@ use Fragment, QueryError, translate from "./sql"
 /** What a query keeps of a quotation: the static tree and the captured values of this particular call. */
 type Quoted {
   tree: ExpressionNode
-  captures: List<Data>
+  captures: List<Encode>
 
-  fn of<T>(expression: Expression<T>): Quoted {
+  fn of<Row>(expression: Expression<Row>): Quoted {
     Quoted(expression.tree, expression.captures())
   }
 
   /** `{ _.age >= 18 }` arrives as a `Lambda` node, the translator wants its body. */
   fn body(self): ExpressionNode {
     match tree {
-      Lambda(_, body, _) => body
+      .Lambda(_, body, _) => body
       other => other
     }
   }
@@ -23,24 +23,24 @@ type Quoted {
 }
 
 /**
- * An immutable description of a query. Has the same vocabulary as `Iterable` - but its parameters are `Expression`,
+ * A description of a query. Has the same vocabulary as `Iterable` - but its parameters are `Expression`,
  * so the closures are not executed, they are translated.
  */
-public type Query<T> {
+public type Query<Row> {
   table: String
   private conditions: List<Quoted> = []
   private ordering: List<Quoted> = []
   private limit: Int? = None
 
-  fn filter(self, predicate: Expression<(row: T) => Bool>): Query<T> {
-    copy(conditions: conditions.add(Quoted.of(predicate)))
+  fn filter(self, predicate: Expression<(row: Row) => Bool>): Query<Row> {
+    copy(conditions: conditions.added(Quoted.of(predicate)))
   }
 
-  fn sortBy<K: Compare>(self, key: Expression<(row: T) => K>): Query<T> {
-    copy(ordering: ordering.add(Quoted.of(key)))
+  fn sorted<Key: Compare>(self, by: Expression<(row: Row) => Key>): Query<Row> {
+    copy(ordering: ordering.added(Quoted.of(by)))
   }
 
-  fn take(self, amount: Int): Query<T> {
+  fn take(self, amount: Int): Query<Row> {
     copy(limit: Some(amount))
   }
 

@@ -7,21 +7,18 @@ type StartupError {
   case Config(cause: ConfigError)
 }
 
-extend StartupError with From<SandboxError> {
-  fn from(value: SandboxError): StartupError { StartupError.Script(value) }
-}
-
-extend StartupError with From<ConfigError> {
-  fn from(value: ConfigError): StartupError { StartupError.Config(value) }
-}
+// Both cases wrap exactly one error, so `From<SandboxError>` and `From<ConfigError>` are generated and `?` converts.
 
 fn loadConfig(path: String): Result<ServerConfig, StartupError> {
-  // No capabilities: the script cannot do IO. Resource limits guard against `while true {}`.
-  const sandbox = Sandbox(maxSteps: 1_000_000, maxMemory: 16_000_000)
-
   // Parses and type checks the file against ServerConfig.
   // The result is an ordinary closure: (var self: ServerConfig) => Void
-  const configure = sandbox.load<ServerConfig>(path)?
+  //
+  // What a script can do is decided here, where it is loaded. Without the block it could not do any IO at all;
+  // this one may read files below ./config. The limits guard against `while true {}`.
+  const configure = Sandbox.load<ServerConfig>(path) {
+    files readOnly: "./config"
+    limits steps: 1_000_000, memory: 16.megabytes()
+  }?
 
   var config = ServerConfig.withSecrets(["DB_PASSWORD": Environment.get("DB_PASSWORD") ?? ""])
   configure(config)
@@ -48,6 +45,6 @@ match loadConfig("./config.trb") {
       print "  {route.path} -> {route.handler}"
     }
   }
-  Error(Script(cause)) => print "config.trb:{cause.line}: {cause.message}"
-  Error(Config(cause)) => print "Invalid configuration: {cause.message}"
+  Error(.Script(cause)) => print "config.trb:{cause.line}: {cause.message}"
+  Error(.Config(cause)) => print "Invalid configuration: {cause.message}"
 }

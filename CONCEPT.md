@@ -1,12 +1,14 @@
 # TorbScript Concept
 
-> Working name. So are derived things like the file extension (`.trb`) and the CLI name (`torb`).
+> The language is called TorbScript, its CLI is `torb`, source files end in `.trb`.
 
 ## Key Facts
 
 - Functional-first, multi-paradigm scripting language. Not Haskell-style purity, but the functional principles are
   kept clean: immutable by default, expressions over statements, values over identity, mutation always explicitly marked.
 - C-style syntax with elements taken from Scala, Kotlin, Groovy, Rust, TypeScript, Swift
+- Value semantics: every type is a value, the binding (`const`/`var`) decides whether it can be changed.
+  No `Point`/`MutablePoint`, no `List`/`MutableList`. Identity is the marked exception (`shared type`)
 - Strongly, statically typed with local (bidirectional) type inference
 - First-class and higher-order functions
 - Algebraic data types and pattern matching
@@ -20,12 +22,12 @@
 ## Design Principles
 
 1. **The parameter type decides how an argument is read.** A closure passed to a parameter of type
-   `(self: T) => R` resolves names against `T`. A closure passed to `(value: Int) => Int` may use `value` implicitly.
-   An expression passed to `lazy T` is not evaluated at the call site. This one principle powers DSLs,
+   `(self: Receiver) => Value` resolves names against `Receiver`. A closure passed to `(value: Int) => Int` may use `value` implicitly.
+   An expression passed to `lazy Value` is not evaluated at the call site. This one principle powers DSLs,
    custom control structures and query providers, without macros or annotations.
 2. **Mutation is always visible.** `var` bindings, `var` fields (`private(var)`: only the type itself), `var` parameters,
-   `var self` methods, `var type`s,
-   Everything not marked is immutable.
+   `var self` methods. Everything not marked does not change. Values are never aliased, so a mutation happens
+   exactly where it is written and nowhere else.
 3. **One way to construct, many ways to create.** Constructors only initialize fields and never contain logic.
    Validation, parsing and conversion live in static factory functions (`Email.parse`, `From`/`Into`).
 4. **No whitespace-sensitive parsing.** Whitespace never changes the meaning of a token sequence
@@ -41,9 +43,13 @@ torb build          # Build a native executable
 torb test           # Run tests/
 torb format         # Formatter
 torb lint           # Linter
+torb doc            # Documentation from the doc comments
 torb repl           # Interactive session
 torb add <package>  # Add a dependency
 ```
+
+Resolved dependency versions are written to `project.lock.trb` (a `.trb` file like every other configuration) and
+belong into version control.
 
 ### Project Layout
 
@@ -70,16 +76,16 @@ version "0.1.0"
 authors "Author Name <author@example.com>",
   "Another Author <another@example.com>"
 dependencies {
-  always "some-library:^1.2.3"
-  optional "another-library:^2.3.4"
-  dev "dev-library:^3.4.5"
-  test "test-library:^4.5.6"
-  suggest "suggested-library:^5.6.7", because: "it provides additional optional features"
+  runtime "acme/http:^1.2.3"
+  development "acme/mock-server:^3.4.5"    // Tests and tools. Never part of what dependents get.
 }
+
+const binary = name.substringAfter("/") ?? name
+
 build {
   target "dev"
   input "src/main.trb"
-  output "build/{target}/{project.name}"   // Eager interpolation: reads the fields set above
+  output "build/{target}/{binary}"         // Eager interpolation: `target` was set one line above
 }
 test {
   input "tests"
@@ -96,26 +102,82 @@ self.version = "0.1.0"
 self.authors("Author Name <author@example.com>", "Another Author <another@example.com>")   // Variadic method
 
 const configureDependencies: (var self: Dependencies) => Void = { dependencies =>
-  dependencies.always("some-library:^1.2.3")       // `always`, `suggest`, ... are methods of Dependencies
-  dependencies.suggest("suggested-library:^5.6.7", because: "it provides additional optional features")
+  dependencies.runtime("acme/http:^1.2.3")         // `runtime` and `development` are methods of Dependencies
 }
 configureDependencies(self.dependencies)   // `dependencies` is a field, configured in place
 
 const configureBuild: (var self: Build) => Void = { build =>
   build.target = "dev"
-  build.output = "build/{build.target}/{build.project.name}"
+  build.output = "build/{build.target}/{binary}"
 }
 configureBuild(self.build)
 ```
 
-(`{project.name}` instead of `{name}`, because only the innermost receiver is implicit - see
-[Configuration DSL](#configuration-dsl).)
+(`binary` is read before the block, because only the innermost receiver is implicit - see
+[Configuration DSL](#configuration-dsl). A `Build` is a value and does not know the project it belongs to.)
+
+### Workspaces
+
+A project can consist of several projects. The root names its members, every member is an ordinary project with a
+`project.trb` of its own:
+
+```trb
+name "acme/shop"
+version "1.4.0"
+
+workspace {
+  members "packages/*", "tools/importer"
+}
+```
+
+```text
+shop/
+├ packages/
+├─ core/            name "acme/shop-core"
+├─ api/             name "acme/shop-api", dependencies { runtime "acme/shop-core" }
+├ tools/
+├─ importer/
+├ project.trb       the workspace
+└ project.lock.trb  one lock file for all of them
+```
+
+- A dependency whose name is a member of the workspace is that member, from source. It needs no version inside of
+  the workspace; publishing a member writes the current versions of its siblings into what is published.
+- There is one `project.lock.trb`, at the root. All members share one resolution, so they cannot drift apart.
+- Members inherit `version`, `authors` and the registries of the root unless they set their own.
+- `torb build`, `test` and `check` at the root work on all members, in the order of their dependencies
+  (`torb test packages/api` for one). Cycles between members are an error. The root may have sources of its own, or
+  be nothing but the list of members.
+- The toolchain is a workspace itself: `std/*`, `compiler`, `examples/*`.
+
+### Packages and the Supply Chain
+
+Simple to use like npm, strict like Maven. The rules exist so that adding a dependency is never a leap of faith:
+
+- **Names are `owner/name`.** Owners are verified namespaces of a registry. A project binds owners to registries
+  (`registry "acme", url: "https://packages.acme.test"`), so a public package can never take the place of a private
+  one (no dependency confusion, no typo squatting on bare names).
+- **Published versions are immutable.** A version can be withdrawn for new resolutions, never replaced or deleted.
+- **`project.lock.trb` pins the whole graph:** exact version, content hash and registry of every package, direct or
+  transitive. `torb run`, `build` and `test` never change it and fail if it does not match `project.trb`;
+  only `torb add`, `torb remove` and `torb update` write it. Hashes are verified on every install.
+- **Resolution:** semantic versions, `^` by default, the highest compatible version, one version of a package per
+  major version in a graph.
+- **Installing never runs code.** There are no install scripts and no build scripts. `project.trb` is evaluated in a
+  sandbox without IO, so reading the metadata of a package is safe, too.
+- **Capabilities are visible.** There is no reflection, no `eval` and no dynamic import, so the compiler knows from
+  the imports alone what a package can touch: file system, network, processes, environment, foreign functions.
+  `torb add` shows that (for the package and everything below it), the lock file records it, and an update that
+  gains a capability needs an explicit confirmation.
+- `torb audit` checks the locked graph against the advisory database of the registry.
+- There are no optional or suggested dependencies and no feature flags. An optional integration is a package of its
+  own (`acme/http`, `acme/http-json`).
 
 ## Lexical Structure
 
 ```trb
 // Line comment
-/* Block comment /* they nest */ so code containing comments can be commented out */
+/* Block comment. It ends at the first star-slash: block comments do not nest. */
 /** Doc comment, attached to the following declaration. Markdown. */
 ```
 
@@ -124,9 +186,23 @@ configureBuild(self.build)
   There are no semicolons.
 - Naming is convention, not grammar: `UpperCamelCase` for types, traits, type parameters and variants,
   `lowerCamelCase` for everything else. The linter checks it, the compiler does not care.
+- Keywords are reserved, except where they cannot be confused: after a `.` and as argument labels they are ordinary
+  names (`query.where { ... }`, `move(from: a, to: b)`). A parameter cannot be named like a keyword (it would be
+  unusable inside of the function). `from`, `as` and `by` are contextual and not reserved at all.
+- A `{` at the start of a line never continues the line above: a closure on its own line is a value (the result of a
+  function, for example). Only the body of a `type`, `trait` or `extend` may start on its own line, after a long
+  `with ...` or `where ...`.
 - **Names are written out.** `Expression`, `Subtract`, `Remainder`, `absolute`, `squareRoot` - not `Expr`, `Sub`,
   `Rem`, `abs`, `sqrt`. Abbreviations are only fine where the abbreviation _is_ the name people know
-  (`Html`, `Json`, `Sql`, `Http`, `Int64`, `min`/`max`). This holds for the standard library, and is a linter hint for user code.
+  (`Html`, `Json`, `Sql`, `Http`, `Int64`, `Bool`, `Char`, `min`/`max`). This holds for the standard library, and is a
+  linter hint for user code. Type parameters are written out, too: `List<Item>`, `Map<Key, Value>`,
+  `Result<Value, Failure>`, `fn map<Output>(...)` - not `T`, `K`, `V`, `E`, `U`.
+- **Verbs change, participles return.** A method that changes its receiver in place is a verb and declares `var self`
+  (`add`, `remove`, `sort`, `translate`). The method that returns a changed copy instead is its participle (`added`,
+  `removed`, `sorted`, `translated`). Pick verbs whose participle is a different word: the standard library avoids
+  `put`, `cut`, `reset` as mutators, and `set` has the counterpart `updated`. Nouns never change
+  anything (`union`, `intersection`). Tooling does not offer verbs on a const path, and the compiler error names the
+  participle ("`add` needs a `var`. Did you mean `added`?").
 - Generics vs. comparison (`load<Config>(path)` vs. `a < b`) is decided purely syntactically, without knowing what
   the names mean (the C#/Kotlin/TypeScript approach): after a name, `<` starts a type argument list if the tokens up
   to the matching `>` form valid types **and** the token after `>` is one of `(` `.` `{` `)` `]` `,` `:` or the end
@@ -138,6 +214,43 @@ configureBuild(self.build)
   Raw strings (`r"..."`, `r"""..."""`) have no interpolation and no escapes (JSON, regular expressions, paths).
 - Char literals: `'A'`
 
+### Doc Comments
+
+A doc comment belongs to the declaration that follows it. **Everything that is declared can have one - parameters,
+fields and cases included** - so there is no tag language that repeats names (`@param host`) and goes stale:
+
+```trb
+/**
+ * Connects to a database.
+ *
+ * # Panics
+ * If `timeout` is negative.
+ *
+ * # Examples
+ *     const connection = connect("localhost", timeout: 5)?
+ *     assert(connection.isOpen())
+ */
+public fn connect(
+  /** Host name or address */
+  host: String,
+  /** Seconds to wait before giving up */
+  timeout: Int = 30,
+): Result<Connection, IoError> { ... }
+
+type Shape {
+  /** A circle around the origin */
+  case Circle(/** Always positive */ radius: Float)
+}
+```
+
+- The text is Markdown. There are no annotations and no second syntax inside of comments.
+- Conventional headings carry what tags carry elsewhere: `# Errors`, `# Panics`, `# Examples`. The return value is
+  described in the text.
+- **Examples are tests.** `torb test` compiles and runs the code under `# Examples`, so documentation cannot rot.
+- `[List.add]` and `[Option]` are links. They are resolved like names in the code at that place; a link that does not
+  resolve is a warning.
+- The doc comment is part of the syntax tree. The language server, `torb doc` and the test runner read the same data.
+
 ## Bindings
 
 ```trb
@@ -145,9 +258,18 @@ const y = 30        // Immutable binding
 var x = 20          // Mutable binding
 const z: Float = 1  // Optional type annotation; literals adapt to the expected type
 
+var list = [1, 2]   // The binding decides about the value, too: `list.add(3)` works, ...
+const fixed = list  // ...`fixed.add(3)` does not. `const` is deep, and `fixed` is a copy: it never changes.
+
 var a               // Compile error: bindings must be initialized
 var b: Int          // Compile error: no implied default value
 ```
+
+- A name can be shadowed in a nested scope, but not redeclared in the same scope.
+- **Changes that cannot have an effect are compile errors,** because with value semantics they are always a mistake:
+  a `var` that is changed but never read afterwards (`var first = list[0]` followed by `first.increment()` - the
+  message points to `list[0].increment()`), and the discarded result of a method that takes `self`
+  (`list.added(4)` as a statement - the message points to `add`). Discard on purpose with `const _ = ...`.
 
 `const` is deep from the perspective of the binding: through a `const` binding you can neither reassign, nor assign
 fields, nor call `var self` methods. `var` means "mutable through this path".
@@ -160,13 +282,14 @@ Assignment is a statement, not an expression.
 const someInt = 10                         // Int
 const someFloat = 3.14                     // Float
 const someChar = 'A'                       // Char (Unicode scalar value)
-const someString = "Hello"                 // String (UTF-8)
+const someString = "Hello"                 // String (UTF-8, see below)
 const someBool = true                      // Bool
 const someTuple = (1, "one")               // (Int, String), access with `.0`, `.1` or destructuring
-const someList = [1, 2, 3]                 // List<Int>          (persistent, immutable)
-const someMap = ["a": 1, "b": 2]           // Map<String, Int>   (persistent, immutable)
-const someRange = 0..10                    // Range<Int>, `0..=10` is inclusive, `0..` is open-ended (infinite)
-const someOption: Int? = None            // `T?` is sugar for `Option<T>`
+const someRange = (lowest: 1, highest: 9)  // Named tuple: `.lowest` is a name for `.0`, nothing more
+const someList = [1, 2, 3]                 // List<Int>
+const someMap = ["a": 1, "b": 2]           // Map<String, Int>
+const someRange = 0..10                    // Range<Int>, `0..=10` is inclusive, `0..` and `..10` are open
+const someOption: Int? = None            // `Value?` is sugar for `Option<Value>`
 const someFunction = { x: Int => x * 2 } // (Int) => Int
 const emptyList: List<Int> = []          // Empty literals need a type from context
 const emptyMap: Map<String, Int> = [:]
@@ -189,6 +312,70 @@ const emptyMap: Map<String, Int> = [:]
 - No implicit numeric conversions. Use `From`/`Into`: `Float.from(someInt)`.
 - `Void` is the type with exactly one value, `Never` the type of expressions that do not return (`panic`, `return`).
 
+### Strings
+
+A `String` is UTF-8 text and a value like everything else. It deliberately has no `length()` and no `text[i]`,
+because "length" and "the i-th character" have three different answers (bytes, code points, what a reader sees) and
+two of them are slow:
+
+```trb
+const text = "Grüße 👋"
+text.chars().count()               // 7  - `chars()` is an Iterable<Char> (Unicode scalar values)
+text.byteLength()                  // 13 - O(1)
+text.isEmpty()
+
+const at = text.indexOf("ß")       // Some(3): positions come from searching and are byte offsets
+const tail = text[3..]             // Slicing with offsets is O(1). An offset inside of a character panics.
+text.substringAfter("ü")           // Some("ße 👋") - most code never sees an offset
+```
+
+### Literal Types
+
+A type can be a union of literals of one base type (`String`, `Int` or `Char`):
+
+```trb
+type Status = "online" | "offline" | "away"
+
+var status: Status = "online"              // Literals adapt to the expected type, like `const z: Float = 1`
+status = "busy"                            // Compile error: not one of the three
+status = someString                        // Compile error: a String is not a Status
+status = Status.parse(someString)?         // Generated, like `Show`, `Equals`, `Hash`, `Encode`, `Decode`
+
+fn connect(host: String, transport: "tcp" | "udp" = "tcp") { ... }   // They work inline, too
+```
+
+- A literal has its ordinary type (`"online"` is a `String`) unless a literal type is expected. So nothing is ever
+  widened or narrowed, and inference is untouched.
+- The members are told apart by value, not by type. That is why this fits a language without runtime types - and why
+  **only literals can be combined with `|`**. There are no unions of types (`Int | String`): use a type with cases,
+  or accept `<Value: Into<Width>>`.
+- `match` on a literal type is exhaustive without `_`. Back to the base type: interpolation or `status.into()`.
+- Two literal types are the same type if they have the same members. A subset is not assignable (no subtyping).
+- For everything with data or behavior attached, a type with cases is the tool. Literal types are for "one of these
+  strings" in signatures, configuration and wire formats.
+
+### Const Parameters and `Array`
+
+A type parameter can be a value instead of a type:
+
+```trb
+type Matrix<const Rows: Int, const Columns: Int> {
+  private var cells: Array<Array<Float, Columns>, Rows> = Array.filled(Array.filled(0.0))
+
+  fn multiplied<const Other: Int>(self, other: Matrix<Columns, Other>): Matrix<Rows, Other> { ... }
+}
+
+const combined = Matrix<2, 3>().multiplied(Matrix<3, 4>())   // Matrix<2, 4>, checked by the compiler
+```
+
+- `Array<Item, const Size: Int>` is the array with a fixed size, as in Rust and Go: a small inline value without heap
+  storage and without a reference count. An index that is known at compile time is checked at compile time.
+  Everything that grows is a `List` (`ArrayList` is what `Vec` is in Rust).
+- A const argument is a literal, a named `const` or another const parameter. **There is no arithmetic in types**
+  (`Array<Item, Size + 1>`): the type checker compares const arguments for equality and nothing else.
+- Const parameters are `Int`, `Bool`, `Char` or `String`. Inside of the type they are ordinary constants (`0..Rows`).
+- This does not make types values: a value in a type is the other direction.
+
 ### Type Aliases
 
 There is no `alias` keyword. `type Name { ... }` declares a new type, `type Name = ...` names an existing one.
@@ -196,7 +383,7 @@ There is no `alias` keyword. `type Name { ... }` declares a new type, `type Name
 ```trb
 type Int = Int64                                   // This is how the prelude declares `Int`
 type Handler = (request: Request) => Response
-type Pair<T> = (T, T)                              // Aliases can be generic
+type Pair<Value> = (Value, Value)                              // Aliases can be generic
 public type EntityId = Int
 ```
 
@@ -215,8 +402,8 @@ public type EntityId = Int
 > `(request: Request) => Response` is a function type, but also a valid lambda returning `Response`.
 > `(Int, Int)` is a tuple type, but also a tuple of two types. `Int?` is `Option<Int>`, but `?` is also the
 > propagation operator. `type X =` sidesteps all of this by switching the parser to type syntax.
-> The bigger cost sits behind it: if types are values, generics become functions over types (`fn List(T: Type): Type`).
-> Those cannot be inferred by unification (`numbers.map { _ * 2 }` could no longer infer `U`), bounds could only be
+> The bigger cost sits behind it: if types are values, generics become functions over types (`fn List(Item: Type): Type`).
+> Those cannot be inferred by unification (`numbers.map { _ * 2 }` could no longer infer `Output`), bounds could only be
 > checked at instantiation instead of at the declaration, and the type checker would need to run the interpreter
 > while it is type checking. Declarative generics with trait bounds and inference are worth more to this language.
 > If types ever become compile-time values, `type X = Y` stays valid as it is.
@@ -325,7 +512,7 @@ numbers.fold(0) { sum, number => sum + number }
 The implicit parameter can be named by the _type of the function_:
 
 ```trb
-fn map<U>(self, transform: (value: T) => U): Iterable<U>
+fn map<Output>(self, transform: (value: Item) => Output): Iterable<Output>
 
 numbers.map { value * 2 }
 ```
@@ -337,45 +524,54 @@ If such a name would shadow a name that is visible at the closure, it is a compi
 ```trb
 print "Hello"
 route "/health", to: "health"
-const email = Email.parse "info@example.test"
+const response = retry 3 { http.get(url) }
 test "adds two numbers" {
-  expect(sum(1, 2)).toBe 3
+  assert(sum(1, 2) == 3)
 }
 ```
 
 Rules:
 
-- Only allowed in _command position_: at the start of a statement, on the right side of `=`, after `return`,
-  after `=>`, or as the last argument of another command call (`a b c` is `a(b(c))`).
-- Never inside parentheses, brackets, operators or regular argument lists.
-- The callee is a name or a member path (`print`, `Email.parse`, `expect(x).toBe`).
+- Only allowed in _command position_: at the start of a statement, on the right side of `=`, after `return` and
+  after `=>`.
+- Never inside parentheses, brackets, operators or argument lists. Commands do not nest: the arguments of a command
+  are ordinary expressions (`print describe(numbers)`, not `print describe numbers`).
+- The callee is a name or a member path (`print`, `Email.parse`, `server.route`).
 - Arguments are separated by `,`. The first argument must not start with `(`, `[`, `-` or `!`
   (`f [1]` is always indexing, `f -1` is always subtraction). Use parentheses in these cases.
 - A trailing closure always belongs to the outermost command call of the statement
   (`unless list.isEmpty() { ... }` passes the closure to `unless`). Consequently, the arguments of a command call
   cannot contain trailing closures themselves: `print numbers.map { _ * 2 }` is an error, write
-  `print numbers.map({ _ * 2 })`. The same is true for the heads of `if`, `for`, `while` and `match`.
+  `print numbers.map({ _ * 2 })`. The same is true for the heads of `if`, `for`, `while` and `match` - a command
+  reads like a built-in statement, and its `{` is its body. (`a b { }` cannot be decided by looking at it:
+  `unless done { ... }` and `print numbers.map { ... }` have the same shape. One rule, the error message names the
+  fix, and the formatter applies it.)
+- **Formatter canon:** a call is written as a command if it is a statement, or if it ends with a trailing closure
+  (`const result = retry 3 { ... }`), and if its arguments fit on one line. Everything else gets parentheses: calls
+  whose value is used without a closure (`const email = Email.parse("a@b.c")`), calls without arguments, and calls
+  whose first argument starts with `(`, `[`, `-` or `!`.
 - Calls without arguments always need `()`. A bare name is always a reference.
 
 ### Parameter Modes
 
 | Parameter type     | The argument is...                                                   | Used for                          |
 |--------------------|----------------------------------------------------------------------|-----------------------------------|
-| `T`                | evaluated at the call site                                           | everything                        |
-| `() => T`          | a closure                                                            | control structures, callbacks     |
-| `(self: R) => T`   | a closure whose names resolve against `R` (receiver closure)         | builders, DSLs, config files      |
-| `lazy T`           | any expression, evaluated at most once, on first use                 | `opt.orElse(expensive())`, logging |
-| `Expression<T>`          | quoted: the typed expression tree, plus the value                    | query providers, `assert`         |
+| `Value`                | evaluated at the call site                                           | everything                        |
+| `var name: Value`      | a `var` path. The function works on the caller's value               | in-place algorithms, builders     |
+| `() => Value`          | a closure                                                            | control structures, callbacks     |
+| `(self: Receiver) => Value`   | a closure whose names resolve against `Receiver` (receiver closure)         | builders, DSLs, config files      |
+| `lazy Value`           | any expression, evaluated at most once, on first use                 | `opt.orElse(expensive())`, logging |
+| `Expression<Value>`          | quoted: the typed expression tree, plus the value                    | query providers, `assert`         |
 
-### Quoted Expressions (`Expression<T>`)
+### Quoted Expressions (`Expression<Value>`)
 
-If a parameter (or binding) has the type `Expression<T>`, the argument is type checked as a normal `T` first and then
+If a parameter (or binding) has the type `Expression<Value>`, the argument is type checked as a normal `Value` first and then
 passed _together with its expression tree_. The call site looks like any other:
 
 ```trb
 const minAge = 18
-const adults = users.filter { _.age >= minAge }             // List<User>:   predicate: (value: T) => Bool
-const query = db.users.filter { _.age >= minAge }           // Query<User>:  predicate: Expression<(row: T) => Bool>
+const adults = users.filter { _.age >= minAge }             // List<User>:   predicate: (value: Item) => Bool
+const query = db.users.filter { _.age >= minAge }           // Query<User>:  predicate: Expression<(row: Row) => Bool>
 // SELECT * FROM users WHERE age >= ?    [18]
 
 assert(adults.length() > limit)                             // fn assert(condition: Expression<Bool>)
@@ -384,16 +580,16 @@ assert(adults.length() > limit)                             // fn assert(conditi
 
 ```trb
 // std/expression
-native type Expression<T> {
+native type Expression<Value> {
   tree: ExpressionNode                  // Static data, created at compile time. Quoting costs nothing at runtime.
   source: String                  // "_.age >= minAge"
   location: SourceLocation
-  native fn value(self): T               // The ordinary value/closure. Evaluated at most once for non-functions.
-  native fn captures(self): List<Data>   // Values of the captured variables, converted on demand
+  native fn value(self): Value               // The ordinary value/closure. Evaluated at most once for non-functions.
+  native fn captures(self): List<Encode> // Values of the captured variables
 }
 
-open type ExpressionNode {
-  case Literal(value: Data, of: TypeReference)
+type ExpressionNode {
+  case Literal(value: Encode, of: TypeReference)
   case Parameter(index: Int, name: String, of: TypeReference)
   case Captured(index: Int, name: String, of: TypeReference)      // Index into `captures()`
   case Field(target: ExpressionNode, name: String, of: TypeReference)
@@ -404,35 +600,45 @@ open type ExpressionNode {
   case Conditional(condition: ExpressionNode, then: ExpressionNode, otherwise: ExpressionNode, of: TypeReference)
   case Lambda(parameters: List<String>, body: ExpressionNode, of: TypeReference)
   case Items(items: List<ExpressionNode>, of: TypeReference)            // List literal
+  case Interpolation(parts: List<ExpressionNode>)                       // "{a} and {b}": literals and expressions
 }
 ```
 
 - **Quotable is what is an expression:** literals, parameters, captured variables, field access, calls, operators,
-  constructors, `if`/`else`, nested closures, list literals. A quoted closure must consist of a single expression.
-  Statements (`const`, `var`, assignment, loops, `return`, `await()`) are a compile error inside of a quotation.
+  constructors, `if`/`else`, nested closures, list literals, string interpolation. A quoted closure must consist of
+  a single expression. Statements (`const`, `var`, assignment, loops, `return`, `await()`) and the early return `?`
+  are a compile error inside of a quotation. `match` is not quotable yet (patterns would double the node set).
+- `?.` and `??` have no nodes of their own. They are what they mean: calls of `Option.map`/`flatMap` and
+  `Option.orElse`. A provider that knows `Option` knows them.
+- `nameOf(user.email)` is `"email"`: an ordinary function over `Expression<Value>` that reads the last `Field` or
+  `Captured` node and never evaluates the value. For types there is the compile-time function `typeName<User>()`.
 - **Quoting happens after name resolution and type checking.** That is why it does not have the phase problem of
   macros: implicit `_`, named parameters, receivers and implicit `self` are already resolved, the tree only contains
   explicit `Parameter`, `Field` and `Call` nodes, each with its type.
 - **The tree is data, not reflection.** `TypeReference` is a description (`name`, `arguments`), there is no way back from it
-  to a type. Trees are const values: they can be matched, transformed, compared, hashed, serialized (`ToData`).
-- **Captured variables must be `ToData`**, because a provider has to be able to look at them (SQL parameters).
+  to a type. Trees are values: they can be matched, transformed and encoded.
+- **Captured variables must be `Encode`**, because a provider has to be able to look at them (a SQL driver binds them
+  as parameters with its own `Encoder`).
   Capturing anything else in a quotation is a compile error.
 - **The tree cannot be executed**, the value can. There is no `compile()` like in C#, so compiled binaries need no
   interpreter for this. An in-memory provider calls `value()`, a SQL provider reads `tree`.
 - What a provider does not understand (`filter { myOwnFunction(_) }`) is the provider's error at runtime
   (`Error(Unsupported(...))`), the language cannot know what a library can translate.
-- `ExpressionNode` is part of the language standard. It is an _open_ type: matches on it need a `_` arm, so new node kinds
-  do not break existing providers.
+- `ExpressionNode` is part of the language standard and an ordinary ADT. A new node kind comes with a new version of
+  the language; providers that end their `match` with `_ => Error(Unsupported(...))` - and they need that arm for
+  calls they do not know anyway - keep compiling.
 
 ## Blocks and Control Flow
 
 `{ ... }` in expression position is a closure. To evaluate a block immediately, use `do` - which is an ordinary
-function from the standard library (`fn do<T>(body: () => T): T { body() }`), not a keyword.
+function from the standard library (`fn do<Value>(body: () => Value): Value { body() }`), not a keyword.
+The bodies of `if`/`else` and of a `match` arm (`pattern => { ... }`) are blocks, not closures: they belong to the
+construct the same way the body of a `for` does.
 
 ```trb
 const initialized = do {
   const base = [1, 2, 3]
-  base.add(4).add(5).remove(2)
+  base.added(4).added(5).removed(2)
 }
 ```
 
@@ -461,18 +667,31 @@ unless user.isAdmin {
 
 ## Types
 
-`type` is the single keyword for all data types (struct, class, enum, ADT). A `type` is an immutable value type, `var type` makes it a mutable reference type. Like everywhere else in the language: what is not marked `var` does not change.
+`type` is the single keyword for all data types (struct, class, enum, ADT). **A `type` is a value, and the binding
+decides whether it can be changed.** There is one `Point`, not a `Point` and a `MutablePoint`. Like everywhere else in
+the language: no `var`, no mutation.
 
-### Value Types (the default)
+### Values
 
 ```trb
 type Point {
-  x: Int
-  y: Int
+  var x: Int                   // Fields are `const` unless marked `var`
+  var y: Int
 
   // Method: declares `self`. Member access through `self` is implicit.
   fn area(self): Int {
     x * y
+  }
+
+  // A verb changes the value in place and says so: `var self`
+  fn translate(var self, deltaX: Int = 0, deltaY: Int = 0) {
+    x = x + deltaX
+    y = y + deltaY
+  }
+
+  // Its participle returns a changed copy
+  fn translated(self, deltaX: Int = 0, deltaY: Int = 0): Point {
+    copy(x: x + deltaX, y: y + deltaY)
   }
 
   // Static function: does not declare `self`.
@@ -485,37 +704,105 @@ type Point {
 }
 
 var p = Point(x: 10, y: 20)    // or positional: Point(10, 20)
-p.x = 20                       // Compile error
+const q = p                    // A copy
+
+p.x = 20
+p.translate(deltaX: 5)         // `q` is still (10, 20)
+
+q.x = 20                       // Compile error: `q` is a `const`
+q.translate(deltaX: 5)         // Compile error: `translate` needs a `var`. Did you mean `translated`?
+const r = q.translated(deltaX: 5)
 p = p.copy(y: 30)              // `copy` is generated for every `type`
-print "The area is {p.area()}"
 ```
 
-- A `type` is deeply immutable: it has no `var` fields, no `var self` methods, and none of its fields is a `var type`.
-  (A generic `type Box<T>` is exactly as immutable as its `T`.)
-- It has value semantics: structural `Equals`, `Hash` and `Show` are generated, there is no identity.
+- **Assigning, passing and capturing a value is a copy.** Two bindings never alias, so what happens through one `var`
+  cannot be observed anywhere else. That is what makes "the binding decides" sound - and why a `const` list, map or
+  point really never changes.
+- **Mutation needs a `var` path,** from the binding down to the field: a `var` binding, `var` parameter or `var self`,
+  then `var` fields all the way. A field without `var` never changes after construction, not even in a `var`
+  binding (`id`, `step`). `const` is deep: through a `const` binding nothing changes, whatever the type looks like.
+- Structural `Equals`, `Hash`, `Show` and `copy` are generated, there is no identity.
   (Each of them only if all fields support it: a type with a function in a field has no generated `Equals`.)
-- Const values can be freely shared between tasks.
+- What a copy costs is the business of the implementation and not observable (see [Execution Model](#execution-model)):
+  small values are copied, the storage of collections and strings is shared until somebody writes to it.
+- Values are freely passed between tasks.
 
-### Mutable Reference Types (`var type`)
+### Identity (`shared type`)
 
 ```trb
-var type Counter {
-  var count: Int = 0    // Fields are `const` unless marked `var`
-  step: Int = 1
+shared type Connection {
+  url: String
+  private(var) sent: Int = 0
 
-  fn increment(var self) {     // Mutating methods declare `var self`
-    count = count + step
+  fn send(var self, message: String) {
+    sent = sent + 1
   }
 }
 
-var counter = Counter()
-counter.increment()
+var connection = Connection("tcp://example.test")
+var same = connection          // The same object
+same.send("hello")
+print connection.sent          // 1
 
-const frozen = Counter()
-frozen.increment()             // Compile error: `var self` method through a `const` binding
+const view = connection
+view.send("nope")              // Compile error: no `var` path, no mutation
 ```
 
-A `var type` has identity and reference semantics: two counters with the same count are different counters. `Equals`, `Hash`, `copy` and `ToData` are not generated for it. It can hold values of plain `type`s, but not the other way around. Most types of a program should not need it - typical cases are builders, caches, iterators, buffers and handles to the outside world.
+A `shared type` is the exception for everything that has an identity: assigning it does not copy, everybody who holds
+it sees the same object. Typical cases are handles to the outside world (`File`, `Socket`, `Window`), `Channel`,
+`Task`, registries. Most programs declare very few of them.
+
+- The rule stays the same: mutation needs a `var` path. A `const` binding to a shared object is a read-only view
+  (the object can still change, but not through this path).
+- `Equals`, `Hash`, `copy` and `Encode` are not generated. `==` is about content and does not exist for objects;
+  `isSame(a, b)` compares identity. `Show` is a `shared trait`, so objects can be printed.
+- `Shared<Value>` from the standard library is the ad hoc version: a box that puts a value in a place that several
+  owners can hold.
+- A value can contain a shared object. Copies of the value then refer to the same object, and the value no longer
+  crosses task boundaries. The compiler derives that, there is no annotation.
+
+### `var` Paths and `var` Parameters
+
+```trb
+fn incrementTwice(var target: Counter) {
+  target.increment()
+  target.increment()
+}
+
+var counter = Counter()
+incrementTwice(counter)              // Changes the caller's counter
+incrementTwice(counters[0])          // Every `var` path is a valid argument
+
+world.entities[id].health = 5        // A path through fields and `[]`: changed in place
+samples[1..4].sort { _ }             // A range is a path, too: sorts this part of the list in place
+```
+
+- A `var` parameter works on the caller's value. The argument has to be a `var` path. There is no marker at the call
+  site - the signature says it, tooling shows it. The meaning is "copy in, copy out", so it is the same in every
+  back end; implementations pass a reference.
+- A path through `a[key]` (`MutableIndexed`) or `a[from..to]` (`MutableSlice`) means: take it out, change it, put it
+  back - without a copy. This is what other languages need mutable slices and spans for.
+- **References are second-class.** They only exist as a `var` parameter or `var self`, for the duration of a call.
+  They cannot be stored in a field, returned, or captured by a closure that is stored. So there are no lifetimes, no
+  borrow checker, and nothing can dangle.
+- **Exclusivity:** while a `var` access to a path is running, the same path (or a path above or below it) cannot be
+  accessed in any other way. The check is static and conservative: what the compiler cannot prove is an error, there
+  is no check at runtime. `swap(a, a)` is a compile error, and so is changing `root` inside of `root.div { ... }`.
+  Different fields are fine (`project.build { output "{project.name}" }`). Two indices or ranges of the same
+  collection are not, because they cannot be compared statically (`swap(items[i], items[j])`: use `items.swapAt(i, j)`).
+- A temporary is not a `var` path: `iterator().next()` is a compile error, `var cursor = iterator()` comes first.
+  (Changing something that is thrown away is always a mistake.)
+- The variable of a `for` loop is a `const`. To change elements, use the path (`items[index].x = 1`,
+  `items.update(index) { ... }`) or build a new collection with `map`.
+- Closures capture `const` bindings as copies. A captured `var` binding is shared between the closure and its scope -
+  the one place where a variable is shared. Closures passed to `spawn` cannot capture `var` bindings.
+- **The copy trap** is the price of values, for everybody who comes from a language with references:
+
+  ```trb
+  var first = counters[0]            // A copy
+  first.increment()                  // Changes the copy. The linter flags a `var` that is changed but never read.
+  counters[0].increment()            // Through the path
+  ```
 
 ### Construction
 
@@ -563,16 +850,16 @@ The `?` operator uses `From` to convert error types.
 
 ### Visibility and Encapsulation
 
-**Members are public unless marked `private`** - fields, methods and constants alike. In a language where a `type` is
-immutable, reading a field cannot break anything, and a value type _is_ its data. What needs protection is mutation
-and invariants, and both have a modifier:
+**Members are public unless marked `private`** - fields, methods and constants alike. In a language where values are
+never aliased and `const` is deep, reading a field cannot break anything, and a value _is_ its data. What needs
+protection is mutation and invariants, and both have a modifier:
 
 ```trb
-var type Account {
+type Account {
   owner: String                          // Public, const
   var nickname: String = ""              // Public, writable by everyone who has a `var` path to the account
   private(var) balance: Int = 0           // Everybody reads, only Account writes
-  private var history: MutableList<String> = ArrayList()     // Invisible from outside
+  private var history: List<String> = []                     // Invisible from outside
 
   fn deposit(var self, amount: Int) {
     balance = balance + amount
@@ -586,14 +873,14 @@ account.balance = 1_000_000              // Compile error: only Account can writ
 
 | Field                | Read from outside | Write from outside |
 |----------------------|:-----------------:|:------------------:|
-| `x: T`               |        yes        |  - (const)         |
-| `var x: T`           |        yes        |  yes               |
-| `private(var) x: T`  |        yes        |  no                |
-| `private x: T` / `private var x: T` | no |  no                |
+| `x: Value`               |        yes        |  - (const)         |
+| `var x: Value`           |        yes        |  yes               |
+| `private(var) x: Value`  |        yes        |  no                |
+| `private x: Value` / `private var x: Value` | no |  no                |
 
-- `private(var)` reads as "the `var` is private": the field is public, its mutability is not. It hands outsiders a _const path_ to the field, and const is deep: with `private(var) routes: MutableList<Route>`,
-  `config.routes` can be read and iterated from outside, but `config.routes.add(...)` is a compile error. No defensive
-  copies, no accessor methods.
+- `private(var)` reads as "the `var` is private": the field is public, its mutability is not. It hands outsiders a _const path_ to the field, and const is deep: with `private(var) routes: List<Route>`,
+  `config.routes` can be read and iterated from outside, but `config.routes.add(...)` is a compile error. What
+  somebody takes out of it is a copy anyway. No defensive copies by hand, no accessor methods.
 - **There are no getters, setters or properties.** A field is storage, a method computes, and the `()` tells which one
   it is (`list.length()` may cost something, `point.x` never does). No `get` prefixes; predicates are called
   `isEmpty()`/`hasX()`, mutators are verbs with `var self`.
@@ -630,26 +917,31 @@ const area = p.area            // Without a call: the function value, bound to `
 ```
 
 - Methods live on the type, not in the instance: no memory per instance, no replacing them at runtime, and const
-  value types stay plain data (`Equals`, `Hash`, `ToData`). A trait is a list of constants a type has to provide.
+  value types stay plain data (`Equals`, `Hash`, `Encode`). A trait is a list of constants a type has to provide.
 - An instance field can hold a function, too (`public onClick: () => Void`), and is called the same way:
   `button.onClick()`. Whether `x.name(...)` calls a method or a function in a field is not visible at the call site,
   and does not need to be.
 - Because there is one namespace, a field and a method cannot share a name.
 
-**Property commands.** A call (usually written as a command call) on a member that is a _field and not callable_ is
-a write to that field.
-This is what gives the configuration DSL its Groovy look without a single hand-written setter:
+**Property commands.** A _command_ on a field never calls it, it writes it. This is what gives the configuration DSL
+its Groovy look without a single hand-written setter:
 
 ```trb
-port 8080                      // Field `var port: Int`:              port = 8080
+port 8080                      // Field `var port: Int`:                port = 8080
+onStart { print "started" }    // Field `var onStart: () => Void`:      onStart = { print "started" }
 database {                     // Field `var database: DatabaseConfig`: the receiver closure is applied to the
   url "postgres://..."         //   field's value, which is configured in place
 }
 print "Listening on {port}"    // Reading is just the name
+onStart()                      // Calling a function in a field always needs parentheses
+port = 8080                    // `=` works, too
 ```
 
-Both forms need a `var` path to the field. A callable field is called, not assigned (`onClick { ... }` calls it, use
-`onClick = { ... }` to set it).
+There is no case where the same line could mean two things: command on a method - call, command on a field - write
+(a closure is assigned if the field holds a function, and configures the value in place otherwise).
+
+Both forms need a `var` path to the field. Calling a function in a field always takes parentheses (`onClick()`,
+`onClick(event)`); `onClick { ... }` sets it.
 
 ## Algebraic Data Types and Pattern Matching
 
@@ -663,9 +955,9 @@ type Shape {
 
   fn area(self): Float {
     match self {
-      Circle(radius) => Float.pi * radius * radius
-      Rectangle(width, height) => width * height
-      Empty => 0.0
+      .Circle(radius) => Float.pi * radius * radius
+      .Rectangle(width, height) => width * height
+      .Empty => 0.0
     }
   }
 }
@@ -673,11 +965,55 @@ type Shape {
 const shape = Shape.Circle(2.0)
 ```
 
-Variants are namespaced (`Shape.Circle`). In patterns, and wherever the expected type is known, the prefix can be
-omitted. `Some`, `None`, `Ok`, `Error` are always in scope.
+**A case is written with its type (`Shape.Circle`), or with a leading dot where the type is known (`.Circle`).**
+Never bare: `Circle` alone is a type, a function or a variable of that name, like every other name.
 
-`match` is an expression and must be exhaustive. For an `open type`, exhaustive means "has a `_` arm": the
-owner may add variants without breaking its users (used by `ExpressionNode`, useful for error types of libraries).
+```trb
+const unit: Shape = .Circle(1.0)               // The annotation says which type
+shapes.add(.Empty)                             // The parameter does
+if shape == .Empty { ... }                     // The other side of the comparison does
+const other = Shape.Circle(1.0)                // Nothing does: write the type
+
+use Circle, Empty from Shape                   // Or import cases by name, like anything else
+const third = Circle(3.0)
+```
+
+- `.Case` works wherever a type is expected: annotations, arguments, fields, results, `==`, the arms of a `match`
+  whose result is expected, and in patterns (the type is the one of the value that is matched).
+- `use Names from Type` brings cases into scope. That is all there is to `Some`, `None`, `Ok` and `Error`: the
+  prelude imports them from `Option` and `Result`.
+- Directly inside of the braces of a `match`, a line that starts with `.` starts an arm. Everywhere else it continues
+  the expression of the line above (`.filter { ... }`). So the value of an arm that spans several lines of a call
+  chain goes into a block (`=> { ... }`).
+
+A case that wraps exactly one value, of a type that no other case of the type wraps, generates `From`. That is what
+makes error types cheap - `?` converts on its own, and nobody writes `extend AppError with From<ConfigError>`:
+
+```trb
+type AppError {
+  case Config(cause: ConfigError)          // AppError.from(configError) is AppError.Config(configError)
+  case Io(cause: IoError)
+  case Startup(message: String)
+}
+```
+
+`match` is an expression and must be exhaustive. There are no "open" or "non-exhaustive" types: a public ADT is a
+promise, and a new variant is a breaking change that the compiler points out at every `match`. A library that wants
+to stay free to add cases does not expose the ADT. It wraps it (a single-field type with a private field) and
+accepts everything that converts:
+
+```trb
+public type HttpError with Show {
+  private kind: HttpErrorKind            // The ADT stays private, variants can be added at any time
+
+  fn isTimeout(self): Bool { ... }
+  fn isRetryable(self): Bool { ... }
+}
+
+public fn fail<Failure: Into<HttpError>>(failure: Failure): HttpError {
+  failure.into()
+}
+```
 
 ```trb
 const description = match value {
@@ -689,7 +1025,7 @@ const description = match value {
 }
 
 match (shape, position) {                  // Tuples
-  (Circle(r), Point(x: 0, y: 0)) => ...    // Variants, types (positional or labeled)
+  (.Circle(r), Point(x: 0, y: 0)) => ...   // Cases, types (positional or labeled)
   (_, Point(x, y)) => ...
 }
 
@@ -719,9 +1055,10 @@ for (key, value) in someMap { ... }
 
 In a pattern `_` is the wildcard, in an expression `_` is the implicit closure parameter. The positions never overlap.
 
-A bare name in a pattern refers to a variant or constant if one with that name is in scope, otherwise it is a new
-binding. A misspelled variant would silently become a catch-all binding, so the compiler reports unreachable arms
-as errors and the linter flags uppercase bindings in patterns.
+**A bare name in a pattern is always a new binding.** A case is `.Case`, `Type.Case` or an imported `Case(...)`, a
+type is `Point(x, y)`, and a constant is compared with a guard (`n if n == limit`). So a pattern never changes its
+meaning because of what happens to be in scope: a misspelled case is an error instead of a catch-all, and renaming
+a constant cannot turn an arm into one. (`None` in a pattern is `.None`. The linter flags uppercase bindings.)
 
 ## Traits
 
@@ -750,31 +1087,43 @@ extend String {                            // Extension methods without a trait
   fn shout(self): String { "{toUpperCase()}!" }
 }
 
-extend<T> List<T> with Show where T: Show { ... }   // Type parameters are declared on `extend`
+extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters are declared on `extend`
 ```
 
 - **Naming:** a trait is a capability the type comes _with_, so a trait with a single required method is named like
   that method: `Hash` (`hash`), `Equals`, `Compare`, `Show`, `Add`, `From`, `Length`, `Close`. `type Money with Equals,
   Hash, Compare` reads as what it is. No `-able`/`-ible` adjectives. Traits that are mainly used _as types_ are nouns:
   `Iterable`, `Iterator`, `Collection`, `List`, `Map`, `Collector`, `Accumulator`.
-- `with` is the only keyword for "implements" and for supertraits. Bounds use `where T: Hash + Equals` or inline `<T: Hash>`.
-- **Coherence:** you can only `extend X with Trait` if your package owns `X` or `Trait`. Extension methods without a
-  trait are only visible where they are imported.
+- `with` is the only keyword for "implements" and for supertraits. Bounds use `where Item: Hash + Equals` or inline `<Item: Hash>`.
+- **Coherence:** you can only `extend X with Trait` if your package owns `X` or `Trait`.
+- **`extend` without a trait:** for a type of your own package it is simply a part of the type, in whatever file it
+  is written, and visible wherever the type is. For a type of another package (`extend String { fn shout(self) ... }`)
+  it is visible in every file that imports the module it is declared in - no matter what it imports from it. A
+  module that only consists of extensions is imported without names: `use "./text-extensions"`. If two imported
+  modules bring a method of the same name for the same type, calling it is a compile error; a namespace import
+  (`use * as text from "./text-extensions"`, `text.shout(value)`) says which one is meant. Nothing runs when a
+  module is imported, this is purely a rule about which names are visible.
+- Traits are implemented by values. A `shared type` can only implement a `shared trait` (`shared trait Close`), and a
+  value of such a trait type counts as shared. So a `List<Item>` or an `Iterable<Item>` is always a value: nobody
+  changes it while you hold it, and it can be passed to another task.
+- Several traits can be one type: `fn audit(entry: Show + Encode)`, `List<Show + Hash>`. It is the `+` of bounds in
+  type position, and only traits can be combined (two different types have no values in common).
 - A trait can be used as a type (`fn draw(shape: Shape)`). Whether this is dispatched statically or dynamically is
   up to the implementation and not observable.
 - Functions without `self` in a trait: without a body they are a requirement for the implementing types
   (`From.from`, `Parse.parse`). With a body they are functions of the trait itself - the place for factories that pick
-  a default implementation (`List.of(1, 2)`, `MutableSet.of("a")`).
-- Because a trait is a type, it can be extended like one. `extend<T> List<T> with Show where T: Show` makes every list
-  showable, `extend<T> List<T> with From<Iterable<T>>` makes `List<T>` itself a valid target of `to<List<T>>()`.
+  a default implementation (`List.of(1, 2)`, `Set.of("a")`).
+- Because a trait is a type, it can be extended like one. `extend<Item> List<Item> with Show where Item: Show` makes every list
+  showable, `extend<Item> List<Item> with From<Iterable<Item>>` makes `List<Item>` itself a valid target of `to<List<Item>>()`.
 - Operators are traits: `+` is `Add.add`, `==` is `Equals.equals`, `<` is `Compare.compare`, `a[i]` is `Indexed.at`,
-  `a[i] = v` is `MutableIndexed.set`, string interpolation is `Show.show`.
+  `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`, `a[from..to] = v` is `MutableSlice.replace`,
+  string interpolation is `Show.show`.
 
 ## Types, Values and Reflection
 
 Types and values are strictly separate worlds:
 
-- A type never flows as a value. There is no `Type` type, no `typeof`, no `value is T` on generic `T`, no
+- A type never flows as a value. There is no `Type` type, no `typeof`, no `value is Value` on generic `Value`, no
   `Class.forName`. Types appear only in type positions (after `:`, in `<>`, after `with`/`where`, right of `type X =`).
 - The only bridges are syntactic: `Point(...)` (constructor), `Point.origin` / `Point.parse(...)` (static members),
   `Shape.Circle` (variants), `Point.area` (method reference).
@@ -782,23 +1131,12 @@ Types and values are strictly separate worlds:
   boxed generics would become observable), it keeps every type's metadata alive in compiled binaries, and it is the
   meta-programming style this language does not want.
 
-What reflection is usually needed for (serialization, config mapping, database rows, diffing, debug output) is
-covered by one more _generated trait pair_, in the same way `Equals`, `Hash` and `Show` are generated:
+What reflection is usually needed for (serialization, config mapping, database rows, debug output) is covered by one
+more _generated trait pair_, in the same way `Equals`, `Hash` and `Show` are generated:
 
 ```trb
-type Data {                          // A small, closed data model (think: what JSON/TOML/rows have in common)
-  case Nothing
-  case Boolean(value: Bool)
-  case Integer(value: Int)
-  case Number(value: Float)
-  case Text(value: String)
-  case Sequence(items: List<Data>)
-  case Record(fields: Map<String, Data>)
-  case Variant(name: String, fields: Map<String, Data>)
-}
-
-trait ToData   { fn toData(self): Data }
-trait FromData { fn fromData(data: Data): Result<Self, DataError> }
+trait Encode { fn encode(self, var encoder: Encoder) }
+trait Decode { fn decode(var decoder: Decoder): Result<Self, DecodeError> }
 ```
 
 ```trb
@@ -808,16 +1146,49 @@ type User {
   tags: List<String> = []
 }
 
-const text = Json.encode(user)                 // fn encode<T: ToData>(value: T): String
-const user = Json.decode<User>(text)?          // fn decode<T: FromData>(text: String): Result<T, JsonError>
+const text = Json.encode(user)                 // fn encode(value: Encode): String
+const user = Json.decode<User>(text)?          // fn decode<Value: Decode>(text: String): Result<Value, JsonError>
 ```
 
-- `ToData` is generated for every `type` whose fields are all `ToData`.
-- `FromData` is only generated if the constructor is usable from outside (see [Construction](#construction)).
-  A type with a private constructor has invariants, so it writes `fromData` by hand and the invariant holds for
-  decoded values, too (`Email.fromData` calls `Email.parse`).
-- Formats (`Json`, `Toml`, `Yaml`, database drivers, ...) are ordinary libraries over `Data`. They never see types.
+A type describes itself to an `Encoder` and reads itself from a `Decoder`. A format (`Json`, `Toml`, a database
+driver) implements these two traits and never sees a type. This is what the compiler generates for `User`, and
+nothing in it is special:
+
+```trb
+extend User with Encode, Decode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.record("User") { fields =>
+      fields.field("name", name)
+      fields.field("email", email)
+      fields.field("tags", tags)
+    }
+  }
+
+  fn decode(var decoder: Decoder): Result<User, DecodeError> {
+    decoder.record("User") { fields =>
+      Ok(User(
+        name: fields.field("name")?,
+        email: fields.field("email")?,
+        tags: fields.fieldOr("tags", [])?,       // Fields with a default value may be missing
+      ))
+    }
+  }
+}
+```
+
+- **No tree in between.** Values are written while the type describes itself: no second representation of the whole
+  document, sequences are streamed, nothing is lost (numbers keep their range, a `Set` comes back as a `Set` because
+  the target type drives the decoding, `Decimal` and bytes are first-class).
+- **No second vocabulary.** The methods of `Encoder` and `Decoder` are named after the types of the language (`bool`,
+  `int`, `float`, `decimal`, `string`, `bytes`) plus the four shapes `sequence`, `map`, `record` and `variant`.
+- **No dynamically typed island.** There is no "any value" type in the language. Who wants to look at a document
+  without knowing its type uses a library type (`JsonValue` of `std/json` is an ordinary ADT, and `Encode`/`Decode` itself).
+- `Encode` is generated for every `type` whose fields are all `Encode`.
+- `Decode` is only generated if the constructor is usable from outside (see [Construction](#construction)).
+  A type with a private constructor has invariants, so it writes `decode` by hand and the invariant holds for
+  decoded values, too (`Email.decode` calls `Email.parse`).
 - Different field names, skipped fields, versioning: write the two functions by hand, there are no annotations.
+- `describe(value)` renders every `Encode` value as text, for messages and debugging.
 - Generated code only exists where it is used, like every generic instantiation. Nothing is kept alive "just in case".
 
 ## Error Handling
@@ -839,63 +1210,79 @@ fn start(): Result<Void, AppError> {
 panic "unreachable"                                      // Bugs. Not catchable, aborts the task.
 ```
 
-- `collection.get(i)` returns `T?`, `collection[i]` panics when out of bounds.
+- `collection.get(i)` returns `Item?`, `collection[i]` panics when out of bounds.
 
 ## Collections and Iteration
 
-The collection types are **traits**. Signatures, fields and bindings talk about traits, an implementation is only
-named where something is constructed.
+The collection types are **traits**, one per kind. Signatures, fields and bindings talk about traits, an
+implementation is only named where something is constructed. Collections are values like everything else: the binding
+decides whether they can be changed.
 
 ```text
-Iterable<T>
-└─ Collection<T>              length, isEmpty, contains
-   ├─ ListView<T>             any list, for reading: get, [], first, last, indexOf
-   │  ├─ List<T>              a value: every "change" returns a new List                 TrieList
-   │  └─ MutableList<T>       an object: changed in place                                ArrayList
-   ├─ SetView<T>              Set<T> (TrieSet), MutableSet<T> (HashSet)
-   ├─ MapView<Key, Value>     Map<Key, Value> (TrieMap), MutableMap<Key, Value> (HashMap)
-   ├─ StackView<T>            Stack<T> (ListStack), MutableStack<T> (ArrayStack)
-   ├─ QueueView<T>            Queue<T> (ListQueue), MutableQueue<T> (ArrayQueue)
-   └─ MutableCollection<T>    everything that can be filled: add, addAll, clear (all Mutable*)
+Iterable<Item>
+└─ Collection<Item>           length, isEmpty, contains, add, addAll, clear
+   ├─ List<Item>              ArrayList (literal [1, 2]), TrieList
+   ├─ Set<Item>               TrieSet, HashSet
+   ├─ Map<Key, Value>      TrieMap (literal ["a": 1]), HashMap           a Collection<(Key, Value)>
+   ├─ Stack<Item>             ArrayStack
+   └─ Queue<Item>             ArrayQueue
 ```
 
 ```trb
+const numbers = [1, 2, 3]
+var buffer = numbers                                    // A copy. The storage is shared until one of them is written to.
+buffer.add(4)                                           // In place. `numbers` is still [1, 2, 3].
+const more = numbers.added(4).removed(2)                // Participles work everywhere
+
 type Inventory {
-  items: Map<String, Int> = [:]                           // A value in a value
+  private(var) items: Map<String, Int> = [:]
 }
 
-var type Scheduler {
-  private var pending: MutableQueue<Job> = ArrayQueue()   // Trait as the type, implementation at construction
-}
+fn lookup(table: Map<String, Int>): Int { ... }         // Any map. Read-only, and nobody changes it meanwhile.
+fn describe<Item>(items: Collection<Item>): String { ... }    // Any collection
+fn fill(var target: Collection<Int>) { ... }            // Fills the caller's list, set, stack, queue, ...
 
-fn lookup(table: MapView<String, Int>): Int { ... }       // Any map, read only
-fn describe<T>(items: Collection<T>): String { ... }      // Any collection, read only
-fn fill(var target: MutableCollection<Int>) { ... }       // Anything that can be filled: list, set, stack, queue, ...
+var index: Map<String, Int> = HashMap()                 // Trait as the type, implementation at construction
 ```
 
-- **Every collection exists twice,** as a value and as an object - the same split as `type` and `var type`.
-  The persistent half is the default (literals, `toList()`, `groupBy`). The mutable half is for building things up,
-  for caches and for hot loops; a mutable stack or queue is often simply the right tool.
-- **Every kind has three traits, and the name says what you know:** `Map` is a value (nobody changes it behind your
-  back), `MutableMap` is an object that is changed in place, `MapView` is "one of the two": you can read it, and it may
-  change while you hold it. Parameters of functions that only read are `View`s, fields and results are usually values.
-- **The halves are siblings: a `MutableList` is not a `List`.** That a `List<T>` never changes is what allows it as
-  a field of a `type` and lets it cross task boundaries. `mutable.toList()` takes the snapshot.
-- The short name belongs to the value, because that is what literals, fields and results are in a functional-first
-  language. (Kotlin gives the short name to the view, and `List` means "probably does not change".)
-- Methods have the same names in both halves (`add`, `set`, `remove`, `push`, `enqueue`). The signature tells
-  them apart: `fn add(self, value: T): List<T>` versus `fn add(var self, value: T)`.
+- **One trait per kind.** There is no `MutableList`, no `ImmutableList`, no read-only view: a `const` binding or a
+  parameter without `var` _is_ the immutable list, a `var` is the mutable one, and because values are never aliased
+  nobody can change a collection while somebody else reads it.
+- **Verbs and participles:**
+
+  | In place (`var self`)                       | Changed copy (`self`)                                  |
+  |---------------------------------------------|--------------------------------------------------------|
+  | `add`, `addAll`, `insert`                   | `added`, `addedAll`, `inserted`                        |
+  | `remove`, `removeAt`                        | `removed`, `removedAt`                                 |
+  | `list[i] = v`, `map[key] = v` (`set`)       | `updated(i, v)`, `updated(key, v)`                     |
+  | `sort(by:)`, `reverse`                      | `sorted(by:)` (lazy stage of every Iterable), `reversed` |
+  | `push`, `pop`, `enqueue`, `dequeue`         | `pushed`, `popped`, `enqueued`, `dequeued` (the last two pairs return `(element, rest)?`) |
+  | `merge`, `removeAll`, `retainAll`           | `merged`, `union`, `intersection`, `difference`        |
+
+  The participles are default methods of the traits (copy, change the copy, return it), an implementation only
+  writes the verbs.
+- **Slices:** `list[from..to]` is a `List` again that shares the storage and starts at index 0. It is a value, not a
+  window: later changes of the original are not visible in it. As a `var` path it _is_ a window:
+  `samples[0..100].sort { _ }`, `fill(buffer[offset..])`. The same holds for `String` and `Array`.
+  A slice keeps the storage of the original alive. Implementations copy small slices of big storage on their own;
+  `header.compact()` does it explicitly (it gives the value a storage of its own that is exactly as big as needed).
 - The traits do not constrain their type parameters, the implementations do: `TrieMap<Key: Hash, Value>`, a sorted
   map needs `Key: Compare`. Only the factories (`Map.of`, `Map.from`, literals) ask for `Hash`, because they pick `TrieMap`.
-- Implementations are named after their data structure: `TrieList`/`TrieMap`/`TrieSet` (persistent tries),
-  `ArrayList`, `HashMap`, `HashSet`, `ListStack`/`ListQueue` (persistent, on top of `List`), `ArrayStack`,
-  `ArrayQueue` (ring buffer). Your own implementation is a type `with Map<Key, Value>` and works everywhere.
-  `Array` (fixed size) is the low-level building block and a `Collection`, too.
-- Every `MutableCollection` is an `Accumulator` and therefore a valid target for collectors and channels.
-- Lists have no `+`: `Add.add` and `add(value)` would be the same member. Use `addAll`.
-- `for x in xs` works with everything that is `Iterable<T>`.
+- Implementations are named after their data structure. Defaults: `ArrayList` (contiguous - the fastest for the
+  common case), `TrieMap`/`TrieSet` (a write to a shared map copies one path instead of the whole table, so keeping
+  many versions of a big map is cheap - undo, history, snapshots). Alternatives: `TrieList`, `HashMap`, `HashSet`.
+  `ArrayStack` and `ArrayQueue` (ring buffer) are written in plain TorbScript. Your own implementation is a
+  type `with Map<Key, Value>` and works everywhere.
+- The native collections (`ArrayList`, `TrieMap`, `HashMap`, ...) are the one place where "share the storage, copy on
+  write" is implemented. Every type that is built from them is a value without doing anything for it (`ArrayQueue`
+  is a ring buffer in a `List`). `Array<Item, Size>` is not a collection but a small inline value, see
+  [Const Parameters](#const-parameters-and-array).
+- Every `Collection` is an `Accumulator` and therefore a valid target for collectors and channels.
+- Lists have no `+`: `Add.add` and `add(value)` would be the same member. Use `addedAll`.
+- `for x in xs` works with everything that is `Iterable<Item>`. It iterates over a copy, so changing `xs` inside of the
+  loop is safe (and does not affect the loop).
 - Creation: literals, `List.of(1, 2, 3)`, `List.of(...iterable)`, `List.from(iterable)`, `iterable.toList()`,
-  `ArrayList<Int>()`, `MutableSet.of(1, 2)`.
+  `HashMap()`, `Set.of(1, 2)`.
 
 ### Pipelines and Collectors
 
@@ -904,16 +1291,16 @@ Working with an `Iterable` has three parts, like in Java and Rust:
 ```trb
 const adults = users                     // 1. A source: anything Iterable (collections, ranges, files, channels)
   .filter { _.age >= 18 }                // 2. Lazy stages: nothing runs, nothing is stored
-  .sortBy { _.name }
+  .sorted { _.name }
   .map { "{_.name} ({_.age})" }
   .take(10)
   .toList()                              // 3. One terminal operation pulls the values through
 ```
 
 - **Stages are lazy and are values.** `map`, `filter`, `filterMap`, `mapWhile`, `flatMap`, `take`, `skip`, `takeWhile`, `zip`, `indexed`,
-  `sortBy` return an `Iterable` again. A pipeline can be stored, passed around, extended and iterated more than once.
+  `sorted` return an `Iterable` again. A pipeline can be stored, passed around, extended and iterated more than once.
   Values are pulled one by one and only as far as needed, so infinite sources (`1..`) and big files just work.
-- **Terminal operations decide where the values end up:** `toList()`, `to<Set<String>>()` (any `From<Iterable<T>>`),
+- **Terminal operations decide where the values end up:** `toList()`, `to<Set<String>>()` (any `From<Iterable<Item>>`),
   `fold`, `find`, `first`, `any`, `all`, `count`, `sum`, `forEach`, `for ... in` - and the general one, `collect`.
 - **Collectors** are reusable, composable descriptions of "what to do with the values":
 
@@ -927,25 +1314,25 @@ const teams = employees.collect(groupingBy { _.department }.then(into<Set<Employ
 ```
 
 ```trb
-trait Collector<T, Result> {             // An immutable description
-  fn start(self): Accumulator<T, Result>
+trait Collector<Item, Output> {             // A description
+  fn start(self): Accumulator<Item, Output>
 }
 
-trait Accumulator<T, Result> {           // The state of one run, a `var type`
-  fn add(var self, value: T)
-  fn finish(self): Result
+trait Accumulator<Item, Output> {           // The state of one run, held in a `var`
+  fn add(var self, value: Item)
+  fn finish(self): Output
 }
 ```
 
 - A collector is written either as a fold with a final step (`collector(initial, finish: { ... }) { state, value => ... }`),
-  or, if it needs more, as a `var type` that is an `Accumulator`. Every `MutableCollection` is one out of the box.
+  or, if it needs more, as a type with `var` fields that is an `Accumulator`. Every `Collection` is one out of the box.
 - Accumulators are _push-based_. The same collectors therefore work for everything that produces values over time,
   not only for iterables: `channel.collect(counting())`, event streams, async sources.
 - The catch of laziness: a stage with side effects does nothing until it is pulled.
   `chunks.map { spawn { ... } }` spawns nothing, `chunks.map { spawn { ... } }.toList()` spawns everything.
 
-This is LINQ in method form and needs nothing but closures. With [`Expression<T>`](#quoted-expressions-expressiont) the very same
-code runs against a database: the provider's `filter` takes an `Expression<(row: T) => Bool>` and translates the tree to SQL
+This is LINQ in method form and needs nothing but closures. With [`Expression<Value>`](#quoted-expressions-expressionvalue) the very same
+code runs against a database: the provider's `filter` takes an `Expression<(row: Row) => Bool>` and translates the tree to SQL
 (see `examples/query-provider`).
 
 ### One Vocabulary instead of Higher-Kinded Types
@@ -961,14 +1348,14 @@ code runs against a database: the provider's `filter` takes an `Expression<(row:
 | `orElse` / `??`        | The value, or a fallback (`lazy`)                              |   x    |   x    |      |          |
 | `toList()`             | Into the world of pipelines                                    |   x    |   x    |      |    x     |
 
-(`Task` is part of the concurrency draft and not in the example standard library yet.)
+(`Task` is part of the concurrency draft and not in the standard library yet.)
 
 This is a convention of the standard library, not an abstraction of the language. There are **no higher-kinded types**
 (`Functor<F<_>>`, `Monad`), no `Self<U>`, no F-bounded tricks:
 
 - The operations look alike but are not the same: an Option is a value and `map` runs immediately, an Iterable is a
   pipeline and `map` runs when it is pulled. An abstraction over both would hide exactly that difference.
-- A kind system, partially applied type constructors (`Result<_, E>`) and higher-order unification would cost the
+- A kind system, partially applied type constructors (`Result<_, Failure>`) and higher-order unification would cost the
   local type inference, readable error messages and a simple mental model - for code that scripts rarely need.
 
 What higher-kinded types are typically used for is covered by things that already exist:
@@ -976,8 +1363,8 @@ What higher-kinded types are typically used for is covered by things that alread
 | Need                                         | Solution                                                                       |
 |----------------------------------------------|--------------------------------------------------------------------------------|
 | Chaining fallible steps                      | `?` for Option and Result, `await()` for Task                                  |
-| `List<Result<T, E>>` to `Result<List<T>, E>` | A collection target: `.to<Result<List<Int>, ParseError>>()`, stops at the first error |
-| `List<T?>` to `List<T>?`                     | `.to<List<User>?>()`, stops at the first `None`                                |
+| `List<Result<Value, Failure>>` to `Result<List<Value>, Failure>` | A collection target: `.to<Result<List<Int>, ParseError>>()`, stops at the first error |
+| `List<Value?>` to `List<Value>?`                     | `.to<List<User>?>()`, stops at the first `None`                                |
 | A function returning an Option as a stage    | `ids.filterMap { findUser(_) }`                                                |
 | An Option or Result inside a pipeline        | `users.flatMap { _.manager.toList() }`                                         |
 
@@ -987,14 +1374,24 @@ language feature was needed for them.
 ## Modules and Packages
 
 ```trb
-use List, MutableList from "std/collections"   // Package import: "<package>/<path>"
+use File from "std/fs"                               // Package import: "<owner>/<name>"
+use Router from "acme/http/routing"                  // A public module of a package: "<owner>/<name>/<path>"
 use Vector2 from "./math/vector2"                    // Relative import, no file extension
-use * as math from "std/math"                  // Namespace import
-public use Stack, MutableStack from "./collections/stack"    // Re-export
+use * as math from "std/math"                        // Namespace import
+public use Stack, ArrayStack from "./collections/stack"      // Re-export
 ```
 
 - `src/main.trb` is what `torb run` executes, `src/lib.trb` is what other packages import.
-- The prelude (`Option`, `Result`, `List`, `Map`, `print`, `do`, ...) is always in scope.
+- A path that starts with `./` or `../` is a file. Everything else starts with the name of a package:
+  `"owner/name"` is its `src/lib.trb`, `"owner/name/path"` is `src/path.trb` of it. Only `public` declarations can
+  be imported from another package, and only packages that `project.trb` lists as dependencies.
+- **The standard library is a set of packages of the owner `std`:** `std/prelude`, `std/fs`, `std/io`,
+  `std/process`, `std/test`, `std/json`, `std/http`, ... They come with the toolchain and have its version, so they
+  need no entry in `dependencies`. What a program can touch is still visible from its imports: no `std/fs`, no files.
+- **The prelude is a package, too.** `Project` has the default `prelude "std/prelude"`: the public names of that
+  package (`Option`, `Result`, `List`, `Map`, `print`, `do`, ...) are in scope in every file of the project.
+  A project can name another one (a teaching subset, the vocabulary of an embedded DSL); a sandbox gives its scripts
+  the prelude of the host plus the receiver.
 - In entry files and scripts, a top-level `?` ends the program with the error, and top-level `await()` is allowed.
 - **Top-level code is only allowed in entry files and scripts.** Imported modules consist of declarations only,
   top-level `const` initializers of modules must be compile-time evaluable. So there is no module initialization
@@ -1007,16 +1404,16 @@ receiver, exactly like inside of a method. Together with command calls, trailing
 gives Groovy-style builders that are completely statically typed.
 
 ```trb
-var type DatabaseConfig {
+type DatabaseConfig {
   var url: String = ""
   var poolSize: Int = 10
 }
 
-var type ServerConfig {
+type ServerConfig {
   var host: String = "localhost"
   var port: Int = 8080
   var database: DatabaseConfig = DatabaseConfig()
-  private var routes: MutableList<Route> = ArrayList()
+  private var routes: List<Route> = []
 
   // Only what is more than "set a field" or "configure a field" needs a method
   fn route(var self, path: String, to: String) {
@@ -1063,18 +1460,30 @@ for name in ["users", "orders"] {
 ```
 
 ```trb
-const sandbox = Sandbox()                                   // No capabilities: no IO, no network, no clock
-const configure = sandbox.load<ServerConfig>("./config.trb")?   // (var self: ServerConfig) => Void
+const configure = Sandbox.load<ServerConfig>("./config.trb")?   // (var self: ServerConfig) => Void
 const config = server(configure)
 ```
 
 - The file is type checked against `ServerConfig` (errors with line numbers, autocompletion in the editor).
 - The script can only reach what the receiver type exposes, plus the pure parts of the prelude. The type argument is
   the whitelist.
-- Limits for steps/memory/time can be set on the `Sandbox`.
+- **Everything else is granted at the call site,** never in a project file - whoever loads a script decides what it
+  can do:
+
+  ```trb
+  const configure = Sandbox.load<ServerConfig>("./config.trb") {
+    modules "std/text", "std/time"             // Additional parts of the standard library
+    files readOnly: "./config"                 // File system roots
+    environment "APP_*"                        // Visible environment variables
+    limits steps: 1_000_000, memory: 64.megabytes(), time: 2.seconds()
+  }?
+  ```
+
+  Without the block a script has no IO, no network, no clock, no environment, no foreign functions and no limits
+  other than the defaults. Foreign functions can never be granted to a script.
 - Because the type argument is known statically, a compiled binary knows exactly which types need to be callable from
   interpreted code. No annotations or reflection needed.
-- `project.trb` is exactly this mechanism with the receiver `Project`.
+- `project.trb` and `project.lock.trb` are exactly this mechanism with the receiver `Project`.
 
 ## Extensibility
 
@@ -1084,7 +1493,7 @@ The language is extended by functions, not by macros or annotations:
 - DSLs are functions with receiver closures.
 - Operators are traits.
 - Code that needs to be _looked at_ instead of executed (query providers, `assert`, validation rules, change
-  tracking) uses [`Expression<T>`](#quoted-expressions-expressiont) parameters.
+  tracking) uses [`Expression<Value>`](#quoted-expressions-expressionvalue) parameters.
 - Declarations (`const`, `var`, `fn`, `type`, `trait`, `extend`, `use`) are the fixed core, because they bind names.
   They all share the uniform shape `modifier* keyword Name clauses* { body }`, which reads like a command call.
 - One possible future step: compile-time functions that _produce_ types (`type Row = Schema.rowOf("users.sql")`),
@@ -1092,28 +1501,82 @@ The language is extended by functions, not by macros or annotations:
   replacement - see the note under [Type Aliases](#type-aliases) for what that replacement would cost.
 
 AST macros are a non-goal: names in TorbScript are resolved with the help of types (receivers, named implicit
-parameters), macros would have to run before name resolution. The two do not go together. `Expression<T>` is the opposite
+parameters), macros would have to run before name resolution. The two do not go together. `Expression<Value>` is the opposite
 of a macro: it reads code _after_ it was resolved and type checked, and it cannot generate any.
 
 ## Concurrency (Draft)
 
 ```trb
-async fn fetchUser(id: Int): Result<User, HttpError> {
+fn fetchUser(id: Int): Task<Result<User, HttpError>> {
   const response = http.get("/users/{id}").await()?
   response.json<User>()
 }
 
 const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()
 
-const task = spawn { expensiveComputation() }    // Task<T>, runs in parallel
+const task = spawn { expensiveComputation() }    // Task<Int>, runs in parallel
 const result = task.await()
 
 const channel = Channel<Int>()
 ```
 
-- Calling an `async fn` returns a `Task<T>`. `await()` is a method on `Task`, only callable inside of `async` code.
-- Const values are shared freely between tasks. Mutable objects are confined to the task that created them, tasks
-  communicate through channels. Data races are impossible by construction.
+- **Asynchrony lives in the type system, not in a keyword.** There is no `async`. A function that returns `Task<Value>`
+  may call `await()`, and its body produces the `Value` - the same way a function that returns `Result` may use `?`.
+  `Task` belongs to the vocabulary of `Option` and `Result` (`map`, `flatMap`, `all`).
+- `await()` is a method on `Task`. It is allowed in functions that return a `Task`, in closures passed to `spawn`, and
+  at the top level of entry files and scripts. Everywhere else it is a compile error: a function that waits says so
+  in its return type. (A blocking `await()` anywhere would need a stack per task in every back end and invites
+  deadlocks; tasks are compiled to state machines instead, identically in the interpreter and in binaries.)
+- Values are passed freely between tasks: a task gets copies, so there is nothing to race for. `shared type` objects
+  (and values that contain one) are confined to the task that created them; `Channel` and `Task` are the exceptions
+  that connect tasks. Closures passed to `spawn` cannot capture `var` bindings. Data races are impossible by construction.
+
+## Foreign Functions (Draft)
+
+`native` and `foreign` are two different things:
+
+- `native` marks declarations that are implemented _by the compiler and its runtime_: `Array`, `String`,
+  the collections, IO. Only the standard library can use it. The interpreter looks them up in a built-in table, the
+  compiler links the same functions.
+- `foreign` declares functions of a C library. It is available to every package:
+
+```trb
+foreign "sqlite3" {
+  fn sqlite3_open(path: CString, database: Pointer<Pointer<Void>>): Int32
+  fn sqlite3_close(database: Pointer<Void>): Int32
+}
+
+public shared type Database with Close {
+  private handle: Pointer<Void>
+
+  fn open(path: String): Result<Database, SqliteError> { ... }
+
+  fn close(var self) {
+    sqlite3_close(handle)
+  }
+}
+```
+
+- The C ABI is the contract, so both back ends behave the same: the interpreter calls through a generic trampoline,
+  the compiler links directly.
+- Foreign types are `Pointer<Value>`, `CString`, the sized numbers and `foreign type` structs with C layout.
+  Pointers are not values in the sense of the language, so they are wrapped in a `shared type` and do not leak
+  into an API.
+- A package that contains `foreign` declarations says so in `project.trb`, where logical library names are mapped to
+  files per platform. `torb add` shows it, and a `Sandbox` never grants it:
+
+  ```trb
+  foreign {
+    library "sqlite3", windows: "sqlite3.dll", linux: "libsqlite3.so.0", macos: "libsqlite3.dylib"
+  }
+  ```
+- **Memory that C allocated is never freed by the runtime.** It is owned by a `shared type` with `Close`, and
+  `using` makes the cleanup deterministic.
+- **Callbacks:** a closure without captures can be passed where C expects a function pointer. Closures with captures
+  cannot (they would need a lifetime that C does not know); the usual C pattern of a function pointer plus a
+  user-data pointer is wrapped by the library in a `shared type`.
+- `foreign type` declares a struct with C layout (field order and alignment of the platform ABI). It can only contain
+  foreign types and sized numbers.
 
 ## Execution Model
 
@@ -1125,22 +1588,39 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - One front end, one typed IR. The semantics of the language are defined on the IR. A conformance test suite runs
   every test against all back ends.
 - `torb run` type checks the whole program before it starts. The IR is cached.
-- `torb build` stage 1: runtime stub + embedded bytecode (single file, trivial cross compilation, available from day
-  one). Stage 2: real AOT from the same IR (Cranelift/LLVM/C). Nothing in the language depends on the stage.
+- `torb build` compiles the typed IR ahead of time. The first back end prints C, a back end that emits machine code
+  can follow behind the same IR. Nothing in the language depends on which one it is.
+- **The toolchain is written in TorbScript** (`compiler/`), the VM included. A small interpreter in Rust
+  (`bootstrap/`) runs it until it compiles itself and is thrown away afterwards
+  (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)). So the language is its own first big program: what is awkward
+  to write in it shows up in the compiler first.
 - Binaries that use `Sandbox.load` embed the front end and the VM. Interpreted code calls compiled methods through a
   bridge that is generated for the receiver types.
 - Generics may be monomorphized or boxed. Not observable (no `sizeof`, no layout, no reflection on type parameters).
 - Integer overflow panics, in every back end. Evaluation order is left to right. Tail calls in tail position are guaranteed.
-- Memory: reference counting. Deeply immutable values cannot form cycles, so `type` values need no cycle
-  collection. Only `var type` objects are tracked by a cycle collector. Deterministic cleanup enables
+- Memory: reference counting. Values cannot form cycles, so they need no cycle collection. Only `shared type`
+  objects (and `var` bindings captured by closures) are tracked by a cycle collector. Deterministic cleanup enables
   `using file { ... }`.
+- Value semantics say _what_ happens, not _how_. "A copy" is implemented depending on the shape of the type, and
+  none of it is observable:
+
+  | Shape                                            | Implementation                                                         |
+  |--------------------------------------------------|------------------------------------------------------------------------|
+  | Small, fixed size (`Point`, `Date`, tuples, `Array<Float, 16>`) | Stored inline, really copied. No reference count, mutation in place |
+  | Storage on the heap (`ArrayList`, `String`, tries) | Reference counted storage. A copy shares it, a write copies it first if it is shared (copy on write). Only native types do this |
+  | Types built from those (`ArrayQueue`, `World`)   | The fields are copied, their storage is shared. Nothing to implement   |
+  | Recursive ADTs (trees)                           | Reference counted nodes. A write copies the path, or happens in place if nobody else holds the node |
+  | Big types                                        | The compiler may box them and treat them like storage                  |
+
+  The interpreter may box everything, the compiler lays out inline. `var` parameters and `var` paths (`a[i].x = 1`)
+  are passed as references, their "copy in, copy out" meaning is never executed literally.
 - `native` declarations are implemented by the runtime. The interpreter resolves them through a built-in table,
   compiled binaries link them statically. Same ABI.
 
 ## Decision Log
 
 - Full names instead of abbreviations in the standard library: `Subtract`/`Multiply`/`Divide`/`Remainder`/`Negate`,
-  `Expression<T>`, `TypeReference`, `Result.Error` (not `Err`), `absolute`/`squareRoot`/`ceiling`. `min`/`max` (and `minBy`/`maxBy`) stay short: they are the names people know.
+  `Expression<Value>`, `TypeReference`, `Result.Error` (not `Err`), `absolute`/`squareRoot`/`ceiling`. `min`/`max` (and `minBy`/`maxBy`) stay short: they are the names people know.
   Files and modules too (`iteration`, `operators`).
 - Single-method traits are named like their method (`Hash`, `Equals`, `Compare`, `Length`, `Close`), not `Hashable`,
   `Equatable`, `Comparable`. That is why the keyword is `with` and not `is` or `implements`. Traits used as types are nouns.
@@ -1148,13 +1628,14 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   lists: streaming, early exit, infinite sources, and the target is chosen at the end. One model only - there is no
   second, eager set of methods on `List`. `toList()` is the price.
 - No higher-kinded types. `Option`, `Result`, `Task`, `Iterable` share a vocabulary by convention; `traverse`/`sequence`
-  are collection targets (`to<Result<List<T>, E>>()`), `filterMap` bridges Option-returning functions into pipelines.
+  are collection targets (`to<Result<List<Item>, Failure>>()`), `filterMap` bridges Option-returning functions into pipelines.
   Option is deliberately not an `Iterable`: its `map` is eager, the trait promises a lazy one.
-- No `Collectable`/`FromIterator` trait: a collection target is simply `From<Iterable<T>>`, `to<Target>()` is a typed `into()`.
+- No `Collectable`/`FromIterator` trait: a collection target is simply `From<Iterable<Item>>`, `to<Target>()` is a typed `into()`.
 - Collectors are push-based (`Accumulator.add`), so they are not tied to `Iterable` and work for channels and streams.
 - `const` instead of `val` as it is clearer (reading many `val` with `var` in between lets you easily miss some)
 - `.trb` instead of `.scr` (`.scr` is an executable screensaver on Windows and blocked by mail filters/AV)
-- `//`, nestable `/* */`, `/** */` for docs. `#` stays reserved.
+- `//`, `/* */`, `/** */` for docs. Block comments do not nest (they did at first: a `/*` inside of a doc comment, as
+  in a glob pattern, then opens a comment nobody sees). Editors comment out code with `//`. `#` stays reserved.
 - One naming scheme for primitives (`Int`, `Float`, `Bool`, `String`), no lowercase aliases. Casing is a convention
   (linter), not enforced by the compiler.
 - Length numeric names (`Int32`) instead of C-style names (`Short`, `Long`, `Double`): the C# scheme pins `Int` to
@@ -1163,14 +1644,26 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   `Float` are plain prelude aliases, declared with the same `type X = Y` syntax everybody can use. No `Byte`.
 - No `alias` keyword: `type X = Y` names an existing type, `type X { }` declares a new one. Not `const X = Y`,
   because types are not compile-time values (see the note under "Type Aliases").
-- Types are not compile-time values. Generics stay declarative (`<T: Bound>`), so they can be inferred and checked
+- Types are not compile-time values. Generics stay declarative (`<Item: Bound>`), so they can be inferred and checked
   at the declaration.
-- `Expression<T>` is part of the language from the start. The quotation carries the static tree _and_ the ordinary value,
+- `Expression<Value>` is part of the language from the start. The quotation carries the static tree _and_ the ordinary value,
   so there is no runtime `compile()` (C#) and no interpreter in binaries because of it. Captures are separate from
   the tree (`captures()`), so the tree is a compile-time constant and quoting is free.
-- Types and values are strictly separate, no runtime reflection. Generated `ToData`/`FromData` (a closed data model)
-  replace the usual reflection use cases. `FromData` is not generated for types with a private constructor, so
-  invariants survive deserialization.
+- Types and values are strictly separate, no runtime reflection. Generated `Encode`/`Decode` replace the usual
+  reflection use cases. `Decode` is not generated for types with a private constructor, so invariants survive
+  deserialization.
+- `Encode`/`Decode` are event-based (a type describes itself to an `Encoder`, like serde) instead of converting to a
+  `Data` tree (was: `ToData`/`FromData` over a closed `Data` ADT). The tree had a parallel vocabulary
+  (`Boolean`/`Integer`/`Text`/`Sequence`), built every document twice, lost precision, and was a dynamically typed
+  island. Document trees are library types now (`JsonValue`).
+- Tests use `assert` only. It takes an `Expression<Bool>`, so a failure shows the source and the values of both
+  sides; there is no matcher vocabulary (`expect(x).toEqual y`) to learn. `test` and `group` are ordinary functions.
+- `Show` is a `shared trait` (objects can be printed), `Equals` and `Hash` are not: `==` always means content,
+  identity is `isSame(a, b)`.
+- Dependencies are `runtime` or `development`, nothing else (was: `always`/`optional`/`dev`/`test`/`suggest`).
+  Optional integrations are separate packages.
+- The capabilities of a `Sandbox` are a closed list defined by the runtime. What a library wants to offer to a script
+  goes through the receiver type, which already is the whitelist.
 - Literal defaults (`Int64`, `Float64`) are fixed and do not follow a shadowed `Int` alias
 - No `opaque alias`. Distinct types are single-field `type`s plus trait delegation (`with Add, Compare by value`).
   Scala-3-style opaque types (transparent inside the declaring scope, opaque outside) make type identity depend on
@@ -1188,8 +1681,52 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - No struct literals (`Point { x: 1 }` collides with trailing closures). Generated constructors with labeled arguments instead.
 - No hand-written constructors, no logic in constructors. Factories, `parse`, `From`/`Into`/`TryFrom`.
 - Labeled arguments use `:` (`=` would collide with assignment)
-- `suggest "lib", because: "reason"` is a labeled argument, there are no infix word chains
-- Command calls only in command position, arguments cannot start with `(`, `[`, `-`, `!` (no whitespace sensitivity)
+- `route "/users", to: "users"` is a labeled argument, there are no infix word chains
+- Command calls only in command position, arguments cannot start with `(`, `[`, `-`, `!` (no whitespace sensitivity).
+  Commands do not nest (was: `a b c` is `a(b(c))`), so "the `{` belongs to the command" has no exception.
+- The standard library is not one package but many, of the owner `std`, and the prelude is one of them, named by a
+  default in `project.trb`. So `"std/fs"` is an ordinary `owner/name` and no special case of the import rules, and
+  capabilities stay visible per import. Workspaces (one root, many projects, one lock file) because the toolchain is
+  the first project that needs them.
+- Self-hosting: the toolchain is a TorbScript project, bootstrapped by a throwaway interpreter in Rust that has no
+  type checker. Everything that lasts (type checker, IR, back ends, VM, tools) is written once, in TorbScript. The
+  first native back end emits C, because the shortest path to "the compiler compiles itself" wins.
+- Cases are `Type.Case` or `.Case`, never bare (Swift). Before, a bare name in a pattern was a case if one was in
+  scope and a binding otherwise, and inside of a type its cases shadowed types of the same name
+  (`case Keyword(keyword: Keyword)`). Now names mean one thing. The price is a rule for line breaks: a leading `.`
+  continues the line above, except directly inside of a `match`, where it starts an arm.
+- Doc comments on every declaration (parameters, fields, cases) instead of `@param` tags or YAML front matter;
+  Markdown with conventional headings; examples are run by `torb test`. A tag language would be annotations through
+  the back door.
+- Extensions of foreign types follow the import of their module (Swift), extensions of own types are part of the
+  type (Rust). `use "./module"` without names exists for modules that consist of extensions.
+- Keywords are ordinary names after `.` and as labels
+- Standard streams are functions: `print`, `printError` (prelude), `readLine()` (`std/io`)
+- The test API stays `test`, `group`, `assert`. Shared setup is a `const` in the group or a function, an async test
+  returns its `Task`. No `beforeEach`/`afterEach`: hidden state between tests is what they produce
+- Literal types, restricted to unions of literals of one base type and typed by expectation only. That keeps what
+  makes them attractive (`transport: "tcp" | "udp"`) and leaves out what makes them expensive in TypeScript
+  (a type per literal, widening, subtyping). No unions of types: they would have to be told apart by type at runtime.
+- Const parameters without arithmetic, from the start, because `Array` has its size in the type (inline, no heap).
+  Growing storage is `List`/`ArrayList`; there is no public raw buffer type, native collections manage their own.
+- `TraitA + TraitB` as a type; named tuples; `From` is generated for cases that wrap one value of a unique type
+- The parser (milestone 1 of the implementation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) checks every
+  example. What it found the first time: `print [a, b].map(...)` (indexing by the rules of command calls),
+  `print list.filter { ... }.collect(...)` (the `{` belongs to `print`), a parameter named `type`, and two rules the
+  concept did not spell out (a `{` on its own line, blocks as the bodies of match arms).
+- No `open type` (ADTs whose matches need a `_` arm, was used for `ExpressionNode`). One kind of ADT, exhaustive
+  matches without exception. Evolving APIs hide their ADT behind a single-field type and take `Into<...>`.
+- A command on a field never calls it (`onStart { ... }` assigns). Removes the one ambiguity of property commands.
+- Strings have no `length()` and no `text[i]`: `chars()`, `bytes()`, `byteLength()` say what is counted; positions
+  come from searching (`indexOf`) and are byte offsets for slicing. Identical and O(1) in every back end.
+- No `async` keyword. The return type `Task<Value>` is what makes a function asynchronous (was: `async fn`).
+- Sandbox capabilities are granted at the call site of `Sandbox.load`, not in project configuration
+- `foreign` (C ABI, for everybody) next to `native` (implemented by the runtime, standard library only)
+- Dead changes are compile errors (changed but never read, discarded result of a `self` method)
+- `shared type`s only implement `shared trait`s, so a trait-typed value is a value
+- Cycle collector for `shared type` objects instead of `weak` references
+- Type parameters are written out (`Item`, `Key`, `Value`, `Failure`, `Output`)
+- `nameOf(expression)` through `Expression<Value>`, `typeName<Value>()` as a compile-time function
 - Variadics never unpack implicitly, spread (`...`) works on `Iterable`
 - `self` in the signature distinguishes methods from static functions, `var self` marks mutation, access is implicit
 - Members are public by default, `private` is explicit - one rule for fields and methods (was: fields private,
@@ -1200,17 +1737,27 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   (`guarded` was tried: one more word to learn for something the existing two words already say). It removed
   every "private field plus accessor method of nearly the same name" pair from the examples.
 - No properties, no computed getters, no validating setters (a setter cannot return a `Result`)
-- Fields are `const` by default, even in a `var type`
-- `type` is an immutable value type by default, `var type` is the explicit opt-in to mutability and identity (was: `const type` / `type`). Same rule as for bindings, fields, parameters and `self`: no `var`, no mutation. `copy` is generated instead of a hand-written `with`.
-- Default collections are persistent, mutable ones are named `Mutable*`
-- Collection types are traits (`List`, `Map`, ..., `MutableList`, `MutableMap`, ...), implementations are named after
-  their data structure (was: concrete native types only, nothing abstract to refer to, `Collection` without a job).
-  Every kind exists persistent and mutable, including stack and queue.
-- Three traits per kind: `ListView` (any list, read only) with the siblings `List` (value) and `MutableList` (object).
-  Not Kotlin's `MutableList : List`, where a `List` can change while you hold it. Here `List<T>` stays a value, the
-  same method names work in both halves, and "any list" has its own, honest name.
+- Fields are `const` by default
+- **Mutable value semantics: every `type` is a value, the binding decides about mutation** (Swift structs, Hylo).
+  Was: immutable `type` plus mutable reference `var type`, which tripled every concept that exists in both worlds
+  (`List`/`MutableList`/`ListView`, builders next to their results, snapshots with `toList()`), and made "is this a
+  `type` or a `var type`?" the first question for every type. Now there is one rule - no `var` path, no mutation - and
+  because values are never aliased, a `const` really never changes. The price is the copy trap
+  (`var x = list[0]` is a copy), which is local and lintable; aliasing bugs are neither.
+- `shared type` for identity (was `var type`, which would be misleading now that every type can be changed through a
+  `var`). Same mutation rule as for values - unlike Swift, where `let` does not protect the content of a class.
+  No inheritance, no `weak`, no actors (for now).
+- References are second-class (`var` parameters and `var self` only) instead of lifetimes, borrow checking or span
+  types. A mutable slice is a `var` path to a range.
+- No marker for `var` arguments at the call site (`fill(buffer)`, not `fill(var buffer)`): the signature and the
+  tooling show it, and a marker would make DSLs and method calls inconsistent (`buffer.add(1)` has none either).
+- Verbs change in place, participles return a changed copy (`sort`/`sorted`, `add`/`added`). Rejected: one name
+  plus a `copy { ... }` block, Ruby's `!` suffix, Scala's symbolic operators.
+- Collection types are traits, one per kind (`List`, `Set`, `Map`, `Stack`, `Queue` under `Collection`),
+  implementations are named after their data structure. Defaults: `ArrayList`, `TrieMap`, `TrieSet`.
+- The lazy stage `sortBy` became `sorted(by:)` to fit the verb/participle rule; `list.sort(by:)` sorts in place.
 - `Option`/`Result`/`?` instead of exceptions (also: trivial to implement identically in VM and AOT)
-- `with` is the only keyword for trait implementation (`implements` is gone), bounds use `where T: Trait`
+- `with` is the only keyword for trait implementation (`implements` is gone), bounds use `where Item: Trait`
 - Orphan rule for `extend ... with`
 - One member namespace. A method is structurally a constant of the type that holds a receiver closure, `fn` is its
   declaration form. Not a per-instance field: methods cost no memory per instance, cannot be swapped at runtime, and
@@ -1223,31 +1770,14 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Open Questions
 
-- Name of the language, the CLI and the file extension
-- Final keyword list. Keywords cannot be used as names, which already hurts for `with`, `where`, `from`, `to`
-  (contextual keywords? allow keywords after `.` and as labels?)
-- The "no trailing closures inside command arguments" rule bites in practice (`print numbers.map { ... }`).
-  Good enough with a clear error message, or restrict command calls further?
-- Are property commands (`port 8080` == `port = 8080`, `database { }` == configure in place) too magical?
-  Alternative: require `=` for fields in DSLs and hand-written section methods. The Groovy look depends on them.
-- Should named implicit closure parameters (`{ value * 2 }`) stay, or only `_`?
-- Mixed-type operators (`Vector2 * Float`): default type parameters on operator traits (`Multiply<Rhs = Self, Output = Self>`)
-  or associated types?
-- String model details: is `length()` chars or grapheme clusters, how are strings indexed and sliced?
-- Value traits: `List<T>` promises to be a value, but nothing stops a `var type` from implementing it. Should a trait
-  be able to demand that (only `type`s may implement it)? The same question decides what trait-typed fields mean for
-  "a `type` is deeply immutable" and for sharing between tasks.
-- Aliasing of mutable objects: a `const` binding and a `var` binding can point to the same `var type` object.
-  The `const` view is read-only, not frozen. Is that enough?
-- Concurrency: is `async`/`await` (colored functions) acceptable or should tasks be colorless (needs stackful
-  coroutines in all back ends)?
-- How are capabilities passed to a `Sandbox` (file system roots, environment, clock)?
-- Test framework API, doc generator, formatter canon (when does the formatter use command calls?)
-- Package registry, lock file format, version resolution, semantics of `optional` and `suggest` dependencies
-- FFI for user code (beyond `native` in the standard library)
-- `ExpressionNode`: is the node set right (`match` expressions? string interpolation as its own node? `?`/`??`/`?.`)?
-  "Open types" (matches need a `_` arm) are a new concept - also useful for error ADTs of libraries?
-- `Data` model details: `Decimal`/`Bytes`/date-time cases? Is `Variant` needed or is it a `Record` with a tag field?
-  Streaming for large documents?
-- Is a compile-time `typeName<T>(): String` (for error messages and logging) acceptable, or already too much?
-- REPL semantics (redefinition of `const`, top-level `await`)
+- Exclusivity is conservative for now. Collect the correct programs it rejects (closures that capture a `var`
+  binding and run during a `var` access, paths through `[]`) here, and decide with a compiler at hand:
+  - (none yet)
+- `Encode`/`Decode`: generic methods on a trait-typed value (`fields.field<Value: Decode>(...)` on a `RecordDecoder`)
+  need dictionary passing in the compiled back end, monomorphization alone cannot do it. Fine (Swift does the same),
+  but it is a requirement for the back ends.
+- `deprecated` (and `since`): not documentation but something the compiler has to read. A modifier? Decide when the
+  first API needs it.
+- Registry protocol and the exact format of `project.lock.trb`
+- REPL: every input is a nested scope of the previous one (so redefining a name is ordinary shadowing). A type that
+  is defined again shadows the old one, values of the old type keep it and show up as `Point#1`.

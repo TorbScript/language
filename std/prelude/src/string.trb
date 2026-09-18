@@ -1,0 +1,86 @@
+use Equals, Compare, Hash from "./compare"
+use Show, From, TryFrom from "./convert"
+use Int64, NumberRangeError from "./numeric"
+use Add from "./operators"
+use Iterable, Length from "./iteration"
+
+public native type Bool with Equals, Hash, Show {}
+
+/** A Unicode scalar value. */
+public native type Char with Equals, Compare, Hash, Show {
+  native fn isDigit(self): Bool
+  native fn isLetter(self): Bool
+  native fn isWhitespace(self): Bool
+
+  /** The number of bytes of the character in UTF-8 (1 to 4): what it adds to an offset into a `String`. */
+  native fn byteLength(self): Int
+  native fn toUpperCase(self): Char
+  native fn toLowerCase(self): Char
+}
+
+/**
+ * UTF-8 text. There is no `length()` and no `text[i]` on purpose: say what you count (`chars()`, `bytes()`).
+ * Positions come from searching and are byte offsets. Slicing with them is O(1) and shares the storage.
+ */
+public native type String
+  with Equals, Compare, Hash, Show, Add, Slice
+{
+  native fn chars(self): Iterable<Char>
+  native fn bytes(self): Iterable<UInt8>
+  native fn byteLength(self): Int
+  native fn isEmpty(self): Bool
+
+  /** `text[from..to]` with byte offsets. Panics if an offset is inside of a character. */
+  native fn slice(self, range: Range<Int>): String
+
+  native fn contains(self, part: String): Bool
+  native fn startsWith(self, prefix: String): Bool
+  native fn endsWith(self, suffix: String): Bool
+  native fn indexOf(self, part: String): Int?
+
+
+  fn substringBefore(self, part: String): String? {
+    indexOf(part).map { self[0.._] }
+  }
+
+  fn substringAfter(self, part: String): String? {
+    indexOf(part).map { self[(_ + part.byteLength())..] }
+  }
+
+  native fn trim(self): String
+  native fn toUpperCase(self): String
+  native fn toLowerCase(self): String
+  native fn replace(self, part: String, replacement: String): String
+  native fn split(self, separator: String): List<String>
+  native fn repeat(self, times: Int): String
+
+  fn isBlank(self): Bool {
+    trim().isEmpty()
+  }
+
+  fn lines(self): List<String> {
+    split("\n")
+  }
+
+  /** `String.join(["a", "b"], separator: ", ")` */
+  fn join(parts: Iterable<String>, separator: String = ""): String {
+    parts.fold("") { result, part =>
+      if result.isEmpty() { part } else { result + separator + part }
+    }
+  }
+}
+
+/** `String.from(characters)`, `characters.to<String>()` */
+extend String with From<Iterable<Char>> {
+  native fn from(value: Iterable<Char>): String
+}
+
+/** The code point: `Int.from('A')` is 65. */
+extend Int64 with From<Char> {
+  native fn from(value: Char): Int64
+}
+
+/** Not every number is a Unicode scalar value (surrogates, everything above 0x10FFFF). */
+extend Char with TryFrom<Int64, NumberRangeError> {
+  native fn tryFrom(value: Int64): Result<Char, NumberRangeError>
+}

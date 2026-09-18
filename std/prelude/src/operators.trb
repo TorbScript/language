@@ -1,0 +1,66 @@
+/** `a + b` */
+public trait Add<Other = Self, Output = Self> {
+  fn add(self, other: Other): Output
+}
+
+/** `a - b` */
+public trait Subtract<Other = Self, Output = Self> {
+  fn subtract(self, other: Other): Output
+}
+
+/** `a * b` */
+public trait Multiply<Other = Self, Output = Self> {
+  fn multiply(self, other: Other): Output
+}
+
+/** `a / b` */
+public trait Divide<Other = Self, Output = Self> {
+  fn divide(self, other: Other): Output
+}
+
+/** `a % b` */
+public trait Remainder<Other = Self, Output = Self> {
+  fn remainder(self, other: Other): Output
+}
+
+/** `-a` */
+public trait Negate {
+  fn negate(self): Self
+}
+
+/** `a[key]` */
+public trait Indexed<Key, Value> {
+  fn get(self, key: Key): Value?
+
+  /** `a[key]` panics if the key does not exist. Use `get` if absence is expected. */
+  fn at(self, key: Key): Value {
+    get(key).expect("Key does not exist")
+  }
+}
+
+/**
+ * `a[key] = value`. It also makes `a[key]` a `var` path: `enemies[0].health = 5` and `groups[key].add(value)`
+ * take the element out, change it and put it back (without a copy).
+ */
+public trait MutableIndexed<Key, Value> with Indexed<Key, Value> {
+  fn set(var self, key: Key, value: Value)
+}
+
+/** `a[from..to]`. The slice shares the storage and starts at index 0 again. */
+public trait Slice {
+  fn slice(self, range: Range<Int>): Self
+}
+
+/**
+ * `a[from..to] = values`. It also makes `a[from..to]` a `var` path, which is what other languages need a
+ * mutable span for: `samples[0..100].sort()` and `fill(samples[0..100])` work on this part in place.
+ */
+public trait MutableSlice with Slice {
+  fn replace(var self, range: Range<Int>, values: Self)
+
+  /**
+   * Gives the value a storage of its own that is exactly as big as needed. For the small slice of something
+   * big that is kept for a long time: `var header = file[0..64]`, then `header.compact()`.
+   */
+  fn compact(var self)
+}

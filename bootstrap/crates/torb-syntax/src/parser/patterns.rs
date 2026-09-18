@@ -1,0 +1,130 @@
+use super::Parser;
+use crate::ast::*;
+use crate::token::{Keyword, TokenKind};
+
+impl Parser<'_> {
+    /// `1 | 2 | 3`
+    pub(super) fn pattern(&mut self) -> Pattern {
+        let start = self.span();
+        let first = self.single_pattern();
+        if !self.at(TokenKind::Pipe) {
+            return first;
+        }
+        let mut alternatives = vec![first];
+        while self.eat(TokenKind::Pipe) {
+            alternatives.push(self.single_pattern());
+        }
+        Pattern { kind: PatternKind::Or(alternatives), span: start.to(self.previous_span()) }
+    }
+
+    fn single_pattern(&mut self) -> Pattern {
+        let start = self.span();
+        let kind = match self.kind() {
+            TokenKind::Identifier if self.text(start) == "_" => {
+                self.bump();
+                PatternKind::Wildcard
+            }
+            TokenKind::Identifier => self.name_or_variant_pattern(),
+            // `.Circle(radius)`, `.Empty`
+            TokenKind::Dot => {
+                self.bump();
+                let name = self.name();
+                let fields = if self.eat(TokenKind::ParenOpen) { self.variant_fields() } else { Vec::new() };
+                PatternKind::ImplicitVariant { name, fields }
+            }
+            TokenKind::ParenOpen => {
+                self.bump();
+                let mut items = self.comma_separated(TokenKind::ParenClose, Self::pattern);
+                if items.len() == 1 {
+                    items.remove(0).kind
+                } else {
+                    PatternKind::Tuple(items)
+                }
+            }
+            TokenKind::BracketOpen => self.list_pattern(),
+            TokenKind::Integer
+            | TokenKind::Float
+            | TokenKind::Char(_)
+            | TokenKind::Text(_)
+            | TokenKind::Minus
+            | TokenKind::Keyword(Keyword::True | Keyword::False) => self.literal_pattern(),
+            _ => {
+                self.error_here(format!("Expected a pattern, found {}", self.kind().describe()));
+                PatternKind::Error
+            }
+        };
+        Pattern { kind, span: start.to(self.previous_span()) }
+    }
+
+    /// `value`, `None`, `Some(value)`, `Shape.Circle(radius)`
+    fn name_or_variant_pattern(&mut self) -> PatternKind {
+        let mut path = vec![self.name()];
+        while self.at(TokenKind::Dot) && *self.kind_at(1) == TokenKind::Identifier {
+            self.bump();
+            path.push(self.name());
+        }
+        if self.eat(TokenKind::ParenOpen) {
+            return PatternKind::Variant { path, fields: self.variant_fields() };
+        }
+        if path.len() > 1 {
+            return PatternKind::Variant { path, fields: Vec::new() };
+        }
+        PatternKind::Name(path.remove(0).text)
+    }
+
+    /// The fields of `Circle(radius: r)`: the label is documentation, fields are matched by position.
+    fn variant_fields(&mut self) -> Vec<Pattern> {
+        self.comma_separated(TokenKind::ParenClose, |parser| {
+            if *parser.kind() == TokenKind::Identifier && *parser.kind_at(1) == TokenKind::Colon {
+                parser.bump();
+                parser.bump();
+            }
+            parser.pattern()
+        })
+    }
+
+    /// `[]`, `[first, second]`, `[first, ...rest]`, `[..., last]`
+    fn list_pattern(&mut self) -> PatternKind {
+        self.bump();
+        let mut rest = None;
+        let mut count = 0;
+        let items = self.comma_separated(TokenKind::BracketClose, |parser| {
+            if parser.eat(TokenKind::Ellipsis) {
+                let name = parser.at(TokenKind::Identifier).then(|| parser.name());
+                if rest.is_some() {
+                    let span = parser.previous_span();
+                    parser.error("A list pattern can only have one `...`", span);
+                }
+                rest = Some(RestPattern { position: count, name });
+                return None;
+            }
+            count += 1;
+            Some(parser.pattern())
+        });
+        PatternKind::List { items: items.into_iter().flatten().collect(), rest }
+    }
+
+    /// `0`, `"text"`, `'a'`, `-1`, `1..=9`
+    fn literal_pattern(&mut self) -> PatternKind {
+        let start = self.literal_pattern_value();
+        let inclusive = self.at(TokenKind::DotDotEqual);
+        if inclusive || self.at(TokenKind::DotDot) {
+            self.bump();
+            let end = self.literal_pattern_value();
+            return PatternKind::Range { start: Box::new(start), end: Box::new(end), inclusive };
+        }
+        PatternKind::Literal(Box::new(start))
+    }
+
+    fn literal_pattern_value(&mut self) -> Expression {
+        let start = self.span();
+        if self.eat(TokenKind::Minus) {
+            let operand = self.primary_expression();
+            return Expression {
+                kind: ExpressionKind::Unary { operator: UnaryOperator::Negate, operand: Box::new(operand) },
+                span: start.to(self.previous_span()),
+            };
+        }
+        self.primary_expression()
+    }
+}

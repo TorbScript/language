@@ -1,0 +1,102 @@
+use Hash from "../compare"
+use From from "../convert"
+use Collection from "./collection"
+
+/**
+ * Collection without duplicates. `add` of a value that is already present does nothing.
+ *
+ * Verbs change the set in place (`add`, `remove`, `addAll`, `removeAll`, `retainAll`). The set operations are
+ * nouns and never change anything (`union`, `intersection`, `difference`).
+ */
+public trait Set<Item>
+  with Collection<Item>
+{
+  fn of(...items: Item): Set<Item> where Item: Hash {
+    TrieSet.from(items)
+  }
+
+  /** Required: a set that has to search is not a set. */
+  fn contains(self, value: Item): Bool
+
+  // --- In place ------------------------------------------------------------------------------------
+
+  /** Returns `false` if the value was not present. */
+  fn remove(var self, value: Item): Bool
+
+  fn removeAll(var self, values: Iterable<Item>) {
+    for value in values {
+      remove(value)
+    }
+  }
+
+  fn retainAll(var self, values: Set<Item>) {
+    const obsolete = filter { !values.contains(_) }   // Holds a copy of this set: iterating while removing is safe
+    removeAll(obsolete)
+  }
+
+  // --- Changed copies --------------------------------------------------------------------------------
+
+  fn removed(self, value: Item): Self {
+    var result = self
+    result.remove(value)
+    result
+  }
+
+  fn union(self, other: Iterable<Item>): Self {
+    addedAll(other)
+  }
+
+  fn intersection(self, other: Set<Item>): Self {
+    var result = self
+    result.retainAll(other)
+    result
+  }
+
+  fn difference(self, other: Iterable<Item>): Self {
+    var result = self
+    result.removeAll(other)
+    result
+  }
+
+  fn isSubsetOf(self, other: Set<Item>): Bool {
+    all { other.contains(_) }
+  }
+}
+
+extend<Item: Hash> Set<Item> with From<Iterable<Item>> {
+  fn from(items: Iterable<Item>): Set<Item> {
+    TrieSet.from(items)
+  }
+}
+
+// --- Implementations -----------------------------------------------------------------------------------
+
+/** Hash array mapped trie - the default. Cheap to keep in many versions. Iterates in insertion order. */
+public native type TrieSet<Item: Hash>
+  with Set<Item>, From<Iterable<Item>>
+{
+  native fn from(items: Iterable<Item>): TrieSet<Item>
+
+  native fn length(self): Int
+  native fn iterator(self): Iterator<Item>
+  native fn contains(self, value: Item): Bool
+
+  native fn add(var self, value: Item)
+  native fn remove(var self, value: Item): Bool
+  native fn clear(var self)
+}
+
+/** Flat hash table: the fastest lookups and writes, but a write to a shared table copies all of it. */
+public native type HashSet<Item: Hash>
+  with Set<Item>, From<Iterable<Item>>
+{
+  native fn from(items: Iterable<Item>): HashSet<Item>
+
+  native fn length(self): Int
+  native fn iterator(self): Iterator<Item>
+  native fn contains(self, value: Item): Bool
+
+  native fn add(var self, value: Item)
+  native fn remove(var self, value: Item): Bool
+  native fn clear(var self)
+}

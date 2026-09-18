@@ -1,0 +1,35 @@
+use MutableIndexed from "./operators"
+use Iterable, Length from "./iteration"
+
+/**
+ * A fixed number of items, and the number is part of the type: `Array<Float, 16>`.
+ *
+ * An Array is a small value with a fixed layout. It lives inline (in a binding, in a field, in another Array), has no
+ * storage on the heap and no reference count, and copying it copies its items. This is the type for vectors and
+ * matrices, colors, hashes and foreign structs. Everything that grows is a `List`.
+ *
+ *     var identity: Array<Float, 4> = Array.filled(0.0)
+ *     identity[0] = 1.0
+ *     identity[4] = 1.0                 // Compile error: the index is known to be out of bounds
+ *
+ * `Size` is a const parameter: a literal, a named `const` or another const parameter. There is no arithmetic in types.
+ */
+public native type Array<Item, const Size: Int>
+  with Iterable<Item>, Length, MutableIndexed<Int, Item>
+{
+  /** The length comes from the expected type: `const zeros: Array<Int, 8> = Array.filled(0)` */
+  native fn filled(value: Item): Array<Item, Size>
+
+  /** `None` if the number of items is not `Size`. */
+  native fn from(items: Iterable<Item>): Array<Item, Size>?
+
+  native fn length(self): Int
+  native fn get(self, index: Int): Item?
+  native fn iterator(self): Iterator<Item>
+
+  native fn set(var self, index: Int, value: Item)
+  native fn fill(var self, value: Item)
+
+  /** Same length, so the result is an Array again. */
+  native fn mapped<Output>(self, transform: (value: Item) => Output): Array<Output, Size>
+}

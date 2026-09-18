@@ -1,0 +1,240 @@
+use test, group from "std/test"
+use SourceText from "../src/syntax/source"
+use Statement, StatementKind, Expression, ExpressionKind, CallStyle, InfixOperator, TypeKind, PatternKind from "../src/syntax/ast"
+use parse from "../src/syntax/parser/parser"
+
+fn statements(text: String): List<Statement> {
+  const parsed = parse(SourceText.of(text))
+  assert(parsed.diagnostics.isEmpty())
+  parsed.file.statements
+}
+
+/** The expression of a file that consists of one expression statement. */
+fn expression(text: String): ExpressionKind {
+  match statements(text)[0].kind {
+    .Evaluate(expression) => expression.kind
+    other => panic "Expected an expression statement, found {other}"
+  }
+}
+
+/** The value of `const name = ...` */
+fn bound(text: String): ExpressionKind {
+  match statements(text)[0].kind {
+    .Bind(binding) => binding.value.kind
+    other => panic "Expected a binding, found {other}"
+  }
+}
+
+fn messages(text: String): List<String> {
+  parse(SourceText.of(text)).diagnostics.map({ _.message }).toList()
+}
+
+/** Source text of the node, to say what a tree looks like without spelling out spans. */
+fn source(text: String, expression: Expression): String {
+  text[expression.span.start..expression.span.end]
+}
+
+group "Operators" {
+  test "multiplication binds tighter than addition" {
+    const text = "1 + 2 * 3"
+    match expression(text) {
+      .Binary(InfixOperator.Add, left, right) => {
+        assert(source(text, left) == "1")
+        assert(source(text, right) == "2 * 3")
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "`??` groups to the right, `-` to the left" {
+    const coalesce = "a ?? b ?? c"
+    match expression(coalesce) {
+      .Binary(InfixOperator.Coalesce, _, right) => assert(source(coalesce, right) == "b ?? c")
+      other => panic "Unexpected tree: {other}"
+    }
+    const subtract = "a - b - c"
+    match expression(subtract) {
+      .Binary(InfixOperator.Subtract, left, _) => assert(source(subtract, left) == "a - b")
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "comparisons do not chain" {
+    assert(messages("const x = a < b > c") == ["Comparisons do not chain. Use `&&`: `a < b && b < c`"])
+  }
+}
+
+group "Generics or less than" {
+  test "type arguments in front of a call" {
+    match bound("const config = load<Config>(path)") {
+      .Call(callee, _, _) => match callee.kind {
+        .Generic(_, arguments) => assert(arguments.length() == 1)
+        other => panic "Unexpected callee: {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "comparisons stay comparisons" {
+    match bound("const inside = 0 < index && index < 16") {
+      .Binary(InfixOperator.And, _, _) => {}
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+}
+
+group "Command calls" {
+  test "arguments, labels and the trailing closure" {
+    match expression("route \"/health\", to: handler \{ respond() \}") {
+      .Call(_, arguments, CallStyle.Command) => {
+        assert(arguments.length() == 3)
+        assert(arguments[1].label?.text == Some("to"))
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "a name followed by `[` is always indexing" {
+    match expression("values [0]") {
+      .Index(_, _) => {}
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "the closure belongs to the command, not to its argument" {
+    assert(messages("print numbers.map \{ _ * 2 \}.toList()").length() == 1)
+    assert(messages("print(numbers.map \{ _ * 2 \}.toList())").isEmpty())
+  }
+
+  test "positional arguments come first" {
+    assert(messages("connect(host: \"a\", 5432)").length() == 1)
+    assert(messages("connect(\"a\", port: 5432)").isEmpty())
+  }
+}
+
+group "Closures" {
+  test "parameters are found by trying" {
+    match bound("const add = \{ a: Int, b: Int => a + b \}") {
+      .Closure(closure) => assert(closure.parameters.length() == 2)
+      other => panic "Unexpected tree: {other}"
+    }
+    match bound("const double = \{ _ * 2 \}") {
+      .Closure(closure) => assert(closure.parameters.isEmpty())
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "a `\{` in the head of an `if` starts the body" {
+    assert(statements("if list.isEmpty() \{ print 1 \}").length() == 1)
+  }
+}
+
+group "Strings" {
+  test "interpolations are parsed, with the offsets of the file" {
+    const text = "print \"sum: \{a + b\}\""
+    match expression(text) {
+      .Call(_, arguments, _) => match arguments[0].value.kind {
+        .TextLiteral([.Literal(prefix), .Interpolated(inner)]) => {
+          assert(prefix == "sum: ")
+          assert(source(text, inner) == "a + b")
+        }
+        other => panic "Unexpected argument: {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+}
+
+group "Types and patterns" {
+  test "literal types, but no unions of types" {
+    assert(messages("const status: \"online\" | \"offline\" = \"online\"").isEmpty())
+    assert(messages("const value: Int | String = 1").length() == 1)
+  }
+
+  test "rest patterns know their position" {
+    match bound("const first = match items \{ [head, ...tail] => head \}") {
+      .Match(_, arms) => match arms[0].pattern.kind {
+        .ListPattern(items, Some(rest)) => {
+          assert(items.length() == 1)
+          assert(rest.position == 1)
+        }
+        other => panic "Unexpected pattern: {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+}
+
+group "Recovery" {
+  test "a broken statement does not take the next one with it" {
+    const parsed = parse(SourceText.of("const a = )\nconst b = 2"))
+    assert(parsed.diagnostics.length() == 1)
+    assert(parsed.file.statements.length() == 2)
+  }
+}
+
+group "Cases" {
+  test "a case is `.Case` or `Type.Case`, a bare name binds" {
+    match bound("const area = match shape \{\n  .Circle(radius) => radius\n  Shape.Empty => 0.0\n  other => other.area()\n\}") {
+      .Match(_, arms) => {
+        assert(arms.length() == 3)
+        match arms[0].pattern.kind {
+          .ImplicitVariant(name, fields) => {
+            assert(name.text == "Circle")
+            assert(fields.length() == 1)
+          }
+          other => panic "Unexpected pattern: {other}"
+        }
+        match arms[2].pattern.kind {
+          .Binding(name) => assert(name == "other")
+          other => panic "Unexpected pattern: {other}"
+        }
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "inside of a match a leading dot starts an arm, elsewhere it continues the line" {
+    match bound("const names = users\n  .map(\{ _.name \})\n  .toList()") {
+      .Call(_, _, _) => {}
+      other => panic "Unexpected tree: {other}"
+    }
+    assert(messages("const x = match y \{\n  .A => list\n    .first()\n  .B => 2\n\}").isNotEmpty())
+    assert(messages("const x = match y \{\n  .A => \{\n    list\n      .first()\n  \}\n  .B => 2\n\}").isEmpty())
+  }
+
+  test "in expressions, where the type is known" {
+    match bound("const kind: TokenKind = .Dot") {
+      .ImplicitMember(name) => assert(name.text == "Dot")
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "cases can be imported by name" {
+    assert(messages("use Some, None from Option\nuse \"./text-extensions\"").isEmpty())
+  }
+}
+
+group "Doc comments" {
+  test "belong to what follows them, down to parameters" {
+    const text = "/**\n * Connects.\n *\n *     example()\n */\nfn connect(/** Host name */ host: String) \{ \}"
+    match statements(text)[0].kind {
+      .Declare(declaration) => {
+        assert(declaration.doc == Some("Connects.\n\n    example()"))
+        match declaration.kind {
+          .Function(function) => assert(function.parameters[0].doc == Some("Host name"))
+          other => panic "Unexpected declaration: {other}"
+        }
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "an ordinary comment in between is fine, code is not" {
+    const parsed = statements("/** Lost */\nconst between = 1\nfn later() \{ \}")
+    match parsed[1].kind {
+      .Declare(declaration) => assert(declaration.doc == None)
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+}

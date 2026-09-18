@@ -1,0 +1,120 @@
+use Json from "std/json"
+
+// --- Literal types: a value that is one of a few literals ------------------------------------
+
+// A union of literals of one base type (String, Int or Char). Nothing else can be combined with `|`.
+type Status = "online" | "offline" | "away"
+
+var status: Status = "online"            // Literals adapt to the expected type, as `const z: Float = 1` does
+status = "away"
+// status = "busy"                       // Compile error: "busy" is not one of "online" | "offline" | "away"
+
+const text = "online"                    // A String, as always
+// status = text                         // Compile error: a String is not a Status
+status = Status.parse(text) ?? "offline" // `parse`, `Show`, `Equals`, `Hash`, `Encode`, `Decode` are generated
+
+const label = match status {             // Exhaustive without `_`
+  "online" => "here"
+  "offline" => "gone"
+  "away" => "back soon"
+}
+
+print "Status: {status}"                 // Back to a String: by interpolation or `status.into()`
+
+// They work inline in signatures, which is where they are most useful
+fn connect(host: String, transport: "tcp" | "udp" = "tcp", retries: 0 | 1 | 3 = 1) {
+  print "{transport}://{host} ({retries} retries)"
+}
+
+connect("example.test", transport: "udp")
+// connect("example.test", retries: 2)   // Compile error
+
+// --- Const parameters: values in types ----------------------------------------------------------
+
+// `Array` has its length in the type. It is a small inline value: no heap, no reference count.
+type Matrix<const Rows: Int, const Columns: Int> {
+  private var cells: Array<Array<Float, Columns>, Rows> = Array.filled(Array.filled(0.0))
+
+  fn get(self, row: Int, column: Int): Float {
+    cells[row][column]
+  }
+
+  fn set(var self, row: Int, column: Int, value: Float) {
+    cells[row][column] = value
+  }
+
+  // The inner dimension has to match, and the compiler checks it
+  fn multiplied<const Other: Int>(self, other: Matrix<Columns, Other>): Matrix<Rows, Other> {
+    var result = Matrix<Rows, Other>()
+    for row in 0..Rows {
+      for column in 0..Other {
+        const sum = (0..Columns).map { get(row, _) * other.get(_, column) }.sum()
+        result.set(row, column, sum)
+      }
+    }
+    result
+  }
+}
+
+const projection = Matrix<2, 3>()
+const model = Matrix<3, 4>()
+const combined = projection.multiplied(model)       // Matrix<2, 4>
+// const wrong = model.multiplied(model)            // Compile error: expected Matrix<4, _>, found Matrix<3, 4>
+
+// A const argument is a literal, a named `const` or another const parameter. There is no arithmetic in types.
+const channels = 4
+var pixel: Array<UInt8, channels> = Array.filled(255)
+pixel[0] = 0
+// pixel[4] = 0                                     // Compile error: the index is known to be out of bounds
+
+// --- Named tuples --------------------------------------------------------------------------------
+
+fn bounds(values: List<Int>): (lowest: Int, highest: Int)? {
+  const lowest = values.first()?
+  Some(values.fold((lowest: lowest, highest: lowest)) { range, value =>
+    (lowest: range.lowest.min(value), highest: range.highest.max(value))
+  })
+}
+
+if const Some(range) = bounds([3, 9, 1]) {
+  print "{range.lowest}..{range.highest}"          // Labels are names for `.0` and `.1`, nothing more
+  const (low, high) = range                        // Destructuring stays positional
+}
+
+// --- Several traits as one type ----------------------------------------------------------------------
+
+// `Show + Encode` is a value that implements both. Only traits can be combined, and it is the same `+` as in bounds.
+fn audit(entry: Show + Encode) {
+  print "audit: {entry}"
+  print Json.encode(entry)
+}
+
+type Registry {
+  private(var) entries: List<Show + Hash> = []
+
+  fn register(var self, entry: Show + Hash) {
+    entries.add(entry)
+  }
+}
+
+// --- What does not exist: unions of types ----------------------------------------------------------------
+
+// fn width(value: Int | String)         // Compile error: only literals can be combined with `|`
+//
+// A union has to be told apart by type at runtime, and types do not exist at runtime. Declare a type with cases
+// (a case that wraps exactly one type gets `From` for free), or accept everything that converts:
+
+type Width {
+  case Pixels(count: Int)
+  case Named(name: String)
+}
+
+fn resize<Value: Into<Width>>(width: Value) {
+  match width.into() {
+    .Pixels(count) => print "{count}px"
+    .Named(name) => print name
+  }
+}
+
+resize(120)                              // `Width.from(120)` is generated: `Pixels` is the only case that wraps an Int
+resize("wide")

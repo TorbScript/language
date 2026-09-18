@@ -1,0 +1,124 @@
+use TokenKind, Keyword from "../token"
+use Pattern, PatternKind, RestPattern, Name, Expression, ExpressionKind, PrefixOperator from "../ast"
+use Parser from "./parser"
+use parsePrimaryExpression from "./expressions"
+
+/** A pattern, including alternatives: `1 | 2 | 3` */
+public fn parsePattern(var parser: Parser): Pattern {
+  const start = parser.span()
+  const first = parseSinglePattern(parser)
+  if !parser.isAt(TokenKind.Pipe) {
+    return first
+  }
+  var alternatives = [first]
+  while parser.eat(TokenKind.Pipe) {
+    alternatives.add(parseSinglePattern(parser))
+  }
+  Pattern(PatternKind.Alternatives(alternatives), start.to(parser.previousSpan()))
+}
+
+fn parseSinglePattern(var parser: Parser): Pattern {
+  const start = parser.span()
+  const kind = match parser.kind() {
+    .Identifier if parser.text(start) == "_" => {
+      parser.bump()
+      PatternKind.Wildcard
+    }
+    .Identifier => parseNameOrVariant(parser)
+    // `.Circle(radius)`, `.Empty`
+    .Dot => {
+      parser.bump()
+      const name = parser.name()
+      const fields = if parser.eat(TokenKind.ParenOpen) { parseVariantFields(parser) } else { [] }
+      PatternKind.ImplicitVariant(name, fields)
+    }
+    .ParenOpen => {
+      parser.bump()
+      const items = parser.commaSeparated(TokenKind.ParenClose, parsePattern)
+      if items.length() == 1 {
+        items[0].kind
+      } else {
+        PatternKind.TuplePattern(items)
+      }
+    }
+    .BracketOpen => parseListPattern(parser)
+    .IntegerLiteral | .FloatLiteral | .CharLiteral(_) | .TextLiteral(_) | .Minus | .Reserved(.True | .False) => parseLiteralPattern(parser)
+    other => {
+      parser.errorHere("Expected a pattern, found {other.describe()}")
+      PatternKind.Invalid
+    }
+  }
+  Pattern(kind, start.to(parser.previousSpan()))
+}
+
+/** `value`, `None`, `Some(value)`, `Shape.Circle(radius)` */
+fn parseNameOrVariant(var parser: Parser): PatternKind {
+  var path = [parser.name()]
+  while parser.isAt(TokenKind.Dot) && parser.kindAt(1) == TokenKind.Identifier {
+    parser.bump()
+    path.add(parser.name())
+  }
+  if parser.eat(TokenKind.ParenOpen) {
+    return PatternKind.Variant(path, parseVariantFields(parser))
+  }
+  if path.length() > 1 {
+    return PatternKind.Variant(path, [])
+  }
+  PatternKind.Binding(path[0].text)
+}
+
+fn parseVariantFields(var parser: Parser): List<Pattern> {
+  parser.commaSeparated(TokenKind.ParenClose, parseVariantField)
+}
+
+/** `Circle(radius: r)`: the label is documentation, fields are matched by position. */
+fn parseVariantField(var parser: Parser): Pattern {
+  if parser.isAt(TokenKind.Identifier) && parser.kindAt(1) == TokenKind.Colon {
+    parser.bump()
+    parser.bump()
+  }
+  parsePattern(parser)
+}
+
+/** `[]`, `[first, second]`, `[first, ...rest]`, `[..., last]` */
+fn parseListPattern(var parser: Parser): PatternKind {
+  parser.bump()
+  var rest: RestPattern? = None
+  var count = 0
+  const items = parser.commaSeparated(TokenKind.BracketClose, { parser =>
+    if !parser.eat(TokenKind.Ellipsis) {
+      count = count + 1
+      return Some(parsePattern(parser))
+    }
+    var name: Name? = None
+    if parser.isAt(TokenKind.Identifier) {
+      name = Some(parser.name())
+    }
+    if rest.isSome() {
+      parser.error("A list pattern can only have one `...`", parser.previousSpan())
+    }
+    rest = Some(RestPattern(count, name))
+    None
+  })
+  PatternKind.ListPattern(items.filterMap({ _ }).toList(), rest)
+}
+
+/** `0`, `"text"`, `'a'`, `-1`, `1..=9` */
+fn parseLiteralPattern(var parser: Parser): PatternKind {
+  const start = parseLiteralPatternValue(parser)
+  const isInclusive = parser.isAt(TokenKind.DotDotEqual)
+  if isInclusive || parser.isAt(TokenKind.DotDot) {
+    parser.bump()
+    return PatternKind.RangePattern(start, parseLiteralPatternValue(parser), isInclusive)
+  }
+  PatternKind.Literal(start)
+}
+
+fn parseLiteralPatternValue(var parser: Parser): Expression {
+  const start = parser.span()
+  if parser.eat(TokenKind.Minus) {
+    const operand = parsePrimaryExpression(parser)
+    return Expression(ExpressionKind.Unary(PrefixOperator.Negate, operand), start.to(parser.previousSpan()))
+  }
+  parsePrimaryExpression(parser)
+}

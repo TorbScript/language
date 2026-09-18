@@ -3,11 +3,11 @@ use Component from "./ecs/component"
 use World from "./ecs/world"
 
 /**
- * Scene DSL. Builders are the one place where mutation is the natural fit:
- * the mutable builder stays local, what comes out is an immutable `World`.
+ * Scene DSL. Builders are where changing in place is the natural fit. The builder lives in a local `var`,
+ * what comes out is a `World` that systems pass on as a value.
  */
-public var type EntityBuilder {
-  private(var) components: MutableList<Component> = ArrayList()
+public type EntityBuilder {
+  private(var) components: List<Component> = []
 
   fn at(var self, x: Float, y: Float, rotation: Float = 0.0) {
     components.add(Transform(Vector2(x, y), rotation))
@@ -35,13 +35,13 @@ public var type EntityBuilder {
 
 }
 
-public var type SceneBuilder {
+public type SceneBuilder {
   private(var) world: World = World()
 
   fn entity(var self, build: (var self: EntityBuilder) => Void) {
     var builder = EntityBuilder()
     build(builder)
-    world = world.spawn(...builder.components)
+    world.spawn(...builder.components)
   }
 
 }

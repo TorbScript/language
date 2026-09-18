@@ -1,0 +1,33 @@
+use File, IoError from "std/fs"
+
+/** Every `.trb` file below the paths, sorted. Hidden directories, `target` and `node_modules` are skipped. */
+public fn collectSourceFiles(paths: List<String>): Result<List<String>, IoError> {
+  var files: List<String> = []
+  for path in paths {
+    collectInto(files, path)?
+  }
+  files.sort({ _ })
+  Ok(files)
+}
+
+fn collectInto(var files: List<String>, path: String): Result<Void, IoError> {
+  if !File.isDirectory(path) {
+    if !File.exists(path) {
+      return Error(IoError(path, "The file does not exist"))
+    }
+    files.add(path)
+    return Ok(Void)
+  }
+  for entry in File.list(path)? {
+    const child = "{path}/{entry}"
+    if File.isDirectory(child) {
+      const isSkipped = entry.startsWith(".") || entry == "target" || entry == "node_modules"
+      if !isSkipped {
+        collectInto(files, child)?
+      }
+    } else if entry.endsWith(".trb") {
+      files.add(child)
+    }
+  }
+  Ok(Void)
+}
