@@ -1,77 +1,80 @@
+use Equals, Compare, Hash from "./compare"
+use From, TryFrom, Parse, Show from "./convert"
+use Add, Subtract, Multiply, Divide, Remainder, Negate from "./operators"
 
-trait NumericOps {
-  add(other: numeric): numeric
-  subtract(other: numeric): numeric
-  multiply(other: numeric): numeric
-  divide(other: numeric): numeric
-  modulo(other: numeric): numeric
-  negate(): numeric
+public trait Numeric
+  with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show, Parse<NumberParseError> {}
+
+public trait Signed
+  with Numeric, Negate {
+  fn absolute(self): Self
 }
 
-trait Numeric
-  with NumericOps {}
-
-const type Byte {}
-
-const type SByte {}
-
-const type Short {}
-
-const type UShort {}
-
-const type Int {}
-
-const type UInt {}
-
-const type Long {}
-
-const type ULong {}
-
-const type Decimal {}
-
-const type Float {}
-
-const type Double {}
-
-extend Byte with NumericOps {
-  native {}
+public type NumberParseError {
+  text: String
 }
 
-extend SByte with NumericOps {
-  native {}
+public type NumberRangeError {
+  message: String
 }
 
-extend Short with NumericOps {
-  native {}
+// `native` types are represented by the runtime.
+// The methods of the traits listed after `with` are provided by the runtime, too.
+
+// The types always carry their width. This file uses the sized names only, because here the width is the point.
+
+public native type Int8 with Signed, Hash {}
+public native type Int16 with Signed, Hash {}
+public native type Int32 with Signed, Hash {}
+/** The type of integer literals. */
+public native type Int64 with Signed, Hash {}
+
+public native type UInt8 with Numeric, Hash {}
+public native type UInt16 with Numeric, Hash {}
+public native type UInt32 with Numeric, Hash {}
+public native type UInt64 with Numeric, Hash {}
+
+public native type Float32 with Signed {}
+/** The type of decimal literals. */
+public native type Float64 with Signed {}
+
+/** Exact base-10 arithmetic. Decimal literals adapt to it: `const price: Decimal = 19.99` */
+public native type Decimal with Signed, Hash {}
+
+// The defaults. Plain aliases, nothing the language treats specially.
+public type Int = Int64
+public type UInt = UInt64
+public type Float = Float64
+
+extend Float64 {
+  const pi: Float64 = 3.141592653589793
+  const e: Float64 = 2.718281828459045
+
+  native fn squareRoot(self): Float64
+  native fn floor(self): Float64
+  native fn ceiling(self): Float64
+  native fn round(self): Float64
+  native fn isNaN(self): Bool
 }
 
-extend UShort with NumericOps {
-  native {}
+// Widening conversions are infallible...
+extend Int64 with From<Int32> {
+  native fn from(value: Int32): Int64
 }
 
-extend Int with NumericOps {
-  native {}
-}
-extend UInt with NumericOps {
-  native {}
+extend Float64 with From<Int64> {
+  native fn from(value: Int64): Float64
 }
 
-extend Long with NumericOps {
-  native {}
+extend Float64 with From<Float32> {
+  native fn from(value: Float32): Float64
 }
 
-extend ULong with NumericOps {
-  native {}
+// ...narrowing conversions are not.
+extend Int32 with TryFrom<Int64, NumberRangeError> {
+  native fn tryFrom(value: Int64): Result<Int32, NumberRangeError>
 }
 
-extend Decimal with NumericOps {
-  native {}
-}
-
-extend Float with NumericOps {
-  native {}
-}
-
-extend Double with NumericOps {
-  native {}
+extend Int64 with TryFrom<Float64, NumberRangeError> {
+  native fn tryFrom(value: Float64): Result<Int64, NumberRangeError>
 }

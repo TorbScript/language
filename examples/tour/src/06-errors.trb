@@ -1,0 +1,104 @@
+type User {
+  id: Int
+  name: String
+  manager: User? = None
+}
+
+const users = [
+  User(1, "Ada"),
+  User(2, "Grace", manager: Some(User(1, "Ada"))),
+]
+
+// --- Option -------------------------------------------------------------------
+
+fn findUser(id: Int): User? {
+  users.find { _.id == id }
+}
+
+const managerName = findUser(2)?.manager?.name ?? "nobody"    // Optional chaining and default
+const upper = findUser(1).map { _.name.toUpperCase() }        // Some("ADA")
+
+if const Some(user) = findUser(3) {
+  print user.name
+} else {
+  print "No user 3"
+}
+
+// --- Result -------------------------------------------------------------------
+
+type ConfigError {
+  case Missing(key: String)
+  case Invalid(key: String, reason: String)
+}
+
+fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
+  const raw = settings.get("port").okOr(ConfigError.Missing("port"))?     // `?` on Option -> early return
+  const port = Int.parse(raw).mapError { ConfigError.Invalid("port", "not a number") }?
+  if port < 1 || port > 65535 {
+    return Error(Invalid("port", "out of range"))
+  }
+  Ok(port)
+}
+
+match readPort(["port": "80a"]) {
+  Ok(port) => print "Port {port}"
+  Error(Missing(key)) => print "{key} is missing"
+  Error(Invalid(key, reason)) => print "{key} is invalid: {reason}"
+}
+
+// --- Error conversion with From -------------------------------------------------
+
+type AppError {
+  case Config(cause: ConfigError)
+  case Startup(message: String)
+}
+
+extend AppError with From<ConfigError> {
+  fn from(value: ConfigError): AppError {
+    AppError.Config(value)
+  }
+}
+
+fn start(settings: Map<String, String>): Result<Void, AppError> {
+  const port = readPort(settings)?       // ConfigError is converted to AppError through `From`
+  print "Listening on {port}"
+  Ok(Void)
+}
+
+// --- Panic ----------------------------------------------------------------------
+// For bugs, not for expected failures. Not catchable, aborts the task.
+
+fn percentage(part: Int, total: Int): Int {
+  if total == 0 {
+    panic "total must not be zero"
+  }
+  part * 100 / total
+}
+
+const first = users[0]                   // Indexing panics when out of bounds...
+const tenth = users.get(10)              // ...`get` returns an Option
+const sure = findUser(1).expect("User 1 always exists")
+
+// --- Option and Result in pipelines ---------------------------------------------------------------------------------
+// `map`, `flatMap`, `filter`, `forEach` mean the same on Option, Result and Iterable. The difference:
+// Option and Result are values and run immediately, an Iterable is a lazy pipeline.
+
+const ids = [1, 2, 3, 4]
+
+// A function that returns an Option, used as a stage: keeps what was found
+const found = ids.filterMap { findUser(_) }.map { _.name }.toList()            // ["Ada", "Grace"]
+
+// All or nothing
+const everyone = ids.map { findUser(_) }.to<List<User>?>()                       // None: 3 and 4 do not exist
+const firstTwo = ids.take(2).map { findUser(_) }.to<List<User>?>()               // Some([Ada, Grace])
+
+// All or the first error. Stops parsing at "x".
+const parsed = ["1", "2", "x", "4"].map { Int.parse(_) }.to<Result<List<Int>, NumberParseError>>()
+match parsed {
+  Ok(numbers) => print "sum: {numbers.sum()}"
+  Error(error) => print "not a number: {error.text}"
+}
+
+// The other direction: from a value into a pipeline
+const managers = users.flatMap { _.manager.toList() }.to<Set<User>>()
+

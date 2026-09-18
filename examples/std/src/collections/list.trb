@@ -1,14 +1,131 @@
-use IndexOps, ArrayOps from "../array.trb"
+use Equals, Compare from "../compare"
+use Indexed, MutableIndexed from "../operators"
+use From from "../convert"
+use Collection, MutableCollection from "./collection"
 
-trait ListOps<Value>
-  with IndexOps<int, Value>, ArrayOps<Value> {
-  add(value: Value): void
-  remove(value: Value): bool
+// --- Traits ------------------------------------------------------------------------------------------
+
+/**
+ * Any list: ordered and addressable by index. Whether it is a value or somebody's mutable object is unknown,
+ * so it can only be read. `fn render(items: ListView<Item>)` accepts a `List`, a `MutableList` and an `Array`.
+ */
+public trait ListView<T>
+  with Collection<T>, Indexed<Int, T>
+{
+  fn first(self): T? {
+    get(0)
+  }
+
+  fn last(self): T? {
+    get(length() - 1)
+  }
+
+  fn indexOf(self, value: T): Int? where T: Equals {
+    indexed().find { _.1 == value }.map { _.0 }
+  }
 }
 
-trait List<Value>
-  with ListOps<Value> {}
+/**
+ * An ordered, persistent sequence of values. This is the type of the literal `[1, 2, 3]`.
+ * All "modifying" methods return a new list and leave the old one alone.
+ */
+public trait List<T>
+  with ListView<T>
+{
+  /** `List.of(1, 2, 3)` or, with a spread, `List.of(...anyIterable)` */
+  fn of(...items: T): List<T> {
+    items
+  }
 
-const type ArrayList<Value> with List<Value> {
-  native {}
+  fn add(self, value: T): List<T>
+  fn insert(self, index: Int, value: T): List<T>
+  fn set(self, index: Int, value: T): List<T>
+  fn removeAt(self, index: Int): List<T>
+  fn slice(self, start: Int, end: Int = length()): List<T>
+  fn reversed(self): List<T>
+
+  fn addAll(self, values: Iterable<T>): List<T> {
+    values.fold(self) { result, value => result.add(value) }
+  }
+
+  fn remove(self, value: T): List<T> where T: Equals {
+    filter { _ != value }.toList()
+  }
+}
+
+/** The factory picks the default implementation. This is also what makes `toList()` and `to<List<T>>()` work. */
+extend<T> List<T> with From<Iterable<T>> {
+  fn from(items: Iterable<T>): List<T> {
+    TrieList.from(items)
+  }
+}
+
+/** An ordered, growable sequence that is changed in place. */
+public trait MutableList<T>
+  with ListView<T>, MutableCollection<T>, MutableIndexed<Int, T>
+{
+  fn of(...items: T): MutableList<T> {
+    ArrayList.from(items)
+  }
+
+  fn insert(var self, index: Int, value: T)
+  fn removeAt(var self, index: Int): T?
+
+  /** Sorts in place. (`sortBy` is the lazy stage of `Iterable` and leaves the list alone.) */
+  fn sort<K: Compare>(var self, by: (value: T) => K)
+
+  fn remove(var self, value: T): Bool where T: Equals {
+    match indexOf(value) {
+      Some(index) => {
+        removeAt(index)
+        true
+      }
+      None => false
+    }
+  }
+}
+
+extend<T> MutableList<T> with From<Iterable<T>> {
+  fn from(items: Iterable<T>): MutableList<T> {
+    ArrayList.from(items)
+  }
+}
+
+// --- Implementations -----------------------------------------------------------------------------------
+
+/** Bit-partitioned trie ("persistent vector"): `get`, `add` and `set` in effectively constant time, structure is shared. */
+public native type TrieList<T>
+  with List<T>, From<Iterable<T>>
+{
+  native fn from(items: Iterable<T>): TrieList<T>
+
+  native fn length(self): Int
+  native fn get(self, index: Int): T?
+  native fn iterator(self): Iterator<T>
+
+  native fn add(self, value: T): List<T>
+  native fn insert(self, index: Int, value: T): List<T>
+  native fn set(self, index: Int, value: T): List<T>
+  native fn removeAt(self, index: Int): List<T>
+  native fn slice(self, start: Int, end: Int = length()): List<T>
+  native fn reversed(self): List<T>
+}
+
+/** Contiguous, growable array. */
+public native var type ArrayList<T>
+  with MutableList<T>, From<Iterable<T>>
+{
+  native fn from(items: Iterable<T>): ArrayList<T>
+  native fn withCapacity(capacity: Int): ArrayList<T>
+
+  native fn length(self): Int
+  native fn get(self, index: Int): T?
+  native fn iterator(self): Iterator<T>
+
+  native fn add(var self, value: T)
+  native fn set(var self, index: Int, value: T)
+  native fn insert(var self, index: Int, value: T)
+  native fn removeAt(var self, index: Int): T?
+  native fn clear(var self)
+  native fn sort<K: Compare>(var self, by: (value: T) => K)
 }

@@ -1,0 +1,39 @@
+/**
+ * Control structures that are ordinary functions.
+ * Only constructs that bind names (`const`, `fn`, `type`, ...) or jump (`if`, `match`, `for`, `while`) are built in.
+ */
+
+/** Evaluates a block immediately: `const x = do { ... }` */
+public fn do<T>(body: () => T): T {
+  body()
+}
+
+public fn unless(condition: Bool, body: () => Void) {
+  if !condition {
+    body()
+  }
+}
+
+/** `const response = retry 3 { http.get(url) }` */
+public fn retry<T, E>(times: Int, action: () => Result<T, E>): Result<T, E> {
+  const result = action()
+  if result.isOk() || times <= 1 {
+    return result
+  }
+  retry(times - 1, action)
+}
+
+public trait Close {
+  fn close(var self)
+}
+
+/**
+ * Closes the resource when the block is done.
+ *
+ *     const text = using File.open(path)? { file => file.readAll() }
+ */
+public fn using<R: Close, T>(var resource: R, body: (R) => T): T {
+  const result = body(resource)
+  resource.close()
+  result
+}

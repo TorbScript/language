@@ -1,0 +1,72 @@
+// DRAFT - see "Concurrency" in CONCEPT.md
+
+use * as http from "std/net/http"
+use HttpError from "std/net/http"
+use sleep from "std/time"
+
+type User {
+  id: Int
+  name: String
+}
+
+type Post {
+  title: String
+}
+
+// Calling an `async fn` returns a `Task<T>`. `await()` is a method on Task and composes with `?`.
+async fn fetchUser(id: Int): Result<User, HttpError> {
+  const response = http.get("https://example.test/users/{id}").await()?
+  response.json<User>()
+}
+
+async fn fetchPosts(userId: Int): Result<List<Post>, HttpError> {
+  const response = http.get("https://example.test/users/{userId}/posts").await()?
+  response.json<List<Post>>()
+}
+
+// Sequential
+async fn loadProfile(id: Int): Result<String, HttpError> {
+  const user = fetchUser(id).await()?
+  const posts = fetchPosts(user.id).await()?
+  Ok("{user.name} wrote {posts.length()} posts")
+}
+
+// Concurrent: start both tasks, then wait for both
+async fn loadProfileFast(id: Int): Result<String, HttpError> {
+  const (userResult, postsResult) = all(fetchUser(id), fetchPosts(id)).await()
+  const user = userResult?
+  const posts = postsResult?
+  Ok("{user.name} wrote {posts.length()} posts")
+}
+
+// Parallel computation. Values of a plain `type` are shared freely between tasks.
+const numbers = List.from(1..=1_000_000)
+const chunks = [numbers.slice(0, 500_000), numbers.slice(500_000)]
+
+// Stages are lazy: without `toList()` nothing would be spawned until somebody iterates - one task at a time.
+const tasks = chunks.map { chunk => spawn { chunk.sum() } }.toList()   // List<Task<Int>>, all running
+
+// Channels connect tasks. Mutable objects never cross task boundaries.
+const channel = Channel<Int>(capacity: 10)
+
+const producer = spawn {
+  for i in 0..5 {
+    channel.send(i).await()
+    sleep(100).await()
+  }
+  channel.close()
+}
+
+// Collectors are push-based, so they work for values that arrive over time, too
+const consumer = spawn {
+  channel.collect(summing { _ }).await()
+}
+
+// Top-level `await()` is allowed in entry files and scripts
+const total = tasks.map { _.await() }.sum()
+print "sum: {total}, consumed: {consumer.await()}"
+
+match loadProfile(1).await() {
+  Ok(profile) => print profile
+  Error(error) => print "Failed: {error}"
+}

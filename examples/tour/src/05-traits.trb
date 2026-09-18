@@ -1,0 +1,123 @@
+trait Shape {
+  fn area(self): Float                   // Required
+
+  fn describe(self): String {            // Default implementation
+    "{name()} with area {area()}"
+  }
+
+  fn name(self): String
+}
+
+// Implement at the declaration...
+type Square with Shape {
+  side: Float
+
+  fn area(self): Float { side * side }
+  fn name(self): String { "Square" }
+}
+
+type Circle {
+  radius: Float
+}
+
+// ...or afterwards
+extend Circle with Shape {
+  fn area(self): Float { Float.pi * radius * radius }
+  fn name(self): String { "Circle" }
+}
+
+// Extension methods without a trait. Only visible where they are imported.
+extend String {
+  fn shout(self): String {
+    "{toUpperCase()}!"
+  }
+}
+
+print "hello".shout()
+
+// Supertraits
+trait Named {
+  fn name(self): String
+}
+
+trait Greeter with Named {
+  fn greet(self): String {
+    "Hello, {name()}"
+  }
+}
+
+// Bounds: inline or with `where`
+fn largestArea<T: Shape>(shapes: List<T>): Float {
+  shapes.map { _.area() }.fold(0.0) { a, b => a.max(b) }
+}
+
+fn printSorted<T>(items: List<T>) where T: Compare + Show {
+  const sorted = items.sortBy { _ }      // Not inside the `for` head: there a `{` starts the body
+  for item in sorted {
+    print item
+  }
+}
+
+// A trait can be used as a type. The list can hold different shapes.
+const shapes: List<Shape> = [Square(2.0), Circle(1.0)]
+for shape in shapes {
+  print shape.describe()
+}
+
+// Operators are traits
+type Vector2 with Add, Subtract, Negate, Multiply<Float> {
+  x: Float
+  y: Float
+
+  fn add(self, other: Vector2): Vector2 { Vector2(x + other.x, y + other.y) }
+  fn subtract(self, other: Vector2): Vector2 { Vector2(x - other.x, y - other.y) }
+  fn negate(self): Vector2 { Vector2(-x, -y) }
+  fn multiply(self, other: Float): Vector2 { Vector2(x * other, y * other) }
+}
+
+const v = (Vector2(1.0, 2.0) + Vector2(3.0, 4.0)) * 2.0
+print(-v)                                // Vector2(x: -8.0, y: -12.0). `print -v` would be a subtraction.
+
+// `Equals`, `Hash` and `Show` are generated for types, but can be written by hand
+type CaseInsensitive with Equals, Hash {
+  text: String
+
+  fn equals(self, other: CaseInsensitive): Bool {
+    text.toLowerCase() == other.text.toLowerCase()
+  }
+
+  fn hash(self): Int {
+    text.toLowerCase().hash()
+  }
+}
+
+// Generic extension with a condition
+extend<T> List<T> where T: Shape {
+  fn totalArea(self): Float {
+    map { _.area() }.sum()
+  }
+}
+
+print [Square(1.0), Square(2.0)].totalArea()
+
+// Indexing is a trait, too
+var type Grid<T> with MutableIndexed<(Int, Int), T> {
+  width: Int
+  private var cells: Array<T>
+
+  fn filled(width: Int, height: Int, value: T): Grid<T> {
+    Self(width, Array.filled(width * height, value))
+  }
+
+  fn get(self, key: (Int, Int)): T? {
+    cells.get(key.1 * width + key.0)
+  }
+
+  fn set(var self, key: (Int, Int), value: T) {
+    cells[key.1 * width + key.0] = value
+  }
+}
+
+var grid = Grid.filled(3, 3, value: ".")
+grid[(1, 1)] = "x"
+print grid[(1, 1)]

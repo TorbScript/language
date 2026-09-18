@@ -1,0 +1,53 @@
+use Sandbox, SandboxError from "std/sandbox"
+use Environment from "std/environment"
+use ServerConfig, ConfigError from "./server-config"
+
+type StartupError {
+  case Script(cause: SandboxError)
+  case Config(cause: ConfigError)
+}
+
+extend StartupError with From<SandboxError> {
+  fn from(value: SandboxError): StartupError { StartupError.Script(value) }
+}
+
+extend StartupError with From<ConfigError> {
+  fn from(value: ConfigError): StartupError { StartupError.Config(value) }
+}
+
+fn loadConfig(path: String): Result<ServerConfig, StartupError> {
+  // No capabilities: the script cannot do IO. Resource limits guard against `while true {}`.
+  const sandbox = Sandbox(maxSteps: 1_000_000, maxMemory: 16_000_000)
+
+  // Parses and type checks the file against ServerConfig.
+  // The result is an ordinary closure: (var self: ServerConfig) => Void
+  const configure = sandbox.load<ServerConfig>(path)?
+
+  var config = ServerConfig.withSecrets(["DB_PASSWORD": Environment.get("DB_PASSWORD") ?? ""])
+  configure(config)
+  Ok(config.validate()?)
+}
+
+// The same vocabulary works inline, without a file
+fn testConfig(): ServerConfig {
+  var config = ServerConfig()
+  const configure: (var self: ServerConfig) => Void = {
+    port 9999
+    database {
+      url "sqlite::memory:"
+    }
+  }
+  configure(config)
+  config
+}
+
+match loadConfig("./config.trb") {
+  Ok(config) => {
+    print "Listening on {config.host}:{config.port} (tls: {config.tls})"
+    for route in config.routes {
+      print "  {route.path} -> {route.handler}"
+    }
+  }
+  Error(Script(cause)) => print "config.trb:{cause.line}: {cause.message}"
+  Error(Config(cause)) => print "Invalid configuration: {cause.message}"
+}

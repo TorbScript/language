@@ -1,0 +1,69 @@
+use Fragment, QueryError, translate from "./sql"
+
+/** What a query keeps of a quotation: the static tree and the captured values of this particular call. */
+type Quoted {
+  tree: ExpressionNode
+  captures: List<Data>
+
+  fn of<T>(expression: Expression<T>): Quoted {
+    Quoted(expression.tree, expression.captures())
+  }
+
+  /** `{ _.age >= 18 }` arrives as a `Lambda` node, the translator wants its body. */
+  fn body(self): ExpressionNode {
+    match tree {
+      Lambda(_, body, _) => body
+      other => other
+    }
+  }
+
+  fn toSql(self): Result<Fragment, QueryError> {
+    translate(body(), captures)
+  }
+}
+
+/**
+ * An immutable description of a query. Has the same vocabulary as `Iterable` - but its parameters are `Expression`,
+ * so the closures are not executed, they are translated.
+ */
+public type Query<T> {
+  table: String
+  private conditions: List<Quoted> = []
+  private ordering: List<Quoted> = []
+  private limit: Int? = None
+
+  fn filter(self, predicate: Expression<(row: T) => Bool>): Query<T> {
+    copy(conditions: conditions.add(Quoted.of(predicate)))
+  }
+
+  fn sortBy<K: Compare>(self, key: Expression<(row: T) => K>): Query<T> {
+    copy(ordering: ordering.add(Quoted.of(key)))
+  }
+
+  fn take(self, amount: Int): Query<T> {
+    copy(limit: Some(amount))
+  }
+
+  fn toSql(self): Result<Fragment, QueryError> {
+    var statement = Fragment.raw("SELECT * FROM {table}")
+
+    var keyword = " WHERE "
+    for condition in conditions {
+      const fragment = condition.toSql()?
+      statement = Fragment(statement.sql + keyword + fragment.sql, statement.parameters + fragment.parameters)
+      keyword = " AND "
+    }
+
+    keyword = " ORDER BY "
+    for key in ordering {
+      const fragment = key.toSql()?
+      statement = Fragment(statement.sql + keyword + fragment.sql, statement.parameters + fragment.parameters)
+      keyword = ", "
+    }
+
+    if const Some(amount) = limit {
+      statement = statement.wrap("", " LIMIT {amount}")
+    }
+    Ok(statement)
+  }
+}

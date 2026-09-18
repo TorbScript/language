@@ -1,1 +1,71 @@
+use sleep, Clock from "std/time"
+use ComponentKind from "./ecs/component"
+use World, System from "./ecs/world"
+use scene from "./scene"
+use movement, falling, collisions, cleanup, onlyEvery from "./systems"
 
+const initial = scene {
+  entity {
+    tag "player"
+    at 0.0, 0.0
+    moving 2.0, 0.0
+    sprite "player.png", layer: 1
+    health 100
+    collider 0.5
+  }
+
+  for i in 1..=3 {
+    entity {
+      tag "asteroid-{i}"
+      at Float.from(i) * 4.0, 0.0
+      moving(-1.0, 0.0)
+      sprite "asteroid.png"
+      health 30
+      collider 1.0
+    }
+  }
+}
+
+const systems: List<System> = [
+  falling,
+  movement,
+  collisions,
+  onlyEvery(1.0, cleanup),
+  { world, deltaTime =>                  // Ad-hoc system
+    print "t={world.time}: {world.entities.length()} entities"
+    world
+  },
+]
+
+const frameTime = 1.0 / 60.0
+
+// The loop is the only place with mutable state: one `var` holding the current immutable world.
+async fn run(start: World, seconds: Float): List<World> {
+  var world = start
+  var history = ArrayList<World>()       // Worlds share structure, keeping all of them is cheap
+
+  while world.time < seconds {
+    const frameStart = Clock.now()
+    world = world.step(systems, frameTime)
+    history.add(world)
+
+    const remaining = frameTime - (Clock.now() - frameStart).seconds()
+    if remaining > 0.0 {
+      sleep(remaining).await()
+    }
+  }
+  history.toList()
+}
+
+const history = run(initial, seconds: 5.0).await()
+
+const survivors = history.last()
+  .map { _.query(ComponentKind.Tag, ComponentKind.Health).count() }
+  ?? 0
+
+print "{survivors} entities survived {history.length()} frames"
+
+// Time travel for free
+if const Some(halfway) = history.get(history.length() / 2) {
+  print "Halfway there were {halfway.entities.length()} entities"
+}

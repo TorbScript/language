@@ -1,0 +1,105 @@
+// Variants are declared with `case` inside of a type
+type Shape {
+  case Circle(radius: Float)
+  case Rectangle(width: Float, height: Float)
+  case Empty
+
+  fn area(self): Float {
+    match self {
+      Circle(radius) => Float.pi * radius * radius
+      Rectangle(width, height) => width * height
+      Empty => 0.0
+    }
+  }
+}
+
+const shapes = [Shape.Circle(2.0), Shape.Rectangle(2.0, 3.0), Shape.Empty]
+const unit: Shape = Circle(1.0)          // The prefix can be omitted where the type is known
+
+// Generic and recursive ADTs
+type Tree<T> {
+  case Leaf
+  case Node(left: Tree<T>, value: T, right: Tree<T>)
+
+  fn insert(self, item: T): Tree<T> where T: Compare {
+    match self {
+      Leaf => Node(Leaf, item, Leaf)
+      Node(left, value, right) if item < value => Node(left.insert(item), value, right)
+      Node(left, value, right) if item > value => Node(left, value, right.insert(item))
+      _ => self
+    }
+  }
+
+  fn toList(self): List<T> {
+    match self {
+      Leaf => []
+      Node(left, value, right) => left.toList().add(value).addAll(right.toList())
+    }
+  }
+}
+
+const tree = [5, 3, 8, 1].fold(Tree<Int>.Leaf) { result, n => result.insert(n) }
+print tree.toList()                      // [1, 3, 5, 8]
+
+// `match` is an expression and must be exhaustive
+fn describe(value: Int): String {
+  match value {
+    0 => "zero"                          // Literal
+    1 | 2 | 3 => "small"                 // Alternatives
+    4..=9 => "medium"                    // Range
+    n if n < 0 => "negative ({n})"       // Binding with guard
+    _ => "large"                         // Wildcard
+  }
+}
+
+// Tuples, types and nested patterns
+type Point {
+  x: Int
+  y: Int
+}
+
+fn locate(shape: Shape, position: Point): String {
+  match (shape, position) {
+    (Empty, _) => "nothing anywhere"
+    (_, Point(x: 0, y: 0)) => "something at the origin"
+    (Circle(r), Point(x, y)) if r > 10.0 => "a big circle at {x}/{y}"
+    (_, Point(x, y)) => "something at {x}/{y}"
+  }
+}
+
+// List patterns
+fn summarize(items: List<String>): String {
+  match items {
+    [] => "nothing"
+    [only] => only
+    [first, second] => "{first} and {second}"
+    [first, ...rest] => "{first} and {rest.length()} more"
+  }
+}
+
+// Patterns in bindings
+const (quotient, remainder) = (7 / 2, 7 % 2)
+const Point(x, y) = Point(3, 4)
+
+// Patterns in conditions
+fn findShape(name: String): Shape? {
+  match name {
+    "unit" => Some(unit)
+    _ => None
+  }
+}
+
+if const Some(Circle(radius)) = findShape("unit") {
+  print "Found a circle with radius {radius}"
+}
+
+// A block body in a match arm
+for shape in shapes {
+  match shape {
+    Empty => print "skipped"
+    other => {
+      const area = other.area()
+      print "area: {area}"
+    }
+  }
+}

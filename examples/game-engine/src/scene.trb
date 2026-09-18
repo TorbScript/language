@@ -1,0 +1,53 @@
+use Vector2 from "./math/vector2"
+use Component from "./ecs/component"
+use World from "./ecs/world"
+
+/**
+ * Scene DSL. Builders are the one place where mutation is the natural fit:
+ * the mutable builder stays local, what comes out is an immutable `World`.
+ */
+public var type EntityBuilder {
+  private(var) components: MutableList<Component> = ArrayList()
+
+  fn at(var self, x: Float, y: Float, rotation: Float = 0.0) {
+    components.add(Transform(Vector2(x, y), rotation))
+  }
+
+  fn moving(var self, x: Float, y: Float) {
+    components.add(Velocity(Vector2(x, y)))
+  }
+
+  fn sprite(var self, texture: String, layer: Int = 0) {
+    components.add(Sprite(texture, layer))
+  }
+
+  fn health(var self, maximum: Int) {
+    components.add(Health(current: maximum, maximum: maximum))
+  }
+
+  fn collider(var self, radius: Float) {
+    components.add(Collider(radius))
+  }
+
+  fn tag(var self, name: String) {
+    components.add(Tag(name))
+  }
+
+}
+
+public var type SceneBuilder {
+  private(var) world: World = World()
+
+  fn entity(var self, build: (var self: EntityBuilder) => Void) {
+    var builder = EntityBuilder()
+    build(builder)
+    world = world.spawn(...builder.components)
+  }
+
+}
+
+public fn scene(build: (var self: SceneBuilder) => Void): World {
+  var builder = SceneBuilder()
+  build(builder)
+  builder.world
+}

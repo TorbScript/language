@@ -1,0 +1,67 @@
+/**
+ * The collection traits. These are the types that signatures, fields and bindings talk about:
+ *
+ *     Iterable<T>
+ *     └─ Collection<T>                  a finite number of values: `length`, `contains`
+ *        ├─ ListView<T>                 any list, for reading
+ *        │  ├─ List<T>                  a value: every "change" returns a new List
+ *        │  └─ MutableList<T>           an object: changed in place
+ *        ├─ SetView<T>                  Set<T>, MutableSet<T>
+ *        ├─ MapView<Key, Value>         Map<Key, Value>, MutableMap<Key, Value>
+ *        ├─ StackView<T>                Stack<T>, MutableStack<T>
+ *        ├─ QueueView<T>                Queue<T>, MutableQueue<T>
+ *        └─ MutableCollection<T>        everything that can be filled: `add`, `addAll`, `clear` (all `Mutable*`)
+ *
+ * Every kind has three traits, and the name says what you know about the collection:
+ *
+ *     Map<Key, Value>           a value. Nobody can change it behind your back, it can be a field of a `type` and
+ *                               it can be shared between tasks. This is what literals and `toMap()` give you.
+ *     MutableMap<Key, Value>    an object with an identity that is changed in place.
+ *     MapView<Key, Value>       one of the two, you do not know which. You can read it, and it may change while
+ *                               you hold it. The type for parameters of functions that only read.
+ *
+ * A `MutableMap` is never a `Map` - `toMap()` takes the snapshot.
+ *
+ * The implementations are named after their data structure (`TrieList`, `ArrayList`, `HashMap`, ...). They only show
+ * up where something is constructed: `private var routes: MutableList<Route> = ArrayList()`.
+ */
+
+use Equals from "../compare"
+use Iterable, Length from "../iteration"
+use Accumulator from "../collectors"
+
+public trait Collection<T>
+  with Iterable<T>, Length
+{
+  /** Linear by default. Sets and maps answer this without searching. */
+  fn contains(self, value: T): Bool where T: Equals {
+    any { _ == value }
+  }
+
+  fn containsAll(self, values: Iterable<T>): Bool where T: Equals {
+    values.all { contains(_) }
+  }
+}
+
+/**
+ * Everything that can be filled. Only `add` and `clear` are required.
+ *
+ * A mutable collection already is an `Accumulator`: it has `add`, and it is its own result. So every mutable
+ * collection can be the target of a collector, a channel or an event stream.
+ */
+public trait MutableCollection<T>
+  with Collection<T>, Accumulator<T, Self>
+{
+  fn add(var self, value: T)
+  fn clear(var self)
+
+  fn addAll(var self, values: Iterable<T>) {
+    for value in values {
+      add(value)
+    }
+  }
+
+  fn finish(self): Self {
+    self
+  }
+}

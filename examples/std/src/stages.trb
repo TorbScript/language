@@ -1,0 +1,230 @@
+/**
+ * The lazy stages behind `Iterable.map`, `filter`, `take`, ...
+ *
+ * Every stage is a pair: an immutable `type` that describes the stage (and is an `Iterable` again), and a
+ * `var type` iterator that does the work while somebody pulls values.
+ */
+
+use Compare from "./compare"
+use Iterable, Iterator from "./iteration"
+
+// --- map --------------------------------------------------------------------------------------
+
+public type Mapped<T, U> with Iterable<U> {
+  source: Iterable<T>
+  transform: (value: T) => U
+
+  fn iterator(self): Iterator<U> {
+    MappedIterator(source.iterator(), transform)
+  }
+}
+
+var type MappedIterator<T, U> with Iterator<U> {
+  var source: Iterator<T>
+  transform: (value: T) => U
+
+  fn next(var self): U? {
+    source.next().map(transform)
+  }
+}
+
+// --- filter ------------------------------------------------------------------------------------
+
+public type Filtered<T> with Iterable<T> {
+  source: Iterable<T>
+  predicate: (value: T) => Bool
+
+  fn iterator(self): Iterator<T> {
+    FilteredIterator(source.iterator(), predicate)
+  }
+}
+
+var type FilteredIterator<T> with Iterator<T> {
+  var source: Iterator<T>
+  predicate: (value: T) => Bool
+
+  fn next(var self): T? {
+    while const Some(value) = source.next() {
+      if predicate(value) {
+        return Some(value)
+      }
+    }
+    None
+  }
+}
+
+// --- filterMap, mapWhile ----------------------------------------------------------------------------
+
+public type FilterMapped<T, U> with Iterable<U> {
+  source: Iterable<T>
+  transform: (value: T) => U?
+
+  fn iterator(self): Iterator<U> {
+    FilterMappedIterator(source.iterator(), transform)
+  }
+}
+
+var type FilterMappedIterator<T, U> with Iterator<U> {
+  var source: Iterator<T>
+  transform: (value: T) => U?
+
+  fn next(var self): U? {
+    while const Some(value) = source.next() {
+      if const Some(result) = transform(value) {
+        return Some(result)
+      }
+    }
+    None
+  }
+}
+
+public type MappedWhile<T, U> with Iterable<U> {
+  source: Iterable<T>
+  transform: (value: T) => U?
+
+  fn iterator(self): Iterator<U> {
+    MappedWhileIterator(source.iterator(), transform)
+  }
+}
+
+var type MappedWhileIterator<T, U> with Iterator<U> {
+  var source: Iterator<T>
+  transform: (value: T) => U?
+  var done: Bool = false
+
+  fn next(var self): U? {
+    if done {
+      return None
+    }
+    const result = transform(source.next()?)
+    done = result.isNone()
+    result
+  }
+}
+
+// --- flatMap -----------------------------------------------------------------------------------
+
+public type FlatMapped<T, U> with Iterable<U> {
+  source: Iterable<T>
+  transform: (value: T) => Iterable<U>
+
+  fn iterator(self): Iterator<U> {
+    FlatMappedIterator(source.iterator(), transform)
+  }
+}
+
+var type FlatMappedIterator<T, U> with Iterator<U> {
+  var source: Iterator<T>
+  transform: (value: T) => Iterable<U>
+  var current: Iterator<U>? = None
+
+  fn next(var self): U? {
+    while true {
+      if var Some(inner) = current {
+        if const Some(value) = inner.next() {
+          return Some(value)
+        }
+      }
+      // `?` on an Option: the source is exhausted, so are we
+      current = Some(transform(source.next()?).iterator())
+    }
+  }
+}
+
+// --- take, skip, takeWhile -----------------------------------------------------------------------
+
+public type Taken<T> with Iterable<T> {
+  source: Iterable<T>
+  amount: Int
+
+  fn iterator(self): Iterator<T> {
+    TakenIterator(source.iterator(), remaining: amount)
+  }
+}
+
+var type TakenIterator<T> with Iterator<T> {
+  var source: Iterator<T>
+  var remaining: Int
+
+  fn next(var self): T? {
+    if remaining <= 0 {
+      return None                        // Does not touch the source again: `take` ends infinite sources
+    }
+    remaining = remaining - 1
+    source.next()
+  }
+}
+
+public type Skipped<T> with Iterable<T> {
+  source: Iterable<T>
+  amount: Int
+
+  fn iterator(self): Iterator<T> {
+    var iterator = source.iterator()
+    for _ in 0..amount {
+      iterator.next()
+    }
+    iterator
+  }
+}
+
+public type TakenWhile<T> with Iterable<T> {
+  source: Iterable<T>
+  predicate: (value: T) => Bool
+
+  fn iterator(self): Iterator<T> {
+    TakenWhileIterator(source.iterator(), predicate)
+  }
+}
+
+var type TakenWhileIterator<T> with Iterator<T> {
+  var source: Iterator<T>
+  predicate: (value: T) => Bool
+  var done: Bool = false
+
+  fn next(var self): T? {
+    if done {
+      return None
+    }
+    const value = source.next()?
+    if predicate(value) {
+      return Some(value)
+    }
+    done = true
+    None
+  }
+}
+
+// --- zip -------------------------------------------------------------------------------------------
+
+public type Zipped<T, U> with Iterable<(T, U)> {
+  left: Iterable<T>
+  right: Iterable<U>
+
+  fn iterator(self): Iterator<(T, U)> {
+    ZippedIterator(left.iterator(), right.iterator())
+  }
+}
+
+var type ZippedIterator<T, U> with Iterator<(T, U)> {
+  var left: Iterator<T>
+  var right: Iterator<U>
+
+  fn next(var self): (T, U)? {
+    Some((left.next()?, right.next()?))
+  }
+}
+
+// --- sortBy ------------------------------------------------------------------------------------------
+
+public type Sorted<T, K: Compare> with Iterable<T> {
+  source: Iterable<T>
+  key: (value: T) => K
+
+  /** Sorting needs all values: the buffer is filled when the iteration starts, not when the stage is created. */
+  fn iterator(self): Iterator<T> {
+    var buffer = source.to<MutableList<T>>()
+    buffer.sort(by: key)
+    buffer.toList().iterator()
+  }
+}

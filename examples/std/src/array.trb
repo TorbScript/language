@@ -1,20 +1,16 @@
-trait IndexOps<Key, Value> {
-  get(index: Key): Value
-  set(index: Key, value: Value): void
-}
+use MutableIndexed from "./operators"
+use ListView from "./collections/list"
 
-trait ArrayOps<Value> {
-  length(): int
-  contains(value: Value): bool
-  indexOf(value: Value): int
-}
+/**
+ * Fixed-size, mutable, contiguous memory. The low-level building block for the collections.
+ * Application code usually wants `List` or `MutableList`.
+ */
+public native var type Array<T>
+  with ListView<T>, MutableIndexed<Int, T>
+{
+  native fn filled(length: Int, value: T): Array<T>
+  native fn from(items: Iterable<T>): Array<T>
 
-const type Array<Value> {}
-
-extend Array<Value> with IndexOps<int, Value> {
-  native {}
-}
-
-extend Array<Value> with ArrayOps<Value> {
-  native {}
+  native fn copyTo(self, var target: Array<T>, offset: Int = 0)
+  native fn resized(self, length: Int, fill: T): Array<T>
 }

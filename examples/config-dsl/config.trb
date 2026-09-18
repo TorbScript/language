@@ -1,0 +1,34 @@
+// This file is a receiver script. It is loaded with `sandbox.load<ServerConfig>("./config.trb")`,
+// so its body is a closure of type `(var self: ServerConfig) => Void`:
+// - It is type checked against `ServerConfig` (try `prot 8080` or `port "8080"`).
+// - It can only reach what `ServerConfig` exposes. No IO, no network, no clock.
+// - It is still real code: bindings, loops, conditions, functions.
+
+const apiVersion = "v1"
+const resources = ["users", "orders", "invoices"]
+
+const secure = true
+
+host "0.0.0.0"
+port if secure { 8443 } else { 8080 }
+tls secure
+
+database {
+  url "postgres://localhost:5432/mydb"
+  username "myuser"
+  password secret("DB_PASSWORD")         // `secret` is exposed by ServerConfig, the script cannot read the environment itself
+  poolSize 20
+}
+
+route "/health", to: "health"
+
+for resource in resources {
+  route "/api/{apiVersion}/{resource}", to: resource
+}
+
+logging {
+  level Debug
+  if secure {                            // `tls` is not visible here: only the innermost receiver is implicit
+    redact "password", "token"
+  }
+}

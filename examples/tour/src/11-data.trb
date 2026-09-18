@@ -1,0 +1,90 @@
+// Types and values are strictly separate: there is no runtime reflection.
+// What reflection is usually needed for is covered by the generated traits `ToData` and `FromData`.
+
+use Json, JsonError from "std/json"
+
+type ParseError {
+  message: String
+}
+
+// Private constructor: `Email` has an invariant, so `FromData` is NOT generated. It is written by hand
+// and goes through `parse` - a decoded Email is as valid as any other.
+type Email {
+  private value: String
+
+  fn parse(text: String): Result<Email, ParseError> {
+    if !text.contains("@") {
+      return Error(ParseError("'{text}' is not an email address"))
+    }
+    Ok(Self(text.toLowerCase()))
+  }
+}
+
+extend Email with ToData, FromData {
+  fn toData(self): Data {
+    Text(value)
+  }
+
+  fn fromData(data: Data): Result<Email, DataError> {
+    const text = String.fromData(data)?
+    Email.parse(text).mapError { DataError.Invalid("email", _.message) }
+  }
+}
+
+type Role {
+  case Admin
+  case Member(since: Int)
+}
+
+// Public constructor, all fields are ToData/FromData: both traits are generated.
+type User {
+  name: String
+  email: Email
+  role: Role = Member(since: 2026)
+  tags: List<String> = []
+}
+
+const user = User("Ada", Email.parse("ada@example.test")?, tags: ["math"])
+
+// --- Formats are ordinary libraries over `Data` ---------------------------------------------
+
+const text = Json.encode(user)
+print text    // {"name":"Ada","email":"ada@example.test","role":{"Member":{"since":2026}},"tags":["math"]}
+
+// Raw strings (`r"..."`) do not interpolate, so braces need no escaping
+match Json.decode<User>(r"""{"name": "Grace", "email": "not-an-email"}""") {
+  Ok(decoded) => print "Hello {decoded.name}"
+  Error(error) => print "Rejected: {error}"          // Rejected: email: 'not-an-email' is not an email address
+}
+
+// --- Generic code over data, without ever seeing a type ---------------------------------------
+
+fn diff(before: Data, after: Data, path: String = ""): List<String> {
+  match (before, after) {
+    (Record(a), Record(b)) => a.keys().toSet().union(b.keys().toSet())
+      .flatMap { key => diff(a.get(key) ?? Nothing, b.get(key) ?? Nothing, "{path}/{key}") }
+      .toList()
+    (a, b) if a == b => []
+    _ => ["{path}: {before} -> {after}"]
+  }
+}
+
+const renamed = user.copy(name: "Ada Lovelace", tags: ["math", "engines"])
+for change in diff(user.toData(), renamed.toData()) {
+  print change
+}
+
+// --- A different wire format: write the functions by hand, there are no annotations -------------
+
+type LegacyUser {
+  name: String
+  mail: String
+}
+
+extend LegacyUser with FromData {
+  fn fromData(data: Data): Result<LegacyUser, DataError> {
+    const name = data.at("user_name").okOr(DataError.Missing("user_name"))?
+    const mail = data.at("contact", "e_mail").okOr(DataError.Missing("contact.e_mail"))?
+    Ok(LegacyUser(String.fromData(name)?, String.fromData(mail)?))
+  }
+}

@@ -1,0 +1,47 @@
+use Vector2 from "../math/vector2"
+use Component, ComponentKind, Entity, EntityId from "./component"
+
+/** A system is a pure function from one world to the next. */
+public type System = (world: World, deltaTime: Float) => World
+
+/**
+ * The complete game state as one immutable value.
+ * Cheap to keep around (structural sharing), so replays, undo and rollback netcode are just lists of worlds.
+ */
+public type World {
+  entities: Map<EntityId, Entity> = [:]
+  time: Float = 0.0
+  private nextId: EntityId = 1
+
+  fn spawn(self, ...components: Component): World {
+    const entity = components.fold(Entity(nextId)) { result, component => result.attach(component) }
+    copy(entities: entities.set(entity.id, entity), nextId: nextId + 1)
+  }
+
+  fn despawn(self, id: EntityId): World {
+    copy(entities: entities.remove(id))
+  }
+
+  fn update(self, id: EntityId, change: (entity: Entity) => Entity): World {
+    match entities.get(id) {
+      Some(entity) => copy(entities: entities.set(id, change(entity)))
+      None => self
+    }
+  }
+
+  /** All entities that have all of the given components. Lazy: systems decide what to do with them. */
+  fn query(self, ...kinds: ComponentKind): Iterable<Entity> {
+    entities.values().filter { entity => kinds.all { entity.has(_) } }
+  }
+
+  /** Applies `change` to every entity that has all of the given components. */
+  fn mapEntities(self, kinds: List<ComponentKind>, change: (entity: Entity) => Entity): World {
+    query(...kinds).fold(self) { world, entity => world.update(entity.id, change) }
+  }
+
+  fn step(self, systems: List<System>, deltaTime: Float): World {
+    systems
+      .fold(self) { world, system => system(world, deltaTime) }
+      .copy(time: time + deltaTime)
+  }
+}

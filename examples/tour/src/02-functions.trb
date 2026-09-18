@@ -1,0 +1,105 @@
+// Declarations are hoisted: `isEven` can be used before and inside of `isOdd`.
+fn isOdd(n: Int): Bool {
+  if n == 0 { false } else { isEven(n - 1) }
+}
+
+fn isEven(n: Int): Bool {
+  if n == 0 { true } else { isOdd(n - 1) }
+}
+
+// The last expression is the result. `return` exits early.
+fn factorial(n: Int): Int {
+  if n <= 1 {
+    return 1
+  }
+  n * factorial(n - 1)
+}
+
+// Defaults and labeled arguments
+fn connect(host: String, port: Int = 5432, timeout: Int = 30): String {
+  "{host}:{port} (timeout {timeout}s)"
+}
+
+print connect("localhost")
+print connect("localhost", 3306)
+print connect("localhost", timeout: 10)
+
+// Variadics and spread
+fn sumAll(...numbers: Int): Int {
+  numbers.fold(0) { a, b => a + b }
+}
+
+const someSet = Set.of(4, 5, 6)
+print sumAll(1, 2, 3)
+print sumAll(1, ...someSet)              // Spread works with every Iterable
+
+// Generics
+fn firstOr<T>(items: List<T>, fallback: T): T {
+  items.first() ?? fallback
+}
+
+fn largest<T: Compare>(first: T, ...rest: T): T {
+  rest.fold(first) { a, b => a.max(b) }
+}
+
+// Closures. There is one form: `{` in expression position is always a closure.
+const double = { x: Int => x * 2 }        // Typed parameters...
+const triple: (Int) => Int = { _ * 3 }    // ...or an expected type, then parameters can be implicit
+const add: (Int, Int) => Int = { a, b => a + b }
+const multiply: (Int, Int) => Int = { _ * _2 }
+const clamp = { x: Int, low: Int, high: Int =>
+  if x < low { return low }               // Returns from the closure
+  if x > high { return high }
+  x
+}
+
+// Need a return type annotation or recursion? That is what local `fn` is for.
+fn fib(n: Int): Int {
+  if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
+}
+const fibs = [1, 2, 3, 4, 5].map(fib)
+
+// Closures capture their scope
+fn counter(): () => Int {
+  var count = 0
+  {
+    count = count + 1
+    count
+  }
+}
+
+const next = counter()
+print "{next()}, {next()}, {next()}"      // 1, 2, 3
+
+// Higher-order functions
+fn twice<T>(f: (T) => T): (T) => T {
+  { f(f(_)) }
+}
+
+fn compose<A, B, C>(f: (A) => B, g: (B) => C): (A) => C {
+  { g(f(_)) }
+}
+
+const quadruple = twice(double)
+const doubleThenTriple = compose(double, triple)
+
+// Trailing closures
+const numbers = [1, 2, 3, 4]
+const a = numbers.map({ _ * 2 })
+const b = numbers.map { _ * 2 }
+const c = numbers.map { value * 2 }       // `map` names its closure parameter `value`
+const d = numbers.map(double)             // Functions are values
+const total = numbers.fold(0) { sum, number => sum + number }
+
+// `map` is a lazy stage: `a` to `d` are pipelines, not lists. A terminal operation runs them.
+const doubled = b.toList()                // [2, 4, 6, 8]
+
+// Command calls: no parentheses in command position
+print "Hello"
+print quadruple(2)
+const e = largest 3, 9, 4
+print numbers.map({ _ + 1 }).toList()     // A trailing closure here would belong to `print`, the outermost command
+
+// Calls without arguments always need `()`, a bare name is a reference
+const reference = factorial
+print reference(5)

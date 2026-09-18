@@ -1,0 +1,72 @@
+use Vector2 from "../math/vector2"
+
+/** Components are immutable values. Systems replace them instead of changing them. */
+public type Component {
+  case Transform(position: Vector2, rotation: Float = 0.0)
+  case Velocity(value: Vector2)
+  case Sprite(texture: String, layer: Int = 0)
+  case Health(current: Int, maximum: Int)
+  case Collider(radius: Float)
+  case Tag(name: String)
+
+  /** Components are stored by kind, an entity has at most one component of each kind. */
+  fn kind(self): ComponentKind {
+    match self {
+      Transform(_, _) => ComponentKind.Transform
+      Velocity(_) => ComponentKind.Velocity
+      Sprite(_, _) => ComponentKind.Sprite
+      Health(_, _) => ComponentKind.Health
+      Collider(_) => ComponentKind.Collider
+      Tag(_) => ComponentKind.Tag
+    }
+  }
+}
+
+public type ComponentKind {
+  case Transform
+  case Velocity
+  case Sprite
+  case Health
+  case Collider
+  case Tag
+}
+
+public type EntityId = Int
+
+public type Entity {
+  id: EntityId
+  components: Map<ComponentKind, Component> = [:]
+
+  fn attach(self, component: Component): Entity {
+    copy(components: components.set(component.kind(), component))
+  }
+
+  fn detach(self, kind: ComponentKind): Entity {
+    copy(components: components.remove(kind))
+  }
+
+  fn has(self, kind: ComponentKind): Bool {
+    components.containsKey(kind)
+  }
+
+  fn position(self): Vector2? {
+    match components.get(ComponentKind.Transform) {
+      Some(Transform(position, _)) => Some(position)
+      _ => None
+    }
+  }
+
+  fn velocity(self): Vector2? {
+    match components.get(ComponentKind.Velocity) {
+      Some(Velocity(value)) => Some(value)
+      _ => None
+    }
+  }
+
+  fn health(self): Int? {
+    match components.get(ComponentKind.Health) {
+      Some(Health(current, _)) => Some(current)
+      _ => None
+    }
+  }
+}

@@ -1,0 +1,222 @@
+// --- Value types: `type` is immutable ------------------------------------------
+
+type Point {
+  x: Int
+  y: Int
+
+  // Static constant
+  const origin = Point(0, 0)
+
+  // Method: declares `self`, accesses members implicitly
+  fn area(self): Int {
+    x * y
+  }
+
+  fn translate(self, deltaX: Int = 0, deltaY: Int = 0): Point {
+    copy(x: x + deltaX, y: y + deltaY)
+  }
+
+  // Static function: no `self`
+  fn diagonal(size: Int): Point {
+    Self(size, size)
+  }
+}
+
+var p = Point(x: 10, y: 20)          // The constructor is generated from the fields
+const q = Point(10, 20)              // Positional works too
+// p.x = 20                          // Compile error: a `type` is immutable (unless it is a `var type`)
+p = p.copy(y: 30)                    // `copy` is generated
+p = p.translate(deltaX: 5)
+
+print "p = {p}, area = {p.area()}"   // `Show` is generated: Point(x: 15, y: 30)
+print p == Point(15, 30)             // `Equals` is generated and structural: true
+print Point.area(q)                  // Methods are static functions taking `self` first
+print [p, q].map(Point.area).toList()
+
+// --- Mutable reference types: `var type` -------------------------------------
+
+var type Counter {
+  var count: Int = 0                 // Fields are const unless marked `var`
+  step: Int = 1
+
+  fn increment(var self) {           // Mutating methods declare `var self`
+    count = count + step
+  }
+
+  fn isZero(self): Bool {
+    count == 0
+  }
+}
+
+var counter = Counter(step: 2)       // Fields with defaults can be omitted
+counter.increment()
+counter.count = 10
+
+const frozen = Counter()
+print frozen.isZero()
+// frozen.increment()                // Compile error: `var self` method through a const binding
+// frozen.count = 1                  // Compile error: assignment through a const binding
+
+// A `var` parameter allows mutation through the parameter
+fn incrementTwice(var target: Counter) {
+  target.increment()
+  target.increment()
+}
+
+// --- Construction without logic: factories, parse, From/Into -----------------
+
+type ParseError {
+  message: String
+}
+
+type Email with Parse<ParseError> {
+  private value: String              // Private without default: only `Email` can call `Email(...)`
+
+  fn parse(text: String): Result<Email, ParseError> {
+    const trimmed = text.trim()
+    if !trimmed.contains("@") {
+      return Error(ParseError("'{text}' is not an email address"))
+    }
+    Ok(Self(trimmed.toLowerCase()))
+  }
+
+  fn domain(self): String {
+    value.substring(value.indexOf("@").expect("Validated in parse") + 1)
+  }
+}
+
+// const invalid = Email("nope")     // Compile error: constructor is not accessible
+const email = Email.parse "Info@Example.test"
+match email {
+  Ok(address) => print "Domain: {address.domain()}"
+  Error(error) => print "Invalid: {error.message}"
+}
+
+type Celsius {
+  degrees: Float
+}
+
+type Fahrenheit {
+  degrees: Float
+}
+
+extend Celsius with From<Fahrenheit> {
+  fn from(value: Fahrenheit): Celsius {
+    Celsius((value.degrees - 32.0) / 1.8)
+  }
+}
+
+const boiling = Celsius.from(Fahrenheit(212.0))
+const freezing: Celsius = Fahrenheit(32.0).into()   // `Into` comes for free
+
+// Fallible conversion
+type Percent with TryFrom<Int, ParseError> {
+  value: Int
+
+  fn tryFrom(value: Int): Result<Percent, ParseError> {
+    if value < 0 || value > 100 {
+      return Error(ParseError("{value} is not between 0 and 100"))
+    }
+    Ok(Self(value))
+  }
+}
+
+// --- Visibility ---------------------------------------------------------------
+
+var type Account {
+  owner: String                                        // Members are public unless marked `private`
+  private(var) balance: Int = 0                         // The `var` is private: everybody reads, only Account writes
+  private var history: MutableList<String> = ArrayList()     // `private`: invisible from outside
+
+  fn deposit(var self, amount: Int) {
+    balance = balance + amount
+    log("deposit {amount}")
+  }
+
+  private fn log(var self, message: String) {
+    history.add("[{owner}] {message}")
+  }
+}
+
+var account = Account(owner: "Ada")  // The private fields have defaults, so the constructor is usable
+account.deposit(100)
+print account.balance                // 100
+// account.balance = 1_000_000       // Compile error: only Account can write `balance`
+// account.history                   // Compile error: `history` is private
+
+// --- A method is a constant of the type that holds a receiver closure ------------------------
+
+type Rectangle {
+  width: Int
+  height: Int
+
+  fn area(self): Int { width * height }
+
+  // The same thing without the `fn` sugar
+  const perimeter: (self: Rectangle) => Int = { 2 * (width + height) }
+}
+
+const rectangle = Rectangle(3, 4)
+print rectangle.area()               // 12
+print rectangle.perimeter()          // 14
+print Rectangle.area(rectangle)      // The constant itself: (self: Rectangle) => Int
+const bound = rectangle.area         // Bound to `rectangle`: () => Int
+print bound()
+
+// An instance field can hold a function, too. The call looks the same.
+var type Button {
+  label: String
+  var onClick: () => Void = {}
+}
+
+var button = Button("OK")
+button.onClick = { print "clicked" }
+button.onClick()
+
+// --- Type aliases ---------------------------------------------------------------
+
+// `Int`, `UInt` and `Float` are nothing special: the prelude declares `type Int = Int64` exactly like this.
+
+type UserId = Int
+type Handler = (request: String) => String
+type Pair<T> = (T, T)
+type Sample = Float32                   // Say why the width matters instead of redefining `Float`
+
+// Aliases are transparent: a UserId is an Int
+const id: UserId = 42
+const next: Int = id + 1
+const range: Pair<UserId> = (id, next)
+
+// --- Distinct types: single-field types, `by` forwards traits to the field ----------------
+
+type OrderId {
+  value: Int
+}
+// const wrong: OrderId = id             // Compile error: Int is not an OrderId
+
+type Meters with Add, Subtract, Compare by value {
+  value: Float
+}
+
+type Seconds with Add, Subtract, Compare by value {
+  value: Float
+}
+
+const distance = Meters(5.0) + Meters(2.5)       // Meters(7.5)
+const longer = distance.max(Meters(10.0))        // `Compare` is forwarded, too
+// const mixed = distance + Seconds(1.0)         // Compile error
+// const area = distance * distance              // Compile error: `Multiply` was not forwarded - that would be m²
+const raw: Float = distance.value                // Explicit way out
+
+// Units can define exactly the operations that make sense
+type MetersPerSecond {
+  value: Float
+}
+
+extend Meters with Divide<Seconds, MetersPerSecond> {
+  fn divide(self, other: Seconds): MetersPerSecond {
+    MetersPerSecond(value / other.value)
+  }
+}
+
+const speed = Meters(100.0) / Seconds(9.58)

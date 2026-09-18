@@ -1,0 +1,76 @@
+/**
+ * The vocabulary of `config.trb`.
+ *
+ * Settings and sections are `var` fields, written with property commands:
+ * `port 8443` sets a field, `database { ... }` configures a field in place.
+ * Only what is more than that (`route`, `redact`, `secret`) is a method.
+ */
+
+public type Route {
+  path: String
+  handler: String
+}
+
+public type LogLevel {
+  case Debug
+  case Info
+  case Warn
+  case Error
+}
+
+public var type DatabaseConfig {
+  var url: String = ""
+  var username: String = ""
+  var password: String = ""
+  var poolSize: Int = 10
+}
+
+public var type LoggingConfig {
+  var level: LogLevel = Info
+  private(var) redacted: MutableSet<String> = HashSet()      // Readable for the application, only `redact` writes
+
+  fn redact(var self, ...keys: String) {
+    for key in keys {
+      redacted.add(key)
+    }
+  }
+
+}
+
+public var type ServerConfig {
+  var host: String = "localhost"
+  var port: Int = 8080
+  var tls: Bool = false
+  var database: DatabaseConfig = DatabaseConfig()
+  var logging: LoggingConfig = LoggingConfig()
+  private(var) routes: MutableList<Route> = ArrayList()
+  private secrets: Map<String, String> = [:]
+
+  /** The host application decides which secrets a config script can see. */
+  fn withSecrets(secrets: Map<String, String>): ServerConfig {
+    Self(secrets: secrets)
+  }
+
+  fn route(var self, path: String, to: String) {
+    routes.add(Route(path, handler: to))
+  }
+
+  fn secret(self, key: String): String {
+    secrets.get(key) ?? ""
+  }
+
+
+  fn validate(self): Result<ServerConfig, ConfigError> {
+    if database.url.isBlank() {
+      return Error(ConfigError("database.url is required"))
+    }
+    if tls && port == 80 {
+      return Error(ConfigError("tls on port 80 is not supported"))
+    }
+    Ok(self)
+  }
+}
+
+public type ConfigError {
+  message: String
+}

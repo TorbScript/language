@@ -1,0 +1,220 @@
+use File from "std/fs"
+
+// --- Persistent collections: every "change" returns a new collection -------------
+
+const numbers = [1, 2, 3]
+const more = numbers.add(4).add(5).remove(2)
+print numbers                            // [1, 2, 3]
+print more                               // [1, 3, 4, 5]
+
+const ages = ["Ada": 36, "Grace": 45]
+const updated = ages.set("Linus", 28).remove("Ada")
+
+const primes = Set.of(2, 3, 5, 7)
+const evenPrimes = primes.intersect(Set.of(2, 4, 6))
+
+// Creation
+const a = List.of(1, 2, 3)
+const b = List.of(...primes)             // Spread any Iterable
+const c = List.from(primes)
+const d = primes.toList()
+const nested = List.of([1, 2], [3])      // List<List<Int>>: variadics never unpack implicitly
+
+// --- Mutable collections: explicit ------------------------------------------------
+
+// `MutableList` is a trait, so something has to be constructed: the implementation is named after its data structure
+var buffer = ArrayList<String>()
+buffer.add("a")
+buffer.add("b")
+buffer[0] = "A"
+const snapshot = buffer.toList()         // Back to an immutable value
+
+var cache: MutableMap<Int, String> = HashMap()
+const label = cache.getOrSet(42) { "computed once" }
+
+var seen = MutableSet.of(1, 2)           // The factories of the traits pick the default implementation
+seen.add(3)
+
+// --- Traits in signatures, implementations at construction -------------------------------------
+
+// `List`, `Set`, `Map`, `Stack`, `Queue` are values. Whoever holds one knows that it never changes.
+fn longest(words: List<String>): String? {
+  words.sortBy { -_.length() }.first()
+}
+
+// "Any map, I only read it": the `View` traits are what `Map` and `MutableMap` have in common
+fn greet(name: String, titles: MapView<String, String>): String {
+  const title = titles.get(name) ?? "dear"
+  "Hello {title} {name}"
+}
+
+print greet("Ada", titles: ["Ada": "Countess"])   // A Map
+var earned: MutableMap<String, String> = HashMap()
+earned["Grace"] = "Admiral"
+print greet("Grace", titles: earned)               // A MutableMap
+
+// Less specific: `Collection` (or `Iterable`) accepts every kind
+fn describe<T>(items: Collection<T>): String {
+  if items.isEmpty() { "nothing" } else { "{items.length()} items" }
+}
+
+print describe(numbers)                  // A List
+print describe(buffer)                   // A MutableList
+print describe(ages)                     // A Map is a Collection<(Key, Value)>
+
+// `var` plus a Mutable trait: "I am going to fill this, whatever it is"
+fn fillWithSquares(var target: MutableCollection<Int>, upTo: Int) {
+  target.addAll((1..=upTo).map { _ * _ })
+}
+
+fillWithSquares(seen, upTo: 3)           // A set...
+var squares = ArrayStack<Int>()
+fillWithSquares(squares, upTo: 3)        // ...or a stack: `add` is `push`
+
+// A mutable collection is never a `List`: `longest` asked for a value. Take the snapshot (or let it ask for a ListView):
+// print longest(buffer)                 // Compile error: MutableList<String> is not a List<String>
+print longest(buffer.toList())
+
+// --- Iteration ----------------------------------------------------------------------
+
+for number in numbers {
+  print number
+}
+
+for (name, age) in ages {                // Maps iterate over (key, value) tuples
+  print "{name} is {age}"
+}
+
+for i in 0..numbers.length() {
+  print "{i}: {numbers[i]}"
+}
+
+// Your own types take part by implementing `Iterable`
+var type CountdownIterator with Iterator<Int> {
+  var current: Int
+
+  fn next(var self): Int? {
+    if current <= 0 {
+      return None
+    }
+    current = current - 1
+    Some(current + 1)
+  }
+}
+
+type Countdown with Iterable<Int> {
+  start: Int
+
+  fn iterator(self): Iterator<Int> {
+    CountdownIterator(start)
+  }
+}
+
+for n in Countdown(3) {
+  print n                                // 3, 2, 1
+}
+const odd = Countdown(5).filter { _ % 2 == 1 }.toList()   // [5, 3, 1] - the pipeline comes with `Iterable`
+print odd
+
+// --- Pipelines: source -> lazy stages -> terminal operation ------------------------------
+
+type Employee {
+  name: String
+  department: String
+  salary: Int
+  age: Int
+}
+
+const employees = [
+  Employee("Ada", "Engineering", 120, 36),
+  Employee("Grace", "Engineering", 130, 45),
+  Employee("Linus", "Operations", 90, 28),
+  Employee("Margaret", "Research", 140, 52),
+]
+
+// Stages (`filter`, `map`, `sortBy`, `take`, ...) are lazy and store nothing. They describe the pipeline.
+const seniorEngineers = employees
+  .filter { _.department == "Engineering" && _.age >= 40 }
+  .sortBy { _.name }
+  .map { "{_.name} ({_.age})" }          // Iterable<String> - nothing has happened yet
+
+// A terminal operation pulls the values through. Where they end up is its decision alone.
+print seniorEngineers.toList()                           // ["Grace (45)"]
+print seniorEngineers.to<Set<String>>()                  // Any `From<Iterable<T>>` works as a target
+print seniorEngineers.collect(joining(", ", prefix: "Seniors: "))
+
+const best = employees.sortBy { -_.salary }.take(2).map { _.name }.toList()
+const anyoneYoung = employees.any { _.age < 30 }         // Stops at the first match
+const total = employees.fold(0) { sum, employee => sum + employee.salary }
+
+// --- Collectors: reusable descriptions of "what to do with the values" ----------------------
+
+const headcount = employees.collect(counting())
+const payroll = employees.collect(summing { _.salary })
+const averageAge = employees.collect(averaging { Float.from(_.age) })          // Float?
+const oldest = employees.collect(maxBy { _.age })                          // Employee?
+const (veterans, others) = employees.collect(partitioningBy { _.age >= 40 })
+
+// Grouping takes a downstream collector per group
+const byDepartment = employees.collect(groupingBy { _.department })            // Map<String, List<Employee>>
+const salaryByDepartment = employees.collect(groupingBy { _.department }.then(summing { _.salary }))
+const topEarners = employees.collect(groupingBy { _.department }.then(maxBy { _.salary }))
+const teams = employees.collect(groupingBy { _.department }.then(into<Set<Employee>>()))
+
+print salaryByDepartment                 // ["Engineering": 250, "Operations": 90, "Research": 140]
+
+// Collectors are values: name them, pass them around, combine them
+const salaryStatistics = groupingBy { employee: Employee => employee.department }.then(averaging { Float.from(_.salary) })
+print employees.collect(salaryStatistics)
+print employees.filter { _.age < 50 }.collect(salaryStatistics)
+
+// Your own collector: a fold with a final step...
+fn median<T>(value: (value: T) => Int): Collector<T, Int?> {
+  collector([], finish: { values: List<Int> => values.sortBy { _ }.skip(values.length() / 2).first() }) {
+    values, item => values.add(value(item))
+  }
+}
+
+print employees.collect(median { _.salary })
+
+// ...or, if it needs more than that, a `var type` that is an `Accumulator` (see std/collectors: `groupingBy`)
+
+// --- Streaming: values are pulled one by one, only as far as needed ----------------------------
+
+const firstBigSquare = (1..)             // An infinite source
+  .map { _ * _ }
+  .filter { _ % 7 == 0 }
+  .find { _ > 1000 }                     // Some(1764) - computed 42 squares, stored none
+
+const errors = File.lines("server.log")? // Reads line by line, the file is never in memory as a whole
+  .filter { _.contains("ERROR") }
+  .take(5)                               // Stops reading after the fifth match
+  .toList()
+
+// --- Stack and queue ------------------------------------------------------------------------
+
+// Persistent: history, undo, backtracking - every older version stays valid
+var stack = Stack.of(1, 2)
+stack = stack.push(3)
+if const Some((top, rest)) = stack.pop() {
+  print "top: {top}, remaining: {rest.length()}"
+}
+
+var queue = Queue.of("first").enqueue("second")
+while const Some((next, rest)) = queue.dequeue() {
+  print next
+  queue = rest
+}
+
+// Mutable: work lists and hot loops - nothing is allocated per element
+var pending: MutableQueue<Int> = ArrayQueue()
+pending.enqueue(1)
+while const Some(number) = pending.dequeue() {
+  if number < 100 {
+    pending.enqueue(number * 3)
+  }
+}
+
+var brackets = ArrayStack<Char>()
+brackets.push('(')
+print brackets.pop()                     // Some('(')

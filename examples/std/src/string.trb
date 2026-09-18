@@ -1,13 +1,52 @@
+use Equals, Compare, Hash from "./compare"
+use Show from "./convert"
+use Add from "./operators"
+use Iterable, Length from "./iteration"
 
-trait StringOps {
-  length(): int
-  substring(start: int, end: int): string
-  contains(sub: string): bool
-  indexOf(sub: string): int
+public native type Bool with Equals, Hash, Show {}
+
+/** A Unicode scalar value. */
+public native type Char with Equals, Compare, Hash, Show {
+  native fn isDigit(self): Bool
+  native fn isLetter(self): Bool
+  native fn isWhitespace(self): Bool
+  native fn toUpperCase(self): Char
+  native fn toLowerCase(self): Char
 }
 
-const type String {}
+/** Immutable UTF-8 text. */
+public native type String
+  with Equals, Compare, Hash, Show, Add, Length, Iterable<Char>
+{
+  /** Number of `Char`s. */
+  native fn length(self): Int
+  native fn byteLength(self): Int
 
-extend String with StringOps {
-  native {}
+  native fn contains(self, part: String): Bool
+  native fn startsWith(self, prefix: String): Bool
+  native fn endsWith(self, suffix: String): Bool
+  native fn indexOf(self, part: String): Int?
+
+  native fn substring(self, start: Int, end: Int = length()): String
+  native fn trim(self): String
+  native fn toUpperCase(self): String
+  native fn toLowerCase(self): String
+  native fn replace(self, part: String, replacement: String): String
+  native fn split(self, separator: String): List<String>
+  native fn repeat(self, times: Int): String
+
+  fn isBlank(self): Bool {
+    trim().isEmpty()
+  }
+
+  fn lines(self): List<String> {
+    split("\n")
+  }
+
+  /** `String.join(["a", "b"], separator: ", ")` */
+  fn join(parts: Iterable<String>, separator: String = ""): String {
+    parts.fold("") { result, part =>
+      if result.isEmpty() { part } else { result + separator + part }
+    }
+  }
 }

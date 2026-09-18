@@ -1,0 +1,101 @@
+use Hash from "../compare"
+use From from "../convert"
+use Collection, MutableCollection from "./collection"
+
+// --- Traits ------------------------------------------------------------------------------------------
+
+/** Any set. Whether it is a value or somebody's mutable object is unknown, so it can only be read. */
+public trait SetView<T>
+  with Collection<T>
+{
+  /** Required: a set that has to search is not a set. */
+  fn contains(self, value: T): Bool
+
+  fn isSubsetOf(self, other: SetView<T>): Bool {
+    all { other.contains(_) }
+  }
+}
+
+/** Persistent collection without duplicates. */
+public trait Set<T>
+  with SetView<T>
+{
+  fn of(...items: T): Set<T> where T: Hash {
+    TrieSet.from(items)
+  }
+
+  fn add(self, value: T): Set<T>
+  fn remove(self, value: T): Set<T>
+
+  fn union(self, other: Iterable<T>): Set<T> {
+    other.fold(self) { result, value => result.add(value) }
+  }
+
+  fn without(self, other: Iterable<T>): Set<T> {
+    other.fold(self) { result, value => result.remove(value) }
+  }
+
+  fn intersect(self, other: SetView<T>): Set<T> {
+    filter { !other.contains(_) }.fold(self) { result, value => result.remove(value) }
+  }
+}
+
+extend<T: Hash> Set<T> with From<Iterable<T>> {
+  fn from(items: Iterable<T>): Set<T> {
+    TrieSet.from(items)
+  }
+}
+
+/** Collection without duplicates that is changed in place. `add` of a value that is already present does nothing. */
+public trait MutableSet<T>
+  with SetView<T>, MutableCollection<T>
+{
+  fn of(...items: T): MutableSet<T> where T: Hash {
+    HashSet.from(items)
+  }
+
+  /** Returns `false` if the value was not present. */
+  fn remove(var self, value: T): Bool
+
+  /** The snapshot: a value that nobody can change anymore. */
+  fn toSet(self): Set<T> where T: Hash {
+    Set.from(self)
+  }
+}
+
+extend<T: Hash> MutableSet<T> with From<Iterable<T>> {
+  fn from(items: Iterable<T>): MutableSet<T> {
+    HashSet.from(items)
+  }
+}
+
+// --- Implementations -----------------------------------------------------------------------------------
+
+/** Hash array mapped trie. Iterates in insertion order. */
+public native type TrieSet<T: Hash>
+  with Set<T>, From<Iterable<T>>
+{
+  native fn from(items: Iterable<T>): TrieSet<T>
+
+  native fn length(self): Int
+  native fn iterator(self): Iterator<T>
+  native fn contains(self, value: T): Bool
+
+  native fn add(self, value: T): Set<T>
+  native fn remove(self, value: T): Set<T>
+}
+
+/** Hash table. Iterates in insertion order. */
+public native var type HashSet<T: Hash>
+  with MutableSet<T>, From<Iterable<T>>
+{
+  native fn from(items: Iterable<T>): HashSet<T>
+
+  native fn length(self): Int
+  native fn iterator(self): Iterator<T>
+  native fn contains(self, value: T): Bool
+
+  native fn add(var self, value: T)
+  native fn remove(var self, value: T): Bool
+  native fn clear(var self)
+}

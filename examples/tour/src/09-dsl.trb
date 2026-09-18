@@ -1,0 +1,115 @@
+// A receiver closure is a closure whose first parameter is called `self`.
+// Inside of it, names resolve against the receiver - exactly like inside of a method.
+
+// --- An HTML builder -----------------------------------------------------------------
+
+var type Element {
+  tag: String
+  private var attributes: MutableMap<String, String> = HashMap()
+  private var children: MutableList<Node> = ArrayList()
+
+  fn attribute(var self, name: String, value: String) {
+    attributes[name] = value
+  }
+
+  fn text(var self, content: String) {
+    children.add(Node.Text(content))
+  }
+
+  // One generic child function...
+  fn element(var self, tag: String, build: (var self: Element) => Void) {
+    var child = Element(tag)
+    build(child)                         // The receiver is passed as the first argument
+    children.add(Node.Child(child))
+  }
+
+  // ...and some vocabulary on top of it
+  fn div(var self, build: (var self: Element) => Void) { element("div", build) }
+  fn ul(var self, build: (var self: Element) => Void) { element("ul", build) }
+  fn li(var self, build: (var self: Element) => Void) { element("li", build) }
+  fn h1(var self, content: String) { element("h1") { text content } }
+
+  fn render(self, indent: String = ""): String {
+    const attributeText = String.join(attributes.map { entry => " {entry.0}=\"{entry.1}\"" })
+    const inner = String.join(children.map { _.render(indent + "  ") }, separator: "\n")
+    "{indent}<{tag}{attributeText}>\n{inner}\n{indent}</{tag}>"
+  }
+}
+
+var type Node {
+  case Text(content: String)
+  case Child(element: Element)
+
+  fn render(self, indent: String): String {
+    match self {
+      Text(content) => "{indent}{content}"
+      Child(element) => element.render(indent)
+    }
+  }
+}
+
+fn html(build: (var self: Element) => Void): Element {
+  var root = Element("html")
+  build(root)
+  root
+}
+
+const features = ["functional-first", "statically typed", "its own config format"]
+
+const page = html {
+  div {
+    attribute "class", "content"
+    h1 "TorbScript"
+    ul {
+      for feature in features {          // It is just code: loops, conditions, functions
+        li { text feature }
+      }
+    }
+  }
+}
+
+print page.render()
+
+// --- Property commands ----------------------------------------------------------------
+// "Calling" a field that is not callable writes it: `port 8080` is `port = 8080`,
+// and `limits { ... }` applies the receiver closure to the field's value. No setters, no section methods.
+
+var type Limits {
+  var maxConnections: Int = 100
+  var timeoutSeconds: Int = 30
+}
+
+var type ServerOptions {
+  var host: String = "localhost"
+  var port: Int = 8080
+  var tls: Bool = false
+  var limits: Limits = Limits()
+  var onStart: () => Void = {}
+}
+
+fn serve(configure: (var self: ServerOptions) => Void): ServerOptions {
+  var options = ServerOptions()
+  configure(options)
+  options
+}
+
+const options = serve {
+  host "0.0.0.0"
+  port 8443
+  tls(port == 8443)                      // Fields are readable, too. Parentheses work as for every call.
+  limits {
+    maxConnections 500
+  }
+  onStart = { print "started" }          // A callable field is called by `onStart { ... }`, so assign it
+}
+options.onStart()
+
+// --- Only the innermost receiver is implicit ---------------------------------------------
+
+const explicit = html { root =>          // Naming the parameter gives access to an outer receiver
+  root.div {
+    text "inside the div"                // `self` is the div
+    root.attribute "lang", "en"               // The outer receiver must be named
+    // attribute "lang", "en"                 // Would set the attribute on the div
+  }
+}
