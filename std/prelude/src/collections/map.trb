@@ -1,4 +1,4 @@
-use Hash from "../compare"
+use Equals, Hash, combineHashes from "../compare"
 use MutableIndexed from "../operators"
 use From, Show from "../convert"
 use Collection from "./collection"
@@ -103,6 +103,41 @@ extend<Key: Show, Value: Show> Map<Key, Value> with Show {
     }
     const parts = map { entry => "{entry.0.showNested()}: {entry.1.showNested()}" }
     "[{String.join(parts, separator: ", ")}]"
+  }
+}
+
+/** Equal when they hold the same entries, regardless of insertion order. */
+extend<Key, Value: Equals> Map<Key, Value> with Equals {
+  fn equals(self, other: Self): Bool {
+    length() == other.length() && all { entry =>
+      match other.get(entry.0) {
+        Some(value) => value == entry.1
+        .None => false
+      }
+    }
+  }
+}
+
+/**
+ * Order-independent, unlike [List.hash]: entries are combined with `bitwiseExclusiveOr`, so insertion order never
+ * changes the hash of equal maps.
+ *
+ * `Hash` requires `Equals`, and `Value: Hash` already implies `Value: Equals` - but the checker looks for the
+ * requirement inside the `extend` that names the supertrait, not across separate `extend` blocks of the same
+ * target, so `equals` is repeated here instead of leaning on the `Equals` implementation above.
+ */
+extend<Key: Hash, Value: Hash> Map<Key, Value> with Hash {
+  fn equals(self, other: Self): Bool {
+    length() == other.length() && all { entry =>
+      match other.get(entry.0) {
+        Some(value) => value == entry.1
+        .None => false
+      }
+    }
+  }
+
+  fn hash(self): Int {
+    fold(0) { seed, entry => seed.bitwiseExclusiveOr(combineHashes(entry.0.hash(), entry.1.hash())) }
   }
 }
 

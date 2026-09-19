@@ -1,4 +1,4 @@
-use Equals, Compare from "../compare"
+use Equals, Compare, Hash, combineHashes from "../compare"
 use MutableIndexed, MutableSlice from "../operators"
 use From, Show from "../convert"
 use Collection from "./collection"
@@ -112,6 +112,30 @@ extend<Item: Show> List<Item> with Show {
   fn show(self): String {
     const parts = map { _.showNested() }
     "[{String.join(parts, separator: ", ")}]"
+  }
+}
+
+/** Equal when they have the same length and equal items in the same order. */
+extend<Item: Equals> List<Item> with Equals {
+  fn equals(self, other: Self): Bool {
+    length() == other.length() && indexed().all { pair => pair.1 == other[pair.0] }
+  }
+}
+
+/**
+ * Order-dependent, unlike [Set.hash] and [Map.hash]: two lists with the same items in a different order differ.
+ *
+ * `Hash` requires `Equals`, and `Item: Hash` already implies `Item: Equals` - but the checker looks for the
+ * requirement inside the `extend` that names the supertrait, not across separate `extend` blocks of the same
+ * target, so `equals` is repeated here instead of leaning on the `Equals` implementation above.
+ */
+extend<Item: Hash> List<Item> with Hash {
+  fn equals(self, other: Self): Bool {
+    length() == other.length() && indexed().all { pair => pair.1 == other[pair.0] }
+  }
+
+  fn hash(self): Int {
+    fold(0) { seed, item => combineHashes(seed, item.hash()) }
   }
 }
 

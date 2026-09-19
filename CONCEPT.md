@@ -1454,6 +1454,10 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
 - Lists have no `+`: `Add.add` and `add(value)` would be the same member. Use `addedAll`.
 - `List`, `Set`, `Map`, `Option` and `Result` are `Show` wherever their items are, in the format of the generated
   `Show` (see [Values](#values)): `[1, 2]`, `{a, b}`, `["k": v]`, `Some(x)`.
+- `List`, `Set` and `Map` are `Equals`/`Hash` wherever their items are, so a `type` with a collection field can be
+  compared and be a `Map` key. A `List` is equal, and hashes, in order: two lists with the same items in a different
+  order differ. A `Set` or a `Map` is equal **regardless of insertion order** - iteration order is insertion order,
+  equality is not - so their hash combines entries with `bitwiseExclusiveOr` instead of folding them in order.
 - `for x in xs` works with everything that is `Iterable<Item>`. **The subject is evaluated once, into a temporary,**
   so it is not an open `var` access: changing `xs` inside of the loop is safe and does not affect the loop, and the
   loop variable is a `const` copy of each item.
@@ -1882,6 +1886,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   sides; there is no matcher vocabulary (`expect(x).toEqual y`) to learn. `test` and `group` are ordinary functions.
 - `Show` is a `shared trait` (objects can be printed), `Equals` and `Hash` are not: `==` always means content,
   identity is `isSame(a, b)`.
+- `List.hash` folds its items in order (`combineHashes`, a wrapping native next to `Hash`); `Set.hash` and `Map.hash`
+  combine their entries with `bitwiseExclusiveOr` instead, because their equality does not see insertion order and
+  their hash must not either.
 - Dependencies are `runtime` or `development`, nothing else (was: `always`/`optional`/`dev`/`test`/`suggest`).
   Optional integrations are separate packages.
 - The capabilities of a `Sandbox` are a closed list defined by the runtime. What a library wants to offer to a script

@@ -1,4 +1,4 @@
-use Hash from "../compare"
+use Equals, Hash from "../compare"
 use From, Show from "../convert"
 use Collection from "./collection"
 
@@ -72,11 +72,39 @@ extend<Item: Hash> Set<Item> with From<Iterable<Item>> {
   }
 }
 
-/** `{a, b}` - braces, so a set is never mistaken for a list. */
+/** `{a, b}` - braces, so a set is never mistaken for a list. Empty is `{}`. */
 extend<Item: Show> Set<Item> with Show {
   fn show(self): String {
+    if isEmpty() {
+      return "\{\}"
+    }
     const parts = map { _.showNested() }
     "\{{String.join(parts, separator: ", ")}\}"
+  }
+}
+
+/** Equal when they hold the same items, regardless of insertion order. */
+extend<Item: Equals> Set<Item> with Equals {
+  fn equals(self, other: Self): Bool {
+    length() == other.length() && all { other.contains(_) }
+  }
+}
+
+/**
+ * Order-independent, unlike [List.hash]: entries are combined with `bitwiseExclusiveOr`, so insertion order never
+ * changes the hash of equal sets.
+ *
+ * `Hash` requires `Equals`, and `Item: Hash` already implies `Item: Equals` - but the checker looks for the
+ * requirement inside the `extend` that names the supertrait, not across separate `extend` blocks of the same
+ * target, so `equals` is repeated here instead of leaning on the `Equals` implementation above.
+ */
+extend<Item: Hash> Set<Item> with Hash {
+  fn equals(self, other: Self): Bool {
+    length() == other.length() && all { other.contains(_) }
+  }
+
+  fn hash(self): Int {
+    fold(0) { seed, item => seed.bitwiseExclusiveOr(item.hash()) }
   }
 }
 
