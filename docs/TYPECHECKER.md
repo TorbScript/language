@@ -335,6 +335,7 @@ public fn inferExpression(var checker: Checker, expression: Expression): TypeId
 | `[a, b]` without an expectation   | The type of `a`; `b` is checked against it                                |
 | Interpolation `"{e}"`             | `None`, then `e` must be `Show`                                           |
 | `a == b`, `a < b`                 | The left side infers, the right side is checked against it                |
+| `a + b`, `-a`                     | An expected *numeric* type, into an operand that is made of numeric literals; a name keeps the type it has |
 | `a ?? b`                          | `b` is checked against the `Value` of the left side                       |
 | `.Case`                           | Required. The expected type names the type the case belongs to            |
 | Empty `[]`, `[:]`                 | Required                                                                  |
@@ -361,6 +362,12 @@ value, and a `Variable`. A decimal literal checks against `Float32`, `Float64`, 
 literals only adapt to a literal type of the matching base. Out of range, or not a member of the literal type, is an
 error that names the type. Without an adaptation the literal is `Int64` / `Float64` / `String` / `Char` / `Bool` -
 fixed, and it does not follow a shadowed `Int` alias. Every literal records `Adaptation.Literal`.
+
+The adaptation reaches through the arithmetic operators: where a numeric type is expected of `a + b` or of `-a` and the
+operand is built from numeric literals and those operators alone, it is what the literals adapt to. So
+`const size: Int8 = 3 + 4` is an `Int8` sum, and only a literal that does not *fit* is an error here - whether the sum
+itself leaves the range is the constant evaluator's question (BACKEND gap 11). An operand that is not a literal keeps
+the type it has, so `Meters + Float` stays the mistake it is.
 
 ### 2.4 Closures
 
@@ -897,7 +904,8 @@ compiler/src/semantics/checker/
 ├ pattern.trb         Patterns and the names they bind
 ├ usefulness.trb      The pattern matrix: usefulness, specialization by constructor, the default matrix, witnesses
 ├ exhaustive.trb      Patterns to the matrix and back: refutability, the messages, the MatchPlan
-├ place.trb           Places, mutability, exclusivity, dead changes
+├ place.trb           Places, mutability, exclusivity, `shared` paths
+├ mutation.trb        Dead changes, and whether a closure may outlive its call
 ├ statement.trb       Statements, blocks, definite return, loops, assignment
 ├ declaration.trb     Types, traits, extends, functions: requirements, visibility, top-level rules
 ├ quote.trb           Expression<Value>: what is quotable, the tree, the captures
@@ -986,7 +994,7 @@ files that have to check cleanly afterwards.
 | **4.3** | **Done.** Traits and implementations. The index, bound resolution with memoization, coherence, overlap, supertraits, member lookup through traits and extensions (the `extend` visibility rule), delegation `by`, derived implementations, operators, interpolation through `Show`, `Iterable` in `for`, `?`/`??`/`?.`, `into()`. | `implementation.trb`, `derive.trb`, `member.trb`, `expression.trb` | 4.2 |
 | **4.4** | **Done.** Generics and inference. Unification variables, inference contexts, two-pass argument checking, closures from expected function types, implicit `_`/named parameters, `.Case`, empty literals, bounds at call sites, witnesses, trait-typed values and per-call object safety. **Gate: `torb check compiler/src/syntax` is clean** - and so is all of `std/` and `compiler/`, at 100% of their expressions. | `unify.trb`, `closure.trb`, `call.trb`, `implementation.trb` | 4.3 |
 | **4.5** | **Done.** Exhaustiveness and redundancy. The pattern matrix over ADTs, literals, ranges, tuples, lists with rest, literal unions, `Option`/`Result`; witnesses; `MatchPlan`; `if const`/`if var`/`while const`, and every pattern that has to match. | `exhaustive.trb`, `usefulness.trb`, `pattern.trb` | 4.4 |
-| **4.6** | Places and the mutation rules. `const`/`var`, valid paths, `var` parameters and temporaries, `private(var)`, exclusivity, dead changes, `break`/`continue`. | `place.trb`, `statement.trb` | 4.4 |
+| **4.6** | **Done.** Places and the mutation rules. `const`/`var`, valid paths, `var` parameters and temporaries, `private(var)`, exclusivity, dead changes, `break`/`continue`. | `place.trb`, `mutation.trb`, `statement.trb` | 4.4 |
 | **4.7** | **Done.** Receivers and the DSL. Receiver closures, the innermost-receiver rule, command calls, property commands (`.Assign`, `.AssignClosure`, `.Configure`), receiver scripts (`project.trb` against the `Project` of the new `std/project`, and every file a `Sandbox.load<Value>` names with a literal path). | `closure.trb`, `command.trb`, `receiver.trb`, `scripts.trb`, `name.trb` | 4.4 |
 | **4.8** | `Expression<Value>` and `lazy`. What is quotable, building the tree after resolution, captures and their `Encode` bound, `Quotation` in the tables, `lazy` parameters. **Gate: `compiler/tests/*.test.trb` check cleanly** (they are full of `assert`). | `quote.trb`, `call.trb` | 4.4, 4.7 |
 | **4.9** | Visibility and program shape. `private`/`private(var)`/`public`, top-level code, compile-time constants, field defaults, `native`, `shared type`/`shared trait`, `foreign`, entry files vs. modules. | `declaration.trb` | 4.2 |
@@ -1253,57 +1261,6 @@ list. Everything else is as written.
   the two argument passes and the bounds, `name.trb` the generic targets and the captures, `member.trb` the generic
   members and the overload sets, and `expression.trb` the collection literals, `.Case` and the arms.
 
-### What 4.7 does differently from sections 1 to 7
-
-- **A receiver is a parameter, so a receiver closure is an ordinary closure.** `checkClosure` needed one question
-  (`receiverIndexOf`) and one branch (`declareReceiver`): everything else - the parameters from the expected function
-  type, the captures, the result from the body - is what every closure does. A receiver closure whose expected type has
-  parameters *after* the receiver keeps them as implicit ones, and `ClosureFrame.implicitFrom` is the offset that makes
-  `Adaptation.ImplicitParameter` count them the way the declaration does.
-- **Naming the receiver makes nothing implicit.** `html { root => ... }` binds `root` and sets the implicit receiver to
-  *nothing*, instead of leaving the one around the closure implicit. Section 3.1 only says that the innermost receiver
-  is the implicit one; reading it as "the next one out becomes implicit again" would be exactly the scope leaking gap 4
-  rules out, and naming the parameter is what the concept offers instead of a second implicit receiver.
-- **`Tables.receivers` is what milestone 5 reads for a receiver closure**, keyed by the span of the closure:
-  `ReceiverClosure(binding, annotation, isVar, isImplicit)`. An implicit receiver has no node in the tree that could
-  carry its binding, and every name that means a member of it records `Adaptation.ImplicitSelf` with that very binding -
-  which is now also a **capture** of every closure in between (gap 19), exactly as an ordinary binding is.
-- **A property command does not care about the call style.** Gap 15 makes "a call of a non-callable member writes it"
-  the whole rule, so `port 8080` and `tls(port == 8443)` take the same path, and a bare trailing closure
-  (`database { ... }`) is `CallStyle.Parentheses` in the tree anyway. The one place the style still decides is a field
-  that *holds* a function: a command assigns, parentheses call ("calling a function in a field always needs
-  parentheses").
-- **`.Configure` needs a type that has a configuration.** A block on a field is the body of
-  `(var self: FieldType) => Void`, which is only meaningful for a `type` that is written down: a `native` type has no
-  fields anybody could set, and a type with cases is chosen and not filled in, so both get "`port` is a `Int64`, which
-  has no configuration a block could fill" instead of a message about whatever the block contains.
-- **A property command checks that the field is a `var`** and leaves the path it is written through to 4.6:
-  `requireMutable` is `place.trb`'s, and the receiver of a property command is `self` or an explicit target either way.
-- **A call of a local binding that is not a function is reported here**, because section 3.3's "a local binding is
-  written with `=`" has no other home: `count 1` reads "`count` is a `Int64`, and only a function can be called".
-- **A method *is* a constant that holds a receiver closure**, so `member.trb` treats one that was written that way
-  (`const perimeter: (self: Rectangle) => Int`) exactly like a `fn`: `Rectangle.perimeter` is the constant,
-  `rectangle.perimeter` is it bound to the value, and `rectangle.perimeter()` calls it.
-- **An annotated `const` has its initializer checked** (`signature.trb`). The annotation *is* the signature, so nothing
-  asked for the value again and the body of `const perimeter: (self: Rectangle) => Int = { ... }` was never looked at.
-- **A receiver script is a module.** Everything the checker keeps - a scope, the tables, the diagnostics, the statistics
-  - is per module, so `project.trb` and every file a `Sandbox.load` names become modules (`semantics/graph.trb`), marked
-  with `Module.receiver`. They are not importable (`resolveImport` skips them), their statements are checked as
-  *ordinary* statements and not as top-level declarations of a module - a `const` of a script is a local of the closure,
-  which is what lets `const binary = name.substringAfter("/") ?? name` read the receiver - and a `use` in one is an
-  error, because everything beyond the prelude is granted where the script is loaded (gap 34).
-- **Which files those are is decided syntactically**, before anything is checked (`semantics/scripts.trb`): a walk that
-  looks for `Sandbox.load<Value>("literal")` by shape. The receiver type is built afterwards, from the type argument, in
-  a type position of the module that loads it. A path that is not a literal is silently not checked - only the sandbox
-  of milestone 7 can know what it was.
-- **The path of a script is resolved against the directory of the project**, not against the file that loads it: that is
-  where the program runs, and it is where `examples/config-dsl/config.trb` sits.
-- **`project.trb` is only checked where the workspace has `std/project`**, the new package that declares `Project`,
-  `Dependencies`, `Build`, `Test`, `Workspace` and `Registry`. Without it there is no type to check a manifest against,
-  and the static reader (`project/manifest.trb`, which stays exactly as it is until milestone 7) keeps working alone.
-- **Gap 42 is the parser's already:** `startsCommandArgument` never accepted `.`, so `level .Debug` has always been the
-  member path `level.Debug`. What 4.7 adds is the note that says so, on the message about the missing member.
-
 ### What 4.5 does differently from sections 1 to 7
 
 - **The algorithm is its own file, `usefulness.trb`, and `exhaustive.trb` is the two things around it.** The matrix
@@ -1361,6 +1318,142 @@ list. Everything else is as written.
   a number instead of "and more", and only beyond that does it give up on the count.
 - **The one finding in the sources was `compiler/src/ir/instantiate.trb`**, whose `match` over `TypeForm` handled every
   case but `Deferred` - which now reports the same way `Invalid` does.
+
+### What 4.6 does differently from sections 1 to 7
+
+- **A `Place` is a root plus a list of steps, not a tree.** `Place(root, steps, at)` with
+  `PlaceRoot.Local | .Declared | .Temporary | .Unknown` and
+  `PlaceStep.Field | .Index | .Range | .TupleField`. Section 5.1's nested form makes every question about a path a
+  recursion; the flat one makes "is one path a prefix of the other" a loop over two lists, which is what exclusivity
+  asks about every access. Two cases of the design fall away with it: **`.Receiver` is a `Local`** whose binding
+  `isReceiver` (`LocalBinding` says so already), and **`.Unknown` is the fourth root** - a construct a later
+  sub-milestone resolves, or one a message was already given about, and every rule of this pass stays quiet about it.
+- **`PlaceRoot.Declared` is the root the design has no case for.** A top-level `const` or `var` of a module, a script
+  or an entry file is a *symbol* and not a local (milestone 3 declares it, and `checkTopLevelBinding` asks for its
+  type), so `counter.increment()` at the top of `examples/tour/src/03-types.trb` has no `BindingId` to point at.
+  Whether such a root may be written is read back off its declaration site (`DeclarationSiteKind.Constant(binding)`),
+  which is the only place the `var` survives.
+- **A step carries the type of its base.** `Index(base, at, literal)` and `Range(base, at)` hold the interned type of
+  what they index, because deciding `MutableIndexed` needs it and milestone 5 needs to know which `set` or `replace`
+  to emit. `Index` also holds the key **as it was written where that was a literal**, which is the whole of "two
+  indexes can be told apart": `items[0]` and `items[1]` are disjoint, `items[i]` and `items[j]` are not, and a window
+  overlaps everything of its base.
+- **`placeOf` never checks an expression a second time.** It reads `resolutions` and `expressionTypes` out of the
+  tables, which are filled by the time anybody asks for a place, so the whole sub-milestone is a walk over the syntax
+  tree plus two map lookups per node. That is what keeps it off the hot path - and it is why `placeOf` takes
+  `var checker` although it decides nothing: the memoized member lookups behind `traitArgumentsOf` do.
+- **`private(var)` carries its `var` in the modifier.** `private(var) balance: Int = 0` parses to
+  `Visibility.PrivateVar` with `Field.isVar == false`, so "is this a `var` field" is the two of them together.
+- **`private` is checked as gap 29 states it, not per package.** A private field is writable inside the body of its
+  type and inside every `extend` of it in the same package - both are "`Self` is this type here" - and the *head* of
+  the type is compared and not the whole type, so a member of `Holder<Item>` may write a field of a `Holder<Int>`.
+- **A tuple position is as writable as the binding that holds the tuple.** A tuple has no `var` markers to consult and
+  no declaration anybody could put one in, so `var pair = (Counter(), 1)` makes `pair.0` a place.
+- **Exclusivity is two halves, and the second one is where the traps live.** A `var` receiver and every `var` argument
+  are pushed on a stack of open accesses as they are checked - so the arguments after them and every closure argument
+  run inside them, which is the DSL rule - and at the end of the call everything it *reads* is held against the whole
+  stack. That second half is what rejects `f(checker, checker.something)` and
+  `pending.removeAt(pending.length() - 1)`: the receiver reference is formed before the arguments are evaluated, so a
+  read of the same path inside them is a second access. The read walk only runs while the stack is not empty, and it
+  does not descend into a path it has already checked (the base is a prefix) or into a closure body (that body was
+  already checked while the accesses were open). A read that stands in a statement of its own inside an open access,
+  with no call of its own, is therefore not caught - the conservatism boundary of the implementation.
+- **The message for a conflict is one shape with two notes.** The catalogue's two texts are one message
+  ("`root` is being changed by `div` right now") plus the note that fits: "`items[i]` and `items[j]` cannot be told
+  apart. Use `items.swapAt(i, j)`" where both sides pass through an index, and "While a `var` access runs, the same
+  path cannot be reached a second time" otherwise. The checker cannot print the source text of a path, so the message
+  names the root and its field steps and writes `[...]` for an index.
+- **A dead change needs the change to be the *only* effect.** Design 5.3 counts every change; the implementation
+  counts a change to a place only where the call produces `Void`/`Never` or its result is thrown away, plus every
+  assignment. `cursor.next()` hands its value on, so the change to `cursor` is not what the statement is for and
+  `fn first(self) { var cursor = iterator()  cursor.next() }` - the idiom gap 2 asks for - is not a mistake.
+- **A change through a step reads the old value; only `x = value` replaces the whole binding.** So the read that
+  resolving the target produced stays for `x.part = value` and goes away for `x = value`, and the change itself is
+  noted *after* the value has been read - otherwise `total = total + 1` would count its own right-hand side as the
+  read that keeps it alive.
+- **A reference is exempt, and three things are one.** A `var` parameter, `var self` and the names an `if var` pattern
+  binds into its subject all write into a place of the caller, so `LocalBinding.isParameter` marks all three and the
+  dead-change rule skips them. It is also what a closure may not carry off (BACKEND gap 14). A `const` binding and an
+  exempt one are never recorded at all, which is what keeps the use list of one body short in a pass that names
+  `checker` on every second line.
+- **A verb in a loop keeps itself alive.** `for x in xs { tally.increment() }` reads `tally` and writes it, so the
+  loop brings the read back around to the change and the rule says nothing, even where nothing after the loop reads
+  the total. Design 5.3 asks for exactly one pass per loop and no fixpoint, and this is the price.
+- **`if var` does not hold an open access over its body.** Design 5.5 says the subject is inside a `var` access while
+  the body runs, but the names the pattern binds *are* paths into that subject, so an access to it would conflict with
+  every use of them - and `if var Some(inner) = current { inner.next() }`, which gap 3 exists for, would be an error.
+  The subject is checked as a place, the place is recorded under its span (which is how milestone 5 knows the
+  bindings are references into it), and the bindings are marked as references.
+- **`ClosureKind` is decided by where the closure is written, and nothing else.** A closure that stands straight as an
+  argument of a call is `.Local`, everything else is `.Escaping`. BACKEND gap 14 adds "and is not stored by the
+  callee", which needs an interprocedural answer the checker does not have; the conservative half is the one that
+  matters, because a closure that is bound to a name, returned or built in a literal is exactly what may outlive the
+  call. Naming the receiver - `self`, or a member of it written without it - now counts as capturing it, which is what
+  makes "`var self` may not be carried off" reportable at all.
+- **`break` cannot leave a closure** is reported where the closure has a loop around it, which needs the loop depth
+  *outside* the closure: `ClosureFrame.enclosingLoopDepth`. Without one the message stays 4.2's
+  "`break` is only allowed inside of a `for` or a `while`".
+- **`mutation.trb` is the second file.** `place.trb` is the places, the mutability walk, exclusivity, gap 20 and the
+  `break` question; `mutation.trb` is the two rules that need the whole body - dead changes and the closure kinds -
+  and the bookkeeping they rest on. The hooks elsewhere are four lines in `call.trb` (the accesses of a call), three
+  in `statement.trb` (assignment, the loops, settling a body), two in `expression.trb` (`if var`), two in `name.trb`
+  (a read, and the receiver as a capture) and three in `closure.trb` (the loop depth, the reference parameters, the
+  kind).
+
+### What 4.7 does differently from sections 1 to 7
+
+- **A receiver is a parameter, so a receiver closure is an ordinary closure.** `checkClosure` needed one question
+  (`receiverIndexOf`) and one branch (`declareReceiver`): everything else - the parameters from the expected function
+  type, the captures, the result from the body - is what every closure does. A receiver closure whose expected type has
+  parameters *after* the receiver keeps them as implicit ones, and `ClosureFrame.implicitFrom` is the offset that makes
+  `Adaptation.ImplicitParameter` count them the way the declaration does.
+- **Naming the receiver makes nothing implicit.** `html { root => ... }` binds `root` and sets the implicit receiver to
+  *nothing*, instead of leaving the one around the closure implicit. Section 3.1 only says that the innermost receiver
+  is the implicit one; reading it as "the next one out becomes implicit again" would be exactly the scope leaking gap 4
+  rules out, and naming the parameter is what the concept offers instead of a second implicit receiver.
+- **`Tables.receivers` is what milestone 5 reads for a receiver closure**, keyed by the span of the closure:
+  `ReceiverClosure(binding, annotation, isVar, isImplicit)`. An implicit receiver has no node in the tree that could
+  carry its binding, and every name that means a member of it records `Adaptation.ImplicitSelf` with that very binding -
+  which is now also a **capture** of every closure in between (gap 19), exactly as an ordinary binding is.
+- **A property command does not care about the call style.** Gap 15 makes "a call of a non-callable member writes it"
+  the whole rule, so `port 8080` and `tls(port == 8443)` take the same path, and a bare trailing closure
+  (`database { ... }`) is `CallStyle.Parentheses` in the tree anyway. The one place the style still decides is a field
+  that *holds* a function: a command assigns, parentheses call ("calling a function in a field always needs
+  parentheses").
+- **`.Configure` needs a type that has a configuration.** A block on a field is the body of
+  `(var self: FieldType) => Void`, which is only meaningful for a `type` that is written down: a `native` type has no
+  fields anybody could set, and a type with cases is chosen and not filled in, so both get "`port` is a `Int64`, which
+  has no configuration a block could fill" instead of a message about whatever the block contains.
+- **A property command checks that the field is a `var`** and leaves the path it is written through to 4.6:
+  `requireMutable` is `place.trb`'s, and the receiver of a property command is `self` or an explicit target either way.
+- **A call of a local binding that is not a function is reported here**, because section 3.3's "a local binding is
+  written with `=`" has no other home: `count 1` reads "`count` is a `Int64`, and only a function can be called".
+- **A method *is* a constant that holds a receiver closure**, so `member.trb` treats one that was written that way
+  (`const perimeter: (self: Rectangle) => Int`) exactly like a `fn`: `Rectangle.perimeter` is the constant,
+  `rectangle.perimeter` is it bound to the value, and `rectangle.perimeter()` calls it.
+- **An annotated `const` has its initializer checked** (`signature.trb`). The annotation *is* the signature, so nothing
+  asked for the value again and the body of `const perimeter: (self: Rectangle) => Int = { ... }` was never looked at.
+  What that uncovered is 2.3's second paragraph: `const size: Int8 = 3 + 4` was an `Int64` sum and therefore an error,
+  because the expected type stopped at the operator instead of reaching the literals inside it. It reaches them now, and
+  the constant evaluator of milestone 5 no longer carries an expected type by hand (BACKEND, "What 5.2 does
+  differently").
+- **A receiver script is a module.** Everything the checker keeps - a scope, the tables, the diagnostics, the statistics
+  - is per module, so `project.trb` and every file a `Sandbox.load` names become modules (`semantics/graph.trb`), marked
+  with `Module.receiver`. They are not importable (`resolveImport` skips them), their statements are checked as
+  *ordinary* statements and not as top-level declarations of a module - a `const` of a script is a local of the closure,
+  which is what lets `const binary = name.substringAfter("/") ?? name` read the receiver - and a `use` in one is an
+  error, because everything beyond the prelude is granted where the script is loaded (gap 34).
+- **Which files those are is decided syntactically**, before anything is checked (`semantics/scripts.trb`): a walk that
+  looks for `Sandbox.load<Value>("literal")` by shape. The receiver type is built afterwards, from the type argument, in
+  a type position of the module that loads it. A path that is not a literal is silently not checked - only the sandbox
+  of milestone 7 can know what it was.
+- **The path of a script is resolved against the directory of the project**, not against the file that loads it: that is
+  where the program runs, and it is where `examples/config-dsl/config.trb` sits.
+- **`project.trb` is only checked where the workspace has `std/project`**, the new package that declares `Project`,
+  `Dependencies`, `Build`, `Test`, `Workspace` and `Registry`. Without it there is no type to check a manifest against,
+  and the static reader (`project/manifest.trb`, which stays exactly as it is until milestone 7) keeps working alone.
+- **Gap 42 is the parser's already:** `startsCommandArgument` never accepted `.`, so `level .Debug` has always been the
+  member path `level.Debug`. What 4.7 adds is the note that says so, on the message about the missing member.
 
 ---
 

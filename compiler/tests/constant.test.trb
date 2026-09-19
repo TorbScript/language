@@ -1,7 +1,7 @@
 use test, group from "std/test"
 use printStatic from "../src/ir/print"
 use loweredText from "../src/ir/lower/lower"
-use lowered from "./lower-harness"
+use lowered, loweredWith from "./lower-harness"
 
 /**
  * The compile-time constant evaluator: what is evaluable (decided gap 27 of docs/TYPECHECKER.md plus the arithmetic
@@ -23,7 +23,7 @@ fn valueOf(initializer: String): String {
   "there is no constant `answer`"
 }
 
-/** The same, with a declared type: the checker does not walk the initializer of an annotated `const`. */
+/** The same, with a declared type: the annotation is what the literals inside the initializer adapt to. */
 fn typedValueOf(annotation: String, initializer: String): String {
   var found = lowered("const answer: {annotation} = {initializer}\n")
   for value in found.program.statics {
@@ -194,12 +194,13 @@ const origin = Point(1, 2)
   }
 
   test "a constant in terms of itself is a cycle and stays unevaluated" {
-    // Annotated, because an inferred `const` in terms of itself is a cycle the checker reports first
+    // The checker reports the cycle, annotated or not, and the evaluator has to survive what it hands over anyway
     const source = r"""
 const first: Int = second
 const second: Int = first
 """
-    const text = loweredText(lowered(source))
+    var found = loweredWith(source, ["`first` is a cycle: it names itself"])
+    const text = loweredText(found)
     assert(!text.contains("s_acme_x2f_app_main_first"))
     assert(!text.contains("s_acme_x2f_app_main_second"))
   }

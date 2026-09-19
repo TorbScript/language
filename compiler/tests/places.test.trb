@@ -1,0 +1,280 @@
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
+/**
+ * Places and the mutation rules (milestone 4.6): what a valid path is, and what a change through it needs.
+ *
+ * Every rule of this file is one walk from the root of a path outwards - a `var` binding, then `var` fields, then
+ * `MutableIndexed` and `MutableSlice` - plus the two rules that are about where a path may *not* start: a temporary is
+ * never the base of one (and always a valid argument for a `var` parameter, gap 2) and a `const` path to a shared
+ * object never widens into a `var` one (gap 20).
+ */
+const counter = "type Counter \{\n  var count: Int = 0\n  step: Int = 1\n\n"
+  + "  fn increment(var self) \{\n    count = count + step\n  \}\n\n"
+  + "  fn incremented(self): Counter \{\n    copy(count: count + 1)\n  \}\n\}\n\n"
+
+const account = "type Account \{\n  private(var) balance: Int = 0\n  private var history: List<String> = []\n\n"
+  + "  fn deposit(var self, amount: Int) \{\n    balance = balance + amount\n  \}\n\}\n\n"
+
+group "The root of a path" {
+  test "a `var` binding can be changed, and the place is recorded" {
+    const source = "{counter}fn probe() \{\n  var tally = Counter()\n  tally.count = 1\n  print tally.count\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.placeOf("tally.count") == "local tally.count")
+  }
+
+  test "a `const` binding cannot be changed, and `const` is deep" {
+    const source = "{counter}fn probe() \{\n  const fixed = Counter()\n  fixed.count = 1\n\}"
+    assert(problems(source) == ["`fixed` is a `const`. Only a `var` binding can be changed"])
+    assert(
+      notes(source)
+        == ["`const` is deep: through it nothing is assigned, no field is written and no verb is called"]
+    )
+    const found = probe(source)
+    assert(!found.hasPlaceAt("fixed.count"))
+  }
+
+  test "a verb on a `const` path names its participle" {
+    const source = "{counter}fn probe() \{\n  const fixed = Counter()\n  fixed.increment()\n\}"
+    assert(problems(source) == ["`increment` needs a `var`"])
+    assert(notes(source) == ["Did you mean `incremented`? `fixed` is a `const`, so nothing changes through it"])
+  }
+
+  test "a `const` parameter is a `const`, and `var self` is a place" {
+    assert(
+      problems("{counter}fn probe(kept: Counter) \{\n  kept.increment()\n\}") == ["`increment` needs a `var`"]
+    )
+    assert(problems("{counter}fn probe(var kept: Counter) \{\n  kept.increment()\n\}").isEmpty())
+  }
+
+  test "the receiver of a `var self` method is a place of its own" {
+    const source = "type Tally \{\n  var total: Int = 0\n\n  fn bump(var self) \{\n    self.total = total + 1\n  \}\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.placeOf("self.total") == "local self.total")
+  }
+}
+
+group "Fields" {
+  test "a field that is not `var` never changes after construction" {
+    const source = "{counter}fn probe() \{\n  var tally = Counter()\n  tally.step = 2\n  print tally.count\n\}"
+    assert(problems(source) == ["`step` never changes after construction"])
+    assert(notes(source) == ["A field is `const` unless it is declared `var`, and a value is its data"])
+  }
+
+  test "`private(var)` is written by the type itself and by an `extend` of it" {
+    const source = "{account}extend Account \{\n  fn raise(var self) \{\n    balance = balance + 1\n  \}\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "`private(var)` hands everybody else a const path" {
+    const source = "{account}fn probe(var target: Account) \{\n  target.balance = 10\n\}"
+    assert(problems(source) == ["`balance` can only be written by `Account`"])
+    assert(
+      notes(source)
+        == [
+          "`private(var)` hands out a const path, and const is deep: it reads and iterates, it does not change",
+        ]
+    )
+  }
+
+  test "const is deep, so a verb on a `private(var)` collection is an error too" {
+    const source = "{account}fn probe(var target: Account) \{\n  target.history.add(\"audit\")\n\}"
+    assert(problems(source) == ["`history` is private to `Account`"])
+  }
+
+  test "a field of a field needs a `var` at every step" {
+    const source = "type Inner \{\n  var value: Int = 0\n\}\n\n"
+      + "type Outer \{\n  inner: Inner = Inner()\n\}\n\n"
+      + "fn probe(var holder: Outer) \{\n  holder.inner.value = 1\n\}"
+    assert(problems(source) == ["`inner` never changes after construction"])
+  }
+
+  test "a tuple position is as writable as the binding that holds the tuple" {
+    const source = "{counter}fn probe() \{\n  var pair = (Counter(), 1)\n  pair.0.increment()\n  print pair.1\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.placeOf("pair.0") == "local pair.0")
+  }
+}
+
+group "Indexes and windows" {
+  test "`a[key]` is a place where the type is `MutableIndexed`" {
+    const source = "fn probe(var samples: List<Int>) \{\n  samples[0] = 1\n  print samples[0]\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.placeOf("samples[0]") == "local samples[0]")
+  }
+
+  test "`a[from..to]` is a window where the type is `MutableSlice`" {
+    const source = "fn probe(var samples: List<Int>) \{\n  samples[1..3].sort \{ _ \}\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.placeOf("samples[1..3]") == "local samples[..]")
+  }
+
+  test "a type that is only `Indexed` has no `var` path through `a[key]`" {
+    const source = "type Frozen with Indexed<Int, Int> \{\n  fn at(self, key: Int): Int \{\n    0\n  \}\n\}\n\n"
+      + "fn probe(var frozen: Frozen) \{\n  frozen[0] = 1\n\}"
+    assert(
+      problems(source) == ["`Frozen` does not implement `MutableIndexed`, so `a[key]` is no `var` path"]
+    )
+    assert(
+      notes(source)
+        == ["A path through `a[key]` takes the value out, changes it and puts it back, which needs the trait"]
+    )
+  }
+
+  test "a path through an index carries on to the fields of the element" {
+    const source = "{counter}fn probe(var counters: List<Counter>) \{\n  counters[2].count = 1\n  print counters[2].count\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.placeOf("counters[2].count") == "local counters[2].count")
+  }
+}
+
+group "Temporaries" {
+  test "a temporary is never the base of a path" {
+    const source = "{counter}fn probe() \{\n  Counter().increment()\n\}"
+    assert(
+      problems(source)
+        == ["This is a temporary, and `increment` changes its receiver: the change would be thrown away"]
+    )
+    assert(notes(source) == ["Bind it first (`var cursor = iterator()`), then the path leads somewhere"])
+  }
+
+  test "assigning into a temporary is the same mistake" {
+    const source = "{counter}fn make(): Counter \{\n  Counter()\n\}\n\n"
+      + "fn probe() \{\n  make().count = 1\n\}"
+    assert(
+      problems(source) == ["This is a temporary, and an assignment writes it: the change would be thrown away"]
+    )
+  }
+
+  test "a temporary is a valid argument for a `var` parameter (gap 2)" {
+    const source = "{counter}fn bump(var target: Counter) \{\n  target.increment()\n\}\n\n"
+      + "fn probe() \{\n  bump(Counter())\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.placeOf("Counter()") == "temporary")
+  }
+
+  test "a field of a temporary is not, even as a `var` argument" {
+    const source = "type Inner \{\n  var value: Int = 0\n\}\n\n"
+      + "type Outer \{\n  var inner: Inner = Inner()\n\}\n\n"
+      + "fn bump(var target: Inner) \{\n  target.value = 1\n\}\n\n"
+      + "fn make(): Outer \{\n  Outer()\n\}\n\n"
+      + "fn probe() \{\n  bump(make().inner)\n\}"
+    assert(
+      problems(source) == ["This is a temporary, and `bump` changes `target`: the change would be thrown away"]
+    )
+  }
+
+  test "a `const` argument for a `var` parameter says which parameter it is" {
+    const source = "{counter}fn bump(var target: Counter) \{\n  target.increment()\n\}\n\n"
+      + "fn probe(kept: Counter) \{\n  bump(kept)\n\}"
+    assert(problems(source) == ["`bump` changes `target`, and `kept` is a `const`"])
+    assert(
+      notes(source) == ["A `var` parameter works on the caller's value, so its argument has to be a `var` path"]
+    )
+  }
+}
+
+group "`if var` binds into the subject (gap 3)" {
+  const cursor = "type Cursor \{\n  var position: Int = 0\n\n"
+    + "  fn step(var self) \{\n    position = position + 1\n  \}\n\}\n\n"
+
+  test "the subject has to be a place, and the place is recorded under it" {
+    const source = "{cursor}type Holder \{\n  var current: Cursor? = None\n\}\n\n"
+      + "fn probe(var holder: Holder) \{\n  if var Some(inner) = holder.current \{\n    inner.step()\n  \}\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.placeOf("holder.current") == "local holder.current")
+  }
+
+  test "a `const` subject cannot be bound into" {
+    const source = "{cursor}fn probe(current: Cursor?) \{\n  if var Some(inner) = current \{\n    inner.step()\n  \}\n\}"
+    assert(problems(source) == ["`current` is a `const`. Only a `var` binding can be changed"])
+  }
+
+  test "`if const` says nothing about the subject: it binds copies" {
+    const source = "{cursor}fn probe(current: Cursor?) \{\n  if const Some(inner) = current \{\n    print inner.position\n  \}\n\}"
+    assert(problems(source).isEmpty())
+  }
+}
+
+group "A shared object never widens (gap 20)" {
+  const connection = "shared type Connection \{\n  url: String\n  private(var) sent: Int = 0\n\n"
+    + "  fn send(var self) \{\n    sent = sent + 1\n  \}\n\}\n\n"
+
+  test "a `var` binding may not be taken from a `const` path to a shared object" {
+    const source = "{connection}fn probe(view: Connection) \{\n  var writable = view\n  writable.send()\n  print writable.url\n\}"
+    assert(
+      problems(source) == ["`view` is a read-only view of a shared `Connection`, so no `var` comes out of it"]
+    )
+    assert(
+      notes(source)
+        == ["A shared object is never copied, so a `var` here would hand out what the `const` withheld"]
+    )
+  }
+
+  test "a `var` path to the same object is fine, and so is a value" {
+    const source = "{connection}fn probe(var handle: Connection) \{\n  var writable = handle\n  writable.send()\n  print writable.url\n\}"
+    assert(problems(source).isEmpty())
+    const value = "type Point \{\n  var x: Int = 0\n\}\n\n"
+      + "fn probe(place: Point) \{\n  var moved = place\n  moved.x = 1\n  print moved.x\n\}"
+    assert(problems(value).isEmpty())
+  }
+}
+
+group "Closures that may outlive their call (BACKEND gap 14)" {
+  test "a closure written straight as an argument is local and may hold a reference" {
+    const source = "{counter}fn probe(var target: Counter) \{\n  do \{ target.increment() \}\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.closureKindOf("\{ target.increment() \}") == "local")
+  }
+
+  test "a closure that goes anywhere else escapes and may not capture a `var` parameter" {
+    const source = "{counter}fn probe(var target: Counter): () => Void \{\n  \{ target.increment() \}\n\}"
+    assert(problems(source) == ["This closure captures the `var` parameter `target` and may outlive the call"])
+    assert(
+      notes(source)
+        == [
+          "A reference is second-class: only a closure written straight as an argument of a call may hold one",
+        ]
+    )
+    const found = probe(source)
+    assert(found.closureKindOf("\{ target.increment() \}") == "escaping")
+  }
+
+  test "an escaping closure that captures a `var` binding is fine: that is a shared box (gap 19)" {
+    const source = "fn probe(): () => Void \{\n  var total = 0\n  \{ total = 1 \}\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.closureKindOf("\{ total = 1 \}") == "escaping")
+    assert(found.capturesOf("\{ total = 1 \}") == ["var total"])
+  }
+
+  test "`var self` may not be carried off either" {
+    const source = "type Tally \{\n  var total: Int = 0\n\n"
+      + "  fn later(var self): () => Void \{\n    \{ total = total + 1 \}\n  \}\n\}"
+    assert(problems(source) == ["This closure captures `var self` and may outlive the call"])
+  }
+}
+
+group "`break` and a closure" {
+  const run = "fn run(body: () => Void) \{\n  body()\n\}"
+
+  test "a `break` inside a closure cannot reach the loop around it" {
+    const source = "fn probe(items: List<Int>) \{\n  for item in items \{\n    run \{ break \}\n  \}\n\}\n\n{run}"
+    assert(problems(source) == ["`break` cannot leave a closure"])
+    assert(notes(source) == ["A closure is a function, not a block: `do \{ \}` is not a loop either"])
+  }
+
+  test "a loop inside a closure has its own `break`" {
+    const source = "fn probe(items: List<Int>) \{\n  run \{\n    for item in items \{\n      break\n    \}\n  \}\n\}\n\n{run}"
+    assert(problems(source).isEmpty())
+  }
+}

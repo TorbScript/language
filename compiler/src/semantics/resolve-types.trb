@@ -335,8 +335,9 @@ fn walkPath(var walk: Walk, scope: Scope, path: List<Name>) {
     const namespace = match walk.symbols.at(current).kind {
       .Namespace(module) => module
       _ => {
+        const owner = walk.symbols.describe(current)
         walk.error(
-          Diagnostic.error("{walk.symbols.describe(current)} has no member `{step.text}`", step.span)
+          Diagnostic.error("{owner} has no member `{step.text}`", step.span)
             .withNote(
               "A dotted name in a type position is a namespace import: `use * as http from \"acme/http\"`, then `http.Response`"
             )
@@ -347,7 +348,8 @@ fn walkPath(var walk: Walk, scope: Scope, path: List<Name>) {
     current = match walk.program.scopes[namespace.value].exported.get(step.text) {
       Some(symbol) => symbol
       None => {
-        walk.error(Diagnostic.error("`{step.text}` is not exported by the module `{walk.symbols.at(current).name}`", step.span))
+        const module = walk.symbols.at(current).name
+        walk.error(Diagnostic.error("`{step.text}` is not exported by the module `{module}`", step.span))
         return
       }
     }

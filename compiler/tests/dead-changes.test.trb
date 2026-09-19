@@ -1,0 +1,146 @@
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
+/**
+ * Dead changes (design 5.3, rule 1): a change to a local `var` binding that nothing reads afterwards. With value
+ * semantics that is always a mistake, and the classic one is the copy trap - a value taken out of a collection, changed,
+ * and thrown away.
+ *
+ * The rule is flow-sensitive and simple: the reads and changes of one body in source order, plus one pass per loop that
+ * marks a change the next round reads again as alive. There is no fixpoint beyond that. Exempt are a `var` parameter,
+ * `var self`, the names an `if var` binds into its subject - all three write into a place of the caller - and a binding a
+ * closure captures, which is a shared box whose read may be anywhere (gap 19).
+ */
+const counter = "type Counter \{\n  var count: Int = 0\n\n"
+  + "  fn increment(var self) \{\n    count = count + 1\n  \}\n\}\n\n"
+
+group "The copy trap" {
+  test "a copy out of a collection that is changed and never read" {
+    const source = "{counter}fn probe(counters: List<Counter>) \{\n  var first = counters[0]\n  first.increment()\n\}"
+    assert(problems(source) == ["This change has no effect: `first` is never read again"])
+    assert(
+      notes(source) == ["`first` is a copy. Did you mean the path it came from (`items[0].increment()`)?"]
+    )
+  }
+
+  test "a read after the change is what makes it worth writing" {
+    const source = "{counter}fn probe(counters: List<Counter>) \{\n  var first = counters[0]\n"
+      + "  first.increment()\n  print first.count\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "the path itself is the fix, and it is no change to a binding at all" {
+    const source = "{counter}fn probe(var counters: List<Counter>) \{\n  counters[0].increment()\n\}"
+    assert(problems(source).isEmpty())
+  }
+}
+
+group "Assignments" {
+  test "an overwrite that nothing reads" {
+    const source = "fn probe() \{\n  var total = 0\n  total = 1\n\}"
+    assert(problems(source) == ["This change has no effect: `total` is never read again"])
+    assert(notes(source) == ["With value semantics a change nobody reads is always a mistake"])
+  }
+
+  test "the value of the assignment is not a read of what comes after it" {
+    const source = "fn probe() \{\n  var total = 0\n  total = total + 1\n\}"
+    assert(problems(source) == ["This change has no effect: `total` is never read again"])
+  }
+
+  test "a read afterwards keeps it alive" {
+    assert(problems("fn probe(): Int \{\n  var total = 0\n  total = total + 1\n  total\n\}").isEmpty())
+  }
+
+  test "a change to one part keeps the rest, so the earlier whole assignment is read" {
+    const source = "{counter}fn probe(): Int \{\n  var tally = Counter()\n  tally = Counter(2)\n"
+      + "  tally.count = 3\n  tally.count\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "a field written through a place that nothing reads" {
+    const source = "{counter}fn probe() \{\n  var tally = Counter()\n  tally.count = 3\n\}"
+    assert(problems(source) == ["This change has no effect: `tally` is never read again"])
+  }
+}
+
+group "Loops" {
+  test "a change the next round reads again is alive, whatever stands after the loop" {
+    const source = "fn probe(): Int \{\n  var isChanged = true\n  var rounds = 0\n  while isChanged \{\n"
+      + "    isChanged = false\n    rounds = rounds + 1\n    if rounds > 3 \{\n      isChanged = true\n    \}\n  \}\n  rounds\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "a change inside a `for` whose binding the body reads is alive" {
+    const source = "{counter}fn probe(values: List<Int>): Int \{\n  var tally = Counter()\n"
+      + "  for value in values \{\n    tally.increment()\n    print tally.count\n  \}\n  0\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  /**
+   * A verb reads the old value and writes the new one, so a loop brings the read back around to the change and the rule
+   * says nothing - even where nothing after the loop reads the total. The rule is conservative on purpose: it is a walk
+   * over the uses of one body and not a fixpoint (design 5.3).
+   */
+  test "a verb in a loop reads what the round before it wrote, so the rule says nothing" {
+    const source = "{counter}fn probe(values: List<Int>) \{\n  var tally = Counter()\n"
+      + "  for value in values \{\n    tally.increment()\n  \}\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "an overwrite in a loop that nothing reads is dead all the same" {
+    const source = "fn probe(values: List<Int>) \{\n  var last = 0\n  for value in values \{\n    last = value\n  \}\n\}"
+    assert(problems(source) == ["This change has no effect: `last` is never read again"])
+  }
+}
+
+group "What the rule does not reach" {
+  test "a `var` parameter writes into the caller's place" {
+    assert(problems("{counter}fn probe(var target: Counter) \{\n  target.increment()\n\}").isEmpty())
+  }
+
+  test "`var self` does too" {
+    const source = "type Tally \{\n  var total: Int = 0\n\n  fn bump(var self) \{\n    total = total + 1\n  \}\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "a binding a closure captures is a shared box, and its read may be anywhere (gap 19)" {
+    const source = "fn probe(): () => Void \{\n  var total = 0\n  \{ total = 1 \}\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "a name an `if var` binds is a path into its subject (gap 3)" {
+    const source = "{counter}type Holder \{\n  var current: Counter? = None\n\}\n\n"
+      + "fn probe(var holder: Holder) \{\n  if var Some(inner) = holder.current \{\n    inner.increment()\n  \}\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "a call whose result is used is not a change and nothing else" {
+    const source = "fn probe(items: List<Int>): Int? \{\n  var cursor = items.iterator()\n  cursor.next()\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "the same call whose result goes nowhere changes a copy nobody reads" {
+    const source = "fn probe(items: List<Int>) \{\n  var cursor = items.iterator()\n  cursor.next()\n  print \"done\"\n\}"
+    assert(problems(source) == ["This change has no effect: `cursor` is never read again"])
+  }
+
+  test "a `const` binding is never changed, so it is never a dead change" {
+    const source = "{counter}fn probe(counters: List<Counter>) \{\n  const first = counters[0]\n  print first.count\n\}"
+    assert(problems(source).isEmpty())
+  }
+}
+
+group "`var` arguments" {
+  const fill = "fn fill(var target: List<Int>) \{\n  target.add(1)\n\}\n\n"
+
+  test "a `var` argument of a call whose result goes nowhere is a change" {
+    const source = "{fill}fn probe() \{\n  var buffer: List<Int> = []\n  fill(buffer)\n\}"
+    assert(problems(source) == ["This change has no effect: `buffer` is never read again"])
+    assert(notes(source) == ["`buffer` is a copy. Did you mean the path it came from (`items[0].fill()`)?"])
+  }
+
+  test "a read afterwards keeps it alive" {
+    const source = "{fill}fn probe() \{\n  var buffer: List<Int> = []\n  fill(buffer)\n  print buffer.length()\n\}"
+    assert(problems(source).isEmpty())
+  }
+}

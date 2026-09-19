@@ -1,0 +1,218 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Argument from "../../syntax/ast"
+use Checker, Place, BindingId, BindingUse, Capture, ClosureKind from "./context"
+
+/**
+ * The two rules that need the whole body instead of one expression: a change nobody reads, and whether a closure may
+ * outlive the call it stands in.
+ *
+ * **Dead changes** (design 5.3, rule 1) keep the source-ordered reads and changes of every local `var` binding of one
+ * body, plus a mark for the ones a loop brings a read back around to. A change is dead when no read follows it in
+ * source order and no read shares a loop with it. There is no fixpoint beyond that: a loop is settled once, when it
+ * closes. A `var` parameter, `var self` and a captured binding are exempt - the first two write back into the caller's
+ * place and the third is a shared box whose read may be anywhere (gap 19).
+ *
+ * A change that goes through a *step* (`first.value = 1`, `first.increment()`, `fill(buffer)`) reads the old value as
+ * well, so the read the target produced stays. Only `x = value` replaces the whole binding, and only there the read
+ * becomes the change - which is what makes `var total = 0` followed by `total = 1` and nothing else a dead change while
+ * `x = 1` followed by `x.part = 2` and a read of `x` is fine.
+ */
+
+// --- Dead changes ---------------------------------------------------------------------------------------------------
+
+/**
+ * Every read of a local `var` binding, in source order. A `const` cannot be changed and a `var` parameter or `var self`
+ * is exempt from the rule, so neither is worth an entry - which is what keeps the list of one body short even in a pass
+ * that names `checker` on every second line.
+ */
+public fn noteRead(var checker: Checker, binding: BindingId, at: Span) {
+  if !isCounted(checker, binding) {
+    return
+  }
+  checker.bindingUses.add(BindingUse(binding, false, at))
+}
+
+/** Whether the dead-change rule has anything to say about this binding at all. */
+fn isCounted(checker: Checker, binding: BindingId): Bool {
+  const found = checker.binding(binding)
+  found.isVar && !found.isParameter && !found.isReceiver
+}
+
+/**
+ * One change of the root of a place, at the point the change happens - which for an assignment is *after* its value has
+ * been read, so that `total = total + 1` does not count its own right-hand side as the read that keeps it alive.
+ */
+public fn noteChange(var checker: Checker, place: Place, changedBy: String) {
+  const binding = match place.root {
+    .Local(found) => found
+    _ => {
+      return
+    }
+  }
+  if !isCounted(checker, binding) {
+    return
+  }
+  checker.bindingUses.add(BindingUse(binding, true, place.at, changedBy: changedBy))
+}
+
+/**
+ * `x = value` replaces the whole binding, so naming `x` as the target of it is not a read of anything: the read that
+ * resolving the target produced goes away again. A change through a *step* (`x.part = value`, `x.increment()`) does read
+ * the old value, and there the read stays.
+ */
+public fn dropRead(var checker: Checker, place: Place) {
+  const binding = match place.root {
+    .Local(found) => found
+    _ => {
+      return
+    }
+  }
+  var index = checker.bindingUses.length() - 1
+  while index >= 0 {
+    const entry = checker.bindingUses[index]
+    if !entry.isChange && entry.binding == binding && entry.at == place.at {
+      const _ = checker.bindingUses.removeAt(index)
+      return
+    }
+    index = index - 1
+  }
+}
+
+/**
+ * A loop that has closed. Every change inside it whose binding is read anywhere inside it is alive, whatever stands
+ * after the loop: the next round reads what this one wrote. That is the whole of what the design calls "flow-sensitive
+ * but simple" - one pass per loop, and no fixpoint.
+ */
+public fn settleLoop(var checker: Checker, from: Int) {
+  var readers: Map<Int, Bool> = [:]
+  var index = from
+  while index < checker.bindingUses.length() {
+    const entry = checker.bindingUses[index]
+    if !entry.isChange {
+      readers.set(entry.binding.value, true)
+    }
+    index = index + 1
+  }
+  if readers.isEmpty() {
+    return
+  }
+  index = from
+  while index < checker.bindingUses.length() {
+    const entry = checker.bindingUses[index]
+    if entry.isChange && !entry.isLive {
+      if readers.containsKey(entry.binding.value) {
+        const alive = entry.copy(isLive: true)
+        checker.bindingUses.set(index, alive)
+      }
+    }
+    index = index + 1
+  }
+}
+
+/**
+ * Every change of a body that no read follows. The walk is backwards, so "is there a read after this one" is one map
+ * that grows as it goes - which keeps the rule linear in the number of uses.
+ */
+public fn settleChanges(var checker: Checker) {
+  var readAfter: Map<Int, Bool> = [:]
+  var index = checker.bindingUses.length() - 1
+  while index >= 0 {
+    const entry = checker.bindingUses[index]
+    if entry.isChange {
+      if !entry.isLive && !readAfter.containsKey(entry.binding.value) {
+        reportDeadChange(checker, entry)
+      }
+    } else {
+      readAfter.set(entry.binding.value, true)
+    }
+    index = index - 1
+  }
+  checker.bindingUses = []
+}
+
+fn reportDeadChange(var checker: Checker, entry: BindingUse) {
+  const binding = checker.binding(entry.binding)
+  // A captured `var` binding is a shared box, not a copy: the read can be anywhere the closure is run (gap 19)
+  if checker.capturedBindings.containsKey(entry.binding.value) {
+    return
+  }
+  const name = binding.name
+  var problem = Diagnostic.error("This change has no effect: `{name}` is never read again", entry.at)
+  if const Some(member) = participleHint(entry.changedBy) {
+    problem = problem.withNote("`{name}` is a copy. Did you mean the path it came from (`items[0].{member}()`)?")
+  } else {
+    problem = problem.withNote("With value semantics a change nobody reads is always a mistake")
+  }
+  checker.reportHere(problem)
+}
+
+/** The member that made the change, where there was one: an assignment has none and reads better without a note. */
+fn participleHint(changedBy: String): String? {
+  if changedBy.isEmpty() {
+    return None
+  }
+  Some(changedBy)
+}
+
+// --- Closures -------------------------------------------------------------------------------------------------------
+
+/** Which closures stand straight as the argument of a call: exactly those cannot outlive it (BACKEND gap 14). */
+public fn noteArgumentClosures(var checker: Checker, arguments: List<Argument>) {
+  for argument in arguments {
+    if const .Closure(_) = argument.value.kind {
+      checker.argumentClosures.set(argument.value.span, true)
+    }
+  }
+}
+
+/** A binding a closure reads is marked, because a captured `var` binding is a shared box and never dead (gap 19). */
+public fn noteCapturedBinding(var checker: Checker, binding: BindingId) {
+  checker.capturedBindings.set(binding.value, true)
+}
+
+/**
+ * The bindings from here on are references into a place of the caller and not copies of it: the parameters a closure
+ * declared, and the names an `if var` pattern binds into its subject (gap 3). Both are exempt from the dead-change rule
+ * - the change lands in the place they point at - and neither may be carried off by an escaping closure (gap 14).
+ */
+public fn markReferenceBindings(var checker: Checker, from: Int) {
+  var index = from
+  while index < checker.bindings.length() {
+    const found = checker.bindings[index]
+    if !found.isParameter {
+      const marked = found.copy(isParameter: true)
+      checker.bindings.set(index, marked)
+    }
+    index = index + 1
+  }
+}
+
+/**
+ * Whether the closure may outlive the call it stands in. Conservatively it cannot when it is written straight as the
+ * argument of a call - which is what every receiver closure, every DSL block and every pipeline stage is - and it can
+ * everywhere else: bound to a name, stored in a field, returned, or built inside a collection literal.
+ *
+ * A closure that may escape may not capture a `var` parameter or `var self`: those are references, and a reference is
+ * second-class (BACKEND gap 14). Everything else it captures is a value or the shared box of a `var` binding.
+ */
+public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture>) {
+  const isLocal = checker.argumentClosures.containsKey(at)
+  if isLocal {
+    checker.recordClosureKind(at, ClosureKind.Local)
+    return
+  }
+  checker.recordClosureKind(at, ClosureKind.Escaping)
+  for capture in captures {
+    const binding = checker.binding(capture.binding)
+    if !binding.isParameter || !binding.isVar {
+      continue
+    }
+    const held = if binding.isReceiver { "`var self`" } else { "the `var` parameter `{binding.name}`" }
+    checker.reportHere(
+      Diagnostic.error("This closure captures {held} and may outlive the call", at)
+        .withNote("A reference is second-class: only a closure written straight as an argument of a call may hold one")
+    )
+    return
+  }
+}

@@ -198,8 +198,13 @@ regardless.)
    type, every declaration a signature, and every expression a type - traits and their implementations included, so the
    operators, `for`, indexing, interpolation, `?`, `??`, `?.` and `into()` all resolve through the trait they mean, and
    generics, closures and inference included, so every call records the type arguments it was instantiated with, one
-   witness per bound, and what every closure captures. **4.7 is done** as well: receiver closures, the innermost-receiver
-   rule, property commands, and receiver scripts - `torb check` checks every `project.trb` of the repository against the
+   witness per bound, and what every closure captures. **4.5 is done**: every `match` is checked for the cases it does
+   not cover and for the arms nothing can reach, and every pattern position carries the plan milestone 5 lowers it
+   from. **4.6 is done as well**: every change goes through a path the
+   checker resolved and recorded, no two overlapping accesses of one call may run where one of them is a `var`, and a
+   change nobody reads afterwards is an error - which found a dozen reads of a place that a `var` argument had already
+   taken out, in the compiler's own sources. **4.7 is done** too: receiver closures, the innermost-receiver rule,
+   property commands, and receiver scripts - `torb check` checks every `project.trb` of the repository against the
    `Project` of `std/project`, and `examples/config-dsl/config.trb` against the type its `Sandbox.load` names. What is
    left is the quotations (4.8) and the generated members of a literal type (4.10), recorded as "not checked yet" and
    counted by `torb check --statistics`.

@@ -11,6 +11,7 @@ use expectationOf, deferClosureParameters, deferBlock from "./expression"
 use checkPattern from "./pattern"
 use requireIrrefutable from "./exhaustive"
 use typeFromReference from "./lowering"
+use markReferenceBindings, noteClosureKind from "./mutation"
 
 /**
  * A closure is read from the type that is expected of it: the expected function type names its parameters and its
@@ -200,7 +201,7 @@ fn checkClosureBody(
   checker.loopDepth = 0
   checker.openScope()
   const start = checker.bindings.length()
-  checker.closureFrames.add(frame.copy(bindings: start))
+  checker.closureFrames.add(frame.copy(bindings: start, enclosingLoopDepth: savedDepth))
   if receiver >= 0 {
     declareReceiver(checker, closure, at, parameters, receiver, hasParameters)
   }
@@ -216,6 +217,9 @@ fn checkClosureBody(
       requireIrrefutable(checker, own, form.annotation, "The parameter of a closure", "value")
     }
   }
+  // A `var` parameter of a closure and a `var self` receiver are references like any other, so a nested closure may not
+  // carry them off (gap 14)
+  markReferenceBindings(checker, start)
   const outcome = checkBlock(checker, closure.body, inner)
   var result = declared
   if isInferred {
@@ -232,6 +236,8 @@ fn checkClosureBody(
   checker.receiverType = savedReceiverType
   checker.receiverBinding = savedReceiverBinding
   checker.recordCaptures(at, captures)
+  // Whether the closure may outlive the call it stands in, and whether it may hold a reference (BACKEND gap 14)
+  noteClosureKind(checker, at, captures)
   if const Some(found) = expectedResult {
     if isInferred {
       const _ = unify(checker, result, found)

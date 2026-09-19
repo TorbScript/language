@@ -398,7 +398,8 @@ fn parseListOrMap(var parser: Parser): ExpressionKind {
     return ExpressionKind.ListLiteral(items)
   }
   if entries.length() != items.length() {
-    parser.error("Every entry of a map literal is `key: value`", parser.previousSpan())
+    const at = parser.previousSpan()
+    parser.error("Every entry of a map literal is `key: value`", at)
   }
   ExpressionKind.MapLiteral(entries)
 }
@@ -483,7 +484,8 @@ fn parseMatch(var parser: Parser): ExpressionKind {
     arms.add(parser.withTrailingClosures(true, parseMatchArm))
     parser.eat(TokenKind.Comma)
     if !parser.isAtEndOfStatement() {
-      parser.errorHere("Expected the end of the match arm, found {parser.kind().describe()}")
+      const found = parser.kind().describe()
+      parser.errorHere("Expected the end of the match arm, found {found}")
       parser.recoverToLineEnd()
     }
     if parser.position == before {

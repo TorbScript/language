@@ -1,0 +1,148 @@
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
+/**
+ * Exclusivity (design 5.2): within one call - the receiver and every argument - no two accesses to overlapping places
+ * may run where one of them is a `var`. An access stays open while the other arguments are evaluated and while a closure
+ * argument runs, which is what makes the DSL rule work and what rejects the two traps of stage 0.
+ *
+ * Overlap is decided on the path: the same root and neither path leaving the other. Two fields with different names are
+ * disjoint, two indexes only where both were written as different literals, and a window covers everything of its base.
+ */
+const report = "type Report \{\n  var title: String = \"\"\n  var subtitle: String = \"\"\n\n"
+  + "  fn rename(var self, text: String) \{\n    title = text\n  \}\n\n"
+  + "  fn around(var self, body: () => Void) \{\n    body()\n  \}\n\}\n\n"
+
+const swap = "fn swap(var first: Report, var second: Report) \{\n  const kept = first\n"
+  + "  first = second\n  second = kept\n\}\n\n"
+
+const rename = "fn rename(var target: Report, text: String) \{\n  target.title = text\n\}\n\n"
+
+group "Two `var` arguments of one call" {
+  test "`swap(a, a)` cannot be told apart from itself" {
+    const source = "{report}{swap}fn probe(var entry: Report) \{\n  swap(entry, entry)\n\}"
+    assert(problems(source) == ["`entry` is being changed by `swap` right now"])
+    assert(notes(source) == ["While a `var` access runs, the same path cannot be reached a second time"])
+  }
+
+  test "two different bindings are two different places" {
+    const source = "{report}{swap}fn probe(var first: Report, var second: Report) \{\n  swap(first, second)\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "two indexes of one collection cannot be told apart" {
+    const source = "{report}{swap}fn probe(var entries: List<Report>, left: Int, right: Int) \{\n"
+      + "  swap(entries[left], entries[right])\n\}"
+    assert(problems(source) == ["`entries[...]` is being changed by `swap` right now"])
+    assert(notes(source) == ["`items[i]` and `items[j]` cannot be told apart. Use `items.swapAt(i, j)`"])
+  }
+
+  test "two indexes that were written as different literals can" {
+    const source = "{report}{swap}fn probe(var entries: List<Report>) \{\n  swap(entries[0], entries[1])\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "the same literal index twice cannot" {
+    const source = "{report}{swap}fn probe(var entries: List<Report>) \{\n  swap(entries[0], entries[0])\n\}"
+    assert(problems(source) == ["`entries[...]` is being changed by `swap` right now"])
+  }
+
+  test "two different fields of one value are disjoint" {
+    const source = "{report}fn both(var one: String, var other: String) \{\n  one = other\n\}\n\n"
+      + "fn probe(var entry: Report) \{\n  both(entry.title, entry.subtitle)\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "a field and the value it belongs to are not" {
+    const source = "{report}{rename}fn probe(var entry: Report) \{\n  rename(entry, entry.title)\n\}"
+    assert(problems(source) == ["`entry` is being changed by `rename` right now"])
+  }
+
+  test "a window covers every index of its base" {
+    const source = "fn fill(var target: List<Int>, value: Int) \{\n  target[0] = value\n\}\n\n"
+      + "fn probe(var samples: List<Int>) \{\n  fill(samples[0..4], samples[7])\n\}"
+    assert(problems(source) == ["`samples[...]` is being changed by `fill` right now"])
+  }
+}
+
+group "What a call reads while it changes something" {
+  test "an argument that reads the place a `var` parameter owns (trap 1 of stage 0)" {
+    const source = "{report}{rename}fn probe(var entry: Report) \{\n  rename(entry, entry.subtitle)\n\}"
+    assert(problems(source) == ["`entry` is being changed by `rename` right now"])
+  }
+
+  test "a nested call that reads it is the same mistake" {
+    const source = "{report}{rename}fn shout(text: String): String \{\n  text\n\}\n\n"
+      + "fn probe(var entry: Report) \{\n  rename(entry, shout(entry.subtitle))\n\}"
+    assert(problems(source) == ["`entry` is being changed by `rename` right now"])
+  }
+
+  test "an argument that reads a disjoint field is fine" {
+    const source = "{report}fn both(var one: String, text: String) \{\n  one = text\n\}\n\n"
+      + "fn probe(var entry: Report) \{\n  both(entry.title, entry.subtitle)\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "an argument that reads the receiver of a `var self` call (trap 2 of stage 0)" {
+    const source = "{report}fn probe(var entry: Report) \{\n  entry.rename(entry.subtitle)\n\}"
+    assert(problems(source) == ["`entry` is being changed by `rename` right now"])
+  }
+
+  test "the classic pop: the argument reads the collection the verb is changing" {
+    const source = "fn probe(var pending: List<Int>) \{\n  pending.removeAt(pending.length() - 1)\n\}"
+    assert(problems(source) == ["`pending` is being changed by `removeAt` right now"])
+  }
+
+  test "hoisting the read into a `const` is the fix" {
+    const source = "fn probe(var pending: List<Int>) \{\n  const last = pending.length() - 1\n  pending.removeAt(last)\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "an interpolated part is read like any other" {
+    const source = "{report}{rename}fn probe(var entry: Report) \{\n  rename(entry, \"a \{entry.subtitle\}\")\n\}"
+    assert(problems(source) == ["`entry` is being changed by `rename` right now"])
+  }
+}
+
+group "An access stays open while a closure argument runs" {
+  test "the DSL rule: the receiver cannot be reached again inside the block" {
+    const source = "{report}fn probe(var entry: Report) \{\n  entry.around \{\n    entry.rename(\"inside\")\n  \}\n\}"
+    assert(problems(source) == ["`entry` is being changed by `around` right now"])
+  }
+
+  test "a disjoint field inside the block is fine" {
+    const source = "{report}fn edit(var one: String, body: () => Void) \{\n  body()\n\}\n\n"
+      + "fn probe(var entry: Report) \{\n  edit(entry.title) \{\n    print entry.subtitle\n  \}\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "the field the block reads is the one the call is changing" {
+    const source = "{report}fn edit(var one: String, body: () => Void) \{\n  body()\n\}\n\n"
+      + "fn probe(var entry: Report) \{\n  edit(entry.title) \{\n    print entry.title\n  \}\n\}"
+    assert(problems(source) == ["`entry.title` is being changed by `edit` right now"])
+  }
+
+  test "a closure of a call with no `var` access is not held against anything" {
+    const source = "{report}fn run(body: () => Void) \{\n  body()\n\}\n\n"
+      + "fn probe(var entry: Report) \{\n  run \{\n    entry.rename(\"inside\")\n  \}\n\}"
+    assert(problems(source).isEmpty())
+  }
+}
+
+group "What is not an access" {
+  test "the subject of a `for` is evaluated once into a temporary (gap 40)" {
+    const source = "fn probe(var items: List<Int>) \{\n  for value in items \{\n    items.add(value)\n  \}\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "a `const` path is never an access, so two reads of one value are fine" {
+    const source = "{report}fn join(left: String, right: String): String \{\n  left + right\n\}\n\n"
+      + "fn probe(entry: Report): String \{\n  join(entry.title, entry.subtitle)\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "two calls one after the other each have their own access" {
+    const source = "{report}fn probe(var entry: Report) \{\n  entry.rename(\"one\")\n  entry.rename(\"two\")\n  print entry.title\n\}"
+    assert(problems(source).isEmpty())
+  }
+}

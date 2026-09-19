@@ -74,6 +74,23 @@ group "A receiver closure" {
     const probed = probe(source)
     assert(probed.capturesOf("\{\n    text title\n  \}") == ["title"])
   }
+
+  /**
+   * The receiver is a `var` parameter, so the mutation rules of 4.6 see it as one: the closure it belongs to stands
+   * straight as an argument and may therefore hold it, and nothing further in may carry it off.
+   */
+  test "the closure stands as an argument, so it is local and may hold its receiver" {
+    const source = inHtml("    tag \"html\"")
+    const probed = probe(source)
+    assert(probed.closureKindOf("\{\n    tag \"html\"\n  \}") == "local")
+  }
+
+  test "a closure inside it that escapes may not carry the receiver off (BACKEND gap 14)" {
+    const source = inHtml("    const later: () => Void = \{ text \"hello\" \}")
+    assert(problems(source) == ["This closure captures `var self` and may outlive the call"])
+    const probed = probe(source)
+    assert(probed.capturesOf("\{ text \"hello\" \}") == ["var self"])
+  }
 }
 
 group "Only the innermost receiver is implicit (gap 4)" {

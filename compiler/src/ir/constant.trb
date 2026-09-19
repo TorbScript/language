@@ -40,16 +40,12 @@ public const smallestInteger = -9223372036854775807 - 1
 /**
  * The value of a compile-time constant, or `None` where the expression is not one.
  *
- * `expected` is what the type of the expression is where the checker recorded none: the declared type of the
- * constant, and the type of the field a value is built into. It is needed because the checker does not walk the
- * initializer of a top-level `const` that is annotated - there is nothing to infer there - so nothing inside of
- * `const minimum: Int8 = -128` has a recorded type.
+ * Every part of it takes the type the checker recorded for it, and nothing here decides one: the checker walks the
+ * initializer of an annotated top-level `const` as well, so `const minimum: Int8 = -128` has its `Int8` on the literal
+ * and the range check reads it from there.
  */
-public fn evaluateConstant(var lowering: Lowering, expression: Expression, expected: IrTypeId?): ConstantValue? {
-  const annotation = match typeAtSpan(lowering, expression.span) {
-    Some(found) => found
-    .None => expected?
-  }
+public fn evaluateConstant(var lowering: Lowering, expression: Expression): ConstantValue? {
+  const annotation = typeAtSpan(lowering, expression.span)?
   match expression.kind {
     .IntegerLiteral(text) => integerConstant(lowering, text, false, annotation, expression.span)
     .FloatLiteral(text) => floatConstant(lowering, text, false, annotation, expression.span)
@@ -80,10 +76,10 @@ fn unaryConstant(
     if const .FloatLiteral(text) = operand.kind {
       return floatConstant(lowering, text, true, annotation, at)
     }
-    const inner = evaluateConstant(lowering, operand, Some(annotation))?
+    const inner = evaluateConstant(lowering, operand)?
     return negatedConstant(lowering, inner, annotation, at)
   }
-  const inner = evaluateConstant(lowering, operand, Some(annotation))?
+  const inner = evaluateConstant(lowering, operand)?
   const value = booleanOf(inner)?
   Some(ConstantValue(StaticContents.Literal(LiteralValue.Boolean(!value)), annotation))
 }
@@ -112,11 +108,8 @@ fn binaryConstant(
   annotation: IrTypeId,
   at: Span,
 ): ConstantValue? {
-  // `a + b` produces what its operands are (`Add<Self, Self>`) and `&&` takes two `Bool`s: only there does the type
-  // of the whole say anything about the type of a part
-  const inner = if keepsType(operator) { Some(annotation) } else { None }
-  const first = evaluateConstant(lowering, left, inner)?
-  const second = evaluateConstant(lowering, right, inner)?
+  const first = evaluateConstant(lowering, left)?
+  const second = evaluateConstant(lowering, right)?
   if const Some(found) = booleanConstant(lowering, operator, first, second, annotation) {
     return Some(found)
   }
@@ -233,14 +226,6 @@ fn integerOperation(
     .Divide => dividedConstant(lowering, first, second, annotation, at)
     .Remainder => remainderConstant(lowering, first, second, annotation, at)
     _ => None
-  }
-}
-
-/** Whether the operands of an operator have the type the whole has: the arithmetic ones and the two logical ones. */
-fn keepsType(operator: InfixOperator): Bool {
-  match operator {
-    .Add | .Subtract | .Multiply | .Divide | .Remainder | .And | .Or => true
-    _ => false
   }
 }
 
@@ -393,7 +378,7 @@ fn textConstant(
         text = text + part
       }
       .Interpolated(inner) => {
-        const value = evaluateConstant(lowering, inner, None)?
+        const value = evaluateConstant(lowering, inner)?
         const shown = shownConstant(value)?
         text = text + shown
       }
@@ -454,8 +439,7 @@ fn aggregateConstant(
   }
   var fields: List<StaticId> = []
   for index in 0..items.length() {
-    const wanted = shape.fields[index].annotation
-    const value = evaluateConstant(lowering, items[index].value, Some(wanted))?
+    const value = evaluateConstant(lowering, items[index].value)?
     fields.add(internStatic(lowering, value.contents, value.annotation))
   }
   Some(ConstantValue(StaticContents.Aggregate(layout, 0, fields), annotation))
@@ -490,8 +474,7 @@ fn callConstant(
       if position < 0 || position >= count {
         return None
       }
-      const wanted = lowering.program.layoutAt(layout).fields[position].annotation
-      const value = evaluateConstant(lowering, arguments[index].value, Some(wanted))?
+      const value = evaluateConstant(lowering, arguments[index].value)?
       const field = internStatic(lowering, value.contents, value.annotation)
       fields.set(position, field)
     }
@@ -527,7 +510,7 @@ public fn staticOfConstant(var lowering: Lowering, symbol: SymbolId): StaticId? 
   const name = staticName(lowering.program, path, [])
   const outer = lowering.module
   lowering.module = site.module
-  const value = evaluateConstant(lowering, binding.value, Some(annotation))
+  const value = evaluateConstant(lowering, binding.value)
   lowering.module = outer
   const found = value?
   const identifier = namedStatic(lowering, name, found.contents, annotation)

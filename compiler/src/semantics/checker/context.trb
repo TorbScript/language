@@ -92,6 +92,11 @@ public type LocalBinding {
   at: Span
   /** `self` and a receiver closure's parameter: the one binding whose members a bare name may mean. */
   isReceiver: Bool = false
+  /**
+   * A `var` parameter and `var self` write back into the caller's place, so a change to one is never dead (design 5.3)
+   * and a closure that may outlive the call may not capture one (BACKEND gap 14).
+   */
+  isParameter: Bool = false
 }
 
 /** One name in the scope chain. A list instead of a map: a scope has few names, and extending it must not copy one. */
@@ -270,6 +275,8 @@ public type ClosureFrame {
    * always names the parameter the way the declaration counts them.
    */
   implicitFrom: Int = 0
+  /** The loop depth around the closure, so that a `break` in it can say that it cannot leave one (design 3.5). */
+  enclosingLoopDepth: Int = 0
 }
 
 /** Everything the source does not spell out, in the order in which it applies. */
@@ -300,6 +307,80 @@ public type Adaptation {
   case ShowValue(witness: Witness)
   /** `with Add by value`: unwrap the arguments, wrap the result again. */
   case Delegate(field: String)
+}
+
+// --- Places and the mutation rules (milestone 4.6) -------------------------------------------------------------------
+
+/**
+ * Where a path starts. The `Receiver` of the design is a `Local` whose binding is `self` - `LocalBinding.isReceiver`
+ * says so already - and one case fewer is one case fewer in every walk over a place.
+ */
+public type PlaceRoot {
+  case Local(binding: BindingId)
+  /**
+   * A top-level `const` or `var` of a module, a script or an entry file. Those are symbols and not locals, because a
+   * module exports them, so they need a root of their own.
+   */
+  case Declared(symbol: SymbolId)
+  /** A call result, a literal, a constructor: a value no path of the caller leads to. */
+  case Temporary
+  /** A construct a later sub-milestone resolves, or one a message was already given about: every rule stays quiet. */
+  case Unknown
+}
+
+/** One step from the root of a path to the value it names. */
+public type PlaceStep {
+  case Field(owner: TypeId, field: SymbolId)
+  /**
+   * `a[key]`: a write through it needs `MutableIndexed`. `literal` is the key where it was written as one, which is
+   * what lets `items[0]` and `items[1]` be told apart while `items[i]` and `items[j]` cannot.
+   */
+  case Index(base: TypeId, at: Span, literal: String)
+  /** `a[from..to]`: a window into the base, which `MutableSlice` makes writable. */
+  case Range(base: TypeId, at: Span)
+  case TupleField(base: TypeId, index: Int)
+}
+
+/**
+ * A path from a root to one value: what an assignment writes, what a `var` argument hands over, what a `var self` call
+ * changes, and what the pattern of an `if var` binds into. Milestone 5 needs nothing else to form the reference.
+ */
+public type Place {
+  root: PlaceRoot
+  /** From the root outwards: `counters[0].hits` is an `Index` and then a `Field`. */
+  steps: List<PlaceStep> = []
+  /** The span of the root, which is where a message about the binding points. */
+  at: Span = Span(0, 0)
+}
+
+/** Whether a closure may outlive the call it is written in (BACKEND gap 14). */
+public type ClosureKind {
+  /** Written straight as the argument of a call: its environment fits on the stack, and it may hold a reference. */
+  case Local
+  /** Stored, returned or built anywhere else: it captures values and shared boxes only. */
+  case Escaping
+}
+
+/** One `var` access that is running. The stack of them is what the exclusivity rule asks (design 5.2). */
+public type Access {
+  place: Place
+  /** The member or the parameter that is changing it: "`root` is being changed by `div` right now". */
+  changedBy: String
+  at: Span
+}
+
+/**
+ * One read or one change of a local `var` binding, in source order. This is the whole state the dead-change rule needs
+ * (design 5.3): a change is dead when no read follows it and no read shares a loop with it.
+ */
+public type BindingUse {
+  binding: BindingId
+  isChange: Bool
+  at: Span
+  /** A change a loop brings a read back around to is alive, whatever stands after it. */
+  var isLive: Bool = false
+  /** The member that changed it, `""` for an assignment: the note names the path that was probably meant. */
+  changedBy: String = ""
 }
 
 /**
@@ -337,6 +418,13 @@ public type Tables {
    * every one of them tests, and what it binds. Milestone 5 lowers a `match` to a decision tree from this alone.
    */
   var matches: Map<Span, MatchPlan> = [:]
+  /**
+   * Per assignment, `var` argument, `var self` receiver and `if var` subject: the place that is changed there. This is
+   * the table that tells milestone 5 where a copy is a move and where a path becomes a reference (design 7.1).
+   */
+  var places: Map<Span, Place> = [:]
+  /** Per closure span: whether the closure may outlive the call it stands in (BACKEND gap 14). */
+  var closureKinds: Map<Span, ClosureKind> = [:]
 }
 
 /** No expected type, a type, or "a value is not wanted here". */
@@ -383,6 +471,9 @@ public type BodyState {
   contextStarts: List<Int>
   pendingSpans: List<Span>
   hasVariables: Bool
+  /** The mutation rules are per body: an open access and the uses of a binding never reach out of one (4.6). */
+  accesses: List<Access>
+  bindingUses: List<BindingUse>
 }
 
 /** How much of a module the checker already understands. `torb check --statistics` prints these. */
@@ -483,6 +574,17 @@ public type Checker {
   var closureFrames: List<ClosureFrame> = []
   /** A body is checked exactly once, whether the walk reached it or a caller asked for its result type first. */
   var checkedBodies: Map<SymbolId, Bool> = [:]
+
+  // --- Places and the mutation rules (milestone 4.6) ------------------------------------------------------------------
+
+  /** The `var` accesses that are running, outermost first: what the exclusivity rule compares against (design 5.2). */
+  var accesses: List<Access> = []
+  /** Every read and every change of a local `var` binding of the body that is being checked, in source order. */
+  var bindingUses: List<BindingUse> = []
+  /** Every binding a closure captures, by `BindingId.value`: a captured binding is a shared box and never dead (gap 19). */
+  var capturedBindings: Map<Int, Bool> = [:]
+  /** The closures that stand straight as the argument of a call, by span: those are the ones that cannot escape. */
+  var argumentClosures: Map<Span, Bool> = [:]
 
   // --- Inference (milestone 4.4) --------------------------------------------------------------------------------------
 
@@ -782,6 +884,24 @@ public type Checker {
     tables[module.value].matches.get(at)
   }
 
+  /** The place an assignment, a `var` argument, a `var self` receiver or an `if var` subject named (design 7.1). */
+  fn recordPlace(var self, at: Span, place: Place) {
+    tables[module.value].places.set(at, place)
+  }
+
+  fn placeAt(self, module: ModuleId, at: Span): Place? {
+    tables[module.value].places.get(at)
+  }
+
+  /** Whether a closure may outlive the call it stands in, which decides where its environment lives (BACKEND gap 14). */
+  fn recordClosureKind(var self, at: Span, kind: ClosureKind) {
+    tables[module.value].closureKinds.set(at, kind)
+  }
+
+  fn closureKindAt(self, module: ModuleId, at: Span): ClosureKind? {
+    tables[module.value].closureKinds.get(at)
+  }
+
   /** A variable that was solved: every table of the statement is walked once at its end, through these. */
   fn expressionTypeHere(self, at: Span): TypeId? {
     tables[module.value].expressionTypes.get(at)
@@ -838,11 +958,13 @@ public type Checker {
   }
 
   fn solveVariable(var self, variable: VariableId, id: TypeId) {
-    variables.set(variable.value, variables[variable.value].copy(solution: Some(id)))
+    const solved = variables[variable.value].copy(solution: Some(id))
+    variables.set(variable.value, solved)
   }
 
   fn markReported(var self, variable: VariableId) {
-    variables.set(variable.value, variables[variable.value].copy(isReported: true))
+    const reported = variables[variable.value].copy(isReported: true)
+    variables.set(variable.value, reported)
   }
 
   fn resolutionHere(self, at: Span): Resolution? {
@@ -906,9 +1028,11 @@ public type Checker {
   }
 
   fn closeScope(var self) {
-    const start = scopeStarts.removeAt(scopeStarts.length() - 1) ?? 0
+    const top = scopeStarts.length() - 1
+    const start = scopeStarts.removeAt(top) ?? 0
     while locals.length() > start {
-      const _ = locals.removeAt(locals.length() - 1)
+      const last = locals.length() - 1
+      const _ = locals.removeAt(last)
     }
   }
 
@@ -964,6 +1088,8 @@ public type Checker {
       contextStarts,
       pendingSpans,
       hasVariables,
+      accesses,
+      bindingUses,
     )
     module = inside
     locals = []
@@ -979,6 +1105,8 @@ public type Checker {
     contextStarts = []
     pendingSpans = []
     hasVariables = false
+    accesses = []
+    bindingUses = []
     saved
   }
 
@@ -997,6 +1125,8 @@ public type Checker {
     contextStarts = saved.contextStarts
     pendingSpans = saved.pendingSpans
     hasVariables = saved.hasVariables
+    accesses = saved.accesses
+    bindingUses = saved.bindingUses
   }
 
   /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */

@@ -7,6 +7,7 @@ use TypeId from "./type"
 use Checker, TypeScope, LocalBinding, ReceiverClosure from "./context"
 use typeFromReference from "./lowering"
 use checkStatement from "./statement"
+use settleChanges from "./mutation"
 
 /**
  * Receiver scripts: a `.trb` file that is the body of a receiver closure. `project.trb` and a configuration file are
@@ -50,7 +51,8 @@ fn projectType(var checker: Checker): TypeId? {
  */
 public fn checkReceiverScript(var checker: Checker, module: ModuleId, receiver: TypeId) {
   const statements = checker.program.graph.at(module).file.statements
-  const saved = checker.enterBody(module, checker.voidType, true, None)
+  const nothing = checker.voidType
+  const saved = checker.enterBody(module, nothing, true, None)
   checker.openScope()
   const binding = checker.declareBinding(
     LocalBinding("self", receiver, true, Span(0, 0), isReceiver: true)
@@ -64,6 +66,8 @@ public fn checkReceiverScript(var checker: Checker, module: ModuleId, receiver: 
     reportImport(checker, statement)
     const _ = checkStatement(checker, statement)
   }
+  // The file is a body like any other, so a change in it that nothing reads afterwards is one too (design 5.3)
+  settleChanges(checker)
   checker.closeScope()
   checker.leaveBody(saved)
 }

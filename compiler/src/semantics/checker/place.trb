@@ -1,0 +1,956 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Expression, Argument, TextSegment from "../../syntax/ast"
+use SymbolId from "../symbols"
+use TypeId, FieldSignature, ParameterForm from "./type"
+use Checker, Place, PlaceRoot, PlaceStep, Access from "./context"
+use isFullyKnown from "./name"
+use typeSignatureOf from "./signature"
+use traitArgumentsOf from "./implementation"
+use noteChange, dropRead from "./mutation"
+
+/**
+ * What a valid place is, whether a change may go through it, and what may run while one is running.
+ *
+ * A place is a path: a root and the steps from it to one value. The root of a path that leads anywhere is a local
+ * binding - `self` is one of those, so the design's `Place.Receiver` is a `Local` whose binding `isReceiver` - and a
+ * path that starts anywhere else is a `Temporary`, which is a valid *argument* for a `var` parameter (gap 2) and never
+ * the base of a path. Whether the path may be written through is one walk from the root outwards: the root has to be a
+ * `var`, every field step a `var` field this file may write, an index step needs `MutableIndexed` and a range step
+ * `MutableSlice`.
+ *
+ * `placeOf` never checks an expression again. Everything it needs - what a name resolved to, what type a base has - is
+ * in the tables by the time somebody asks for a place, so this is a walk over the syntax tree plus two map lookups per
+ * node. That is what keeps the whole sub-milestone off the hot path: nothing here runs for an expression that changes
+ * nothing.
+ */
+
+/** Why a place has to be mutable. The message follows from this, so every caller says what it is doing. */
+public type Mutation {
+  /** `place = value` */
+  case Write
+  /** `list.add(1)`: the member that declares `var self`. */
+  case Receiver(member: String)
+  /** A `var` parameter: which one, and of what. */
+  case Argument(parameter: String, callee: String)
+  /** `if var Some(inner) = current`: the pattern binds `var` paths into the subject (gap 3). */
+  case Subject
+}
+
+/** Why a change may not go through a path, or `.Writable` when it may. */
+type MutationProblem {
+  case Writable
+  /** Nothing is known about the place, so nothing is said about it either. */
+  case Unknown
+  case ConstantRoot(name: String)
+  case TemporaryRoot
+  case ConstantField(field: SymbolId)
+  case PrivateField(owner: TypeId, field: SymbolId, isWholePrivate: Bool)
+  case NotIndexable(base: TypeId)
+  case NotSliceable(base: TypeId)
+}
+
+// --- Reading a place out of an expression ---------------------------------------------------------------------------
+
+/**
+ * The path an expression names. A name, a field, a tuple position, an index and a slice lead somewhere; everything
+ * else is a value of its own and therefore a `Temporary`.
+ */
+public fn placeOf(var checker: Checker, expression: Expression): Place {
+  match expression.kind {
+    .Name(_) => namePlace(checker, expression.span)
+    .Member(base, _, isOptional) => memberPlace(checker, base, expression.span, isOptional)
+    .Index(target, index) => indexPlace(checker, target, index)
+    // `items.at<Int>(0)`: the type arguments say nothing about the path
+    .Generic(inner, _) => placeOf(checker, inner)
+    .Invalid => Place(PlaceRoot.Unknown, [], expression.span)
+    _ => Place(PlaceRoot.Temporary, [], expression.span)
+  }
+}
+
+/** A bare name: a local, or a field of the innermost receiver that was written without `self`. */
+fn namePlace(var checker: Checker, at: Span): Place {
+  const resolution = match checker.resolutionHere(at) {
+    Some(found) => found
+    .None => {
+      return Place(PlaceRoot.Unknown, [], at)
+    }
+  }
+  match resolution {
+    .Local(binding) => Place(PlaceRoot.Local(binding), [], at)
+    // A top-level `var` of a script is a symbol of its module and not a local, so it is a root of its own
+    .Constant(symbol, owner) => {
+      if owner.isSome() {
+        return Place(PlaceRoot.Temporary, [], at)
+      }
+      Place(PlaceRoot.Declared(symbol), [], at)
+    }
+    // `value = value + 1` in a method of `Point`: a field of `self`, one step from the receiver
+    .Field(owner, field) => {
+      match checker.receiverBinding {
+        Some(receiver) => Place(PlaceRoot.Local(receiver), [PlaceStep.Field(owner, field)], at)
+        .None => Place(PlaceRoot.Unknown, [], at)
+      }
+    }
+    .Deferred => Place(PlaceRoot.Unknown, [], at)
+    _ => Place(PlaceRoot.Temporary, [], at)
+  }
+}
+
+/** `a.b`: a field and a tuple position lead on, everything else is a value the path ends at. */
+fn memberPlace(var checker: Checker, base: Expression, at: Span, isOptional: Bool): Place {
+  // `a?.b` is `Option.map`, and what comes out is a new `Option` and no path into `a`
+  if isOptional {
+    return Place(PlaceRoot.Temporary, [], at)
+  }
+  const resolution = match checker.resolutionHere(at) {
+    Some(found) => found
+    .None => {
+      return Place(PlaceRoot.Unknown, [], at)
+    }
+  }
+  match resolution {
+    .Field(owner, field) => stepped(checker, base, PlaceStep.Field(owner, field))
+    .TupleField(owner, index) => stepped(checker, base, PlaceStep.TupleField(owner, index))
+    .Deferred => Place(PlaceRoot.Unknown, [], at)
+    _ => Place(PlaceRoot.Temporary, [], at)
+  }
+}
+
+/** `a[key]` and `a[from..to]`: which of the two it is follows from the type of what stands in the brackets. */
+fn indexPlace(var checker: Checker, target: Expression, index: Expression): Place {
+  const base = checker.expressionTypeHere(target.span) ?? checker.deferredType
+  const key = checker.expressionTypeHere(index.span) ?? checker.deferredType
+  if isRangeType(checker, key) {
+    return stepped(checker, target, PlaceStep.Range(base, index.span))
+  }
+  const written = literalKeyOf(index)
+  stepped(checker, target, PlaceStep.Index(base, index.span, written))
+}
+
+/** One more step on the path of the base. A base nothing is known about stays unknown, steps and all. */
+fn stepped(var checker: Checker, base: Expression, step: PlaceStep): Place {
+  const inner = placeOf(checker, base)
+  if const .Unknown = inner.root {
+    return inner
+  }
+  Place(inner.root, inner.steps.added(step), inner.at)
+}
+
+fn isRangeType(checker: Checker, annotation: TypeId): Bool {
+  if const .Nominal(symbol, _) = checker.types.form(annotation) {
+    return checker.wellKnown.range == Some(symbol)
+  }
+  false
+}
+
+/**
+ * The key of an index as it was written, where that was a literal. Two different literals name two different elements;
+ * everything else cannot be told apart, which is what makes `swap(items[i], items[j])` an error.
+ */
+fn literalKeyOf(index: Expression): String {
+  match index.kind {
+    .IntegerLiteral(text) => text
+    .CharLiteral(value) => "char {value}"
+    .BoolLiteral(value) => "bool {value}"
+    .TextLiteral(segments) => {
+      if segments.length() != 1 {
+        return ""
+      }
+      match segments[0] {
+        .Literal(text) => "text {text}"
+        _ => ""
+      }
+    }
+    _ => ""
+  }
+}
+
+/** A place as a message writes it: the name of the root and the steps that follow it. */
+public fn describePlace(checker: Checker, place: Place): String {
+  var shown = match place.root {
+    .Local(binding) => checker.binding(binding).name
+    .Declared(symbol) => checker.symbolAt(symbol).name
+    _ => "this value"
+  }
+  for step in place.steps {
+    match step {
+      .Field(_, field) => {
+        shown = "{shown}.{checker.symbolAt(field).name}"
+      }
+      .TupleField(_, index) => {
+        shown = "{shown}.{index}"
+      }
+      _ => {
+        shown = "{shown}[...]"
+      }
+    }
+  }
+  shown
+}
+
+// --- Whether a change may go through it -----------------------------------------------------------------------------
+
+/**
+ * Whether a change may go through this path, without saying anything about it. A path that is one `var` binding and
+ * nothing else - which is what almost every `var` argument of a pass that threads one value through it is - is answered
+ * without building a reason for the answer.
+ */
+public fn isMutable(var checker: Checker, place: Place): Bool {
+  if place.steps.isEmpty() {
+    if const .Local(binding) = place.root {
+      return checker.binding(binding).isVar
+    }
+  }
+  match problemOf(checker, place) {
+    .Writable => true
+    _ => false
+  }
+}
+
+/**
+ * The same question with a message. `false` also comes back where nothing is known - then nothing is said, because one
+ * root cause gets one message and that one was given where the path stopped being understood.
+ */
+public fn requireMutable(var checker: Checker, place: Place, at: Span, cause: Mutation): Bool {
+  const problem = problemOf(checker, place)
+  if const .Writable = problem {
+    return true
+  }
+  if const .Unknown = problem {
+    return false
+  }
+  // A temporary is a valid *argument* for a `var` parameter: the callee is its only owner, so "copy in, copy out" is
+  // exact and nothing would have to be written back anywhere (gap 2). It is never the base of a path
+  if const .TemporaryRoot = problem {
+    if place.steps.isEmpty() {
+      if const .Argument(_, _) = cause {
+        return true
+      }
+    }
+  }
+  reportProblem(checker, problem, at, cause)
+  false
+}
+
+/** The first reason the path cannot be written through, from the root outwards. */
+fn problemOf(var checker: Checker, place: Place): MutationProblem {
+  const found = problemOfRoot(checker, place.root)
+  if const .Writable = found {
+    return problemOfSteps(checker, place)
+  }
+  found
+}
+
+fn problemOfRoot(var checker: Checker, root: PlaceRoot): MutationProblem {
+  match root {
+    .Local(binding) => {
+      const found = checker.binding(binding)
+      if found.isVar {
+        return MutationProblem.Writable
+      }
+      MutationProblem.ConstantRoot(found.name)
+    }
+    // A top-level `var` of a script is written like any other root; a top-level `const` of a module never is
+    .Declared(symbol) => {
+      if isDeclaredVar(checker, symbol) {
+        return MutationProblem.Writable
+      }
+      const name = checker.symbolAt(symbol).name
+      MutationProblem.ConstantRoot(name)
+    }
+    .Temporary => MutationProblem.TemporaryRoot
+    .Unknown => MutationProblem.Unknown
+  }
+}
+
+/** Whether a top-level binding was written `var`. Its symbol says nothing about that, its declaration site does. */
+fn isDeclaredVar(checker: Checker, symbol: SymbolId): Bool {
+  if const Some(site) = checker.siteOf(symbol) {
+    if const .Constant(binding) = site.kind {
+      return binding.isVar
+    }
+  }
+  false
+}
+
+fn problemOfSteps(var checker: Checker, place: Place): MutationProblem {
+  for step in place.steps {
+    const found = problemOfStep(checker, step)
+    if const .Writable = found {
+      continue
+    }
+    return found
+  }
+  MutationProblem.Writable
+}
+
+fn problemOfStep(var checker: Checker, step: PlaceStep): MutationProblem {
+  match step {
+    .Field(owner, field) => problemOfField(checker, owner, field)
+    .Index(base, _, _) => {
+      const capability = checker.wellKnown.mutableIndexed
+      if hasTrait(checker, base, capability) {
+        return MutationProblem.Writable
+      }
+      MutationProblem.NotIndexable(base)
+    }
+    .Range(base, _) => {
+      const capability = checker.wellKnown.mutableSlice
+      if hasTrait(checker, base, capability) {
+        return MutationProblem.Writable
+      }
+      MutationProblem.NotSliceable(base)
+    }
+    // A tuple has no `const` positions: every one of them is as writable as the binding that holds the tuple
+    .TupleField(_, _) => MutationProblem.Writable
+  }
+}
+
+/**
+ * A field step. The field has to be declared `var`, and `private(var)` hands out a const path to everybody outside the
+ * package that declares the type - const is deep, so `config.routes.add(...)` is an error while `config.routes` reads.
+ */
+fn problemOfField(var checker: Checker, owner: TypeId, field: SymbolId): MutationProblem {
+  const signature = match fieldSignatureOf(checker, owner, field) {
+    Some(found) => found
+    // A field of a type whose shape could not be built: the message belongs where the type was named
+    .None => {
+      return MutationProblem.Unknown
+    }
+  }
+  // `private(var) balance: Int` carries its `var` in the modifier, so the visibility is the second half of the answer
+  if !isVarField(signature) {
+    return MutationProblem.ConstantField(field)
+  }
+  // `private` reaches as far as the type does: its body, and every `extend` of it in the same package (gap 29)
+  if isInsideOwner(checker, owner, field) {
+    return MutationProblem.Writable
+  }
+  match signature.visibility {
+    .PrivateVar => MutationProblem.PrivateField(owner, field, false)
+    .Private => MutationProblem.PrivateField(owner, field, true)
+    _ => MutationProblem.Writable
+  }
+}
+
+/** The field of `owner` with this id, with its `var` and its visibility. Nothing here needs the field's type. */
+fn fieldSignatureOf(var checker: Checker, owner: TypeId, field: SymbolId): FieldSignature? {
+  const symbol = match checker.types.form(owner) {
+    .Nominal(found, _) => found
+    _ => {
+      return None
+    }
+  }
+  const identifier = typeSignatureOf(checker, symbol)
+  const shape = checker.typeSignature(identifier)
+  for declared in shape.fields {
+    if declared.symbol == field {
+      return Some(declared)
+    }
+  }
+  for variant in shape.cases {
+    for declared in variant.fields {
+      if declared.symbol == field {
+        return Some(declared)
+      }
+    }
+  }
+  None
+}
+
+/**
+ * Whether a private field may be written from here: inside the body of its type, and inside every `extend` of that type
+ * in the same package (gap 29). Both are the same question - `Self` is the type there and nowhere else - and the *head*
+ * is compared and not the whole type, so a member of `Holder<Item>` may write a field of a `Holder<Int>` as well.
+ */
+fn isInsideOwner(var checker: Checker, owner: TypeId, field: SymbolId): Bool {
+  if !isOwnPackage(checker, field) {
+    return false
+  }
+  const own = match checker.selfType {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  const here = headOf(checker, own)
+  const wanted = headOf(checker, owner)
+  if here.isNone() || wanted.isNone() {
+    return false
+  }
+  here == wanted
+}
+
+fn headOf(checker: Checker, annotation: TypeId): SymbolId? {
+  if const .Nominal(symbol, _) = checker.types.form(annotation) {
+    return Some(symbol)
+  }
+  None
+}
+
+/** Whether the file that is being checked belongs to the package that declares this symbol (gap 29). */
+fn isOwnPackage(checker: Checker, symbol: SymbolId): Bool {
+  const declared = match checker.symbolAt(symbol).module {
+    Some(found) => found
+    // A name the language provides itself belongs to no file, so nothing is hidden from anybody
+    .None => {
+      return true
+    }
+  }
+  const graph = checker.program.graph
+  graph.at(declared).package == graph.at(checker.module).package
+}
+
+/** A type that is not known well enough to answer counts as implementing it: the message belongs elsewhere. */
+fn hasTrait(var checker: Checker, base: TypeId, capability: SymbolId?): Bool {
+  const wanted = match capability {
+    Some(found) => found
+    .None => {
+      return true
+    }
+  }
+  if checker.absorbs(base) {
+    return true
+  }
+  if traitArgumentsOf(checker, base, wanted).isSome() {
+    return true
+  }
+  !isFullyKnown(checker, base)
+}
+
+// --- Messages -------------------------------------------------------------------------------------------------------
+
+fn reportProblem(var checker: Checker, problem: MutationProblem, at: Span, cause: Mutation) {
+  match problem {
+    .ConstantRoot(name) => reportConstantRoot(checker, name, at, cause)
+    .TemporaryRoot => reportTemporary(checker, at, cause)
+    .ConstantField(field) => {
+      const name = checker.symbolAt(field).name
+      checker.reportHere(
+        Diagnostic.error("`{name}` never changes after construction", at)
+          .withNote("A field is `const` unless it is declared `var`, and a value is its data")
+      )
+    }
+    .PrivateField(owner, field, isWholePrivate) => reportPrivateField(checker, owner, field, isWholePrivate, at)
+    .NotIndexable(base) => reportMissingTrait(checker, base, "MutableIndexed", "a[key]", at)
+    .NotSliceable(base) => reportMissingTrait(checker, base, "MutableSlice", "a[from..to]", at)
+    _ => {}
+  }
+}
+
+/**
+ * The root of the path is a `const`. Where a verb was called on it the participle is the fix, which is the one message
+ * of the language that names the member the writer probably wanted.
+ */
+fn reportConstantRoot(var checker: Checker, name: String, at: Span, cause: Mutation) {
+  if const .Receiver(member) = cause {
+    var problem = Diagnostic.error("`{member}` needs a `var`", at)
+    match participleOf(member) {
+      Some(participle) => {
+        problem = problem.withNote("Did you mean `{participle}`? `{name}` is a `const`, so nothing changes through it")
+      }
+      .None => {
+        problem = problem.withNote("`{name}` is a `const`. Only a `var` binding can be changed")
+      }
+    }
+    checker.reportHere(problem)
+    return
+  }
+  if const .Argument(parameter, callee) = cause {
+    checker.reportHere(
+      Diagnostic.error("`{callee}` changes `{parameter}`, and `{name}` is a `const`", at)
+        .withNote("A `var` parameter works on the caller's value, so its argument has to be a `var` path")
+    )
+    return
+  }
+  checker.reportHere(
+    Diagnostic.error("`{name}` is a `const`. Only a `var` binding can be changed", at)
+      .withNote("`const` is deep: through it nothing is assigned, no field is written and no verb is called")
+  )
+}
+
+/** A `var` path through a temporary: the change would be thrown away, which is always a mistake. */
+fn reportTemporary(var checker: Checker, at: Span, cause: Mutation) {
+  const what = match cause {
+    .Receiver(member) => "`{member}` changes its receiver"
+    .Argument(parameter, callee) => "`{callee}` changes `{parameter}`"
+    .Subject => "`if var` binds paths into its subject"
+    .Write => "an assignment writes it"
+  }
+  checker.reportHere(
+    Diagnostic.error("This is a temporary, and {what}: the change would be thrown away", at)
+      .withNote("Bind it first (`var cursor = iterator()`), then the path leads somewhere")
+  )
+}
+
+fn reportPrivateField(
+  var checker: Checker,
+  owner: TypeId,
+  field: SymbolId,
+  isWholePrivate: Bool,
+  at: Span,
+) {
+  const name = checker.symbolAt(field).name
+  const shown = checker.describe(owner)
+  if isWholePrivate {
+    checker.reportHere(Diagnostic.error("`{name}` is private to `{shown}`", at))
+    return
+  }
+  checker.reportHere(
+    Diagnostic.error("`{name}` can only be written by `{shown}`", at)
+      .withNote("`private(var)` hands out a const path, and const is deep: it reads and iterates, it does not change")
+  )
+}
+
+fn reportMissingTrait(var checker: Checker, base: TypeId, capability: String, written: String, at: Span) {
+  const shown = checker.describe(base)
+  checker.reportHere(
+    Diagnostic.error("`{shown}` does not implement `{capability}`, so `{written}` is no `var` path", at)
+      .withNote("A path through `a[key]` takes the value out, changes it and puts it back, which needs the trait")
+  )
+}
+
+/** `added` for `add`, `sorted` for `sort`: the participles of the language are the verb plus `ed` or `d`. */
+fn participleOf(name: String): String? {
+  if name.isEmpty() || name.endsWith("ed") || name.endsWith("d") {
+    return None
+  }
+  if name.endsWith("e") {
+    return Some("{name}d")
+  }
+  Some("{name}ed")
+}
+
+// --- The places one statement or one call names ----------------------------------------------------------------------
+
+/**
+ * `place = value`. The target has to be a valid place and the place is recorded for milestone 5. The *change* is noted
+ * by `noteAssignment` afterwards, because the value of the assignment is read before the change happens; what happens
+ * here is that naming the target of an overwrite stops counting as a read of it.
+ */
+public fn checkAssignment(var checker: Checker, target: Expression): Place {
+  const place = placeOf(checker, target)
+  const at = target.span
+  const _ = checkAccess(checker, place, at)
+  if isMutable(checker, place) {
+    checker.recordPlace(at, place)
+  } else {
+    const _ = requireMutable(checker, place, at, Mutation.Write)
+  }
+  if place.steps.isEmpty() {
+    dropRead(checker, place)
+  }
+  place
+}
+
+/** The change an assignment makes, once its value has been read (design 5.3). */
+public fn noteAssignment(var checker: Checker, place: Place) {
+  noteChange(checker, place, "")
+}
+
+/**
+ * `if var Some(inner) = current`: the pattern binds `var` paths *into* the subject (gap 3), so the subject has to be a
+ * valid place. The place is recorded under the span of the subject, which is what tells milestone 5 that the bindings
+ * of the pattern are references into it and not copies.
+ */
+public fn checkSubject(var checker: Checker, value: Expression) {
+  const place = placeOf(checker, value)
+  const at = value.span
+  const _ = checkAccess(checker, place, at)
+  if isMutable(checker, place) {
+    checker.recordPlace(at, place)
+  } else {
+    const _ = requireMutable(checker, place, at, Mutation.Subject)
+  }
+}
+
+/**
+ * The receiver of a `var self` call. It stays an open access while the arguments are evaluated and while a closure
+ * argument runs, which is exactly what makes `root.div { root.attribute "lang", "en" }` a mistake (design 5.2).
+ */
+public fn openReceiverAccess(
+  var checker: Checker,
+  callee: Expression,
+  isVarSelf: Bool,
+  member: String,
+  isDiscarded: Bool,
+) {
+  if !isVarSelf {
+    return
+  }
+  const place = receiverPlaceOf(checker, callee)
+  const at = receiverSpanOf(callee)
+  const _ = checkAccess(checker, place, at)
+  // The reason a place cannot be written is only built where there is one: the message costs a value and a string, and
+  // almost every receiver of a `var self` call is a plain `var` binding
+  if isMutable(checker, place) {
+    checker.recordPlace(at, place)
+  } else {
+    const _ = requireMutable(checker, place, at, Mutation.Receiver(member))
+  }
+  // Only a call whose result goes nowhere is a change and nothing else: `cursor.next()` hands its value on, so the
+  // change to `cursor` is not the point of the statement and the dead-change rule has nothing to say about it
+  if isDiscarded {
+    noteChange(checker, place, member)
+  }
+  openAccess(checker, place, member, at)
+}
+
+/** What a `var self` call changes: the base of the member path, or `self` where the member was written bare. */
+fn receiverPlaceOf(var checker: Checker, callee: Expression): Place {
+  match callee.kind {
+    .Member(base, _, isOptional) => {
+      if isOptional {
+        return Place(PlaceRoot.Temporary, [], base.span)
+      }
+      placeOf(checker, base)
+    }
+    .Generic(inner, _) => receiverPlaceOf(checker, inner)
+    // `add(value)` inside a method: the innermost receiver is the place, and `Adaptation.ImplicitSelf` recorded it
+    .Name(_) => {
+      match checker.receiverBinding {
+        Some(receiver) => Place(PlaceRoot.Local(receiver), [], callee.span)
+        .None => Place(PlaceRoot.Unknown, [], callee.span)
+      }
+    }
+    _ => Place(PlaceRoot.Unknown, [], callee.span)
+  }
+}
+
+fn receiverSpanOf(callee: Expression): Span {
+  match callee.kind {
+    .Member(base, _, _) => base.span
+    .Generic(inner, _) => receiverSpanOf(inner)
+    _ => callee.span
+  }
+}
+
+/**
+ * One argument that fills a `var` parameter. It is pushed onto the access stack right away, so that the arguments after
+ * it and every closure of the same call are checked against it - which is what rejects `swap(a, a)` and
+ * `f(checker, checker.something)`.
+ */
+public fn openArgumentAccess(
+  var checker: Checker,
+  value: Expression,
+  parameter: String,
+  callee: String,
+  isDiscarded: Bool,
+) {
+  const place = placeOf(checker, value)
+  const at = value.span
+  const _ = checkAccess(checker, place, at)
+  if isMutable(checker, place) {
+    checker.recordPlace(at, place)
+  } else {
+    const named = if parameter.isEmpty() { "its argument" } else { parameter }
+    // A temporary is a valid argument, and milestone 5 has to know that this one is owned by the callee (gap 2)
+    if requireMutable(checker, place, at, Mutation.Argument(named, callee)) {
+      checker.recordPlace(at, place)
+    }
+  }
+  if isDiscarded {
+    noteChange(checker, place, callee)
+  }
+  openAccess(checker, place, callee, at)
+}
+
+// --- Exclusivity ----------------------------------------------------------------------------------------------------
+
+public fn openAccess(var checker: Checker, place: Place, changedBy: String, at: Span) {
+  // A path that leads nowhere cannot be reached a second time either, so it is not worth a place on the stack
+  if rootKey(place.root) != -1 {
+    checker.accesses.add(Access(place, changedBy, at))
+  }
+}
+
+/** Everything a call opened is closed again when it ends. A depth instead of a count, so nothing can drift. */
+public fn closeAccessesTo(var checker: Checker, depth: Int) {
+  while checker.accesses.length() > depth {
+    const last = checker.accesses.length() - 1
+    const _ = checker.accesses.removeAt(last)
+  }
+}
+
+/**
+ * Whether the place may be reached while everything on the stack is running. Every entry of the stack is a `var`
+ * access, so any overlap is a conflict whether this access is a read or a change.
+ */
+public fn checkAccess(var checker: Checker, place: Place, at: Span): Bool {
+  if checker.accesses.isEmpty() {
+    return true
+  }
+  var index = checker.accesses.length() - 1
+  while index >= 0 {
+    const access = checker.accesses[index]
+    if overlaps(access.place, place) {
+      reportConflict(checker, place, access, at)
+      return false
+    }
+    index = index - 1
+  }
+  true
+}
+
+/**
+ * Two places overlap when they have the same root and neither path leaves the other: two field steps with different
+ * symbols and two tuple positions are disjoint, two indexes only where both were written as different literals, and a
+ * window overlaps everything of its base (design 5.2).
+ */
+fn overlaps(first: Place, second: Place): Bool {
+  const root = rootKey(first.root)
+  if root < 0 || root != rootKey(second.root) {
+    return false
+  }
+  var shorter = first.steps.length()
+  if second.steps.length() < shorter {
+    shorter = second.steps.length()
+  }
+  for index in 0..shorter {
+    if areDisjoint(first.steps[index], second.steps[index]) {
+      return false
+    }
+  }
+  true
+}
+
+/** One number per root, so that two places are compared without building a key. Locals and symbols never collide. */
+fn rootKey(root: PlaceRoot): Int {
+  match root {
+    .Local(binding) => binding.value
+    .Declared(symbol) => -2 - symbol.value
+    _ => -1
+  }
+}
+
+fn areDisjoint(first: PlaceStep, second: PlaceStep): Bool {
+  if const .Field(_, field) = first {
+    if const .Field(_, other) = second {
+      return field != other
+    }
+    return false
+  }
+  if const .TupleField(_, index) = first {
+    if const .TupleField(_, other) = second {
+      return index != other
+    }
+    return false
+  }
+  // `items[i]` and `items[j]` cannot be told apart, and a window covers whatever index falls into it
+  if const .Index(_, _, literal) = first {
+    if const .Index(_, _, other) = second {
+      return !literal.isEmpty() && !other.isEmpty() && literal != other
+    }
+    return false
+  }
+  false
+}
+
+fn reportConflict(var checker: Checker, place: Place, access: Access, at: Span) {
+  const name = describePlace(checker, access.place)
+  const changedBy = access.changedBy
+  var problem = if changedBy.isEmpty() {
+    Diagnostic.error("`{name}` is being changed right now", at)
+  } else {
+    Diagnostic.error("`{name}` is being changed by `{changedBy}` right now", at)
+  }
+  if hasIndex(place) && hasIndex(access.place) {
+    problem = problem.withNote("`items[i]` and `items[j]` cannot be told apart. Use `items.swapAt(i, j)`")
+  } else {
+    problem = problem.withNote("While a `var` access runs, the same path cannot be reached a second time")
+  }
+  checker.reportHere(problem)
+}
+
+fn hasIndex(place: Place): Bool {
+  for step in place.steps {
+    if const .Index(_, _, _) = step {
+      return true
+    }
+  }
+  false
+}
+
+// --- What a call reads ----------------------------------------------------------------------------------------------
+
+/**
+ * The other half of the exclusivity rule: what the call *reads* while a `var` access is running. The `var` accesses of
+ * this call are on the stack by the time this runs, and so are the ones of every call around it, so one walk over the
+ * receiver and over every argument that is not itself a `var` argument answers both questions at once.
+ *
+ * This is what catches the two traps of stage 0: `f(checker, checker.something)` and `checker.method(g(checker, x))`
+ * read a place that the `var` parameter owns for the whole call.
+ */
+public fn checkCallReads(
+  var checker: Checker,
+  callee: Expression,
+  arguments: List<Argument>,
+  targets: List<Int>,
+  parameters: List<ParameterForm>,
+  isVarReceiver: Bool,
+) {
+  if checker.accesses.isEmpty() {
+    return
+  }
+  // The receiver of a `var self` call *is* the access, so reading it again is not a second one
+  if !isVarReceiver {
+    checkReads(checker, callee)
+  }
+  for index in 0..arguments.length() {
+    if isVarParameter(targets, parameters, index) {
+      continue
+    }
+    checkReads(checker, arguments[index].value)
+  }
+}
+
+fn isVarParameter(targets: List<Int>, parameters: List<ParameterForm>, index: Int): Bool {
+  const position = targets.get(index) ?? -1
+  if position < 0 || position >= parameters.length() {
+    return false
+  }
+  if const .Var = parameters[position].mode {
+    return true
+  }
+  false
+}
+
+/**
+ * Every place an expression reads. A path is checked as a whole and not walked into - its base is a prefix of it and
+ * would only find the same conflict again - and a closure is not walked at all: its body was already checked while the
+ * accesses were open, and what it captures is a question of its own.
+ */
+fn checkReads(var checker: Checker, expression: Expression) {
+  match expression.kind {
+    .Name(_) | .Member(_, _, _) | .Index(_, _) => {
+      const place = placeOf(checker, expression)
+      if rootKey(place.root) != -1 {
+        const _ = checkAccess(checker, place, expression.span)
+        // The key of an index is an expression of its own and reads whatever it reads
+        if const .Index(_, index) = expression.kind {
+          checkReads(checker, index)
+        }
+        return
+      }
+      checkReadsInParts(checker, expression)
+    }
+    _ => checkReadsInParts(checker, expression)
+  }
+}
+
+fn checkReadsInParts(var checker: Checker, expression: Expression) {
+  match expression.kind {
+    .Call(callee, arguments, _) => {
+      checkReads(checker, callee)
+      for argument in arguments {
+        checkReads(checker, argument.value)
+      }
+    }
+    .Member(target, _, _) => checkReads(checker, target)
+    .Index(target, index) => {
+      checkReads(checker, target)
+      checkReads(checker, index)
+    }
+    .Generic(inner, _) => checkReads(checker, inner)
+    .Unary(_, operand) => checkReads(checker, operand)
+    .Binary(_, left, right) => {
+      checkReads(checker, left)
+      checkReads(checker, right)
+    }
+    .Try(inner) => checkReads(checker, inner)
+    .TupleLiteral(items) => checkReadsInItems(checker, items)
+    .ListLiteral(items) => checkReadsInItems(checker, items)
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        checkReads(checker, key)
+        checkReads(checker, value)
+      }
+    }
+    .TextLiteral(segments) => checkReadsInText(checker, segments)
+    .RangeLiteral(start, end, _) => {
+      if const Some(found) = start {
+        checkReads(checker, found)
+      }
+      if const Some(found) = end {
+        checkReads(checker, found)
+      }
+    }
+    _ => {}
+  }
+}
+
+fn checkReadsInItems(var checker: Checker, items: List<Argument>) {
+  for item in items {
+    checkReads(checker, item.value)
+  }
+}
+
+fn checkReadsInText(var checker: Checker, segments: List<TextSegment>) {
+  for segment in segments {
+    if const .Interpolated(inner) = segment {
+      checkReads(checker, inner)
+    }
+  }
+}
+
+// --- `shared type` (gap 20) -----------------------------------------------------------------------------------------
+
+/**
+ * A `var` binding, `var` field or `var` argument may not be taken from a `const` path to a shared object (gap 20).
+ * There is no copy that would make it a different object, so `var writable = view` would hand out exactly what the
+ * `const` withheld - and then "no `var` path, no mutation" would be vacuous for the types where identity matters.
+ */
+public fn requireSharedSource(var checker: Checker, value: Expression, annotation: TypeId) {
+  if !isSharedType(checker, annotation) {
+    return
+  }
+  const place = placeOf(checker, value)
+  if rootKey(place.root) != -1 {
+    if isMutable(checker, place) {
+      return
+    }
+    const name = describePlace(checker, place)
+    const shown = checker.describe(annotation)
+    checker.reportHere(
+      Diagnostic.error("`{name}` is a read-only view of a shared `{shown}`, so no `var` comes out of it", value.span)
+        .withNote("A shared object is never copied, so a `var` here would hand out what the `const` withheld")
+    )
+  }
+}
+
+fn isSharedType(var checker: Checker, annotation: TypeId): Bool {
+  const symbol = match checker.types.form(annotation) {
+    .Nominal(found, _) => found
+    _ => {
+      return false
+    }
+  }
+  const identifier = typeSignatureOf(checker, symbol)
+  checker.typeSignature(identifier).isShared
+}
+
+// --- `break` and `continue` -----------------------------------------------------------------------------------------
+
+/**
+ * Whether a `break` here would have to leave a closure to find its loop. A closure is a function, so it cannot, and
+ * the message says that instead of "there is no loop" (design 3.5).
+ */
+public fn leavesClosure(checker: Checker): Bool {
+  const last = checker.closureFrames.length() - 1
+  if last < 0 {
+    return false
+  }
+  checker.closureFrames[last].enclosingLoopDepth > 0
+}
+
+/** A field that may be written: `var`, or `private(var)` - which is a `var` whose mutability is private. */
+fn isVarField(signature: FieldSignature): Bool {
+  if signature.isVar {
+    return true
+  }
+  if const .PrivateVar = signature.visibility {
+    return true
+  }
+  false
+}

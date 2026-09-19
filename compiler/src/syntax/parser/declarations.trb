@@ -122,7 +122,8 @@ fn parsePlainText(var parser: Parser, what: String): String {
       if const [.Literal(text)] = parts {
         return text
       }
-      parser.error("Expected {what} as a plain string, without `\{...\}`", parser.previousSpan())
+      const at = parser.previousSpan()
+      parser.error("Expected {what} as a plain string, without `\{...\}`", at)
     }
     other => parser.errorHere("Expected {what} as a string, found {other.describe()}")
   }
@@ -270,7 +271,8 @@ fn parseMembers(var parser: Parser): List<Member> {
     const before = parser.position
     members.add(parseMember(parser))
     if !parser.isAtEndOfStatement() {
-      parser.errorHere("Expected the end of the member, found {parser.kind().describe()}")
+      const found = parser.kind().describe()
+      parser.errorHere("Expected the end of the member, found {found}")
       parser.recoverToLineEnd()
     }
     if parser.position == before {

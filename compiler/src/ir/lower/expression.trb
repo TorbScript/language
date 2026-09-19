@@ -47,7 +47,7 @@ public fn lowerExpression(
   }
   // Every literal, including a negated one, is static data: the checker already decided which type it adapted to
   if isLiteralExpression(expression) {
-    return lowerLiteral(lowering, builder, destination, expression, annotation)
+    return lowerLiteral(lowering, builder, destination, expression)
   }
   match expression.kind {
     .Name(_) | .Member(_, _, _) | .ImplicitMember(_) => {
@@ -209,9 +209,8 @@ fn lowerLiteral(
   var builder: FunctionBuilder,
   destination: Slot?,
   expression: Expression,
-  annotation: IrTypeId,
 ): Slot {
-  const value = match evaluateConstant(lowering, expression, Some(annotation)) {
+  const value = match evaluateConstant(lowering, expression) {
     Some(found) => found
     .None => {
       return unsupportedSlot(lowering, builder, destination, "a literal the back end cannot read", expression.span)

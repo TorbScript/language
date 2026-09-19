@@ -10,6 +10,8 @@ use resolveTarget, expectationOf from "./expression"
 use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
 use witnessFor, isConcrete, traitArgumentsOf from "./implementation"
 use propertyWrite from "./command"
+use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads from "./place"
+use noteArgumentClosures from "./mutation"
 
 /**
  * Calls: which parameter every written argument fills, what the generic parameters of the callee turn out to be, and
@@ -82,8 +84,21 @@ public fn checkCall(
   if const Some(annotation) = wanted {
     matchResult(checker, inner.result, annotation)
   }
+  // Places and the mutation rules (milestone 4.6). The receiver of a `var self` call stays an open access while the
+  // arguments are evaluated and while a closure argument runs, which is what makes the DSL rule work; every `var`
+  // argument joins it as it is checked; and at the end everything the call *reads* is held against all of them
+  const openAccesses = checker.accesses.length()
+  const isVarReceiver = target.isVarSelf
+  // A call that changes something and produces nothing, and a call whose result is thrown away, are changes and nothing
+  // else - the only case the dead-change rule has anything to say about (design 5.3). `cursor.next()` hands its value on
+  // and is therefore never one, wherever it stands
+  const isDiscarded = expected.isStatement() || isEffectOnly(checker, inner.result)
+  openReceiverAccess(checker, callee, isVarReceiver, target.name, isDiscarded)
   const plan = matchArguments(checker, target, inner, arguments, expression.span)
-  checkArguments(checker, inner, arguments, plan)
+  const calleeName = target.name
+  checkArguments(checker, inner, arguments, plan, calleeName, isDiscarded)
+  checkCallReads(checker, callee, arguments, plan.targets, inner.parameters, isVarReceiver)
+  closeAccessesTo(checker, openAccesses)
   const witnesses = checkBounds(checker, instantiation.bounds, target.name, expression.span)
   const solved = resolveTypes(checker, instantiation.arguments)
   if !solved.isEmpty() {
@@ -96,6 +111,11 @@ public fn checkCall(
   checker.resolved(expression.span, resolution)
   recordPlan(checker, expression.span, inner, plan)
   resolveType(checker, inner.result)
+}
+
+/** A call that produces nothing was written for its effect, whatever position it stands in. */
+fn isEffectOnly(checker: Checker, result: TypeId): Bool {
+  result == checker.voidType || result == checker.neverType
 }
 
 /**
@@ -386,9 +406,18 @@ fn indexOfParameter(parameters: List<ParameterForm>, name: String): Int {
  * by then (design 2.6). Within a pass the arguments are checked in source order, which is the order they are written in
  * and not the one they are evaluated in - `Adaptation.Reorder` records that.
  */
-fn checkArguments(var checker: Checker, form: FunctionForm, arguments: List<Argument>, plan: ArgumentPlan) {
-  checkArgumentPass(checker, form, arguments, plan, false)
-  checkArgumentPass(checker, form, arguments, plan, true)
+fn checkArguments(
+  var checker: Checker,
+  form: FunctionForm,
+  arguments: List<Argument>,
+  plan: ArgumentPlan,
+  callee: String,
+  isDiscarded: Bool,
+) {
+  // A closure written straight as an argument cannot outlive the call, which is what lets it hold a reference (gap 14)
+  noteArgumentClosures(checker, arguments)
+  checkArgumentPass(checker, form, arguments, plan, false, callee, isDiscarded)
+  checkArgumentPass(checker, form, arguments, plan, true, callee, isDiscarded)
 }
 
 fn checkArgumentPass(
@@ -397,6 +426,8 @@ fn checkArgumentPass(
   arguments: List<Argument>,
   plan: ArgumentPlan,
   isClosurePass: Bool,
+  callee: String,
+  isDiscarded: Bool,
 ) {
   const parameters = form.parameters
   for index in 0..arguments.length() {
@@ -421,6 +452,11 @@ fn checkArgumentPass(
     const annotation = resolveType(checker, parameter.annotation)
     const inner = expectationOf(checker, annotation)
     const _ = checkExpression(checker, argument.value, inner)
+    // A `var` argument is a path into the caller's value, and it owns that path for the rest of the call (4.6)
+    if const .Var = parameter.mode {
+      const named = parameter.name ?? ""
+      openArgumentAccess(checker, argument.value, named, callee, isDiscarded)
+    }
   }
 }
 

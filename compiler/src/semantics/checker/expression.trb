@@ -14,6 +14,8 @@ use sameType, unify, resolveType, resolveTypes, hasVariable from "./unify"
 use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
 use checkClosure from "./closure"
 use checkBlock, checkDiscarded, scopeHere from "./statement"
+use checkSubject from "./place"
+use markReferenceBindings from "./mutation"
 use checkPattern from "./pattern"
 use MatchArmPlan, armPlanOf, checkExhaustive, checkConditionPattern from "./exhaustive"
 use checkDeclaration from "./check"
@@ -95,8 +97,8 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     .RangeLiteral(start, end, _) => rangeLiteralType(checker, start, end)
     // `-300` is one literal, not a negation of `300`: only then can the range of the type it adapts to be checked
     .Unary(.Negate, operand) if isNumberLiteral(operand) => negatedLiteral(checker, operand, annotation, expression.span)
-    .Unary(operator, operand) => unaryType(checker, operator, operand, expression.span)
-    .Binary(operator, left, right) => binaryType(checker, operator, left, right, expression.span)
+    .Unary(operator, operand) => unaryType(checker, operator, operand, expression.span, annotation)
+    .Binary(operator, left, right) => binaryType(checker, operator, left, right, expression.span, annotation)
     .If(condition, then, otherwise) => ifType(checker, condition, then, otherwise, expected)
     .Match(subject, arms) => matchType(checker, subject, arms, expected)
     .Block(block) => checkBlock(checker, block, expected).annotation
@@ -815,7 +817,13 @@ fn rangeLiteralType(var checker: Checker, start: Expression?, end: Expression?):
  * `!a` is built in on `Bool` (gap 21), `-a` is `Negate.negate`. A type that does not *declare* the trait waits for
  * milestone 4.3, which looks implementations up instead of reading the `with` list of a declaration.
  */
-fn unaryType(var checker: Checker, operator: PrefixOperator, operand: Expression, at: Span): TypeId {
+fn unaryType(
+  var checker: Checker,
+  operator: PrefixOperator,
+  operand: Expression,
+  at: Span,
+  expected: TypeId?,
+): TypeId {
   match operator {
     .Not => {
       const boolean = checker.booleanType()
@@ -823,7 +831,8 @@ fn unaryType(var checker: Checker, operator: PrefixOperator, operand: Expression
       boolean
     }
     .Negate => {
-      const found = inferExpression(checker, operand)
+      const inner = literalExpectation(checker, expected, operand)
+      const found = checkExpression(checker, operand, inner)
       if checker.absorbs(found) {
         return checker.deferredType
       }
@@ -854,6 +863,7 @@ fn binaryType(
   left: Expression,
   right: Expression,
   at: Span,
+  expected: TypeId?,
 ): TypeId {
   const boolean = checker.booleanType()
   match operator {
@@ -872,7 +882,48 @@ fn binaryType(
     }
     // `a ?? b` is `orElse` on an `Option` and on a `Result` alike, and `b` is `lazy` (gap 13)
     .Coalesce => coalesceType(checker, left, right, at)
-    _ => arithmeticType(checker, operator, left, right, at)
+    _ => arithmeticType(checker, operator, left, right, at, expected)
+  }
+}
+
+/**
+ * What is expected of an operand of an arithmetic operator. A numeric type that is expected of the whole expression
+ * flows into the literals inside of it, so `const size: Int8 = 3 + 4` is an `Int8` sum and not an `Int64` one that is
+ * then rejected (design 2.3). Only an operand that is *made* of literals adapts: a name keeps the type it has, so
+ * `Meters + Float` stays the mistake it is, and whether the sum itself leaves the range is the constant evaluator's
+ * question and not one the checker can answer about two literals that each fit.
+ */
+fn literalExpectation(checker: Checker, expected: TypeId?, operand: Expression): Expectation {
+  const annotation = match expected {
+    Some(found) => found
+    .None => {
+      return Expectation.None
+    }
+  }
+  if numericNameOf(checker, annotation).isNone() {
+    return Expectation.None
+  }
+  if !isLiteralArithmetic(operand) {
+    return Expectation.None
+  }
+  Expectation.Type(annotation)
+}
+
+/** Whether the expression is built from numeric literals and the arithmetic operators alone, so that it can adapt. */
+fn isLiteralArithmetic(operand: Expression): Bool {
+  match operand.kind {
+    .IntegerLiteral(_) | .FloatLiteral(_) => true
+    .Unary(.Negate, inner) => isLiteralArithmetic(inner)
+    .Binary(operator, left, right) =>
+      isArithmetic(operator) && isLiteralArithmetic(left) && isLiteralArithmetic(right)
+    _ => false
+  }
+}
+
+fn isArithmetic(operator: InfixOperator): Bool {
+  match operator {
+    .Add | .Subtract | .Multiply | .Divide | .Remainder => true
+    _ => false
   }
 }
 
@@ -959,8 +1010,10 @@ fn arithmeticType(
   left: Expression,
   right: Expression,
   at: Span,
+  expected: TypeId?,
 ): TypeId {
-  const found = inferExpression(checker, left)
+  const outer = literalExpectation(checker, expected, left)
+  const found = checkExpression(checker, left, outer)
   const capability = match checker.wellKnown.symbolNamed(traitNameOf(operator)) {
     Some(symbol) => symbol
     .None => {
@@ -1080,7 +1133,16 @@ public fn checkCondition(var checker: Checker, condition: Condition, isLoop: Boo
     .Bind(isVar, pattern, value) => {
       const found = inferExpression(checker, value)
       const inner = if checker.absorbs(found) { checker.deferredType } else { found }
+      // `if var Some(inner) = current` binds `var` paths *into* the subject (gap 3), so the subject has to be one and
+      // what the pattern binds is a reference into it and not a copy
+      if isVar {
+        checkSubject(checker, value)
+      }
+      const first = checker.bindings.length()
       checkPattern(checker, pattern, inner, isVar)
+      if isVar {
+        markReferenceBindings(checker, first)
+      }
       checkConditionPattern(checker, pattern, inner, isLoop)
     }
   }
@@ -1287,7 +1349,8 @@ fn conversionType(var checker: Checker, expression: Expression, callee: Expressi
     }
   }
   const source = inferExpression(checker, base)
-  const _ = checker.typed(callee.span, checker.deferredType)
+  const deferred = checker.deferredType
+  const _ = checker.typed(callee.span, deferred)
   if checker.absorbs(source) || checker.absorbs(target) {
     return target
   }
@@ -1462,7 +1525,8 @@ fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
  * nested blocks, so that a deferred closure body still contributes everything the earlier passes promise.
  */
 public fn deferExpression(var checker: Checker, expression: Expression) {
-  const _ = checker.typed(expression.span, checker.deferredType)
+  const deferred = checker.deferredType
+  const _ = checker.typed(expression.span, deferred)
   match expression.kind {
     .Generic(target, arguments) => {
       deferExpression(checker, target)

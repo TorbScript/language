@@ -1003,11 +1003,11 @@ the code won and this is the list. Everything else is as written.
   (`torbscript/compiler/src/ir/print.trb`), not the way the path was typed on the command line. A location reaches the
   generated C as a `#line` directive and the fixpoint of milestone 6 compares two C files byte for byte, so no working
   directory may leak into one.
-- **The constant evaluator carries an expected type**, because the checker does not walk the initializer of a
-  top-level `const` that is annotated - there is nothing to infer there - so nothing inside `const minimum: Int8 =
-  -128` has a recorded type. Where the checker recorded none, the declared type stands in; it propagates into the
-  operands of the arithmetic and logical operators (whose operands have the type of the whole) and into the fields of a
-  tuple or a constructor (whose types the layout says), and nowhere else.
+- **The constant evaluator decides no type of its own**: every part of an initializer takes the type the checker
+  recorded for it. It carried an expected type at first, because the initializer of an annotated top-level `const` was
+  never checked; 4.7 checks it, and an expected numeric type flows through the arithmetic operators into the literals
+  inside them (design 2.3), so `const minimum: Int8 = -128` and `const size: Int8 = 3 + 4` both have their `Int8` on
+  every literal and the range check reads it from there.
 - **A constant that is not compile-time evaluable is counted, not reported.** Gap 11 makes overflow, a division by zero
   and a `nan` compile errors at the expression, and those are `Diagnostic`s of the program. "This is not a constant at
   all" is a rule of the *checker* (gap 27, 4.9's) and would be a false positive here, so it is an unsupported construct
@@ -1024,17 +1024,18 @@ the code won and this is the list. Everything else is as written.
   unsupported construct sorted by count. `--statistics` leaves the IR out. Everything the verifier finds is printed as
   an internal error, because it is one.
 
-**Two records the checker does not have yet**, both of which the lowering works around rather than waits for:
+**One record the checker does not have yet**, which the lowering works around rather than waits for:
 
 1. **The resolution of a call whose receiver is a call is overwritten with `Resolution.Deferred`** (`memberTarget` in
    `semantics/checker/expression.trb` writes `checker.resolved(base.span, owner.resolution)` after the base has
    recorded its own answer). Needed: that `resolveTarget` not record `Deferred` over an answer that is already there,
    or a table keyed by the callee's span alone.
-2. **The initializer of an annotated top-level `const` is never checked**, so no expression inside it has a recorded
-   type (`checkTopLevelBinding` returns after `resultOf`, and `constantSignature` only builds the annotation). Needed:
-   that it be checked against the annotation, which would also catch `const size: Int8 = 3 + 4` - an `Int64` today.
 
-Neither blocks 5.2; both would remove a workaround. The two tables the risks section asks for
+The second one, **the unchecked initializer of an annotated top-level `const`**, arrived with 4.7: it is checked
+against its annotation, `const size: Int8 = 3 + 4` is an `Int8` sum, and the expected type the evaluator carried by
+hand is gone.
+
+It does not block 5.2; it would remove a workaround. The two tables the risks section asks for
 (`bindings: List<BindingDeclaration>` and the per-closure escape flag) are **not** needed yet: a local is found by the
 span of the name it was declared under, which is exactly what `LocalBinding.at` carries.
 

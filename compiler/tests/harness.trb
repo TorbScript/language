@@ -3,6 +3,7 @@ use SourceTree from "../src/project/source-tree"
 use ModuleId from "../src/semantics/module"
 use check from "../src/semantics/check"
 use Checker, Resolution, Adaptation, Dispatch, Statistics, ReceiverClosure from "../src/semantics/checker/context"
+use Place, PlaceRoot, PlaceStep, ClosureKind from "../src/semantics/checker/context"
 use TypeId, Witness, describeLiteral from "../src/semantics/checker/type"
 use MatchPlan, MatchArmPlan, PatternBranch, PatternTest, PatternCheck from "../src/semantics/checker/exhaustive"
 use PatternLiteral, PatternStep from "../src/semantics/checker/exhaustive"
@@ -65,8 +66,18 @@ public trait Indexed<Key, Value> {
   fn at(self, key: Key): Value
 }
 
+/** `a[key] = v`, and what makes `a[key]` a `var` path at all (milestone 4.6). */
+public trait MutableIndexed<Key, Value> with Indexed<Key, Value> {
+  fn set(var self, key: Key, value: Value)
+}
+
 public trait Slice {
   fn slice(self, range: Range<Int>): Self
+}
+
+/** `samples[0..100].sort()`: a window into the original, which is what a range as a `var` path is. */
+public trait MutableSlice with Slice {
+  fn replace(var self, range: Range<Int>, values: Self)
 }
 
 public trait Iterable<Item> {
@@ -183,10 +194,12 @@ extend Range<Int> with Iterable<Int> {
   native fn iterator(self): Iterator<Int>
 }
 
-public trait List<Item> with Iterable<Item>, Indexed<Int, Item> {
+public trait List<Item> with Iterable<Item>, MutableIndexed<Int, Item>, MutableSlice {
   fn length(self): Int
   fn add(var self, value: Item)
   fn added(self, value: Item): Self
+  fn removeAt(var self, index: Int): Item?
+  fn sort(var self, by: (value: Item) => Int)
 
   /** `List.of(1, 2)`: a factory of the trait itself, which is what a trait as a namespace means (gap 31). */
   fn of(...items: Item): List<Item> {
@@ -201,7 +214,7 @@ extend<Item> List<Item> with From<Iterable<Item>> {
   }
 }
 
-public trait Map<Key, Value> with Indexed<Key, Value> {}
+public trait Map<Key, Value> with MutableIndexed<Key, Value> {}
 
 /** Every list is showable: an implementation whose target is the *trait* covers every type that implements it. */
 extend<Item: Show> List<Item> with Show {
@@ -253,6 +266,7 @@ name "std/prelude"
   "std/prelude/src/lib.trb": r"""
 public use Show, Equals, Compare, Hash, Negate, Iterable, Iterator from "./types"
 public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
+public use MutableIndexed, MutableSlice from "./types"
 public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
 public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
 public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
@@ -391,6 +405,29 @@ public type Probed {
     checker.matchAt(module, at).expect("a match at `{written}`").isExhaustive
   }
 
+  /** The place the assignment, `var` argument, `var self` receiver or `if var` subject at `written` names. */
+  fn placeOf(self, written: String): String {
+    const at = spanOf(written)
+    const found = checker.placeAt(module, at).expect("a place at `{written}`")
+    describePlace(checker, found)
+  }
+
+  /** Whether a place was recorded at all, which is the question a test about a rejected path asks. */
+  fn hasPlaceAt(self, written: String): Bool {
+    const at = spanOf(written)
+    checker.placeAt(module, at).isSome()
+  }
+
+  /** Whether the closure at `written` may outlive the call it stands in (BACKEND gap 14). */
+  fn closureKindOf(self, written: String): String {
+    const at = spanOf(written)
+    match checker.closureKindAt(module, at) {
+      Some(.Local) => "local"
+      Some(.Escaping) => "escaping"
+      .None => "none"
+    }
+  }
+
   fn statistics(self): Statistics {
     checker.statisticsOf(module)
   }
@@ -472,6 +509,38 @@ fn describeStep(checker: Checker, step: PatternStep): String {
     .ItemFromEnd(index) => "[-{index}]"
     .Rest(index) => "[{index}...]"
   }
+}
+
+/**
+ * A place as a test writes it: where the path starts, then one step per field, index, window or tuple position. An
+ * index shows the key it was written as, or `?` where it is not a literal - which is exactly what decides whether two
+ * of them can be told apart.
+ */
+public fn describePlace(checker: Checker, place: Place): String {
+  var shown = match place.root {
+    .Local(binding) => "local {checker.binding(binding).name}"
+    .Declared(symbol) => "declared {checker.symbolAt(symbol).name}"
+    .Temporary => "temporary"
+    .Unknown => "unknown"
+  }
+  for step in place.steps {
+    match step {
+      .Field(_, field) => {
+        shown = "{shown}.{checker.symbolAt(field).name}"
+      }
+      .Index(_, _, literal) => {
+        const key = if literal.isEmpty() { "?" } else { literal }
+        shown = "{shown}[{key}]"
+      }
+      .Range(_, _) => {
+        shown = "{shown}[..]"
+      }
+      .TupleField(_, index) => {
+        shown = "{shown}.{index}"
+      }
+    }
+  }
+  shown
 }
 
 public fn probe(source: String): Probed {

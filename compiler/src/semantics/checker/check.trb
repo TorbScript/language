@@ -12,6 +12,7 @@ use traitList, boundsOf, resultOf from "./signature"
 use typeFromReference from "./lowering"
 use checkBodyOf, checkInitializer, checkStatement from "./statement"
 use deferBlock from "./expression"
+use settleChanges from "./mutation"
 use buildImplementations, checkCoherence, checkImplementations, extensionAt from "./implementation"
 use scriptReceiverOf, checkReceiverScript from "./receiver"
 
@@ -55,12 +56,15 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
     return
   }
   const statements = checker.program.graph.at(module).file.statements
-  const saved = checker.enterBody(module, checker.voidType, true, None)
+  const void = checker.voidType
+  const saved = checker.enterBody(module, void, true, None)
   checker.openScope()
   // The sites of the top level are known already, so nothing is collected here
   for statement in statements {
     checkTopLevel(checker, TypeScope(module), statement)
   }
+  // The top level of a file is one body, so its changes are settled like any other's (design 5.3)
+  settleChanges(checker)
   checker.closeScope()
   checker.leaveBody(saved)
 }

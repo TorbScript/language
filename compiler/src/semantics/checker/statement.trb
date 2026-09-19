@@ -13,6 +13,8 @@ use checkPattern from "./pattern"
 use requireIrrefutable from "./exhaustive"
 use traitArgumentsOf from "./implementation"
 use openInference, closeInference, resolveType, unify from "./unify"
+use checkAssignment, noteAssignment, requireSharedSource, leavesClosure from "./place"
+use settleLoop, settleChanges from "./mutation"
 use signatureOf, functionOfSite, declareSites from "./signature"
 use typeFromReference from "./lowering"
 use checkDeclaration from "./check"
@@ -118,10 +120,15 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
       checkBinding(checker, binding)
       false
     }
+    // The target has to be a valid place, and the change is noted before the value is read so that the read the target
+    // itself produced is the one that becomes the change (milestone 4.6)
     .Assign(target, value) => {
       const annotation = inferExpression(checker, target)
+      const place = checkAssignment(checker, target)
       const inner = expectationOf(checker, annotation)
       const _ = checkExpression(checker, value, inner)
+      requireSharedSource(checker, value, annotation)
+      noteAssignment(checker, place)
       false
     }
     .For(pattern, iterable, body) => {
@@ -131,10 +138,15 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
     .While(condition, body) => {
       // `while const Some(x) = next()` binds for the body of the loop and for nothing after it
       checker.openScope()
+      // The condition runs again after every round, so its reads belong to the loop: `while isChanged` is what keeps
+      // the `isChanged = false` at the top of the body alive
+      const uses = checker.bindingUses.length()
       checkCondition(checker, condition, true)
       checker.loopDepth = checker.loopDepth + 1
       const _ = checkBlock(checker, body, Expectation.Statement)
       checker.loopDepth = checker.loopDepth - 1
+      // A change the next round reads again is alive, whatever stands after the loop (design 5.3)
+      settleLoop(checker, uses)
       checker.closeScope()
       neverEnds(condition, body)
     }
@@ -172,6 +184,11 @@ fn checkBinding(var checker: Checker, binding: Binding) {
     .None => inferExpression(checker, binding.value)
   }
   var bound = annotation ?? found
+  // A `var` binding may not be taken from a `const` path to a shared object: there is no copy that would make it a
+  // different one, so it would hand out exactly what the `const` withheld (gap 20)
+  if binding.isVar {
+    requireSharedSource(checker, binding.value, bound)
+  }
   // Nothing is known about a value the checker could not type, so neither is anything about the name it is bound to
   if checker.absorbs(bound) {
     bound = checker.deferredType
@@ -192,9 +209,11 @@ fn checkLoop(var checker: Checker, pattern: Pattern, iterable: Expression, body:
   checker.openScope()
   checkPattern(checker, pattern, element, false)
   requireIrrefutable(checker, pattern, element, "The pattern of a `for`", "item")
+  const uses = checker.bindingUses.length()
   checker.loopDepth = checker.loopDepth + 1
   const _ = checkBlock(checker, body, Expectation.Statement)
   checker.loopDepth = checker.loopDepth - 1
+  settleLoop(checker, uses)
   checker.closeScope()
 }
 
@@ -311,6 +330,14 @@ fn hasBreakIn(expression: Expression): Bool {
 
 fn requireLoop(var checker: Checker, keyword: String, at: Span) {
   if checker.loopDepth > 0 {
+    return
+  }
+  // A closure is a function, so a `break` in one cannot reach the loop around it (design 3.5)
+  if leavesClosure(checker) {
+    checker.reportHere(
+      Diagnostic.error("`{keyword}` cannot leave a closure", at)
+        .withNote("A closure is a function, not a block: `do \{ \}` is not a loop either")
+    )
     return
   }
   checker.reportHere(
@@ -500,6 +527,8 @@ public fn checkFunctionBody(
   } else {
     requireResult(checker, outcome, produced, body.span)
   }
+  // Every change of this body that no read follows (design 5.3): the uses are per body and gone with it
+  settleChanges(checker)
   checker.closeScope()
   checker.leaveBody(saved)
   found
@@ -524,7 +553,8 @@ public fn checkInitializer(
   owner: TypeId?,
   annotation: TypeId?,
 ): TypeId {
-  const saved = checker.enterBody(module, checker.voidType, true, owner)
+  const void = checker.voidType
+  const saved = checker.enterBody(module, void, true, owner)
   checker.openScope()
   openInference(checker)
   var found = match annotation {
@@ -536,6 +566,7 @@ public fn checkInitializer(
   }
   closeInference(checker)
   found = resolveType(checker, found)
+  settleChanges(checker)
   checker.closeScope()
   checker.leaveBody(saved)
   annotation ?? found
@@ -624,6 +655,7 @@ fn declareBindingsFor(
             isVarSelf,
             parameter.name.span,
             isReceiver: true,
+            isParameter: true,
           )
         )
         checker.setReceiver(binding)
@@ -639,7 +671,7 @@ fn declareBindingsFor(
     index = index + 1
     const annotation = bindingTypeOf(checker, form)
     const _ = checker.declareBinding(
-      LocalBinding(parameter.name.text, annotation, parameter.isVar, parameter.name.span)
+      LocalBinding(parameter.name.text, annotation, parameter.isVar, parameter.name.span, isParameter: true)
     )
   }
 }

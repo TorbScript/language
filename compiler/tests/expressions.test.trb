@@ -241,6 +241,25 @@ group "Operators" {
     assert(found.typeOf("-3") == "Int64")
   }
 
+  test "an expected numeric type flows through the arithmetic into the literals in it" {
+    const found = probe(inBody("  const size: Int8 = 3 + 4\n  const scaled: Float32 = 1 / 2 * 3"))
+    assert(found.typeOf("3 + 4") == "Int8")
+    assert(found.typeOf("3") == "Int8")
+    assert(found.typeOf("4") == "Int8")
+    assert(found.adaptationsOf("3") == ["literal Int8"])
+    assert(found.typeOf("1 / 2 * 3") == "Float32")
+    assert(found.typeOf("1 / 2") == "Float32")
+  }
+
+  test "a literal of an arithmetic expression that does not fit is reported at the literal itself" {
+    assert(problems(inBody("  const size: Int8 = 300 + 1")) == ["`300` does not fit into `Int8`"])
+  }
+
+  test "only a literal adapts: a name keeps the type it has, so the mistake stays where it is" {
+    const source = inBody("  const value: Float64 = 2.0\n  const sum: Int8 = value + 1")
+    assert(problems(source) == ["Expected `Int8`, found `Float64`"])
+  }
+
   test "`a[key]` is the `Value` of the `Indexed` the type declares" {
     const found = probe(inBody("  const numbers: List<Int> = [1, 2]\n  const first = numbers[0]"))
     assert(found.typeOf("numbers[0]") == "Int64")

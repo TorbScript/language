@@ -10,6 +10,7 @@ use isConcrete, hiddenExtensionOf from "./implementation"
 use signatureOf, aliasTargetOf, genericsOf, resultOf from "./signature"
 use substitute from "./unify"
 use implicitParameterTarget, isImplicitName from "./closure"
+use noteRead, noteCapturedBinding from "./mutation"
 
 /**
  * What a name in an *expression* means. This cannot happen before type checking: what `port` means in
@@ -66,6 +67,8 @@ public fn resolveName(
   if text == "self" {
     match checker.receiverBinding {
       Some(receiver) => {
+        // A closure that names the receiver captures it, which is what decides whether that closure may escape (gap 14)
+        noteCapture(checker, receiver)
         const annotation = checker.binding(receiver).annotation
         return Target(Resolution.Local(receiver), annotation, name: "self")
       }
@@ -115,6 +118,8 @@ fn localTarget(
   match found {
     .Bound(binding) => {
       noteCapture(checker, binding)
+      // Every read of a local `var` binding, in source order: what the dead-change rule counts (design 5.3)
+      noteRead(checker, binding, at)
       const annotation = checker.binding(binding).annotation
       Target(Resolution.Local(binding), annotation, form: formOf(checker, annotation), name: text)
     }
@@ -143,6 +148,8 @@ public fn noteCapture(var checker: Checker, binding: BindingId) {
     if !captures.any({ _.binding == binding }) {
       captures.add(Capture(binding, isVar))
       checker.closureFrames.set(index, frame.copy(captures: captures))
+      // A captured `var` binding is a shared box, not a copy, so it is exempt from the dead-change rule (gap 19)
+      noteCapturedBinding(checker, binding)
     }
     index = index + 1
   }
@@ -205,7 +212,8 @@ public fn symbolTarget(
       }
       // `type Handles = Map<Int, Handle>` used as a callee: the arguments the alias takes have to be solved first
       const arguments = argumentsFor(checker, generics, explicit, None, text, at)
-      typeTarget(checker, substituteInto(checker, target, generics, arguments), text)
+      const applied = substituteInto(checker, target, generics, arguments)
+      typeTarget(checker, applied, text)
     }
     // A trait is a namespace for its own members and for the ones an implementation of it provides (gap 31)
     .Trait => traitNamespaceTarget(checker, symbol, text, at, expected, explicit)

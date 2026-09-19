@@ -9,20 +9,35 @@ use lowerChecked, loweredText from "../src/ir/lower/lower"
  * What the three tests of the lowering ask of one in-memory program: the IR text of one function, the text of the whole
  * program, and which constructs blocked a function.
  *
- * Every program is checked first and has to be clean - the lowering reads the checker's tables, so a program with a
- * mistake in it would be a test about the wrong thing - and every function that comes out is run through the verifier
- * by the same question that pins its text. A snapshot that matches and a body that is malformed would otherwise pass
- * together, which is exactly the bug a lowering makes on an untyped interpreter.
+ * Every program is checked first and has to be clean unless the test says which messages it expects (`loweredWith`) -
+ * the lowering reads the checker's tables, so an unexpected mistake in a program would be a test about the wrong thing
+ * - and every function that comes out is run through the verifier by the same question that pins its text. A snapshot
+ * that matches and a body that is malformed would otherwise pass together, which is exactly the bug a lowering makes on
+ * an untyped interpreter.
  */
 public fn lowered(source: String): Lowering {
+  loweredWith(source, [])
+}
+
+/**
+ * The same for a program the checker has something to say about: `expected` are its messages, in the order it gives
+ * them. A test needs this where the construct under test *is* a mistake the checker reports - a constant in terms of
+ * itself, say - and the question is what the lowering then does with it.
+ */
+public fn loweredWith(source: String, expected: List<String>): Lowering {
   const tree = workspaceWith(["app/src/main.trb": source])
   const checked = check(tree, ["app"])
-  // A mistake in the program under test has to fail the test that uses it, with the message in the output
+  var found: List<String> = []
   for file in checked.files {
     for diagnostic in file.diagnostics {
-      assert(diagnostic.message == file.path)
+      // A mistake the test did not ask for has to fail it, with the message in the output
+      if !expected.contains(diagnostic.message) {
+        assert(diagnostic.message == file.path)
+      }
+      found.add(diagnostic.message)
     }
   }
+  assert(found == expected)
   lowerChecked(checked)
 }
 

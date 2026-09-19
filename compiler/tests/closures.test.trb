@@ -63,7 +63,7 @@ group "Parameters from the expected function type" {
   test "a `var` parameter of the expected function type stays a `var` parameter of the closure" {
     const source = "fn probe() \{\n  step \{ counter => counter.count = 1 \}\n\}\n\n"
       + "type Counter \{\n  var count: Int = 0\n\}\n\n"
-      + "fn step(action: (var it: Counter) => Void) \{\n  var counter = Counter()\n  action(counter)\n\}"
+      + "fn step(action: (var it: Counter) => Void) \{\n  var counter = Counter()\n  action(counter)\n  print counter.count\n\}"
     assert(problems(source).isEmpty())
     const probed = probe(source)
     assert(probed.typeOf("\{ counter => counter.count = 1 \}") == "(var counter: Counter) => Void")
@@ -184,13 +184,8 @@ group "Control flow inside a closure" {
   test "`break` cannot leave a closure" {
     const source = "fn probe(items: List<Int>) \{\n  for item in items \{\n    const found = run \{ break \}\n  \}\n\}\n"
       + run
-    assert(problems(source) == ["`break` is only allowed inside of a `for` or a `while`"])
-    assert(
-      notes(source)
-        == [
-          "A closure is a function, not a block: `break` cannot leave one, and `do \{ \}` is not a loop either",
-        ]
-    )
+    assert(problems(source) == ["`break` cannot leave a closure"])
+    assert(notes(source) == ["A closure is a function, not a block: `do \{ \}` is not a loop either"])
   }
 
   test "the body of a closure is checked against the result of the expected function type" {
