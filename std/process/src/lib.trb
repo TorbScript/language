@@ -1,3 +1,17 @@
+use IoError from "std/fs"
+
+/** What a program that was run to its end left behind. */
+public type ProcessOutput {
+  exitCode: Int
+  standardOutput: String
+  standardError: String
+
+  /** The usual question about a child process: did it do what it was asked. */
+  fn isSuccess(self): Bool {
+    exitCode == 0
+  }
+}
+
 /** The running program. */
 public native type Process {
   /** The command line arguments, without the program itself. */
@@ -5,4 +19,13 @@ public native type Process {
 
   /** Ends the program. Open resources are not closed: prefer to return from the entry file. */
   native fn exit(code: Int): Never
+
+  /**
+   * Runs a program to its end and collects everything about it. The arguments are passed as they are - there is no
+   * shell, so nothing about them is interpreted and nothing has to be quoted.
+   *
+   * A program that could not be started at all is an `IoError`; a program that ran and failed is an exit code, which
+   * is why `torb build` can tell "there is no C compiler" from "the C compiler said no".
+   */
+  native fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError>
 }

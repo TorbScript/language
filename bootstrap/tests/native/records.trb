@@ -1,0 +1,43 @@
+use Process from "std/process"
+
+/** A record of at most 32 bytes is copied inline; a wider one is a counted block, and both are the same value here. */
+type Point {
+  x: Int
+  y: Int
+}
+
+type Line {
+  from: Point
+  to: Point
+}
+
+/** Five fields are 40 bytes, which the size model puts above the inline limit. */
+type Wide {
+  a: Int
+  b: Int
+  c: Int
+  d: Int
+  e: Int
+}
+
+fn length(line: Line): Int {
+  const width = line.to.x - line.from.x
+  const height = line.to.y - line.from.y
+  width * width + height * height
+}
+
+fn sum(wide: Wide): Int {
+  wide.a + wide.b + wide.c + wide.d + wide.e
+}
+
+fn widened(): Wide {
+  Wide(1, 2, 3, 4, 5)
+}
+
+fn exitCode(): Int {
+  const line = Line(Point(1, 2), Point(4, 6))
+  const outer = Line(line.from, Point(0, 0))
+  length(line) + sum(widened()) + outer.from.x
+}
+
+Process.exit(exitCode())

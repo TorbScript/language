@@ -826,7 +826,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.1** | **Done.** IR data types, layouts, the representation classes, the layout model, mangling, instantiation from a checker type, the builder, the verifier, the text format | `ir/ir.trb`, `ir/layout.trb`, `ir/mangle.trb`, `ir/instantiate.trb`, `ir/build.trb`, `ir/verify.trb`, `ir/print.trb` | Hand-built IR to text; mangling is stable and collision free; layouts and instantiation by table | M4.1 |
 | **5.R1** | **Done.** Runtime skeleton and the manifest format: header, heap, retain/release/make-unique, `torb_text`, panic, overflow, console, the manifest with the header it renders, the C test harness | `runtime/*`, `backend/c/natives.trb` | `runtime/tests` (67, zero live blocks after each); the generated header compiles against the runtime and the table's shape is pinned | - |
 | **5.2** | **Done.** Lowering: functions, slots, blocks, literals, locals, arithmetic intrinsics, calls of top-level functions and concrete methods, fields, constructors, tuples, `if`, `while`, `for` over `Range<Int>`, `return`, blocks, the const evaluator, static values | `ir/lower/*.trb`, `ir/instances.trb`, `ir/constant.trb` | IR snapshots for ~15 small programs | 5.1, M4.4 |
-| **5.3** | The C emitter, minimum path. Types, functions, blocks and gotos, `#line`, slot declarations, static data, `main`, the driver's minimum (`torb build`, compiler discovery, `--emit-c`). **Gate: `print "Hello"` becomes a native binary** | `backend/c/emit.trb`, `backend/c/type.trb`, `cli/build.trb` | 10 scripts compiled and run, stdout compared; `--emit-c` twice is byte identical | 5.2, 5.R1 |
+| **5.3** | **Done.** The C emitter, minimum path. Types, functions, blocks and gotos, `#line`, slot declarations, static data, `main`, the driver's minimum (`torb build`, compiler discovery, `--emit-c`). **Gate: a program of monomorphic functions becomes a native binary and behaves like it does on stage 0** (`print` needs the witness tables of 5.6) | `backend/c/type.trb`, `emission.trb`, `prototype.trb`, `body.trb`, `emit.trb`, `cli/build.trb` | `compiler/tests/emit-c.test.trb` (20); `bootstrap/tests/native/*` compiled, run and compared with stage 0 by `bootstrap/crates/torb-cli/tests/native.rs`; `--emit-c` twice is byte identical | 5.2, 5.R1 |
 | **5.4** | Ownership: the summary pass, liveness, `Copy`/`Move`/`Release` insertion, edge splitting, `MakeUnique` | `ir/ownership.trb` | IR snapshots pinning every insertion point; the live-block counter is zero after every conformance script | 5.2 |
 | **5.5** | ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, `Option`/`Result`, `?` with its conversion, `if const`/`if var`/`while const` | `ir/lower/match.trb`, `ir/decision.trb` | Snapshots of the decision trees; `04-adts-and-matching.trb` and `06-errors.trb` run | 5.2, 5.4 |
 | **5.6** | Generics: instance keys, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`copy`. **Gate: `bootstrap/tests/scripts/basics.trb` produces its `.expected` natively** | `ir/lower/generic.trb`, `ir/witness.trb`, `ir/lower/derive.trb` | basics.trb; instance counts are asserted so an accidental explosion fails a test | 5.5 |
@@ -1038,6 +1038,77 @@ hand is gone.
 It does not block 5.2; it would remove a workaround. The two tables the risks section asks for
 (`bindings: List<BindingDeclaration>` and the per-closure escape flag) are **not** needed yet: a local is found by the
 span of the name it was declared under, which is exactly what `LocalBinding.at` carries.
+
+### What 5.3 does differently
+
+Sections 3 and 4 are the plan; where they did not fit what 5.1 and 5.2 built, what portable C allows or what stage 0
+can run, the code won and this is the list. Everything else is as written.
+
+- **Five files, not two.** `backend/c/type.trb` (every IR type as C, the type definition of every layout and the order
+  they have to come in), `emission.trb` (the lines, the findings, slot names, `#line` and `TORB_LOCATION`),
+  `prototype.trb` (a manifest prototype, taken apart), `body.trb` (one function body) and `emit.trb` (the translation
+  unit). `cli/build.trb` is the driver.
+- **What the back end cannot emit yet is a *finding*, not an internal error.** The emitter answers its lines *and* a
+  deduplicated list of constructs with the milestone that brings each of them ("a trait-typed value (milestone 5.6)"),
+  and `torb build` prints them and refuses. So nothing ever reaches a C compiler that could fail there, and the
+  progress of milestone 5 is measurable in the back end the same way `torb ir --statistics` measures the lowering.
+- **Every type is checked before anything is written.** One pass over the layouts the emitted functions reach and over
+  every slot, parameter and result asks whether there is a C spelling at all; everything after it can spell a type
+  without asking. Layouts that nothing reaches are not emitted, which is what keeps a type the back end cannot spell
+  yet (a closure, an `Array`, a `Task`) from refusing a program that never mentions it.
+- **A runtime native is called only where the manifest's prototype says it can be.** The prototype text of
+  `NativeEntry` is taken apart and compared to the signature the lowering built, spelling by spelling. That is what
+  catches the two conventions of 5.R1 before the C compiler does: a native whose result is an `Option` or a `Result`
+  answers `bool` and writes its payload through an out parameter, and one that takes a `var self` takes a pointer -
+  both need a wrapper the lowering does not build yet, and both are a finding that names the symbol.
+- **`Instruction.Call` carries no location, so a native that takes one cannot be called yet.** `torb_text_slice`,
+  `torb_text_repeat` and `torb_list_with_capacity` take a `torb_location` for the panic they may raise, and the
+  instruction has no field for it; guessing `torb_location_unknown` would make a panic message wrong, which is
+  observable, so it is a finding instead. One `at: LocationId?` on `Call` removes it.
+- **`Copy` retains and nothing releases yet.** `Copy` of a `Text`, a list, a map or a counted block is a real retain,
+  because that is what the instruction means (section 1.2) - but the matching `Release` is 5.4's, so a program that
+  builds a string leaks it. Leaking is not observable and a double free is, so this is the one thing that is
+  deliberately still wrong. The two functions `torb_release` and `torb_make_unique` need per layout (`D_<layout>` and
+  `R_<layout>`) are generated, for the layouts something really releases - which is none of them before 5.4, because an
+  unused `static` function is a warning and the generated C compiles with `-Werror`.
+- **Warning-free is part of the output, not of the flags.** `-Wall -Wextra -Werror` is passed on every build, so the
+  emitter has to keep the C clean: every slot is zero initialized (`= { 0 }`, which is a universal initializer in C11)
+  because a `goto` graph defeats a C compiler's flow analysis, a slot nothing reads is cast to `void` once, a label
+  nothing jumps to is left out, a layout without fields carries one byte (an empty struct is not C), a string literal's
+  byte array holds at least one byte, and a constant nothing names is not emitted at all. The output happens to be
+  `-Wpedantic` clean as well (checked by hand with gcc 13), but the driver does not ask for it: `#line` and a `goto`
+  graph are exactly the shapes a pedantic mode is most likely to complain about in a future compiler version.
+- **A field is `f_<escaped name>`, a variant group `v<index>`.** A field called `default` or `int` would be a C keyword
+  and a tuple position (`0`, `1`) is not an identifier at all, so every member carries the prefix. `torb_result` is the
+  result pointer of a `.ByPointer` signature, which no mangled name can collide with.
+- **`resultMode` is always `.ByValue` in practice**, so the `.ByPointer` path is written but unexercised: a layout above
+  32 bytes is `Boxed` and therefore a pointer, and nothing else can be bigger than the 64 byte limit yet. A
+  `FixedArray` will be the first one (5.9).
+- **One profile, no cache, no output path from `project.trb`.** `torb build [path] [--emit-c] [--output <file>]` writes
+  `<project>/build/release/program.c` and the binary next to it. `--profile`, the content-hash cache, `torb run` as
+  build-and-execute, `torb test` and `buildOutput`/`buildTarget` in the manifest reader are 5.13's, as the table says.
+- **The runtime is found by walking up from the working directory** (or `$TORB_RUNTIME`): until the compiler compiles
+  itself it is always run from inside its own checkout, and a compiled `torb` will know where it was installed.
+- **Three natives stage 0 was missing.** `Process.run(command, arguments): Result<ProcessOutput, IoError>` (the driver
+  runs the C compiler with it; `.Planned(5.13)` in the manifest, because its runtime side is a `bool` plus out
+  parameters and the wrapper around it), `File.createDirectory` (`.Planned(5.12)`, `mkdir -p` for the output directory)
+  and `Environment.get`, which `std/environment` and the manifest already had. `std/process` gained `ProcessOutput`.
+- **A `native type` the runtime does not represent yet is a finding of the lowering.** `IrProgram.planned` was added
+  next to `problems`, and `instantiate.trb` reports `Script`, `Sandbox`, `Instant`, `File`, `Json` and friends as "not
+  supported yet (milestone N)" instead of "internal error: the native type `Script` has no representation in the back
+  end", which is what `torb ir ..` over the repository used to end in. `torb ir --statistics` prints them under the
+  constructs.
+- **The gate is not `print "Hello"`.** `print` is `print(...values: Show)`: a variadic list of trait-typed values, which
+  needs the element descriptors of 5.7 and the witness tables of 5.6 - the emitter cannot reach it from here, and
+  special-casing it in the compiler would let the two back ends disagree about what `print` does. The gate is therefore
+  a program that computes with everything 5.2 lowers and ends in `Process.exit` with a computed code, plus one program
+  per panic (`panic`, overflow, division by zero). They are in `bootstrap/tests/native/`, each with its `.expected`
+  (stdout), `.exit` and, where it panics, its `.stderr`.
+- **Stage 0 and a compiled binary do not agree about a panic yet.** The interpreter prints `error: <message>` with an
+  absolute path and leaves with 1, the binary prints `panic: <message>` with a path relative to the workspace root and
+  leaves with 101 (decided gap 9), and the messages of the checked arithmetic differ (`Integer overflow` against
+  `` arithmetic overflow in `*` ``). The end-to-end test knows about exactly this one difference: for a program that
+  panics, stage 0 only has to fail. Unifying them is 5.14's.
 
 ### What 5.R1 does differently
 

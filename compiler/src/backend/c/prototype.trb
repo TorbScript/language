@@ -1,0 +1,160 @@
+use IrProgram, IrSignature, IrTypeId from "../../ir/ir"
+use cTypeOf from "./type"
+
+/**
+ * The C prototype of a runtime native, taken apart, and whether a call of it is the call the lowering wrote.
+ *
+ * The manifest carries the prototype of every ready `.Runtime` target as text, because `torb_natives.h` has to be a
+ * pure function of the table (BACKEND 5.R1). That same text is what tells the emitter whether a native can be called
+ * *as declared*: a native whose result is an `Option` or a `Result` answers `bool` and writes its payload through an
+ * out parameter, and a native that takes a `var self` takes a pointer - both need a wrapper the lowering does not
+ * build yet, and both are visible here as a shape that does not match.
+ *
+ * Comparing the spellings is exact on purpose. A mismatch is a finding that names the native, never C that the
+ * compiler then rejects with a mangled name in the message.
+ */
+public type Prototype {
+  result: String
+  /** One type spelling per parameter, in order. A prototype of `(void)` has none. */
+  parameters: List<String>
+}
+
+/** How a call of the native has to be written, or why the emitter cannot write one. */
+public type PrototypeMatch {
+  /** `symbol(arguments...)`: the prototype is exactly what the lowering wrote. */
+  case Direct
+  /**
+   * `symbol(arguments..., at)`: the native takes the source location of the operation as its last parameter, for the
+   * panic it may raise.
+   */
+  case WithLocation
+  case Mismatch(what: String)
+}
+
+/** `"torb_text torb_text_trim(torb_text text);"` taken apart. `None` when the text is not a prototype at all. */
+public fn readPrototype(text: String): Prototype? {
+  const head = text.substringBefore("(")?
+  const body = text.substringAfter("(")?
+  const inside = body.substringBefore(")")?
+  const result = resultTypeOf(head)?
+  Some(Prototype(result, parameterTypesOf(inside)))
+}
+
+/** Everything of the head but the symbol, which is its last word. */
+fn resultTypeOf(head: String): String? {
+  const words = wordsOf(head)
+  if words.length() < 2 {
+    return None
+  }
+  var parts: List<String> = []
+  for index in 0..words.length() - 1 {
+    parts.add(words[index])
+  }
+  Some(String.join(parts, separator: " "))
+}
+
+fn parameterTypesOf(inside: String): List<String> {
+  var types: List<String> = []
+  for part in inside.split(",") {
+    const written = part.trim()
+    if written.isEmpty() || written == "void" {
+      continue
+    }
+    types.add(parameterTypeOf(written))
+  }
+  types
+}
+
+/**
+ * The type of one parameter: everything but its name. A `*` binds to the type, not to the name, so
+ * `const torb_element *element` is a `const torb_element *`.
+ */
+fn parameterTypeOf(written: String): String {
+  const words = wordsOf(written)
+  if words.isEmpty() {
+    return ""
+  }
+  const last = words.length() - 1
+  var stars = ""
+  for character in words[last].chars() {
+    if character != '*' {
+      break
+    }
+    stars = stars + "*"
+  }
+  if last == 0 {
+    return words[0]
+  }
+  var parts: List<String> = []
+  for index in 0..last {
+    parts.add(words[index])
+  }
+  const named = String.join(parts, separator: " ")
+  if stars.isEmpty() {
+    return named
+  }
+  "{named} {stars}"
+}
+
+fn wordsOf(text: String): List<String> {
+  var words: List<String> = []
+  for part in text.trim().split(" ") {
+    const word = part.trim()
+    if !word.isEmpty() {
+      words.add(word)
+    }
+  }
+  words
+}
+
+/**
+ * Whether the runtime function can be called with exactly the arguments the lowering put in the `Call`, and whether
+ * the source location has to be appended.
+ *
+ * Every parameter and the result are compared by their C spelling. That rejects an out parameter, a `torb_list *`
+ * receiver and every native whose result the lowering still has to wrap - which is what keeps the generated C
+ * compiling instead of failing at the C compiler.
+ */
+public fn matchPrototype(
+  program: IrProgram,
+  signature: IrSignature,
+  prototype: Prototype,
+  name: String,
+): PrototypeMatch {
+  const expectedResult = cTypeOf(program, signature.result)
+  if expectedResult != prototype.result {
+    const shown = if expectedResult.isEmpty() { "a type the back end cannot spell" } else { expectedResult }
+    return PrototypeMatch.Mismatch(
+      "`{name}`: the runtime answers `{prototype.result}` where the lowering expects `{shown}`,"
+        + " so the wrapper of a later sub-milestone is still missing"
+    )
+  }
+  const declared = signature.parameters.length()
+  const given = prototype.parameters.length()
+  if given != declared && given != declared + 1 {
+    return PrototypeMatch.Mismatch(
+      "`{name}`: the runtime takes {given} parameters where the lowering passes {declared}"
+    )
+  }
+  for index in 0..declared {
+    const expected = cTypeOf(program, signature.parameters[index].annotation)
+    const isReference = signature.parameters[index].isReference
+    const wanted = if isReference { "{expected} *" } else { expected }
+    if wanted != prototype.parameters[index] {
+      return PrototypeMatch.Mismatch(
+        "`{name}`: parameter {index + 1} of the runtime is a `{prototype.parameters[index]}`"
+          + " where the lowering passes a `{wanted}`"
+      )
+    }
+  }
+  if given == declared {
+    return PrototypeMatch.Direct
+  }
+  if prototype.parameters[declared] == "torb_location" {
+    return PrototypeMatch.WithLocation
+  }
+  PrototypeMatch.Mismatch(
+    "`{name}`: the runtime takes one parameter more than the lowering passes,"
+      + " and it is not the source location"
+  )
+}

@@ -560,6 +560,12 @@ public type IrProgram {
   var pending: List<Instance> = []
   /** What could not be represented. An entry here is an internal error of the compiler, never the user's fault. */
   var problems: List<String> = []
+  /**
+   * What is well formed and waits for a milestone: a `native type` whose representation the runtime does not have yet
+   * (`Script`, `Sandbox`, `Instant`). It is a clean finding with the milestone in it - a program that uses one cannot
+   * be built, but nothing about it is an internal error, which is what an entry in `problems` means.
+   */
+  var planned: List<String> = []
 
   // --- Types
 
@@ -736,6 +742,13 @@ public type IrProgram {
   fn reportProblem(var self, message: String) {
     if !problems.contains(message) {
       problems.add(message)
+    }
+  }
+
+  /** A construct that is well formed and waits for a milestone. One root cause gets one message, however often. */
+  fn reportPlanned(var self, message: String) {
+    if !planned.contains(message) {
+      planned.add(message)
     }
   }
 }

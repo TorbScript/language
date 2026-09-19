@@ -19,5 +19,6 @@ native executables, and it is its own configuration format.
 cd bootstrap
 cargo test                                                     # Everything, including the TorbScript tests
 cargo run --release -- run ../compiler tokens ../compiler/src/main.trb
+cargo run --release -- run ../compiler build some-program.trb  # A native binary, through C and a C compiler
 cd .. && sh runtime/build.sh                                   # The C runtime and its own tests
 ```

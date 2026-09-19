@@ -1,0 +1,102 @@
+use IrProgram, IrFunction, Slot, LocationId, Location from "../../ir/ir"
+use escapedComponent from "../../ir/mangle"
+
+/**
+ * What the C emitter writes into, and the two things every part of it needs: a line of output, and a finding.
+ *
+ * A finding is **not** an internal error: it is a construct of the program that a later sub-milestone teaches the C
+ * back end, counted and named the same way `torb ir` counts what the lowering does not lower yet. `torb build` refuses
+ * a program that has any, so no C that cannot compile is ever written.
+ */
+public type Emission {
+  var lines: List<String> = []
+  /** Deduplicated, in the order they were found: the walk is deterministic, so this list is too. */
+  var unsupported: List<String> = []
+  var unsupportedIndex: Map<String, Bool> = [:]
+}
+
+public fn add(var emission: Emission, line: String) {
+  emission.lines.add(line)
+}
+
+public fn addAll(var emission: Emission, lines: List<String>) {
+  emission.lines.addAll(lines)
+}
+
+/** An empty line, for the paragraphs the output is read in. */
+public fn addBlank(var emission: Emission) {
+  emission.lines.add("")
+}
+
+/**
+ * One construct the C back end does not emit yet, with the milestone that brings it. The same construct is recorded
+ * once however often it occurs, because one root cause gets one message - the rule the diagnostics follow everywhere.
+ */
+public fn reportUnsupported(var emission: Emission, what: String) {
+  if emission.unsupportedIndex.containsKey(what) {
+    return
+  }
+  emission.unsupportedIndex.set(what, true)
+  emission.unsupported.add(what)
+}
+
+public fn emittedText(emission: Emission): String {
+  // Always `\n`, on every platform: the fixpoint of milestone 6 compares two files byte for byte
+  String.join(emission.lines, separator: "\n") + "\n"
+}
+
+// --- The spellings every part of the emitter needs ------------------------------------------------------------------
+
+/**
+ * The C variable of a slot: its number, and the name the source gave it where there is one, so that the generated C
+ * reads like the program it came from. The number comes first, so two bindings of the same name are two variables.
+ */
+public fn slotNameOf(function: IrFunction, slot: Slot): String {
+  if !function.hasSlot(slot) {
+    return "s_unknown{slot.value}"
+  }
+  const declared = function.slots[slot.value]
+  if declared.name.isEmpty() {
+    return "s{slot.value}"
+  }
+  "s{slot.value}_{escapedComponent(declared.name)}"
+}
+
+/** A `"..."` literal for a C compiler: the only two bytes that need an escape are the backslash and the quote. */
+public fn cStringOf(text: String): String {
+  var result = "\""
+  for character in text.chars() {
+    if character == '\\' {
+      result = result + "\\\\"
+      continue
+    }
+    if character == '"' {
+      result = result + "\\\""
+      continue
+    }
+    result = result + "{character}"
+  }
+  result + "\""
+}
+
+/**
+ * `TORB_LOCATION("src/main.trb", 12, 5)`: what every checked operation and every panic carries. The path is the one
+ * the lowering interned - relative to the workspace root, with forward slashes - so no path of a machine can reach the
+ * output.
+ */
+public fn locationText(program: IrProgram, at: LocationId): String {
+  if !program.hasLocation(at) {
+    return "torb_location_unknown"
+  }
+  const location = program.locationAt(at)
+  "TORB_LOCATION({cStringOf(location.path)}, {location.line}, {location.column})"
+}
+
+/** `#line 12 "src/main.trb"`: what makes a C compiler error and a debugger point into the TorbScript source. */
+public fn lineDirectiveOf(program: IrProgram, at: LocationId): String {
+  if !program.hasLocation(at) {
+    return ""
+  }
+  const location = program.locationAt(at)
+  "#line {location.line} {cStringOf(location.path)}"
+}

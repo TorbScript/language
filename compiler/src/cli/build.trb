@@ -1,0 +1,383 @@
+use File, IoError from "std/fs"
+use Environment from "std/environment"
+use Process from "std/process"
+use LineIndex from "../syntax/source"
+use normalizePath, parentPath, joinPath, pathName, pathDepth from "../project/path"
+use SourceTree from "../project/source-tree"
+use readSourceTree, absolutePaths from "../project/read"
+use ModuleId from "../semantics/module"
+use check, Checked from "../semantics/check"
+use verifyProgram from "../ir/verify"
+use Lowering from "../ir/lower/context"
+use lowerWorkspace, pathsOfModules from "../ir/lower/lower"
+use entryNameOf from "../ir/lower/function"
+use emitProgram from "../backend/c/emit"
+use emittedText from "../backend/c/emission"
+use renderDiagnostic from "./render"
+
+/**
+ * `torb build`: from a checked program to a native binary, through one C file and whatever C compiler is on the
+ * machine (BACKEND 4).
+ *
+ * This is the **minimum path** of milestone 5.3: one profile, no cache, no `project.trb` output path. The profiles, the
+ * content-hash cache, `torb run` as build-and-execute and `torb test` are milestone 5.13's, and everything here is
+ * written so that they are additions and not a rewrite.
+ *
+ * Nothing is compiled that the back end cannot emit: a construct a later sub-milestone lowers is a **finding** with the
+ * milestone in it, and `torb build` reports the findings and refuses. A C compiler error, on the other hand, is an
+ * internal error of the compiler - never the user's fault.
+ */
+
+/** What the profile is called until `--profile` exists. It is the `{target}` of an output path. */
+public const buildTarget = "release"
+
+public type BuildOptions {
+  paths: List<String>
+  /** `--emit-c`: write the C and stop. It needs no C compiler at all, which is what keeps CI able to diff the C. */
+  onlyC: Bool = false
+  /** `--output <file>`: the binary. The C is written next to it, so both are in one place. */
+  output: String = ""
+}
+
+/** Exit codes of `torb build`, the way BACKEND 4 fixes them. */
+public const buildFailedCode = 1
+public const noCompilerCode = 3
+public const internalErrorCode = 70
+
+/** The exit code of the whole command: zero when a binary (or, with `--emit-c`, a C file) came out. */
+public fn build(options: BuildOptions): Result<Int, IoError> {
+  const tree = readSourceTree(options.paths)?
+  const checked = check(tree, absolutePaths(options.paths)?)
+  const reported = reportChecked(checked)
+  if reported > 0 {
+    printError "{reported} problems, nothing was built"
+    return Ok(buildFailedCode)
+  }
+  const module = match entryModuleOf(checked) {
+    Some(found) => found
+    .None => {
+      printError "error: `torb build` needs one entry file. Name the file, or a project with a `build` input"
+      return Ok(buildFailedCode)
+    }
+  }
+  const paths = pathsOfModules(checked)
+  const checker = checked.checker
+  // Only what the entry file reaches: nothing unreachable is emitted
+  var lowering = lowerWorkspace(checker, paths, [module], false)
+  const entry = entryNameOf(lowering, module)
+  const found = reportLowering(checked, tree, lowering, entry)
+  if found > 0 {
+    printError "{found} problems the back end cannot compile yet, nothing was built"
+    return Ok(buildFailedCode)
+  }
+  const emission = emitProgram(lowering.program, entry)
+  if !emission.unsupported.isEmpty() {
+    printError "error: the C back end does not support everything this program uses yet"
+    for what in emission.unsupported {
+      printError "  {what}"
+    }
+    return Ok(buildFailedCode)
+  }
+  const binary = outputPathOf(checked, module, options)
+  const directory = parentPath(binary)
+  File.createDirectory(directory)?
+  const source = joinPath(directory, "program.c")
+  const text = emittedText(emission)
+  File.writeText(source, text)?
+  if options.onlyC {
+    print "wrote {source}"
+    return Ok(0)
+  }
+  compile(source, binary)
+}
+
+// --- What was wrong with the program --------------------------------------------------------------------------------
+
+/** Everything the front end found, rendered the way `torb check` renders it. */
+fn reportChecked(checked: Checked): Int {
+  var problems = checked.problems.length()
+  for problem in checked.problems {
+    printError "error: {problem}"
+  }
+  for file in checked.files {
+    if file.diagnostics.isEmpty() {
+      continue
+    }
+    problems = problems + file.diagnostics.length()
+    const lines = LineIndex.of(file.text)
+    for diagnostic in file.diagnostics {
+      printError renderDiagnostic(file.path, lines, diagnostic)
+      printError ""
+    }
+  }
+  problems
+}
+
+/**
+ * Everything the lowering found: an error of the program, a construct a later sub-milestone lowers, a `native type` the
+ * runtime does not represent yet, and anything the verifier says - which is an internal error, because a malformed body
+ * is a bug of the compiler.
+ */
+fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering, entry: String): Int {
+  var found = 0
+  for problem in lowering.problems {
+    const module = checked.program.graph.at(problem.module)
+    const lines = LineIndex.of(module.source.text)
+    printError renderDiagnostic(tree.display(module.path), lines, problem.diagnostic)
+    printError ""
+    found = found + 1
+  }
+  for blocked in lowering.unsupported {
+    printError "error: {blocked.what} (at {blocked.at})"
+    found = found + blocked.count
+  }
+  for what in lowering.program.planned {
+    printError "error: {what}"
+    found = found + 1
+  }
+  for problem in lowering.program.problems {
+    printError "internal error: {problem}"
+    found = found + 1
+  }
+  for problem in verifyProgram(lowering.program) {
+    printError "internal error: {problem}"
+    found = found + 1
+  }
+  if !hasEntryFunction(lowering, entry) {
+    printError "error: the entry file has no top-level code, so the program has nothing to run"
+    found = found + 1
+  }
+  found
+}
+
+fn hasEntryFunction(lowering: Lowering, entry: String): Bool {
+  for function in lowering.program.functions {
+    if function.name == entry {
+      return true
+    }
+  }
+  false
+}
+
+// --- Where the output goes ------------------------------------------------------------------------------------------
+
+/**
+ * The entry file: the one requested module, or the `build { input }` of the project that was named. A workspace with
+ * several members has no single entry, and building every member in dependency order is milestone 5.13's.
+ */
+fn entryModuleOf(checked: Checked): ModuleId? {
+  if const [only] = checked.requested {
+    return Some(only)
+  }
+  for module in checked.requested {
+    const inside = checked.program.graph.at(module)
+    const package = checked.program.workspace.packages[inside.package]
+    if inside.path == joinPath(package.directory, package.manifest.buildInput) {
+      return Some(module)
+    }
+  }
+  None
+}
+
+/**
+ * `<project>/build/<target>/<name>`, or whatever `--output` says. Reading `build { output "build/{target}/torb" }` out
+ * of the manifest is milestone 5.13's; the shape of the default path is already that one.
+ */
+fn outputPathOf(checked: Checked, module: ModuleId, options: BuildOptions): String {
+  if !options.output.isEmpty() {
+    return normalizePath(options.output)
+  }
+  const inside = checked.program.graph.at(module)
+  const package = checked.program.workspace.packages[inside.package]
+  const name = binaryNameOf(inside.path)
+  const directory = if package.directory.isEmpty() { parentPath(inside.path) } else { package.directory }
+  joinPath(directory, "build/{buildTarget}/{name}")
+}
+
+/** The name of the binary: the entry file without its extension. */
+fn binaryNameOf(path: String): String {
+  const name = pathName(path)
+  if name.endsWith(".trb") {
+    return name[0..name.byteLength() - 4]
+  }
+  name
+}
+
+// --- The C compiler -------------------------------------------------------------------------------------------------
+
+/** Which compiler was found, and how it is called. */
+type CCompiler {
+  command: String
+  /** MSVC takes `/`-flags and names its output differently, so the two shapes are told apart once. */
+  isMicrosoft: Bool
+}
+
+/**
+ * The C compiler, in the order of BACKEND 4: `$TORB_CC`, then `clang`, `gcc`, `cc`, then `cl`. A candidate counts as
+ * found when the process starts at all - `torb build` never tries to configure another process's environment, so an
+ * `x64 Native Tools` prompt is the user's job and not the build tool's.
+ */
+fn findCompiler(): CCompiler? {
+  if const Some(given) = Environment.get("TORB_CC") {
+    if !given.isEmpty() {
+      return Some(CCompiler(given, isMicrosoftName(given)))
+    }
+  }
+  for candidate in ["clang", "gcc", "cc"] {
+    if canRun(candidate, ["--version"]) {
+      return Some(CCompiler(candidate, false))
+    }
+  }
+  if canRun("cl", []) {
+    return Some(CCompiler("cl", true))
+  }
+  None
+}
+
+fn isMicrosoftName(command: String): Bool {
+  const name = pathName(command)
+  name == "cl" || name == "cl.exe"
+}
+
+/** Whether the command exists at all: a process that does not start is an `IoError` and not an exit code. */
+fn canRun(command: String, arguments: List<String>): Bool {
+  match Process.run(command, arguments) {
+    Ok(output) => output.exitCode == 0
+    Error(_) => false
+  }
+}
+
+/**
+ * The runtime the binary links against: `$TORB_RUNTIME`, or the `runtime/` of the repository the compiler is being run
+ * from - found by walking up from the working directory, because until the compiler compiles itself it is run from
+ * inside its own checkout.
+ */
+fn findRuntime(): String? {
+  if const Some(given) = Environment.get("TORB_RUNTIME") {
+    if !given.isEmpty() {
+      return Some(normalizePath(given))
+    }
+  }
+  const working = match File.absolutePath(".") {
+    Ok(found) => found
+    Error(_) => "."
+  }
+  var current = normalizePath(working)
+  while pathDepth(current) >= 1 {
+    const candidate = joinPath(current, "runtime")
+    if File.exists(joinPath(candidate, "include/torb.h")) {
+      return Some(candidate)
+    }
+    const parent = parentPath(current)
+    if parent == current {
+      return None
+    }
+    current = parent
+  }
+  None
+}
+
+/** Every `.c` file of the runtime, sorted: its tests are not part of a program. */
+fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
+  var sources: List<String> = []
+  for entry in File.list(directory)? {
+    if entry.endsWith(".c") {
+      sources.add(joinPath(directory, entry))
+    }
+  }
+  Ok(sources)
+}
+
+fn compile(source: String, binary: String): Result<Int, IoError> {
+  const compiler = match findCompiler() {
+    Some(found) => found
+    .None => {
+      printError "error: no C compiler found. `torb build` needs one until the native back end emits machine code."
+      printError "  tried: $TORB_CC, clang, gcc, cc, cl"
+      printError "  on Windows: winget install LLVM.LLVM, or open a \"x64 Native Tools\" prompt"
+      printError "  `torb build --emit-c` writes the C without compiling it"
+      return Ok(noCompilerCode)
+    }
+  }
+  const runtime = match findRuntime() {
+    Some(found) => found
+    .None => {
+      printError "error: the C runtime was not found. Set $TORB_RUNTIME to the `runtime` directory of the toolchain."
+      return Ok(noCompilerCode)
+    }
+  }
+  const sources = runtimeSourcesOf(runtime)?
+  const arguments = compilerArguments(compiler, source, binary, runtime, sources)
+  const output = match Process.run(compiler.command, arguments) {
+    Ok(found) => found
+    // `$TORB_CC` is taken as it is given, so a name that is not a program at all ends up here
+    Error(problem) => {
+      printError "error: the C compiler `{compiler.command}` could not be started: {problem.message}"
+      return Ok(noCompilerCode)
+    }
+  }
+  if output.exitCode == 0 {
+    // A C compiler on Windows appends `.exe` to an output name without an extension, so the path that is reported is
+    // the one that is really there
+    if File.exists(binary) {
+      print "wrote {binary}"
+    } else {
+      print "wrote {binary}.exe"
+    }
+    return Ok(0)
+  }
+  reportInternalError(compiler, source, output.standardOutput, output.standardError)
+  Ok(internalErrorCode)
+}
+
+/**
+ * The flags of BACKEND 4, plus the warnings: a warning in generated code is a bug of the emitter, so it is an error
+ * here and not a message the user has to read.
+ */
+fn compilerArguments(
+  compiler: CCompiler,
+  source: String,
+  binary: String,
+  runtime: String,
+  sources: List<String>,
+): List<String> {
+  if compiler.isMicrosoft {
+    var arguments = ["/std:c11", "/O2", "/W3", "/WX", "/nologo", "/I{joinPath(runtime, "include")}", "/Fe{binary}"]
+    arguments.add(source)
+    arguments.addAll(sources)
+    return arguments
+  }
+  var arguments = [
+    "-std=c11",
+    "-O2",
+    "-g0",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-I{joinPath(runtime, "include")}",
+    "-o",
+    binary,
+  ]
+  arguments.add(source)
+  arguments.addAll(sources)
+  arguments.add("-lm")
+  arguments
+}
+
+/** A C compiler error is never the user's fault: the C file is kept and the first lines of the output are shown. */
+fn reportInternalError(compiler: CCompiler, source: String, standardOutput: String, standardError: String) {
+  printError "internal error: the generated C did not compile. This is a bug in torb, please report it."
+  printError "  kept: {source}"
+  const text = if standardError.trim().isEmpty() { standardOutput } else { standardError }
+  var shown = 0
+  for line in text.lines() {
+    if shown >= 20 {
+      break
+    }
+    if line.trim().isEmpty() {
+      continue
+    }
+    printError "  {compiler.command}: {line}"
+    shown = shown + 1
+  }
+}

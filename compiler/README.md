@@ -7,6 +7,8 @@ cd ../bootstrap
 cargo run --release -- run ../compiler check ..
 cargo run --release -- run ../compiler parse ../compiler ../std ../examples
 cargo run --release -- run ../compiler ast ../examples/tour/src/01-bindings-and-values.trb
+cargo run --release -- run ../compiler ir ../examples/tour/src/01-bindings-and-values.trb
+cargo run --release -- run ../compiler build ../bootstrap/tests/native/arithmetic.trb
 cargo run --release -- test ../compiler/tests
 ```
 
@@ -15,12 +17,29 @@ path around it is loaded too - that is where the imports and the prelude are - b
 reported. `--statistics` adds how many expressions of every module have a type and how many wait for a later
 sub-milestone of the type checker (see [docs/TYPECHECKER.md](../docs/TYPECHECKER.md)).
 
+`torb build [path] [--emit-c] [--output <file>]` compiles the entry file it was given to a native binary: it checks,
+lowers it to the typed IR, writes one C11 translation unit and hands it plus `runtime/*.c` to the first C compiler it
+finds (`$TORB_CC`, `clang`, `gcc`, `cc`, `cl`). The C goes next to the binary, which is `<project>/build/release/<entry
+file>` unless `--output` says otherwise, and `--emit-c` stops after writing it - which needs no C compiler at all. A
+construct the back end does not compile yet is reported with the milestone that brings it, and nothing is written; a C
+compiler error is an internal error of the compiler and keeps the `.c` file. The profiles, the content-hash cache,
+`torb run` and `torb test` as native builds are milestone 5.13's (see [docs/BACKEND.md](../docs/BACKEND.md) section 4).
+
 ```text
 src/
-├ main.trb              Command line: check, parse, ast, tokens
+├ main.trb              Command line: check, build, ir, parse, ast, tokens
 ├ cli/
 │ ├ files.trb           Collecting source files
+│ ├ build.trb           `torb build`: check, lower, emit C, find a C compiler, compile
 │ └ render.trb          Diagnostics as text
+├ ir/                   The typed IR and the lowering (milestone 5.1, 5.2)
+├ backend/c/
+│ ├ natives.trb         The manifest: every `native` declaration of `std/` and what it becomes
+│ ├ type.trb            Every IR type as C, and the type definition of every layout
+│ ├ emission.trb        What the emitter writes into: lines, findings, slot names, locations
+│ ├ prototype.trb       A manifest prototype, and whether a call of the native is the one the lowering wrote
+│ ├ body.trb            One function body: slots, labels, `goto`, instructions, places
+│ └ emit.trb            One C11 translation unit: types, static data, functions, `main`
 ├ project/
 │ ├ path.trb            Paths as text: normalize, join, relative, "is inside of"
 │ ├ source-tree.trb     SourceTree: every file with its text, read once
@@ -69,6 +88,7 @@ tests/
 ├ check.test.trb        Modules, symbols, visibility, type positions
 ├ types.test.trb        Types, signatures, equality, substitution, the messages about them
 ├ harness.trb           The in-memory workspace of the type checker's tests, and what they ask about it
+├ emit-c.test.trb       The generated C: types, static data, bodies, `main`, and what it cannot emit yet
 ├ expressions.test.trb  Literals and their adaptation, names, members, operators, `if` and `match`
 ├ statements.test.trb   Bindings, scopes, assignment, loops, definite return, discarded values
 └ calls.test.trb        Arguments, labels, defaults, variadics, constructors, `copy`, the side tables

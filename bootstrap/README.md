@@ -6,6 +6,7 @@ A parser and a tree-walking interpreter for TorbScript, written in Rust. It exis
 
 ```text
 cargo run --release -- run ../compiler tokens some-file.trb   # Run the compiler (src/main.trb of the project)
+cargo run --release -- run ../compiler build some-file.trb    # A native binary, through C (needs a C compiler)
 cargo run --release -- run script.trb [arguments]             # Run a single file
 cargo run --release -- test ../compiler/tests                 # Run *.test.trb files
 cargo run --release -- parse ..                               # Check the syntax of every .trb file
@@ -41,4 +42,13 @@ Where the language lets types decide, the interpreter uses what it sees at runti
 | Visibility of `extend`                                | Every `extend` of every loaded module applies everywhere |
 
 The compiler sources stay inside of what stage 0 and the language agree on. If the compiler needs something that is
-missing here, it is added here - and nothing else is.
+missing here, it is added here - and nothing else is. Three natives arrived that way with `torb build` (milestone 5.3),
+all three declared in `std/` and in the manifest of natives: `Process.run` (the driver runs a C compiler with it and has
+to tell "there is no such program" from "it said no"), `File.createDirectory` (`mkdir -p` for the directory the C and
+the binary go into) and `Environment.get` (`$TORB_CC`, `$TORB_RUNTIME`). `ProcessOutput` is in `prelude.trb`, with the
+field order `std/process` declares - the natives build it positionally.
+
+`bootstrap/tests/native/` holds the programs of the end-to-end test of the C back end
+(`crates/torb-cli/tests/native.rs`): every one of them is compiled to a native binary, run, and compared with itself on
+stage 0. It is a workspace of its own whose only member is `std/`, so `torb check ..` over the repository does not look
+at it, and it is the seed of the conformance runner of milestone 5.14.

@@ -64,7 +64,7 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 | `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: see the table in section 8 of TYPECHECKER.md for what is done |
 | `cli/`                   | Collecting files, rendering diagnostics                               | started  |
 | `ir/`                    | Typed IR, lowering, last-use analysis                                 | started: the IR, layouts, mangling, the verifier, the text format (5.1), the lowering of monomorphic code and the constant evaluator (5.2) |
-| `backend/c/`             | Typed IR to C                                                         | started: the manifest of natives (5.R1) |
+| `backend/c/`             | Typed IR to C                                                         | started: the manifest of natives (5.R1), one C11 translation unit for the monomorphic part of the language plus `torb build` (5.3) |
 | `backend/bytecode/`, `vm/` | Bytecode and the VM that runs it (`torb run`, sandbox, REPL)        | planned  |
 | `tools/`                 | Formatter, test runner, package manager, language server              | planned  |
 

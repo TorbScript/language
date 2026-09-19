@@ -269,7 +269,12 @@ fn nominalType(
   const isVariant = !signature.cases.isEmpty()
   if signature.isNative && signature.fields.isEmpty() && !isVariant {
     const name = checker.symbolAt(symbol).name
-    program.reportProblem("The native type `{name}` has no representation in the back end")
+    const milestone = plannedNativeMilestone(name)
+    if milestone.isEmpty() {
+      program.reportProblem("The native type `{name}` has no representation in the back end")
+    } else {
+      program.reportPlanned("the type `{name}` is not supported yet (milestone {milestone})")
+    }
     return program.internType(IrType.VoidType)
   }
   const path = symbolPathOf(checker, symbol)
@@ -362,6 +367,32 @@ fn primitiveType(
       const applied = instantiateTypes(program, checker, instantiation, empty, arguments)
       program.internType(IrType.Runtime(runtime, applied))
     }
+  }
+}
+
+/**
+ * The milestone that gives a `native type` without fields a representation, or the empty string for one that should
+ * have had it already - which is an internal error of the compiler.
+ *
+ * A `native type` with neither fields nor cases is one the runtime owns end to end (BACKEND 5.1's list). Those the
+ * primitive table knows are types already; these are the ones whose runtime side a later milestone writes, and using
+ * one has to be a clean "not supported yet" and never an internal error. `Instant` and `Duration` are the odd ones:
+ * `runtime/clock.c` has them as `int64_t` nanoseconds, so what is missing is only the lowering that maps them - which
+ * is the row `std/time` sits in.
+ */
+fn plannedNativeMilestone(name: String): String {
+  match name {
+    "Instant" => "5.12"
+    "Duration" => "5.12"
+    "Clock" => "5.12"
+    "Process" => "5.12"
+    "Environment" => "5.12"
+    "File" => "5.9"
+    "Json" => "5.10"
+    "Script" => "7.4"
+    "Sandbox" => "7.4"
+    "SandboxCapabilities" => "7.4"
+    _ => ""
   }
 }
 

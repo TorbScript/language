@@ -1,0 +1,89 @@
+use Process from "std/process"
+
+/**
+ * The gate of milestone 5.3: monomorphic functions, records, tuples, control flow and text, compiled to a native
+ * binary. It ends in `Process.exit` with a computed code, because `print` needs the witness tables of 5.6.
+ */
+const offset = 3
+
+const greeting = "hi"
+
+type Point {
+  x: Int
+  y: Int = 0
+
+  fn sum(self): Int {
+    x + y
+  }
+
+  fn moved(self): Point {
+    copy(x: 10)
+  }
+}
+
+fn fibonacci(value: Int): Int {
+  if value < 2 {
+    return value
+  }
+  fibonacci(value - 1) + fibonacci(value - 2)
+}
+
+/** A default argument is evaluated at the call site, at every call (decided gap 13). */
+fn scaled(value: Int, factor: Int = 2): Int {
+  value * factor
+}
+
+fn sumOfRange(limit: Int): Int {
+  var total = 0
+  for index in 0..limit {
+    if index == 3 {
+      continue
+    }
+    total = total + index
+  }
+  total
+}
+
+fn halved(value: Int): Int {
+  var total = value
+  while true {
+    total = total / 2
+    if total < 3 {
+      break
+    }
+  }
+  total
+}
+
+fn pick(pair: (Int, Bool)): Int {
+  const (number, flag) = pair
+  if flag {
+    return number
+  }
+  0 - number
+}
+
+/** Floats are arithmetic and comparison; turning one back into an `Int` needs the `Result` of 5.5. */
+fn isCloseToOne(value: Float): Bool {
+  const scaledValue = value * 2.0
+  scaledValue > 1.9 && scaledValue < 2.1
+}
+
+fn exitCode(): Int {
+  var code = fibonacci(10)
+  code = code + Point(4, 5).sum()
+  code = code + Point(1, 2).moved().sum()
+  code = code + scaled(4)
+  code = code + scaled(4, 3)
+  code = code + sumOfRange(6)
+  code = code + halved(100)
+  code = code + pick((7, true))
+  code = code + offset
+  code = code + (greeting + " there").byteLength()
+  if isCloseToOne(1.0) {
+    code = code + 1
+  }
+  code % 200
+}
+
+Process.exit(exitCode())

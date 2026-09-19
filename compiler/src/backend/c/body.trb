@@ -1,0 +1,1378 @@
+use IrProgram, IrFunction, IrSignature, IrTypeId, LayoutId, FunctionId from "../../ir/ir"
+use Slot, SlotDeclaration, BlockId, Instruction, Terminator, Argument, WitnessSource from "../../ir/ir"
+use Reference, LocationId, RuntimeKind from "../../ir/ir"
+use Intrinsic, IntrinsicOperation, NumericKind from "../../ir/ir"
+use Layout, isManagedType from "../../ir/layout"
+use suffixOfNumeric from "../../ir/print"
+use Emission, add, reportUnsupported, slotNameOf, locationText, lineDirectiveOf from "./emission"
+use cTypeOf, declarationOf, memberNameOf, variantMemberNameOf from "./type"
+use readPrototype, matchPrototype from "./prototype"
+
+/**
+ * One function body as C: the slots as locals, the blocks as labels and `goto`, and one statement per instruction.
+ *
+ * The shape follows BACKEND 3.6: all slots are declared at the top, so no `goto` can cross an initialization; every
+ * block carries its label as a comment; a `#line` directive points every statement at the TorbScript source. Every
+ * slot is zero initialized, and a slot nothing reads is cast to `void` once - the generated code has to compile with
+ * `-Wall -Wextra -Werror`, and an uninitialized or unused variable is a warning there.
+ */
+public type Body {
+  function: IrFunction
+  /** The C prototype of every ready runtime symbol, by symbol (BACKEND 3.7). */
+  prototypes: Map<String, String>
+  /** Whether anything reads the slot. Everything else is cast to `void` once, so no warning is left. */
+  readSlots: List<Bool>
+  /** Whether any terminator jumps to the block. A label nothing jumps to is a warning, so it is left out. */
+  usedLabels: List<Bool>
+  /** The result is written through the pointer the caller passes first (BACKEND 3.2). */
+  isByPointer: Bool
+}
+
+/** The name the caller's result pointer has inside the callee. No mangled name can collide with it. */
+public const resultPointerName = "torb_result"
+
+public fn bodyOf(program: IrProgram, function: IrFunction, prototypes: Map<String, String>): Body {
+  var reads: List<Bool> = []
+  for _ in 0..function.slots.length() {
+    reads.add(false)
+  }
+  var labels: List<Bool> = []
+  for _ in 0..function.blocks.length() {
+    labels.add(false)
+  }
+  for block in function.blocks {
+    for instruction in block.instructions {
+      markReadSlots(reads, instruction)
+    }
+    markTerminator(reads, labels, block.terminator)
+  }
+  Body(function, prototypes, reads, labels, isByPointerResult(function))
+}
+
+fn isByPointerResult(function: IrFunction): Bool {
+  match function.signature.resultMode {
+    .ByPointer => true
+    .ByValue => false
+  }
+}
+
+fn markRead(var reads: List<Bool>, slot: Slot) {
+  if slot.value >= 0 && slot.value < reads.length() {
+    reads.set(slot.value, true)
+  }
+}
+
+fn markArguments(var reads: List<Bool>, arguments: List<Argument>) {
+  for argument in arguments {
+    markRead(reads, argument.slot)
+  }
+}
+
+fn markReference(var reads: List<Bool>, reference: Reference) {
+  markRead(reads, reference.base)
+  for step in reference.steps {
+    if const .Element(_, index) = step {
+      markRead(reads, index)
+    }
+  }
+}
+
+/** Every operand occurrence, which is what "something reads this slot" means. A target is a write and not a read. */
+fn markReadSlots(var reads: List<Bool>, instruction: Instruction) {
+  match instruction {
+    .Constant(_, _) => {}
+    .Move(_, source) => markRead(reads, source)
+    .Copy(_, source) => markRead(reads, source)
+    .Retain(slot) => markRead(reads, slot)
+    .Release(slot) => markRead(reads, slot)
+    .MakeUnique(reference) => markReference(reads, reference)
+    .Call(_, _, arguments, _) => markArguments(reads, arguments)
+    .CallClosure(_, callee, arguments) => {
+      markRead(reads, callee)
+      markArguments(reads, arguments)
+    }
+    .CallWitness(_, _, _, arguments) => markArguments(reads, arguments)
+    .Intrinsic(_, _, arguments, _) => {
+      for slot in arguments {
+        markRead(reads, slot)
+      }
+    }
+    .Construct(_, _, _, fields) => markArguments(reads, fields)
+    .Read(_, reference) => markReference(reads, reference)
+    .Write(reference, value) => {
+      markReference(reads, reference)
+      markRead(reads, value.slot)
+    }
+    .Tag(_, source) => markRead(reads, source)
+    .Closure(_, _, captures, _) => {
+      for capture in captures {
+        match capture {
+          .Value(slot) => markRead(reads, slot)
+          .Boxed(slot) => markRead(reads, slot)
+          .Place(reference) => markReference(reads, reference)
+        }
+      }
+    }
+    .BoxNew(_, value) => markRead(reads, value.slot)
+    .TraitValue(_, value, _) => markRead(reads, value.slot)
+    .TakeOut(_, container, key, _) => {
+      markReference(reads, container)
+      markRead(reads, key)
+    }
+    .PutBack(container, key, value, _) => {
+      markReference(reads, container)
+      markRead(reads, key)
+      markRead(reads, value)
+    }
+    .Panic(message, _) => markRead(reads, message.slot)
+    .Suspend(_, awaited) => markRead(reads, awaited)
+  }
+}
+
+fn markTerminator(var reads: List<Bool>, var labels: List<Bool>, terminator: Terminator) {
+  match terminator {
+    .Jump(target) => markLabel(labels, target)
+    .Branch(condition, then, otherwise) => {
+      markRead(reads, condition)
+      markLabel(labels, then)
+      markLabel(labels, otherwise)
+    }
+    .Switch(scrutinee, _, targets, otherwise) => {
+      markRead(reads, scrutinee)
+      for target in targets {
+        markLabel(labels, target)
+      }
+      markLabel(labels, otherwise)
+    }
+    .Return(value) => {
+      if const Some(argument) = value {
+        markRead(reads, argument.slot)
+      }
+    }
+    .Unreachable => {}
+  }
+}
+
+fn markLabel(var labels: List<Bool>, block: BlockId) {
+  if block.value >= 0 && block.value < labels.length() {
+    labels.set(block.value, true)
+  }
+}
+
+// --- The head of a function -----------------------------------------------------------------------------------------
+
+/**
+ * `static int64_t t_main_double(int64_t s0_value)`: the parameters in declaration order, `self` first, and a `var`
+ * parameter as a pointer. A result the layout model calls too big is written through a pointer the caller passes
+ * first; a function that does not return is `_Noreturn`.
+ */
+public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
+  const signature = function.signature
+  var parameters: List<String> = []
+  if isByPointerResult(function) {
+    const spelling = resultTypeOf(program, signature.result)
+    parameters.add(declarationOf("{spelling} *", resultPointerName))
+  }
+  for index in 0..signature.parameters.length() {
+    const parameter = signature.parameters[index]
+    const spelling = valueTypeOf(program, parameter.annotation)
+    const name = slotNameOf(function, Slot(index))
+    if parameter.isReference {
+      parameters.add(declarationOf("{spelling} *", name))
+      continue
+    }
+    parameters.add(declarationOf(spelling, name))
+  }
+  const written = if parameters.isEmpty() { "void" } else { String.join(parameters, separator: ", ") }
+  const result = returnTypeOf(program, function)
+  "{qualifiersOf(program, function)}{declarationOf(result, "{function.name}({written})")}"
+}
+
+/** A function that never returns is `_Noreturn`, which is what keeps a C compiler from asking for a return. */
+fn qualifiersOf(program: IrProgram, function: IrFunction): String {
+  if isNeverResult(program, function.signature.result) {
+    return "static TORB_NORETURN "
+  }
+  "static "
+}
+
+fn returnTypeOf(program: IrProgram, function: IrFunction): String {
+  if isByPointerResult(function) {
+    return "void"
+  }
+  resultTypeOf(program, function.signature.result)
+}
+
+/** `Void` and `Never` are `void` as a result; everything else is the type of the value. */
+public fn resultTypeOf(program: IrProgram, id: IrTypeId): String {
+  if isVoidResult(program, id) {
+    return "void"
+  }
+  valueTypeOf(program, id)
+}
+
+fn isVoidResult(program: IrProgram, id: IrTypeId): Bool {
+  if !program.hasType(id) {
+    return true
+  }
+  match program.typeAt(id) {
+    .VoidType => true
+    .NeverType => true
+    _ => false
+  }
+}
+
+fn isNeverResult(program: IrProgram, id: IrTypeId): Bool {
+  if !program.hasType(id) {
+    return false
+  }
+  match program.typeAt(id) {
+    .NeverType => true
+    _ => false
+  }
+}
+
+/**
+ * The C type of a *value* of this type. Whether the back end has one at all is decided once, before anything is
+ * written (`checkProgramTypes`), so this only ever has to stand in for a type that was already reported.
+ */
+public fn valueTypeOf(program: IrProgram, id: IrTypeId): String {
+  const spelling = cTypeOf(program, id)
+  if spelling.isEmpty() || spelling == "void" {
+    return "torb_void"
+  }
+  spelling
+}
+
+// --- The body -------------------------------------------------------------------------------------------------------
+
+public fn emitFunctionBody(var emission: Emission, program: IrProgram, body: Body) {
+  const function = body.function
+  const head = signatureHeadOf(program, function)
+  add(emission, "{head} \{")
+  emitSlotDeclarations(emission, program, body)
+  for index in 0..function.blocks.length() {
+    emitBlock(emission, program, body, index)
+  }
+  add(emission, "\}")
+}
+
+/**
+ * Every slot as a local, zero initialized, at the top of the function - so that no `goto` crosses an initialization
+ * and no path can read a variable a C compiler thinks is uninitialized. A parameter is already a local.
+ */
+fn emitSlotDeclarations(var emission: Emission, program: IrProgram, body: Body) {
+  const function = body.function
+  var silenced: List<String> = []
+  for index in 0..function.slots.length() {
+    const declared = function.slots[index]
+    const name = slotNameOf(function, Slot(index))
+    if !body.readSlots[index] {
+      silenced.add("(void){name};")
+    }
+    if isParameterSlot(declared) {
+      continue
+    }
+    const spelling = valueTypeOf(program, declared.annotation)
+    add(emission, "  {declarationOf(spelling, name)} = \{ 0 \};")
+  }
+  if !silenced.isEmpty() {
+    add(emission, "  {String.join(silenced, separator: " ")}")
+  }
+}
+
+fn isParameterSlot(declared: SlotDeclaration): Bool {
+  match declared.role {
+    .Parameter(_) => true
+    _ => false
+  }
+}
+
+fn emitBlock(var emission: Emission, program: IrProgram, body: Body, index: Int) {
+  const block = body.function.blocks[index]
+  if const Some(at) = block.at {
+    const directive = lineDirectiveOf(program, at)
+    if !directive.isEmpty() {
+      add(emission, directive)
+    }
+  }
+  const comment = if block.label.isEmpty() { "" } else { "/* {block.label} */" }
+  if body.usedLabels[index] {
+    const shown = if comment.isEmpty() { "" } else { "  {comment}" }
+    add(emission, "L{index}:{shown}")
+  } else if !comment.isEmpty() {
+    add(emission, "  {comment}")
+  }
+  for instruction in block.instructions {
+    emitInstruction(emission, program, body, instruction)
+  }
+  emitTerminator(emission, program, body, block.terminator)
+}
+
+// --- Instructions ---------------------------------------------------------------------------------------------------
+
+fn emitInstruction(var emission: Emission, program: IrProgram, body: Body, instruction: Instruction) {
+  match instruction {
+    .Constant(target, value) => {
+      const name = program.staticAt(value).name
+      const place = slotText(body, target)
+      add(emission, "  {place} = {name};")
+    }
+    .Move(target, source) => emitMove(emission, body, target, source)
+    .Copy(target, source) => emitCopy(emission, program, body, target, source)
+    .Retain(slot) => emitRetain(emission, program, body, slot)
+    .Release(slot) => emitRelease(emission, program, body, slot)
+    .MakeUnique(reference) => emitMakeUnique(emission, program, body, reference)
+    .Call(target, callee, arguments, witnesses) => {
+      emitCall(emission, program, body, target, callee, arguments, witnesses)
+    }
+    .Intrinsic(target, intrinsic, arguments, at) => {
+      emitIntrinsicInstruction(emission, program, body, target, intrinsic, arguments, at)
+    }
+    .Construct(target, layout, variant, fields) => {
+      emitConstruct(emission, program, body, target, layout, variant, fields)
+    }
+    .Read(target, reference) => {
+      const place = placeText(emission, program, body, reference)
+      const name = slotText(body, target)
+      add(emission, "  {name} = {place};")
+    }
+    .Write(reference, value) => {
+      const place = placeText(emission, program, body, reference)
+      const name = slotText(body, value.slot)
+      add(emission, "  {place} = {name};")
+    }
+    .Tag(target, source) => emitTag(emission, program, body, target, source)
+    .Panic(message, at) => {
+      const directive = lineDirectiveOf(program, at)
+      if !directive.isEmpty() {
+        add(emission, directive)
+      }
+      const name = slotText(body, message.slot)
+      const site = locationText(program, at)
+      add(emission, "  torb_panic({name}, {site});")
+    }
+    .CallClosure(_, _, _) => report(emission, "a call of a closure value (milestone 5.8)")
+    .CallWitness(_, _, _, _) => report(emission, "a call through a witness table (milestone 5.6)")
+    .Closure(_, _, _, _) => report(emission, "a closure (milestone 5.8)")
+    .BoxNew(_, _) => report(emission, "a captured `var` binding (milestone 5.8)")
+    .TraitValue(_, _, _) => report(emission, "a trait-typed value (milestone 5.6)")
+    .TakeOut(_, _, _, _) => report(emission, "a `var` path through a map (milestone 5.9)")
+    .PutBack(_, _, _, _) => report(emission, "a `var` path through a map (milestone 5.9)")
+    .Suspend(_, _) => report(emission, "a task that suspends (milestone 7.3)")
+  }
+}
+
+/** A finding, plus a comment in the C so that a kept `program.c` says where the emitter stopped. */
+fn report(var emission: Emission, what: String) {
+  reportUnsupported(emission, what)
+  add(emission, "  /* not supported by the C back end yet: {what} */")
+}
+
+fn emitMove(var emission: Emission, body: Body, target: Slot, source: Slot) {
+  if target == source {
+    return
+  }
+  const to = slotText(body, target)
+  const from = slotText(body, source)
+  add(emission, "  {to} = {from};")
+}
+
+/**
+ * `Copy` shares ownership: a retain for a managed type, a plain assignment otherwise (BACKEND 1.2). The matching
+ * `Release` is what the ownership pass of 5.4 inserts, so until then a program that builds a string leaks it - which
+ * is the one thing that is deliberately still wrong here, because leaking is not observable and a double free is.
+ */
+fn emitCopy(var emission: Emission, program: IrProgram, body: Body, target: Slot, source: Slot) {
+  const to = slotText(body, target)
+  const from = slotText(body, source)
+  const annotation = typeOfSlot(body, source)
+  const retained = retainedText(program, annotation, from)
+  if retained.isEmpty() {
+    if target == source {
+      return
+    }
+    add(emission, "  {to} = {from};")
+    return
+  }
+  if isCountedPointer(program, annotation) {
+    add(emission, "  torb_retain({from});")
+    if target != source {
+      add(emission, "  {to} = {from};")
+    }
+    return
+  }
+  add(emission, "  {to} = {retained};")
+}
+
+/** `torb_text_retained(x)` and friends: the expression that is the value with one more count. Empty when trivial. */
+fn retainedText(program: IrProgram, id: IrTypeId, expression: String): String {
+  if !isManagedType(program, id) {
+    return ""
+  }
+  if isCountedPointer(program, id) {
+    return expression
+  }
+  match program.typeAt(id) {
+    .Text => "torb_text_retained({expression})"
+    .Runtime(kind, _) => {
+      match kind {
+        .ListStorage => "torb_list_retained({expression})"
+        .MapStorage => "torb_map_retained({expression})"
+        .SetStorage => "torb_set_retained({expression})"
+        _ => ""
+      }
+    }
+    _ => ""
+  }
+}
+
+/** Whether a value of this type *is* the pointer to its counted block, so `torb_retain` takes it directly. */
+fn isCountedPointer(program: IrProgram, id: IrTypeId): Bool {
+  if !program.hasType(id) {
+    return false
+  }
+  match program.typeAt(id) {
+    .SharedObject(_) => true
+    .Box(_) => true
+    .Lazy(_) => true
+    .Record(layout) => isBoxedLayout(program, layout)
+    .Variant(layout) => isBoxedLayout(program, layout)
+    .Tuple(layout) => isBoxedLayout(program, layout)
+    _ => false
+  }
+}
+
+fn isBoxedLayout(program: IrProgram, id: LayoutId): Bool {
+  if !program.hasLayout(id) {
+    return false
+  }
+  match program.layoutAt(id).representation {
+    .Boxed => true
+    _ => false
+  }
+}
+
+fn emitRetain(var emission: Emission, program: IrProgram, body: Body, slot: Slot) {
+  const name = slotText(body, slot)
+  const annotation = typeOfSlot(body, slot)
+  if isCountedPointer(program, annotation) {
+    add(emission, "  torb_retain({name});")
+    return
+  }
+  const retained = retainedText(program, annotation, name)
+  if retained.isEmpty() {
+    return
+  }
+  add(emission, "  {name} = {retained};")
+}
+
+fn emitRelease(var emission: Emission, program: IrProgram, body: Body, slot: Slot) {
+  const name = slotText(body, slot)
+  const annotation = typeOfSlot(body, slot)
+  if !isManagedType(program, annotation) {
+    return
+  }
+  if const Some(layout) = boxedLayoutOf(program, annotation) {
+    const drop = dropFunctionText(program, layout)
+    add(emission, "  torb_release({name}, {drop});")
+    return
+  }
+  match program.typeAt(annotation) {
+    .Text => add(emission, "  torb_text_release({name});")
+    .Runtime(kind, _) => emitRuntimeRelease(emission, body, kind, name)
+    _ => report(emission, "a release of {describeManaged(program, annotation)}")
+  }
+}
+
+fn emitRuntimeRelease(var emission: Emission, body: Body, kind: RuntimeKind, name: String) {
+  match kind {
+    .ListStorage => add(emission, "  torb_list_release({name});")
+    .MapStorage => add(emission, "  torb_map_release({name});")
+    .SetStorage => add(emission, "  torb_set_release({name});")
+    _ => report(emission, "a release of a value the runtime owns")
+  }
+}
+
+fn describeManaged(program: IrProgram, id: IrTypeId): String {
+  match program.typeAt(id) {
+    .SharedObject(_) => "a `shared type` object (milestone 5.9)"
+    .Box(_) => "a captured `var` binding (milestone 5.8)"
+    .Lazy(_) => "a `lazy` cell (milestone 5.8)"
+    _ => "a counted value the back end does not know (milestone 5.6)"
+  }
+}
+
+public fn boxedLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
+  if !program.hasType(id) {
+    return None
+  }
+  const layout = match program.typeAt(id) {
+    .Record(found) => found
+    .Variant(found) => found
+    .Tuple(found) => found
+    _ => {
+      return None
+    }
+  }
+  if !isBoxedLayout(program, layout) {
+    return None
+  }
+  Some(layout)
+}
+
+/** The `torb_drop_function` of a layout: `NULL` where nothing inside it is counted, which is most layouts. */
+public fn dropFunctionText(program: IrProgram, id: LayoutId): String {
+  if !program.hasLayout(id) {
+    return "NULL"
+  }
+  const layout = program.layoutAt(id)
+  if !layout.containsCounted {
+    return "NULL"
+  }
+  "D_{layout.name}"
+}
+
+/** The "retain the children" function of a layout, which `torb_make_unique` runs on the shallow copy. */
+public fn retainChildrenFunctionText(program: IrProgram, id: LayoutId): String {
+  if !program.hasLayout(id) {
+    return "NULL"
+  }
+  const layout = program.layoutAt(id)
+  if !layout.containsCounted {
+    return "NULL"
+  }
+  "R_{layout.name}"
+}
+
+fn emitMakeUnique(var emission: Emission, program: IrProgram, body: Body, reference: Reference) {
+  const place = placeText(emission, program, body, reference)
+  const annotation = placeTypeOf(program, body, reference)
+  if const Some(layout) = boxedLayoutOf(program, annotation) {
+    const name = program.layoutAt(layout).name
+    const retain = retainChildrenFunctionText(program, layout)
+    const drop = dropFunctionText(program, layout)
+    add(emission, "  {place} = ({name} *)torb_make_unique({place}, sizeof({name}), {retain}, {drop});")
+    return
+  }
+  if isListType(program, annotation) {
+    add(emission, "  torb_list_make_unique(&{place});")
+    return
+  }
+  if !isManagedType(program, annotation) {
+    return
+  }
+  report(emission, "making a value of this type unique (milestone 5.9)")
+}
+
+fn isListType(program: IrProgram, id: IrTypeId): Bool {
+  if !program.hasType(id) {
+    return false
+  }
+  if const .Runtime(kind, _) = program.typeAt(id) {
+    if const .ListStorage = kind {
+      return true
+    }
+  }
+  false
+}
+
+// --- Calls ----------------------------------------------------------------------------------------------------------
+
+fn emitCall(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot?,
+  callee: FunctionId,
+  arguments: List<Argument>,
+  witnesses: List<WitnessSource>,
+) {
+  if !witnesses.isEmpty() {
+    report(emission, "a call that passes a witness table (milestone 5.6)")
+    return
+  }
+  if !program.hasFunction(callee) {
+    report(emission, "a call of a function that is not in the program")
+    return
+  }
+  const function = program.functionAt(callee)
+  if const .Runtime(symbol) = function.kind {
+    emitRuntimeCall(emission, program, body, target, function, symbol, arguments)
+    return
+  }
+  if const .TaskResume = function.kind {
+    report(emission, "a call of a task (milestone 7.3)")
+    return
+  }
+  const written = argumentListOf(body, function.signature, arguments)
+  emitCallStatement(emission, program, body, target, function, function.name, written)
+}
+
+/**
+ * One call, with the result where it belongs: in the slot, through the pointer the caller passes first, or nowhere.
+ */
+fn emitCallStatement(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot?,
+  function: IrFunction,
+  symbol: String,
+  written: List<String>,
+) {
+  var given = written
+  const byPointer = isByPointerResult(function)
+  match target {
+    Some(slot) => {
+      const place = slotText(body, slot)
+      if byPointer {
+        given.insert(0, "&{place}")
+        const call = String.join(given, separator: ", ")
+        add(emission, "  {symbol}({call});")
+        return
+      }
+      const call = String.join(given, separator: ", ")
+      add(emission, "  {place} = {symbol}({call});")
+    }
+    .None => {
+      if byPointer {
+        report(emission, "a call whose big result nobody takes (milestone 5.4)")
+        return
+      }
+      const call = String.join(given, separator: ", ")
+      add(emission, "  {symbol}({call});")
+    }
+  }
+}
+
+/** Every argument in declaration order. A `var` parameter takes the address of the slot, which is what a place is. */
+fn argumentListOf(body: Body, signature: IrSignature, arguments: List<Argument>): List<String> {
+  var written: List<String> = []
+  for index in 0..arguments.length() {
+    const name = slotNameOf(body.function, arguments[index].slot)
+    const parameter = signature.parameters.get(index)
+    const isReference = match parameter {
+      Some(found) => found.isReference
+      .None => false
+    }
+    if isReference {
+      written.add("&{name}")
+      continue
+    }
+    written.add(slotText(body, arguments[index].slot))
+  }
+  written
+}
+
+/**
+ * A `native fn` the runtime provides. It is called as declared only where the manifest's prototype says exactly that;
+ * a native whose result is an `Option` or a `Result`, one that takes a pointer, and one that wants the source location
+ * of the call all need something the lowering does not write yet, and each is a finding that names the native.
+ */
+fn emitRuntimeCall(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot?,
+  function: IrFunction,
+  symbol: String,
+  arguments: List<Argument>,
+) {
+  const text = body.prototypes.get(symbol) ?? ""
+  if text.isEmpty() {
+    report(emission, "`{symbol}`, which the natives manifest declares no prototype for")
+    return
+  }
+  const prototype = match readPrototype(text) {
+    Some(found) => found
+    .None => {
+      report(emission, "`{symbol}`, whose prototype the emitter could not read")
+      return
+    }
+  }
+  const matched = matchPrototype(program, function.signature, prototype, symbol)
+  match matched {
+    .Direct => {
+      const written = argumentListOf(body, function.signature, arguments)
+      emitCallStatement(emission, program, body, target, function, symbol, written)
+    }
+    .WithLocation => {
+      report(
+        emission,
+        "`{symbol}` takes the source location of the call, which `Instruction.Call` does not carry yet"
+      )
+    }
+    .Mismatch(what) => report(emission, what)
+  }
+}
+
+// --- Intrinsics -----------------------------------------------------------------------------------------------------
+
+fn emitIntrinsicInstruction(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot?,
+  intrinsic: Intrinsic,
+  arguments: List<Slot>,
+  at: LocationId,
+) {
+  const directive = lineDirectiveOf(program, at)
+  if !directive.isEmpty() {
+    add(emission, directive)
+  }
+  const place = match target {
+    Some(slot) => slotText(body, slot)
+    .None => ""
+  }
+  if const .TextConcat = intrinsic.operation {
+    emitTextConcat(emission, body, place, arguments)
+    return
+  }
+  const expression = intrinsicExpression(emission, program, body, intrinsic, arguments, at)
+  if expression.isEmpty() {
+    return
+  }
+  if place.isEmpty() {
+    add(emission, "  (void)({expression});")
+    return
+  }
+  add(emission, "  {place} = {expression};")
+}
+
+/** One allocation for the whole interpolation, never repeated `String.add` (BACKEND 1.6). */
+fn emitTextConcat(var emission: Emission, body: Body, place: String, arguments: List<Slot>) {
+  if place.isEmpty() {
+    return
+  }
+  if arguments.isEmpty() {
+    add(emission, "  {place} = torb_text_empty();")
+    return
+  }
+  var parts: List<String> = []
+  for slot in arguments {
+    parts.add(slotText(body, slot))
+  }
+  const written = String.join(parts, separator: ", ")
+  add(emission, "  \{")
+  add(emission, "    const torb_text parts[{parts.length()}] = \{ {written} \};")
+  add(emission, "    {place} = torb_text_concat(parts, {parts.length()});")
+  add(emission, "  \}")
+}
+
+/** The expression of one intrinsic, or the empty string where it was reported as a finding instead. */
+fn intrinsicExpression(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  intrinsic: Intrinsic,
+  arguments: List<Slot>,
+  at: LocationId,
+): String {
+  var operands: List<String> = []
+  for slot in arguments {
+    operands.add(slotText(body, slot))
+  }
+  const first = operands.get(0) ?? "0"
+  const second = operands.get(1) ?? "0"
+  const site = locationText(program, at)
+  match intrinsic.operation {
+    .BooleanNot => "!{first}"
+    .TextEqual => "torb_text_equal({first}, {second})"
+    .TextByteLength => "torb_text_byte_length({first})"
+    .TextConcat => ""
+    .TextCompare => "(int64_t)torb_text_compare({first}, {second})"
+    .LazyForce => {
+      reportUnsupported(emission, "forcing a `lazy` value (milestone 5.8)")
+      ""
+    }
+    .Convert(to) => "({numericTypeOf(to)}){first}"
+    .Equal => comparisonExpression(emission, program, body, arguments, "==", first, second)
+    .NotEqual => comparisonExpression(emission, program, body, arguments, "!=", first, second)
+    .Less => comparisonExpression(emission, program, body, arguments, "<", first, second)
+    .LessOrEqual => comparisonExpression(emission, program, body, arguments, "<=", first, second)
+    .Greater => comparisonExpression(emission, program, body, arguments, ">", first, second)
+    .GreaterOrEqual => comparisonExpression(emission, program, body, arguments, ">=", first, second)
+    _ => arithmeticExpression(emission, intrinsic, first, second, site)
+  }
+}
+
+/**
+ * Arithmetic is always checked, because overflow panics in every back end: every integer operation is the `static
+ * inline` helper of `torb_number.h` for its width, with the source location of the operation in it. The float
+ * operations are the C operators, which is what IEEE-754 semantics are.
+ */
+fn arithmeticExpression(
+  var emission: Emission,
+  intrinsic: Intrinsic,
+  first: String,
+  second: String,
+  site: String,
+): String {
+  const kind = match intrinsic.kind {
+    Some(found) => found
+    .None => {
+      reportUnsupported(emission, "an arithmetic intrinsic without a numeric type")
+      return ""
+    }
+  }
+  if isFloatingKind(kind) {
+    return floatingExpression(emission, intrinsic.operation, first, second)
+  }
+  if isUnsignedKind(kind) {
+    if const .Negate = intrinsic.operation {
+      reportUnsupported(emission, "the negation of an unsigned number")
+      return ""
+    }
+  }
+  const name = checkedHelperOf(intrinsic.operation)
+  if name.isEmpty() {
+    reportUnsupported(emission, "an intrinsic the C back end does not emit yet")
+    return ""
+  }
+  const symbol = "torb_{name}_{suffixOfNumeric(kind)}"
+  if isUnary(intrinsic.operation) {
+    if takesLocation(intrinsic.operation) {
+      return "{symbol}({first}, {site})"
+    }
+    return "{symbol}({first})"
+  }
+  if takesLocation(intrinsic.operation) {
+    return "{symbol}({first}, {second}, {site})"
+  }
+  "{symbol}({first}, {second})"
+}
+
+fn floatingExpression(var emission: Emission, operation: IntrinsicOperation, first: String, second: String): String {
+  match operation {
+    .Add => "{first} + {second}"
+    .Subtract => "{first} - {second}"
+    .Multiply => "{first} * {second}"
+    .Divide => "{first} / {second}"
+    .Negate => "-{first}"
+    .Remainder => {
+      reportUnsupported(emission, "the remainder of two floats (milestone 5.12)")
+      ""
+    }
+    _ => {
+      reportUnsupported(emission, "a bit operation on a float")
+      ""
+    }
+  }
+}
+
+/** A comparison is a C operator for everything but a `String`, whose order is the runtime's byte comparison. */
+fn comparisonExpression(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  arguments: List<Slot>,
+  operator: String,
+  first: String,
+  second: String,
+): String {
+  const annotation = match arguments.first() {
+    Some(slot) => typeOfSlot(body, slot)
+    .None => {
+      reportUnsupported(emission, "a comparison without operands")
+      return ""
+    }
+  }
+  if isTextType(program, annotation) {
+    if operator == "==" {
+      return "torb_text_equal({first}, {second})"
+    }
+    if operator == "!=" {
+      return "!torb_text_equal({first}, {second})"
+    }
+    return "torb_text_compare({first}, {second}) {operator} 0"
+  }
+  if isComparableInC(program, annotation) {
+    return "{first} {operator} {second}"
+  }
+  reportUnsupported(emission, "a comparison of a value the C back end cannot compare directly (milestone 5.6)")
+  ""
+}
+
+fn isTextType(program: IrProgram, id: IrTypeId): Bool {
+  if !program.hasType(id) {
+    return false
+  }
+  match program.typeAt(id) {
+    .Text => true
+    _ => false
+  }
+}
+
+/** Numbers, `Bool`, `Char` and a pointer compare with a C operator; a record and a variant do not. */
+fn isComparableInC(program: IrProgram, id: IrTypeId): Bool {
+  if !program.hasType(id) {
+    return false
+  }
+  match program.typeAt(id) {
+    .Integer(_, _) => true
+    .Floating(_) => true
+    .Boolean => true
+    .Character => true
+    .VoidType => true
+    .SharedObject(_) => true
+    .Box(_) => true
+    .Lazy(_) => true
+    .Record(layout) => isBoxedLayout(program, layout)
+    .Variant(layout) => isBoxedLayout(program, layout)
+    .Tuple(layout) => isBoxedLayout(program, layout)
+    _ => false
+  }
+}
+
+fn isFloatingKind(kind: NumericKind): Bool {
+  match kind {
+    .Floating(_) => true
+    _ => false
+  }
+}
+
+fn isUnsignedKind(kind: NumericKind): Bool {
+  match kind {
+    .Unsigned(_) => true
+    _ => false
+  }
+}
+
+fn numericTypeOf(kind: NumericKind): String {
+  match kind {
+    .Signed(width) => "int{width}_t"
+    .Unsigned(width) => "uint{width}_t"
+    .Floating(width) => if width == 32 { "float" } else { "double" }
+  }
+}
+
+/** The name of the checked helper of `torb_number.h`, without its width. Empty for an operation that has none. */
+fn checkedHelperOf(operation: IntrinsicOperation): String {
+  match operation {
+    .Add => "add"
+    .Subtract => "subtract"
+    .Multiply => "multiply"
+    .Divide => "divide"
+    .Remainder => "remainder"
+    .Negate => "negate"
+    .BitwiseAnd => "bitwise_and"
+    .BitwiseOr => "bitwise_or"
+    .BitwiseExclusiveOr => "bitwise_exclusive_or"
+    .BitwiseNot => "bitwise_not"
+    .ShiftedLeft => "shifted_left"
+    .ShiftedRight => "shifted_right"
+    _ => ""
+  }
+}
+
+fn isUnary(operation: IntrinsicOperation): Bool {
+  match operation {
+    .Negate => true
+    .BitwiseNot => true
+    _ => false
+  }
+}
+
+/** Which operations can panic, and therefore carry the source location of the operation (BACKEND 3.3). */
+fn takesLocation(operation: IntrinsicOperation): Bool {
+  match operation {
+    .BitwiseAnd => false
+    .BitwiseOr => false
+    .BitwiseExclusiveOr => false
+    .BitwiseNot => false
+    _ => true
+  }
+}
+
+// --- Constructing and reading ---------------------------------------------------------------------------------------
+
+fn emitConstruct(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot,
+  layout: LayoutId,
+  variant: Int,
+  fields: List<Argument>,
+) {
+  if !program.hasLayout(layout) {
+    report(emission, "a construction of a layout that is not in the program")
+    return
+  }
+  const shape = program.layoutAt(layout)
+  const place = slotText(body, target)
+  var written: List<String> = []
+  for field in fields {
+    written.add(slotText(body, field.slot))
+  }
+  match shape.representation {
+    .Boxed => emitBoxedConstruct(emission, program, body, place, shape, variant, written)
+    .Niche(payload, _) => {
+      if variant == payload {
+        const value = written.get(0) ?? "0"
+        add(emission, "  {place} = {value};")
+        return
+      }
+      const empty = emptyNicheText(program, shape)
+      add(emission, "  {place} = {empty};")
+    }
+    .Inline => {
+      const initializer = inlineInitializerOf(shape, variant, written)
+      add(emission, "  {place} = ({shape.name}){initializer};")
+    }
+  }
+}
+
+/**
+ * The initializer of an inline value: the fields in order for a record and a tuple, and for a variant layout the
+ * common fields, the tag and the group of the variant as a designated member of the union.
+ */
+fn inlineInitializerOf(shape: Layout, variant: Int, written: List<String>): String {
+  if shape.variants.isEmpty() {
+    if written.isEmpty() {
+      return "\{ 0 \}"
+    }
+    return "\{ {String.join(written, separator: ", ")} \}"
+  }
+  var parts: List<String> = []
+  var index = 0
+  for _ in 0..shape.commonFieldCount {
+    parts.add(written.get(index) ?? "0")
+    index = index + 1
+  }
+  parts.add("{variant}")
+  var group: List<String> = []
+  while index < written.length() {
+    group.add(written[index])
+    index = index + 1
+  }
+  if !group.isEmpty() {
+    const inner = String.join(group, separator: ", ")
+    parts.add("\{ .{variantMemberNameOf(variant)} = \{ {inner} \} \}")
+  }
+  "\{ {String.join(parts, separator: ", ")} \}"
+}
+
+/** A counted block of count one, then one field at a time: an aggregate initializer cannot write through a pointer. */
+fn emitBoxedConstruct(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  place: String,
+  shape: Layout,
+  variant: Int,
+  written: List<String>,
+) {
+  add(emission, "  {place} = ({shape.name} *)torb_allocate(sizeof({shape.name}), TORB_BLOCK_RECORD);")
+  var index = 0
+  if shape.variants.isEmpty() {
+    for field in shape.fields {
+      const value = written.get(index) ?? "0"
+      add(emission, "  {place}->{memberNameOf(field)} = {value};")
+      index = index + 1
+    }
+    return
+  }
+  for field in shape.commonFields() {
+    const value = written.get(index) ?? "0"
+    add(emission, "  {place}->{memberNameOf(field)} = {value};")
+    index = index + 1
+  }
+  add(emission, "  {place}->tag = {variant};")
+  if !shape.hasVariant(variant) {
+    return
+  }
+  for field in shape.fieldsOfVariant(variant) {
+    const value = written.get(index) ?? "0"
+    const member = variantMemberNameOf(variant)
+    add(emission, "  {place}->payload.{member}.{memberNameOf(field)} = {value};")
+    index = index + 1
+  }
+}
+
+/** The empty variant of a niche: the null pointer, whichever of the shapes of the ABI carries it. */
+public fn emptyNicheText(program: IrProgram, shape: Layout): String {
+  const payload = nichePayloadTypeOf(program, shape)
+  if !program.hasType(payload) {
+    return "NULL"
+  }
+  match program.typeAt(payload) {
+    .Text => "(torb_text)\{ NULL, 0, 0 \}"
+    .Runtime(kind, _) => {
+      match kind {
+        .ListStorage => "(torb_list)\{ NULL, 0, 0 \}"
+        .MapStorage => "(torb_map)\{ NULL \}"
+        .SetStorage => "(torb_set)\{ NULL \}"
+        _ => "NULL"
+      }
+    }
+    _ => "NULL"
+  }
+}
+
+fn nichePayloadTypeOf(program: IrProgram, shape: Layout): IrTypeId {
+  if const .Niche(_, field) = shape.representation {
+    if field >= 0 && field < shape.fields.length() {
+      return shape.fields[field].annotation
+    }
+  }
+  IrTypeId(0 - 1)
+}
+
+/** The variant a value of a variant layout is: the tag member, or the null test of a niche. */
+fn emitTag(var emission: Emission, program: IrProgram, body: Body, target: Slot, source: Slot) {
+  const place = slotText(body, target)
+  const name = slotText(body, source)
+  const annotation = typeOfSlot(body, source)
+  const spelling = valueTypeOf(program, typeOfSlot(body, target))
+  const layout = variantLayoutOf(program, annotation)
+  const found = match layout {
+    Some(inner) => inner
+    .None => {
+      report(emission, "the tag of a value that is not a variant")
+      return
+    }
+  }
+  const shape = program.layoutAt(found)
+  match shape.representation {
+    .Niche(payload, _) => {
+      const test = nullTestOf(program, shape, name)
+      const empty = if payload == 0 { 1 } else { 0 }
+      add(emission, "  {place} = ({spelling})(({test}) ? {payload} : {empty});")
+    }
+    .Boxed => add(emission, "  {place} = ({spelling}){name}->tag;")
+    .Inline => add(emission, "  {place} = ({spelling}){name}.tag;")
+  }
+}
+
+fn nullTestOf(program: IrProgram, shape: Layout, name: String): String {
+  const payload = nichePayloadTypeOf(program, shape)
+  if !program.hasType(payload) {
+    return "{name} != NULL"
+  }
+  match program.typeAt(payload) {
+    .Text => "{name}.storage != NULL"
+    .Runtime(kind, _) => {
+      match kind {
+        .ListStorage => "{name}.storage != NULL"
+        _ => "{name}.storage != NULL"
+      }
+    }
+    _ => "{name} != NULL"
+  }
+}
+
+fn variantLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
+  if !program.hasType(id) {
+    return None
+  }
+  match program.typeAt(id) {
+    .Variant(layout) => Some(layout)
+    _ => None
+  }
+}
+
+// --- Places ---------------------------------------------------------------------------------------------------------
+
+/**
+ * A place as a C expression: the slot, then one step per field, variant field, tuple position or dereference. A `var`
+ * parameter is a `T *`, so it is dereferenced where the path starts.
+ */
+public fn placeText(var emission: Emission, program: IrProgram, body: Body, reference: Reference): String {
+  var text = slotText(body, reference.base)
+  var current = typeOfSlot(body, reference.base)
+  for step in reference.steps {
+    const arrow = if isCountedPointer(program, current) { "->" } else { "." }
+    match step {
+      .Field(layout, index) => {
+        const member = fieldMemberOf(program, layout, index)
+        text = "{text}{arrow}{member}"
+        current = fieldTypeOf(program, layout, index)
+      }
+      .TupleField(layout, index) => {
+        const member = fieldMemberOf(program, layout, index)
+        text = "{text}{arrow}{member}"
+        current = fieldTypeOf(program, layout, index)
+      }
+      .Variant(layout, variant, index) => {
+        const inner = variantFieldTextOf(program, layout, variant, index, text, arrow)
+        text = inner
+        current = variantFieldTypeOf(program, layout, variant, index)
+      }
+      .Contents(annotation) => {
+        text = "(*{text})"
+        current = annotation
+      }
+      .Element(_, _) => {
+        reportUnsupported(emission, "an element of a list as a place (milestone 5.7)")
+        return text
+      }
+    }
+  }
+  text
+}
+
+/** The type a place ends in, which is what decides how it is made unique and how it is released. */
+public fn placeTypeOf(program: IrProgram, body: Body, reference: Reference): IrTypeId {
+  var current = typeOfSlot(body, reference.base)
+  for step in reference.steps {
+    match step {
+      .Field(layout, index) => {
+        current = fieldTypeOf(program, layout, index)
+      }
+      .TupleField(layout, index) => {
+        current = fieldTypeOf(program, layout, index)
+      }
+      .Variant(layout, variant, index) => {
+        current = variantFieldTypeOf(program, layout, variant, index)
+      }
+      .Contents(annotation) => {
+        current = annotation
+      }
+      .Element(item, _) => {
+        current = item
+      }
+    }
+  }
+  current
+}
+
+/** A niche layout *is* its payload, so a step into the one field of the payload variant changes nothing. */
+fn variantFieldTextOf(
+  program: IrProgram,
+  layout: LayoutId,
+  variant: Int,
+  index: Int,
+  text: String,
+  arrow: String,
+): String {
+  if !program.hasLayout(layout) {
+    return text
+  }
+  const shape = program.layoutAt(layout)
+  if const .Niche(_, _) = shape.representation {
+    return text
+  }
+  const fields = shape.fieldsOfVariant(variant)
+  if index < 0 || index >= fields.length() {
+    return text
+  }
+  const member = memberNameOf(fields[index])
+  "{text}{arrow}payload.{variantMemberNameOf(variant)}.{member}"
+}
+
+fn fieldMemberOf(program: IrProgram, layout: LayoutId, index: Int): String {
+  if !program.hasLayout(layout) {
+    return "f_unknown"
+  }
+  const shape = program.layoutAt(layout)
+  if index < 0 || index >= shape.fields.length() {
+    return "f_unknown"
+  }
+  memberNameOf(shape.fields[index])
+}
+
+fn fieldTypeOf(program: IrProgram, layout: LayoutId, index: Int): IrTypeId {
+  if !program.hasLayout(layout) {
+    return IrTypeId(0 - 1)
+  }
+  const shape = program.layoutAt(layout)
+  if index < 0 || index >= shape.fields.length() {
+    return IrTypeId(0 - 1)
+  }
+  shape.fields[index].annotation
+}
+
+fn variantFieldTypeOf(program: IrProgram, layout: LayoutId, variant: Int, index: Int): IrTypeId {
+  if !program.hasLayout(layout) {
+    return IrTypeId(0 - 1)
+  }
+  const shape = program.layoutAt(layout)
+  if !shape.hasVariant(variant) {
+    return IrTypeId(0 - 1)
+  }
+  const fields = shape.fieldsOfVariant(variant)
+  if index < 0 || index >= fields.length() {
+    return IrTypeId(0 - 1)
+  }
+  fields[index].annotation
+}
+
+// --- Terminators ----------------------------------------------------------------------------------------------------
+
+fn emitTerminator(var emission: Emission, program: IrProgram, body: Body, terminator: Terminator) {
+  match terminator {
+    .Jump(target) => add(emission, "  goto L{target.value};")
+    .Branch(condition, then, otherwise) => {
+      const name = slotText(body, condition)
+      add(emission, "  if ({name}) \{ goto L{then.value}; \}")
+      add(emission, "  goto L{otherwise.value};")
+    }
+    .Switch(scrutinee, values, targets, otherwise) => {
+      const name = slotText(body, scrutinee)
+      add(emission, "  switch ({name}) \{")
+      const count = values.length().min(targets.length())
+      for index in 0..count {
+        add(emission, "    case {values[index]}: goto L{targets[index].value};")
+      }
+      add(emission, "    default: goto L{otherwise.value};")
+      add(emission, "  \}")
+    }
+    .Return(value) => emitReturn(emission, program, body, value)
+    .Unreachable => add(emission, "  TORB_UNREACHABLE();")
+  }
+}
+
+fn emitReturn(var emission: Emission, program: IrProgram, body: Body, value: Argument?) {
+  const isVoid = isVoidResult(program, body.function.signature.result)
+  const found = match value {
+    Some(argument) => argument
+    .None => {
+      add(emission, "  return;")
+      return
+    }
+  }
+  if isVoid {
+    add(emission, "  return;")
+    return
+  }
+  const name = slotText(body, found.slot)
+  if body.isByPointer {
+    add(emission, "  *{resultPointerName} = {name};")
+    add(emission, "  return;")
+    return
+  }
+  add(emission, "  return {name};")
+}
+
+// --- Slots ----------------------------------------------------------------------------------------------------------
+
+/** A slot as an expression. A `var` parameter holds a pointer, so reading it goes through one dereference. */
+public fn slotText(body: Body, slot: Slot): String {
+  const name = slotNameOf(body.function, slot)
+  if isReferenceSlot(body, slot) {
+    return "(*{name})"
+  }
+  name
+}
+
+fn isReferenceSlot(body: Body, slot: Slot): Bool {
+  if !body.function.hasSlot(slot) {
+    return false
+  }
+  if const .Parameter(index) = body.function.slots[slot.value].role {
+    if const Some(parameter) = body.function.signature.parameters.get(index) {
+      return parameter.isReference
+    }
+  }
+  false
+}
+
+fn typeOfSlot(body: Body, slot: Slot): IrTypeId {
+  if !body.function.hasSlot(slot) {
+    return IrTypeId(0 - 1)
+  }
+  body.function.typeOfSlot(slot)
+}

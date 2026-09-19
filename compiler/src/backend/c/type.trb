@@ -1,0 +1,301 @@
+use IrProgram, IrTypeId, IrType, LayoutId, RuntimeKind from "../../ir/ir"
+use Layout, LayoutKind, Representation, FieldLayout from "../../ir/layout"
+use escapedComponent from "../../ir/mangle"
+
+/**
+ * Every IR type as C, and the type definition of every layout (BACKEND 3.1).
+ *
+ * Nothing here decides anything: the representation class, the size and the niche are in the IR, because both back
+ * ends have to agree about them. This file only spells them, and it is a pure function of the program so that the
+ * translation unit is one too.
+ *
+ * A type the C back end cannot spell yet answers the empty string, and `whyNoCType` says which milestone brings it.
+ * That is how `torb build` refuses with a finding instead of writing C that does not compile.
+ */
+
+/** The C type of a value of this type. Empty where the back end has none yet - `whyNoCType` says why. */
+public fn cTypeOf(program: IrProgram, id: IrTypeId): String {
+  if !program.hasType(id) {
+    return ""
+  }
+  match program.typeAt(id) {
+    .Integer(width, isSigned) => {
+      if isSigned {
+        return "int{width}_t"
+      }
+      "uint{width}_t"
+    }
+    .Floating(width) => if width == 32 { "float" } else { "double" }
+    .Boolean => "bool"
+    .Character => "torb_char"
+    .VoidType => "torb_void"
+    // Only ever the result of a function, which is what makes it `void` and not a value
+    .NeverType => "void"
+    .Text => "torb_text"
+    .Record(layout) => cTypeOfLayout(program, layout)
+    .Variant(layout) => cTypeOfLayout(program, layout)
+    .Tuple(layout) => cTypeOfLayout(program, layout)
+    .SharedObject(layout) => {
+      if !program.hasLayout(layout) {
+        return ""
+      }
+      "{program.layoutAt(layout).name} *"
+    }
+    .Runtime(kind, _) => cTypeOfRuntime(kind)
+    _ => ""
+  }
+}
+
+/** Which milestone brings the C type of this type. One sentence, in the words of the sub-milestone table. */
+public fn whyNoCType(program: IrProgram, id: IrTypeId): String {
+  if !program.hasType(id) {
+    return "a type that is not in the program"
+  }
+  match program.typeAt(id) {
+    .FixedArray(_, _) => "an `Array<Item, Size>` value (milestone 5.9)"
+    .Closure(_) => "a closure value (milestone 5.8)"
+    .Object(_) => "a trait-typed value (milestone 5.6)"
+    .Box(_) => "a captured `var` binding (milestone 5.8)"
+    .Lazy(_) => "a `lazy` parameter (milestone 5.8)"
+    .Runtime(kind, _) => whyNoRuntimeCType(kind)
+    .ConstantValue(_, _) => "a const generic argument as the type of a value"
+    _ => "a layout the back end could not lay out"
+  }
+}
+
+fn cTypeOfRuntime(kind: RuntimeKind): String {
+  match kind {
+    .ListStorage => "torb_list"
+    .MapStorage => "torb_map"
+    .SetStorage => "torb_set"
+    _ => ""
+  }
+}
+
+fn whyNoRuntimeCType(kind: RuntimeKind): String {
+  match kind {
+    .TaskObject => "a `Task` value (milestone 7.3)"
+    .ChannelObject => "a `Channel` value (milestone 7.3)"
+    .ExpressionTree => "an `Expression` value (milestone 5.11)"
+    .DecimalNumber => "a `Decimal` value (milestone 8)"
+    _ => "a runtime container"
+  }
+}
+
+/**
+ * The C type of a value whose type is a layout: the struct itself when it is inline, a pointer to the counted block
+ * when it is boxed, and the payload field alone when the empty variant is a null pointer.
+ */
+public fn cTypeOfLayout(program: IrProgram, id: LayoutId): String {
+  if !program.hasLayout(id) {
+    return ""
+  }
+  const layout = program.layoutAt(id)
+  match layout.representation {
+    .Inline => layout.name
+    .Boxed => "{layout.name} *"
+    .Niche(_, field) => {
+      if field < 0 || field >= layout.fields.length() {
+        return ""
+      }
+      cTypeOf(program, layout.fields[field].annotation)
+    }
+  }
+}
+
+/**
+ * One declaration: `int64_t s3`, `T_main_Node *s4`. The `*` of a pointer binds to the name, which is where C wants it
+ * and what keeps `T *x, y` from ever being written by accident - the emitter declares one name per line.
+ */
+public fn declarationOf(spelling: String, name: String): String {
+  if spelling.endsWith("*") {
+    return "{spelling}{name}"
+  }
+  "{spelling} {name}"
+}
+
+/** A niche layout is the payload field itself, so it has no struct of its own; everything else has one. */
+public fn hasStructDefinition(layout: Layout): Bool {
+  match layout.representation {
+    .Niche(_, _) => false
+    _ => true
+  }
+}
+
+fn isBoxed(layout: Layout): Bool {
+  match layout.representation {
+    .Boxed => true
+    _ => false
+  }
+}
+
+/**
+ * The member of a struct one field is. Every field name is escaped and prefixed, so a field called `default` or `int`
+ * cannot collide with a C keyword and a tuple position (`0`, `1`) becomes an identifier at all.
+ */
+public fn memberNameOf(field: FieldLayout): String {
+  "f_{escapedComponent(field.name)}"
+}
+
+/** The member of the union one variant's group is. */
+public fn variantMemberNameOf(variant: Int): String {
+  "v{variant}"
+}
+
+/**
+ * The type definition of one layout: a plain struct for a record and a tuple, a tag plus a union of the groups for a
+ * variant layout, and the counted header in front of both where the representation is boxed.
+ *
+ * A struct with no members is not C, so a layout without fields carries one byte that nothing reads.
+ */
+public fn typeDefinitionLines(program: IrProgram, layout: Layout): List<String> {
+  var lines = ["struct {layout.name} \{"]
+  if isBoxed(layout) {
+    lines.add("  torb_header header;")
+  }
+  if layout.variants.isEmpty() {
+    for field in layout.fields {
+      lines.add("  {memberLine(program, field)}")
+    }
+  } else {
+    for field in layout.commonFields() {
+      lines.add("  {memberLine(program, field)}")
+    }
+    lines.add("  uint32_t tag;")
+    lines.addAll(unionLines(program, layout))
+  }
+  if lines.length() == 1 {
+    lines.add("  unsigned char nothing;")
+  }
+  lines.add("\};")
+  lines
+}
+
+fn memberLine(program: IrProgram, field: FieldLayout): String {
+  const spelling = cTypeOf(program, field.annotation)
+  const shown = if spelling.isEmpty() { "torb_void" } else { spelling }
+  "{declarationOf(shown, memberNameOf(field))};"
+}
+
+/** One member per variant that carries fields. A variant layout whose every case is empty needs no union at all. */
+fn unionLines(program: IrProgram, layout: Layout): List<String> {
+  var groups: List<String> = []
+  for index in 0..layout.variants.length() {
+    const fields = layout.fieldsOfVariant(index)
+    if fields.isEmpty() {
+      continue
+    }
+    groups.add("    struct \{")
+    for field in fields {
+      groups.add("      {memberLine(program, field)}")
+    }
+    groups.add("    \} {variantMemberNameOf(index)};")
+  }
+  if groups.isEmpty() {
+    return []
+  }
+  var lines = ["  union \{"]
+  lines.addAll(groups)
+  lines.add("  \} payload;")
+  lines
+}
+
+// --- The order the definitions have to come in ----------------------------------------------------------------------
+
+/**
+ * Every layout of the program, in an order in which a definition only ever needs what is already complete: a field
+ * that stores another layout inline has to come after it, while a field that is a pointer needs nothing but the
+ * forward declaration every layout gets.
+ *
+ * The walk starts from the layouts sorted by name and is depth first, so the order is a function of the *set* of
+ * layouts and never of the order in which the lowering found them. A cycle cannot happen, because a layout on a cycle
+ * of the by-value field graph is `Boxed` and therefore a pointer (BACKEND 1.3).
+ */
+public fn layoutDefinitionOrder(program: IrProgram): List<LayoutId> {
+  var names: List<String> = []
+  for layout in program.layouts {
+    names.add(layout.name)
+  }
+  var byName = names
+  byName.sort({ _ })
+  var indexOfName: Map<String, Int> = [:]
+  for index in 0..names.length() {
+    if !indexOfName.containsKey(names[index]) {
+      indexOfName.set(names[index], index)
+    }
+  }
+  var state: List<Int> = []
+  for _ in 0..names.length() {
+    state.add(0)
+  }
+  var order: List<LayoutId> = []
+  for name in byName {
+    const index = indexOfName.get(name) ?? -1
+    if index >= 0 {
+      visitLayout(program, state, order, index)
+    }
+  }
+  order
+}
+
+/**
+ * One layout and everything it stores inline, depth first. `state` is 0 for "not seen", 1 for "on the way down" and 2
+ * for "emitted"; a layout that is already on the way down is a recursion through a pointer and is skipped.
+ */
+fn visitLayout(program: IrProgram, var state: List<Int>, var order: List<LayoutId>, index: Int) {
+  if state[index] != 0 {
+    return
+  }
+  state.set(index, 1)
+  for needed in inlineDependenciesOf(program, program.layouts[index]) {
+    if needed != index {
+      visitLayout(program, state, order, needed)
+    }
+  }
+  state.set(index, 2)
+  order.add(LayoutId(index))
+}
+
+/** The layouts one definition needs complete: every field that is stored inline, in field order. */
+fn inlineDependenciesOf(program: IrProgram, layout: Layout): List<Int> {
+  var needed: List<Int> = []
+  for field in layout.fields {
+    for found in inlineLayoutsOfType(program, field.annotation) {
+      if !needed.contains(found) {
+        needed.add(found)
+      }
+    }
+  }
+  needed
+}
+
+fn inlineLayoutsOfType(program: IrProgram, id: IrTypeId): List<Int> {
+  if !program.hasType(id) {
+    return []
+  }
+  match program.typeAt(id) {
+    .Record(layout) => inlineLayoutOf(program, layout)
+    .Variant(layout) => inlineLayoutOf(program, layout)
+    .Tuple(layout) => inlineLayoutOf(program, layout)
+    .FixedArray(item, _) => inlineLayoutsOfType(program, item)
+    _ => []
+  }
+}
+
+/** A boxed layout is a pointer, so it needs nothing; a niche is its payload, so it needs what the payload needs. */
+fn inlineLayoutOf(program: IrProgram, id: LayoutId): List<Int> {
+  if !program.hasLayout(id) {
+    return []
+  }
+  const layout = program.layoutAt(id)
+  match layout.representation {
+    .Boxed => []
+    .Inline => [id.value]
+    .Niche(_, field) => {
+      if field < 0 || field >= layout.fields.length() {
+        return []
+      }
+      inlineLayoutsOfType(program, layout.fields[field].annotation)
+    }
+  }
+}

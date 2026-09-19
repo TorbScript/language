@@ -288,10 +288,46 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
                 Err(error) => Value::error(io_error(interpreter, &path, &error)),
             })
         }
+        ("File", "createDirectory") => {
+            let path = text_of(&arguments.required(0, "path")?, "path")?;
+            Ok(match std::fs::create_dir_all(&path) {
+                Ok(()) => Value::ok(Value::Void),
+                Err(error) => Value::error(io_error(interpreter, &path, &error)),
+            })
+        }
         ("Process", "arguments") => Ok(Value::list(interpreter.arguments.iter().map(|argument| Value::text(argument)).collect())),
         ("Process", "exit") => {
             let code = int_of(&arguments.required(0, "code")?, "code")?;
             std::process::exit(code as i32)
+        }
+        // `torb build` needs this to find a C compiler and to run it. A program that cannot be started at all is an
+        // `IoError`; one that ran and failed is an exit code, which is what tells the two apart.
+        ("Process", "run") => {
+            let command = text_of(&arguments.required(0, "command")?, "command")?;
+            let given = items_of(&arguments.required(1, "arguments")?)?;
+            let mut parameters = Vec::new();
+            for value in &given {
+                parameters.push(text_of(value, "argument")?);
+            }
+            Ok(match std::process::Command::new(&command).args(&parameters).output() {
+                Ok(output) => Value::ok(prelude_object(
+                    interpreter,
+                    "ProcessOutput",
+                    vec![
+                        Value::Int(output.status.code().unwrap_or(-1) as i64),
+                        Value::text(&String::from_utf8_lossy(&output.stdout)),
+                        Value::text(&String::from_utf8_lossy(&output.stderr)),
+                    ],
+                )),
+                Err(error) => Value::error(io_error(interpreter, &command, &error)),
+            })
+        }
+        ("Environment", "get") => {
+            let name = text_of(&arguments.required(0, "name")?, "name")?;
+            Ok(match std::env::var(&name) {
+                Ok(value) => Value::some(Value::text(&value)),
+                Err(_) => Value::NONE,
+            })
         }
         ("", _) => Err(failure(format!("Unknown function `{name}`"))),
         _ => Err(failure(format!("The bootstrap interpreter does not know `{owner}.{name}`"))),

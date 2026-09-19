@@ -596,12 +596,21 @@ fn fileEntries(var entries: List<NativeEntry>) {
 
   entries.add(runtimeOf("readLine", "torb_read_line", "bool torb_read_line(torb_text *out);"))
 
+  // `mkdir -p` as a native: `torb build` has to create the directory it writes the C and the binary into. The runtime
+  // has the whole platform layer for it (`runtime/platform.c`) and only the two functions on top are missing, which is
+  // the row `std/fs` sits in.
+  entries.add(plannedRuntimeOf("File.createDirectory", "torb_file_create_directory", "5.12"))
+
   entries.add(runtimeOf(
     "Process.arguments",
     "torb_process_arguments",
     "torb_list torb_process_arguments(void);",
   ))
   entries.add(runtimeOf("Process.exit", "torb_process_exit", "void torb_process_exit(int64_t code);"))
+  // The driver runs the C compiler through this. It answers a `Result<ProcessOutput, IoError>`, so the runtime side is
+  // a function that answers `bool` plus out parameters and the wrapper the lowering builds around it - both of which
+  // arrive with the full driver.
+  entries.add(plannedRuntimeOf("Process.run", "torb_process_run", "5.13"))
 }
 
 /** `std/math`: everything is a thin wrapper over `<math.h>` in `number.c`, so there is one entry per function. */
