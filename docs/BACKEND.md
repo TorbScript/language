@@ -824,7 +824,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | # | Scope | Files | Tests | Depends on |
 |---|---|---|---|---|
 | **5.1** | **Done.** IR data types, layouts, the representation classes, the layout model, mangling, instantiation from a checker type, the builder, the verifier, the text format | `ir/ir.trb`, `ir/layout.trb`, `ir/mangle.trb`, `ir/instantiate.trb`, `ir/build.trb`, `ir/verify.trb`, `ir/print.trb` | Hand-built IR to text; mangling is stable and collision free; layouts and instantiation by table | M4.1 |
-| **5.R1** | Runtime skeleton and the manifest format: header, heap, retain/release/make-unique, `torb_text`, panic, overflow, console, `torb natives --header`, the C test harness | `runtime/*`, `backend/c/natives.trb` | `runtime/tests`; the generated header matches the table | - |
+| **5.R1** | **Done.** Runtime skeleton and the manifest format: header, heap, retain/release/make-unique, `torb_text`, panic, overflow, console, the manifest with the header it renders, the C test harness | `runtime/*`, `backend/c/natives.trb` | `runtime/tests` (67, zero live blocks after each); the generated header compiles against the runtime and the table's shape is pinned | - |
 | **5.2** | Lowering: functions, slots, blocks, literals, locals, arithmetic intrinsics, calls of top-level functions and concrete methods, fields, constructors, tuples, `if`, `while`, `for` over `Range<Int>`, `return`, blocks, the const evaluator, static values | `ir/lower/*.trb`, `ir/instances.trb`, `ir/constant.trb` | IR snapshots for ~15 small programs | 5.1, M4.4 |
 | **5.3** | The C emitter, minimum path. Types, functions, blocks and gotos, `#line`, slot declarations, static data, `main`, the driver's minimum (`torb build`, compiler discovery, `--emit-c`). **Gate: `print "Hello"` becomes a native binary** | `backend/c/emit.trb`, `backend/c/type.trb`, `cli/build.trb` | 10 scripts compiled and run, stdout compared; `--emit-c` twice is byte identical | 5.2, 5.R1 |
 | **5.4** | Ownership: the summary pass, liveness, `Copy`/`Move`/`Release` insertion, edge splitting, `MakeUnique` | `ir/ownership.trb` | IR snapshots pinning every insertion point; the live-block counter is zero after every conformance script | 5.2 |
@@ -939,6 +939,73 @@ the code won and this is the list. Everything else is as written.
   the same type share one IR type, one layout and one name. The key of an *instance* (`instanceKey`) is the symbol
   plus the ids of its arguments and witness tables, and it never leaves the run that built it - a *name* is what has
   to be stable across runs.
+
+### What 5.R1 does differently
+
+Sections 2 and 3 are the plan; where portable C or the split between runtime and program did not fit them, the code
+won. Everything else is as written. The one-page version of the ABI is [runtime/README.md](../runtime/README.md).
+
+- **Two conventions that section 3 does not name, and that half of the manifest needs.** A runtime function may not
+  build a type of the *program*, because `Option`, `Result`, `Ordering` and `IoError` are layouts the lowering emits.
+  So: a native whose result is an `Option` or a `Result` is a function that answers `bool` and writes the payload
+  through an out parameter (`torb_list_get`, `torb_text_index_of`, `torb_file_read_text`), and the lowering builds the
+  wrapper around it; a native whose result is `Ordering` is a `.Derived` entry. That is why `compare` is derived for
+  every integer width, and why `Float64.compare` - a total order with `nan` above everything, which no comparison
+  intrinsic gives - is the one `.Runtime` comparison.
+- **`Release` and `MakeUnique` take the drop function as an argument.** `void torb_release(void *block,
+  torb_drop_function drop)`, and make-unique takes a "retain the children" function as well, which is exactly the
+  `{ shallow copy, retain the children, release the old }` of section 2.1. The alternative was a type descriptor
+  pointer in every block header, which section 1.3 does not have room for and which would cost eight bytes per block.
+  The emitter knows both functions statically, per layout, the same way it knows an element descriptor.
+- **`NativeEntry` gained `prototype: String`.** The generated header has to be a pure function of the table, so the
+  table carries the C prototype of every ready `.Runtime` target. `renderNativesHeader` then sorts by symbol and
+  prints one comment line with the natives that share it. `torb natives --header` is the *command* and arrives with
+  the driver (5.13); the renderer and the checked-in `runtime/include/torb_natives.h` are here, and two tests keep
+  them together: `runtime/tests/natives_header_test.c` includes the generated header after `torb.h` so the C compiler
+  compares both declarations of every symbol, and `compiler/tests/natives.test.trb` pins the table's shape and its
+  counts. The byte-for-byte comparison of the file on disk needs file IO from a test, which is 5.13's.
+- **`runtime/platform.c` is a file section 3.8 does not list.** Windows and POSIX behind five functions (path kind,
+  working directory, directory listing, whole-file read and write), so no other file in the runtime has an `#ifdef`.
+- **`absolutePath` is text arithmetic, as `std/fs` promises, so it needs no `realpath`.** The working directory plus
+  the path, separators normalized to forward slashes, `.` and `..` resolved textually, a drive letter upper-cased.
+  Deterministic and identical on both platforms, and it works for a file that does not exist.
+- **The checked arithmetic is `static inline` in a second header** (`include/torb_number.h`), macro-generated per
+  width, because the C compiler has to see through it: an addition is one instruction plus a branch and must not
+  become a call. The consequence is that it can only be an `.Intrinsic` target - a `static inline` cannot also be
+  declared with external linkage in the generated header - so `addedWrapping`, `multipliedWrapping` and the checked
+  narrowing conversions of `TryFrom`, which the manifest maps to a runtime symbol, are ordinary functions in
+  `number.c`.
+- **`absolute` is derived, not an intrinsic.** `IntrinsicOperation` has no `Absolute`, and it should not: the body is
+  `if self < 0 { -self } else { self }`, so the overflow of the smallest value falls out of `Negate` for free.
+- **`print` joins in the runtime.** `print(...values: Show)` maps to `torb_print_parts(const torb_text *, size_t)`,
+  which writes the shown parts separated by one space and one `\n` - the format stage 0 already prints. Putting the
+  join in the emitter would let the two back ends disagree about it.
+- **The float formatting is a `printf` search, not Grisu.** `printf("%.*e")` with 1 up to 17 significant digits, the
+  first answer that `strtod` turns back into the identical bit pattern wins; then the notation is chosen from the
+  decimal exponent (the exponent form below -6 and at 21 and above) and `.0` is appended where neither `.` nor `e`
+  is in the result. That is by construction the shortest round-tripping decimal of decided gap 4, about 90 lines
+  instead of 250, and it is the reference a Ryu routine will be tested against. `%g` cannot be used: it picks its
+  notation from the precision it was given, so `100.0` would print as `1e2`.
+- **An empty list allocates a storage of capacity zero.** `torb_list` is `{ storage, offset, length }` as section 3.1
+  says, which leaves no room for the element descriptor - so the descriptor lives in the storage and an empty list has
+  one. The alternative is a fourth word in every list value.
+- **A text and a list are limited to 4 GiB and 2^32 elements**, because `offset` and `length` are `uint32_t` as
+  section 3.1 writes them. Both limits panic rather than wrap.
+- **`torb_list_storage` does not use `max_align_t`.** MSVC's C mode does not reliably declare it. The elements begin
+  at the struct's size rounded up to the element's alignment, which `malloc` already satisfies.
+- **The list's write path is one function.** `torb_list_prepare(list, extra)` makes the storage unique, moves a slice
+  into a storage of its own and grows in one place, so "copy exactly once" is one piece of code rather than one per
+  method. A slice never owns the whole storage, so a write through a slice always copies - which is what keeps it
+  from reaching its parent.
+- **Panics in the runtime's own tests are caught in process.** `torb_set_panic_hook` lets a test build `longjmp` out
+  of a panic, compare the message and go on. Child processes were the alternative; this one is portable, identical on
+  Windows and POSIX, and keeps the suite one binary. `torb build` never installs a hook.
+- **The live-block counter is on in every profile,** not only in debug as section 3.8 says. It is one increment per
+  allocation, the harness needs it after *every* test, and `--report-leaks` should not need a different build.
+- **Case mapping and character classification are ASCII plus the letters of Latin-1,** with `isWhitespace` knowing the
+  common `White_Space` code points. Full Unicode tables are milestone 8; the compiler's own identifiers are ASCII.
+  This is the one place where the runtime is knowingly incomplete rather than unimplemented, and
+  `runtime/README.md` says so next to it.
 
 ---
 

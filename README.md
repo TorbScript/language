@@ -11,6 +11,7 @@ native executables, and it is its own configuration format.
 |--------------|-------------------------------------------------------------------------------|
 | `compiler/`  | The toolchain, written in TorbScript                                          |
 | `std/`       | The standard library, one package per directory (`std/prelude`, `std/fs`, ...) |
+| `runtime/`   | The C runtime every compiled binary links against ([runtime/README.md](runtime/README.md)) |
 | `examples/`  | Tour and example projects                                                     |
 | `bootstrap/` | Temporary: a Rust interpreter that runs `compiler/` until it compiles itself  |
 
@@ -18,4 +19,5 @@ native executables, and it is its own configuration format.
 cd bootstrap
 cargo test                                                     # Everything, including the TorbScript tests
 cargo run --release -- run ../compiler tokens ../compiler/src/main.trb
+cd .. && sh runtime/build.sh                                   # The C runtime and its own tests
 ```

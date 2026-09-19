@@ -1,0 +1,763 @@
+use Intrinsic, IntrinsicOperation, NumericKind from "../../ir/ir"
+
+/**
+ * The manifest of natives: the contract between the lowering and the runtime (BACKEND 3.7).
+ *
+ * Every `native` declaration of `std/` is in here exactly once, mapped either to an intrinsic the back ends emit
+ * themselves, to a function of `runtime/` called by name, or to a body the lowering generates from the layout. A
+ * declaration that the runtime does not implement yet is `.Planned(milestone)`, so using it is a clean compile error
+ * that names the milestone and never a link error with a mangled name in it (decided gaps 18 and 22).
+ *
+ *     torb build → `Decimal.add` is not implemented yet (milestone 8)
+ *
+ * `torb natives --header` writes the `.Ready` `.Runtime` entries to `runtime/include/torb_natives.h`. That file is
+ * included after `torb.h` by `runtime/tests/natives_header_test.c`, so the C compiler compares the two declarations
+ * of every symbol: the manifest and the runtime cannot drift without a compile error.
+ *
+ * **Two conventions the runtime follows, because a runtime function may not build a type of the program:**
+ *
+ * - A native whose result is an `Option` or a `Result` becomes a runtime function that answers `bool` and writes the
+ *   payload through an out parameter (`torb_list_get`, `torb_text_index_of`, `torb_file_read_text`). The lowering
+ *   builds the `Option`, the `Result` and the `IoError` around it.
+ * - A native whose result is `Ordering` is `.Derived`: the lowering generates the two comparisons and the
+ *   `Construct`, because `Ordering` is a layout of the program.
+ */
+
+/** One `native` declaration and what it becomes. */
+public type NativeEntry {
+  /** `"ArrayList.add"`, `"String.trim"`, `"print"`. The owner is empty for a free function. */
+  name: String
+  target: NativeTarget
+  /** Which parameters the callee stores, so the ownership pass knows (BACKEND 2.1). `self` is index 0. */
+  ownedParameters: List<Int> = []
+  state: NativeState = NativeState.Ready
+  /**
+   * The C prototype of a `.Ready` `.Runtime` target, exactly as `torb_natives.h` writes it. Empty for every other
+   * target. It lives here so that the generated header is a pure function of this table.
+   */
+  prototype: String = ""
+}
+
+public type NativeTarget {
+  /** Emitted inline by the C back end, an opcode in the VM. */
+  case Intrinsic(intrinsic: Intrinsic)
+  /** A function of the runtime, called by name. */
+  case Runtime(function: String)
+  /** Generated from the layout: derived members of native types. */
+  case Derived(derived: DerivedKind)
+}
+
+public type NativeState {
+  case Ready
+  /** `Decimal`, `Float32` arithmetic, `std/http`: a clean compile error naming the milestone. */
+  case Planned(milestone: String)
+}
+
+/**
+ * Which body the lowering generates. `Compare` and `Absolute` are here rather than among the intrinsics because both
+ * are two intrinsics plus something the runtime cannot build: an `Ordering`, and a branch.
+ */
+public type DerivedKind {
+  case Show
+  case ShowNested
+  case Equals
+  case Compare
+  case Hash
+  /** `if self < 0 { -self } else { self }`, so the overflow of the smallest value falls out of `Negate`. */
+  case Absolute
+  /** `String.show()` is the text itself, and `Void.equals` is always true. */
+  case Identity
+  case Copy
+}
+
+// --- Building the entries -------------------------------------------------------------------------------------------
+
+fn intrinsicOf(name: String, operation: IntrinsicOperation): NativeEntry {
+  NativeEntry(name: name, target: NativeTarget.Intrinsic(Intrinsic(operation: operation)))
+}
+
+fn numericOf(name: String, operation: IntrinsicOperation, kind: NumericKind): NativeEntry {
+  NativeEntry(name: name, target: NativeTarget.Intrinsic(Intrinsic(operation: operation, kind: Some(kind))))
+}
+
+fn runtimeOf(name: String, function: String, prototype: String): NativeEntry {
+  NativeEntry(name: name, target: NativeTarget.Runtime(function), prototype: prototype)
+}
+
+fn ownedRuntimeOf(name: String, function: String, prototype: String, owned: List<Int>): NativeEntry {
+  NativeEntry(name: name, target: NativeTarget.Runtime(function), ownedParameters: owned, prototype: prototype)
+}
+
+fn derivedOf(name: String, derived: DerivedKind): NativeEntry {
+  NativeEntry(name: name, target: NativeTarget.Derived(derived))
+}
+
+fn plannedRuntimeOf(name: String, function: String, milestone: String): NativeEntry {
+  NativeEntry(name: name, target: NativeTarget.Runtime(function), state: NativeState.Planned(milestone))
+}
+
+fn plannedIntrinsicOf(name: String, operation: IntrinsicOperation, milestone: String): NativeEntry {
+  NativeEntry(
+    name: name,
+    target: NativeTarget.Intrinsic(Intrinsic(operation: operation)),
+    state: NativeState.Planned(milestone),
+  )
+}
+
+// --- The numeric types ----------------------------------------------------------------------------------------------
+
+/** The suffix of an intrinsic and of a runtime symbol: `i64`, `u8`, `f64`. */
+fn numericSuffix(kind: NumericKind): String {
+  match kind {
+    .Signed(width) => "i{width}"
+    .Unsigned(width) => "u{width}"
+    .Floating(width) => "f{width}"
+  }
+}
+
+/**
+ * The members of `Numeric` for one width, which every integer and float type comes `with`. Arithmetic is an
+ * intrinsic, and `show` and `parse` are the runtime's. `compare` is not here: on the integers it is generated, on
+ * `Float64` it is a runtime function, because a total order with `nan` in it is not a comparison intrinsic.
+ */
+fn numericMembers(var entries: List<NativeEntry>, owner: String, kind: NumericKind, showFunction: String,
+                  showPrototype: String, parseFunction: String, parsePrototype: String) {
+  entries.add(numericOf("{owner}.add", IntrinsicOperation.Add, kind))
+  entries.add(numericOf("{owner}.subtract", IntrinsicOperation.Subtract, kind))
+  entries.add(numericOf("{owner}.multiply", IntrinsicOperation.Multiply, kind))
+  entries.add(numericOf("{owner}.divide", IntrinsicOperation.Divide, kind))
+  entries.add(numericOf("{owner}.remainder", IntrinsicOperation.Remainder, kind))
+  entries.add(numericOf("{owner}.equals", IntrinsicOperation.Equal, kind))
+  entries.add(runtimeOf("{owner}.show", showFunction, showPrototype))
+  entries.add(runtimeOf("{owner}.parse", parseFunction, parsePrototype))
+}
+
+/** `Signed` adds `negate` and `absolute` on top of `Numeric`. */
+fn signedMembers(var entries: List<NativeEntry>, owner: String, kind: NumericKind) {
+  entries.add(numericOf("{owner}.negate", IntrinsicOperation.Negate, kind))
+  entries.add(derivedOf("{owner}.absolute", DerivedKind.Absolute))
+}
+
+/** The six methods of `Bits`, one entry per member per width. */
+fn bitsMembers(var entries: List<NativeEntry>, owner: String, kind: NumericKind) {
+  entries.add(numericOf("{owner}.bitwiseAnd", IntrinsicOperation.BitwiseAnd, kind))
+  entries.add(numericOf("{owner}.bitwiseOr", IntrinsicOperation.BitwiseOr, kind))
+  entries.add(numericOf("{owner}.bitwiseExclusiveOr", IntrinsicOperation.BitwiseExclusiveOr, kind))
+  entries.add(numericOf("{owner}.bitwiseNot", IntrinsicOperation.BitwiseNot, kind))
+  entries.add(numericOf("{owner}.shiftedLeft", IntrinsicOperation.ShiftedLeft, kind))
+  entries.add(numericOf("{owner}.shiftedRight", IntrinsicOperation.ShiftedRight, kind))
+}
+
+fn integerEntries(var entries: List<NativeEntry>) {
+  const widths = [8, 16, 32, 64]
+  for width in widths {
+    const owner = "Int{width}"
+    const kind = NumericKind.Signed(width)
+    numericMembers(
+      entries,
+      owner,
+      kind,
+      "torb_show_i64",
+      "torb_text torb_show_i64(int64_t value);",
+      "torb_parse_i64",
+      "bool torb_parse_i64(torb_text text, int64_t *out);",
+    )
+    signedMembers(entries, owner, kind)
+    bitsMembers(entries, owner, kind)
+    entries.add(derivedOf("{owner}.compare", DerivedKind.Compare))
+    entries.add(runtimeOf("{owner}.hash", "torb_hash_i64", "uint64_t torb_hash_i64(int64_t value);"))
+  }
+  for width in widths {
+    const owner = "UInt{width}"
+    const kind = NumericKind.Unsigned(width)
+    numericMembers(
+      entries,
+      owner,
+      kind,
+      "torb_show_u64",
+      "torb_text torb_show_u64(uint64_t value);",
+      "torb_parse_u64",
+      "bool torb_parse_u64(torb_text text, uint64_t *out);",
+    )
+    bitsMembers(entries, owner, kind)
+    entries.add(derivedOf("{owner}.compare", DerivedKind.Compare))
+    entries.add(runtimeOf("{owner}.hash", "torb_hash_u64", "uint64_t torb_hash_u64(uint64_t value);"))
+  }
+}
+
+fn floatEntries(var entries: List<NativeEntry>) {
+  const kind = NumericKind.Floating(64)
+  numericMembers(
+    entries,
+    "Float64",
+    kind,
+    "torb_show_f64",
+    "torb_text torb_show_f64(double value);",
+    "torb_parse_f64",
+    "bool torb_parse_f64(torb_text text, double *out);",
+  )
+  signedMembers(entries, "Float64", kind)
+  // `compare` is a total order with `nan` above everything (decided gap 5), which no comparison intrinsic gives.
+  entries.add(runtimeOf("Float64.compare", "torb_compare_f64", "int32_t torb_compare_f64(double first, double second);"))
+  entries.add(runtimeOf("Float64.squareRoot", "torb_square_root_f64", "double torb_square_root_f64(double value);"))
+  entries.add(runtimeOf("Float64.floor", "torb_floor_f64", "double torb_floor_f64(double value);"))
+  entries.add(runtimeOf("Float64.ceiling", "torb_ceiling_f64", "double torb_ceiling_f64(double value);"))
+  entries.add(runtimeOf("Float64.round", "torb_round_f64", "double torb_round_f64(double value);"))
+  entries.add(runtimeOf("Float64.isNaN", "torb_is_nan_f64", "bool torb_is_nan_f64(double value);"))
+
+  // `Float32` arithmetic is not implemented: everything narrows to `Float64` for now (decided gap 18).
+  const float32Members = [
+    "add", "subtract", "multiply", "divide", "remainder", "negate", "absolute", "equals", "compare", "show", "parse",
+  ]
+  for member in float32Members {
+    entries.add(plannedRuntimeOf("Float32.{member}", "torb_{member}_f32", "8"))
+  }
+}
+
+fn decimalEntries(var entries: List<NativeEntry>) {
+  const members = [
+    "add", "subtract", "multiply", "divide", "remainder", "negate", "absolute", "equals", "compare", "show", "parse",
+    "hash",
+  ]
+  for member in members {
+    entries.add(plannedRuntimeOf("Decimal.{member}", "torb_decimal_{member}", "8"))
+  }
+}
+
+fn conversionEntries(var entries: List<NativeEntry>) {
+  entries.add(numericOf("Int64.from", IntrinsicOperation.Convert(NumericKind.Signed(64)), NumericKind.Signed(32)))
+  entries.add(numericOf(
+    "Float64.from",
+    IntrinsicOperation.Convert(NumericKind.Floating(64)),
+    NumericKind.Signed(64),
+  ))
+  entries.add(numericOf(
+    "Float64.fromFloat32",
+    IntrinsicOperation.Convert(NumericKind.Floating(64)),
+    NumericKind.Floating(32),
+  ))
+  entries.add(runtimeOf(
+    "Int32.tryFrom",
+    "torb_convert_i64_i32_checked",
+    "bool torb_convert_i64_i32_checked(int64_t value, int32_t *out);",
+  ))
+  entries.add(runtimeOf(
+    "Int64.tryFrom",
+    "torb_convert_f64_i64_checked",
+    "bool torb_convert_f64_i64_checked(double value, int64_t *out);",
+  ))
+  entries.add(runtimeOf(
+    "Int64.parseDigits",
+    "torb_parse_i64_digits",
+    "bool torb_parse_i64_digits(torb_text text, int64_t radix, int64_t *out);",
+  ))
+  entries.add(runtimeOf(
+    "UInt64.addedWrapping",
+    "torb_added_wrapping_u64",
+    "uint64_t torb_added_wrapping_u64(uint64_t first, uint64_t second);",
+  ))
+  entries.add(runtimeOf(
+    "UInt64.multipliedWrapping",
+    "torb_multiplied_wrapping_u64",
+    "uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);",
+  ))
+}
+
+// --- Bool, Char, String, Void ---------------------------------------------------------------------------------------
+
+fn textEntries(var entries: List<NativeEntry>) {
+  entries.add(intrinsicOf("Bool.equals", IntrinsicOperation.Equal))
+  entries.add(runtimeOf("Bool.hash", "torb_hash_bool", "uint64_t torb_hash_bool(bool value);"))
+  entries.add(runtimeOf("Bool.show", "torb_show_bool", "torb_text torb_show_bool(bool value);"))
+
+  entries.add(intrinsicOf("Char.equals", IntrinsicOperation.Equal))
+  entries.add(derivedOf("Char.compare", DerivedKind.Compare))
+  entries.add(runtimeOf("Char.hash", "torb_hash_char", "uint64_t torb_hash_char(torb_char character);"))
+  entries.add(runtimeOf("Char.show", "torb_show_char", "torb_text torb_show_char(torb_char character);"))
+  entries.add(runtimeOf(
+    "Char.showNested",
+    "torb_show_char_nested",
+    "torb_text torb_show_char_nested(torb_char character);",
+  ))
+  entries.add(runtimeOf("Char.isDigit", "torb_char_is_digit", "bool torb_char_is_digit(torb_char character);"))
+  entries.add(runtimeOf("Char.isLetter", "torb_char_is_letter", "bool torb_char_is_letter(torb_char character);"))
+  entries.add(runtimeOf(
+    "Char.isWhitespace",
+    "torb_char_is_whitespace",
+    "bool torb_char_is_whitespace(torb_char character);",
+  ))
+  entries.add(runtimeOf(
+    "Char.byteLength",
+    "torb_char_byte_length_of",
+    "int64_t torb_char_byte_length_of(torb_char character);",
+  ))
+  entries.add(runtimeOf(
+    "Char.toUpperCase",
+    "torb_char_to_upper_case",
+    "torb_char torb_char_to_upper_case(torb_char character);",
+  ))
+  entries.add(runtimeOf(
+    "Char.toLowerCase",
+    "torb_char_to_lower_case",
+    "torb_char torb_char_to_lower_case(torb_char character);",
+  ))
+  entries.add(runtimeOf(
+    "Char.tryFrom",
+    "torb_char_try_from_i64",
+    "bool torb_char_try_from_i64(int64_t value, torb_char *out);",
+  ))
+  entries.add(numericOf("Int64.fromChar", IntrinsicOperation.Convert(NumericKind.Signed(64)), NumericKind.Unsigned(32)))
+
+  entries.add(intrinsicOf("String.equals", IntrinsicOperation.TextEqual))
+  entries.add(derivedOf("String.compare", DerivedKind.Compare))
+  entries.add(runtimeOf("String.hash", "torb_text_hash", "uint64_t torb_text_hash(torb_text text);"))
+  // `show()` of a `String` is the text itself, which is a copy and not a call.
+  entries.add(derivedOf("String.show", DerivedKind.Identity))
+  entries.add(runtimeOf(
+    "String.showNested",
+    "torb_text_show_nested",
+    "torb_text torb_text_show_nested(torb_text text);",
+  ))
+  entries.add(intrinsicOf("String.add", IntrinsicOperation.TextConcat))
+  entries.add(intrinsicOf("String.byteLength", IntrinsicOperation.TextByteLength))
+  entries.add(runtimeOf("String.isEmpty", "torb_text_is_empty", "bool torb_text_is_empty(torb_text text);"))
+  entries.add(runtimeOf(
+    "String.slice",
+    "torb_text_slice",
+    "torb_text torb_text_slice(torb_text text, int64_t from, int64_t to, torb_location at);",
+  ))
+  entries.add(runtimeOf(
+    "String.contains",
+    "torb_text_contains",
+    "bool torb_text_contains(torb_text text, torb_text part);",
+  ))
+  entries.add(runtimeOf(
+    "String.startsWith",
+    "torb_text_starts_with",
+    "bool torb_text_starts_with(torb_text text, torb_text prefix);",
+  ))
+  entries.add(runtimeOf(
+    "String.endsWith",
+    "torb_text_ends_with",
+    "bool torb_text_ends_with(torb_text text, torb_text suffix);",
+  ))
+  entries.add(runtimeOf(
+    "String.indexOf",
+    "torb_text_index_of",
+    "bool torb_text_index_of(torb_text text, torb_text part, int64_t *out);",
+  ))
+  entries.add(runtimeOf("String.trim", "torb_text_trim", "torb_text torb_text_trim(torb_text text);"))
+  entries.add(runtimeOf(
+    "String.toUpperCase",
+    "torb_text_to_upper_case",
+    "torb_text torb_text_to_upper_case(torb_text text);",
+  ))
+  entries.add(runtimeOf(
+    "String.toLowerCase",
+    "torb_text_to_lower_case",
+    "torb_text torb_text_to_lower_case(torb_text text);",
+  ))
+  entries.add(runtimeOf(
+    "String.replace",
+    "torb_text_replace",
+    "torb_text torb_text_replace(torb_text text, torb_text part, torb_text replacement);",
+  ))
+  entries.add(runtimeOf(
+    "String.repeat",
+    "torb_text_repeat",
+    "torb_text torb_text_repeat(torb_text text, int64_t times, torb_location at);",
+  ))
+  entries.add(runtimeOf(
+    "String.split",
+    "torb_text_split",
+    "torb_list torb_text_split(torb_text text, torb_text separator);",
+  ))
+  // `chars()` and `bytes()` answer an `Iterable`, which is a trait-typed value over an iterator type: 5.7.
+  entries.add(plannedRuntimeOf("String.chars", "torb_text_chars", "5.7"))
+  entries.add(plannedRuntimeOf("String.bytes", "torb_text_bytes", "5.7"))
+  entries.add(plannedRuntimeOf("String.from", "torb_text_from_chars", "5.7"))
+
+  entries.add(derivedOf("Void.equals", DerivedKind.Identity))
+  entries.add(derivedOf("Void.hash", DerivedKind.Hash))
+  entries.add(runtimeOf("Void.show", "torb_show_void", "torb_text torb_show_void(void);"))
+}
+
+fn consoleEntries(var entries: List<NativeEntry>) {
+  entries.add(runtimeOf(
+    "print",
+    "torb_print_parts",
+    "void torb_print_parts(const torb_text *parts, size_t count);",
+  ))
+  entries.add(runtimeOf(
+    "printError",
+    "torb_print_error_parts",
+    "void torb_print_error_parts(const torb_text *parts, size_t count);",
+  ))
+  entries.add(runtimeOf("panic", "torb_panic", "void torb_panic(torb_text message, torb_location at);"))
+}
+
+// --- The collections ------------------------------------------------------------------------------------------------
+
+/**
+ * `ArrayList` and `TrieList` are the same implementation until milestone 8, which is observable only through
+ * performance: iteration order and `Show` are the same either way (decided gap 18).
+ */
+fn listEntries(var entries: List<NativeEntry>, owner: String) {
+  entries.add(plannedRuntimeOf("{owner}.from", "torb_list_from_iterable", "5.7"))
+  entries.add(plannedRuntimeOf("{owner}.iterator", "torb_list_iterator", "5.7"))
+  entries.add(runtimeOf(
+    "{owner}.withCapacity",
+    "torb_list_with_capacity",
+    "torb_list torb_list_with_capacity(const torb_element *element, int64_t capacity, torb_location at);",
+  ))
+  entries.add(runtimeOf("{owner}.length", "torb_list_length", "int64_t torb_list_length(torb_list list);"))
+  entries.add(runtimeOf(
+    "{owner}.get",
+    "torb_list_get",
+    "bool torb_list_get(torb_list list, int64_t index, void *out);",
+  ))
+  entries.add(runtimeOf(
+    "{owner}.slice",
+    "torb_list_slice",
+    "torb_list torb_list_slice(torb_list list, int64_t from, int64_t to, torb_location at);",
+  ))
+  entries.add(ownedRuntimeOf(
+    "{owner}.add",
+    "torb_list_add",
+    "void torb_list_add(torb_list *list, const void *value);",
+    [1],
+  ))
+  entries.add(ownedRuntimeOf(
+    "{owner}.set",
+    "torb_list_set",
+    "void torb_list_set(torb_list *list, int64_t index, const void *value, torb_location at);",
+    [2],
+  ))
+  entries.add(ownedRuntimeOf(
+    "{owner}.insert",
+    "torb_list_insert",
+    "void torb_list_insert(torb_list *list, int64_t index, const void *value, torb_location at);",
+    [2],
+  ))
+  entries.add(runtimeOf(
+    "{owner}.removeAt",
+    "torb_list_remove_at",
+    "bool torb_list_remove_at(torb_list *list, int64_t index, void *out);",
+  ))
+  entries.add(runtimeOf(
+    "{owner}.replace",
+    "torb_list_replace",
+    "void torb_list_replace(torb_list *list, int64_t from, int64_t to, torb_list values, torb_location at);",
+  ))
+  entries.add(runtimeOf("{owner}.reverse", "torb_list_reverse", "void torb_list_reverse(torb_list *list);"))
+  entries.add(runtimeOf(
+    "{owner}.sort",
+    "torb_list_sort",
+    "void torb_list_sort(torb_list *list, torb_compare_function compare, void *context);",
+  ))
+  entries.add(runtimeOf("{owner}.clear", "torb_list_clear", "void torb_list_clear(torb_list *list);"))
+  entries.add(runtimeOf("{owner}.compact", "torb_list_compact", "void torb_list_compact(torb_list *list);"))
+}
+
+fn mapEntries(var entries: List<NativeEntry>, owner: String, hasCapacity: Bool) {
+  entries.add(plannedRuntimeOf("{owner}.from", "torb_map_from_iterable", "5.7"))
+  entries.add(plannedRuntimeOf("{owner}.iterator", "torb_map_iterator", "5.7"))
+  if hasCapacity {
+    entries.add(runtimeOf(
+      "{owner}.withCapacity",
+      "torb_map_with_capacity",
+      "torb_map torb_map_with_capacity(const torb_element *key, const torb_element *value, int64_t capacity, "
+        + "torb_location at);",
+    ))
+  }
+  entries.add(runtimeOf("{owner}.length", "torb_map_length", "int64_t torb_map_length(torb_map map);"))
+  entries.add(runtimeOf(
+    "{owner}.get",
+    "torb_map_get",
+    "bool torb_map_get(torb_map map, const void *key, void *out);",
+  ))
+  entries.add(ownedRuntimeOf(
+    "{owner}.set",
+    "torb_map_set",
+    "void torb_map_set(torb_map *map, const void *key, const void *value);",
+    [1, 2],
+  ))
+  entries.add(runtimeOf(
+    "{owner}.remove",
+    "torb_map_remove",
+    "bool torb_map_remove(torb_map *map, const void *key, void *out);",
+  ))
+  entries.add(runtimeOf("{owner}.clear", "torb_map_clear", "void torb_map_clear(torb_map *map);"))
+}
+
+fn setEntries(var entries: List<NativeEntry>, owner: String) {
+  entries.add(plannedRuntimeOf("{owner}.from", "torb_set_from_iterable", "5.7"))
+  entries.add(plannedRuntimeOf("{owner}.iterator", "torb_set_iterator", "5.7"))
+  entries.add(runtimeOf("{owner}.length", "torb_set_length", "int64_t torb_set_length(torb_set set);"))
+  entries.add(runtimeOf(
+    "{owner}.contains",
+    "torb_set_contains",
+    "bool torb_set_contains(torb_set set, const void *item);",
+  ))
+  entries.add(ownedRuntimeOf(
+    "{owner}.add",
+    "torb_set_add",
+    "void torb_set_add(torb_set *set, const void *item);",
+    [1],
+  ))
+  entries.add(runtimeOf(
+    "{owner}.remove",
+    "torb_set_remove",
+    "bool torb_set_remove(torb_set *set, const void *item);",
+  ))
+  entries.add(runtimeOf("{owner}.clear", "torb_set_clear", "void torb_set_clear(torb_set *set);"))
+}
+
+fn collectionEntries(var entries: List<NativeEntry>) {
+  listEntries(entries, "ArrayList")
+  listEntries(entries, "TrieList")
+  mapEntries(entries, "HashMap", true)
+  mapEntries(entries, "TrieMap", false)
+  setEntries(entries, "HashSet")
+  setEntries(entries, "TrieSet")
+
+  // `Array<Item, Size>` is inline storage the emitter writes itself; the members arrive with the interior paths.
+  const arrayMembers = ["filled", "from", "length", "get", "iterator", "set", "fill", "mapped"]
+  for member in arrayMembers {
+    entries.add(plannedRuntimeOf("Array.{member}", "torb_array_{member}", "5.9"))
+  }
+
+  // A `Range` is an ordinary record; only its iteration is native, and it panics without both ends (decided gap 17).
+  entries.add(derivedOf("Range.equals", DerivedKind.Equals))
+  entries.add(derivedOf("Range.hash", DerivedKind.Hash))
+  entries.add(derivedOf("Range.show", DerivedKind.Show))
+  entries.add(plannedRuntimeOf("Range.iterator", "torb_range_iterator", "5.7"))
+  entries.add(plannedRuntimeOf("Range.length", "torb_range_length", "5.7"))
+}
+
+// --- The packages outside the prelude --------------------------------------------------------------------------------
+
+fn fileEntries(var entries: List<NativeEntry>) {
+  entries.add(runtimeOf(
+    "File.readText",
+    "torb_file_read_text",
+    "bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error);",
+  ))
+  entries.add(runtimeOf(
+    "File.writeText",
+    "torb_file_write_text",
+    "bool torb_file_write_text(torb_text path, torb_text text, torb_text *error);",
+  ))
+  entries.add(runtimeOf("File.exists", "torb_file_exists", "bool torb_file_exists(torb_text path);"))
+  entries.add(runtimeOf(
+    "File.isDirectory",
+    "torb_file_is_directory",
+    "bool torb_file_is_directory(torb_text path);",
+  ))
+  entries.add(runtimeOf(
+    "File.list",
+    "torb_file_list",
+    "bool torb_file_list(torb_text path, torb_list *out, torb_text *error);",
+  ))
+  entries.add(runtimeOf(
+    "File.absolutePath",
+    "torb_file_absolute_path",
+    "bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);",
+  ))
+  // An open handle is a `shared type`, which arrives with 5.9, and `lines` needs an iterator.
+  entries.add(plannedRuntimeOf("File.open", "torb_file_open", "5.12"))
+  entries.add(plannedRuntimeOf("File.readAll", "torb_file_read_all", "5.12"))
+  entries.add(plannedRuntimeOf("File.close", "torb_file_close", "5.12"))
+  entries.add(plannedRuntimeOf("File.lines", "torb_file_lines", "5.12"))
+
+  entries.add(runtimeOf("readLine", "torb_read_line", "bool torb_read_line(torb_text *out);"))
+
+  entries.add(runtimeOf(
+    "Process.arguments",
+    "torb_process_arguments",
+    "torb_list torb_process_arguments(void);",
+  ))
+  entries.add(runtimeOf("Process.exit", "torb_process_exit", "void torb_process_exit(int64_t code);"))
+}
+
+fn plannedPackageEntries(var entries: List<NativeEntry>) {
+  const mathFunctions = [
+    "power", "exponential", "naturalLog", "logarithm", "sine", "cosine", "tangent", "arcSine", "arcCosine",
+    "arcTangent", "arcTangent2",
+  ]
+  for name in mathFunctions {
+    entries.add(plannedRuntimeOf(name, "torb_math_{name}", "5.12"))
+  }
+
+  entries.add(plannedRuntimeOf("Environment.get", "torb_environment_get", "5.12"))
+
+  entries.add(plannedRuntimeOf("Instant.equals", "torb_instant_equals", "5.12"))
+  entries.add(plannedRuntimeOf("Instant.compare", "torb_instant_compare", "5.12"))
+  entries.add(plannedRuntimeOf("Instant.subtract", "torb_instant_subtract", "5.12"))
+  entries.add(plannedRuntimeOf("Duration.equals", "torb_duration_equals", "5.12"))
+  entries.add(plannedRuntimeOf("Duration.compare", "torb_duration_compare", "5.12"))
+  entries.add(plannedRuntimeOf("Duration.show", "torb_duration_show", "5.12"))
+  entries.add(plannedRuntimeOf("Duration.seconds", "torb_duration_seconds", "5.12"))
+  entries.add(plannedRuntimeOf("Int64.seconds", "torb_duration_of_seconds", "5.12"))
+  entries.add(plannedRuntimeOf("Clock.now", "torb_clock_now", "5.12"))
+  entries.add(plannedRuntimeOf("sleep", "torb_sleep", "7.3"))
+
+  entries.add(plannedRuntimeOf("Task.await", "torb_task_await", "7.3"))
+  entries.add(plannedRuntimeOf("Task.map", "torb_task_map", "7.3"))
+  entries.add(plannedRuntimeOf("Task.flatMap", "torb_task_flat_map", "7.3"))
+  entries.add(plannedRuntimeOf("Task.all", "torb_task_all", "7.3"))
+  entries.add(plannedRuntimeOf("spawn", "torb_spawn", "7.3"))
+  entries.add(plannedRuntimeOf("all", "torb_task_all_pair", "7.3"))
+  entries.add(plannedRuntimeOf("Channel.send", "torb_channel_send", "7.3"))
+  entries.add(plannedRuntimeOf("Channel.receive", "torb_channel_receive", "7.3"))
+  entries.add(plannedRuntimeOf("Channel.close", "torb_channel_close", "7.3"))
+  entries.add(plannedRuntimeOf("Channel.collect", "torb_channel_collect", "7.3"))
+
+  entries.add(plannedRuntimeOf("Expression.value", "torb_expression_value", "5.11"))
+  entries.add(plannedRuntimeOf("Expression.captures", "torb_expression_captures", "5.11"))
+  entries.add(plannedRuntimeOf("test", "torb_test_case", "5.11"))
+  entries.add(plannedRuntimeOf("group", "torb_test_group", "5.11"))
+
+  entries.add(plannedRuntimeOf("describe", "torb_describe", "5.10"))
+  entries.add(plannedRuntimeOf("Json.encode", "torb_json_encode", "5.10"))
+  entries.add(plannedRuntimeOf("Json.decode", "torb_json_decode", "5.10"))
+  entries.add(plannedRuntimeOf("Json.parse", "torb_json_parse", "5.10"))
+  entries.add(plannedRuntimeOf("Json.value", "torb_json_value", "5.10"))
+
+  // `isSame` compares the identity of a `shared` object, which the checker allows nowhere else (decided gap 15).
+  entries.add(plannedIntrinsicOf("isSame", IntrinsicOperation.Equal, "5.9"))
+
+  entries.add(plannedRuntimeOf("SandboxCapabilities.modules", "torb_sandbox_modules", "7.4"))
+  entries.add(plannedRuntimeOf("SandboxCapabilities.files", "torb_sandbox_files", "7.4"))
+  entries.add(plannedRuntimeOf("SandboxCapabilities.environment", "torb_sandbox_environment", "7.4"))
+  entries.add(plannedRuntimeOf("SandboxCapabilities.limits", "torb_sandbox_limits", "7.4"))
+  entries.add(plannedRuntimeOf("Script.apply", "torb_script_apply", "7.4"))
+  entries.add(plannedRuntimeOf("Sandbox.load", "torb_sandbox_load", "7.4"))
+
+  entries.add(plannedRuntimeOf("get", "torb_http_get", "8"))
+  entries.add(plannedRuntimeOf("post", "torb_http_post", "8"))
+  entries.add(plannedRuntimeOf("request", "torb_http_request", "8"))
+}
+
+/** The whole manifest, in the order the sections above build it. */
+public fn nativeEntries(): List<NativeEntry> {
+  var entries: List<NativeEntry> = []
+  integerEntries(entries)
+  floatEntries(entries)
+  decimalEntries(entries)
+  conversionEntries(entries)
+  textEntries(entries)
+  consoleEntries(entries)
+  collectionEntries(entries)
+  fileEntries(entries)
+  plannedPackageEntries(entries)
+  entries
+}
+
+/** The entry for a `native` declaration, or `None` - which is an internal error of the compiler (BACKEND 3.7). */
+public fn findNative(entries: List<NativeEntry>, name: String): NativeEntry? {
+  for entry in entries {
+    if entry.name == name {
+      return Some(entry)
+    }
+  }
+  None
+}
+
+// --- The generated header -------------------------------------------------------------------------------------------
+
+/** `a < b` by bytes, spelled out so this file needs nothing from the iteration pipelines. */
+fn isBefore(first: String, second: String): Bool {
+  first.compare(second) == .Less
+}
+
+/** Insertion sort over a small list. Deterministic, and short enough to need no explanation. */
+fn sortedNames(names: List<String>): List<String> {
+  var result: List<String> = []
+  for name in names {
+    var index = 0
+    while index < result.length() && isBefore(result[index], name) {
+      index = index + 1
+    }
+    result.insert(index, name)
+  }
+  result
+}
+
+fn hasPrototype(prototypes: Map<String, String>, symbol: String): Bool {
+  if const Some(_) = prototypes.get(symbol) {
+    return true
+  }
+  false
+}
+
+/**
+ * `runtime/include/torb_natives.h`: one prototype per runtime symbol the manifest declares ready, with the natives
+ * that map to it above it. Sorted by symbol, so the file is a pure function of the table and never of a traversal.
+ */
+public fn renderNativesHeader(entries: List<NativeEntry>): String {
+  var symbols: List<String> = []
+  var prototypes: Map<String, String> = [:]
+  var users: Map<String, List<String>> = [:]
+  for entry in entries {
+    if const .Planned(_) = entry.state {
+      continue
+    }
+    if const .Runtime(function) = entry.target {
+      if !hasPrototype(prototypes, function) {
+        symbols.add(function)
+        prototypes.set(function, entry.prototype)
+        users.set(function, [])
+      }
+      users[function].add(entry.name)
+    }
+  }
+
+  var lines = [
+    "/*",
+    " * torb_natives.h - generated from the natives manifest by `torb natives --header`. Do not edit.",
+    " *",
+    " * One prototype per `native` declaration of `std/` whose target is a function of the runtime and whose state is",
+    " * ready. Include it after torb.h: the C compiler then compares the two declarations of every symbol, so the",
+    " * manifest (compiler/src/backend/c/natives.trb) and the runtime cannot drift.",
+    " */",
+    "",
+    "#ifndef TORB_NATIVES_H",
+    "#define TORB_NATIVES_H",
+    "",
+    "#include \"torb.h\"",
+    "",
+  ]
+  for symbol in sortedNames(symbols) {
+    lines.add("/* {String.join(sortedNames(users[symbol]), separator: ", ")} */")
+    lines.add(prototypes[symbol])
+  }
+  lines.add("")
+  lines.add("#endif /* TORB_NATIVES_H */")
+  String.join(lines, separator: "\n") + "\n"
+}
+
+/** How many entries are ready and how many are planned, for the report of `torb natives`. */
+public type NativeCounts {
+  ready: Int = 0
+  planned: Int = 0
+  /** Distinct runtime symbols the generated header declares. */
+  symbols: Int = 0
+}
+
+public fn countNatives(entries: List<NativeEntry>): NativeCounts {
+  var ready = 0
+  var planned = 0
+  var symbols: Map<String, Bool> = [:]
+  for entry in entries {
+    if const .Planned(_) = entry.state {
+      planned = planned + 1
+      continue
+    }
+    ready = ready + 1
+    if const .Runtime(function) = entry.target {
+      symbols.set(function, true)
+    }
+  }
+  NativeCounts(ready: ready, planned: planned, symbols: symbols.length())
+}

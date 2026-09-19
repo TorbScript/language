@@ -12,6 +12,7 @@ The language itself is specified in [CONCEPT.md](../CONCEPT.md).
 |--------------|--------------------------------------------------------------------------------------------|------------|
 | `compiler/`  | The toolchain: front end, type checker, back ends, tools. A normal TorbScript project        | TorbScript |
 | `std/`       | The standard library: one package per directory (`std/prelude`, `std/fs`, `std/io`, ...)      | TorbScript |
+| `runtime/`   | What every compiled binary links against: counts, `String`, the collections, panics, IO      | C11        |
 | `examples/`  | Tour, example projects. With `std/` and `compiler/` the conformance suite of every stage     | TorbScript |
 | `bootstrap/` | Stage 0: parser and tree-walking interpreter. Thrown away after the compiler compiles itself | Rust       |
 | `docs/`      | This file                                                                                    |            |
@@ -63,7 +64,7 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 | `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: types and signatures (4.1), statements and monomorphic expressions (4.2) |
 | `cli/`                   | Collecting files, rendering diagnostics                               | started  |
 | `ir/`                    | Typed IR, lowering, last-use analysis                                 | started: the IR, layouts, mangling, the verifier, the text format (5.1) |
-| `backend/c/`             | Typed IR to C                                                         | planned  |
+| `backend/c/`             | Typed IR to C                                                         | started: the manifest of natives (5.R1) |
 | `backend/bytecode/`, `vm/` | Bytecode and the VM that runs it (`torb run`, sandbox, REPL)        | planned  |
 | `tools/`                 | Formatter, test runner, package manager, language server              | planned  |
 
@@ -130,6 +131,14 @@ the storage of `ArrayList` and the tries, reference counting, tasks. With the C 
 C file that is linked into every binary. It shrinks over time: what can be written in TorbScript on top of `foreign`
 declarations and a few intrinsics (raw memory, atomics) moves to `std/`.
 
+[`runtime/`](../runtime) is that runtime: portable C11 with no dependency beyond libc, one page of ABI in
+[runtime/README.md](../runtime/README.md), built and tested on its own with `sh runtime/build.sh`. The bytecode VM
+calls the same functions, so there is exactly one `ArrayList`, one hash table and one `String` in a process whichever
+back end is running. The contract between the two sides is the **manifest of natives**
+(`compiler/src/backend/c/natives.trb`): every `native` declaration of `std/` mapped to an intrinsic, to a runtime
+symbol, or to a body the lowering generates - and to the milestone that will bring it where the runtime does not have
+it yet, so a missing native is a compile error naming the milestone and never a link error.
+
 ## Memory Model
 
 The language has value semantics; identity is the marked exception (`shared type`). The implementation maps that to:
@@ -190,7 +199,9 @@ regardless.)
    `compiler/src/ir/mangle.trb` mixed the `UInt8` of a byte with `Int64` arithmetic.
 5. Typed IR and the C back end. The tour runs natively, with the same output as under stage 0. The plan and the state
    of its sub-milestones are in [docs/BACKEND.md](BACKEND.md); **5.1 is done**: the IR's data model, the layouts and
-   their representation classes, the mangling, a builder, a verifier and the text format.
+   their representation classes, the mangling, a builder, a verifier and the text format. **5.R1 is done**: the C
+   runtime ([`runtime/`](../runtime)) with counts, `String`, one list, one ordered hash table, panics and the minimum
+   of file IO, and the manifest of natives that is the contract between it and the lowering.
 6. The compiler compiles itself, stage 1 and stage 2 agree. `bootstrap/` is frozen.
 7. Bytecode and VM, tasks, channels, the sandbox (`Sandbox.load`, receiver scripts, `project.trb`).
 8. Formatter, language server, package manager.
