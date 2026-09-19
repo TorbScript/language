@@ -652,3 +652,18 @@ Wenn nicht, was bedeutet, bewirkt es?
     am Scope (`use`), nicht am erwarteten Typ - für alles nicht Importierte bleibt `.Case`. Also `Some(found) =>` /
     `None =>`, `Ok(value) =>` / `Fail(problem) =>`. Umsetzung (beide Parser, Checker, Stage 0) und Umstellung des
     Bestands im Werkzeuglauf zusammen mit K2, nach den drei Merges.
+
+- (Chat, 2026-09-19) Cases importieren: `use Option.* from "…"`, `use Option.Some, Option.None from "…"`,
+  `use Option.{Some, None} from "…"`?
+  - **Entschieden:** Die Pfad-Form kommt und ERSETZT `use Some, None from Option`:
+    `use Option, Option.Some, Option.None from "./option"`. Damit steht hinter `from` immer ein Modul (heute: Modul
+    oder Typ), ein Schritt statt zwei, und der Import liest sich wie der Name im Code (`Option.Some`, nur gekürzt);
+    `as` geht wie überall (`use Option.None as Nothing from …`). Ohne `from` gilt der Pfad im eigenen Scope
+    (`use Shape.Circle`). Nur Cases, keine Methoden (kein UFCS, keine zweite Schreibweise für denselben Aufruf;
+    als Wert reicht `Option.map`). Betroffen: 11 Stellen (Prelude, Tests, `language.trb`), beide Parser, Resolver.
+    Umsetzung zusammen mit "importierter Case nackt im Pattern", nach dem Merge der Prelude-Runde.
+  - **Nein zu `Option.*`:** die einzige Import-Form, bei der sich eine Datei ändert, ohne dass sie jemand anfasst
+    (neuer Case in der Abhängigkeit → neuer Name im Scope, kollidiert z. B. mit dem Typ `Transform` neben
+    `Component.Transform`). Seit großgeschriebene Pattern-Namen über den Scope laufen, muss der Scope oben ablesbar sein.
+  - **Nein zu `Option.{Some, None}`** (mein Votum, sag Bescheid wenn du sie doch willst): eine zweite Grammatikform,
+    die nur ein wiederholtes `Option.` spart - bei den wenigen Stellen, an denen Cases importiert werden, zu wenig.
