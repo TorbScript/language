@@ -546,6 +546,12 @@ Wenn nicht, was bedeutet, bewirkt es?
     - **`?`-Return-Traces:** ja, im Debug-Profil, als Teil von 5.13/5.14 (dort entstehen die Profile).
     Trait, Namensregel und Alias gehen in die Runde "Prelude-Umbau" (nächster Punkt), weil alle drei die Prelude und
     die Scopes anfassen.
+  - **Geändert (Chat, 2026-09-19): der Case von `Result` heißt `Fail` statt `Error`** - `Result` ist `Ok(value)` oder
+    `Fail(error)`. Damit kollidiert der Trait `Error` mit nichts, und die Namensregel "Case und Typ dürfen gleich
+    heißen" **entfällt** (keine positionsabhängige Suche, wie von dir gewünscht; der Typparameter bleibt `Failure`).
+    Mit K2 liest es sich auch gut: `return Fail problem`, `Ok value`. Der laufende Prelude-Agent hat beides
+    bekommen: Namensregel streichen, Umbenennung über `std/`, `compiler/`, `examples/`, Tests, Stage 0, Checker-
+    Meldungen, Konzept und Doku; er landet sie als letzten Schritt, damit sie nicht mit den anderen Zweigen kollidiert.
 
 - Das prelude enthält gerade jede menge Dinge, aber jede menge dinge auch nicht (math gehört z.B. ins prelude)
   Die ganzen Sachen im Prelude sollten in eigene, entsprechende Projekte und das Prelude sollte einfach mehrere dieser Projekte zusammenfassen
