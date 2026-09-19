@@ -62,7 +62,7 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 | `semantics/`             | Modules, symbols, visibility, names in type positions (`torb check`)  | done     |
 | `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: types, signatures (4.1) |
 | `cli/`                   | Collecting files, rendering diagnostics                               | started  |
-| `ir/`                    | Typed IR, lowering, last-use analysis                                 | planned  |
+| `ir/`                    | Typed IR, lowering, last-use analysis                                 | started: the IR, layouts, mangling, the verifier, the text format (5.1) |
 | `backend/c/`             | Typed IR to C                                                         | planned  |
 | `backend/bytecode/`, `vm/` | Bytecode and the VM that runs it (`torb run`, sandbox, REPL)        | planned  |
 | `tools/`                 | Formatter, test runner, package manager, language server              | planned  |
@@ -185,7 +185,9 @@ regardless.)
    From here on the compiler checks itself, which stage 0 never could. The plan and the state of its ten steps are in
    [docs/TYPECHECKER.md](TYPECHECKER.md); **4.1 is done**: every type position of the repository becomes a type, and
    every declaration a signature.
-5. Typed IR and the C back end. The tour runs natively, with the same output as under stage 0.
+5. Typed IR and the C back end. The tour runs natively, with the same output as under stage 0. The plan and the state
+   of its sub-milestones are in [docs/BACKEND.md](BACKEND.md); **5.1 is done**: the IR's data model, the layouts and
+   their representation classes, the mangling, a builder, a verifier and the text format.
 6. The compiler compiles itself, stage 1 and stage 2 agree. `bootstrap/` is frozen.
 7. Bytecode and VM, tasks, channels, the sandbox (`Sandbox.load`, receiver scripts, `project.trb`).
 8. Formatter, language server, package manager.

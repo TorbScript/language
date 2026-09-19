@@ -823,7 +823,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 
 | # | Scope | Files | Tests | Depends on |
 |---|---|---|---|---|
-| **5.1** | IR data types, layouts, the representation classes, the layout model, mangling, the text format, `torb ir` | `ir/ir.trb`, `ir/layout.trb`, `ir/mangle.trb`, `ir/print.trb` | Hand-built IR to text; mangling is stable and collision free over every symbol of the repository | M4.1 |
+| **5.1** | **Done.** IR data types, layouts, the representation classes, the layout model, mangling, instantiation from a checker type, the builder, the verifier, the text format | `ir/ir.trb`, `ir/layout.trb`, `ir/mangle.trb`, `ir/instantiate.trb`, `ir/build.trb`, `ir/verify.trb`, `ir/print.trb` | Hand-built IR to text; mangling is stable and collision free; layouts and instantiation by table | M4.1 |
 | **5.R1** | Runtime skeleton and the manifest format: header, heap, retain/release/make-unique, `torb_text`, panic, overflow, console, `torb natives --header`, the C test harness | `runtime/*`, `backend/c/natives.trb` | `runtime/tests`; the generated header matches the table | - |
 | **5.2** | Lowering: functions, slots, blocks, literals, locals, arithmetic intrinsics, calls of top-level functions and concrete methods, fields, constructors, tuples, `if`, `while`, `for` over `Range<Int>`, `return`, blocks, the const evaluator, static values | `ir/lower/*.trb`, `ir/instances.trb`, `ir/constant.trb` | IR snapshots for ~15 small programs | 5.1, M4.4 |
 | **5.3** | The C emitter, minimum path. Types, functions, blocks and gotos, `#line`, slot declarations, static data, `main`, the driver's minimum (`torb build`, compiler discovery, `--emit-c`). **Gate: `print "Hello"` becomes a native binary** | `backend/c/emit.trb`, `backend/c/type.trb`, `cli/build.trb` | 10 scripts compiled and run, stdout compared; `--emit-c` twice is byte identical | 5.2, 5.R1 |
@@ -860,6 +860,85 @@ run against **stage 0, the C back end and later the VM** by the same runner.
   lowering. 5.1 defines the manifest's shape, so 5.R1 can start immediately after it.
 - 5.7, 5.8 and 5.12 are independent of each other; 5.9 and 5.10 are independent; 5.13 only needs 5.3.
 - **Hello world is native at 5.3. The tour runs at 5.12. The fixpoint gate is 6.2.**
+
+### What 5.1 does differently from sections 1 to 3
+
+Sections 1 to 3 are the plan; where they did not fit what milestone 4.1 actually built, or what the language allows,
+the code won and this is the list. Everything else is as written.
+
+- **Seven files, not four.** `ir/ir.trb` (ids, types, instructions, the program), `ir/layout.trb` (layouts, the size
+  model, `finishProgram`), `ir/mangle.trb`, `ir/instantiate.trb` (a checker `TypeId` plus a substitution to an IR
+  type), `ir/build.trb` (the builder every lowering threads), `ir/verify.trb`, `ir/print.trb`. **`torb ir` is not
+  wired yet**: there is nothing to lower, so the command arrives with 5.2. The printer it will use is here.
+- **Case names that would shadow a prelude type are renamed**, the same rule that makes the syntax tree say
+  `TupleType` and the checker `VoidType`: `IrType.Floating`, `.Boolean`, `.Character`, `.VoidType`, `.NeverType`,
+  `.SharedObject`. `RuntimeKind` says `ListStorage`, `MapStorage`, `SetStorage`, `TaskObject`, `ChannelObject`,
+  `ExpressionTree`, `DecimalNumber` for the same reason.
+- **`IrType.ConstantValue(value, of)` was added.** A const generic argument is part of an instance's argument list
+  (section 1.4), so it has to have a form - otherwise `Array<Float, 16>` cannot be a *key*. It is never the type of a
+  slot, a field or a parameter, and the verifier says so. `IrType.NeverType` was added for the result of a function
+  that does not return, which is `_Noreturn` in C.
+- **`Instruction.Call` carries `witnesses: List<WitnessSource>`.** Section 1.4 says witness tables are appended after
+  the declared parameters; without a place for them a dictionary-passing call could not be written at all.
+- **`ContainerKind` is `RuntimeKind`.** Section 2.3 says the lowering picks the form of `TakeOut`/`PutBack` by the
+  container's `RuntimeKind`, so a second enumeration with the same cases would only be a second place to be wrong.
+- **`WitnessSource` is flat**: a `WitnessRoot` (a static table, a witness parameter, or one of the bounds of a
+  trait-typed value) plus a `List<Int>` of steps through the `nested` tables. A recursive case would be a value type
+  that contains itself, which the language does not have.
+- **`Block` gained `at: LocationId?`.** The text format of section 1.7 prints `b0: # main.trb:19 body`, which is a
+  location *and* a label, and the C emitter needs the same thing for `#line`. `Layout` gained `size`, `alignment`,
+  `isRecursive`, `commonFieldCount`, `origin` and `arguments`, so that a layout answers for itself.
+- **`resultMode` is not part of the interning key of a signature**, and `finishProgram` fills it in. It follows from
+  the size of the result, and a size is only final once every layout is - which is after the last instance was
+  lowered. `finishProgram` also fills in the sizes of the element descriptors, and it has to run before anything is
+  printed, verified or emitted.
+- **Representations are a fixpoint over the whole layout table, not a recursion over one layout.** Whether a field is
+  a pointer or bytes depends on the representation of its own layout, so a type that contains itself would never
+  terminate. The layouts that are *on* a cycle of the by-value field graph are pinned to `Boxed` first (found by a
+  walk per layout, which is why the answer does not depend on the order in which the layouts were created), and what
+  is left is a DAG that settles in as many sweeps as the field graph is deep.
+- **A type may carry fields of its own and cases.** The design's `Layout` has no room for that; here the common
+  fields come first in `fields`, `commonFieldCount` says how many, and every variant group follows them. A layout with
+  common fields never uses the niche.
+- **The hash of a name that is too long is not FNV-1a-64.** FNV needs wrapping 64 bit multiplication, and every
+  arithmetic operation of the language panics on overflow: gap 3's `multipliedWrapping` is `native` and the runtime
+  does not exist yet. `nameHash` is two polynomial hashes over prime moduli, each below 2^31, printed as the same 16
+  hexadecimal digits. When the wrapping operations arrive this can be swapped - it changes every long name, so it is
+  recorded here.
+- **A source underscore is always escaped as `_x5f_`**, not only where it would create a `__`. That is what makes the
+  escaping injective: an `_` in a mangled name then comes from an escape or from a component separator and never from
+  a name. A `__` can still appear where a component begins with an escape (`_foo`); that is not a collision, because
+  the number of components of a name is fixed, and C reserved spellings are still impossible because every name
+  starts with its prefix letter.
+- **A tuple layout is `T_tuple__<field types>`.** The mangling grammar of section 1.5 assumes a source path, and a
+  tuple has none. Labels are not part of type identity (gap 17), so `(lowest: Int, highest: Int)` and `(Int, Int)`
+  are one layout and one name.
+- **An `Intrinsic` is an operation plus an optional numeric type** (`add.i64`, `less.f64`, `convert.i32.i64`,
+  `textConcat`), and it takes **slots**. The example in section 1.7 writes `%0.x` as an operand of an intrinsic, which
+  the instruction cannot express - a field read is its own `Read`, which is the form the snapshot tests show.
+- **Every parameter writes its ownership out** in the header of a function, not only `self` as in the example. It is
+  what the summary pass of 5.4 decides, so a snapshot should pin it everywhere.
+- **The verifier does not check that every managed slot is released on every path.** Nothing emits a `Release` before
+  5.4, so the check would reject every function; it belongs to the pass that inserts them. Everything else the risks
+  section asks for is here, plus operand and result types, witness sources, and "a block nothing reaches has to be an
+  empty `unreachable` marker".
+- **A closure counts as a niche payload** and is always treated as counted. Section 1.3 says "a `Closure` with an
+  environment", but nothing in the *type* of a closure says whether it has one; the null test is on the code pointer,
+  which is never null, and a retain of an empty environment is a no-op at runtime. `containsShared` is `true` for
+  every `Object` (a trait-typed value may hold anything its bounds allow) and `false` for a `Closure` until 5.8 gives
+  a closure type its environment layout.
+- **`Expression`, `Task`, `Channel` and `Decimal` are `Runtime` kinds**, as section 1.3 lists them, although
+  `Expression` declares fields in `std/prelude`. A `native type` that is *not* in that list and does declare fields -
+  `Range` is the one - is an ordinary record; a `native type` with neither fields nor cases and no entry is an
+  internal error of the compiler, reported through `IrProgram.problems`.
+- **A trait name in a type position is an `Object`.** The checker lowers `List<Int>` in a type position to
+  `Traits([List<Int>])` (a trait-typed value), not to the `ArrayList` that implements it, so that is what arrives
+  here. `ArrayList<Int>` is the `Runtime(ListStorage, [Int64])`.
+- **The monomorphization key of a *type* is the substituted checker `TypeId`.** Checker types are interned, so a
+  closed `TypeId` is already the canonical name of one type; `Instantiation.memo` is keyed by it, and two routes to
+  the same type share one IR type, one layout and one name. The key of an *instance* (`instanceKey`) is the symbol
+  plus the ids of its arguments and witness tables, and it never leaves the run that built it - a *name* is what has
+  to be stable across runs.
 
 ---
 
