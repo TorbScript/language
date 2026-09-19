@@ -1012,3 +1012,14 @@ Wenn nicht, was bedeutet, bewirkt es?
     leicht auf kursiv umzustellen). Farben als Defaults der Extension in C#/Dark+-Anmutung, sprachgebunden (`:trb`),
     ohne dass du Settings anfassen musst. TextMate-Grammatik und Markdown-Vorschau bekommen die fehlenden Keywords
     (aus dem Lexer abgeleitet), `void`, `Fail`, Generics, `.Case`.
+
+- (Fund des Streams-Nachzugs, 2026-09-20) "Eine Nur-Lese-Sicht auf ein Shared-Objekt lässt sich nicht wieder
+  erweitern" wird nur an zwei von vier Stellen durchgesetzt (nicht bei Trait-Werten eines `shared trait`, nicht bei
+  generierten Konstruktoren) - und das Umwickeln einer Quelle mit `self` stützte sich genau darauf.
+  - **Entschieden (ich, Veto möglich) - wird gelöst:** kein neues Sprachmittel für "übergeben". Ein frisch erzeugtes
+    Shared-Objekt als Zwischenergebnis gilt als `var`-Pfad: die Temporary-Regel schützt Werte (die Änderung ginge
+    verloren), bei einem Objekt mit Identität geht nichts verloren, und auf ein Temporary hat niemand sonst eine
+    Sicht. Damit nimmt auch das Umwickeln (`map`, `through`, `checked`, …) `var self` - eine Regel: wer aus einem
+    Stream liest, jetzt oder später, braucht die Berechtigung; Pipelines bleiben ein Ausdruck; eine `const`-Quelle lässt
+    sich nicht mehr verbrauchen; die Regel wird an allen vier Stellen durchgesetzt. `var writable = view()` bleibt
+    legal (ein Aufrufergebnis ist kein Pfad; die Nur-Lese-Sicht ist ein Pfad-Versprechen, kein Typ).
