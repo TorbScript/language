@@ -1,0 +1,282 @@
+use Visibility from "../../syntax/ast"
+use SymbolId from "../symbols"
+use TypeId, ParameterId, FieldSignature from "./type"
+use Checker from "./context"
+use typeSignatureOf from "./signature"
+use substitute, sameType from "./unify"
+use implementsBound from "./implementation"
+
+/**
+ * The implementations the language generates: `Equals`, `Hash`, `Show`, `Encode`, `Decode`, the `From` of a wrapper
+ * case, and the members of a literal type. They are generated *where they are used*, so nothing is generated for a
+ * type nobody asks about, and a hand-written member always wins - resolution only gets here when no declared
+ * implementation answered.
+ *
+ * The one thing this file has to get right is the cycle: the syntax tree of the compiler is `Show` although
+ * `Expression` contains a `List<Statement>` that contains an `Expression` again. So while the question "can this be
+ * derived" is being answered it is *assumed* to hold, which is the only sound reading - a structural implementation of
+ * a recursive type is well defined, it just recurses at run time as the value does.
+ */
+
+/** The members a derived implementation of `capability` for `target` would generate, or `None`. */
+public fn derivableMembers(
+  var checker: Checker,
+  target: TypeId,
+  capability: SymbolId,
+  wanted: TypeId?,
+): List<String>? {
+  const name = derivedTraitName(checker, capability)
+  if name.isEmpty() {
+    return None
+  }
+  const key = "{target.value}:{capability.value}:{wantedKey(wanted)}"
+  if checker.derivationsMissing.containsKey(key) {
+    return None
+  }
+  if const Some(known) = checker.derivations.get(key) {
+    return Some(known)
+  }
+  const members = membersOf(name)
+  if members.isEmpty() {
+    checker.derivationsMissing.set(key, true)
+    return None
+  }
+  // Assumed while it is being answered: a recursive type is structurally comparable, it just recurses as the value does
+  checker.derivations.set(key, members)
+  const isDerivable = canDerive(checker, target, name, capability, wanted)
+  if !isDerivable {
+    const _ = checker.derivations.remove(key)
+    checker.derivationsMissing.set(key, true)
+    return None
+  }
+  Some(members)
+}
+
+fn wantedKey(wanted: TypeId?): Int {
+  match wanted {
+    Some(bound) => bound.value
+    .None => -1
+  }
+}
+
+/** The name of the trait, but only when the symbol really is the prelude's trait of that name. */
+fn derivedTraitName(checker: Checker, capability: SymbolId): String {
+  const name = checker.symbolAt(capability).name
+  if checker.wellKnown.symbolNamed(name) == Some(capability) {
+    return name
+  }
+  ""
+}
+
+/** What a derived implementation has to provide. The default members of the trait come from the trait as always. */
+fn membersOf(name: String): List<String> {
+  if name == "Equals" {
+    return ["equals"]
+  }
+  if name == "Hash" {
+    return ["hash"]
+  }
+  if name == "Show" {
+    return ["show"]
+  }
+  if name == "Encode" {
+    return ["encode"]
+  }
+  if name == "Decode" {
+    return ["decode"]
+  }
+  if name == "From" {
+    return ["from"]
+  }
+  if name == "Into" {
+    return ["into"]
+  }
+  []
+}
+
+fn canDerive(
+  var checker: Checker,
+  target: TypeId,
+  name: String,
+  capability: SymbolId,
+  wanted: TypeId?,
+): Bool {
+  // `From` is generated for a case that wraps exactly one value of a type no other case wraps (design 4.6)
+  if name == "From" {
+    return wrapsExactlyOnce(checker, target, wanted)
+  }
+  if name == "Into" {
+    return isIntoBase(checker, target, wanted)
+  }
+  match checker.types.form(target) {
+    // A literal type has `Show`, `Equals`, `Hash`, `Encode` and `Decode` of its base, and nothing else (gap 32)
+    .Literals(_, _) => true
+    // Tuples and function types cannot be declared, so what a `type` gets generated they get generated too (gap 35)
+    .Tuple(_) => everyFieldImplements(checker, target, capability, wanted)
+    .Function(_) => name == "Show"
+    .Nominal(symbol, _) => {
+      const identifier = typeSignatureOf(checker, symbol)
+      const shape = checker.typeSignature(identifier)
+      // A `native` type is what the runtime provides, and a trait it does not declare it does not have
+      if shape.isNative {
+        return false
+      }
+      // A trait is not a type with fields: there is nothing structural to generate
+      if isTrait(checker, symbol) {
+        return false
+      }
+      // Only `Show` is generated for a `shared type`: everything else would compare or copy an identity
+      if shape.isShared && name != "Show" {
+        return false
+      }
+      if name == "Decode" && !isConstructible(checker, shape.fields) {
+        return false
+      }
+      everyFieldImplements(checker, target, capability, wanted)
+    }
+    _ => false
+  }
+}
+
+fn isTrait(checker: Checker, symbol: SymbolId): Bool {
+  match checker.symbolAt(symbol).kind {
+    .Trait => true
+    _ => false
+  }
+}
+
+/** `Decode` needs the constructor from outside, so a private field without a default rules it out. */
+fn isConstructible(checker: Checker, fields: List<FieldSignature>): Bool {
+  for field in fields {
+    const isHidden = field.visibility == Visibility.Private
+    if isHidden && !field.hasDefault {
+      return false
+    }
+  }
+  true
+}
+
+/** Every field of the type and of every one of its cases has to have the trait itself. */
+fn everyFieldImplements(var checker: Checker, target: TypeId, capability: SymbolId, wanted: TypeId?): Bool {
+  const bound = match wanted {
+    Some(found) => found
+    .None => checker.nominal(capability, [])
+  }
+  match checker.types.form(target) {
+    .Tuple(fields) => {
+      for field in fields {
+        if !fieldImplements(checker, field.annotation, target, bound) {
+          return false
+        }
+      }
+      true
+    }
+    .Nominal(symbol, arguments) => {
+      const identifier = typeSignatureOf(checker, symbol)
+      const shape = checker.typeSignature(identifier)
+      var mapping: Map<ParameterId, TypeId> = [:]
+      for position in 0..shape.generics.length().min(arguments.length()) {
+        mapping.set(shape.generics[position], arguments[position])
+      }
+      for field in shape.fields {
+        const annotation = substitute(checker.types, field.annotation, mapping)
+        if !fieldImplements(checker, annotation, target, bound) {
+          return false
+        }
+      }
+      for variant in shape.cases {
+        for field in variant.fields {
+          const annotation = substitute(checker.types, field.annotation, mapping)
+          if !fieldImplements(checker, annotation, target, bound) {
+            return false
+          }
+        }
+      }
+      true
+    }
+    _ => true
+  }
+}
+
+/** A field of the type's own type needs nothing: the generated member recurses exactly as the value does. */
+fn fieldImplements(var checker: Checker, annotation: TypeId, target: TypeId, bound: TypeId): Bool {
+  if sameType(checker.types, annotation, target) {
+    return true
+  }
+  implementsBound(checker, annotation, bound)
+}
+
+/**
+ * `type AppError { case Io(error: IoError) ... }` gets `From<IoError>`, which is what makes `?` convert an error
+ * without anybody writing the implementation. Exactly one case may wrap exactly one value of that type.
+ */
+fn wrapsExactlyOnce(var checker: Checker, target: TypeId, wanted: TypeId?): Bool {
+  const bound = match wanted {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  const source = match checker.types.form(bound) {
+    .Nominal(_, arguments) => {
+      if arguments.length() != 1 {
+        return false
+      }
+      arguments[0]
+    }
+    _ => {
+      return false
+    }
+  }
+  const (symbol, arguments) = match checker.types.form(target) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return false
+    }
+  }
+  const identifier = typeSignatureOf(checker, symbol)
+  const shape = checker.typeSignature(identifier)
+  if shape.cases.isEmpty() {
+    return false
+  }
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for position in 0..shape.generics.length().min(arguments.length()) {
+    mapping.set(shape.generics[position], arguments[position])
+  }
+  var matches = 0
+  for variant in shape.cases {
+    if variant.fields.length() != 1 {
+      continue
+    }
+    const annotation = substitute(checker.types, variant.fields[0].annotation, mapping)
+    if sameType(checker.types, annotation, source) {
+      matches = matches + 1
+    }
+  }
+  matches == 1
+}
+
+/** `Into<String>` for `"a" | "b"`: a literal type converts into its own base, and into nothing else (gap 32). */
+fn isIntoBase(var checker: Checker, target: TypeId, wanted: TypeId?): Bool {
+  const bound = match wanted {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  const into = match checker.types.form(bound) {
+    .Nominal(_, arguments) => {
+      if arguments.length() != 1 {
+        return false
+      }
+      arguments[0]
+    }
+    _ => {
+      return false
+    }
+  }
+  if const .Literals(base, _) = checker.types.form(target) {
+    return sameType(checker.types, base, into)
+  }
+  false
+}

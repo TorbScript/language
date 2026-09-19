@@ -1,3 +1,4 @@
+use Span from "../../syntax/source"
 use Visibility, TypeReference from "../../syntax/ast"
 use ModuleId from "../module"
 use SymbolId, Symbols from "../symbols"
@@ -456,4 +457,223 @@ public type SignatureState {
   case Ready(index: Int)
   /** A cycle or a broken annotation. Everything about this declaration is `Invalid`. */
   case Failed
+}
+
+// --- Implementations ------------------------------------------------------------------------------------------------
+
+/** The index of an `Implementation` in the `ImplementationTable`. */
+public type ImplementationId {
+  value: Int
+}
+
+/**
+ * Where an implementation comes from. The back ends need this: a declared one has bodies in the source, a delegated
+ * one forwards to a field, a derived one has to be generated, and a `native` one is provided by the runtime.
+ */
+public type ImplementationOrigin {
+  /** `type X with Trait { ... }`, `extend X with Trait { ... }` */
+  case Declared
+  /** `extend X { ... }`: members without a trait, which is the other half of the same table. */
+  case Inherent
+  /** `with Add, Compare by value`: every required member is forwarded to the field. */
+  case Delegated
+  /** `Show`, `Equals`, `Hash`, `Encode`, `Decode`, the `From` of a wrapper case: generated on first use. */
+  case Derived
+}
+
+/**
+ * One implementation of one trait for one type. `extend X with A, B` is two of these over the same members, because
+ * every question the checker asks is about one trait: "does `X` implement `B`, and through which implementation".
+ *
+ * `target` may be a trait type (`extend<Item> List<Item> with Show`), which means "every type that implements it",
+ * and it may be a bare generic parameter (`extend<Source, Target> Source with Into<Target>`), which means every type.
+ */
+public type Implementation {
+  /** The trait, with its arguments. `None` for `extend X { }` without one. */
+  capability: TypeId?
+  target: TypeId
+  generics: List<ParameterId>
+  bounds: List<Bound>
+  module: ModuleId
+  /** The index of the package in `Workspace.packages`: the unit of coherence, and of `private` (gap 29). */
+  package: Int
+  members: Map<String, SymbolId>
+  /** `with Add, Compare by value`: the field every *required* member is forwarded to (gap 14). */
+  delegate: String?
+  origin: ImplementationOrigin
+  /** Where a message about this implementation points: the name of the type, or the target of the `extend`. */
+  at: Span
+  /** A `native type` provides the members of its traits through the runtime, without bodies (gap 22). */
+  isNative: Bool = false
+}
+
+/** What the target of an implementation covers, which is what the index is built on. */
+public type TargetShape {
+  /** `extend Point with Show`: exactly the types with this head symbol. */
+  case Concrete(head: SymbolId)
+  /** `extend<Item> List<Item> with Show`: every type that implements the trait. */
+  case Bounded(head: SymbolId)
+  /** `extend<Source, Target> Source with Into<Target>`: every type at all. */
+  case Blanket
+  /** A tuple, a function type or something that was already reported. */
+  case Other
+}
+
+/** What bound resolution answers, and what it is memoized as. */
+public type Resolved {
+  /** The type implements the trait through this implementation, with these arguments. */
+  case Found(implementation: ImplementationId, arguments: List<TypeId>)
+  /** A trait-typed value or a generic parameter: the bound says so and the witness comes with the value. */
+  case Bounded(arguments: List<TypeId>)
+  case Missing
+  /** Two implementations answer the same question. Both declarations are named in the message. */
+  case Ambiguous(first: ImplementationId, second: ImplementationId)
+
+  fn isFound(self): Bool {
+    match self {
+      .Found(_, _) | .Bounded(_) => true
+      _ => false
+    }
+  }
+
+  /** The arguments of the trait as they are for the type that was asked about. */
+  fn argumentsOf(self): List<TypeId>? {
+    match self {
+      .Found(_, arguments) => Some(arguments)
+      .Bounded(arguments) => Some(arguments)
+      _ => None
+    }
+  }
+}
+
+/**
+ * How one bound of one type is satisfied at one place. Milestone 4.4 builds the whole tree; 4.3 fills in the leaves it
+ * can see without inference, and `Unresolved` stands for "it holds, the tree comes with the inference contexts".
+ */
+public type Witness {
+  case Implementation(implementation: ImplementationId, arguments: List<TypeId>)
+  /** The receiver's type is a generic parameter: the caller passed the witness. */
+  case Forwarded(parameter: ParameterId, bound: TypeId)
+  /** The receiver is a trait-typed value: the witness is in its table. */
+  case Object(annotation: TypeId, bound: TypeId)
+  case Derived(derived: Int)
+  case Unresolved
+}
+
+/** A derived implementation and the members a back end has to generate for it. */
+public type DerivedImplementation {
+  target: TypeId
+  capability: TypeId
+  /** In declaration order of the trait. */
+  members: List<String>
+}
+
+/**
+ * Every implementation of the program, with the indexes bound resolution needs. Built once, from the declarations
+ * alone: it is the only step of the checker that looks at the whole program.
+ */
+public type ImplementationTable {
+  var all: List<Implementation> = []
+  /** `"{trait}:{head}"`: the implementations of one trait for one concrete head symbol. */
+  var byTraitAndHead: Map<String, List<Int>> = [:]
+  /** Per trait symbol: the implementations whose target is a trait type or a bare parameter. */
+  var byTraitOpen: Map<Int, List<Int>> = [:]
+  /** Per concrete head symbol: every implementation of any trait for it, for the walk over supertraits. */
+  var byHead: Map<Int, List<Int>> = [:]
+  /** Every implementation whose target is not a concrete head: the list is short, so it is scanned. */
+  var open: List<Int> = []
+  /** `extend X { }` without a trait, per concrete head symbol. */
+  var inherent: Map<Int, List<Int>> = [:]
+  /** `extend<Item> List<Item> { }` without a trait: an inherent extension of a trait type. */
+  var inherentOpen: List<Int> = []
+  /** `"{module}:{span.start}"` of an `extend`: the first implementation it produced, so its members are built once. */
+  var bySpan: Map<String, Int> = [:]
+  var isBuilt: Bool = false
+
+  fn at(self, id: ImplementationId): Implementation {
+    all[id.value]
+  }
+
+  /**
+   * Every index is written out here instead of through a helper: handing a field of `self` to another `var self`
+   * method reads a place that has already been taken out, which stage 0 cannot see and cannot report.
+   */
+  fn add(var self, implementation: Implementation, shape: TargetShape, capability: SymbolId?): ImplementationId {
+    all.add(implementation)
+    const index = all.length() - 1
+    if const .Concrete(head) = shape {
+      var known = byHead.get(head.value) ?? []
+      known.add(index)
+      byHead.set(head.value, known)
+      if const Some(symbol) = capability {
+        const key = "{symbol.value}:{head.value}"
+        var candidates = byTraitAndHead.get(key) ?? []
+        candidates.add(index)
+        byTraitAndHead.set(key, candidates)
+      } else {
+        var extensions = inherent.get(head.value) ?? []
+        extensions.add(index)
+        inherent.set(head.value, extensions)
+      }
+    }
+    const isOpen = match shape {
+      .Bounded(_) | .Blanket => true
+      _ => false
+    }
+    if isOpen {
+      open.add(index)
+      match capability {
+        Some(symbol) => {
+          var candidates = byTraitOpen.get(symbol.value) ?? []
+          candidates.add(index)
+          byTraitOpen.set(symbol.value, candidates)
+        }
+        .None => inherentOpen.add(index)
+      }
+    }
+    ImplementationId(index)
+  }
+
+  fn candidatesOf(self, capability: SymbolId, head: SymbolId?): List<Int> {
+    var found: List<Int> = []
+    if const Some(symbol) = head {
+      for index in byTraitAndHead.get("{capability.value}:{symbol.value}") ?? [] {
+        found.add(index)
+      }
+    }
+    for index in byTraitOpen.get(capability.value) ?? [] {
+      if !found.contains(index) {
+        found.add(index)
+      }
+    }
+    found
+  }
+
+  /**
+   * What a type declares itself: the `with` list of its declaration and every `extend` of it. Only these, because
+   * every question about the whole program goes through `candidatesOf`, which is keyed by the trait and therefore
+   * short - scanning every blanket and every trait-targeted implementation for every type is what made the pass slow.
+   */
+  fn declaredFor(self, head: SymbolId?): List<Int> {
+    var found: List<Int> = []
+    if const Some(symbol) = head {
+      for index in byHead.get(symbol.value) ?? [] {
+        found.add(index)
+      }
+    }
+    found
+  }
+
+  fn inherentOf(self, head: SymbolId?): List<Int> {
+    var found: List<Int> = []
+    if const Some(symbol) = head {
+      for index in inherent.get(symbol.value) ?? [] {
+        found.add(index)
+      }
+    }
+    for index in inherentOpen {
+      found.add(index)
+    }
+    found
+  }
 }

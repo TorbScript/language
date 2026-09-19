@@ -27,7 +27,7 @@ workspace { members "std/*", "app" }
 name "std/prelude"
 """,
   "std/prelude/src/types.trb": r"""
-public type Int64 {}
+public native type Int64 with Add {}
 public type Float64 {}
 public type String {}
 public type Char {}
@@ -258,10 +258,17 @@ group "Forms of a type" {
   }
 
   test "a default type argument is filled in where the list is shorter, never inferred" {
-    // In a type position the `Self` of the default is the trait's own: nothing there says what implements it
-    assert(typeOf("Add") == "Add<Self, Self>")
-    assert(typeOf("Add<Int>") == "Add<Int64, Self>")
     assert(typeOf("Add<Int, Bool>") == "Add<Int64, Bool>")
+    // Only a bound says what implements the trait, so only there can a default of `Self` be filled in (4.3)
+    const outside = "type Probe \{\n  field: Add<Int>\n\}"
+    assert(problems(outside) == ["`Add` needs its second type argument here"])
+    assert(
+      notes(outside)
+        == [
+          "Its default is `Self`, and there is no `Self` outside of a bound: write the argument out, or use the trait"
+            + " in a `with` or a `where`",
+        ]
+    )
   }
 
   test "a bound fills the defaults of the trait with what the bound is asked of" {

@@ -8,8 +8,9 @@ use TypeId, TypeForm, ParameterForm, ParameterId from "./type"
 use Checker, Expectation, LocalBinding, TypeScope from "./context"
 use checkExpression, inferExpression, checkCondition from "./expression"
 use expectationOf, isNested from "./expression"
+use isFullyKnown from "./name"
 use checkPattern from "./pattern"
-use declaredTraitArguments from "./member"
+use traitArgumentsOf from "./implementation"
 use signatureOf, functionOfSite, declareSites from "./signature"
 use typeFromReference from "./lowering"
 use checkDeclaration from "./check"
@@ -162,13 +163,13 @@ fn checkBinding(var checker: Checker, binding: Binding) {
 }
 
 /**
- * `for x in xs` evaluates the subject once into a temporary and binds a copy of every item (gap 40). The item type
- * comes from the `Iterable<Item>` the subject's type declares, and from `Range<Value>`, which the prelude makes
- * iterable in an `extend` that milestone 4.3 will read.
+ * `for x in xs` evaluates the subject once into a temporary and binds a copy of every item (gap 40). The item type is
+ * the `Item` of the `Iterable<Item>` the subject implements - through its own declaration, through an `extend`
+ * (`extend Range<Int> with Iterable<Int>`) or through a supertrait, which is one and the same question.
  */
 fn checkLoop(var checker: Checker, pattern: Pattern, iterable: Expression, body: Block) {
   const subject = inferExpression(checker, iterable)
-  const element = iterationItemOf(checker, subject)
+  const element = iterationItemOf(checker, subject, iterable.span)
   checker.openScope()
   checkPattern(checker, pattern, element, false)
   checker.loopDepth = checker.loopDepth + 1
@@ -177,14 +178,9 @@ fn checkLoop(var checker: Checker, pattern: Pattern, iterable: Expression, body:
   checker.closeScope()
 }
 
-fn iterationItemOf(var checker: Checker, subject: TypeId): TypeId {
+fn iterationItemOf(var checker: Checker, subject: TypeId, at: Span): TypeId {
   if checker.absorbs(subject) {
     return checker.deferredType
-  }
-  if const .Nominal(symbol, arguments) = checker.types.form(subject) {
-    if checker.wellKnown.range == Some(symbol) && arguments.length() == 1 {
-      return arguments[0]
-    }
   }
   const iterable = match checker.wellKnown.iterable {
     Some(found) => found
@@ -192,10 +188,25 @@ fn iterationItemOf(var checker: Checker, subject: TypeId): TypeId {
       return checker.deferredType
     }
   }
-  match declaredTraitArguments(checker, subject, iterable) {
+  match traitArgumentsOf(checker, subject, iterable) {
     Some(arguments) => arguments.get(0) ?? checker.deferredType
-    .None => checker.deferredType
+    .None => {
+      reportNotIterable(checker, subject, at)
+      checker.deferredType
+    }
   }
+}
+
+/** A subject that is not `Iterable` cannot be looped over, and nothing else in the statement can be checked either. */
+fn reportNotIterable(var checker: Checker, subject: TypeId, at: Span) {
+  if !isFullyKnown(checker, subject) {
+    return
+  }
+  const shown = checker.describe(subject)
+  checker.reportHere(
+    Diagnostic.error("`{shown}` is not `Iterable`, so `for` cannot walk it", at)
+      .withNote("`for x in xs` needs an `Iterable<Item>`: a collection, a range, a pipeline, or a type that implements it")
+  )
 }
 
 /** `return e` is checked against the declared result; without one it *is* the result, so it is collected. */

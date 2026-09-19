@@ -294,11 +294,14 @@ group "`if`, `match` and blocks" {
 }
 
 group "What waits for a later sub-milestone" {
-  test "a generic call, a trait member and a closure body are `unchecked` and say nothing" {
-    const source = inBody("  const numbers: List<Int> = [1, 2]\n  const count = numbers.length()")
+  test "a generic call is `unchecked` and says nothing, a trait member of a known type is not" {
+    const source = "fn wrap<Value>(value: Value): Value \{\n  value\n\}\n\n"
+      + inBody("  const numbers: List<Int> = [1, 2]\n  print numbers.length()\n  print wrap(1)")
     assert(problems(source).isEmpty())
     const found = probe(source)
-    assert(found.typeOf("numbers.length()") == "unchecked")
+    // `length` comes from the `List` trait, which milestone 4.3 resolves; the arguments of `wrap` are 4.4's
+    assert(found.typeOf("numbers.length()") == "Int64")
+    assert(found.typeOf("wrap(1)") == "unchecked")
   }
 
   test "the statistics count what is typed and what waits" {

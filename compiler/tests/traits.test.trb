@@ -1,0 +1,268 @@
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
+/**
+ * What a trait means for an expression: which member a name reaches, which implementation carries it, and what the
+ * operators, `for`, indexing and string interpolation resolve to.
+ *
+ * Bound resolution itself - the index, coherence, overlap, derivation, delegation - is `implementations.test.trb`, and
+ * `?`, `??`, `?.` and `into()` are `conversions.test.trb`.
+ */
+
+/** The source inside of a `fn probe()` body, so that an expression can be looked at without a declaration around it. */
+fn inBody(body: String): String {
+  "fn probe() \{\n{body}\n\}"
+}
+
+group "Members through traits" {
+  test "a required member of a trait the type comes with" {
+    const source = "type Amount with Equals \{\n  value: Int\n\n  fn equals(self, other: Amount): Bool \{\n"
+      + "    value == other.value\n  \}\n\}\n\n"
+      + inBody("  const a = Amount(1)\n  print a.equals(Amount(2))")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("a.equals(Amount(2))") == "Bool")
+    assert(found.resolutionOf("a.equals") == "call equals")
+  }
+
+  test "a default member of a trait, with `Self` standing for the type that reached it" {
+    const source = "trait Grow \{\n  fn step(self): Int\n\n  fn twice(self): Int \{\n    step() + step()\n  \}\n\}\n\n"
+      + "type Amount with Grow \{\n  fn step(self): Int \{\n    1\n  \}\n\}\n\n"
+      + inBody("  const a = Amount()\n  print a.twice()")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("a.twice()") == "Int64")
+  }
+
+  test "a member of a supertrait, which a type that meets it implements" {
+    const source = "type Amount with Compare \{\n  value: Int\n\n"
+      + "  fn compare(self, other: Amount): Int \{\n    0\n  \}\n\n"
+      + "  fn equals(self, other: Amount): Bool \{\n    true\n  \}\n\}\n\n"
+      + inBody("  const a = Amount(1)\n  print a.equals(Amount(2))")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("a.equals(Amount(2))") == "Bool")
+  }
+
+  test "the dispatch says which implementation carries a member that comes from a trait" {
+    const source = "trait Grow \{\n  fn step(self): Int\n\n  fn twice(self): Int \{\n    step() + step()\n  \}\n\}\n\n"
+      + "type Amount with Grow \{\n  fn step(self): Int \{\n    1\n  \}\n\}\n\n"
+      + inBody("  const a = Amount()\n  print a.twice()\n  print a.step()")
+    const found = probe(source)
+    assert(found.dispatchOf("a.twice") == "implementation Amount: Grow")
+    // A member the type writes in its own body is an ordinary member and is reached directly
+    assert(found.dispatchOf("a.step") == "direct")
+  }
+
+  test "a member of a trait-typed value is taken from its witness table" {
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + inBody("  fn draw(shape: Shape): Int \{\n    shape.area()\n  \}")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("shape.area()") == "Int64")
+    assert(found.dispatchOf("shape.area") == "object Shape")
+  }
+
+  test "a member of a generic parameter comes from its bounds, and the caller passes the witness" {
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + "fn total<Item: Shape>(value: Item): Int \{\n  value.area()\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("value.area()") == "Int64")
+    assert(found.dispatchOf("value.area") == "forwarded Shape")
+  }
+
+  test "a member that no trait and no extension has is a mistake, with the nearest name as a note" {
+    const source = "type Amount \{\n  value: Int\n\}\n\n" + inBody("  const a = Amount(1)\n  print a.valu")
+    assert(problems(source) == ["`Amount` has no member `valu`"])
+    assert(notes(source) == ["Did you mean `value`?"])
+  }
+
+  test "a member of a trait whose own parameters the receiver fills in" {
+    const source = inBody("  const texts: List<String> = [\"a\"]\n  print texts.length()")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("texts.length()") == "Int64")
+  }
+
+  test "one name with several signatures waits for its arguments" {
+    // `Wide` is `From<Int8>` and `From<UInt8>`, so `Wide.from` is one name with two signatures: milestone 4.4 picks
+    const source = "type Wide \{\n  value: Int\n\}\n\n"
+      + "extend Wide with From<Int8> \{\n  fn from(value: Int8): Wide \{\n    Wide(1)\n  \}\n\}\n\n"
+      + "extend Wide with From<UInt8> \{\n  fn from(value: UInt8): Wide \{\n    Wide(2)\n  \}\n\}\n\n"
+      + inBody("  print Wide.from(1)")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Wide.from(1)") == "unchecked")
+  }
+}
+
+group "Traits as a namespace" {
+  test "`Trait.member` reads the trait's own members first" {
+    const source = "trait Shape \{\n  fn area(self): Int\n\n  fn unit(): Int \{\n    1\n  \}\n\}\n\n"
+      + inBody("  print Shape.unit()")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Shape.unit()") == "Int64")
+  }
+
+  test "`Trait.member` reads the members of an implementation whose target is the trait itself" {
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + "type Square with Shape \{\n  fn area(self): Int \{\n    1\n  \}\n\}\n\n"
+      + "extend Shape \{\n  fn unit(): Square \{\n    Square()\n  \}\n\}\n\n"
+      + inBody("  print Shape.unit().area()")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Shape.unit()") == "Square")
+  }
+}
+
+group "Operators through their traits" {
+  test "arithmetic takes `Other` and `Output` from the trait the left operand implements" {
+    const source = "type Meters with Add<Meters, Meters> \{\n  value: Float\n\n"
+      + "  fn add(self, other: Meters): Meters \{\n    Meters(value + other.value)\n  \}\n\}\n\n"
+      + inBody("  const sum = Meters(1.0) + Meters(2.0)")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Meters(1.0) + Meters(2.0)") == "Meters")
+    assert(found.dispatchOf("Meters(1.0) + Meters(2.0)") == "implementation Meters: Add<Meters, Meters>")
+  }
+
+  test "a type that does not implement the operator is told so" {
+    const source = "type Meters \{\n  value: Float\n\}\n\n" + inBody("  const sum = Meters(1.0) + Meters(2.0)")
+    assert(problems(source) == ["`Meters` does not implement `Add`, so `a + b` has no meaning for it"])
+    assert(notes(source) == ["Operators are traits: a type has the ones it comes `with`, and nothing else"])
+  }
+
+  test "the right operand is checked against `Other`, so `Meters + Float` is a mistake" {
+    const source = "type Meters with Add<Meters, Meters> \{\n  value: Float\n\n"
+      + "  fn add(self, other: Meters): Meters \{\n    self\n  \}\n\}\n\n"
+      + inBody("  const sum = Meters(1.0) + 2.0")
+    assert(problems(source) == ["Expected `Meters`, found `Float64`"])
+  }
+
+  test "the arithmetic of the built-in numbers goes through `Signed`, `Numeric` and `Add<Self, Self>`" {
+    const found = probe(inBody("  const sum = 1 + 2\n  const share = 1.0 / 60.0"))
+    assert(found.typeOf("1 + 2") == "Int64")
+    assert(found.typeOf("1.0 / 60.0") == "Float64")
+  }
+
+  test "`-a` is `Negate.negate`, and a type without it is told so" {
+    const found = probe(inBody("  const value = 1\n  const other = -value"))
+    assert(found.typeOf("-value") == "Int64")
+    const source = "type Meters \{\n  value: Float\n\}\n\n"
+      + inBody("  const distance = Meters(1.0)\n  const back = -distance")
+    assert(problems(source) == ["`Meters` does not implement `Negate`, so `-a` has no meaning for it"])
+  }
+
+  test "a comparison is a `Bool`, and it records the `equals` or `compare` that runs" {
+    const source = "type Amount with Equals, Compare \{\n  value: Int\n\n"
+      + "  fn compare(self, other: Amount): Int \{\n    0\n  \}\n\n"
+      + "  fn equals(self, other: Amount): Bool \{\n    true\n  \}\n\}\n\n"
+      + inBody("  const same = Amount(1) == Amount(2)\n  const order = Amount(1) < Amount(2)")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Amount(1) == Amount(2)") == "Bool")
+    assert(found.dispatchOf("Amount(1) == Amount(2)") == "implementation Amount: Equals")
+    assert(found.dispatchOf("Amount(1) < Amount(2)") == "implementation Amount: Compare")
+  }
+
+  test "`&&`, `||` and `!` stay built in on `Bool` and are not traits (gap 21)" {
+    const found = probe(inBody("  const flag = true && !false\n  const other = flag || true"))
+    assert(found.typeOf("true && !false") == "Bool")
+    assert(found.typeOf("!false") == "Bool")
+    assert(found.typeOf("flag || true") == "Bool")
+  }
+
+  test "`a[key]` is `Indexed.at` and `a[from..to]` is `Slice.slice`" {
+    const source = inBody("  const texts: List<String> = [\"a\"]\n  print texts[0]\n  print \"abc\"[0..2]")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("texts[0]") == "String")
+    assert(found.typeOf("\"abc\"[0..2]") == "String")
+  }
+
+  test "a type that is not `Indexed` cannot be indexed" {
+    const source = "type Amount \{\n  value: Int\n\}\n\n" + inBody("  const a = Amount(1)\n  print a[0]")
+    assert(problems(source) == ["`Amount` does not implement `Indexed`, so `a[key]` has no meaning for it"])
+  }
+}
+
+group "Interpolation and iteration" {
+  test "every interpolated part records the `Show` implementation that renders it" {
+    const source = "type Amount with Show \{\n  fn show(self): String \{\n    \"a\"\n  \}\n\}\n\n"
+      + inBody("  const shown = \"value \{Amount()\}\"")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("\"value \{Amount()\}\"") == "String")
+    assert(found.adaptationsOf("Amount()") == ["show through Amount: Show"])
+  }
+
+  test "a built-in number reaches `Show` through its supertraits, and the witness names the route" {
+    const found = probe(inBody("  const shown = \"value \{1 + 1\}\""))
+    // `Int64 with Signed`, `Signed with Numeric`, `Numeric with Show`: the implementation that carries it is the one
+    // the type wrote down, and the trait it satisfies is reached from there
+    assert(found.adaptationsOf("1 + 1") == ["show through Int64: Signed"])
+  }
+
+  test "a `Show` that is generated for a type of the file is recorded as the implementation that was derived" {
+    const source = "type Amount \{\n  value: Int\n\}\n\n" + inBody("  const shown = \"value \{Amount(2)\}\"")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.adaptationsOf("Amount(2)") == ["show through Amount: Show"])
+  }
+
+  test "`for` walks everything that implements `Iterable`, through an `extend` as well" {
+    const source = inBody(
+      "  const texts: List<String> = [\"a\"]\n  for part in texts \{\n    print (part)\n  \}\n"
+        + "  for index in 0..2 \{\n    print (index)\n  \}"
+    )
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.patternTypeOf("part") == "String")
+    assert(found.patternTypeOf("index") == "Int64")
+  }
+
+  test "a subject that is not `Iterable` cannot be looped over" {
+    const source = "type Amount \{\n  value: Int\n\}\n\n"
+      + inBody("  const a = Amount(1)\n  for part in a \{\n    print (part)\n  \}")
+    assert(problems(source) == ["`Amount` is not `Iterable`, so `for` cannot walk it"])
+  }
+}
+
+group "Coercion to a trait type" {
+  test "a value becomes a trait-typed value, and every bound records its witness (gap 8)" {
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + "type Square with Shape \{\n  fn area(self): Int \{\n    1\n  \}\n\}\n\n"
+      + inBody("  const shape: Shape = Square()")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.adaptationsOf("Square()") == ["trait value Shape"])
+  }
+
+  test "a value that does not implement the bound is told which one" {
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + "type Square \{\n  side: Int\n\}\n\n"
+      + inBody("  const shape: Shape = Square(1)")
+    assert(problems(source) == ["`Square` does not implement `Shape`"])
+  }
+
+  test "a trait value coerces to fewer bounds and to a supertrait" {
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + "fn narrow(value: Shape + Show): Shape \{\n  value\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "there is no variance: a `List<Square>` is not a `List<Shape>`" {
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + "type Square with Shape \{\n  fn area(self): Int \{\n    1\n  \}\n\}\n\n"
+      + "fn widen(squares: List<Square>): List<Shape> \{\n  squares\n\}"
+    assert(problems(source) == ["`List<Square>` does not implement `List<Shape>`"])
+  }
+
+  test "`Never` fits everywhere" {
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + "fn broken(): Shape \{\n  panic \"none\"\n\}"
+    assert(problems(source).isEmpty())
+  }
+}

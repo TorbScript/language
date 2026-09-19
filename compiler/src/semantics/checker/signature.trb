@@ -112,6 +112,13 @@ public fn selfTypeOf(var checker: Checker, symbol: SymbolId): TypeId {
       ParameterDeclaration("Self", None, Some(symbol), false, -1, None, module)
     )
     built = checker.types.intern(TypeForm.Parameter(parameter))
+    // The one bound of `Self` is the trait itself, which is what makes a member lookup on it find the trait's members
+    var arguments: List<TypeId> = []
+    for own in generics {
+      arguments.add(checker.types.intern(TypeForm.Parameter(own)))
+    }
+    const bound = checker.nominal(symbol, arguments)
+    checker.parameterBounds.set(parameter.value, [bound])
   } else {
     var arguments: List<TypeId> = []
     for parameter in generics {
@@ -563,8 +570,19 @@ fn addBound(
   for reference in references {
     traits.addAll(traitsFromReference(checker, reference, subject, scope))
   }
-  if !traits.isEmpty() {
-    bounds.add(Bound(subject, traits))
+  if traits.isEmpty() {
+    return
+  }
+  bounds.add(Bound(subject, traits))
+  // `<Item: Hash>` and `where Item: Hash` are what a member lookup on `Item` may see (design 4.1, `Parameter`)
+  if const .Parameter(parameter) = checker.types.form(subject) {
+    var known = checker.parameterBounds.get(parameter.value) ?? []
+    for bound in traits {
+      if !known.contains(bound) {
+        known.add(bound)
+      }
+    }
+    checker.parameterBounds.set(parameter.value, known)
   }
 }
 

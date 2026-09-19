@@ -2,10 +2,11 @@ use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use SymbolId from "../symbols"
 use editDistance from "../resolve-types"
-use TypeId, FunctionForm from "./type"
-use Checker, Resolution, Dispatch, Adaptation, LocalKind from "./context"
-use Candidate, lookupMember, lookupStaticMember, resolutionOfCandidate from "./member"
-use constructorOf, memberNames, isExtended, hasDeclaredTraits, caseNamed from "./member"
+use TypeId, TypeForm, FunctionForm from "./type"
+use Checker, Resolution, Dispatch, Adaptation, LocalKind, Candidate from "./context"
+use lookupMember, lookupStaticMember, resolutionOfCandidate from "./member"
+use constructorOf, memberNames, caseNamed from "./member"
+use isConcrete, hiddenExtensionOf from "./implementation"
 use signatureOf, aliasTargetOf, genericsOf, resultOf from "./signature"
 
 /**
@@ -70,7 +71,7 @@ public fn resolveName(var checker: Checker, text: String, at: Span, expected: Ty
   }
   // The innermost receiver, and only that one: `server { s => s.database { ... } }` names the outer one (gap 4)
   if const Some(receiver) = checker.receiverType {
-    if const Some(candidate) = lookupMember(checker, receiver, text) {
+    if const Some(candidate) = lookupMember(checker, receiver, text, Some(at)) {
       return implicitTarget(checker, candidate, text, at)
     }
   }
@@ -102,7 +103,7 @@ fn implicitTarget(var checker: Checker, candidate: Candidate, text: String, at: 
 
 /** A member that was found on a type: the same answer in the shape the rest of the checker works with. */
 public fn targetOfCandidate(var checker: Checker, candidate: Candidate, text: String): Target {
-  if candidate.isGeneric {
+  if candidate.isGeneric || candidate.needsArguments {
     return Target(Resolution.Deferred, checker.deferredType, name: text)
   }
   Target(
@@ -130,8 +131,16 @@ public fn symbolTarget(var checker: Checker, symbol: SymbolId, text: String): Ta
       }
       deferredTarget(checker)
     }
-    // A trait as a namespace (`List.of`, `Map.from`) needs its implementations: milestone 4.3
-    .Trait => deferredTarget(checker)
+    // A trait is a namespace for its own members and for the ones an implementation of it provides (gap 31). A
+    // generic one (`List.of`, `Map.from`) has to infer its arguments from the call, which is milestone 4.4
+    .Trait => {
+      if !genericsOf(checker, symbol).isEmpty() {
+        return deferredTarget(checker)
+      }
+      const bound = checker.nominal(symbol, [])
+      const own = checker.types.intern(TypeForm.Traits([bound]))
+      Target(Resolution.TypeOf(own), checker.deferredType, name: text, constructs: Some(own))
+    }
     .Case(owner) => caseTarget(checker, owner, text)
     .Namespace(target) => Target(Resolution.Namespace(target), checker.deferredType, name: text)
     // A generic parameter as a namespace (`Item.from(0)`) forwards to a witness: milestone 4.4
@@ -246,8 +255,8 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
 }
 
 /**
- * `a.b` where `b` is not there. Answers whether it said anything: a type that comes with a trait or that an `extend`
- * adds to may well have the member, and only milestone 4.3 can tell.
+ * `a.b` where `b` is not there. Answers whether it said anything: what a generic parameter or a trait-typed value has
+ * depends on bounds that milestone 4.4 solves, so nothing is said about those.
  */
 public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: String, at: Span): Bool {
   if !isFullyKnown(checker, receiver) {
@@ -255,6 +264,15 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
   }
   const shown = checker.describe(receiver)
   var problem = Diagnostic.error("`{shown}` has no member `{text}`", at)
+  // An extension of a foreign type only reaches the files that import the module it is written in
+  if const Some(module) = hiddenExtensionOf(checker, receiver, text) {
+    const path = checker.program.graph.at(module).path
+    checker.reportHere(
+      Diagnostic.error("`{text}` is declared in `{path}`, which this file does not import", at)
+        .withNote("An extension of a type of another package is visible in every file that imports its module")
+    )
+    return true
+  }
   if const Some(similar) = nearestMember(checker, receiver, text) {
     problem = problem.withNote("Did you mean `{similar}`?")
   }
@@ -262,19 +280,22 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
   true
 }
 
-/** Whether every member of a type is visible to milestone 4.2: a plain `type` with no traits and no extensions. */
+/**
+ * Whether every member of a type is visible: a concrete type has the members of its body, of every extension of it
+ * and of every trait it implements, and milestone 4.3 sees all three. A generic parameter and a trait-typed value do
+ * not: what they have depends on the bounds a call site solves, which is 4.4.
+ */
 public fn isFullyKnown(var checker: Checker, of: TypeId): Bool {
   if checker.absorbs(of) {
     return false
   }
-  const isNominal = match checker.types.form(of) {
-    .Nominal(_, _) => true
+  // A literal type carries `parse`, `show`, `equals`, `hash`, `encode`, `decode` and `into` without declaring any of
+  // them, and what their failure types are is not written down anywhere yet - so nothing is said about one
+  const isNamed = match checker.types.form(of) {
+    .Nominal(_, _) | .Tuple(_) => true
     _ => false
   }
-  if !isNominal {
-    return false
-  }
-  !hasDeclaredTraits(checker, of) && !isExtended(checker, of)
+  isNamed && isConcrete(checker, of)
 }
 
 /** A member of the type that is at most two edits away from what was written. */

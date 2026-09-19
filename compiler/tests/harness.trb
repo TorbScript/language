@@ -2,7 +2,8 @@ use Span from "../src/syntax/source"
 use SourceTree from "../src/project/source-tree"
 use ModuleId from "../src/semantics/module"
 use check from "../src/semantics/check"
-use Checker, Resolution, Adaptation, Statistics from "../src/semantics/checker/context"
+use Checker, Resolution, Adaptation, Dispatch, Statistics from "../src/semantics/checker/context"
+use TypeId, Witness from "../src/semantics/checker/type"
 
 /**
  * One in-memory workspace for the tests of the type checker, and the questions they ask about it.
@@ -23,6 +24,11 @@ public trait Equals {
 
 public trait Compare with Equals {
   fn compare(self, other: Self): Int
+
+  /** A default member: written in terms of the required one, and not forwarded by `by field` (gap 14). */
+  fn max(self, other: Self): Self {
+    if compare(other) > 0 { self } else { other }
+  }
 }
 
 public trait Hash {
@@ -69,6 +75,36 @@ public trait Iterator<Item> {
   fn next(var self): Item?
 }
 
+public trait From<Source> {
+  fn from(value: Source): Self
+}
+
+public trait Into<Target> {
+  fn into(self): Target
+}
+
+extend<Source, Target> Source with Into<Target> where Target: From<Source> {
+  fn into(self): Target {
+    Target.from(self)
+  }
+}
+
+public trait TryFrom<Source, Failure> {
+  fn tryFrom(value: Source): Result<Self, Failure>
+}
+
+public trait Encode {
+  fn encode(self): String
+}
+
+public trait Length {
+  fn length(self): Int
+
+  fn isEmpty(self): Bool {
+    length() == 0
+  }
+}
+
 public trait Numeric with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show {}
 
 public trait Signed with Numeric, Negate {}
@@ -93,12 +129,49 @@ public type Float = Float64
 public type Option<Value> {
   case Some(value: Value)
   case None
+
+  fn isSome(self): Bool {
+    match self {
+      Some(_) => true
+      .None => false
+    }
+  }
+
+  fn orElse(self, fallback: lazy Value): Value {
+    match self {
+      Some(value) => value
+      .None => fallback
+    }
+  }
+}
+
+public type Result<Value, Failure> {
+  case Ok(value: Value)
+  case Error(error: Failure)
+
+  fn ok(self): Value? {
+    match self {
+      Ok(value) => Some(value)
+      Error(_) => None
+    }
+  }
+
+  fn orElse(self, fallback: lazy Value): Value {
+    match self {
+      Ok(value) => value
+      Error(_) => fallback
+    }
+  }
 }
 
 public type Range<Value> {
   start: Value?
   end: Value?
   isInclusive: Bool = false
+}
+
+extend Range<Int> with Iterable<Int> {
+  native fn iterator(self): Iterator<Int>
 }
 
 public trait List<Item> with Iterable<Item>, Indexed<Int, Item> {
@@ -108,6 +181,15 @@ public trait List<Item> with Iterable<Item>, Indexed<Int, Item> {
 }
 
 public trait Map<Key, Value> with Indexed<Key, Value> {}
+
+/** Every list is showable: an implementation whose target is the *trait* covers every type that implements it. */
+extend<Item: Show> List<Item> with Show {
+  fn show(self): String {
+    "a list"
+  }
+}
+
+public native type ArrayList<Item> with List<Item> {}
 
 public type Array<Item, const Size: Int> {}
 
@@ -129,9 +211,11 @@ name "std/prelude"
 public use Show, Equals, Compare, Hash, Negate, Iterable, Iterator from "./types"
 public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
 public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
-public use Bool, Char, String, Int, Float, Option, Range, List, Map, Array from "./types"
+public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
+public use From, Into, TryFrom, Encode, Length from "./types"
 public use print, panic from "./types"
 public use Some, None from Option
+public use Ok, Error from Result
 """,
   "app/project.trb": r"""
 name "acme/app"
@@ -180,6 +264,12 @@ public type Probed {
     const at = spanOf(written)
     const found = checker.resolutionAt(module, at).expect("a resolution at `{written}`")
     describeResolution(checker, found)
+  }
+
+  /** How the call or the operator at `written` reaches its target. */
+  fn dispatchOf(self, written: String): String {
+    const at = spanOf(written)
+    dispatchAt(checker, module, at)
   }
 
   /** The adaptations of the expression at `written`, in the order they apply. */
@@ -259,5 +349,59 @@ public fn describeAdaptation(checker: Checker, adaptation: Adaptation): String {
     .Lazy => "lazy"
     .TrailingClosure(parameter) => "trailing {parameter}"
     .ImplicitSelf(receiver) => "self {checker.binding(receiver).name}"
+    .ToTraitValue(bounds, _) => "trait value {describeBounds(checker, bounds)}"
+    .Convert(witness, method) => "convert {checker.symbolAt(method).name} through {describeWitness(checker, witness)}"
+    .ShowValue(witness) => "show through {describeWitness(checker, witness)}"
+    .Delegate(field) => "delegate {field}"
+  }
+}
+
+fn describeBounds(checker: Checker, bounds: List<TypeId>): String {
+  var parts: List<String> = []
+  for bound in bounds {
+    parts.add(checker.describe(bound))
+  }
+  String.join(parts, separator: " + ")
+}
+
+/** A witness as a test writes it: which implementation makes a bound hold, and for which type. */
+public fn describeWitness(checker: Checker, witness: Witness): String {
+  match witness {
+    .Implementation(implementation, _) => {
+      const found = checker.implementations.at(implementation)
+      "{checker.describe(found.target)}: {describeTrait(checker, found.capability)}"
+    }
+    .Forwarded(_, bound) => "forwarded {checker.describe(bound)}"
+    .Object(annotation, bound) => "object {checker.describe(annotation)}: {checker.describe(bound)}"
+    .Derived(index) => "derived {index}"
+    .Unresolved => "unresolved"
+  }
+}
+
+fn describeTrait(checker: Checker, applied: TypeId?): String {
+  match applied {
+    Some(found) => checker.describe(found)
+    .None => "-"
+  }
+}
+
+/** How a call reaches its target: `.Direct`, or which implementation, bound or parameter carries the member. */
+public fn describeDispatch(checker: Checker, dispatch: Dispatch): String {
+  match dispatch {
+    .Direct => "direct"
+    .Implementation(implementation, _) => {
+      const found = checker.implementations.at(implementation)
+      "implementation {checker.describe(found.target)}: {describeTrait(checker, found.capability)}"
+    }
+    .Object(bound, _) => "object {checker.describe(bound)}"
+    .Forwarded(_, bound, _) => "forwarded {checker.describe(bound)}"
+  }
+}
+
+/** The dispatch that was recorded for the expression at `written`, for a test about an operator or a trait member. */
+public fn dispatchAt(checker: Checker, module: ModuleId, at: Span): String {
+  match checker.resolutionAt(module, at) {
+    Some(.Callable(_, _, dispatch)) => describeDispatch(checker, dispatch)
+    _ => "none"
   }
 }

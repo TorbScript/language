@@ -3,11 +3,12 @@ use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, TextSegment, Condition, Block, Statement from "../../syntax/ast"
 use MatchArm, PrefixOperator, InfixOperator, Closure, TypeReference from "../../syntax/ast"
 use SymbolId from "../symbols"
-use TypeId, TypeForm, TupleField, LiteralValue from "./type"
-use Checker, Expectation, Resolution, Adaptation from "./context"
+use TypeId, TypeForm, TupleField, LiteralValue, FunctionForm, Witness from "./type"
+use Checker, Expectation, Resolution, Adaptation, Dispatch from "./context"
 use Target, deferredTarget, resolveName, symbolTarget, targetOfCandidate from "./name"
-use formOf, reportUnknownMember from "./name"
-use lookupMember, lookupStaticMember, declaredTraitArguments from "./member"
+use formOf, reportUnknownMember, isFullyKnown from "./name"
+use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf from "./member"
+use traitArgumentsOf, witnessFor, isConcrete from "./implementation"
 use typeFromReference, integerLiteral from "./lowering"
 use sameType from "./unify"
 use checkCall from "./call"
@@ -81,6 +82,9 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     }
     // `.Circle(1.0)` needs the type it belongs to; without a concrete one it is milestone 4.4's work
     .ImplicitMember(name) => implicitMemberType(checker, name.text, annotation, expression.span)
+    // `value.into()` is chosen by the expected type, so it is the one call the callee alone cannot answer
+    .Call(callee, arguments, _) if isConversionCall(checker, callee, arguments, annotation) =>
+      conversionType(checker, expression, callee, annotation)
     .Call(callee, arguments, style) => checkCall(checker, expression, callee, arguments, style, expected)
     .Index(target, index) => indexType(checker, target, index, expression.span)
     .TupleLiteral(items) => tupleLiteralType(checker, items, annotation)
@@ -102,11 +106,7 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     }
     // A closure is read from the expected function type, and its body is checked with it: milestone 4.4
     .Closure(closure) => closureType(checker, closure, annotation)
-    // `?` converts the error through `From` and needs the result type of the function: milestone 4.3
-    .Try(inner) => {
-      deferExpression(checker, inner)
-      checker.deferredType
-    }
+    .Try(inner) => tryType(checker, inner, expression.span)
     .Invalid => checker.invalidType
   }
 }
@@ -121,12 +121,8 @@ public fn resolveTarget(var checker: Checker, expression: Expression, expected: 
   match expression.kind {
     .Name(text) => resolveName(checker, text, expression.span, expected)
     .Member(target, name, isOptional) => {
-      // `a?.m` is `Option.map`, or `flatMap` when `m` returns an `Option` (gap 12): milestone 4.3
-      if isOptional {
-        deferExpression(checker, target)
-        return deferredTarget(checker)
-      }
-      memberTarget(checker, target, name.text, name.span)
+      const found = memberTarget(checker, target, name.text, name.span, isOptional)
+      found
     }
     .ImplicitMember(name) => implicitMemberTarget(checker, name.text, expected)
     _ => {
@@ -137,10 +133,14 @@ public fn resolveTarget(var checker: Checker, expression: Expression, expected: 
 }
 
 /** `a.b`, `Type.b`, `namespace.b`: which one it is depends on what the part in front of the dot turned out to be. */
-fn memberTarget(var checker: Checker, base: Expression, text: String, at: Span): Target {
+fn memberTarget(var checker: Checker, base: Expression, text: String, at: Span, isOptional: Bool): Target {
   const owner = resolveTarget(checker, base, None)
   checker.resolved(base.span, owner.resolution)
   const _ = checker.typed(base.span, owner.annotation)
+  // `a?.m` is `Option.map`, or `flatMap` when `m` gives back an `Option` itself: it never nests one (gap 12)
+  if isOptional {
+    return optionalTarget(checker, owner.annotation, text, at)
+  }
   // `namespace.b` from `use * as text from "./text"`: a top-level declaration of that module
   if const .Namespace(target) = owner.resolution {
     match checker.program.scopes[target.value].exported.get(text) {
@@ -157,7 +157,7 @@ fn memberTarget(var checker: Checker, base: Expression, text: String, at: Span):
   }
   // `Point.origin`, `Shape.Circle`, `Email.parse`: a constant, a static function or a case of the type
   if const Some(own) = owner.constructs {
-    match lookupStaticMember(checker, own, text) {
+    match lookupStaticMember(checker, own, text, Some(at)) {
       Some(candidate) => {
         return targetOfCandidate(checker, candidate, text)
       }
@@ -168,8 +168,11 @@ fn memberTarget(var checker: Checker, base: Expression, text: String, at: Span):
     }
   }
   const receiver = owner.annotation
-  match lookupMember(checker, receiver, text) {
-    Some(candidate) => targetOfCandidate(checker, candidate, text)
+  match lookupMember(checker, receiver, text, Some(at)) {
+    Some(candidate) => {
+      recordDelegation(checker, at, candidate)
+      targetOfCandidate(checker, candidate, text)
+    }
     .None => {
       if reportUnknownMember(checker, receiver, text, at) {
         return Target(Resolution.Deferred, checker.invalidType, name: text)
@@ -177,6 +180,88 @@ fn memberTarget(var checker: Checker, base: Expression, text: String, at: Span):
       Target(Resolution.Deferred, checker.deferredType, name: text)
     }
   }
+}
+
+/**
+ * `first()?.position()`: the member is looked up on the `Value` of the `Option`, and what comes out is an `Option`
+ * again - `map` when the member gives back an ordinary value, `flatMap` when it gives back an `Option`, so that `?.`
+ * never produces a nested one (gap 12). It is not defined on a `Result`.
+ */
+fn optionalTarget(var checker: Checker, receiver: TypeId, text: String, at: Span): Target {
+  const inner = match optionValueOf(checker, receiver) {
+    Some(found) => found
+    .None => {
+      if isFullyKnown(checker, receiver) && !isOption(checker, receiver) {
+        const shown = checker.describe(receiver)
+        checker.reportHere(
+          Diagnostic.error("`?.` needs an `Option`, and `{shown}` is not one", at)
+            .withNote("`a?.m` is `Option.map`. On a `Result` it has no meaning: take the `Option` first (`ok()`)")
+        )
+        return Target(Resolution.Deferred, checker.invalidType, name: text)
+      }
+      return deferredTarget(checker)
+    }
+  }
+  const candidate = match lookupMember(checker, inner, text, Some(at)) {
+    Some(found) => found
+    .None => {
+      if reportUnknownMember(checker, inner, text, at) {
+        return Target(Resolution.Deferred, checker.invalidType, name: text)
+      }
+      return Target(Resolution.Deferred, checker.deferredType, name: text)
+    }
+  }
+  const target = targetOfCandidate(checker, candidate, text)
+  if checker.absorbs(target.annotation) {
+    return target
+  }
+  match target.form {
+    Some(form) => {
+      const wrapped = optionalOf(checker, form.result)
+      const inner = FunctionForm(form.parameters, wrapped)
+      target.copy(annotation: checker.functionType(inner), form: Some(inner))
+    }
+    // A field or a constant behind `?.`: the value itself becomes optional
+    .None => target.copy(annotation: optionalOf(checker, target.annotation))
+  }
+}
+
+/** `Option<Value>` around a type, unless it is an `Option` already: `?.` never nests one. */
+fn optionalOf(var checker: Checker, annotation: TypeId): TypeId {
+  if isOption(checker, annotation) {
+    return annotation
+  }
+  match checker.wellKnown.option {
+    Some(option) => checker.nominal(option, [annotation])
+    .None => checker.deferredType
+  }
+}
+
+fn isOption(checker: Checker, annotation: TypeId): Bool {
+  if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
+    return checker.wellKnown.option == Some(symbol) && arguments.length() == 1
+  }
+  false
+}
+
+/** The `Value` of an `Option<Value>`. */
+public fn optionValueOf(checker: Checker, annotation: TypeId): TypeId? {
+  if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
+    if checker.wellKnown.option == Some(symbol) && arguments.length() == 1 {
+      return Some(arguments[0])
+    }
+  }
+  None
+}
+
+/** The `Value` of a `Result<Value, Failure>`, and its `Failure`. */
+public fn resultPartsOf(checker: Checker, annotation: TypeId): (TypeId, TypeId)? {
+  if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
+    if checker.wellKnown.result == Some(symbol) && arguments.length() == 2 {
+      return Some((arguments[0], arguments[1]))
+    }
+  }
+  None
 }
 
 /** `.Circle(1.0)`, `.None`: the case of the type that is expected here. */
@@ -200,7 +285,7 @@ fn implicitMemberTarget(var checker: Checker, text: String, expected: TypeId?): 
   }
 }
 
-/** `a[key]` is `Indexed.at`, `a[from..to]` is `Slice.slice`, which the type of `a` has to come with. */
+/** `a[key]` is `Indexed.at`, `a[from..to]` is `Slice.slice`: both are looked up as implementations of those traits. */
 fn indexType(var checker: Checker, target: Expression, index: Expression, at: Span): TypeId {
   const receiver = inferExpression(checker, target)
   const key = inferExpression(checker, index)
@@ -209,11 +294,17 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
   }
   // A range makes it a slice, which gives back a value of the same type
   if isRange(checker, key) {
-    if const Some(slice) = checker.wellKnown.slice {
-      if declaredTraitArguments(checker, receiver, slice).isSome() {
-        return receiver
+    const slice = match checker.wellKnown.slice {
+      Some(found) => found
+      .None => {
+        return checker.deferredType
       }
     }
+    if traitArgumentsOf(checker, receiver, slice).isSome() {
+      recordTraitCall(checker, at, receiver, slice, "slice")
+      return receiver
+    }
+    reportMissingOperator(checker, receiver, "Slice", "a[from..to]", at)
     return checker.deferredType
   }
   const indexed = match checker.wellKnown.indexed {
@@ -222,16 +313,50 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
       return checker.deferredType
     }
   }
-  match declaredTraitArguments(checker, receiver, indexed) {
+  match traitArgumentsOf(checker, receiver, indexed) {
     Some(arguments) => {
       if arguments.length() != 2 {
         return checker.deferredType
       }
       const _ = checkValue(checker, key, arguments[0], index.span)
+      recordTraitCall(checker, at, receiver, indexed, "at")
       arguments[1]
     }
-    .None => checker.deferredType
+    .None => {
+      reportMissingOperator(checker, receiver, "Indexed", "a[key]", at)
+      checker.deferredType
+    }
   }
+}
+
+/**
+ * Which implementation and which member an operator, an index or an interpolation reached. Milestone 5 reads this
+ * instead of looking a trait up again: the choice between monomorphizing and passing a table is made here.
+ */
+fn recordTraitCall(var checker: Checker, at: Span, receiver: TypeId, capability: SymbolId, name: String) {
+  const candidate = match lookupMember(checker, receiver, name) {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  const dispatch = traitDispatchOf(checker, receiver, capability)
+  if const .Method(_, symbol) = candidate.kind {
+    checker.resolved(at, Resolution.Callable(symbol, [], dispatch))
+    recordDelegation(checker, at, candidate.copy(dispatch: dispatch))
+  }
+}
+
+/** `Meters * Meters` and `"a"[0..2]`: the type does not come with the trait the operator needs. */
+fn reportMissingOperator(var checker: Checker, receiver: TypeId, capability: String, written: String, at: Span) {
+  if !isFullyKnown(checker, receiver) {
+    return
+  }
+  const shown = checker.describe(receiver)
+  checker.reportHere(
+    Diagnostic.error("`{shown}` does not implement `{capability}`, so `{written}` has no meaning for it", at)
+      .withNote("Operators are traits: a type has the ones it comes `with`, and nothing else")
+  )
 }
 
 fn isRange(checker: Checker, annotation: TypeId): Bool {
@@ -325,10 +450,11 @@ fn textLiteralType(var checker: Checker, segments: List<TextSegment>, expected: 
       .Literal(part) => {
         text = text + part
       }
-      // Interpolation renders every part through `Show`, whose implementation milestone 4.3 resolves
+      // Every interpolated part is rendered through `Show.show`, and the witness says which implementation runs
       .Interpolated(inner) => {
         isPlain = false
-        const _ = inferExpression(checker, inner)
+        const found = inferExpression(checker, inner)
+        recordShow(checker, found, inner.span)
       }
     }
   }
@@ -341,6 +467,29 @@ fn textLiteralType(var checker: Checker, segments: List<TextSegment>, expected: 
     }
   }
   adapt(checker, at, fallback)
+}
+
+/**
+ * `"{value}"` is `Show.show` on that part. A type that has no `Show` is not reported: the standard library has no
+ * `Equals`/`Hash` for its collections yet and the derivation walks fields, so a message here would be about the
+ * prelude and not about the source. Recording the witness is what milestone 5 needs either way.
+ */
+fn recordShow(var checker: Checker, found: TypeId, at: Span) {
+  if checker.absorbs(found) {
+    return
+  }
+  const show = match checker.wellKnown.show {
+    Some(symbol) => symbol
+    .None => {
+      return
+    }
+  }
+  const bound = checker.nominal(show, [])
+  const witness = witnessFor(checker, found, bound)
+  if const .Unresolved = witness {
+    return
+  }
+  checker.adapted(at, Adaptation.ShowValue(witness))
 }
 
 /** A `Bool` or a `Char` literal: only a literal type of the matching base makes it anything but its own type. */
@@ -519,7 +668,7 @@ fn mapLiteralType(var checker: Checker, entries: List<(Expression, Expression)>,
 /** The `Item` of an expected `List<Item>`, the `Key` or `Value` of an expected `Map<Key, Value>`. */
 fn itemOfCollection(var checker: Checker, expected: TypeId?, capability: SymbolId, position: Int): TypeId? {
   const annotation = expected?
-  match declaredTraitArguments(checker, annotation, capability) {
+  match traitArgumentsOf(checker, annotation, capability) {
     Some(arguments) => arguments.get(position)
     .None => {
       // The expected type may be the trait itself: `List<Int>` as a type is `Traits([List<Int>])`
@@ -573,15 +722,17 @@ fn unaryType(var checker: Checker, operator: PrefixOperator, operand: Expression
       if checker.absorbs(found) {
         return checker.deferredType
       }
-      if numericNameOf(checker, found).isSome() {
-        return found
-      }
-      const negate = checker.wellKnown.symbolNamed("Negate")
-      if const Some(capability) = negate {
-        if declaredTraitArguments(checker, found, capability).isSome() {
-          return found
+      const negate = match checker.wellKnown.negate {
+        Some(capability) => capability
+        .None => {
+          return checker.deferredType
         }
       }
+      if traitArgumentsOf(checker, found, negate).isSome() {
+        recordTraitCall(checker, at, found, negate, "negate")
+        return found
+      }
+      reportMissingOperator(checker, found, "Negate", "-a", at)
       checker.deferredType
     }
   }
@@ -606,21 +757,95 @@ fn binaryType(
       const _ = checkExpression(checker, right, Expectation.Type(boolean))
       boolean
     }
-    // `a == b` and `a < b` always produce a `Bool`; which `equals` or `compare` runs is milestone 4.3's answer
+    // `a == b` is `Equals.equals` and `a < b` is `Compare.compare`, and both produce a `Bool` whatever implements them
     .Equal | .NotEqual | .Less | .LessOrEqual | .Greater | .GreaterOrEqual => {
       const found = inferExpression(checker, left)
       const inner = expectationOf(checker, found)
       const _ = checkExpression(checker, right, inner)
+      recordComparison(checker, operator, found, at)
       boolean
     }
-    // `a ?? b` is `orElse` on an `Option` or a `Result`, with `b` lazy: milestone 4.3
-    .Coalesce => {
-      deferExpression(checker, left)
-      deferExpression(checker, right)
-      checker.deferredType
-    }
+    // `a ?? b` is `orElse` on an `Option` and on a `Result` alike, and `b` is `lazy` (gap 13)
+    .Coalesce => coalesceType(checker, left, right, at)
     _ => arithmeticType(checker, operator, left, right, at)
   }
+}
+
+/**
+ * Which `equals` or `compare` a comparison runs. Whether the type has one at all is *not* reported here: the prelude
+ * has no `Equals` for its collections yet, so a message would be about the standard library and not about the source
+ * (see the open findings of 4.3).
+ */
+fn recordComparison(var checker: Checker, operator: InfixOperator, found: TypeId, at: Span) {
+  if checker.absorbs(found) {
+    return
+  }
+  const isOrdering = match operator {
+    .Equal | .NotEqual => false
+    _ => true
+  }
+  const capability = if isOrdering { checker.wellKnown.compare } else { checker.wellKnown.equals }
+  const symbol = match capability {
+    Some(inner) => inner
+    .None => {
+      return
+    }
+  }
+  if traitArgumentsOf(checker, found, symbol).isSome() {
+    recordTraitCall(checker, at, found, symbol, if isOrdering { "compare" } else { "equals" })
+  }
+}
+
+/** `a ?? b`: the `Value` of the left side, with the fallback checked against it and evaluated only when needed. */
+fn coalesceType(var checker: Checker, left: Expression, right: Expression, at: Span): TypeId {
+  const found = inferExpression(checker, left)
+  const value = match valueOfOptionOrResult(checker, found) {
+    Some(inner) => inner
+    .None => {
+      if isFullyKnown(checker, found) {
+        const shown = checker.describe(found)
+        checker.reportHere(
+          Diagnostic.error("`??` needs an `Option` or a `Result`, and `{shown}` is not one", at)
+            .withNote("`a ?? b` is `orElse`: it gives back the value, or the fallback")
+        )
+        deferExpression(checker, right)
+        return checker.invalidType
+      }
+      deferExpression(checker, right)
+      return checker.deferredType
+    }
+  }
+  const inner = expectationOf(checker, value)
+  // The fallback is a `lazy` argument, so it is recorded before it is checked, exactly as an argument list does it
+  checker.adapted(right.span, Adaptation.Lazy)
+  const _ = checkExpression(checker, right, inner)
+  // `orElse` is an ordinary member of `Option` and of `Result`, so the call is direct
+  recordMemberCall(checker, at, found, "orElse")
+  value
+}
+
+/** The member a construct of the language stands for, where it is a member of the type and not of a trait. */
+fn recordMemberCall(var checker: Checker, at: Span, receiver: TypeId, name: String) {
+  const candidate = match lookupMember(checker, receiver, name) {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  if const .Method(_, symbol) = candidate.kind {
+    checker.resolved(at, Resolution.Callable(symbol, [], candidate.dispatch))
+  }
+}
+
+/** The `Value` of an `Option<Value>` or of a `Result<Value, Failure>`: what `?` unwraps and what `??` produces. */
+fn valueOfOptionOrResult(checker: Checker, annotation: TypeId): TypeId? {
+  if const Some(value) = optionValueOf(checker, annotation) {
+    return Some(value)
+  }
+  if const Some((value, _)) = resultPartsOf(checker, annotation) {
+    return Some(value)
+  }
+  None
 }
 
 fn arithmeticType(
@@ -642,12 +867,12 @@ fn arithmeticType(
     deferExpression(checker, right)
     return checker.deferredType
   }
-  // `Other` and `Output` come from the trait the left operand declares, so `Meters + Float` is a mistake
-  const arguments = match declaredTraitArguments(checker, found, capability) {
+  // `Other` and `Output` come from the implementation of the trait, so `Meters + Float` is a mistake
+  const arguments = match traitArgumentsOf(checker, found, capability) {
     Some(given) => given
-    // The type does not declare the operator; an `extend` may still bring it: milestone 4.3
     .None => {
       deferExpression(checker, right)
+      reportMissingOperator(checker, found, traitNameOf(operator), operatorOf(operator), at)
       return checker.deferredType
     }
   }
@@ -657,7 +882,30 @@ fn arithmeticType(
   }
   const inner = expectationOf(checker, arguments[0])
   const _ = checkExpression(checker, right, inner)
+  recordTraitCall(checker, at, found, capability, memberOfOperator(operator))
   arguments[1]
+}
+
+fn operatorOf(operator: InfixOperator): String {
+  match operator {
+    .Add => "a + b"
+    .Subtract => "a - b"
+    .Multiply => "a * b"
+    .Divide => "a / b"
+    .Remainder => "a % b"
+    _ => ""
+  }
+}
+
+fn memberOfOperator(operator: InfixOperator): String {
+  match operator {
+    .Add => "add"
+    .Subtract => "subtract"
+    .Multiply => "multiply"
+    .Divide => "divide"
+    .Remainder => "remainder"
+    _ => ""
+  }
 }
 
 fn traitNameOf(operator: InfixOperator): String {
@@ -795,12 +1043,162 @@ fn closureType(var checker: Checker, closure: Closure, expected: TypeId?): TypeI
   }
 }
 
+// --- `?` and `into()` ------------------------------------------------------------------------------------------------
+
+/**
+ * `e?` unwraps an `Ok` or a `Some` and returns the other case from the enclosing function. Where the error types
+ * differ, the error is converted through `From` - which is what makes the generated `From<IoError>` of a wrapper case
+ * work without anybody writing it (section 4.6).
+ */
+fn tryType(var checker: Checker, inner: Expression, at: Span): TypeId {
+  const found = inferExpression(checker, inner)
+  if checker.absorbs(found) {
+    return checker.deferredType
+  }
+  const value = match valueOfOptionOrResult(checker, found) {
+    Some(given) => given
+    .None => {
+      if isFullyKnown(checker, found) {
+        const shown = checker.describe(found)
+        checker.reportHere(
+          Diagnostic.error("`?` needs an `Option` or a `Result`, and `{shown}` is not one", at)
+        )
+        return checker.invalidType
+      }
+      return checker.deferredType
+    }
+  }
+  // At the top level of an entry file and in a body whose result is inferred there is nothing to convert towards: the
+  // program ends with the error, or milestone 4.4 decides once the result is known
+  if checker.isResultInferred {
+    return value
+  }
+  const result = checker.resultType
+  if checker.absorbs(result) {
+    return value
+  }
+  const failure = match resultPartsOf(checker, found) {
+    Some((_, error)) => Some(error)
+    .None => None
+  }
+  // A body whose result is neither of the two says nothing here: `await()` inside a `Task<...>` is milestone 7's rule,
+  // and the design's one error is an `Option` in a function that returns a `Result`
+  if const Some(error) = failure {
+    if const Some((_, wanted)) = resultPartsOf(checker, result) {
+      convertError(checker, error, wanted, at)
+    }
+    return value
+  }
+  if resultPartsOf(checker, result).isSome() {
+    const shown = checker.describe(result)
+    checker.reportHere(
+      Diagnostic.error("`?` on an `Option` in a function that returns `{shown}`", at)
+        .withNote("There is no error to return. Turn it into one first: `okOr(...)` gives the `Option` an error")
+    )
+  }
+  value
+}
+
+/** `IoError` into `AppError`: the ordinary `From` lookup, including the one a wrapper case gets generated. */
+fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
+  if sameType(checker.types, error, wanted) {
+    return
+  }
+  if !isConcrete(checker, error) || !isConcrete(checker, wanted) {
+    return
+  }
+  const from = match checker.wellKnown.from {
+    Some(symbol) => symbol
+    .None => {
+      return
+    }
+  }
+  const bound = checker.nominal(from, [error])
+  const witness = witnessFor(checker, wanted, bound)
+  if const .Unresolved = witness {
+    const given = checker.describe(error)
+    const target = checker.describe(wanted)
+    checker.reportHere(
+      Diagnostic.error("`{given}` does not convert into `{target}`", at)
+        .withNote("Add a case that wraps it, or `extend {target} with From<{given}>`")
+    )
+    return
+  }
+  const method = memberSymbolOf(checker, wanted, "from")
+  if const Some(symbol) = method {
+    checker.adapted(at, Adaptation.Convert(witness, symbol))
+  }
+}
+
+fn memberSymbolOf(var checker: Checker, owner: TypeId, name: String): SymbolId? {
+  const candidate = lookupStaticMember(checker, owner, name)?
+  match candidate.kind {
+    .Method(_, symbol) => Some(symbol)
+    .Constant(_, symbol) => Some(symbol)
+    _ => None
+  }
+}
+
+/**
+ * `value.into()`: the target is the expected type, and the conversion is the `From` implementation of that target -
+ * which is exactly what the blanket `extend<Source, Target> Source with Into<Target>` of the prelude says.
+ */
+fn isConversionCall(checker: Checker, callee: Expression, arguments: List<Argument>, expected: TypeId?): Bool {
+  if expected.isNone() || !arguments.isEmpty() {
+    return false
+  }
+  if const .Member(_, name, isOptional) = callee.kind {
+    return name.text == "into" && !isOptional
+  }
+  false
+}
+
+fn conversionType(var checker: Checker, expression: Expression, callee: Expression, expected: TypeId?): TypeId {
+  const target = expected ?? checker.deferredType
+  const base = match callee.kind {
+    .Member(inner, _, _) => inner
+    _ => {
+      return checker.deferredType
+    }
+  }
+  const source = inferExpression(checker, base)
+  const _ = checker.typed(callee.span, checker.deferredType)
+  if checker.absorbs(source) || checker.absorbs(target) {
+    return target
+  }
+  const from = match checker.wellKnown.from {
+    Some(symbol) => symbol
+    .None => {
+      return target
+    }
+  }
+  const bound = checker.nominal(from, [source])
+  const witness = witnessFor(checker, target, bound)
+  if const .Unresolved = witness {
+    if isConcrete(checker, source) && isConcrete(checker, target) {
+      const given = checker.describe(source)
+      const wanted = checker.describe(target)
+      checker.reportHere(
+        Diagnostic.error("`{given}` does not convert into `{wanted}`", expression.span)
+          .withNote("`into()` is the `From` of the target: `extend {wanted} with From<{given}>` provides it")
+      )
+      return checker.invalidType
+    }
+    return target
+  }
+  if const Some(symbol) = memberSymbolOf(checker, target, "from") {
+    checker.adapted(expression.span, Adaptation.Convert(witness, symbol))
+    checker.resolved(expression.span, Resolution.Callable(symbol, [], Dispatch.Direct))
+  }
+  target
+}
+
 // --- Checking a value against what is expected ----------------------------------------------------------------------
 
 /**
- * Whether a value of type `found` may stand where `expected` is asked for. The four coercions of the design
- * (to a trait value, to fewer bounds, from `Never`, a literal to a literal type) are milestone 4.3's and 4.4's, so
- * everything that needs one says nothing here - and everything that says something is exact type equality.
+ * Whether a value of type `found` may stand where `expected` is asked for. Exact type equality, plus the four
+ * directed coercions of the design: a value to a trait it implements, a trait value to fewer bounds or to a
+ * supertrait, `Never` to anything, and a literal to a literal type that contains it (gap 8). There is no variance.
  */
 public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: Span): Bool {
   if checker.absorbs(found) || checker.isBroken(expected) {
@@ -808,6 +1206,9 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
   }
   if sameType(checker.types, found, expected) {
     return true
+  }
+  if const .Traits(bounds) = checker.types.form(expected) {
+    return coerceToTraits(checker, found, bounds, at)
   }
   if isUndecided(checker, found) || isUndecided(checker, expected) {
     return true
@@ -823,8 +1224,39 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
 }
 
 /**
- * Types a later sub-milestone decides about. A trait value needs a coercion with a witness (4.3), a generic parameter
- * and a unification variable need inference (4.4), and `Expression<Value>` quotes what arrives at it (4.8).
+ * `const shapes: List<Shape> = [Square(2.0)]`: the value becomes a trait-typed value, and the witness of every bound
+ * is recorded so that milestone 5 can build its table. A subject that is not concrete says nothing: what a generic
+ * parameter implements is decided by the call site, which is milestone 4.4.
+ */
+fn coerceToTraits(var checker: Checker, found: TypeId, bounds: List<TypeId>, at: Span): Bool {
+  var witnesses: List<Witness> = []
+  var missing: TypeId? = None
+  for bound in bounds {
+    const witness = witnessFor(checker, found, bound)
+    if const .Unresolved = witness {
+      if missing.isNone() {
+        missing = Some(bound)
+      }
+      continue
+    }
+    witnesses.add(witness)
+  }
+  if const Some(bound) = missing {
+    if !isConcrete(checker, found) || !isConcrete(checker, bound) {
+      return true
+    }
+    const given = checker.describe(found)
+    const wanted = checker.describe(bound)
+    checker.reportHere(Diagnostic.error("`{given}` does not implement `{wanted}`", at))
+    return false
+  }
+  checker.adapted(at, Adaptation.ToTraitValue(bounds, witnesses))
+  true
+}
+
+/**
+ * Types a later sub-milestone decides about. A generic parameter and a unification variable need inference (4.4), and
+ * `Expression<Value>` quotes what arrives at it (4.8).
  */
 fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
   match checker.types.form(annotation) {

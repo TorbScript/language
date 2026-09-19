@@ -6,6 +6,7 @@ use SymbolId, Symbol, Symbols from "../symbols"
 use Program from "../scope"
 use TypeId, TypeForm, TypeTable, FunctionForm, ParameterId, describeType from "./type"
 use Signature, SignatureId, SignatureState, TypeSignature, TypeSignatureId from "./type"
+use ImplementationId, ImplementationTable, Resolved, Witness, DerivedImplementation from "./type"
 use WellKnown, wellKnownOf from "./wellknown"
 
 /** What may stand in a type position: a type, or the value a `const` parameter asks for. */
@@ -131,11 +132,52 @@ public type Resolution {
 }
 
 /**
- * How a call reaches its target. Milestone 4.2 only ever produces `Direct`; the trait cases arrive with 4.3 and 4.4,
- * which is why the back ends never have to decide between monomorphizing and passing a table.
+ * How a call reaches its target. This is what keeps the back ends out of the choice between monomorphizing and
+ * passing a witness table: the checker says which one it is, and both back ends have to support both.
  */
 public type Dispatch {
+  /** Not a trait member: a free function, a member of a concrete type, a field that holds a closure. */
   case Direct
+  /** The implementation is known: monomorphize, or call it directly. */
+  case Implementation(implementation: ImplementationId, witnesses: List<Witness>)
+  /** The receiver is a trait-typed value: take the member from its witness table. */
+  case Object(bound: TypeId, witnesses: List<Witness>)
+  /** The receiver's type is a generic parameter: the caller passed the witness. */
+  case Forwarded(parameter: ParameterId, bound: TypeId, witnesses: List<Witness>)
+}
+
+/**
+ * One member that was found, with everything a call or a read of it needs. It lives here and not in `member.trb`
+ * because the `Checker` keeps the answers: `a.b` is the hottest question of the pass.
+ */
+public type Candidate {
+  kind: CandidateKind
+  /** The member as a value: the type of a field, or the function type of a method bound to its receiver. */
+  annotation: TypeId
+  /** When the member is a function: its form, with the generic parameters of its owner substituted. */
+  form: FunctionForm? = None
+  takesSelf: Bool = false
+  isVarSelf: Bool = false
+  /** The member declares generic parameters of its own, so calling it is milestone 4.4's work. */
+  isGeneric: Bool = false
+  /** Several implementations of one trait provide it (`Int.from`), so the arguments decide: milestone 4.4. */
+  needsArguments: Bool = false
+  /** How the member is reached: a member of the type itself, or one of a trait it implements. */
+  dispatch: Dispatch = Dispatch.Direct
+  /** Where the member is declared, for the ambiguity message about two extensions. */
+  module: ModuleId? = None
+}
+
+public type CandidateKind {
+  case Field(owner: TypeId, field: SymbolId)
+  case Constant(owner: TypeId, symbol: SymbolId)
+  case Method(owner: TypeId, symbol: SymbolId)
+  case CaseConstructor(owner: TypeId, variant: SymbolId)
+  /** The generated constructor of a type. */
+  case Construct(owner: TypeId)
+  /** The generated `copy` (gap 24). */
+  case Copy(owner: TypeId)
+  case TupleField(owner: TypeId, index: Int)
 }
 
 /** Everything the source does not spell out, in the order in which it applies. */
@@ -156,6 +198,14 @@ public type Adaptation {
   case TrailingClosure(parameter: Int)
   /** A member of `self` that was written without it: `area()` inside a method of `Point`. */
   case ImplicitSelf(receiver: BindingId)
+  /** A value that became a trait-typed value: `const shapes: List<Shape> = [Square(2.0)]` (gap 8). */
+  case ToTraitValue(bounds: List<TypeId>, witnesses: List<Witness>)
+  /** `?` and `into()`: the error or the value is converted through `From.from`. */
+  case Convert(witness: Witness, method: SymbolId)
+  /** One interpolated part of a text literal, rendered through `Show.show`. */
+  case ShowValue(witness: Witness)
+  /** `with Add by value`: unwrap the arguments, wrap the result again. */
+  case Delegate(field: String)
 }
 
 /**
@@ -315,19 +365,45 @@ public type Checker {
   var checkedBodies: Map<SymbolId, Bool> = [:]
   /** The declarations whose result is being inferred right now: naming one of them inside its own body is a cycle. */
   var inferringResults: Map<SymbolId, Bool> = [:]
-  /** Every type that an `extend` anywhere in the program adds members to. Built once, on the first question. */
-  var extendedSymbols: Map<Int, Bool> = [:]
-  var hasCollectedExtensions: Bool = false
-  /**
-   * "Does this type declare that trait, and with which arguments" - by type and trait. The operators and `for` ask it
-   * for every expression they look at, and the walk up the `with` list of `Int64` is the same one every time.
-   */
-  var declaredTraits: Map<String, List<TypeId>?> = [:]
   /**
    * The function type of a signature, by `SignatureId`. Reading a member builds one, interning it builds a key out of
    * every parameter, and the same member is read over and over - so the answer is kept.
    */
   var signatureTypes: Map<Int, TypeId> = [:]
+
+  // --- Traits and implementations (milestone 4.3) ---------------------------------------------------------------------
+
+  /** Every implementation of the program, with the indexes bound resolution needs. Built once. */
+  var implementations: ImplementationTable = ImplementationTable()
+  /**
+   * "Does this type implement that trait, and through which implementation" - by interned type id and trait symbol.
+   * This is the memoization the whole pass rests on: every operator, every `for`, every interpolated part asks it.
+   */
+  var traitAnswers: Map<String, Resolved> = [:]
+  /** Bound resolution recurses through the bounds of an implementation; a limit is an answer, never a hang. */
+  var traitDepth: Int = 0
+  /** Every trait a type implements, transitively over supertraits, by interned type id. */
+  var traitClosures: Map<Int, List<TypeId>> = [:]
+  /** The traits a generic parameter is bounded by, by `ParameterId.value`: what a member lookup on it may see. */
+  var parameterBounds: Map<Int, List<TypeId>> = [:]
+  /** Every derived implementation that was generated, which milestone 5 has to emit the members of. */
+  var derived: List<DerivedImplementation> = []
+  /** `"{target}:{trait}"` to the index in `derived`, so one is generated once. */
+  var derivedIndex: Map<String, Int> = [:]
+  /** What a derived implementation would generate, by target and trait. Two maps, because the answer may be "no". */
+  var derivations: Map<String, List<String>> = [:]
+  var derivationsMissing: Map<String, Bool> = [:]
+  /** Per module: which modules' extensions of *foreign* types are visible in it. Built on the first question. */
+  var visibleModules: Map<Int, Map<Int, Bool>> = [:]
+  /**
+   * `a.b` for one module, one receiver type and one name. Member lookup is a pure function of those three - the body
+   * of the type, the extensions this file can see, the traits the type implements - and it is the hottest question of
+   * the whole pass, so the answer is kept. Two maps, because "there is no such member" is an answer too.
+   */
+  var memberAnswers: Map<String, Candidate> = [:]
+  var memberMissing: Map<String, Bool> = [:]
+  /** The inherent extensions of one type that one module may use, by module and type. */
+  var visibleExtensions: Map<String, List<Int>> = [:]
 
   fn symbolAt(self, id: SymbolId): Symbol {
     symbols.at(id)

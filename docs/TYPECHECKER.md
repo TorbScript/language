@@ -976,7 +976,7 @@ files that have to check cleanly afterwards.
 |---|---|---|---|
 | **4.1** | **Done.** Type representation and signatures. `TypeForm`, interning, `TypeReference` to `TypeId`, alias expansion, `Self`, generic parameters, const arguments, literal types, tuples, function types, intersections. Signatures on demand with cycle detection. `describeType` for messages. No expression checking. | `type.trb`, `wellknown.trb`, `signature.trb`, `context.trb`, `unify.trb` (equality and substitution only), `check.trb` (skeleton) | M3 |
 | **4.2** | **Done.** Statements, blocks and monomorphic expressions. Literals with adaptation, locals, bindings with irrefutable patterns, assignment, `if`/`match` types without exhaustiveness, calls of top-level functions and of methods on concrete types, arguments/labels/defaults/variadics, field and static member access, definite return, `Never`. Everything else becomes `TypeForm.Deferred` and is counted (`torb check --statistics`). | `expression.trb`, `statement.trb`, `call.trb`, `member.trb`, `name.trb`, `pattern.trb` | 4.1 |
-| **4.3** | Traits and implementations. The index, bound resolution with memoization, coherence, overlap, supertraits, member lookup through traits and extensions (the `extend` visibility rule), delegation `by`, derived implementations, operators, interpolation through `Show`, `Iterable` in `for`, `?`/`??`/`?.`, `into()`. | `implementation.trb`, `derive.trb`, `member.trb`, `expression.trb` | 4.2 |
+| **4.3** | **Done.** Traits and implementations. The index, bound resolution with memoization, coherence, overlap, supertraits, member lookup through traits and extensions (the `extend` visibility rule), delegation `by`, derived implementations, operators, interpolation through `Show`, `Iterable` in `for`, `?`/`??`/`?.`, `into()`. | `implementation.trb`, `derive.trb`, `member.trb`, `expression.trb` | 4.2 |
 | **4.4** | Generics and inference. Unification variables, inference contexts, two-pass argument checking, closures from expected function types, implicit `_`/named parameters, `.Case`, empty literals, const generic inference, bounds at call sites, witnesses, trait-typed values and per-call object safety. **Gate: `torb check compiler/src/syntax` is clean.** | `unify.trb`, `closure.trb`, `call.trb`, `implementation.trb` | 4.3 |
 | **4.5** | Exhaustiveness and redundancy. The pattern matrix over ADTs, literals, ranges, tuples, lists with rest, literal unions, `Option`/`Result`; witnesses; `MatchPlan`; `if const`/`if var`/`while const`. | `exhaustive.trb`, `pattern.trb` | 4.4 |
 | **4.6** | Places and the mutation rules. `const`/`var`, valid paths, `var` parameters and temporaries, `private(var)`, exclusivity, dead changes, `break`/`continue`. | `place.trb`, `statement.trb` | 4.4 |
@@ -1108,6 +1108,66 @@ list. Everything else is as written.
   the `var` parameter has already taken out, and a `var self` method whose argument reads another field of `self` does
   the same - so every such read is hoisted into a local first, and the short forms on `Checker` (`typed`, `resolved`,
   `adapted`, `reportHere`) write through their own path instead of calling the long form.
+
+### What 4.3 does differently from sections 1 to 7
+
+- **A supertrait is reachable.** Section 4.2 makes a supertrait a *requirement*, and it stays one: that a type with
+  `with Compare` also provides `equals` is what `checkImplementations` verifies. But a type that meets the requirement
+  also **implements** the supertrait, so `resolveTrait` searches the supertraits of everything a type declares. That is
+  the only reading under which `1 + 2` is an `Int64` (`Int64 with Signed`, `Signed with Numeric`,
+  `Numeric with Add<Self, Self>`), and it is what 4.2's walk over the `with` list did already. The `Resolved.Found` of
+  such an answer names the implementation the type *wrote down* (`Int64 with Signed`), not one for the supertrait -
+  there is none to name.
+- **There are no inference variables in trait resolution.** An implementation's target is a pattern, the type is
+  concrete, and one-directional matching binds the implementation's own parameters (`matchPattern`). Every parameter has
+  to be bound, so the blanket `extend<Source, Target> Source with Into<Target>` answers `resolveBound(X, Into<Meters>)`
+  and not `resolveTrait(X, Into)`. This is why trait resolution works a whole sub-milestone before inference exists.
+- **An implementation whose target is a trait applies to every type that implements it.** `extend<Item: Show> List<Item>
+  with Show` makes `ArrayList<Int>` showable. Such a target is a third shape next to "one head" and "every type"
+  (`TargetShape.Bounded`), and it is what `List.from`, `Map.from` and the `Show` of every collection rest on.
+- **`Implementation.capability` is the field the design calls `trait`**, because `trait` is a keyword. The data model of
+  section 4.2 (`Implementation`, `ImplementationTable`, `Resolved`, `Witness`, `DerivedImplementation`) lives in
+  `type.trb` next to `Signature`, and only the algorithms are in `implementation.trb`.
+- **`Candidate` moved to `context.trb`.** Member lookup is the hottest question of the pass, so the `Checker` keeps the
+  answers (`memberAnswers` by module, receiver and name) - and what a table of the `Checker` holds cannot live in the
+  file that asks the question.
+- **Three memoizations carry the performance**, and all of them were needed: the trait answers (interned type id plus
+  trait symbol), the member answers, and the visible extensions of one module. The one that mattered most was *not*
+  adding a cache but removing a scan: looking at every blanket and every trait-targeted implementation for every type
+  cost 4 seconds of a 14 second run, so `declaredFor` only ever returns what a type writes down and everything
+  program-wide goes through the per-trait index.
+- **`Resolved.Ambiguous` says nothing at the use.** Two implementations that both answer are an overlap, and
+  `checkCoherence` reports that at the two declarations - one root cause, one message.
+- **A derived implementation is an ordinary one.** `Show`, `Equals`, `Hash`, `Encode`, `Decode` and the `From` of a
+  wrapper case are generated on the first question and then indexed like any other implementation, so everything after
+  that needs no special case. The list of what has to be emitted is `Checker.derived`, which is global and not per
+  module - a type is derived once for the whole program, not once per file that uses it. `Compare` is **not** derived:
+  the concept generates `Equals`, `Hash`, `Show` and `copy`, and an order is a decision, not a structure.
+- **Whether a derivation is possible is assumed while it is being answered.** `Expression` contains a
+  `List<Statement>` that contains an `Expression` again, and the generated `Show` of it is well defined - it recurses
+  exactly as the value does. So the question is memoized *before* it is answered, under a key that always carries the
+  applied bound, and a cycle finds the assumption instead of the depth limit.
+- **`Int.from` is one name with five signatures**, because `Int64` implements `From<Int32>`, `From<UInt8>`,
+  `From<UInt16>`, `From<UInt32>` and `From<Char>`. That is the one overload set the language has, and which one is meant
+  follows from the argument - so such a member records `Candidate.needsArguments` and stays `Deferred` until 4.4.
+- **A comparison, an interpolation and `==` on a collection are not reported.** The prelude has `Show` for `List`,
+  `Set`, `Map`, `Option` and `Result` (gap 35) but no `Equals` and no `Hash`, so a message about "`List<Token>` does not
+  implement `Equals`" would be about the standard library and not about the source. `==`, `<` and `"{x}"` therefore
+  record the witness where they find one and say nothing where they do not; 4.10 closes the gap in the prelude and turns
+  the messages on. The same holds for an unmet `where` clause on a member (`contains` needs `Item: Equals`).
+- **A default type argument that mentions `Self` needs a bound.** 4.1 filled `Self` in with the trait's own parameter in
+  a plain type position; `field: Add<Int>` now reads "`Add` needs its second type argument here". The `Self` of an
+  enclosing type is a *different* `Self`: in `field: Add` the default means "whatever is stored here", which is an
+  existential the language cannot write down.
+- **`?` says nothing where the enclosing result is neither an `Option` nor a `Result`.** `fetchUser(id).await()?` stands
+  in a function that returns a `Task<Result<...>>`, and that rule belongs to milestone 7. The design's one error - an
+  `Option` in a function that returns a `Result` - is reported.
+- **A literal type is not reported about.** `Status.parse(text)` needs the generated `Parse` of a literal type, and
+  nothing writes down what its failure type is, so `isFullyKnown` says no for a `Literals` form and the generated
+  members of a literal type wait for 4.10.
+- **`checkExtension` reads its members back out of the index.** Building the index gives every member of an `extend` its
+  id; building them a second time would hand the same source two sets of symbols, so `check.trb` looks the
+  implementation up by the span of the `extend`'s target and only checks the bodies.
 
 ---
 

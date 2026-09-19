@@ -196,7 +196,7 @@ fn typeArguments(
   for index in arguments.length()..generics.length() {
     const declaration = checker.types.parameter(generics[index])
     match declaration.default {
-      Some(default) => built.add(defaultArgument(checker, generics, built, default, declaration, scope))
+      Some(default) => built.add(defaultArgument(checker, generics, built, default, declaration, at, scope))
       .None => {
         isMissing = true
         built.add(checker.invalidType)
@@ -210,8 +210,13 @@ fn typeArguments(
 }
 
 /**
- * `trait Add<Other = Self, Output = Self>`: the default is written in the declaration, so it is built there - with
- * the arguments that are known already, and with `Self` meaning whatever the bound is asked of.
+ * `trait Add<Other = Self, Output = Self>`: the default is written in the declaration, so it is built there - with the
+ * arguments that are known already, and with `Self` meaning whatever the bound is asked of (`with Add` on `Meters` is
+ * `Add<Meters, Meters>`).
+ *
+ * Where there is no `Self` at all - `field: Add<Int>` in a plain type position, outside of a type, a trait or an
+ * `extend` - the default cannot be filled in, and that is an error instead of a type that mentions a parameter nobody
+ * can ever give.
  */
 fn defaultArgument(
   var checker: Checker,
@@ -219,21 +224,95 @@ fn defaultArgument(
   known: List<TypeId>,
   default: TypeReference,
   declaration: ParameterDeclaration,
+  at: Span,
   scope: TypeScope,
 ): TypeId {
+  // Only a bound says what implements the trait. The `Self` of an enclosing type is a different `Self`: in
+  // `field: Add` the default means "whatever is stored here", and that is nothing the language can write down
   var own: TypeId? = scope.subject
+  var isOutside = false
   if own.isNone() {
     if const Some(owner) = declaration.owner {
       own = Some(selfTypeOf(checker, owner))
+      isOutside = true
     }
   }
   const inner = TypeScope(declaration.module, selfType: own, records: false)
   const lowered = typeFromReference(checker, default, inner)
+  if isOutside {
+    if const Some(missing) = own {
+      if mentionsParameter(checker, lowered, missing) {
+        reportMissingSelf(checker, declaration, at, scope)
+        return checker.invalidType
+      }
+    }
+  }
   var mapping: Map<ParameterId, TypeId> = [:]
   for index in 0..known.length() {
     mapping.set(generics[index], known[index])
   }
   substitute(checker.types, lowered, mapping)
+}
+
+/** Whether a type mentions one particular parameter - here: the `Self` of the trait whose default this is. */
+fn mentionsParameter(checker: Checker, annotation: TypeId, parameter: TypeId): Bool {
+  if annotation == parameter {
+    return true
+  }
+  match checker.types.form(annotation) {
+    .Nominal(_, arguments) => mentionsAny(checker, arguments, parameter)
+    .Traits(bounds) => mentionsAny(checker, bounds, parameter)
+    .Tuple(fields) => {
+      for field in fields {
+        if mentionsParameter(checker, field.annotation, parameter) {
+          return true
+        }
+      }
+      false
+    }
+    .Function(form) => {
+      for inner in form.parameters {
+        if mentionsParameter(checker, inner.annotation, parameter) {
+          return true
+        }
+      }
+      mentionsParameter(checker, form.result, parameter)
+    }
+    _ => false
+  }
+}
+
+fn mentionsAny(checker: Checker, arguments: List<TypeId>, parameter: TypeId): Bool {
+  for argument in arguments {
+    if mentionsParameter(checker, argument, parameter) {
+      return true
+    }
+  }
+  false
+}
+
+fn reportMissingSelf(var checker: Checker, declaration: ParameterDeclaration, at: Span, scope: TypeScope) {
+  const owner = match declaration.owner {
+    Some(symbol) => checker.symbolAt(symbol).name
+    .None => "This trait"
+  }
+  const position = if declaration.index == 0 {
+    "first"
+  } else if declaration.index == 1 {
+    "second"
+  } else if declaration.index == 2 {
+    "third"
+  } else {
+    "{declaration.index + 1}th"
+  }
+  checker.report(
+    scope.module,
+    Diagnostic.error("`{owner}` needs its {position} type argument here", at)
+      .withNote(
+        "Its default is `Self`, and there is no `Self` outside of a bound:"
+          + " write the argument out, or use the trait in a `with` or a `where`"
+      )
+  )
 }
 
 fn reportArity(var checker: Checker, symbol: SymbolId, expected: Int, given: Int, at: Span, scope: TypeScope) {

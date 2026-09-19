@@ -1,17 +1,18 @@
 use Span from "../../syntax/source"
 use Statement, Binding, Declaration, Member from "../../syntax/ast"
-use FunctionDeclaration, ExtendDeclaration, Expression, TypeReference from "../../syntax/ast"
+use FunctionDeclaration, ExtendDeclaration, Expression from "../../syntax/ast"
 use ModuleId from "../module"
 use SymbolId from "../symbols"
 use Program from "../scope"
 use Checker, TypeScope, Statistics, newChecker from "./context"
 use TypeId from "./type"
 use declareSites, declareParameters, genericsOf from "./signature"
-use signatureOf, typeSignatureOf, aliasTargetOf, extensionMembers from "./signature"
+use signatureOf, typeSignatureOf, aliasTargetOf from "./signature"
 use traitList, boundsOf, resultOf from "./signature"
 use typeFromReference from "./lowering"
 use checkBodyOf, checkInitializer, checkStatement from "./statement"
 use deferBlock from "./expression"
+use buildImplementations, checkCoherence, checkImplementations, extensionAt from "./implementation"
 
 /**
  * Checks the declarations of the given modules: every type position becomes a type, every declaration a signature, and
@@ -27,45 +28,16 @@ public fn checkTypes(program: Program, resolutions: List<Map<Span, SymbolId>>, m
   for module in program.graph.modules {
     declareSites(checker, module.id, module.file.statements)
   }
-  collectExtensions(checker)
+  // Every implementation of the program, then the two rules that need all of them: the orphan rule and overlap
+  buildImplementations(checker)
+  checkCoherence(checker)
+  for module in modules {
+    checkImplementations(checker, module)
+  }
   for module in modules {
     checkModule(checker, module)
   }
   checker
-}
-
-/**
- * Every type an `extend` anywhere in the program adds members to. Member lookup needs it to tell a typo apart from a
- * member milestone 4.3 will find: a type nobody extends and that comes with no trait has exactly the members of its
- * body, and everything else waits.
- */
-fn collectExtensions(var checker: Checker) {
-  if checker.hasCollectedExtensions {
-    return
-  }
-  checker.hasCollectedExtensions = true
-  for module in checker.program.graph.modules {
-    for statement in module.file.statements {
-      if const .Declare(declaration) = statement.kind {
-        if const .Extend(extension) = declaration.kind {
-          if const Some(symbol) = headOfReference(checker, module.id, extension.target) {
-            checker.extendedSymbols.set(symbol.value, true)
-          }
-        }
-      }
-    }
-  }
-}
-
-/** The symbol a plain named type reference points at, which milestone 3 resolved already. */
-fn headOfReference(checker: Checker, module: ModuleId, reference: TypeReference): SymbolId? {
-  if const .Named(path, _) = reference.kind {
-    if path.isEmpty() {
-      return None
-    }
-    return checker.resolvedName(module, path[path.length() - 1].span)
-  }
-  None
 }
 
 /**
@@ -223,16 +195,26 @@ fn constantMember(known: Map<String, SymbolId>, binding: Binding): SymbolId? {
 }
 
 /**
- * An `extend` has no symbol of its own: milestone 4.3 turns it into an implementation. Here its target, its traits
- * and the signatures and bodies of its members are built, which is what finds everything that is wrong in them.
+ * An `extend` is one or more implementations, and `buildImplementations` built them - including the ids of its
+ * members, which must not be handed out twice. So the target and the members are read back out of the index, and only
+ * the bodies are checked here.
  */
 fn checkExtension(var checker: Checker, scope: TypeScope, extension: ExtendDeclaration) {
-  const generics = declareParameters(checker, scope.module, None, extension.generics)
-  const target = typeFromReference(checker, extension.target, scope.forType())
-  const inner = scope.copy(selfType: Some(target))
-  const _ = boundsOf(checker, generics, extension.generics, extension.whereClauses, inner)
-  const _ = traitList(checker, extension.traits, target, inner)
-  const members = extensionMembers(checker, scope.module, target, generics, extension.members)
+  const implementation = match extensionAt(checker, scope.module, extension.target.span) {
+    Some(found) => found
+    // A target that did not build a type produced no implementation; its members still have type positions
+    .None => {
+      const generics = declareParameters(checker, scope.module, None, extension.generics)
+      const target = typeFromReference(checker, extension.target, scope.forType())
+      const inner = scope.copy(selfType: Some(target))
+      const _ = boundsOf(checker, generics, extension.generics, extension.whereClauses, inner)
+      const _ = traitList(checker, extension.traits, target, inner)
+      checkMembers(checker, inner, [:], extension.members)
+      return
+    }
+  }
+  const inner = scope.copy(selfType: Some(implementation.target))
+  const members = implementation.members
   checkMembers(checker, inner, members, extension.members)
 }
 
