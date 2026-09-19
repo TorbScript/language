@@ -1,0 +1,91 @@
+/**
+ * The vocabulary of `project.trb`. A project file is a receiver script against [Project] (CONCEPT.md, "project.trb"),
+ * so everything a project can say about itself is a `var` field or a method of the types here - and nothing else is
+ * needed to write one, because a setting is written `name "acme/shop"` and a section `build { ... }`.
+ *
+ * The types are ordinary data, not `native`: a project file is deterministic and has no IO, so evaluating it is
+ * nothing but running these members. Until the sandbox exists (milestone 7) the toolchain reads the file statically
+ * (`compiler/src/project/manifest.trb`); this package is what makes it *type check* in the meantime, with the same
+ * vocabulary both readings understand.
+ */
+
+/** An owner bound to a registry, so a public package can never take the place of a private one. */
+public type Registry {
+  /** The `owner` part of every `owner/name` this registry answers for. */
+  owner: String
+  url: String
+}
+
+/**
+ * What a project depends on. A requirement is written as it is published - `"acme/http:^1.2.3"` - because the version
+ * is the business of the package manager and the project file only names what it wants.
+ */
+public type Dependencies {
+  private(var) runtimeRequirements: List<String> = []
+  /** Tests and tools. Never part of what dependents get. */
+  private(var) developmentRequirements: List<String> = []
+
+  fn runtime(var self, ...requirements: String) {
+    runtimeRequirements.addAll(requirements)
+  }
+
+  fn development(var self, ...requirements: String) {
+    developmentRequirements.addAll(requirements)
+  }
+}
+
+/** What `torb build` produces. `output` is interpolated eagerly, so it reads `target` and the script's own bindings. */
+public type Build {
+  var target: String = "dev"
+  var input: String = "src/main.trb"
+  var output: String = ""
+}
+
+/** What `torb test` runs. */
+public type Test {
+  var input: String = "tests"
+  /** The share of lines a test run has to cover, in percent. `0` asks for nothing. */
+  var coverageThreshold: Int = 0
+}
+
+/**
+ * A project that consists of several projects. Every member is an ordinary project with a `project.trb` of its own;
+ * a pattern is a directory or `directory/*` for every project directly below it.
+ */
+public type Workspace {
+  private(var) memberPatterns: List<String> = []
+
+  fn members(var self, ...patterns: String) {
+    memberPatterns.addAll(patterns)
+  }
+}
+
+/**
+ * The receiver of `project.trb`. A setting is a `var` field (`name "acme/shop"` writes it), a section is a field that
+ * is configured in place (`build { ... }`), and only what is more than that is a method (`authors`, `registry`).
+ *
+ * The fields are readable, which is what lets a project file compute from what it has already said:
+ * `const binary = name.substringAfter("/") ?? name`.
+ */
+public type Project {
+  /** `owner/name`. Owners are verified namespaces of a registry, so a bare name is not publishable. */
+  var name: String = ""
+  var version: String = ""
+  /** The package whose public names are in scope in every file of the project. */
+  var prelude: String = "std/prelude"
+  var dependencies: Dependencies = Dependencies()
+  var build: Build = Build()
+  var test: Test = Test()
+  var workspace: Workspace = Workspace()
+  private(var) authorNames: List<String> = []
+  private(var) registries: List<Registry> = []
+
+  fn authors(var self, ...names: String) {
+    authorNames.addAll(names)
+  }
+
+  /** Binds an owner to the registry its packages come from: `registry "acme", url: "https://packages.acme.test"`. */
+  fn registry(var self, owner: String, url: String) {
+    registries.add(Registry(owner, url))
+  }
+}

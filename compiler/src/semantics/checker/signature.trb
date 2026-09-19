@@ -386,8 +386,16 @@ fn constantSignature(
   owner: TypeId?,
 ): Signature {
   const scope = TypeScope(module, selfType: owner)
+  // An annotated initializer is checked here too, and not where the declaration is walked: the annotation *is* the
+  // signature, so nobody would ask for the value again - and a `const` that holds a receiver closure
+  // (`const perimeter: (self: Rectangle) => Int`) would never have its body looked at
   const annotation = match binding.annotation {
-    Some(reference) => typeFromReference(checker, reference, scope.forType())
+    Some(reference) => {
+      const built = typeFromReference(checker, reference, scope.forType())
+      checker.checkedBodies.set(symbol, true)
+      const _ = checkInitializer(checker, module, binding.value, owner, Some(built))
+      built
+    }
     .None => {
       checker.checkedBodies.set(symbol, true)
       checkInitializer(checker, module, binding.value, owner, None)

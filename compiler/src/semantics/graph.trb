@@ -3,7 +3,8 @@ use parse from "../syntax/parser/parser"
 use normalizePath, parentPath, joinPath from "../project/path"
 use SourceTree from "../project/source-tree"
 use Workspace, Package from "../project/workspace"
-use ModuleId, Module from "./module"
+use ModuleId, Module, ScriptReceiver from "./module"
+use scriptLoadsOf from "./scripts"
 
 /** Every module of every package, and the index that turns an import path into a module. */
 public type Graph {
@@ -39,12 +40,61 @@ public fn buildGraph(tree: SourceTree, workspace: Workspace): Graph {
       modules.add(Module(id, index, path, source, parsed.file, parsed.diagnostics, isEntryFile(package, path)))
     }
   }
+  addReceiverScripts(tree, workspace, modules)
   Graph.of(modules)
 }
 
 /** A script that belongs to no project is always an entry: nobody imports it. */
 fn isEntryFile(package: Package, path: String): Bool {
   package.name.isEmpty() || path == joinPath(package.directory, package.manifest.buildInput) || path.endsWith(".test.trb")
+}
+
+/**
+ * The receiver scripts of the workspace, after its ordinary modules: the `project.trb` of every project, and every
+ * file a `Sandbox.load<Value>("./path")` names with a literal path (gap 34). They are modules because everything the
+ * checker keeps - a scope, the tables, the diagnostics - is per module; they are not importable, because their scope
+ * is "the prelude, and nothing else" and nothing they declare belongs to the package.
+ *
+ * A `project.trb` is only one of them where the workspace has `std/project`: without the package that declares
+ * `Project` there is no type to check it against, and reading it statically (`project/manifest.trb`) keeps working.
+ */
+fn addReceiverScripts(tree: SourceTree, workspace: Workspace, var modules: List<Module>) {
+  const ordinary = modules.length()
+  var known: Set<String> = Set.of()
+  for module in modules {
+    known.add(module.path)
+  }
+  if workspace.packageNamed("std/project").isSome() {
+    for index in 0..workspace.packages.length() {
+      const path = joinPath(workspace.packages[index].directory, "project.trb")
+      if !tree.exists(path) || known.contains(path) {
+        continue
+      }
+      known.add(path)
+      addScript(tree, modules, index, path, ScriptReceiver.ProjectFile)
+    }
+  }
+  for index in 0..ordinary {
+    const package = modules[index].package
+    const directory = workspace.packages[package].directory
+    const loads = scriptLoadsOf(modules[index].file)
+    const from = modules[index].id
+    for load in loads {
+      const path = joinPath(directory, load.path)
+      if !tree.exists(path) || known.contains(path) {
+        continue
+      }
+      known.add(path)
+      addScript(tree, modules, package, path, ScriptReceiver.Loaded(from, load.annotation))
+    }
+  }
+}
+
+fn addScript(tree: SourceTree, var modules: List<Module>, package: Int, path: String, receiver: ScriptReceiver) {
+  const source = SourceText.of(tree.text(path) ?? "")
+  const parsed = parse(source)
+  const id = ModuleId(modules.length())
+  modules.add(Module(id, package, path, source, parsed.file, parsed.diagnostics, true, receiver: Some(receiver)))
 }
 
 /** What a `use "..."` path names, or why it names nothing. */
@@ -66,8 +116,11 @@ public fn resolveImport(graph: Graph, workspace: Workspace, from: ModuleId, path
   const module = graph.at(from)
   if path.startsWith("./") || path.startsWith("../") {
     const target = "{joinPath(parentPath(module.path), path)}.trb"
+    // A receiver script is not a module anybody imports: it is a body, checked against a receiver type
     if const Some(id) = graph.moduleAt(target) {
-      return Import.Found(id)
+      if graph.at(id).receiver.isNone() {
+        return Import.Found(id)
+      }
     }
     return Import.NoModule(path)
   }

@@ -1,0 +1,199 @@
+use Diagnostic from "../../syntax/diagnostic"
+use Expression, Argument, CallStyle from "../../syntax/ast"
+use SymbolId from "../symbols"
+use TypeId, FunctionForm, ParameterForm, ParameterMode from "./type"
+use Checker, Resolution, PropertyWriteKind from "./context"
+use Target from "./name"
+use checkExpression, inferExpression, expectationOf from "./expression"
+use fieldsOf from "./member"
+use typeSignatureOf from "./signature"
+use resolveType from "./unify"
+use trailingClosureAt from "./call"
+
+/**
+ * Property commands. A command call of a *function* is an ordinary call and needs nothing here; a call of a member that
+ * is not callable **writes** it, with or without parentheses (gap 15) - which is what gives the configuration DSL its
+ * look without a single hand-written setter.
+ *
+ * There is no line that could mean two things:
+ *
+ * | Written                    | The field holds      | Means                                          |
+ * |----------------------------|----------------------|------------------------------------------------|
+ * | `port 8080`, `tls(secure)` | anything but a function | `port = 8080`               (`.Assign`)     |
+ * | `onStart { ... }`          | a function           | `onStart = { ... }`         (`.AssignClosure`) |
+ * | `database { ... }`         | a type               | the receiver closure configures it in place (`.Configure`) |
+ * | `onStart()`, `onStart(e)`  | a function           | a call - "calling a function in a field always needs parentheses" |
+ *
+ * Milestone 5 reads `Resolution.PropertyWrite(owner, field, kind)` at the span of the whole command, and the field
+ * itself at the span of the callee.
+ */
+
+/** `None` where the call is an ordinary call and `checkCall` has to go on with it. */
+public fn propertyWrite(
+  var checker: Checker,
+  expression: Expression,
+  callee: Expression,
+  target: Target,
+  arguments: List<Argument>,
+  style: CallStyle,
+): TypeId? {
+  const (owner, field) = match target.resolution {
+    .Field(found, symbol) => (found, symbol)
+    // A property command reaches a field, through the innermost receiver or through a target. A local is not one
+    .Local(_) => {
+      return reportLocal(checker, target, arguments, expression)
+    }
+    _ => {
+      return None
+    }
+  }
+  const annotation = resolveType(checker, target.annotation)
+  const trailing = trailingClosureAt(arguments, expression.span)
+  const isOnlyClosure = trailing == 0 && arguments.length() == 1
+  const holdsFunction = functionFormOf(checker, annotation).isSome()
+  // "Calling a function in a field always needs parentheses": `onStart()` and `onStart(event)` call, `onStart { }` sets
+  if holdsFunction && !isOnlyClosure {
+    if const .Parentheses = style {
+      return None
+    }
+  }
+  const kind = if isOnlyClosure {
+    if holdsFunction { PropertyWriteKind.AssignClosure } else { PropertyWriteKind.Configure }
+  } else {
+    PropertyWriteKind.Assign
+  }
+  Some(writeField(checker, expression, callee, target, arguments, owner, field, annotation, kind, holdsFunction))
+}
+
+fn writeField(
+  var checker: Checker,
+  expression: Expression,
+  callee: Expression,
+  target: Target,
+  arguments: List<Argument>,
+  owner: TypeId,
+  field: SymbolId,
+  annotation: TypeId,
+  kind: PropertyWriteKind,
+  holdsFunction: Bool,
+): TypeId {
+  checker.resolved(callee.span, target.resolution)
+  const _ = checker.typed(callee.span, annotation)
+  // Anything but exactly one value is not a write, and a field is not callable: one root cause, one message
+  if arguments.length() != 1 {
+    reportNotCallable(checker, target.name, holdsFunction, expression)
+    return inferRest(checker, arguments)
+  }
+  requireVariable(checker, owner, field, target.name, expression)
+  const inner = match kind {
+    .Configure => configurationOf(checker, annotation, target.name, expression)
+    _ => Some(annotation)
+  }
+  const wanted = match inner {
+    Some(found) => found
+    // A field whose value has no configuration: `port { ... }` is not a section
+    .None => {
+      return inferRest(checker, arguments)
+    }
+  }
+  const inside = expectationOf(checker, wanted)
+  const _ = checkExpression(checker, arguments[0].value, inside)
+  checker.resolved(expression.span, Resolution.PropertyWrite(owner, field, kind))
+  checker.voidType
+}
+
+/**
+ * `count 1` where `count` is a binding of the body: a value that is not a function was called, and the fix is the
+ * assignment. `None` where the binding does hold a function, which is an ordinary call.
+ */
+fn reportLocal(var checker: Checker, target: Target, arguments: List<Argument>, expression: Expression): TypeId? {
+  const annotation = resolveType(checker, target.annotation)
+  if checker.absorbs(annotation) || functionFormOf(checker, annotation).isSome() {
+    return None
+  }
+  const shown = checker.describe(annotation)
+  checker.reportHere(
+    Diagnostic.error("`{target.name}` is a `{shown}`, and only a function can be called", expression.span)
+      .withNote("A binding is changed with `=`: `{target.name} = value`. A command writes a field of a receiver")
+  )
+  Some(inferRest(checker, arguments))
+}
+
+/** `database { url "..." }`: the block is the body of `(var self: DatabaseConfig) => Void`, applied to the field. */
+fn configurationOf(var checker: Checker, annotation: TypeId, name: String, expression: Expression): TypeId? {
+  if checker.absorbs(annotation) {
+    return Some(annotation)
+  }
+  if !isConfigurable(checker, annotation) {
+    const shown = checker.describe(annotation)
+    checker.reportHere(
+      Diagnostic.error("`{name}` is a `{shown}`, which has no configuration a block could fill", expression.span)
+        .withNote("A block on a field applies a receiver closure to its value. Write `{name} value` to set it")
+    )
+    return None
+  }
+  const parameters = [ParameterForm(Some("self"), ParameterMode.Receiver(true), annotation)]
+  Some(checker.functionType(FunctionForm(parameters, checker.voidType)))
+}
+
+/**
+ * Which values have a configuration: a `type` that is written down. A `native` type has no fields anybody could set,
+ * and a type with cases is chosen and not filled in - so a block on a field of one is a mistake and not a section.
+ */
+fn isConfigurable(var checker: Checker, annotation: TypeId): Bool {
+  const symbol = match checker.types.form(annotation) {
+    .Nominal(found, _) => found
+    _ => {
+      return false
+    }
+  }
+  const identifier = typeSignatureOf(checker, symbol)
+  const shape = checker.typeSignature(identifier)
+  !shape.isNative && shape.cases.isEmpty()
+}
+
+/** Both forms need a `var` path to the field, and the place the path starts at is milestone 4.6's question. */
+fn requireVariable(var checker: Checker, owner: TypeId, field: SymbolId, name: String, expression: Expression) {
+  for declared in fieldsOf(checker, owner) {
+    if declared.symbol != field {
+      continue
+    }
+    if !declared.isVar {
+      checker.reportHere(
+        Diagnostic.error("`{name}` never changes after construction", expression.span)
+          .withNote("`{name} value` writes the field, and only a `var` field can be written")
+      )
+    }
+    return
+  }
+}
+
+/** A write that could not be made still gives every argument a type: one message, and nothing is left unrecorded. */
+fn inferRest(var checker: Checker, arguments: List<Argument>): TypeId {
+  for argument in arguments {
+    const _ = inferExpression(checker, argument.value)
+  }
+  checker.invalidType
+}
+
+fn functionFormOf(checker: Checker, annotation: TypeId): FunctionForm? {
+  if const .Function(form) = checker.types.form(annotation) {
+    return Some(form)
+  }
+  None
+}
+
+fn reportNotCallable(var checker: Checker, name: String, holdsFunction: Bool, expression: Expression) {
+  if holdsFunction {
+    checker.reportHere(
+      Diagnostic.error(
+        "`{name}` holds a function: `{name} \{ ... \}` assigns it, `{name}()` calls it",
+        expression.span,
+      )
+    )
+    return
+  }
+  checker.reportHere(
+    Diagnostic.error("`{name}` is a field: `{name} value` writes it. Only a function can be called", expression.span)
+  )
+}

@@ -1,0 +1,248 @@
+use SourceFile, Statement, Declaration, Member, Block, Expression, Argument from "../syntax/ast"
+use Closure, Condition, TextSegment, TypeReference from "../syntax/ast"
+
+/**
+ * Which files a project loads as receiver scripts. `Sandbox.load<Value>("./config.trb")` says both things the checker
+ * needs about such a file - which type its body is checked against, and where it is - and it says them statically,
+ * which is the whole point of the mechanism: "because the type argument is known statically, a compiled binary knows
+ * exactly which types need to be callable from interpreted code" (CONCEPT.md, "Receiver Scripts and the Sandbox").
+ *
+ * This is a walk over the syntax tree and nothing else. It has to run before the modules of a program exist, because
+ * a receiver script *is* one of them, so it cannot ask what a name means - `Sandbox.load` is recognized by its shape.
+ * A path that is not a literal is not found here, and such a file is simply not checked: only the sandbox of
+ * milestone 7 can know what it was.
+ */
+
+/** One `Sandbox.load<Value>(path)` with a literal path. */
+public type ScriptLoad {
+  /** The path as it was written, which is resolved against the directory of the project that loads it. */
+  path: String
+  /** The `Value` the script's body is checked against, in a type position of the loading module. */
+  annotation: TypeReference
+}
+
+public fn scriptLoadsOf(file: SourceFile): List<ScriptLoad> {
+  var found: List<ScriptLoad> = []
+  walkStatements(file.statements, found)
+  found
+}
+
+/** `Sandbox.load<ServerConfig>("./config.trb")`: the shape, with a type argument and a literal first argument. */
+fn loadOf(expression: Expression): ScriptLoad? {
+  const (callee, arguments) = match expression.kind {
+    .Call(target, given, _) => (target, given)
+    _ => {
+      return None
+    }
+  }
+  const (inner, references) = match callee.kind {
+    .Generic(target, given) => (target, given)
+    _ => {
+      return None
+    }
+  }
+  const annotation = references.first()?
+  const (owner, name) = match inner.kind {
+    .Member(target, member, isOptional) => {
+      if isOptional {
+        return None
+      }
+      (target, member.text)
+    }
+    _ => {
+      return None
+    }
+  }
+  if name != "load" {
+    return None
+  }
+  if const .Name(text) = owner.kind {
+    if text != "Sandbox" {
+      return None
+    }
+  } else {
+    return None
+  }
+  const first = arguments.first()?
+  const path = literalTextOf(first.value)?
+  Some(ScriptLoad(path, annotation))
+}
+
+/** A text literal without interpolation. Anything else is a path only the sandbox can know. */
+fn literalTextOf(expression: Expression): String? {
+  if const .TextLiteral(segments) = expression.kind {
+    if const [.Literal(text)] = segments {
+      return Some(text)
+    }
+  }
+  None
+}
+
+// --- The walk -------------------------------------------------------------------------------------------------------
+
+fn walkStatements(statements: List<Statement>, var found: List<ScriptLoad>) {
+  for statement in statements {
+    walkStatement(statement, found)
+  }
+}
+
+fn walkStatement(statement: Statement, var found: List<ScriptLoad>) {
+  match statement.kind {
+    .Declare(declaration) => walkDeclaration(declaration, found)
+    .Bind(binding) => walkExpression(binding.value, found)
+    .Assign(target, value) => {
+      walkExpression(target, found)
+      walkExpression(value, found)
+    }
+    .For(_, iterable, body) => {
+      walkExpression(iterable, found)
+      walkBlock(body, found)
+    }
+    .While(condition, body) => {
+      walkCondition(condition, found)
+      walkBlock(body, found)
+    }
+    .Return(value) => {
+      if const Some(expression) = value {
+        walkExpression(expression, found)
+      }
+    }
+    .Evaluate(expression) => walkExpression(expression, found)
+    _ => {}
+  }
+}
+
+fn walkDeclaration(declaration: Declaration, var found: List<ScriptLoad>) {
+  match declaration.kind {
+    .Function(function) => {
+      for parameter in function.parameters {
+        if const Some(default) = parameter.default {
+          walkExpression(default, found)
+        }
+      }
+      if const Some(body) = function.body {
+        walkBlock(body, found)
+      }
+    }
+    .Type(declared) => walkMembers(declared.members, found)
+    .Trait(declared) => walkMembers(declared.members, found)
+    .Extend(extension) => walkMembers(extension.members, found)
+    .Foreign(library) => walkMembers(library.members, found)
+    .Constant(binding) => walkExpression(binding.value, found)
+    _ => {}
+  }
+}
+
+fn walkMembers(members: List<Member>, var found: List<ScriptLoad>) {
+  for member in members {
+    match member.kind {
+      .Field(field) => {
+        if const Some(default) = field.default {
+          walkExpression(default, found)
+        }
+      }
+      .Constant(binding) => walkExpression(binding.value, found)
+      .Function(function) => {
+        if const Some(body) = function.body {
+          walkBlock(body, found)
+        }
+      }
+      .Case(declared) => {
+        for field in declared.fields {
+          if const Some(default) = field.default {
+            walkExpression(default, found)
+          }
+        }
+      }
+    }
+  }
+}
+
+fn walkBlock(block: Block, var found: List<ScriptLoad>) {
+  walkStatements(block.statements, found)
+}
+
+fn walkCondition(condition: Condition, var found: List<ScriptLoad>) {
+  match condition {
+    .Test(expression) => walkExpression(expression, found)
+    .Bind(_, _, value) => walkExpression(value, found)
+  }
+}
+
+fn walkClosure(closure: Closure, var found: List<ScriptLoad>) {
+  walkBlock(closure.body, found)
+}
+
+fn walkArguments(arguments: List<Argument>, var found: List<ScriptLoad>) {
+  for argument in arguments {
+    walkExpression(argument.value, found)
+  }
+}
+
+fn walkExpression(expression: Expression, var found: List<ScriptLoad>) {
+  if const Some(load) = loadOf(expression) {
+    found.add(load)
+  }
+  match expression.kind {
+    .Generic(target, _) => walkExpression(target, found)
+    .Closure(closure) => walkClosure(closure, found)
+    .If(condition, then, otherwise) => {
+      walkCondition(condition, found)
+      walkBlock(then, found)
+      if const Some(alternative) = otherwise {
+        walkExpression(alternative, found)
+      }
+    }
+    .Match(subject, arms) => {
+      walkExpression(subject, found)
+      for arm in arms {
+        if const Some(guard) = arm.guard {
+          walkExpression(guard, found)
+        }
+        walkExpression(arm.body, found)
+      }
+    }
+    .Block(block) => walkBlock(block, found)
+    .TextLiteral(segments) => walkSegments(segments, found)
+    .TupleLiteral(items) => walkArguments(items, found)
+    .ListLiteral(items) => walkArguments(items, found)
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        walkExpression(key, found)
+        walkExpression(value, found)
+      }
+    }
+    .Member(target, _, _) => walkExpression(target, found)
+    .Index(target, index) => {
+      walkExpression(target, found)
+      walkExpression(index, found)
+    }
+    .Call(callee, arguments, _) => {
+      walkExpression(callee, found)
+      walkArguments(arguments, found)
+    }
+    .Unary(_, operand) => walkExpression(operand, found)
+    .Binary(_, left, right) => {
+      walkExpression(left, found)
+      walkExpression(right, found)
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(from) = start {
+        walkExpression(from, found)
+      }
+      if const Some(to) = end {
+        walkExpression(to, found)
+      }
+    }
+    .Try(inner) => walkExpression(inner, found)
+    _ => {}
+  }
+}
+
+fn walkSegments(segments: List<TextSegment>, var found: List<ScriptLoad>) {
+  for segment in segments {
+    if const .Interpolated(inner) = segment {
+      walkExpression(inner, found)
+    }
+  }
+}

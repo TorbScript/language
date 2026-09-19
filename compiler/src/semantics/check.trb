@@ -88,9 +88,11 @@ public fn check(tree: SourceTree, paths: List<String>): Checked {
     diagnostics.sort({ (_.span.start, _.span.end) })
     files.add(CheckedFile(tree.display(module.path), module.source.text, diagnostics))
   }
+  // A `project.trb` that is a receiver script is a module and was reported above; without `std/project` there is no
+  // type to check it against, and then only what the parser found about it is reported
   for package in packages {
     const manifest = joinPath(package.directory, "project.trb")
-    if isRequested(targets, manifest) {
+    if isRequested(targets, manifest) && graph.moduleAt(manifest).isNone() {
       if const Some(text) = tree.text(manifest) {
         files.add(CheckedFile(tree.display(manifest), text, parse(SourceText.of(text)).diagnostics))
       }

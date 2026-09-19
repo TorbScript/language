@@ -3,7 +3,7 @@ use Diagnostic from "../../syntax/diagnostic"
 use Closure, ClosureParameter from "../../syntax/ast"
 use TypeId, FunctionForm, ParameterForm, ParameterMode from "./type"
 use Checker, Expectation, Resolution, Adaptation, LocalBinding, BindingId from "./context"
-use ClosureFrame from "./context"
+use ClosureFrame, ReceiverClosure from "./context"
 use Target, formOf, noteCapture from "./name"
 use resolveType, hasVariable, unify, suppressVariables from "./unify"
 use checkBlock, bodyExpectation, inferredResult, scopeHere from "./statement"
@@ -19,6 +19,11 @@ use typeFromReference from "./lowering"
  * Three things are recorded here that the back ends cannot work out again: which parameter an implicit `_` or a name
  * from the function type stands for (`Adaptation.ImplicitParameter`), which bindings of the scope around the closure
  * its body reads and which of those are `var` (gap 19), and the function type the closure turned out to have.
+ *
+ * A **receiver closure** (`(var self: Element) => Void`) is the same thing with one parameter that is not a value but
+ * the thing names resolve against: inside it, a bare name means a member of the receiver exactly as it does inside a
+ * method. Only that one receiver is implicit (gap 4), so it replaces whatever was implicit around the closure, and
+ * naming it (`html { root => ... }`) means nothing is implicit at all.
  */
 
 /** `{ x => x + 1 }`, `{ _ * 2 }`, `{ value: Int => ... }`: the closure, checked against what is expected of it. */
@@ -28,12 +33,6 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
     .None => checker.deferredType
   }
   const form = formOf(checker, wanted)
-  // `(var self: Element) => Void`: a receiver closure resolves names against the receiver, which is milestone 4.7
-  if const Some(found) = form {
-    if isReceiverForm(found) {
-      return deferredClosure(checker, closure, wanted)
-    }
-  }
   // `filter(predicate: Expression<(row: Row) => Bool>)`: the closure is quoted instead of called, which is 4.8
   if isQuotation(checker, wanted) {
     return deferredClosure(checker, closure, wanted)
@@ -41,13 +40,15 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
   const hasParameters = !closure.parameters.isEmpty()
   const written = parameterFormsOf(checker, closure, form, at)
   const parameters = written.forms
+  // `(var self: Element) => Void`: the receiver is a parameter, and everything after it is an ordinary one
+  const receiver = receiverIndexOf(parameters)
   var implicit: List<String?> = []
   var types: List<TypeId> = []
   var used: List<Int> = []
   if !hasParameters {
-    for parameter in parameters {
-      implicit.add(parameter.name)
-      types.add(parameter.annotation)
+    for index in (receiver + 1)..parameters.length() {
+      implicit.add(parameters[index].name)
+      types.add(parameters[index].annotation)
       used.add(-1)
     }
   }
@@ -59,11 +60,22 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
       expectedResult = Some(found.result)
     }
   }
-  const result = checkClosureBody(checker, closure, at, parameters, implicit, types, used, hasParameters, expectedResult)
+  const frame = ClosureFrame(at, 0, implicit, types, used, [], hasParameters, receiver + 1)
+  const result = checkClosureBody(checker, closure, at, parameters, frame, receiver, expectedResult)
   if written.isBroken {
     return wanted
   }
   checker.functionType(FunctionForm(parameters, result))
+}
+
+/** The parameter names resolve against, or `-1`: the first one of the expected function type that is a receiver. */
+fn receiverIndexOf(parameters: List<ParameterForm>): Int {
+  for index in 0..parameters.length() {
+    if const .Receiver(_) = parameters[index].mode {
+      return index
+    }
+  }
+  -1
 }
 
 /** The parameters a closure ends up with, and whether they disagreed with what was expected of it. */
@@ -157,16 +169,17 @@ fn checkClosureBody(
   closure: Closure,
   at: Span,
   parameters: List<ParameterForm>,
-  implicit: List<String?>,
-  types: List<TypeId>,
-  used: List<Int>,
-  hasParameters: Bool,
+  frame: ClosureFrame,
+  receiver: Int,
   expectedResult: TypeId?,
 ): TypeId {
+  const hasParameters = frame.hasParameters
   const savedResult = checker.resultType
   const savedInferred = checker.isResultInferred
   const savedReturns = checker.returnTypes
   const savedDepth = checker.loopDepth
+  const savedReceiverType = checker.receiverType
+  const savedReceiverBinding = checker.receiverBinding
   // The result is inferred whenever the expected one is not pinned down yet, which is the ordinary case at a call. It
   // still flows into the body: `flatMap { _.manager.toList() }` learns its `Output` from the `Iterable<Output>` the
   // closure has to produce, and that is a coercion and not a unification
@@ -186,9 +199,15 @@ fn checkClosureBody(
   checker.loopDepth = 0
   checker.openScope()
   const start = checker.bindings.length()
-  checker.closureFrames.add(ClosureFrame(at, start, implicit, types, used, [], hasParameters))
+  checker.closureFrames.add(frame.copy(bindings: start))
+  if receiver >= 0 {
+    declareReceiver(checker, closure, at, parameters, receiver, hasParameters)
+  }
   if hasParameters {
     for index in 0..closure.parameters.length() {
+      if index == receiver {
+        continue
+      }
       const form = parameters.get(index) ?? ParameterForm(None, ParameterMode.Value, checker.deferredType)
       const isVar = isVarMode(form.mode)
       checkPattern(checker, closure.parameters[index].pattern, form.annotation, isVar)
@@ -200,14 +219,15 @@ fn checkClosureBody(
     result = inferredResult(checker, outcome)
   }
   const last = checker.closureFrames.length() - 1
-  const frame = checker.closureFrames[last]
-  const captures = frame.captures
+  const captures = checker.closureFrames[last].captures
   const _ = checker.closureFrames.removeAt(last)
   checker.closeScope()
   checker.resultType = savedResult
   checker.isResultInferred = savedInferred
   checker.returnTypes = savedReturns
   checker.loopDepth = savedDepth
+  checker.receiverType = savedReceiverType
+  checker.receiverBinding = savedReceiverBinding
   checker.recordCaptures(at, captures)
   if const Some(found) = expectedResult {
     if isInferred {
@@ -237,14 +257,42 @@ fn isQuotation(checker: Checker, wanted: TypeId): Bool {
   false
 }
 
-/** `(self: Receiver) => Value`: the names inside resolve against the receiver, which milestone 4.7 brings. */
-fn isReceiverForm(form: FunctionForm): Bool {
-  for parameter in form.parameters {
-    if const .Receiver(_) = parameter.mode {
-      return true
-    }
+// --- Receivers ------------------------------------------------------------------------------------------------------
+
+/**
+ * The receiver of a receiver closure. Written down (`html { root => ... }`) it is an ordinary binding and **nothing**
+ * is implicit inside the closure any more: reaching a receiver by name is exactly what gap 4 offers instead of a
+ * second implicit one, and leaving the outer one implicit would be the scope leaking it rules out.
+ *
+ * Left out, `self` is the implicit receiver, and it replaces whatever was implicit around the closure. Either way the
+ * binding is recorded, because an implicit receiver has no node in the tree that could carry it.
+ */
+fn declareReceiver(
+  var checker: Checker,
+  closure: Closure,
+  at: Span,
+  parameters: List<ParameterForm>,
+  index: Int,
+  hasParameters: Bool,
+) {
+  const form = parameters[index]
+  const isVar = isVarMode(form.mode)
+  // A closure that wrote fewer parameters than the expected type has said so already, and its receiver stays implicit
+  if !hasParameters || index >= closure.parameters.length() {
+    const binding = checker.declareBinding(
+      LocalBinding("self", form.annotation, isVar, at, isReceiver: true)
+    )
+    checker.setReceiver(binding)
+    checker.recordReceiver(at, ReceiverClosure(binding, form.annotation, isVar, true))
+    return
   }
-  false
+  const before = checker.bindings.length()
+  checkPattern(checker, closure.parameters[index].pattern, form.annotation, isVar)
+  checker.receiverType = None
+  checker.receiverBinding = None
+  if checker.bindings.length() > before {
+    checker.recordReceiver(at, ReceiverClosure(BindingId(before), form.annotation, isVar, false))
+  }
 }
 
 // --- Implicit parameters --------------------------------------------------------------------------------------------
@@ -321,7 +369,8 @@ fn parameterBindingOf(var checker: Checker, frame: Int, index: Int, text: String
     const updated = checker.closureFrames[frame].copy(used: used)
     checker.closureFrames.set(frame, updated)
   }
-  checker.adapted(at, Adaptation.ImplicitParameter(index))
+  const position = checker.closureFrames[frame].implicitFrom + index
+  checker.adapted(at, Adaptation.ImplicitParameter(position))
   noteCapture(checker, identifier)
   const annotation = checker.binding(identifier).annotation
   Target(Resolution.Local(identifier), annotation, form: formOf(checker, annotation), name: text)

@@ -427,6 +427,21 @@ fn memberCandidate(
   }
   // A member without `self` is a constant of the type: a static function, or a `const`
   if signature.hasBody && form.parameters.isEmpty() && isConstantMember(checker, member) {
+    // `const perimeter: (self: Rectangle) => Int`: a method *is* a constant that holds a receiver closure, so one that
+    // was written that way is read exactly like a `fn` - `Rectangle.perimeter` is it, `rectangle.perimeter` is it bound
+    if const Some(held) = receiverFormOf(checker, form.result) {
+      const value = if isStatic { held } else { FunctionForm(held.parameters.skip(1).toList(), held.result) }
+      return Candidate(
+        CandidateKind.Constant(receiver, member),
+        checker.functionType(value),
+        form: Some(value),
+        takesSelf: true,
+        isVarSelf: isVarReceiver(held.parameters[0].mode),
+        generics: generics,
+        bounds: bounds,
+        dispatch: dispatch,
+      )
+    }
     return Candidate(
       CandidateKind.Constant(receiver, member),
       form.result,
@@ -482,6 +497,25 @@ fn functionTypeOf(
   const built = checker.functionType(form)
   checker.signatureTypes.set(identifier.value, built)
   built
+}
+
+/** The function type a `const` holds, where its first parameter is a receiver: that is what a method is (CONCEPT.md). */
+fn receiverFormOf(checker: Checker, annotation: TypeId): FunctionForm? {
+  if const .Function(form) = checker.types.form(annotation) {
+    if const Some(first) = form.parameters.first() {
+      if const .Receiver(_) = first.mode {
+        return Some(form)
+      }
+    }
+  }
+  None
+}
+
+fn isVarReceiver(mode: ParameterMode): Bool {
+  match mode {
+    .Receiver(isVar) => isVar
+    _ => false
+  }
 }
 
 /** A `const` member has no parameters and no `self`, which is exactly what `Signature` says about it. */

@@ -9,6 +9,10 @@ const resources = ["users", "orders", "invoices"]
 
 const secure = true
 
+// `secret` is exposed by ServerConfig, the script cannot read the environment itself. It is read here and not inside
+// `database { }`, because only the innermost receiver is implicit.
+const databasePassword = secret("DB_PASSWORD")
+
 host "0.0.0.0"
 port if secure { 8443 } else { 8080 }
 tls secure
@@ -16,7 +20,7 @@ tls secure
 database {
   url "postgres://localhost:5432/mydb"
   username "myuser"
-  password secret("DB_PASSWORD")         // `secret` is exposed by ServerConfig, the script cannot read the environment itself
+  password databasePassword              // Read above: inside this block the receiver is the DatabaseConfig
   poolSize 20
 }
 

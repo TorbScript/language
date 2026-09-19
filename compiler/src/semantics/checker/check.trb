@@ -13,6 +13,7 @@ use typeFromReference from "./lowering"
 use checkBodyOf, checkInitializer, checkStatement from "./statement"
 use deferBlock from "./expression"
 use buildImplementations, checkCoherence, checkImplementations, extensionAt from "./implementation"
+use scriptReceiverOf, checkReceiverScript from "./receiver"
 
 /**
  * Checks the declarations of the given modules: every type position becomes a type, every declaration a signature, and
@@ -46,6 +47,13 @@ public fn checkTypes(program: Program, resolutions: List<Map<Span, SymbolId>>, m
  * scope in the next.
  */
 public fn checkModule(var checker: Checker, module: ModuleId) {
+  // `project.trb` and a configuration file are bodies, not modules: they are checked against their receiver (4.7)
+  if checker.program.graph.at(module).receiver.isSome() {
+    if const Some(receiver) = scriptReceiverOf(checker, module) {
+      checkReceiverScript(checker, module, receiver)
+    }
+    return
+  }
   const statements = checker.program.graph.at(module).file.statements
   const saved = checker.enterBody(module, checker.voidType, true, None)
   checker.openScope()

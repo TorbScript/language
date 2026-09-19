@@ -61,7 +61,7 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 | `syntax/`                | Source text, spans, diagnostics, tokens, lexer, AST, parser           | done, verified against stage 0 |
 | `project/`               | Paths, the source tree, `project.trb`, workspaces and their members   | done     |
 | `semantics/`             | Modules, symbols, visibility, names in type positions (`torb check`)  | done     |
-| `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: types and signatures (4.1), statements and monomorphic expressions (4.2), traits and implementations (4.3), generics, inference and closures (4.4) |
+| `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: types and signatures (4.1), statements and monomorphic expressions (4.2), traits and implementations (4.3), generics, inference and closures (4.4), receivers and the configuration DSL (4.7) |
 | `cli/`                   | Collecting files, rendering diagnostics                               | started  |
 | `ir/`                    | Typed IR, lowering, last-use analysis                                 | started: the IR, layouts, mangling, the verifier, the text format (5.1) |
 | `backend/c/`             | Typed IR to C                                                         | started: the manifest of natives (5.R1) |
@@ -99,7 +99,9 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 - **`project.trb` is read from its syntax tree, not evaluated.** Top-level command calls with literal arguments and
   the blocks the toolchain knows; everything else in the file is ignored silently. It is a receiver script, and the
   sandboxed VM will evaluate it properly in milestone 7 - the static reading is what lets the compiler find its own
-  standard library before there is a VM.
+  standard library before there is a VM. It is nevertheless **type checked** like any other file, against the `Project`
+  of [`std/project`](../std/project), and so is every file a `Sandbox.load<Value>("./config.trb")` names with a literal
+  path: such a file is a module whose body is a receiver closure, not a module anybody imports.
 - **Program-wide things are ids, not references.** Values have no identity in TorbScript, so modules and symbols live
   in lists and are referred to by `ModuleId` and `SymbolId`. Anything a later pass has to look up (what a name in a
   type position resolved to) is a side table keyed by module and span, never a field in the syntax tree - the tree
@@ -196,8 +198,11 @@ regardless.)
    type, every declaration a signature, and every expression a type - traits and their implementations included, so the
    operators, `for`, indexing, interpolation, `?`, `??`, `?.` and `into()` all resolve through the trait they mean, and
    generics, closures and inference included, so every call records the type arguments it was instantiated with, one
-   witness per bound, and what every closure captures. 99% of the expressions of the repository today; what is left is
-   the DSL (4.7) and the quotations (4.8), recorded as "not checked yet" and counted by `torb check --statistics`.
+   witness per bound, and what every closure captures. **4.7 is done** as well: receiver closures, the innermost-receiver
+   rule, property commands, and receiver scripts - `torb check` checks every `project.trb` of the repository against the
+   `Project` of `std/project`, and `examples/config-dsl/config.trb` against the type its `Sandbox.load` names. What is
+   left is the quotations (4.8) and the generated members of a literal type (4.10), recorded as "not checked yet" and
+   counted by `torb check --statistics`.
    `std/` and `compiler/` are at 100%. The first thing it found by checking the compiler itself was that
    `compiler/src/ir/mangle.trb` mixed the `UInt8` of a byte with `Int64` arithmetic; checking the generic code found
    `Set.new()`, which the standard library never had.

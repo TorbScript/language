@@ -127,8 +127,42 @@ public type Resolution {
   case VoidValue
   /** The type itself, as the target of a static member or of a constructor: `Point` in `Point.origin`. */
   case TypeOf(owner: TypeId)
+  /**
+   * `port 8080`, `onStart { ... }`, `database { ... }`: a call of a member that is not callable writes it (gap 15).
+   * The kind says which of the three the lowering has to emit.
+   */
+  case PropertyWrite(owner: TypeId, field: SymbolId, kind: PropertyWriteKind)
   /** A construct a later sub-milestone resolves. It is recorded so that the statistics can count it. */
   case Deferred
+}
+
+/**
+ * Which of the three forms a property command is. There is no case where a line could mean two of them: a command on
+ * a field writes it, and a trailing closure on one configures its value in place unless the field holds a function.
+ */
+public type PropertyWriteKind {
+  /** `port 8080`, `tls(port == 8443)`: the argument is the new value of the field. */
+  case Assign
+  /** `onStart { print "started" }`: the field holds a function, and the closure becomes its value. */
+  case AssignClosure
+  /** `database { url "..." }`: the receiver closure is applied to the field's value, which changes in place. */
+  case Configure
+}
+
+/**
+ * One receiver closure, by the span of the closure: `(var self: ServerConfig) => Void`. The lowering needs the binding
+ * the receiver is reached under, because an implicit one has no node in the tree that could carry it - every name that
+ * means a member of it records `Adaptation.ImplicitSelf` with this very binding.
+ *
+ * The body of a receiver *script* records one of these at `Span(0, 0)`: the file is that closure.
+ */
+public type ReceiverClosure {
+  binding: BindingId
+  annotation: TypeId
+  /** `(var self: T) => Void` configures its receiver in place, `(self: T) => Value` reads it. */
+  isVar: Bool
+  /** Whether the closure wrote the parameter itself (`html { root => ... }`) or `self` is the implicit receiver. */
+  isImplicit: Bool
 }
 
 /**
@@ -229,6 +263,12 @@ public type ClosureFrame {
   var captures: List<Capture>
   /** Whether the closure declared its parameters itself: then no implicit parameter is available. */
   hasParameters: Bool
+  /**
+   * The position the first entry of `implicit` has in the expected function type. It is `1` inside a receiver closure,
+   * whose first parameter is the receiver and not a value, and `0` everywhere else - so `Adaptation.ImplicitParameter`
+   * always names the parameter the way the declaration counts them.
+   */
+  implicitFrom: Int = 0
 }
 
 /** Everything the source does not spell out, in the order in which it applies. */
@@ -289,6 +329,8 @@ public type Tables {
   var witnesses: Map<Span, List<Witness>> = [:]
   /** Per closure span: the bindings of the scope around it that its body reads. */
   var captures: Map<Span, List<Capture>> = [:]
+  /** Per receiver closure span, and at `Span(0, 0)` for a receiver script: the binding its receiver is reached under. */
+  var receivers: Map<Span, ReceiverClosure> = [:]
 }
 
 /** No expected type, a type, or "a value is not wanted here". */
@@ -714,6 +756,15 @@ public type Checker {
 
   fn capturesAt(self, module: ModuleId, at: Span): List<Capture>? {
     tables[module.value].captures.get(at)
+  }
+
+  /** The receiver of one receiver closure, which is the one binding a bare name in it may look members up on. */
+  fn recordReceiver(var self, at: Span, found: ReceiverClosure) {
+    tables[module.value].receivers.set(at, found)
+  }
+
+  fn receiverAt(self, module: ModuleId, at: Span): ReceiverClosure? {
+    tables[module.value].receivers.get(at)
   }
 
   /** A variable that was solved: every table of the statement is walked once at its end, through these. */

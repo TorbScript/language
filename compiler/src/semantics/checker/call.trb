@@ -9,6 +9,7 @@ use checkExpression, inferExpression, deferExpression, deferArguments from "./ex
 use resolveTarget, expectationOf from "./expression"
 use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
 use witnessFor, isConcrete, traitArgumentsOf from "./implementation"
+use propertyWrite from "./command"
 
 /**
  * Calls: which parameter every written argument fills, what the generic parameters of the callee turn out to be, and
@@ -55,9 +56,13 @@ public fn checkCall(
   if !target.overloads.isEmpty() {
     target = chooseOverload(checker, target, arguments, expression.span)
   }
+  // `port 8080`, `onStart { ... }`, `database { ... }`: a call of a member that is not callable writes it (gap 15)
+  if const Some(written) = propertyWrite(checker, expression, callee, target, arguments, style) {
+    return written
+  }
   const form = match target.form {
     Some(found) => found
-    // A property command (`port 8080`) and a call of something that is not a function: milestone 4.7
+    // A call of something that is not a function, which nothing here can resolve
     .None => {
       checker.resolved(callee.span, target.resolution)
       const _ = checker.typed(callee.span, target.annotation)
@@ -350,7 +355,7 @@ fn placeTrailingClosure(
  * The index of the argument that is a trailing closure: written after the argument list, so its text ends where the
  * whole call ends. A closure inside of the parentheses is an ordinary argument.
  */
-fn trailingClosureAt(arguments: List<Argument>, at: Span): Int {
+public fn trailingClosureAt(arguments: List<Argument>, at: Span): Int {
   const index = arguments.length() - 1
   if index < 0 {
     return -1

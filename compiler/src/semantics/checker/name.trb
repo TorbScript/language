@@ -148,10 +148,14 @@ public fn noteCapture(var checker: Checker, binding: BindingId) {
   }
 }
 
-/** A member of `self` that was written without it. The lowering puts the receiver back, so it is recorded here. */
+/**
+ * A member of `self` that was written without it. The lowering puts the receiver back, so it is recorded here - and a
+ * closure that reads a member of a receiver from further out captures that receiver like any other binding (gap 19).
+ */
 fn implicitTarget(var checker: Checker, candidate: Candidate, text: String, at: Span): Target {
   if const Some(receiver) = checker.receiverBinding {
     checker.adapted(at, Adaptation.ImplicitSelf(receiver))
+    noteCapture(checker, receiver)
   }
   targetOfCandidate(checker, candidate, text)
 }
@@ -457,6 +461,17 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
   }
   const shown = checker.describe(receiver)
   var problem = Diagnostic.error("`{shown}` has no member `{text}`", at)
+  // `level .Debug` lexes as `level.Debug`: whitespace never changes what a token sequence means, so `.` is one of the
+  // tokens a first command argument must not start with (gap 42)
+  if caseNamed(checker, receiver, text).isSome() {
+    checker.reportHere(
+      problem.withNote(
+        "`{text}` is a case of `{shown}`. The first argument of a command may not start with `.`, so"
+          + " `setting .{text}` is the member `setting.{text}`: write `setting(.{text})` or `setting = .{text}`"
+      )
+    )
+    return true
+  }
   // An extension of a foreign type only reaches the files that import the module it is written in
   if const Some(module) = hiddenExtensionOf(checker, receiver, text) {
     const path = checker.program.graph.at(module).path

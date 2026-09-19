@@ -1,0 +1,248 @@
+use test, group from "std/test"
+use SourceTree from "../src/project/source-tree"
+use check from "../src/semantics/check"
+use Probed, probe, problems, notes, workspace from "./harness"
+
+/**
+ * Receiver closures, the innermost-receiver rule, and receiver scripts.
+ *
+ * `(var self: Element) => Void` is an ordinary closure with one parameter that is not a value but the thing names
+ * resolve against. Exactly one receiver is implicit - the innermost (gap 4) - and naming the parameter is what reaches
+ * an outer one, so it makes nothing implicit inside the closure at all.
+ *
+ * A receiver *script* is a file that is such a body: `project.trb` against `Project`, and a configuration file against
+ * whatever `Sandbox.load<Value>` was written with. It is checked with the file scope "the prelude, and nothing else"
+ * (gap 34), which is why a `use` in one is an error.
+ */
+
+const element = "\ntype Element \{\n  var tag: String = \"\"\n  private var texts: List<String> = []\n\n"
+  + "  fn text(var self, content: String) \{\n    texts.add(content)\n  \}\n\n"
+  + "  fn child(var self, build: (var self: Element) => Void) \{\n"
+  + "    var inner = Element()\n    build(inner)\n  \}\n\}\n\n"
+  + "fn html(build: (var self: Element) => Void): Element \{\n"
+  + "  var root = Element()\n  build(root)\n  root\n\}\n"
+
+fn inHtml(body: String): String {
+  "fn probe() \{\n  const page = html \{\n{body}\n  \}\n\}\n{element}"
+}
+
+group "A receiver closure" {
+  test "the closure has the type that was expected of it, receiver and all" {
+    const source = inHtml("    tag \"html\"")
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("\{\n    tag \"html\"\n  \}") == "(var self: Element) => Void")
+    assert(probed.receiverOf("\{\n    tag \"html\"\n  \}") == "implicit var self: Element")
+  }
+
+  test "a bare name resolves against the receiver, exactly as in a method" {
+    const source = inHtml("    text \"hello\"")
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.resolutionOf("text \"hello\"") == "call text")
+    assert(probed.adaptationsOf("text") == ["self self"])
+  }
+
+  test "`self` names the receiver" {
+    const source = inHtml("    self.text(\"hello\")")
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("self") == "Element")
+  }
+
+  test "a name that is nowhere is reported, with the innermost-receiver rule as the note" {
+    const source = inHtml("    missing \"hello\"")
+    assert(problems(source) == ["Cannot find `missing` here"])
+    assert(
+      notes(source)
+        == [
+          "Only the innermost receiver is implicit: name the parameter to reach an outer one (`report \{ r => r.missing \}`)",
+        ]
+    )
+  }
+
+  test "the body is ordinary code: bindings, loops and what the scope around the closure holds" {
+    const source = inHtml("    const items = [\"a\", \"b\"]\n    for word in items \{\n      text word\n    \}")
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.patternTypeOf("word") == "String")
+  }
+
+  test "what the closure reads from around it is a capture" {
+    const source = "fn probe(title: String) \{\n  const page = html \{\n    text title\n  \}\n\}\n{element}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.capturesOf("\{\n    text title\n  \}") == ["title"])
+  }
+}
+
+group "Only the innermost receiver is implicit (gap 4)" {
+  test "a nested receiver closure replaces the receiver of the one around it" {
+    const source = inHtml("    child \{\n      text \"inner\"\n    \}")
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.receiverOf("\{\n      text \"inner\"\n    \}") == "implicit var self: Element")
+  }
+
+  test "a member of an outer receiver is not reachable without naming it" {
+    const source = "fn probe() \{\n  const page = html \{\n    child \{\n      poolSize 20\n    \}\n  \}\n\}\n"
+      + "\ntype Inner \{\n  var poolSize: Int = 1\n\}\n"
+      + "\ntype Element \{\n  var poolSize: Int = 1\n\n"
+      + "  fn child(var self, build: (var self: Inner) => Void) \{\n"
+      + "    var made = Inner()\n    build(made)\n  \}\n\}\n\n"
+      + "fn html(build: (var self: Element) => Void): Element \{\n"
+      + "  var root = Element()\n  build(root)\n  root\n\}\n"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    // The *inner* receiver has the field as well, so this one resolves - against `Inner`, not against `Element`
+    assert(probed.resolutionOf("poolSize 20") == "assign Inner.poolSize")
+  }
+
+  test "naming the parameter makes nothing implicit, which is how an outer receiver is reached" {
+    const source = inHtml("    root => root.text(\"hello\")")
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.receiverOf("\{\n    root => root.text(\"hello\")\n  \}") == "named var root: Element")
+    assert(probed.patternTypeOf("root") == "Element")
+  }
+
+  test "a bare member of a named receiver is not found" {
+    const source = inHtml("    root => text \"hello\"")
+    assert(problems(source) == ["Cannot find `text` here"])
+  }
+
+  test "a method of the type around the closure is not implicit inside it either" {
+    const source = "\ntype Page \{\n  var title: String = \"\"\n\n"
+      + "  fn build(self): Element \{\n    html \{\n      tag title\n    \}\n  \}\n\}\n{element}"
+    assert(problems(source) == ["Cannot find `title` here"])
+  }
+}
+
+group "A method is a constant that holds a receiver closure" {
+  const rectangle = "\ntype Rectangle \{\n  width: Int\n  height: Int\n\n"
+    + "  const perimeter: (self: Rectangle) => Int = \{ 2 * (width + height) \}\n\}\n"
+
+  test "the closure of such a constant is checked against its own type" {
+    const source = "fn probe(made: Rectangle) \{\n  const found = made.perimeter()\n\}\n{rectangle}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("made.perimeter()") == "Int64")
+    assert(probed.typeOf("\{ 2 * (width + height) \}") == "(self: Rectangle) => Int64")
+    assert(probed.receiverOf("\{ 2 * (width + height) \}") == "implicit self: Rectangle")
+  }
+
+  test "read through the type it is the constant itself, read through a value it is bound" {
+    const source = "fn probe(made: Rectangle) \{\n  const bound = made.perimeter\n  const own = Rectangle.perimeter\n\}\n"
+      + rectangle
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("made.perimeter") == "() => Int64")
+    assert(probed.typeOf("Rectangle.perimeter") == "(self: Rectangle) => Int64")
+  }
+}
+
+// --- Receiver scripts -----------------------------------------------------------------------------------------------
+
+/** A `Project` small enough to read, in a package of its own: that is how the checker finds the receiver. */
+const projectSource = "public type Build \{\n  var target: String = \"dev\"\n  var output: String = \"\"\n\}\n\n"
+  + "public type Project \{\n  var name: String = \"\"\n  var build: Build = Build()\n\}\n"
+
+fn scriptTree(files: Map<String, String>): SourceTree {
+  var all = workspace
+  all.set("std/project/project.trb", "name \"std/project\"")
+  all.set("std/project/src/lib.trb", projectSource)
+  for (path, text) in files {
+    all.set(path, text)
+  }
+  SourceTree.of(all)
+}
+
+/** Everything that is wrong in `app`, its `project.trb` and the scripts it loads. */
+fn scriptProblems(files: Map<String, String>): List<String> {
+  var found: List<String> = []
+  for file in check(scriptTree(files), ["app"]).files {
+    for diagnostic in file.diagnostics {
+      found.add(diagnostic.message)
+    }
+  }
+  found
+}
+
+/** The checked module of one file of `app`, so a test can ask what the script recorded. */
+fn probeScript(files: Map<String, String>, path: String): Probed {
+  const checked = check(scriptTree(files), ["app"])
+  const module = checked.program.graph.moduleAt(path).expect("the module of `{path}`")
+  Probed(files[path], checked.checker, module)
+}
+
+const loader = "type Sandbox \{\n  fn load<Value>(path: String): Int \{\n    0\n  \}\n\}\n\n"
+  + "public type Config \{\n  var port: Int = 8080\n  var host: String = \"\"\n\}\n\n"
+  + "const script = Sandbox.load<Config>(\"./config.trb\")\n"
+
+group "project.trb is a receiver script against `Project`" {
+  test "a setting writes a field of the receiver" {
+    const manifest = "name \"acme/app\"\nbuild \{\n  target \"release\"\n\}\n"
+    assert(scriptProblems(["app/project.trb": manifest]).isEmpty())
+    const probed = probeScript(["app/project.trb": manifest], "app/project.trb")
+    assert(probed.resolutionOf("name \"acme/app\"") == "assign Project.name")
+    assert(probed.resolutionOf("build \{\n  target \"release\"\n\}") == "configure Project.build")
+    assert(probed.resolutionOf("target \"release\"") == "assign Build.target")
+    // The file *is* the closure, so its receiver is recorded at the span the whole body has
+    assert(probed.receiverOf("") == "implicit var self: Project")
+  }
+
+  test "a `const` of a script is a local of the body: it may read the receiver and what came before it" {
+    const manifest = "name \"acme/app\"\nconst binary = name\nbuild \{\n  output \"build/\{target\}/\{binary\}\"\n\}\n"
+    assert(scriptProblems(["app/project.trb": manifest]).isEmpty())
+    const probed = probeScript(["app/project.trb": manifest], "app/project.trb")
+    assert(probed.patternTypeOf("binary") == "String")
+    assert(probed.resolutionOf("target") == "field Build.target")
+  }
+
+  test "a mistake in a project file is reported with its position, like any other file" {
+    assert(
+      scriptProblems(["app/project.trb": "name 7\n"]) == ["Expected `String`, found `Int64`"]
+    )
+    assert(scriptProblems(["app/project.trb": "nmae \"acme/app\"\n"]) == ["Cannot find `nmae` here"])
+  }
+
+  test "a script reaches the prelude and nothing else" {
+    const manifest = "use Thing from \"./src/thing\"\nname \"acme/app\"\n"
+    assert(
+      scriptProblems(["app/project.trb": manifest, "app/src/thing.trb": "public type Thing \{\}\n"])
+        == ["A receiver script reaches the prelude and nothing else, so it cannot `use` a module"]
+    )
+  }
+}
+
+group "Sandbox.load makes a file part of the project" {
+  test "a literal path is checked as the body of `(var self: Value) => Void`" {
+    const files = ["app/src/main.trb": loader, "app/config.trb": "port 9000\nhost \"0.0.0.0\"\n"]
+    assert(scriptProblems(files).isEmpty())
+    const probed = probeScript(files, "app/config.trb")
+    assert(probed.receiverOf("") == "implicit var self: Config")
+    assert(probed.resolutionOf("port 9000") == "assign Config.port")
+    assert(probed.statistics().deferred == 0)
+  }
+
+  test "the file is checked against the type argument, so a mistake in it is reported" {
+    const files = ["app/src/main.trb": loader, "app/config.trb": "port \"9000\"\n"]
+    assert(scriptProblems(files) == ["Expected `Int64`, found `String`"])
+  }
+
+  test "a script is not a module anybody can import" {
+    const files = [
+      "app/src/main.trb": "use * as other from \"../config\"\n{loader}",
+      "app/config.trb": "port 9000\n",
+    ]
+    assert(scriptProblems(files).contains("There is no module `../config`"))
+  }
+
+  test "a path that is not a literal is not checked here: only the sandbox can know it" {
+    const dynamic = "type Sandbox \{\n  fn load<Value>(path: String): Int \{\n    0\n  \}\n\}\n\n"
+      + "public type Config \{\n  var port: Int = 8080\n\}\n\n"
+      + "fn open(path: String): Int \{\n  Sandbox.load<Config>(path)\n\}\n"
+    const files = ["app/src/main.trb": dynamic, "app/config.trb": "nonsense 1\n"]
+    assert(scriptProblems(files).isEmpty())
+  }
+}

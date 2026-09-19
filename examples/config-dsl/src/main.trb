@@ -9,13 +9,16 @@ type StartupError {
 
 // Both cases wrap exactly one error, so `From<SandboxError>` and `From<ConfigError>` are generated and `?` converts.
 
-fn loadConfig(path: String): Result<ServerConfig, StartupError> {
+fn loadConfig(): Result<ServerConfig, StartupError> {
   // Parses and type checks the file against ServerConfig. The result is a Script<ServerConfig>: loading reports what
   // is wrong with the file, `apply` what goes wrong while it runs (a limit, or a panic inside the script).
   //
+  // The path is a literal, so `torb check` checks `config.trb` against ServerConfig as part of this project. A path
+  // that is only known while the program runs is checked by the sandbox instead, when it loads the file.
+  //
   // What a script can do is decided here, where it is loaded. Without the block it could not do any IO at all;
   // this one may read files below ./config. The limits guard against `while true {}`.
-  const script = Sandbox.load<ServerConfig>(path) {
+  const script = Sandbox.load<ServerConfig>("./config.trb") {
     files readOnly: "./config"
     limits steps: 1_000_000, memory: 16.megabytes()
   }?
@@ -38,7 +41,7 @@ fn testConfig(): ServerConfig {
   config
 }
 
-match loadConfig("./config.trb") {
+match loadConfig() {
   Ok(config) => {
     print "Listening on {config.host}:{config.port} (tls: {config.tls})"
     for route in config.routes {

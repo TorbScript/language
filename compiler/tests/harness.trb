@@ -2,7 +2,7 @@ use Span from "../src/syntax/source"
 use SourceTree from "../src/project/source-tree"
 use ModuleId from "../src/semantics/module"
 use check from "../src/semantics/check"
-use Checker, Resolution, Adaptation, Dispatch, Statistics from "../src/semantics/checker/context"
+use Checker, Resolution, Adaptation, Dispatch, Statistics, ReceiverClosure from "../src/semantics/checker/context"
 use TypeId, Witness from "../src/semantics/checker/type"
 
 /**
@@ -361,6 +361,13 @@ public type Probed {
     shown
   }
 
+  /** The receiver of the receiver closure at `written`. `Span(0, 0)` is the body of a receiver script. */
+  fn receiverOf(self, written: String): String {
+    const at = if written.isEmpty() { Span(0, 0) } else { spanOf(written) }
+    const found = checker.receiverAt(module, at).expect("a receiver closure at `{written}`")
+    describeReceiver(checker, found)
+  }
+
   fn statistics(self): Statistics {
     checker.statisticsOf(module)
   }
@@ -407,8 +414,25 @@ public fn describeResolution(checker: Checker, resolution: Resolution): String {
     .Namespace(_) => "namespace"
     .VoidValue => "void"
     .TypeOf(owner) => "type {checker.describe(owner)}"
+    .PropertyWrite(owner, field, kind) => {
+      const how = match kind {
+        .Assign => "assign"
+        .AssignClosure => "assign closure"
+        .Configure => "configure"
+      }
+      "{how} {checker.describe(owner)}.{checker.symbolAt(field).name}"
+    }
     .Deferred => "deferred"
   }
+}
+
+/** The receiver of the receiver closure at `written`, as a test compares it: the binding, its type, and how it got it. */
+public fn describeReceiver(checker: Checker, found: ReceiverClosure): String {
+  const name = checker.binding(found.binding).name
+  const shown = checker.describe(found.annotation)
+  const how = if found.isImplicit { "implicit" } else { "named" }
+  const mode = if found.isVar { "var " } else { "" }
+  "{how} {mode}{name}: {shown}"
 }
 
 /** An adaptation as a test writes it. */

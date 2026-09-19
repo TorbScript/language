@@ -888,7 +888,9 @@ compiler/src/semantics/checker/
 ├ implementation.trb  The implementation index, bound resolution, witnesses, coherence, overlap, delegation
 ├ derive.trb          Derived implementations: Equals, Hash, Show, copy, Encode, Decode, From, literal types
 ├ member.trb          Member lookup on every form of type
-├ name.trb            Names in expressions: the lookup order, receivers, commands, property commands
+├ name.trb            Names in expressions: the lookup order, receivers, the messages about a name
+├ command.trb         Property commands: `port 8080`, `onStart { ... }`, `database { ... }`
+├ receiver.trb        Receiver scripts: `project.trb` and what `Sandbox.load` names
 ├ call.trb            Arguments, labels, defaults, variadics, spread, trailing closures, lazy
 ├ expression.trb      check/infer for every ExpressionKind, operators, interpolation, `?`, `??`, `?.`
 ├ closure.trb         Closures from an expected function type, implicit parameters, receiver closures
@@ -980,7 +982,7 @@ files that have to check cleanly afterwards.
 | **4.4** | **Done.** Generics and inference. Unification variables, inference contexts, two-pass argument checking, closures from expected function types, implicit `_`/named parameters, `.Case`, empty literals, bounds at call sites, witnesses, trait-typed values and per-call object safety. **Gate: `torb check compiler/src/syntax` is clean** - and so is all of `std/` and `compiler/`, at 100% of their expressions. | `unify.trb`, `closure.trb`, `call.trb`, `implementation.trb` | 4.3 |
 | **4.5** | Exhaustiveness and redundancy. The pattern matrix over ADTs, literals, ranges, tuples, lists with rest, literal unions, `Option`/`Result`; witnesses; `MatchPlan`; `if const`/`if var`/`while const`. | `exhaustive.trb`, `pattern.trb` | 4.4 |
 | **4.6** | Places and the mutation rules. `const`/`var`, valid paths, `var` parameters and temporaries, `private(var)`, exclusivity, dead changes, `break`/`continue`. | `place.trb`, `statement.trb` | 4.4 |
-| **4.7** | Receivers and the DSL. Receiver closures, the innermost-receiver rule, command calls, property commands (`.Assign`, `.AssignClosure`, `.Configure`), receiver scripts (`Sandbox.load<T>` checks a file as a closure body). | `name.trb`, `closure.trb` | 4.4 |
+| **4.7** | **Done.** Receivers and the DSL. Receiver closures, the innermost-receiver rule, command calls, property commands (`.Assign`, `.AssignClosure`, `.Configure`), receiver scripts (`project.trb` against the `Project` of the new `std/project`, and every file a `Sandbox.load<Value>` names with a literal path). | `closure.trb`, `command.trb`, `receiver.trb`, `scripts.trb`, `name.trb` | 4.4 |
 | **4.8** | `Expression<Value>` and `lazy`. What is quotable, building the tree after resolution, captures and their `Encode` bound, `Quotation` in the tables, `lazy` parameters. **Gate: `compiler/tests/*.test.trb` check cleanly** (they are full of `assert`). | `quote.trb`, `call.trb` | 4.4, 4.7 |
 | **4.9** | Visibility and program shape. `private`/`private(var)`/`public`, top-level code, compile-time constants, field defaults, `native`, `shared type`/`shared trait`, `foreign`, entry files vs. modules. | `declaration.trb` | 4.2 |
 | **4.10** | The conformance suite. `torb check std`, `torb check examples`, `torb check compiler` clean; the spec gaps of section 9 resolved in the sources; diagnostics polished against real output; performance (the whole workspace well under a minute on stage 0; a timing test in the suite). | all | 4.1 - 4.9 |
@@ -1009,7 +1011,7 @@ What each one is tested with, beyond its own unit tests:
 | 4.4 | `compiler/src/syntax/**` complete, `std/prelude/src/option.trb`, `result.trb`, `iteration.trb` |
 | 4.5 | `compiler/src/syntax/**` stays clean, `std/prelude/src/collections/**` |
 | 4.6 | `compiler/src/**`, `std/prelude/src/stages.trb`, `collectors.trb` |
-| 4.7 | `examples/config-dsl/**`, `examples/tour/src/09-dsl.trb` |
+| 4.7 | `examples/config-dsl/**` (`config.trb` included), `examples/tour/src/09-dsl.trb`, `examples/game-engine/src/**`, and every `project.trb` of the repository |
 | 4.8 | `compiler/tests/**`, `examples/query-provider/**`, `std/prelude/src/expression.trb` |
 | 4.9 | `std/**` (visibility and `native`), `compiler/src/main.trb` (an entry file) |
 | 4.10 | everything, plus `examples/tour/**` and `examples/game-engine/**` |
@@ -1245,6 +1247,57 @@ list. Everything else is as written.
 - **`closure.trb` is the only new file.** `unify.trb` grew the contexts and the unifier, `call.trb` the instantiation,
   the two argument passes and the bounds, `name.trb` the generic targets and the captures, `member.trb` the generic
   members and the overload sets, and `expression.trb` the collection literals, `.Case` and the arms.
+
+### What 4.7 does differently from sections 1 to 7
+
+- **A receiver is a parameter, so a receiver closure is an ordinary closure.** `checkClosure` needed one question
+  (`receiverIndexOf`) and one branch (`declareReceiver`): everything else - the parameters from the expected function
+  type, the captures, the result from the body - is what every closure does. A receiver closure whose expected type has
+  parameters *after* the receiver keeps them as implicit ones, and `ClosureFrame.implicitFrom` is the offset that makes
+  `Adaptation.ImplicitParameter` count them the way the declaration does.
+- **Naming the receiver makes nothing implicit.** `html { root => ... }` binds `root` and sets the implicit receiver to
+  *nothing*, instead of leaving the one around the closure implicit. Section 3.1 only says that the innermost receiver
+  is the implicit one; reading it as "the next one out becomes implicit again" would be exactly the scope leaking gap 4
+  rules out, and naming the parameter is what the concept offers instead of a second implicit receiver.
+- **`Tables.receivers` is what milestone 5 reads for a receiver closure**, keyed by the span of the closure:
+  `ReceiverClosure(binding, annotation, isVar, isImplicit)`. An implicit receiver has no node in the tree that could
+  carry its binding, and every name that means a member of it records `Adaptation.ImplicitSelf` with that very binding -
+  which is now also a **capture** of every closure in between (gap 19), exactly as an ordinary binding is.
+- **A property command does not care about the call style.** Gap 15 makes "a call of a non-callable member writes it"
+  the whole rule, so `port 8080` and `tls(port == 8443)` take the same path, and a bare trailing closure
+  (`database { ... }`) is `CallStyle.Parentheses` in the tree anyway. The one place the style still decides is a field
+  that *holds* a function: a command assigns, parentheses call ("calling a function in a field always needs
+  parentheses").
+- **`.Configure` needs a type that has a configuration.** A block on a field is the body of
+  `(var self: FieldType) => Void`, which is only meaningful for a `type` that is written down: a `native` type has no
+  fields anybody could set, and a type with cases is chosen and not filled in, so both get "`port` is a `Int64`, which
+  has no configuration a block could fill" instead of a message about whatever the block contains.
+- **A property command checks that the field is a `var`** and leaves the path it is written through to 4.6:
+  `requireMutable` is `place.trb`'s, and the receiver of a property command is `self` or an explicit target either way.
+- **A call of a local binding that is not a function is reported here**, because section 3.3's "a local binding is
+  written with `=`" has no other home: `count 1` reads "`count` is a `Int64`, and only a function can be called".
+- **A method *is* a constant that holds a receiver closure**, so `member.trb` treats one that was written that way
+  (`const perimeter: (self: Rectangle) => Int`) exactly like a `fn`: `Rectangle.perimeter` is the constant,
+  `rectangle.perimeter` is it bound to the value, and `rectangle.perimeter()` calls it.
+- **An annotated `const` has its initializer checked** (`signature.trb`). The annotation *is* the signature, so nothing
+  asked for the value again and the body of `const perimeter: (self: Rectangle) => Int = { ... }` was never looked at.
+- **A receiver script is a module.** Everything the checker keeps - a scope, the tables, the diagnostics, the statistics
+  - is per module, so `project.trb` and every file a `Sandbox.load` names become modules (`semantics/graph.trb`), marked
+  with `Module.receiver`. They are not importable (`resolveImport` skips them), their statements are checked as
+  *ordinary* statements and not as top-level declarations of a module - a `const` of a script is a local of the closure,
+  which is what lets `const binary = name.substringAfter("/") ?? name` read the receiver - and a `use` in one is an
+  error, because everything beyond the prelude is granted where the script is loaded (gap 34).
+- **Which files those are is decided syntactically**, before anything is checked (`semantics/scripts.trb`): a walk that
+  looks for `Sandbox.load<Value>("literal")` by shape. The receiver type is built afterwards, from the type argument, in
+  a type position of the module that loads it. A path that is not a literal is silently not checked - only the sandbox
+  of milestone 7 can know what it was.
+- **The path of a script is resolved against the directory of the project**, not against the file that loads it: that is
+  where the program runs, and it is where `examples/config-dsl/config.trb` sits.
+- **`project.trb` is only checked where the workspace has `std/project`**, the new package that declares `Project`,
+  `Dependencies`, `Build`, `Test`, `Workspace` and `Registry`. Without it there is no type to check a manifest against,
+  and the static reader (`project/manifest.trb`, which stays exactly as it is until milestone 7) keeps working alone.
+- **Gap 42 is the parser's already:** `startsCommandArgument` never accepted `.`, so `level .Debug` has always been the
+  member path `level.Debug`. What 4.7 adds is the note that says so, on the message about the missing member.
 
 ---
 
