@@ -1738,8 +1738,12 @@ nothing told a back end how such a literal is built.
 - **`Array.of(...items: Item): Array<Item, Size>` is a well-known special case in `checkCall`.** There is no way to
   declare that the size of a result is the number of arguments, and the language gets none, so `checkArrayOf` counts the
   variadic arguments and solves `Size` with the count; with an expectation the two have to agree, with the same message
-  as the literal. A `...` follows the same rule as in a literal. `Array [1, 2, 3, 4]` is **not** a second spelling: it
-  already parses as an index expression, and a command's first argument may not start with `[`.
+  as the literal. A `...` follows the same rule as in a literal. What triggers it is the *shape* and not the declaration
+  it came from - a call of a member named `of` that has a variadic parameter and whose result is the well-known
+  `Array<Item, Size>` - because a member symbol does not carry its owner; a hand-written `fn of(...items: Int):
+  Array<Int, 4>` would be counted the same way, and counting is the only thing that could make that signature true.
+  `Array [1, 2, 3, 4]` is **not** a second spelling: it already parses as an index expression, and a command's first
+  argument may not start with `[`.
 - **`WellKnown.array`** joins `list` and `map`: both rules ask for the symbol at every literal and at every call.
 
 ---
