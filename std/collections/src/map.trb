@@ -1,0 +1,174 @@
+use Equals, Hash, combineHashes from "std/core"
+use MutableIndexed from "std/core"
+use From, Show from "std/core"
+use Collection from "./collection"
+
+/**
+ * Mapping from keys to values. This is the type of the literal `["a": 1, "b": 2]`.
+ * As a collection it consists of `(key, value)` tuples, `add((key, value))` is `set(key, value)`.
+ *
+ *     var ages = ["Ada": 36]
+ *     ages["Grace"] = 45                          // In place, needs `var`
+ *     ages["Ada"].increment()                     // Values are changed through the path, not through a copy
+ *     const older = ages.updated("Ada", 37)       // The participle returns a changed copy
+ *
+ * The trait asks nothing of `Key`. What a key has to be able to do is a matter of the implementation
+ * (`TrieMap` and `HashMap` need `Hash`, a sorted map needs `Compare`), so only the factories carry a bound.
+ *
+ * **Every implementation iterates in insertion order,** and removing an entry does not reorder the rest. The order
+ * reaches the output through `Show` (an empty map shows as `[:]`), so it is a rule of the language and not of the
+ * implementation.
+ */
+public trait Map<Key, Value>
+  with Collection<(Key, Value)>, MutableIndexed<Key, Value>
+{
+  /** `Map.of(("a", 1), ("b", 2))` */
+  fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash {
+    TrieMap.from(entries)
+  }
+
+  // --- In place ------------------------------------------------------------------------------------
+
+  fn remove(var self, key: Key): Value?
+
+  fn add(var self, entry: (Key, Value)) {
+    set(entry.0, entry.1)
+  }
+
+  fn merge(var self, other: Iterable<(Key, Value)>) {
+    addAll(other)
+  }
+
+  /** `cache.getOrSet(key) { expensive(key) }` */
+  fn getOrSet(var self, key: Key, create: () => Value): Value {
+    if const Some(existing) = get(key) {
+      return existing
+    }
+    const value = create()
+    set(key, value)
+    value
+  }
+
+  // --- Changed copies --------------------------------------------------------------------------------
+
+  /** The participle of `set` is `set`, so this one is called `updated`. */
+  fn updated(self, key: Key, value: Value): Self {
+    var result = self
+    result.set(key, value)
+    result
+  }
+
+  fn removed(self, key: Key): Self {
+    var result = self
+    result.remove(key)
+    result
+  }
+
+  fn merged(self, other: Iterable<(Key, Value)>): Self {
+    var result = self
+    result.merge(other)
+    result
+  }
+
+  // --- Reading -----------------------------------------------------------------------------------------
+
+  fn containsKey(self, key: Key): Bool {
+    get(key).isSome()
+  }
+
+  fn keys(self): Iterable<Key> {
+    map { entry => entry.0 }
+  }
+
+  fn values(self): Iterable<Value> {
+    map { entry => entry.1 }
+  }
+
+  fn mapValues<Output>(self, transform: (value: Value) => Output): Map<Key, Output> where Key: Hash {
+    Map.from(map { entry => (entry.0, transform(entry.1)) })
+  }
+}
+
+extend<Key: Hash, Value> Map<Key, Value> with From<Iterable<(Key, Value)>> {
+  fn from(entries: Iterable<(Key, Value)>): Map<Key, Value> {
+    TrieMap.from(entries)
+  }
+}
+
+/** `["a": 1, "b": 2]`, and `[:]` when it is empty - the format of the literal. */
+extend<Key: Show, Value: Show> Map<Key, Value> with Show {
+  fn show(self): String {
+    if isEmpty() {
+      return "[:]"
+    }
+    const parts = map { entry => "{entry.0.showNested()}: {entry.1.showNested()}" }
+    "[{parts.joined(separator: ", ")}]"
+  }
+}
+
+/** Equal when they hold the same entries, regardless of insertion order. */
+extend<Key, Value: Equals> Map<Key, Value> with Equals {
+  fn equals(self, other: Self): Bool {
+    length() == other.length() && all { entry =>
+      match other.get(entry.0) {
+        Some(value) => value == entry.1
+        .None => false
+      }
+    }
+  }
+}
+
+/**
+ * Order-independent, unlike [List.hash]: entries are combined with `bitwiseExclusiveOr`, so insertion order never
+ * changes the hash of equal maps.
+ *
+ * `Hash` requires `Equals`, and the `Equals` implementation above satisfies that: `Value: Hash` implies
+ * `Value: Equals`.
+ */
+extend<Key: Hash, Value: Hash> Map<Key, Value> with Hash {
+  fn hash(self): Int {
+    fold(0) { seed, entry => seed.bitwiseExclusiveOr(combineHashes(entry.0.hash(), entry.1.hash())) }
+  }
+}
+
+// --- Implementations -----------------------------------------------------------------------------------
+
+/**
+ * Hash array mapped trie - the default. A write to a shared map copies one path (O(log n)), so keeping many
+ * versions of a big map is cheap. Iterates in insertion order.
+ *
+ * Until the trie exists, this name is a documented alias of [HashMap]. Only performance differs: iteration order
+ * and `Show` are the same either way.
+ */
+public native type TrieMap<Key: Hash, Value>
+  with Map<Key, Value>, From<Iterable<(Key, Value)>>
+{
+  native fn from(entries: Iterable<(Key, Value)>): TrieMap<Key, Value>
+
+  native fn length(self): Int
+  native fn get(self, key: Key): Value?
+  native fn iterator(self): Iterator<(Key, Value)>
+
+  native fn set(var self, key: Key, value: Value)
+  native fn remove(var self, key: Key): Value?
+  native fn clear(var self)
+}
+
+/**
+ * Flat hash table: the fastest lookups and writes, but a write to a shared table copies all of it.
+ * The one for caches and indexes that are never copied. Iterates in insertion order.
+ */
+public native type HashMap<Key: Hash, Value>
+  with Map<Key, Value>, From<Iterable<(Key, Value)>>
+{
+  native fn from(entries: Iterable<(Key, Value)>): HashMap<Key, Value>
+  native fn withCapacity(capacity: Int): HashMap<Key, Value>
+
+  native fn length(self): Int
+  native fn get(self, key: Key): Value?
+  native fn iterator(self): Iterator<(Key, Value)>
+
+  native fn set(var self, key: Key, value: Value)
+  native fn remove(var self, key: Key): Value?
+  native fn clear(var self)
+}

@@ -13,7 +13,10 @@ fn collect(directory: &Path, files: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(directory).expect("readable directory") {
         let path = entry.expect("readable entry").path();
         if path.is_dir() {
-            if !path.ends_with("target") && !path.ends_with("node_modules") {
+            // A hidden directory is not the repository's source: `.claude/worktrees` holds whole checkouts that
+            // change while this test reads them.
+            let hidden = path.file_name().is_some_and(|name| name.to_string_lossy().starts_with('.'));
+            if !hidden && !path.ends_with("target") && !path.ends_with("node_modules") {
                 collect(&path, files);
             }
         } else if path.extension().is_some_and(|extension| extension == "trb") {

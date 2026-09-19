@@ -1,0 +1,70 @@
+/**
+ * The collection traits. These are the types that signatures, fields and bindings talk about:
+ *
+ *     Iterable<Item>
+ *     └─ Collection<Item>              a finite number of values that can be filled
+ *        ├─ List<Item>                 ArrayList (literal `[1, 2]`), TrieList
+ *        ├─ Set<Item>                  TrieSet, HashSet
+ *        ├─ Map<Key, Value>            TrieMap (literal `["a": 1]`), HashMap
+ *        ├─ Stack<Item>                ArrayStack
+ *        └─ Queue<Item>                ArrayQueue
+ *
+ * Collections are values like every other `type`. There is one trait per kind and the binding decides:
+ *
+ *     const numbers = [1, 2, 3]     // Never changes
+ *     var buffer = numbers          // A copy (the storage is shared until one of them is written to)
+ *     buffer.add(4)                 // `numbers` is still [1, 2, 3]
+ *
+ * Verbs change the collection in place and need a `var` path (`add`, `remove`, `sort`). Their participles return a
+ * changed copy and work everywhere (`added`, `removed`, `sorted`).
+ *
+ * The implementations are named after their data structure. They only show up where something is constructed.
+ */
+
+use Equals from "std/core"
+use Iterable, Length from "std/iteration"
+use Accumulator from "std/iteration"
+
+/**
+ * Only `add`, `clear`, `length` and `iterator` are required.
+ *
+ * A collection already is an `Accumulator`: it has `add`, and it is its own result. So every collection can be the
+ * target of a collector, a channel or an event stream.
+ */
+public trait Collection<Item>
+  with Iterable<Item>, Length, Accumulator<Item, Self>
+{
+  fn add(var self, value: Item)
+  fn clear(var self)
+
+  fn addAll(var self, values: Iterable<Item>) {
+    for value in values {
+      add(value)
+    }
+  }
+
+  fn added(self, value: Item): Self {
+    var result = self
+    result.add(value)
+    result
+  }
+
+  fn addedAll(self, values: Iterable<Item>): Self {
+    var result = self
+    result.addAll(values)
+    result
+  }
+
+  /** Linear by default. Sets and maps answer this without searching. */
+  fn contains(self, value: Item): Bool where Item: Equals {
+    any { _ == value }
+  }
+
+  fn containsAll(self, values: Iterable<Item>): Bool where Item: Equals {
+    values.all(contains)
+  }
+
+  fn finish(self): Self {
+    self
+  }
+}

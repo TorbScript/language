@@ -47,7 +47,7 @@ extend JsonValue with Encode {
  * What went wrong turning text into a value and back: malformed JSON text, or JSON that parsed fine but does not
  * fit the requested type.
  */
-public type JsonError with Show {
+public type JsonError with Show, Error {
   private kind: JsonErrorKind
 
   /** The text was not well-formed JSON. */
@@ -74,6 +74,14 @@ public type JsonError with Show {
       .Decode(cause) => "{cause}"
     }
   }
+
+  /** The `DecodeError` a rejected document failed on, so a report can unwind the chain down to the field. */
+  fn cause(self): Error? {
+    match kind {
+      .Syntax(_, _) => None
+      .Decode(problem) => Some(problem)
+    }
+  }
 }
 
 type JsonErrorKind {
@@ -91,7 +99,7 @@ public native type Json {
    *
    *     match Json.decode<User>(text) {
    *       Ok(user) => print user.name
-   *       Error(error) => print "Rejected: {error}"
+   *       Fail(error) => print "Rejected: {error}"
    *     }
    */
   native fn decode<Value: Decode>(text: String): Result<Value, JsonError>

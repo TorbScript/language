@@ -1,5 +1,5 @@
 use TokenKind, Keyword, TextPart from "../token"
-use Declaration, DeclarationKind, Modifiers, Visibility, UseDeclaration, UseItems, UseSource from "../ast"
+use Declaration, DeclarationKind, Modifiers, Visibility, UseDeclaration, UseItem, UseItems, UseSource from "../ast"
 use FunctionDeclaration, Parameter, GenericParameter, WhereClause, TypeReference, TraitClause from "../ast"
 use TypeDeclaration, AliasDeclaration, TraitDeclaration, ExtendDeclaration, ForeignDeclaration from "../ast"
 use Member, MemberKind, Field, CaseDeclaration, Name from "../ast"
@@ -91,11 +91,11 @@ fn parseUse(var parser: Parser): DeclarationKind {
     }
     UseItems.All(parser.name())
   } else {
-    var names = [parser.name()]
+    var items = [parseUseItem(parser)]
     while parser.eat(TokenKind.Comma) {
-      names.add(parser.name())
+      items.add(parseUseItem(parser))
     }
-    UseItems.Names(names)
+    UseItems.Names(items)
   }
   if parser.isAtWord("from") {
     parser.bump()
@@ -112,6 +112,17 @@ fn parseUse(var parser: Parser): DeclarationKind {
     return DeclarationKind.Use(UseDeclaration(items, UseSource.Type(path)))
   }
   DeclarationKind.Use(UseDeclaration(items, UseSource.Module(parsePlainText(parser, "the path of a module"))))
+}
+
+/** `IoError as FileProblem`: one name of a `use` list, under the local name it is to get. */
+fn parseUseItem(var parser: Parser): UseItem {
+  const name = parser.name()
+  // `use A as B from "..."`: `as` is a word, not a keyword, so a type named `as` stays possible
+  if !parser.isAtWord("as") {
+    return UseItem(name, None)
+  }
+  parser.bump()
+  UseItem(name, Some(parser.name()))
 }
 
 /** A string literal without interpolation. */

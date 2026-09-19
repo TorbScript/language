@@ -11,7 +11,7 @@ use IrTypeId, IrType, TraitId, IrSignatureId, IrProgram, Instance, RuntimeKind, 
  *     instance  ::= the canonical argument spelling, at most 160 characters, plus "_h" and 16 hexadecimal digits
  *                   of a hash of the whole spelling when it was longer
  *
- * `t_std_x2f_prelude_collections_x2f_list_ArrayList_add__Int64`. **No id ever appears in a name:** a name is a
+ * `t_std_x2f_collections_list_ArrayList_add__Int64`. **No id ever appears in a name:** a name is a
  * function of the source path plus the arguments, so it does not move when an unrelated module is added, and the
  * fixpoint of milestone 6 compares two C files that were produced by two different binaries.
  *
@@ -21,9 +21,9 @@ use IrTypeId, IrType, TraitId, IrSignatureId, IrProgram, Instance, RuntimeKind, 
 
 /** Where a declaration is written, unescaped: the components of its mangled name, in order. */
 public type SymbolPath {
-  /** `std/prelude`. Empty for a standalone script, which belongs to no package. */
+  /** `std/collections`. Empty for a standalone script, which belongs to no package. */
   package: String = ""
-  /** `collections/list`: the path below the `src/` of the package, without the extension. */
+  /** `list`, `collections/list`: the path below the `src/` of the package, without the extension. */
   module: String = ""
   /** The declarations around it, outermost first - the type a method belongs to. */
   owners: List<String> = []
@@ -221,7 +221,7 @@ public fn canonicalSignature(program: IrProgram, id: IrSignatureId): String {
   "{name}_to_{canonicalType(program, signature.result)}"
 }
 
-/** `std_x2f_prelude_convert_Show`, with the trait's own arguments behind it. */
+/** `std_x2f_core_convert_Show`, with the trait's own arguments behind it. */
 public fn canonicalTrait(program: IrProgram, id: TraitId): String {
   const applied = program.traitAt(id)
   const path = applied.path
@@ -259,12 +259,12 @@ public fn canonicalLiteral(value: LiteralValue): String {
 
 // --- The five kinds of name -----------------------------------------------------------------------------------------
 
-/** `t_main_translated`, `t_std_x2f_prelude_collections_x2f_list_ArrayList_add__Int64`. */
+/** `t_main_translated`, `t_std_x2f_collections_list_ArrayList_add__Int64`. */
 public fn functionName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
   mangledName("t", path.components(), canonicalTypes(program, arguments))
 }
 
-/** `T_main_Point`, `T_std_x2f_prelude_option_Option__Int64`. */
+/** `T_main_Point`, `T_std_x2f_core_option_Option__Int64`. */
 public fn layoutName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
   mangledName("T", path.components(), canonicalTypes(program, arguments))
 }
@@ -288,7 +288,7 @@ public fn elementName(program: IrProgram, item: IrTypeId): String {
   "d_{canonicalType(program, item)}"
 }
 
-/** `w_std_x2f_prelude_convert_Show__T_main_Point`: one table per applied trait and target type. */
+/** `w_std_x2f_core_convert_Show__T_main_Point`: one table per applied trait and target type. */
 public fn witnessTableName(program: IrProgram, applied: TraitId, target: IrTypeId): String {
   const declared = program.traitAt(applied)
   var instance = canonicalType(program, target)

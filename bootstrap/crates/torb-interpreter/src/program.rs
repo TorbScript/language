@@ -378,21 +378,22 @@ impl Loader {
                         }
                         // The extensions of every loaded module apply everywhere: the interpreter does not check visibility
                         UseItems::OnlyExtensions => {}
-                        UseItems::Names(names) => {
-                            for name in names {
-                                let text: &'static str = &name.text;
-                                if module.scope.borrow().contains_key(text) {
+                        UseItems::Names(items) => {
+                            for item in items {
+                                let text: &'static str = &item.name.text;
+                                // `use IoError as FileProblem from "..."`: the module gets the name under the alias
+                                let local: &'static str = local_name(item);
+                                if module.scope.borrow().contains_key(local) {
                                     continue;
                                 }
-                                let item = target.scope.borrow().get(text).cloned();
-                                match item {
-                                    Some(item) => {
-                                        module.scope.borrow_mut().insert(text, item);
+                                let found = target.scope.borrow().get(text).cloned();
+                                match found {
+                                    Some(found) => {
+                                        module.scope.borrow_mut().insert(local, found);
                                         changed = true;
                                     }
-                                    None => {
-                                        unresolved.push(format!("{}: \"{path}\" does not declare `{text}`", module.location(name.span)))
-                                    }
+                                    None => unresolved
+                                        .push(format!("{}: \"{path}\" does not declare `{text}`", module.location(item.name.span))),
                                 }
                             }
                         }
@@ -428,6 +429,14 @@ impl Loader {
     }
 }
 
+/// The local name an imported item gets: its alias where there is one, otherwise the name the module exports.
+fn local_name(item: &'static ast::UseItem) -> &'static str {
+    match &item.alias {
+        Some(alias) => &alias.text,
+        None => &item.name.text,
+    }
+}
+
 /// `use Circle, Empty from Shape`: the cases of a type as names of the module. Returns whether something was added.
 fn import_cases(module: &Rc<Module>, path: &'static [ast::Name], items: &'static UseItems, unresolved: &mut Vec<String>) -> bool {
     let UseItems::Names(names) = items else { return false };
@@ -435,13 +444,15 @@ fn import_cases(module: &Rc<Module>, path: &'static [ast::Name], items: &'static
     // The cases of `Option` and `Result` are built in
     let Some(Item::Value(Value::Type(info))) = owner else { return false };
     let mut changed = false;
-    for name in names {
-        let text: &'static str = &name.text;
-        if module.scope.borrow().contains_key(text) {
+    for item in names {
+        let text: &'static str = &item.name.text;
+        // `use Some as Just from Option`: the case is bound under the alias
+        let local: &'static str = local_name(item);
+        if module.scope.borrow().contains_key(local) {
             continue;
         }
         let Some(case) = info.case_index(text) else {
-            unresolved.push(format!("{}: `{}` has no case `{text}`", module.location(name.span), info.name));
+            unresolved.push(format!("{}: `{}` has no case `{text}`", module.location(item.name.span), info.name));
             continue;
         };
         let value = if info.cases[case].fields.is_empty() {
@@ -449,7 +460,7 @@ fn import_cases(module: &Rc<Module>, path: &'static [ast::Name], items: &'static
         } else {
             Value::Function(Rc::new(Function::Constructor { info: info.clone(), case: Some(case) }))
         };
-        module.scope.borrow_mut().insert(text, Item::Value(value));
+        module.scope.borrow_mut().insert(local, Item::Value(value));
         changed = true;
     }
     changed

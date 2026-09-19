@@ -13,7 +13,7 @@ use crate::value::{Function, Key, Object, Range, Table, Value};
 
 pub fn global(name: &'static str) -> Option<Value> {
     Some(match name {
-        "Some" | "Ok" | "Error" => Value::Function(Rc::new(Function::Wrap(name))),
+        "Some" | "Ok" | "Fail" => Value::Function(Rc::new(Function::Wrap(name))),
         "None" => Value::NONE,
         "Void" => Value::Void,
         "print" | "printError" | "readLine" | "panic" | "test" | "group" | "do" | "describe" => {

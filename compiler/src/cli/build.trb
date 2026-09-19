@@ -247,7 +247,7 @@ fn isMicrosoftName(command: String): Bool {
 fn canRun(command: String, arguments: List<String>): Bool {
   match Process.run(command, arguments) {
     Ok(output) => output.exitCode == 0
-    Error(_) => false
+    Fail(_) => false
   }
 }
 
@@ -264,7 +264,7 @@ fn findRuntime(): String? {
   }
   const working = match File.absolutePath(".") {
     Ok(found) => found
-    Error(_) => "."
+    Fail(_) => "."
   }
   var current = normalizePath(working)
   while pathDepth(current) >= 1 {
@@ -315,7 +315,7 @@ fn compile(source: String, binary: String): Result<Int, IoError> {
   const output = match Process.run(compiler.command, arguments) {
     Ok(found) => found
     // `$TORB_CC` is taken as it is given, so a name that is not a program at all ends up here
-    Error(problem) => {
+    Fail(problem) => {
       printError "error: the C compiler `{compiler.command}` could not be started: {problem.message}"
       return Ok(noCompilerCode)
     }

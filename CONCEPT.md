@@ -733,9 +733,9 @@ type ExpressionNode {
 - **The tree cannot be executed**, the value can. There is no `compile()` like in C#, so compiled binaries need no
   interpreter for this. An in-memory provider calls `value()`, a SQL provider reads `tree`.
 - What a provider does not understand (`filter { myOwnFunction(_) }`) is the provider's error at runtime
-  (`Error(Unsupported(...))`), the language cannot know what a library can translate.
+  (`Fail(Unsupported(...))`), the language cannot know what a library can translate.
 - `ExpressionNode` is part of the language standard and an ordinary ADT. A new node kind comes with a new version of
-  the language; providers that end their `match` with `_ => Error(Unsupported(...))` - and they need that arm for
+  the language; providers that end their `match` with `_ => Fail(Unsupported(...))` - and they need that arm for
   calls they do not know anyway - keep compiling.
 
 ## Blocks and Control Flow
@@ -980,7 +980,7 @@ type Email {
 
   fn parse(text: String): Result<Email, ParseError> {
     if !text.contains("@") {
-      return Error(ParseError("'{text}' is not an email address"))
+      return Fail(ParseError("'{text}' is not an email address"))
     }
     Ok(Self(text))
   }
@@ -1178,7 +1178,7 @@ const third = Circle(3.0)
 
 - `.Case` works wherever a type is expected: annotations, arguments, fields, results, `==`, the arms of a `match`
   whose result is expected, and in patterns (the type is the one of the value that is matched).
-- `use Names from Type` brings cases into scope. That is all there is to `Some`, `None`, `Ok` and `Error`: the
+- `use Names from Type` brings cases into scope. That is all there is to `Some`, `None`, `Ok` and `Fail`: the
   prelude imports them from `Option` and `Result`.
 - Directly inside of the braces of a `match`, a line that starts with `.` starts an arm. Everywhere else it continues
   the expression of the line above (`.filter { ... }`). So the value of an arm that spans several lines of a call
@@ -1458,8 +1458,13 @@ fn loadConfig(path: String): Result<Config, IoError> { ... }
 const name = findUser(1)?.name ?? "anonymous"            // Optional chaining, default
 
 fn start(): Result<Void, AppError> {
-  const config = loadConfig("app.trb")?                  // Early return on Error. IoError -> AppError through `From`
+  const config = loadConfig("app.trb")?                  // Early return on Fail. IoError -> AppError through `From`
   ...
+  Ok(Void)
+}
+
+fn main(): Result<Void, Error> {                         // Any error, handed up: `Error` is a trait
+  start()?                                               // AppError -> Error, because `AppError` carries the trait
   Ok(Void)
 }
 
@@ -1480,7 +1485,27 @@ panic "unreachable"                                      // Bugs. Not catchable,
 - **A panic aborts the process,** because the language has no supervision. The one exception is a sandboxed script: the
   VM is interpreting it and the script has a heap of its own, so the VM stops it and reports a `SandboxError`
   (see [Receiver Scripts and the Sandbox](#receiver-scripts-and-the-sandbox)).
-- **A top-level `?` is not a panic.** It prints `error: <the error through Show>` and exits with 1.
+- **`Error` is a trait, not a base type.** `public trait Error with Show { fn cause(self): Error? { None } }` in the
+  prelude. Every error type that carries it fits into `Result<Value, Error>`, which is the "some error, hand it up"
+  signature: `?` needs no new rule for that, because a concrete failure becomes the trait value through the ordinary
+  conversion of a value to a trait-typed value. **Precise error types stay the norm for libraries** - a caller can
+  only `match` on what a signature names - and the trait is for the layers above, where the only thing left to do
+  with a failure is to report it. Nothing is generated: `with Error` is written down, and a type that has nothing to
+  add inherits the default `cause()`.
+- **`cause()` is the chain.** An error that wraps another one hands it out, so a report can unwind it. That is all
+  the trait promises; there is no stack in an error value, because a value would then carry something that is neither
+  deterministic nor comparable.
+- **A top-level `?` is not a panic.** It prints `error: <the error through Show>` and exits with 1 - and it walks
+  `cause()`, one `  caused by: <...>` line per link:
+
+  ```text
+  error: the server did not start
+    caused by: app.trb: no such file
+  ```
+
+  In the **debug profile** every `?` that hands an error on also records where it did, and those locations are printed
+  under the chain (`  at src/config.trb:12:31`), the way Zig's error return traces work. The release profile emits
+  nothing for it, so it is free there and no error type has to change.
 
 ## Collections and Iteration
 
@@ -1667,6 +1692,7 @@ use File from "std/fs"                               // Package import: "<owner>
 use Router from "acme/http/routing"                  // A public module of a package: "<owner>/<name>/<path>"
 use Vector2 from "./math/vector2"                    // Relative import, no file extension
 use * as math from "std/math"                        // Namespace import
+use IoError as FileProblem, File from "std/fs"           // Any name of the list may get a local name of its own
 public use Stack, ArrayStack from "./collections/stack"      // Re-export
 ```
 
@@ -1674,13 +1700,34 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
 - A path that starts with `./` or `../` is a file. Everything else starts with the name of a package:
   `"owner/name"` is its `src/lib.trb`, `"owner/name/path"` is `src/path.trb` of it. Only `public` declarations can
   be imported from another package, and only packages that `project.trb` lists as dependencies.
-- **The standard library is a set of packages of the owner `std`:** `std/prelude`, `std/fs`, `std/io`,
-  `std/process`, `std/test`, `std/json`, `std/http`, ... They come with the toolchain and have its version, so they
-  need no entry in `dependencies`. What a program can touch is still visible from its imports: no `std/fs`, no files.
-- **The prelude is a package, too.** `Project` has the default `prelude "std/prelude"`: the public names of that
-  package (`Option`, `Result`, `List`, `Map`, `print`, `do`, ...) are in scope in every file of the project.
+- **`as` renames an import.** Any name of a `use` list may take a local name of its own (`use Some as Just from
+  Option` works for a case too), and `public use X as Y from "..."` re-exports it under the new name. From there on
+  the local name is the only one the file has: it is what shadows, what collides with a second import, and what a
+  "did you mean" note offers. Nothing else changes - an alias is a name in one file, not a second export.
+- **The standard library is a set of packages of the owner `std`:** `std/core`, `std/text`, `std/number`,
+  `std/collections`, `std/iteration`, `std/encoding`, `std/expression`, `std/task`, `std/console`, `std/math`,
+  `std/json`, `std/time`, `std/fs`, `std/io`, `std/process`, `std/test`, `std/http`, `std/sandbox`, ... They come with
+  the toolchain and have its version, so they need no entry in `dependencies`. What a program can touch is still
+  visible from its imports: no `std/fs`, no files.
+- **Imports between packages may be cyclic, exactly as imports between modules may.** Nothing runs when a module is
+  imported, so a cycle is only a reason not to recurse: the exports are computed to a fixpoint. The standard library
+  makes use of that - `Show.show` answers a `String`, so `std/core` names `std/text`, and `String` is comparable, so
+  `std/text` names `std/core`. Cutting that apart would mean one package or a `String` that is not a type of the
+  library, and neither is better than a cycle nobody can observe.
+- **The prelude is a package of re-exports.** `Project` has the default `prelude "std/prelude"`: the public names of
+  that package (`Option`, `Result`, `List`, `Map`, `print`, `do`, ...) are in scope in every file of the project.
+  `std/prelude` **declares nothing of its own** - its `src/lib.trb` is nothing but `public use ... from "std/..."` -
+  so every name in it can be imported directly as well, and that file is where "what one always needs" is decided.
   A project can name another one (a teaching subset, the vocabulary of an embedded DSL); a sandbox gives its scripts
   the prelude of the host plus the receiver.
+- **The prelude is the pure part of the standard library, and capabilities are not in it.** Values, text, numbers,
+  collections, pipelines, encoding, quotations, tasks, printing, `std/math`, `std/json` and the time *values*
+  (`Duration`, `Instant`) are in scope everywhere, because unused names cost nothing and these are needed everywhere.
+  `std/fs`, `std/environment`, `std/process`, `std/io`, `std/http`, `std/sandbox` and `Clock` are **not**, and that is
+  not about size: (1) `use File from "std/fs"` at the top of a file is the statement "this file touches files", for a
+  reviewer and for `torb add`; (2) a receiver script and a sandbox are defined as "the prelude and the receiver, and
+  nothing else", which would need a second, trimmed prelude if `File` were in this one; (3) on a target that has no
+  file system a missing import is a compile error at one line, while a prelude name that is sometimes there is not.
 - **Top-level code is only allowed in entry files (`src/main.trb`), scripts, receiver scripts and
   `tests/*.test.trb`.** A test file consists of nothing but top-level `group` and `test` calls, and the test
   framework is ordinary functions, so its files are scripts. Everything that is imported consists of declarations
@@ -1975,8 +2022,23 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **`Result` is `Ok` or `Fail`** (was: `Error`): `Error` is the trait every error type implements, and `return Fail
+  problem` reads as what it does. The field keeps its name (`case Fail(error: Failure)`), and so do `isError` and
+  `mapError`, which are about the error the case carries.
+- **The prelude is a package of re-exports over one package per area** (`std/core`, `std/text`, `std/number`,
+  `std/collections`, `std/iteration`, `std/encoding`, `std/expression`, `std/task`, `std/console`), instead of a
+  package that declares everything. A file then imports `std/collections` when that is what it is about, the areas and
+  what depends on what are visible, and `std/prelude/src/lib.trb` is a single readable list of what is in scope
+  everywhere. The cut follows what the pieces are, not what a dependency graph would need: the packages are cyclic, and
+  that is allowed. **`panic` is in `std/core`** and not with `print`, because `Result.expect` and every out-of-bounds
+  index need it; `Bool` is in `std/core` and not with `String`, where it only ever sat because `Char` needed it.
+- **`Error` is a trait, not a base type and not a concrete error.** A base type would need inheritance, and one
+  concrete type (`anyhow::Error`) would lose the precise types libraries want. The trait costs nothing to implement
+  (`with Error`, and `cause()` has a default), `Result<Value, Error>` is the existing coercion of a value to a
+  trait-typed value, and `cause()` is the only thing it adds. `?` return traces live in the debug profile instead of
+  in the error value: a value that carried a stack would be neither deterministic nor comparable.
 - Full names instead of abbreviations in the standard library: `Subtract`/`Multiply`/`Divide`/`Remainder`/`Negate`,
-  `Expression<Value>`, `TypeReference`, `Result.Error` (not `Err`), `absolute`/`squareRoot`/`ceiling`. `min`/`max` (and `minBy`/`maxBy`) stay short: they are the names people know.
+  `Expression<Value>`, `TypeReference`, `Result.Fail` (not `Err`), `absolute`/`squareRoot`/`ceiling`. `min`/`max` (and `minBy`/`maxBy`) stay short: they are the names people know.
   Files and modules too (`iteration`, `operators`).
 - Single-method traits are named like their method (`Hash`, `Equals`, `Compare`, `Length`, `Close`), not `Hashable`,
   `Equatable`, `Comparable`. That is why the keyword is `with` and not `is` or `implements`. Traits used as types are nouns.

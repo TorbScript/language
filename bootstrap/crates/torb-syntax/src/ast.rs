@@ -70,9 +70,17 @@ pub enum UseSource {
     Type(Vec<Name>),
 }
 
+/// One name of a `use` list, with the local name it gets: `IoError as FileProblem`. Both carry their own span, so a
+/// message about the export points at the export and one about the local name at the alias.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseItem {
+    pub name: Name,
+    pub alias: Option<Name>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum UseItems {
-    Names(Vec<Name>),
+    Names(Vec<UseItem>),
     /// `use * as http from "..."`
     All {
         alias: Name,

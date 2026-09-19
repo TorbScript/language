@@ -2,7 +2,7 @@ use test, group from "std/test"
 use SourceText from "../src/syntax/source"
 use Statement, StatementKind, Expression, ExpressionKind, CallStyle, InfixOperator, TypeKind, PatternKind from "../src/syntax/ast"
 use TraitClause from "../src/syntax/ast"
-use Visibility from "../src/syntax/ast"
+use Visibility, UseItem from "../src/syntax/ast"
 use parse from "../src/syntax/parser/parser"
 
 fn statements(text: String): List<Statement> {
@@ -29,6 +29,20 @@ fn bound(text: String): ExpressionKind {
 
 fn messages(text: String): List<String> {
   parse(SourceText.of(text)).diagnostics.map({ _.message }).toList()
+}
+
+/** The items of a file that consists of one `use` with a list of names. */
+fn useItems(text: String): List<UseItem> {
+  match statements(text)[0].kind {
+    .Declare(declaration) => match declaration.kind {
+      .Use(usage) => match usage.items {
+        .Names(items) => items
+        other => panic "Expected a list of names, found {other}"
+      }
+      other => panic "Expected a `use`, found {other}"
+    }
+    other => panic "Expected a declaration, found {other}"
+  }
 }
 
 /** Source text of the node, to say what a tree looks like without spelling out spans. */
@@ -241,6 +255,20 @@ group "Cases" {
 
   test "cases can be imported by name" {
     assert(messages("use Some, None from Option\nuse \"./text-extensions\"").isEmpty())
+  }
+
+  test "any name of a use list may get a local name of its own" {
+    const items = useItems("public use IoError as FileProblem, File from \"std/fs\"")
+    assert(items[0].name.text == "IoError")
+    assert(items[0].alias.map({ _.text }) == Some("FileProblem"))
+    assert(items[1].name.text == "File")
+    assert(items[1].alias.isNone())
+    // The spans of both names are kept: a message about the export points at it, one about the local name at the alias
+    assert(items[0].name.span.start == 11)
+    assert(items[0].alias.map({ _.span.start }) == Some(22))
+    // A case is aliased the same way
+    const cases = useItems("use Some as Just from Option")
+    assert(cases[0].alias.map({ _.text }) == Some("Just"))
   }
 
   test "a label in a variant pattern is kept, not discarded" {

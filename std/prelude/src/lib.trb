@@ -1,45 +1,52 @@
 /**
  * The prelude: what is in scope in every file of a project, unless its `project.trb` names another prelude.
- * The rest of the standard library are packages of their own (`std/fs`, `std/io`, `std/test`, ...) and imported
- * where they are needed.
+ *
+ * It declares nothing of its own. Everything it names lives in a package that can also be imported directly, and this
+ * file is the decision about what "one always needs" - the pure things: values, text, numbers, collections, pipelines,
+ * encoding, quotations, tasks, printing, mathematics, JSON and the two time *values*.
+ *
+ * **What a program can touch is not in here.** `std/fs`, `std/environment`, `std/process`, `std/io`, `std/http`,
+ * `std/sandbox` and `Clock` stay explicit imports, because there the import *is* the statement: "this file touches
+ * files" is readable at the top of the file, a sandbox is defined as "the prelude and nothing else", and a name that
+ * exists on one target and not on another would be a worse error than a missing import.
  */
 
-public use Void, Never from "./void"
-public use Option from "./option"
-public use Result from "./result"
+public use Void, Never, panic, Bool, Option, Result, Error from "std/core"
 // The one reason these four can be written without their type
 public use Some, None from Option
-public use Ok, Error from Result
-public use print, printError, panic from "./console"
+public use Ok, Fail from Result
+public use Equals, Compare, Ordering, Hash, combineHashes from "std/core"
+public use From, Into, TryFrom, Parse, Show, LiteralParseError from "std/core"
+public use Add, Subtract, Multiply, Divide, Remainder, Negate, Indexed, MutableIndexed, Slice, MutableSlice from "std/core"
+public use Range, Shared, isSame from "std/core"
+public use do, unless, retry, using, Close from "std/core"
 
-public use Equals, Compare, Ordering, Hash, combineHashes from "./compare"
-public use From, Into, TryFrom, Parse, Show, LiteralParseError from "./convert"
-public use Add, Subtract, Multiply, Divide, Remainder, Negate, Indexed, MutableIndexed, Slice, MutableSlice from "./operators"
+public use Char, String from "std/text"
 
-public use Numeric, Signed, Bits, NumberParseError, NumberRangeError from "./numeric"
-public use Int8, Int16, Int32, Int64 from "./numeric"
-public use UInt8, UInt16, UInt32, UInt64 from "./numeric"
-public use Float32, Float64, Decimal from "./numeric"
-public use Int, UInt, Float from "./numeric"
-public use Bool, Char, String from "./string"
-public use Encode, Decode, DecodeError, describe from "./encoding"
-public use Encoder, SequenceEncoder, MapEncoder, RecordEncoder from "./encoding"
-public use Decoder, SequenceDecoder, MapDecoder, RecordDecoder from "./encoding"
-public use Expression, ExpressionNode, TypeReference, SourceLocation, UnaryOperator, BinaryOperator, assert, nameOf from "./expression"
+public use Numeric, Signed, Bits, NumberParseError, NumberRangeError from "std/number"
+public use Int8, Int16, Int32, Int64 from "std/number"
+public use UInt8, UInt16, UInt32, UInt64 from "std/number"
+public use Float32, Float64, Decimal from "std/number"
+public use Int, UInt, Float from "std/number"
 
-public use Iterator, Iterable, Length from "./iteration"
-public use Range from "./range"
-public use Collector, Accumulator, collector, into, listing from "./collectors"
-public use counting, summing, averaging, minBy, maxBy, joining, partitioningBy, groupingBy from "./collectors"
-public use Array from "./array"
-// Collections: the traits are what signatures talk about, the implementations are what gets constructed
-public use Collection from "./collections/collection"
-public use List, ArrayList, TrieList from "./collections/list"
-public use Map, TrieMap, HashMap from "./collections/map"
-public use Set, TrieSet, HashSet from "./collections/set"
-public use Stack, ArrayStack from "./collections/stack"
-public use Queue, ArrayQueue from "./collections/queue"
-public use Shared, isSame from "./shared"
-public use Task, Channel, spawn, all from "./task"
+public use Collection, List, ArrayList, TrieList from "std/collections"
+public use Map, TrieMap, HashMap, Set, TrieSet, HashSet from "std/collections"
+public use Stack, ArrayStack, Queue, ArrayQueue, Array from "std/collections"
 
-public use do, unless, retry, using, Close from "./control"
+public use Iterator, Iterable, Length from "std/iteration"
+public use Collector, Accumulator, collector, into, listing from "std/iteration"
+public use counting, summing, averaging, minBy, maxBy, joining, partitioningBy, groupingBy from "std/iteration"
+
+public use Encode, Decode, DecodeError, describe from "std/encoding"
+public use Encoder, SequenceEncoder, MapEncoder, RecordEncoder from "std/encoding"
+public use Decoder, SequenceDecoder, MapDecoder, RecordDecoder from "std/encoding"
+
+public use Expression, ExpressionNode, TypeReference, SourceLocation, UnaryOperator, BinaryOperator, assert, nameOf from "std/expression"
+public use Task, Channel, spawn, all from "std/task"
+public use print, printError from "std/console"
+
+// `math` keeps its namespace: the functions read as `math.power(a, 2.0)` and their bare names would say nothing
+public use * as math from "std/math"
+public use Json, JsonValue, JsonError from "std/json"
+// The time *values* only. `Clock` reads the clock, which is a capability and therefore an import
+public use Duration, Instant from "std/time"

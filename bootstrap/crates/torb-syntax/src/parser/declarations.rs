@@ -77,9 +77,9 @@ impl Parser<'_> {
             }
             UseItems::All { alias: self.name() }
         } else {
-            let mut names = vec![self.name()];
+            let mut names = vec![self.use_item()];
             while self.eat(TokenKind::Comma) {
-                names.push(self.name());
+                names.push(self.use_item());
             }
             UseItems::Names(names)
         };
@@ -98,6 +98,17 @@ impl Parser<'_> {
             return DeclarationKind::Use(UseDeclaration { items, source: UseSource::Type(path) });
         }
         DeclarationKind::Use(UseDeclaration { items, source: UseSource::Module(self.plain_text("the path of a module")) })
+    }
+
+    /// `IoError as FileProblem`: one name of a `use` list, under the local name it is to get.
+    fn use_item(&mut self) -> UseItem {
+        let name = self.name();
+        // `use A as B from "..."`: `as` is a word, not a keyword, so a type named `as` stays possible
+        if !self.at_word("as") {
+            return UseItem { name, alias: None };
+        }
+        self.bump();
+        UseItem { name, alias: Some(self.name()) }
     }
 
     /// A string literal without interpolation.

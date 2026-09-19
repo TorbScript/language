@@ -11,7 +11,7 @@ The language itself is specified in [CONCEPT.md](../CONCEPT.md).
 | Directory    | Contains                                                                                   | Language   |
 |--------------|--------------------------------------------------------------------------------------------|------------|
 | `compiler/`  | The toolchain: front end, type checker, back ends, tools. A normal TorbScript project        | TorbScript |
-| `std/`       | The standard library: one package per directory (`std/prelude`, `std/fs`, `std/io`, ...)      | TorbScript |
+| `std/`       | The standard library: one package per directory (`std/core`, `std/fs`, `std/io`, ...). `std/prelude` declares nothing: it re-exports | TorbScript |
 | `runtime/`   | What every compiled binary links against: counts, `String`, the collections, panics, IO      | C11        |
 | `examples/`  | Tour, example projects. With `std/` and `compiler/` the conformance suite of every stage     | TorbScript |
 | `bootstrap/` | Stage 0: parser and tree-walking interpreter. Thrown away after the compiler compiles itself | Rust       |

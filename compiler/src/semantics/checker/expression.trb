@@ -1341,12 +1341,25 @@ fn matchedFailure(var checker: Checker, subject: TypeId): TypeId {
   resolveType(checker, subject)
 }
 
-/** `IoError` into `AppError`: the ordinary `From` lookup, including the one a wrapper case gets generated. */
+/**
+ * `IoError` into `AppError`: the ordinary `From` lookup, including the one a wrapper case gets generated.
+ *
+ * Where the wanted failure is a trait-typed value (`fn main(): Result<Void, Error>`) no `From` can apply - nobody
+ * extends a trait type - so the error becomes the trait value through the ordinary coercion of a value to a
+ * trait-typed one instead (gap 8), recorded as `ToTraitValue` like every other one.
+ */
 fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
   if sameType(checker.types, error, wanted) {
     return
   }
-  if !isConcrete(checker, error) || !isConcrete(checker, wanted) {
+  if !isConcrete(checker, error) {
+    return
+  }
+  const asTraits = match checker.types.form(wanted) {
+    .Traits(bounds) => Some(bounds)
+    _ => None
+  }
+  if !isConcrete(checker, wanted) && asTraits.isNone() {
     return
   }
   const from = match checker.wellKnown.from {
@@ -1358,6 +1371,10 @@ fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
   const bound = checker.nominal(from, [error])
   const witness = witnessFor(checker, wanted, bound)
   if const .Unresolved = witness {
+    if const Some(bounds) = asTraits {
+      const _ = coerceToTraits(checker, error, bounds, at)
+      return
+    }
     const given = checker.describe(error)
     const target = checker.describe(wanted)
     checker.reportHere(

@@ -1,0 +1,47 @@
+use Equals, Compare, Hash from "./compare"
+use Show from "./convert"
+use Iterator, Iterable, Length from "std/iteration"
+
+/**
+ * `0..10`, `0..=10`, `0..`, `..10`. A range is an ordinary value with two ends; what it means is up to whoever
+ * takes one. `Range<Int>` is what `Slice` and `MutableSlice` take (`text[3..]`, `samples[0..100]`), and a range of
+ * integers is what `for index in 0..list.length()` counts through.
+ *
+ * Both ends are optional, because a range may be open on either side. What an open end means is decided by the
+ * receiver: for a slice it is the start or the end of the value, for `for` it is a source without an end.
+ */
+public native type Range<Value> with Equals, Hash, Show {
+  /** `None` for a range that is open at the start: `..10` */
+  start: Value?
+  /** `None` for a range that is open at the end: `0..` */
+  end: Value?
+  /** `0..=10` contains its end, `0..10` does not */
+  isInclusive: Bool = false
+
+  fn contains(self, value: Value): Bool where Value: Compare {
+    if const Some(lowest) = start {
+      if value < lowest {
+        return false
+      }
+    }
+    if const Some(highest) = end {
+      return if isInclusive { value <= highest } else { value < highest }
+    }
+    true
+  }
+}
+
+/**
+ * A range of integers is a sequence. Other ranges are bounds and nothing more: `'a'..'z'` says what is inside of it,
+ * but there is no "the next value after `a`" in general.
+ *
+ * "Has a start" and "has both ends" are properties of a field, not of the type, so the open cases are checked where
+ * they are used and not by the checker (a compile-time version would need dependent types).
+ */
+extend Range<Int> with Iterable<Int>, Length {
+  /** Panics for a range without a start: `..10` has no first value. `0..` iterates forever. */
+  native fn iterator(self): Iterator<Int>
+
+  /** Panics for a range without both ends: `0..` has no length. */
+  native fn length(self): Int
+}

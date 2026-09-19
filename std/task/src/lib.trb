@@ -1,0 +1,44 @@
+use Collector from "std/iteration"
+
+/**
+ * A computation that finishes later. Asynchrony lives in the type: a function that returns `Task<Value>` may call
+ * `await()`, and its body produces the `Value` - the same way a function that returns `Result` may use `?`.
+ *
+ * A task starts running when it is created (`spawn { ... }`, or calling a function that returns one).
+ * `Task` and `Channel` are the two shared types that connect tasks; everything else is copied into a task.
+ */
+public native shared type Task<Value> {
+  /**
+   * Waits for the value. Allowed in functions that return a `Task`, in closures passed to `spawn` and at the top
+   * level of entry files and scripts.
+   */
+  native fn await(self): Value
+
+  native fn map<Output>(self, transform: (value: Value) => Output): Task<Output>
+  native fn flatMap<Output>(self, transform: (value: Value) => Task<Output>): Task<Output>
+
+  /** A task for every item, running at the same time. The values arrive in the order of the tasks. */
+  native fn all(tasks: Iterable<Task<Value>>): Task<List<Value>>
+}
+
+/** Runs the closure as a new task, in parallel. It gets copies of what it captures and cannot capture a `var`. */
+public native fn spawn<Value>(body: () => Value): Task<Value>
+
+/** Waits for two tasks of different types at once: `const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()` */
+public native fn all<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)>
+
+/**
+ * A queue between tasks. `send` waits while the channel is full, `receive` waits while it is empty.
+ * After `close()` the remaining items can still be received, then `receive` answers `None`.
+ */
+public native shared type Channel<Item> {
+  /** `0` hands every item over directly: `send` waits until somebody receives. */
+  capacity: Int = 0
+
+  native fn send(self, item: Item): Task<Void>
+  native fn receive(self): Task<Item?>
+  native fn close(self)
+
+  /** Feeds everything that arrives until the channel is closed into the collector. */
+  native fn collect<Output>(self, collector: Collector<Item, Output>): Task<Output>
+}

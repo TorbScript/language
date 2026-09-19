@@ -40,6 +40,39 @@ group "`?` on a `Result`" {
     assert(notes(source) == ["Add a case that wraps it, or `extend AppError with From<IoError>`"])
   }
 
+  /**
+   * `fn main(): Result<Void, Error>` of the standard library: the failure is a trait-typed value, and no `From` can
+   * ever apply to one, because nobody extends a trait type. So `?` falls back to the coercion of a value to a
+   * trait-typed value (gap 8), which is what makes a precise error type fit a signature that only reports.
+   */
+  const withTrait = "trait Problem with Show \{\n  fn cause(self): Problem? \{\n    None\n  \}\n\}\n\n"
+    + "type IoError with Show, Problem \{\n  path: String\n\n  fn show(self): String \{\n    path\n  \}\n\}\n\n"
+    + "fn read(): Result<Int, IoError> \{\n  Ok(1)\n\}\n\n"
+
+  test "a trait-typed failure takes a concrete error through the trait-value coercion" {
+    const source = withTrait + "fn probe(): Result<Int, Problem> \{\n  const value = read()?\n  Ok(value)\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("read()?") == "Int64")
+    assert(found.adaptationsOf("read()?") == ["trait value Problem"])
+  }
+
+  test "an error that does not carry the trait is reported like any failed coercion" {
+    const source = "trait Problem with Show \{\n  fn cause(self): Problem? \{\n    None\n  \}\n\}\n\n"
+      + "type IoError with Show \{\n  path: String\n\n  fn show(self): String \{\n    path\n  \}\n\}\n\n"
+      + "fn read(): Result<Int, IoError> \{\n  Ok(1)\n\}\n\n"
+      + "fn probe(): Result<Int, Problem> \{\n  const value = read()?\n  Ok(value)\n\}"
+    assert(problems(source) == ["`IoError` does not implement `Problem`"])
+  }
+
+  test "a failure that is already the trait value needs no adaptation" {
+    const source = withTrait + "fn hand(): Result<Int, Problem> \{\n  Ok(1)\n\}\n\n"
+      + "fn probe(): Result<Int, Problem> \{\n  const value = hand()?\n  Ok(value)\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.adaptationsOf("hand()?") == [])
+  }
+
   test "a hand-written `From` is found like any other implementation" {
     const source = "type IoError \{\n  path: String\n\}\n\ntype AppError \{\n  message: String\n\}\n\n"
       + "extend AppError with From<IoError> \{\n  fn from(value: IoError): AppError \{\n    AppError(value.path)\n  \}\n\}\n\n"
@@ -130,7 +163,7 @@ group "`?.`" {
   }
 
   test "`?.` is not defined on a `Result`" {
-    const source = "type User \{\n  name: String\n\}\n\nfn read(): Result<User, String> \{\n  Error(\"no\")\n\}\n\n"
+    const source = "type User \{\n  name: String\n\}\n\nfn read(): Result<User, String> \{\n  Fail(\"no\")\n\}\n\n"
       + "fn probe() \{\n  const shown = read()?.name\n\}"
     assert(problems(source) == ["`?.` needs an `Option`, and `Result<User, String>` is not one"])
     assert(

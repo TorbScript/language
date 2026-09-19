@@ -213,6 +213,114 @@ fn take(shape: shapes.Square) {}
   }
 }
 
+group "Aliases of an import" {
+  test "`as` gives the import a local name, and the exported one is gone" {
+    const files = [
+      "app/src/helper.trb": r"public type Helper {}",
+      "app/src/main.trb": r"""
+use Helper as Assistant from "./helper"
+
+fn take(value: Assistant) {}
+""",
+    ]
+    assert(messages(files).isEmpty())
+    assert(
+      messages([
+        "app/src/helper.trb": r"public type Helper {}",
+        "app/src/main.trb": r"""
+use Helper as Assistant from "./helper"
+
+fn take(value: Helper) {}
+""",
+      ]) == ["Unknown type `Helper`"]
+    )
+  }
+
+  test "a `public use` re-exports under the alias" {
+    assert(
+      messages([
+        "app/src/helper.trb": r"public type Helper {}",
+        "app/src/middle.trb": "public use Helper as Assistant from \"./helper\"",
+        "app/src/main.trb": r"""
+use Assistant from "./middle"
+
+fn take(value: Assistant) {}
+""",
+      ]).isEmpty()
+    )
+  }
+
+  test "a case is aliased the same way" {
+    assert(
+      problems(
+        r"""
+use Some as Just, None from Option
+
+fn take(value: Option<Int>) {}
+"""
+      ).isEmpty()
+    )
+  }
+
+  test "the message about what a module does not export names the export, not the alias" {
+    assert(
+      messages([
+        "app/src/helper.trb": r"public type Helper {}",
+        "app/src/main.trb": "use Missing as Present from \"./helper\"",
+      ]) == ["`Missing` is not exported by `./helper`"]
+    )
+    assert(problems("use Maybe as Perhaps from Option") == ["`Option` has no case `Maybe`"])
+  }
+
+  test "duplicates are about the local name" {
+    // Two aliases of one export are two names, so neither is a duplicate
+    assert(
+      messages([
+        "app/src/helper.trb": r"public type Helper {}",
+        "app/src/main.trb": "use Helper as First from \"./helper\"\nuse Helper as Second from \"./helper\"",
+      ]).isEmpty()
+    )
+    assert(
+      messages([
+        "app/src/helper.trb": r"""
+public type Helper {}
+public type Other {}
+""",
+        "app/src/main.trb": "use Helper as Same from \"./helper\"\nuse Other as Same from \"./helper\"",
+      ]) == ["`Same` is already imported"]
+    )
+    assert(
+      messages([
+        "app/src/helper.trb": r"public type Helper {}",
+        "app/src/main.trb": "type Taken \{\}\nuse Helper as Taken from \"./helper\"",
+      ]) == ["`Taken` is already declared in this file"]
+    )
+  }
+
+  test "the alias is what a did-you-mean note offers" {
+    assert(
+      messages([
+        "app/src/helper.trb": r"public type Helper {}",
+        "app/src/main.trb": r"""
+use Helper as Assistant from "./helper"
+
+fn take(value: Assistent) {}
+""",
+      ]) == ["Unknown type `Assistent`"]
+    )
+    assert(
+      notes([
+        "app/src/helper.trb": r"public type Helper {}",
+        "app/src/main.trb": r"""
+use Helper as Assistant from "./helper"
+
+fn take(value: Assistent) {}
+""",
+      ]) == ["Did you mean `Assistant`?"]
+    )
+  }
+}
+
 group "Constants of a module" {
   test "a `public const` is exported, a plain one is private to its file" {
     assert(

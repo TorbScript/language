@@ -31,6 +31,10 @@ fn name(name: &Name) -> String {
     format!("Name(text: {}, span: {})", text(&name.text), span(&name.span))
 }
 
+fn use_item(item: &UseItem) -> String {
+    format!("UseItem(name: {}, alias: {})", name(&item.name), option(&item.alias, name))
+}
+
 fn modifiers(modifiers: &Modifiers) -> String {
     format!("Modifiers(visibility: {:?}, isNative: {}, isShared: {})", modifiers.visibility, modifiers.native, modifiers.shared)
 }
@@ -39,7 +43,7 @@ fn declaration(declaration: &Declaration) -> String {
     let kind = match &declaration.kind {
         DeclarationKind::Use(usage) => {
             let items = match &usage.items {
-                UseItems::Names(names) => format!("Names(names: {})", list(names, name)),
+                UseItems::Names(items) => format!("Names(items: {})", list(items, use_item)),
                 UseItems::All { alias } => format!("All(alias: {})", name(alias)),
                 UseItems::OnlyExtensions => "OnlyExtensions".to_string(),
             };

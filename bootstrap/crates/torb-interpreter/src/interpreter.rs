@@ -1075,7 +1075,7 @@ impl Interpreter {
                     ("Some", Value::Option(Some(inner))) => std::slice::from_ref(&**inner),
                     ("None", Value::Option(None)) => &[],
                     ("Ok", Value::Result(Ok(inner))) => std::slice::from_ref(&**inner),
-                    ("Error", Value::Result(Err(inner))) => std::slice::from_ref(&**inner),
+                    ("Fail", Value::Result(Err(inner))) => std::slice::from_ref(&**inner),
                     (case, Value::Object(object)) => match object.info.case_index(case) {
                         Some(index) if object.case == Some(index) => &object.fields,
                         Some(_) => return Ok(false),
@@ -1161,7 +1161,7 @@ impl Interpreter {
                     ("Some", Value::Option(Some(inner))) => std::slice::from_ref(&**inner),
                     ("None", Value::Option(None)) => &[],
                     ("Ok", Value::Result(Ok(inner))) => std::slice::from_ref(&**inner),
-                    ("Error", Value::Result(Err(inner))) => std::slice::from_ref(&**inner),
+                    ("Fail", Value::Result(Err(inner))) => std::slice::from_ref(&**inner),
                     (_, Value::Object(object)) => {
                         // `Shape.Circle(r)` is a case, `Point(x, y)` is a type. A case without its type is `.Circle(r)`
                         let is_case = path.len() > 1 && object.case.is_some() && object.info.case_index(name) == object.case;
@@ -2003,7 +2003,7 @@ impl Interpreter {
             Value::Option(None) => "None".to_string(),
             Value::Option(Some(value)) => format!("Some({})", self.show(value, false)?),
             Value::Result(Ok(value)) => format!("Ok({})", self.show(value, false)?),
-            Value::Result(Err(value)) => format!("Error({})", self.show(value, false)?),
+            Value::Result(Err(value)) => format!("Fail({})", self.show(value, false)?),
             Value::Object(object) => {
                 if object.info.methods.borrow().contains_key("show") {
                     return match self.call_method_by_name(value, "show", Vec::new())? {

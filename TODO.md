@@ -556,6 +556,10 @@ Wenn nicht, was bedeutet, bewirkt es?
     Mit K2 liest es sich auch gut: `return Fail problem`, `Ok value`. Der laufende Prelude-Agent hat beides
     bekommen: Namensregel streichen, Umbenennung über `std/`, `compiler/`, `examples/`, Tests, Stage 0, Checker-
     Meldungen, Konzept und Doku; er landet sie als letzten Schritt, damit sie nicht mit den anderen Zweigen kollidiert.
+  - **Erledigt:** `public trait Error with Show { fn cause(self): Error? { None } }` steht in `std/core` und wird von
+    allen Fehlertypen der `std/` getragen; der Case von `Result` heißt `Fail`, die Namensregel entfällt, `?`
+    konvertiert einen konkreten Fehler über die vorhandene Coercion "Wert → Trait-Wert" in `Result<Value, Error>`, und
+    Kette plus `?`-Return-Traces (Debug-Profil) sind als Regel in CONCEPT und als 5.13 in `docs/BACKEND.md` notiert.
 
 - Das prelude enthält gerade jede menge Dinge, aber jede menge dinge auch nicht (math gehört z.B. ins prelude)
   Die ganzen Sachen im Prelude sollten in eigene, entsprechende Projekte und das Prelude sollte einfach mehrere dieser Projekte zusammenfassen
@@ -587,6 +591,10 @@ Wenn nicht, was bedeutet, bewirkt es?
     `std/collections`, `std/iteration`, `std/encoding`, `std/expression`, `std/task`, `std/console`, dazu `std/math`,
     `std/json` und die Zeit-Werte; `fs`, `environment`, `process`, `Clock` und Netz bleiben Importe. Läuft als nächste
     Runde zusammen mit dem Trait `Error`, der Namensregel Case/Typ und den `use`-Aliasen.
+  - **Erledigt:** die neun Pakete gibt es, `std/prelude/src/lib.trb` besteht nur noch aus `public use`-Zeilen (plus
+    `Some`/`None`/`Ok`/`Fail`, `math` als Namensraum, `Json`/`JsonValue`/`JsonError` und `Duration`/`Instant`), der
+    Checker findet die Sprach-Typen unverändert über die *Exporte* der Prelude, Zyklen zwischen std-Paketen sind
+    unproblematisch (Fixpunkt, kein Dependency-Eintrag nötig), und `panic` sitzt in `std/core` statt in `std/console`.
 
 - Wir brauchen ein Konstrukt für Bitmaks/Bitflags. Momentan gibt es keine Bit-Operatoren, wie könnte man so ein Konstrukt sauber implementieren, sodass es auch interoperabel konsumiert werden kann?
   - **Vorschlag - zwei kleine Bausteine statt eines Sonderkonstrukts:**

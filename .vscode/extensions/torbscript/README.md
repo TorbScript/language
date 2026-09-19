@@ -39,7 +39,7 @@ ln -s "$PWD/.vscode/extensions/torbscript" ~/.vscode/extensions/torbscript
   raw strings (`r"..."`, `r"""..."""`), chars
 - Declarations (`fn`, `type`, `trait`, `extend`, `case`, `const`, `var`), modifiers, control flow,
   contextual keywords (`from` only in `use ... from "..."`)
-- Types (uppercase names), primitives, `Self`, `Some`/`Ok`/`Error`/`None`
+- Types (uppercase names), primitives, `Self`, `Some`/`Ok`/`Fail`/`None`
 - Calls, generic calls (`load<Config>(path)`), trailing closures (`.map { }`), labels (`to: "x"`), implicit parameters (`_`, `_2`)
 - Command calls at the start of a statement (`route "/health", to: "health"`, `database {`) and on member paths
   (`expect(x).toBe 3`). This is a heuristic: a TextMate grammar has no types, so it cannot know that `port 8080` is a

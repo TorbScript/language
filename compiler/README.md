@@ -56,7 +56,7 @@ src/
 │ ├ check.trb           `check`: source tree in, diagnostics and tables out
 │ └ checker/            The type checker (milestone 4)
 │   ├ type.trb          TypeForm, TypeId, the interning table, signatures, a type in a message
-│   ├ wellknown.trb     The declarations of `std/prelude` the language itself refers to
+│   ├ wellknown.trb     The declarations the language itself refers to, through the exports of `std/prelude`
 │   ├ context.trb       Checker: every table of the pass, the scopes, and what it resolved
 │   ├ unify.trb         Equality of types and substitution of generic parameters
 │   ├ lowering.trb      A `TypeReference` to a `TypeId`: names, tuples, functions, literals, const arguments

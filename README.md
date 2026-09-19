@@ -10,7 +10,7 @@ native executables, and it is its own configuration format.
 | Directory    | Contains                                                                      |
 |--------------|-------------------------------------------------------------------------------|
 | `compiler/`  | The toolchain, written in TorbScript                                          |
-| `std/`       | The standard library, one package per directory (`std/prelude`, `std/fs`, ...) |
+| `std/`       | The standard library, one package per directory (`std/core`, `std/fs`, ...; `std/prelude` re-exports) |
 | `runtime/`   | The C runtime every compiled binary links against ([runtime/README.md](runtime/README.md)) |
 | `examples/`  | Tour and example projects                                                     |
 | `bootstrap/` | Temporary: a Rust interpreter that runs `compiler/` until it compiles itself  |

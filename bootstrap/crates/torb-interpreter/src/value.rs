@@ -123,7 +123,7 @@ pub enum Function {
         info: Rc<TypeInfo>,
         case: Option<usize>,
     },
-    /// `Some`, `Ok`, `Error`
+    /// `Some`, `Ok`, `Fail`
     Wrap(&'static str),
     /// `Target.from`: chosen by the type of the argument
     Conversion(Rc<TypeInfo>),
@@ -162,7 +162,7 @@ impl Value {
     }
 
     pub fn error(value: Value) -> Value {
-        crate::profile::count("allocate.Error");
+        crate::profile::count("allocate.Fail");
         Value::Result(Err(Rc::new(value)))
     }
 

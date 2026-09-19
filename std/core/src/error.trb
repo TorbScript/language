@@ -1,0 +1,25 @@
+use Show from "./convert"
+
+/**
+ * "Some error, hand it up." `Result<Value, Error>` is the trait-typed failure: every error type that carries this
+ * trait fits into it, so an application can pass a failure up through layers that have nothing to say about it
+ * without declaring a wrapper type per layer.
+ *
+ * **Precise error types stay the norm for libraries.** A library that answers `Result<Config, ConfigError>` lets its
+ * callers `match` on what went wrong; one that answers `Result<Config, Error>` does not. The trait is for the other
+ * direction: `fn main(): Result<Void, Error>` and everything in between, where the only thing left to do with a
+ * failure is to report it.
+ *
+ * `?` needs nothing new for that: a concrete failure that carries `Error` becomes the trait value through the
+ * ordinary conversion of a value to a trait value, exactly as `List<Shape>` takes a `Circle`.
+ *
+ * `cause()` is the chain. An error that was caused by another one hands it out, so a report can unwind it:
+ * `error: the server did not start` / `  caused by: app.trb: no such file`. The default is `None`, so a type that
+ * has nothing to add implements the trait by writing `with Error` and nothing else.
+ */
+public trait Error with Show {
+  /** What this error was caused by, if it wraps one. The end of the chain answers `None`. */
+  fn cause(self): Error? {
+    None
+  }
+}

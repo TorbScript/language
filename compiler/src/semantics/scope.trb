@@ -1,6 +1,6 @@
 use Span from "../syntax/source"
 use Diagnostic from "../syntax/diagnostic"
-use Name, Visibility, UseDeclaration from "../syntax/ast"
+use Name, Visibility, UseDeclaration, UseItem from "../syntax/ast"
 use Workspace from "../project/workspace"
 use joinPath from "../project/path"
 use ModuleId, Module from "./module"
@@ -187,10 +187,10 @@ type Binder {
       .Module(path) => {
         if const .Found(target) = resolveImport(graph, workspace, id, path) {
           match usage.items {
-            .Names(names) => {
-              for name in names {
-                if const Some(symbol) = scopes[target.value].exported.get(name.text) {
-                  bind(id, name.text, symbol, isPublic)
+            .Names(items) => {
+              for item in items {
+                if const Some(symbol) = scopes[target.value].exported.get(item.name.text) {
+                  bind(id, localNameOf(item).text, symbol, isPublic)
                 }
               }
             }
@@ -207,11 +207,11 @@ type Binder {
       }
       // `use Some, None from Option`: the cases of a type
       .Type(path) => {
-        if const .Names(names) = usage.items {
+        if const .Names(items) = usage.items {
           if const Some(owner) = resolveTypePath(id, path) {
-            for name in names {
-              if const Some(symbol) = symbols.caseNamed(owner, name.text) {
-                bind(id, name.text, symbol, isPublic)
+            for item in items {
+              if const Some(symbol) = symbols.caseNamed(owner, item.name.text) {
+                bind(id, localNameOf(item).text, symbol, isPublic)
               }
             }
           }
@@ -314,17 +314,18 @@ fn checkImport(
         }
       }
       match usage.items {
-        .Names(names) => {
-          for name in names {
-            if !program.scopes[target.value].exported.containsKey(name.text) {
-              var problem = Diagnostic.error("`{name.text}` is not exported by `{path}`", name.span)
-              if program.scopes[target.value].names.containsKey(name.text) {
+        .Names(items) => {
+          for item in items {
+            // What is missing is the *export*, so this message names it and points at it even under an alias
+            if !program.scopes[target.value].exported.containsKey(item.name.text) {
+              var problem = Diagnostic.error("`{item.name.text}` is not exported by `{path}`", item.name.span)
+              if program.scopes[target.value].names.containsKey(item.name.text) {
                 problem = problem.withNote("It is declared there, but not `public`")
               }
               diagnostics.add(problem)
               continue
             }
-            reportDuplicate(name, declared, imported, diagnostics)
+            reportDuplicate(localNameOf(item), declared, imported, diagnostics)
           }
         }
         .All(alias) => reportDuplicate(alias, declared, imported, diagnostics)
@@ -333,8 +334,8 @@ fn checkImport(
     }
     .Type(path) => {
       const at = path[0].span.to(path[path.length() - 1].span)
-      const names = match usage.items {
-        .Names(names) => names
+      const items = match usage.items {
+        .Names(items) => items
         _ => {
           diagnostics.add(Diagnostic.error("`use * as name from Type` does not exist: cases are imported by name", at))
           return
@@ -348,12 +349,14 @@ fn checkImport(
         }
       }
       if const .Type = program.symbols.at(owner).kind {
-        for name in names {
-          if program.symbols.caseNamed(owner, name.text).isNone() {
-            diagnostics.add(Diagnostic.error("`{program.symbols.at(owner).name}` has no case `{name.text}`", name.span))
+        for item in items {
+          if program.symbols.caseNamed(owner, item.name.text).isNone() {
+            diagnostics.add(
+              Diagnostic.error("`{program.symbols.at(owner).name}` has no case `{item.name.text}`", item.name.span)
+            )
             continue
           }
-          reportDuplicate(name, declared, imported, diagnostics)
+          reportDuplicate(localNameOf(item), declared, imported, diagnostics)
         }
         return
       }
@@ -363,6 +366,14 @@ fn checkImport(
       )
     }
   }
+}
+
+/**
+ * `use IoError as FileProblem from "std/fs"`: the name the importing file sees. Everything that is about the *export* -
+ * "is not exported by", "has no case" - keeps naming and pointing at `item.name` instead.
+ */
+fn localNameOf(item: UseItem): Name {
+  item.alias ?? item.name
 }
 
 /** `use Circle from shapes.Shape`: a path through namespace imports. `None` if any step is not there. */

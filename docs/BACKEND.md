@@ -275,7 +275,7 @@ instance  ::= the canonical type argument list, escaped, at most 160 characters,
               plus "_h" and 16 hexadecimal digits of its FNV-1a-64 when it was longer
 ```
 
-`t_std_x2f_prelude_collections_x2f_list_ArrayList_add__Int64`. Ids never appear in a name: a name is a function of the
+`t_std_x2f_collections_list_ArrayList_add__Int64`. Ids never appear in a name: a name is a function of the
 *source path plus the type arguments*, so it does not move when an unrelated module is added. C reserved spellings
 cannot be hit (every name starts with a lowercase prefix letter and never contains `__` except as the instance
 separator - which is why the separator is checked against the escaped components, and `_x5f_` is how a source
@@ -839,7 +839,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.10** | Text and data: interpolation, `Show` for every shape in the format of gap 23, float formatting, `describe`, derived `Encode`/`Decode`, `std/json` | `runtime/text.c` (float), `ir/lower/derive.trb`, `std/json` natives | `11-data.trb`, the `Show` format is pinned by a table-driven test | 5.6, 5.7 |
 | **5.11** | `Expression<Value>`: static trees, captures, `assert`, `test`/`group` and `torb test` natively. **Gate: `compiler/tests/*.test.trb` run from the native binary** | `ir/lower/quote.trb`, `runtime/`, `cli/test.trb` | The compiler's own tests | 5.10 |
 | **5.12** | **Runtime half done.** The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
-| **5.13** | The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir` | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE | 5.3 |
+| **5.13** | The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir`, the `error:` report of a top-level `?` (it walks `cause()`) and `?` return traces in the debug profile | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE, an error chain of three prints three lines | 5.3 |
 | **5.14** | Conformance and determinism: one runner over stage 0 and the C back end, `--emit-c` twice byte identical for the whole workspace, no absolute path in the output, timing budget | `compiler/tests/backend.test.trb`, the runner | Everything above | 5.1-5.13 |
 | **6.1** | Compile `compiler/` with stage 1: every missing intrinsic, every crash, every construct the compiler uses and the lowering does not cover yet. **Gate: a `torb` binary exists** | wherever it hurts | `torb check ..` from the new binary gives the same output as stage 1 | 5.14 |
 | **6.2** | The fixpoint: stage 2 compiles `compiler/` again, the two C files are compared byte for byte, both binaries pass the conformance suite. `bootstrap/` frozen | the runner | **The fixpoint gate** | 6.1 |
@@ -937,7 +937,7 @@ the code won and this is the list. Everything else is as written.
   every `Object` (a trait-typed value may hold anything its bounds allow) and `false` for a `Closure` until 5.8 gives
   a closure type its environment layout.
 - **`Expression`, `Task`, `Channel` and `Decimal` are `Runtime` kinds**, as section 1.3 lists them, although
-  `Expression` declares fields in `std/prelude`. A `native type` that is *not* in that list and does declare fields -
+  `Expression` declares fields in `std/expression`. A `native type` that is *not* in that list and does declare fields -
   `Range` is the one - is an ordinary record; a `native type` with neither fields nor cases and no entry is an
   internal error of the compiler, reported through `IrProgram.problems`.
 - **A trait name in a type position is an `Object`.** The checker lowers `List<Int>` in a type position to
@@ -1090,6 +1090,15 @@ can run, the code won and this is the list. Everything else is as written.
 - **One profile, no cache, no output path from `project.trb`.** `torb build [path] [--emit-c] [--output <file>]` writes
   `<project>/build/release/program.c` and the binary next to it. `--profile`, the content-hash cache, `torb run` as
   build-and-execute, `torb test` and `buildOutput`/`buildTarget` in the manifest reader are 5.13's, as the table says.
+- **Two decided pieces of 5.13 that the prelude's `Error` trait now makes expressible** (CONCEPT, Error Handling):
+  - The `error:` report of a top-level `?` **walks `cause()`**: `error: <the error through Show>`, then one
+    `  caused by: <that one through Show>` per link of the chain, until `cause()` answers `None`. Where the error is a
+    concrete type rather than the trait value there is nothing to walk and it stays one line, which is what it prints
+    today. A cycle cannot happen (errors are values, a value cannot contain itself), so no depth limit is needed.
+  - **`?` return traces are Zig's, in the debug profile only.** Every `?` that hands an error on records its source
+    location in a small per-task ring buffer, and the report above prints the locations under the chain
+    (`  at src/config.trb:12:31`). The release profile emits nothing for it, so it costs nothing there, and no error
+    type changes: a value never carries a stack. Panic frames are 7.9 and independent of this.
 - **The runtime is found by walking up from the working directory** (or `$TORB_RUNTIME`): until the compiler compiles
   itself it is always run from inside its own checkout, and a compiled `torb` will know where it was installed.
 - **Three natives stage 0 was missing.** `Process.run(command, arguments): Result<ProcessOutput, IoError>` (the driver
@@ -1461,7 +1470,7 @@ tokens (`|` already means a literal-type union), keeping them off the signed typ
 everywhere a `+` is written, and without them three parts of the toolchain cannot be written in TorbScript at all.
 
 _Decision:_ accepted, with the names as spelled here. The six bit methods are one trait, `Bits`, that the eight
-integer types come `with` (`std/prelude/src/numeric.trb`): they are then ordinary trait-member requirements on the
+integer types come `with` (`std/number/src/lib.trb`): they are then ordinary trait-member requirements on the
 runtime - one manifest entry per member per width, section 3.7 - and usable as a bound, which a generic hash needs.
 `addedWrapping` and `multipliedWrapping` are an `extend UInt64`. One detail the proposal leaves open is decided with
 it: **a shift by a negative amount or by the width of the type or more panics,** like every other operation that
@@ -1512,7 +1521,7 @@ _Decision:_ accepted.
 
 **8. Recursion depth is not mentioned, and "tail calls are guaranteed" cannot be kept in general.** Execution Model:
 "Tail calls in tail position are guaranteed." Portable C cannot guarantee a general tail call, and the language has
-no stack limit at all - while `retry` in `std/prelude/src/control.trb` is tail recursive and the parser recurses with
+no stack limit at all - while `retry` in `std/core/src/control.trb` is tail recursive and the parser recurses with
 the nesting of an expression.
 _Proposal:_ guarantee **direct self-recursion in tail position** (the lowering turns it into a jump to the entry
 block, which both back ends do identically) and say so; every other call uses the stack. A per-task **frame counter**
@@ -1588,7 +1597,7 @@ DSL and the pipelines free), and without it the rule quoted above is unenforced.
 
 _Decision:_ accepted.
 
-**15. `isSame` is callable on values.** `std/prelude/src/shared.trb`:
+**15. `isSame` is callable on values.** `std/core/src/shared.trb`:
 `public native fn isSame<Object>(first: Object, second: Object): Bool`, with no bound. On a value the answer would
 expose whether the implementation shares storage.
 _Proposal:_ the checker rejects `isSame` on a non-`shared` type, as a named special case next to object safety, with

@@ -731,8 +731,8 @@ public fn lowerTry(
   }
   const isResult = variantNamed(lowering, subjectLayout, "Ok") >= 0
   const success = variantNamed(lowering, subjectLayout, if isResult { "Ok" } else { "Some" })
-  const failure = variantNamed(lowering, subjectLayout, if isResult { "Error" } else { "None" })
-  const wantedFailure = variantNamed(lowering, resultLayout, if isResult { "Error" } else { "None" })
+  const failure = variantNamed(lowering, subjectLayout, if isResult { "Fail" } else { "None" })
+  const wantedFailure = variantNamed(lowering, resultLayout, if isResult { "Fail" } else { "None" })
   if success < 0 || failure < 0 || wantedFailure < 0 {
     const what = "`?` between an `Option` and a `Result` (milestone 5.10)"
     return unsupportedSlot(lowering, builder, destination, what, expression.span)
@@ -768,7 +768,7 @@ fn emitFailure(
   const shape = lowering.program.layoutAt(resultLayout)
   const wanted = shape.fieldsOfVariant(wantedFailure)
   var fields: List<Slot> = []
-  // `None` carries nothing; the `Error` of a `Result` carries the error, and that one may need a conversion
+  // `None` carries nothing; the `Fail` of a `Result` carries the error, and that one may need a conversion
   if !wanted.isEmpty() {
     const group = lowering.program.layoutAt(subjectLayout).fieldsOfVariant(failure)
     if group.isEmpty() {
@@ -941,7 +941,7 @@ public fn variantIndexOf(var lowering: Lowering, layout: LayoutId, variant: Symb
   -1
 }
 
-/** Which variant of a layout carries this name: how `Some`, `None`, `Ok` and `Error` are found for `?`. */
+/** Which variant of a layout carries this name: how `Some`, `None`, `Ok` and `Fail` are found for `?`. */
 public fn variantNamed(var lowering: Lowering, layout: LayoutId, name: String): Int {
   const shape = lowering.program.layoutAt(layout)
   for index in 0..shape.variants.length() {
