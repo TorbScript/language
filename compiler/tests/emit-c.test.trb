@@ -1,5 +1,6 @@
 use test, group from "std/test"
 use lowered from "./lower-harness"
+use insertOwnership from "../src/ir/ownership"
 use IrProgram, IrType, IrSignature, IrParameter from "../src/ir/ir"
 use emitProgram, emittedProgramText from "../src/backend/c/emit"
 use readPrototype, matchPrototype from "../src/backend/c/prototype"
@@ -24,6 +25,16 @@ const entryName = "t_acme_x2f_app_main"
 
 fn cOf(source: String): String {
   var found = lowered(source)
+  emittedProgramText(found.program, entryName)
+}
+
+/**
+ * The same C **after the ownership pass**, which is what `torb build` emits: the retains, the releases and the two
+ * per-layout helpers are only in the IR once 5.4 has run over it.
+ */
+fn ownedCOf(source: String): String {
+  var found = lowered(source)
+  insertOwnership(found.program)
   emittedProgramText(found.program, entryName)
 }
 
@@ -130,6 +141,7 @@ static int64_t t_acme_x2f_app_main_double(int64_t s0_value) {
 int main(int argument_count, char **argument_values) {
   torb_process_start(argument_count, argument_values);
   t_acme_x2f_app_main();
+  torb_process_finish();
   return 0;
 }
 """
@@ -250,6 +262,47 @@ const _ = widen()
     )
     assert(text.contains("s5->f_a = s0;"))
     assert(text.contains("s5->f_e = s4;"))
+  }
+
+  /** `Option<String>` is the `torb_text` itself: the null storage pointer *is* the empty case (BACKEND 3.1). */
+  test "a niche layout has no struct of its own, and the empty case is the null pointer" {
+    const source = r"""
+fn keep(value: String?): Int {
+  match value {
+    Some(text) => text.byteLength()
+    .None => 0
+  }
+}
+
+const _ = keep(None)
+"""
+    const text = ownedCOf(source)
+    assert(!text.contains("struct T_std_x2f_prelude_types_Option__String \{"))
+    assert(text.contains("static int64_t t_acme_x2f_app_main_keep(torb_text s0_value) \{"))
+    assert(text.contains("  s3 = (int64_t)((s0_value.storage != NULL) ? 0 : 1);"))
+    // The niche layout *is* the payload, so the read of its one field changes nothing but the count
+    assert(text.contains("  s2_text = s0_value;\n  s2_text = torb_text_retained(s2_text);"))
+  }
+
+  test "a construction of a case names the tag and the group, and a case without fields names only the tag" {
+    const source = r"""
+type Shape {
+  case Circle(radius: Int)
+  case Empty
+}
+
+fn made(flag: Bool): Shape {
+  if flag {
+    return Shape.Circle(2)
+  }
+  Shape.Empty
+}
+
+const _ = made(true)
+"""
+    const text = cOf(source)
+    assert(text.contains(r"""  s3 = (T_acme_x2f_app_main_Shape){ .tag = 0, .payload = { .v0 = { s2 } } };"""))
+    assert(text.contains(r"""  s4 = (T_acme_x2f_app_main_Shape){ .tag = 1 };"""))
   }
 
   test "a variant layout is a tag and a union of the groups, and an empty case has no member" {
@@ -454,6 +507,151 @@ const _ = flags()
   }
 }
 
+/**
+ * The three contracts of BACKEND 2.1 that are not instructions, and the two helpers a counted layout needs. They are
+ * only visible after the ownership pass, so every test here goes through `ownedCOf`.
+ */
+group "Counted values" {
+  test "a copy of an inline record with a counted field retains per field, and a release drops per field" {
+    const source = r"""
+type Label {
+  text: String
+  weight: Int
+}
+
+fn twice(label: Label): Int {
+  const kept = label
+  label.weight + kept.weight
+}
+
+const _ = twice(Label("ab", 2))
+"""
+    const text = ownedCOf(source)
+    assert(
+      text.contains(r"""static void R_T_acme_x2f_app_main_Label(void *block) {
+  T_acme_x2f_app_main_Label *value = (T_acme_x2f_app_main_Label *)block;
+  value->f_text = torb_text_retained(value->f_text);
+}""")
+    )
+    assert(
+      text.contains(r"""static void D_T_acme_x2f_app_main_Label(void *block) {
+  T_acme_x2f_app_main_Label *value = (T_acme_x2f_app_main_Label *)block;
+  torb_text_release(value->f_text);
+}""")
+    )
+    assert(text.contains("  s1_kept = s0_label;\n  R_T_acme_x2f_app_main_Label(&s1_kept);"))
+    assert(text.contains("  D_T_acme_x2f_app_main_Label(&s1_kept);"))
+  }
+
+  /** A read of a counted field hands the frame a count of it, which is what makes the target of the read owned. */
+  test "a read of a counted field retains it, and a counted block is released through its drop function" {
+    const source = r"""
+type Bundle {
+  first: String
+  second: String
+  weight: Int
+}
+
+fn size(bundle: Bundle): Int {
+  const taken = bundle.first
+  taken.byteLength()
+}
+
+const _ = size(Bundle("ab", "cd", 2))
+"""
+    const text = ownedCOf(source)
+    assert(text.contains("  s1_taken = s0_bundle->f_first;\n  s1_taken = torb_text_retained(s1_taken);"))
+    assert(text.contains("  torb_text_release(s1_taken);"))
+    assert(text.contains(", D_T_acme_x2f_app_main_Bundle);"))
+  }
+
+  /** Which group of the union is live depends on the tag, so the drop function of a variant layout switches on it. */
+  test "the drop function of a variant layout switches on the tag" {
+    const source = r"""
+type Label {
+  case Named(text: String)
+  case Numbered(value: Int)
+  case Anonymous
+}
+
+fn sizeOf(label: Label): Int {
+  match label {
+    .Named(text) => text.byteLength()
+    .Numbered(value) => value
+    .Anonymous => 0
+  }
+}
+
+const _ = sizeOf(Label.Anonymous)
+"""
+    const text = ownedCOf(source)
+    assert(
+      text.contains(r"""static void D_T_acme_x2f_app_main_Label(void *block) {
+  T_acme_x2f_app_main_Label *value = (T_acme_x2f_app_main_Label *)block;
+  switch (value->tag) {
+    case 0:
+      torb_text_release(value->payload.v0.f_text);
+      break;
+    default: break;
+  }
+}""")
+    )
+  }
+
+  /** The tag of a value with a union is the member, and a `Switch` terminator is a C `switch` with a `default`. */
+  test "a tag read is the member, and the decision tree is a switch with a default" {
+    const source = r"""
+type Shape {
+  case Circle(radius: Int)
+  case Rectangle(width: Int, height: Int)
+  case Empty
+}
+
+fn area(shape: Shape): Int {
+  match shape {
+    .Circle(radius) => radius
+    .Rectangle(width, height) => width * height
+    .Empty => 0
+  }
+}
+
+const _ = area(Shape.Empty)
+"""
+    const text = cOf(source)
+    assert(text.contains("  s5 = (int64_t)s0_shape.tag;"))
+    assert(
+      text.contains(r"""switch (s5) {
+    case 0: goto L5;
+    case 1: goto L6;
+    case 2: goto L7;
+    default: goto L8;
+  }""")
+    )
+    assert(text.contains("  s3_width = s0_shape.payload.v1.f_width;"))
+    assert(text.contains("L8:  /* no match */\n  TORB_UNREACHABLE();"))
+  }
+
+  /** Only the half that is really called is emitted: an unused `static` function is a warning, and `-Werror` is on. */
+  test "a layout that is only ever released gets a drop function and no retain function" {
+    const source = r"""
+type Bundle {
+  first: String
+  second: String
+  weight: Int
+}
+
+fn size(bundle: Bundle): Int {
+  bundle.weight
+}
+
+const _ = size(Bundle("ab", "cd", 2))
+"""
+    const text = ownedCOf(source)
+    assert(text.contains("static void D_T_acme_x2f_app_main_Bundle(void *block);"))
+    assert(!text.contains("static void R_T_acme_x2f_app_main_Bundle(void *block);"))
+  }
+}
+
 group "What the C back end does not emit yet" {
   test "a type the back end has no C spelling for is a finding that names its milestone" {
     const source = r"""
@@ -489,7 +687,7 @@ const _ = describeIt(1)
       + " so the wrapper of a later sub-milestone is still missing")
   }
 
-  test "a native that takes the source location of the call cannot be written yet" {
+  test "a native that takes the source location of the call is called with it" {
     const prototype = readPrototype("torb_text torb_text_repeat(torb_text text, int64_t times, torb_location at);")
       .expect("a prototype")
     var program = IrProgram()

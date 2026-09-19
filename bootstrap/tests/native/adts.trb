@@ -1,0 +1,83 @@
+use Process from "std/process"
+
+/**
+ * The gate of milestone 5.5, first half: a recursive ADT and the decision trees over it.
+ *
+ * Every node of an `Expression` holds two more of them, so the layout is on a cycle of the field graph and every node is
+ * a counted block - which is what "recursive ADTs are reference counted nodes" means. The tree is built, walked twice
+ * and released, and `TORB_REPORT_LEAKS=1` has to say zero.
+ */
+type Expression {
+  case Number(value: Int)
+  case Add(left: Expression, right: Expression)
+  case Multiply(left: Expression, right: Expression)
+  case Negate(inner: Expression)
+}
+
+/** A counted field inside a case: the drop function of the layout has to switch on the tag to find it. */
+type Named {
+  case Anonymous
+  case Labelled(name: String, inner: Expression)
+}
+
+fn evaluate(expression: Expression): Int {
+  match expression {
+    .Number(value) => value
+    .Add(left, right) => evaluate(left) + evaluate(right)
+    .Multiply(left, right) => evaluate(left) * evaluate(right)
+    .Negate(inner) => 0 - evaluate(inner)
+  }
+}
+
+fn deeper(first: Int, second: Int): Int {
+  if first > second {
+    return first
+  }
+  second
+}
+
+/** How deep the tree is: the same walk, with a `match` used as the value of a `const`. */
+fn depth(expression: Expression): Int {
+  const found = match expression {
+    .Number(_) => 0
+    .Add(left, right) => deeper(depth(left), depth(right))
+    .Multiply(left, right) => deeper(depth(left), depth(right))
+    .Negate(inner) => depth(inner)
+  }
+  found + 1
+}
+
+/** A nested pattern: two levels of cases in one arm, and a case that is only a name. */
+fn doubledNumbers(expression: Expression): Int {
+  match expression {
+    .Add(.Number(left), .Number(right)) => (left + right) * 2
+    .Add(left, right) => evaluate(left) + evaluate(right)
+    _ => evaluate(expression)
+  }
+}
+
+fn sizeOf(named: Named): Int {
+  match named {
+    .Anonymous => 0
+    .Labelled(name, inner) => name.byteLength() + evaluate(inner)
+  }
+}
+
+fn tree(): Expression {
+  Expression.Add(
+    Expression.Multiply(Expression.Number(3), Expression.Number(4)),
+    Expression.Negate(Expression.Number(2)),
+  )
+}
+
+fn exitCode(): Int {
+  var total = evaluate(tree())
+  total = total + depth(tree())
+  total = total + doubledNumbers(Expression.Add(Expression.Number(5), Expression.Number(6)))
+  total = total + doubledNumbers(tree())
+  total = total + sizeOf(Named.Labelled("abc", Expression.Number(7)))
+  total = total + sizeOf(Named.Anonymous)
+  total
+}
+
+Process.exit(exitCode() % 200)

@@ -146,9 +146,13 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
     .Retain(slot) => "retain %{slot.value}"
     .Release(slot) => "release %{slot.value}"
     .MakeUnique(reference) => "makeUnique {printReference(program, reference)}"
-    .Call(target, callee, arguments, witnesses) => {
+    .Call(target, callee, arguments, witnesses, at) => {
       const head = "{printOptionalTarget(target)}call {program.functionAt(callee).name}"
-      "{head}({printArguments(arguments)}){printWitnesses(program, witnesses)}"
+      const site = match at {
+        Some(found) => " at {printLocation(program, found)}"
+        .None => ""
+      }
+      "{head}({printArguments(arguments)}){printWitnesses(program, witnesses)}{site}"
     }
     .CallClosure(target, callee, arguments) => {
       "{printOptionalTarget(target)}callClosure %{callee.value}({printArguments(arguments)})"

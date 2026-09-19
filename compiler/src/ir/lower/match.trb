@@ -1,0 +1,953 @@
+use Span from "../../syntax/source"
+use Expression, Block, MatchArm, Pattern from "../../syntax/ast"
+use SymbolId from "../../semantics/symbols"
+use TypeId, LiteralValue from "../../semantics/checker/type"
+use MatchPlan, PatternBranch, PatternCheck, PatternLiteral, PatternStep from "../../semantics/checker/exhaustive"
+use IrTypeId, IrType, Slot, BlockId, LocationId, Instruction, Terminator, Reference, PathStep from "../ir"
+use LayoutId, IntrinsicOperation, NumericKind, StaticContents, borrowed from "../ir"
+use DecisionGraph, DecisionNode, NodeId, decisionTreeOf from "../decision"
+use FunctionBuilder, addLocal, addTemporary, addBlock from "../build"
+use emit from "../build"
+use layoutOfType, numericKindOf from "../verify"
+use instanceOfSymbol from "../instances"
+use emitCall, lowerConstruct from "./call"
+use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf, isVoidType from "./context"
+use finishBlock, continueIn, enterLoop, leaveLoop from "./context"
+use lowerExpression, lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
+use constantSlot, emitIntrinsic, intrinsicSlot from "./expression"
+use lowerBlockInto from "./statement"
+
+/**
+ * Patterns: `match`, `if const`, `while const`, a destructuring binding, and `?`.
+ *
+ * Every one of them is the same three steps. The checker's `MatchPlan` says what has to hold and what is bound
+ * (TYPECHECKER 4.5), `ir/decision.trb` turns that into a decision graph, and this file emits the graph as blocks: one
+ * block per node, one per arm body, and one join. Nothing here decides which arm wins or whether the arms are
+ * exhaustive - both were settled by the checker, which is why a value no arm matches is `unreachable` and not a panic.
+ *
+ * **A path is read where it is safe to read it.** The tests of a branch come outermost first, so by the time a block
+ * reads `subject.Circle.radius` every test that says the value *is* a `Circle` has already held on the way in. A read is
+ * repeated per block rather than shared across blocks, because a slot has to be defined on every path that reads it -
+ * and a `Read` of a counted field hands the frame a count, which the ownership pass releases at its last use.
+ */
+
+/** Everything one walk of a decision graph needs, so that no function of it takes ten parameters. */
+type Walk {
+  plan: MatchPlan
+  graph: DecisionGraph
+  /** The guard of every arm, by arm index. `None` for an arm without one, and for `if const`. */
+  guards: List<Expression?>
+  subject: Slot
+  /** The block that runs the body of arm `i`. */
+  armBlocks: List<BlockId>
+  /** Where a value nothing matches goes. `None` makes it `unreachable`, which an exhaustive `match` is. */
+  failBlock: BlockId?
+  /** The block of every node of the graph, by `NodeId.value`. */
+  blocks: List<BlockId>
+  at: Span
+  /** Where the whole construct is written: every block of the walk carries it, for the comment and for `#line`. */
+  location: LocationId
+}
+
+// --- `match` --------------------------------------------------------------------------------------------------------
+
+/**
+ * `match` as an expression and as a statement, in one piece: every arm produces into one slot, and an arm that diverges
+ * simply does not jump to the join block. A `match` whose arms all diverge leaves an empty `unreachable` marker behind,
+ * exactly as an `if` whose two arms both `return` does.
+ */
+public fn lowerMatch(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  subject: Expression,
+  arms: List<MatchArm>,
+  annotation: IrTypeId,
+): Slot {
+  const module = lowering.module
+  const plan = match lowering.checker.matchAt(module, subject.span) {
+    Some(found) => found
+    .None => {
+      const what = "a `match` the checker recorded no plan for"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
+  }
+  if plan.arms.length() != arms.length() {
+    const what = "a `match` whose plan does not have one entry per arm"
+    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+  }
+  const scrutinee = lowerValue(lowering, builder, subject)
+  if !lowering.isSupported {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  const target = valueSlot(lowering, builder, destination, annotation)
+  const location = locationOf(lowering, expression.span)
+  var armBlocks: List<BlockId> = []
+  var guards: List<Expression?> = []
+  for index in 0..arms.length() {
+    // An arm no value reaches got a message from the checker; a block nothing jumps to is not a block
+    if plan.arms[index].isReachable {
+      armBlocks.add(addBlock(builder, "arm", Some(location)))
+    } else {
+      armBlocks.add(BlockId(0))
+    }
+    guards.add(arms[index].guard)
+  }
+  const join = addBlock(builder, "join", Some(location))
+  for index in 0..arms.length() {
+    declareBindings(lowering, builder, plan, index)
+  }
+  const graph = decisionTreeOf(plan)
+  const walk = Walk(plan, graph, guards, scrutinee, armBlocks, None, [], expression.span, location)
+  emitWalk(lowering, builder, walk)
+  var reaches = false
+  for index in 0..arms.length() {
+    if !lowering.isSupported || !plan.arms[index].isReachable {
+      continue
+    }
+    continueIn(lowering, builder, armBlocks[index])
+    const _ = lowerExpression(lowering, builder, arms[index].body, Some(target))
+    if !lowering.isDiverged {
+      finishBlock(lowering, builder, Terminator.Jump(join))
+      reaches = true
+    }
+  }
+  continueIn(lowering, builder, join)
+  lowering.isDiverged = !reaches
+  target
+}
+
+// --- `if const` and `while const` -----------------------------------------------------------------------------------
+
+/**
+ * `if const Some(found) = lookup() { ... } else { ... }`: one arm, and the `else` is where a value that does not match
+ * goes. The plan is recorded under the span of the *pattern*, which is what a single pattern is keyed by everywhere.
+ */
+public fn lowerIfBinding(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  isVar: Bool,
+  pattern: Pattern,
+  value: Expression,
+  then: Block,
+  otherwise: Expression?,
+  annotation: IrTypeId,
+): Slot {
+  if isVar {
+    const what = "`if var`, which binds a path into its subject (milestone 5.9)"
+    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+  }
+  const plan = match planOfPattern(lowering, pattern) {
+    Some(found) => found
+    .None => {
+      const what = "an `if const` the checker recorded no plan for"
+      return unsupportedSlot(lowering, builder, destination, what, pattern.span)
+    }
+  }
+  const scrutinee = lowerValue(lowering, builder, value)
+  if !lowering.isSupported {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  const location = locationOf(lowering, expression.span)
+  // Without an `else` the whole is `Void`, and that value is defined before the branch so that it is defined on both
+  const target = match otherwise {
+    Some(_) => valueSlot(lowering, builder, destination, annotation)
+    .None => {
+      match destination {
+        Some(_) => voidSlot(lowering, builder, destination)
+        .None => abandonedSlot(lowering, builder, destination)
+      }
+    }
+  }
+  const thenBlock = addBlock(builder, "then", Some(location))
+  const elseBlock = addBlock(builder, "else", Some(location))
+  const join = addBlock(builder, "join", Some(location))
+  declareBindings(lowering, builder, plan, 0)
+  const graph = decisionTreeOf(plan)
+  const walk = Walk(plan, graph, [None], scrutinee, [thenBlock], Some(elseBlock), [], pattern.span, location)
+  emitWalk(lowering, builder, walk)
+  continueIn(lowering, builder, thenBlock)
+  const wanted = if otherwise.isSome() { Some(target) } else { None }
+  lowerBlockInto(lowering, builder, then, wanted)
+  const thenDiverged = lowering.isDiverged
+  if !thenDiverged {
+    finishBlock(lowering, builder, Terminator.Jump(join))
+  }
+  continueIn(lowering, builder, elseBlock)
+  var elseDiverged = false
+  if const Some(alternative) = otherwise {
+    const _ = lowerExpression(lowering, builder, alternative, Some(target))
+    elseDiverged = lowering.isDiverged
+  }
+  if !elseDiverged {
+    finishBlock(lowering, builder, Terminator.Jump(join))
+  }
+  continueIn(lowering, builder, join)
+  lowering.isDiverged = thenDiverged && elseDiverged
+  target
+}
+
+/** `while const Some(line) = lines.next() { ... }`: the pattern is matched again at the head of every round. */
+public fn lowerWhileBinding(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  isVar: Bool,
+  pattern: Pattern,
+  value: Expression,
+  body: Block,
+  at: Span,
+) {
+  if isVar {
+    reportUnsupported(lowering, "`while var`, which binds a path into its subject (milestone 5.9)", at)
+    return
+  }
+  const plan = match planOfPattern(lowering, pattern) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a `while const` the checker recorded no plan for", pattern.span)
+      return
+    }
+  }
+  const location = locationOf(lowering, at)
+  const check = addBlock(builder, "while", Some(location))
+  const inner = addBlock(builder, "body", Some(location))
+  const done = addBlock(builder, "done", Some(location))
+  declareBindings(lowering, builder, plan, 0)
+  finishBlock(lowering, builder, Terminator.Jump(check))
+  continueIn(lowering, builder, check)
+  const scrutinee = lowerValue(lowering, builder, value)
+  if !lowering.isSupported {
+    return
+  }
+  const graph = decisionTreeOf(plan)
+  const walk = Walk(plan, graph, [None], scrutinee, [inner], Some(done), [], pattern.span, location)
+  emitWalk(lowering, builder, walk)
+  continueIn(lowering, builder, inner)
+  enterLoop(lowering, done, check)
+  lowerBlockInto(lowering, builder, body, None)
+  const _ = leaveLoop(lowering)
+  if !lowering.isDiverged {
+    finishBlock(lowering, builder, Terminator.Jump(check))
+  }
+  continueIn(lowering, builder, done)
+}
+
+/** The plan of a single pattern, which is recorded under the span of the pattern itself. */
+fn planOfPattern(var lowering: Lowering, pattern: Pattern): MatchPlan? {
+  const module = lowering.module
+  lowering.checker.matchAt(module, pattern.span)
+}
+
+// --- A destructuring binding ----------------------------------------------------------------------------------------
+
+/**
+ * `const (line, column) = pair`, `const Point(x, y) = point`, `for (key, value) in pairs`: a pattern that decides
+ * nothing and only binds. The checker rejects a refutable pattern in either position, so a test here would be a bug of
+ * the lowering rather than of the program - and it is reported as an unsupported construct all the same.
+ */
+public fn lowerPatternBinding(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  pattern: Pattern,
+  source: Slot,
+  at: Span,
+) {
+  const plan = match planOfPattern(lowering, pattern) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a binding that takes a value apart", pattern.span)
+      return
+    }
+  }
+  const branch = match firstBranchOf(plan) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a binding whose pattern has no alternative at all", pattern.span)
+      return
+    }
+  }
+  if !branch.tests.isEmpty() {
+    reportUnsupported(lowering, "a binding whose pattern decides which case a value is", pattern.span)
+    return
+  }
+  declareBindings(lowering, builder, plan, 0)
+  emitBindings(lowering, builder, plan, 0, 0, source, at)
+}
+
+fn firstBranchOf(plan: MatchPlan): PatternBranch? {
+  const arm = plan.arms.first()?
+  arm.branches.first()
+}
+
+// --- The slots the names of an arm live in --------------------------------------------------------------------------
+
+/**
+ * One slot per name an arm binds, shared by every alternative of that arm: `.Circle(r) | .Ring(r)` keeps `r` in a
+ * different field, and one body reads one slot whichever alternative matched. The slot is found by the span the name was
+ * declared under, which is what every other binding of the lowering is keyed by.
+ */
+fn declareBindings(var lowering: Lowering, var builder: FunctionBuilder, plan: MatchPlan, arm: Int) {
+  if arm < 0 || arm >= plan.arms.length() {
+    return
+  }
+  var byName: Map<String, Slot> = [:]
+  for branch in plan.arms[arm].branches {
+    for binding in branch.bindings {
+      const declared = lowering.checker.binding(binding.binding).at
+      if const Some(found) = byName.get(binding.name) {
+        lowering.slots.set(declared, found)
+        continue
+      }
+      const annotation = irTypeOf(lowering, binding.annotation)
+      const slot = addLocal(builder, annotation, binding.name)
+      byName.set(binding.name, slot)
+      lowering.slots.set(declared, slot)
+    }
+  }
+}
+
+fn emitBindings(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  plan: MatchPlan,
+  arm: Int,
+  branch: Int,
+  subject: Slot,
+  at: Span,
+) {
+  if arm < 0 || arm >= plan.arms.length() {
+    return
+  }
+  const branches = plan.arms[arm].branches
+  if branch < 0 || branch >= branches.length() {
+    return
+  }
+  for binding in branches[branch].bindings {
+    const declared = lowering.checker.binding(binding.binding).at
+    const slot = match lowering.slots.get(declared) {
+      Some(found) => found
+      .None => {
+        reportUnsupported(lowering, "a name a pattern binds without a slot", at)
+        return
+      }
+    }
+    readPathInto(lowering, builder, subject, binding.path, slot, at)
+    if !lowering.isSupported {
+      return
+    }
+  }
+}
+
+// --- Emitting the graph ---------------------------------------------------------------------------------------------
+
+/**
+ * Every node of the graph as one block. The blocks are allocated in node order before anything is written, so the
+ * numbering is a function of the graph - and a subtree the graph shares is one block, because a node is one node.
+ */
+fn emitWalk(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk) {
+  const location = walk.location
+  var blocks: List<BlockId> = []
+  for index in 0..walk.graph.nodes.length() {
+    blocks.add(addBlock(builder, labelOfNode(walk.graph.nodes[index]), Some(location)))
+  }
+  const filled = walk.copy(blocks: blocks)
+  const root = filled.graph.root
+  if !filled.graph.hasNode(root) {
+    reportUnsupported(lowering, "a decision tree without a root", filled.at)
+    return
+  }
+  finishBlock(lowering, builder, Terminator.Jump(blocks[root.value]))
+  for index in 0..filled.graph.nodes.length() {
+    if !lowering.isSupported {
+      return
+    }
+    continueIn(lowering, builder, blocks[index])
+    emitNode(lowering, builder, filled, filled.graph.nodes[index])
+  }
+}
+
+fn labelOfNode(node: DecisionNode): String {
+  match node {
+    .SwitchCase(_, _, _, _) => "case"
+    .Check(_, _, _, _) => "test"
+    .Arm(_, _) => "bind"
+    .Guarded(_, _, _) => "guard"
+    .Fail => "no match"
+  }
+}
+
+fn emitNode(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk, node: DecisionNode) {
+  match node {
+    .SwitchCase(path, _, edges, otherwise) => {
+      const value = match readPath(lowering, builder, walk.subject, path, walk.at) {
+        Some(found) => found
+        .None => {
+          return
+        }
+      }
+      const layout = match variantLayoutOf(lowering, builder, value, walk.at) {
+        Some(found) => found
+        .None => {
+          return
+        }
+      }
+      const integer = lowering.program.internType(IrType.Integer(64, true))
+      const tag = addTemporary(builder, integer)
+      emit(builder, Instruction.Tag(tag, value))
+      var values: List<Int> = []
+      var targets: List<BlockId> = []
+      for edge in edges {
+        const index = variantIndexOf(lowering, layout, edge.variant)
+        if index < 0 {
+          reportUnsupported(lowering, "a case the layout of its type does not have", walk.at)
+          return
+        }
+        values.add(index)
+        targets.add(walk.blocks[edge.target.value])
+      }
+      const fallback = walk.blocks[otherwise.value]
+      finishBlock(lowering, builder, Terminator.Switch(tag, values, targets, fallback))
+    }
+    .Check(path, check, then, otherwise) => {
+      const value = match readPath(lowering, builder, walk.subject, path, walk.at) {
+        Some(found) => found
+        .None => {
+          return
+        }
+      }
+      emitCheck(lowering, builder, walk, value, check, walk.blocks[then.value], walk.blocks[otherwise.value])
+    }
+    .Arm(arm, branch) => {
+      emitBindings(lowering, builder, walk.plan, arm, branch, walk.subject, walk.at)
+      if !lowering.isSupported {
+        return
+      }
+      finishBlock(lowering, builder, Terminator.Jump(walk.armBlocks[arm]))
+    }
+    .Guarded(arm, branch, otherwise) => {
+      emitBindings(lowering, builder, walk.plan, arm, branch, walk.subject, walk.at)
+      if !lowering.isSupported {
+        return
+      }
+      const guard = match walk.guards.get(arm) ?? None {
+        Some(found) => found
+        .None => {
+          reportUnsupported(lowering, "an arm the plan calls guarded and the source does not", walk.at)
+          return
+        }
+      }
+      // The guard sees the names of its own arm, which the bindings above have just put in their slots
+      const condition = lowerValue(lowering, builder, guard)
+      if !lowering.isSupported {
+        return
+      }
+      const fallback = walk.blocks[otherwise.value]
+      finishBlock(lowering, builder, Terminator.Branch(condition, walk.armBlocks[arm], fallback))
+    }
+    .Fail => {
+      match walk.failBlock {
+        Some(found) => finishBlock(lowering, builder, Terminator.Jump(found))
+        // After the checker no value reaches here, so nothing is emitted and nothing has to be released (gap 9)
+        .None => finishBlock(lowering, builder, Terminator.Unreachable)
+      }
+    }
+  }
+}
+
+/** A literal, a range or a length, as a `Bool` and a branch. Lists are milestone 5.7's, so is every length test. */
+fn emitCheck(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  walk: Walk,
+  value: Slot,
+  check: PatternCheck,
+  then: BlockId,
+  otherwise: BlockId,
+) {
+  match check {
+    .IsLiteral(literal) => {
+      const condition = match literalComparison(lowering, builder, value, literal, IntrinsicOperation.Equal, walk.at) {
+        Some(found) => found
+        .None => {
+          return
+        }
+      }
+      finishBlock(lowering, builder, Terminator.Branch(condition, then, otherwise))
+    }
+    .IsInRange(low, high, isInclusive) => {
+      const first = IntrinsicOperation.GreaterOrEqual
+      const lower = match literalComparison(lowering, builder, value, low, first, walk.at) {
+        Some(found) => found
+        .None => {
+          return
+        }
+      }
+      const second = addBlock(builder, "test", Some(walk.location))
+      finishBlock(lowering, builder, Terminator.Branch(lower, second, otherwise))
+      continueIn(lowering, builder, second)
+      const last = if isInclusive { IntrinsicOperation.LessOrEqual } else { IntrinsicOperation.Less }
+      const upper = match literalComparison(lowering, builder, value, high, last, walk.at) {
+        Some(found) => found
+        .None => {
+          return
+        }
+      }
+      finishBlock(lowering, builder, Terminator.Branch(upper, then, otherwise))
+    }
+    .IsCase(_, _) => reportUnsupported(lowering, "a case test outside of a switch", walk.at)
+    .HasLength(_) => reportUnsupported(lowering, "a list pattern (milestone 5.7)", walk.at)
+    .HasAtLeast(_) => reportUnsupported(lowering, "a list pattern with a rest (milestone 5.7)", walk.at)
+  }
+}
+
+/**
+ * One comparison of the value against a literal of the pattern. A number compares as itself, a `Bool` and a `Char` with
+ * the one form of the equality intrinsic, and a `String` through the runtime's byte comparison.
+ */
+fn literalComparison(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  value: Slot,
+  literal: PatternLiteral,
+  operation: IntrinsicOperation,
+  at: Span,
+): Slot? {
+  const found = match literal.value {
+    Some(inner) => inner
+    .None => {
+      // The checker does not reduce a decimal literal or a text with interpolation to one value
+      reportUnsupported(lowering, "a pattern that compares a decimal literal", at)
+      return None
+    }
+  }
+  const annotation = builder.typeOfSlot(value)
+  const boolean = booleanTypeOf(lowering)
+  const other = constantSlot(lowering, builder, None, StaticContents.Literal(found), annotation)
+  if const Some(kind) = numericKindOf(lowering.program, annotation) {
+    const slots = [value, other]
+    return Some(intrinsicSlot(lowering, builder, None, operation, Some(kind), slots, boolean, at))
+  }
+  if isPlainEquality(lowering, annotation) {
+    if const .Equal = operation {
+      return Some(intrinsicSlot(lowering, builder, None, operation, None, [value, other], boolean, at))
+    }
+    reportUnsupported(lowering, "a range of values that have no order", at)
+    return None
+  }
+  if isTextType(lowering, annotation) {
+    if const .Equal = operation {
+      const equals = IntrinsicOperation.TextEqual
+      return Some(intrinsicSlot(lowering, builder, None, equals, None, [value, other], boolean, at))
+    }
+    const integer = lowering.program.internType(IrType.Integer(64, true))
+    const order = addTemporary(builder, integer)
+    emitIntrinsic(lowering, builder, Some(order), IntrinsicOperation.TextCompare, None, [value, other], at)
+    const zero = constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Integer(0)), integer)
+    const kind = NumericKind.Signed(64)
+    return Some(intrinsicSlot(lowering, builder, None, operation, Some(kind), [order, zero], boolean, at))
+  }
+  reportUnsupported(lowering, "a pattern that compares a value the back end cannot compare yet", at)
+  None
+}
+
+fn isPlainEquality(var lowering: Lowering, annotation: IrTypeId): Bool {
+  match lowering.program.typeAt(annotation) {
+    .Boolean | .Character | .VoidType => true
+    _ => false
+  }
+}
+
+fn isTextType(var lowering: Lowering, annotation: IrTypeId): Bool {
+  match lowering.program.typeAt(annotation) {
+    .Text => true
+    _ => false
+  }
+}
+
+// --- Reading a path -------------------------------------------------------------------------------------------------
+
+/** One step of a path, resolved against the layout of the value it starts from. */
+type ResolvedStep {
+  step: PathStep
+  annotation: IrTypeId
+}
+
+/** The value a path names, in a slot of its own. Every step is one `Read`, which is one member access in C. */
+fn readPath(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: Slot,
+  path: List<PatternStep>,
+  at: Span,
+): Slot? {
+  var current = subject
+  for step in path {
+    const resolved = match resolveStep(lowering, builder, current, step, at) {
+      Some(found) => found
+      .None => {
+        return None
+      }
+    }
+    const target = addTemporary(builder, resolved.annotation)
+    emit(builder, Instruction.Read(target, Reference(current, [resolved.step])))
+    current = target
+  }
+  Some(current)
+}
+
+/** The same, with the last step writing into a slot that already exists: the slot a name of the pattern lives in. */
+fn readPathInto(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: Slot,
+  path: List<PatternStep>,
+  target: Slot,
+  at: Span,
+) {
+  if path.isEmpty() {
+    emit(builder, Instruction.Copy(target, subject))
+    return
+  }
+  const last = path.length() - 1
+  const base = match readPath(lowering, builder, subject, path[0..last], at) {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  const resolved = match resolveStep(lowering, builder, base, path[last], at) {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  emit(builder, Instruction.Read(target, Reference(base, [resolved.step])))
+}
+
+fn resolveStep(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  base: Slot,
+  step: PatternStep,
+  at: Span,
+): ResolvedStep? {
+  // A list is asked about before its layout is, because a list has none: it is what the runtime owns (milestone 5.7)
+  if isItemStep(step) {
+    reportUnsupported(lowering, "a list pattern (milestone 5.7)", at)
+    return None
+  }
+  const owner = builder.typeOfSlot(base)
+  const layout = match layoutOfType(lowering.program, owner) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a pattern over a value without a layout", at)
+      return None
+    }
+  }
+  const shape = lowering.program.layoutAt(layout)
+  match step {
+    .CaseField(_, variant, index, _) => {
+      const found = variantIndexOf(lowering, layout, variant)
+      if found < 0 {
+        reportUnsupported(lowering, "a case the layout of its type does not have", at)
+        return None
+      }
+      const fields = shape.fieldsOfVariant(found)
+      if index < 0 || index >= fields.length() {
+        reportUnsupported(lowering, "a case pattern with a position the case does not have", at)
+        return None
+      }
+      Some(ResolvedStep(PathStep.Variant(layout, found, index), fields[index].annotation))
+    }
+    .Field(_, index, _) => {
+      if index < 0 || index >= shape.fields.length() {
+        reportUnsupported(lowering, "a pattern with a field the type does not have", at)
+        return None
+      }
+      Some(ResolvedStep(PathStep.Field(layout, index), shape.fields[index].annotation))
+    }
+    .TupleField(_, index) => {
+      if index < 0 || index >= shape.fields.length() {
+        reportUnsupported(lowering, "a tuple pattern with a position the tuple does not have", at)
+        return None
+      }
+      Some(ResolvedStep(PathStep.TupleField(layout, index), shape.fields[index].annotation))
+    }
+    _ => {
+      reportUnsupported(lowering, "a list pattern (milestone 5.7)", at)
+      None
+    }
+  }
+}
+
+fn isItemStep(step: PatternStep): Bool {
+  match step {
+    .Item(_) | .ItemFromEnd(_) | .Rest(_) => true
+    _ => false
+  }
+}
+
+// --- `?` ------------------------------------------------------------------------------------------------------------
+
+/**
+ * `e?`: the value of an `Option` or a `Result`, or the failure handed straight back out of the function.
+ *
+ * The error of a `Result` is converted where the two error types differ - through the `From` the checker recorded, or by
+ * building the case of the enclosing error type that wraps it, which is what the *generated* `From` of a wrapper case
+ * means (TYPECHECKER 4.3). The releases the early exit needs are not written here: the failure block ends in a `Return`,
+ * and the ownership pass puts the drops of that path on the edges into it.
+ */
+public fn lowerTry(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  inner: Expression,
+  annotation: IrTypeId,
+): Slot {
+  const subject = lowerValue(lowering, builder, inner)
+  if !lowering.isSupported {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  const subjectLayout = match variantLayoutOfType(lowering, builder.typeOfSlot(subject)) {
+    Some(found) => found
+    .None => {
+      const what = "`?` on a value that is neither an `Option` nor a `Result`"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
+  }
+  const result = builder.function.signature.result
+  const resultLayout = match variantLayoutOfType(lowering, result) {
+    Some(found) => found
+    .None => {
+      // At the top level of an entry file there is nothing to hand the failure to: `error: <the error through Show>`
+      // plus exit code 1 (decided gap 9) needs the `Show` of milestone 5.10
+      const what = "`?` in a body that returns neither an `Option` nor a `Result` (milestone 5.10)"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
+  }
+  const isResult = variantNamed(lowering, subjectLayout, "Ok") >= 0
+  const success = variantNamed(lowering, subjectLayout, if isResult { "Ok" } else { "Some" })
+  const failure = variantNamed(lowering, subjectLayout, if isResult { "Error" } else { "None" })
+  const wantedFailure = variantNamed(lowering, resultLayout, if isResult { "Error" } else { "None" })
+  if success < 0 || failure < 0 || wantedFailure < 0 {
+    const what = "`?` between an `Option` and a `Result` (milestone 5.10)"
+    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+  }
+  const target = valueSlot(lowering, builder, destination, annotation)
+  const location = locationOf(lowering, expression.span)
+  const value = addBlock(builder, "value", Some(location))
+  const failed = addBlock(builder, "failed", Some(location))
+  const integer = lowering.program.internType(IrType.Integer(64, true))
+  const tag = addTemporary(builder, integer)
+  emit(builder, Instruction.Tag(tag, subject))
+  finishBlock(lowering, builder, Terminator.Switch(tag, [success], [value], failed))
+  continueIn(lowering, builder, failed)
+  emitFailure(lowering, builder, subject, subjectLayout, failure, resultLayout, wantedFailure, result, expression.span)
+  continueIn(lowering, builder, value)
+  const step = PathStep.Variant(subjectLayout, success, 0)
+  emit(builder, Instruction.Read(target, Reference(subject, [step])))
+  target
+}
+
+/** The failure arm: the error, converted, built into the enclosing failure case, and returned. */
+fn emitFailure(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: Slot,
+  subjectLayout: LayoutId,
+  failure: Int,
+  resultLayout: LayoutId,
+  wantedFailure: Int,
+  result: IrTypeId,
+  at: Span,
+) {
+  const shape = lowering.program.layoutAt(resultLayout)
+  const wanted = shape.fieldsOfVariant(wantedFailure)
+  var fields: List<Slot> = []
+  // `None` carries nothing; the `Error` of a `Result` carries the error, and that one may need a conversion
+  if !wanted.isEmpty() {
+    const group = lowering.program.layoutAt(subjectLayout).fieldsOfVariant(failure)
+    if group.isEmpty() {
+      reportUnsupported(lowering, "`?` on a failure case that carries no value", at)
+      return
+    }
+    const error = addTemporary(builder, group[0].annotation)
+    emit(builder, Instruction.Read(error, Reference(subject, [PathStep.Variant(subjectLayout, failure, 0)])))
+    const converted = match convertedError(lowering, builder, error, wanted[0].annotation, at) {
+      Some(found) => found
+      .None => {
+        return
+      }
+    }
+    fields.add(converted)
+  }
+  const failed = addTemporary(builder, result)
+  lowerConstruct(lowering, builder, failed, resultLayout, wantedFailure, fields)
+  finishBlock(lowering, builder, Terminator.Return(Some(borrowed(failed))))
+}
+
+/**
+ * The error of the subject as the error the enclosing body promises. The same type needs nothing; a different one is the
+ * `From` the checker recorded at the `?`, and where that implementation is the *generated* one of a wrapper case there is
+ * no function to call - the case itself is the conversion.
+ */
+fn convertedError(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  error: Slot,
+  wanted: IrTypeId,
+  at: Span,
+): Slot? {
+  const given = builder.typeOfSlot(error)
+  if given == wanted {
+    return Some(error)
+  }
+  const module = lowering.module
+  const adaptations = lowering.checker.adaptationsAt(module, at)
+  for adaptation in adaptations {
+    if const .Convert(_, method) = adaptation {
+      if const Some(function) = instanceOfSymbol(lowering, method) {
+        return Some(emitCall(lowering, builder, None, function, [error], wanted, at))
+      }
+    }
+  }
+  const wrapper = wrappingVariantOf(lowering, wanted, given)
+  if wrapper < 0 {
+    reportUnsupported(lowering, "`?` whose error conversion the back end cannot build yet", at)
+    return None
+  }
+  const layout = match variantLayoutOfType(lowering, wanted) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "`?` whose error type is not a variant type", at)
+      return None
+    }
+  }
+  const built = addTemporary(builder, wanted)
+  lowerConstruct(lowering, builder, built, layout, wrapper, [error])
+  Some(built)
+}
+
+/** The one case of `wanted` that wraps exactly one value of `given`, which is what the generated `From` converts to. */
+fn wrappingVariantOf(var lowering: Lowering, wanted: IrTypeId, given: IrTypeId): Int {
+  const layout = match variantLayoutOfType(lowering, wanted) {
+    Some(found) => found
+    .None => {
+      return -1
+    }
+  }
+  const shape = lowering.program.layoutAt(layout)
+  for index in 0..shape.variants.length() {
+    const fields = shape.fieldsOfVariant(index)
+    if fields.length() == 1 && fields[0].annotation == given {
+      return index
+    }
+  }
+  -1
+}
+
+// --- `??` -----------------------------------------------------------------------------------------------------------
+
+/**
+ * `a ?? b`: the value of the `Option` or of the `Result`, and only where there is none the fallback.
+ *
+ * The checker records it as `orElse` with a `lazy` argument (gap 13). A thunk is a closure, and closures are milestone
+ * 5.8's - so the lowering **inlines** the thunk as the control flow it stands for: the fallback is lowered into the arm
+ * that needs it, which short circuits exactly as decided gap 1 asks and allocates nothing. Both back ends still read one
+ * IR, so neither of them can disagree about what `??` does.
+ */
+public fn lowerCoalesce(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  left: Expression,
+  right: Expression,
+  annotation: IrTypeId,
+): Slot {
+  const subject = lowerValue(lowering, builder, left)
+  if !lowering.isSupported {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  const layout = match variantLayoutOfType(lowering, builder.typeOfSlot(subject)) {
+    Some(found) => found
+    .None => {
+      const what = "`??` on a value that is neither an `Option` nor a `Result`"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
+  }
+  const isResult = variantNamed(lowering, layout, "Ok") >= 0
+  const success = variantNamed(lowering, layout, if isResult { "Ok" } else { "Some" })
+  if success < 0 {
+    const what = "`??` on a value that is neither an `Option` nor a `Result`"
+    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+  }
+  const target = valueSlot(lowering, builder, destination, annotation)
+  const location = locationOf(lowering, expression.span)
+  const value = addBlock(builder, "value", Some(location))
+  const fallback = addBlock(builder, "fallback", Some(location))
+  const join = addBlock(builder, "join", Some(location))
+  const integer = lowering.program.internType(IrType.Integer(64, true))
+  const tag = addTemporary(builder, integer)
+  emit(builder, Instruction.Tag(tag, subject))
+  finishBlock(lowering, builder, Terminator.Switch(tag, [success], [value], fallback))
+  continueIn(lowering, builder, value)
+  emit(builder, Instruction.Read(target, Reference(subject, [PathStep.Variant(layout, success, 0)])))
+  finishBlock(lowering, builder, Terminator.Jump(join))
+  continueIn(lowering, builder, fallback)
+  // The thunk the checker asked for is this block: the fallback runs only here, and nothing is captured
+  lowering.inlinedThunks.set(right.span, true)
+  const _ = lowerExpression(lowering, builder, right, Some(target))
+  if !lowering.isDiverged {
+    finishBlock(lowering, builder, Terminator.Jump(join))
+  }
+  continueIn(lowering, builder, join)
+  target
+}
+
+// --- Variant layouts ------------------------------------------------------------------------------------------------
+
+public fn variantLayoutOfType(var lowering: Lowering, annotation: IrTypeId): LayoutId? {
+  if !lowering.program.hasType(annotation) {
+    return None
+  }
+  if const .Variant(layout) = lowering.program.typeAt(annotation) {
+    return Some(layout)
+  }
+  None
+}
+
+fn variantLayoutOf(var lowering: Lowering, var builder: FunctionBuilder, value: Slot, at: Span): LayoutId? {
+  const annotation = builder.typeOfSlot(value)
+  if const .Variant(layout) = lowering.program.typeAt(annotation) {
+    return Some(layout)
+  }
+  reportUnsupported(lowering, "a case pattern over a value that is not a variant type", at)
+  None
+}
+
+/** Which variant of a layout a case is, or `-1`. The declaration order of the cases is the order of the groups. */
+public fn variantIndexOf(var lowering: Lowering, layout: LayoutId, variant: SymbolId): Int {
+  const shape = lowering.program.layoutAt(layout)
+  for index in 0..shape.variants.length() {
+    if shape.variants[index].symbol == Some(variant) {
+      return index
+    }
+  }
+  -1
+}
+
+/** Which variant of a layout carries this name: how `Some`, `None`, `Ok` and `Error` are found for `?`. */
+public fn variantNamed(var lowering: Lowering, layout: LayoutId, name: String): Int {
+  const shape = lowering.program.layoutAt(layout)
+  for index in 0..shape.variants.length() {
+    if shape.variants[index].name == name {
+      return index
+    }
+  }
+  -1
+}

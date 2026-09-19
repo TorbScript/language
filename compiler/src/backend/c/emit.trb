@@ -1,14 +1,16 @@
 use LiteralValue from "../../semantics/checker/type"
 use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue from "../../ir/ir"
 use Slot, Instruction from "../../ir/ir"
-use Layout, isManagedType from "../../ir/layout"
+use Layout, FieldLayout, containsCountedType from "../../ir/layout"
+use typeOfReference from "../../ir/verify"
 use hexDigits from "../../ir/mangle"
 use nativeEntries from "./natives"
 use Emission, add, addAll, addBlank, reportUnsupported, emittedText from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
 use typeDefinitionLines, layoutDefinitionOrder from "./type"
-use bodyOf, emitFunctionBody, signatureHeadOf, valueTypeOf, emptyNicheText from "./body"
-use dropFunctionText, boxedLayoutOf from "./body"
+use bodyOf, emitFunctionBody, signatureHeadOf, valueTypeOf, emptyNicheText, variantInitializerParts from "./body"
+use boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
+use retainStatement, releaseStatement, describeCounted from "./body"
 
 /**
  * One portable C11 translation unit for a whole program (BACKEND 3.6).
@@ -240,28 +242,39 @@ fn emitTypeDefinitions(var emission: Emission, program: IrProgram, layouts: List
 // --- Retaining and dropping the children of a counted block ---------------------------------------------------------
 
 /**
- * The two functions `torb_release` and `torb_make_unique` take for a counted block of the program: one that releases
- * the counted values inside it, one that retains them after a shallow copy.
+ * The two functions `torb_release` and `torb_make_unique` take for a counted block of the program: `R_<layout>` retains
+ * the counted values inside it after a shallow copy, `D_<layout>` releases them (BACKEND 2.1, 5.R1).
  *
- * They are emitted only for the layouts something really releases or makes unique, because an unused `static` function
- * is a warning and the generated C has to compile with `-Werror`. Nothing does before milestone 5.4 inserts the first
- * `Release`, which is why a program of this sub-milestone has none of them.
+ * The very same pair is what a `Copy`, a `Retain` and a `Release` of an **inline** aggregate are: such a value carries no
+ * count of its own and owns one on each of its fields, so both of them mean "per counted field".
+ *
+ * Each of the two is emitted only where something really calls it, because an unused `static` function is a warning and
+ * the generated C compiles with `-Werror` - which is why the demand is two sets and not one. Everything is declared
+ * before anything is defined, so a helper may call the helper of a field whatever the order of the names is.
  */
 fn emitCountedHelpers(var emission: Emission, program: IrProgram, functions: List<IrFunction>, layouts: List<Bool>) {
-  const needed = countedHelperLayoutsOf(program, functions)
-  if needed.isEmpty() {
+  const demand = helperDemandOf(program, functions, layouts)
+  if demand.retained.isEmpty() && demand.dropped.isEmpty() {
     return
   }
-  for index in needed {
+  addBlank(emission)
+  add(emission, "/* Retaining and dropping the counted values inside a layout (docs/BACKEND.md 2.1). */")
+  for index in demand.retained {
+    add(emission, "static void R_{program.layouts[index].name}(void *block);")
+  }
+  for index in demand.dropped {
+    add(emission, "static void D_{program.layouts[index].name}(void *block);")
+  }
+  for index in demand.retained {
     const layout = program.layouts[index]
-    if !layouts[index] {
-      continue
-    }
     addBlank(emission)
     add(emission, "static void R_{layout.name}(void *block) \{")
     add(emission, "  {layout.name} *value = ({layout.name} *)block;")
     emitChildLines(emission, program, layout, true)
     add(emission, "\}")
+  }
+  for index in demand.dropped {
+    const layout = program.layouts[index]
     addBlank(emission)
     add(emission, "static void D_{layout.name}(void *block) \{")
     add(emission, "  {layout.name} *value = ({layout.name} *)block;")
@@ -271,91 +284,242 @@ fn emitCountedHelpers(var emission: Emission, program: IrProgram, functions: Lis
 }
 
 /**
- * One line per counted field. A variant layout is not walked: which group is live depends on the tag, which is the
- * decision tree of milestone 5.5 - so a counted field of one is a finding instead of a wrong release.
+ * One statement per counted field. A variant layout switches on the tag: the common fields first, then the group of the
+ * variant the value really is - which is the whole reason a counted field inside a case had to wait for this
+ * sub-milestone.
  */
 fn emitChildLines(var emission: Emission, program: IrProgram, layout: Layout, isRetain: Bool) {
-  if !layout.variants.isEmpty() {
-    reportUnsupported(emission, "releasing the fields of a variant layout (milestone 5.5)")
-    add(emission, "  (void)value;")
-    return
-  }
   var written = 0
-  for field in layout.fields {
-    if !isManagedType(program, field.annotation) {
-      continue
-    }
+  const common = if layout.variants.isEmpty() { layout.fields } else { layout.commonFields() }
+  for field in common {
     const place = "value->{memberNameOf(field)}"
-    const line = if isRetain {
-      retainChildLine(program, field.annotation, place)
-    } else {
-      releaseChildLine(program, field.annotation, place)
-    }
-    if line.isEmpty() {
-      reportUnsupported(emission, "releasing a field the back end cannot release yet (milestone 5.6)")
+    if childStatement(emission, program, place, field, isRetain).isEmpty() {
       continue
     }
-    add(emission, "  {line}")
     written = written + 1
+  }
+  var groups: List<List<String>> = []
+  var total = 0
+  for index in 0..layout.variants.length() {
+    var lines: List<String> = []
+    for field in layout.fieldsOfVariant(index) {
+      // The group of a variant lives in the union, which is where its fields have to be reached
+      const place = "value->payload.{variantMemberNameOf(index)}.{memberNameOf(field)}"
+      const statement = childStatementText(emission, program, place, field, isRetain)
+      if statement.isEmpty() {
+        continue
+      }
+      lines.add(statement)
+    }
+    total = total + lines.length()
+    groups.add(lines)
+  }
+  if total > 0 {
+    add(emission, "  switch (value->tag) \{")
+    for index in 0..groups.length() {
+      if groups[index].isEmpty() {
+        continue
+      }
+      add(emission, "    case {index}:")
+      for line in groups[index] {
+        add(emission, "      {line}")
+      }
+      add(emission, "      break;")
+    }
+    add(emission, "    default: break;")
+    add(emission, "  \}")
+    written = written + total
   }
   if written == 0 {
     add(emission, "  (void)value;")
   }
 }
 
-fn retainChildLine(program: IrProgram, id: IrTypeId, place: String): String {
-  if boxedLayoutOf(program, id).isSome() {
-    return "torb_retain({place});"
+/** One field of the layout itself, written out. Answers the statement so that a caller can count what it wrote. */
+fn childStatement(
+  var emission: Emission,
+  program: IrProgram,
+  place: String,
+  field: FieldLayout,
+  isRetain: Bool,
+): String {
+  const statement = childStatementText(emission, program, place, field, isRetain)
+  if statement.isEmpty() {
+    return statement
   }
-  match program.typeAt(id) {
-    .Text => "{place} = torb_text_retained({place});"
-    .Runtime(kind, _) => {
-      match kind {
-        .ListStorage => "{place} = torb_list_retained({place});"
-        .MapStorage => "{place} = torb_map_retained({place});"
-        .SetStorage => "{place} = torb_set_retained({place});"
-        _ => ""
-      }
-    }
-    _ => ""
-  }
+  add(emission, "  {statement}")
+  statement
 }
 
-fn releaseChildLine(program: IrProgram, id: IrTypeId, place: String): String {
-  if const Some(layout) = boxedLayoutOf(program, id) {
-    const drop = dropFunctionText(program, layout)
-    return "torb_release({place}, {drop});"
+fn childStatementText(
+  var emission: Emission,
+  program: IrProgram,
+  place: String,
+  field: FieldLayout,
+  isRetain: Bool,
+): String {
+  if !containsCountedType(program, field.annotation) {
+    return ""
   }
-  match program.typeAt(id) {
-    .Text => "torb_text_release({place});"
-    .Runtime(kind, _) => {
-      match kind {
-        .ListStorage => "torb_list_release({place});"
-        .MapStorage => "torb_map_release({place});"
-        .SetStorage => "torb_set_release({place});"
-        _ => ""
-      }
-    }
-    _ => ""
+  const statement = if isRetain {
+    retainStatement(program, field.annotation, place)
+  } else {
+    releaseStatement(program, field.annotation, place)
   }
+  if statement.isEmpty() {
+    reportUnsupported(emission, "a counted field that is {describeCounted(program, field.annotation)}")
+  }
+  statement
 }
 
-/** The layouts a `Release` or a `MakeUnique` of an emitted function needs the two functions of, sorted by name. */
-fn countedHelperLayoutsOf(program: IrProgram, functions: List<IrFunction>): List<Int> {
-  var names: List<String> = []
-  var byName: Map<String, Int> = [:]
+/** Which layouts need `R_` and which need `D_`. Two sets, because a layout that is only released needs only one. */
+type HelperDemand {
+  retained: List<Int>
+  dropped: List<Int>
+}
+
+/**
+ * The layouts the emitted C really calls a helper of: every position that retains or releases a value, plus - because a
+ * helper walks the fields of its layout - the layouts those fields need one of.
+ */
+fn helperDemandOf(program: IrProgram, functions: List<IrFunction>, layouts: List<Bool>): HelperDemand {
+  const count = program.layouts.length()
+  var retains = filledFalse(count)
+  var drops = filledFalse(count)
   for function in functions {
     for block in function.blocks {
       for instruction in block.instructions {
-        const found = helperLayoutOf(program, function, instruction)
-        if const Some(layout) = found {
-          const name = program.layoutAt(layout).name
-          if !byName.containsKey(name) {
-            byName.set(name, layout.value)
-            names.add(name)
-          }
+        collectHelperDemand(program, function, instruction, retains, drops)
+      }
+    }
+  }
+  closeHelperDemand(program, retains, drops)
+  HelperDemand(sortedLayouts(program, retains, layouts), sortedLayouts(program, drops, layouts))
+}
+
+fn filledFalse(count: Int): List<Bool> {
+  var filled: List<Bool> = []
+  for _ in 0..count {
+    filled.add(false)
+  }
+  filled
+}
+
+fn collectHelperDemand(
+  program: IrProgram,
+  function: IrFunction,
+  instruction: Instruction,
+  var retains: List<Bool>,
+  var drops: List<Bool>,
+) {
+  var ignored: List<String> = []
+  match instruction {
+    .Copy(_, source) => markRetained(program, retains, typeOfSlotOf(function, source))
+    .Retain(slot) => markRetained(program, retains, typeOfSlotOf(function, slot))
+    .Release(slot) => markDropped(program, drops, typeOfSlotOf(function, slot))
+    // The result of a read of a counted field arrives owned, which is one retain of the type that was read
+    .Read(target, _) => markRetained(program, retains, typeOfSlotOf(function, target))
+    .Write(reference, _) => {
+      if const Some(inner) = typeOfReference(program, function, ignored, "", reference) {
+        markDropped(program, drops, inner)
+      }
+    }
+    // `torb_make_unique` takes both: it retains the children of the shallow copy and releases the old block
+    .MakeUnique(reference) => {
+      if const Some(inner) = typeOfReference(program, function, ignored, "", reference) {
+        if const Some(layout) = boxedLayoutOf(program, inner) {
+          markLayoutFlag(program, retains, layout)
+          markLayoutFlag(program, drops, layout)
         }
       }
+    }
+    _ => {}
+  }
+}
+
+fn typeOfSlotOf(function: IrFunction, slot: Slot): IrTypeId {
+  if !function.hasSlot(slot) {
+    return IrTypeId(0 - 1)
+  }
+  function.typeOfSlot(slot)
+}
+
+/** A retain of an inline aggregate is its `R_`; a retain of a pointer, a text or a container calls no helper. */
+fn markRetained(program: IrProgram, var retains: List<Bool>, id: IrTypeId) {
+  if const Some(layout) = inlineCountedLayoutOf(program, countedFormOf(program, id)) {
+    markLayoutFlag(program, retains, layout)
+  }
+}
+
+fn markDropped(program: IrProgram, var drops: List<Bool>, id: IrTypeId) {
+  const inner = countedFormOf(program, id)
+  if const Some(layout) = boxedLayoutOf(program, inner) {
+    markLayoutFlag(program, drops, layout)
+    return
+  }
+  if const Some(layout) = inlineCountedLayoutOf(program, inner) {
+    markLayoutFlag(program, drops, layout)
+  }
+}
+
+fn markLayoutFlag(program: IrProgram, var flags: List<Bool>, layout: LayoutId) {
+  if !program.hasLayout(layout) {
+    return
+  }
+  if !program.layoutAt(layout).containsCounted {
+    return
+  }
+  flags.set(layout.value, true)
+}
+
+/** A helper walks the fields of its layout, and a counted field may need a helper of its own. */
+fn closeHelperDemand(program: IrProgram, var retains: List<Bool>, var drops: List<Bool>) {
+  const limit = program.layouts.length() + 1
+  var rounds = 0
+  var isChanged = true
+  while isChanged {
+    isChanged = false
+    rounds = rounds + 1
+    if rounds > limit {
+      return
+    }
+    for index in 0..program.layouts.length() {
+      const layout = program.layouts[index]
+      for field in layout.fields {
+        if retains[index] {
+          var grown = retains
+          markRetained(program, grown, field.annotation)
+          if grown != retains {
+            retains = grown
+            isChanged = true
+          }
+        }
+        if !drops[index] {
+          continue
+        }
+        var found = drops
+        markDropped(program, found, field.annotation)
+        if found != drops {
+          drops = found
+          isChanged = true
+        }
+      }
+    }
+  }
+}
+
+/** The marked layouts that are emitted at all, sorted by name so that the output is a function of the program. */
+fn sortedLayouts(program: IrProgram, flags: List<Bool>, layouts: List<Bool>): List<Int> {
+  var names: List<String> = []
+  var byName: Map<String, Int> = [:]
+  for index in 0..flags.length() {
+    if !flags[index] || !layouts[index] {
+      continue
+    }
+    const name = program.layouts[index].name
+    if !byName.containsKey(name) {
+      byName.set(name, index)
+      names.add(name)
     }
   }
   var sorted = names
@@ -367,31 +531,6 @@ fn countedHelperLayoutsOf(program: IrProgram, functions: List<IrFunction>): List
     }
   }
   found
-}
-
-fn helperLayoutOf(program: IrProgram, function: IrFunction, instruction: Instruction): LayoutId? {
-  match instruction {
-    .Release(slot) => countedLayoutOfSlot(program, function, slot)
-    .MakeUnique(reference) => {
-      if reference.steps.isEmpty() {
-        return countedLayoutOfSlot(program, function, reference.base)
-      }
-      None
-    }
-    _ => None
-  }
-}
-
-fn countedLayoutOfSlot(program: IrProgram, function: IrFunction, slot: Slot): LayoutId? {
-  if !function.hasSlot(slot) {
-    return None
-  }
-  const annotation = function.typeOfSlot(slot)
-  const layout = boxedLayoutOf(program, annotation)?
-  if !program.layoutAt(layout).containsCounted {
-    return None
-  }
-  Some(layout)
 }
 
 // --- Static data ----------------------------------------------------------------------------------------------------
@@ -645,23 +784,7 @@ fn aggregateText(
 }
 
 fn variantConstantText(shape: Layout, variant: Int, written: List<String>): String {
-  var parts: List<String> = []
-  var index = 0
-  for _ in 0..shape.commonFieldCount {
-    parts.add(written.get(index) ?? "0")
-    index = index + 1
-  }
-  parts.add("{variant}")
-  var group: List<String> = []
-  while index < written.length() {
-    group.add(written[index])
-    index = index + 1
-  }
-  if !group.isEmpty() {
-    const inner = group.joined(separator: ", ")
-    parts.add("\{ .{variantMemberNameOf(variant)} = \{ {inner} \} \}")
-  }
-  "\{ {parts.joined(separator: ", ")} \}"
+  "\{ {variantInitializerParts(shape, variant, written).joined(separator: ", ")} \}"
 }
 
 // --- Functions and `main` -------------------------------------------------------------------------------------------
@@ -711,6 +834,7 @@ fn emitMain(var emission: Emission, entry: String) {
     "int main(int argument_count, char **argument_values) \{",
     "  torb_process_start(argument_count, argument_values);",
     "  {entry}();",
+    "  torb_process_finish();",
     "  return 0;",
     "\}",
   ])

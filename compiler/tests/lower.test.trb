@@ -374,34 +374,73 @@ const _ = twice(21)
   slot %1 temporary: Int64
 b0: # acme/app/src/main.trb:5 entry
   %0 = constant s_literal__Int64_21
-  %1 = call t_acme_x2f_app_main_twice(%0 borrowed)
+  %1 = call t_acme_x2f_app_main_twice(%0 borrowed) at acme/app/src/main.trb:5:11
   return
 }"""
     )
+  }
+
+  /**
+   * The top-level bindings of an entry file are locals of its entry function, which is what makes an assignment to a
+   * top-level `var` ordinary code. A `const` of a module that runs nothing stays static data, and the test above pins
+   * that half.
+   */
+  test "the top-level bindings of an entry file are locals of the entry function, and a `var` can be assigned to" {
+    const source = r"""
+var counter = 0
+
+const step = 2
+
+counter = counter + step
+"""
+    assert(
+      irOf(source, "t_acme_x2f_app_main") == r"""fn t_acme_x2f_app_main() -> Void {
+  slot %0 local counter: Int64
+  slot %1 local step: Int64
+b0: # acme/app/src/main.trb:1 entry
+  %0 = constant s_literal__Int64_0
+  %1 = constant s_literal__Int64_2
+  %0 = intrinsic add.i64 %0, %1 at acme/app/src/main.trb:5:11
+  return
+}"""
+    )
+    // Nothing of the entry file is static data with a name of its own any more
+    assert(!textOf(source).contains("static s_acme_x2f_app_main_counter"))
+  }
+
+  test "a top-level `var` a function reads is a clean finding, because it would read the initializer" {
+    const source = r"""
+var counter = 0
+
+fn read(): Int {
+  counter
+}
+
+counter = counter + 1
+"""
+    assert(unsupportedIn(source) == ["not supported by the back end yet: a top-level `var` read from a function"])
   }
 }
 
 group "What the back end does not lower yet" {
   test "every construct of a later sub-milestone is named, and the function becomes an `unreachable` stub" {
     const source = r"""
-fn matching(value: Int?): Int {
-  match value {
-    Some(found) => found
-    .None => 0
-  }
+fn collected(value: Int): Int {
+  const items = [value, value]
+  items.length()
 }
 """
-    assert(unsupportedIn(source) == ["not supported by the back end yet: `match`"])
+    assert(unsupportedIn(source) == ["not supported by the back end yet: a list literal"])
     assert(
-      irOf(source, "t_acme_x2f_app_main_matching") == r"""fn t_acme_x2f_app_main_matching(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Int64 {
-  slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
+      irOf(source, "t_acme_x2f_app_main_collected") == r"""fn t_acme_x2f_app_main_collected(value: Int64 borrowed) -> Int64 {
+  slot %0 parameter value: Int64
 b0: # not supported yet
   unreachable
 }"""
     )
   }
 
-  test "a list literal, a closure, `?` and an index each say which construct they are" {
+  test "a list literal, a closure, an index and a top-level `?` each say which construct they are" {
     assert(
       unsupportedIn("fn items(): Int \{\n  const found = [1, 2]\n  1\n\}")
         == ["not supported by the back end yet: a list literal"]
@@ -416,7 +455,10 @@ b0: # not supported yet
     )
     assert(
       unsupportedIn("fn take(value: Int?): Int \{\n  value?\n\}")
-        == ["not supported by the back end yet: `?`"]
+        == [
+          "not supported by the back end yet: `?` in a body that returns neither an `Option`"
+            + " nor a `Result` (milestone 5.10)",
+        ]
     )
   }
 

@@ -112,7 +112,7 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
     .Retain(_) => []
     .Release(_) => []
     .MakeUnique(reference) => borrowedOperands(placeSlotsOf(reference))
-    .Call(_, callee, arguments, witnesses) => {
+    .Call(_, callee, arguments, witnesses, _) => {
       var found = callOperands(program, callee, arguments)
       found.addAll(borrowedOperands(witnessSlotsOf(witnesses)))
       found
@@ -256,7 +256,7 @@ fn slotsOfArguments(arguments: List<Argument>): List<Slot> {
 public fn consumedSlotsOf(instruction: Instruction): List<Slot> {
   match instruction {
     .Move(_, source) => [source]
-    .Call(_, _, arguments, _) => movedSlotsOf(arguments)
+    .Call(_, _, arguments, _, _) => movedSlotsOf(arguments)
     .CallClosure(_, _, arguments) => movedSlotsOf(arguments)
     .CallWitness(_, _, _, arguments) => movedSlotsOf(arguments)
     .Construct(_, _, _, fields) => movedSlotsOf(fields)
@@ -296,8 +296,8 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
     .Retain(_) => instruction
     .Release(_) => instruction
     .MakeUnique(reference) => Instruction.MakeUnique(withPlace(reference, decided, 0))
-    .Call(target, callee, arguments, witnesses) => {
-      Instruction.Call(target, callee, takenArguments(arguments, decided, 0), witnesses)
+    .Call(target, callee, arguments, witnesses, at) => {
+      Instruction.Call(target, callee, takenArguments(arguments, decided, 0), witnesses, at)
     }
     .CallClosure(target, _, arguments) => {
       const slot = decidedAt(decided, 0).slot

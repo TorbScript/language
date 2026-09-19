@@ -118,6 +118,18 @@ fn every_native_program_behaves_like_it_does_on_stage_0() {
         let native = Command::new(&binary).output().expect("the compiled program runs");
         let code = native.status.code().expect("an exit code");
 
+        // The leak gate: with `TORB_REPORT_LEAKS=1` the runtime writes its live block count where the program ends, and
+        // a program that frees what it allocated reports zero. A panic runs nothing (decided gap 9), so what it leaves
+        // behind is not a leak and the gate does not apply to one.
+        if expected_file(file, "stderr").is_none() {
+            let counted = Command::new(&binary).env("TORB_REPORT_LEAKS", "1").output().expect("the compiled program runs");
+            assert!(
+                text(&counted.stderr).contains("live blocks at exit: 0\n"),
+                "the binary of {name} does not report zero live blocks:\n{}",
+                text(&counted.stderr)
+            );
+        }
+
         if let Some(expected) = expected_file(file, "expected") {
             assert!(text(&native.stdout) == expected, "unexpected output of the binary of {name}:\n{}", text(&native.stdout));
         }

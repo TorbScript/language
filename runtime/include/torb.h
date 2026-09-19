@@ -634,6 +634,11 @@ bool torb_read_line(torb_text *out);
 
 /** Called by the generated `main` before anything else. `argument_values` borrowed for the whole run. */
 void torb_process_start(int argument_count, char **argument_values);
+/**
+ * Called where the program ends normally, and by `torb_process_exit`. With `TORB_REPORT_LEAKS=1` in the environment it
+ * writes the live block count to stderr, which is the leak gate of the conformance suite.
+ */
+void torb_process_finish(void);
 /** `Process.arguments()`: the program's own name is not in it. Result owned. */
 torb_list torb_process_arguments(void);
 TORB_NORETURN void torb_process_exit(int64_t code);

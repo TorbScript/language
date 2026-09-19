@@ -73,7 +73,9 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
 public fn beginFunction(var lowering: Lowering, module: ModuleId) {
   lowering.module = module
   lowering.slots = [:]
+  lowering.entryLocals = [:]
   lowering.hole = None
+  lowering.inlinedThunks = [:]
   lowering.isSupported = true
   lowering.isDiverged = false
   lowering.breakTargets = []
@@ -139,12 +141,13 @@ fn declareParameterSlots(var lowering: Lowering, symbol: SymbolId, declaration: 
  * The top-level code of an entry file, as one function. `t_main` for a script that belongs to no package, and the
  * package plus the module for one that does - a name with no member component, which no declaration can produce.
  *
- * A top-level `const` is **not** a statement of it: it is a static value with a name, evaluated by the constant
- * evaluator wherever it is used. There is no module initialization, ever.
+ * Its top-level bindings are **locals of this function**, in source order, and not static values: `var counter = 0`
+ * followed by `counter = counter + 1` is ordinary code, and a static value cannot be assigned to. A `const` of a module
+ * that is *imported* stays a static value the const evaluator produces - there is no module initialization, ever.
  */
 public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): FunctionId? {
   const statements = lowering.checker.program.graph.at(module).file.statements
-  if !hasTopLevelCode(lowering, module, statements) {
+  if !isEntryModule(lowering, module, statements) {
     return None
   }
   const name = entryNameOf(lowering, module)
@@ -153,7 +156,7 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   beginFunction(lowering, module)
   var builder = newFunction(name, None, signature, "entry")
   for statement in statements {
-    if isTopLevelCode(lowering, module, statement) {
+    if isEntryStatement(statement) {
       const location = locationOf(lowering, statement.span)
       setBlockLocation(builder, BlockId(0), Some(location))
       break
@@ -177,47 +180,68 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   Some(finishFunction(lowering.program, builder))
 }
 
-/** Whether a file has top-level code at all. A module of declarations and constants needs no entry function. */
-fn hasTopLevelCode(var lowering: Lowering, module: ModuleId, statements: List<Statement>): Bool {
+/**
+ * Whether the module is an entry file or a script: whether anything in it runs. A module of declarations and top-level
+ * `const`s is not one - those constants are static data, and there is no module initialization, ever.
+ */
+public fn isEntryModule(var lowering: Lowering, module: ModuleId, statements: List<Statement>): Bool {
   for statement in statements {
-    if isTopLevelCode(lowering, module, statement) {
-      return true
+    match statement.kind {
+      .Declare(_) => {}
+      .Bind(binding) => {
+        if !isNamedBinding(lowering, module, binding) {
+          return true
+        }
+      }
+      _ => {
+        return true
+      }
     }
   }
   false
 }
 
-fn isTopLevelCode(var lowering: Lowering, module: ModuleId, statement: Statement): Bool {
-  match statement.kind {
-    .Declare(_) => false
-    .Bind(binding) => !isNamedConstant(lowering, module, binding)
-    _ => true
-  }
-}
-
-/** A `const` with a name of its own is a declaration of the module and not a statement of its entry function. */
-fn isNamedConstant(var lowering: Lowering, module: ModuleId, binding: Binding): Bool {
+/** A top-level binding the module declared a name for. In an entry file it is a local; elsewhere it is static data. */
+fn isNamedBinding(var lowering: Lowering, module: ModuleId, binding: Binding): Bool {
   if const .Binding(_) = binding.pattern.kind {
     return lowering.checker.resolvedName(module, binding.pattern.span).isSome()
   }
   false
 }
 
-fn lowerTopLevel(var lowering: Lowering, var builder: FunctionBuilder, statement: Statement) {
+/** Every statement of an entry file is code of its entry function; only a declaration is reached through the worklist. */
+fn isEntryStatement(statement: Statement): Bool {
   match statement.kind {
-    // Declarations are reached through the worklist, and a top-level `const` is static data with a name
-    .Declare(_) => {}
-    .Bind(binding) => {
-      const module = lowering.module
-      if isNamedConstant(lowering, module, binding) {
-        if const Some(symbol) = lowering.checker.resolvedName(module, binding.pattern.span) {
-          const _ = staticOfConstant(lowering, symbol)
-        }
-        return
-      }
-      lowerStatement(lowering, builder, statement)
+    .Declare(_) => false
+    _ => true
+  }
+}
+
+/**
+ * One statement of the entry function. A binding with a name of its own is a local like any other, and the symbol the
+ * module declared for it is remembered so that a *name* of it later in the file finds the slot instead of a static.
+ */
+fn lowerTopLevel(var lowering: Lowering, var builder: FunctionBuilder, statement: Statement) {
+  if const .Declare(_) = statement.kind {
+    // Declarations are reached through the worklist, never emitted here
+    return
+  }
+  lowerStatement(lowering, builder, statement)
+  if const .Bind(binding) = statement.kind {
+    rememberEntryLocal(lowering, binding)
+  }
+}
+
+fn rememberEntryLocal(var lowering: Lowering, binding: Binding) {
+  const module = lowering.module
+  const symbol = match lowering.checker.resolvedName(module, binding.pattern.span) {
+    Some(found) => found
+    .None => {
+      return
     }
-    _ => lowerStatement(lowering, builder, statement)
+  }
+  if const Some(slot) = lowering.slots.get(binding.pattern.span) {
+    lowering.entryLocals.set(symbol.value, slot)
   }
 }
 
@@ -238,14 +262,18 @@ public fn entryNameOf(var lowering: Lowering, module: ModuleId): String {
  */
 public fn seedModule(var lowering: Lowering, module: ModuleId) {
   const statements = lowering.checker.program.graph.at(module).file.statements
+  // The top-level bindings of an entry file are locals of its entry function, so seeding them would count them twice
+  const isEntry = isEntryModule(lowering, module, statements)
   for statement in statements {
     match statement.kind {
       .Declare(declaration) => seedDeclaration(lowering, module, declaration)
-      // A plain top-level `const` is a statement of the file; `public const` is a declaration
+      // A plain top-level `const` of a module that runs nothing is static data; `public const` is a declaration
       .Bind(binding) => {
-        if const .Binding(_) = binding.pattern.kind {
-          if const Some(symbol) = lowering.checker.resolvedName(module, binding.pattern.span) {
-            seedSymbol(lowering, symbol)
+        if !isEntry {
+          if const .Binding(_) = binding.pattern.kind {
+            if const Some(symbol) = lowering.checker.resolvedName(module, binding.pattern.span) {
+              seedSymbol(lowering, symbol)
+            }
           }
         }
       }

@@ -12,8 +12,9 @@ use describeIrType from "../print"
 use evaluateConstant, staticOfConstant from "../constant"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
 use internStatic, isNeverType, finishBlock, continueIn from "./context"
-use lowerCall, lowerOperator, lowerConstruct from "./call"
+use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue from "./call"
 use lowerBlockInto from "./statement"
+use lowerMatch, lowerIfBinding, lowerTry, lowerCoalesce from "./match"
 
 /**
  * Every expression of the monomorphic part of the language, as instructions over numbered slots.
@@ -42,7 +43,7 @@ public fn lowerExpression(
       return unsupportedSlot(lowering, builder, destination, "an expression without a type", expression.span)
     }
   }
-  if !canReplayAdaptations(lowering, expression.span) {
+  if !canReplayAdaptations(lowering, expression) {
     return abandonedSlot(lowering, builder, destination)
   }
   // Every literal, including a negated one, is static data: the checker already decided which type it adapted to
@@ -71,9 +72,9 @@ public fn lowerExpression(
     .ListLiteral(_) => unsupportedSlot(lowering, builder, destination, "a list literal", expression.span)
     .MapLiteral(_) => unsupportedSlot(lowering, builder, destination, "a map literal", expression.span)
     .RangeLiteral(_, _, _) => unsupportedSlot(lowering, builder, destination, "a range as a value", expression.span)
-    .Try(_) => unsupportedSlot(lowering, builder, destination, "`?`", expression.span)
+    .Try(inner) => lowerTry(lowering, builder, destination, expression, inner, annotation)
     .Closure(_) => unsupportedSlot(lowering, builder, destination, "a closure", expression.span)
-    .Match(_, _) => unsupportedSlot(lowering, builder, destination, "`match`", expression.span)
+    .Match(subject, arms) => lowerMatch(lowering, builder, destination, expression, subject, arms, annotation)
     .Generic(_, _) => unsupportedSlot(lowering, builder, destination, "a generic call", expression.span)
     .TextLiteral(_) => unsupportedSlot(lowering, builder, destination, "string interpolation", expression.span)
     _ => unsupportedSlot(lowering, builder, destination, "an expression the front end rejected", expression.span)
@@ -148,16 +149,20 @@ public fn abandonedSlot(var lowering: Lowering, var builder: FunctionBuilder, de
  * Whether every adaptation the checker recorded for this expression can be replayed here. The ones that cannot are
  * named one by one rather than as "an adaptation", because each of them is a different later sub-milestone.
  */
-fn canReplayAdaptations(var lowering: Lowering, at: Span): Bool {
+fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
+  const at = expression.span
   const module = lowering.module
   const adaptations = lowering.checker.adaptationsAt(module, at)
+  // `?` converts the error out of the very adaptation this would refuse, and a `??` inlines the thunk of its fallback
+  const convertsItself = isTryExpression(expression)
+  const inlinesThunk = lowering.inlinedThunks.containsKey(at)
   for adaptation in adaptations {
     const blocked = match adaptation {
       .ToTraitValue(_, _) => "a value used as a trait-typed value"
-      .Convert(_, _) => "a conversion through `From`"
+      .Convert(_, _) => if convertsItself { "" } else { "a conversion through `From`" }
       .ShowValue(_) => "string interpolation"
       .Delegate(_) => "`by` delegation"
-      .Lazy => "a `lazy` argument"
+      .Lazy => if inlinesThunk { "" } else { "a `lazy` argument" }
       .Spread => "`...` in an argument list"
       .Variadic(_, _) => "a variadic argument list"
       .ImplicitParameter(_) => "an implicit closure parameter"
@@ -172,6 +177,13 @@ fn canReplayAdaptations(var lowering: Lowering, at: Span): Bool {
 }
 
 // --- Literals -------------------------------------------------------------------------------------------------------
+
+fn isTryExpression(expression: Expression): Bool {
+  match expression.kind {
+    .Try(_) => true
+    _ => false
+  }
+}
 
 /** Whether the whole expression is one literal: the four kinds, a plain text, and a negated number. */
 public fn isLiteralExpression(expression: Expression): Bool {
@@ -285,7 +297,7 @@ fn lowerReference(
     .Callable(_, _, _) => {
       unsupportedSlot(lowering, builder, destination, "a function used as a value", expression.span)
     }
-    .CaseOf(_, _) => unsupportedSlot(lowering, builder, destination, "a case of a variant type", expression.span)
+    .CaseOf(owner, variant) => lowerCaseValue(lowering, builder, destination, expression, owner, variant, annotation)
     _ => unsupportedSlot(lowering, builder, destination, "a name the back end does not lower yet", expression.span)
   }
 }
@@ -297,6 +309,14 @@ fn lowerConstantReference(
   symbol: SymbolId,
   at: Span,
 ): Slot {
+  // A top-level binding of the entry file is a local of the entry function, not a static value
+  if const Some(slot) = lowering.entryLocals.get(symbol.value) {
+    return copiedInto(builder, destination, slot)
+  }
+  if isVarBinding(lowering, symbol) {
+    const what = "a top-level `var` read from a function"
+    return unsupportedSlot(lowering, builder, destination, what, at)
+  }
   const identifier = match staticOfConstant(lowering, symbol) {
     Some(found) => found
     .None => {
@@ -307,6 +327,23 @@ fn lowerConstantReference(
   const target = valueSlot(lowering, builder, destination, annotation)
   emit(builder, Instruction.Constant(target, identifier))
   target
+}
+
+/**
+ * Whether the declaration is a top-level `var`. Reading one from a *function* of the same file would read the static the
+ * const evaluator makes of its initializer and never what the entry code wrote into it, so it is a clean finding.
+ */
+public fn isVarBinding(var lowering: Lowering, symbol: SymbolId): Bool {
+  const site = match lowering.checker.siteOf(symbol) {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  if const .Constant(binding) = site.kind {
+    return binding.isVar
+  }
+  false
 }
 
 /**
@@ -403,7 +440,8 @@ fn isTupleLayout(var lowering: Lowering, owner: IrTypeId): Bool {
 public fn receiverSlot(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot? {
   if const .Member(base, _, isOptional) = expression.kind {
     if isOptional {
-      reportUnsupported(lowering, "`?.`", expression.span)
+      // The checker resolves `a?.m` to `Option.map`/`flatMap`, whose argument is a closure (gap 12)
+      reportUnsupported(lowering, "`?.`, which is `Option.map` over a closure (milestone 5.8)", expression.span)
       return None
     }
     const slot = lowerValue(lowering, builder, base)
@@ -486,7 +524,7 @@ fn lowerBinary(
 ): Slot {
   match operator {
     .And | .Or => shortCircuit(lowering, builder, destination, operator, left, right, annotation, expression.span)
-    .Coalesce => unsupportedSlot(lowering, builder, destination, "`??`", expression.span)
+    .Coalesce => lowerCoalesce(lowering, builder, destination, expression, left, right, annotation)
     _ => {
       const first = lowerValue(lowering, builder, left)
       const second = lowerValue(lowering, builder, right)
@@ -719,8 +757,20 @@ public fn lowerIf(
 ): Slot {
   const test = match condition {
     .Test(inner) => inner
-    .Bind(_, _, _) => {
-      return unsupportedSlot(lowering, builder, destination, "`if const` and `if var`", expression.span)
+    .Bind(isVar, pattern, value) => {
+      const found = lowerIfBinding(
+        lowering,
+        builder,
+        destination,
+        expression,
+        isVar,
+        pattern,
+        value,
+        then,
+        otherwise,
+        annotation,
+      )
+      return found
     }
   }
   const scrutinee = lowerValue(lowering, builder, test)

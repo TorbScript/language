@@ -1,0 +1,83 @@
+use Process from "std/process"
+
+/**
+ * The leak gate: counted values through every position the ownership pass of 5.4 decides about, compiled to a native
+ * binary. With `TORB_REPORT_LEAKS=1` it has to report zero live blocks at exit, which is what `native.rs` asserts for
+ * every program that does not panic.
+ *
+ * A top-level `var` is a local of this entry function, so the total is accumulated the way a reader expects.
+ */
+
+/** Twenty-four bytes: stored inline, and owning a count on its one `String` field. */
+type Label {
+  text: String
+  weight: Int
+}
+
+/** Forty bytes is above the inline limit, so this one is a counted block with two counted fields. */
+type Bundle {
+  first: String
+  second: String
+  weight: Int
+}
+
+/** A borrowed parameter: the caller keeps the count for the whole call, so nothing is retained for it. */
+fn size(text: String): Int {
+  text.byteLength()
+}
+
+/** An owned parameter: the value is built into a record, so the summary pass hands the count over. */
+fn labelled(text: String): Label {
+  Label(text, size(text))
+}
+
+fn bundled(first: String, second: String): Bundle {
+  Bundle(first, second, size(first) + size(second))
+}
+
+/** A string built in a loop: every round releases what the slot held before it holds the longer one. */
+fn repeated(part: String, times: Int): String {
+  var total = ""
+  for _ in 0..times {
+    total = total + part
+  }
+  total
+}
+
+/** A value that dies on one branch only, and an early `return` out of the middle of a loop. */
+fn firstLong(part: String, limit: Int): Int {
+  var index = 0
+  while index < limit {
+    const grown = repeated(part, index)
+    if size(grown) > 4 {
+      return size(grown) + index
+    }
+    index = index + 1
+  }
+  0
+}
+
+/** A field of a counted block read back out, and a record copied with one field replaced. */
+fn weightOf(bundle: Bundle): Int {
+  const changed = bundle.copy(second: "xy")
+  size(changed.first) + size(changed.second) + bundle.weight
+}
+
+/** An inline record copied with one field replaced, whose old field is released by the copy. */
+fn relabelled(text: String): Int {
+  const first = labelled(text)
+  const second = first.copy(text: "zzz")
+  size(second.text) + first.weight
+}
+
+var total = 0
+
+const part = "ab"
+
+total = total + size(repeated(part, 3))
+total = total + labelled(repeated(part, 2)).weight
+total = total + relabelled("cd")
+total = total + weightOf(bundled(repeated(part, 1), "efg"))
+total = total + firstLong(part, 6)
+
+Process.exit(total % 200)

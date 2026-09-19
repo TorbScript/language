@@ -1,0 +1,102 @@
+use Process from "std/process"
+
+/**
+ * The gate of milestone 5.5, second half: `Option` and `Result` through `?`, `??` and the patterns over them.
+ *
+ * The **conversion** a `?` records is not here, although the back end does it: stage 0's `?` hands the error on as it is
+ * instead of converting it through the generated `From` of a wrapper case, so a program that needs one cannot be
+ * compared with the interpreter yet. It is pinned by `lower-match.test.trb` instead, and unifying the two is 5.14's.
+ */
+type ParseError {
+  case Empty
+  case TooLarge(limit: Int)
+}
+
+type AppError {
+  case Parsing(error: ParseError)
+  case Other(message: String)
+}
+
+fn checked(value: Int): Result<Int, ParseError> {
+  if value > 100 {
+    return Error(ParseError.TooLarge(100))
+  }
+  if value == 0 {
+    return Error(ParseError.Empty)
+  }
+  Ok(value * 2)
+}
+
+/** `?` where the two error types are the same: the failure is handed straight back out. */
+fn doubled(value: Int): Result<Int, ParseError> {
+  const found = checked(value)?
+  Ok(found + 1)
+}
+
+/** The same with a counted result: what the failing path holds is released on the edge into the `return`. */
+fn named(value: Int): Result<String, ParseError> {
+  const found = doubled(value)?
+  const label = "n" + "ame"
+  Ok(label + "x")
+}
+
+fn optional(value: Int): Int? {
+  if value < 0 {
+    return None
+  }
+  Some(value)
+}
+
+/** `?` on an `Option` in a body that answers one: the empty case is built and returned. */
+fn addedOne(value: Int): Int? {
+  const found = optional(value)?
+  Some(found + 1)
+}
+
+fn codeOf(result: Result<Int, ParseError>): Int {
+  match result {
+    Ok(value) => value
+    Error(.TooLarge(limit)) => limit
+    Error(.Empty) => 7
+  }
+}
+
+/** A nested pattern over both layers of an error that wraps another one. */
+fn depthOf(error: AppError): Int {
+  match error {
+    .Parsing(.TooLarge(limit)) => limit
+    .Parsing(.Empty) => 3
+    .Other(message) => message.byteLength()
+  }
+}
+
+fn lengthOf(result: Result<String, ParseError>): Int {
+  match result {
+    Ok(text) => text.byteLength()
+    Error(_) => 0
+  }
+}
+
+/** `Option<Option<Int>>` cannot use the null pointer twice, so it falls back to a tag. */
+fn nested(value: Option<Int?>): Int {
+  match value {
+    Some(Some(found)) => found
+    Some(.None) => 1
+    .None => 2
+  }
+}
+
+fn exitCode(): Int {
+  var total = codeOf(doubled(5)) + codeOf(doubled(0)) + codeOf(doubled(200))
+  total = total + depthOf(AppError.Parsing(ParseError.TooLarge(9)))
+  total = total + depthOf(AppError.Parsing(ParseError.Empty))
+  total = total + depthOf(AppError.Other("abcd"))
+  total = total + lengthOf(named(5)) + lengthOf(named(0))
+  total = total + (addedOne(4) ?? 0) + (addedOne(0 - 1) ?? 20)
+  const inner: Option<Int?> = Some(Some(6))
+  const empty: Option<Int?> = Some(None)
+  total = total + nested(inner) + nested(empty) + nested(None)
+  total
+}
+
+Process.exit(exitCode() % 200)

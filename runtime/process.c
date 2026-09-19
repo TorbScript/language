@@ -22,10 +22,27 @@
 
 static int torb_argument_count = 0;
 static char **torb_argument_values = NULL;
+static bool torb_reports_leaks = false;
 
+/**
+ * `TORB_REPORT_LEAKS=1` makes the program write its live block count to stderr when it ends, whichever way it ends.
+ * That is the leak gate of the conformance suite: a program that frees what it allocated reports zero, and the
+ * environment decides rather than the build, so one binary answers both questions.
+ *
+ * A panic is not one of the two ends: it aborts without running anything (decided gap 9), so what it leaves behind is
+ * not a leak - it is a program that is over.
+ */
 void torb_process_start(int argument_count, char **argument_values) {
+  const char *given = getenv("TORB_REPORT_LEAKS");
   torb_argument_count = argument_count;
   torb_argument_values = argument_values;
+  torb_reports_leaks = given != NULL && given[0] == '1' && given[1] == '\0';
+}
+
+void torb_process_finish(void) {
+  if (torb_reports_leaks) {
+    torb_report_leaks();
+  }
 }
 
 torb_list torb_process_arguments(void) {
@@ -39,6 +56,7 @@ torb_list torb_process_arguments(void) {
 }
 
 void torb_process_exit(int64_t code) {
+  torb_process_finish();
   fflush(stdout);
   fflush(stderr);
   TORB_EXIT_IMMEDIATELY((int)(code & 0xFF));

@@ -1,0 +1,179 @@
+use test, group from "std/test"
+use probe from "./harness"
+use decisionTreeOf, printDecisionGraph from "../src/ir/decision"
+
+/**
+ * The decision graph of `ir/decision.trb`, as text.
+ *
+ * What is pinned here is the *shape* of the generated control flow: which value is tested in which order, where every
+ * outcome goes, and which subtree two arms share. A change of that shape is a change of every binary the compiler
+ * writes, and this is the earliest place it is visible - long before any C exists.
+ *
+ * Every subject is a **call**, so that the text of the subject is unique in the file and the span the plan is recorded
+ * under is found without parsing it again. The declarations come after the body, which is what makes the first
+ * occurrence of `shapeOf()` the use and not the declaration.
+ */
+
+const declarations = r"""
+
+type Shape {
+  case Circle(radius: Int)
+  case Rectangle(width: Int, height: Int)
+  case Empty
+}
+
+type Tree {
+  case Leaf(value: Int)
+  case Branch(left: Tree, right: Tree)
+}
+
+fn shapeOf(): Shape {
+  Shape.Empty
+}
+
+fn treeValue(): Tree {
+  Tree.Leaf(1)
+}
+
+fn numberOf(): Int {
+  3
+}
+
+fn pairOf(): (Int, Bool) {
+  (1, true)
+}
+
+fn nestedOf(): Option<Int?> {
+  Some(Some(1))
+}
+"""
+
+fn inBody(body: String): String {
+  "fn probed() \{\n{body}\n\}\n{declarations}"
+}
+
+/** The graph of the plan the checker recorded at the span of `written`, in the text format of `ir/decision.trb`. */
+fn treeOf(source: String, written: String): String {
+  var found = probe(source)
+  const at = found.spanOf(written)
+  const plan = found.checker.matchAt(found.module, at).expect("a plan at `{written}`")
+  const graph = decisionTreeOf(plan)
+  printDecisionGraph(found.checker, graph)
+}
+
+group "Cases" {
+  test "one switch over the cases of the subject, and one arm per edge" {
+    const source = inBody(r"""  const found = match shapeOf() {
+    .Circle(radius) => radius
+    .Rectangle(width, height) => width * height
+    .Empty => 0
+  }
+  print found""")
+    assert(
+      treeOf(source, "shapeOf()") == r"""root n4
+n0: arm 0 branch 0
+n1: arm 1 branch 0
+n2: arm 2 branch 0
+n3: fail
+n4: switch subject [.Circle -> n0, .Rectangle -> n1, .Empty -> n2] otherwise n3"""
+    )
+  }
+
+  test "nested cases test the outer value first and the inner one after it" {
+    const source = inBody(r"""  const found = match treeValue() {
+    .Branch(.Leaf(left), .Leaf(right)) => left + right
+    .Branch(_, _) => 0
+    .Leaf(value) => value
+  }
+  print found""")
+    assert(
+      treeOf(source, "treeValue()") == r"""root n6
+n0: arm 0 branch 0
+n1: arm 1 branch 0
+n2: switch subject.Branch.right [.Leaf -> n0] otherwise n1
+n3: switch subject.Branch.left [.Leaf -> n2] otherwise n1
+n4: arm 2 branch 0
+n5: fail
+n6: switch subject [.Branch -> n3, .Leaf -> n4] otherwise n5"""
+    )
+  }
+}
+
+group "Literals, ranges and alternatives" {
+  test "a chain of literal tests, then a range, then the catch-all" {
+    const source = inBody(r"""  const found = match numberOf() {
+    0 => 100
+    1 | 2 => 200
+    3..=6 => 400
+    _ => 500
+  }
+  print found""")
+    assert(
+      treeOf(source, "numberOf()") == r"""root n8
+n0: arm 0 branch 0
+n1: arm 1 branch 0
+n2: arm 1 branch 1
+n3: arm 2 branch 0
+n4: arm 3 branch 0
+n5: check subject in 3..=6 then n3 else n4
+n6: check subject == 2 then n2 else n5
+n7: check subject == 1 then n1 else n6
+n8: check subject == 0 then n0 else n7"""
+    )
+  }
+
+  test "a guard falls back to the arm after it" {
+    const source = inBody(r"""  const found = match numberOf() {
+    value if value > 10 => 1
+    value if value > 5 => 2
+    _ => 3
+  }
+  print found""")
+    assert(
+      treeOf(source, "numberOf()") == r"""root n2
+n0: arm 2 branch 0
+n1: guard arm 1 branch 0 otherwise n0
+n2: guard arm 0 branch 0 otherwise n1"""
+    )
+  }
+}
+
+group "Tuples and nested options" {
+  test "a tuple tests one position after the other" {
+    const source = inBody(r"""  const found = match pairOf() {
+    (0, true) => 1
+    (number, false) => number
+    (number, true) => number * 2
+  }
+  print found""")
+    assert(
+      treeOf(source, "pairOf()") == r"""root n7
+n0: arm 0 branch 0
+n1: arm 1 branch 0
+n2: arm 2 branch 0
+n3: fail
+n4: check subject.1 == true then n2 else n3
+n5: check subject.1 == false then n1 else n4
+n6: check subject.1 == true then n0 else n5
+n7: check subject.0 == 0 then n6 else n5"""
+    )
+  }
+
+  test "`Option<Option<Int>>` tests the outer `Option` and then the inner one" {
+    const source = inBody(r"""  const found = match nestedOf() {
+    Some(Some(inner)) => inner
+    Some(.None) => 1
+    .None => 2
+  }
+  print found""")
+    assert(
+      treeOf(source, "nestedOf()") == r"""root n5
+n0: arm 0 branch 0
+n1: arm 1 branch 0
+n2: fail
+n3: switch subject.Some.value [.Some -> n0, .None -> n1] otherwise n2
+n4: arm 2 branch 0
+n5: switch subject [.Some -> n3, .None -> n4] otherwise n2"""
+    )
+  }
+}

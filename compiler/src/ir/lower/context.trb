@@ -59,8 +59,21 @@ public type Lowering {
   var staticKeys: Map<String, StaticId> = [:]
   /** The slot of every binding of the function that is being lowered, by the span of the name it was declared under. */
   var slots: Map<Span, Slot> = [:]
+  /**
+   * The top-level bindings of an entry file, by `SymbolId.value`: they are **locals of the entry function** and not
+   * module constants, because a top-level `var` can be assigned to and a static value cannot.
+   *
+   * A module that is imported has no entry function, and its top-level `const` stays a static value the const evaluator
+   * produces - there is no module initialization, ever.
+   */
+  var entryLocals: Map<Int, Slot> = [:]
   /** The one `Void` slot of the function that holds every result nobody takes, made when the first one needs it. */
   var hole: Slot? = None
+  /**
+   * The spans whose `lazy` argument the lowering inlines as control flow instead of building a thunk for it: the
+   * fallback of a `??`. A closure is milestone 5.8's, and a short circuit needs none.
+   */
+  var inlinedThunks: Map<Span, Bool> = [:]
   /** `false` once the function that is being lowered hit a construct the back end does not support yet. */
   var isSupported: Bool = true
   /** Control cannot reach the end of the current block any more: `return`, `break`, `continue`, a panic. */

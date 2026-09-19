@@ -831,7 +831,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.2** | **Done.** Lowering: functions, slots, blocks, literals, locals, arithmetic intrinsics, calls of top-level functions and concrete methods, fields, constructors, tuples, `if`, `while`, `for` over `Range<Int>`, `return`, blocks, the const evaluator, static values | `ir/lower/*.trb`, `ir/instances.trb`, `ir/constant.trb` | IR snapshots for ~15 small programs | 5.1, M4.4 |
 | **5.3** | **Done.** The C emitter, minimum path. Types, functions, blocks and gotos, `#line`, slot declarations, static data, `main`, the driver's minimum (`torb build`, compiler discovery, `--emit-c`). **Gate: a program of monomorphic functions becomes a native binary and behaves like it does on stage 0** (`print` needs the witness tables of 5.6) | `backend/c/type.trb`, `emission.trb`, `prototype.trb`, `body.trb`, `emit.trb`, `cli/build.trb` | `compiler/tests/emit-c.test.trb` (20); `bootstrap/tests/native/*` compiled, run and compared with stage 0 by `bootstrap/crates/torb-cli/tests/native.rs`; `--emit-c` twice is byte identical | 5.2, 5.R1 |
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
-| **5.5** | ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, `Option`/`Result`, `?` with its conversion, `if const`/`if var`/`while const` | `ir/lower/match.trb`, `ir/decision.trb` | Snapshots of the decision trees; `04-adts-and-matching.trb` and `06-errors.trb` run | 5.2, 5.4 |
+| **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `bootstrap/tests/native/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
 | **5.6** | Generics: instance keys, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`copy`. **Gate: `bootstrap/tests/scripts/basics.trb` produces its `.expected` natively** | `ir/lower/generic.trb`, `ir/witness.trb`, `ir/lower/derive.trb` | basics.trb; instance counts are asserted so an accidental explosion fails a test | 5.5 |
 | **5.7** | Collections: the list and the ordered hash table in C, element descriptors, the natives of `List`/`Map`/`Set`/`String`, `Iterable` pipelines (ordinary TorbScript once closures work). **Gate: `language.trb` passes** | `runtime/list.c`, `runtime/map.c`, `runtime/text.c`, manifest entries | language.trb, `07-collections.trb` | 5.3, 5.6, 5.8 |
 | **5.8** | Closures: closure conversion, environments, escaping or not, `Box`es for captured `var` bindings, `lazy` cells, receiver closures, property commands. **Gate: `examples/config-dsl` runs** | `ir/lower/closure.trb`, `ir/capture.trb` | config-dsl, `09-dsl.trb`, `02-functions.trb` | 5.6 |
@@ -1193,6 +1193,115 @@ this is the list. Everything else is as written.
   answers a value the caller owns; and a `Write` through a counted place releases what was there before it stores the new
   value - which is why the value operand of a write is `owned`. `Copy` retains, `Move` does not, and for an inline
   aggregate both of them mean "per counted field".
+
+### What 5.5 does differently
+
+Sections 1 and 3 are the plan; where they did not fit what the checker records, what stage 0 can run or what a C compiler
+accepts, the code won and this is the list. Everything else is as written.
+
+- **Two files, and the decision tree is a graph.** `ir/decision.trb` turns a `MatchPlan` into a list of nodes addressed
+  by index - a value cannot contain itself - and `ir/lower/match.trb` emits that graph as blocks. The tree decides
+  nothing about the language: exhaustiveness and which arm wins were settled by the checker, which is why a value no arm
+  matches is `Unreachable` and never a panic.
+- **A node is memoized by the rows it was built from**, which is the DAG sharing section 1.6 asks for: two arms that end
+  in the same question are one node and therefore one block. Termination is structural rather than a bound - every step
+  takes the first test of the first row, so in the child where that test held the row has one test fewer and in every
+  other child the row is gone.
+- **A path is tested once per outcome, with one exception.** Section 1.6 says "tests memoized so the DAG is shared" and
+  the design asks for each path at most once per branch. A row whose check at a path is a *different kind* from the one
+  being asked - a range next to a literal - stays on both sides and is asked again, because the matrix cannot merge two
+  kinds of question into one node. Everything else (a set of distinct literals, a set of cases) is removed or excluded.
+- **Literals are a chain of two-way tests, not a `Switch`.** `Switch` is for the tag; a literal chain leaves it to the C
+  compiler to build a jump table where it pays, which is what "dense or sparse is the back end's business" means and what
+  section 1.3 already says about a literal type ("a string comparison chain").
+- **The names of an arm are one slot per name, shared by every alternative.** `.Circle(r) | .Ring(r)` keeps `r` in a
+  different field, and each alternative's block reads its own path into the *same* slot - so one body block serves every
+  alternative instead of one copy per alternative. A name is found by the span it was declared under, which is what every
+  other binding of the lowering is keyed by.
+- **A guard binds before it runs, in its own block.** The bindings of the alternative are read there, the guard is
+  evaluated, and the branch goes to the arm's body or on to the next candidate. What the guard bound and the failing path
+  does not need is released by the ownership pass at its last use inside that very block - no rule of its own.
+- **A path is read again per block rather than once.** A slot has to be defined on every path that reads it, so sharing
+  one temporary across blocks would be wrong; and a `Read` of a counted field hands the frame a count, which dies at its
+  last use anyway. A nested pattern therefore costs one `Read` per step per block, and the C compiler flattens it.
+- **`if var` and `while var` wait for 5.9.** The row of the table names `if var`, but the name it binds is a *path into
+  its subject* (the checker's own note, gap 3), and a path is a `Reference` - which is milestone 5.9's. Binding it by
+  value would compile and silently drop a write, so it is a clean finding instead.
+- **`??` inlines the thunk the checker asked for.** The checker records `a ?? b` as `orElse` with a `lazy` argument
+  (gap 13); a thunk is a closure and closures are 5.8's. So the lowering emits the control flow the `lazy` stands for -
+  the fallback in the arm that needs it - which short circuits as decided gap 1 asks and allocates nothing.
+  `Lowering.inlinedThunks` records the span whose `Lazy` adaptation is replayed by *not* building one. `?.` is still a
+  finding: the checker resolves it to `Option.map`/`flatMap` with a closure, and there is no closure yet.
+- **`?` converts the error itself.** `Adaptation.Convert(witness, method)` at the `?` is tried as a call of the `from` the
+  checker named; where that is the *generated* `From` of a wrapper case there is no function to call, so the lowering
+  builds the case of the enclosing error type that wraps exactly one value of the given one - the case *is* the
+  conversion. A `?` in a body that returns neither an `Option` nor a `Result` (the top level of an entry file) is a
+  finding that names 5.10: printing `error: <the error through Show>` needs `Show`.
+- **Every variant initializer in C is designated.** `(T){ .tag = 1 }` rather than `{ 1, { 0 } }`. A case that carries
+  nothing would otherwise leave the `payload` member out, which `-Wmissing-field-initializers` reports, and naming it
+  with a bare `{ 0 }` runs into `-Wmissing-braces` as soon as the first group holds a struct of its own - which
+  `Option<Option<Int>>` does. Neither warning is raised for a designated initializer, and what is left out is zero
+  initialized, which is exactly what a case without fields means.
+- **The drop function of a variant layout switches on the tag**, with a `default: break;` and only the cases whose group
+  really holds a count. A **niche** layout has no helper and no struct at all: it *is* its payload field, so retaining an
+  `Option<String>` is retaining the `String` (`countedFormOf`).
+- **A case is a function from its own fields**, which the checker's `caseSignature` decides. A variant type that also
+  declares fields of its own therefore cannot be built through a case constructor at all; that is a gap between the
+  checker and the language and not one of the back end, and it is named as one.
+- **Stage 0's `?` does not convert the error.** It hands the failure on as it is instead of going through the generated
+  `From` of a wrapper case, so a gate program that needs one cannot be compared with the interpreter. The conversion is
+  pinned by an IR snapshot in `lower-match.test.trb` instead, and `bootstrap/tests/native/errors.trb` uses `?` where the
+  two error types agree. Unifying stage 0 and the binary is 5.14's, and this is the second entry on its list after the
+  panic format.
+- **The gate programs still end in `Process.exit`.** `File.writeText` would give a real output comparison, but its
+  manifest prototype answers `bool` and writes through an out parameter, so the wrapper is still missing (5.3's list) -
+  and `File` itself is a `native type` the runtime represents from 5.9 on.
+- **`isSome`, `orElse` and every other member of `Option` and `Result` stay blocked.** They are methods of a *generic
+  type*, and an instance of one needs three things 5.6 brings: a type-argument list in the instance key and in the
+  mangled name, a substitution threaded through `irTypeOf` while the body is lowered (it passes an empty mapping today),
+  and a worklist that seeds an instance per argument list. None of that is small, so nothing of it was done here - what
+  5.5 needs of `Option` and `Result` is their *layout*, which 5.1 already builds, and the constructors and patterns over
+  it, which are here.
+
+### Integration of 5.3 and 5.4
+
+5.3 (the C emitter) and 5.4 (ownership) were written in parallel against section 2's contract. What did not fit, and how
+it was closed:
+
+- **`torb build` ran the emitter over phase-one IR.** The pipeline is now lower → `insertOwnership` →
+  `verifyOwnedProgram` → emit, which is what `torb ir` already did. The driver's internal-error check is the *extended*
+  verifier, so a body that leaks a count on one path never reaches a C compiler.
+- **The three contracts that are not instructions are kept now** (5.4's list): a `Read` of a counted field retains into
+  the target, a `Write` through a counted place releases what was there before it stores, and a `Call` result arrives
+  owned (which it already did, because a callee returns `owned`). `Copy` is an assignment plus one more count and `Move`
+  the assignment alone, and for an **inline aggregate** both of them mean "per counted field" - which is exactly the
+  `R_<layout>`/`D_<layout>` pair. `retainStatement`/`releaseStatement` in `backend/c/body.trb` is the one place that
+  knows every shape of the ABI, and the child lines of a helper are the same two functions over `value->f_x`.
+- **`R_<layout>` and `D_<layout>` are emitted per *half*, not per pair.** An unused `static` function is a warning and
+  `-Werror` is on, so a layout that is only ever released gets a `D_` and no `R_`. The demand is two flag sets over the
+  layouts, seeded from the positions that really call one (`Copy`, `Retain`, `Release`, `Read`, `Write`, `MakeUnique`) and
+  closed over the fields, because a helper walks its layout's fields. Everything is declared before anything is defined,
+  so a helper may call the helper of a field whatever the order of the names is.
+- **A niche layout has no helper at all.** It *is* its payload field (section 3.1), so `countedFormOf` unwraps it and
+  retaining an `Option<String>` is retaining the `String` - there is no struct a helper could be written against.
+- **The leak gate.** `runtime/memory.c` already counted live blocks and had `torb_report_leaks`; what was missing was a
+  way for a binary to ask for it. `torb_process_finish()` writes the count to stderr when `TORB_REPORT_LEAKS=1` is in the
+  environment, the generated `main` calls it before `return 0`, and `torb_process_exit` calls it too - a program that
+  ends in `Process.exit` never reaches `main`'s return, and `_exit` runs no `atexit` handler. `native.rs` asserts
+  `live blocks at exit: 0` for every gate program that does not panic. A **panic** is not one of the two ends: it aborts
+  without running anything (decided gap 9), so what it leaves behind is not a leak.
+- **A top-level binding of an entry file is a local of its entry function**, in source order, and no longer a module
+  constant - 5.3's wart, which made `var counter = 0` unassignable. `Lowering.entryLocals` maps the symbol the module
+  declared to the slot, so a *name* of it later in the file finds the slot; `seedModule` skips those bindings, because
+  counting them twice would move the progress bar. A module that runs nothing is not an entry file, so its top-level
+  `const` stays static data and "there is no module initialization, ever" is untouched. A top-level `var` read from a
+  *function* of the same file is a clean finding: it would read the static the const evaluator makes of the initializer.
+  The checker records no pattern type for a top-level binding (it checks one through its declaration), so the lowering
+  falls back to the declared result of the symbol.
+- **`Instruction.Call` gained `at: LocationId?`**, which 5.3 had named as the one thing that kept `torb_text_slice`,
+  `torb_text_repeat` and `torb_list_with_capacity` from being callable at all. The lowering fills it in at every call, the
+  text format prints ` at path:line:column` after the arguments, and `PrototypeMatch.WithLocation` now appends
+  `TORB_LOCATION(...)` instead of being a finding. The field has a default, so only *patterns* over `Call` had to change.
 
 ### What 5.R1 does differently
 

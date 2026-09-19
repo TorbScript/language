@@ -490,8 +490,18 @@ public type Instruction {
   /**
    * A call of a known function. `witnesses` is empty for a monomorphic instance and holds one table per bound of the
    * callee where the caller passes dictionaries instead (BACKEND 1.4) - they arrive after the declared parameters.
+   *
+   * `at` is where the call is written. A function of the runtime that can panic takes it as a `torb_location`
+   * (`torb_text_slice`, `torb_list_with_capacity`), so a call without one could not name the site of that panic - and a
+   * panic message is output, which two back ends have to agree on to the character.
    */
-  case Call(target: Slot?, callee: FunctionId, arguments: List<Argument>, witnesses: List<WitnessSource>)
+  case Call(
+    target: Slot?,
+    callee: FunctionId,
+    arguments: List<Argument>,
+    witnesses: List<WitnessSource>,
+    at: LocationId? = None,
+  )
   /** A closure value, a function in a field, a `lazy` force. */
   case CallClosure(target: Slot?, callee: Slot, arguments: List<Argument>)
   /** A member of a witness table: a trait-typed receiver, or a forwarded witness. */

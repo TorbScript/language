@@ -1,0 +1,102 @@
+use Process from "std/process"
+
+/**
+ * The gate of milestone 5.5, third half: everything a decision tree has to decide besides a case - literals, ranges,
+ * alternatives, tuples, guards, and an arm that falls back to the next one because its guard did not hold.
+ */
+type Shape {
+  case Circle(radius: Int)
+  case Rectangle(width: Int, height: Int)
+  case Empty
+}
+
+fn area(shape: Shape): Int {
+  match shape {
+    .Circle(radius) => radius * radius * 3
+    .Rectangle(width, height) => width * height
+    .Empty => 0
+  }
+}
+
+/** A guard, a range, alternatives and a catch-all, in the order the source writes them. */
+fn describe(value: Int): Int {
+  match value {
+    0 => 100
+    1 | 2 | 9 => 200
+    found if found > 50 => 300
+    3..=6 => 400
+    7..9 => 450
+    _ => 500
+  }
+}
+
+/** Two guards on the same shape: the second arm is reached only where the first guard was false. */
+fn sized(shape: Shape): Int {
+  match shape {
+    .Circle(radius) if radius > 10 => 1
+    .Circle(radius) if radius > 2 => 2
+    .Circle(_) => 3
+    _ => 4
+  }
+}
+
+/** A tuple pattern with a literal in one position, and a `Bool` and a `Char` as scrutinees. */
+fn paired(pair: (Int, Bool)): Int {
+  match pair {
+    (0, true) => 1
+    (number, false) => number
+    (number, true) => number * 2
+  }
+}
+
+fn classified(character: Char): Int {
+  match character {
+    'a' | 'e' | 'i' | 'o' | 'u' => 1
+    'x' => 2
+    _ => 3
+  }
+}
+
+fn greeted(text: String): Int {
+  match text {
+    "hi" => 1
+    "hello" => 2
+    _ => text.byteLength()
+  }
+}
+
+/** The same value in two alternatives of one arm keeps one slot for the name it binds. */
+fn radiusOf(shape: Shape): Int {
+  match shape {
+    .Circle(size) | .Rectangle(size, _) => size
+    .Empty => 0
+  }
+}
+
+/** A `match` as a statement, whose arms all assign into the same binding. */
+fn counted(shape: Shape): Int {
+  var found = 0
+  match shape {
+    .Circle(_) => {
+      found = 1
+    }
+    _ => {
+      found = 2
+    }
+  }
+  found
+}
+
+fn exitCode(): Int {
+  var total = area(Shape.Circle(2)) + area(Shape.Rectangle(3, 4)) + area(Shape.Empty)
+  total = total + describe(0) + describe(2) + describe(9) + describe(60) + describe(5) + describe(8) + describe(40)
+  total = total + sized(Shape.Circle(20)) + sized(Shape.Circle(5)) + sized(Shape.Circle(1)) + sized(Shape.Empty)
+  total = total + paired((0, true)) + paired((5, false)) + paired((5, true))
+  total = total + classified('e') + classified('x') + classified('z')
+  total = total + greeted("hi") + greeted("hello") + greeted("abc")
+  total = total + radiusOf(Shape.Circle(6)) + radiusOf(Shape.Rectangle(7, 8)) + radiusOf(Shape.Empty)
+  total = total + counted(Shape.Circle(1)) + counted(Shape.Empty)
+  total
+}
+
+Process.exit(exitCode() % 200)

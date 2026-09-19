@@ -376,7 +376,7 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
     .Retain(slot) => [slot]
     .Release(slot) => [slot]
     .MakeUnique(reference) => slotsOfReference(reference)
-    .Call(_, _, arguments, witnesses) => {
+    .Call(_, _, arguments, witnesses, _) => {
       var used = slotsOfArguments(arguments)
       used.addAll(slotsOfWitnesses(witnesses))
       used
@@ -435,7 +435,7 @@ public fn definedSlot(instruction: Instruction): Slot? {
     .Constant(target, _) => Some(target)
     .Move(target, _) => Some(target)
     .Copy(target, _) => Some(target)
-    .Call(target, _, _, _) => target
+    .Call(target, _, _, _, _) => target
     .CallClosure(target, _, _) => target
     .CallWitness(target, _, _, _) => target
     .Intrinsic(target, _, _, _) => target
@@ -547,10 +547,15 @@ fn verifyInstruction(
         }
       }
     }
-    .Call(target, callee, arguments, witnesses) => {
+    .Call(target, callee, arguments, witnesses, site) => {
       if !program.hasFunction(callee) {
         found.add("{at}: there is no function t{callee.value}")
         return
+      }
+      if const Some(location) = site {
+        if !program.hasLocation(location) {
+          found.add("{at}: there is no location for the call")
+        }
       }
       const signature = program.functionAt(callee).signature
       const name = program.functionAt(callee).name

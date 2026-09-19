@@ -1,0 +1,89 @@
+use Process from "std/process"
+
+/**
+ * The gate of milestone 5.5, fourth half: a state machine over unit cases, `if const` and `while const`.
+ *
+ * A variant layout whose every case is empty has no union at all, so it is a tag and nothing else - and a `match` over
+ * it is one `switch`.
+ */
+type State {
+  case Idle
+  case Running
+  case Paused
+  case Done
+}
+
+fn next(state: State): State {
+  match state {
+    .Idle => State.Running
+    .Running => State.Paused
+    .Paused => State.Done
+    .Done => State.Done
+  }
+}
+
+fn code(state: State): Int {
+  match state {
+    .Idle => 1
+    .Running => 2
+    .Paused => 4
+    .Done => 8
+  }
+}
+
+/** A counter that walks the machine until it stops, which is a `while` over an ordinary condition. */
+fn walked(rounds: Int): Int {
+  var state = State.Idle
+  var total = 0
+  var index = 0
+  while index < rounds {
+    total = total + code(state)
+    state = next(state)
+    index = index + 1
+  }
+  total
+}
+
+/** `while const`: the pattern is matched again at the head of every round, and the name is bound in the body. */
+fn countedDown(from: Int): Int {
+  var current: Int? = Some(from)
+  var total = 0
+  while const Some(value) = current {
+    total = total + value
+    current = if value <= 1 { None } else { Some(value - 1) }
+  }
+  total
+}
+
+/** `if const` with and without an `else`, and as the value of an expression. */
+fn unwrapped(value: Int?): Int {
+  if const Some(found) = value {
+    return found * 2
+  }
+  0
+}
+
+fn either(value: Int?): Int {
+  const found = if const Some(inner) = value { inner + 1 } else { 100 }
+  found
+}
+
+fn labelled(value: String?): Int {
+  var total = 0
+  if const Some(text) = value {
+    total = total + text.byteLength()
+  }
+  total
+}
+
+fn exitCode(): Int {
+  var total = walked(6)
+  total = total + countedDown(4)
+  total = total + unwrapped(Some(3)) + unwrapped(None)
+  total = total + either(Some(5)) + either(None)
+  total = total + labelled(Some("abcd")) + labelled(None)
+  total = total + code(next(next(State.Idle)))
+  total
+}
+
+Process.exit(exitCode() % 200)

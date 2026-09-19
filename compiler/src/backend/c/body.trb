@@ -2,7 +2,7 @@ use IrProgram, IrFunction, IrSignature, IrTypeId, LayoutId, FunctionId from "../
 use Slot, SlotDeclaration, BlockId, Instruction, Terminator, Argument, WitnessSource from "../../ir/ir"
 use Reference, LocationId, RuntimeKind from "../../ir/ir"
 use Intrinsic, IntrinsicOperation, NumericKind from "../../ir/ir"
-use Layout, isManagedType from "../../ir/layout"
+use Layout, isManagedType, containsCountedType from "../../ir/layout"
 use suffixOfNumeric from "../../ir/print"
 use Emission, add, reportUnsupported, slotNameOf, locationText, lineDirectiveOf from "./emission"
 use cTypeOf, declarationOf, memberNameOf, variantMemberNameOf from "./type"
@@ -86,7 +86,7 @@ fn markReadSlots(var reads: List<Bool>, instruction: Instruction) {
     .Retain(slot) => markRead(reads, slot)
     .Release(slot) => markRead(reads, slot)
     .MakeUnique(reference) => markReference(reads, reference)
-    .Call(_, _, arguments, _) => markArguments(reads, arguments)
+    .Call(_, _, arguments, _, _) => markArguments(reads, arguments)
     .CallClosure(_, callee, arguments) => {
       markRead(reads, callee)
       markArguments(reads, arguments)
@@ -323,8 +323,8 @@ fn emitInstruction(var emission: Emission, program: IrProgram, body: Body, instr
     .Retain(slot) => emitRetain(emission, program, body, slot)
     .Release(slot) => emitRelease(emission, program, body, slot)
     .MakeUnique(reference) => emitMakeUnique(emission, program, body, reference)
-    .Call(target, callee, arguments, witnesses) => {
-      emitCall(emission, program, body, target, callee, arguments, witnesses)
+    .Call(target, callee, arguments, witnesses, at) => {
+      emitCall(emission, program, body, target, callee, arguments, witnesses, at)
     }
     .Intrinsic(target, intrinsic, arguments, at) => {
       emitIntrinsicInstruction(emission, program, body, target, intrinsic, arguments, at)
@@ -332,14 +332,18 @@ fn emitInstruction(var emission: Emission, program: IrProgram, body: Body, instr
     .Construct(target, layout, variant, fields) => {
       emitConstruct(emission, program, body, target, layout, variant, fields)
     }
+    // A `Read` of a counted field hands the frame a count of it, which is what makes the target of the read owned
     .Read(target, reference) => {
       const place = placeText(emission, program, body, reference)
       const name = slotText(body, target)
       add(emission, "  {name} = {place};")
+      emitRetainOf(emission, program, typeOfSlot(body, target), name)
     }
+    // A write through a counted place releases what was there before it stores the new value
     .Write(reference, value) => {
       const place = placeText(emission, program, body, reference)
       const name = slotText(body, value.slot)
+      emitReleaseOf(emission, program, placeTypeOf(program, body, reference), place)
       add(emission, "  {place} = {name};")
     }
     .Tag(target, source) => emitTag(emission, program, body, target, source)
@@ -379,51 +383,119 @@ fn emitMove(var emission: Emission, body: Body, target: Slot, source: Slot) {
 }
 
 /**
- * `Copy` shares ownership: a retain for a managed type, a plain assignment otherwise (BACKEND 1.2). The matching
- * `Release` is what the ownership pass of 5.4 inserts, so until then a program that builds a string leaks it - which
- * is the one thing that is deliberately still wrong here, because leaking is not observable and a double free is.
+ * `Copy` shares ownership: an assignment plus one more count (BACKEND 1.2), which for an inline aggregate means one
+ * retain per counted field - that is what the `R_<layout>` helper is. `Move` is the assignment alone.
  */
 fn emitCopy(var emission: Emission, program: IrProgram, body: Body, target: Slot, source: Slot) {
   const to = slotText(body, target)
   const from = slotText(body, source)
   const annotation = typeOfSlot(body, source)
-  const retained = retainedText(program, annotation, from)
-  if retained.isEmpty() {
-    if target == source {
-      return
-    }
+  if target != source {
     add(emission, "  {to} = {from};")
-    return
   }
-  if isCountedPointer(program, annotation) {
-    add(emission, "  torb_retain({from});")
-    if target != source {
-      add(emission, "  {to} = {from};")
-    }
-    return
-  }
-  add(emission, "  {to} = {retained};")
+  emitRetainOf(emission, program, annotation, to)
 }
 
-/** `torb_text_retained(x)` and friends: the expression that is the value with one more count. Empty when trivial. */
-fn retainedText(program: IrProgram, id: IrTypeId, expression: String): String {
-  if !isManagedType(program, id) {
-    return ""
+/**
+ * One more count of the value in `place`, or nothing at all where the type carries none.
+ *
+ * It is the one place that knows every shape the ABI has, and the same answer serves a `Retain`, the retaining half of a
+ * `Copy` and the count a `Read` of a counted field hands the frame.
+ */
+public fn retainStatement(program: IrProgram, id: IrTypeId, place: String): String {
+  const inner = countedFormOf(program, id)
+  if const Some(layout) = inlineCountedLayoutOf(program, inner) {
+    return "{retainChildrenFunctionText(program, layout)}(&{place});"
   }
-  if isCountedPointer(program, id) {
-    return expression
+  if isCountedPointer(program, inner) {
+    return "torb_retain({place});"
   }
-  match program.typeAt(id) {
-    .Text => "torb_text_retained({expression})"
+  match program.typeAt(inner) {
+    .Text => "{place} = torb_text_retained({place});"
     .Runtime(kind, _) => {
       match kind {
-        .ListStorage => "torb_list_retained({expression})"
-        .MapStorage => "torb_map_retained({expression})"
-        .SetStorage => "torb_set_retained({expression})"
+        .ListStorage => "{place} = torb_list_retained({place});"
+        .MapStorage => "{place} = torb_map_retained({place});"
+        .SetStorage => "{place} = torb_set_retained({place});"
         _ => ""
       }
     }
     _ => ""
+  }
+}
+
+/** One count less, and the block freed where it was the last one. Empty where the type carries no count. */
+public fn releaseStatement(program: IrProgram, id: IrTypeId, place: String): String {
+  const inner = countedFormOf(program, id)
+  if const Some(layout) = boxedLayoutOf(program, inner) {
+    return "torb_release({place}, {dropFunctionText(program, layout)});"
+  }
+  if const Some(layout) = inlineCountedLayoutOf(program, inner) {
+    return "{dropFunctionText(program, layout)}(&{place});"
+  }
+  match program.typeAt(inner) {
+    .Text => "torb_text_release({place});"
+    .Runtime(kind, _) => {
+      match kind {
+        .ListStorage => "torb_list_release({place});"
+        .MapStorage => "torb_map_release({place});"
+        .SetStorage => "torb_set_release({place});"
+        _ => ""
+      }
+    }
+    _ => ""
+  }
+}
+
+/**
+ * A niche layout **is** its payload field (BACKEND 3.1), so retaining or releasing one is retaining or releasing that
+ * payload - and it never has a struct of its own that a helper could be written against.
+ */
+public fn countedFormOf(program: IrProgram, id: IrTypeId): IrTypeId {
+  if !program.hasType(id) {
+    return id
+  }
+  const layout = match program.typeAt(id) {
+    .Variant(found) => found
+    _ => {
+      return id
+    }
+  }
+  if !program.hasLayout(layout) {
+    return id
+  }
+  const shape = program.layoutAt(layout)
+  if const .Niche(_, field) = shape.representation {
+    if field >= 0 && field < shape.fields.length() {
+      return shape.fields[field].annotation
+    }
+  }
+  id
+}
+
+/** A layout that is stored inline and owns a count on one of its fields: a record of two `String`s, a variant group. */
+public fn inlineCountedLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
+  if !program.hasType(id) {
+    return None
+  }
+  const layout = match program.typeAt(id) {
+    .Record(found) => found
+    .Variant(found) => found
+    .Tuple(found) => found
+    _ => {
+      return None
+    }
+  }
+  if !program.hasLayout(layout) {
+    return None
+  }
+  const shape = program.layoutAt(layout)
+  if !shape.containsCounted {
+    return None
+  }
+  match shape.representation {
+    .Inline => Some(layout)
+    _ => None
   }
 }
 
@@ -454,51 +526,46 @@ fn isBoxedLayout(program: IrProgram, id: LayoutId): Bool {
 }
 
 fn emitRetain(var emission: Emission, program: IrProgram, body: Body, slot: Slot) {
-  const name = slotText(body, slot)
-  const annotation = typeOfSlot(body, slot)
-  if isCountedPointer(program, annotation) {
-    add(emission, "  torb_retain({name});")
-    return
-  }
-  const retained = retainedText(program, annotation, name)
-  if retained.isEmpty() {
-    return
-  }
-  add(emission, "  {name} = {retained};")
+  emitRetainOf(emission, program, typeOfSlot(body, slot), slotText(body, slot))
 }
 
 fn emitRelease(var emission: Emission, program: IrProgram, body: Body, slot: Slot) {
-  const name = slotText(body, slot)
-  const annotation = typeOfSlot(body, slot)
-  if !isManagedType(program, annotation) {
-    return
-  }
-  if const Some(layout) = boxedLayoutOf(program, annotation) {
-    const drop = dropFunctionText(program, layout)
-    add(emission, "  torb_release({name}, {drop});")
-    return
-  }
-  match program.typeAt(annotation) {
-    .Text => add(emission, "  torb_text_release({name});")
-    .Runtime(kind, _) => emitRuntimeRelease(emission, body, kind, name)
-    _ => report(emission, "a release of {describeManaged(program, annotation)}")
-  }
+  emitReleaseOf(emission, program, typeOfSlot(body, slot), slotText(body, slot))
 }
 
-fn emitRuntimeRelease(var emission: Emission, body: Body, kind: RuntimeKind, name: String) {
-  match kind {
-    .ListStorage => add(emission, "  torb_list_release({name});")
-    .MapStorage => add(emission, "  torb_map_release({name});")
-    .SetStorage => add(emission, "  torb_set_release({name});")
-    _ => report(emission, "a release of a value the runtime owns")
+/** The retain of one place, with a finding where the type carries a count the ABI has no shape for yet. */
+fn emitRetainOf(var emission: Emission, program: IrProgram, id: IrTypeId, place: String) {
+  if !containsCountedType(program, id) {
+    return
   }
+  const statement = retainStatement(program, id, place)
+  if statement.isEmpty() {
+    report(emission, "a retain of {describeCounted(program, id)}")
+    return
+  }
+  add(emission, "  {statement}")
 }
 
-fn describeManaged(program: IrProgram, id: IrTypeId): String {
-  match program.typeAt(id) {
+fn emitReleaseOf(var emission: Emission, program: IrProgram, id: IrTypeId, place: String) {
+  if !containsCountedType(program, id) {
+    return
+  }
+  const statement = releaseStatement(program, id, place)
+  if statement.isEmpty() {
+    report(emission, "a release of {describeCounted(program, id)}")
+    return
+  }
+  add(emission, "  {statement}")
+}
+
+public fn describeCounted(program: IrProgram, id: IrTypeId): String {
+  match program.typeAt(countedFormOf(program, id)) {
     .SharedObject(_) => "a `shared type` object (milestone 5.9)"
     .Box(_) => "a captured `var` binding (milestone 5.8)"
     .Lazy(_) => "a `lazy` cell (milestone 5.8)"
+    .Object(_) => "a trait-typed value (milestone 5.6)"
+    .Closure(_) => "a closure (milestone 5.8)"
+    .FixedArray(_, _) => "an `Array<Item, Size>` (milestone 5.9)"
     _ => "a counted value the back end does not know (milestone 5.6)"
   }
 }
@@ -587,6 +654,7 @@ fn emitCall(
   callee: FunctionId,
   arguments: List<Argument>,
   witnesses: List<WitnessSource>,
+  at: LocationId?,
 ) {
   if !witnesses.isEmpty() {
     report(emission, "a call that passes a witness table (milestone 5.6)")
@@ -598,7 +666,7 @@ fn emitCall(
   }
   const function = program.functionAt(callee)
   if const .Runtime(symbol) = function.kind {
-    emitRuntimeCall(emission, program, body, target, function, symbol, arguments)
+    emitRuntimeCall(emission, program, body, target, function, symbol, arguments, at)
     return
   }
   if const .TaskResume = function.kind {
@@ -678,6 +746,7 @@ fn emitRuntimeCall(
   function: IrFunction,
   symbol: String,
   arguments: List<Argument>,
+  at: LocationId?,
 ) {
   const text = body.prototypes.get(symbol) ?? ""
   if text.isEmpty() {
@@ -698,10 +767,16 @@ fn emitRuntimeCall(
       emitCallStatement(emission, program, body, target, function, symbol, written)
     }
     .WithLocation => {
-      report(
-        emission,
-        "`{symbol}` takes the source location of the call, which `Instruction.Call` does not carry yet"
-      )
+      const site = match at {
+        Some(found) => found
+        .None => {
+          report(emission, "`{symbol}` takes the source location of the call, and the call carries none")
+          return
+        }
+      }
+      var written = argumentListOf(body, function.signature, arguments)
+      written.add(locationText(program, site))
+      emitCallStatement(emission, program, body, target, function, symbol, written)
     }
     .Mismatch(what) => report(emission, what)
   }
@@ -1036,13 +1111,26 @@ fn inlineInitializerOf(shape: Layout, variant: Int, written: List<String>): Stri
     }
     return "\{ {written.joined(separator: ", ")} \}"
   }
+  "\{ {variantInitializerParts(shape, variant, written).joined(separator: ", ")} \}"
+}
+
+/**
+ * The parts of the initializer of one variant, every one of them **designated**: the common fields by name, the tag, and
+ * the group of this variant inside the union.
+ *
+ * Designated is not a nicety. A case that carries nothing would otherwise leave the `payload` member out, which
+ * `-Wmissing-field-initializers` reports, and naming it with a `\{ 0 \}` runs into `-Wmissing-braces` as soon as the
+ * first group holds a struct of its own. Neither warning is raised for a designated initializer, and what is left out
+ * is zero initialized - which is exactly what a case without fields means.
+ */
+public fn variantInitializerParts(shape: Layout, variant: Int, written: List<String>): List<String> {
   var parts: List<String> = []
   var index = 0
-  for _ in 0..shape.commonFieldCount {
-    parts.add(written.get(index) ?? "0")
+  for field in shape.commonFields() {
+    parts.add(".{memberNameOf(field)} = {written.get(index) ?? "0"}")
     index = index + 1
   }
-  parts.add("{variant}")
+  parts.add(".tag = {variant}")
   var group: List<String> = []
   while index < written.length() {
     group.add(written[index])
@@ -1050,9 +1138,9 @@ fn inlineInitializerOf(shape: Layout, variant: Int, written: List<String>): Stri
   }
   if !group.isEmpty() {
     const inner = group.joined(separator: ", ")
-    parts.add("\{ .{variantMemberNameOf(variant)} = \{ {inner} \} \}")
+    parts.add(".payload = \{ .{variantMemberNameOf(variant)} = \{ {inner} \} \}")
   }
-  "\{ {parts.joined(separator: ", ")} \}"
+  parts
 }
 
 /** A counted block of count one, then one field at a time: an aggregate initializer cannot write through a pointer. */

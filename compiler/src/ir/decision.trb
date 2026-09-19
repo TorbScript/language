@@ -1,0 +1,350 @@
+use SymbolId from "../semantics/symbols"
+use TypeId, describeLiteral from "../semantics/checker/type"
+use Checker from "../semantics/checker/context"
+use MatchPlan, PatternTest, PatternCheck, PatternLiteral, PatternStep from "../semantics/checker/exhaustive"
+
+/**
+ * A `MatchPlan` as a decision tree: which value is tested in which order, and where every outcome goes.
+ *
+ * The checker already said *what* has to hold for each arm (`docs/TYPECHECKER.md` 4.5): one entry per alternative, the
+ * tests outermost first, and every name with the path from the subject to the value it stands for. This turns that list
+ * of rows into the shape a control flow graph is emitted from, and it decides nothing about the language - it is the
+ * matrix algorithm with one test taken at a time, so both back ends branch identically.
+ *
+ * **A graph, not a tree.** The nodes are a list and every edge is an index, because a value cannot contain itself; and a
+ * node is **memoized by the rows it was built from**, so two arms that end in the same question share one subtree
+ * (BACKEND 1.6: "tests memoized so the DAG is shared"). The order of the list is the order the walk created the nodes
+ * in, which is a function of the plan alone.
+ *
+ * **Why it terminates.** Every step takes the first test of the first row. In the child where that test held the row has
+ * one test fewer; in every other child the row is gone. So each child is strictly smaller than its parent.
+ */
+
+/** The index of a node in `DecisionGraph.nodes`. */
+public type NodeId {
+  value: Int
+}
+
+public type DecisionNode {
+  /**
+   * Which case the value at `path` is. One edge per variant any row tests, in the order they are written, and
+   * `otherwise` for every value none of them covers - which is where the rows that test nothing at this path go.
+   */
+  case SwitchCase(path: List<PatternStep>, owner: TypeId, edges: List<CaseEdge>, otherwise: NodeId)
+  /** A literal, a range or a length: one question, two ways. */
+  case Check(path: List<PatternStep>, check: PatternCheck, then: NodeId, otherwise: NodeId)
+  /** Arm `arm` matched through alternative `branch`: bind its names and run its body. */
+  case Arm(arm: Int, branch: Int)
+  /** The same, with a guard: bind the names, and where the guard does not hold go on with `otherwise`. */
+  case Guarded(arm: Int, branch: Int, otherwise: NodeId)
+  /** No arm matches. Impossible after the checker for a `match`, and the `else` of an `if const`. */
+  case Fail
+}
+
+public type CaseEdge {
+  variant: SymbolId
+  target: NodeId
+}
+
+public type DecisionGraph {
+  var nodes: List<DecisionNode> = []
+  var root: NodeId = NodeId(0)
+  /** The node one set of rows became: what makes a shared subtree one node instead of two identical ones. */
+  var memo: Map<String, NodeId> = [:]
+
+  fn nodeAt(self, id: NodeId): DecisionNode {
+    nodes[id.value]
+  }
+
+  fn hasNode(self, id: NodeId): Bool {
+    id.value >= 0 && id.value < nodes.length()
+  }
+}
+
+/** One alternative of one arm, with the tests it has not made yet. */
+type Row {
+  arm: Int
+  branch: Int
+  tests: List<PatternTest>
+  hasGuard: Bool
+}
+
+/**
+ * The decision graph of one plan. An arm no value reaches is left out: the checker reported it (gap 25), and a block
+ * nothing jumps to is not a block.
+ */
+public fn decisionTreeOf(plan: MatchPlan): DecisionGraph {
+  var graph = DecisionGraph()
+  var rows: List<Row> = []
+  for arm in 0..plan.arms.length() {
+    const found = plan.arms[arm]
+    if !found.isReachable {
+      continue
+    }
+    for branch in 0..found.branches.length() {
+      rows.add(Row(arm, branch, found.branches[branch].tests, found.hasGuard))
+    }
+  }
+  const root = buildNode(graph, rows)
+  graph.root = root
+  graph
+}
+
+fn addNode(var graph: DecisionGraph, node: DecisionNode): NodeId {
+  graph.nodes.add(node)
+  NodeId(graph.nodes.length() - 1)
+}
+
+fn buildNode(var graph: DecisionGraph, rows: List<Row>): NodeId {
+  const key = keyOfRows(rows)
+  if const Some(found) = graph.memo.get(key) {
+    return found
+  }
+  const made = buildFresh(graph, rows)
+  graph.memo.set(key, made)
+  made
+}
+
+fn buildFresh(var graph: DecisionGraph, rows: List<Row>): NodeId {
+  const first = match rows.first() {
+    Some(found) => found
+    .None => {
+      return addNode(graph, DecisionNode.Fail)
+    }
+  }
+  if first.tests.isEmpty() {
+    if !first.hasGuard {
+      return addNode(graph, DecisionNode.Arm(first.arm, first.branch))
+    }
+    // A guard may always be false, so the arms after this one are still candidates
+    const rest = rows[1..rows.length()]
+    const otherwise = buildNode(graph, rest)
+    return addNode(graph, DecisionNode.Guarded(first.arm, first.branch, otherwise))
+  }
+  const test = first.tests[0]
+  if const .IsCase(owner, _) = test.check {
+    return buildSwitch(graph, rows, test.path, owner)
+  }
+  buildCheck(graph, rows, test.path, test.check)
+}
+
+/**
+ * One question about which case a value is, answered for every variant any row names. A row that tests nothing at this
+ * path fits every answer, so it is in every edge *and* in `otherwise`.
+ */
+fn buildSwitch(var graph: DecisionGraph, rows: List<Row>, path: List<PatternStep>, owner: TypeId): NodeId {
+  var variants: List<SymbolId> = []
+  for row in rows {
+    if const Some(found) = caseTestedAt(row, path) {
+      if !variants.contains(found) {
+        variants.add(found)
+      }
+    }
+  }
+  var edges: List<CaseEdge> = []
+  for variant in variants {
+    var taken: List<Row> = []
+    for row in rows {
+      match caseTestedAt(row, path) {
+        Some(found) => {
+          if found == variant {
+            taken.add(withoutTest(row, path, PatternCheck.IsCase(owner, variant)))
+          }
+        }
+        .None => taken.add(row)
+      }
+    }
+    edges.add(CaseEdge(variant, buildNode(graph, taken)))
+  }
+  var rest: List<Row> = []
+  for row in rows {
+    if caseTestedAt(row, path).isNone() {
+      rest.add(row)
+    }
+  }
+  const otherwise = buildNode(graph, rest)
+  addNode(graph, DecisionNode.SwitchCase(path, owner, edges, otherwise))
+}
+
+/**
+ * A literal, a range or a length: two ways. A row that makes exactly this check has it removed on the `then` side and is
+ * gone on the `otherwise` side; a row that makes no check at this path is on both. A row that makes a *different* kind
+ * of check here - a range next to a literal - stays on both sides and is asked again, which is the one place where a
+ * path is tested twice on one path through the graph.
+ */
+fn buildCheck(var graph: DecisionGraph, rows: List<Row>, path: List<PatternStep>, check: PatternCheck): NodeId {
+  var taken: List<Row> = []
+  var rest: List<Row> = []
+  for row in rows {
+    if hasTest(row, path, check) {
+      taken.add(withoutTest(row, path, check))
+      continue
+    }
+    taken.add(row)
+    rest.add(row)
+  }
+  const then = buildNode(graph, taken)
+  const otherwise = buildNode(graph, rest)
+  addNode(graph, DecisionNode.Check(path, check, then, otherwise))
+}
+
+/** The case one row tests at this path, if it tests one there at all. */
+fn caseTestedAt(row: Row, path: List<PatternStep>): SymbolId? {
+  for test in row.tests {
+    if test.path != path {
+      continue
+    }
+    if const .IsCase(_, variant) = test.check {
+      return Some(variant)
+    }
+  }
+  None
+}
+
+fn hasTest(row: Row, path: List<PatternStep>, check: PatternCheck): Bool {
+  for test in row.tests {
+    if test.path == path && test.check == check {
+      return true
+    }
+  }
+  false
+}
+
+/** The same row without the first test that is exactly this one: the question has been answered. */
+fn withoutTest(row: Row, path: List<PatternStep>, check: PatternCheck): Row {
+  var kept: List<PatternTest> = []
+  var isRemoved = false
+  for test in row.tests {
+    if !isRemoved && test.path == path && test.check == check {
+      isRemoved = true
+      continue
+    }
+    kept.add(test)
+  }
+  row.copy(tests: kept)
+}
+
+/** The key a set of rows is memoized under. Injective: every part carries what it is, and nothing is a separator. */
+fn keyOfRows(rows: List<Row>): String {
+  var parts: List<String> = []
+  for row in rows {
+    var tests: List<String> = []
+    for test in row.tests {
+      tests.add("{keyOfPath(test.path)}={keyOfCheck(test.check)}")
+    }
+    parts.add("{row.arm}/{row.branch}/{tests.joined(separator: "&")}")
+  }
+  parts.joined(separator: ";")
+}
+
+fn keyOfPath(path: List<PatternStep>): String {
+  var parts: List<String> = []
+  for step in path {
+    parts.add(keyOfStep(step))
+  }
+  parts.joined(separator: ".")
+}
+
+fn keyOfStep(step: PatternStep): String {
+  match step {
+    .CaseField(owner, variant, index, _) => "c{owner.value}_{variant.value}_{index}"
+    .Field(owner, index, _) => "f{owner.value}_{index}"
+    .TupleField(owner, index) => "t{owner.value}_{index}"
+    .Item(index) => "i{index}"
+    .ItemFromEnd(index) => "e{index}"
+    .Rest(index) => "r{index}"
+  }
+}
+
+fn keyOfCheck(check: PatternCheck): String {
+  match check {
+    .IsCase(owner, variant) => "C{owner.value}_{variant.value}"
+    .IsLiteral(literal) => "L{keyOfLiteral(literal)}"
+    .IsInRange(low, high, isInclusive) => "R{keyOfLiteral(low)}_{keyOfLiteral(high)}_{isInclusive}"
+    .HasLength(length) => "N{length}"
+    .HasAtLeast(length) => "A{length}"
+  }
+}
+
+fn keyOfLiteral(literal: PatternLiteral): String {
+  match literal.value {
+    Some(found) => describeLiteral(found)
+    // A decimal literal and a text with interpolation have no value: the span is what tells two of them apart
+    .None => "?{literal.at.start}"
+  }
+}
+
+// --- The text format ------------------------------------------------------------------------------------------------
+
+/**
+ * One node per line, in the order the walk created them, with every edge as a node number. It is what the snapshot
+ * tests of `compiler/tests/decision.test.trb` compare: a tree that changes shape is a change of the generated code, and
+ * this is where it is visible before any C is written.
+ */
+public fn printDecisionGraph(var checker: Checker, graph: DecisionGraph): String {
+  var lines = ["root n{graph.root.value}"]
+  for index in 0..graph.nodes.length() {
+    lines.add("n{index}: {printDecisionNode(checker, graph.nodes[index])}")
+  }
+  lines.joined(separator: "\n")
+}
+
+fn printDecisionNode(var checker: Checker, node: DecisionNode): String {
+  match node {
+    .SwitchCase(path, _, edges, otherwise) => {
+      var parts: List<String> = []
+      for edge in edges {
+        parts.add(".{checker.symbolAt(edge.variant).name} -> n{edge.target.value}")
+      }
+      const shown = parts.joined(separator: ", ")
+      "switch {printPath(checker, path)} [{shown}] otherwise n{otherwise.value}"
+    }
+    .Check(path, check, then, otherwise) => {
+      const question = printCheck(checker, check)
+      "check {printPath(checker, path)} {question} then n{then.value} else n{otherwise.value}"
+    }
+    .Arm(arm, branch) => "arm {arm} branch {branch}"
+    .Guarded(arm, branch, otherwise) => "guard arm {arm} branch {branch} otherwise n{otherwise.value}"
+    .Fail => "fail"
+  }
+}
+
+/** `subject`, `subject.Circle.radius`, `subject.1[0]`: the value a test is about, the way the source reaches it. */
+public fn printPath(var checker: Checker, path: List<PatternStep>): String {
+  var shown = "subject"
+  for step in path {
+    shown = shown + printStep(checker, step)
+  }
+  shown
+}
+
+fn printStep(var checker: Checker, step: PatternStep): String {
+  match step {
+    .CaseField(_, variant, _, field) => ".{checker.symbolAt(variant).name}.{checker.symbolAt(field).name}"
+    .Field(_, _, field) => ".{checker.symbolAt(field).name}"
+    .TupleField(_, index) => ".{index}"
+    .Item(index) => "[{index}]"
+    .ItemFromEnd(index) => "[-{index + 1}]"
+    .Rest(index) => "[{index}...]"
+  }
+}
+
+fn printCheck(var checker: Checker, check: PatternCheck): String {
+  match check {
+    .IsCase(_, variant) => "is .{checker.symbolAt(variant).name}"
+    .IsLiteral(literal) => "== {printLiteral(literal)}"
+    .IsInRange(low, high, isInclusive) => {
+      const dots = if isInclusive { "..=" } else { ".." }
+      "in {printLiteral(low)}{dots}{printLiteral(high)}"
+    }
+    .HasLength(length) => "length == {length}"
+    .HasAtLeast(length) => "length >= {length}"
+  }
+}
+
+fn printLiteral(literal: PatternLiteral): String {
+  match literal.value {
+    Some(found) => describeLiteral(found)
+    .None => "?"
+  }
+}

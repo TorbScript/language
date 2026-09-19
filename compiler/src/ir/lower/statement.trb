@@ -1,5 +1,6 @@
 use Span from "../../syntax/source"
 use Statement, Block, Binding, Condition, Expression, Pattern from "../../syntax/ast"
+use resultOf from "../../semantics/checker/signature"
 use IrTypeId, Slot, Terminator, IntrinsicOperation, Instruction, Reference, PathStep, borrowed from "../ir"
 use FunctionBuilder, addLocal, addTemporary, addBlock, emit from "../build"
 use numericKindOf, layoutOfType from "../verify"
@@ -7,6 +8,7 @@ use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf from "./con
 use isVoidType, finishBlock, continueIn from "./context"
 use enterLoop, leaveLoop, breakTarget, continueTarget, markBreak from "./context"
 use lowerExpression, lowerValue, voidSlot, integerSlot, emitIntrinsic from "./expression"
+use lowerPatternBinding, lowerWhileBinding from "./match"
 
 /**
  * Statements, blocks and the two loops. A block is a value where its last statement is an expression, which is the
@@ -90,25 +92,20 @@ fn lowerBinding(var lowering: Lowering, var builder: FunctionBuilder, binding: B
     const _ = lowerValue(lowering, builder, binding.value)
     return
   }
-  // `const (line, column) = lines.lineAndColumn(offset)`: one slot per position, out of one temporary
-  if const .TuplePattern(items) = pattern.kind {
-    const source = lowerValue(lowering, builder, binding.value)
-    if !lowering.isSupported {
-      return
-    }
-    bindTuple(lowering, builder, items, source, pattern.span)
-    return
-  }
+  // `const (line, column) = pair`, `const Point(x, y) = point`: one `Read` per name, along the paths of the plan
   const name = match bindingNameOf(pattern) {
     Some(found) => found
     .None => {
-      // A pattern that decides which case a value is, is a decision tree, and those are milestone 5.5's
-      reportUnsupported(lowering, "a binding that takes a value apart", pattern.span)
+      const source = lowerValue(lowering, builder, binding.value)
+      if !lowering.isSupported {
+        return
+      }
+      lowerPatternBinding(lowering, builder, pattern, source, pattern.span)
       return
     }
   }
   const declared = pattern.span
-  const annotation = match patternTypeOf(lowering, declared) {
+  const annotation = match bindingTypeOf(lowering, declared) {
     Some(found) => found
     .None => {
       reportUnsupported(lowering, "a binding without a type", declared)
@@ -118,55 +115,6 @@ fn lowerBinding(var lowering: Lowering, var builder: FunctionBuilder, binding: B
   const slot = addLocal(builder, annotation, name)
   const _ = lowerExpression(lowering, builder, binding.value, Some(slot))
   lowering.slots.set(declared, slot)
-}
-
-/**
- * The positions of a tuple pattern, read out of the value that was matched. Only the irrefutable patterns are here -
- * a name, `_` and another tuple - because everything else decides which case a value is.
- */
-fn bindTuple(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  items: List<Pattern>,
-  source: Slot,
-  at: Span,
-) {
-  const owner = builder.typeOfSlot(source)
-  const layout = match layoutOfType(lowering.program, owner) {
-    Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "a tuple pattern over a value without a layout", at)
-      return
-    }
-  }
-  const shape = lowering.program.layoutAt(layout)
-  if shape.fields.length() != items.length() {
-    reportUnsupported(lowering, "a tuple pattern with the wrong number of positions", at)
-    return
-  }
-  for index in 0..items.length() {
-    const item = items[index]
-    if isWildcardPattern(item) {
-      continue
-    }
-    const annotation = shape.fields[index].annotation
-    if const .TuplePattern(nested) = item.kind {
-      const inner = addTemporary(builder, annotation)
-      emit(builder, Instruction.Read(inner, Reference(source, [PathStep.TupleField(layout, index)])))
-      bindTuple(lowering, builder, nested, inner, item.span)
-      continue
-    }
-    const name = match bindingNameOf(item) {
-      Some(found) => found
-      .None => {
-        reportUnsupported(lowering, "a tuple pattern that takes a position apart", item.span)
-        return
-      }
-    }
-    const slot = addLocal(builder, annotation, name)
-    emit(builder, Instruction.Read(slot, Reference(source, [PathStep.TupleField(layout, index)])))
-    lowering.slots.set(item.span, slot)
-  }
 }
 
 fn bindingNameOf(pattern: Pattern): String? {
@@ -185,6 +133,24 @@ fn isWildcardPattern(pattern: Pattern): Bool {
     .Binding(name) => name == "_"
     _ => false
   }
+}
+
+/**
+ * The type of what a binding binds. A binding of a *body* has a pattern type; a top-level binding of a module is
+ * checked through its declaration instead and has none, so the declared result of its symbol stands in - which is the
+ * same answer the const evaluator reads for a `const` of an imported module.
+ */
+fn bindingTypeOf(var lowering: Lowering, at: Span): IrTypeId? {
+  if const Some(found) = patternTypeOf(lowering, at) {
+    return Some(found)
+  }
+  const module = lowering.module
+  const symbol = lowering.checker.resolvedName(module, at)?
+  const declared = resultOf(lowering.checker, symbol)
+  if lowering.checker.isBroken(declared) {
+    return None
+  }
+  Some(irTypeOf(lowering, declared))
 }
 
 fn patternTypeOf(var lowering: Lowering, at: Span): IrTypeId? {
@@ -214,6 +180,18 @@ fn lowerAssignment(
   }
   const binding = match resolution {
     .Local(found) => found
+    // A top-level `var` of the entry file: a local of the entry function, so an assignment to it is an ordinary one
+    .Constant(symbol, _) => {
+      const found = match lowering.entryLocals.get(symbol.value) {
+        Some(slot) => slot
+        .None => {
+          reportUnsupported(lowering, "an assignment to a top-level `var` from a function", at)
+          return
+        }
+      }
+      const _ = lowerExpression(lowering, builder, value, Some(found))
+      return
+    }
     _ => {
       reportUnsupported(lowering, "an assignment to a place", at)
       return
@@ -286,8 +264,8 @@ fn lowerContinue(var lowering: Lowering, var builder: FunctionBuilder, at: Span)
 fn lowerWhile(var lowering: Lowering, var builder: FunctionBuilder, condition: Condition, body: Block, at: Span) {
   const test = match condition {
     .Test(inner) => inner
-    .Bind(_, _, _) => {
-      reportUnsupported(lowering, "`while const` and `while var`", at)
+    .Bind(isVar, pattern, value) => {
+      lowerWhileBinding(lowering, builder, isVar, pattern, value, body, at)
       return
     }
   }
@@ -392,10 +370,8 @@ fn lowerFor(
     }
   }
   const name = bindingNameOf(pattern) ?? ""
-  if !isWildcardPattern(pattern) && name.isEmpty() {
-    reportUnsupported(lowering, "`for` with a pattern that takes the item apart", pattern.span)
-    return
-  }
+  // A pattern that takes the item apart binds in the body, through the plan the checker recorded for it
+  const takesApart = !isWildcardPattern(pattern) && name.isEmpty()
   const counter = addLocal(builder, item, name)
   const _ = lowerExpression(lowering, builder, start, Some(counter))
   const limit = addTemporary(builder, item)
@@ -419,6 +395,9 @@ fn lowerFor(
   finishBlock(lowering, builder, Terminator.Branch(scrutinee, inner, done))
   continueIn(lowering, builder, inner)
   enterLoop(lowering, done, step)
+  if takesApart {
+    lowerPatternBinding(lowering, builder, pattern, counter, pattern.span)
+  }
   lowerBlockInto(lowering, builder, body, None)
   const _ = leaveLoop(lowering)
   if !lowering.isDiverged {

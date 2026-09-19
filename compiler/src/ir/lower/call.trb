@@ -15,6 +15,7 @@ use instanceOfSymbol, runtimeFunctionOf, needsReference, isMonomorphic from "../
 use Lowering, reportUnsupported, locationOf, nativeNamed, producesValue from "./context"
 use isNeverType, finishBlock, borrowedArguments from "./context"
 use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
+use variantIndexOf from "./match"
 use emitIntrinsic, receiverSlot from "./expression"
 
 /**
@@ -60,8 +61,8 @@ public fn lowerCall(
       lowerConstructorCall(lowering, builder, destination, expression, arguments, annotation, owner)
     }
     .CopyOf(owner) => lowerCopyCall(lowering, builder, destination, expression, callee, arguments, annotation, owner)
-    .CaseOf(_, _) => {
-      unsupportedSlot(lowering, builder, destination, "a case of a variant type", expression.span)
+    .CaseOf(_, variant) => {
+      lowerCaseCall(lowering, builder, destination, expression, arguments, annotation, variant)
     }
     .Local(_) | .Field(_, _) => {
       unsupportedSlot(lowering, builder, destination, "a call of a closure value", expression.span)
@@ -347,8 +348,10 @@ public fn emitCall(
   at: Span,
 ): Slot {
   const given = borrowedArguments(operands)
+  // Where the call is written: a runtime function that can panic takes it, and a panic message is observable
+  const location = locationOf(lowering, at)
   if !producesValue(lowering, annotation) {
-    emit(builder, Instruction.Call(None, function, given, []))
+    emit(builder, Instruction.Call(None, function, given, [], Some(location)))
     if isNeverType(lowering, annotation) {
       finishBlock(lowering, builder, Terminator.Unreachable)
       return abandonedSlot(lowering, builder, destination)
@@ -363,7 +366,7 @@ public fn emitCall(
     }
   }
   const target = valueSlot(lowering, builder, destination, annotation)
-  emit(builder, Instruction.Call(Some(target), function, given, []))
+  emit(builder, Instruction.Call(Some(target), function, given, [], Some(location)))
   target
 }
 
@@ -374,7 +377,7 @@ public fn emitCall(
  * putting finished slots into their positions and never by evaluating out of order, which is what makes a side effect
  * in a labeled argument happen where a reader sees it.
  */
-fn lowerArgumentSlots(
+public fn lowerArgumentSlots(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   expression: Expression,
@@ -703,6 +706,83 @@ fn fieldDefaultOf(var lowering: Lowering, field: SymbolId): Expression? {
     }
   }
   None
+}
+
+// --- Case constructors ----------------------------------------------------------------------------------------------
+
+/**
+ * `Shape.Circle(1.0)`, `.Circle(1.0)`, `Some(x)`, `Ok(value)`: one `Construct` of the variant the case names. A case is a
+ * function from *its own* fields to the type it belongs to, so a variant type that also declares fields of its own
+ * cannot be built this way - that is a gap of the language and not of the back end, and it is named as one.
+ */
+fn lowerCaseCall(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  arguments: List<Argument>,
+  annotation: IrTypeId,
+  variant: SymbolId,
+): Slot {
+  const identifier = signatureOf(lowering.checker, variant)
+  const signature = lowering.checker.signature(identifier)
+  const slots = lowerArgumentSlots(lowering, builder, expression, arguments, signature)
+  if !lowering.isSupported {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  constructedCase(lowering, builder, destination, expression, annotation, variant, slots)
+}
+
+/** `Shape.Empty`, `None`: a case without fields, written as a value. */
+public fn lowerCaseValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  owner: TypeId,
+  variant: SymbolId,
+  annotation: IrTypeId,
+): Slot {
+  // A case that takes fields and is written without them is a function value, which is milestone 5.8's
+  if layoutOfType(lowering.program, annotation).isNone() {
+    const name = lowering.checker.symbolAt(variant).name
+    const what = "`{name}` used as a function value (milestone 5.8)"
+    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+  }
+  constructedCase(lowering, builder, destination, expression, annotation, variant, [])
+}
+
+fn constructedCase(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  annotation: IrTypeId,
+  variant: SymbolId,
+  slots: List<Slot>,
+): Slot {
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    .None => {
+      const shown = describeIrType(lowering.program, annotation)
+      return unsupportedSlot(lowering, builder, destination, "a case of `{shown}`", expression.span)
+    }
+  }
+  const index = variantIndexOf(lowering, layout, variant)
+  if index < 0 {
+    const name = lowering.checker.symbolAt(variant).name
+    const what = "`{name}`, which the layout of its type does not have as a case"
+    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+  }
+  const shape = lowering.program.layoutAt(layout)
+  if shape.fieldsOfConstruction(index).length() != slots.length() {
+    const name = lowering.checker.symbolAt(variant).name
+    const what = "`{name}` of a type that carries fields of its own next to its cases"
+    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+  }
+  const target = valueSlot(lowering, builder, destination, annotation)
+  lowerConstruct(lowering, builder, target, layout, index, slots)
+  target
 }
 
 /** One `Construct`: every field is an `Owned` position, which 5.4 writes out. */
