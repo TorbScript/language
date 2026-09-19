@@ -13,6 +13,7 @@ use typeFromReference, integerLiteral from "./lowering"
 use sameType, unify, resolveType, resolveTypes, hasVariable from "./unify"
 use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
 use checkClosure from "./closure"
+use isQuotation, isQuotationValue, checkQuotation, openThunk, closeThunk from "./quote"
 use checkBlock, checkDiscarded, scopeHere from "./statement"
 use checkSubject from "./place"
 use markReferenceBindings from "./mutation"
@@ -32,6 +33,19 @@ use checkDeclaration from "./check"
 
 /** The type of an expression in a position that expects one. Every expression that is looked at is recorded. */
 public fn checkExpression(var checker: Checker, expression: Expression, expected: Expectation): TypeId {
+  // `Expression<Value>` does not take a value, it takes the expression that was written (design 4.8). One hook covers
+  // every position the type can stand in: an argument, a binding, a field default - and a quotation that is already one
+  // (`filter(isAdult)`) is passed on as the ordinary value it is
+  if const Some(wanted) = expected.annotationOf() {
+    if isQuotation(checker, wanted) {
+      if !isQuotationValue(checker, expression) {
+        return checkQuotation(checker, expression, wanted)
+      }
+      // Nothing was quoted here, so what the caller said about the quoting parameter is not about anything
+      checker.quotingOwner = ""
+      checker.quotingParameter = ""
+    }
+  }
   const found = evaluateExpression(checker, expression, expected)
   // A block, an `if` and a `match` handed the expectation down to their parts, which said everything there is to say
   if const Some(annotation) = expected.annotationOf() {
@@ -972,9 +986,12 @@ fn coalesceType(var checker: Checker, left: Expression, right: Expression, at: S
     }
   }
   const inner = expectationOf(checker, value)
-  // The fallback is a `lazy` argument, so it is recorded before it is checked, exactly as an argument list does it
+  // The fallback is a `lazy` argument, so it is recorded before it is checked, exactly as an argument list does it - and
+  // it becomes a thunk, which is a closure and needs the bindings it reads (design 4.8)
   checker.adapted(right.span, Adaptation.Lazy)
+  openThunk(checker, right.span)
   const _ = checkExpression(checker, right, inner)
+  closeThunk(checker, right.span)
   // `orElse` is an ordinary member of `Option` and of `Result`, so the call is direct
   recordMemberCall(checker, at, found, "orElse")
   value
@@ -1474,10 +1491,7 @@ fn matchedBound(var checker: Checker, found: TypeId, wanted: TypeId): TypeId {
   resolveType(checker, wanted)
 }
 
-/**
- * Types a later sub-milestone decides about. A generic parameter and a unification variable need inference (4.4), and
- * `Expression<Value>` quotes what arrives at it (4.8).
- */
+/** Types that say nothing about what may arrive at them: a trait bound, a generic parameter, a variable, an error. */
 fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
   match checker.types.form(annotation) {
     .Traits(_) => true
@@ -1486,10 +1500,7 @@ fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
     // A type that carries one of these anywhere inside of it says as little as the type itself would
     .Invalid => true
     .Deferred => true
-    .Nominal(symbol, arguments) => {
-      if checker.wellKnown.symbolNamed("Expression") == Some(symbol) {
-        return true
-      }
+    .Nominal(_, arguments) => {
       for argument in arguments {
         if isUndecided(checker, argument) {
           return true

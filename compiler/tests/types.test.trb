@@ -538,14 +538,18 @@ group "The whole repository" {
     const checked = check(readSourceTree([root]).expect("the sources of the repository"), [root])
     var typed = 0
     var deferred = 0
+    var quotations = 0
     for module in checked.requested {
       const statistics = checked.checker.statisticsOf(module)
       typed = typed + statistics.typed
       deferred = deferred + statistics.deferred
+      quotations = quotations + checked.checker.tables[module.value].quotations.length()
     }
-    // After milestone 4.4 everything but the DSL (4.7) and the quotations (4.8) has a type
+    // After milestone 4.8 only the generated members of a literal type and the `.Case` of `06-errors.trb` are left (4.10)
     assert(typed > 60000)
     assert(deferred > 0)
     assert(typed * 100 / (typed + deferred) >= 99)
+    // `assert` is in every test, so the repository is full of quotations, and every one of them recorded its tree (4.8)
+    assert(quotations > 1000)
   }
 }

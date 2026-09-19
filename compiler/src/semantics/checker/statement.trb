@@ -17,6 +17,7 @@ use checkAssignment, noteAssignment, requireSharedSource, leavesClosure from "./
 use settleLoop, settleChanges from "./mutation"
 use signatureOf, functionOfSite, declareSites from "./signature"
 use typeFromReference from "./lowering"
+use isQuotation from "./quote"
 use checkDeclaration from "./check"
 
 /**
@@ -179,6 +180,12 @@ fn checkBinding(var checker: Checker, binding: Binding) {
   const found = match annotation {
     Some(wanted) => {
       const inner = expectationOf(checker, wanted)
+      // `const condition: Expression<Bool> = age > 1` quotes its initializer exactly as a parameter does (gap 37), and
+      // the message about a capture that is not `Encode` names the binding as the reason
+      if isQuotation(checker, wanted) {
+        checker.quotingOwner = nameOfPattern(binding.pattern)
+        checker.quotingParameter = ""
+      }
       checkExpression(checker, binding.value, inner)
     }
     .None => inferExpression(checker, binding.value)
@@ -196,6 +203,14 @@ fn checkBinding(var checker: Checker, binding: Binding) {
   checkPattern(checker, binding.pattern, bound, binding.isVar)
   // `const Point(x, y) = p` has no second way to go, so the pattern has to match every value
   requireIrrefutable(checker, binding.pattern, bound, "The pattern of a binding", "value")
+}
+
+/** The name a binding is known under, where its pattern is a plain name: what a message about it calls it. */
+fn nameOfPattern(pattern: Pattern): String {
+  if const .Binding(name) = pattern.kind {
+    return name
+  }
+  ""
 }
 
 /**
@@ -670,8 +685,19 @@ fn declareBindingsFor(
     }
     index = index + 1
     const annotation = bindingTypeOf(checker, form)
+    const isLazy = match form.mode {
+      .Lazy => true
+      _ => false
+    }
     const _ = checker.declareBinding(
-      LocalBinding(parameter.name.text, annotation, parameter.isVar, parameter.name.span, isParameter: true)
+      LocalBinding(
+        parameter.name.text,
+        annotation,
+        parameter.isVar,
+        parameter.name.span,
+        isParameter: true,
+        isLazy: isLazy,
+      )
     )
   }
 }

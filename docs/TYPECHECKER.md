@@ -121,7 +121,7 @@ Notes on the forms:
 - **Literal types are not subtypes.** `"online"` has type `String` unless a literal type is expected. Two literal
   types are the same type when their value sets are equal; a subset is never assignable (section 2.5).
 - **`Expression<Value>` stays nominal.** The checker recognizes it by symbol (`wellKnown.expression`) at parameter and
-  binding positions and quotes the argument there (section 4.9).
+  binding positions and quotes the argument there (section 8, row 4.8).
 - **`lazy` is a mode, not a type.** `lazy Value` is only the type of a parameter, so it never has to be interned.
 - **`Invalid` is the error type.** Every operation on `Invalid` yields `Invalid` and reports nothing (section 6).
 
@@ -996,7 +996,7 @@ files that have to check cleanly afterwards.
 | **4.5** | **Done.** Exhaustiveness and redundancy. The pattern matrix over ADTs, literals, ranges, tuples, lists with rest, literal unions, `Option`/`Result`; witnesses; `MatchPlan`; `if const`/`if var`/`while const`, and every pattern that has to match. | `exhaustive.trb`, `usefulness.trb`, `pattern.trb` | 4.4 |
 | **4.6** | **Done.** Places and the mutation rules. `const`/`var`, valid paths, `var` parameters and temporaries, `private(var)`, exclusivity, dead changes, `break`/`continue`. | `place.trb`, `mutation.trb`, `statement.trb` | 4.4 |
 | **4.7** | **Done.** Receivers and the DSL. Receiver closures, the innermost-receiver rule, command calls, property commands (`.Assign`, `.AssignClosure`, `.Configure`), receiver scripts (`project.trb` against the `Project` of the new `std/project`, and every file a `Sandbox.load<Value>` names with a literal path). | `closure.trb`, `command.trb`, `receiver.trb`, `scripts.trb`, `name.trb` | 4.4 |
-| **4.8** | `Expression<Value>` and `lazy`. What is quotable, building the tree after resolution, captures and their `Encode` bound, `Quotation` in the tables, `lazy` parameters. **Gate: `compiler/tests/*.test.trb` check cleanly** (they are full of `assert`). | `quote.trb`, `call.trb` | 4.4, 4.7 |
+| **4.8** | **Done.** `Expression<Value>` and `lazy`. What is quotable, building the tree after resolution, captures and their `Encode` bound, `Quotation` in the tables, `lazy` parameters. **Gate: `compiler/tests/*.test.trb` check cleanly** (they are full of `assert`): 1207 quotation sites, every one with a recorded `Quotation`. | `quote.trb`, `call.trb` | 4.4, 4.7 |
 | **4.9** | Visibility and program shape. `private`/`private(var)`/`public`, top-level code, compile-time constants, field defaults, `native`, `shared type`/`shared trait`, `foreign`, entry files vs. modules. | `declaration.trb` | 4.2 |
 | **4.10** | The conformance suite. `torb check std`, `torb check examples`, `torb check compiler` clean; the spec gaps of section 9 resolved in the sources; diagnostics polished against real output; performance (the whole workspace well under a minute on stage 0; a timing test in the suite). | all | 4.1 - 4.9 |
 
@@ -1454,6 +1454,68 @@ list. Everything else is as written.
   and the static reader (`project/manifest.trb`, which stays exactly as it is until milestone 7) keeps working alone.
 - **Gap 42 is the parser's already:** `startsCommandArgument` never accepted `.`, so `level .Debug` has always been the
   member path `level.Debug`. What 4.7 adds is the note that says so, on the message about the missing member.
+
+### What 4.8 does differently from sections 1 to 7
+
+- **One hook in `checkExpression` covers every position `Expression<Value>` can stand in.** An argument, a binding
+  (gap 37), a field default, a `return` - they all arrive at `checkExpression` with the expectation, so the branch that
+  quotes sits there and not at each of them. That is also why `closure.trb`'s `isQuotation` branch is gone: a closure
+  never reaches `checkClosure` with an `Expression<Value>` expected any more, it is quoted one level higher.
+- **The tree is not stored, the span is.** The tree of a quotation *is* the syntax tree under that span, and 4.1 to 4.7
+  already recorded the type of every node of it (`expressionTypes`), what every name and every call resolved to
+  (`resolutions`), and what the source did not spell out (`adaptations`). `Quotation` therefore holds only what a second
+  walk could **not** work out: the captures in the order `Expression.captures()` returns them with their `Encode`
+  witness, the parameters of each quoted closure by its span (`lambdas`), and which `Parameter` or `Captured` node every
+  name inside becomes (`names`, by span). 1200 `assert`s in the repository would otherwise carry 1200 copies of their
+  own source text.
+- **A quotation is a closure as far as the scope chain is concerned.** `checkQuotation` pushes a `ClosureFrame` whose
+  watermark is the current end of `Checker.bindings`, so `noteCapture` collects exactly the bindings from *around* the
+  quotation - for a quoted closure and for a bare `assert(limit > 1)` alike, and correctly through any number of nested
+  closures. The frame declares itself as "has parameters", so `_` still means the innermost closure the source wrote.
+- **A name that already holds a quotation is passed through.** `Query.filter(isAdult)` and `Quoted.of(predicate)` hand
+  the tree they have on instead of quoting it into an `Expression<Expression<...>>`, which could not exist anyway (an
+  `Expression` is not `Encode`). It has to be decided before the argument is checked, and in a bidirectional checker the
+  type of an expression is known without checking it only for a **name** - so a name (a local, or a top-level `const`) is
+  the rule and everything else is quoted. `filter(predicateOf())` quotes the *call* into a `Call` node, which is right.
+- **A tuple, a map literal and a range are quotable as constructions.** The concept's list of quotable constructs names
+  "constructors", and a tuple literal, `["a": 1]` and `0..2` are exactly that: a `Construct` node, a `Call` of `Map.of`,
+  a `Construct` of `Range`. 23 `assert`s of the repository compare against one of the three, and `ExpressionNode` needs
+  no new kind for them - which is what "a new node kind comes with a new version of the language" is about.
+- **A forbidden construct gets one message, at the construct.** The quotable set is validated in one walk *after* the
+  expression was checked, and the first construct that has no node stops it: "A `const` cannot appear in a quotation:
+  `Expression<Bool>` holds a single expression" for every statement, `?`, an `if` without an `else`, a pattern in an
+  `if`, a second statement in a quoted closure; "`match` cannot be quoted yet"; and "A spread has no node in an
+  expression tree" for a spread and for a closure parameter that destructures (a `Lambda` node names its parameters).
+- **`Adaptation.Force` is new, and `LocalBinding.isLazy` is what records it.** Design 3.4 says a `lazy` argument records
+  `Adaptation.Lazy`; nothing said how milestone 5 finds the *reads* that have to force the cell, and a
+  `Resolution.Local` cannot say it on its own. So a `lazy` parameter's binding is marked, and every read of one records
+  `Force`. Only a `fn` parameter is marked: `lazy` in a function *type* is legal, but no closure in the repository fills
+  one, and threading the mode through `checkPattern` for that would be a change to every pattern.
+- **A `lazy` argument records its captures in `Tables.captures`.** The thunk is a closure (BACKEND 1.6: a `Lazy(T)` cell
+  holding a closure), so it needs the same list a closure needs, and `Adaptation.Lazy` at the same span is what says the
+  span is a thunk and not an ordinary closure. `??` goes through the same two calls, because it *is*
+  `orElse(fallback: lazy Value)`.
+- **`nameOf` is not an intrinsic.** The concept calls it "an ordinary function over `Expression<Value>`", and that is
+  exactly what it is: `nameOf(user.email)` quotes its argument like any other quoted parameter and reads the tree at
+  runtime. The checker has no case for it.
+- **The `Encode` bound needed nine implementations in the prelude.** `Encode` existed for `Bool`, `Int8`, `Int64`,
+  `String`, `Option`, `List`, `Set` and `Map` and for nothing else, so a `Char` or a `Float64` anywhere inside a value
+  made it unencodable - which made the whole syntax tree (`CharLiteral`), the whole `Checker` (`LiteralValue.Character`)
+  and every `Vector2` uncapturable. `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float32`, `Float64`,
+  `Decimal` and `Char` now carry `Encode` (`std/prelude/src/encoding.trb`); `Decode` for them is still missing, because
+  it needs a `TryFrom` back that only three of them have.
+- **Nothing is said about a capture whose type is not concrete**, exactly as `reportUnmetBound` does not: what a generic
+  parameter of the enclosing declaration implements is decided where *that* one is called.
+- **An implicit receiver that a quotation reads is a capture without a name entry.** A member of `self` written without
+  it has no node in the tree that could carry the span, so the receiver's binding is in `Quotation.captures` (its value
+  has to reach `captures()`) while `Adaptation.ImplicitSelf` is what tells milestone 5 which capture the `Field` node
+  hangs off. The same holds for a module-level `const` read inside a quotation: it is compile-time evaluable (gap 27),
+  so it is a `Literal` node and not a capture, and `Resolution.Constant` is all that is recorded.
+- **A thunk and a quotation are a closure for 4.6's rules too**, and nothing had to be added for that: both are checked
+  where they are written, so a name in one is an ordinary read of the binding around it (which keeps a change before it
+  alive, wherever the callee evaluates it) and a capture of it (which makes that binding a shared box the dead-change
+  rule leaves alone). A quoted expression is never run at the call site, but it holds no `var` access open either: it
+  contains no statement and no assignment, because the quotable walk rejects both.
 
 ---
 

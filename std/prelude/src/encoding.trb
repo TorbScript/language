@@ -183,6 +183,73 @@ extend Int8 with Encode, Decode {
   }
 }
 
+/*
+ * Every other number and the `Char`. They carry no `Decode` yet - `Decode` needs a `TryFrom` back, and only `Int8`,
+ * `Int32` and `Int64` have one - but `Encode` is what a value has to have to be *looked at*: `describe(value)` renders
+ * one, a quotation hands its captures on as `Encode` values (gap 36), and a SQL driver binds them as parameters. Without
+ * these, a `Float64` field would make a whole syntax tree unshowable.
+ */
+extend Int16 with Encode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.int(Int64.from(self))
+  }
+}
+
+extend Int32 with Encode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.int(Int64.from(self))
+  }
+}
+
+extend UInt8 with Encode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.int(Int64.from(self))
+  }
+}
+
+extend UInt16 with Encode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.int(Int64.from(self))
+  }
+}
+
+extend UInt32 with Encode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.int(Int64.from(self))
+  }
+}
+
+extend UInt64 with Encode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.unsigned(self)
+  }
+}
+
+extend Float32 with Encode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.float(Float64.from(self))
+  }
+}
+
+extend Float64 with Encode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.float(self)
+  }
+}
+
+extend Decimal with Encode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.decimal(self)
+  }
+}
+
+/** A `Char` travels as a text of one character: the formats of the language have no character of their own. */
+extend Char with Encode {
+  fn encode(self, var encoder: Encoder) {
+    encoder.string(show())
+  }
+}
+
 extend String with Encode, Decode {
   fn encode(self, var encoder: Encoder) {
     encoder.string(self)

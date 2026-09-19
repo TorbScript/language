@@ -12,6 +12,7 @@ use witnessFor, isConcrete, traitArgumentsOf from "./implementation"
 use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads from "./place"
 use noteArgumentClosures from "./mutation"
+use isQuotation, openThunk, closeThunk from "./quote"
 
 /**
  * Calls: which parameter every written argument fills, what the generic parameters of the callee turn out to be, and
@@ -426,6 +427,7 @@ fn checkArgumentPass(
   arguments: List<Argument>,
   plan: ArgumentPlan,
   isClosurePass: Bool,
+  /** The name of the callee: what the exclusivity message calls the change, and what quotes a quoted argument. */
   callee: String,
   isDiscarded: Bool,
 ) {
@@ -445,12 +447,23 @@ fn checkArgumentPass(
       checkSpread(checker, argument, parameter)
       continue
     }
-    if const .Lazy = parameter.mode {
-      checker.adapted(argument.value.span, Adaptation.Lazy)
-    }
     // What the parameter is may have been learned from an argument to its left, so it is resolved here and not before
     const annotation = resolveType(checker, parameter.annotation)
     const inner = expectationOf(checker, annotation)
+    const at = argument.value.span
+    // `lazy Value`: the argument is a thunk the callee evaluates at most once, so it becomes a closure of its own
+    if const .Lazy = parameter.mode {
+      checker.adapted(at, Adaptation.Lazy)
+      openThunk(checker, at)
+      const _ = checkExpression(checker, argument.value, inner)
+      closeThunk(checker, at)
+      continue
+    }
+    // `assert(x > 1)`: the message about a capture that is not `Encode` names what quotes it (gap 36)
+    if isQuotation(checker, annotation) {
+      checker.quotingOwner = callee
+      checker.quotingParameter = parameter.name ?? ""
+    }
     const _ = checkExpression(checker, argument.value, inner)
     // A `var` argument is a path into the caller's value, and it owns that path for the rest of the call (4.6)
     if const .Var = parameter.mode {

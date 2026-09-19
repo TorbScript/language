@@ -1,0 +1,580 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Expression, Argument, Block, Statement, Closure, Condition from "../../syntax/ast"
+use TypeId, Witness from "./type"
+use Checker, Adaptation, Capture, BindingId, ClosureFrame from "./context"
+use Quotation, QuotationCapture, QuotationParameter, QuotationName from "./context"
+use checkExpression, expectationOf from "./expression"
+use witnessFor, implementsBound from "./implementation"
+use formOf from "./name"
+use resultOf from "./signature"
+use resolveType from "./unify"
+
+/**
+ * `Expression<Value>`: a parameter or a binding of that type does not take a value, it takes the expression that was
+ * written - checked as an ordinary `Value` and then handed over together with its tree.
+ *
+ * **Quoting happens after name resolution**, which is what keeps it free of the phase problem of macros: implicit `_`,
+ * named closure parameters, receivers and implicit `self` are already resolved when the tree is built, so the tree only
+ * ever holds explicit `Parameter`, `Field` and `Call` nodes. That is also why this is the last sub-milestone of the
+ * checker that touches expressions: it reads what 4.4 and 4.7 recorded.
+ *
+ * Three things happen here, in this order:
+ *
+ * 1. the expression is checked against the `Value` of the `Expression<Value>`, inside a frame of its own so that every
+ *    binding from around it that a name inside means becomes a **capture**;
+ * 2. it is validated as **quotable** - exactly what the concept lists as an expression, and nothing that is a statement
+ *    (`const`, an assignment, `return`, a loop), no early `?` and no `match`;
+ * 3. every capture is required to be `Encode`, because a provider has to be able to look at the values (gap 36), and a
+ *    `Quotation` is recorded that says which name in the tree is which parameter and which capture.
+ *
+ * Nothing of the tree itself is stored: the tree *is* the syntax tree of that span, and the type of every node of it is
+ * already in `Tables.expressionTypes`.
+ */
+
+/** `Expression<Value>` quotes what arrives at it instead of evaluating it. */
+public fn isQuotation(checker: Checker, annotation: TypeId): Bool {
+  if const .Nominal(symbol, _) = checker.types.form(annotation) {
+    return checker.wellKnown.expression == Some(symbol)
+  }
+  false
+}
+
+/** The `Value` of an `Expression<Value>`: the type the quoted expression itself has to have. */
+public fn quotationValueOf(checker: Checker, annotation: TypeId): TypeId? {
+  if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
+    if checker.wellKnown.expression == Some(symbol) && arguments.length() == 1 {
+      return Some(arguments[0])
+    }
+  }
+  None
+}
+
+/**
+ * A quotation is a value, so **a name that already holds one is that quotation** and is passed on unchanged instead of
+ * being quoted a second time: `Query.filter(isAdult)` and `Quoted.of(predicate)` hand the tree they have on, and
+ * `Expression<Expression<Bool>>` is never what anybody meant (it could not exist - an `Expression` is not `Encode`).
+ *
+ * It has to be decided *before* the argument is checked, and in a bidirectional checker the type of an expression is
+ * known without checking it only for a **name**. So a name is the rule and everything else is quoted - which is right
+ * anyway: `filter(predicateOf())` quotes the *call* into a `Call` node, exactly as `assert(f())` does.
+ */
+public fn isQuotationValue(var checker: Checker, expression: Expression): Bool {
+  const text = match expression.kind {
+    .Name(found) => found
+    _ => {
+      return false
+    }
+  }
+  if const Some(.Bound(binding)) = checker.findLocal(text) {
+    const annotation = checker.binding(binding).annotation
+    return isQuotation(checker, annotation)
+  }
+  // A top-level `const` of a module is a declaration and not a local: `const isAdult: Expression<...> = { ... }`
+  const module = checker.module
+  const symbol = match checker.program.lookUp(module, text) {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  if const .Constant = checker.symbolAt(symbol).kind {
+    const annotation = resultOf(checker, symbol)
+    return isQuotation(checker, annotation)
+  }
+  false
+}
+
+/**
+ * The argument of an `Expression<Value>` parameter, or the initializer of such a binding (gap 37: a binding behaves
+ * exactly like a parameter). Gives back the `Expression<Value>` itself, because that is what arrives at the parameter -
+ * while `Tables.expressionTypes` keeps the type of the quoted expression for every node of the tree, which is what
+ * milestone 5 builds the `TypeReference`s from.
+ */
+public fn checkQuotation(var checker: Checker, expression: Expression, wanted: TypeId): TypeId {
+  const owner = checker.quotingOwner
+  const parameter = checker.quotingParameter
+  checker.quotingOwner = ""
+  checker.quotingParameter = ""
+  const value = quotationValueOf(checker, wanted)
+  const inner = match value {
+    // `Expression<Expression<Bool>>` quotes nothing: one of the two is a mistake, and the type says which
+    Some(found) => {
+      if isQuotation(checker, found) {
+        checker.deferredType
+      } else {
+        found
+      }
+    }
+    .None => checker.deferredType
+  }
+  const at = expression.span
+  const start = checker.bindings.length()
+  // The quotation is a closure as far as the scope chain is concerned: a name from around it is a capture, and there is
+  // nothing implicit to take from it, so the frame declares its parameters (there are none) as written
+  checker.closureFrames.add(ClosureFrame(at, start, [], [], [], [], true, 0))
+  const expectation = expectationOf(checker, inner)
+  const found = checkExpression(checker, expression, expectation)
+  const last = checker.closureFrames.length() - 1
+  const captured = checker.closureFrames[last].captures
+  const _ = checker.closureFrames.removeAt(last)
+  var state = QuotationWalk(start, wanted, captured, [:], [:], [:], [], false)
+  quoteExpression(checker, state, expression)
+  if state.isBroken {
+    return wanted
+  }
+  const captures = encodedCaptures(checker, state, owner, parameter)
+  const annotation = if checker.absorbs(found) { inner } else { resolveType(checker, found) }
+  const quotation = Quotation(annotation, captures, state.names, state.lambdas)
+  checker.recordQuotation(at, quotation)
+  checker.adapted(at, Adaptation.Quote(at))
+  wanted
+}
+
+// --- `lazy` ---------------------------------------------------------------------------------------------------------
+
+/**
+ * The argument of a `lazy Value` parameter is a **thunk**: an expression the callee evaluates at most once, on first
+ * use. It is checked as an ordinary value of the inner type - there is no new rule about what may stand there - but it
+ * becomes a closure, so the bindings it reads have to be recorded exactly as a closure's are (`Tables.captures` under
+ * the span of the argument, next to the `Adaptation.Lazy` that marks it as one).
+ */
+public fn openThunk(var checker: Checker, at: Span) {
+  const start = checker.bindings.length()
+  checker.closureFrames.add(ClosureFrame(at, start, [], [], [], [], true, 0))
+}
+
+public fn closeThunk(var checker: Checker, at: Span) {
+  const last = checker.closureFrames.length() - 1
+  if last < 0 {
+    return
+  }
+  const captures = checker.closureFrames[last].captures
+  const _ = checker.closureFrames.removeAt(last)
+  // A closure that is itself the argument of a `lazy` parameter already recorded its own captures at this very span
+  const module = checker.module
+  if checker.capturesAt(module, at).isSome() {
+    return
+  }
+  checker.recordCaptures(at, captures)
+}
+
+// --- What is quotable, and what every name in the tree becomes -------------------------------------------------------
+
+/**
+ * The state of the one walk over the quoted syntax tree. It answers both questions at once, because both need the same
+ * walk: whether every construct in it has a node in an `ExpressionNode`, and which `Parameter` or `Captured` node every
+ * name becomes.
+ */
+type QuotationWalk {
+  /** Bindings below this index were declared outside the quotation, so a name that means one is a capture. */
+  watermark: Int
+  /** The `Expression<Value>` that is being filled, for the messages. */
+  wanted: TypeId
+  /** Every binding the quotation reads from around it, in the order `Expression.captures()` returns them. */
+  captures: List<Capture>
+  /** Where each of them was read first, which is where a message about it points. */
+  var firstReads: Map<Int, Span>
+  var names: Map<Span, QuotationName>
+  var lambdas: Map<Span, List<QuotationParameter>>
+  /** The parameters of the quoted closures that are open, innermost last. */
+  var open: List<List<QuotationParameter>>
+  /** One root cause, one message: the first construct that cannot be quoted is the only one that is reported. */
+  var isBroken: Bool
+}
+
+fn quoteExpression(var checker: Checker, var state: QuotationWalk, expression: Expression) {
+  if state.isBroken {
+    return
+  }
+  const at = expression.span
+  match expression.kind {
+    .IntegerLiteral(_) | .FloatLiteral(_) | .BoolLiteral(_) | .CharLiteral(_) => {}
+    // Something that was already reported: nothing here is about the quotation
+    .Invalid => {}
+    .Name(_) => quoteName(checker, state, at)
+    // `.Circle(1.0)`: a case, which is a `Construct` or a `Call` node like any other constructor
+    .ImplicitMember(_) => {}
+    .Generic(target, _) => quoteExpression(checker, state, target)
+    .TextLiteral(segments) => {
+      for segment in segments {
+        if const .Interpolated(inner) = segment {
+          quoteExpression(checker, state, inner)
+        }
+      }
+    }
+    .Member(target, _, _) => quoteExpression(checker, state, target)
+    // `a[key]` is `Indexed.at(key)`, which is a `Call` node
+    .Index(target, index) => {
+      quoteExpression(checker, state, target)
+      quoteExpression(checker, state, index)
+    }
+    .Unary(_, operand) => quoteExpression(checker, state, operand)
+    .Binary(_, left, right) => {
+      quoteExpression(checker, state, left)
+      quoteExpression(checker, state, right)
+    }
+    .ListLiteral(items) => quoteArguments(checker, state, items)
+    .Call(callee, arguments, _) => quoteCall(checker, state, callee, arguments, at)
+    .Closure(closure) => quoteClosure(checker, state, closure, at)
+    .If(condition, then, otherwise) => quoteConditional(checker, state, condition, then, otherwise, at)
+    // `{ ... }` as the `else` of an `if` or as the body of an arm: the same single expression as a closure body
+    .Block(block) => quoteBlock(checker, state, block)
+    .Match(_, _) => {
+      state.isBroken = true
+      checker.reportHere(
+        Diagnostic.error("`match` cannot be quoted yet", at)
+          .withNote("Patterns would double the set of nodes an `ExpressionNode` has, so the language leaves them out")
+      )
+    }
+    .Try(_) => reportNotOneExpression(checker, state, "`?`", at)
+    // A tuple, a map and a range are *constructions*, which the concept lists as quotable: they have no node of their
+    // own, and they need none - a tuple and a range are a `Construct`, a map literal is the `Map.of` it means
+    .TupleLiteral(items) => quoteArguments(checker, state, items)
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        quoteExpression(checker, state, key)
+        quoteExpression(checker, state, value)
+      }
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(from) = start {
+        quoteExpression(checker, state, from)
+      }
+      if const Some(to) = end {
+        quoteExpression(checker, state, to)
+      }
+    }
+  }
+}
+
+fn quoteArguments(var checker: Checker, var state: QuotationWalk, arguments: List<Argument>) {
+  for argument in arguments {
+    if argument.isSpread {
+      reportHasNoNode(checker, state, "A spread", argument.value.span)
+      return
+    }
+    quoteExpression(checker, state, argument.value)
+  }
+}
+
+/**
+ * A call, and the one thing that looks like one but is not: `port 8080` writes a field (gap 15), and an assignment is a
+ * statement whatever it is written as. The callee is not walked - what it resolved to is the `method` and the `owner` of
+ * the `Call` node, never a value of its own.
+ */
+fn quoteCall(
+  var checker: Checker,
+  var state: QuotationWalk,
+  callee: Expression,
+  arguments: List<Argument>,
+  at: Span,
+) {
+  const module = checker.module
+  if const Some(.PropertyWrite(_, _, _)) = checker.resolutionAt(module, at) {
+    reportNotOneExpression(checker, state, "A property command", at)
+    return
+  }
+  quoteCallee(checker, state, callee)
+  quoteArguments(checker, state, arguments)
+}
+
+/**
+ * The callee of a call is not a node of the tree: it is the `method` and the `owner` of the `Call`. Only what stands in
+ * front of the dot is, so `a.b(c)` walks `a` and `b(c)` walks nothing. Anything else - a call of a computed function -
+ * is walked as a whole, so that the captures stay complete even where a provider will not understand the shape.
+ */
+fn quoteCallee(var checker: Checker, var state: QuotationWalk, callee: Expression) {
+  match callee.kind {
+    .Member(target, _, _) => quoteExpression(checker, state, target)
+    .Generic(inner, _) => quoteCallee(checker, state, inner)
+    .Name(_) | .ImplicitMember(_) => {}
+    _ => quoteExpression(checker, state, callee)
+  }
+}
+
+/** A quoted closure becomes a `Lambda` node, and it has to consist of a single expression. */
+fn quoteClosure(var checker: Checker, var state: QuotationWalk, closure: Closure, at: Span) {
+  // A `Lambda` node names its parameters, so a parameter that destructures has nothing the tree could call it
+  for parameter in closure.parameters {
+    if const .Binding(_) = parameter.pattern.kind {
+      continue
+    }
+    reportHasNoNode(checker, state, "A parameter that destructures", parameter.pattern.span)
+    return
+  }
+  const parameters = lambdaParametersOf(checker, closure, at)
+  state.lambdas.set(at, parameters)
+  state.open.add(parameters)
+  quoteBlock(checker, state, closure.body)
+  const last = state.open.length() - 1
+  if last >= 0 {
+    const _ = state.open.removeAt(last)
+  }
+}
+
+/**
+ * The parameters the `Lambda` node names. A closure that wrote them down is read from the source; one that did not is
+ * read from the function type it was checked against, which is where `_` and a name from the expected type come from -
+ * both are already resolved by 4.4, so the tree only holds explicit parameters.
+ */
+fn lambdaParametersOf(var checker: Checker, closure: Closure, at: Span): List<QuotationParameter> {
+  const annotation = checker.expressionTypeHere(at) ?? checker.deferredType
+  const form = formOf(checker, annotation)
+  const forms = match form {
+    Some(found) => found.parameters
+    .None => []
+  }
+  var parameters: List<QuotationParameter> = []
+  for index in 0..forms.length() {
+    const shape = forms[index]
+    var name = shape.name ?? "_"
+    if index < closure.parameters.length() {
+      if const .Binding(written) = closure.parameters[index].pattern.kind {
+        name = written
+      }
+    }
+    parameters.add(QuotationParameter(name, resolveType(checker, shape.annotation)))
+  }
+  parameters
+}
+
+/** `if c { a } else { b }` is a `Conditional` node. Without an `else` it has no value, and a pattern binds a name. */
+fn quoteConditional(
+  var checker: Checker,
+  var state: QuotationWalk,
+  condition: Condition,
+  then: Block,
+  otherwise: Expression?,
+  at: Span,
+) {
+  match condition {
+    .Test(inner) => quoteExpression(checker, state, inner)
+    .Bind(_, _, _) => {
+      reportNotOneExpression(checker, state, "A pattern in an `if`", at)
+      return
+    }
+  }
+  quoteBlock(checker, state, then)
+  match otherwise {
+    Some(alternative) => quoteExpression(checker, state, alternative)
+    .None => {
+      checker.reportHere(
+        Diagnostic.error("An `if` without an `else` has no value, so it cannot be quoted", at)
+          .withNote("A `Conditional` node has all three parts: write the `else`")
+      )
+      state.isBroken = true
+    }
+  }
+}
+
+/** A block inside a quotation is one expression and nothing else: a statement has no node in an expression tree. */
+fn quoteBlock(var checker: Checker, var state: QuotationWalk, block: Block) {
+  if state.isBroken {
+    return
+  }
+  if block.statements.isEmpty() {
+    reportNotOneExpression(checker, state, "An empty block", block.span)
+    return
+  }
+  for index in 0..block.statements.length() {
+    const statement = block.statements[index]
+    const inner = match statement.kind {
+      .Evaluate(expression) => expression
+      _ => {
+        reportNotOneExpression(checker, state, statementNameOf(statement), statement.span)
+        return
+      }
+    }
+    if index > 0 {
+      reportNotOneExpression(checker, state, "A second statement", statement.span)
+      return
+    }
+    quoteExpression(checker, state, inner)
+  }
+}
+
+fn statementNameOf(statement: Statement): String {
+  match statement.kind {
+    .Bind(binding) => if binding.isVar { "A `var`" } else { "A `const`" }
+    .Assign(_, _) => "An assignment"
+    .For(_, _, _) => "A `for` loop"
+    .While(_, _) => "A `while` loop"
+    .Return(_) => "A `return`"
+    .Break => "A `break`"
+    .Continue => "A `continue`"
+    .Declare(_) => "A declaration"
+    .Evaluate(_) => "A statement"
+  }
+}
+
+// --- Names ----------------------------------------------------------------------------------------------------------
+
+/**
+ * Which node a name becomes. A parameter of one of the quoted closures is a `Parameter`, a binding from around the
+ * quotation a `Captured` - and a name that means anything else (a function, a type, a module `const`, a case) needs no
+ * entry: what it resolved to is in `Tables.resolutions`, and a module `const` is compile-time evaluable (gap 27), so it
+ * becomes a `Literal` and not a capture.
+ */
+fn quoteName(var checker: Checker, var state: QuotationWalk, at: Span) {
+  // `_`, `_2` and a name the expected function type gives: 4.4 recorded which parameter it is
+  if const Some(index) = implicitParameterIndexOf(checker, at) {
+    state.names.set(at, QuotationName.Parameter(index))
+    return
+  }
+  const module = checker.module
+  const binding = match checker.resolutionAt(module, at) {
+    Some(.Local(found)) => found
+    _ => {
+      return
+    }
+  }
+  if binding.value >= state.watermark {
+    // A parameter the closure wrote down itself: which one it is follows from the name, innermost closure first
+    if const Some(index) = writtenParameterIndexOf(checker, state, binding) {
+      state.names.set(at, QuotationName.Parameter(index))
+    }
+    return
+  }
+  const index = captureIndexOf(state, binding)
+  if index < 0 {
+    return
+  }
+  state.names.set(at, QuotationName.Captured(index))
+  if !state.firstReads.containsKey(index) {
+    state.firstReads.set(index, at)
+  }
+}
+
+fn implicitParameterIndexOf(checker: Checker, at: Span): Int? {
+  const module = checker.module
+  for adaptation in checker.adaptationsAt(module, at) {
+    if const .ImplicitParameter(index) = adaptation {
+      return Some(index)
+    }
+  }
+  None
+}
+
+/** A written closure parameter, by the name it was declared under: `\{ row => row.age \}`. */
+fn writtenParameterIndexOf(checker: Checker, state: QuotationWalk, binding: BindingId): Int? {
+  const name = checker.binding(binding).name
+  var frame = state.open.length() - 1
+  while frame >= 0 {
+    const parameters = state.open[frame]
+    for index in 0..parameters.length() {
+      if parameters[index].name == name {
+        return Some(index)
+      }
+    }
+    frame = frame - 1
+  }
+  None
+}
+
+fn captureIndexOf(state: QuotationWalk, binding: BindingId): Int {
+  for index in 0..state.captures.length() {
+    if state.captures[index].binding == binding {
+      return index
+    }
+  }
+  -1
+}
+
+// --- Captures and their `Encode` bound -------------------------------------------------------------------------------
+
+/**
+ * **Captured variables must be `Encode`** (gap 36): `captures()` hands the current values to whoever reads the tree, and
+ * a SQL driver binds them as parameters with its own `Encoder` while `assert` shows them in its message. So the bound is
+ * required here, with the witness a back end needs, and the message names the quoting parameter as the reason.
+ */
+fn encodedCaptures(
+  var checker: Checker,
+  state: QuotationWalk,
+  owner: String,
+  parameter: String,
+): List<QuotationCapture> {
+  const bound = match checker.wellKnown.encode {
+    Some(symbol) => checker.nominal(symbol, [])
+    // A workspace without a prelude has no `Encode`, and what is missing was reported where the name did not resolve
+    .None => {
+      return plainCaptures(checker, state)
+    }
+  }
+  var found: List<QuotationCapture> = []
+  for index in 0..state.captures.length() {
+    const binding = state.captures[index].binding
+    const local = checker.binding(binding)
+    const annotation = resolveType(checker, local.annotation)
+    const witness = witnessFor(checker, annotation, bound)
+    if const .Unresolved = witness {
+      const at = state.firstReads.get(index) ?? local.at
+      reportNotEncodable(checker, local.name, annotation, bound, owner, parameter, at)
+    }
+    found.add(QuotationCapture(binding, local.name, annotation, witness))
+  }
+  found
+}
+
+/** The same list without the bound, for a workspace whose prelude does not declare `Encode`. */
+fn plainCaptures(var checker: Checker, state: QuotationWalk): List<QuotationCapture> {
+  var found: List<QuotationCapture> = []
+  for capture in state.captures {
+    const local = checker.binding(capture.binding)
+    const annotation = resolveType(checker, local.annotation)
+    found.add(QuotationCapture(capture.binding, local.name, annotation, Witness.Unresolved))
+  }
+  found
+}
+
+// --- Messages -------------------------------------------------------------------------------------------------------
+
+/** A construct that is not one expression: a statement, an early `?`, an `if` without an `else`. */
+fn reportNotOneExpression(var checker: Checker, var state: QuotationWalk, what: String, at: Span) {
+  const wanted = state.wanted
+  const shown = checker.describe(wanted)
+  state.isBroken = true
+  checker.reportHere(
+    Diagnostic.error("{what} cannot appear in a quotation: `{shown}` holds a single expression", at)
+      .withNote("A quotation is one expression, so a quoted closure is one too: `\{ _.age >= minAge \}`")
+  )
+}
+
+/** A construct that *is* one expression but has no node an `ExpressionNode` could be: a tuple, a map, a range. */
+fn reportHasNoNode(var checker: Checker, var state: QuotationWalk, what: String, at: Span) {
+  const wanted = state.wanted
+  const shown = checker.describe(wanted)
+  state.isBroken = true
+  checker.reportHere(
+    Diagnostic.error("{what} has no node in an expression tree, so `{shown}` cannot hold it", at)
+      .withNote("`ExpressionNode` is part of the language standard: a new kind of node needs a new version of it")
+  )
+}
+
+/**
+ * A capture whose type is not `Encode`. Nothing is said where the type is not concrete: what a generic parameter of the
+ * enclosing declaration implements is decided where *that* one is called.
+ */
+fn reportNotEncodable(
+  var checker: Checker,
+  name: String,
+  annotation: TypeId,
+  bound: TypeId,
+  owner: String,
+  parameter: String,
+  at: Span,
+) {
+  if implementsBound(checker, annotation, bound) {
+    return
+  }
+  const shown = checker.describe(annotation)
+  var problem = Diagnostic.error("`{name}` is captured here and `{shown}` is not `Encode`", at)
+  if !owner.isEmpty() && !parameter.isEmpty() {
+    problem = problem.withNote("`{owner}` quotes its `{parameter}`, so `{name}` has to be `Encode`")
+  } else if !owner.isEmpty() {
+    problem = problem.withNote("The type of `{owner}` quotes its value, so `{name}` has to be `Encode`")
+  }
+  checker.reportHere(
+    problem.withNote("A quotation hands the captured values on, so what cannot be `Encode` is compared in a `match`")
+  )
+}

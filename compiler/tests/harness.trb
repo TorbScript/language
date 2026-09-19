@@ -110,6 +110,23 @@ public trait Encode {
   fn encode(self): String
 }
 
+/**
+ * `Expression<Value>` quotes what arrives at it: the argument is checked as an ordinary `Value` and handed over with its
+ * tree. Everything it captures has to be `Encode`, which is why the numbers and the collections below have it.
+ */
+public native type Expression<Value> {
+  source: String
+
+  native fn value(self): Value
+  native fn captures(self): List<Encode>
+}
+
+/** The one quotation every test file of the language is full of. */
+public native fn assert(condition: Expression<Bool>)
+
+/** `nameOf(user.email)` is `"email"`: an ordinary function over a quotation, not an intrinsic. */
+public native fn nameOf<Value>(expression: Expression<Value>): String
+
 public trait Length {
   fn length(self): Int
 
@@ -122,16 +139,16 @@ public trait Numeric with Add, Subtract, Multiply, Divide, Remainder, Equals, Co
 
 public trait Signed with Numeric, Negate {}
 
-public native type Int8 with Signed, Hash {}
-public native type Int32 with Signed, Hash {}
-public native type Int64 with Signed, Hash {}
-public native type UInt8 with Numeric, Hash {}
-public native type Float32 with Signed {}
-public native type Float64 with Signed {}
-public native type Bool with Equals, Hash, Show {}
-public native type Char with Equals, Compare, Hash, Show {}
+public native type Int8 with Signed, Hash, Encode {}
+public native type Int32 with Signed, Hash, Encode {}
+public native type Int64 with Signed, Hash, Encode {}
+public native type UInt8 with Numeric, Hash, Encode {}
+public native type Float32 with Signed, Encode {}
+public native type Float64 with Signed, Encode {}
+public native type Bool with Equals, Hash, Show, Encode {}
+public native type Char with Equals, Compare, Hash, Show, Encode {}
 
-public native type String with Equals, Compare, Hash, Show, Add, Slice {
+public native type String with Equals, Compare, Hash, Show, Add, Slice, Encode {
   native fn byteLength(self): Int64
   native fn isEmpty(self): Bool
 }
@@ -223,6 +240,25 @@ extend<Item: Show> List<Item> with Show {
   }
 }
 
+/** A quotation may capture a list or an option, so both carry `Encode` exactly as they do in the real prelude. */
+extend<Item: Encode> List<Item> with Encode {
+  fn encode(self): String {
+    "a list"
+  }
+}
+
+extend<Value: Encode> Option<Value> with Encode {
+  fn encode(self): String {
+    "an option"
+  }
+}
+
+extend<Key: Encode, Value: Encode> Map<Key, Value> with Encode {
+  fn encode(self): String {
+    "a map"
+  }
+}
+
 public native type ArrayList<Item> with List<Item>, From<Iterable<Item>> {
   native fn from(items: Iterable<Item>): ArrayList<Item>
 }
@@ -270,7 +306,7 @@ public use MutableIndexed, MutableSlice from "./types"
 public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
 public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
 public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
-public use print, panic, using, do from "./types"
+public use print, panic, using, do, assert, nameOf, Expression from "./types"
 public use Some, None from Option
 public use Ok, Error from Result
 """,
@@ -300,6 +336,42 @@ public type Probed {
   fn spanOf(self, written: String): Span {
     const start = source.indexOf(written).expect("`{written}` in the source")
     Span(start, start + written.byteLength())
+  }
+
+  /**
+   * The span of the **last** occurrence of `written`. A parameter is declared before its body reads it, so a test about
+   * a read of a parameter cannot use the first occurrence the way everything else does.
+   */
+  fn lastSpanOf(self, written: String): Span {
+    const length = source.byteLength()
+    var start = -1
+    var from = 0
+    while from < length {
+      const rest = source.slice(from..length)
+      const found = match rest.indexOf(written) {
+        Some(index) => index
+        .None => {
+          from = length
+          continue
+        }
+      }
+      start = from + found
+      from = start + 1
+    }
+    if start < 0 {
+      panic "`{written}` is not in the source"
+    }
+    Span(start, start + written.byteLength())
+  }
+
+  /** The adaptations of the last expression that is written exactly like this, in the order they apply. */
+  fn lastAdaptationsOf(self, written: String): List<String> {
+    const at = lastSpanOf(written)
+    var found: List<String> = []
+    for adaptation in checker.adaptationsAt(module, at) {
+      found.add(describeAdaptation(checker, adaptation))
+    }
+    found
   }
 
   /** The type of the expression that is written exactly like this, as a message would show it. */
@@ -375,6 +447,45 @@ public type Probed {
       shown.add(if capture.isVar { "var {name}" } else { name })
     }
     shown
+  }
+
+  /**
+   * The quotation at `written`, in a fixed order so that the lines are comparable: the type of the quoted expression,
+   * the captures in the order `Expression.captures()` returns them, then the quoted closures and the names inside - both
+   * named by the text that was written there, which is what a test can read.
+   */
+  fn quotationOf(self, written: String): List<String> {
+    const at = spanOf(written)
+    const found = checker.quotationAt(module, at).expect("a quotation at `{written}`")
+    var lines = ["value {checker.describe(found.annotation)}"]
+    for index in 0..found.captures.length() {
+      const capture = found.captures[index]
+      const shown = checker.describe(capture.annotation)
+      const witness = describeWitness(checker, capture.witness)
+      lines.add("capture {index} {capture.name}: {shown} through {witness}")
+    }
+    var inside: List<(Span, String)> = []
+    for (span, parameters) in found.lambdas {
+      var parts: List<String> = []
+      for parameter in parameters {
+        parts.add("{parameter.name}: {checker.describe(parameter.annotation)}")
+      }
+      inside.add((span, "lambda `{textAt(span)}` ({String.join(parts, separator: ", ")})"))
+    }
+    for (span, node) in found.names {
+      const shown = match node {
+        .Parameter(index) => "parameter {index}"
+        .Captured(index) => "capture {index}"
+      }
+      inside.add((span, "name `{textAt(span)}` {shown}"))
+    }
+    inside.sort({ (_.0.start, _.0.end) })
+    lines.addedAll(inside.map({ _.1 }).toList())
+  }
+
+  /** The text of one span of the source, which is how a test recognizes a node of a quotation. */
+  fn textAt(self, at: Span): String {
+    source.slice(at.start..at.end)
   }
 
   /** The receiver of the receiver closure at `written`. `Span(0, 0)` is the body of a receiver script. */
@@ -614,6 +725,9 @@ public fn describeAdaptation(checker: Checker, adaptation: Adaptation): String {
     .Variadic(element, from) => "variadic {checker.describe(element)} from {from}"
     .Spread => "spread"
     .Lazy => "lazy"
+    .Force => "force"
+    // The quotation is recorded under the span of the expression itself, which is the span this adaptation sits at
+    .Quote(_) => "quote"
     .TrailingClosure(parameter) => "trailing {parameter}"
     .ImplicitSelf(receiver) => "self {checker.binding(receiver).name}"
     .ImplicitParameter(index) => "parameter {index}"

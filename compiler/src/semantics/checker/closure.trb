@@ -5,9 +5,8 @@ use TypeId, FunctionForm, ParameterForm, ParameterMode from "./type"
 use Checker, Expectation, Resolution, Adaptation, LocalBinding, BindingId from "./context"
 use ClosureFrame, ReceiverClosure from "./context"
 use Target, formOf, noteCapture from "./name"
-use resolveType, hasVariable, unify, suppressVariables from "./unify"
+use resolveType, hasVariable, unify from "./unify"
 use checkBlock, bodyExpectation, inferredResult, scopeHere from "./statement"
-use expectationOf, deferClosureParameters, deferBlock from "./expression"
 use checkPattern from "./pattern"
 use requireIrrefutable from "./exhaustive"
 use typeFromReference from "./lowering"
@@ -35,10 +34,6 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
     .None => checker.deferredType
   }
   const form = formOf(checker, wanted)
-  // `filter(predicate: Expression<(row: Row) => Bool>)`: the closure is quoted instead of called, which is 4.8
-  if isQuotation(checker, wanted) {
-    return deferredClosure(checker, closure, wanted)
-  }
   const hasParameters = !closure.parameters.isEmpty()
   const written = parameterFormsOf(checker, closure, form, at)
   const parameters = written.forms
@@ -244,26 +239,6 @@ fn checkClosureBody(
     }
   }
   result
-}
-
-/**
- * A closure a later sub-milestone checks. Its body is still walked so that the type positions in it become types, and
- * the variables the expected type still holds are marked as answered - the construct is what is missing, not an
- * annotation, so "cannot infer" would be a message about the checker and not about the source.
- */
-fn deferredClosure(var checker: Checker, closure: Closure, wanted: TypeId): TypeId {
-  deferClosureParameters(checker, closure)
-  deferBlock(checker, closure.body)
-  suppressVariables(checker, wanted)
-  wanted
-}
-
-/** `Expression<Value>` quotes what arrives at it instead of evaluating it, which is milestone 4.8. */
-fn isQuotation(checker: Checker, wanted: TypeId): Bool {
-  if const .Nominal(symbol, _) = checker.types.form(wanted) {
-    return checker.wellKnown.symbolNamed("Expression") == Some(symbol)
-  }
-  false
 }
 
 // --- Receivers ------------------------------------------------------------------------------------------------------

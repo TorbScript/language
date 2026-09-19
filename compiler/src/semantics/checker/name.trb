@@ -120,7 +120,12 @@ fn localTarget(
       noteCapture(checker, binding)
       // Every read of a local `var` binding, in source order: what the dead-change rule counts (design 5.3)
       noteRead(checker, binding, at)
-      const annotation = checker.binding(binding).annotation
+      const local = checker.binding(binding)
+      // `fn orElse(self, fallback: lazy Value)`: reading the parameter forces the cell the caller filled in
+      if local.isLazy {
+        checker.adapted(at, Adaptation.Force)
+      }
+      const annotation = local.annotation
       Target(Resolution.Local(binding), annotation, form: formOf(checker, annotation), name: text)
     }
     // A `fn`, `type` or `trait` of a block, and a generic parameter that is in scope

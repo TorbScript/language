@@ -97,6 +97,8 @@ public type LocalBinding {
    * and a closure that may outlive the call may not capture one (BACKEND gap 14).
    */
   isParameter: Bool = false
+  /** A `lazy Value` parameter: every read of it forces the cell, which records `Adaptation.Force` (design 3.4). */
+  isLazy: Bool = false
 }
 
 /** One name in the scope chain. A list instead of a map: a scope has few names, and extending it must not copy one. */
@@ -291,8 +293,18 @@ public type Adaptation {
   case Variadic(element: TypeId, from: Int)
   /** `...expression` in an argument list. */
   case Spread
-  /** The argument of a `lazy` parameter is an expression, not a value. */
+  /**
+   * The argument of a `lazy` parameter is an expression, not a value: a thunk that is evaluated at most once. The
+   * bindings it reads are in `Tables.captures` under the same span, because the thunk *is* a closure.
+   */
   case Lazy
+  /** A read of a `lazy` parameter, which forces the cell the caller filled in. */
+  case Force
+  /**
+   * The argument of an `Expression<Value>` parameter, or the initializer of such a binding: it is quoted instead of
+   * being evaluated, and `Tables.quotations` under this very span says what tree it becomes.
+   */
+  case Quote(quotation: Span)
   /** The trailing closure fills the last parameter, whatever position it was written in. */
   case TrailingClosure(parameter: Int)
   /** A member of `self` that was written without it: `area()` inside a method of `Point`. */
@@ -384,6 +396,53 @@ public type BindingUse {
 }
 
 /**
+ * One quotation site, by the span of the expression that was quoted: everything milestone 5 needs to build the static
+ * `ExpressionNode` tree and the list of captured values without resolving a single name again.
+ *
+ * The tree itself is *not* stored: it is the syntax tree of that very span, and every node of it already has its type
+ * in `expressionTypes` and its target in `resolutions`. What cannot be worked out again is which name is a parameter of
+ * which quoted closure and which name is a capture, in the order `Expression.captures()` returns them - and that a
+ * provider may read the captured values, which is what the `Encode` witness is for.
+ */
+public type Quotation {
+  /** The `Value` of the `Expression<Value>` this quotation fills: the type of the quoted expression itself. */
+  annotation: TypeId
+  /** The bindings the quotation reads from the scope around it, in the order of their `Captured.index`. */
+  captures: List<QuotationCapture>
+  /** Every name inside that becomes a `Parameter` or a `Captured` node, by the span that wrote it. */
+  names: Map<Span, QuotationName>
+  /**
+   * The closures inside the quotation, by their span: the parameters their `Lambda` node names, in declaration order.
+   * A quotation of `{ _.age >= minAge }` has one entry, one whose expression is not a closure has none.
+   */
+  lambdas: Map<Span, List<QuotationParameter>>
+}
+
+/** One parameter of a quoted closure: `ExpressionNode.Parameter(index, name, of)`. */
+public type QuotationParameter {
+  /** What the tree calls it. An implicit parameter is called what the expected function type calls it, or `_`. */
+  name: String
+  annotation: TypeId
+}
+
+/** One captured binding: `ExpressionNode.Captured(index, name, of)`, and the value `captures()` has to hold. */
+public type QuotationCapture {
+  binding: BindingId
+  name: String
+  annotation: TypeId
+  /** `Encode` for the captured value (gap 36). `Unresolved` where the type does not have it and it was reported. */
+  witness: Witness
+}
+
+/** Which node of the tree a name inside a quotation becomes. */
+public type QuotationName {
+  /** A parameter of the quoted closure, by its position in the closure's parameter list. */
+  case Parameter(index: Int)
+  /** A binding from around the quotation, by its position in `Quotation.captures`. */
+  case Captured(index: Int)
+}
+
+/**
  * Everything milestone 5 reads, one of these per module. Keyed by the `Span` of the node it belongs to, as
  * milestone 3 keys its type positions: no two nodes of the same kind in a file have the same span.
  */
@@ -409,8 +468,13 @@ public type Tables {
    * witnesses of a `Dispatch` carry the same list; this table is the one a `.Direct` call has.
    */
   var witnesses: Map<Span, List<Witness>> = [:]
-  /** Per closure span: the bindings of the scope around it that its body reads. */
+  /**
+   * Per closure span: the bindings of the scope around it that its body reads. The argument of a `lazy` parameter has
+   * an entry too: the thunk it becomes is a closure, and `Adaptation.Lazy` at the same span is what marks it as one.
+   */
   var captures: Map<Span, List<Capture>> = [:]
+  /** Per quoted expression span: the tree and the captures milestone 5 has to build (design 4.8). */
+  var quotations: Map<Span, Quotation> = [:]
   /** Per receiver closure span, and at `Span(0, 0)` for a receiver script: the binding its receiver is reached under. */
   var receivers: Map<Span, ReceiverClosure> = [:]
   /**
@@ -585,6 +649,17 @@ public type Checker {
   var capturedBindings: Map<Int, Bool> = [:]
   /** The closures that stand straight as the argument of a call, by span: those are the ones that cannot escape. */
   var argumentClosures: Map<Span, Bool> = [:]
+
+  // --- Quotations (milestone 4.8) -------------------------------------------------------------------------------------
+
+  /**
+   * What is quoting the expression that is about to be checked: `assert` and `condition` for `assert(x > 1)`, the name
+   * of the binding and nothing for `const e: Expression<Bool> = x > 1`. Only the message about a capture that is not
+   * `Encode` reads them, and gap 36 asks that message to name the reason - so they are two plain names and not a
+   * sentence that would be built for every argument of every call.
+   */
+  var quotingOwner: String = ""
+  var quotingParameter: String = ""
 
   // --- Inference (milestone 4.4) --------------------------------------------------------------------------------------
 
@@ -864,6 +939,15 @@ public type Checker {
 
   fn capturesAt(self, module: ModuleId, at: Span): List<Capture>? {
     tables[module.value].captures.get(at)
+  }
+
+  /** One quotation site: the tree and the captures milestone 5 builds an `Expression<Value>` from. */
+  fn recordQuotation(var self, at: Span, found: Quotation) {
+    tables[module.value].quotations.set(at, found)
+  }
+
+  fn quotationAt(self, module: ModuleId, at: Span): Quotation? {
+    tables[module.value].quotations.get(at)
   }
 
   /** The receiver of one receiver closure, which is the one binding a bare name in it may look members up on. */

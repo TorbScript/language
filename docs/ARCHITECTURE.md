@@ -200,14 +200,16 @@ regardless.)
    generics, closures and inference included, so every call records the type arguments it was instantiated with, one
    witness per bound, and what every closure captures. **4.5 is done**: every `match` is checked for the cases it does
    not cover and for the arms nothing can reach, and every pattern position carries the plan milestone 5 lowers it
-   from. **4.6 is done as well**: every change goes through a path the
-   checker resolved and recorded, no two overlapping accesses of one call may run where one of them is a `var`, and a
-   change nobody reads afterwards is an error - which found a dozen reads of a place that a `var` argument had already
-   taken out, in the compiler's own sources. **4.7 is done** too: receiver closures, the innermost-receiver rule,
-   property commands, and receiver scripts - `torb check` checks every `project.trb` of the repository against the
-   `Project` of `std/project`, and `examples/config-dsl/config.trb` against the type its `Sandbox.load` names. What is
-   left is the quotations (4.8) and the generated members of a literal type (4.10), recorded as "not checked yet" and
-   counted by `torb check --statistics`.
+   from. **4.6 is done as well**: every change goes through a path the checker resolved and recorded, no two overlapping
+   accesses of one call may run where one of them is a `var`, and a change nobody reads afterwards is an error - which
+   found a dozen reads of a place that a `var` argument had already taken out, in the compiler's own sources. **4.7 is
+   done** too: receiver closures, the innermost-receiver rule, property commands, and receiver scripts - `torb check`
+   checks every `project.trb` of the repository against the `Project` of `std/project`, and
+   `examples/config-dsl/config.trb` against the type its `Sandbox.load` names. **4.8 is done**: an `Expression<Value>`
+   parameter or binding quotes what arrives at it, so every one of the repository's 1200 `assert`s records the tree
+   milestone 5 has to build, the captures it hands on and their `Encode` witness, and `examples/query-provider`
+   translates `filter { _.age >= minAge }` to SQL. What is left is the generated members of a literal type (4.10),
+   recorded as "not checked yet" and counted by `torb check --statistics`.
    `std/` and `compiler/` are at 100%. The first thing it found by checking the compiler itself was that
    `compiler/src/ir/mangle.trb` mixed the `UInt8` of a byte with `Int64` arithmetic; checking the generic code found
    `Set.new()`, which the standard library never had.

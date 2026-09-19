@@ -144,3 +144,28 @@ group "`var` arguments" {
     assert(problems(source).isEmpty())
   }
 }
+
+/**
+ * A thunk and a quotation are checked where they are written, so a name in one is an ordinary read of the binding around
+ * it - and that read is what keeps a change before it alive, wherever the callee evaluates it.
+ */
+group "Reads inside a thunk and inside a quotation (4.8)" {
+  const helpers = "\nfn orDefault(value: Int?, fallback: lazy Int): Int \{\n"
+    + "  if value.isSome() \{ 0 \} else \{ fallback \}\n\}\n\n"
+    + "fn quoted(condition: Expression<Bool>): String \{\n  condition.source\n\}\n"
+
+  test "a read inside a `lazy` argument is a read" {
+    const source = "fn probe(): Int \{\n  var total = 0\n  total = 1\n  orDefault(None, total)\n\}\n{helpers}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "a read inside a quotation is a read" {
+    const source = "fn probe(): String \{\n  var total = 0\n  total = 1\n  quoted(total == 1)\n\}\n{helpers}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "a change with nothing but a thunk that reads something else after it is still dead" {
+    const source = "fn probe(): Int \{\n  var total = 0\n  var other = 2\n  total = 1\n  orDefault(None, other)\n\}\n{helpers}"
+    assert(problems(source) == ["This change has no effect: `total` is never read again"])
+  }
+}

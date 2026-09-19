@@ -3,6 +3,7 @@ use Diagnostic from "../../syntax/diagnostic"
 use TypeId, TypeForm, TypeTable, TupleField, FunctionForm, ParameterForm, ParameterMode, ParameterId, Bound from "./type"
 use VariableId, Witness from "./type"
 use Checker, Adaptation, Resolution, Dispatch from "./context"
+use Quotation, QuotationCapture, QuotationParameter from "./context"
 
 /**
  * "The same type" the way the language means it.
@@ -643,6 +644,32 @@ fn pruneAt(var checker: Checker, at: Span) {
       checker.setWitnesses(at, solved)
     }
   }
+  // A quotation holds the types of the quoted expression, of its captures and of the parameters of its closures, and
+  // `nameOf(limit)` learns its `Value` from the argument - so they are solved here like everything else (4.8)
+  if const Some(found) = checker.quotationAt(checker.module, at) {
+    const solved = pruneQuotation(checker, found)
+    checker.recordQuotation(at, solved)
+  }
+}
+
+fn pruneQuotation(var checker: Checker, quotation: Quotation): Quotation {
+  var captures: List<QuotationCapture> = []
+  for capture in quotation.captures {
+    const annotation = resolveType(checker, capture.annotation)
+    const witness = pruneWitness(checker, capture.witness)
+    captures.add(QuotationCapture(capture.binding, capture.name, annotation, witness))
+  }
+  var lambdas: Map<Span, List<QuotationParameter>> = [:]
+  for (span, parameters) in quotation.lambdas {
+    var solved: List<QuotationParameter> = []
+    for parameter in parameters {
+      const annotation = resolveType(checker, parameter.annotation)
+      solved.add(QuotationParameter(parameter.name, annotation))
+    }
+    lambdas.set(span, solved)
+  }
+  const annotation = resolveType(checker, quotation.annotation)
+  Quotation(annotation, captures, quotation.names, lambdas)
 }
 
 fn pruneAdaptation(var checker: Checker, adaptation: Adaptation): Adaptation {
