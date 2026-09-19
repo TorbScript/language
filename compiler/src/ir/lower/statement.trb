@@ -1,0 +1,432 @@
+use Span from "../../syntax/source"
+use Statement, Block, Binding, Condition, Expression, Pattern from "../../syntax/ast"
+use IrTypeId, Slot, Terminator, IntrinsicOperation, Instruction, Reference, PathStep, borrowed from "../ir"
+use FunctionBuilder, addLocal, addTemporary, addBlock, emit from "../build"
+use numericKindOf, layoutOfType from "../verify"
+use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf from "./context"
+use isVoidType, finishBlock, continueIn from "./context"
+use enterLoop, leaveLoop, breakTarget, continueTarget, markBreak from "./context"
+use lowerExpression, lowerValue, voidSlot, integerSlot, emitIntrinsic from "./expression"
+
+/**
+ * Statements, blocks and the two loops. A block is a value where its last statement is an expression, which is the
+ * same rule the checker follows - so `const x = \{ ... value \}` needs nothing of its own here.
+ *
+ * `for` is lowered **without an iterator** where the subject is written as a range with both ends: a counter, a
+ * comparison and an increment, which is what "only if it needs no trait dispatch" means. Every other `for` needs
+ * `Iterable.iterator()` and the `Option` its `next()` answers, so it waits for 5.5 and 5.6.
+ */
+
+/**
+ * Every statement of a block, and the value of the block where somebody takes one. Nothing is emitted after a
+ * statement that diverges: the instructions would land in a block nothing reaches, which the verifier rejects.
+ */
+public fn lowerBlockInto(var lowering: Lowering, var builder: FunctionBuilder, block: Block, destination: Slot?) {
+  const found = lowerStatements(lowering, builder, block, destination)
+  // A block that does not end in an expression is worth `Void`, and somebody may still be taking that value
+  if found.isSome() || lowering.isDiverged || destination.isNone() {
+    return
+  }
+  const _ = voidSlot(lowering, builder, destination)
+}
+
+/**
+ * The value of a block, in whatever slot it already is. Used where nothing forces a slot on it - the body of a
+ * function, whose value the `return` carries - so that `fn f(): Point \{ ... point \}` returns the local itself
+ * instead of a copy of it.
+ */
+public fn lowerBlockValue(var lowering: Lowering, var builder: FunctionBuilder, block: Block): Slot? {
+  lowerStatements(lowering, builder, block, None)
+}
+
+fn lowerStatements(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  block: Block,
+  destination: Slot?,
+): Slot? {
+  const last = block.statements.length() - 1
+  for index in 0..block.statements.length() {
+    if lowering.isDiverged || !lowering.isSupported {
+      return None
+    }
+    const statement = block.statements[index]
+    if index == last {
+      if const .Evaluate(expression) = statement.kind {
+        return Some(lowerExpression(lowering, builder, expression, destination))
+      }
+    }
+    lowerStatement(lowering, builder, statement)
+  }
+  None
+}
+
+public fn lowerStatement(var lowering: Lowering, var builder: FunctionBuilder, statement: Statement) {
+  if !lowering.isSupported {
+    return
+  }
+  match statement.kind {
+    // A `fn`, a `type` or a `trait` inside a block is reached through a call of it, so nothing is emitted here
+    .Declare(_) => {}
+    .Bind(binding) => lowerBinding(lowering, builder, binding, statement.span)
+    .Assign(target, value) => lowerAssignment(lowering, builder, target, value, statement.span)
+    .While(condition, body) => lowerWhile(lowering, builder, condition, body, statement.span)
+    .For(pattern, iterable, body) => lowerFor(lowering, builder, pattern, iterable, body, statement.span)
+    .Return(value) => lowerReturn(lowering, builder, value, statement.span)
+    .Break => lowerBreak(lowering, builder, statement.span)
+    .Continue => lowerContinue(lowering, builder, statement.span)
+    .Evaluate(expression) => {
+      const _ = lowerExpression(lowering, builder, expression, None)
+    }
+  }
+}
+
+// --- Bindings and assignment ----------------------------------------------------------------------------------------
+
+/** `const x = e`, `var x = e`: one local slot, and the value is computed straight into it. */
+fn lowerBinding(var lowering: Lowering, var builder: FunctionBuilder, binding: Binding, at: Span) {
+  const pattern = binding.pattern
+  if isWildcardPattern(pattern) {
+    const _ = lowerValue(lowering, builder, binding.value)
+    return
+  }
+  // `const (line, column) = lines.lineAndColumn(offset)`: one slot per position, out of one temporary
+  if const .TuplePattern(items) = pattern.kind {
+    const source = lowerValue(lowering, builder, binding.value)
+    if !lowering.isSupported {
+      return
+    }
+    bindTuple(lowering, builder, items, source, pattern.span)
+    return
+  }
+  const name = match bindingNameOf(pattern) {
+    Some(found) => found
+    .None => {
+      // A pattern that decides which case a value is, is a decision tree, and those are milestone 5.5's
+      reportUnsupported(lowering, "a binding that takes a value apart", pattern.span)
+      return
+    }
+  }
+  const declared = pattern.span
+  const annotation = match patternTypeOf(lowering, declared) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a binding without a type", declared)
+      return
+    }
+  }
+  const slot = addLocal(builder, annotation, name)
+  const _ = lowerExpression(lowering, builder, binding.value, Some(slot))
+  lowering.slots.set(declared, slot)
+}
+
+/**
+ * The positions of a tuple pattern, read out of the value that was matched. Only the irrefutable patterns are here -
+ * a name, `_` and another tuple - because everything else decides which case a value is.
+ */
+fn bindTuple(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  items: List<Pattern>,
+  source: Slot,
+  at: Span,
+) {
+  const owner = builder.typeOfSlot(source)
+  const layout = match layoutOfType(lowering.program, owner) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a tuple pattern over a value without a layout", at)
+      return
+    }
+  }
+  const shape = lowering.program.layoutAt(layout)
+  if shape.fields.length() != items.length() {
+    reportUnsupported(lowering, "a tuple pattern with the wrong number of positions", at)
+    return
+  }
+  for index in 0..items.length() {
+    const item = items[index]
+    if isWildcardPattern(item) {
+      continue
+    }
+    const annotation = shape.fields[index].annotation
+    if const .TuplePattern(nested) = item.kind {
+      const inner = addTemporary(builder, annotation)
+      emit(builder, Instruction.Read(inner, Reference(source, [PathStep.TupleField(layout, index)])))
+      bindTuple(lowering, builder, nested, inner, item.span)
+      continue
+    }
+    const name = match bindingNameOf(item) {
+      Some(found) => found
+      .None => {
+        reportUnsupported(lowering, "a tuple pattern that takes a position apart", item.span)
+        return
+      }
+    }
+    const slot = addLocal(builder, annotation, name)
+    emit(builder, Instruction.Read(slot, Reference(source, [PathStep.TupleField(layout, index)])))
+    lowering.slots.set(item.span, slot)
+  }
+}
+
+fn bindingNameOf(pattern: Pattern): String? {
+  if const .Binding(name) = pattern.kind {
+    if name == "_" {
+      return None
+    }
+    return Some(name)
+  }
+  None
+}
+
+fn isWildcardPattern(pattern: Pattern): Bool {
+  match pattern.kind {
+    .Wildcard => true
+    .Binding(name) => name == "_"
+    _ => false
+  }
+}
+
+fn patternTypeOf(var lowering: Lowering, at: Span): IrTypeId? {
+  const module = lowering.module
+  const found = lowering.checker.patternType(module, at)?
+  if lowering.checker.isBroken(found) {
+    return None
+  }
+  Some(irTypeOf(lowering, found))
+}
+
+/** `x = e`: a plain local. A field, an element and a slice are places, which is milestone 5.9's. */
+fn lowerAssignment(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  target: Expression,
+  value: Expression,
+  at: Span,
+) {
+  const module = lowering.module
+  const resolution = match lowering.checker.resolutionAt(module, target.span) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "an assignment the checker did not resolve", at)
+      return
+    }
+  }
+  const binding = match resolution {
+    .Local(found) => found
+    _ => {
+      reportUnsupported(lowering, "an assignment to a place", at)
+      return
+    }
+  }
+  const declared = lowering.checker.binding(binding).at
+  const slot = match lowering.slots.get(declared) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "an assignment to a captured binding", at)
+      return
+    }
+  }
+  const _ = lowerExpression(lowering, builder, value, Some(slot))
+}
+
+// --- `return`, `break`, `continue` ----------------------------------------------------------------------------------
+
+fn lowerReturn(var lowering: Lowering, var builder: FunctionBuilder, value: Expression?, at: Span) {
+  const result = builder.function.signature.result
+  const expression = match value {
+    Some(found) => found
+    .None => {
+      finishBlock(lowering, builder, Terminator.Return(None))
+      return
+    }
+  }
+  if isVoidType(lowering, result) {
+    // `return Void` in a function that produces nothing: the value is evaluated and thrown away
+    const _ = lowerValue(lowering, builder, expression)
+    finishBlock(lowering, builder, Terminator.Return(None))
+    return
+  }
+  const slot = lowerValue(lowering, builder, expression)
+  if !lowering.isSupported {
+    return
+  }
+  finishBlock(lowering, builder, Terminator.Return(Some(borrowed(slot))))
+}
+
+fn lowerBreak(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
+  const target = match breakTarget(lowering) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "`break` outside of a loop", at)
+      return
+    }
+  }
+  markBreak(lowering)
+  finishBlock(lowering, builder, Terminator.Jump(target))
+}
+
+fn lowerContinue(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
+  const target = match continueTarget(lowering) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "`continue` outside of a loop", at)
+      return
+    }
+  }
+  finishBlock(lowering, builder, Terminator.Jump(target))
+}
+
+// --- `while` --------------------------------------------------------------------------------------------------------
+
+/**
+ * `while c { ... }`: the condition is a block of its own, because the back edge jumps to it. A `while true` without a
+ * `break` never ends, so nothing after it is reachable - and the block after it stays an empty `unreachable` marker.
+ */
+fn lowerWhile(var lowering: Lowering, var builder: FunctionBuilder, condition: Condition, body: Block, at: Span) {
+  const test = match condition {
+    .Test(inner) => inner
+    .Bind(_, _, _) => {
+      reportUnsupported(lowering, "`while const` and `while var`", at)
+      return
+    }
+  }
+  const location = locationOf(lowering, at)
+  const check = addBlock(builder, "while", Some(location))
+  const inner = addBlock(builder, "body", Some(location))
+  const done = addBlock(builder, "done", Some(location))
+  finishBlock(lowering, builder, Terminator.Jump(check))
+  continueIn(lowering, builder, check)
+  const scrutinee = lowerValue(lowering, builder, test)
+  if !lowering.isSupported {
+    return
+  }
+  finishBlock(lowering, builder, Terminator.Branch(scrutinee, inner, done))
+  continueIn(lowering, builder, inner)
+  enterLoop(lowering, done, check)
+  lowerBlockInto(lowering, builder, body, None)
+  const broke = leaveLoop(lowering)
+  if !lowering.isDiverged {
+    finishBlock(lowering, builder, Terminator.Jump(check))
+  }
+  continueIn(lowering, builder, done)
+  if neverEnds(test) && !broke {
+    lowering.isDiverged = true
+  }
+}
+
+/** `while true` is the one loop whose end the checker knows nothing follows. */
+fn neverEnds(test: Expression): Bool {
+  if const .BoolLiteral(value) = test.kind {
+    return value
+  }
+  false
+}
+
+// --- `for` over a range ---------------------------------------------------------------------------------------------
+
+/**
+ * `for index in 0..count`: a counter, a comparison and an increment. Both ends are evaluated once, in source order,
+ * into slots of their own - a `for` evaluates its subject once (gap 40), and the end must not change with the body.
+ *
+ * Everything else - a collection, a pipeline, an inclusive range, a range without both ends - goes through
+ * `Iterable.iterator()` and the `Option` that `next()` answers, which needs the witness tables of 5.6 and the decision
+ * trees of 5.5.
+ */
+/** The two ends of a range that is written out. Everything else the `for` of 5.6 iterates through an `Iterable`. */
+fn rangeEndsOf(var lowering: Lowering, iterable: Expression, at: Span): (Expression, Expression)? {
+  const (from, to, isInclusive) = match iterable.kind {
+    .RangeLiteral(first, second, inclusive) => (first, second, inclusive)
+    _ => {
+      reportUnsupported(lowering, "`for` over anything but a range of integers", at)
+      return None
+    }
+  }
+  if isInclusive {
+    reportUnsupported(lowering, "`for` over an inclusive range", at)
+    return None
+  }
+  const start = match from {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "`for` over a range without both ends", at)
+      return None
+    }
+  }
+  const end = match to {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "`for` over a range without both ends", at)
+      return None
+    }
+  }
+  Some((start, end))
+}
+
+fn lowerFor(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  pattern: Pattern,
+  iterable: Expression,
+  body: Block,
+  at: Span,
+) {
+  const (start, end) = match rangeEndsOf(lowering, iterable, at) {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  const item = match patternTypeOf(lowering, pattern.span) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "`for` over a range without an item type", at)
+      return
+    }
+  }
+  const kind = match numericKindOf(lowering.program, item) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "`for` over a range of something that is not a number", at)
+      return
+    }
+  }
+  const name = bindingNameOf(pattern) ?? ""
+  if !isWildcardPattern(pattern) && name.isEmpty() {
+    reportUnsupported(lowering, "`for` with a pattern that takes the item apart", pattern.span)
+    return
+  }
+  const counter = addLocal(builder, item, name)
+  const _ = lowerExpression(lowering, builder, start, Some(counter))
+  const limit = addTemporary(builder, item)
+  const _ = lowerExpression(lowering, builder, end, Some(limit))
+  if !lowering.isSupported {
+    return
+  }
+  if !name.isEmpty() {
+    lowering.slots.set(pattern.span, counter)
+  }
+  const location = locationOf(lowering, at)
+  const check = addBlock(builder, "for", Some(location))
+  const inner = addBlock(builder, "body", Some(location))
+  const step = addBlock(builder, "step", Some(location))
+  const done = addBlock(builder, "done", Some(location))
+  finishBlock(lowering, builder, Terminator.Jump(check))
+  continueIn(lowering, builder, check)
+  const boolean = booleanTypeOf(lowering)
+  const scrutinee = addTemporary(builder, boolean)
+  emitIntrinsic(lowering, builder, Some(scrutinee), IntrinsicOperation.Less, Some(kind), [counter, limit], at)
+  finishBlock(lowering, builder, Terminator.Branch(scrutinee, inner, done))
+  continueIn(lowering, builder, inner)
+  enterLoop(lowering, done, step)
+  lowerBlockInto(lowering, builder, body, None)
+  const _ = leaveLoop(lowering)
+  if !lowering.isDiverged {
+    finishBlock(lowering, builder, Terminator.Jump(step))
+  }
+  continueIn(lowering, builder, step)
+  const one = integerSlot(lowering, builder, 1, item)
+  emitIntrinsic(lowering, builder, Some(counter), IntrinsicOperation.Add, Some(kind), [counter, one], at)
+  finishBlock(lowering, builder, Terminator.Jump(check))
+  continueIn(lowering, builder, done)
+}

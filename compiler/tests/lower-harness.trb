@@ -1,0 +1,67 @@
+use workspaceWith from "./harness"
+use check from "../src/semantics/check"
+use printFunction from "../src/ir/print"
+use verifyProgram from "../src/ir/verify"
+use Lowering from "../src/ir/lower/context"
+use lowerChecked, loweredText from "../src/ir/lower/lower"
+
+/**
+ * What the three tests of the lowering ask of one in-memory program: the IR text of one function, the text of the whole
+ * program, and which constructs blocked a function.
+ *
+ * Every program is checked first and has to be clean - the lowering reads the checker's tables, so a program with a
+ * mistake in it would be a test about the wrong thing - and every function that comes out is run through the verifier
+ * by the same question that pins its text. A snapshot that matches and a body that is malformed would otherwise pass
+ * together, which is exactly the bug a lowering makes on an untyped interpreter.
+ */
+public fn lowered(source: String): Lowering {
+  const tree = workspaceWith(["app/src/main.trb": source])
+  const checked = check(tree, ["app"])
+  // A mistake in the program under test has to fail the test that uses it, with the message in the output
+  for file in checked.files {
+    for diagnostic in file.diagnostics {
+      assert(diagnostic.message == file.path)
+    }
+  }
+  lowerChecked(checked)
+}
+
+/** One function of the program, with the verifier's findings in its place if it has any. */
+public fn irOf(source: String, name: String): String {
+  var found = lowered(source)
+  const problems = verifyProgram(found.program)
+  if !problems.isEmpty() {
+    return String.join(problems, separator: "\n")
+  }
+  if !found.program.problems.isEmpty() {
+    return String.join(found.program.problems, separator: "\n")
+  }
+  for function in found.program.functions {
+    if function.name == name {
+      return printFunction(found.program, function)
+    }
+  }
+  "there is no function `{name}`"
+}
+
+/** The whole program: the layouts and the static values as well as the functions. */
+public fn textOf(source: String): String {
+  var found = lowered(source)
+  loweredText(found)
+}
+
+/** Which constructs blocked a function, in the order they were first seen. */
+public fn unsupportedIn(source: String): List<String> {
+  var found = lowered(source)
+  var shown: List<String> = []
+  for entry in found.unsupported {
+    shown.add(entry.what)
+  }
+  shown
+}
+
+/** How many functions of the program got a body, and how many stayed an `unreachable` stub. */
+public fn countsOf(source: String): (Int, Int) {
+  var found = lowered(source)
+  (found.lowered, found.stubbed)
+}

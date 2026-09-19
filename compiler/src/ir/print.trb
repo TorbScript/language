@@ -59,11 +59,16 @@ public fn printFunction(program: IrProgram, function: IrFunction): String {
 
 fn functionLines(program: IrProgram, function: IrFunction): List<String> {
   var lines: List<String> = []
-  const prefix = match function.kind {
-    .Plain => ""
-    .TaskResume => "task "
+  const head = "({printParameters(program, function.signature)}) -> {printResult(program, function.signature)}"
+  // A `native fn` the runtime provides has no body at all: the symbol it is is everything a back end needs
+  if const .Runtime(symbol) = function.kind {
+    return ["runtime fn {function.name}{head} = {symbol}"]
   }
-  lines.add("{prefix}fn {function.name}({printParameters(program, function.signature)}) -> {printResult(program, function.signature)} \{")
+  const prefix = match function.kind {
+    .TaskResume => "task "
+    _ => ""
+  }
+  lines.add("{prefix}fn {function.name}{head} \{")
   for index in 0..function.slots.length() {
     lines.add("  {printSlot(program, index, function.slots[index])}")
   }

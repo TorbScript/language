@@ -1,0 +1,782 @@
+use Span from "../../syntax/source"
+use Expression, Argument, TextSegment, Condition, Block from "../../syntax/ast"
+use PrefixOperator, InfixOperator from "../../syntax/ast"
+use SymbolId from "../../semantics/symbols"
+use LiteralValue from "../../semantics/checker/type"
+use Adaptation from "../../semantics/checker/context"
+use IrTypeId, IrType, Slot, BlockId, LocationId, Instruction, Terminator, Reference, PathStep from "../ir"
+use Intrinsic, IntrinsicOperation, NumericKind, StaticContents, LayoutId from "../ir"
+use FunctionBuilder, addTemporary, addBlock, emit from "../build"
+use numericKindOf, layoutOfType from "../verify"
+use describeIrType from "../print"
+use evaluateConstant, staticOfConstant from "../constant"
+use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
+use internStatic, isNeverType, finishBlock, continueIn from "./context"
+use lowerCall, lowerOperator, lowerConstruct from "./call"
+use lowerBlockInto from "./statement"
+
+/**
+ * Every expression of the monomorphic part of the language, as instructions over numbered slots.
+ *
+ * `destination` is a hint and not a contract: where the caller already has a slot for the value - a local it is bound
+ * to, the result of the `if` both arms produce - the value is computed *into* that slot, and only a value that is
+ * already somewhere else is copied. That is what keeps one value to one defining slot, which is what the ownership
+ * pass of 5.4 needs, and it is why the arms of an `if` need no phi node and no join instruction.
+ *
+ * Evaluation order is source order, always (decided gap 1): the receiver first, then the arguments in written order,
+ * then the defaults. Nothing here reorders anything - `Adaptation.Reorder` is replayed by moving finished slots into
+ * their parameter positions, never by evaluating out of order.
+ */
+public fn lowerExpression(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  expression: Expression,
+  destination: Slot?,
+): Slot {
+  if !lowering.isSupported {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  const annotation = match typeAtSpan(lowering, expression.span) {
+    Some(found) => found
+    .None => {
+      return unsupportedSlot(lowering, builder, destination, "an expression without a type", expression.span)
+    }
+  }
+  if !canReplayAdaptations(lowering, expression.span) {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  // Every literal, including a negated one, is static data: the checker already decided which type it adapted to
+  if isLiteralExpression(expression) {
+    return lowerLiteral(lowering, builder, destination, expression, annotation)
+  }
+  match expression.kind {
+    .Name(_) | .Member(_, _, _) | .ImplicitMember(_) => {
+      lowerReference(lowering, builder, destination, expression, annotation)
+    }
+    .Call(callee, arguments, _) => lowerCall(lowering, builder, destination, expression, callee, arguments, annotation)
+    .Unary(operator, operand) => lowerUnary(lowering, builder, destination, expression, operator, operand, annotation)
+    .Binary(operator, left, right) => {
+      lowerBinary(lowering, builder, destination, expression, operator, left, right, annotation)
+    }
+    .If(condition, then, otherwise) => {
+      lowerIf(lowering, builder, destination, expression, condition, then, otherwise, annotation)
+    }
+    .Block(block) => {
+      const target = valueSlot(lowering, builder, destination, annotation)
+      lowerBlockInto(lowering, builder, block, Some(target))
+      target
+    }
+    .TupleLiteral(items) => lowerTuple(lowering, builder, destination, items, annotation, expression.span)
+    .Index(_, _) => unsupportedSlot(lowering, builder, destination, "`a[key]`", expression.span)
+    .ListLiteral(_) => unsupportedSlot(lowering, builder, destination, "a list literal", expression.span)
+    .MapLiteral(_) => unsupportedSlot(lowering, builder, destination, "a map literal", expression.span)
+    .RangeLiteral(_, _, _) => unsupportedSlot(lowering, builder, destination, "a range as a value", expression.span)
+    .Try(_) => unsupportedSlot(lowering, builder, destination, "`?`", expression.span)
+    .Closure(_) => unsupportedSlot(lowering, builder, destination, "a closure", expression.span)
+    .Match(_, _) => unsupportedSlot(lowering, builder, destination, "`match`", expression.span)
+    .Generic(_, _) => unsupportedSlot(lowering, builder, destination, "a generic call", expression.span)
+    .TextLiteral(_) => unsupportedSlot(lowering, builder, destination, "string interpolation", expression.span)
+    _ => unsupportedSlot(lowering, builder, destination, "an expression the front end rejected", expression.span)
+  }
+}
+
+/** The value of an expression that nothing has a slot for yet. */
+public fn lowerValue(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
+  lowerExpression(lowering, builder, expression, None)
+}
+
+// --- Slots ----------------------------------------------------------------------------------------------------------
+
+/** The slot an expression produces into: the one the caller asked for, or a temporary of its own. */
+public fn valueSlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  annotation: IrTypeId,
+): Slot {
+  if const Some(slot) = destination {
+    return slot
+  }
+  // `Never` has no values, so a slot may not have that type: the expression diverges and nothing reads this one
+  const inner = if isNeverType(lowering, annotation) { voidTypeOf(lowering) } else { annotation }
+  addTemporary(builder, inner)
+}
+
+/** A value that is already in a slot, moved into the destination where the caller asked for one. */
+public fn copiedInto(var builder: FunctionBuilder, destination: Slot?, source: Slot): Slot {
+  if const Some(slot) = destination {
+    if slot != source {
+      emit(builder, Instruction.Copy(slot, source))
+    }
+    return slot
+  }
+  source
+}
+
+/** A construct outside of this sub-milestone: reported once, and the function becomes an `unreachable` stub. */
+public fn unsupportedSlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  what: String,
+  at: Span,
+): Slot {
+  reportUnsupported(lowering, what, at)
+  abandonedSlot(lowering, builder, destination)
+}
+
+/**
+ * A slot for a value nobody takes: the result of a statement, and everything in a body that is being walked only to
+ * get out of it. One `Void` slot per function is enough for all of them, because nothing ever reads one.
+ */
+public fn abandonedSlot(var lowering: Lowering, var builder: FunctionBuilder, destination: Slot?): Slot {
+  if const Some(slot) = destination {
+    return slot
+  }
+  if const Some(known) = lowering.hole {
+    return known
+  }
+  const annotation = voidTypeOf(lowering)
+  const made = addTemporary(builder, annotation)
+  lowering.hole = Some(made)
+  made
+}
+
+// --- Adaptations ----------------------------------------------------------------------------------------------------
+
+/**
+ * Whether every adaptation the checker recorded for this expression can be replayed here. The ones that cannot are
+ * named one by one rather than as "an adaptation", because each of them is a different later sub-milestone.
+ */
+fn canReplayAdaptations(var lowering: Lowering, at: Span): Bool {
+  const module = lowering.module
+  const adaptations = lowering.checker.adaptationsAt(module, at)
+  for adaptation in adaptations {
+    const blocked = match adaptation {
+      .ToTraitValue(_, _) => "a value used as a trait-typed value"
+      .Convert(_, _) => "a conversion through `From`"
+      .ShowValue(_) => "string interpolation"
+      .Delegate(_) => "`by` delegation"
+      .Lazy => "a `lazy` argument"
+      .Spread => "`...` in an argument list"
+      .Variadic(_, _) => "a variadic argument list"
+      .ImplicitParameter(_) => "an implicit closure parameter"
+      _ => ""
+    }
+    if !blocked.isEmpty() {
+      reportUnsupported(lowering, blocked, at)
+      return false
+    }
+  }
+  true
+}
+
+// --- Literals -------------------------------------------------------------------------------------------------------
+
+/** Whether the whole expression is one literal: the four kinds, a plain text, and a negated number. */
+public fn isLiteralExpression(expression: Expression): Bool {
+  match expression.kind {
+    .IntegerLiteral(_) | .FloatLiteral(_) | .BoolLiteral(_) | .CharLiteral(_) => true
+    .TextLiteral(segments) => isPlainText(segments)
+    .Unary(operator, operand) => {
+      if const .Negate = operator {
+        return isNumberLiteral(operand)
+      }
+      false
+    }
+    _ => false
+  }
+}
+
+fn isPlainText(segments: List<TextSegment>): Bool {
+  for segment in segments {
+    if const .Interpolated(_) = segment {
+      return false
+    }
+  }
+  true
+}
+
+fn isNumberLiteral(operand: Expression): Bool {
+  match operand.kind {
+    .IntegerLiteral(_) | .FloatLiteral(_) => true
+    _ => false
+  }
+}
+
+fn lowerLiteral(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  annotation: IrTypeId,
+): Slot {
+  const value = match evaluateConstant(lowering, expression, Some(annotation)) {
+    Some(found) => found
+    .None => {
+      return unsupportedSlot(lowering, builder, destination, "a literal the back end cannot read", expression.span)
+    }
+  }
+  constantSlot(lowering, builder, destination, value.contents, value.annotation)
+}
+
+/** A slot that holds one static value. Two literals of the same value are one static, whatever they are written in. */
+public fn constantSlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  contents: StaticContents,
+  annotation: IrTypeId,
+): Slot {
+  const identifier = internStatic(lowering, contents, annotation)
+  const target = valueSlot(lowering, builder, destination, annotation)
+  emit(builder, Instruction.Constant(target, identifier))
+  target
+}
+
+/** An integer of a known type as static data: the step of a `for`, the zero a text comparison is compared against. */
+public fn integerSlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  value: Int,
+  annotation: IrTypeId,
+): Slot {
+  const contents = StaticContents.Literal(LiteralValue.Integer(value))
+  constantSlot(lowering, builder, None, contents, annotation)
+}
+
+/**
+ * The one value of `Void`, in a slot. A construct whose result is `Void` still has to *define* what it produced, or a
+ * later read of the slot would be a read of nothing - and the verifier says so.
+ */
+public fn voidSlot(var lowering: Lowering, var builder: FunctionBuilder, destination: Slot?): Slot {
+  const annotation = voidTypeOf(lowering)
+  constantSlot(lowering, builder, destination, StaticContents.VoidValue, annotation)
+}
+
+// --- Names, fields and tuple positions ------------------------------------------------------------------------------
+
+/** A name or a member path read as a value: a local, a compile-time constant, a field, or a position of a tuple. */
+fn lowerReference(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  annotation: IrTypeId,
+): Slot {
+  const module = lowering.module
+  const resolution = match lowering.checker.resolutionAt(module, expression.span) {
+    Some(found) => found
+    .None => {
+      return unsupportedSlot(lowering, builder, destination, "a name the checker did not resolve", expression.span)
+    }
+  }
+  match resolution {
+    .Local(binding) => {
+      const at = lowering.checker.binding(binding).at
+      match lowering.slots.get(at) {
+        Some(found) => copiedInto(builder, destination, found)
+        .None => unsupportedSlot(lowering, builder, destination, "a captured binding", expression.span)
+      }
+    }
+    .Constant(symbol, _) => lowerConstantReference(lowering, builder, destination, symbol, expression.span)
+    .VoidValue => constantSlot(lowering, builder, destination, StaticContents.VoidValue, annotation)
+    .Field(_, field) => lowerFieldRead(lowering, builder, destination, expression, field, annotation)
+    .TupleField(_, index) => lowerTupleRead(lowering, builder, destination, expression, index, annotation)
+    .Callable(_, _, _) => {
+      unsupportedSlot(lowering, builder, destination, "a function used as a value", expression.span)
+    }
+    .CaseOf(_, _) => unsupportedSlot(lowering, builder, destination, "a case of a variant type", expression.span)
+    _ => unsupportedSlot(lowering, builder, destination, "a name the back end does not lower yet", expression.span)
+  }
+}
+
+fn lowerConstantReference(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  symbol: SymbolId,
+  at: Span,
+): Slot {
+  const identifier = match staticOfConstant(lowering, symbol) {
+    Some(found) => found
+    .None => {
+      return unsupportedSlot(lowering, builder, destination, "a constant that is not compile-time evaluable", at)
+    }
+  }
+  const annotation = lowering.program.staticAt(identifier).annotation
+  const target = valueSlot(lowering, builder, destination, annotation)
+  emit(builder, Instruction.Constant(target, identifier))
+  target
+}
+
+/**
+ * `p.x`, and a field of `self` that was written without it. A field of a field is two reads rather than one path:
+ * an interior projection is a place, and places are milestone 5.9's.
+ */
+fn lowerFieldRead(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  field: SymbolId,
+  annotation: IrTypeId,
+): Slot {
+  const base = match receiverSlot(lowering, builder, expression) {
+    Some(found) => found
+    .None => {
+      const what = "a field of something the back end cannot reach"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
+  }
+  const owner = builder.typeOfSlot(base)
+  const layout = match layoutOfType(lowering.program, owner) {
+    Some(found) => found
+    .None => {
+      const shown = describeIrType(lowering.program, owner)
+      return unsupportedSlot(lowering, builder, destination, "a field of `{shown}`", expression.span)
+    }
+  }
+  const index = fieldIndexOf(lowering, layout, field)
+  if index < 0 {
+    return unsupportedSlot(lowering, builder, destination, "a field of a variant type", expression.span)
+  }
+  const step = if isTupleLayout(lowering, owner) {
+    PathStep.TupleField(layout, index)
+  } else {
+    PathStep.Field(layout, index)
+  }
+  const target = valueSlot(lowering, builder, destination, annotation)
+  emit(builder, Instruction.Read(target, Reference(base, [step])))
+  target
+}
+
+fn lowerTupleRead(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  index: Int,
+  annotation: IrTypeId,
+): Slot {
+  const base = match receiverSlot(lowering, builder, expression) {
+    Some(found) => found
+    .None => {
+      return unsupportedSlot(lowering, builder, destination, "a tuple position of something unreachable", expression.span)
+    }
+  }
+  const owner = builder.typeOfSlot(base)
+  const layout = match layoutOfType(lowering.program, owner) {
+    Some(found) => found
+    .None => {
+      const what = "a tuple position of a value without a layout"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
+  }
+  const target = valueSlot(lowering, builder, destination, annotation)
+  emit(builder, Instruction.Read(target, Reference(base, [PathStep.TupleField(layout, index)])))
+  target
+}
+
+/** Which field of a layout a symbol is. Only the common fields of a variant layout are reachable without a `match`. */
+public fn fieldIndexOf(var lowering: Lowering, layout: LayoutId, field: SymbolId): Int {
+  const shape = lowering.program.layoutAt(layout)
+  const reachable = if shape.variants.isEmpty() { shape.fields.length() } else { shape.commonFieldCount }
+  for index in 0..reachable {
+    if shape.fields[index].symbol == Some(field) {
+      return index
+    }
+  }
+  -1
+}
+
+fn isTupleLayout(var lowering: Lowering, owner: IrTypeId): Bool {
+  match lowering.program.typeAt(owner) {
+    .Tuple(_) => true
+    _ => false
+  }
+}
+
+/**
+ * The value a member path is read from: what is written in front of the dot, or the receiver of the enclosing method
+ * where the source left it out (`Adaptation.ImplicitSelf`).
+ */
+public fn receiverSlot(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot? {
+  if const .Member(base, _, isOptional) = expression.kind {
+    if isOptional {
+      reportUnsupported(lowering, "`?.`", expression.span)
+      return None
+    }
+    const slot = lowerValue(lowering, builder, base)
+    return Some(slot)
+  }
+  implicitReceiver(lowering, expression.span)
+}
+
+/** The binding `Adaptation.ImplicitSelf` names: the lowering puts the receiver back that the source left out. */
+public fn implicitReceiver(var lowering: Lowering, at: Span): Slot? {
+  const module = lowering.module
+  const adaptations = lowering.checker.adaptationsAt(module, at)
+  for adaptation in adaptations {
+    if const .ImplicitSelf(receiver) = adaptation {
+      const declared = lowering.checker.binding(receiver).at
+      return lowering.slots.get(declared)
+    }
+  }
+  None
+}
+
+// --- Tuples ---------------------------------------------------------------------------------------------------------
+
+fn lowerTuple(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  items: List<Argument>,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    .None => {
+      return unsupportedSlot(lowering, builder, destination, "a tuple without a layout", at)
+    }
+  }
+  var slots: List<Slot> = []
+  for item in items {
+    slots.add(lowerValue(lowering, builder, item.value))
+  }
+  const target = valueSlot(lowering, builder, destination, annotation)
+  lowerConstruct(lowering, builder, target, layout, 0, slots)
+  target
+}
+
+// --- Operators ------------------------------------------------------------------------------------------------------
+
+fn lowerUnary(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  operator: PrefixOperator,
+  operand: Expression,
+  annotation: IrTypeId,
+): Slot {
+  const slot = lowerValue(lowering, builder, operand)
+  if const .Not = operator {
+    const at = expression.span
+    return intrinsicSlot(lowering, builder, destination, IntrinsicOperation.BooleanNot, None, [slot], annotation, at)
+  }
+  const inner = builder.typeOfSlot(slot)
+  if const Some(kind) = numericKindOf(lowering.program, inner) {
+    const at = expression.span
+    return intrinsicSlot(lowering, builder, destination, IntrinsicOperation.Negate, Some(kind), [slot], annotation, at)
+  }
+  lowerOperator(lowering, builder, destination, expression.span, [slot], annotation)
+}
+
+fn lowerBinary(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+  annotation: IrTypeId,
+): Slot {
+  match operator {
+    .And | .Or => shortCircuit(lowering, builder, destination, operator, left, right, annotation, expression.span)
+    .Coalesce => unsupportedSlot(lowering, builder, destination, "`??`", expression.span)
+    _ => {
+      const first = lowerValue(lowering, builder, left)
+      const second = lowerValue(lowering, builder, right)
+      if isComparison(operator) {
+        return lowerComparison(lowering, builder, destination, operator, first, second, annotation, expression.span)
+      }
+      lowerArithmetic(lowering, builder, destination, operator, first, second, annotation, expression.span)
+    }
+  }
+}
+
+fn isComparison(operator: InfixOperator): Bool {
+  match operator {
+    .Equal | .NotEqual | .Less | .LessOrEqual | .Greater | .GreaterOrEqual => true
+    _ => false
+  }
+}
+
+/**
+ * `&&` and `||` short circuit, so they are control flow and not an instruction: the destination holds the left side,
+ * and only the path that needs the right side computes it. One slot, one definition per path.
+ */
+fn shortCircuit(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const target = valueSlot(lowering, builder, destination, annotation)
+  const _ = lowerExpression(lowering, builder, left, Some(target))
+  const location = locationOf(lowering, at)
+  const other = addBlock(builder, "right", Some(location))
+  const join = addBlock(builder, "join", Some(location))
+  const isAnd = match operator {
+    .And => true
+    _ => false
+  }
+  const terminator = if isAnd {
+    Terminator.Branch(target, other, join)
+  } else {
+    Terminator.Branch(target, join, other)
+  }
+  finishBlock(lowering, builder, terminator)
+  continueIn(lowering, builder, other)
+  const _ = lowerExpression(lowering, builder, right, Some(target))
+  if !lowering.isDiverged {
+    finishBlock(lowering, builder, Terminator.Jump(join))
+  }
+  continueIn(lowering, builder, join)
+  target
+}
+
+/**
+ * A comparison of a built-in type is an intrinsic and never a call: `==` on the numbers, on `Bool` and on `Char` is
+ * one instruction, `==` on a `String` is `textEqual`, and an ordering of two strings is `textCompare` against zero.
+ * Everything else goes through the member the checker recorded.
+ */
+fn lowerComparison(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  operator: InfixOperator,
+  first: Slot,
+  second: Slot,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const operands = builder.typeOfSlot(first)
+  const operation = comparisonOperation(operator)
+  if const Some(kind) = numericKindOf(lowering.program, operands) {
+    return intrinsicSlot(lowering, builder, destination, operation, Some(kind), [first, second], annotation, at)
+  }
+  if isEqualityOperation(operation) && isPlainEquality(lowering, operands) {
+    return intrinsicSlot(lowering, builder, destination, operation, None, [first, second], annotation, at)
+  }
+  if isTextType(lowering, operands) {
+    return lowerTextComparison(lowering, builder, destination, operation, first, second, annotation, at)
+  }
+  lowerOperator(lowering, builder, destination, at, [first, second], annotation)
+}
+
+fn comparisonOperation(operator: InfixOperator): IntrinsicOperation {
+  match operator {
+    .Equal => IntrinsicOperation.Equal
+    .NotEqual => IntrinsicOperation.NotEqual
+    .Less => IntrinsicOperation.Less
+    .LessOrEqual => IntrinsicOperation.LessOrEqual
+    .Greater => IntrinsicOperation.Greater
+    _ => IntrinsicOperation.GreaterOrEqual
+  }
+}
+
+fn isEqualityOperation(operation: IntrinsicOperation): Bool {
+  match operation {
+    .Equal | .NotEqual => true
+    _ => false
+  }
+}
+
+/** `Bool` and `Char` compare as themselves: the equality intrinsic of those two names no numeric type. */
+fn isPlainEquality(var lowering: Lowering, operands: IrTypeId): Bool {
+  match lowering.program.typeAt(operands) {
+    .Boolean | .Character | .VoidType => true
+    _ => false
+  }
+}
+
+fn isTextType(var lowering: Lowering, operands: IrTypeId): Bool {
+  match lowering.program.typeAt(operands) {
+    .Text => true
+    _ => false
+  }
+}
+
+/**
+ * `a == b` on two strings is one intrinsic; an ordering is `textCompare`, whose result is an `Int64`, compared against
+ * zero. Doing it here rather than through the derived `compare` keeps `Ordering` - a layout of the program - out of it.
+ */
+fn lowerTextComparison(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  operation: IntrinsicOperation,
+  first: Slot,
+  second: Slot,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  if const .Equal = operation {
+    const equals = IntrinsicOperation.TextEqual
+    return intrinsicSlot(lowering, builder, destination, equals, None, [first, second], annotation, at)
+  }
+  if const .NotEqual = operation {
+    const equals = IntrinsicOperation.TextEqual
+    const equal = intrinsicSlot(lowering, builder, None, equals, None, [first, second], annotation, at)
+    return intrinsicSlot(lowering, builder, destination, IntrinsicOperation.BooleanNot, None, [equal], annotation, at)
+  }
+  const integer = lowering.program.internType(IrType.Integer(64, true))
+  const order = addTemporary(builder, integer)
+  emitIntrinsic(lowering, builder, Some(order), IntrinsicOperation.TextCompare, None, [first, second], at)
+  const zero = integerSlot(lowering, builder, 0, integer)
+  const kind = NumericKind.Signed(64)
+  intrinsicSlot(lowering, builder, destination, operation, Some(kind), [order, zero], annotation, at)
+}
+
+/** `+`, `-`, `*`, `/`, `%` on the built-in numbers, and `+` on two strings. Everything else is a call of `Add.add`. */
+fn lowerArithmetic(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  operator: InfixOperator,
+  first: Slot,
+  second: Slot,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const operands = builder.typeOfSlot(first)
+  if const Some(kind) = numericKindOf(lowering.program, operands) {
+    const operation = arithmeticOperation(operator)
+    return intrinsicSlot(lowering, builder, destination, operation, Some(kind), [first, second], annotation, at)
+  }
+  if isTextType(lowering, operands) {
+    if const .Add = operator {
+      const concat = IntrinsicOperation.TextConcat
+      return intrinsicSlot(lowering, builder, destination, concat, None, [first, second], annotation, at)
+    }
+  }
+  lowerOperator(lowering, builder, destination, at, [first, second], annotation)
+}
+
+fn arithmeticOperation(operator: InfixOperator): IntrinsicOperation {
+  match operator {
+    .Add => IntrinsicOperation.Add
+    .Subtract => IntrinsicOperation.Subtract
+    .Multiply => IntrinsicOperation.Multiply
+    .Divide => IntrinsicOperation.Divide
+    _ => IntrinsicOperation.Remainder
+  }
+}
+
+/** One intrinsic into a slot of its own or into the destination the caller has. */
+public fn intrinsicSlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  operation: IntrinsicOperation,
+  kind: NumericKind?,
+  operands: List<Slot>,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const target = valueSlot(lowering, builder, destination, annotation)
+  emitIntrinsic(lowering, builder, Some(target), operation, kind, operands, at)
+  target
+}
+
+public fn emitIntrinsic(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  target: Slot?,
+  operation: IntrinsicOperation,
+  kind: NumericKind?,
+  operands: List<Slot>,
+  at: Span,
+) {
+  const location = locationOf(lowering, at)
+  emit(builder, Instruction.Intrinsic(target, Intrinsic(operation, kind), operands, location))
+}
+
+// --- `if` -----------------------------------------------------------------------------------------------------------
+
+/**
+ * `if` as a statement and as an expression, in one piece: with an `else` both arms produce into one slot, without one
+ * the body is a block of statements and the whole is `Void`. An arm that diverges simply does not jump to the join
+ * block, which is what makes `if c { return 1 } else { 2 }` fall out without a rule of its own.
+ */
+public fn lowerIf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  condition: Condition,
+  then: Block,
+  otherwise: Expression?,
+  annotation: IrTypeId,
+): Slot {
+  const test = match condition {
+    .Test(inner) => inner
+    .Bind(_, _, _) => {
+      return unsupportedSlot(lowering, builder, destination, "`if const` and `if var`", expression.span)
+    }
+  }
+  const scrutinee = lowerValue(lowering, builder, test)
+  const location = locationOf(lowering, expression.span)
+  const thenBlock = addBlock(builder, "then", Some(location))
+  const alternative = match otherwise {
+    Some(found) => found
+    .None => {
+      return lowerIfStatement(lowering, builder, destination, scrutinee, thenBlock, then, location)
+    }
+  }
+  const elseBlock = addBlock(builder, "else", Some(location))
+  const join = addBlock(builder, "join", Some(location))
+  const target = valueSlot(lowering, builder, destination, annotation)
+  finishBlock(lowering, builder, Terminator.Branch(scrutinee, thenBlock, elseBlock))
+  continueIn(lowering, builder, thenBlock)
+  lowerBlockInto(lowering, builder, then, Some(target))
+  const thenDiverged = lowering.isDiverged
+  if !thenDiverged {
+    finishBlock(lowering, builder, Terminator.Jump(join))
+  }
+  continueIn(lowering, builder, elseBlock)
+  const _ = lowerExpression(lowering, builder, alternative, Some(target))
+  const elseDiverged = lowering.isDiverged
+  if !elseDiverged {
+    finishBlock(lowering, builder, Terminator.Jump(join))
+  }
+  continueIn(lowering, builder, join)
+  // Nothing reaches the join block when both arms left the function, and an empty `unreachable` marker is what it is
+  lowering.isDiverged = thenDiverged && elseDiverged
+  target
+}
+
+fn lowerIfStatement(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  scrutinee: Slot,
+  thenBlock: BlockId,
+  then: Block,
+  location: LocationId,
+): Slot {
+  const join = addBlock(builder, "join", Some(location))
+  // An `if` without an `else` produces `Void`. Where somebody takes that value it is defined *before* the branch, so
+  // that it is defined on both paths; where nobody does, no instruction is written at all
+  const target = match destination {
+    Some(_) => voidSlot(lowering, builder, destination)
+    .None => abandonedSlot(lowering, builder, destination)
+  }
+  finishBlock(lowering, builder, Terminator.Branch(scrutinee, thenBlock, join))
+  continueIn(lowering, builder, thenBlock)
+  lowerBlockInto(lowering, builder, then, None)
+  if !lowering.isDiverged {
+    finishBlock(lowering, builder, Terminator.Jump(join))
+  }
+  continueIn(lowering, builder, join)
+  target
+}

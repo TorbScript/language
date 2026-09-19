@@ -1,0 +1,309 @@
+use test, group from "std/test"
+use irOf, textOf, countsOf, unsupportedIn from "./lower-harness"
+
+/**
+ * Calls: which function a call reaches, in which order its arguments are evaluated, and where the instance it reaches
+ * came from.
+ *
+ * The two questions these tests exist for are the ones a back end must never decide for itself: **source order**
+ * (the receiver first, then the written arguments in the order they are written, then the defaults in declaration
+ * order) and **which target** - a function of the program, an intrinsic, or a function of the runtime.
+ */
+
+const declarations = r"""
+fn connect(host: String, port: Int = 5432, retries: Int = 1): Int {
+  port + retries
+}
+
+fn positional(): Int {
+  connect("a")
+}
+
+fn labeled(): Int {
+  connect(retries: 3, host: "b")
+}
+"""
+
+group "The argument plan" {
+  test "a default is evaluated at the call site, after the written arguments" {
+    assert(
+      irOf(declarations, "t_acme_x2f_app_main_positional") == r"""fn t_acme_x2f_app_main_positional() -> Int64 {
+  slot %0 temporary: String
+  slot %1 temporary: Int64
+  slot %2 temporary: Int64
+  slot %3 temporary: Int64
+b0: # acme/app/src/main.trb:6 body
+  %0 = constant s_literal__String_a
+  %1 = constant s_literal__Int64_5432
+  %2 = constant s_literal__Int64_1
+  %3 = call t_acme_x2f_app_main_connect(%0 borrowed, %1 borrowed, %2 borrowed)
+  return %3 borrowed
+}"""
+    )
+  }
+
+  test "labeled arguments are evaluated in written order and passed in declaration order" {
+    assert(
+      irOf(declarations, "t_acme_x2f_app_main_labeled") == r"""fn t_acme_x2f_app_main_labeled() -> Int64 {
+  slot %0 temporary: Int64
+  slot %1 temporary: String
+  slot %2 temporary: Int64
+  slot %3 temporary: Int64
+b0: # acme/app/src/main.trb:10 body
+  %0 = constant s_literal__Int64_3
+  %1 = constant s_literal__String_b
+  %2 = constant s_literal__Int64_5432
+  %3 = call t_acme_x2f_app_main_connect(%1 borrowed, %2 borrowed, %0 borrowed)
+  return %3 borrowed
+}"""
+    )
+  }
+
+  test "a call whose result is `Void` takes no slot, and the caller still returns" {
+    const source = r"""
+fn note(value: Int) {
+  const doubled = value + value
+}
+
+fn caller() {
+  note(1)
+}
+"""
+    assert(
+      irOf(source, "t_acme_x2f_app_main_caller") == r"""fn t_acme_x2f_app_main_caller() -> Void {
+  slot %0 temporary: Int64
+  slot %1 temporary: Void
+b0: # acme/app/src/main.trb:6 body
+  %0 = constant s_literal__Int64_1
+  call t_acme_x2f_app_main_note(%0 borrowed)
+  return
+}"""
+    )
+  }
+}
+
+group "Methods of a concrete type" {
+  test "the receiver is the first parameter, and a member of `self` without it puts it back" {
+    const source = r"""
+type Counter {
+  value: Int
+
+  fn plus(self, other: Int): Int {
+    value + other
+  }
+
+  fn twice(self): Int {
+    plus(value)
+  }
+}
+"""
+    assert(
+      irOf(source, "t_acme_x2f_app_main_Counter_twice") == r"""fn t_acme_x2f_app_main_Counter_twice(self: Record(T_acme_x2f_app_main_Counter) borrowed) -> Int64 {
+  slot %0 parameter self: Record(T_acme_x2f_app_main_Counter)
+  slot %1 temporary: Int64
+  slot %2 temporary: Int64
+b0: # acme/app/src/main.trb:9 body
+  %1 = read %0.value
+  %2 = call t_acme_x2f_app_main_Counter_plus(%0 borrowed, %1 borrowed)
+  return %2 borrowed
+}"""
+    )
+  }
+
+  test "a static function of a type has no receiver" {
+    const source = r"""
+type Counter {
+  value: Int
+
+  fn zero(): Counter {
+    Counter(0)
+  }
+}
+"""
+    assert(
+      irOf(source, "t_acme_x2f_app_main_Counter_zero") == r"""fn t_acme_x2f_app_main_Counter_zero() -> Record(T_acme_x2f_app_main_Counter) {
+  slot %0 temporary: Int64
+  slot %1 temporary: Record(T_acme_x2f_app_main_Counter)
+b0: # acme/app/src/main.trb:5 body
+  %0 = constant s_literal__Int64_0
+  %1 = construct T_acme_x2f_app_main_Counter (%0 borrowed)
+  return %1 borrowed
+}"""
+    )
+  }
+
+  test "a call of a method reaches the instance, and the receiver is the value in front of the dot" {
+    const source = r"""
+type Counter {
+  value: Int
+
+  fn double(self): Int {
+    value + value
+  }
+}
+
+fn use1(counter: Counter): Int {
+  counter.double()
+}
+"""
+    assert(irOf(source, "t_acme_x2f_app_main_use1").contains("call t_acme_x2f_app_main_Counter_double(%0 borrowed)"))
+  }
+}
+
+group "The worklist of instances" {
+  test "a function that calls itself finds its own instance" {
+    const source = r"""
+fn factorial(value: Int): Int {
+  if value <= 1 {
+    return 1
+  }
+  value * factorial(value - 1)
+}
+"""
+    const text = irOf(source, "t_acme_x2f_app_main_factorial")
+    assert(text.contains("%7 = call t_acme_x2f_app_main_factorial(%6 borrowed)"))
+  }
+
+  test "two routes to the same declaration are one function of the program" {
+    const source = r"""
+fn twice(value: Int): Int {
+  value + value
+}
+
+fn first(): Int {
+  twice(1)
+}
+
+fn second(): Int {
+  twice(2)
+}
+"""
+    const text = textOf(source)
+    var found = 0
+    for line in text.lines() {
+      if line.startsWith("fn t_acme_x2f_app_main_twice(") {
+        found = found + 1
+      }
+    }
+    assert(found == 1)
+    assert(countsOf(source) == (3, 0))
+  }
+
+  test "nothing unreachable stops a reachable function: a stub is still a well typed callee" {
+    const source = r"""
+fn broken(value: Int?): Int {
+  match value {
+    Some(found) => found
+    .None => 0
+  }
+}
+
+fn caller(value: Int?): Int {
+  broken(value)
+}
+"""
+    assert(irOf(source, "t_acme_x2f_app_main_caller").contains("call t_acme_x2f_app_main_broken(%0 borrowed)"))
+    assert(countsOf(source) == (1, 1))
+  }
+}
+
+group "Operators and natives" {
+  test "an operator of a type of the program is an ordinary call of the member the implementation provides" {
+    const source = r"""
+type Meters with Add {
+  size: Int
+
+  fn add(self, other: Meters): Meters {
+    Meters(size + other.size)
+  }
+}
+
+fn total(first: Meters, second: Meters): Meters {
+  first + second
+}
+"""
+    assert(
+      irOf(source, "t_acme_x2f_app_main_total") == r"""fn t_acme_x2f_app_main_total(first: Record(T_acme_x2f_app_main_Meters) borrowed, second: Record(T_acme_x2f_app_main_Meters) borrowed) -> Record(T_acme_x2f_app_main_Meters) {
+  slot %0 parameter first: Record(T_acme_x2f_app_main_Meters)
+  slot %1 parameter second: Record(T_acme_x2f_app_main_Meters)
+  slot %2 temporary: Record(T_acme_x2f_app_main_Meters)
+b0: # acme/app/src/main.trb:10 body
+  %2 = call t_acme_x2f_app_main_Meters_add(%0 borrowed, %1 borrowed)
+  return %2 borrowed
+}"""
+    )
+  }
+
+  test "a `native` the manifest maps to an intrinsic is one instruction" {
+    const source = r"""
+fn sizes(text: String): Int {
+  text.byteLength()
+}
+"""
+    assert(irOf(source, "t_acme_x2f_app_main_sizes").contains("intrinsic textByteLength %0 at"))
+  }
+
+  test "a `native` the runtime provides is a function with a signature and no body" {
+    const source = r"""
+fn empty(text: String): Bool {
+  text.isEmpty()
+}
+"""
+    const text = textOf(source)
+    assert(
+      text.contains("runtime fn t_std_x2f_prelude_types_String_isEmpty(self: String borrowed) -> Bool = torb_text_is_empty")
+    )
+    assert(irOf(source, "t_acme_x2f_app_main_empty").contains("call t_std_x2f_prelude_types_String_isEmpty(%0 borrowed)"))
+  }
+
+  test "a chained call finds its target although the checker records the inner one as deferred" {
+    const source = r"""
+extend String {
+  native fn trim(self): String
+}
+
+fn sizes(text: String): Int {
+  text.trim().byteLength()
+}
+"""
+    const text = irOf(source, "t_acme_x2f_app_main_sizes")
+    assert(text.contains("call t_acme_x2f_app_main_String_trim(%0 borrowed)"))
+    assert(text.contains("intrinsic textByteLength %1 at"))
+  }
+}
+
+group "What a call cannot reach yet" {
+  test "a derived member, a default member of a trait and a witness are each named" {
+    assert(
+      unsupportedIn("type Tag \{\n  case One\n  case Two\n\}\n\nfn same(first: Tag, second: Tag): Bool \{\n  first == second\n\}")
+        == ["not supported by the back end yet: a derived `Equals` member"]
+    )
+    assert(
+      unsupportedIn("fn largest(first: Int, second: Int): Int \{\n  first.max(second)\n\}")
+        == ["not supported by the back end yet: a generic function or a member of a generic type"]
+    )
+  }
+
+  test "a native the runtime does not have yet names the milestone instead of failing to link" {
+    const source = r"""
+extend String {
+  native fn chars(self): Int
+}
+
+fn parts(text: String): Int {
+  text.chars()
+}
+"""
+    assert(
+      unsupportedIn(source)
+        == ["not supported by the back end yet: `String.chars`, which the runtime provides from milestone 5.7 on"]
+    )
+  }
+
+  test "a call of a closure value waits for 5.8" {
+    assert(
+      unsupportedIn("fn run(step: (Int) => Int): Int \{\n  step(1)\n\}")
+        == ["not supported by the back end yet: a call of a closure value"]
+    )
+  }
+}

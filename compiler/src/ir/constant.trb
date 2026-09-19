@@ -1,0 +1,679 @@
+use Span from "../syntax/source"
+use Expression, Argument, TextSegment, PrefixOperator, InfixOperator from "../syntax/ast"
+use SymbolId from "../semantics/symbols"
+use LiteralValue from "../semantics/checker/type"
+use bindingOfSite, resultOf from "../semantics/checker/signature"
+use integerLiteral from "../semantics/checker/lowering"
+use IrTypeId, StaticId, StaticContents from "./ir"
+use Lowering, irTypeOf, typeAtSpan, internStatic, namedStatic, reportProblem from "./lower/context"
+use numericKindOf, layoutOfType from "./verify"
+use describeIrType from "./print"
+use staticName from "./mangle"
+use symbolPathOf from "./instantiate"
+
+/**
+ * The compile-time constant evaluator: the one place that turns an expression into static data.
+ *
+ * What is evaluable is decided gap 27 of [docs/TYPECHECKER.md](../../../docs/TYPECHECKER.md) plus the arithmetic it
+ * adds: literals, the unary operators, the arithmetic, comparison and logical operators of the built-in number types
+ * and of `Bool`, interpolation of such, constructors and tuples of such, and references to other compile-time
+ * constants. No function call and no `native` call, because a constant may not run code.
+ *
+ * **Overflow, a division by zero and a `nan` out of a literal expression are compile errors at that expression**
+ * (decided gap 11 of [docs/BACKEND.md](../../../docs/BACKEND.md)): a program that cannot start is worse than one that
+ * does not compile. Everything else that is simply not evaluable is not an error here - it is a construct the back end
+ * does not lower yet, counted like every other one, until the checker enforces the rule at the declaration.
+ */
+
+/** One compile-time value: what it is, and what type it has. */
+public type ConstantValue {
+  contents: StaticContents
+  annotation: IrTypeId
+}
+
+/** The largest and the smallest `Int64`, spelled the way `std/prelude` spells them. */
+public const largestInteger = 9223372036854775807
+public const smallestInteger = -9223372036854775807 - 1
+
+// --- One expression -------------------------------------------------------------------------------------------------
+
+/**
+ * The value of a compile-time constant, or `None` where the expression is not one.
+ *
+ * `expected` is what the type of the expression is where the checker recorded none: the declared type of the
+ * constant, and the type of the field a value is built into. It is needed because the checker does not walk the
+ * initializer of a top-level `const` that is annotated - there is nothing to infer there - so nothing inside of
+ * `const minimum: Int8 = -128` has a recorded type.
+ */
+public fn evaluateConstant(var lowering: Lowering, expression: Expression, expected: IrTypeId?): ConstantValue? {
+  const annotation = match typeAtSpan(lowering, expression.span) {
+    Some(found) => found
+    .None => expected?
+  }
+  match expression.kind {
+    .IntegerLiteral(text) => integerConstant(lowering, text, false, annotation, expression.span)
+    .FloatLiteral(text) => floatConstant(lowering, text, false, annotation, expression.span)
+    .BoolLiteral(value) => Some(ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation))
+    .CharLiteral(value) => Some(ConstantValue(StaticContents.Literal(LiteralValue.Character(value)), annotation))
+    .TextLiteral(segments) => textConstant(lowering, segments, annotation, expression.span)
+    .Name(_) | .Member(_, _, _) => namedConstant(lowering, expression, annotation)
+    .Unary(operator, operand) => unaryConstant(lowering, operator, operand, annotation, expression.span)
+    .Binary(operator, left, right) => binaryConstant(lowering, operator, left, right, annotation, expression.span)
+    .TupleLiteral(items) => aggregateConstant(lowering, items, annotation, expression.span)
+    .Call(_, arguments, _) => callConstant(lowering, expression, arguments, annotation)
+    _ => None
+  }
+}
+
+/** `-3` is one literal and not a negation of `3`, exactly as the checker reads it, so the range check sees the value. */
+fn unaryConstant(
+  var lowering: Lowering,
+  operator: PrefixOperator,
+  operand: Expression,
+  annotation: IrTypeId,
+  at: Span,
+): ConstantValue? {
+  if const .Negate = operator {
+    if const .IntegerLiteral(text) = operand.kind {
+      return integerConstant(lowering, text, true, annotation, at)
+    }
+    if const .FloatLiteral(text) = operand.kind {
+      return floatConstant(lowering, text, true, annotation, at)
+    }
+    const inner = evaluateConstant(lowering, operand, Some(annotation))?
+    return negatedConstant(lowering, inner, annotation, at)
+  }
+  const inner = evaluateConstant(lowering, operand, Some(annotation))?
+  const value = booleanOf(inner)?
+  Some(ConstantValue(StaticContents.Literal(LiteralValue.Boolean(!value)), annotation))
+}
+
+fn negatedConstant(var lowering: Lowering, inner: ConstantValue, annotation: IrTypeId, at: Span): ConstantValue? {
+  if const Some(value) = integerOf(inner) {
+    if value == smallestInteger {
+      reportOverflow(lowering, "-", annotation, at)
+      return None
+    }
+    return integerValue(lowering, 0 - value, annotation, "-", at)
+  }
+  const value = floatOf(inner)?
+  Some(ConstantValue(StaticContents.Floating(0.0 - value), annotation))
+}
+
+/**
+ * The binary operators. Arithmetic and comparison on the built-in numbers, `&&`/`||` on `Bool`, and nothing else -
+ * `+` on a `String` is `Add.add`, which is a call.
+ */
+fn binaryConstant(
+  var lowering: Lowering,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+  annotation: IrTypeId,
+  at: Span,
+): ConstantValue? {
+  // `a + b` produces what its operands are (`Add<Self, Self>`) and `&&` takes two `Bool`s: only there does the type
+  // of the whole say anything about the type of a part
+  const inner = if keepsType(operator) { Some(annotation) } else { None }
+  const first = evaluateConstant(lowering, left, inner)?
+  const second = evaluateConstant(lowering, right, inner)?
+  if const Some(found) = booleanConstant(lowering, operator, first, second, annotation) {
+    return Some(found)
+  }
+  if const Some(found) = integerOf(first) {
+    const other = integerOf(second)?
+    return integerOperation(lowering, operator, found, other, first.annotation, annotation, at)
+  }
+  const found = floatOf(first)?
+  const other = floatOf(second)?
+  floatOperation(lowering, operator, found, other, annotation, at)
+}
+
+/** `&&`, `||` and the comparisons of `Bool`, `Char` and `String`: everything whose operands are not numbers. */
+fn booleanConstant(
+  var lowering: Lowering,
+  operator: InfixOperator,
+  first: ConstantValue,
+  second: ConstantValue,
+  annotation: IrTypeId,
+): ConstantValue? {
+  if const Some(found) = booleanOf(first) {
+    const other = booleanOf(second)?
+    const value = match operator {
+      .And => found && other
+      .Or => found || other
+      .Equal => found == other
+      .NotEqual => found != other
+      _ => {
+        return None
+      }
+    }
+    return Some(ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation))
+  }
+  if const Some(found) = textOf(first) {
+    const other = textOf(second)?
+    return textComparison(lowering, operator, found, other, annotation)
+  }
+  const found = characterOf(first)?
+  const other = characterOf(second)?
+  characterComparison(lowering, operator, found, other, annotation)
+}
+
+fn textComparison(
+  var lowering: Lowering,
+  operator: InfixOperator,
+  first: String,
+  second: String,
+  annotation: IrTypeId,
+): ConstantValue? {
+  const value = match operator {
+    .Equal => first == second
+    .NotEqual => first != second
+    .Less => first.compare(second) == .Less
+    .LessOrEqual => first.compare(second) != .Greater
+    .Greater => first.compare(second) == .Greater
+    .GreaterOrEqual => first.compare(second) != .Less
+    _ => {
+      return None
+    }
+  }
+  Some(ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation))
+}
+
+fn characterComparison(
+  var lowering: Lowering,
+  operator: InfixOperator,
+  first: Char,
+  second: Char,
+  annotation: IrTypeId,
+): ConstantValue? {
+  const value = match operator {
+    .Equal => first == second
+    .NotEqual => first != second
+    .Less => first < second
+    .LessOrEqual => first <= second
+    .Greater => first > second
+    .GreaterOrEqual => first >= second
+    _ => {
+      return None
+    }
+  }
+  Some(ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation))
+}
+
+/** Every integer operation, with the range of the type checked afterwards: `const tiny: Int8 = 100 + 100` is an error. */
+fn integerOperation(
+  var lowering: Lowering,
+  operator: InfixOperator,
+  first: Int,
+  second: Int,
+  operands: IrTypeId,
+  annotation: IrTypeId,
+  at: Span,
+): ConstantValue? {
+  match operator {
+    .Equal => Some(comparisonValue(first == second, annotation))
+    .NotEqual => Some(comparisonValue(first != second, annotation))
+    .Less => Some(comparisonValue(first < second, annotation))
+    .LessOrEqual => Some(comparisonValue(first <= second, annotation))
+    .Greater => Some(comparisonValue(first > second, annotation))
+    .GreaterOrEqual => Some(comparisonValue(first >= second, annotation))
+    .Add => {
+      const found = addedChecked(first, second)
+      integerResult(lowering, found, annotation, "+", at)
+    }
+    .Subtract => {
+      const found = subtractedChecked(first, second)
+      integerResult(lowering, found, annotation, "-", at)
+    }
+    .Multiply => {
+      const found = multipliedChecked(first, second)
+      integerResult(lowering, found, annotation, "*", at)
+    }
+    .Divide => dividedConstant(lowering, first, second, annotation, at)
+    .Remainder => remainderConstant(lowering, first, second, annotation, at)
+    _ => None
+  }
+}
+
+/** Whether the operands of an operator have the type the whole has: the arithmetic ones and the two logical ones. */
+fn keepsType(operator: InfixOperator): Bool {
+  match operator {
+    .Add | .Subtract | .Multiply | .Divide | .Remainder | .And | .Or => true
+    _ => false
+  }
+}
+
+fn comparisonValue(value: Bool, annotation: IrTypeId): ConstantValue {
+  ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation)
+}
+
+fn integerResult(
+  var lowering: Lowering,
+  found: Int?,
+  annotation: IrTypeId,
+  operator: String,
+  at: Span,
+): ConstantValue? {
+  const value = match found {
+    Some(inner) => inner
+    .None => {
+      reportOverflow(lowering, operator, annotation, at)
+      return None
+    }
+  }
+  integerValue(lowering, value, annotation, operator, at)
+}
+
+/** The value, with the range of the type it is written at: `Int8` is one byte whatever the arithmetic was done in. */
+fn integerValue(
+  var lowering: Lowering,
+  value: Int,
+  annotation: IrTypeId,
+  operator: String,
+  at: Span,
+): ConstantValue? {
+  if !fitsNumeric(lowering, value, annotation) {
+    reportOverflow(lowering, operator, annotation, at)
+    return None
+  }
+  Some(ConstantValue(StaticContents.Literal(LiteralValue.Integer(value)), annotation))
+}
+
+fn dividedConstant(var lowering: Lowering, first: Int, second: Int, annotation: IrTypeId, at: Span): ConstantValue? {
+  if second == 0 {
+    reportDivisionByZero(lowering, "/", at)
+    return None
+  }
+  if first == smallestInteger && second == -1 {
+    reportOverflow(lowering, "/", annotation, at)
+    return None
+  }
+  integerValue(lowering, first / second, annotation, "/", at)
+}
+
+fn remainderConstant(var lowering: Lowering, first: Int, second: Int, annotation: IrTypeId, at: Span): ConstantValue? {
+  if second == 0 {
+    reportDivisionByZero(lowering, "%", at)
+    return None
+  }
+  if first == smallestInteger && second == -1 {
+    reportOverflow(lowering, "%", annotation, at)
+    return None
+  }
+  integerValue(lowering, first % second, annotation, "%", at)
+}
+
+fn floatOperation(
+  var lowering: Lowering,
+  operator: InfixOperator,
+  first: Float,
+  second: Float,
+  annotation: IrTypeId,
+  at: Span,
+): ConstantValue? {
+  match operator {
+    .Equal => Some(comparisonValue(first == second, annotation))
+    .NotEqual => Some(comparisonValue(first != second, annotation))
+    .Less => Some(comparisonValue(first < second, annotation))
+    .LessOrEqual => Some(comparisonValue(first <= second, annotation))
+    .Greater => Some(comparisonValue(first > second, annotation))
+    .GreaterOrEqual => Some(comparisonValue(first >= second, annotation))
+    .Add => floatResult(lowering, first + second, annotation, "+", at)
+    .Subtract => floatResult(lowering, first - second, annotation, "-", at)
+    .Multiply => floatResult(lowering, first * second, annotation, "*", at)
+    .Divide => floatResult(lowering, first / second, annotation, "/", at)
+    .Remainder => floatResult(lowering, first % second, annotation, "%", at)
+    _ => None
+  }
+}
+
+/**
+ * A float operation follows IEEE-754, so an infinity is a value and not an error - but a `nan` out of a literal
+ * expression is one, because nothing a program can write down afterwards distinguishes it from a mistake.
+ */
+fn floatResult(
+  var lowering: Lowering,
+  value: Float,
+  annotation: IrTypeId,
+  operator: String,
+  at: Span,
+): ConstantValue? {
+  if value != value {
+    reportProblem(lowering, "`{operator}` produces `nan` here, which a compile-time constant cannot hold", at)
+    return None
+  }
+  Some(ConstantValue(StaticContents.Floating(value), annotation))
+}
+
+// --- Literals -------------------------------------------------------------------------------------------------------
+
+/**
+ * Every base the lexer allows, and the sign that belongs to the literal rather than to an operator. The text is read
+ * by the same function the checker reads it with, so the two can never disagree about what `0xff` is.
+ */
+fn integerConstant(
+  var lowering: Lowering,
+  text: String,
+  isNegative: Bool,
+  annotation: IrTypeId,
+  at: Span,
+): ConstantValue? {
+  const literal = integerLiteral(text, isNegative)?
+  // A literal that does not fit the type it adapts to was already reported by the checker, so nothing is said twice
+  Some(ConstantValue(StaticContents.Literal(literal), annotation))
+}
+
+fn floatConstant(
+  var lowering: Lowering,
+  text: String,
+  isNegative: Bool,
+  annotation: IrTypeId,
+  at: Span,
+): ConstantValue? {
+  const value = Float.parse(text).ok()?
+  Some(ConstantValue(StaticContents.Floating(if isNegative { 0.0 - value } else { value }), annotation))
+}
+
+/**
+ * An interpolated text of compile-time constants. Every part is rendered the way `Show` renders it, which for a
+ * number, a `Bool`, a `Char` and a `String` is what the interpreter and the runtime agree on - a `Float` is left out
+ * on purpose, because its shortest round-tripping spelling is the runtime's and not this evaluator's.
+ */
+fn textConstant(
+  var lowering: Lowering,
+  segments: List<TextSegment>,
+  annotation: IrTypeId,
+  at: Span,
+): ConstantValue? {
+  var text = ""
+  for segment in segments {
+    match segment {
+      .Literal(part) => {
+        text = text + part
+      }
+      .Interpolated(inner) => {
+        const value = evaluateConstant(lowering, inner, None)?
+        const shown = shownConstant(value)?
+        text = text + shown
+      }
+    }
+  }
+  Some(ConstantValue(StaticContents.Literal(LiteralValue.Text(text)), annotation))
+}
+
+/** What one interpolated part of a constant becomes. `None` for everything whose `Show` is not this evaluator's. */
+fn shownConstant(value: ConstantValue): String? {
+  if const .Literal(literal) = value.contents {
+    match literal {
+      .Integer(inner) => {
+        return Some("{inner}")
+      }
+      .Text(inner) => {
+        return Some(inner)
+      }
+      .Character(inner) => {
+        return Some("{inner}")
+      }
+      .Boolean(inner) => {
+        return Some(if inner { "true" } else { "false" })
+      }
+    }
+  }
+  None
+}
+
+// --- Names, tuples and constructors ---------------------------------------------------------------------------------
+
+/** A reference to another compile-time constant, and `Void`, which is the one name that is also a value (gap 1). */
+fn namedConstant(var lowering: Lowering, expression: Expression, annotation: IrTypeId): ConstantValue? {
+  const module = lowering.module
+  const resolution = lowering.checker.resolutionAt(module, expression.span)?
+  match resolution {
+    .VoidValue => Some(ConstantValue(StaticContents.VoidValue, annotation))
+    .Constant(symbol, _) => {
+      const identifier = staticOfConstant(lowering, symbol)?
+      const value = lowering.program.staticAt(identifier)
+      Some(ConstantValue(value.contents, value.annotation))
+    }
+    _ => None
+  }
+}
+
+/** `(1, "one")`: a tuple layout whose fields are static values of their own. */
+fn aggregateConstant(
+  var lowering: Lowering,
+  items: List<Argument>,
+  annotation: IrTypeId,
+  at: Span,
+): ConstantValue? {
+  const layout = layoutOfType(lowering.program, annotation)?
+  const shape = lowering.program.layoutAt(layout)
+  if shape.fields.length() != items.length() {
+    return None
+  }
+  var fields: List<StaticId> = []
+  for index in 0..items.length() {
+    const wanted = shape.fields[index].annotation
+    const value = evaluateConstant(lowering, items[index].value, Some(wanted))?
+    fields.add(internStatic(lowering, value.contents, value.annotation))
+  }
+  Some(ConstantValue(StaticContents.Aggregate(layout, 0, fields), annotation))
+}
+
+/**
+ * `Point(0, 0)`: the constructor of a record, with every field written out. A field that takes its default is not
+ * evaluated here - a default is an expression of the declaration and belongs to the call site (gap 13), and a
+ * constant has no call site.
+ */
+fn callConstant(
+  var lowering: Lowering,
+  expression: Expression,
+  arguments: List<Argument>,
+  annotation: IrTypeId,
+): ConstantValue? {
+  const module = lowering.module
+  const resolution = lowering.checker.resolutionAt(module, expression.span)?
+  if const .Construct(_) = resolution {
+    const targets = lowering.checker.argumentTargetsAt(module, expression.span)?
+    const layout = layoutOfType(lowering.program, annotation)?
+    const count = lowering.program.layoutAt(layout).fields.length()
+    if targets.length() != count || arguments.length() != count {
+      return None
+    }
+    var fields: List<StaticId> = []
+    for _ in 0..count {
+      fields.add(StaticId(0))
+    }
+    for index in 0..arguments.length() {
+      const position = targets[index]
+      if position < 0 || position >= count {
+        return None
+      }
+      const wanted = lowering.program.layoutAt(layout).fields[position].annotation
+      const value = evaluateConstant(lowering, arguments[index].value, Some(wanted))?
+      const field = internStatic(lowering, value.contents, value.annotation)
+      fields.set(position, field)
+    }
+    return Some(ConstantValue(StaticContents.Aggregate(layout, 0, fields), annotation))
+  }
+  None
+}
+
+// --- A top-level `const` of a module --------------------------------------------------------------------------------
+
+/**
+ * The static value of a top-level `const`, evaluated once. There is no module initialization, ever: a constant is
+ * static data with a name, and `Instruction.Constant` names it.
+ */
+public fn staticOfConstant(var lowering: Lowering, symbol: SymbolId): StaticId? {
+  if const Some(known) = lowering.constants.get(symbol.value) {
+    return Some(known)
+  }
+  // A constant that could not be evaluated is not evaluated a second time: one root cause gets one message, however
+  // many uses of it there are, and a constant in terms of itself has to stop somewhere
+  if lowering.evaluating.containsKey(symbol.value) {
+    return None
+  }
+  lowering.evaluating.set(symbol.value, true)
+  const site = lowering.checker.siteOf(symbol)?
+  const binding = bindingOfSite(site)?
+  const declared = resultOf(lowering.checker, symbol)
+  if lowering.checker.isBroken(declared) {
+    return None
+  }
+  const annotation = irTypeOf(lowering, declared)
+  const path = symbolPathOf(lowering.checker, symbol)
+  const name = staticName(lowering.program, path, [])
+  const outer = lowering.module
+  lowering.module = site.module
+  const value = evaluateConstant(lowering, binding.value, Some(annotation))
+  lowering.module = outer
+  const found = value?
+  const identifier = namedStatic(lowering, name, found.contents, annotation)
+  lowering.constants.set(symbol.value, identifier)
+  Some(identifier)
+}
+
+// --- Reading a value ------------------------------------------------------------------------------------------------
+
+public fn integerOf(value: ConstantValue): Int? {
+  if const .Literal(literal) = value.contents {
+    if const .Integer(found) = literal {
+      return Some(found)
+    }
+  }
+  None
+}
+
+public fn floatOf(value: ConstantValue): Float? {
+  if const .Floating(found) = value.contents {
+    return Some(found)
+  }
+  None
+}
+
+public fn booleanOf(value: ConstantValue): Bool? {
+  if const .Literal(literal) = value.contents {
+    if const .Boolean(found) = literal {
+      return Some(found)
+    }
+  }
+  None
+}
+
+public fn textOf(value: ConstantValue): String? {
+  if const .Literal(literal) = value.contents {
+    if const .Text(found) = literal {
+      return Some(found)
+    }
+  }
+  None
+}
+
+public fn characterOf(value: ConstantValue): Char? {
+  if const .Literal(literal) = value.contents {
+    if const .Character(found) = literal {
+      return Some(found)
+    }
+  }
+  None
+}
+
+// --- Checked arithmetic over the host's integers ---------------------------------------------------------------------
+
+/**
+ * Addition that answers `None` instead of leaving the range of an `Int64`. The evaluator runs on stage 0, whose own
+ * integers are the ones it computes with, so every check has to happen *before* the operation - which is also exactly
+ * what the runtime does (BACKEND 3.3).
+ */
+public fn addedChecked(first: Int, second: Int): Int? {
+  if second > 0 && first > largestInteger - second {
+    return None
+  }
+  if second < 0 && first < smallestInteger - second {
+    return None
+  }
+  Some(first + second)
+}
+
+public fn subtractedChecked(first: Int, second: Int): Int? {
+  if second < 0 && first > largestInteger + second {
+    return None
+  }
+  if second > 0 && first < smallestInteger + second {
+    return None
+  }
+  Some(first - second)
+}
+
+public fn multipliedChecked(first: Int, second: Int): Int? {
+  if first == 0 || second == 0 {
+    return Some(0)
+  }
+  if first > 0 {
+    if second > 0 {
+      if first > largestInteger / second {
+        return None
+      }
+    } else if second < smallestInteger / first {
+      return None
+    }
+  } else if second > 0 {
+    if first < smallestInteger / second {
+      return None
+    }
+  } else if first < largestInteger / second {
+    return None
+  }
+  Some(first * second)
+}
+
+/** Whether a value fits into the numeric type it is written at. `Int64` and `UInt64` are as wide as the host's. */
+public fn fitsNumeric(var lowering: Lowering, value: Int, annotation: IrTypeId): Bool {
+  const kind = match numericKindOf(lowering.program, annotation) {
+    Some(found) => found
+    .None => {
+      return true
+    }
+  }
+  match kind {
+    .Signed(width) => {
+      if width >= 64 {
+        return true
+      }
+      const bound = boundOfWidth(width - 1)
+      value >= 0 - bound && value <= bound - 1
+    }
+    .Unsigned(width) => {
+      if value < 0 {
+        return false
+      }
+      if width >= 64 {
+        return true
+      }
+      value <= boundOfWidth(width) - 1
+    }
+    .Floating(_) => true
+  }
+}
+
+/** Two to the power of `bits`, for the ranges of the narrow integer types. */
+fn boundOfWidth(bits: Int): Int {
+  var bound = 1
+  for _ in 0..bits {
+    bound = bound * 2
+  }
+  bound
+}
+
+// --- Messages -------------------------------------------------------------------------------------------------------
+
+fn reportOverflow(var lowering: Lowering, operator: String, annotation: IrTypeId, at: Span) {
+  const shown = describeIrType(lowering.program, annotation)
+  reportProblem(lowering, "`{operator}` leaves the range of `{shown}` here", at)
+}
+
+fn reportDivisionByZero(var lowering: Lowering, operator: String, at: Span) {
+  reportProblem(lowering, "`{operator}` divides by zero here", at)
+}

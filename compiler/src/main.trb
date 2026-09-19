@@ -9,6 +9,8 @@ use renderDiagnostic from "./cli/render"
 use readSourceTree, absolutePaths from "./project/read"
 use SourceTree from "./project/source-tree"
 use check, Checked from "./semantics/check"
+use Lowering from "./ir/lower/context"
+use lowerChecked, loweredText, loweredProblems, statisticsLines from "./ir/lower/lower"
 
 /**
  * The TorbScript toolchain, written in TorbScript. Until it can compile itself it is run by the bootstrap
@@ -20,6 +22,8 @@ fn printUsage() {
   printError "Usage:"
   printError "  torb check [path]...   Check projects, workspaces or single files (default: the current directory)"
   printError "                         --statistics: how many expressions are typed and how many wait for milestone 4"
+  printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
+  printError "                         --statistics: only the counts, without the IR itself"
   printError "  torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)"
   printError "  torb tokens <file>     Print the tokens of a file"
   printError "  torb ast <file>        Print the syntax tree of a file"
@@ -126,12 +130,72 @@ fn printStatistics(checked: Checked, tree: SourceTree) {
   print "{typed} of {total} expressions typed ({share}%), {deferred} deferred"
 }
 
+/**
+ * The typed IR of what the back end lowers today, in the deterministic text format of docs/BACKEND.md 1.7, plus the
+ * list of the constructs a later sub-milestone has to replace. Returns the number of problems.
+ */
+fn printIr(paths: List<String>, onlyStatistics: Bool): Result<Int, IoError> {
+  const tree = readSourceTree(paths)?
+  const checked = check(tree, absolutePaths(paths)?)
+  var problems = checked.problems.length()
+  for problem in checked.problems {
+    printError "error: {problem}"
+  }
+  for file in checked.files {
+    problems = problems + file.diagnostics.length()
+    const lines = LineIndex.of(file.text)
+    for diagnostic in file.diagnostics {
+      printError renderDiagnostic(file.path, lines, diagnostic)
+      printError ""
+    }
+  }
+  // Nothing is lowered from a program that does not check: every table the lowering reads would be half filled
+  if problems > 0 {
+    return Ok(problems)
+  }
+  var lowering = lowerChecked(checked)
+  if !onlyStatistics {
+    const text = loweredText(lowering)
+    if !text.isEmpty() {
+      print text
+      print ""
+    }
+  }
+  const found = reportLoweredProblems(checked, tree, lowering)
+  for line in statisticsLines(lowering) {
+    print line
+  }
+  for line in loweredProblems(lowering) {
+    printError "internal error: {line}"
+  }
+  Ok(found + loweredProblems(lowering).length())
+}
+
+/** The errors of the program the lowering found: an overflow or a division by zero in a compile-time constant. */
+fn reportLoweredProblems(checked: Checked, tree: SourceTree, lowering: Lowering): Int {
+  for problem in lowering.problems {
+    const module = checked.program.graph.at(problem.module)
+    const lines = LineIndex.of(module.source.text)
+    printError renderDiagnostic(tree.display(module.path), lines, problem.diagnostic)
+    printError ""
+  }
+  lowering.problems.length()
+}
+
 match Process.arguments() {
   ["check", ...more] => {
     const withStatistics = more.contains("--statistics")
     const given = more.filter({ _ != "--statistics" }).toList()
     const paths = if given.isEmpty() { ["."] } else { given }
     if checkProjects(paths, withStatistics)? > 0 {
+      Process.exit(1)
+    }
+  }
+  ["ir", ...more] => {
+    const onlyStatistics = more.contains("--statistics")
+    const given = more.filter({ _ != "--statistics" }).toList()
+    const paths = if given.isEmpty() { ["."] } else { given }
+    if printIr(paths, onlyStatistics)? > 0 {
       Process.exit(1)
     }
   }

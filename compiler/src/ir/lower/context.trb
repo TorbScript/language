@@ -1,0 +1,335 @@
+use Span, LineIndex from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use ModuleId from "../../semantics/module"
+use SymbolId from "../../semantics/symbols"
+use TypeId, ParameterId from "../../semantics/checker/type"
+use Checker from "../../semantics/checker/context"
+use NativeEntry, nativeEntries from "../../backend/c/natives"
+use IrProgram, IrTypeId, IrType, Slot, BlockId, StaticId, StaticValue, StaticContents from "../ir"
+use Location, LocationId, Terminator, Argument, borrowed from "../ir"
+use Instantiation, newInstantiation, instantiateType from "../instantiate"
+use canonicalType, canonicalLiteral, escapedComponent, mangledName from "../mangle"
+use FunctionBuilder, terminate, switchTo from "../build"
+
+/**
+ * What the lowering from the checked syntax tree to the IR threads through itself: the program it builds, the tables
+ * the type checker filled, and the little bookkeeping one function body needs.
+ *
+ * It is one `var lowering: Lowering` for the same reason the grammar has one `var parser: Parser` and the checker one
+ * `var checker: Checker` - every program-wide table lives in exactly one owner and is never held twice, because a
+ * second live copy across a write is O(n) on stage 0.
+ *
+ * The **builder** of the function that is being lowered is deliberately *not* a field of this value: a lowering
+ * function takes `var lowering: Lowering` and `var builder: FunctionBuilder` side by side, so that emitting an
+ * instruction never has to read a field of the same place that was just taken out.
+ */
+
+/** One construct milestone 5.2 does not lower yet, with where it was first seen and how often it blocked a function. */
+public type Unsupported {
+  what: String
+  /** `path:line:column` of the first occurrence. */
+  at: String
+  count: Int
+}
+
+/**
+ * One error of the *program* the lowering found, with the module it belongs to so that it can be rendered like any
+ * other diagnostic. The only ones there are come from the constant evaluator: overflow, a division by zero and a `nan`
+ * in a compile-time constant are compile errors at that expression (decided gap 11).
+ */
+public type LoweredProblem {
+  module: ModuleId
+  diagnostic: Diagnostic
+}
+
+public type Lowering {
+  var program: IrProgram
+  var checker: Checker
+  var instantiation: Instantiation
+  natives: List<NativeEntry>
+  /** The name of the manifest entry to its index, so a native call is a lookup and never a scan over the table. */
+  nativeIndex: Map<String, Int>
+  /** How every module's path is written in a location, in the order of `program.graph.modules`. */
+  paths: List<String>
+  /** The line index of a module, built the first time a location of it is needed and kept afterwards. */
+  var lines: Map<Int, LineIndex> = [:]
+  /** Whose tables are being read. A default argument is lowered at the call site but in the callee's module. */
+  var module: ModuleId = ModuleId(0)
+  /** One static value per distinct constant: the literals of a program repeat, and their names have to agree. */
+  var staticKeys: Map<String, StaticId> = [:]
+  /** The slot of every binding of the function that is being lowered, by the span of the name it was declared under. */
+  var slots: Map<Span, Slot> = [:]
+  /** The one `Void` slot of the function that holds every result nobody takes, made when the first one needs it. */
+  var hole: Slot? = None
+  /** `false` once the function that is being lowered hit a construct the back end does not support yet. */
+  var isSupported: Bool = true
+  /** Control cannot reach the end of the current block any more: `return`, `break`, `continue`, a panic. */
+  var isDiverged: Bool = false
+  /** Where a `break` and a `continue` of the innermost loop go, innermost last. */
+  var breakTargets: List<BlockId> = []
+  var continueTargets: List<BlockId> = []
+  /** Whether anything in the loop wrote a `break`: `while true` without one never ends. */
+  var loopBroke: List<Bool> = []
+  var unsupported: List<Unsupported> = []
+  var unsupportedIndex: Map<String, Int> = [:]
+  /** Errors of the program itself, in the order they were found. */
+  var problems: List<LoweredProblem> = []
+  /** How many instances were lowered, and how many became an `unreachable` stub. */
+  var lowered: Int = 0
+  var stubbed: Int = 0
+  /** How far the worklist has come. The cursor never goes back, so draining it is one pass over a growing list. */
+  var drained: Int = 0
+  /** The static value of every module constant, by `SymbolId.value`. */
+  var constants: Map<Int, StaticId> = [:]
+  /** The constants whose initializer is being evaluated right now: a `const` in terms of itself is a cycle. */
+  var evaluating: Map<Int, Bool> = [:]
+}
+
+/** A lowering for one checked program. `paths` holds one path per module, in the order of `program.graph.modules`. */
+public fn newLowering(checker: Checker, paths: List<String>): Lowering {
+  const instantiation = newInstantiation(checker)
+  const entries = nativeEntries()
+  var index: Map<String, Int> = [:]
+  for position in 0..entries.length() {
+    const name = entries[position].name
+    if !index.containsKey(name) {
+      index.set(name, position)
+    }
+  }
+  Lowering(IrProgram(), checker, instantiation, entries, index, paths)
+}
+
+// --- What the back end does not do yet ------------------------------------------------------------------------------
+
+/**
+ * One construct outside of this sub-milestone. The function that is being lowered becomes an `unreachable` stub, so
+ * a later sub-milestone replaces it without anything else changing, and the counts are the progress bar of
+ * milestone 5.
+ *
+ * Only the *first* one per function is recorded: everything after it walks a body whose slots were abandoned, and one
+ * root cause gets one message - the same rule the checker's diagnostics follow.
+ */
+public fn reportUnsupported(var lowering: Lowering, what: String, at: Span) {
+  if !lowering.isSupported {
+    return
+  }
+  lowering.isSupported = false
+  const message = "not supported by the back end yet: {what}"
+  if const Some(index) = lowering.unsupportedIndex.get(message) {
+    const entry = lowering.unsupported[index]
+    lowering.unsupported.set(index, entry.copy(count: entry.count + 1))
+    return
+  }
+  const place = describeSpan(lowering, at)
+  const next = lowering.unsupported.length()
+  lowering.unsupportedIndex.set(message, next)
+  lowering.unsupported.add(Unsupported(message, place, 1))
+}
+
+/**
+ * An error of the program, at the expression that caused it. Not an internal error - those go to
+ * `IrProgram.problems` - and not a construct that waits for a later sub-milestone.
+ */
+public fn reportProblem(var lowering: Lowering, message: String, at: Span) {
+  const module = lowering.module
+  const problem = Diagnostic.error(message, at)
+  lowering.problems.add(LoweredProblem(module, problem))
+}
+
+/** `src/main.trb:12:5`, the way a location is written everywhere else. */
+public fn describeSpan(var lowering: Lowering, at: Span): String {
+  const index = lowering.module.value
+  const path = pathOfModule(lowering, index)
+  const lines = lineIndexOf(lowering, index)
+  const (line, column) = lines.lineAndColumn(at.start)
+  "{path}:{line}:{column}"
+}
+
+/** The interned location of a span of the module that is being lowered. */
+public fn locationOf(var lowering: Lowering, at: Span): LocationId {
+  const index = lowering.module.value
+  const path = pathOfModule(lowering, index)
+  const lines = lineIndexOf(lowering, index)
+  const (line, column) = lines.lineAndColumn(at.start)
+  lowering.program.internLocation(Location(path, line, column))
+}
+
+fn pathOfModule(lowering: Lowering, index: Int): String {
+  lowering.paths.get(index) ?? "?"
+}
+
+/** Built on the first location of a module and kept: walking the characters of a file is not free on stage 0. */
+fn lineIndexOf(var lowering: Lowering, index: Int): LineIndex {
+  if const Some(known) = lowering.lines.get(index) {
+    return known
+  }
+  const modules = lowering.checker.program.graph.modules
+  const text = if index >= 0 && index < modules.length() { modules[index].source.text } else { "" }
+  const built = LineIndex.of(text)
+  lowering.lines.set(index, built)
+  built
+}
+
+// --- Types ----------------------------------------------------------------------------------------------------------
+
+/** The IR type a checker type stands for. Everything here is monomorphic, so nothing is ever substituted. */
+public fn irTypeOf(var lowering: Lowering, id: TypeId): IrTypeId {
+  const empty: Map<ParameterId, TypeId> = [:]
+  instantiateType(lowering.program, lowering.checker, lowering.instantiation, empty, id)
+}
+
+/** The IR type of the expression at `at`, or `None` where the checker recorded nothing or something broken. */
+public fn typeAtSpan(var lowering: Lowering, at: Span): IrTypeId? {
+  const module = lowering.module
+  const found = lowering.checker.expressionType(module, at)?
+  if lowering.checker.isBroken(found) {
+    return None
+  }
+  Some(irTypeOf(lowering, found))
+}
+
+public fn voidTypeOf(var lowering: Lowering): IrTypeId {
+  lowering.program.internType(IrType.VoidType)
+}
+
+public fn booleanTypeOf(var lowering: Lowering): IrTypeId {
+  lowering.program.internType(IrType.Boolean)
+}
+
+public fn isVoidType(lowering: Lowering, id: IrTypeId): Bool {
+  match lowering.program.typeAt(id) {
+    .VoidType => true
+    _ => false
+  }
+}
+
+public fn isNeverType(lowering: Lowering, id: IrTypeId): Bool {
+  match lowering.program.typeAt(id) {
+    .NeverType => true
+    _ => false
+  }
+}
+
+/** Whether a call of a function with this result produces a value something can take. */
+public fn producesValue(lowering: Lowering, id: IrTypeId): Bool {
+  !isVoidType(lowering, id) && !isNeverType(lowering, id)
+}
+
+// --- Static data ----------------------------------------------------------------------------------------------------
+
+/**
+ * One static value per distinct constant. The name is a function of the type and of the value, so two literals that
+ * are the same value are one static and the text of the program does not depend on the order they were found in.
+ */
+public fn internStatic(var lowering: Lowering, contents: StaticContents, annotation: IrTypeId): StaticId {
+  const spelling = spellingOfContents(lowering, contents)
+  const key = "{annotation.value};{spelling}"
+  if const Some(found) = lowering.staticKeys.get(key) {
+    return found
+  }
+  const instance = "{canonicalType(lowering.program, annotation)}_{spelling}"
+  const name = mangledName("s", ["literal"], instance)
+  const identifier = lowering.program.addStatic(StaticValue(name, annotation, contents))
+  lowering.staticKeys.set(key, identifier)
+  identifier
+}
+
+/** A static value that carries the name of the declaration it is the value of: a top-level `const` of a module. */
+public fn namedStatic(var lowering: Lowering, name: String, contents: StaticContents, annotation: IrTypeId): StaticId {
+  lowering.program.addStatic(StaticValue(name, annotation, contents))
+}
+
+/** How a constant is spelled inside a name. Injective, because every escape is, so two values never collide. */
+fn spellingOfContents(lowering: Lowering, contents: StaticContents): String {
+  match contents {
+    .Literal(value) => canonicalLiteral(value)
+    .Floating(value) => escapedComponent("{value}")
+    .VoidValue => "void"
+    .Aggregate(layout, variant, fields) => {
+      var parts = ["{lowering.program.layoutAt(layout).name}", "{variant}"]
+      for field in fields {
+        parts.add(lowering.program.staticAt(field).name)
+      }
+      String.join(parts, separator: "_")
+    }
+    .Items(item, items) => {
+      var parts = ["items", canonicalType(lowering.program, item)]
+      for one in items {
+        parts.add(lowering.program.staticAt(one).name)
+      }
+      String.join(parts, separator: "_")
+    }
+  }
+}
+
+/**
+ * Every operand of a call and every field of a `Construct`, as `Borrowed`. Which position takes the count is what the
+ * ownership pass of 5.4 decides out of the body this sub-milestone writes, so phase one writes one thing everywhere.
+ */
+public fn borrowedArguments(slots: List<Slot>): List<Argument> {
+  var given: List<Argument> = []
+  for slot in slots {
+    given.add(borrowed(slot))
+  }
+  given
+}
+
+// --- The natives manifest -------------------------------------------------------------------------------------------
+
+/** `"Int64.add"`, `"print"`: what a `native` declaration becomes, looked up by owner and member name. */
+public fn nativeNamed(lowering: Lowering, owner: String, member: String): NativeEntry? {
+  const key = if owner.isEmpty() { member } else { "{owner}.{member}" }
+  const index = lowering.nativeIndex.get(key)?
+  lowering.natives.get(index)
+}
+
+// --- Blocks ---------------------------------------------------------------------------------------------------------
+
+/**
+ * Terminates the current block. Everything after it in the same block is unreachable, which is what `isDiverged`
+ * says - a lowering that kept emitting there would build a block nothing reaches, and the verifier rejects one.
+ */
+public fn finishBlock(var lowering: Lowering, var builder: FunctionBuilder, terminator: Terminator) {
+  terminate(builder, terminator)
+  lowering.isDiverged = true
+}
+
+/** Where the next instructions go. Control reaches the beginning of a block that was just opened. */
+public fn continueIn(var lowering: Lowering, var builder: FunctionBuilder, block: BlockId) {
+  switchTo(builder, block)
+  lowering.isDiverged = false
+}
+
+// --- Loops ----------------------------------------------------------------------------------------------------------
+
+public fn enterLoop(var lowering: Lowering, exit: BlockId, step: BlockId) {
+  lowering.breakTargets.add(exit)
+  lowering.continueTargets.add(step)
+  lowering.loopBroke.add(false)
+}
+
+/** Answers whether anything in the loop wrote a `break`, which is what says `while true` can be left at all. */
+public fn leaveLoop(var lowering: Lowering): Bool {
+  const last = lowering.breakTargets.length() - 1
+  const _ = lowering.breakTargets.removeAt(last)
+  const other = lowering.continueTargets.length() - 1
+  const _ = lowering.continueTargets.removeAt(other)
+  const index = lowering.loopBroke.length() - 1
+  lowering.loopBroke.removeAt(index) ?? false
+}
+
+/** A `break` of the innermost loop, so that the block after a `while true` is reachable. */
+public fn markBreak(var lowering: Lowering) {
+  const index = lowering.loopBroke.length() - 1
+  if index >= 0 {
+    lowering.loopBroke.set(index, true)
+  }
+}
+
+public fn breakTarget(lowering: Lowering): BlockId? {
+  lowering.breakTargets.last()
+}
+
+public fn continueTarget(lowering: Lowering): BlockId? {
+  lowering.continueTargets.last()
+}

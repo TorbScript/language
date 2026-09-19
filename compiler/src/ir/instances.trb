@@ -1,0 +1,183 @@
+use FunctionDeclaration from "../syntax/ast"
+use SymbolId from "../semantics/symbols"
+use TypeId, ParameterForm, ParameterMode, Signature from "../semantics/checker/type"
+use signatureOf, functionOfSite from "../semantics/checker/signature"
+use IrProgram, IrFunction, IrSignature, IrParameter, IrType, IrTypeId, Ownership from "./ir"
+use FunctionId, FunctionKind, Instance, SlotDeclaration, SlotRole, RuntimeKind from "./ir"
+use Lowering, irTypeOf from "./lower/context"
+use functionName from "./mangle"
+use symbolPathOf from "./instantiate"
+use newFunction, finishFunction from "./build"
+
+/**
+ * The monomorphization worklist: which declarations become functions of the program, and under which name.
+ *
+ * An instance is `(SymbolId, typeArguments, witnessArguments)` and `IrProgram.instances` maps its key to the
+ * `FunctionId` it became, so two routes to the same declaration are one function however the lowering reached them.
+ * Milestone 5.2 only ever builds instances **without** arguments: a generic declaration, a witness and a trait-typed
+ * receiver are 5.6's, and a call that needs one fails cleanly instead.
+ *
+ * Every instance is added to the program *before* its body is lowered, with an `unreachable` body: a function that
+ * calls itself needs its own id, and a function whose body turns out to need a construct of a later sub-milestone
+ * keeps exactly that body - so a caller of it is still a well typed `Call` and 5.5 to 5.9 replace the stubs one by one.
+ */
+
+/** What a declaration is as a function of the IR, or `None` where nothing monomorphic can be built from it. */
+public fn instanceOfSymbol(var lowering: Lowering, symbol: SymbolId): FunctionId? {
+  const instance = Instance(symbol, [], [])
+  const key = instanceKeyOf(instance)
+  if const Some(found) = lowering.program.instances.get(key) {
+    return Some(found)
+  }
+  if !isMonomorphic(lowering, symbol) {
+    return None
+  }
+  const identifier = signatureOf(lowering.checker, symbol)
+  const signature = lowering.checker.signature(identifier)
+  if !signature.hasBody {
+    return None
+  }
+  if functionDeclarationOf(lowering, symbol).isNone() {
+    return None
+  }
+  const built = irSignatureOf(lowering, signature)
+  const name = nameOfInstance(lowering, symbol)
+  var builder = newFunction(name, Some(symbol), built, "not supported yet")
+  const added = finishFunction(lowering.program, builder)
+  lowering.program.instances.set(key, added)
+  lowering.program.pending.add(instance)
+  Some(added)
+}
+
+/**
+ * A `native fn` the runtime provides: a function with a signature and no body, whose `kind` carries the C symbol the
+ * emitter calls. It is a function and not an instruction of its own, so a call of one is an ordinary `Call` and the
+ * ownership pass reads its modes out of the signature exactly as it does for anything else.
+ */
+public fn runtimeFunctionOf(var lowering: Lowering, symbol: SymbolId, runtime: String): FunctionId? {
+  const instance = Instance(symbol, [], [])
+  const key = instanceKeyOf(instance)
+  if const Some(found) = lowering.program.instances.get(key) {
+    return Some(found)
+  }
+  if !isMonomorphic(lowering, symbol) {
+    return None
+  }
+  const identifier = signatureOf(lowering.checker, symbol)
+  const signature = lowering.checker.signature(identifier)
+  const built = irSignatureOf(lowering, signature)
+  const name = nameOfInstance(lowering, symbol)
+  var function = IrFunction(name, Some(symbol), built, [], [], FunctionKind.Runtime(runtime))
+  for index in 0..built.parameters.length() {
+    const parameter = built.parameters[index]
+    function.slots.add(SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name))
+  }
+  const added = lowering.program.addFunction(function)
+  lowering.program.instances.set(key, added)
+  Some(added)
+}
+
+/** The mangled name of a monomorphic instance: a pure function of where the declaration is written. */
+public fn nameOfInstance(var lowering: Lowering, symbol: SymbolId): String {
+  const path = symbolPathOf(lowering.checker, symbol)
+  functionName(lowering.program, path, [])
+}
+
+/**
+ * The key an instance is memoized under. Spelled out here rather than taken from `mangle.trb` because the arguments
+ * of an instance are always empty in this sub-milestone and a key still has to tell two symbols apart.
+ */
+public fn instanceKeyOf(instance: Instance): String {
+  var key = "{instance.symbol.value}"
+  for argument in instance.arguments {
+    key = key + ";{argument.value}"
+  }
+  key = key + "!"
+  for witness in instance.witnesses {
+    key = key + ";{witness.value}"
+  }
+  key
+}
+
+/**
+ * Whether a declaration needs nothing a call site has to decide: no generic parameters of its own or of the
+ * declaration around it, and an owner that is a concrete type rather than the `Self` of a trait.
+ */
+public fn isMonomorphic(var lowering: Lowering, symbol: SymbolId): Bool {
+  const identifier = signatureOf(lowering.checker, symbol)
+  const signature = lowering.checker.signature(identifier)
+  if !signature.generics.isEmpty() {
+    return false
+  }
+  if !signature.bounds.isEmpty() {
+    return false
+  }
+  match signature.owner {
+    .None => true
+    Some(owner) => isConcreteOwner(lowering, owner)
+  }
+}
+
+fn isConcreteOwner(var lowering: Lowering, owner: TypeId): Bool {
+  match lowering.checker.types.form(owner) {
+    .Nominal(_, arguments) => arguments.isEmpty()
+    _ => false
+  }
+}
+
+/** The `fn` a symbol was declared by, so that a body can be lowered from it. */
+public fn functionDeclarationOf(var lowering: Lowering, symbol: SymbolId): FunctionDeclaration? {
+  const site = lowering.checker.siteOf(symbol)?
+  functionOfSite(site)
+}
+
+// --- Signatures -----------------------------------------------------------------------------------------------------
+
+/**
+ * The IR signature of a declaration: `self` first, then the parameters in declaration order. Every one of them is
+ * `Borrowed` here - which parameters the callee stores is what the summary pass of 5.4 decides, and it reads the
+ * body this sub-milestone writes.
+ */
+public fn irSignatureOf(var lowering: Lowering, signature: Signature): IrSignature {
+  var parameters: List<IrParameter> = []
+  if signature.takesSelf {
+    if const Some(owner) = signature.owner {
+      const annotation = irTypeOf(lowering, owner)
+      parameters.add(IrParameter("self", annotation, signature.isVarSelf, Ownership.Borrowed))
+    }
+  }
+  for parameter in signature.form.parameters {
+    const annotation = parameterTypeOf(lowering, parameter)
+    const name = parameter.name ?? ""
+    const isReference = isReferenceParameter(parameter.mode)
+    parameters.add(IrParameter(name, annotation, isReference, Ownership.Borrowed))
+  }
+  const result = irTypeOf(lowering, signature.form.result)
+  IrSignature(parameters, result)
+}
+
+/** `lazy Value` is a one-shot memo cell and a variadic parameter holds the list the call site builds (BACKEND 1.6). */
+fn parameterTypeOf(var lowering: Lowering, parameter: ParameterForm): IrTypeId {
+  const annotation = irTypeOf(lowering, parameter.annotation)
+  match parameter.mode {
+    .Lazy => lowering.program.internType(IrType.Lazy(annotation))
+    .Variadic => lowering.program.internType(IrType.Runtime(RuntimeKind.ListStorage, [annotation]))
+    _ => annotation
+  }
+}
+
+public fn isReferenceParameter(mode: ParameterMode): Bool {
+  match mode {
+    .Var => true
+    .Receiver(isVar) => isVar
+    _ => false
+  }
+}
+
+/** Whether a call of this declaration would need a `var` path, which is milestone 5.9's. */
+public fn needsReference(signature: Signature): Bool {
+  if signature.isVarSelf {
+    return true
+  }
+  signature.form.parameters.any({ isReferenceParameter(_.mode) })
+}

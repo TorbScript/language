@@ -1,0 +1,231 @@
+use test, group from "std/test"
+use printStatic from "../src/ir/print"
+use loweredText from "../src/ir/lower/lower"
+use lowered from "./lower-harness"
+
+/**
+ * The compile-time constant evaluator: what is evaluable (decided gap 27 of docs/TYPECHECKER.md plus the arithmetic
+ * of the built-in number types), and what is a **compile error at the expression** rather than a program that cannot
+ * start - overflow, a division by zero and a `nan` out of a literal expression (decided gap 11 of docs/BACKEND.md).
+ *
+ * Every constant here is a top-level `const` of a module, because that is the one place the language has for one:
+ * a static value with a name, evaluated once, with no module initialization anywhere.
+ */
+
+/** The value of the top-level `const` called `answer`, as the text format writes it. */
+fn valueOf(initializer: String): String {
+  var found = lowered("const answer = {initializer}\n")
+  for value in found.program.statics {
+    if value.name == "s_acme_x2f_app_main_answer" {
+      return printStatic(found.program, value)
+    }
+  }
+  "there is no constant `answer`"
+}
+
+/** The same, with a declared type: the checker does not walk the initializer of an annotated `const`. */
+fn typedValueOf(annotation: String, initializer: String): String {
+  var found = lowered("const answer: {annotation} = {initializer}\n")
+  for value in found.program.statics {
+    if value.name == "s_acme_x2f_app_main_answer" {
+      return printStatic(found.program, value)
+    }
+  }
+  "there is no constant `answer`"
+}
+
+/** The errors of the program the evaluator found, in the order it found them. */
+fn errorsOf(source: String): List<String> {
+  var found = lowered(source)
+  var shown: List<String> = []
+  for problem in found.problems {
+    shown.add(problem.diagnostic.message)
+  }
+  shown
+}
+
+fn errorsOfValue(initializer: String): List<String> {
+  errorsOf("const answer = {initializer}\n")
+}
+
+fn errorsOfTyped(annotation: String, initializer: String): List<String> {
+  errorsOf("const answer: {annotation} = {initializer}\n")
+}
+
+group "Literals" {
+  test "every literal of the language is static data of the type the checker adapted it to" {
+    assert(valueOf("42") == "static s_acme_x2f_app_main_answer: Int64 = 42")
+    assert(valueOf("-7") == "static s_acme_x2f_app_main_answer: Int64 = -7")
+    assert(valueOf("0xff") == "static s_acme_x2f_app_main_answer: Int64 = 255")
+    assert(valueOf("0b1010") == "static s_acme_x2f_app_main_answer: Int64 = 10")
+    assert(valueOf("1_000") == "static s_acme_x2f_app_main_answer: Int64 = 1000")
+    assert(valueOf("true") == "static s_acme_x2f_app_main_answer: Bool = true")
+    assert(valueOf("'a'") == "static s_acme_x2f_app_main_answer: Char = 'a'")
+    assert(valueOf("\"hi\"") == "static s_acme_x2f_app_main_answer: String = \"hi\"")
+    assert(valueOf("3.5") == "static s_acme_x2f_app_main_answer: Float64 = 3.5")
+    assert(valueOf("-0.25") == "static s_acme_x2f_app_main_answer: Float64 = -0.25")
+    assert(valueOf("Void") == "static s_acme_x2f_app_main_answer: Void = void")
+  }
+
+  test "a literal adapts to the narrow type it is declared at" {
+    assert(typedValueOf("Int8", "-128") == "static s_acme_x2f_app_main_answer: Int8 = -128")
+    assert(typedValueOf("UInt8", "255") == "static s_acme_x2f_app_main_answer: UInt8 = 255")
+  }
+}
+
+group "Every operator" {
+  test "the arithmetic of the integers, with truncation toward zero and the sign of the dividend" {
+    assert(valueOf("2 + 3") == "static s_acme_x2f_app_main_answer: Int64 = 5")
+    assert(valueOf("2 - 3") == "static s_acme_x2f_app_main_answer: Int64 = -1")
+    assert(valueOf("2 * 3") == "static s_acme_x2f_app_main_answer: Int64 = 6")
+    assert(valueOf("-7 / 2") == "static s_acme_x2f_app_main_answer: Int64 = -3")
+    assert(valueOf("-7 % 2") == "static s_acme_x2f_app_main_answer: Int64 = -1")
+    assert(valueOf("-(2 + 3)") == "static s_acme_x2f_app_main_answer: Int64 = -5")
+  }
+
+  test "the arithmetic of the floats" {
+    assert(valueOf("1.5 + 2.0") == "static s_acme_x2f_app_main_answer: Float64 = 3.5")
+    assert(valueOf("1.5 - 2.0") == "static s_acme_x2f_app_main_answer: Float64 = -0.5")
+    assert(valueOf("1.5 * 2.0") == "static s_acme_x2f_app_main_answer: Float64 = 3.0")
+    assert(valueOf("1.0 / 60.0").startsWith("static s_acme_x2f_app_main_answer: Float64 = 0.0166"))
+  }
+
+  test "every comparison, on the numbers, on `Bool`, on `Char` and on `String`" {
+    assert(valueOf("2 == 3") == "static s_acme_x2f_app_main_answer: Bool = false")
+    assert(valueOf("2 != 3") == "static s_acme_x2f_app_main_answer: Bool = true")
+    assert(valueOf("2 < 3") == "static s_acme_x2f_app_main_answer: Bool = true")
+    assert(valueOf("2 <= 2") == "static s_acme_x2f_app_main_answer: Bool = true")
+    assert(valueOf("2 > 3") == "static s_acme_x2f_app_main_answer: Bool = false")
+    assert(valueOf("2 >= 3") == "static s_acme_x2f_app_main_answer: Bool = false")
+    assert(valueOf("1.5 < 2.0") == "static s_acme_x2f_app_main_answer: Bool = true")
+    assert(valueOf("true == false") == "static s_acme_x2f_app_main_answer: Bool = false")
+    assert(valueOf("'a' < 'b'") == "static s_acme_x2f_app_main_answer: Bool = true")
+    assert(valueOf("\"a\" < \"b\"") == "static s_acme_x2f_app_main_answer: Bool = true")
+    assert(valueOf("\"a\" == \"a\"") == "static s_acme_x2f_app_main_answer: Bool = true")
+  }
+
+  test "the logical operators of `Bool`" {
+    assert(valueOf("true && false") == "static s_acme_x2f_app_main_answer: Bool = false")
+    assert(valueOf("true || false") == "static s_acme_x2f_app_main_answer: Bool = true")
+    assert(valueOf("!true") == "static s_acme_x2f_app_main_answer: Bool = false")
+  }
+
+  test "interpolation of constants, which is not a call and is therefore evaluable" {
+    assert(valueOf("\"n is \{1 + 1\}\"") == "static s_acme_x2f_app_main_answer: String = \"n is 2\"")
+    assert(valueOf("\"\{true\} \{'x'\}\"") == "static s_acme_x2f_app_main_answer: String = \"true x\"")
+  }
+}
+
+group "Overflow, division by zero and `nan`" {
+  test "an addition that leaves the range of the type it is written at is an error at that expression" {
+    assert(errorsOfValue("9223372036854775807 + 1") == ["`+` leaves the range of `Int64` here"])
+    assert(errorsOfTyped("Int8", "100 + 100") == ["`+` leaves the range of `Int8` here"])
+    assert(errorsOfTyped("UInt8", "1 - 2") == ["`-` leaves the range of `UInt8` here"])
+  }
+
+  test "a multiplication, a negation and a division can leave the range as well" {
+    assert(errorsOfValue("4611686018427387904 * 4") == ["`*` leaves the range of `Int64` here"])
+    assert(errorsOfValue("-(-9223372036854775807 - 1)") == ["`-` leaves the range of `Int64` here"])
+    assert(
+      errorsOfValue("(-9223372036854775807 - 1) / -1") == ["`/` leaves the range of `Int64` here"]
+    )
+    assert(
+      errorsOfValue("(-9223372036854775807 - 1) % -1") == ["`%` leaves the range of `Int64` here"]
+    )
+  }
+
+  test "a division by zero is an error, and so is a remainder by zero" {
+    assert(errorsOfValue("1 / 0") == ["`/` divides by zero here"])
+    assert(errorsOfValue("1 % 0") == ["`%` divides by zero here"])
+  }
+
+  test "a float infinity is a value, and only a `nan` is an error" {
+    assert(valueOf("1.0 / 0.0") == "static s_acme_x2f_app_main_answer: Float64 = inf")
+    assert(
+      errorsOfValue("0.0 / 0.0") == ["`/` produces `nan` here, which a compile-time constant cannot hold"]
+    )
+  }
+
+  test "an error stops the constant and nothing else is said about it" {
+    const source = r"""
+const broken = 1 / 0
+
+fn use1(): Int {
+  broken
+}
+"""
+    var found = lowered(source)
+    assert(found.problems.length() == 1)
+    assert(!loweredText(found).contains("s_acme_x2f_app_main_broken"))
+  }
+}
+
+group "What a constant may name" {
+  test "a constant may name another constant, and the value is inlined into the static" {
+    const source = r"""
+const base = 10
+const doubled = base * 2
+"""
+    var found = lowered(source)
+    const text = loweredText(found)
+    assert(text.contains("static s_acme_x2f_app_main_base: Int64 = 10"))
+    assert(text.contains("static s_acme_x2f_app_main_doubled: Int64 = 20"))
+  }
+
+  test "a constant of a type of the program is an aggregate of static fields" {
+    const source = r"""
+type Point {
+  x: Int
+  y: Int
+}
+
+const origin = Point(1, 2)
+"""
+    const text = loweredText(lowered(source))
+    assert(
+      text.contains("static s_acme_x2f_app_main_origin: Record(T_acme_x2f_app_main_Point) = T_acme_x2f_app_main_Point(")
+    )
+    assert(text.contains("s_literal__Int64_1, s_literal__Int64_2)"))
+  }
+
+  test "a tuple of constants is an aggregate too" {
+    const text = loweredText(lowered("const pair = (1, true)\n"))
+    assert(text.contains("static s_acme_x2f_app_main_pair: Tuple(T_tuple__Int64_Bool) = T_tuple__Int64_Bool("))
+  }
+
+  test "a constant in terms of itself is a cycle and stays unevaluated" {
+    // Annotated, because an inferred `const` in terms of itself is a cycle the checker reports first
+    const source = r"""
+const first: Int = second
+const second: Int = first
+"""
+    const text = loweredText(lowered(source))
+    assert(!text.contains("s_acme_x2f_app_main_first"))
+    assert(!text.contains("s_acme_x2f_app_main_second"))
+  }
+
+  test "a function call is not a compile-time constant, and the lowering counts it" {
+    const source = r"""
+fn twice(value: Int): Int {
+  value + value
+}
+
+const answer = twice(21)
+"""
+    var found = lowered(source)
+    var shown: List<String> = []
+    for entry in found.unsupported {
+      shown.add(entry.what)
+    }
+    assert(shown == ["not supported by the back end yet: a `const` that is not compile-time evaluable"])
+  }
+
+  test "a list literal is not one either: a collection is built at runtime" {
+    var found = lowered("const items = [1, 2, 3]\n")
+    var shown: List<String> = []
+    for entry in found.unsupported {
+      shown.add(entry.what)
+    }
+    assert(shown == ["not supported by the back end yet: a `const` that is not compile-time evaluable"])
+  }
+}

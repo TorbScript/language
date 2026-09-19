@@ -825,7 +825,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 |---|---|---|---|---|
 | **5.1** | **Done.** IR data types, layouts, the representation classes, the layout model, mangling, instantiation from a checker type, the builder, the verifier, the text format | `ir/ir.trb`, `ir/layout.trb`, `ir/mangle.trb`, `ir/instantiate.trb`, `ir/build.trb`, `ir/verify.trb`, `ir/print.trb` | Hand-built IR to text; mangling is stable and collision free; layouts and instantiation by table | M4.1 |
 | **5.R1** | **Done.** Runtime skeleton and the manifest format: header, heap, retain/release/make-unique, `torb_text`, panic, overflow, console, the manifest with the header it renders, the C test harness | `runtime/*`, `backend/c/natives.trb` | `runtime/tests` (67, zero live blocks after each); the generated header compiles against the runtime and the table's shape is pinned | - |
-| **5.2** | Lowering: functions, slots, blocks, literals, locals, arithmetic intrinsics, calls of top-level functions and concrete methods, fields, constructors, tuples, `if`, `while`, `for` over `Range<Int>`, `return`, blocks, the const evaluator, static values | `ir/lower/*.trb`, `ir/instances.trb`, `ir/constant.trb` | IR snapshots for ~15 small programs | 5.1, M4.4 |
+| **5.2** | **Done.** Lowering: functions, slots, blocks, literals, locals, arithmetic intrinsics, calls of top-level functions and concrete methods, fields, constructors, tuples, `if`, `while`, `for` over `Range<Int>`, `return`, blocks, the const evaluator, static values | `ir/lower/*.trb`, `ir/instances.trb`, `ir/constant.trb` | IR snapshots for ~15 small programs | 5.1, M4.4 |
 | **5.3** | The C emitter, minimum path. Types, functions, blocks and gotos, `#line`, slot declarations, static data, `main`, the driver's minimum (`torb build`, compiler discovery, `--emit-c`). **Gate: `print "Hello"` becomes a native binary** | `backend/c/emit.trb`, `backend/c/type.trb`, `cli/build.trb` | 10 scripts compiled and run, stdout compared; `--emit-c` twice is byte identical | 5.2, 5.R1 |
 | **5.4** | Ownership: the summary pass, liveness, `Copy`/`Move`/`Release` insertion, edge splitting, `MakeUnique` | `ir/ownership.trb` | IR snapshots pinning every insertion point; the live-block counter is zero after every conformance script | 5.2 |
 | **5.5** | ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, `Option`/`Result`, `?` with its conversion, `if const`/`if var`/`while const` | `ir/lower/match.trb`, `ir/decision.trb` | Snapshots of the decision trees; `04-adts-and-matching.trb` and `06-errors.trb` run | 5.2, 5.4 |
@@ -945,6 +945,98 @@ the code won and this is the list. Everything else is as written.
   the same type share one IR type, one layout and one name. The key of an *instance* (`instanceKey`) is the symbol
   plus the ids of its arguments and witness tables, and it never leaves the run that built it - a *name* is what has
   to be stable across runs.
+
+### What 5.2 does differently
+
+Sections 1 to 3 are the plan; where they did not fit what 5.1 built, what the checker records or what stage 0 can run,
+the code won and this is the list. Everything else is as written.
+
+- **Eight files, and `Lowering` is the value everything is threaded through.** `ir/lower/context.trb` (the state, the
+  reporting, the interning of locations and static values, the natives index), `ir/lower/expression.trb`,
+  `ir/lower/statement.trb`, `ir/lower/call.trb`, `ir/lower/function.trb` (one body, the entry function, seeding),
+  `ir/lower/lower.trb` (the worklist and what `torb ir` prints), `ir/instances.trb` and `ir/constant.trb`. The
+  **builder is deliberately not a field of `Lowering`**: a lowering function takes `var lowering: Lowering` and
+  `var builder: FunctionBuilder` side by side, so that emitting an instruction never reads a field of the same place a
+  `var` argument has just taken out - trap 1 of `compiler/CONTRIBUTING.md`.
+- **A construct of a later sub-milestone makes the function an `unreachable` stub, and the stub is already in the
+  program.** The worklist adds every instance with a one-block `unreachable` body *before* it lowers it (a function
+  that calls itself needs its own id), and a body that hits something outside this sub-milestone is thrown away. So a
+  caller of it is still a well typed `Call`, the verifier is happy with the stub, and 5.5 to 5.9 are a sequence of
+  replacements rather than a rewrite. Only the **first** construct per function is recorded: everything after it walks
+  a body whose slots were abandoned, and one root cause gets one message - the rule the checker's diagnostics follow.
+  The counts are therefore *per function blocked*, which is what makes them a progress bar.
+- **`FunctionKind.Runtime(symbol)` was added.** A `native fn` the manifest maps to a function of `runtime/` is an
+  `IrFunction` with a signature, no blocks and the C symbol in its kind - because there is no instruction for "call the
+  runtime" and section 5.3's file list has no lowering in it, so the lowering of a native call has to be here. A call
+  of one is an ordinary `Call`, the ownership pass of 5.4 reads its modes out of its signature like any other
+  callee's, and `torb ir` prints it as `runtime fn t_... = torb_text_is_empty`. `panic` is the one exception: it has
+  `Instruction.Panic` and an `unreachable` after it.
+- **`==` and `!=` may name no numeric type.** The manifest of 5.R1 has `Bool.equals` and `Char.equals` as
+  `IntrinsicOperation.Equal` *without* a kind while `Int64.equals` has one, and the verifier of 5.1 demanded a kind for
+  every comparison. So the kind is now optional for exactly those two operations (`needsNumericKind` versus
+  `allowsNumericKind`), and where it is absent the verifier demands that both operands have the same type instead.
+- **The verifier's definedness analysis was wrong across blocks.** It intersected what was defined at the *beginning*
+  of each predecessor, so nothing a predecessor's own instructions wrote ever reached its successors and every branch
+  in a lowered function was reported. It now intersects what *leaves* each predecessor (`definedIn` union
+  `definitions`), which is what "defined on every path" means.
+- **`Copy` is what phase one emits to put a value in a slot**, and every operand position is `Borrowed`. Section 2.2
+  says phase one writes no `Copy`, which is about the copies *ownership* needs; a binding initialized from another slot
+  and an argument that is `Owned` are 5.4's, and rule 3 of section 2.1 ("a parameter whose only use is a `Copy` into a
+  slot that is later returned") already assumes the `Copy` is there. The snapshots of this sub-milestone therefore say
+  `borrowed` everywhere, including at `Construct` and `Return`.
+- **A destination is passed down instead of joining afterwards.** `lowerExpression` takes the slot the caller already
+  has - the local a value is bound to, the one slot both arms of an `if` produce into - so the arms of an `if` need no
+  phi node and no move, `&&` is a branch over one slot, and a body's last expression is returned out of the slot it is
+  already in. One value has one defining slot, which is what 5.4 needs.
+- **One `Void` slot per function holds every result nobody takes.** An `if` without an `else` used as a statement, and
+  every expression of a body that was abandoned, answer with that one slot rather than a temporary each.
+- **`for` is lowered without an iterator only where the range is written out.** `for index in a..b` with both ends and
+  an integer item becomes a counter, a `less` and an `add`; an inclusive range, a range without both ends and every
+  other subject need `Iterable.iterator()` and the `Option` its `next()` answers, so they are counted and wait for 5.5
+  and 5.6. `continue` jumps to the increment block, which is why the increment is a block of its own.
+- **`while true` without a `break` diverges, tracked per loop.** The block after it stays an empty `unreachable`
+  marker, and nothing is emitted into it - the verifier rejects a block that nothing reaches and is not one.
+- **An irrefutable tuple pattern binds here, not in 5.5.** `const (line, column) = lines.lineAndColumn(offset)` is one
+  `Read` of a `TupleField` step per position, which needs no decision tree at all; every pattern that decides which
+  *case* a value is waits for 5.5.
+- **A path in a location is the package's name plus the file below the package's directory**
+  (`torbscript/compiler/src/ir/print.trb`), not the way the path was typed on the command line. A location reaches the
+  generated C as a `#line` directive and the fixpoint of milestone 6 compares two C files byte for byte, so no working
+  directory may leak into one.
+- **The constant evaluator carries an expected type**, because the checker does not walk the initializer of a
+  top-level `const` that is annotated - there is nothing to infer there - so nothing inside `const minimum: Int8 =
+  -128` has a recorded type. Where the checker recorded none, the declared type stands in; it propagates into the
+  operands of the arithmetic and logical operators (whose operands have the type of the whole) and into the fields of a
+  tuple or a constructor (whose types the layout says), and nowhere else.
+- **A constant that is not compile-time evaluable is counted, not reported.** Gap 11 makes overflow, a division by zero
+  and a `nan` compile errors at the expression, and those are `Diagnostic`s of the program. "This is not a constant at
+  all" is a rule of the *checker* (gap 27, 4.9's) and would be a false positive here, so it is an unsupported construct
+  like any other - which is what `const maximum: UInt64 = UInt64.minimum.bitwiseNot()` in the prelude is today.
+- **`torb ir` seeds every monomorphic declaration of the modules it was asked about**, not only what the entry file
+  reaches. "Nothing unreachable is emitted" is `torb build`'s rule (5.13), and a progress bar must not depend on what
+  one entry file happens to call. `lowerWorkspace` takes the choice as a flag.
+- **A chained call reads its target from the callee's span.** Reading the member of `text.trim().replace(a, b)` records
+  `Resolution.Deferred` at the span of the inner call, over the answer the inner call had already put there, and the
+  two spans begin at the same byte - so the span of the *callee* is what stands in. Whether a call has type arguments
+  is asked of the call's own span, which is where they are recorded. See the records the checker does not have yet,
+  below.
+- **What `torb ir` prints:** the IR text, then the errors of the program, then the statistics with one line per
+  unsupported construct sorted by count. `--statistics` leaves the IR out. Everything the verifier finds is printed as
+  an internal error, because it is one.
+
+**Two records the checker does not have yet**, both of which the lowering works around rather than waits for:
+
+1. **The resolution of a call whose receiver is a call is overwritten with `Resolution.Deferred`** (`memberTarget` in
+   `semantics/checker/expression.trb` writes `checker.resolved(base.span, owner.resolution)` after the base has
+   recorded its own answer). Needed: that `resolveTarget` not record `Deferred` over an answer that is already there,
+   or a table keyed by the callee's span alone.
+2. **The initializer of an annotated top-level `const` is never checked**, so no expression inside it has a recorded
+   type (`checkTopLevelBinding` returns after `resultOf`, and `constantSignature` only builds the annotation). Needed:
+   that it be checked against the annotation, which would also catch `const size: Int8 = 3 + 4` - an `Int64` today.
+
+Neither blocks 5.2; both would remove a workaround. The two tables the risks section asks for
+(`bindings: List<BindingDeclaration>` and the per-closure escape flag) are **not** needed yet: a local is found by the
+span of the name it was declared under, which is exactly what `LocalBinding.at` carries.
 
 ### What 5.R1 does differently
 

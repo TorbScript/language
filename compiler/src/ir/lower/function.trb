@@ -1,0 +1,349 @@
+use Statement, Block, Binding, FunctionDeclaration, Declaration, ExtendDeclaration from "../../syntax/ast"
+use ModuleId from "../../semantics/module"
+use SymbolId from "../../semantics/symbols"
+use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
+use extensionAt from "../../semantics/checker/implementation"
+use IrSignature, IrTypeId, Slot, BlockId, FunctionId, Instance, Terminator, borrowed from "../ir"
+use FunctionBuilder, newFunction, setBlockLocation, finishFunction from "../build"
+use moduleComponentOf from "../instantiate"
+use mangledName from "../mangle"
+use instanceOfSymbol, instanceKeyOf, functionDeclarationOf from "../instances"
+use Lowering, reportUnsupported, locationOf, isVoidType, isNeverType from "./context"
+use finishBlock, voidTypeOf from "./context"
+use lowerBlockInto, lowerBlockValue, lowerStatement from "./statement"
+use staticOfConstant from "../constant"
+
+/**
+ * One function body, from the first block to the last terminator, plus the entry function of a module.
+ *
+ * A body that turns out to need a construct of a later sub-milestone is **thrown away**: the `unreachable` stub the
+ * worklist already added stays, the construct is counted, and every caller keeps a well typed `Call`. That is what
+ * makes the sub-milestones after this one a sequence of replacements rather than a rewrite.
+ */
+
+/** The body of one instance. The stub is replaced only where everything in it could be lowered. */
+public fn lowerInstance(var lowering: Lowering, instance: Instance) {
+  const symbol = instance.symbol
+  const key = instanceKeyOf(instance)
+  const identifier = match lowering.program.instances.get(key) {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  const declaration = match functionDeclarationOf(lowering, symbol) {
+    Some(found) => found
+    .None => {
+      lowering.stubbed = lowering.stubbed + 1
+      return
+    }
+  }
+  const body = match declaration.body {
+    Some(found) => found
+    .None => {
+      lowering.stubbed = lowering.stubbed + 1
+      return
+    }
+  }
+  const module = match lowering.checker.siteOf(symbol) {
+    Some(site) => site.module
+    .None => {
+      lowering.stubbed = lowering.stubbed + 1
+      return
+    }
+  }
+  const stub = lowering.program.functionAt(identifier)
+  const name = stub.name
+  const signature = stub.signature
+  beginFunction(lowering, module)
+  var builder = newFunction(name, Some(symbol), signature, "body")
+  const location = locationOf(lowering, body.span)
+  setBlockLocation(builder, BlockId(0), Some(location))
+  declareParameterSlots(lowering, symbol, declaration)
+  lowerBody(lowering, builder, body, signature.result)
+  if !lowering.isSupported {
+    lowering.stubbed = lowering.stubbed + 1
+    return
+  }
+  lowering.program.functions.set(identifier.value, builder.function)
+  lowering.lowered = lowering.lowered + 1
+}
+
+/** What every function starts from: no slots, no loops, nothing diverged, and the module its body is written in. */
+public fn beginFunction(var lowering: Lowering, module: ModuleId) {
+  lowering.module = module
+  lowering.slots = [:]
+  lowering.hole = None
+  lowering.isSupported = true
+  lowering.isDiverged = false
+  lowering.breakTargets = []
+  lowering.continueTargets = []
+  lowering.loopBroke = []
+}
+
+/**
+ * The block of a body, and the terminator that follows it. Where the function produces a value the body is lowered
+ * *into* the slot the `return` carries, so the last expression of a body needs no move of its own.
+ */
+public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: Block, result: IrTypeId) {
+  if isVoidType(lowering, result) {
+    lowerBlockInto(lowering, builder, body, None)
+    if !lowering.isDiverged {
+      finishBlock(lowering, builder, Terminator.Return(None))
+    }
+    return
+  }
+  if isNeverType(lowering, result) {
+    lowerBlockInto(lowering, builder, body, None)
+    if !lowering.isDiverged {
+      // A function that does not return has to leave through a panic or a call of another such function
+      reportUnsupported(lowering, "a body of a function that returns `Never` and does return", body.span)
+    }
+    return
+  }
+  const found = lowerBlockValue(lowering, builder, body)
+  if lowering.isDiverged {
+    return
+  }
+  match found {
+    Some(target) => finishBlock(lowering, builder, Terminator.Return(Some(borrowed(target))))
+    // A body that produces nothing and does not diverge is what the checker reports, so nothing is said here
+    .None => reportUnsupported(lowering, "a body that produces no value", body.span)
+  }
+}
+
+/**
+ * `self` and the parameters, by the span of the name each of them was declared under - which is the very span the
+ * checker's `LocalBinding` carries, so a name in the body finds its slot without the lowering keeping a scope chain.
+ */
+fn declareParameterSlots(var lowering: Lowering, symbol: SymbolId, declaration: FunctionDeclaration) {
+  const identifier = signatureOf(lowering.checker, symbol)
+  const signature = lowering.checker.signature(identifier)
+  var next = 0
+  for parameter in declaration.parameters {
+    if parameter.name.text == "self" && parameter.annotation.isNone() {
+      if signature.takesSelf {
+        lowering.slots.set(parameter.name.span, Slot(next))
+        next = next + 1
+      }
+      continue
+    }
+    lowering.slots.set(parameter.name.span, Slot(next))
+    next = next + 1
+  }
+}
+
+// --- The entry function of a module ---------------------------------------------------------------------------------
+
+/**
+ * The top-level code of an entry file, as one function. `t_main` for a script that belongs to no package, and the
+ * package plus the module for one that does - a name with no member component, which no declaration can produce.
+ *
+ * A top-level `const` is **not** a statement of it: it is a static value with a name, evaluated by the constant
+ * evaluator wherever it is used. There is no module initialization, ever.
+ */
+public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): FunctionId? {
+  const statements = lowering.checker.program.graph.at(module).file.statements
+  if !hasTopLevelCode(lowering, module, statements) {
+    return None
+  }
+  const name = entryNameOf(lowering, module)
+  const void = voidTypeOf(lowering)
+  const signature = IrSignature([], void)
+  beginFunction(lowering, module)
+  var builder = newFunction(name, None, signature, "entry")
+  for statement in statements {
+    if isTopLevelCode(lowering, module, statement) {
+      const location = locationOf(lowering, statement.span)
+      setBlockLocation(builder, BlockId(0), Some(location))
+      break
+    }
+  }
+  for statement in statements {
+    if lowering.isDiverged || !lowering.isSupported {
+      break
+    }
+    lowerTopLevel(lowering, builder, statement)
+  }
+  if !lowering.isDiverged {
+    finishBlock(lowering, builder, Terminator.Return(None))
+  }
+  if !lowering.isSupported {
+    lowering.stubbed = lowering.stubbed + 1
+    var stub = newFunction(name, None, signature, "not supported yet")
+    return Some(finishFunction(lowering.program, stub))
+  }
+  lowering.lowered = lowering.lowered + 1
+  Some(finishFunction(lowering.program, builder))
+}
+
+/** Whether a file has top-level code at all. A module of declarations and constants needs no entry function. */
+fn hasTopLevelCode(var lowering: Lowering, module: ModuleId, statements: List<Statement>): Bool {
+  for statement in statements {
+    if isTopLevelCode(lowering, module, statement) {
+      return true
+    }
+  }
+  false
+}
+
+fn isTopLevelCode(var lowering: Lowering, module: ModuleId, statement: Statement): Bool {
+  match statement.kind {
+    .Declare(_) => false
+    .Bind(binding) => !isNamedConstant(lowering, module, binding)
+    _ => true
+  }
+}
+
+/** A `const` with a name of its own is a declaration of the module and not a statement of its entry function. */
+fn isNamedConstant(var lowering: Lowering, module: ModuleId, binding: Binding): Bool {
+  if const .Binding(_) = binding.pattern.kind {
+    return lowering.checker.resolvedName(module, binding.pattern.span).isSome()
+  }
+  false
+}
+
+fn lowerTopLevel(var lowering: Lowering, var builder: FunctionBuilder, statement: Statement) {
+  match statement.kind {
+    // Declarations are reached through the worklist, and a top-level `const` is static data with a name
+    .Declare(_) => {}
+    .Bind(binding) => {
+      const module = lowering.module
+      if isNamedConstant(lowering, module, binding) {
+        if const Some(symbol) = lowering.checker.resolvedName(module, binding.pattern.span) {
+          const _ = staticOfConstant(lowering, symbol)
+        }
+        return
+      }
+      lowerStatement(lowering, builder, statement)
+    }
+    _ => lowerStatement(lowering, builder, statement)
+  }
+}
+
+/** `t_main`, `t_acme_x2f_app_main`: the entry function is named after the file and has no member component. */
+public fn entryNameOf(var lowering: Lowering, module: ModuleId): String {
+  const inside = lowering.checker.program.graph.at(module)
+  const package = lowering.checker.program.workspace.packages[inside.package]
+  const component = moduleComponentOf(package.directory, inside.path)
+  mangledName("t", [package.name, component], "")
+}
+
+// --- Seeding the worklist -------------------------------------------------------------------------------------------
+
+/**
+ * Every monomorphic declaration of a module, so that `torb ir` can say how much of real code the back end lowers.
+ * `torb build` seeds the entry function alone - nothing unreachable is emitted there - but a progress bar has to
+ * measure everything, not only what one entry file happens to call.
+ */
+public fn seedModule(var lowering: Lowering, module: ModuleId) {
+  const statements = lowering.checker.program.graph.at(module).file.statements
+  for statement in statements {
+    match statement.kind {
+      .Declare(declaration) => seedDeclaration(lowering, module, declaration)
+      // A plain top-level `const` is a statement of the file; `public const` is a declaration
+      .Bind(binding) => {
+        if const .Binding(_) = binding.pattern.kind {
+          if const Some(symbol) = lowering.checker.resolvedName(module, binding.pattern.span) {
+            seedSymbol(lowering, symbol)
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+}
+
+fn seedDeclaration(var lowering: Lowering, module: ModuleId, declaration: Declaration) {
+  match declaration.kind {
+    .Function(function) => {
+      if const Some(symbol) = lowering.checker.resolvedName(module, function.name.span) {
+        seedSymbol(lowering, symbol)
+      }
+    }
+    .Type(declared) => {
+      if const Some(symbol) = lowering.checker.resolvedName(module, declared.name.span) {
+        seedMembersOf(lowering, symbol)
+      }
+    }
+    .Extend(extension) => seedExtension(lowering, module, extension)
+    _ => {}
+  }
+}
+
+fn seedMembersOf(var lowering: Lowering, symbol: SymbolId) {
+  const identifier = typeSignatureOf(lowering.checker, symbol)
+  const shape = lowering.checker.typeSignature(identifier)
+  var names: List<String> = []
+  for (name, _) in shape.members {
+    names.add(name)
+  }
+  names.sort({ _ })
+  for name in names {
+    if const Some(member) = shape.members.get(name) {
+      seedSymbol(lowering, member)
+    }
+  }
+}
+
+fn seedExtension(var lowering: Lowering, module: ModuleId, extension: ExtendDeclaration) {
+  const found = match extensionAt(lowering.checker, module, extension.target.span) {
+    Some(inner) => inner
+    .None => {
+      return
+    }
+  }
+  var names: List<String> = []
+  for (name, _) in found.members {
+    names.add(name)
+  }
+  names.sort({ _ })
+  for name in names {
+    if const Some(member) = found.members.get(name) {
+      seedSymbol(lowering, member)
+    }
+  }
+}
+
+/** One declaration, if anything monomorphic can be built from it. A `const` becomes a static value instead. */
+fn seedSymbol(var lowering: Lowering, symbol: SymbolId) {
+  const declared = lowering.checker.symbolAt(symbol)
+  match declared.kind {
+    .Function => {
+      // A `native fn` is a callee and not a function of the program: it becomes one where it is called, or not at all
+      if hasBody(lowering, symbol) && instanceOfSymbol(lowering, symbol).isNone() {
+        countUnbuildable(lowering, symbol, "a declaration the back end cannot build an instance of")
+      }
+    }
+    .Constant => {
+      const reported = lowering.problems.length()
+      if staticOfConstant(lowering, symbol).isNone() {
+        // A constant that overflowed or divided by zero was *reported*: one root cause gets one message, so it is
+        // only counted here and not named a second time as a construct the back end does not know
+        if lowering.problems.length() > reported {
+          lowering.stubbed = lowering.stubbed + 1
+          return
+        }
+        countUnbuildable(lowering, symbol, "a `const` that is not compile-time evaluable")
+      }
+    }
+    _ => {}
+  }
+}
+
+fn hasBody(var lowering: Lowering, symbol: SymbolId): Bool {
+  const identifier = signatureOf(lowering.checker, symbol)
+  lowering.checker.signature(identifier).hasBody
+}
+
+/** A declaration that never even became an instance still counts: the statistics are about declarations, not calls. */
+fn countUnbuildable(var lowering: Lowering, symbol: SymbolId, what: String) {
+  const declared = lowering.checker.symbolAt(symbol)
+  if const Some(module) = declared.module {
+    lowering.module = module
+  }
+  lowering.isSupported = true
+  reportUnsupported(lowering, what, declared.span)
+  lowering.isSupported = true
+  lowering.stubbed = lowering.stubbed + 1
+}

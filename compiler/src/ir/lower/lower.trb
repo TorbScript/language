@@ -1,0 +1,122 @@
+use ModuleId from "../../semantics/module"
+use Checker from "../../semantics/checker/context"
+use Checked from "../../semantics/check"
+use Package from "../../project/workspace"
+use relativePath, pathName from "../../project/path"
+use finishProgram from "../layout"
+use verifyProgram from "../verify"
+use printProgram from "../print"
+use Lowering, newLowering from "./context"
+use lowerEntryFunction, lowerInstance, seedModule from "./function"
+
+/**
+ * From a checked program to the IR, in the order the worklist finds it.
+ *
+ * `torb build` will seed the entry function alone - nothing unreachable is emitted (5.13) - but `torb ir` seeds every
+ * monomorphic declaration of every module it was asked about as well, because the share of them that lowers is the
+ * progress bar of milestone 5 and a progress bar must not depend on what one entry file happens to call.
+ */
+
+/** The whole lowering of a checked workspace: the entry functions first, then everything the worklist reaches. */
+public fn lowerWorkspace(
+  checker: Checker,
+  paths: List<String>,
+  modules: List<ModuleId>,
+  seedsEverything: Bool,
+): Lowering {
+  var lowering = newLowering(checker, paths)
+  for module in modules {
+    const _ = lowerEntryFunction(lowering, module)
+    drainPending(lowering)
+  }
+  if seedsEverything {
+    for module in modules {
+      seedModule(lowering, module)
+      drainPending(lowering)
+    }
+  }
+  finishProgram(lowering.program)
+  lowering
+}
+
+/** What `torb ir` lowers: everything the requested modules declare. */
+public fn lowerChecked(checked: Checked): Lowering {
+  const paths = pathsOfModules(checked)
+  const modules = checked.requested
+  const checker = checked.checker
+  lowerWorkspace(checker, paths, modules, true)
+}
+
+/**
+ * One path per module, in the order of `program.graph.modules`: that is what a `ModuleId` indexes.
+ *
+ * The path is the package's name plus the file below the package's directory (`torbscript/compiler/src/ir/print.trb`),
+ * **not** the way the path was typed on the command line. A location of the IR reaches the generated C as a `#line`
+ * directive and the fixpoint of milestone 6 compares two C files byte for byte, so no working directory and no machine
+ * may ever leak into one.
+ */
+public fn pathsOfModules(checked: Checked): List<String> {
+  var paths: List<String> = []
+  for module in checked.program.graph.modules {
+    const package = checked.program.workspace.packages[module.package]
+    paths.add(stablePathOf(package, module.path))
+  }
+  paths
+}
+
+fn stablePathOf(package: Package, path: String): String {
+  if package.directory.isEmpty() {
+    return pathName(path)
+  }
+  const relative = relativePath(package.directory, path)
+  if package.name.isEmpty() {
+    return relative
+  }
+  "{package.name}/{relative}"
+}
+
+/**
+ * Every instance that is known to be needed and not lowered yet. The cursor never goes back, so the whole worklist is
+ * one pass over a list that only grows - which is what keeps the lowering near-linear in the size of the program.
+ */
+public fn drainPending(var lowering: Lowering) {
+  while lowering.drained < lowering.program.pending.length() {
+    const index = lowering.drained
+    const instance = lowering.program.pending[index]
+    lowering.drained = index + 1
+    lowerInstance(lowering, instance)
+  }
+}
+
+// --- What `torb ir` prints ------------------------------------------------------------------------------------------
+
+/** The IR text of everything that was lowered, in the deterministic form of BACKEND 1.7. */
+public fn loweredText(lowering: Lowering): String {
+  printProgram(lowering.program)
+}
+
+/** Everything the verifier found. An entry here is a bug of the lowering, never of the program. */
+public fn loweredProblems(lowering: Lowering): List<String> {
+  var found = verifyProgram(lowering.program)
+  for problem in lowering.program.problems {
+    found.add(problem)
+  }
+  found
+}
+
+/**
+ * The progress bar: how many declarations became a function with a body, how many are still an `unreachable` stub, and
+ * which construct blocked each of them - counted like the checker's `--statistics`.
+ */
+public fn statisticsLines(lowering: Lowering): List<String> {
+  var lines: List<String> = []
+  const total = lowering.lowered + lowering.stubbed
+  const share = if total == 0 { 100 } else { lowering.lowered * 100 / total }
+  lines.add("{lowering.lowered} of {total} functions lowered ({share}%), {lowering.stubbed} not supported yet")
+  var sorted = lowering.unsupported
+  sorted.sort({ (0 - _.count, _.what) })
+  for entry in sorted {
+    lines.add("  {entry.count}  {entry.what} (first at {entry.at})")
+  }
+  lines
+}

@@ -24,6 +24,13 @@ use describeIrType, describeIntrinsic, describeNumericKind from "./print"
 public fn verifyFunction(program: IrProgram, function: IrFunction): List<String> {
   var found: List<String> = []
   verifyParameters(program, function, found)
+  // A `native fn` the runtime provides is a signature and nothing else: there is no body to say anything about
+  if const .Runtime(_) = function.kind {
+    if !function.blocks.isEmpty() {
+      found.add("{function.name}: a function of the runtime has no body")
+    }
+    return found
+  }
   verifyGraph(program, function, found)
   // A dataflow over a graph with a dangling edge says nothing useful, so the shape has to be right first
   if !found.isEmpty() {
@@ -213,6 +220,8 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
   const blockCount = function.blocks.length()
   const reachable = reachableBlocks(function)
   const predecessors = predecessorsOf(function)
+  // What a block writes, so that what leaves it is what arrived plus that - the loop below needs both ends of a block
+  const defines = definitionsOf(function, slotCount)
   var definedIn: List<List<Bool>> = []
   for index in 0..blockCount {
     definedIn.add(filledBooleans(slotCount, index != 0))
@@ -231,7 +240,7 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
       if !reachable[index] {
         continue
       }
-      const incoming = intersected(definedIn, predecessors[index], slotCount)
+      const incoming = intersected(definedIn, defines, predecessors[index], slotCount)
       if incoming != definedIn[index] {
         definedIn.set(index, incoming)
         isChanged = true
@@ -300,13 +309,40 @@ fn predecessorsOf(function: IrFunction): List<List<Int>> {
   predecessors
 }
 
-fn intersected(definedIn: List<List<Bool>>, predecessors: List<Int>, slotCount: Int): List<Bool> {
+/** Which slots a block writes, whatever arrived in it: what leaves the block is the union of the two. */
+fn definitionsOf(function: IrFunction, slotCount: Int): List<List<Bool>> {
+  var defines: List<List<Bool>> = []
+  for block in function.blocks {
+    var written = filledBooleans(slotCount, false)
+    for instruction in block.instructions {
+      if const Some(target) = definedSlot(instruction) {
+        if target.value >= 0 && target.value < slotCount {
+          written.set(target.value, true)
+        }
+      }
+    }
+    defines.add(written)
+  }
+  defines
+}
+
+/**
+ * What is defined at the beginning of a block: the intersection over its predecessors of what *leaves* each of them.
+ * A slot that one arm of an `if` writes and the other does not is exactly what this catches, and it is the mistake a
+ * lowering makes.
+ */
+fn intersected(
+  definedIn: List<List<Bool>>,
+  defines: List<List<Bool>>,
+  predecessors: List<Int>,
+  slotCount: Int,
+): List<Bool> {
   if predecessors.isEmpty() {
     return filledBooleans(slotCount, false)
   }
-  var common = definedIn[predecessors[0]]
+  var common = leaving(definedIn, defines, predecessors[0], slotCount)
   for index in 1..predecessors.length() {
-    const other = definedIn[predecessors[index]]
+    const other = leaving(definedIn, defines, predecessors[index], slotCount)
     for slot in 0..slotCount {
       if !other[slot] {
         common.set(slot, false)
@@ -314,6 +350,17 @@ fn intersected(definedIn: List<List<Bool>>, predecessors: List<Int>, slotCount: 
     }
   }
   common
+}
+
+fn leaving(definedIn: List<List<Bool>>, defines: List<List<Bool>>, block: Int, slotCount: Int): List<Bool> {
+  var found = definedIn[block]
+  const written = defines[block]
+  for slot in 0..slotCount {
+    if written[slot] {
+      found.set(slot, true)
+    }
+  }
+  found
 }
 
 // --- What an instruction reads and writes ---------------------------------------------------------------------------
@@ -782,11 +829,13 @@ fn verifyIntrinsic(
   if needsNumericKind(intrinsic.operation) && intrinsic.kind.isNone() {
     found.add("{at}: `{name}` needs to say which numeric type it works on")
   }
-  if !needsNumericKind(intrinsic.operation) && intrinsic.kind.isSome() {
+  if !allowsNumericKind(intrinsic.operation) && intrinsic.kind.isSome() {
     found.add("{at}: `{name}` has only one form, so it names no numeric type")
   }
-  if const Some(kind) = intrinsic.kind {
-    verifyOperands(program, function, found, at, name, intrinsic.operation, kind, arguments)
+  match intrinsic.kind {
+    Some(kind) => verifyOperands(program, function, found, at, name, intrinsic.operation, kind, arguments)
+    // `==` on a `Bool`, a `Char` or `Void` names no numeric type, and then both sides have to be the same thing
+    .None => verifySameOperands(program, function, found, at, name, arguments)
   }
   match target {
     .None => found.add("{at}: `{name}` produces a value and nothing takes it")
@@ -822,6 +871,31 @@ fn verifyOperands(
     }
     expectNumeric(program, function, found, at, arguments[index], kind, name)
   }
+}
+
+/**
+ * An equality that names no numeric type: `==` and `!=` on a `Bool`, a `Char` or `Void`, which are one instruction
+ * each and have exactly one form. Both operands have to be the same type, whatever that type is.
+ */
+fn verifySameOperands(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  name: String,
+  arguments: List<Slot>,
+) {
+  if arguments.length() < 2 {
+    return
+  }
+  const first = function.typeOfSlot(arguments[0])
+  const second = function.typeOfSlot(arguments[1])
+  if first == second {
+    return
+  }
+  const one = describeIrType(program, first)
+  const other = describeIrType(program, second)
+  found.add("{at}: `{name}` compares `{one}` with `{other}`")
 }
 
 fn isShiftOperation(operation: IntrinsicOperation): Bool {
@@ -914,7 +988,20 @@ public fn operandCountOf(operation: IntrinsicOperation): Int {
   }
 }
 
+/**
+ * Whether an operation has one form per numeric type. `==` and `!=` are the two that work on the numbers *and* on
+ * `Bool`, `Char` and `Void`, so for them the numeric type is optional rather than required - which is exactly what the
+ * natives manifest writes down (`Int64.equals` is `equal.i64`, `Bool.equals` is `equal`).
+ */
 fn needsNumericKind(operation: IntrinsicOperation): Bool {
+  match operation {
+    .Equal => false
+    .NotEqual => false
+    _ => allowsNumericKind(operation)
+  }
+}
+
+fn allowsNumericKind(operation: IntrinsicOperation): Bool {
   match operation {
     .BooleanNot => false
     .TextConcat => false
