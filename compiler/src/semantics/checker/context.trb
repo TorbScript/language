@@ -319,6 +319,33 @@ public type Adaptation {
   case Delegate(field: String)
 }
 
+/**
+ * What a collection literal turned out to be. The same three characters are three different things depending on what is
+ * expected of them - `[1, 2]` is the default list, an `Array<Int, 2>` written into inline slots, or the argument of
+ * `Target.from` - and *which* one is the checker's decision (gap 49). So the back ends read it here instead of asking
+ * the expected type a second time and answering it differently.
+ */
+public type CollectionLiteral {
+  /**
+   * Built directly, item by item, as the collection the literal's own type names: the default implementation of the
+   * trait (`ArrayList` for `[a, b]`, `TrieMap` for `["k": v]`) where the trait itself is what is expected, and that very
+   * type where a concrete implementation of it is (`const numbers: TrieList<Int> = [1, 2]`).
+   */
+  case Default
+  /**
+   * `const numbers: Array<Int, 4> = [1, 2, 3, 4]`: the items are written straight into the inline slots of the array.
+   * There is no list and no iterator in between, which is why the number of items is static and `size` is a number here.
+   */
+  case InlineArray(item: TypeId, size: Int)
+  /**
+   * `const names: Set<String> = ["a", "b"]`: the default list is built and handed to the `from` of the target, which is
+   * the one protocol a collection target has (concept: no `Collectable`). `witness` is that `From<Iterable<Item>>`
+   * implementation, so the `from` to call is `memberOfImplementation(witness, "from")` exactly as for every other trait
+   * member.
+   */
+  case FromIterable(target: TypeId, item: TypeId, witness: Witness)
+}
+
 // --- Places and the mutation rules (milestone 4.6) -------------------------------------------------------------------
 
 /**
@@ -498,6 +525,8 @@ public type Tables {
   var places: Map<Span, Place> = [:]
   /** Per closure span: whether the closure may outlive the call it stands in (BACKEND gap 14). */
   var closureKinds: Map<Span, ClosureKind> = [:]
+  /** Per collection literal span: what the literal became, which the expected type alone does not say (gap 49). */
+  var collectionLiterals: Map<Span, CollectionLiteral> = [:]
 }
 
 /** No expected type, a type, or "a value is not wanted here". */
@@ -1071,6 +1100,18 @@ public type Checker {
 
   fn closureKindAt(self, module: ModuleId, at: Span): ClosureKind? {
     tables[module.value].closureKinds.get(at)
+  }
+
+  /** What one collection literal became: the default collection, inline array slots, or `Target.from` (gap 49). */
+  fn recordCollectionLiteral(var self, at: Span, found: CollectionLiteral) {
+    tables[module.value].collectionLiterals.set(at, found)
+    if hasVariables && pendingSpans.last() != Some(at) {
+      pendingSpans.add at
+    }
+  }
+
+  fn collectionLiteralAt(self, module: ModuleId, at: Span): CollectionLiteral? {
+    tables[module.value].collectionLiterals.get(at)
   }
 
   /** A variable that was solved: every table of the statement is walked once at its end, through these. */

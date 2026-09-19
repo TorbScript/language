@@ -234,6 +234,8 @@ public type Tables {
   var places: Map<Span, Place> = [:]
   var matches: Map<Span, MatchPlan> = [:]
   var quotations: Map<Span, Quotation> = [:]
+  /** What a collection literal became: the default collection, inline array slots, or `Target.from` (gap 49). */
+  var collectionLiterals: Map<Span, CollectionLiteral> = [:]
   var derived: List<DerivedImplementation> = []
 }
 ```
@@ -1685,6 +1687,61 @@ list. Everything else is as written.
     value that does not fit its own `Int`. `LiteralValue.Integer` is an `Int64` and the IR reads it, so the change
     crosses into milestone 5's contract; `UInt64.maximum` stays `UInt64.minimum.bitwiseNot()`, which is exact.
 
+### What the collection literals add (gap 49)
+
+A slice of its own after 4.10, because `listLiteralType` handed back *any* expected collection type unverified:
+`const wrong: Array<Int, 4> = [1, 2, 3]` and `const names: Set<String> = ["a", "b"]` both checked without a problem, and
+nothing told a back end how such a literal is built.
+
+- **A list literal has three shapes and a fourth answer, decided by the expected type alone,** and which one it is now
+  stands in `Tables.collectionLiterals` at the literal's span:
+
+  ```trb
+  public type CollectionLiteral {
+    case Default
+    case InlineArray(item: TypeId, size: Int)
+    case FromIterable(target: TypeId, item: TypeId, witness: Witness)
+  }
+  ```
+
+  `Default` means "build the collection this literal's own type names, item by item" - the default implementation where
+  the trait is what is expected (`ArrayList` for a list, `TrieMap` for a map), and that very type where a concrete
+  implementation of the trait is (`const numbers: TrieList<Int> = [1, 2]`). **A concrete implementation is therefore
+  `Default` and not `FromIterable`:** a literal knows its items, so building the type that is asked for directly *is*
+  the fast path the concept asks the compiler to find, and going through `Target.from` would be a list built to be
+  thrown away. (It is also the only answer resolution can give today: the standard library has both
+  `extend<Item> List<Item> with From<Iterable<Item>>` and `with From<Iterable<Item>>` on `ArrayList` itself, and both
+  apply to `ArrayList<Int>` - so `resolveBound` calls it ambiguous, exactly as it does for `.to<ArrayList<Int>>()`.
+  That is gap 5's overlap rule, not this slice's.)
+- **`Array<Item, Size>` is checked before anything else**, because it is the one target that is not built from a
+  collection at all: the items go into the inline slots. The number of them is static, so it has to be `Size`
+  (`` `Array<Int64, 4>` has 4 items, and this literal has 3 ``), and where `Size` is still an open variable the count
+  solves it - which is what makes `fn total<const Size: Int>(values: Array<Int, Size>)` callable as `total([1, 2, 3])`.
+  A `Size` that is a const *parameter* (`Array<Float, Columns>` inside a generic type) says nothing: what `Columns` is,
+  the caller decides. A `...` contributes its own size where its operand is an `Array` of a known size, and is otherwise
+  ``  `List<Int64>` does not say how many items it has, so `...` cannot fill an `Array` ``.
+- **Every other target goes through `From<Iterable<Item>>`**, the one collection protocol the language has, and `Item` is
+  what the target itself iterates (`Iterable<Item>`), or - for a target that is not iterable at all - the
+  `Iterable<Item>` its own `From` takes. So a literal accepts exactly the targets `.to<Target>()` accepts, trait types
+  included: `Set<String>` and `Queue<Int>` are `From<Iterable<Item>>` through an `extend` whose target is the trait, and
+  the `Witness` that is recorded is that implementation with its inner witnesses (`String: Hash`).
+- **A type that is none of these is an error** instead of a silent acceptance:
+  `` A list literal cannot become a `Point`: `Point` is not `From<Iterable<Item>>` ``, and for a map literal
+  `` ... is not `From<Iterable<(Key, Value)>>` ``. A trait type the collection merely *coerces* to is deliberately not
+  one of these: `print [1, 2]` fills a `...values: Show`, and `const numbers: Iterable<Int> = []` takes its item type
+  from the `Iterable<Item>` of the expectation. Such a literal keeps the expected type as its own, as before - but the
+  coercion is now held to, so `const ordered: Compare = [1, 2]` gets the existing
+  `` `List<Int64>` does not implement `Compare` ``.
+- **Map literals had the same hole and are fixed by the same three rules**, minus the `Array` one. **Set literals have
+  none of it, because the syntax has no set literal yet:** `{a, b}` is in the concept and nothing in the parser builds a
+  node for it, so there was nothing to verify. When it arrives it is `listLiteralType` with `Set` in place of `List`.
+- **`Array.of(...items: Item): Array<Item, Size>` is a well-known special case in `checkCall`.** There is no way to
+  declare that the size of a result is the number of arguments, and the language gets none, so `checkArrayOf` counts the
+  variadic arguments and solves `Size` with the count; with an expectation the two have to agree, with the same message
+  as the literal. A `...` follows the same rule as in a literal. `Array [1, 2, 3, 4]` is **not** a second spelling: it
+  already parses as an index expression, and a command's first argument may not start with `[`.
+- **`WellKnown.array`** joins `list` and `map`: both rules ask for the symbol at every literal and at every call.
+
 ---
 
 ## 9. Spec gaps
@@ -2186,3 +2243,36 @@ holder and "nobody reads it here" is not evidence of anything.
 
 _Decision:_ accepted (`mutation.trb`, `isCounted`). A value that merely *contains* a shared object keeps the rule:
 changing the value is still a change of a copy, and only the object inside it is shared.
+
+**49. What does a collection literal become, and which types may one adapt to?**
+"Collections and Iteration" says `[1, 2]` is a `List` and `["a": 1]` a `Map`, and "literals adapt to the expected type"
+is stated for numbers. Nothing said what an `Array<Item, Size>` or a `Set<String>` does with one - `listLiteralType`
+handed *any* expected collection type back unverified, so `const wrong: Array<Int, 4> = [1, 2, 3]` and
+`const origin: Point = [1, 2]` both checked without a problem, and no table said how the literal is built. And nothing
+links the number of arguments of `Array.of(1, 2, 3)` to its `Size`: a const parameter cannot be written in terms of an
+argument count.
+_Proposal:_ a collection literal adapts to exactly three things and nothing else - the collection its expected type
+names, built directly; an `Array<Item, Size>`, filled inline, whose number of items has to be `Size` (an open `Size` is
+solved by the count, a spread has to come from an `Array` too); and any `From<Iterable<Item>>` target, built from the
+collection, which is the one collection protocol the language has. Anything else is an error that names what a target has
+to be. What the literal became is recorded per span (`CollectionLiteral`), so a back end reads the decision instead of
+making it again. `Array.of` is a well-known special case of the same counting rule, and there is no second spelling of it:
+`Array [1, 2, 3, 4]` is an index expression.
+_Reason:_ it needs no new trait - "no `Collectable`/`FromIterator`" stays - and it puts the one decision a back end
+cannot make in the one place that already knows the expected type. The fast path for a literal is the compiler's job
+precisely because the compiler knows the items; for a *value* it is a type pattern inside `from`, which is an ordinary
+generic call.
+
+_Decision:_ accepted. Three points had to be decided beyond the proposal:
+- **A concrete implementation of the literal's own trait is `Default`, not `FromIterable`** (`ArrayList<Int>`,
+  `TrieList<Int>`, `HashMap<K, V>`): the literal builds the type that is asked for directly. Going through
+  `Target.from` would build a collection to throw it away, and resolution cannot even name the implementation - the
+  standard library's trait-level `extend ... with From<Iterable<Item>>` and the inherent one on `ArrayList` both apply,
+  which `resolveBound` reports as ambiguous. That overlap is gap 5's rule to settle, and `.to<ArrayList<Int>>()` has it
+  too.
+- **A trait type the collection only coerces to is not a target** (`Show` for `print [1, 2]`, `Iterable<Int>`,
+  `Collection<Int>`): the literal stays the expected type as it did before, its item type comes from the
+  `Iterable<Item>` of the expectation where there is one, and the coercion is verified so that
+  `const ordered: Compare = [1, 2]` is reported with the existing "does not implement" message.
+- **Set literals are not touched**, because the parser has no set literal: `{a, b}` is in the concept and in no
+  `ExpressionKind`. The rule is written so that adding one is `listLiteralType` with `Set` in place of `List`.

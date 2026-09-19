@@ -3,7 +3,7 @@ use SourceTree from "../src/project/source-tree"
 use ModuleId from "../src/semantics/module"
 use check from "../src/semantics/check"
 use Checker, Resolution, Adaptation, Dispatch, Statistics, ReceiverClosure from "../src/semantics/checker/context"
-use Place, PlaceRoot, PlaceStep, ClosureKind from "../src/semantics/checker/context"
+use Place, PlaceRoot, PlaceStep, ClosureKind, CollectionLiteral from "../src/semantics/checker/context"
 use TypeId, Witness, describeLiteral from "../src/semantics/checker/type"
 use MatchPlan, MatchArmPlan, PatternBranch, PatternTest, PatternCheck from "../src/semantics/checker/exhaustive"
 use PatternLiteral, PatternStep from "../src/semantics/checker/exhaustive"
@@ -278,7 +278,37 @@ public const preludeSource = r"""
     native fn from(items: Iterable<Item>): ArrayList<Item>
   }
 
-  public type Array<Item, const Size: Int> {}
+  /** A set, so that a literal can be tested against a collection target that is not a `List` (gap 49). */
+  public trait Set<Item>
+    with Iterable<Item>, Length
+  {
+    fn contains(self, value: Item): Bool
+  }
+
+  extend<Item: Hash> Set<Item> with From<Iterable<Item>> {
+    fn from(items: Iterable<Item>): Set<Item> {
+      TrieSet.from items
+    }
+  }
+
+  public native type TrieSet<Item: Hash> with Set<Item>, From<Iterable<Item>> {
+    native fn from(items: Iterable<Item>): TrieSet<Item>
+
+    native fn length(self): Int
+    native fn iterator(self): Iterator<Item>
+    native fn contains(self, value: Item): Bool
+  }
+
+  /** `Array.of(1, 2)` is an `Array<Int, 2>`: the number of arguments is the size, and the checker says so (gap 49). */
+  public native type Array<Item, const Size: Int>
+    with Iterable<Item>, Length
+  {
+    native fn of(...items: Item): Array<Item, Size>
+    native fn from(items: Iterable<Item>): Array<Item, Size>?
+
+    native fn length(self): Int
+    native fn iterator(self): Iterator<Item>
+  }
 
   public native fn print(...values: Show): Void
 
@@ -323,6 +353,7 @@ public const workspace = [
     public use MutableIndexed, MutableSlice from "./types"
     public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
     public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
+    public use Set, TrieSet from "./types"
     public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
     public use print, panic, using, do, assert, nameOf, Expression from "./types"
     public use Void from "./types"
@@ -547,6 +578,19 @@ public type Probed {
   fn hasPlaceAt(self, written: String): Bool {
     const at = spanOf written
     checker.placeAt(module, at).isSome()
+  }
+
+  /** What the collection literal at `written` became: the default collection, inline array slots, or `Target.from`. */
+  fn collectionOf(self, written: String): String {
+    const at = spanOf written
+    const found = checker.collectionLiteralAt(module, at).expect("a collection literal at `{written}`")
+    describeCollectionLiteral checker, found
+  }
+
+  /** Whether the literal at `written` was recorded at all, which is the question a test about a rejected one asks. */
+  fn hasCollectionAt(self, written: String): Bool {
+    const at = spanOf written
+    checker.collectionLiteralAt(module, at).isSome()
   }
 
   /** Whether the closure at `written` may outlive the call it stands in (BACKEND gap 14). */
@@ -806,6 +850,21 @@ fn describeBounds(checker: Checker, bounds: List<TypeId>): String {
     parts.add checker.describe(bound)
   }
   parts.joined separator: " + "
+}
+
+/**
+ * What a collection literal became, as a test compares it: the default collection of the trait, `Item x Size` slots of
+ * an inline array, or the target the list is handed to with the `From<Iterable<Item>>` that does it.
+ */
+public fn describeCollectionLiteral(checker: Checker, found: CollectionLiteral): String {
+  match found {
+    .Default => "default"
+    .InlineArray(item, size) => "array {checker.describe(item)} x {size}"
+    .FromIterable(target, item, witness) => {
+      const shown = describeWitness checker, witness
+      "from {checker.describe(target)} of {checker.describe(item)} through {shown}"
+    }
+  }
 }
 
 /** A witness as a test writes it: which implementation makes a bound hold, and for which type. */

@@ -1,0 +1,237 @@
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
+/**
+ * What a collection literal becomes (gap 49). `[1, 2]` is not one thing: it is the default list, an `Array<Int, 2>`
+ * written into inline slots, or the argument of `Target.from` - and which one it is, the expected type decides. So every
+ * test here asks two questions: does it check, and what was *recorded* at the literal, because that entry is the whole
+ * contract with the back ends.
+ */
+fn inBody(body: String): String {
+  "fn probe() \{\n{body}\n\}"
+}
+
+group "A list literal without a target" {
+  test "nothing expected is the default list, and it is recorded as one" {
+    const source = inBody "  const numbers = [1, 2, 3]"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("[1, 2, 3]") == "List<Int64>")
+    assert(found.collectionOf("[1, 2, 3]") == "default")
+  }
+
+  test "the trait `List<Item>` is the default list too, and every item is checked against `Item`" {
+    const source = inBody "  const numbers: List<Int> = [1, 2, 3]"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.collectionOf("[1, 2, 3]") == "default")
+    assert(problems(inBody("  const numbers: List<Int> = [1, \"two\"]")) == ["Expected `Int64`, found `String`"])
+  }
+
+  test "an empty one is the default list of whatever the annotation says" {
+    const source = inBody "  const numbers: List<Int> = []"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("[]") == "List<Int64>")
+    assert(found.collectionOf("[]") == "default")
+  }
+
+  test "a map literal is the default map" {
+    const source = inBody "  const index: Map<String, Int> = [\"a\": 1]"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.collectionOf("[\"a\": 1]") == "default")
+  }
+}
+
+group "A list literal that fills an `Array`" {
+  test "the items go into the inline slots, and the size is the number of them" {
+    const source = inBody "  const numbers: Array<Int, 4> = [1, 2, 3, 4]"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("[1, 2, 3, 4]") == "Array<Int64, 4>")
+    assert(found.collectionOf("[1, 2, 3, 4]") == "array Int64 x 4")
+  }
+
+  test "too few items is an error that counts both sides" {
+    const source = inBody "  const numbers: Array<Int, 4> = [1, 2, 3]"
+    assert(problems(source) == ["`Array<Int64, 4>` has 4 items, and this literal has 3"])
+    assert(
+      notes(source)
+        == ["The size of an `Array` is part of its type, so the number of items is counted where it is written"]
+    )
+  }
+
+  test "too many items is the same message from the other side" {
+    const source = inBody "  const numbers: Array<Int, 2> = [1, 2, 3]"
+    assert(problems(source) == ["`Array<Int64, 2>` has 2 items, and this literal has 3"])
+  }
+
+  test "the items are checked against the item type of the array" {
+    const source = inBody "  const numbers: Array<Int, 2> = [1, \"two\"]"
+    assert(problems(source) == ["Expected `Int64`, found `String`"])
+  }
+
+  test "a spread of another `Array` adds its size, because that one is known too" {
+    const source = inBody "  const half: Array<Int, 2> = [1, 2]\n  const whole: Array<Int, 4> = [...half, 3, 4]"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.collectionOf("[...half, 3, 4]") == "array Int64 x 4")
+  }
+
+  test "a spread of anything else says why it cannot be counted" {
+    const source = inBody "  const rest: List<Int> = [1, 2]\n  const whole: Array<Int, 3> = [...rest, 3]"
+    assert(
+      problems(source)
+        == ["`List<Int64>` does not say how many items it has, so `...` cannot fill an `Array`"]
+    )
+    assert(
+      notes(source)
+        == [
+          "The size of an `Array` is part of its type: only an `Array` of a known size can be spread into one",
+        ]
+    )
+  }
+
+  test "a size that is a const parameter of the enclosing type says nothing here" {
+    const source = "type Row<const Width: Int> \{\n  cells: Array<Int, Width> = [0, 0]\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a size that is still open is solved by the number of items" {
+    const source = "fn total<const Size: Int>(values: Array<Int, Size>): Int \{\n  values.length()\n\}\n\n"
+      + inBody("  const sum = total([1, 2, 3])")
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("[1, 2, 3]") == "Array<Int64, 3>")
+    assert(found.collectionOf("[1, 2, 3]") == "array Int64 x 3")
+    assert(found.typeArgumentsOf("total([1, 2, 3])") == ["3"])
+  }
+}
+
+group "A list literal that is built through `From<Iterable<Item>>`" {
+  test "a `Set<Item>` is `Target.from(theList)`, with the implementation that does it" {
+    const source = inBody "  const names: Set<String> = [\"a\", \"b\"]"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("[\"a\", \"b\"]") == "Set<String>")
+    assert(
+      found.collectionOf("[\"a\", \"b\"]")
+        == "from Set<String> of String through Set<Item>: From<Iterable<Item>> [String: Hash]"
+    )
+  }
+
+  test "a concrete implementation of the literal's own trait is built directly instead" {
+    const source = inBody "  const numbers: ArrayList<Int> = [1, 2]"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("[1, 2]") == "ArrayList<Int64>")
+    assert(found.collectionOf("[1, 2]") == "default")
+  }
+
+  test "what the literal became is solved with the rest of the statement, like every other table" {
+    const source = "fn count(values: Set<String>): Int \{\n  values.length()\n\}\n\n"
+      + "fn identity<Value>(value: Value): Value \{\n  value\n\}\n\n"
+      + inBody("  const total = identity(count([\"a\"]))")
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(
+      found.collectionOf("[\"a\"]")
+        == "from Set<String> of String through Set<Item>: From<Iterable<Item>> [String: Hash]"
+    )
+  }
+
+  test "the items are checked against the `Item` the target takes" {
+    assert(problems(inBody("  const names: Set<String> = [\"a\", 2]")) == ["Expected `String`, found `Int64`"])
+  }
+
+  test "a type of your own is a target as soon as it is `From<Iterable<Item>>`" {
+    const source = "public type Tally \{\n  total: Int\n\}\n\n"
+      + "extend Tally with From<Iterable<Int>> \{\n"
+      + "  fn from(values: Iterable<Int>): Tally \{\n    Tally(0)\n  \}\n\}\n\n"
+      + inBody("  const counted: Tally = [1, 2, 3]")
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(
+      found.collectionOf("[1, 2, 3]") == "from Tally of Int64 through Tally: From<Iterable<Int64>>"
+    )
+  }
+}
+
+group "A literal against a type it cannot become" {
+  test "a type that is not `From<Iterable<Item>>` is an error instead of a silent acceptance" {
+    const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\n" + inBody("  const origin: Point = [1, 2]")
+    assert(
+      problems(source) == ["A list literal cannot become a `Point`: `Point` is not `From<Iterable<Item>>`"]
+    )
+    assert(
+      notes(source) == ["A collection target is `From<Iterable<...>>`, the same one `.to<Target>()` asks for"]
+    )
+    const found = probe source
+    assert(!found.hasCollectionAt("[1, 2]"))
+  }
+
+  test "a map literal names the entries the target would have to take" {
+    const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\n"
+      + inBody("  const origin: Point = [\"x\": 1]")
+    assert(
+      problems(source)
+        == ["A map literal cannot become a `Point`: `Point` is not `From<Iterable<(Key, Value)>>`"]
+    )
+  }
+
+  test "a map literal into a target that takes single items is refused as well" {
+    const source = inBody "  const names: Set<String> = [\"a\": 1]"
+    assert(
+      problems(source)
+        == ["A map literal cannot become a `Set<String>`: `Set<String>` is not `From<Iterable<(Key, Value)>>`"]
+    )
+  }
+
+  test "a trait the list only coerces to keeps working, and one it does not is reported" {
+    const source = inBody "  const shown: Show = [1, 2]"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.collectionOf("[1, 2]") == "default")
+    assert(
+      problems(inBody("  const ordered: Compare = [1, 2]"))
+        == ["`List<Int64>` does not implement `Compare`"]
+    )
+  }
+}
+
+group "`Array.of`" {
+  test "the number of arguments is the size" {
+    const source = inBody "  const numbers = Array.of(1, 2, 3, 4)"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Array.of(1, 2, 3, 4)") == "Array<Int64, 4>")
+  }
+
+  test "an expectation and the number of arguments have to agree" {
+    const source = inBody "  const numbers: Array<Int, 4> = Array.of(1, 2, 3)"
+    assert(problems(source) == ["`Array<Int64, 4>` has 4 items, and this literal has 3"])
+  }
+
+  test "an expectation that agrees is ordinary" {
+    const source = inBody "  const numbers: Array<Int, 3> = Array.of(1, 2, 3)"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Array.of(1, 2, 3)") == "Array<Int64, 3>")
+  }
+
+  test "a spread of another `Array` adds its size" {
+    const source = inBody "  const half: Array<Int, 2> = [1, 2]\n  const whole = Array.of(...half, 3)"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Array.of(...half, 3)") == "Array<Int64, 3>")
+  }
+
+  test "a spread of anything else cannot be counted" {
+    const source = inBody "  const rest: List<Int> = [1, 2]\n  const whole = Array.of(...rest, 3)"
+    assert(
+      problems(source)
+        == ["`List<Int64>` does not say how many items it has, so `...` cannot fill an `Array`"]
+    )
+  }
+}

@@ -2,7 +2,7 @@ use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use TypeId, TypeForm, TypeTable, TupleField, FunctionForm, ParameterForm, ParameterMode, ParameterId, Bound from "./type"
 use VariableId, Witness from "./type"
-use Checker, Adaptation, Resolution, Dispatch from "./context"
+use Checker, Adaptation, Resolution, Dispatch, CollectionLiteral from "./context"
 use Quotation, QuotationCapture, QuotationParameter from "./context"
 
 /**
@@ -649,6 +649,23 @@ fn pruneAt(var checker: Checker, at: Span) {
   if const Some(found) = checker.quotationAt(checker.module, at) {
     const solved = pruneQuotation checker, found
     checker.recordQuotation at, solved
+  }
+  // `const items: List<Int> = []` records `List<_>` and learns `Int64` afterwards, and so does what the literal became
+  if const Some(found) = checker.collectionLiteralAt(checker.module, at) {
+    const solved = pruneCollectionLiteral checker, found
+    checker.recordCollectionLiteral at, solved
+  }
+}
+
+fn pruneCollectionLiteral(var checker: Checker, found: CollectionLiteral): CollectionLiteral {
+  match found {
+    .Default => found
+    .InlineArray(item, size) => CollectionLiteral.InlineArray resolveType(checker, item), size
+    .FromIterable(target, item, witness) => CollectionLiteral.FromIterable(
+      resolveType(checker, target),
+      resolveType(checker, item),
+      pruneWitness(checker, witness),
+    )
   }
 }
 

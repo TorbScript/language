@@ -452,6 +452,14 @@ const combined = Matrix<2, 3>().multiplied(Matrix<3, 4>())   // Matrix<2, 4>, ch
 - `Array<Item, const Size: Int>` is the array with a fixed size, as in Rust and Go: a small inline value without heap
   storage and without a reference count. An index that is known at compile time is checked at compile time.
   Everything that grows is a `List` (`ArrayList` is what `Vec` is in Rust).
+- **An array is built from a literal or from `Array.of`, and both count their items:**
+  `const corners: Array<Int, 4> = [1, 2, 3, 4]` and `const diagonal = Array.of(1.0, 0.0, 0.0, 1.0)`, which is an
+  `Array<Float, 4>` - the number of arguments is the `Size`. Both write the items straight into the inline slots, so no
+  list is built and nothing can fail; `Array.from(iterable)` is the fallible runtime form and answers `Array<Item, Size>?`.
+  A `...` in either is only allowed where its operand is an `Array` as well, because the number of items has to be known.
+  There is no way to *write down* that the size of a result is the number of arguments, and the language gets none: the
+  count is the compiler's answer for these two forms and for nothing else. `Array [1, 2, 3]` is not a spelling of it -
+  that already parses as an index expression.
 - A const argument is a literal, a named `const` or another const parameter. **There is no arithmetic in types**
   (`Array<Item, Size + 1>`): the type checker compares const arguments for equality and nothing else.
 - Const parameters are `Int`, `Bool`, `Char` or `String`. Inside of the type they are ordinary constants (`0..Rows`).
@@ -1665,6 +1673,22 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
   loop variable is a `const` copy of each item.
 - Creation: literals, `List.of(1, 2, 3)`, `List.of(...iterable)`, `List.from(iterable)`, `iterable.toList()`,
   `HashMap()`, `Set.of(1, 2)`.
+- **A collection literal adapts to the type that is expected of it,** exactly as a number literal does, and the target
+  decides what is built:
+
+  ```trb
+  const numbers = [1, 2, 3]                         // The default list: ArrayList<Int>
+  const unique: Set<Int> = [1, 2, 2, 3]             // Set.from([1, 2, 2, 3]) - any From<Iterable<Item>> target
+  const corners: Array<Int, 4> = [1, 2, 3, 4]       // Filled inline: no list, no iterator, and exactly 4 items
+  const index: Map<String, Int> = ["a": 1]          // The default map: TrieMap
+  const origin: Point = [1, 2]                      // Compile error: a Point is not From<Iterable<Item>>
+  ```
+
+  So there are exactly three answers: the collection the expected type names, built directly (the trait itself, or one
+  of its implementations); an `Array<Item, Size>`, whose items go into the inline slots and whose **number of items has
+  to be `Size`**; and any `From<Iterable<Item>>` target, built from the list - the same targets `to<Target>()` accepts.
+  Anything else is a compile error that names what a target has to be. A spread inside an array literal is only allowed
+  where its operand is an `Array` too, because the size has to be known: `[...half, 3, 4]`.
 
 ### Pipelines and Collectors
 
@@ -2257,6 +2281,13 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   are collection targets (`to<Result<List<Item>, Failure>>()`), `filterMap` bridges Option-returning functions into pipelines.
   Option is deliberately not an `Iterable`: its `map` is eager, the trait promises a lazy one.
 - No `Collectable`/`FromIterator` trait: a collection target is simply `From<Iterable<Item>>`, `to<Target>()` is a typed `into()`.
+- **A collection literal adapts to the expected type, to an `Array<Item, Size>` and to every `From<Iterable<Item>>`
+  target** - and to nothing else, which is why `const origin: Point = [1, 2]` is an error instead of silently claiming to
+  be a `Point`. A literal and `to<Target>()` therefore accept the same targets, and no new protocol was needed for it:
+  **a fast path is the compiler's job for a literal** (it knows the items, so it fills an array inline and builds the
+  expected implementation directly) **and a type pattern inside `from` for a value** - `from` is generic over what
+  arrives, so an implementation may recognize the type it is handed and take its storage instead of iterating it, decided
+  at compile time like every other generic call. Never a second trait that every collection would implement twice.
 - Collectors are push-based (`Accumulator.add`), so they are not tied to `Iterable` and work for channels and streams.
 - **A stream is a word, not a type: what a signature names is one of its two ends,** `Source<Item, Failure>` or
   `Sink<Item, Failure>`. They are the asynchronous siblings of `Iterator` and `Accumulator` and carry the same verbs
