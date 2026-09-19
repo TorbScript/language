@@ -7,7 +7,7 @@ use IrFunction, IrSignature, IrParameter, IrType, IrTypeId, Ownership from "./ir
 use FunctionId, FunctionKind, Instance, SlotDeclaration, SlotRole, RuntimeKind from "./ir"
 use Lowering, irTypeOfClosed from "./lower/context"
 use functionName from "./mangle"
-use symbolPathOf from "./instantiate"
+use symbolPathOf, cellType from "./instantiate"
 use newFunction, finishFunction from "./build"
 
 /**
@@ -363,10 +363,15 @@ fn parameterTypeOf(
   const applied = substitute lowering.checker.types, parameter.annotation, mapping
   const annotation = irTypeOfClosed lowering, applied
   match parameter.mode {
-    .Lazy => lowering.program.internType IrType.Lazy(annotation)
+    .Lazy => cellTypeFor lowering, applied, annotation
     .Variadic => lowering.program.internType IrType.Runtime(RuntimeKind.ListStorage, [annotation])
     _ => annotation
   }
+}
+
+/** The memo cell of a `lazy Value` parameter, which the whole back end sees as an ordinary counted record. */
+public fn cellTypeFor(var lowering: Lowering, item: TypeId, inner: IrTypeId): IrTypeId {
+  cellType lowering.program, lowering.checker, lowering.instantiation, item, inner
 }
 
 public fn isReferenceParameter(mode: ParameterMode): Bool {

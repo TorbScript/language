@@ -35,12 +35,12 @@ signature names is one of its two **ends**, because at any point in a program yo
 
 ```trb
 public shared trait Source<Item, Failure> with Close {
-  fn next(self): Task<Result<Item?, Failure>>
+  fn next(var self): Task<Result<Item?, Failure>>
 }
 
 public shared trait Sink<Item, Failure> with Close {
-  fn add(self, item: Item): Task<Result<Void, Failure>>
-  fn finish(self): Task<Result<Void, Failure>>
+  fn add(var self, item: Item): Task<Result<Void, Failure>>
+  fn finish(var self): Task<Result<Void, Failure>>
 }
 ```
 
@@ -57,11 +57,18 @@ nothing new has to be learned and the two worlds read alike:
 
 Five decisions carry everything below.
 
-**A stream has an identity and is consumed once**, so its ends are `shared type`s. Two consequences, both deliberate:
-`next` and `add` take `self` and not `var self` (an exclusive access to a value cannot stay open across an `await` —
-CONCEPT, "`var` Paths"), and a source cannot be handed to another task, because shared objects are confined to the task
-that made them. Nothing in `std/stream` spawns except `Source.produce`, which spawns a task that captures a `Channel`
-and nothing else shared.
+**A stream has an identity and is consumed once**, so its ends are `shared type`s, and the verbs that consume take
+`var self` exactly as `Iterator.next` and `Accumulator.add` do. **A `var self` method of a shared type may answer a
+`Task`**: "a `var self` access cannot stay open across an `await`" is true for a *value*, where `var` is an exclusive
+in-out access whose copy back ends with the call — for an object there is no copy, `var` is the permission to change the
+one object, and a permission survives an `await` (CONCEPT, "Identity"; TYPECHECKER gap 49). The reverse is an error with
+a message of its own: a `var self` or a `var` parameter of a **value** on a function that answers a `Task` would write its
+change back before the task has run.
+
+So **a source that is read from sits in a `var` binding** and a `const` handle is the read-only view every shared object
+has. The second consequence of identity: a source cannot be handed to another task, because shared objects are confined
+to the task that made them. Nothing in `std/stream` spawns except `Source.produce`, which spawns a task that captures a
+`Channel` and nothing else shared.
 
 **A failure ends the stream and stands in the type**, on both ends, symmetrically. An end that cannot fail is
 `Source<Item, Never>` — `Channel`'s reading end is one. This is what every language except Rust does: Rust's
@@ -83,10 +90,25 @@ collectors, the terminal operations — is synchronous and shared with `Iterable
 ## 2. `Source`
 
 ```trb
-fn next(self): Task<Result<Item?, Failure>>
+fn next(var self): Task<Result<Item?, Failure>>
 ```
 
 `Ok(Some(item))` is the next item, `Ok(None)` the end of the stream, `Fail(problem)` a failure that ends it.
+
+**Reading takes `var self`, wrapping takes `self`.** `next`, `collect`, `toList`, `count`, `fold`, `forEach`, `find` and
+`into` consume items, so they need the permission. `through`, `map`, `filter`, `take`, `then`, `mapFailure` and `checked`
+read nothing: they **hand the source over** to a wrapper, which pulls from then on. That split is not only about what
+changes — a temporary is no `var` path, so if wrapping took `var self` no pipeline could be written as one expression at
+all. The price is the other way round: a pipeline that is read gets a name.
+
+```trb
+var users = body.through(Json.items<User>()).checked()   // wrapping: one expression
+const all = users.toList().await()?                      // reading: through a `var` path
+```
+
+Forgetting the name is the error "This is a temporary, and `toList` changes its receiver", which names the fix. The
+hand-over is a promise and not a proof: the language has no `move`, so reading a source after giving it away is a bug of
+the same kind as pulling from it twice at once (see section 13, open point 1).
 
 **The contract.**
 
@@ -107,6 +129,7 @@ fn next(self): Task<Result<Item?, Failure>>
 **The loop** is a `while` with a pattern, and it works today:
 
 ```trb
+var lines = file.lines()
 while const Some(line) = lines.next().await()? {
   print line
 }
@@ -121,8 +144,8 @@ they happen, which is the same reason there is no `async` keyword in the languag
 ## 3. `Sink`
 
 ```trb
-fn add(self, item: Item): Task<Result<Void, Failure>>
-fn finish(self): Task<Result<Void, Failure>>
+fn add(var self, item: Item): Task<Result<Void, Failure>>
+fn finish(var self): Task<Result<Void, Failure>>
 ```
 
 **The contract.**
@@ -163,8 +186,9 @@ worlds:
 ```trb
 const interesting = filtering<Event>({ _.level >= .Warning }).then(mapping { _.message })
 
-const fromList = events.through(interesting).toList()               // a list, synchronously
-const fromBody = response.body.through(interesting).toList().await()?   // an HTTP body, asynchronously
+const fromList = events.through(interesting).toList()        // a list, synchronously
+var arriving = response.body.through(interesting)            // an HTTP body, asynchronously
+const fromBody = arriving.toList().await()?
 ```
 
 `Accumulator` gains one member for it:
@@ -267,9 +291,10 @@ Every terminal operation of both worlds ends here: `toList`, `count`, `fold`, `j
 **`iterator()` / `next()` needs a queue,** because one value pushed in can become none or many coming out while the
 caller asks for exactly one. The queue holds what *one* input produced and is emptied before the next input is pulled,
 so it stays as wide as the widest stage of the pipeline and no wider. This is what Clojure's `sequence` does and what
-Java's `Spliterator` bridge does. The tail of the chain is `Queueing<Item>`, an accumulator that writes into a
-`Shared<List<Item>>` the driver also holds — an accumulator is a **value**, so handing one over would hand over a copy
-and the driver would never see what arrived.
+Java's `Spliterator` bridge does. The driver keeps it in a `var` field; the tail of the chain is `Queueing<Item>`, an
+accumulator that writes into a `Shared<List<Item>>` the driver also holds — an accumulator is a **value**, so handing one
+over would hand over a copy and the driver would never see what arrived. That box is the one piece of indirection left,
+and it is there because accumulators are values, not because a shared object could not hold state.
 
 **Chaining composes instead of stacking.** `through` on an already-staged source or iterable answers
 `upstream.through(stage.then(other))`, so `source.through(a).through(b)` is one driver over one composed stage and stays
@@ -285,14 +310,17 @@ what is above it, or a file handle or a socket stays open until the program ends
 mechanism, so streams use it and add nothing:
 
 - **`Source` and `Sink` both carry `Close`**, whose `close(var self)` is synchronous and cannot fail.
-- **Every derived end closes the one it came from.** `Pulling` (the one type behind `map`, `filter`, `then`,
-  `mapFailure`, `checked`, `from`, `pulling`, `empty`) holds the thing above it as a `Close?` and closes it; `Staged`
-  closes its upstream; `Pushing` and `Buffered` close what is below.
+- **Every derived end closes the one it came from.** Each wrapper holds its upstream in a `var` field and closes it:
+  `Staged`, `Stepping` (`then`), `Remapped` (`mapFailure`), `Checked`, `Buffered`. `Pulling` and `Pushing`, the two
+  closure-shaped escape hatches, hold whatever is above or below them as a `Close?`.
 - **`using` is the form that does not forget it**, and it wants a `var` path:
 
   ```trb
   var file = File.open(path)?
-  using file { open => open.lines().take(5).toList().await() }
+  using file { open =>
+    var first = open.lines().take(5)
+    first.toList().await()
+  }
   ```
 
 - **Closing a produced source ends its producer.** `Produced.close()` closes the relay channel, so the producer's next
@@ -320,8 +348,8 @@ fn produce(capacity: Int = 0, body: (sink: Sink<Item, Failure>) => Result<Void, 
 
 - `from` is the bridge from the synchronous world. `Failure` is whatever the caller needs: a source over a list cannot
   fail, and fixing it to `Never` would make it unusable where a failing stream is expected.
-- `pulling` is for everything that already knows how to answer one item. Its state lives in the `var` bindings the
-  closure captured (see section 13, "the state of a shared object").
+- `pulling` is the escape hatch for something that already knows how to answer one item and has no state worth a type
+  of its own. With state, write an ordinary `shared type` with `var` fields — that is what the traits are for.
 - `produce` is the push-shaped producer: `body` runs as a task of its own and writes into a sink, and the items travel
   through a `Channel` of `capacity`. **`capacity: 0` hands every item over directly**, so the producer runs in lock-step
   with the consumer — which is exactly what a generator does, without a language feature. The bound
@@ -417,6 +445,10 @@ signal of `Source.produce`. **Everything bidirectional is a type with a `source`
 a socket and a WebSocket with milestone 10.
 
 **`std/http`.** `Response.body` and `Request.body` are a `Body`, and `shared type Body with Source<Bytes, HttpError>`.
+`Response` is a `shared type` too, because it owns one end of a stream that is read once and a copy would promise a
+second read of a body that is already gone — the same reason a `File` is one. `Request` stays a value: it is a
+description you build, and nothing on it reads its body. Both declare `var body`, because reading a body changes it and a
+reader needs a `var` path to it.
 Convenience first, which is the lesson of `fetch` and Bun (`await response.json()` is what almost every program wants):
 `body.bytes(limit:)`, `body.text(limit:)`, `body.json<Value>(limit:)`, `body.lines()`, all answering a `Task`. **Every
 one of them takes a limit**, defaulting to `Body.defaultLimit` = 16 MiB — a server that decides how much memory a client
@@ -488,19 +520,21 @@ capability tables need.
 
 ## 13. Open points
 
-**1. The state of a shared object.** A `shared type` written in TorbScript cannot change its own fields from a method
-that takes `self` — and an asynchronous method has to take `self`, because a `var self` access cannot stay open across
-an `await`. Every stateful end in `std/stream` therefore keeps its state in the `var` bindings its closures captured (a
-captured `var` binding is a shared box that may escape, CONCEPT "`var` Paths"), which works and type checks but reads
-indirectly: `Pulling` holds a `step` closure rather than a cursor, `Buffered` holds a `buffer` closure rather than a
-list. Every native shared type in the standard library (`Channel`, `File`, `Task`) has the same need and gets it by
-being native.
-_Decision:_ the captured-`var` form, because it needs no language change and no new native. **The owner's call:** whether
-a `shared type`'s own methods may write its `var` fields through `self`. The argument for it is that there is no copy, so
-nothing is being thrown away, and `var self` would stay the form a `const` path can withhold — `Channel.send(self, …)`
-already relies on exactly this and gets away with it by being native. The argument against is that a read-only view of a
-shared object would then only be read-only for the `var self` members. If it lands, `Pulling`, `Staged` and `Buffered`
-become ordinary types with ordinary fields and nothing else changes.
+**1. The state of a shared object, and the hand-over.**
+_Decision:_ **a `var self` method of a `shared type` or a `shared trait` may answer a `Task`** (TYPECHECKER gap 49), so
+every stateful end here is an ordinary shared type with `var` fields: `Iterating` holds a cursor, `Staged` a queue and an
+accumulator chain, `Buffered` a list. `Pulling` and `Pushing` keep closures because a closure is what they are for. The
+reverse — a `var self` or a `var` parameter of a value on a function that answers a `Task` — is an error, because the
+copy back would happen before the task has run.
+
+What is left open is the **hand-over**. Wrapping takes the source by value (section 2), and the wrapper keeps it in a
+`var` field, so the permission to read travels with it; the language has no `move`, so nothing stops the old owner from
+pulling as well. Two holes in the checker make it reachable even from a read-only view: gap 20's rule ("a `var` binding,
+field or argument may not be initialised from a `const` path to a shared object") is enforced for a binding of a named
+`shared type` but **not** for a trait-typed value of a `shared trait`, and **not** for a field filled by a generated
+constructor. Closing either would make wrapping impossible to write without a `var` receiver, and that would cost the
+one-expression pipeline. **The owner's call:** leave it as a documented promise (what the `Source` contract already says:
+one puller, consumed once), or give the language a way to say "this argument is handed over".
 
 **2. `Stage.map` instead of `mapping`.** Section 4 has the reason the members do not work today. The rule that would
 make them work: *a type parameter of a namespace that the static member's signature does not mention need not be
@@ -518,12 +552,12 @@ in flight runs to its end. Whether a task can be cancelled at all is milestone 7
 _Decision:_ out of scope here; `close()` plus `ChannelClosed` covers the cases that matter (stop reading, stop
 producing).
 
-**5. `?` on a `Result<Value, Never>`.** `Channel`'s reading end cannot fail, so `relay.source().next().await()` answers
-a `Result<Item?, Never>` that has to be taken apart with a pattern, because `?` would need `Failure: From<Never>`.
-A blanket `extend<Failure> Failure with From<Never>` would make it work everywhere (its body is `Never` coerced, which
-is legal).
-_Decision:_ not added here, because a blanket implementation of `From` touches coherence for the whole repository and
-belongs in its own change. Worth doing.
+**5. `?` on a `Result<Value, Never>`.** `Channel`'s reading end cannot fail, so `channel.source().next().await()`
+answers a `Result<Item?, Never>`, and `?` on it would need `Failure: From<Never>`.
+_Decision:_ **done.** `std/core` has the blanket `extend<Target> Target with From<Never>`, whose body is the argument —
+`Never` coerces to anything, so there is nothing to write. It overlaps nothing (an overlap would need a second
+implementation for `Never` as the *source*, and `Never` has no values), and `Produced.next` reads
+`reading.next().await()?` because of it. TYPECHECKER gap 50.
 
 **6. Names.** `Source`/`Sink` are decided. **The owner's call** on the rest: the stage factories (`mapping`,
 `filtering`, `taking`, … versus `Stage.map` under point 2), `Pulling`/`Pushing`/`Staged`/`Queueing` (the implementation

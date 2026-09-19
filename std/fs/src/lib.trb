@@ -61,10 +61,10 @@ public native shared type File with Close, Sink<Bytes, IoError> {
   }
 
   /** The writing end. A `File` is a `Sink<Bytes, IoError>`, so `addText`, `addLine` and `fill` are all there. */
-  native fn add(self, item: Bytes): Task<Result<Void, IoError>>
+  native fn add(var self, item: Bytes): Task<Result<Void, IoError>>
 
   /** Flushes to the operating system and reports what a buffered write could only report now. */
-  native fn finish(self): Task<Result<Void, IoError>>
+  native fn finish(var self): Task<Result<Void, IoError>>
 
   /** A `String` is always valid UTF-8, so bytes that are not are an `IoError` and never a replacement character. */
   native fn readText(path: String): Result<String, IoError>
@@ -74,7 +74,7 @@ public native shared type File with Close, Sink<Bytes, IoError> {
    * Creates `path` and writes everything `source` delivers into it, of any size and without holding it in memory:
    * `File.write(path, response.body.mapFailure(IoError.from)).await()?`
    */
-  fn write(path: String, source: Source<Bytes, IoError>): Task<Result<Void, IoError>> {
+  fn write(path: String, var source: Source<Bytes, IoError>): Task<Result<Void, IoError>> {
     var target = File.create(path)?
     const outcome = target.fill(source).await()
     target.close()

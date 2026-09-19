@@ -1,0 +1,524 @@
+use test, group from "std/test"
+use lowered, irOf, ownedIrOf, unsupportedIn from "./lower-harness"
+use insertOwnership from "../src/ir/ownership"
+use emittedProgramText from "../src/backend/c/emit"
+use loweredText from "../src/ir/lower/lower"
+
+/**
+ * Closures (milestone 5.8): a closure as a function plus an environment, a captured `var` binding as a shared box, a
+ * `lazy` argument as a thunk in a memo cell, a receiver closure applied to a place, and a function used as a value.
+ *
+ * The three questions these snapshots exist for are the ones nobody can answer by reading the C: **what is in the
+ * environment** (a copy of a `const` capture, the box of a `var` one), **who owns it** - the captures are `Owned`
+ * positions, so the environment is retained where the frame keeps its own count and moved where it does not - and **what
+ * a call goes through**, which is one thunk per closure and no cast of an argument anywhere.
+ *
+ * Every snapshot of the final IR runs through `verifyOwnedProgram` (`ownedIrOf`), so a text that matches and a body that
+ * leaks a count cannot pass together. That the C really runs is `bootstrap/tests/native/closures.trb`,
+ * `counted-closures.trb` and `dsl.trb`.
+ */
+
+/** The entry function of `app/src/main.trb`, which is what the `main` of the program calls. */
+const entryName = "t_acme_x2f_app_main"
+
+/** The emitted C of one function, from its comment to its closing brace, after the ownership pass. */
+fn functionOf(source: String, name: String): String {
+  var found = lowered source
+  insertOwnership found.program
+  const text = emittedProgramText found.program, entryName
+  var lines: List<String> = []
+  var isInside = false
+  for line in text.lines() {
+    if line == "/* {name} */" {
+      isInside = true
+      continue
+    }
+    if !isInside {
+      continue
+    }
+    lines.add line
+    if line == "\}" {
+      break
+    }
+  }
+  lines.joined separator: "\n"
+}
+
+/**
+ * The emitted C from the line that begins with `head` to its closing brace. A **thunk** carries no comment of its own -
+ * it is not a function of the program but the shape one is reached through - so it is found by its head.
+ */
+fn definitionOf(source: String, head: String): String {
+  var found = lowered source
+  insertOwnership found.program
+  const text = emittedProgramText found.program, entryName
+  var lines: List<String> = []
+  var isInside = false
+  for line in text.lines() {
+    if line.startsWith(head) && line.endsWith("\{") {
+      isInside = true
+    }
+    if !isInside {
+      continue
+    }
+    lines.add line
+    if line == "\}" {
+      break
+    }
+  }
+  lines.joined separator: "\n"
+}
+
+const closures = r"""
+  type Counter {
+    var hits: Int = 0
+  }
+
+  fn applied(value: Int, transform: (Int) => Int): Int {
+    transform value
+  }
+
+  fn adder(amount: Int): (Int) => Int {
+    { value => value + amount }
+  }
+
+  fn counted(times: Int): Int {
+    var hits = 0
+    const bump = {
+      hits = hits + 1
+    }
+    bump()
+    hits
+  }
+
+  fn lengthOf(text: String): Int {
+    const measure = {
+      text.byteLength()
+    }
+    measure()
+  }
+
+  fn configured(configure: (var self: Counter) => Void): Int {
+    var counter = Counter()
+    configure counter
+    counter.hits
+  }
+
+  fn doubled(value: Int): Int {
+    value * 2
+  }
+
+  fn twice(value: Int): Int {
+    applied(value, doubled)
+  }
+  """
+
+/** The three kinds of property command in one body: `.Assign`, `.Configure` and `.AssignClosure` (gap 15). */
+const commands = r"""
+  type Limits {
+    var maximum: Int = 0
+  }
+
+  type Options {
+    var limits: Limits = Limits()
+    var port: Int = 0
+    var onStart: () => Int = {
+      0
+    }
+
+    fn apply(var self) {
+      port 1
+      limits {
+        maximum 2
+      }
+      onStart {
+        3
+      }
+    }
+  }
+  """
+
+const commandsIr = r"""
+  fn t_acme_x2f_app_main_Options_apply(var self: Record(T_acme_x2f_app_main_Options) borrowed) -> Void {
+    slot %0 parameter self: Record(T_acme_x2f_app_main_Options)
+    slot %1 temporary: Int64
+    slot %2 temporary: Void
+    slot %3 temporary: Closure((var Record(T_acme_x2f_app_main_Limits)) -> Void)
+    slot %4 temporary: Closure(() -> Int64)
+  b0: # acme/app/src/main.trb:12 body
+    %1 = constant s_literal__Int64_1
+    write %0.port = %1 borrowed
+    %3 = closure t_closure__t_acme_x2f_app_main_Options_apply_0 captures() escaping
+    callClosure %3(&%0.limits borrowed)
+    release %3
+    %4 = closure t_closure__t_acme_x2f_app_main_Options_apply_1 captures() escaping
+    write %0.onStart = %4 owned last
+    return
+  }"""
+
+group "A closure" {
+  test "is a function whose first parameter is its environment, and the captures are read out of it" {
+    assert(
+      ownedIrOf(closures, "t_closure__t_acme_x2f_app_main_adder_0") == r"""
+        fn t_closure__t_acme_x2f_app_main_adder_0(environment: Record(T_environment__t_closure__t_acme_x2f_app_main_adder_0) borrowed, Int64 borrowed) -> Int64 {
+          slot %0 parameter environment: Record(T_environment__t_closure__t_acme_x2f_app_main_adder_0)
+          slot %1 parameter: Int64
+          slot %2 local amount: Int64
+          slot %3 temporary: Int64
+        b0: # acme/app/src/main.trb:10 closure
+          %2 = read %0.amount
+          %3 = intrinsic add.i64 %1, %2 at acme/app/src/main.trb:10:14
+          return %3 borrowed
+        }"""
+    )
+  }
+
+  test "is one instruction where it is written, with the captures the checker recorded" {
+    assert(
+      ownedIrOf(closures, "t_acme_x2f_app_main_adder") == r"""
+        fn t_acme_x2f_app_main_adder(amount: Int64 borrowed) -> Closure((Int64) -> Int64) {
+          slot %0 parameter amount: Int64
+          slot %1 temporary: Closure((Int64) -> Int64)
+        b0: # acme/app/src/main.trb:9 body
+          %1 = closure t_closure__t_acme_x2f_app_main_adder_0 captures(%0 value) escaping
+          return %1 owned last
+        }"""
+    )
+  }
+
+  test "counts what it captures: the environment owns the `String` and releases it with the closure" {
+    assert(
+      ownedIrOf(closures, "t_acme_x2f_app_main_lengthOf") == r"""
+        fn t_acme_x2f_app_main_lengthOf(text: String owned) -> Int64 {
+          slot %0 parameter text: String
+          slot %1 local measure: Closure(() -> Int64)
+          slot %2 temporary: Int64
+        b0: # acme/app/src/main.trb:22 body
+          retain %0
+          %1 = closure t_closure__t_acme_x2f_app_main_lengthOf_0 captures(%0 value) escaping
+          release %0
+          %2 = callClosure %1()
+          release %1
+          return %2 borrowed
+        }"""
+    )
+  }
+
+  test "a read of a counted capture hands the frame a count, which dies at its last use" {
+    assert(
+      ownedIrOf(closures, "t_closure__t_acme_x2f_app_main_lengthOf_0") == r"""
+        fn t_closure__t_acme_x2f_app_main_lengthOf_0(environment: Record(T_environment__t_closure__t_acme_x2f_app_main_lengthOf_0) borrowed) -> Int64 {
+          slot %0 parameter environment: Record(T_environment__t_closure__t_acme_x2f_app_main_lengthOf_0)
+          slot %1 local text: String
+          slot %2 temporary: Int64
+        b0: # acme/app/src/main.trb:23 closure
+          %1 = read %0.text
+          %2 = intrinsic textByteLength %1 at acme/app/src/main.trb:24:5
+          release %1
+          return %2 borrowed
+        }"""
+    )
+  }
+
+  test "without captures it has no environment parameter at all, which is what a function value is" {
+    assert(
+      ownedIrOf(closures, "t_acme_x2f_app_main_twice") == r"""
+        fn t_acme_x2f_app_main_twice(value: Int64 borrowed) -> Int64 {
+          slot %0 parameter value: Int64
+          slot %1 temporary: Closure((Int64) -> Int64)
+          slot %2 temporary: Int64
+        b0: # acme/app/src/main.trb:39 body
+          %1 = closure t_acme_x2f_app_main_doubled captures() local
+          %2 = call t_acme_x2f_app_main_applied(%0 borrowed, %1 borrowed last) at acme/app/src/main.trb:40:3
+          release %1
+          return %2 borrowed
+        }"""
+    )
+  }
+}
+
+group "A captured `var` binding" {
+  test "is a shared box, and every read and every write of it goes through the one field of that box" {
+    assert(
+      ownedIrOf(closures, "t_acme_x2f_app_main_counted") == r"""
+        fn t_acme_x2f_app_main_counted(times: Int64 borrowed) -> Int64 {
+          slot %0 parameter times: Int64
+          slot %1 temporary: Int64
+          slot %2 local hits: Record(T_box__Int64)
+          slot %3 local bump: Closure(() -> Void)
+          slot %4 temporary: Void
+          slot %5 temporary: Int64
+        b0: # acme/app/src/main.trb:13 body
+          %1 = constant s_literal__Int64_0
+          %2 = construct T_box__Int64 (%1 borrowed)
+          retain %2
+          %3 = closure t_closure__t_acme_x2f_app_main_counted_0 captures(%2 boxed) escaping
+          callClosure %3()
+          release %3
+          %5 = read %2.value
+          release %2
+          return %5 borrowed
+        }"""
+    )
+  }
+
+  test "is never made unique: the closure and the frame have to see one variable (gap 19)" {
+    assert(
+      ownedIrOf(closures, "t_closure__t_acme_x2f_app_main_counted_0") == r"""
+        fn t_closure__t_acme_x2f_app_main_counted_0(environment: Record(T_environment__t_closure__t_acme_x2f_app_main_counted_0) borrowed) -> Void {
+          slot %0 parameter environment: Record(T_environment__t_closure__t_acme_x2f_app_main_counted_0)
+          slot %1 local hits: Record(T_box__Int64)
+          slot %2 temporary: Int64
+          slot %3 temporary: Int64
+          slot %4 temporary: Int64
+        b0: # acme/app/src/main.trb:15 closure
+          %1 = read %0.hits
+          %2 = read %1.value
+          %3 = constant s_literal__Int64_1
+          %4 = intrinsic add.i64 %2, %3 at acme/app/src/main.trb:16:12
+          write %1.value = %4 borrowed
+          release %1
+          return
+        }"""
+    )
+  }
+
+  test "its box is a counted block of its own, and a layout says so" {
+    const text = loweredText lowered(closures)
+    assert text.contains("layout T_box__Int64 boxed size 8 align 8 shared fields(value: Int64)")
+    assert(
+      text.contains(
+        "layout T_environment__t_closure__t_acme_x2f_app_main_counted_0 boxed size 8 align 8"
+          + " counted shared fields(hits: Record(T_box__Int64))"
+      )
+    )
+  }
+}
+
+group "A receiver closure" {
+  test "takes the place of its receiver, so the field is configured where it lies" {
+    assert(
+      ownedIrOf(closures, "t_acme_x2f_app_main_configured") == r"""
+        fn t_acme_x2f_app_main_configured(configure: Closure((var Record(T_acme_x2f_app_main_Counter)) -> Void) borrowed) -> Int64 {
+          slot %0 parameter configure: Closure((var Record(T_acme_x2f_app_main_Counter)) -> Void)
+          slot %1 local counter: Record(T_acme_x2f_app_main_Counter)
+          slot %2 temporary: Int64
+          slot %3 temporary: Void
+          slot %4 temporary: Int64
+        b0: # acme/app/src/main.trb:29 body
+          %2 = constant s_literal__Int64_0
+          %1 = construct T_acme_x2f_app_main_Counter (%2 borrowed)
+          callClosure %0(&%1 borrowed)
+          %4 = read %1.hits
+          return %4 borrowed
+        }"""
+    )
+  }
+
+  test "a property command that configures a field applies the closure to that field's place" {
+    assert(ownedIrOf(commands, "t_acme_x2f_app_main_Options_apply") == commandsIr)
+  }
+}
+
+group "A `lazy` argument" {
+  test "is a thunk in a memo cell the caller builds, and the cell is a counted record of the program" {
+    const source = r"""
+      fn orDefault(value: Int?, fallback: lazy Int): Int {
+        if value.isSome() { 0 } else { fallback }
+      }
+
+      fn defaulted(value: Int?, base: Int): Int {
+        orDefault(value, base + 1)
+      }
+      """
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_defaulted") == r"""
+        fn t_acme_x2f_app_main_defaulted(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed, base: Int64 borrowed) -> Int64 {
+          slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %1 parameter base: Int64
+          slot %2 temporary: Closure(() -> Int64)
+          slot %3 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %4 temporary: Record(T_cell__Int64)
+          slot %5 temporary: Int64
+        b0: # acme/app/src/main.trb:5 body
+          %2 = closure t_closure__t_acme_x2f_app_main_defaulted_0 captures(%1 value) escaping
+          %3 = construct T_std_x2f_prelude_types_Option__Int64.None ()
+          %4 = construct T_cell__Int64 (%3 borrowed, %2 owned last)
+          %5 = call t_acme_x2f_app_main_orDefault(%0 borrowed, %4 owned last) at acme/app/src/main.trb:6:3
+          return %5 borrowed
+        }"""
+    )
+  }
+
+  test "reading it forces the cell: the memoized value, or the thunk once and written back" {
+    const source = r"""
+      fn orDefault(value: Int?, fallback: lazy Int): Int {
+        if value.isSome() { 0 } else { fallback }
+      }
+      """
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_orDefault") == r"""
+        fn t_acme_x2f_app_main_orDefault(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed, fallback: Record(T_cell__Int64) owned) -> Int64 {
+          slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %1 parameter fallback: Record(T_cell__Int64)
+          slot %2 temporary: Bool
+          slot %3 temporary: Int64
+          slot %4 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %5 temporary: Int64
+          slot %6 temporary: Closure(() -> Int64)
+          slot %7 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+        b0: # acme/app/src/main.trb:1 body
+          %2 = call t_std_x2f_prelude_types_Option_isSome__Int64(%0 borrowed) at acme/app/src/main.trb:2:6
+          branch %2 then b7 else b2
+        b1: # acme/app/src/main.trb:2 then
+          %3 = constant s_literal__Int64_0
+          jump b3
+        b2: # acme/app/src/main.trb:2 else
+          %4 = read %1.value
+          %5 = tag %4
+          switch %5 case 0 b8, otherwise b5
+        b3: # acme/app/src/main.trb:2 join
+          return %3 borrowed
+        b4: # acme/app/src/main.trb:2 forced
+          %3 = read %4.Some.value
+          jump b6
+        b5: # acme/app/src/main.trb:2 pending
+          %6 = read %1.thunk
+          %3 = callClosure %6()
+          release %6
+          %7 = construct T_std_x2f_prelude_types_Option__Int64.Some (%3 borrowed)
+          write %1.value = %7 borrowed
+          release %1
+          jump b6
+        b6: # acme/app/src/main.trb:2 join
+          jump b3
+        b7: # acme/app/src/main.trb:1 drop
+          release %1
+          jump b1
+        b8: # acme/app/src/main.trb:2 drop
+          release %1
+          jump b4
+        }"""
+    )
+  }
+}
+
+group "The C of a closure" {
+  test "the environment is a counted block, and the code pointer is the thunk of the closure" {
+    assert(
+      functionOf(closures, "t_acme_x2f_app_main_adder") == r"""
+        static torb_closure t_acme_x2f_app_main_adder(int64_t s0_amount) {
+          torb_closure s1 = { 0 };
+        #line 9 "acme/app/src/main.trb"
+          /* body */
+          {
+            T_environment__t_closure__t_acme_x2f_app_main_adder_0 *environment = (T_environment__t_closure__t_acme_x2f_app_main_adder_0 *)torb_allocate(sizeof(T_environment__t_closure__t_acme_x2f_app_main_adder_0), TORB_BLOCK_ENVIRONMENT);
+            environment->drop = NULL;
+            environment->f_amount = s0_amount;
+            s1.code = (void (*)(void))F_t_closure__t_acme_x2f_app_main_adder_0;
+            s1.environment = (torb_environment *)environment;
+          }
+          return s1;
+        }"""
+    )
+  }
+
+  test "the thunk casts the erased environment back, so nothing casts a function pointer it does not have" {
+    assert(
+      definitionOf(closures, "static int64_t F_t_closure__t_acme_x2f_app_main_adder_0") == r"""
+        static int64_t F_t_closure__t_acme_x2f_app_main_adder_0(torb_environment *environment, int64_t a1) {
+          return t_closure__t_acme_x2f_app_main_adder_0((T_environment__t_closure__t_acme_x2f_app_main_adder_0 *)environment, a1);
+        }"""
+    )
+  }
+
+  test "a function used as a value gets the same thunk, which ignores the environment it is handed" {
+    assert(
+      definitionOf(closures, "static int64_t F_t_acme_x2f_app_main_doubled") == r"""
+        static int64_t F_t_acme_x2f_app_main_doubled(torb_environment *environment, int64_t a0) {
+          (void)environment;
+          return t_acme_x2f_app_main_doubled(a0);
+        }"""
+    )
+  }
+
+  test "a call goes through the code pointer, converted back to the thunk's own signature" {
+    assert(
+      functionOf(closures, "t_acme_x2f_app_main_applied") == r"""
+        static int64_t t_acme_x2f_app_main_applied(int64_t s0_value, torb_closure s1_transform) {
+          int64_t s2 = { 0 };
+        #line 5 "acme/app/src/main.trb"
+          /* body */
+          s2 = ((int64_t (*)(torb_environment *, int64_t))s1_transform.code)(s1_transform.environment, s0_value);
+          return s2;
+        }"""
+    )
+  }
+
+  test "the environment carries its own drop function, because a closure value has erased its captures" {
+    assert(
+      functionOf(closures, "t_acme_x2f_app_main_lengthOf") == r"""
+        static int64_t t_acme_x2f_app_main_lengthOf(torb_text s0_text) {
+          torb_closure s1_measure = { 0 };
+          int64_t s2 = { 0 };
+        #line 22 "acme/app/src/main.trb"
+          /* body */
+          s0_text = torb_text_retained(s0_text);
+          {
+            T_environment__t_closure__t_acme_x2f_app_main_lengthOf_0 *environment = (T_environment__t_closure__t_acme_x2f_app_main_lengthOf_0 *)torb_allocate(sizeof(T_environment__t_closure__t_acme_x2f_app_main_lengthOf_0), TORB_BLOCK_ENVIRONMENT);
+            environment->drop = D_T_environment__t_closure__t_acme_x2f_app_main_lengthOf_0;
+            environment->f_text = s0_text;
+            s1_measure.code = (void (*)(void))F_t_closure__t_acme_x2f_app_main_lengthOf_0;
+            s1_measure.environment = (torb_environment *)environment;
+          }
+          torb_text_release(s0_text);
+          s2 = ((int64_t (*)(torb_environment *))s1_measure.code)(s1_measure.environment);
+          torb_environment_release(s1_measure.environment);
+          return s2;
+        }"""
+    )
+  }
+}
+
+group "What a closure cannot do yet" {
+  test "a closure that captures an implicit parameter of a closure around it is a clean finding" {
+    const source = r"""
+      fn outer(transform: (value: Int) => Int): Int {
+        transform 1
+      }
+
+      fn inner(transform: (Int) => Int): Int {
+        transform 2
+      }
+
+      fn nested(): Int {
+        outer({ inner({ _ + value }) })
+      }
+      """
+    assert(
+      unsupportedIn(source)
+        == [
+          "not supported by the back end yet: a closure that captures an implicit parameter of a closure around it",
+        ]
+    )
+  }
+
+  test "`?.` is control flow and not a closure, and says what it is missing" {
+    const source = r"""
+      type Holder {
+        name: String
+      }
+
+      fn nameOf(holder: Holder?): String? {
+        holder?.name
+      }
+      """
+    assert(
+      unsupportedIn(source)
+        == [
+          "not supported by the back end yet: `?.`, whose arm cannot say whether the member answers an"
+            + " `Option` already",
+        ]
+    )
+  }
+}

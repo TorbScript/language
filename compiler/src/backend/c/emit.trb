@@ -1,5 +1,5 @@
 use LiteralValue from "../../semantics/checker/type"
-use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue from "../../ir/ir"
+use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue, FunctionId from "../../ir/ir"
 use Slot, Instruction, WitnessTable, WitnessTableId from "../../ir/ir"
 use Layout, FieldLayout, containsCountedType from "../../ir/layout"
 use typeOfReference from "../../ir/verify"
@@ -10,7 +10,7 @@ use Emission, write, reportUnsupported, emittedText from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
 use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf from "./type"
 use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
-use dropFunctionOf from "./body"
+use dropFunctionOf, pointerTo, closureThunkNameOf, environmentLayoutOfFunction from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
 use retainStatement, releaseStatement, describeCounted from "./body"
 
@@ -34,13 +34,16 @@ public fn emitProgram(program: IrProgram, entry: String): Emission {
   const prototypes = runtimePrototypes()
   checkProgramTypes emission, program, functions, layouts
   emitHeader emission
-  emitTypeDefinitions emission, program, layouts
+  // The trait-typed values come first: they are made of the erased pointers of the ABI and of nothing of the program,
+  // while a layout may hold one in a field - the environment of a closure over a trait-typed value is one
   emitObjectTypes emission, program, functions, layouts
+  emitTypeDefinitions emission, program, layouts
   emitCountedHelpers emission, program, functions, layouts
   emitStaticData emission, program, functions
   emitPrototypes emission, program, functions
   // The tables come between the prototypes and the bodies: their initializers name the thunks, and a body names a table
   emitWitnessTables emission, program
+  emitClosureThunks emission, program, functions
   emitDefinitions emission, program, functions, prototypes
   emitMain emission, entry
   emission
@@ -336,6 +339,118 @@ fn emitWitnessTable(var emission: Emission, program: IrProgram, table: WitnessTa
   }
   const initializer = CExpression.Initializer([drop, array])
   write emission, CDeclaration.StaticData("static const torb_witness_table", table.name, initializer)
+}
+
+// --- The thunks of the closures -------------------------------------------------------------------------------------
+
+/**
+ * One thunk per function a closure value points at, sorted by name.
+ *
+ * A closure value has the type of *every* closure of its shape, so its code pointer cannot have the concrete
+ * environment's type in it. The thunk is what closes that gap: it takes `torb_environment *`, casts it to the
+ * environment of this one closure, and calls the body - so the function a closure points at really has the signature a
+ * call converts its pointer back to, which is what C allows. Casting a function pointer to a signature the function
+ * does not have, which is the alternative, is not.
+ *
+ * The same thunk is what makes a **named function used as a value** free: such a function has no environment parameter,
+ * and its thunk simply ignores the one it is handed.
+ */
+fn emitClosureThunks(var emission: Emission, program: IrProgram, functions: List<IrFunction>) {
+  const order = closureTargetsOf program, functions
+  if order.isEmpty() {
+    return
+  }
+  write emission, CDeclaration.Comment("The thunks of the closures: the erased environment, cast back to its own type.")
+  for function in order {
+    if const Some(head) = thunkHeadOfFunction(emission, program, function) {
+      write emission, CDeclaration.Prototype(head)
+    }
+  }
+  for function in order {
+    emitClosureThunk emission, program, function
+  }
+}
+
+/** Every function a `Closure` instruction of the program names, sorted by its mangled name. */
+fn closureTargetsOf(program: IrProgram, functions: List<IrFunction>): List<IrFunction> {
+  var names: List<String> = []
+  var byName: Map<String, Int> = [:]
+  for function in functions {
+    for block in function.blocks {
+      for instruction in block.instructions {
+        if const .Closure(_, callee, _, _) = instruction {
+          if !program.hasFunction(callee) {
+            continue
+          }
+          const name = program.functionAt(callee).name
+          if !byName.containsKey(name) {
+            byName.set name, callee.value
+            names.add name
+          }
+        }
+      }
+    }
+  }
+  var sorted = names
+  sorted.sort({ _ })
+  var order: List<IrFunction> = []
+  for name in sorted {
+    if const Some(index) = byName.get(name) {
+      order.add program.functionAt(FunctionId(index))
+    }
+  }
+  order
+}
+
+/** The head of one thunk: the erased environment first, then the parameters the closure type declares. */
+fn thunkHeadOfFunction(var emission: Emission, program: IrProgram, function: IrFunction): String? {
+  const signature = function.signature
+  if const .ByPointer = signature.resultMode {
+    reportUnsupported emission, "a closure whose result is written through a pointer (milestone 5.4)"
+    return None
+  }
+  const first = if environmentLayoutOfFunction(program, function).isSome() { 1 } else { 0 }
+  var parameters = ["torb_environment *environment"]
+  for index in first..signature.parameters.length() {
+    const parameter = signature.parameters[index]
+    const spelling = valueTypeOf program, parameter.annotation
+    const shown = if parameter.isReference { pointerTo spelling } else { spelling }
+    parameters.add declarationOf(shown, "a{index}")
+  }
+  const result = resultTypeOf program, signature.result
+  const written = parameters.joined separator: ", "
+  Some "static {declarationOf(result, "{closureThunkNameOf(function.name)}({written})")}"
+}
+
+fn emitClosureThunk(var emission: Emission, program: IrProgram, function: IrFunction) {
+  const head = match thunkHeadOfFunction(emission, program, function) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const layout = environmentLayoutOfFunction program, function
+  const first = if layout.isSome() { 1 } else { 0 }
+  var body: List<CStatement> = []
+  var given: List<CExpression> = []
+  match layout {
+    Some(found) => {
+      const spelling = "{program.layoutAt(found).name} *"
+      given.add CExpression.Cast(spelling, CExpression.Name("environment"))
+    }
+    None => body.add CStatement.Evaluate(CExpression.Cast("void", CExpression.Name("environment")))
+  }
+  for index in first..function.signature.parameters.length() {
+    given.add CExpression.Name("a{index}")
+  }
+  const called = CExpression.Call CExpression.Name(function.name), given
+  if isVoidResultOf(program, function.signature.result) {
+    body.add CStatement.Evaluate(called)
+    body.add CStatement.Return()
+  } else {
+    body.add CStatement.Return(Some(called))
+  }
+  write emission, CDeclaration.Definition("", head, body)
 }
 
 // --- Are all the types there? ---------------------------------------------------------------------------------------
@@ -687,6 +802,12 @@ fn collectHelperDemand(
         markDropped program, drops, inner
       }
     }
+    // The `Closure` instruction names the drop function of the environment it allocates, whether or not anything else does
+    .Closure(_, callee, _, _) => {
+      if const Some(layout) = environmentLayoutOfCallee(program, callee) {
+        markLayoutFlag program, drops, layout
+      }
+    }
     // `torb_make_unique` takes both: it retains the children of the shallow copy and releases the old block
     .MakeUnique(reference) => {
       if const Some(inner) = typeOfReference(program, function, ignored, "", reference) {
@@ -698,6 +819,13 @@ fn collectHelperDemand(
     }
     _ => {}
   }
+}
+
+fn environmentLayoutOfCallee(program: IrProgram, callee: FunctionId): LayoutId? {
+  if !program.hasFunction(callee) {
+    return None
+  }
+  environmentLayoutOfFunction program, program.functionAt(callee)
 }
 
 fn typeOfSlotOf(function: IrFunction, slot: Slot): IrTypeId {

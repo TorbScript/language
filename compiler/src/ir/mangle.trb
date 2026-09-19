@@ -302,6 +302,49 @@ public fn payloadLayoutName(program: IrProgram, item: IrTypeId): String {
   mangledName "T", ["payload"], canonicalType(program, item)
 }
 
+/**
+ * `t_closure__t_main_run_0`: the body of the closure that is written at the `index`th closure site of `owner`.
+ *
+ * A closure has no declaration anywhere, so it is named after the function it is written in and its position in it -
+ * which is stable under everything that does not change that function, the same property every other name here has.
+ * `owner` is a mangled name already and is therefore not escaped again; the word `closure` in front of it is what keeps
+ * it out of the namespace of the declarations, the way `payload` and `tuple` do.
+ */
+public fn closureFunctionName(owner: String, index: Int): String {
+  mangledName "t", ["closure"], "{owner}_{index}"
+}
+
+/**
+ * `T_environment__t_closure__t_main_run_0`: the captures of one closure, as the layout of one counted block.
+ *
+ * Making the environment an ordinary layout is what gives it a C struct, the `R_`/`D_` pair of every other counted
+ * block and its place in the definition order - a second mechanism beside the layouts would be a second place to get a
+ * retain wrong (the same reason the boxed payload of a trait-typed value is one).
+ */
+public fn environmentLayoutName(closure: String): String {
+  mangledName "T", ["environment"], closure
+}
+
+/**
+ * `t_constructor__T_main_Point_0`: the function a constructor or a case becomes where it is used as a **value**.
+ *
+ * `names.map Role` and `byPath.get(path).map(ModuleId)` hand a constructor over as a function, and a constructor has no
+ * body anywhere - so the lowering generates one, named after the layout it builds and the variant it builds of it.
+ */
+public fn constructorFunctionName(layout: String, variant: Int): String {
+  mangledName "t", ["constructor"], "{layout}_{variant}"
+}
+
+/** `T_box__Int64`: the shared box a captured `var` binding lives in - the only sharing of a variable there is. */
+public fn boxLayoutName(program: IrProgram, item: IrTypeId): String {
+  mangledName "T", ["box"], canonicalType(program, item)
+}
+
+/** `T_cell__Int64`: the one-shot memo cell of a `lazy Value` parameter - the thunk, and the value once it was forced. */
+public fn cellLayoutName(program: IrProgram, item: IrTypeId): String {
+  mangledName "T", ["cell"], canonicalType(program, item)
+}
+
 /** `T_object__std_x2f_prelude_convert_Show`: the C struct of a trait-typed value with these bounds, in bound order. */
 public fn objectTypeName(program: IrProgram, bounds: List<TraitId>): String {
   var parts: List<String> = []

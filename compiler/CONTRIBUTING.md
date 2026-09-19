@@ -52,6 +52,14 @@ the checker is a bug of the checker.
 - Prefer the short form where the type is expected and stage 0 can see it: `addNode(graph, .SwitchCase(path))` for a
   parameter of a declared function, `const kind: TokenKind = .Dot`, `kinds == [.Dot, .Name]`. Write `Type.Case` only
   where stage 0 cannot (trap 8).
+- **A literal that sets an option is labeled.** `true`, `false` and `None` have no name of their own, so where one is
+  passed to a parameter that is *declared* as `Bool` or as an optional, the label is the only thing that says what it
+  means: `listEntries entries, "ArrayList", hasCapacity: false`, never `listEntries entries, "ArrayList", false`. Two
+  cases need none: a call with a single argument (`setEnabled(true)`, `assert(false)` - the function's name says it),
+  and a literal that is the *data* and not an option, which is the case exactly when the parameter's declared type is a
+  type parameter (`flags.set key, true`, `Some(true)`, `list.add(None)`). Labeled arguments follow the positional ones,
+  so options are declared last. The same goes for a number literal whose meaning the call does not show
+  (`connect("localhost", timeout: 10)`); that half is judgement, the `Bool`/`None` half will be a lint with a fix.
 - A case name must not shadow a prelude type (`TupleType`, `Floating`, `VoidType`, not `Tuple`, `Float`, `Void`).
 - `type`, `trait`, `where`, `shared` are keywords and cannot be names (`annotation`, `capability`, ...).
 - **A `public` function and a trait method never infer their result.** Without a result type they produce `Void`, which

@@ -1,5 +1,6 @@
 use IrProgram, IrTypeId, IrType, LayoutId, RuntimeKind from "../../ir/ir"
 use Layout, LayoutKind, Representation, FieldLayout from "../../ir/layout"
+use isEnvironmentLayout from "../../ir/capture"
 use escapedComponent, objectTypeName from "../../ir/mangle"
 use CMember, CDeclaration from "./writer"
 
@@ -45,6 +46,14 @@ public fn cTypeOf(program: IrProgram, id: IrTypeId): String {
     .Runtime(kind, _) => cTypeOfRuntime kind
     // The boxed payload plus one table pointer per bound: a value, so it is passed and returned like a record
     .Object(bounds) => objectTypeName program, bounds
+    /*
+     * One erased struct for every closure of the program (`torb_closure` of the ABI): the code pointer, and the
+     * environment the thunk of the closure casts back. A struct per *signature* would need the parameter types complete
+     * where it is defined, and a layout may hold a closure of its own type - so the definition order could not be
+     * decided at all. A call converts the pointer back to the one signature the thunk really has, which is exactly what
+     * a call through a witness table already does.
+     */
+    .Closure(_) => "torb_closure"
     _ => ""
   }
 }
@@ -81,10 +90,10 @@ public fn whyNoCType(program: IrProgram, id: IrTypeId): String {
   }
   match program.typeAt(id) {
     .FixedArray(_, _) => "an `Array<Item, Size>` value (milestone 5.9)"
-    .Closure(_) => "a closure value (milestone 5.8)"
     .Object(_) => "a trait-typed value without bounds"
-    .Box(_) => "a captured `var` binding (milestone 5.8)"
-    .Lazy(_) => "a `lazy` parameter (milestone 5.8)"
+    // Neither of them is ever built: a box and a cell are layouts of the program, so they are ordinary counted records
+    .Box(_) => "a captured `var` binding as a type of its own"
+    .Lazy(_) => "a `lazy` cell as a type of its own"
     .Runtime(kind, _) => whyNoRuntimeCType kind
     .ConstantValue(_, _) => "a const generic argument as the type of a value"
     _ => "a layout the back end could not lay out"
@@ -169,6 +178,11 @@ public fn structDeclarationOf(program: IrProgram, layout: Layout): CDeclaration 
   var members: List<CMember> = []
   if isBoxed(layout) {
     members.add CMember.Field("torb_header", "header")
+  }
+  // The environment of a closure carries its own drop function, because a closure value has the *type* of every closure
+  // of its shape and the release of one therefore cannot know which captures are inside it (BACKEND 5.8)
+  if isEnvironmentLayout(layout) {
+    members.add CMember.Field("torb_drop_function", "drop")
   }
   if layout.variants.isEmpty() {
     for field in layout.fields {

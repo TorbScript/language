@@ -12,6 +12,7 @@ use instanceOfSymbol, instanceKeyOf, functionDeclarationOf from "../instances"
 use Lowering, reportUnsupported, locationOf, isVoidType, isNeverType from "./context"
 use finishBlock, voidTypeOf from "./context"
 use lowerBlockInto, lowerBlockValue, lowerStatement from "./statement"
+use capturedVariablesOf, capturedVariablesIn from "./closure"
 use staticOfConstant from "../constant"
 
 /**
@@ -60,6 +61,8 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
   // The type arguments this instance was reached with: every type the body mentions is substituted through them
   const empty: Map<ParameterId, TypeId> = [:]
   lowering.substitution = lowering.instanceMappings.get(key) ?? empty
+  lowering.owner = name
+  lowering.capturedVariables = capturedVariablesOf lowering, body
   var builder = newFunction name, Some(symbol), signature, "body"
   const location = locationOf lowering, body.span
   setBlockLocation builder, BlockId(0), Some(location)
@@ -86,6 +89,13 @@ public fn beginFunction(var lowering: Lowering, module: ModuleId) {
   lowering.breakTargets = []
   lowering.continueTargets = []
   lowering.loopBroke = []
+  lowering.owner = ""
+  lowering.closureCount = 0
+  lowering.capturedVariables = [:]
+  lowering.boxes = [:]
+  lowering.references = [:]
+  lowering.closureParameters = []
+  lowering.closureAt = None
 }
 
 /**
@@ -143,6 +153,14 @@ fn returnsAnywhere(builder: FunctionBuilder): Bool {
 fn declareParameterSlots(var lowering: Lowering, symbol: SymbolId, declaration: FunctionDeclaration) {
   const identifier = signatureOf lowering.checker, symbol
   const signature = lowering.checker.signature identifier
+  // `...numbers: Int` is a list at the call site and the *collection trait* inside the body, and the two shapes only
+  // agree once a list is a value of the back end - so a body with one is a finding and never IR that disagrees with itself
+  for parameter in signature.form.parameters {
+    if const .Variadic = parameter.mode {
+      reportUnsupported lowering, "a variadic parameter (milestone 5.7)", declaration.name.span
+      return
+    }
+  }
   var next = 0
   for parameter in declaration.parameters {
     if parameter.name.text == "self" && parameter.annotation.isNone() {
@@ -176,6 +194,8 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   const voidType = voidTypeOf lowering
   const signature = IrSignature([], voidType)
   beginFunction lowering, module
+  lowering.owner = name
+  lowering.capturedVariables = capturedVariablesIn lowering, statements
   var builder = newFunction name, None, signature, "entry"
   for statement in statements {
     if isEntryStatement(statement) {

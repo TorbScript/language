@@ -1,3 +1,4 @@
+use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Name, Statement, Binding, Declaration, Visibility from "../../syntax/ast"
 use TypeReference, GenericParameter, WhereClause, TraitClause from "../../syntax/ast"
@@ -11,7 +12,8 @@ use TypeSignature, TypeSignatureId from "./type"
 use Checker, TypeScope, DeclarationSite, DeclarationSiteKind, ResultRule from "./context"
 use typeFromReference, traitsFromReference from "./lowering"
 use substituteFunction from "./unify"
-use checkFunctionBody, checkInitializer from "./statement"
+use checkFunctionBody, checkInitializer, taskValueOf from "./statement"
+use isSharedType, isSharedTrait from "./declaration"
 
 /**
  * What a declaration is, as a type. A signature is built the first time somebody asks for it and kept afterwards,
@@ -468,6 +470,7 @@ fn functionSignature(
   const bounds = boundsOf checker, generics, function.generics, function.whereClauses, scope
   if const Some(annotation) = function.returnType {
     const result = typeFromReference checker, annotation, scope.forType()
+    requireSharedForTaskChanges checker, module, function, parameters, owner, isVarSelf, result
     return Signature symbol, generics, FunctionForm(parameters, result), bounds, owner, takesSelf, isVarSelf, hasBody
   }
   // Without a body there is nothing to infer from, so the result is `Void`
@@ -539,7 +542,98 @@ fn inferredSignature(
   }
   const found = provisional.copy form: FunctionForm(parameters, result)
   checker.signatures.set identifier.value, found
+  requireSharedForTaskChanges checker, module, function, parameters, owner, isVarSelf, result
   found
+}
+
+/**
+ * A function that answers a `Task` and changes a **value** through a `var`. The change would have to be written back
+ * when the call returns, which is *before* the task has run, so it would be lost - and losing it silently is worse than
+ * saying so here.
+ *
+ * A `shared type` is the exception this rule exists for. There `var` is a permission to change the one object and not
+ * an exclusive access that ends with the call (CONCEPT, "Identity"), which is what lets `Source.next(var self)` answer
+ * a `Task` exactly as `Iterator.next(var self)` answers an item.
+ */
+fn requireSharedForTaskChanges(
+  var checker: Checker,
+  module: ModuleId,
+  function: FunctionDeclaration,
+  parameters: List<ParameterForm>,
+  owner: TypeId?,
+  isVarSelf: Bool,
+  result: TypeId,
+) {
+  if taskValueOf(checker, result).isNone() {
+    return
+  }
+  const name = function.name.text
+  if isVarSelf {
+    reportValueChangedByTask checker, module, name, "self", owner, function.name.span
+  }
+  // The parameter list of the signature has no entry for `self`, so the two walk side by side by name
+  var index = 0
+  for parameter in function.parameters {
+    if parameter.name.text == "self" && parameter.annotation.isNone() {
+      continue
+    }
+    if parameter.isVar {
+      const annotation = match parameters.get(index) {
+        Some(form) => Some form.annotation
+        None => None
+      }
+      reportValueChangedByTask checker, module, name, parameter.name.text, annotation, parameter.name.span
+    }
+    index = index + 1
+  }
+}
+
+fn reportValueChangedByTask(
+  var checker: Checker,
+  module: ModuleId,
+  name: String,
+  changed: String,
+  annotation: TypeId?,
+  at: Span,
+) {
+  const subject = match annotation {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if checker.absorbs(subject) || isSharedType(checker, subject) {
+    return
+  }
+  // `Self` inside a `trait`: the parameter knows the declaration it belongs to, and a `shared trait` is shared
+  if const .Parameter(parameter) = checker.types.form(subject) {
+    const declared = checker.types.parameter parameter
+    if declared.index != -1 {
+      return
+    }
+    const declaring = match declared.owner {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    if isSharedTrait(checker, declaring) {
+      return
+    }
+    const traitName = checker.symbolAt(declaring).name
+    checker.report(
+      module,
+      Diagnostic.error("`{name}` changes `{changed}` and answers a `Task`, and `{traitName}` is not a `shared trait`", at)
+        .withNote("An ordinary trait can be implemented by a value, and a value cannot be changed by a task: write `shared trait {traitName}`")
+    )
+    return
+  }
+  const shown = checker.describe subject
+  checker.report(
+    module,
+    Diagnostic.error("`{name}` changes `{changed}` and answers a `Task`, and `{shown}` is a value", at)
+      .withNote("A `var` of a value is copy in, copy out, and the copy back happens when the call returns - before the task has run. Only a `shared type` can be changed by a task")
+  )
 }
 
 fn caseSignature(

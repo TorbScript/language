@@ -834,7 +834,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `bootstrap/tests/native/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
 | **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `bootstrap/tests/native/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
 | **5.7** | **Half done.** The ABI of the containers: the two conventions of `runtime/` (`bool` plus an out parameter, an element by address) as a generated wrapper, `var self` natives, and the leak an assignment into a counted local was. **Still open:** element descriptors, the literals, `a[key]`, `for` over a collection, index paths, nested tables - all behind one chain that ends in "a `var self` witness member needs the payload box made unique" (see the note below). **Gate: `language.trb` passes** | `ir/lower/native.trb`, `backend/c/natives.trb`, `ir/instances.trb` | `bootstrap/tests/native/{natives,reassignment}.trb`, `compiler/tests/lower-natives.test.trb`; language.trb and `07-collections.trb` still blocked | 5.3, 5.6, 5.8 |
-| **5.8** | Closures: closure conversion, environments, escaping or not, `Box`es for captured `var` bindings, `lazy` cells, receiver closures, property commands. **Gate: `examples/config-dsl` runs** | `ir/lower/closure.trb`, `ir/capture.trb` | config-dsl, `09-dsl.trb`, `02-functions.trb` | 5.6 |
+| **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `bootstrap/tests/native/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
 | **5.9a** | **Done.** `var` parameters and `var self` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
 | **5.10** | Text and data: interpolation, `Show` for every shape in the format of gap 23, float formatting, `describe`, derived `Encode`/`Decode`, `std/json` | `runtime/text.c` (float), `ir/lower/derive.trb`, `std/json` natives | `11-data.trb`, the `Show` format is pinned by a table-driven test | 5.6, 5.7 |
@@ -1380,6 +1380,139 @@ portable C can express, the code won and this is the list. Everything else is as
   (`var self`, `var` parameters, assignment to a place) and 5.10 (string interpolation). The gate of this sub-milestone is
   therefore `bootstrap/tests/native/traits.trb`, `generics.trb` and `derived.trb`, each compiled, run, compared with
   stage 0 and asserted to leave zero live blocks.
+
+### What 5.8 does differently
+
+Sections 1 to 3 are the plan; where they did not fit what 5.1 to 5.6 built, what the checker records or what portable C
+allows, the code won and this is the list. Everything else is as written.
+
+- **Everything a closure stores is an ordinary `Layout`.** `ir/capture.trb` builds three of them: the **environment** of
+  one closure (one field per capture, named after the closure's own function), the **box** a captured `var` binding lives
+  in (`T_box__Int64`, one field), and the memo **cell** of a `lazy` parameter (`T_cell__Int64`). That is the same decision
+  5.6 made for the boxed payload of a trait-typed value, for the same reason: a layout already carries a C struct, its
+  place in the definition order, `containsCounted`, and the `R_`/`D_` pair the ownership pass emits for every counted
+  block - so nothing about a closure needs a second way to be retained and dropped, and a capture that is itself counted
+  needs no rule at all. `LayoutKind` gained `Box` and `Cell` next to `Environment`, and all three are pinned to `Boxed`
+  whatever they cost, because every one of them is *shared*.
+- **`IrType.Box`, `IrType.Lazy` and `Instruction.BoxNew` are therefore never produced.** A box is `Record` of a
+  `LayoutKind.Box` layout and a cell `Record` of a `LayoutKind.Cell` one; building either is an ordinary `Construct`.
+  The three forms stay in the IR because the design names them and the VM may want them, and the C back end says so where
+  one would arrive (`a captured `var` binding as a type of its own`). What the two kinds do need is **one** rule of their
+  own: `uniqueOwnersOf` never makes a prefix unique whose layout is one of them, because a box is the one place where a
+  variable is shared (gap 19) and a cell is what "evaluated at most once" rests on - copying either is exactly what may
+  not happen. That is the one change this sub-milestone made to `ir/ownership.trb` besides adding `CallClosure` to
+  `writtenPlacesOf`.
+- **A `lazy` cell holds `Option<Value>` and the thunk, not a flag and a value.** The drop of a cell has to be the
+  ordinary drop of its fields, and `None` releases to nothing; a field that held a half-initialized `Value` would need a
+  drop that asks a flag first, which is a second shape of a counted block for one parameter mode. Forcing is therefore
+  control flow over the `Option` and needs no instruction: `Intrinsic.LazyForce` is not emitted either.
+- **The C type of every closure is `torb_closure`** - the erased `{ void (*code)(void); torb_environment *environment; }`
+  of the ABI - and **one thunk per closure** is what makes a call of one well defined. A struct per *signature* would
+  have to have its parameter types complete where it is defined, and a layout may hold a closure of its own type, so the
+  definition order could not be decided at all. The thunk (`F_<function name>`) takes `torb_environment *`, casts it to
+  the environment of that one closure and calls the body, so the function a closure points at really has the signature a
+  call site converts its pointer back to - the same trick the witness tables use, and the reason casting a function
+  pointer to a signature it does not have never happens. It is also what makes a **named function used as a value** free:
+  such a function has no environment parameter, and its thunk ignores the one it is handed.
+- **A closure body is recognized by its first parameter.** It is the one kind of function whose first parameter is a
+  `Record` of a `LayoutKind.Environment` layout, so `IrFunction` needed no flag and the emitter, the verifier and the
+  helper demand all ask the same question. A closure without captures has no environment parameter at all.
+- **The environment carries its own `drop` pointer**, as a second ABI field of `torb_environment`, and
+  `torb_environment_release` is the one runtime function this sub-milestone added. A closure value has the type of every
+  closure of its shape, so the release site cannot know which captures are inside one - the alternative was a third
+  pointer in every closure value, which would change what a closure costs (section 1.3's two words).
+- **The environment is always a counted heap block, and `isEscaping` is recorded and not yet used.** Section 0 leaves
+  "stack or heap environment" to a back end and the flag is in the IR and in the text format, but taking it needs
+  liveness to hold every captured value live to the closure's **last use** rather than to the `Closure` instruction: a
+  borrowing environment whose captures die right after it was built would read freed memory at the call one line later.
+  That is a rule of the liveness pass, so it is 6.3's measurement and not this one's.
+- **A capture is an `Owned` position and still cannot be a move.** 5.4's note asked for a mode on `Capture`; a `Capture`
+  has no room for `last` and `withOperands` cannot write one back, so a capture at its last use is a retain followed by a
+  release rather than a move. One retain/release pair per capture of a value the frame no longer needs, which the
+  snapshots of `lower-closures.test.trb` show. Closing it means giving `Capture` an `Argument`.
+- **A captured `var` binding is a place from the moment it is declared.** The lowering has to know *before* it reaches
+  `var counter = 0` that some closure captures it, so `capturedVariablesOf` walks the whole body once up front and asks
+  the checker for a capture list at **every** expression - the argument of a `lazy` parameter and a quotation are closures
+  too and record their captures under their own span. From there on `Lowering.boxes` maps the declaration span to the slot
+  that holds the box, and every read, every write and every *place rooted in it* goes through `Field(box, 0)`. That last
+  one is what 5.9a's hand-over note asked for: `rootReferenceOf` in `ir/lower/place.trb` answers a `PlacePath` now and not
+  a `Slot`, so a path simply continues from the box.
+- **`Capture.Place` is built by nothing, and the repository needs it nowhere.** A `var` parameter a closure captures would
+  have to live in the environment as the pointer it is, and a reference is not a value - so it cannot be the type of a
+  field, and `FieldLayout` would need a "this one is a pointer" flag that every walk over a layout then has to know about.
+  There is **not one occurrence in the whole repository** (the receiver of a receiver closure is its first *parameter* and
+  not a capture), so it is a clean finding that names 5.9b, which needs the same flag for its index paths.
+- **`.Assign` and `.AssignClosure` are one lowering.** Whether the value of a property command is `8080` or a closure
+  changes what is evaluated and nothing about the write, so `lowerPropertyWrite` needed no case for the second one.
+  `.Configure` is the other one: the closure is a *receiver* closure and the field's own place is its `var self`
+  argument, so `database { ... }` configures the field where it lies and copies nothing.
+- **A constructor and a case used as a value get a generated function.** `names.map Role` and
+  `byPath.get(path).map(ModuleId)` hand over something that has no body anywhere, so `t_constructor__T_main_Point_0` is
+  generated - the fields as parameters, one `Construct`, memoized by its name - and from there on it is an ordinary
+  function value. It is built in `ir/lower/closure.trb` and not through `Generated`, because that machinery is keyed by a
+  member symbol with a signature and a constructor has neither.
+- **A variadic parameter is a finding of the *body* now, and names 5.7.** `...numbers: Int` is a list at the call site and
+  the collection *trait* inside the body (`List<Int>` in a type position is a trait-typed value, 5.1's note), and the two
+  shapes only agree once a list is a value of the back end. Before this sub-milestone the closure in
+  `numbers.fold 0 { a, b => a + b }` stopped such a body first; now it would produce IR that disagrees with itself, so it
+  is refused cleanly instead.
+- **Two records the checker did not have, one of them fixed here.** `checkArguments` opened a `var` access only for
+  `.Var`, so the argument of a `(var self: R) => Void` parameter - `configure settings`, which is every DSL block - had no
+  recorded `Place` at all and milestone 5 could not form the reference. It opens one for `.Receiver(isVar: true)` now,
+  **without** noting a change: a receiver closure changes its receiver through its own body, so `var inner = Element()
+  build(inner)` is not a dead change and calling it one would reject every nested block of a DSL. The second record is
+  still missing: the checker declares every implicit parameter (`_`, `_2`, a name the function type gives) under the span
+  of *its own closure* and creates the binding when the name is first used - which is already inside a nested closure, so
+  no capture is recorded for one. Reading an outer closure's implicit parameter by position would silently read the inner
+  closure's, so the lowering compares the binding's span with the closure it is in and reports
+  "a closure that captures an implicit parameter of a closure around it". One entry per closure in the tables closes it.
+- **A closure of an entry file sees no top-level binding of that file.** Those bindings are locals of the entry function
+  (5.4's list), and a closure is a function of its own - so `enterClosure` clears `entryLocals` and a top-level `const`
+  read inside a closure goes through the const evaluator like it does from any other function. A top-level `var` read
+  there is the clean finding it already was.
+- **`?.` is not a closure and stays a finding.** The checker resolves `a?.m` to `Option.map`/`flatMap` (gap 12), but there
+  is no closure in the source to lower - it is a `Tag`, a `Switch` and the member on the payload, the way `??` is inlined.
+  What is missing is one record: the checker wraps the member's own result into the `Option` *inside* the function type it
+  gives the callee, so nothing says whether `m` answered an `Option` already, and that is exactly what decides whether the
+  arm wraps its value or hands it on. Two occurrences in the repository.
+- **One bug of 5.6 that closures made reachable.** `objectTypeOf` did not substitute the bounds `Adaptation.ToTraitValue`
+  recorded, while `lowerTraitValue` did - so the slot a coercion produced into was `Object(Iterable<Void>)` while its
+  tables were for `Iterable<String>`. Every body of `std/iteration` that the closures unlocked reported it, and it is
+  fixed where the type is built.
+- **The trait-typed values are emitted before the layouts.** An object struct is made of the erased pointers of the ABI
+  and of nothing of the program, while a layout may hold one in a field - the environment of a closure over a trait-typed
+  value is the first one that does.
+- **The verifier knows the shape of a closure.** At a `Closure` it asks that the callee take the closure type's parameters
+  after the environment, answer its result, and that the environment hold exactly one field per capture with the type of
+  what the frame handed over. That is the check that catches a lowering which fills the wrong field, and it is why the two
+  hand-built fixtures of 5.1 and 5.4 now build an environment layout too.
+- **`torb ir --statistics` over the repository: 854 of 2662 declarations lowered before 5.8, 977 of 2848 on the same tree
+  after, and 1058 of 3086 once 5.7's half and the streams of `std/` were merged in** (32% to 34%; the total grows because
+  a closure unlocks instances that were never reached at all). "A closure" (91), "a call of a closure value", "a function
+  used as a value", "a `lazy` argument", "an implicit closure parameter" and "`X` used as a function value" are all gone.
+  The new top blockers are a list literal (528, 5.7), string interpolation (283, 5.10), `a[key]` (251, 5.7), `for` over a
+  collection (244, 5.7) and "a declaration the back end cannot build an instance of" (236, the generic members of the
+  collections, 5.7).
+- **One internal error is left in `torb ir ..`, and it is not a closure's.** "The generic parameter `Item` was not
+  substituted before the back end saw it", from `std/http`: `lowerForeignExpression` switches the *module* to the one a
+  **field default** is written in but keeps the caller's substitution, so the default of a field of a *generic* type is
+  lowered with the wrong arguments in scope (`completeFields` → `lowerForeignExpression` → `typeAtSpan`). The mapping of
+  the constructed type is in hand at `lowerFieldArguments` (its `owner`), so closing it is one argument threaded down.
+  Master had that one and nine more of the same kind in `std/http` alone; the nine are gone with the `objectTypeOf` fix
+  above.
+- **The gate is not `examples/config-dsl`.** Three things stand in front of it, none of them a closure: its entry file
+  loads a receiver **script** through `Sandbox.load` (`Script` and `SandboxCapabilities` are milestone 7.4, and the body of
+  a receiver script is applied by the sandbox and by nothing else), `ServerConfig` has a variadic parameter and a
+  `Set`/`Map`/`List` field (5.7), and every line of its output is interpolated (5.10). What is left of the vocabulary is
+  `bootstrap/tests/native/closures.trb` (a closure over a captured `var`, one returned and called later, one in a record
+  field, function values of a named function, a constructor and a case, a `lazy` forced zero times and once),
+  `counted-closures.trb` (the same with `String`s, a trait-typed value and closures in environments - the leak gate) and
+  `dsl.trb` (receiver closures and all three property commands). Each is compiled, run, compared with stage 0 and asserted
+  to leave zero live blocks.
+- **Two lines of the DSL that stage 0 cannot run.** `tls(port == 8443)` and `own.port 80` - a property command written
+  with parentheses, and one on a **named** receiver - are read by the interpreter as calls of the field and fail there, so
+  `dsl.trb` writes `tls true` and `own.port = 80` instead. Unifying stage 0 and the binary is 5.14's, and this is the third
+  entry on its list after the panic format and `?`.
 
 ### What 5.9a does differently
 

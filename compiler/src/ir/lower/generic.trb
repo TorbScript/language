@@ -389,8 +389,14 @@ public fn payloadLayoutOf(var lowering: Lowering, item: IrTypeId): LayoutId {
 
 /** The IR type of a trait-typed value with these bounds: the boxed payload plus one table pointer per bound. */
 public fn objectTypeOf(var lowering: Lowering, bounds: List<TypeId>): IrTypeId {
-  var traits: List<TraitId> = []
+  // The bounds the checker recorded are in terms of the *callee's* parameters, so the arguments of this instance go in
+  // first - otherwise the tables `lowerTraitValue` builds and the type of the slot they land in disagree
+  var applied: List<TypeId> = []
   for bound in bounds {
+    applied.add substituted(lowering, bound)
+  }
+  var traits: List<TraitId> = []
+  for bound in applied {
     traits.add instantiateTrait(lowering.program, lowering.checker, lowering.instantiation, bound)
   }
   lowering.program.internType IrType.Object(traits)

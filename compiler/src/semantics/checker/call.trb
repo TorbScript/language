@@ -482,9 +482,13 @@ fn checkArgumentPass(
     }
     const _ = checkExpression checker, argument.value, inner
     // A `var` argument is a path into the caller's value, and it owns that path for the rest of the call (4.6)
-    if const .Var = parameter.mode {
+    if isVarArgument(parameter.mode) {
       const named = parameter.name ?? ""
-      openArgumentAccess checker, argument.value, named, callee, isDiscarded, call
+      // A receiver closure changes its receiver through its own body, so `build(inner)` is not a change the dead-change
+      // rule can judge: `var inner = Element()  build(inner)` is what every nested block of a DSL is, and calling that
+      // change dead would reject it
+      const notes = isDiscarded && !isReceiverArgument(parameter.mode)
+      openArgumentAccess checker, argument.value, named, callee, notes, call
     }
   }
 }
@@ -492,7 +496,7 @@ fn checkArgumentPass(
 /**
  * `Array.of(1, 2, 3, 4)` is an `Array<Int64, 4>`: the number of variadic arguments *is* the `Size` of the array. There
  * is no way to declare the link between a count of arguments and a const parameter, and the language gets none
- * (gap 49) - so `Array.of` is a well-known special case here, exactly as `[1, 2, 3, 4]` is one in `listLiteralType`.
+ * (gap 51) - so `Array.of` is a well-known special case here, exactly as `[1, 2, 3, 4]` is one in `listLiteralType`.
  *
  * A `...` is only allowed where its operand is itself an `Array` of a known size: the size has to be static.
  */
@@ -547,6 +551,27 @@ fn checkArrayOf(
     }
   }
   const _ = matchArraySize checker, form.result, given[1], count, at
+}
+
+/**
+ * Which parameter modes take a `var` path. The receiver of a **receiver closure** is one of them: `configure settings`
+ * fills a `(var self: Settings) => Void`, and that argument is a path into the caller's value exactly as the argument of
+ * a `var` parameter is - so it needs the same access and the same recorded `Place`, which milestone 5 forms the
+ * reference from.
+ */
+fn isVarArgument(mode: ParameterMode): Bool {
+  match mode {
+    .Var => true
+    .Receiver(isVar) => isVar
+    _ => false
+  }
+}
+
+fn isReceiverArgument(mode: ParameterMode): Bool {
+  match mode {
+    .Receiver(_) => true
+    _ => false
+  }
 }
 
 fn isClosureArgument(argument: Argument): Bool {

@@ -27,6 +27,47 @@ public type LayoutKind {
    * the layouts would be a second place to get a retain wrong.
    */
   case Payload
+  /**
+   * The shared box a captured `var` binding lives in: one field, always a counted block (gap 19).
+   *
+   * It is a layout for the same reason the payload is one, and it is **never made unique**: a box is shared between the
+   * frame and every closure that captured the binding on purpose, so copying it would split the one variable in two.
+   */
+  case Box
+  /**
+   * The one-shot memo cell of a `lazy Value` parameter: the thunk, and the value once something forced it.
+   *
+   * Never made unique either - the caller and every use inside the callee share the one cell, which is what "evaluated
+   * at most once" means.
+   */
+  case Cell
+}
+
+/**
+ * Whether a layout is a block whatever it costs. The payload of a trait-typed value is one because a witness member
+ * takes a pointer to it; an environment, a box and a cell are because they are *shared* - a closure, the frame the
+ * binding was declared in and the callee of a `lazy` parameter all hold the same block.
+ */
+public fn isAlwaysBoxedKind(kind: LayoutKind): Bool {
+  match kind {
+    .Payload => true
+    .Environment => true
+    .Box => true
+    .Cell => true
+    _ => false
+  }
+}
+
+/**
+ * Whether writing through a field of this layout may not make the block unique first: a box and a cell are shared on
+ * purpose, so the copy `MakeUnique` would make is exactly what must not happen (BACKEND 2.3's one exception).
+ */
+public fn isSharedStorageKind(kind: LayoutKind): Bool {
+  match kind {
+    .Box => true
+    .Cell => true
+    _ => false
+  }
 }
 
 public type Representation {
@@ -402,8 +443,8 @@ fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
   var size = packed.size
   var alignment = packed.alignment
   const niche = nicheOf program, before
-  // The payload of a trait-typed value is a block whatever it costs: a witness member takes a pointer to it
-  if isPayloadKind(before.kind) {
+  // A payload, an environment, a box and a cell are blocks whatever they cost: every one of them is shared
+  if isAlwaysBoxedKind(before.kind) {
     representation = Representation.Boxed
   } else if before.isRecursive {
     representation = Representation.Boxed
@@ -419,7 +460,7 @@ fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
     representation: representation,
     size: size,
     alignment: alignment,
-    containsShared: anyFieldIsShared(program, before),
+    containsShared: anyFieldIsShared(program, before) || isSharedStorageKind(before.kind),
     containsCounted: anyFieldIsCounted(program, before),
   )
   if after == before {
@@ -427,13 +468,6 @@ fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
   }
   program.setLayout id, after
   true
-}
-
-public fn isPayloadKind(kind: LayoutKind): Bool {
-  match kind {
-    .Payload => true
-    _ => false
-  }
 }
 
 fn fieldOfNiche(representation: Representation): Int {

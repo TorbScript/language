@@ -1,0 +1,1011 @@
+use Span from "../../syntax/source"
+use Statement, Block, Expression, Condition, Argument, MatchArm, Closure from "../../syntax/ast"
+use SymbolId from "../../semantics/symbols"
+use TypeId, Signature, ParameterMode from "../../semantics/checker/type"
+use signatureOf from "../../semantics/checker/signature"
+use IrProgram, IrTypeId, IrType, IrSignature, IrSignatureId, IrParameter, Ownership from "../ir"
+use Slot, BlockId, LayoutId, FunctionId from "../ir"
+use Instruction, Terminator, Reference, PathStep, Capture, Argument as IrArgument, borrowed from "../ir"
+use FieldLayout from "../layout"
+use boxLayoutOf, environmentLayoutOf from "../capture"
+use FunctionBuilder, newFunction, addLocal, addTemporary, addBlock from "../build"
+use emit, terminate, setBlockLocation, finishFunction from "../build"
+use layoutOfType from "../verify"
+use describeIrType from "../print"
+use closureFunctionName, constructorFunctionName from "../mangle"
+use instanceFor, cellTypeFor from "../instances"
+use Lowering, reportUnsupported, locationOf, irTypeOf from "./context"
+use isVoidType, finishBlock, continueIn, producesValue, borrowedArguments from "./context"
+use lowerValue, lowerExpression, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
+use lowerBody from "./function"
+use lowerPatternBinding from "./match"
+use argumentReference from "./place"
+
+/**
+ * Closures: a closure becomes a function plus an environment, and so does everything that is one underneath - a named
+ * function used as a value, the thunk of a `lazy` argument, a receiver closure, and the two property commands that take
+ * one (milestone 5.8).
+ *
+ * **The closure conversion is here and not in a back end** (BACKEND 0): which values the environment holds, whether the
+ * closure may outlive its call, and what the code pointer points at are decided once, so the C back end and the VM read
+ * one answer. What is left to a back end is how the environment block is written and nothing else.
+ *
+ * Three things fall out of making the environment an ordinary **layout** (`ir/capture.trb`): the captures are `Owned`
+ * positions of the `Closure` instruction, so the ownership pass retains them with the rule it already has; the drop of
+ * the environment is the `D_` helper every counted block gets; and a capture that is itself counted - a `String`, a list,
+ * a trait-typed value - needs no rule of its own.
+ *
+ * A captured `const` binding is a **copy** in the environment; a captured `var` binding is a shared **box** that the
+ * frame and every closure hold together, which is the one place where a variable is shared in this language (gap 19).
+ */
+
+// --- Which `var` bindings become boxes ------------------------------------------------------------------------------
+
+/**
+ * The declaration spans of the `var` bindings of one body that some closure inside it captures.
+ *
+ * A binding becomes a box **where it is declared**, so the lowering has to know before it gets there - which is why the
+ * body is walked once up front instead of the answer being discovered at the closure. The question is asked of the
+ * checker at *every* expression and not only at a `{ ... }`: the argument of a `lazy` parameter and a quotation are
+ * closures too and record their captures under their own span, exactly as a written closure does.
+ */
+public fn capturedVariablesOf(var lowering: Lowering, body: Block): Map<Span, Bool> {
+  var found: Map<Span, Bool> = [:]
+  collectBlock lowering, found, body
+  found
+}
+
+/** The same for the top-level code of an entry file, which is a list of statements and not a block. */
+public fn capturedVariablesIn(var lowering: Lowering, statements: List<Statement>): Map<Span, Bool> {
+  var found: Map<Span, Bool> = [:]
+  for statement in statements {
+    collectStatement lowering, found, statement
+  }
+  found
+}
+
+fn collectBlock(var lowering: Lowering, var found: Map<Span, Bool>, block: Block) {
+  for statement in block.statements {
+    collectStatement lowering, found, statement
+  }
+}
+
+fn collectStatement(var lowering: Lowering, var found: Map<Span, Bool>, statement: Statement) {
+  match statement.kind {
+    .Declare(_) => {}
+    .Bind(binding) => collectExpression lowering, found, binding.value
+    .Assign(target, value) => {
+      collectExpression lowering, found, target
+      collectExpression lowering, found, value
+    }
+    .While(condition, body) => {
+      collectCondition lowering, found, condition
+      collectBlock lowering, found, body
+    }
+    .For(_, iterable, body) => {
+      collectExpression lowering, found, iterable
+      collectBlock lowering, found, body
+    }
+    .Return(value) => {
+      if const Some(inner) = value {
+        collectExpression lowering, found, inner
+      }
+    }
+    .Break => {}
+    .Continue => {}
+    .Evaluate(expression) => collectExpression lowering, found, expression
+  }
+}
+
+fn collectCondition(var lowering: Lowering, var found: Map<Span, Bool>, condition: Condition) {
+  match condition {
+    .Test(inner) => collectExpression lowering, found, inner
+    .Bind(_, _, value) => collectExpression lowering, found, value
+  }
+}
+
+/**
+ * One expression and everything under it. The capture list the checker recorded at a span is what says "a closure begins
+ * here", so nothing here has to know which of the forms of a closure the source wrote.
+ */
+fn collectExpression(var lowering: Lowering, var found: Map<Span, Bool>, expression: Expression) {
+  noteCapturedVariables lowering, found, expression.span
+  match expression.kind {
+    .TextLiteral(segments) => {
+      for segment in segments {
+        if const .Interpolated(inner) = segment {
+          collectExpression lowering, found, inner
+        }
+      }
+    }
+    .Generic(target, _) => collectExpression lowering, found, target
+    .TupleLiteral(items) => collectArguments lowering, found, items
+    .ListLiteral(items) => collectArguments lowering, found, items
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        collectExpression lowering, found, key
+        collectExpression lowering, found, value
+      }
+    }
+    .Member(target, _, _) => collectExpression lowering, found, target
+    .Index(target, index) => {
+      collectExpression lowering, found, target
+      collectExpression lowering, found, index
+    }
+    .Call(callee, arguments, _) => {
+      collectExpression lowering, found, callee
+      collectArguments lowering, found, arguments
+    }
+    .Unary(_, operand) => collectExpression lowering, found, operand
+    .Binary(_, left, right) => {
+      collectExpression lowering, found, left
+      collectExpression lowering, found, right
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(inner) = start {
+        collectExpression lowering, found, inner
+      }
+      if const Some(inner) = end {
+        collectExpression lowering, found, inner
+      }
+    }
+    .Try(inner) => collectExpression lowering, found, inner
+    .Closure(closure) => collectBlock lowering, found, closure.body
+    .If(condition, then, otherwise) => {
+      collectCondition lowering, found, condition
+      collectBlock lowering, found, then
+      if const Some(inner) = otherwise {
+        collectExpression lowering, found, inner
+      }
+    }
+    .Match(subject, arms) => {
+      collectExpression lowering, found, subject
+      for arm in arms {
+        collectArm lowering, found, arm
+      }
+    }
+    .Block(block) => collectBlock lowering, found, block
+    _ => {}
+  }
+}
+
+fn collectArm(var lowering: Lowering, var found: Map<Span, Bool>, arm: MatchArm) {
+  if const Some(guard) = arm.guard {
+    collectExpression lowering, found, guard
+  }
+  collectExpression lowering, found, arm.body
+}
+
+fn collectArguments(var lowering: Lowering, var found: Map<Span, Bool>, arguments: List<Argument>) {
+  for argument in arguments {
+    collectExpression lowering, found, argument.value
+  }
+}
+
+fn noteCapturedVariables(var lowering: Lowering, var found: Map<Span, Bool>, at: Span) {
+  const module = lowering.module
+  const captures = match lowering.checker.capturesAt(module, at) {
+    Some(inner) => inner
+    None => {
+      return
+    }
+  }
+  for capture in captures {
+    if !capture.isVar {
+      continue
+    }
+    const declared = lowering.checker.binding(capture.binding).at
+    found.set declared, true
+  }
+}
+
+// --- A `var` binding that is a shared box ---------------------------------------------------------------------------
+
+/** Whether the binding declared at this span has to live in a shared box, because some closure of the body reads it. */
+public fn isCapturedVariable(lowering: Lowering, at: Span): Bool {
+  lowering.capturedVariables.containsKey at
+}
+
+/**
+ * `var counter = 0` where a closure captures it: the value is built, and then the box that holds it.
+ *
+ * The binding is a **place** from here on - every read is a `Read` through the one field of the box and every write a
+ * `Write` through it - which is exactly what makes the closure and the frame see one variable.
+ */
+public fn lowerBoxedBinding(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  declared: Span,
+  name: String,
+  annotation: IrTypeId,
+  value: Expression,
+) {
+  const inner = addTemporary builder, annotation
+  const _ = lowerExpression lowering, builder, value, Some(inner)
+  if !lowering.isSupported {
+    return
+  }
+  const layout = boxLayoutOf lowering.program, annotation
+  const boxType = lowering.program.internType IrType.Record(layout)
+  const box = addLocal builder, boxType, name
+  emit builder, Instruction.Construct(box, layout, 0, [borrowed(inner)])
+  lowering.boxes.set declared, box
+}
+
+/**
+ * The place a binding of the body is reached through, or `None` where it is an ordinary slot: the one field of the box of
+ * a captured `var` binding, and the pointer a `var` parameter a closure captured already is.
+ */
+public fn bindingReferenceOf(var lowering: Lowering, var builder: FunctionBuilder, at: Span): Reference? {
+  if const Some(slot) = lowering.boxes.get(at) {
+    const annotation = builder.typeOfSlot slot
+    const layout = layoutOfType(lowering.program, annotation)?
+    return Some Reference(slot, [PathStep.Field(layout, 0)])
+  }
+  lowering.references.get at
+}
+
+// --- A closure value ------------------------------------------------------------------------------------------------
+
+/** What the body of a closure is: the block the source wrote, or the expression a `lazy` argument stands for. */
+type ClosureSource {
+  case Written(closure: Closure)
+  /** The argument of a `lazy` parameter: the expression *is* the body, and the thunk takes nothing. */
+  case Thunk(value: Expression)
+}
+
+/** `\{ x => x + 1 \}`, `\{ _ * 2 \}`, a receiver closure: the function, the environment, and the value that names both. */
+public fn lowerClosureValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  closure: Closure,
+  annotation: IrTypeId,
+): Slot {
+  const signature = match closureSignatureOf(lowering, annotation) {
+    Some(found) => found
+    None => {
+      const shown = describeClosureType lowering, annotation
+      return unsupportedSlot lowering, builder, destination, "a closure whose type is {shown}", expression.span
+    }
+  }
+  const source = ClosureSource.Written closure
+  closureValueOf lowering, builder, destination, expression.span, source, signature, annotation
+}
+
+/** Which positions of a signature are `lazy` parameters: the argument there becomes a thunk and a memo cell. */
+public fn lazyParametersOf(signature: Signature): List<Bool> {
+  var found: List<Bool> = []
+  for parameter in signature.form.parameters {
+    found.add isLazyMode(parameter.mode)
+  }
+  found
+}
+
+fn isLazyMode(mode: ParameterMode): Bool {
+  match mode {
+    .Lazy => true
+    _ => false
+  }
+}
+
+/**
+ * The thunk of a `lazy` argument, and the cell that memoizes it: `Option<Value>` plus the thunk, in a counted block the
+ * caller builds and the callee forces at most once (BACKEND 1.6).
+ */
+public fn lowerLazyArgument(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  value: Expression,
+  item: TypeId,
+): Slot? {
+  const inner = irTypeOf lowering, item
+  const cellType = cellTypeFor lowering, item, inner
+  const layout = match layoutOfType(lowering.program, cellType) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `lazy` argument without a cell", value.span
+      return None
+    }
+  }
+  const shape = lowering.program.layoutAt layout
+  if shape.fields.length() != 2 {
+    reportUnsupported lowering, "a `lazy` cell of an unexpected shape", value.span
+    return None
+  }
+  const optional = shape.fields[0].annotation
+  const thunkType = shape.fields[1].annotation
+  const thunkSignature = match closureSignatureOf(lowering, thunkType) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `lazy` argument whose thunk has no signature", value.span
+      return None
+    }
+  }
+  const source = ClosureSource.Thunk value
+  const thunk = closureValueOf lowering, builder, None, value.span, source, thunkSignature, thunkType
+  if !lowering.isSupported {
+    return None
+  }
+  const empty = match emptyOptionSlot(lowering, builder, optional, value.span) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const cell = addTemporary builder, cellType
+  emit builder, Instruction.Construct(cell, layout, 0, [borrowed(empty), borrowed(thunk)])
+  Some cell
+}
+
+/**
+ * Reading a `lazy` parameter forces its cell: the memoized value where there is one, and otherwise the thunk, whose
+ * answer is written back so that the next read finds it (`Adaptation.Force`).
+ */
+public fn lowerForcedRead(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  cell: Slot,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const cellType = builder.typeOfSlot cell
+  const layout = match layoutOfType(lowering.program, cellType) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a `lazy` parameter without a cell", at
+    }
+  }
+  const shape = lowering.program.layoutAt layout
+  if shape.fields.length() != 2 {
+    return unsupportedSlot lowering, builder, destination, "a `lazy` cell of an unexpected shape", at
+  }
+  const optional = shape.fields[0].annotation
+  const optionLayout = match layoutOfType(lowering.program, optional) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a `lazy` cell whose value has no layout", at
+    }
+  }
+  const someIndex = variantNamedIn lowering, optionLayout, "Some"
+  if someIndex < 0 {
+    return unsupportedSlot lowering, builder, destination, "an `Option` without a `Some` case", at
+  }
+  const location = locationOf lowering, at
+  const target = valueSlot lowering, builder, destination, annotation
+  const held = addTemporary builder, optional
+  emit builder, Instruction.Read(held, Reference(cell, [PathStep.Field(layout, 0)]))
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const tag = addTemporary builder, integer
+  emit builder, Instruction.Tag(tag, held)
+  const forced = addBlock builder, "forced", Some(location)
+  const pending = addBlock builder, "pending", Some(location)
+  const join = addBlock builder, "join", Some(location)
+  finishBlock lowering, builder, Terminator.Switch(tag, [someIndex], [forced], pending)
+  continueIn lowering, builder, forced
+  emit builder, Instruction.Read(target, Reference(held, [PathStep.Variant(optionLayout, someIndex, 0)]))
+  finishBlock lowering, builder, Terminator.Jump(join)
+  continueIn lowering, builder, pending
+  const thunkType = shape.fields[1].annotation
+  const thunk = addTemporary builder, thunkType
+  emit builder, Instruction.Read(thunk, Reference(cell, [PathStep.Field(layout, 1)]))
+  emit builder, Instruction.CallClosure(Some(target), thunk, [])
+  const wrapped = addTemporary builder, optional
+  emit builder, Instruction.Construct(wrapped, optionLayout, someIndex, [borrowed(target)])
+  emit builder, Instruction.Write(Reference(cell, [PathStep.Field(layout, 0)]), borrowed(wrapped))
+  finishBlock lowering, builder, Terminator.Jump(join)
+  continueIn lowering, builder, join
+  target
+}
+
+/** The `None` of the cell's `Option`, in a slot: a cell starts out with nothing in it. */
+fn emptyOptionSlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  optional: IrTypeId,
+  at: Span,
+): Slot? {
+  const layout = match layoutOfType(lowering.program, optional) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `lazy` cell whose `Option` has no layout", at
+      return None
+    }
+  }
+  const index = variantNamedIn lowering, layout, "None"
+  if index < 0 {
+    reportUnsupported lowering, "an `Option` without a `None` case", at
+    return None
+  }
+  const slot = addTemporary builder, optional
+  emit builder, Instruction.Construct(slot, layout, index, [])
+  Some slot
+}
+
+fn variantNamedIn(var lowering: Lowering, layout: LayoutId, name: String): Int {
+  const shape = lowering.program.layoutAt layout
+  for index in 0..shape.variants.length() {
+    if shape.variants[index].name == name {
+      return index
+    }
+  }
+  -1
+}
+
+// --- A named function, a constructor or a case as a value -----------------------------------------------------------
+
+/**
+ * `names.map Role`, `commaSeparated(closer, parse: parseItem)`: a function used as a value is a closure whose
+ * environment is empty and whose code is that very function - the C back end's thunk adapts the one to the other, so no
+ * wrapper of the lowering and no second calling convention is needed.
+ */
+public fn lowerNamedFunctionValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  symbol: SymbolId,
+  annotation: IrTypeId,
+): Slot {
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
+  if signature.takesSelf {
+    const name = lowering.checker.symbolAt(symbol).name
+    const what = "`{name}` used as a function value, which would have to bind its receiver (milestone 5.11)"
+    return unsupportedSlot lowering, builder, destination, what, expression.span
+  }
+  const mapping = lowering.substitution
+  const function = match instanceFor(lowering, symbol, mapping) {
+    Some(found) => found
+    None => {
+      const name = lowering.checker.symbolAt(symbol).name
+      const what = "`{name}` used as a function value, which the back end cannot build an instance of"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  if closureSignatureOf(lowering, annotation).isNone() {
+    const shown = describeClosureType lowering, annotation
+    const what = "a function value whose type is {shown}"
+    return unsupportedSlot lowering, builder, destination, what, expression.span
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.Closure(target, function, [], false)
+  target
+}
+
+/**
+ * `names.map Role`, `byPath.get(path).map(ModuleId)`: a constructor or a case used as a value.
+ *
+ * Neither of them has a body anywhere, so one is generated - a function whose parameters are the fields and whose body
+ * is the one `Construct`. It is memoized by its name, so a constructor that is handed over twice is one function, and
+ * from there on it is an ordinary function value: a closure with no environment behind the thunk of the emitter.
+ */
+public fn lowerConstructorValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  variant: Int,
+  annotation: IrTypeId,
+): Slot {
+  const signature = match closureSignatureOf(lowering, annotation) {
+    Some(found) => found
+    None => {
+      const shown = describeClosureType lowering, annotation
+      const what = "a constructor used as a value whose type is {shown}"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  const shape = lowering.program.signatureAt signature
+  const layout = match layoutOfType(lowering.program, shape.result) {
+    Some(found) => found
+    None => {
+      const what = "a constructor used as a value that builds a value without a layout"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  const built = lowering.program.layoutAt layout
+  if built.fieldsOfConstruction(variant).length() != shape.parameters.length() {
+    const what = "a constructor used as a value whose parameters are not its fields"
+    return unsupportedSlot lowering, builder, destination, what, expression.span
+  }
+  const function = constructorFunctionOf lowering, layout, variant, shape
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.Closure(target, function, [], false)
+  target
+}
+
+fn constructorFunctionOf(
+  var lowering: Lowering,
+  layout: LayoutId,
+  variant: Int,
+  shape: IrSignature,
+): FunctionId {
+  const name = constructorFunctionName lowering.program.layoutAt(layout).name, variant
+  if const Some(found) = lowering.generatedInstances.get(name) {
+    return found
+  }
+  var inner = newFunction name, None, shape, "constructor"
+  const result = addTemporary inner, shape.result
+  var fields: List<IrArgument> = []
+  for index in 0..shape.parameters.length() {
+    fields.add borrowed(Slot(index))
+  }
+  emit inner, Instruction.Construct(result, layout, variant, fields)
+  terminate inner, Terminator.Return(Some(borrowed(result)))
+  const added = finishFunction lowering.program, inner
+  lowering.generatedInstances.set name, added
+  added
+}
+
+// --- Calling a closure value ----------------------------------------------------------------------------------------
+
+/** `transform(value)`, `onClick()`: a call of whatever is in a local, a parameter or a field. */
+public fn lowerClosureCall(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  callee: Expression,
+  arguments: List<Argument>,
+  annotation: IrTypeId,
+): Slot {
+  const holder = lowerValue lowering, builder, callee
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const held = builder.typeOfSlot holder
+  const signature = match closureSignatureOf(lowering, held) {
+    Some(found) => found
+    None => {
+      const shown = describeClosureType lowering, held
+      const what = "a call of {shown}, which is not a closure"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  const shape = lowering.program.signatureAt signature
+  if shape.parameters.length() != arguments.length() {
+    const what = "a call of a closure value that takes its arguments in another order"
+    return unsupportedSlot lowering, builder, destination, what, expression.span
+  }
+  var slots: List<Slot> = []
+  var places: List<Reference?> = []
+  for index in 0..arguments.length() {
+    const value = arguments[index].value
+    // `commaSeparated(closer, parse: (var Parser) => Item)`: a `var` parameter of a closure type takes a place, exactly
+    // as a `var` parameter of a declaration does - the closure writes through the caller's own storage
+    if shape.parameters[index].isReference {
+      const annotation = shape.parameters[index].annotation
+      const path = match argumentReference(lowering, builder, value, annotation, "a `var` argument") {
+        Some(found) => found
+        None => {
+          return abandonedSlot lowering, builder, destination
+        }
+      }
+      slots.add path.reference.base
+      places.add Some(path.reference)
+      continue
+    }
+    const slot = lowerValue lowering, builder, value
+    if !lowering.isSupported {
+      return abandonedSlot lowering, builder, destination
+    }
+    slots.add slot
+    places.add None
+  }
+  emitClosureCall lowering, builder, destination, holder, slots, places, annotation
+}
+
+/** One `CallClosure`, with the result where it belongs and `Void` for a closure that answers nothing. */
+public fn emitClosureCall(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  holder: Slot,
+  slots: List<Slot>,
+  places: List<Reference?>,
+  annotation: IrTypeId,
+): Slot {
+  const given = borrowedArguments slots, places
+  if !producesValue(lowering, annotation) {
+    emit builder, Instruction.CallClosure(None, holder, given)
+    match destination {
+      Some(_) => {
+        return voidSlot lowering, builder, destination
+      }
+      None => {
+        return abandonedSlot lowering, builder, destination
+      }
+    }
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.CallClosure(Some(target), holder, given)
+  target
+}
+
+// --- Building one closure -------------------------------------------------------------------------------------------
+
+/** One capture, as the outer frame hands it over and as the closure body finds it again. */
+type CapturePlan {
+  taken: Capture
+  field: FieldLayout
+  /** The span the binding is declared under, which is how the body reaches it. */
+  declared: Span
+  isBoxed: Bool
+}
+
+/**
+ * The closure value: the capture plan, the environment layout, the body as a function of its own, and the instruction
+ * that names both.
+ */
+fn closureValueOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  at: Span,
+  source: ClosureSource,
+  signature: IrSignatureId,
+  annotation: IrTypeId,
+): Slot {
+  const plans = capturePlansOf lowering, builder, at
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const index = lowering.closureCount
+  lowering.closureCount = index + 1
+  const name = closureFunctionName lowering.owner, index
+  var fields: List<FieldLayout> = []
+  for plan in plans {
+    fields.add plan.field
+  }
+  const environment = if fields.isEmpty() {
+    None
+  } else {
+    Some environmentLayoutOf(lowering.program, name, fields)
+  }
+  const function = loweredClosureBody lowering, name, at, source, signature, environment, plans
+  var taken: List<Capture> = []
+  for plan in plans {
+    taken.add plan.taken
+  }
+  const isEscaping = escapesAt lowering, at
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.Closure(target, function, taken, isEscaping)
+  target
+}
+
+/**
+ * Whether the checker decided the closure may outlive the call it stands in (BACKEND gap 14). It is in the IR so that a
+ * back end can put the environment of a closure that cannot escape on the stack; both of them heap-allocate it today.
+ */
+fn escapesAt(var lowering: Lowering, at: Span): Bool {
+  const module = lowering.module
+  const kind = match lowering.checker.closureKindAt(module, at) {
+    Some(found) => found
+    None => {
+      return true
+    }
+  }
+  match kind {
+    .Local => false
+    .Escaping => true
+  }
+}
+
+/**
+ * Where every captured binding lives in the frame that makes the closure, and what the environment keeps of it: a copy
+ * of a `const` binding, and the shared box of a `var` one.
+ */
+fn capturePlansOf(var lowering: Lowering, var builder: FunctionBuilder, at: Span): List<CapturePlan> {
+  const module = lowering.module
+  const captures = lowering.checker.capturesAt(module, at) ?? []
+  var plans: List<CapturePlan> = []
+  for capture in captures {
+    const binding = lowering.checker.binding capture.binding
+    const declared = binding.at
+    const name = if binding.name.isEmpty() { "captured" } else { binding.name }
+    if const Some(box) = lowering.boxes.get(declared) {
+      const annotation = builder.typeOfSlot box
+      plans.add CapturePlan(Capture.Boxed(box), FieldLayout(name, annotation, None), declared, true)
+      continue
+    }
+    const slot = match lowering.slots.get(declared) {
+      Some(found) => found
+      None => {
+        reportUnsupported lowering, "a closure that captures {describeCapture(lowering, binding.name)}", at
+        return []
+      }
+    }
+    if isReferenceParameterSlot(builder, slot) {
+      const what = "a closure that captures a `var` parameter or `var self` (milestone 5.9b)"
+      reportUnsupported lowering, what, at
+      return []
+    }
+    const annotation = builder.typeOfSlot slot
+    plans.add CapturePlan(Capture.Value(slot), FieldLayout(name, annotation, None), declared, false)
+  }
+  plans
+}
+
+/**
+ * Why a captured binding could not be found in the frame. The one that really happens is an implicit parameter of an
+ * enclosing closure: the checker declares every `_` of one closure under the span of the closure itself, so which
+ * *position* such a capture means is the one record the tables do not carry.
+ */
+fn describeCapture(lowering: Lowering, name: String): String {
+  if name == "_" {
+    return "an implicit parameter of a closure around it"
+  }
+  "`{name}`, which the back end cannot reach"
+}
+
+fn isReferenceParameterSlot(builder: FunctionBuilder, slot: Slot): Bool {
+  if !builder.function.hasSlot(slot) {
+    return false
+  }
+  if const .Parameter(index) = builder.function.slots[slot.value].role {
+    if const Some(parameter) = builder.function.signature.parameters.get(index) {
+      return parameter.isReference
+    }
+  }
+  false
+}
+
+/**
+ * The body of the closure, as a function of its own. The frame of the enclosing function is saved and restored around
+ * it, because a lowering has exactly one of everything a body needs - which is what keeps the state small enough to be
+ * threaded through an interpreter at all.
+ *
+ * The first parameter is the **environment**, where there is one at all. The C back end writes one thunk per closure
+ * that casts the erased environment pointer back to this function's own, so a closure without captures needs no
+ * environment parameter and a call through a closure value needs no cast of an argument anywhere.
+ */
+fn loweredClosureBody(
+  var lowering: Lowering,
+  name: String,
+  at: Span,
+  source: ClosureSource,
+  signature: IrSignatureId,
+  environment: LayoutId?,
+  plans: List<CapturePlan>,
+): FunctionId {
+  const shape = lowering.program.signatureAt signature
+  var parameters: List<IrParameter> = []
+  if const Some(layout) = environment {
+    const annotation = lowering.program.internType IrType.Record(layout)
+    parameters.add IrParameter("environment", annotation, false, Ownership.Borrowed)
+  }
+  parameters.addAll shape.parameters
+  const built = IrSignature parameters, shape.result
+  var inner = newFunction name, None, built, "closure"
+  const location = locationOf lowering, at
+  setBlockLocation inner, BlockId(0), Some(location)
+  const saved = savedFrame lowering
+  enterClosure lowering, name, at
+  bindCaptures lowering, inner, environment, plans
+  bindClosureParameters lowering, inner, at, source, environment.isSome(), shape.parameters.length()
+  if lowering.isSupported {
+    lowerClosureBody lowering, inner, source, built.result
+  }
+  const isSupported = lowering.isSupported
+  restoreFrame lowering, saved
+  if !isSupported {
+    lowering.isSupported = false
+    var stub = newFunction name, None, built, "not supported yet"
+    return finishFunction lowering.program, stub
+  }
+  finishFunction lowering.program, inner
+}
+
+fn lowerClosureBody(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  source: ClosureSource,
+  result: IrTypeId,
+) {
+  match source {
+    .Written(closure) => lowerBody lowering, builder, closure.body, result
+    .Thunk(value) => {
+      // The very `Adaptation.Lazy` that made this body a function of its own may not refuse the body itself
+      lowering.inlinedThunks.set value.span, true
+      const slot = lowerValue lowering, builder, value
+      if !lowering.isSupported {
+        return
+      }
+      if isVoidType(lowering, result) {
+        finishBlock lowering, builder, Terminator.Return(None)
+        return
+      }
+      finishBlock lowering, builder, Terminator.Return(Some(borrowed(slot)))
+    }
+  }
+}
+
+/**
+ * The captures, read out of the environment at the top of the body. A `const` capture becomes an ordinary slot; a `var`
+ * capture is the box, and the binding is a place through it from here on.
+ */
+fn bindCaptures(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  environment: LayoutId?,
+  plans: List<CapturePlan>,
+) {
+  const layout = match environment {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const slot = Slot 0
+  for index in 0..plans.length() {
+    const plan = plans[index]
+    const annotation = plan.field.annotation
+    const held = addLocal builder, annotation, plan.field.name
+    emit builder, Instruction.Read(held, Reference(slot, [PathStep.Field(layout, index)]))
+    if plan.isBoxed {
+      lowering.boxes.set plan.declared, held
+      continue
+    }
+    lowering.slots.set plan.declared, held
+  }
+}
+
+/**
+ * The parameters of the closure. A written one binds through its pattern, exactly as a `fn`'s does; the implicit ones
+ * (`_`, `_2`, a name the expected function type gives) are reached by *position*, because the checker declares all of
+ * them under the span of the closure itself.
+ *
+ * The receiver of a receiver closure is parameter zero. Where it is implicit it is `self`, whose binding the checker
+ * recorded under the closure's span - the same span `Adaptation.ImplicitSelf` leads to.
+ */
+fn bindClosureParameters(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  at: Span,
+  source: ClosureSource,
+  hasEnvironment: Bool,
+  count: Int,
+) {
+  const first = if hasEnvironment { 1 } else { 0 }
+  var positions: List<Slot> = []
+  for index in 0..count {
+    positions.add Slot(first + index)
+  }
+  lowering.closureParameters = positions
+  const closure = match source {
+    .Written(found) => found
+    .Thunk(_) => {
+      return
+    }
+  }
+  if closure.parameters.isEmpty() {
+    const module = lowering.module
+    if const Some(receiver) = lowering.checker.receiverAt(module, at) {
+      if receiver.isImplicit {
+        const declared = lowering.checker.binding(receiver.binding).at
+        if const Some(slot) = positions.first() {
+          lowering.slots.set declared, slot
+        }
+      }
+    }
+    return
+  }
+  for index in 0..closure.parameters.length() {
+    const slot = match positions.get(index) {
+      Some(found) => found
+      None => {
+        reportUnsupported lowering, "a closure with more parameters than its type has", at
+        return
+      }
+    }
+    const pattern = closure.parameters[index].pattern
+    if const .Binding(name) = pattern.kind {
+      if name != "_" {
+        lowering.slots.set pattern.span, slot
+      }
+      continue
+    }
+    if const .Wildcard = pattern.kind {
+      continue
+    }
+    lowerPatternBinding lowering, builder, pattern, slot, pattern.span
+    if !lowering.isSupported {
+      return
+    }
+  }
+}
+
+// --- The frame of one function --------------------------------------------------------------------------------------
+
+/** Everything about one function body the lowering holds exactly one of, saved while a closure inside it is lowered. */
+type SavedFrame {
+  slots: Map<Span, Slot>
+  entryLocals: Map<Int, Slot>
+  boxes: Map<Span, Slot>
+  references: Map<Span, Reference>
+  closureParameters: List<Slot>
+  hole: Slot?
+  isDiverged: Bool
+  breakTargets: List<BlockId>
+  continueTargets: List<BlockId>
+  loopBroke: List<Bool>
+  inlinedThunks: Map<Span, Bool>
+  owner: String
+  closureCount: Int
+  closureAt: Span?
+}
+
+fn savedFrame(var lowering: Lowering): SavedFrame {
+  SavedFrame(
+    lowering.slots,
+    lowering.entryLocals,
+    lowering.boxes,
+    lowering.references,
+    lowering.closureParameters,
+    lowering.hole,
+    lowering.isDiverged,
+    lowering.breakTargets,
+    lowering.continueTargets,
+    lowering.loopBroke,
+    lowering.inlinedThunks,
+    lowering.owner,
+    lowering.closureCount,
+    lowering.closureAt,
+  )
+}
+
+/**
+ * The frame of the closure. The bindings of the enclosing function are gone - a name that reaches out of the closure is a
+ * *capture* and was bound by `bindCaptures` - and so are its loops, because `break` cannot leave a closure (design 3.5).
+ * `capturedVariables` stays: it is keyed by a span of the file and a closure's body is part of the same body.
+ */
+fn enterClosure(var lowering: Lowering, name: String, at: Span) {
+  lowering.slots = [:]
+  lowering.entryLocals = [:]
+  lowering.boxes = [:]
+  lowering.references = [:]
+  lowering.closureParameters = []
+  lowering.hole = None
+  lowering.isDiverged = false
+  lowering.breakTargets = []
+  lowering.continueTargets = []
+  lowering.loopBroke = []
+  lowering.inlinedThunks = [:]
+  lowering.owner = name
+  lowering.closureCount = 0
+  lowering.closureAt = Some at
+}
+
+fn restoreFrame(var lowering: Lowering, saved: SavedFrame) {
+  lowering.slots = saved.slots
+  lowering.entryLocals = saved.entryLocals
+  lowering.boxes = saved.boxes
+  lowering.references = saved.references
+  lowering.closureParameters = saved.closureParameters
+  lowering.hole = saved.hole
+  lowering.isDiverged = saved.isDiverged
+  lowering.breakTargets = saved.breakTargets
+  lowering.continueTargets = saved.continueTargets
+  lowering.loopBroke = saved.loopBroke
+  lowering.inlinedThunks = saved.inlinedThunks
+  lowering.owner = saved.owner
+  lowering.closureCount = saved.closureCount
+  lowering.closureAt = saved.closureAt
+}
+
+// --- Types ----------------------------------------------------------------------------------------------------------
+
+/** The signature a closure value is called with, out of its own type. */
+public fn closureSignatureOf(var lowering: Lowering, annotation: IrTypeId): IrSignatureId? {
+  if const .Closure(signature) = lowering.program.typeAt(annotation) {
+    return Some signature
+  }
+  None
+}
+
+fn describeClosureType(var lowering: Lowering, annotation: IrTypeId): String {
+  "`{describeIrType(lowering.program, annotation)}`"
+}

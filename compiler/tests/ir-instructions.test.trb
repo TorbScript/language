@@ -20,6 +20,13 @@ use SymbolPath from "../src/ir/mangle"
  * line that is never executed is a line that was never checked - so every arm of every match here is reached.
  */
 
+fn environmentLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
+  const reserved = program.reserveLayout name, LayoutKind.Environment
+  const layout = program.layoutAt reserved.layout
+  program.setLayout reserved.layout, layout.copy(fields: fields, isBuilt: true)
+  reserved.layout
+}
+
 fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
   const reserved = program.reserveLayout name, LayoutKind.Record
   const layout = program.layoutAt reserved.layout
@@ -85,7 +92,19 @@ group "A function that uses every instruction" {
     )
     terminate doubleBuilder, Terminator.Return(Some(owned(Slot(0))))
     const double = finishFunction program, doubleBuilder
-    var innerBuilder = newFunction "t_main_inner", None, IrSignature([IrParameter("value", int64)], voidType), "body"
+    // A closure body takes its environment first, and the environment holds one field per capture (BACKEND 5.8)
+    const environment = environmentLayout(
+      program,
+      "T_environment__t_main_inner",
+      [FieldLayout("value", int64), FieldLayout("counter", box), FieldLayout("items", listOfInteger)],
+    )
+    const environmentType = program.internType IrType.Record(environment)
+    var innerBuilder = newFunction(
+      "t_main_inner",
+      None,
+      IrSignature([IrParameter("environment", environmentType), IrParameter("value", int64)], voidType),
+      "body",
+    )
     terminate innerBuilder, Terminator.Return(None)
     const inner = finishFunction program, innerBuilder
     const showTable = program.addWitnessTable WitnessTable("w_show__Int64", show, int64, [double], [])

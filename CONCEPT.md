@@ -955,6 +955,13 @@ it sees the same object. Typical cases are handles to the outside world (`File`,
 
 - The rule stays the same: mutation needs a `var` path. A `const` binding to a shared object is a read-only view
   (the object can still change, but not through this path).
+- **A `var self` method of a `shared type` may answer a `Task`.** For a value a `var` is an exclusive in-out access whose
+  "copy in, copy out" ends with the call, so a change made after the call has returned would be lost - and a `var` of a
+  value on a function that answers a `Task` is therefore a compile error. For an object there is no copy: `var` is the
+  *permission* to change the one object, two `var` paths to it may exist at once (as above), and a permission survives an
+  `await`. That is what lets `Source.next(var self)` of [Streams](#streams) mirror `Iterator.next(var self)` instead of
+  hiding a cursor somewhere. An ordinary `trait` counts as a value here, because a value may implement it: only a
+  `shared trait` may require such a member.
 - **A read-only view cannot be widened again.** A `var` binding, `var` field or `var` argument may not be
   initialized from a `const` path to a shared object - there is no copy that would make it a different object, so
   `var writable = view` would hand out exactly what the `const` withheld. For a value it is simply a copy and fine.
@@ -1790,13 +1797,13 @@ stream", because at any point in a program you hold one end and not both. The tw
 `Iterator` and `Accumulator` and carry the same verbs, so nothing new has to be learned:
 
 ```trb
-shared trait Source<Item, Failure> with Close {          // reading: `next`, like an Iterator
-  fn next(self): Task<Result<Item?, Failure>>
+shared trait Source<Item, Failure> with Close {              // reading: `next`, like an Iterator
+  fn next(var self): Task<Result<Item?, Failure>>
 }
 
-shared trait Sink<Item, Failure> with Close {            // writing: `add`/`finish`, like an Accumulator
-  fn add(self, item: Item): Task<Result<Void, Failure>>
-  fn finish(self): Task<Result<Void, Failure>>
+shared trait Sink<Item, Failure> with Close {                // writing: `add`/`finish`, like an Accumulator
+  fn add(var self, item: Item): Task<Result<Void, Failure>>
+  fn finish(var self): Task<Result<Void, Failure>>
 }
 ```
 
@@ -1805,26 +1812,37 @@ use File from "std/fs"
 use * as http from "std/http"
 
 fn importUsers(url: String, path: String): Task<Result<Int, ImportError>> {
-  const response = http.get(url).await()?
-  const users = response.body
+  var response = http.get(url).await()?
+  var active = response.body
     .mapFailure(ImportError.requestFailed)
     .through(Json.items<User>())               // a resumable framer: memory is one `User`
     .checked()                                 // `Result` items become the stream's failure
-  const active = users.filter { _.active }
-  File.write(path, active.through(Json.encoded<User>()).mapFailure(...)).await()?
+    .filter { _.active }
   active.count().await()
 }
 
 // The loop. `await()` and `?` are both visible, which is why there is no `for` over a source.
-while const Some(line) = file.lines().next().await()? {
+var lines = file.lines()
+while const Some(line) = lines.next().await()? {
   print line
 }
 ```
 
-- **A stream has an identity and is consumed once,** so both ends are `shared type`s. That is also why `next` and `add`
-  take `self` and not `var self`: an exclusive access to a value cannot stay open across an `await`
-  ([`var` Paths](#var-paths-and-var-parameters)). A consequence worth knowing: a source belongs to the task that made
-  it, because shared objects do not cross task boundaries.
+- **A stream has an identity and is consumed once,** so both ends are `shared type`s, and the verbs that consume take
+  `var self` exactly as `Iterator.next` and `Accumulator.add` do. A `var self` method may answer a `Task` because for an
+  object `var` is a permission and not an exclusive access ([Identity](#identity-shared-type)). So **a source that is
+  read from sits in a `var` binding**, and a `const` handle is the read-only view every shared object has. A consequence
+  worth knowing: a source belongs to the task that made it, because shared objects do not cross task boundaries.
+- **Reading takes `var self`, wrapping takes `self`.** `next`, `collect`, `toList`, `count`, `find` and `into` consume
+  items. `map`, `filter`, `through`, `then` and `checked` read nothing: they hand the source over to a wrapper, which
+  pulls from then on. That is also what keeps a pipeline one expression - a temporary is no `var` path, so a `var self`
+  on the wrapping side would need a name for every step. The price is on the other side: a pipeline that is read gets a
+  name, exactly as `var cursor = iterator()` does.
+
+  ```trb
+  var users = body.through(Json.items<User>()).checked()   // wrapping: one expression
+  const all = users.toList().await()?                      // reading: through a `var` path
+  ```
 - **A failure ends the stream and stands in the type,** on both ends. An end that cannot fail is
   `Source<Item, Never>`. After a failure a source never delivers again, and after `Ok(None)` the end is final.
 - **Backpressure is the shape of the protocol.** At the reading end it is the pull - nothing is read until somebody
@@ -1855,8 +1873,9 @@ more than once:
 ```trb
 const activeNames: Stage<User, String> = filtering<User>({ _.active }).then(mapping { _.name })
 
-const fromList = users.through(activeNames).toList()                   // a list
-const fromBody = body.through(activeNames).toList().await()?           // an HTTP body
+const fromList = users.through(activeNames).toList()            // a list
+var arriving = body.through(activeNames)                        // an HTTP body
+const fromBody = arriving.toList().await()?
 ```
 
 - `Accumulator` has `fn isDone(self): Bool { false }` for it. A driver asks before the first value and after every
@@ -2125,8 +2144,12 @@ const channel = Channel<Int>(capacity: 8)        // a stream in memory: `channel
 - Values are passed freely between tasks: a task gets copies, so there is nothing to race for. `shared type` objects
   (and values that contain one) are confined to the task that created them; `Channel` and `Task` are the exceptions
   that connect tasks. Closures passed to `spawn` cannot capture `var` bindings. Data races are impossible by construction.
-- **A `Channel` is one end of each of the two ends of a stream:** `channel.source()` and `channel.sink()` are ordinary
-  `Source`/`Sink` values, so everything of [Streams](#streams) works between two tasks without a second vocabulary.
+- **A `Channel` hands out the two ends of a stream:** `channel.source()` and `channel.sink()` are ordinary
+  `Source`/`Sink` values, so everything of [Streams](#streams) works between two tasks without a second vocabulary. Each
+  end is read or written through a `var` binding, because its verbs change it.
+- **A `var self` method may answer a `Task` when its type is shared, and only then** - see
+  [Identity](#identity-shared-type). This is what lets a task change an object it holds; a value would have to write its
+  change back when the call returns, which is before the task has run.
 
 ## Foreign Functions (Draft)
 
@@ -2318,6 +2341,15 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   and a `sink`.
 - **No `for` over a source in v1:** a `for` head has no place for the `?` that the pull needs, and
   `while const Some(item) = source.next().await()? { ... }` keeps both `await` and `?` where they happen.
+- **A `var self` method of a `shared type` may answer a `Task`; for a value it is an error.** "A `var self` access cannot
+  stay open across an `await`" holds for values, where `var` is an exclusive in-out access that ends with the call. For an
+  object `var` is a permission, and the language already hands out two `var` paths to one object. So `Source.next` and
+  `Sink.add` take `var self` like their synchronous siblings, every stateful end of `std/stream` is an ordinary shared
+  type with `var` fields, and *reading* a stream needs a `var` binding while *wrapping* one hands it over and takes
+  `self` - which is what keeps a pipeline one expression.
+- **Every type can be made from a `Never`** (`extend<Target> Target with From<Never>` in `std/core`), so `?` works on a
+  `Result<Value, Never>`. The conversion is total and its body is forced, and without it the infallible case - the
+  reading end of a `Channel` - would be the awkward one.
 - `const` instead of `val` as it is clearer (reading many `val` with `var` in between lets you easily miss some)
 - `.trb` instead of `.scr` (`.scr` is an executable screensaver on Windows and blocked by mail filters/AV)
 - `//`, `/* */`, `/** */` for docs. Block comments do not nest (they did at first: a `/*` inside of a doc comment, as
@@ -2579,11 +2611,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `for` over a `Source`: there is no place in a `for` head for the `?` the pull needs, so v1 has
   `while const Some(item) = source.next().await()? { ... }`. Swift needs `for try await` for exactly this. Reconsider if
   a spelling turns up that keeps `await` and `?` visible without a keyword combination.
-- Whether a `shared type`'s own methods may change its `var` fields through `self`. Today they cannot (mutation needs a
-  `var` path), and an asynchronous method has to take `self`, so every stateful end in `std/stream` keeps its state in
-  the `var` bindings its closures captured. There is no copy being thrown away, and `var self` would stay the form a
-  `const` path can withhold - `Channel.send(self, ...)` already relies on this and gets away with it by being native.
-  See `docs/STREAMS.md`, open point 1.
+- Handing a shared object over. Wrapping a source gives it to the wrapper, which reads it from then on, and nothing
+  stops the old owner from reading it as well: the language has no `move`. Either a way to say "this argument is handed
+  over", or it stays what the `Source` contract promises in prose. See `docs/STREAMS.md`, open point 1.
 - Registry protocol and the exact format of `project.lock.trb`
 - REPL: every input is a nested scope of the previous one (so redefining a name is ordinary shadowing). A type that
   is defined again shadows the old one, values of the old type keep it and show up as `Point#1`.

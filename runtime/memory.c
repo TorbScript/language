@@ -101,6 +101,13 @@ void torb_release(void *block, torb_drop_function drop) {
   torb_live_blocks -= 1;
 }
 
+void torb_environment_release(torb_environment *environment) {
+  if (environment == NULL) {
+    return;
+  }
+  torb_release(environment, environment->drop);
+}
+
 bool torb_is_unique(const void *block) {
   const torb_header *header = (const torb_header *)block;
   if (header == NULL) {

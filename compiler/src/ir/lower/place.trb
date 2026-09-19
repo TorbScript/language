@@ -1,14 +1,15 @@
 use Span from "../../syntax/source"
 use Expression from "../../syntax/ast"
 use Signature from "../../semantics/checker/type"
-use Place, PlaceRoot, PlaceStep, PropertyWriteKind from "../../semantics/checker/context"
+use Place, PlaceRoot, PlaceStep, PropertyWriteKind, BindingId from "../../semantics/checker/context"
 use IrTypeId, Slot, LayoutId, Reference, PathStep, Instruction, borrowed from "../ir"
 use FunctionBuilder, addTemporary, emit from "../build"
 use layoutOfType from "../verify"
 use describeIrType from "../print"
 use isReferenceParameter from "../instances"
-use Lowering, reportUnsupported, irTypeOf from "./context"
+use Lowering, reportUnsupported, irTypeOf, voidTypeOf from "./context"
 use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf from "./expression"
+use bindingReferenceOf, emitClosureCall from "./closure"
 
 /**
  * `var` paths: how the path the checker wrote down becomes a `Reference` of the IR, and what a call, an assignment and a
@@ -107,14 +108,15 @@ fn pathOfPlace(
   what: String,
   at: Span,
 ): PlacePath? {
-  const base = match rootSlotOf(lowering, place.root, what, at) {
+  const root = match rootReferenceOf(lowering, builder, place.root, what, at) {
     Some(found) => found
     None => {
       return None
     }
   }
-  var steps: List<PathStep> = []
-  var annotation = builder.typeOfSlot base
+  const base = root.reference.base
+  var steps = root.reference.steps
+  var annotation = root.annotation
   for step in place.steps {
     const next = match steppedPath(lowering, annotation, step, what, at) {
       Some(found) => found
@@ -135,24 +137,38 @@ type SteppedPath {
 }
 
 /**
- * Where a path starts. A local is the slot the lowering gave its binding - `self` is one of those, so a `var self`
- * receiver needs no case of its own - and a top-level binding of an entry file is a local of its entry function.
+ * Where a path starts, as a path of its own: usually a slot and no steps, and for a **captured** `var` binding the one
+ * field of the box the frame shares with the closure - which is why this answers a `PlacePath` and not a `Slot`.
+ *
+ * `self` is an ordinary local, so a `var self` receiver needs no case of its own, and a top-level binding of an entry
+ * file is a local of its entry function.
  */
-fn rootSlotOf(var lowering: Lowering, root: PlaceRoot, what: String, at: Span): Slot? {
+fn rootReferenceOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  root: PlaceRoot,
+  what: String,
+  at: Span,
+): PlacePath? {
   match root {
     .Local(binding) => {
       const declared = lowering.checker.binding(binding).at
+      if const Some(place) = bindingReferenceOf(lowering, builder, declared) {
+        const annotation = typeOfPlace lowering, builder, place
+        return Some PlacePath(place, annotation)
+      }
       match lowering.slots.get(declared) {
-        Some(found) => Some found
+        Some(found) => Some PlacePath(Reference(found, []), builder.typeOfSlot(found))
         None => {
-          reportUnsupported lowering, "{what} through a captured binding (milestone 5.8)", at
+          const shown = describeRoot lowering, binding
+          reportUnsupported lowering, "{what} through {shown}", at
           None
         }
       }
     }
     .Declared(symbol) => {
       match lowering.entryLocals.get(symbol.value) {
-        Some(found) => Some found
+        Some(found) => Some PlacePath(Reference(found, []), builder.typeOfSlot(found))
         None => {
           reportUnsupported lowering, "{what} through a top-level `var` read from a function", at
           None
@@ -169,6 +185,18 @@ fn rootSlotOf(var lowering: Lowering, root: PlaceRoot, what: String, at: Span): 
       None
     }
   }
+}
+
+/**
+ * Why the root of a path is nowhere in the frame. The one that really happens is the receiver of a **receiver script**:
+ * `project.trb` and a configuration file *are* the body of a receiver closure, and what applies that body is
+ * `Sandbox.load` - so there is no frame to put the receiver in until the sandbox exists.
+ */
+fn describeRoot(var lowering: Lowering, binding: BindingId): String {
+  if lowering.checker.binding(binding).isReceiver {
+    return "the receiver of a receiver script, which `Sandbox.load` applies (milestone 7.4)"
+  }
+  "a binding the back end cannot reach"
 }
 
 /**
@@ -226,6 +254,17 @@ fn steppedPath(
 
 fn fieldTypeOf(var lowering: Lowering, layout: LayoutId, index: Int): IrTypeId {
   lowering.program.layoutAt(layout).fields[index].annotation
+}
+
+/** The type a place of the lowering's own making ends in. Only field steps can stand in one, so this is the whole walk. */
+fn typeOfPlace(var lowering: Lowering, var builder: FunctionBuilder, place: Reference): IrTypeId {
+  var annotation = builder.typeOfSlot place.base
+  for step in place.steps {
+    if const .Field(layout, index) = step {
+      annotation = fieldTypeOf lowering, layout, index
+    }
+  }
+  annotation
 }
 
 /** Whether a slot is a `var` parameter of this frame: it holds a pointer into the caller's frame and not a value. */
@@ -348,11 +387,13 @@ fn writtenPlace(var lowering: Lowering, var builder: FunctionBuilder, path: Plac
 }
 
 /**
- * `port 8080`: a property command writes the field it names (gap 15), so it is an assignment written another way and the
- * checker recorded the very same place for it - the path to the *field*, under the span of the callee.
+ * `port 8080`, `onStart { ... }`, `database { ... }`: a property command writes the field it names (gap 15), so it is an
+ * assignment written another way and the checker recorded the very same place for it - the path to the *field*, under the
+ * span of the callee.
  *
- * The other two kinds need a closure: `onStart { ... }` stores one in the field and `database { ... }` applies a receiver
- * closure to the field in place, and both are milestone 5.8's.
+ * `.Assign` and `.AssignClosure` are therefore **one** lowering: whether the value is `8080` or a closure changes what is
+ * evaluated and nothing about the write. `.Configure` is the other one: the closure is a *receiver* closure and the
+ * field's own place is what it is applied to, so the field is configured where it already is and never copied.
  */
 public fn lowerPropertyWrite(
   var lowering: Lowering,
@@ -362,15 +403,8 @@ public fn lowerPropertyWrite(
   value: Expression,
   kind: PropertyWriteKind,
 ): Slot {
-  if const .AssignClosure = kind {
-    const what = "a property command that stores a closure in a field (milestone 5.8)"
-    reportUnsupported lowering, what, callee.span
-    return abandonedSlot lowering, builder, destination
-  }
   if const .Configure = kind {
-    const what = "a property command that configures a field through a receiver closure (milestone 5.8)"
-    reportUnsupported lowering, what, callee.span
-    return abandonedSlot lowering, builder, destination
+    return lowerConfigureCommand lowering, builder, destination, callee, value
   }
   const path = match referenceAt(lowering, builder, callee.span, "a property command") {
     Some(found) => found
@@ -383,6 +417,36 @@ public fn lowerPropertyWrite(
     return abandonedSlot lowering, builder, destination
   }
   // A command is a statement and produces `Void`, which somebody may still be taking as the value of a block
+  match destination {
+    Some(_) => voidSlot lowering, builder, destination
+    None => abandonedSlot lowering, builder, destination
+  }
+}
+
+/**
+ * `database { url "..." }`: the closure is a receiver closure over the field, so the field's own place is its `var self`
+ * argument and the value is changed where it lies. Nothing is copied out and back in, which is what makes the
+ * configuration DSL cost what an assignment costs.
+ */
+fn lowerConfigureCommand(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  callee: Expression,
+  value: Expression,
+): Slot {
+  const holder = lowerValue lowering, builder, value
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const path = match referenceAt(lowering, builder, callee.span, "a property command") {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const voidType = voidTypeOf lowering
+  emitClosureCall lowering, builder, None, holder, [path.reference.base], [Some(path.reference)], voidType
   match destination {
     Some(_) => voidSlot lowering, builder, destination
     None => abandonedSlot lowering, builder, destination

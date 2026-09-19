@@ -122,6 +122,58 @@ TORB_TEST(making_a_block_immortal_takes_it_out_of_the_live_count) {
   /* Deliberately not freed: an immortal block never is. */
 }
 
+/** A closure environment in the shape the C emitter writes: the header, the drop function, then the captures. */
+typedef struct sample_environment {
+  torb_header header;
+  torb_drop_function drop;
+  torb_text captured;
+} sample_environment;
+
+static void sample_environment_drop(void *block) {
+  sample_environment *value = (sample_environment *)block;
+  torb_text_release(value->captured);
+}
+
+/*
+ * Releasing a closure goes through its environment, because a closure value has the type of every closure of its shape:
+ * which captures are inside one, and therefore what a release has to release, is only known to the closure that built it
+ * (BACKEND 5.8). So the drop function travels in the block.
+ */
+TORB_TEST(releasing_an_environment_runs_the_drop_function_it_carries) {
+  size_t before = torb_live_block_count();
+  sample_environment *environment = (sample_environment *)torb_allocate(sizeof(sample_environment), TORB_BLOCK_ENVIRONMENT);
+  uint8_t *data = NULL;
+  environment->drop = sample_environment_drop;
+  environment->captured = torb_text_allocate(2u, &data);
+  data[0] = 'a';
+  data[1] = 'b';
+  TORB_CHECK_INTEGER(torb_live_block_count(), before + 2u);
+  torb_environment_release((torb_environment *)environment);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+}
+
+/** A closure without captures has no environment at all, and releasing that is nothing. */
+TORB_TEST(releasing_the_environment_of_a_closure_without_captures_is_a_no_op) {
+  size_t before = torb_live_block_count();
+  torb_environment_release(NULL);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+}
+
+/** A closure that is copied shares its environment, so the captures die with the last copy and not with the first. */
+TORB_TEST(a_copied_closure_shares_its_environment) {
+  size_t before = torb_live_block_count();
+  sample_environment *environment = (sample_environment *)torb_allocate(sizeof(sample_environment), TORB_BLOCK_ENVIRONMENT);
+  uint8_t *data = NULL;
+  environment->drop = sample_environment_drop;
+  environment->captured = torb_text_allocate(1u, &data);
+  data[0] = 'x';
+  torb_retain(environment);
+  torb_environment_release((torb_environment *)environment);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before + 2u);
+  torb_environment_release((torb_environment *)environment);
+  TORB_CHECK_INTEGER(torb_live_block_count(), before);
+}
+
 TORB_TEST(a_panic_hook_catches_a_panic_and_the_suite_goes_on) {
   TORB_EXPECT_PANIC(torb_panic_text("something broke", in_main));
   TORB_CHECK_PANIC_CONTAINS("panic: something broke");
@@ -149,6 +201,9 @@ void torb_register_memory_tests(void) {
   TORB_ADD(a_null_block_is_a_unique_no_op);
   TORB_ADD(raw_buffers_are_counted_too);
   TORB_ADD(making_a_block_immortal_takes_it_out_of_the_live_count);
+  TORB_ADD(releasing_an_environment_runs_the_drop_function_it_carries);
+  TORB_ADD(releasing_the_environment_of_a_closure_without_captures_is_a_no_op);
+  TORB_ADD(a_copied_closure_shares_its_environment);
   TORB_ADD(a_panic_hook_catches_a_panic_and_the_suite_goes_on);
   TORB_ADD(the_frame_counter_panics_at_the_limit);
 }

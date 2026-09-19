@@ -328,11 +328,16 @@ typedef struct torb_map {
 typedef torb_map torb_set;
 
 /**
- * A closure environment. The captures follow the header; the emitter generates the typed struct per closure and
- * only the header is ABI. A closure that does not escape gets its environment on the stack, with an immortal header.
+ * A closure environment. The captures follow the header and the drop function; the emitter generates the typed struct
+ * per closure and only these two fields are ABI.
+ *
+ * The `drop` pointer is here and not at the release site, because a closure **value** has the type of every closure of
+ * its shape: which captures are inside one, and therefore which of them a release has to release, is only known to the
+ * closure that built it.
  */
 typedef struct torb_environment {
   torb_header header;
+  torb_drop_function drop;
 } torb_environment;
 
 /**
@@ -344,6 +349,16 @@ typedef struct torb_closure {
   void (*code)(void);
   torb_environment *environment;
 } torb_closure;
+
+/**
+ * `environment` consumed: one count less, and the captures inside it released when it was the last one. This is
+ * `Release` for a closure slot.
+ *
+ * It is a function of the runtime and not two lines in the generated code, because the drop function has to be read out
+ * of the block *after* the null check - a closure without captures has no environment at all, and every call site would
+ * otherwise repeat that conditional.
+ */
+void torb_environment_release(torb_environment *environment);
 
 /** The boxed payload of a trait-typed value: a witness member takes `void *self`, so the payload is always boxed. */
 typedef struct torb_object {

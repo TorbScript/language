@@ -1,7 +1,9 @@
 use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, FunctionKind, RuntimeKind, Ownership from "./ir"
 use Block, BlockId, Slot, SlotRole, Instruction, Terminator, Argument, Reference, PathStep from "./ir"
 use Intrinsic, IntrinsicOperation, NumericKind, WitnessSource, WitnessRoot, Capture, LayoutId from "./ir"
+use FunctionId, IrSignatureId from "./ir"
 use isManagedType, containsCountedType from "./layout"
+use isEnvironmentLayout from "./capture"
 use describeIrType, describeIntrinsic, describeNumericKind from "./print"
 
 /**
@@ -665,9 +667,10 @@ fn verifyInstruction(
         found.add "{at}: a tag is an integer"
       }
     }
-    .Closure(target, callee, _, _) => {
+    .Closure(target, callee, captures, _) => {
       if !program.hasFunction(callee) {
         found.add "{at}: there is no function t{callee.value}"
+        return
       }
       if !function.hasSlot(target) {
         found.add "{at}: there is no slot %{target.value}"
@@ -675,7 +678,9 @@ fn verifyInstruction(
       }
       const annotation = function.typeOfSlot target
       match program.typeAt(annotation) {
-        .Closure(_) => {}
+        .Closure(signature) => {
+          verifyClosure program, function, found, at, callee, captures, signature
+        }
         _ => found.add "{at}: a closure value is not `{describeIrType(program, annotation)}`"
       }
     }
@@ -840,6 +845,93 @@ fn checkPlaceArgument(
   }
   const shown = describeIrType program, wanted
   found.add "{at}: parameter {index} of {callee} is `{shown}` and its place is `{describeIrType(program, annotation)}`"
+}
+
+/**
+ * A closure value: the function it points at has to be callable with exactly the closure's own parameters, after the
+ * **environment** that stands in front of them wherever there are captures at all.
+ *
+ * The environment is what ties the two halves together, so this is where a lowering that puts the wrong value into a
+ * field of it, or that forgets one, is caught: one field per capture, and the type of each of them is the type of what
+ * the frame handed over.
+ */
+fn verifyClosure(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  callee: FunctionId,
+  captures: List<Capture>,
+  signature: IrSignatureId,
+) {
+  const target = program.functionAt callee
+  const shape = program.signatureAt signature
+  const layout = environmentLayoutOf program, target
+  const first = match layout {
+    Some(_) => 1
+    None => 0
+  }
+  if target.signature.parameters.length() != shape.parameters.length() + first {
+    found.add "{at}: `{target.name}` does not take the parameters of `{describeIrType(program, resultTypeOfSignature(program, signature))}`"
+    return
+  }
+  for index in 0..shape.parameters.length() {
+    const declared = target.signature.parameters[index + first]
+    const wanted = shape.parameters[index]
+    if declared.annotation != wanted.annotation || declared.isReference != wanted.isReference {
+      found.add "{at}: parameter {index} of `{target.name}` is not the parameter the closure type declares"
+    }
+  }
+  if target.signature.result != shape.result {
+    found.add "{at}: `{target.name}` does not answer what the closure type declares"
+  }
+  const fields = match layout {
+    Some(inner) => program.layoutAt(inner).fields
+    None => []
+  }
+  if fields.length() != captures.length() {
+    found.add "{at}: the environment of `{target.name}` holds {fields.length()} values and {captures.length()} were captured"
+    return
+  }
+  for index in 0..captures.length() {
+    const slot = match slotOfCapture(captures[index]) {
+      Some(inner) => inner
+      None => {
+        continue
+      }
+    }
+    if !function.hasSlot(slot) {
+      found.add "{at}: there is no slot %{slot.value}"
+      continue
+    }
+    if function.typeOfSlot(slot) != fields[index].annotation {
+      const shown = describeIrType program, fields[index].annotation
+      found.add "{at}: the environment of `{target.name}` keeps `{shown}` and %{slot.value} is `{describeIrType(program, function.typeOfSlot(slot))}`"
+    }
+  }
+}
+
+/** A closure body is the one kind of function whose first parameter is the environment of a closure. */
+fn environmentLayoutOf(program: IrProgram, target: IrFunction): LayoutId? {
+  const parameter = target.signature.parameters.first()?
+  const layout = layoutOfType(program, parameter.annotation)?
+  if !isEnvironmentLayout(program.layoutAt(layout)) {
+    return None
+  }
+  Some layout
+}
+
+/** The slot a capture hands over, or `None` for a place - which carries a whole path and not one value. */
+fn slotOfCapture(capture: Capture): Slot? {
+  match capture {
+    .Value(slot) => Some slot
+    .Boxed(slot) => Some slot
+    .Place(_) => None
+  }
+}
+
+fn resultTypeOfSignature(program: IrProgram, signature: IrSignatureId): IrTypeId {
+  program.signatureAt(signature).result
 }
 
 fn verifyWitness(program: IrProgram, function: IrFunction, var found: List<String>, at: String, witness: WitnessSource) {

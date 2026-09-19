@@ -350,6 +350,137 @@ group "`shared type` and `shared trait`" {
       """
     assert problems(source).isEmpty()
   }
+
+  /**
+   * A `var` of a value is copy in, copy out, and the copy back happens when the call returns - before a task it
+   * answered has run. For a shared object `var` is a permission and not an exclusive access, which is what lets
+   * `Source.next(var self)` answer a `Task` (docs/STREAMS.md).
+   */
+  test "a `var self` that answers a `Task` needs a shared type" {
+    const source = r"""
+      type Bag {
+        var items: List<Int>
+
+        fn take(var self, value: Int): Task<Int> {
+          items.add(value)
+          items.length()
+        }
+      }
+      """
+    assert(problems(source) == ["`take` changes `self` and answers a `Task`, and `Bag` is a value"])
+    const note = "A `var` of a value is copy in, copy out, and the copy back happens when the call returns"
+      + " - before the task has run. Only a `shared type` can be changed by a task"
+    assert(notes(source) == [note])
+  }
+
+  test "and so does a `var` parameter that answers a `Task`" {
+    const source = r"""
+      fn fill(var bag: Bag, amount: Int): Task<Int> {
+        amount
+      }
+
+      type Bag {
+        var items: List<Int>
+      }
+      """
+    assert(problems(source) == ["`fill` changes `bag` and answers a `Task`, and `Bag` is a value"])
+  }
+
+  test "an ordinary trait is not enough either: a value could implement it" {
+    const source = r"""
+      trait Counter {
+        fn bump(var self): Task<Int>
+      }
+      """
+    assert(
+      problems(source) == ["`bump` changes `self` and answers a `Task`, and `Counter` is not a `shared trait`"]
+    )
+    assert(
+      notes(source)
+        == [
+          "An ordinary trait can be implemented by a value, and a value cannot be changed by a task:"
+            + " write `shared trait Counter`",
+        ]
+    )
+  }
+
+  test "a `shared trait` and a `shared type` may be changed by a task" {
+    const source = r"""
+      shared trait Ticking {
+        fn tick(var self): Task<Int>
+      }
+
+      shared type Clockwork with Ticking {
+        var ticks: Int
+
+        fn tick(var self): Task<Int> {
+          ticks = ticks + 1
+          ticks
+        }
+      }
+
+      fn run(var machine: Ticking): Task<Int> {
+        machine.tick().await()
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+
+  /** Two pulls in a row through one `var` binding: a shared object is never an exclusive access across an `await`. */
+  test "exclusivity says nothing about two changes of one shared object in a row" {
+    const source = r"""
+      shared trait Ticking {
+        fn tick(var self): Task<Int>
+      }
+
+      fn twice(var machine: Ticking): Task<Int> {
+        const first = machine.tick().await()
+        const second = machine.tick().await()
+        first + second
+      }
+
+      fn onward(var machine: Ticking): Task<Int> {
+        const once = twice(machine).await()
+        once + twice(machine).await()
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+
+  /** A wrapper pulls from a `var` field across an `await`, which is what every stage of `std/stream` does. */
+  test "a `var` field of a shared object may be changed across an `await`" {
+    const source = r"""
+      shared trait Ticking {
+        fn tick(var self): Task<Int>
+      }
+
+      shared type Doubling with Ticking {
+        var upstream: Ticking
+        var seen: Int
+
+        fn tick(var self): Task<Int> {
+          const value = upstream.tick().await()
+          seen = seen + 1
+          value + value
+        }
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+
+  /** The shape of `Source.produce`: a closure that takes the end it writes into as a `var` parameter. */
+  test "a closure may take a shared object as a `var` parameter" {
+    const source = r"""
+      shared trait Ticking {
+        fn tick(var self): Task<Int>
+      }
+
+      fn drive(var machine: Ticking, body: (var machine: Ticking) => Result<Int, String>): Task<Int> {
+        body(machine).orElse(0)
+      }
+      """
+    assert problems(source).isEmpty()
+  }
 }
 
 group "`isSame` compares identity (BACKEND gap 15)" {

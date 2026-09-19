@@ -9,6 +9,7 @@ use substitute from "../semantics/checker/unify"
 use IrTypeId, IrType, IrProgram, IrTrait, TraitId, RuntimeKind from "./ir"
 use IrSignature, IrSignatureId, IrParameter, Ownership, LayoutId from "./ir"
 use Layout, LayoutKind, FieldLayout, VariantLayout from "./layout"
+use cellLayoutOf, thunkTypeOf from "./capture"
 use SymbolPath, layoutName, tupleLayoutName from "./mangle"
 
 /**
@@ -220,10 +221,40 @@ fn instantiateParameterType(
   const empty: Map<ParameterId, TypeId> = [:]
   const annotation = instantiateType program, checker, instantiation, empty, parameter.annotation
   match parameter.mode {
-    .Lazy => program.internType IrType.Lazy(annotation)
+    .Lazy => cellType program, checker, instantiation, parameter.annotation, annotation
     .Variadic => program.internType IrType.Runtime(RuntimeKind.ListStorage, [annotation])
     _ => annotation
   }
+}
+
+/**
+ * `lazy Value` as a parameter: a counted block holding the value once something forced it, and the thunk that makes it.
+ *
+ * It is a **layout of the program** and not a type of its own, so its C struct, its place in the definition order and the
+ * `D_` helper that releases what is in it are the ones every other counted block has (BACKEND 5.8). `IrType.Lazy` is
+ * therefore never produced: a cell is an ordinary `Record` of a `LayoutKind.Cell` layout, which nothing may ever make
+ * unique - the caller and every read inside the callee share the one cell.
+ */
+public fn cellType(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  item: TypeId,
+  inner: IrTypeId,
+): IrTypeId {
+  const empty: Map<ParameterId, TypeId> = [:]
+  const option = match checker.wellKnown.option {
+    Some(found) => found
+    None => {
+      program.reportProblem "A `lazy` parameter needs the `Option` of the prelude"
+      return inner
+    }
+  }
+  const named = checker.nominal option, [item]
+  const optional = instantiateType program, checker, instantiation, empty, named
+  const thunk = thunkTypeOf program, inner
+  const layout = cellLayoutOf program, inner, optional, thunk
+  program.internType IrType.Record(layout)
 }
 
 fn isReferenceMode(mode: ParameterMode): Bool {

@@ -1,8 +1,9 @@
 use IrProgram, IrFunction, IrSignature, IrTypeId, LayoutId, FunctionId from "../../ir/ir"
 use Slot, SlotDeclaration, BlockId, Instruction, Terminator, Argument, WitnessSource from "../../ir/ir"
-use Reference, LocationId, RuntimeKind, WitnessRoot, WitnessTableId from "../../ir/ir"
+use Reference, LocationId, RuntimeKind, WitnessRoot, WitnessTableId, Capture from "../../ir/ir"
 use Intrinsic, IntrinsicOperation, NumericKind from "../../ir/ir"
 use Layout, isManagedType, containsCountedType from "../../ir/layout"
+use isEnvironmentLayout from "../../ir/capture"
 use suffixOfNumeric from "../../ir/print"
 use payloadLayoutName from "../../ir/mangle"
 use Emission, reportUnsupported, slotNameOf, locationExpression, lineDirectiveOf from "./emission"
@@ -421,12 +422,16 @@ fn instructionStatements(
       statements.add CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_panic"), [name, site]))
       statements
     }
-    .CallClosure(_, _, _) => reported emission, "a call of a closure value (milestone 5.8)"
+    .CallClosure(target, callee, arguments) => {
+      closureCallStatements emission, program, body, target, callee, arguments
+    }
     .CallWitness(target, witness, member, arguments) => {
       witnessCallStatements emission, program, body, target, witness, member, arguments
     }
-    .Closure(_, _, _, _) => reported emission, "a closure (milestone 5.8)"
-    .BoxNew(_, _) => reported emission, "a captured `var` binding (milestone 5.8)"
+    .Closure(target, callee, captures, _) => {
+      closureStatements emission, program, body, target, callee, captures
+    }
+    .BoxNew(_, _) => reported emission, "a box built by an instruction instead of by a `construct`"
     .TraitValue(target, value, tables) => {
       traitValueStatements emission, program, body, target, value, tables
     }
@@ -496,6 +501,11 @@ public fn retainStatement(program: IrProgram, id: IrTypeId, place: CExpression):
       Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [data]))
     }
     .Text => Some retainedInto(place, "torb_text_retained")
+    // A closure owns its environment and borrows its code pointer, which is static
+    .Closure(_) => {
+      const held = CExpression.Member place, environmentMemberName
+      Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [held]))
+    }
     .Runtime(kind, _) => {
       match kind {
         .ListStorage => Some retainedInto(place, "torb_list_retained")
@@ -507,6 +517,11 @@ public fn retainStatement(program: IrProgram, id: IrTypeId, place: CExpression):
     _ => None
   }
 }
+
+/** The two members of `torb_closure`: the code pointer the thunks of the program fill in, and the environment. */
+public const codeMemberName = "code"
+
+public const environmentMemberName = "environment"
 
 /** A slice and a container answer the retained value rather than taking one, so the place is written back. */
 fn retainedInto(place: CExpression, symbol: String): CStatement {
@@ -537,6 +552,11 @@ public fn releaseStatement(program: IrProgram, id: IrTypeId, place: CExpression)
       Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_release"), [data, drop]))
     }
     .Text => Some releasedBy(place, "torb_text_release")
+    // The environment carries its own drop function, because a closure value has erased which captures are in it
+    .Closure(_) => {
+      const held = CExpression.Member place, environmentMemberName
+      Some CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_environment_release"), [held]))
+    }
     .Runtime(kind, _) => {
       match kind {
         .ListStorage => Some releasedBy(place, "torb_list_release")
@@ -917,6 +937,168 @@ fn runtimeCallStatements(
       callStatementOf emission, body, target, function, symbol, written, annotation
     }
     .Mismatch(what) => reported emission, what
+  }
+}
+
+// --- Closures ---------------------------------------------------------------------------------------------------------
+
+/**
+ * `Closure`: the environment as a counted block, then the two members of the closure value.
+ *
+ * The code pointer is the **thunk** of the target function and never the function itself, which is what makes the cast
+ * back at the call site well defined: the thunk really has the erased signature `(torb_environment *, ...)`, and it is
+ * what turns a function without an environment - a named function used as a value - into a closure for free.
+ *
+ * A closure without captures has no environment at all: the null pointer, which `torb_retain` and
+ * `torb_environment_release` both treat as nothing.
+ */
+fn closureStatements(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot,
+  callee: FunctionId,
+  captures: List<Capture>,
+): List<CStatement> {
+  if !program.hasFunction(callee) {
+    return reported emission, "a closure of a function that is not in the program"
+  }
+  const function = program.functionAt callee
+  const place = slotExpression body, target
+  const code = CExpression.Cast closureCodeType, CExpression.Name(closureThunkNameOf(function.name))
+  const layout = environmentLayoutOfFunction program, function
+  const found = match layout {
+    Some(inner) => inner
+    None => {
+      if !captures.isEmpty() {
+        return reported emission, "a closure with captures whose function takes no environment"
+      }
+      return [
+        CStatement.Assignment(CExpression.Member(place, codeMemberName), code),
+        CStatement.Assignment(CExpression.Member(place, environmentMemberName), nullPointer),
+      ]
+    }
+  }
+  const shape = program.layoutAt found
+  if shape.fields.length() != captures.length() {
+    return reported emission, "a closure whose environment does not hold exactly its captures"
+  }
+  const spelling = "{shape.name} *"
+  var inner: List<CStatement> = []
+  const allocated = CExpression.Call(CExpression.Name("torb_allocate"), [
+    sizeOf(shape.name),
+    CExpression.Name("TORB_BLOCK_ENVIRONMENT"),
+  ])
+  inner.add CStatement.Declaration(spelling, "environment", Some(CExpression.Cast(spelling, allocated)))
+  const drop = CExpression.PointerMember CExpression.Name("environment"), "drop"
+  inner.add CStatement.Assignment(drop, dropFunctionOf(program, found))
+  for index in 0..captures.length() {
+    const member = CExpression.PointerMember CExpression.Name("environment"), memberNameOf(shape.fields[index])
+    const value = captureExpression emission, program, body, captures[index]
+    inner.add CStatement.Assignment(member, value)
+  }
+  inner.add CStatement.Assignment(CExpression.Member(place, codeMemberName), code)
+  const erased = CExpression.Cast "torb_environment *", CExpression.Name("environment")
+  inner.add CStatement.Assignment(CExpression.Member(place, environmentMemberName), erased)
+  [CStatement.Block(inner)]
+}
+
+/** What one capture puts into the environment: the value, the box, or the pointer of a place. */
+fn captureExpression(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  capture: Capture,
+): CExpression {
+  match capture {
+    .Value(slot) => slotExpression body, slot
+    .Boxed(slot) => slotExpression body, slot
+    .Place(reference) => {
+      reportUnsupported emission, "a closure that captures a `var` parameter (milestone 5.9b)"
+      CExpression.AddressOf placeExpression(emission, program, body, reference)
+    }
+  }
+}
+
+/** `void (*)(void)`, the one type a code pointer is stored as. Every call converts it back to the thunk's own. */
+const closureCodeType = "void (*)(void)"
+
+/** `F_t_main_run`: the thunk of one function, which is what a closure value points at. */
+public fn closureThunkNameOf(name: String): String {
+  "F_{name}"
+}
+
+/**
+ * The environment of a closure body, out of its first parameter. A closure body is the one kind of function whose first
+ * parameter is a `LayoutKind.Environment` record, so nothing else has to be recorded about it anywhere.
+ */
+public fn environmentLayoutOfFunction(program: IrProgram, function: IrFunction): LayoutId? {
+  const parameter = function.signature.parameters.first()?
+  const layout = match program.typeAt(parameter.annotation) {
+    .Record(found) => found
+    _ => {
+      return None
+    }
+  }
+  if !program.hasLayout(layout) {
+    return None
+  }
+  if !isEnvironmentLayout(program.layoutAt(layout)) {
+    return None
+  }
+  Some layout
+}
+
+/**
+ * `CallClosure`: the code pointer, converted back to the signature the thunk of the closure really has, applied to the
+ * environment and the written arguments.
+ */
+fn closureCallStatements(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot?,
+  callee: Slot,
+  arguments: List<Argument>,
+): List<CStatement> {
+  const annotation = typeOfSlot body, callee
+  const identifier = match program.typeAt(annotation) {
+    .Closure(found) => found
+    _ => {
+      return reported emission, "a call of a value that is not a closure"
+    }
+  }
+  const signature = program.signatureAt identifier
+  if isByPointerSignature(signature) {
+    return reported emission, "a call of a closure whose result is written through a pointer (milestone 5.4)"
+  }
+  const held = slotExpression body, callee
+  var spellings = ["torb_environment *"]
+  for parameter in signature.parameters {
+    const spelling = valueTypeOf program, parameter.annotation
+    spellings.add(if parameter.isReference { pointerTo spelling } else { spelling })
+  }
+  const result = resultTypeOf program, signature.result
+  const shape = "{result} (*)({spellings.joined(separator: ", ")})"
+  var given = [CExpression.Member(held, environmentMemberName)]
+  given.addAll argumentsOf(emission, program, body, signature, arguments)
+  const code = CExpression.Cast shape, CExpression.Member(held, codeMemberName)
+  const called = CExpression.Call code, given
+  match target {
+    Some(slot) => {
+      if result == "void" {
+        return [CStatement.Evaluate(called)]
+      }
+      [CStatement.Assignment(slotExpression(body, slot), called)]
+    }
+    None => [CStatement.Evaluate(called)]
+  }
+}
+
+fn isByPointerSignature(signature: IrSignature): Bool {
+  match signature.resultMode {
+    .ByPointer => true
+    .ByValue => false
   }
 }
 
@@ -1491,6 +1673,8 @@ public fn emptyNicheExpression(program: IrProgram, shape: Layout): CExpression {
   }
   match program.typeAt(payload) {
     .Text => emptySlice "torb_text", 3
+    // A closure whose code pointer is null is no closure, which is what makes `Option<() => Void>` cost nothing
+    .Closure(_) => emptySlice "torb_closure", 2
     .Runtime(kind, _) => {
       match kind {
         .ListStorage => emptySlice "torb_list", 3
@@ -1572,6 +1756,7 @@ fn nullTestOf(program: IrProgram, shape: Layout, name: CExpression): CExpression
     .Text => storageTestOf name
     // Every container of the ABI carries its storage in the same first member
     .Runtime(_, _) => storageTestOf name
+    .Closure(_) => CExpression.Binary CExpression.Member(name, codeMemberName), "!=", nullPointer
     _ => CExpression.Binary name, "!=", nullPointer
   }
 }

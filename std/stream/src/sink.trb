@@ -1,18 +1,21 @@
 /**
- * The writing end of a stream: the asynchronous sibling of `Accumulator`, with the same two verbs.
+ * The writing end of a stream: the asynchronous sibling of `Accumulator`, with the same two verbs and the same
+ * `var self`.
  */
 
 use Source from "./source"
 
 /**
- *     const file = File.create(path)?
+ *     var file = File.create(path)?
  *     using file { target =>
  *       target.addLine("first").await()?
  *       target.finish().await()
  *     }
  *
- * A sink has an identity and is finished once, so it is a `shared type`, and `add` takes `self` for the same reason
- * `Source.next` does: an exclusive access cannot stay open across an `await`.
+ * A sink has an identity and is finished once, so it is a `shared type`, and `add` and `finish` change it: they take
+ * `var self`, exactly as `Accumulator.add` does. **A sink that is written to sits in a `var` binding**, and a `const`
+ * handle is the read-only view every shared object has. A `var self` method may answer a `Task` because for an object
+ * `var` is a permission and not an exclusive access that ends with the call (CONCEPT, "Identity").
  *
  * - **Backpressure is the `await` on `add`.** The task finishes when the target has taken the item, not before, so a
  *   writer that is faster than its target waits by itself and nothing piles up.
@@ -23,16 +26,18 @@ use Source from "./source"
  * - **`close()` is the abrupt end:** it releases the target and cannot fail, which is what `Close` and `using` need.
  *   A sink that is closed without `finish()` may have written less than it was given - that is the point of the two.
  * - **Buffering is never implicit.** `sink.buffered(capacity:)` says it, and `Buffered.flush()` is where it is forced.
+ * - **Wrapping hands the sink over,** as on the reading end: `mapFailure` and `buffered` take `self`, because they
+ *   write nothing themselves and the wrapper is what writes from then on.
  */
 public shared trait Sink<Item, Failure> with Close {
   /** Finishes when the target has taken the item. */
-  fn add(self, item: Item): Task<Result<Void, Failure>>
+  fn add(var self, item: Item): Task<Result<Void, Failure>>
 
   /** No more items. Flushes, reports what is left to report, and makes every further `add` fail. */
-  fn finish(self): Task<Result<Void, Failure>>
+  fn finish(var self): Task<Result<Void, Failure>>
 
   /** Everything an `Iterable` holds, in order. Does not finish the sink: a sink may be filled from several places. */
-  fn addAll(self, items: Iterable<Item>): Task<Result<Void, Failure>> {
+  fn addAll(var self, items: Iterable<Item>): Task<Result<Void, Failure>> {
     for item in items {
       add(item).await()?
     }
@@ -40,18 +45,13 @@ public shared trait Sink<Item, Failure> with Close {
   }
 
   /** Reads `source` empty into this sink and finishes it: the same pump as `source.into(sink)`, from this side. */
-  fn fill(self, source: Source<Item, Failure>): Task<Result<Void, Failure>> {
+  fn fill(var self, var source: Source<Item, Failure>): Task<Result<Void, Failure>> {
     source.into(self).await()
   }
 
   /** A sink for the same items with a failure of another type: what `mapError` is on a `Result`. */
   fn mapFailure<Other>(self, transform: (failure: Failure) => Other): Sink<Item, Other> {
-    const target = self
-    const accept: (item: Item) => Task<Result<Void, Other>> = {
-      item => Ok(target.add(item).await().mapError(transform)?)
-    }
-    const complete: () => Task<Result<Void, Other>> = { Ok(target.finish().await().mapError(transform)?) }
-    Pushing.of accept, complete: complete, below: Some(self)
+    Remapped.of self, transform
   }
 
   /**
@@ -62,21 +62,26 @@ public shared trait Sink<Item, Failure> with Close {
     Buffered.of self, capacity: capacity
   }
 
+  /**
+   * Two closures instead of a type: the escape hatch for a sink with no state worth a type of its own. With state,
+   * write an ordinary `shared type` with `var` fields.
+   */
+  fn pushing(
+    accept: (item: Item) => Task<Result<Void, Failure>>,
+    complete: () => Task<Result<Void, Failure>>,
+  ): Sink<Item, Failure> {
+    Pushing.of accept, complete
+  }
+
   /** Everything written into it is dropped. What `/dev/null` is, and what a test writes into. */
   fn discarding(): Sink<Item, Failure> {
-    const accept: (item: Item) => Task<Result<Void, Failure>> = { _ => Ok void }
-    const complete: () => Task<Result<Void, Failure>> = { Ok void }
-    Pushing.of accept, complete: complete
+    Discarding<Item, Failure>()
   }
 }
 
-// --- One type for every sink that is built out of another -------------------------------------------------------------
+// --- Closures as a sink, and a sink that drops -----------------------------------------------------------------------
 
-/**
- * Every sink `std/stream` derives from another one is this type: one closure per verb, and the thing below it that has
- * to be released. Its state lives in the `var` bindings those closures captured - see `Pulling` in `source.trb` for
- * why a `shared type` written in TorbScript keeps it there and not in a field.
- */
+/** `Sink.pushing(accept, complete)`: one closure per verb, and the thing below it that has to be released. */
 public shared type Pushing<Item, Failure> with Sink<Item, Failure> {
   private accept: (item: Item) => Task<Result<Void, Failure>>
   private complete: () => Task<Result<Void, Failure>>
@@ -90,11 +95,11 @@ public shared type Pushing<Item, Failure> with Sink<Item, Failure> {
     Pushing accept, complete, below
   }
 
-  fn add(self, item: Item): Task<Result<Void, Failure>> {
+  fn add(var self, item: Item): Task<Result<Void, Failure>> {
     accept(item).await()
   }
 
-  fn finish(self): Task<Result<Void, Failure>> {
+  fn finish(var self): Task<Result<Void, Failure>> {
     complete().await()
   }
 
@@ -102,6 +107,40 @@ public shared type Pushing<Item, Failure> with Sink<Item, Failure> {
     if var Some(target) = below {
       target.close()
     }
+  }
+}
+
+shared type Discarding<Item, Failure> with Sink<Item, Failure> {
+  fn add(var self, item: Item): Task<Result<Void, Failure>> {
+    Ok void
+  }
+
+  fn finish(var self): Task<Result<Void, Failure>> {
+    Ok void
+  }
+
+  fn close(var self) {}
+}
+
+/** `sink.mapFailure(transform)`. */
+shared type Remapped<Item, Failure, Other> with Sink<Item, Other> {
+  private var downstream: Sink<Item, Failure>
+  private transform: (failure: Failure) => Other
+
+  fn of(downstream: Sink<Item, Failure>, transform: (failure: Failure) => Other): Remapped<Item, Failure, Other> {
+    Remapped downstream, transform
+  }
+
+  fn add(var self, item: Item): Task<Result<Void, Other>> {
+    Ok(downstream.add(item).await().mapError(transform)?)
+  }
+
+  fn finish(var self): Task<Result<Void, Other>> {
+    Ok(downstream.finish().await().mapError(transform)?)
+  }
+
+  fn close(var self) {
+    downstream.close()
   }
 }
 
@@ -121,47 +160,34 @@ public shared type Pushing<Item, Failure> with Sink<Item, Failure> {
  */
 public shared type Buffered<Item, Failure> with Sink<Item, Failure> {
   private var downstream: Sink<Item, Failure>
-  /** Buffers the item and answers what has to go down now. `None` asks for everything that is left. */
-  private buffer: (item: Item?) => List<Item>
+  private capacity: Int = 64
+  private var pending: List<Item> = []
 
   fn of(downstream: Sink<Item, Failure>, capacity: Int = 64): Buffered<Item, Failure> {
-    const size = capacity.max 1
-    var pending: List<Item> = []
-    Buffered(
-      downstream,
-      { item =>
-        if const Some(value) = item {
-          pending.add value
-          if pending.length() < size {
-            return []
-          }
-        }
-        const ready = pending
-        pending = []
-        ready
-      },
-    )
+    Buffered downstream, capacity.max(1)
   }
 
-  fn add(self, item: Item): Task<Result<Void, Failure>> {
-    write(buffer(Some(item))).await()
+  fn add(var self, item: Item): Task<Result<Void, Failure>> {
+    pending.add item
+    if pending.length() < capacity {
+      return Ok void
+    }
+    flush().await()
   }
 
   /** Writes everything that is buffered, and finishes when it has arrived below. */
-  fn flush(self): Task<Result<Void, Failure>> {
-    write(buffer(None)).await()
-  }
-
-  fn finish(self): Task<Result<Void, Failure>> {
-    flush().await()?
-    downstream.finish().await()
-  }
-
-  private fn write(self, ready: List<Item>): Task<Result<Void, Failure>> {
+  fn flush(var self): Task<Result<Void, Failure>> {
+    const ready = pending
+    pending = []
     for one in ready {
       downstream.add(one).await()?
     }
     Ok void
+  }
+
+  fn finish(var self): Task<Result<Void, Failure>> {
+    flush().await()?
+    downstream.finish().await()
   }
 
   fn close(var self) {

@@ -1,0 +1,113 @@
+use IrProgram, IrTypeId, IrType, IrSignature, LayoutId from "./ir"
+use Layout, LayoutKind, FieldLayout, isSharedStorageKind from "./layout"
+use boxLayoutName, cellLayoutName, environmentLayoutName from "./mangle"
+
+/**
+ * The three layouts a closure needs: the environment that holds its captures, the box a captured `var` binding lives in,
+ * and the memo cell of a `lazy` parameter.
+ *
+ * **Everything a closure stores is a layout** (milestone 5.8). That is not a convenience: a layout already carries a C
+ * struct, its place in the definition order, the `containsCounted` flag and the `R_`/`D_` pair the ownership pass emits
+ * for every counted block, so nothing about a closure needs a second way to be retained and dropped. It is the same
+ * decision that made the boxed payload of a trait-typed value an ordinary layout in 5.6, for the same reason - a second
+ * mechanism beside the layouts is a second place to get a retain wrong.
+ *
+ * The two of them that are **shared on purpose** - the box and the cell - carry a `LayoutKind` that says so, because
+ * `MakeUnique` may never copy one: a box is the one place where a variable is shared (gap 19), and a cell is what
+ * "evaluated at most once" rests on.
+ */
+
+/** The one field of a box, and the field of a cell that holds the value once something forced it. */
+public const boxFieldName = "value"
+
+/** The field of a cell that holds the thunk. */
+public const cellThunkName = "thunk"
+
+/**
+ * The layout of the shared box of a captured `var` binding of this type: one field, always a counted block.
+ *
+ * A read of the binding is a `Read` through `Field(box, 0)` and a write a `Write` through the same path, so both sides
+ * of the capture see one variable - which is the whole of gap 19.
+ */
+public fn boxLayoutOf(var program: IrProgram, item: IrTypeId): LayoutId {
+  const name = boxLayoutName program, item
+  const reserved = program.reserveLayout name, LayoutKind.Box
+  if reserved.isFresh {
+    const layout = program.layoutAt reserved.layout
+    const fields = [FieldLayout(boxFieldName, item, None)]
+    program.setLayout reserved.layout, layout.copy(arguments: [item], fields: fields, isBuilt: true)
+  }
+  reserved.layout
+}
+
+/**
+ * The layout of the memo cell of a `lazy Value` parameter: the value once it was forced, and the thunk that makes it.
+ *
+ * `value` is an `Option<Value>` rather than a flag next to a `Value`, because the drop of the cell has to be the
+ * ordinary drop of its fields: `None` releases to nothing, while a field holding a half-initialized `Value` would need
+ * a drop that asks a flag first - a second shape of a counted block, for one parameter mode.
+ */
+public fn cellLayoutOf(
+  var program: IrProgram,
+  item: IrTypeId,
+  optional: IrTypeId,
+  thunk: IrTypeId,
+): LayoutId {
+  const name = cellLayoutName program, item
+  const reserved = program.reserveLayout name, LayoutKind.Cell
+  if reserved.isFresh {
+    const layout = program.layoutAt reserved.layout
+    const fields = [FieldLayout(boxFieldName, optional, None), FieldLayout(cellThunkName, thunk, None)]
+    program.setLayout reserved.layout, layout.copy(arguments: [item], fields: fields, isBuilt: true)
+  }
+  reserved.layout
+}
+
+/** The type of the thunk of a cell: a closure that takes nothing and answers the value. */
+public fn thunkTypeOf(var program: IrProgram, item: IrTypeId): IrTypeId {
+  const signature = program.internSignature IrSignature([], item)
+  program.internType IrType.Closure(signature)
+}
+
+/**
+ * The layout of the environment of one closure: one field per capture, in the order the checker recorded them.
+ *
+ * It is named after the closure's own function, so it needs no id to be unique, and it is a counted block whatever it
+ * costs - every copy of a closure value shares the one environment.
+ */
+public fn environmentLayoutOf(var program: IrProgram, closure: String, fields: List<FieldLayout>): LayoutId {
+  const name = environmentLayoutName closure
+  const reserved = program.reserveLayout name, LayoutKind.Environment
+  if reserved.isFresh {
+    const layout = program.layoutAt reserved.layout
+    program.setLayout reserved.layout, layout.copy(fields: fields, isBuilt: true)
+  }
+  reserved.layout
+}
+
+/** Whether a type is a block of one of the two kinds nothing may ever make unique: a box, or a `lazy` cell. */
+public fn isSharedStorage(program: IrProgram, id: IrTypeId): Bool {
+  const layout = match program.typeAt(id) {
+    .Record(found) => found
+    _ => {
+      return false
+    }
+  }
+  if !program.hasLayout(layout) {
+    return false
+  }
+  isSharedStorageLayout program.layoutAt(layout)
+}
+
+/** Whether the layout itself is one of those two. */
+public fn isSharedStorageLayout(layout: Layout): Bool {
+  isSharedStorageKind layout.kind
+}
+
+/** Whether a layout is the environment of a closure, which the emitter gives a drop pointer of its own. */
+public fn isEnvironmentLayout(layout: Layout): Bool {
+  match layout.kind {
+    .Environment => true
+    _ => false
+  }
+}

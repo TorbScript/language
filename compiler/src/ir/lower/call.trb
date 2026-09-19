@@ -2,6 +2,7 @@ use Span from "../../syntax/source"
 use Expression, Argument, FunctionDeclaration from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
 use TypeId, ParameterId, Signature, FieldSignature from "../../semantics/checker/type"
+use substitute from "../../semantics/checker/unify"
 use Resolution, Dispatch from "../../semantics/checker/context"
 use signatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
@@ -23,6 +24,7 @@ use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expr
 use variantIndexOf from "./match"
 use emitIntrinsic, receiverSlot from "./expression"
 use Dispatched, dispatchedMember from "./generic"
+use lowerClosureCall, lowerLazyArgument, lazyParametersOf, lowerConstructorValue from "./closure"
 
 /**
  * Calls, constructors and operators: which function a call reaches, and in which order its arguments are evaluated.
@@ -65,11 +67,10 @@ public fn lowerCall(
     .CaseOf(_, variant) => {
       lowerCaseCall lowering, builder, destination, expression, arguments, annotation, variant
     }
-    .Local(_) | .Field(_, _) => {
-      unsupportedSlot lowering, builder, destination, "a call of a closure value", expression.span
-    }
-    .Constant(_, _) => {
-      unsupportedSlot lowering, builder, destination, "a call of a `const` that holds a closure", expression.span
+    // A local, a field, a parameter and a top-level binding of an entry file: whatever holds the closure is lowered as
+    // a value, and the type it turns out to have is what says how the call is made
+    .Local(_) | .Field(_, _) | .Constant(_, _) => {
+      lowerClosureCall lowering, builder, destination, expression, callee, arguments, annotation
     }
     // `port 8080`: a call of a member that is not callable writes it, which is an assignment written another way
     .PropertyWrite(_, _, kind) => {
@@ -165,7 +166,8 @@ fn lowerCallable(
       places.add None
     }
   }
-  const written = lowerArgumentSlots lowering, builder, expression, arguments, signature
+  const plan = dispatched.mapping
+  const written = lowerArgumentSlots lowering, builder, expression, arguments, signature, plan
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
   }
@@ -486,6 +488,7 @@ public fn lowerArgumentSlots(
   expression: Expression,
   arguments: List<Argument>,
   signature: Signature,
+  mapping: Map<ParameterId, TypeId> = [:],
 ): CallOperands {
   const module = lowering.module
   const count = signature.form.parameters.length()
@@ -497,6 +500,7 @@ public fn lowerArgumentSlots(
     }
   }
   const references = referenceParametersOf signature
+  const lazies = lazyParametersOf signature
   var filled: List<Slot?> = []
   var places: List<Reference?> = []
   for _ in 0..count {
@@ -508,6 +512,18 @@ public fn lowerArgumentSlots(
     if position < 0 || position >= count {
       reportUnsupported lowering, "an argument that fills no parameter", arguments[index].value.span
       return CallOperands([], [])
+    }
+    // `lazy Value`: the argument is an expression, so what is handed over is a thunk in a one-shot memo cell
+    if lazies.get(position) ?? false {
+      const item = lazyItemAt lowering, signature, position, mapping, arguments[index].value.span
+      const cell = match lowerLazyArgument(lowering, builder, arguments[index].value, item) {
+        Some(found) => found
+        None => {
+          return CallOperands([], [])
+        }
+      }
+      filled.set position, Some(cell)
+      continue
     }
     if references.get(position) ?? false {
       const path = match referenceArgumentAt(lowering, builder, arguments[index].value, signature, position) {
@@ -527,6 +543,31 @@ public fn lowerArgumentSlots(
     filled.set position, Some(slot)
   }
   lowerDefaults lowering, builder, expression, signature, filled, places, references
+}
+
+/**
+ * The inner type of a `lazy` parameter. The arguments of the **callee's** instance go in and not the caller's: the type
+ * is written in the callee's declaration, so `okOr(ConfigError(...))` has to read `Failure` through the mapping the
+ * dispatch decided.
+ */
+fn lazyItemAt(
+  var lowering: Lowering,
+  signature: Signature,
+  position: Int,
+  mapping: Map<ParameterId, TypeId>,
+  at: Span,
+): TypeId {
+  const parameter = match signature.form.parameters.get(position) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `lazy` parameter without a type", at
+      return lowering.checker.invalidType
+    }
+  }
+  if mapping.isEmpty() {
+    return parameter.annotation
+  }
+  substitute lowering.checker.types, parameter.annotation, mapping
 }
 
 /** One argument of a `var` parameter, whose place has to end in exactly the type the parameter declares. */
@@ -561,6 +602,7 @@ fn lowerDefaults(
   references: List<Bool>,
 ): CallOperands {
   var found = filled
+  const lazies = lazyParametersOf signature
   const defaults = declaredDefaults lowering, signature.symbol
   for index in 0..found.length() {
     if found[index].isSome() {
@@ -569,6 +611,11 @@ fn lowerDefaults(
     // A default is a value, so a `var` parameter nobody wrote an argument for has no place the callee could work on
     if references.get(index) ?? false {
       reportUnsupported lowering, "a `var` parameter that takes its default", expression.span
+      return CallOperands([], [])
+    }
+    // The default of a `lazy` parameter would have to become a thunk of the *callee's* module, which no call site builds
+    if lazies.get(index) ?? false {
+      reportUnsupported lowering, "a `lazy` parameter that takes its default", expression.span
       return CallOperands([], [])
     }
     const written = defaults.get(index) ?? None
@@ -886,13 +933,33 @@ public fn lowerCaseValue(
   variant: SymbolId,
   annotation: IrTypeId,
 ): Slot {
-  // A case that takes fields and is written without them is a function value, which is milestone 5.8's
+  // `Ok`, `Some`: a case that takes fields and is written without them is a function value like a constructor
   if layoutOfType(lowering.program, annotation).isNone() {
-    const name = lowering.checker.symbolAt(variant).name
-    const what = "`{name}` used as a function value (milestone 5.8)"
-    return unsupportedSlot lowering, builder, destination, what, expression.span
+    const layout = match layoutOfType(lowering.program, resultOfCaseValue(lowering, annotation)) {
+      Some(found) => found
+      None => {
+        const name = lowering.checker.symbolAt(variant).name
+        const what = "`{name}` used as a function value of a type without a layout"
+        return unsupportedSlot lowering, builder, destination, what, expression.span
+      }
+    }
+    const index = variantIndexOf lowering, layout, variant
+    if index < 0 {
+      const name = lowering.checker.symbolAt(variant).name
+      const what = "`{name}`, which the layout of its type does not have as a case"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+    return lowerConstructorValue lowering, builder, destination, expression, index, annotation
   }
   constructedCase lowering, builder, destination, expression, annotation, variant, []
+}
+
+/** What a case used as a function value builds: the result of the closure type the checker gave it. */
+fn resultOfCaseValue(var lowering: Lowering, annotation: IrTypeId): IrTypeId {
+  if const .Closure(signature) = lowering.program.typeAt(annotation) {
+    return lowering.program.signatureAt(signature).result
+  }
+  annotation
 }
 
 fn constructedCase(

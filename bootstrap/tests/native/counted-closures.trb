@@ -1,0 +1,114 @@
+use Process from "std/process"
+
+/**
+ * The leak gate of milestone 5.8: everything a closure can hold that carries a count.
+ *
+ * A `String` captured by value, a `String` shared through the box of a captured `var` binding, a trait-typed value in an
+ * environment, a closure captured by another closure, a closure stored in a field of a counted record, and a `lazy`
+ * `String` forced once. `native.rs` asserts `live blocks at exit: 0` for this program, which is the only way a retain the
+ * environment forgets or a drop it does twice shows up at all.
+ *
+ * `Capture.Value` of a trait-typed value retains the **payload** alone: the tables are static data of the program, so
+ * they are borrowed however often a closure copies them (BACKEND 5.6).
+ */
+trait Show2 {
+  fn text(self): String
+}
+
+type Word with Show2 {
+  letters: String
+
+  fn text(self): String {
+    letters
+  }
+}
+
+/** Above the inline limit, so it is a counted block whose field holds a closure. */
+type Holder {
+  first: String
+  second: String
+  transform: (String) => Int
+}
+
+fn size(text: String): Int {
+  text.byteLength()
+}
+
+/** A captured `String`: the environment owns one count of it and drops it with the closure. */
+fn lengthOf(text: String): Int {
+  const measure = {
+    size text
+  }
+  measure()
+}
+
+/** The same capture, in a closure that is returned and therefore outlives the call. */
+fn measurer(text: String): () => Int {
+  {
+    size(text) + size(text)
+  }
+}
+
+/** A captured `var` binding of a counted type: the box is shared, so both sides see the longer string. */
+fn grown(part: String, times: Int): Int {
+  var total = ""
+  const append = {
+    total = total + part
+  }
+  for _ in 0..times {
+    append()
+  }
+  size total
+}
+
+/** A trait-typed value in an environment: the boxed payload is retained, the table is not. */
+fn shown(value: Show2): Int {
+  const read = {
+    size value.text()
+  }
+  read() + read()
+}
+
+/** A closure captured by a closure, so that the outer environment releases the inner one. */
+fn wrapped(text: String): Int {
+  const inner = {
+    size text
+  }
+  const outer = {
+    inner() + inner()
+  }
+  outer()
+}
+
+fn held(holder: Holder): Int {
+  holder.transform(holder.first) + size(holder.second)
+}
+
+fn onceForced(fallback: lazy String): Int {
+  size(fallback) + size(fallback)
+}
+
+fn repeated(part: String, times: Int): String {
+  var total = ""
+  for _ in 0..times {
+    total = total + part
+  }
+  total
+}
+
+var total = 0
+
+const part = "ab"
+
+total = total + lengthOf(repeated(part, 3))
+
+const measure = measurer repeated(part, 2)
+total = total + measure()
+
+total = total + grown(part, 4)
+total = total + shown(Word(repeated(part, 2)))
+total = total + wrapped(repeated(part, 1))
+total = total + held(Holder(repeated(part, 2), "xyz", size))
+total = total + onceForced(repeated(part, 3))
+
+Process.exit(total % 251)

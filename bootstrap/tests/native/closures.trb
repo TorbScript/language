@@ -1,0 +1,161 @@
+use Process from "std/process"
+
+/**
+ * The gate of milestone 5.8: closures as native code. A closure that captures nothing, one that captures a value, one
+ * that shares a `var` binding through a box, one that is returned and called later, one stored in a field, function
+ * values of a named function, a receiver closure, and a `lazy` argument that is forced zero times and once.
+ *
+ * `examples/config-dsl` cannot be the gate: it loads a receiver **script** through `Sandbox.load` (milestone 7.4) and
+ * needs list literals, `for` over a collection and string interpolation on top of that. This is the same vocabulary
+ * without them.
+ *
+ * Every value here is a number or a record of numbers, so the exit code is the whole answer; `counted-closures.trb` is
+ * the same shape with `String`s and trait-typed values in it, which is where the leak gate bites.
+ */
+
+type Counter {
+  var hits: Int = 0
+}
+
+/** A record that holds a closure in a field, which is called through the field and never through a method. */
+type Button {
+  onClick: (Int) => Int
+  label: Int
+}
+
+/** A receiver closure configures its receiver in place, which is what the configuration DSL is made of. */
+type Settings {
+  var port: Int = 0
+  var retries: Int = 0
+}
+
+/** A closure that captures nothing: its environment is the null pointer. */
+fn applied(value: Int, transform: (Int) => Int): Int {
+  transform value
+}
+
+/** Two applications of one closure value, so that a copy of it is retained and released. */
+fn twice(value: Int, transform: (Int) => Int): Int {
+  transform transform(value)
+}
+
+/** A closure that is **returned**: it outlives the call, so its environment is a counted block of its own. */
+fn adder(amount: Int): (Int) => Int {
+  { value => value + amount }
+}
+
+/** A counter over a captured `var` binding: the closure and the frame see one variable (gap 19). */
+fn counted(times: Int): Int {
+  var hits = 0
+  const bump = {
+    hits = hits + 1
+  }
+  for _ in 0..times {
+    bump()
+  }
+  hits
+}
+
+/** A captured `var` binding of a record type, written through a field of the box. */
+fn countedRecord(times: Int): Int {
+  var counter = Counter()
+  const bump = {
+    counter.hits = counter.hits + 1
+  }
+  for _ in 0..times {
+    bump()
+  }
+  counter.hits
+}
+
+/** A named function used as a value, which becomes a closure without an environment. */
+fn doubled(value: Int): Int {
+  value * 2
+}
+
+type Wrapped {
+  value: Int
+}
+
+/** A **constructor** used as a value: it has no body anywhere, so the lowering generates one. */
+fn wrappedBy(value: Int, make: (Int) => Wrapped): Int {
+  make(value).value
+}
+
+/** A **case** used as a value, which is a constructor of one variant. */
+fn optionOf(value: Int, make: (Int) => Int?): Int {
+  match make(value) {
+    Some(found) => found
+    None => 0
+  }
+}
+
+/** A closure that captures two closures, so that an environment holds counted values. */
+fn composed(first: (Int) => Int, second: (Int) => Int): (Int) => Int {
+  { value => second first(value) }
+}
+
+fn clicked(button: Button, value: Int): Int {
+  button.onClick(value) + button.label
+}
+
+fn configured(configure: (var self: Settings) => Void): Settings {
+  var settings = Settings()
+  configure settings
+  settings
+}
+
+/** A `lazy` parameter that is never read: the thunk is built and never run. */
+fn ignored(value: Int, fallback: lazy Int): Int {
+  value
+}
+
+/** A `lazy` parameter that is read twice: the thunk runs once and the cell answers the second time. */
+fn twiceForced(fallback: lazy Int): Int {
+  fallback + fallback
+}
+
+/**
+ * How often a `lazy` argument really ran: the thunk of `ignored` never does, the thunk of `twiceForced` does once
+ * although the parameter is read twice. The side effect is a closure over a captured `var`, which is the only way a
+ * `lazy` expression can be counted at all.
+ */
+fn lazyRuns(): Int {
+  var runs = 0
+  const bump = {
+    runs = runs + 1
+    7
+  }
+  const skipped = ignored 1, bump()
+  const forced = twiceForced bump()
+  skipped + forced + runs * 100
+}
+
+var total = 0
+
+total = total + applied(3, { value => value * 5 })
+total = total + applied(4, doubled)
+total = total + wrappedBy(6, Wrapped)
+total = total + optionOf(9, Some)
+total = total + twice(1, { _ + 3 })
+
+const add = adder 10
+total = total + add(5)
+
+total = total + counted(4)
+total = total + countedRecord(3)
+
+const pipeline = composed doubled, { _ + 1 }
+total = total + pipeline(6)
+
+total = total + clicked(Button({ _ * 3 }, 2), 4)
+
+const settings = configured {
+  port 8
+  retries 2
+}
+total = total + settings.port + settings.retries
+
+total = total + lazyRuns()
+
+Process.exit(total % 251)

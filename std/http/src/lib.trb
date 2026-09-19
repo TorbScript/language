@@ -24,20 +24,26 @@ public type Request {
   method: String
   url: String
   headers: Map<String, String> = [:]
-  body: Body = Body.empty()
+  /** `var`, because reading a body changes it: whoever reads one needs a `var` path to it. */
+  var body: Body = Body.empty()
 }
 
-/** What came back. */
-public type Response {
+/**
+ * What came back. A `shared type` and not a value: it owns one end of a stream that is read once, and a copy would
+ * promise a second read of a body that is already gone. So a response that is read from sits in a `var` binding, for
+ * the same reason a `File` does.
+ */
+public shared type Response {
   status: Int
   headers: Map<String, String> = [:]
-  body: Body
+  /** `var`, because reading a body changes it: whoever reads one needs a `var` path to it. */
+  var body: Body
 
   /**
    * Decodes the body as JSON. A `Task` since the body arrives over the network: what used to be a plain `Result` was
    * only a `Result` because the whole response was read before anybody looked at it.
    */
-  fn json<Value: Decode>(self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
+  fn json<Value: Decode>(var self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
     body.json<Value>(limit: limit).await()
   }
 }
@@ -45,9 +51,10 @@ public type Response {
 /**
  * The bytes of a request or a response, as a stream that is read once.
  *
- *     const users = response.body.through(Json.items<User>()).checked().toList().await()?   // one at a time
- *     const text = response.body.text().await()?                                            // or all of it
- *     File.write(path, response.body).await()?                                               // or straight to disk
+ *     var users = response.body.through(Json.items<User>()).checked()   // one at a time
+ *     const all = users.toList().await()?
+ *     const text = response.body.text().await()?                        // or all of it
+ *     File.write(path, response.body.mapFailure(IoError.from)).await()?  // or straight to disk
  *
  * The convenience methods come first on purpose - that is the lesson of `fetch` and Bun, where `await response.json()`
  * is what almost every program wants - and every one of them takes a `limit`, because a server that decides how much
@@ -62,7 +69,7 @@ public shared type Body with Source<Bytes, HttpError> {
 
   private var reading: Source<Bytes, HttpError>
 
-  fn next(self): Task<Result<Bytes?, HttpError>> {
+  fn next(var self): Task<Result<Bytes?, HttpError>> {
     reading.next().await()
   }
 
@@ -71,7 +78,7 @@ public shared type Body with Source<Bytes, HttpError> {
   }
 
   /** The whole body. More than `limit` bytes is an `HttpError` and the rest is not read. */
-  fn bytes(self, limit: Int = Body.defaultLimit): Task<Result<Bytes, HttpError>> {
+  fn bytes(var self, limit: Int = Body.defaultLimit): Task<Result<Bytes, HttpError>> {
     var collected: Bytes = []
     while const Some(chunk) = next().await()? {
       if collected.length() + chunk.length() > limit {
@@ -83,13 +90,13 @@ public shared type Body with Source<Bytes, HttpError> {
   }
 
   /** The whole body as text. Bytes that are not UTF-8 are an `HttpError`, never a replacement character. */
-  fn text(self, limit: Int = Body.defaultLimit): Task<Result<String, HttpError>> {
+  fn text(var self, limit: Int = Body.defaultLimit): Task<Result<String, HttpError>> {
     const raw = bytes(limit: limit).await()?
     textOf(raw).mapError(HttpError.invalidText)
   }
 
   /** The whole body, decoded as JSON: `response.body.json<User>().await()?` */
-  fn json<Value: Decode>(self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
+  fn json<Value: Decode>(var self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
     const document = text(limit: limit).await()?
     Json.decode<Value>(document).mapError(HttpError.decodeFailed)
   }

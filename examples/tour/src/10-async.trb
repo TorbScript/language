@@ -16,12 +16,13 @@ type Post {
 // There is no `async` keyword. A function that returns a `Task` may `await()`, and its body produces the value.
 // `await()` is a method on Task and composes with `?`.
 fn fetchUser(id: Int): Task<Result<User, HttpError>> {
-  const response = http.get("https://example.test/users/{id}").await()?
+  // A `Response` owns one end of a stream and is read once, so it is a shared object in a `var` binding
+  var response = http.get("https://example.test/users/{id}").await()?
   response.json<User>().await()
 }
 
 fn fetchPosts(userId: Int): Task<Result<List<Post>, HttpError>> {
-  const response = http.get("https://example.test/users/{userId}/posts").await()?
+  var response = http.get("https://example.test/users/{userId}/posts").await()?
   response.json<List<Post>>().await()
 }
 
@@ -52,7 +53,7 @@ const tasks = chunks.map { chunk => spawn { chunk.sum() } }.toList()   // List<T
 const channel = Channel<Int>(capacity: 10)
 
 const producer = spawn {
-  const writing = channel.sink()
+  var writing = channel.sink()
   for i in 0..5 {
     writing.add(i).await()?
     sleep(0.1).await()
@@ -62,7 +63,10 @@ const producer = spawn {
 
 // Collectors are push-based and shared between `Iterable` and `Source`, so the same `summing` works for values
 // that arrive over time
-const consumer = spawn { channel.source().collect(summing { _ }).await() }
+const consumer = spawn {
+  var reading = channel.source()
+  reading.collect(summing { _ }).await()
+}
 
 // Top-level `await()` is allowed in entry files and scripts
 const total = tasks.map { _.await() }.sum()

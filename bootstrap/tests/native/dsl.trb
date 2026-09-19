@@ -1,0 +1,95 @@
+use Process from "std/process"
+
+/**
+ * Receiver closures and the three property commands, compiled to a native binary: the vocabulary of `09-dsl.trb` and of
+ * `examples/config-dsl` with nothing in it that waits for the collections of 5.7 or the interpolation of 5.10.
+ *
+ * What it pins: `port 8443` writes a field (`.Assign`), `onStart { ... }` stores a closure in one (`.AssignClosure`),
+ * `limits { ... }` applies a receiver closure to the field **in place** (`.Configure`), a receiver that is named rather
+ * than implicit, and one receiver closure applied to two different places of the same receiver.
+ *
+ * `tls(port == 8443)` is written as `tls true` here, although the parenthesized form is the one the canon asks for: stage
+ * 0 reads it as a call of the field and fails, and this program has to behave the same in both back ends to be a gate at
+ * all. Closing that is on 5.14's list next to the panic format.
+ */
+
+type Limits {
+  var maxConnections: Int = 100
+  var timeoutSeconds: Int = 30
+}
+
+type ServerOptions {
+  var port: Int = 8080
+  var tls: Bool = false
+  var limits: Limits = Limits()
+  var onStart: () => Int = {
+    0
+  }
+}
+
+fn serve(configure: (var self: ServerOptions) => Void): ServerOptions {
+  var options = ServerOptions()
+  configure options
+  options
+}
+
+/** A record that configures a field of its own through a receiver closure, which is what a section method is. */
+type Report {
+  var head: Limits = Limits()
+  var tail: Limits = Limits()
+
+  fn both(var self, build: (var self: Limits) => Void) {
+    build head
+    build tail
+  }
+
+  fn total(self): Int {
+    head.maxConnections + head.timeoutSeconds + tail.maxConnections + tail.timeoutSeconds
+  }
+}
+
+fn reported(build: (var self: Report) => Void): Int {
+  var report = Report()
+  build report
+  report.total()
+}
+
+var total = 0
+
+// `.Assign`, `.Configure` and `.AssignClosure` in one block, and a field read back inside the same block
+const options = serve {
+  port 8443
+  tls true
+  limits {
+    maxConnections 500
+    timeoutSeconds 5
+  }
+  onStart {
+    3
+  }
+}
+
+total = total + options.port
+total = total + options.limits.maxConnections
+total = total + options.limits.timeoutSeconds
+total = total + options.onStart()
+if options.tls {
+  total = total + 1
+}
+
+// A receiver that is named: nothing is implicit inside the closure, so every path starts at `own`
+const named = serve { own =>
+  own.port = 80
+  own.limits.maxConnections = 7
+}
+total = total + named.port + named.limits.maxConnections
+
+// One receiver closure applied twice, to two different places of the receiver
+total = total + reported {
+  both {
+    maxConnections 1
+    timeoutSeconds 2
+  }
+}
+
+Process.exit(total % 251)

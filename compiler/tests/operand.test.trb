@@ -152,7 +152,17 @@ group "Every operand position of every instruction" {
     const shape = program.internSignature IrSignature([IrParameter("value", text)], voidType)
     const closureType = program.internType IrType.Closure(shape)
     const table = program.addWitnessTable WitnessTable("w_show__String", show, text, [], [])
-    var innerBuilder = newFunction "t_inner", None, IrSignature([IrParameter("value", text)], voidType), "body"
+    // A closure body takes its environment first, and one field of it stands for one capture (BACKEND 5.8)
+    const reserved = program.reserveLayout "T_environment__t_inner", LayoutKind.Environment
+    const held = program.layoutAt reserved.layout
+    program.setLayout reserved.layout, held.copy(fields: [FieldLayout("text", text)], isBuilt: true)
+    const environmentType = program.internType IrType.Record(reserved.layout)
+    var innerBuilder = newFunction(
+      "t_inner",
+      None,
+      IrSignature([IrParameter("environment", environmentType), IrParameter("value", text)], voidType),
+      "body",
+    )
     terminate innerBuilder, Terminator.Return(None)
     const inner = finishFunction program, innerBuilder
     const signature = IrSignature([IrParameter("text", text)], voidType)

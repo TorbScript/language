@@ -10,6 +10,7 @@ use enterLoop, leaveLoop, breakTarget, continueTarget, markBreak from "./context
 use lowerExpression, lowerValue, voidSlot, integerSlot, emitIntrinsic from "./expression"
 use lowerPatternBinding, lowerWhileBinding from "./match"
 use lowerPlaceAssignment, lowerSlotAssignment, isReferenceSlot from "./place"
+use isCapturedVariable, lowerBoxedBinding, bindingReferenceOf from "./closure"
 use containsCountedType from "../layout"
 
 /**
@@ -114,6 +115,11 @@ fn lowerBinding(var lowering: Lowering, var builder: FunctionBuilder, binding: B
       return
     }
   }
+  // A `var` binding some closure captures is a shared box, not a slot: from here on it is a place (gap 19)
+  if isCapturedVariable(lowering, declared) {
+    lowerBoxedBinding lowering, builder, declared, name, annotation, binding.value
+    return
+  }
   const slot = addLocal builder, annotation, name
   const _ = lowerExpression lowering, builder, binding.value, Some(slot)
   lowering.slots.set declared, slot
@@ -205,6 +211,15 @@ fn lowerAssignment(
     }
   }
   const declared = lowering.checker.binding(binding).at
+  // A captured `var` binding is a shared box, so an assignment to it writes through that box and both sides see it
+  if const Some(place) = bindingReferenceOf(lowering, builder, declared) {
+    const slot = lowerValue lowering, builder, value
+    if !lowering.isSupported {
+      return
+    }
+    emit builder, Instruction.Write(place, borrowed(slot))
+    return
+  }
   const slot = match lowering.slots.get(declared) {
     Some(found) => found
     None => {

@@ -922,6 +922,18 @@ Wenn nicht, was bedeutet, bewirkt es?
     Meldung). `Source.next(var self)`, `Sink.add(var self, item)`, `finish(var self)` - spiegelt `Iterator.next(var
     self)`; eine Quelle, aus der gelesen wird, steht in einer `var`-Bindung, `const` ist die Nur-Lese-Sicht wie bei
     jedem Shared-Objekt. Die Closure-Kisten werden gewöhnliche Shared-Typen mit `var`-Feldern.
+  - **Erledigt:** Die positive Hälfte konnte der Checker schon (geprüft: `var self` + `Task`, zwei `next()`
+    hintereinander, eine `var`-Quelle an eine awaitende Funktion, ein `var`-Feld über ein `await`, eine Closure mit
+    `var`-Parameter - Tests in `compiler/tests/program-shape.test.trb`); die umgekehrte Richtung war still und ist jetzt
+    "`take` changes `self` and answers a `Task`, and `Bag` is a value" bzw. "... `Counter` is not a `shared trait`"
+    (`signature.trb`, greift auch bei Trait-Anforderungen und `native`-Deklarationen). `Source.next(var self)`,
+    `Sink.add`/`finish(var self)`, `Buffered.flush(var self)`; **Lesen nimmt `var self`, Verpacken `self`** (ein
+    Temporary ist kein `var`-Pfad, sonst wäre keine Pipeline mehr ein Ausdruck) - eine gelesene Pipeline bekommt also
+    einen Namen, wie `var cursor = iterator()`. `Pulling`/`Pushing` bleiben die Closure-Notausgänge, alles andere
+    (`Iterating`, `Stepping`, `Remapped`, `Checked`, `Staged`, `Produced`, `Buffered`) sind gewöhnliche Shared-Typen mit
+    `var`-Feldern; `Response` ist ein `shared type` geworden. Dazu der offene Punkt 5: `extend<Target> Target with
+    From<Never>` in `std/core`, also geht `?` auf einem `Result<Value, Never>`. Entscheidungen als Lücken 49 und 50 in
+    `docs/TYPECHECKER.md`, Konzept und `docs/STREAMS.md` nachgezogen.
 
 - (Chat, 2026-09-20) `...items: Item` ist eine `List<Item>` - wäre `Array<Item, count>`, ein Tupel oder ein (lazy)
   `Iterable` schlauer?
@@ -949,3 +961,54 @@ Wenn nicht, was bedeutet, bewirkt es?
     Mal mit unerprobten Collections selbst übersetzen. `iterator` wandert schon jetzt (5.7) nach TorbScript.
   - **Für JS/PHP:** genau dafür ist `native fn` mit TorbScript-Rumpf als Rückfall gedacht - portabel läuft der
     TorbScript-Rumpf über `Buffer`, ein Back-End darf `ArrayList` auf das JS-Array und `HashMap` auf `Map` abbilden.
+
+- (Chat, 2026-09-20) `const nums: Array<Int, 4> = [1, 2, 3, 4]`, `Array.from [1, 2, 3, 4]`, `Array [1, 2, 3, 4]`; und
+  ein Iterable soll dabei nicht das ganze Iterator-Protokoll durchlaufen müssen.
+  - **Fund dabei:** der Checker nimmt heute JEDEN erwarteten Collection-Typ ungeprüft an - `const wrong: Array<Int, 4>
+    = [1, 2, 3]` und `const names: Set<String> = ["a"]` prüfen ohne Meldung, und das Back-End erfährt nicht, wie das
+    Literal zu bauen ist.
+  - **Entschieden - wird gelöst (Agent läuft):** Ein Listen-Literal passt sich an (1) `List<Item>`/keine Erwartung:
+    Standardliste wie heute; (2) `Array<Item, Size>`: wird direkt inline gebaut, die Anzahl ist statisch und muss
+    `Size` sein ("`Array<Int, 4>` has 4 items, and this literal has 3"), Spread nur von Arrays bekannter Größe;
+    (3) jeden Typ, der `From<Iterable<Item>>` ist (`ArrayList`, `ArrayQueue`, eigene Typen) - dasselbe Protokoll wie
+    `.to<Target>()`, kein neues; (4) sonst ein Fehler. Was das Literal wurde, steht in den Tabellen fürs Back-End.
+  - `const nums = Array.of(1, 2, 3, 4)` kommt dazu: die Zahl der Argumente löst `Size` (Sonderregel für `Array.of`,
+    die Sprache bekommt keinen Weg, eine variadische Anzahl mit einem const-Parameter zu verknüpfen).
+    `Array [1, 2, 3, 4]` geht nicht: das parst schon als Index-Ausdruck, und ein Kommando-Argument darf nicht mit `[`
+    beginnen. `Array.from(iterable)` bleibt die Laufzeitform mit `?`-Ergebnis (Anzahl erst dann bekannt).
+  - **Abkürzen des Iterator-Protokolls - kein Sprachfeature nötig:** für Literale baut der Compiler direkt (kein
+    Iterator, bei `Array` nicht einmal eine Liste); für Werte kürzt `from` selbst ab: ein Typ-Pattern auf den
+    Trait-Wert (`ArrayList` → Speicher teilen, O(1) dank Copy-on-Write), `Length` zum Vorbelegen. Rust macht dasselbe
+    mit `size_hint` und Spezialisierung.
+
+- (Chat, 2026-09-20) Regel: wenn am Aufruf nicht klar ist, was ein Argument bedeutet, wird es benannt - vor allem
+  `true`/`false`/`None` (`listEntries entries, "ArrayList", hasCapacity: false`).
+  - **Entschieden - so verstehe ich sie:** Ein Literal hat keinen eigenen Namen. `entries` sagt selbst, was es ist,
+    `false` nicht - dort ist das Label die einzige Dokumentation (die "Boolean Trap"). Mechanisch prüfbar formuliert:
+    **`true`, `false` oder `None` an einen Parameter, der als `Bool` bzw. optional DEKLARIERT ist, bekommt das Label.**
+    Zwei Ausnahmen: (1) der Aufruf hat nur dieses eine Argument (`setEnabled(true)`, `assert(false)` - der
+    Funktionsname sagt es); (2) das Literal ist die *Daten* und keine Option - genau dann, wenn der deklarierte
+    Parametertyp ein Typparameter ist (`flags.set key, true`, `Some(true)`, `list.add(None)`); variadische Positionen
+    lassen sich ohnehin nicht benennen. Ohne (2) träfe die Regel 277 Stellen in `compiler/src`, von denen die meisten
+    `map.set key, true` sind - dort wäre `value: true` nur Lärm.
+  - Folge für APIs: benannte Argumente stehen hinter den positionalen, also stehen Optionen in der Signatur hinten.
+  - Zahlen-Literale: dieselbe Überlegung (`connect("localhost", timeout: 10)`), aber Ermessenssache
+    (`Point(1, 2)`, `take(5)`) - als Stilregel, nicht als Lint-Fehler. Sag Bescheid, wenn du sie härter willst.
+  - **Umsetzung:** Regel steht ab sofort in `compiler/CONTRIBUTING.md` (gilt für neuen Code). Durchsetzen kann das nur
+    ein Werkzeug mit Typinformation (deklarierte Parametertypen, `argumentTargets` des Checkers): erste Regel von
+    `torb lint --fix`, vorgezogen als kleiner Compiler-Auftrag, sobald 5.7 und 5.8 gemergt sind; stellt den Bestand um
+    und kommt dann in CONCEPT. Nebenbei: `hasCapacity` als Parametername widerspricht der neuen Bool-Namensregel
+    (Adjektiv statt `is`/`has`) - wird mit den Compiler-internen Namen nach dem Fixpunkt bereinigt.
+
+- (Chat, 2026-09-20) Syntax-Highlighting verbessern: eigene Farbe für Generics, fehlende Keywords (`shared`), Felder ≠
+  Locals ≠ Parameter (auch im Rumpf), `var` gegenüber `const` kursiv/unterstrichen statt farbig, Cases ≠ Typen,
+  Methoden ≠ Funktionen, Kommando- und Aufrufstil gleich, Namen am Gebrauch wie an der Definition; Palette wie C# in
+  Visual Studio / VS Code dunkel.
+  - **Wird gelöst (Sonnet-Agent läuft).** Eine TextMate-Grammatik kann nicht wissen, ob ein Name im Rumpf Parameter,
+    Local, Feld, `var` oder `const` ist - das braucht **semantische Tokens**. Bis zum LSP (Meilenstein 8) liefert sie
+    ein neues Stage-0-Kommando `torb highlight --stdin` (Rust-Parser + kleiner Scope-Auflöser, JSON), die Extension
+    ruft es als `DocumentSemanticTokensProvider` auf; fehlt das Binary, bleibt die TextMate-Färbung. Das LSP ersetzt
+    es später hinter demselben Protokoll. `var` bekommt den eigenen Modifier `mutable` → unterstrichen (eine Regel,
+    leicht auf kursiv umzustellen). Farben als Defaults der Extension in C#/Dark+-Anmutung, sprachgebunden (`:trb`),
+    ohne dass du Settings anfassen musst. TextMate-Grammatik und Markdown-Vorschau bekommen die fehlenden Keywords
+    (aus dem Lexer abgeleitet), `void`, `Fail`, Generics, `.Case`.

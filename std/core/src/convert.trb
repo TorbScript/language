@@ -15,6 +15,17 @@ extend<Source, Target> Source with Into<Target> where Target: From<Source> {
   }
 }
 
+/**
+ * Every type can be made from a `Never`, because there is no value to make it from: `Never` coerces to anything, so
+ * the body is the argument. What this buys is `?` on a `Result<Value, Never>` - the reading end of a `Channel` cannot
+ * fail, and without this every use of one would have to take the `Result` apart with a pattern.
+ */
+extend<Target> Target with From<Never> {
+  fn from(value: Never): Target {
+    value
+  }
+}
+
 /** Fallible conversion. */
 public trait TryFrom<Source, Failure> {
   fn tryFrom(value: Source): Result<Self, Failure>

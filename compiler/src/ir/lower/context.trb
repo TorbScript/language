@@ -106,6 +106,38 @@ public type Lowering {
   /** The slot of every binding of the function that is being lowered, by the span of the name it was declared under. */
   var slots: Map<Span, Slot> = [:]
   /**
+   * The mangled name of the function that is being lowered, so that a closure written in it can be named after it.
+   * While a closure body is being lowered it is that closure's name, which is what makes a nested closure's name
+   * unique without an id in it.
+   */
+  var owner: String = ""
+  /** How many closures the function that is being lowered has written so far: the second half of a closure's name. */
+  var closureCount: Int = 0
+  /**
+   * The `var` bindings of the body that some closure captures, by the span they are declared under. A captured `var`
+   * binding is a shared box (gap 19), and it has to *become* one where it is declared - so the whole body is walked
+   * once before it is lowered (`ir/lower/closure.trb`).
+   */
+  var capturedVariables: Map<Span, Bool> = [:]
+  /** The slot that holds the shared box of such a binding, by the same span: every read and every write goes through it. */
+  var boxes: Map<Span, Slot> = [:]
+  /**
+   * A binding that is reached through a place rather than through a slot: a `var` parameter a closure captured, which
+   * lives in the environment as the pointer it is. `if var` of 5.9b needs the same table.
+   */
+  var references: Map<Span, Reference> = [:]
+  /**
+   * The parameter slots of the closure that is being lowered, by the position the *declaration* counts them in - which
+   * is what `Adaptation.ImplicitParameter` names. Empty outside of a closure body.
+   */
+  var closureParameters: List<Slot> = []
+  /**
+   * The span of the closure that is being lowered, so that an implicit parameter can be told from an implicit parameter
+   * of a closure *around* it: the checker declares every one of them under the span of its own closure, and only the
+   * innermost one is reachable by position.
+   */
+  var closureAt: Span? = None
+  /**
    * The top-level bindings of an entry file, by `SymbolId.value`: they are **locals of the entry function** and not
    * module constants, because a top-level `var` can be assigned to and a static value cannot.
    *
@@ -116,8 +148,10 @@ public type Lowering {
   /** The one `Void` slot of the function that holds every result nobody takes, made when the first one needs it. */
   var hole: Slot? = None
   /**
-   * The spans whose `lazy` argument the lowering inlines as control flow instead of building a thunk for it: the
-   * fallback of a `??`. A closure is milestone 5.8's, and a short circuit needs none.
+   * The spans whose `Adaptation.Lazy` has already been dealt with, so that lowering the expression itself may not refuse
+   * it a second time. Two of them: the fallback of a `??`, which is inlined as control flow because a short circuit
+   * needs no thunk at all, and the body of a thunk the lowering is building right now - there the adaptation is the
+   * reason the body is a function of its own.
    */
   var inlinedThunks: Map<Span, Bool> = [:]
   /** `false` once the function that is being lowered hit a construct the back end does not support yet. */

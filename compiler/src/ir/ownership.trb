@@ -1,6 +1,7 @@
 use IrProgram, IrFunction, Ownership, Slot, SlotRole, SlotDeclaration from "./ir"
 use BlockId, Block, Instruction, Terminator, Argument, Reference from "./ir"
 use isManagedType, containsCountedType from "./layout"
+use isSharedStorage from "./capture"
 use usedSlots, definedSlot, successorsOf, reachableBlocks, typeOfReference from "./verify"
 use Counted, LiveSets, countedSlotsOf, livenessOf, filledFlags from "./liveness"
 use SlotFacts, Operand, slotFactsOf, operandsOf, withOperands from "./operand"
@@ -432,6 +433,10 @@ fn uniqueOwnersOf(
       const prefix = Reference found.base, found.steps[0..count]
       const annotation = typeOfReference program, function, ignored, "", prefix
       if const Some(inner) = annotation {
+        // A box and a `lazy` cell are shared on purpose: copying one is exactly what must not happen (gap 19)
+        if isSharedStorage(program, inner) {
+          continue
+        }
         // Two `var` arguments of one call may share a prefix, and making the same storage unique twice is only noise
         if isManagedType(program, inner) && !needed.contains(Instruction.MakeUnique(prefix)) {
           needed.add Instruction.MakeUnique(prefix)
@@ -454,6 +459,8 @@ fn writtenPlacesOf(instruction: Instruction): List<Reference> {
     .Write(reference, _) => [reference]
     .TakeOut(_, container, _, _) => [container]
     .Call(_, _, arguments, _, _) => placesOfArguments arguments
+    // `database { ... }`: a receiver closure writes through the place its `var self` argument names
+    .CallClosure(_, _, arguments) => placesOfArguments arguments
     _ => []
   }
 }

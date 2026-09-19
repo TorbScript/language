@@ -234,7 +234,7 @@ public type Tables {
   var places: Map<Span, Place> = [:]
   var matches: Map<Span, MatchPlan> = [:]
   var quotations: Map<Span, Quotation> = [:]
-  /** What a collection literal became: the default collection, inline array slots, or `Target.from` (gap 49). */
+  /** What a collection literal became: the default collection, inline array slots, or `Target.from` (gap 51). */
   var collectionLiterals: Map<Span, CollectionLiteral> = [:]
   var derived: List<DerivedImplementation> = []
 }
@@ -1687,7 +1687,7 @@ list. Everything else is as written.
     value that does not fit its own `Int`. `LiteralValue.Integer` is an `Int64` and the IR reads it, so the change
     crosses into milestone 5's contract; `UInt64.maximum` stays `UInt64.minimum.bitwiseNot()`, which is exact.
 
-### What the collection literals add (gap 49)
+### What the collection literals add (gap 51)
 
 A slice of its own after 4.10, because `listLiteralType` handed back *any* expected collection type unverified:
 `const wrong: Array<Int, 4> = [1, 2, 3]` and `const names: Set<String> = ["a", "b"]` both checked without a problem, and
@@ -2248,7 +2248,45 @@ holder and "nobody reads it here" is not evidence of anything.
 _Decision:_ accepted (`mutation.trb`, `isCounted`). A value that merely *contains* a shared object keeps the rule:
 changing the value is still a change of a copy, and only the object inside it is shared.
 
-**49. What does a collection literal become, and which types may one adapt to?**
+**49. May a `var self` method answer a `Task`?**
+"Concurrency" and `docs/STREAMS.md` argued that it may not, because "a `var self` access cannot stay open across an
+`await`" - which is why `Source.next` first took `self` and every stateful source of `std/stream` had to hide its state
+in the `var` bindings its closures captured. But the sentence is only true for a **value**: there a `var` is an exclusive
+in-out access whose "copy in, copy out" ends with the call. For a `shared type` there is no copy, `var` is the permission
+to change the one object, and CONCEPT's own `Connection` example already hands out two `var` paths to one object.
+_Proposal:_ a `var self` method of a `shared type` or a `shared trait` may answer a `Task`, and exclusivity says nothing
+about a `var` access to a shared object across an `await`. The reverse is an error with a message of its own: a `var self`
+or any `var` parameter whose type is a **value** on a function that answers a `Task`, because the copy back would happen
+when the call returns - before the task has run - and the change would be lost. An ordinary `trait` counts as a value,
+because a value may implement it.
+_Reason:_ it is the same distinction the language already makes everywhere else between a value and an object, and it is
+what lets `Source.next(var self)` mirror `Iterator.next(var self)` instead of hiding a cursor in a closure.
+
+_Decision:_ accepted. The positive half needed no change - `var self` plus `Task` already checked, and so did two pulls
+in a row, a `var` source handed to a function that awaits it, and a `var` field pulled across an `await`; tests in
+`compiler/tests/program-shape.test.trb` hold it. The negative half was silent and is now
+`` `take` changes `self` and answers a `Task`, and `Bag` is a value `` (and `` ... `Counter` is not a `shared trait` ``
+for a trait), in `signature.trb`, so it covers a trait requirement and a `native` declaration as well as a body.
+
+Two consequences for an API built on this. **Reading takes `var self`, wrapping takes `self`:** a temporary is no `var`
+path, so if `map`/`filter`/`through` took `var self` no pipeline could be written as one expression. Handing a source to
+a wrapper is therefore a hand-over, and the wrapper pulls from then on. **A pipeline that is read gets a name**
+(`var users = body.through(...).checked()` and then `users.toList()`), exactly as `var cursor = iterator()` does, and the
+message for forgetting it already says so.
+
+**50. `?` on a `Result<Value, Never>`.**
+`Channel`'s reading end cannot fail, so `channel.source().next().await()` answers a `Result<Item?, Never>`. `?` converts
+a failure through `From`, and nothing implemented `From<Never>`, so every such result had to be taken apart with a
+pattern although the failure cannot exist.
+_Proposal:_ a blanket `extend<Target> Target with From<Never>` in `std/core`, whose body is the argument - `Never`
+coerces to anything, so there is nothing to write.
+_Reason:_ the conversion is total and the implementation is forced; leaving it out only makes the infallible case the
+awkward one.
+
+_Decision:_ accepted. It does not overlap any other `From` implementation of the repository (checked: `std/core`,
+`std/text`, `std/number`, `std/http`, `std/fs`, `std/json` and the examples all still resolve), because an overlap would
+need a second implementation for `Never` as the source, and `Never` has no values to convert.
+**51. What does a collection literal become, and which types may one adapt to?**
 "Collections and Iteration" says `[1, 2]` is a `List` and `["a": 1]` a `Map`, and "literals adapt to the expected type"
 is stated for numbers. Nothing said what an `Array<Item, Size>` or a `Set<String>` does with one - `listLiteralType`
 handed *any* expected collection type back unverified, so `const wrong: Array<Int, 4> = [1, 2, 3]` and

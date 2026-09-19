@@ -3,7 +3,7 @@ use Expression, Argument, TextSegment, Condition, Block from "../../syntax/ast"
 use PrefixOperator, InfixOperator from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
 use TypeId, LiteralValue from "../../semantics/checker/type"
-use Adaptation from "../../semantics/checker/context"
+use Adaptation, BindingId from "../../semantics/checker/context"
 use IrTypeId, IrType, Slot, BlockId, LocationId, Instruction, Terminator, Reference, PathStep from "../ir"
 use Intrinsic, IntrinsicOperation, NumericKind, StaticContents, LayoutId from "../ir"
 use FunctionBuilder, addTemporary, addBlock, emit from "../build"
@@ -16,6 +16,8 @@ use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue from "./call"
 use objectTypeOf, lowerTraitValue from "./generic"
 use lowerBlockInto from "./statement"
 use lowerMatch, lowerIfBinding, lowerTry, lowerCoalesce from "./match"
+use lowerClosureValue, lowerNamedFunctionValue, lowerForcedRead, bindingReferenceOf from "./closure"
+use lowerConstructorValue from "./closure"
 
 /**
  * Every expression of the monomorphic part of the language, as instructions over numbered slots.
@@ -93,7 +95,9 @@ fn lowerInnerExpression(
     .MapLiteral(_) => unsupportedSlot lowering, builder, destination, "a map literal", expression.span
     .RangeLiteral(_, _, _) => unsupportedSlot lowering, builder, destination, "a range as a value", expression.span
     .Try(inner) => lowerTry lowering, builder, destination, expression, inner, annotation
-    .Closure(_) => unsupportedSlot lowering, builder, destination, "a closure", expression.span
+    .Closure(closure) => {
+      lowerClosureValue lowering, builder, destination, expression, closure, annotation
+    }
     .Match(subject, arms) => lowerMatch lowering, builder, destination, expression, subject, arms, annotation
     .Generic(_, _) => unsupportedSlot lowering, builder, destination, "a generic call", expression.span
     .TextLiteral(_) => unsupportedSlot lowering, builder, destination, "string interpolation", expression.span
@@ -229,7 +233,6 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
       .Quote(_) => "a quoted expression (milestone 5.11)"
       .Spread => "`...` in an argument list"
       .Variadic(_, _) => "a variadic argument list"
-      .ImplicitParameter(_) => "an implicit closure parameter"
       _ => ""
     }
     if !blocked.isEmpty() {
@@ -347,22 +350,98 @@ fn lowerReference(
     }
   }
   match resolution {
-    .Local(binding) => {
-      const at = lowering.checker.binding(binding).at
-      match lowering.slots.get(at) {
-        Some(found) => copiedInto builder, destination, found
-        None => unsupportedSlot lowering, builder, destination, "a captured binding", expression.span
-      }
-    }
+    .Local(binding) => lowerLocalRead lowering, builder, destination, expression, binding, annotation
     .Constant(symbol, _) => lowerConstantReference lowering, builder, destination, symbol, expression.span
     .Field(_, field) => lowerFieldRead lowering, builder, destination, expression, field, annotation
     .TupleField(_, index) => lowerTupleRead lowering, builder, destination, expression, index, annotation
-    .Callable(_, _, _) => {
-      unsupportedSlot lowering, builder, destination, "a function used as a value", expression.span
+    .Callable(symbol, _, _) => {
+      lowerNamedFunctionValue lowering, builder, destination, expression, symbol, annotation
     }
     .CaseOf(owner, variant) => lowerCaseValue lowering, builder, destination, expression, owner, variant, annotation
+    // `byPath.get(path).map(ModuleId)`: the constructor itself, as a function value
+    .Construct(_) => lowerConstructorValue lowering, builder, destination, expression, 0, annotation
     _ => unsupportedSlot lowering, builder, destination, "a name the back end does not lower yet", expression.span
   }
+}
+
+/**
+ * A local, a parameter, a binding of a pattern, a parameter of a closure, or a binding a closure shares through its box.
+ *
+ * Three of them are not a plain slot. An **implicit closure parameter** (`_`, `_2`, a name the expected function type
+ * gives) is reached by the position `Adaptation.ImplicitParameter` names, because the checker declares every one of them
+ * under the span of the closure itself. A **captured `var` binding** lives in a box the frame shares with the closure,
+ * so reading it is a `Read` through that place. And a **`lazy` parameter** is a cell, so reading it forces it.
+ */
+fn lowerLocalRead(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  binding: BindingId,
+  annotation: IrTypeId,
+): Slot {
+  const at = expression.span
+  const declared = lowering.checker.binding(binding).at
+  if const Some(position) = implicitParameterOf(lowering, at) {
+    /*
+     * The position is one of the *innermost* closure's parameters. Where the binding was declared under another
+     * closure's span the name means an implicit parameter of a closure around this one, which the checker records no
+     * capture for - it declares the binding when the name is first used, which is already inside the inner closure - so
+     * reading it by position would silently read the wrong parameter.
+     */
+    if lowering.closureAt != Some(declared) {
+      const what = "a closure that captures an implicit parameter of a closure around it"
+      return unsupportedSlot lowering, builder, destination, what, at
+    }
+    match lowering.closureParameters.get(position) {
+      Some(found) => {
+        return copiedInto builder, destination, found
+      }
+      None => {
+        const what = "an implicit closure parameter the back end cannot place"
+        return unsupportedSlot lowering, builder, destination, what, at
+      }
+    }
+  }
+  if const Some(place) = bindingReferenceOf(lowering, builder, declared) {
+    const target = valueSlot lowering, builder, destination, annotation
+    emit builder, Instruction.Read(target, place)
+    return target
+  }
+  const slot = match lowering.slots.get(declared) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a captured binding", at
+    }
+  }
+  if forcesLazy(lowering, at) {
+    return lowerForcedRead lowering, builder, destination, slot, annotation, at
+  }
+  copiedInto builder, destination, slot
+}
+
+/** The position `Adaptation.ImplicitParameter` names at this span, in the order the *declaration* counts parameters. */
+fn implicitParameterOf(var lowering: Lowering, at: Span): Int? {
+  const module = lowering.module
+  const adaptations = lowering.checker.adaptationsAt module, at
+  for adaptation in adaptations {
+    if const .ImplicitParameter(position) = adaptation {
+      return Some position
+    }
+  }
+  None
+}
+
+/** Whether reading this name forces a `lazy` cell, which is what `Adaptation.Force` says (TYPECHECKER 3.4). */
+fn forcesLazy(var lowering: Lowering, at: Span): Bool {
+  const module = lowering.module
+  const adaptations = lowering.checker.adaptationsAt module, at
+  for adaptation in adaptations {
+    if const .Force = adaptation {
+      return true
+    }
+  }
+  false
 }
 
 fn lowerConstantReference(
@@ -503,8 +582,17 @@ fn isTupleLayout(var lowering: Lowering, owner: IrTypeId): Bool {
 public fn receiverSlot(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot? {
   if const .Member(base, _, isOptional) = expression.kind {
     if isOptional {
-      // The checker resolves `a?.m` to `Option.map`/`flatMap`, whose argument is a closure (gap 12)
-      reportUnsupported lowering, "`?.`, which is `Option.map` over a closure (milestone 5.8)", expression.span
+      /*
+       * `a?.m` is control flow and not a closure: the `Option.map` the checker names has no closure in the source to
+       * lower at all (gap 12), so it would be a `Tag`, a `Switch` and the member on the payload - the way `??` is
+       * inlined.
+       *
+       * What is missing for it is one record. The checker wraps the member's own result into the `Option` *inside* the
+       * function type it gives the callee, so nothing says whether `m` answered an `Option` already - and that is what
+       * decides whether the arm wraps its value or hands it on. One flag at the span of the `?.` closes it.
+       */
+      const what = "`?.`, whose arm cannot say whether the member answers an `Option` already"
+      reportUnsupported lowering, what, expression.span
       return None
     }
     const slot = lowerValue lowering, builder, base
