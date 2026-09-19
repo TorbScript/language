@@ -875,3 +875,22 @@ Wenn nicht, was bedeutet, bewirkt es?
     - Folge: `std/iteration/stages.trb` wird auf `Stage`-Werte umgebaut (Stage 0 lädt `std/` nicht, Risiko klein).
   - **Entschieden (Nutzer):** v3 gilt erst mal so. Spezifikation + std-Deklarationen + Umbau von `std/iteration` starten
     nach dem 5.6-Merge und der Canon-Anwendung.
+
+- (Chat, 2026-09-20) Eine saubere Dokumentationsform für Menschen und Agents: Markdown mit Frontmatter (`title`,
+  `summary`, …), Index-Dateien pro Ordner und Index der Indexe, daraus am Ende ein Agent Skill; Best Practices recherchieren.
+  - **Wird gelöst, in zwei Phasen.** Phase 1 (Opus-Agent, läuft): Recherche (Diátaxis, Doku anderer Sprachen,
+    `llms.txt`, Anthropics Agent-Skills-Format, retrieval-freundliches Schreiben, getestete Snippets) →
+    `docs/contributing/research.md`; Baum unter `docs/` (`guide`, `language`, `standard-library`, `how-to`,
+    `explanation` inkl. "coming from Rust/Swift/Kotlin/TypeScript", `tooling`, `internals`, `contributing`, Glossar);
+    Frontmatter-Schema; Seitenvorlagen je Art; Schreibregeln; Muster-Seiten; Seiteninventar für Phase 2.
+  - **Meine Festlegungen:** (1) Index-Dateien werden aus `title`/`summary`/`order` der Kinder **generiert** (zwischen
+    Markern; eigene Frontmatter und Einleitung bleiben) - ein Index kann nie veralten, ein Agent geht Index →
+    Summary → Seite. (2) **Jeder `trb`-Block wird geprüft** mit dem Front-End des Compilers (parst + Canon;
+    markierbar als typgeprüft, Fragment, oder absichtlicher Fehler mit erwarteter Meldung) - falsche Beispiele sind
+    für Agents das Schlimmste. (3) Das Werkzeug ist TorbScript im Compiler-CLI: `torb docs check|index|skill|bundle`,
+    wird Gate. (4) `status: planned` trennt Geplantes von Vorhandenem. (5) `CONCEPT.md` bleibt bis zum Fixpunkt die
+    Design-Quelle, Seiten nennen ihre `source`; die bestehenden `docs/*.md` bleiben vorerst an ihrem Platz
+    (laufende Agents schreiben hinein) und werden über `docs/internals/` verlinkt.
+  - Phase 2: mehrere günstigere Schreib-Agents füllen die Ordner nach Vorlage und Inventar; danach der Skill
+    (`SKILL.md` mit Denkmodell, Syntax-Spickzettel, den typischen Fehlgriffen von Rust-/Swift-/Kotlin-geprägten
+    Modellen, Prüfkommandos, Navigation in die Referenz).
