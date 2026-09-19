@@ -158,7 +158,12 @@ type Lexer {
 
   /** Does the rest of the input start with this text? */
   fn isAt(self, text: String): Bool {
-    var index = position
+    textStartsAt(position, text)
+  }
+
+  /** Does the input starting at `offset` start with this text? */
+  fn textStartsAt(self, offset: Int, text: String): Bool {
+    var index = offset
     for expected in text.chars() {
       if index >= end || source.characters[index] != expected {
         return false
@@ -328,10 +333,18 @@ type Lexer {
   /** `"..."`, `"""..."""`, and their raw variants `r"..."`, `r"""..."""`. The position is at the first quote. */
   fn textLiteral(var self, start: Int, raw: Bool) {
     const quotes = if isAt("\"\"\"") { "\"\"\"" } else { "\"" }
-    const isMultiLine = quotes != "\""
+    const isTripleQuoted = quotes != "\""
     position = position + quotes.byteLength()
+    // A triple-quoted string is dedented (see `dedentLine`) only if it really spans more than one line: a
+    // one-line `"""text"""` is left exactly as written.
+    const isMultiLine = isTripleQuoted && hasMultipleLines(raw)
+    if isMultiLine {
+      skipLeadingLineBreak()
+    }
     var parts: List<TextPart> = []
     var literal: List<Char> = []
+    var reference: String? = None
+    var atLineStart = isMultiLine
     while true {
       const character = match peek() {
         Some(character) => character
@@ -344,9 +357,14 @@ type Lexer {
         position = position + quotes.byteLength()
         break
       }
-      if character == '\n' && !isMultiLine {
+      if character == '\n' && !isTripleQuoted {
         error("This string is never closed. Multi-line strings use `\"\"\"`", start)
         return
+      }
+      if atLineStart {
+        atLineStart = false
+        dedentLine(reference)
+        continue
       }
       position = position + 1
       if character == '\\' && !raw {
@@ -364,6 +382,9 @@ type Lexer {
           literal.clear()
         }
         parts.add(TextPart.Expression(Span(source.offsets[expressionStart], source.offsets[position - 1])))
+      } else if character == '\n' && isMultiLine {
+        literal.add(character)
+        atLineStart = true
       } else {
         literal.add(character)
       }
@@ -372,6 +393,114 @@ type Lexer {
       parts.add(TextPart.Literal(String.from(literal)))
     }
     push(TokenKind.TextLiteral(parts), start)
+  }
+
+  /**
+   * Whether a `"""`/`r"""` string starting right after the opening quotes spans more than one physical line, i.e.
+   * contains a raw line break before the closing quotes. An interpolation cannot contain one, so this is enough to
+   * tell a one-line `"""text"""` apart from a real block. Leaves `position` unchanged.
+   */
+  fn hasMultipleLines(var self, raw: Bool): Bool {
+    const saved = position
+    var found = false
+    while const Some(character) = peek() {
+      if character == '"' && isAt("\"\"\"") {
+        break
+      }
+      if character == '\n' {
+        found = true
+        break
+      }
+      if character == '\\' && !raw {
+        position = position + 1
+        skipRawEscape()
+      } else if character == '{' && !raw {
+        position = position + 1
+        if !skipInterpolation() {
+          break
+        }
+      } else {
+        position = position + 1
+      }
+    }
+    position = saved
+    found
+  }
+
+  /**
+   * Advances past an escape sequence without decoding it. Used only to look for a raw line break before the real,
+   * diagnostic-producing `escape` runs (which happens later, once dedenting is settled).
+   */
+  fn skipRawEscape(var self) {
+    const character = peek()
+    if character.isNone() {
+      return
+    }
+    position = position + 1
+    if character == Some('u') && peek() == Some('{') {
+      var index = position
+      while index < end && source.characters[index] != '}' {
+        index = index + 1
+      }
+      if index < end {
+        position = index + 1
+      }
+    }
+  }
+
+  /** The number of `' '`/`'\t'` characters starting at `position`. */
+  fn indentLength(self): Int {
+    var offset = 0
+    while true {
+      if peekAt(offset) != Some(' ') && peekAt(offset) != Some('\t') {
+        return offset
+      }
+      offset = offset + 1
+    }
+  }
+
+  /**
+   * Rule 1 of multi-line strings: a line break directly after the opening `"""` (optionally after trailing
+   * spaces) is not part of the string.
+   */
+  fn skipLeadingLineBreak(var self) {
+    const length = indentLength()
+    if peekAt(length) == Some('\r') && peekAt(length + 1) == Some('\n') {
+      position = position + length + 2
+    } else if peekAt(length) == Some('\n') {
+      position = position + length + 1
+    }
+  }
+
+  /**
+   * Called at the start of a physical line inside of a multi-line string. Strips this line's share of the
+   * indentation of the first line that has content (the reference), or the whole line if it has none itself (a
+   * blank line, or the line of a lone closing `"""`). A line indented less than the reference, or whose
+   * indentation is not the reference followed by more, is a lexer error and is left exactly as written.
+   */
+  fn dedentLine(var self, var reference: String?) {
+    const length = indentLength()
+    const hasNoContent = peekAt(length) == Some('\n') || peekAt(length) == Some('\r') || textStartsAt(position + length, "\"\"\"")
+    if hasNoContent {
+      position = position + length
+      return
+    }
+    match reference {
+      .None => {
+        reference = Some(source.slice(position, position + length))
+        position = position + length
+      }
+      Some(text) => {
+        if isAt(text) {
+          position = position + text.byteLength()
+        } else {
+          const indentStart = position
+          position = position + length
+          error("This line is indented less than the first line of the string", indentStart)
+          position = indentStart
+        }
+      }
+    }
   }
 
   /** Moves behind the `}` that closes an interpolation. Braces and strings inside of it may nest. */

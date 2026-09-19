@@ -210,7 +210,8 @@ Simple to use like npm, strict like Maven. The rules exist so that adding a depe
   comparison), so the generic reading never steals a meaningful expression. In type positions (after `:`, `with`,
   `where`, ...) there is no ambiguity to begin with.
 - Number literals: `10`, `1_000_000`, `0xFF`, `0b1010`, `3.14`, `1e9`
-- String literals: `"text"`, interpolation with `{expr}`, literal brace with `\{`. Multi-line strings with `"""`.
+- String literals: `"text"`, interpolation with `{expr}`, literal brace with `\{`. Multi-line strings with `"""`, dedented by
+  the indentation of their first line (see "Strings").
   Raw strings (`r"..."`, `r"""..."""`) have no interpolation and no escapes (JSON, regular expressions, paths).
 - Char literals: `'A'`
 
@@ -371,6 +372,32 @@ text.substringAfter("ü")           // Some("ße 👋") - most code never sees a
 - **A `String` is therefore always valid UTF-8.** The only ways in are literals, slices at character boundaries,
   `String.from(Iterable<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is an
   `IoError`, never a replacement character, and neither `chars()` nor a back end needs a rule for broken text.
+
+**A `"""`/`r"""` string is dedented by its first line,** so a block of code reads at the indentation of the call
+around it instead of jammed against the left margin:
+
+```trb
+fn count(limit: Int): Int {
+  var total = 0
+  const source = r"""
+    fn double(value: Int): Int {
+      value * 2
+    }
+    """
+  total
+}
+```
+
+1. If the opening `"""` is directly followed by a line break (optionally after trailing spaces), that line break is
+   not part of the string.
+2. The indentation of the **first line that has content** is the reference. It is removed from the start of every
+   line. A line with content that is indented less than the reference, or whose indentation does not start with it
+   (tabs where the reference has spaces, for example), is a lexer error at that line ("This line is indented less
+   than the first line of the string") - no silent guessing. Empty or whitespace-only lines become empty.
+3. If the closing `"""` stands alone on its line, that line's indentation is not part of the string; the string then
+   ends with the line break of the last content line.
+4. `"""text"""` on one line is unchanged. Interpolated **values** are never dedented, only the literal text around
+   them - an interpolation counts as content for rule 2. Escapes run after dedenting.
 
 ### Literal Types
 
@@ -2144,6 +2171,10 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Tail calls are guaranteed for direct self-recursion in tail position only, and a per-task frame limit panics with
   "stack overflow". Portable C cannot guarantee a general tail call; the guarantee that can be kept is the one `retry`
   and every fold need, and a counter is the only way a frame list and a C stack agree on when the stack is full.
+- Multi-line strings are dedented by their first line: the indentation of the first line with content is stripped
+  from every line, a lesser or mismatched indentation is a lexer error, and a leading line break right after `"""`
+  is never part of the string. This lets a code block sit at the indentation of the call around it instead of at
+  the left margin. `torb format` will enforce the layout it produces.
 - `String.join(parts, separator:)` became `Iterable.joined(separator:)`, now that a member can carry its own `where`
   clause (`where Item: Show`). One way to join instead of two, and it reads left to right with the rest of a
   pipeline; the collector `joining` stays for a prefix, a suffix, or a step inside `collect`.

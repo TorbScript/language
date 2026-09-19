@@ -234,8 +234,16 @@ impl Lexer<'_> {
     fn text(&mut self, start: usize, raw: bool) {
         let quotes = if self.rest().starts_with("\"\"\"") { 3 } else { 1 };
         self.position += quotes;
+        // A triple-quoted string is dedented (see `dedent_line`) only if it really spans more than one line: a
+        // one-line `"""text"""` is left exactly as written.
+        let multiline = quotes == 3 && self.has_multiple_lines(raw);
+        if multiline {
+            self.skip_leading_line_break();
+        }
         let mut parts = Vec::new();
         let mut literal = String::new();
+        let mut reference: Option<String> = None;
+        let mut at_line_start = multiline;
         loop {
             let Some(character) = self.peek() else {
                 return self.error("This string is never closed", start);
@@ -246,6 +254,11 @@ impl Lexer<'_> {
             }
             if character == '\n' && quotes == 1 {
                 return self.error("This string is never closed. Multi-line strings use `\"\"\"`", start);
+            }
+            if at_line_start {
+                at_line_start = false;
+                self.dedent_line(&mut reference);
+                continue;
             }
             self.position += character.len_utf8();
             match character {
@@ -260,6 +273,10 @@ impl Lexer<'_> {
                     }
                     parts.push(TextPart::Expression(Span::new(expression_start, self.position - 1)));
                 }
+                '\n' if multiline => {
+                    literal.push(character);
+                    at_line_start = true;
+                }
                 _ => literal.push(character),
             }
         }
@@ -267,6 +284,93 @@ impl Lexer<'_> {
             parts.push(TextPart::Literal(literal));
         }
         self.push(TokenKind::Text(parts), start);
+    }
+
+    /// Whether a `"""`/`r"""` string starting right after the opening quotes spans more than one physical line,
+    /// i.e. contains a raw line break before the closing `"""`. An interpolation cannot contain one, so this is
+    /// enough to tell a one-line `"""text"""` apart from a real block. Leaves `self.position` unchanged.
+    fn has_multiple_lines(&mut self, raw: bool) -> bool {
+        let saved = self.position;
+        let mut found = false;
+        loop {
+            match self.peek() {
+                None => break,
+                Some('"') if self.rest().starts_with("\"\"\"") => break,
+                Some('\n') => {
+                    found = true;
+                    break;
+                }
+                Some('\\') if !raw => {
+                    self.position += 1;
+                    self.skip_raw_escape();
+                }
+                Some('{') if !raw => {
+                    self.position += 1;
+                    if !self.skip_interpolation() {
+                        break;
+                    }
+                }
+                Some(character) => self.position += character.len_utf8(),
+            }
+        }
+        self.position = saved;
+        found
+    }
+
+    /// Advances past an escape sequence without decoding it. Used only to look for a raw line break before the
+    /// real, diagnostic-producing `escape` runs (which happens later, once dedenting is settled).
+    fn skip_raw_escape(&mut self) {
+        let Some(character) = self.peek() else { return };
+        self.position += character.len_utf8();
+        if character == 'u' && self.peek() == Some('{') {
+            if let Some(length) = self.rest().find('}') {
+                self.position += length + 1;
+            }
+        }
+    }
+
+    /// Rule 1 of multi-line strings: a line break directly after the opening `"""` (optionally after trailing
+    /// spaces) is not part of the string.
+    fn skip_leading_line_break(&mut self) {
+        let rest = self.rest();
+        let indent_length = rest.find(|character: char| character != ' ' && character != '\t').unwrap_or(rest.len());
+        let after = &rest[indent_length..];
+        if after.starts_with("\r\n") {
+            self.position += indent_length + 2;
+        } else if after.starts_with('\n') {
+            self.position += indent_length + 1;
+        }
+    }
+
+    /// Called at the start of a physical line inside of a multi-line string. Strips this line's share of the
+    /// indentation of the first line that has content (the reference), or the whole line if it has none itself (a
+    /// blank line, or the line of a lone closing `"""`). A line indented less than the reference, or whose
+    /// indentation is not the reference followed by more, is a lexer error and is left exactly as written.
+    fn dedent_line(&mut self, reference: &mut Option<String>) {
+        let rest = self.rest();
+        let indent_length = rest.find(|character: char| character != ' ' && character != '\t').unwrap_or(rest.len());
+        let after = &rest[indent_length..];
+        let has_no_content = after.starts_with('\n') || after.starts_with('\r') || after.starts_with("\"\"\"");
+        if has_no_content {
+            self.position += indent_length;
+            return;
+        }
+        match reference {
+            None => {
+                *reference = Some(rest[..indent_length].to_string());
+                self.position += indent_length;
+            }
+            Some(reference) => {
+                if rest.starts_with(reference.as_str()) {
+                    self.position += reference.len();
+                } else {
+                    let indent_start = self.position;
+                    self.position += indent_length;
+                    self.error("This line is indented less than the first line of the string", indent_start);
+                    self.position = indent_start;
+                }
+            }
+        }
     }
 
     /// Moves behind the `}` that closes an interpolation. Braces and strings inside of it may nest.
@@ -443,5 +547,65 @@ mod tests {
         assert_eq!(kinds("a\n  .b"), [Identifier, Dot, Identifier, EndOfFile]);
         assert_eq!(kinds("f(\na,\nb\n)"), [Identifier, ParenOpen, Identifier, Comma, Identifier, ParenClose, EndOfFile]);
         assert_eq!(kinds("/* a /* not nested */ x // y"), [Identifier, EndOfFile]);
+    }
+
+    /// The literal text of a source that is a single `Text` token with a single `TextPart::Literal`.
+    fn literal_of(source: &str) -> String {
+        let lexed = lex(source);
+        assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
+        let TokenKind::Text(parts) = &lexed.tokens[0].kind else { panic!("not a string: {:?}", lexed.tokens) };
+        let [TextPart::Literal(text)] = &parts[..] else { panic!("not one literal part: {parts:?}") };
+        text.clone()
+    }
+
+    #[test]
+    fn multiline_strings_drop_the_leading_line_break() {
+        assert_eq!(literal_of("\"\"\"\ncontent\n\"\"\""), "content\n");
+        // A one-line triple-quoted string is unchanged, leading spaces included.
+        assert_eq!(literal_of("\"\"\" content \"\"\""), " content ");
+    }
+
+    #[test]
+    fn multiline_strings_are_dedented_by_their_first_line() {
+        assert_eq!(literal_of("\"\"\"\n  first\n  second\n  \"\"\""), "first\nsecond\n");
+        // More indentation than the reference is kept, and blank lines become empty regardless of their whitespace.
+        assert_eq!(literal_of("\"\"\"\n  first\n    nested\n\n  \t \n  last\n  \"\"\""), "first\n  nested\n\n\nlast\n");
+        // The closing `\"\"\"` need not be indented at all.
+        assert_eq!(literal_of("\"\"\"\n  first\n  second\n\"\"\""), "first\nsecond\n");
+    }
+
+    #[test]
+    fn multiline_raw_strings_are_dedented_too() {
+        let lexed = lex("r\"\"\"\n  first\\n\n  {ignored}\n  \"\"\"");
+        assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
+        let TokenKind::Text(parts) = &lexed.tokens[0].kind else { panic!() };
+        assert_eq!(parts, &[TextPart::Literal("first\\n\n{ignored}\n".into())]);
+    }
+
+    #[test]
+    fn a_line_indented_less_than_the_reference_is_an_error() {
+        let lexed = lex("\"\"\"\n  first\nsecond\n  \"\"\"");
+        assert_eq!(lexed.diagnostics.len(), 1);
+        assert_eq!(lexed.diagnostics[0].message, "This line is indented less than the first line of the string");
+        // The string still lexes, with the offending line unchanged.
+        let TokenKind::Text(parts) = &lexed.tokens[0].kind else { panic!() };
+        assert_eq!(parts, &[TextPart::Literal("first\nsecond\n".into())]);
+    }
+
+    #[test]
+    fn a_line_whose_indentation_is_not_the_reference_is_an_error() {
+        // Tabs do not match a reference of spaces, even at the same or greater width.
+        let lexed = lex("\"\"\"\n  first\n\tsecond\n  \"\"\"");
+        assert_eq!(lexed.diagnostics.len(), 1);
+        assert_eq!(lexed.diagnostics[0].message, "This line is indented less than the first line of the string");
+    }
+
+    #[test]
+    fn interpolation_counts_as_content_and_is_never_dedented() {
+        let lexed = lex("\"\"\"\n  a{1}\n  b{2}\n  \"\"\"");
+        assert!(lexed.diagnostics.is_empty(), "{:?}", lexed.diagnostics);
+        let TokenKind::Text(parts) = &lexed.tokens[0].kind else { panic!() };
+        assert_eq!(parts[0], TextPart::Literal("a".into()));
+        assert_eq!(parts[2], TextPart::Literal("\nb".into()));
     }
 }

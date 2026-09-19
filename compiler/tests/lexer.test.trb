@@ -64,6 +64,58 @@ group "Lexer" {
   }
 }
 
+group "Multi-line strings" {
+  test "the line break right after the opening `\"\"\"` is not part of the string" {
+    assert(kinds("\"\"\"\ncontent\n\"\"\"")[0] == TokenKind.TextLiteral([TextPart.Literal("content\n")]))
+    // A one-line triple-quoted string is unchanged, leading and trailing spaces included.
+    assert(kinds("\"\"\" content \"\"\"")[0] == TokenKind.TextLiteral([TextPart.Literal(" content ")]))
+  }
+
+  test "a multi-line string is dedented by the indentation of its first line" {
+    const source = "\"\"\"\n  first\n  second\n  \"\"\""
+    assert(kinds(source)[0] == TokenKind.TextLiteral([TextPart.Literal("first\nsecond\n")]))
+  }
+
+  test "more indentation than the reference is kept, and blank or whitespace-only lines become empty" {
+    const source = "\"\"\"\n  first\n    nested\n\n  \t \n  last\n  \"\"\""
+    assert(kinds(source)[0] == TokenKind.TextLiteral([TextPart.Literal("first\n  nested\n\n\nlast\n")]))
+  }
+
+  test "the closing `\"\"\"` need not be indented at all" {
+    const source = "\"\"\"\n  first\n  second\n\"\"\""
+    assert(kinds(source)[0] == TokenKind.TextLiteral([TextPart.Literal("first\nsecond\n")]))
+  }
+
+  test "a line indented less than the reference is a lexer error, and the string still lexes unchanged" {
+    const source = "\"\"\"\n  first\nsecond\n  \"\"\""
+    const lexed = lex(SourceText.of(source))
+    assert(lexed.diagnostics.map({ _.message }).toList() == ["This line is indented less than the first line of the string"])
+    assert(lexed.tokens[0].kind == TokenKind.TextLiteral([TextPart.Literal("first\nsecond\n")]))
+  }
+
+  test "a tab does not match a reference of spaces, even at the same or greater width" {
+    const source = "\"\"\"\n  first\n\tsecond\n  \"\"\""
+    assert(messages(source) == ["This line is indented less than the first line of the string"])
+  }
+
+  test "raw multi-line strings are dedented too" {
+    const source = "r\"\"\"\n  first\n  \"\"\""
+    assert(kinds(source)[0] == TokenKind.TextLiteral([TextPart.Literal("first\n")]))
+  }
+
+  test "an interpolation counts as content, and its value is never dedented" {
+    const source = "\"\"\"\n  a\{1\}\n  b\{2\}\n  \"\"\""
+    const expected = [
+      TextPart.Literal("a"),
+      TextPart.Expression(Span(8, 9)),
+      TextPart.Literal("\nb"),
+      TextPart.Expression(Span(15, 16)),
+      TextPart.Literal("\n"),
+    ]
+    assert(kinds(source)[0] == TokenKind.TextLiteral(expected))
+  }
+}
+
 group "LineIndex" {
   test "counts characters, not bytes" {
     const lines = LineIndex.of("äö = 1\nb = 2")
