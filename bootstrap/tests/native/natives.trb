@@ -1,0 +1,61 @@
+use Process from "std/process"
+use Environment from "std/environment"
+
+/**
+ * The two conventions of `runtime/`: a native that answers `bool` and writes its payload through an out parameter, and
+ * one that takes an element by address (BACKEND 5.R1). Both are a wrapper the lowering generates, and both have to leave
+ * `live blocks at exit: 0`.
+ *
+ * `Int.parse` is the one the back end was blocked on by exactly that convention: the runtime answers
+ * `bool torb_parse_i64(torb_text, int64_t *)` and the `Result<Int64, NumberParseError>` around it is the wrapper's.
+ */
+
+fn parsed(text: String): Int {
+  match Int.parse(text) {
+    Ok(value) => value
+    .Fail(_) => -1
+  }
+}
+
+/** The failure carries the text it was given, which is what the wrapper builds it from. */
+fn refusedText(text: String): Int {
+  match Int.parse(text) {
+    Ok(_) => 0
+    .Fail(problem) => problem.text.byteLength()
+  }
+}
+
+fn digits(text: String): Int {
+  match Int.parseDigits(text, radix: 16) {
+    Ok(value) => value
+    .Fail(_) => -1
+  }
+}
+
+/** `indexOf` answers an `Int?` through the same convention. */
+fn indexIn(text: String, part: String): Int {
+  match text.indexOf(part) {
+    Some(found) => found
+    None => -1
+  }
+}
+
+/** A counted payload through the out parameter: the wrapper owns what the runtime wrote, and nothing leaks. */
+fn variable(name: String): Int {
+  match Environment.get(name) {
+    Some(found) => found.byteLength()
+    None => 7
+  }
+}
+
+var total = 0
+
+total = total + parsed("41")
+total = total + parsed("nope")
+total = total + refusedText("abcd")
+total = total + digits("ff")
+total = total + indexIn("hello", "ll")
+total = total + indexIn("hello", "zz")
+total = total + variable("TORB_A_VARIABLE_NOTHING_SETS")
+
+Process.exit(total % 200)

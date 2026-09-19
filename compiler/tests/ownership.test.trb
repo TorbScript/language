@@ -227,8 +227,8 @@ group "Last use is a move" {
 
   /**
    * The participle, which is what the whole memory model is for: `var result = self`, change `result`, answer it.
-   * `text` arrives owned, the `copy` of phase one is a `move`, the old value of `%2` gets a slot of its own so that it
-   * can be released *after* the concatenation read it, and the count never leaves one.
+   * `text` arrives owned, the `copy` of phase one is a `move`, and the assignment is a **write through** `%2`: it
+   * releases what the local held after the concatenation has read it, so the count never leaves one.
    */
   test "the participle pattern: the copy of a parameter into a local is a move" {
     const source = r"""
@@ -247,9 +247,8 @@ group "Last use is a move" {
           slot %3 temporary: String
         b0: # acme/app/src/main.trb:1 body
           %2 = move %0
-          %3 = move %2
-          %2 = intrinsic textConcat %3, %1 at acme/app/src/main.trb:3:11
-          release %3
+          %3 = intrinsic textConcat %2, %1 at acme/app/src/main.trb:3:11
+          write %2 = %3 owned last
           return %2 owned last
         }"""
     )
@@ -480,7 +479,7 @@ group "Where a value dies" {
     assert shown.contains("b3: # acme/app/src/main.trb:3 done\n  return %1 owned last")
     assert(
       shown.contains(
-        "  %8 = move %1\n  %1 = intrinsic textConcat %8, %7 at acme/app/src/main.trb:7:15\n  release %8\n  release %7\n  jump b1"
+        "  %8 = intrinsic textConcat %1, %7 at acme/app/src/main.trb:7:15\n  release %7\n  write %1 = %8 owned last\n  jump b1"
       )
     )
   }

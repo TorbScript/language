@@ -9,7 +9,8 @@ use isVoidType, finishBlock, continueIn from "./context"
 use enterLoop, leaveLoop, breakTarget, continueTarget, markBreak from "./context"
 use lowerExpression, lowerValue, voidSlot, integerSlot, emitIntrinsic from "./expression"
 use lowerPatternBinding, lowerWhileBinding from "./match"
-use lowerPlaceAssignment, isReferenceSlot from "./place"
+use lowerPlaceAssignment, lowerSlotAssignment, isReferenceSlot from "./place"
+use containsCountedType from "../layout"
 
 /**
  * Statements, blocks and the two loops. A block is a value where its last statement is an expression, which is the
@@ -195,7 +196,7 @@ fn lowerAssignment(
           return
         }
       }
-      const _ = lowerExpression lowering, builder, value, Some(found)
+      assignedInto lowering, builder, found, value
       return
     }
     _ => {
@@ -214,6 +215,20 @@ fn lowerAssignment(
   // A `var` parameter holds a pointer into the caller's frame: assigning through one has to release what the caller had
   if isReferenceSlot(builder, slot) {
     lowerPlaceAssignment lowering, builder, target, value
+    return
+  }
+  assignedInto lowering, builder, slot, value
+}
+
+/**
+ * The value of an assignment, into the slot the target names. A **counted** local is written *through* rather than
+ * stored into, because a write releases what was there first and a store would leak it - which is the one thing
+ * `a = b` between two counted locals used to get wrong.
+ */
+fn assignedInto(var lowering: Lowering, var builder: FunctionBuilder, slot: Slot, value: Expression) {
+  const annotation = builder.typeOfSlot slot
+  if containsCountedType(lowering.program, annotation) {
+    lowerSlotAssignment lowering, builder, slot, value
     return
   }
   const _ = lowerExpression lowering, builder, value, Some(slot)

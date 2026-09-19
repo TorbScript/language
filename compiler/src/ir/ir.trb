@@ -181,6 +181,12 @@ public type IrParameter {
   /** A `var` parameter or `var self`: a reference into the caller's frame, never counted (BACKEND 2.3). */
   isReference: Bool = false
   ownership: Ownership = Ownership.Borrowed
+  /**
+   * An **out** parameter: the callee never reads what is there and writes a value the caller then owns. Only the
+   * functions of `runtime/` whose result is an `Option` or a `Result` have one (BACKEND 5.R1), and it is what tells the
+   * ownership verifier that the base of such a place starts empty and owns a value afterwards.
+   */
+  isOut: Bool = false
 }
 
 /**
@@ -884,8 +890,9 @@ public fn keyOfSignature(signature: IrSignature): String {
   var key = ""
   for parameter in signature.parameters {
     const reference = if parameter.isReference { "&" } else { "" }
+    const out = if parameter.isOut { "!" } else { "" }
     const ownership = keyOfOwnership parameter.ownership
-    key = key + ";{reference}{ownership}{parameter.annotation.value}"
+    key = key + ";{reference}{out}{ownership}{parameter.annotation.value}"
   }
   var witnesses = ""
   for witness in signature.witnesses {

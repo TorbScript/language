@@ -833,7 +833,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
 | **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `bootstrap/tests/native/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
 | **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `bootstrap/tests/native/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
-| **5.7** | Collections: the list and the ordered hash table in C, element descriptors, the natives of `List`/`Map`/`Set`/`String`, `Iterable` pipelines (ordinary TorbScript once closures work). **Gate: `language.trb` passes** | `runtime/list.c`, `runtime/map.c`, `runtime/text.c`, manifest entries | language.trb, `07-collections.trb` | 5.3, 5.6, 5.8 |
+| **5.7** | **Half done.** The ABI of the containers: the two conventions of `runtime/` (`bool` plus an out parameter, an element by address) as a generated wrapper, `var self` natives, and the leak an assignment into a counted local was. **Still open:** element descriptors, the literals, `a[key]`, `for` over a collection, index paths, nested tables - all behind one chain that ends in "a `var self` witness member needs the payload box made unique" (see the note below). **Gate: `language.trb` passes** | `ir/lower/native.trb`, `backend/c/natives.trb`, `ir/instances.trb` | `bootstrap/tests/native/{natives,reassignment}.trb`, `compiler/tests/lower-natives.test.trb`; language.trb and `07-collections.trb` still blocked | 5.3, 5.6, 5.8 |
 | **5.8** | Closures: closure conversion, environments, escaping or not, `Box`es for captured `var` bindings, `lazy` cells, receiver closures, property commands. **Gate: `examples/config-dsl` runs** | `ir/lower/closure.trb`, `ir/capture.trb` | config-dsl, `09-dsl.trb`, `02-functions.trb` | 5.6 |
 | **5.9a** | **Done.** `var` parameters and `var self` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
@@ -1439,6 +1439,97 @@ parameters and `var self` receivers, which need nothing of 5.6 and 5.7 at all.
 - **`torb ir --statistics` over the repository: 341 of 2432 declarations lowered before, 578 of 2441 after** (14% to
   23%). The 501 that were blocked by "a `var` receiver or a `var` argument" are gone, and the new top blockers are a
   call on a trait-typed value (512, 5.6), a list literal (395, 5.7) and string interpolation (222, 5.10).
+
+### What 5.7 does differently
+
+**5.7 is not finished.** What is here is the ABI the containers need - the two conventions of `runtime/` as a generated
+wrapper, and the leak an assignment used to be - plus the measurement that says what the rest of the row really waits
+for. The literals, `a[key]`, `for` over a collection, the element descriptors and the index paths are **not** here, and
+the reason is one chain that was not visible before and that the next session should start from.
+
+- **Two files, and the manifest carries the ABI.** `ir/lower/native.trb` (the wrapper) and the two new fields of
+  `NativeEntry` in `backend/c/natives.trb` are the sub-milestone. Sections 3.7 and 5.R1 name the two conventions of the
+  runtime in prose; they are now *data*, one entry at a time, because the lowering has to act on them and the VM has to
+  read the same answer:
+  - `addressedParameters: List<Int>` - which declared parameters the runtime takes **by address**. There is one C list
+    and one C hash table for every element type (3.1), so an element is `const void *value` whatever it really is.
+  - `result: NativeResult` - `.Direct`, `.Optional` (`bool` plus one out parameter, `Value?` around it) or `.Fallible`
+    (the same for a `Result`).
+- **A native whose ABI is not the declaration's is called through a generated wrapper.** The wrapper is a function of
+  the *program* whose signature is exactly what `std/` declares and whose body is the runtime call plus the `Construct`
+  of the `Option` or the `Result`. So `Instruction.Call` stays an ordinary call for every pass after the lowering, a
+  witness table has a function to point at, and the one place that knows the runtime's conventions is one place. The
+  **raw** runtime function keeps the ordinary `t` name of the same declaration and carries the runtime's own signature
+  (`RuntimeShape`, `shapedSignature` in `ir/instances.trb`); the wrapper gets the new mangling prefix **`n`**, because
+  both are in the program at once and only the wrapper is ever emitted or called.
+- **The failure of a `.Fallible` native is built from the error type's own fields, each taken from the parameter of the
+  same name.** `Int.parse(text)` fails with `NumberParseError(text)`, which is exactly what the runtime cannot answer
+  and what the wrapper has in hand. An error type with a field no parameter names is a clean finding and no guess - which
+  is why `Int32.tryFrom` (`NumberRangeError { message }` against `tryFrom(value)`) stays one.
+- **`IrParameter.isOut` was added**, and it is the only new field in the IR. An out parameter is a `var` parameter the
+  callee never *reads*: the base of such a place starts empty and owns a value afterwards. Without saying so in the IR,
+  `verify.trb` reports "used before it is defined" and `ownership-verify.trb` reports "used after it was moved out of"
+  for every wrapper. Both read it through one shared `outParameterSlotsOf`, and the text format prints `out` where it
+  prints `var` for an ordinary reference.
+- **Two spellings the prototype match now accepts, and both are a conversion C does at the call.** An opaque
+  `void *`/`const void *` where the lowering passes a reference - that *is* the element-descriptor design, a runtime
+  function cannot spell the element type - and the other signedness of one width for a **parameter**, which 5.6 already
+  allowed for a result (`combineHashes(first: Int, second: Int)` against `torb_hash_combine(uint64_t, uint64_t)`: the
+  bits are the hash either way). `Void` is `torb_void` as a value and `void` as the result of a function, which is what
+  the emitter writes for a prototype and what `torb_list_add` is.
+- **The finding "a `var` receiver of a `native fn` (milestone 5.7)" is gone.** `List.add`, `Map.set` and `Set.add` are
+  ordinary places: the receiver was already a `Reference` after 5.9a, and what was missing was only the wrapper around
+  the pointer plus the element by address.
+- **`a = b` between two counted locals leaked, and so did every other assignment into a counted slot.** 5.9a found the
+  `Copy` without a release; the same hole was in an assignment from a call, from a literal and of a whole counted record.
+  An assignment to a counted local is now a `Write` **through** the slot, which releases before it stores - the contract
+  section 2 wrote down for a write. Only `containsCountedType` slots go through it, so the arithmetic half of a program
+  is byte for byte what it was, and it removes the read-and-write prepass from `total = total + part` (one instruction
+  fewer). `bootstrap/tests/native/reassignment.trb` is the gate.
+- **One bug of the *dispatch*, found on the way.** What stands in front of the dot of `Int.parse(text)` is a **type**,
+  and the checker records the type of its *constructor* there (`() => Int64`). That function type was accepted as a
+  receiver, so the `Self` of `trait Parse<Failure>` was bound to it, the trait's own arguments were not found for it and
+  `Failure` was never substituted - which is why `Int.parse` and `Float.parse` were "not monomorphic" long before this
+  sub-milestone. `closedReceiver` now answers `None` for a function type, and `staticDispatch`'s existing fallback (the
+  target of the implementation) takes over.
+
+**What the rest of 5.7 really waits for, measured rather than guessed.** The row of the table says 5.7 depends on 5.8,
+and this is why - the chain is longer than "the pipelines need closures":
+
+1. **A list literal is a trait-typed value.** `[1, 2, 3]` has the checker type `Traits([List<Int>])` (5.6's note, "a
+   trait name in a type position is an `Object`"), so lowering one means building an `ArrayList<Int>`, filling it, and
+   boxing it with the witness table of `(ArrayList<Int>, List<Int>)`. The literal is therefore not reachable without
+   that table.
+2. **The table of `List<Item>` cannot be built yet, and the first thing it blocks on is `iterator`.** Measured:
+   `ArrayList<Int>` coerced to `List<Int>` reports `` `ArrayList.iterator`, which the runtime provides from milestone 5.7
+   on ``. `iterator` is a required member of `Iterable`, so it is in every collection's table.
+3. **`iterator` should be TorbScript and not a runtime function** ("natives stay few"): a `ListIterator<Item>` over the
+   list and an index, whose `next` is `items.get(index)` - which the `.Optional` convention above now makes callable.
+4. **But `Iterator.next(var self)` is a `var self` member**, and a `var self` member is still left out of a witness table
+   (5.6's list). So `for x in xs` cannot pull from a trait-typed iterator.
+5. **And putting `var self` back into a table needs one thing the IR cannot express: making the payload box of a
+   trait-typed value unique.** A `Copy` of an `Object` retains the box, so two copies share it; a write through a table
+   without a `MakeUnique` of that box would change both, which is observable. The box's size and its `R_`/`D_` pair are a
+   property of the *target* type, which a trait-typed value has erased - so the **witness table has to carry them**
+   (`{ drop, retainChildren, size, members }` instead of `{ drop, members }`), and `MakeUnique` of an `Object` slot
+   becomes `value.data = torb_make_unique(value.data, value.w0->size, value.w0->retainChildren, value.w0->drop)`.
+   That is the next decision of this row, and it is the one that unlocks 4, 3, 2 and 1 in that order.
+
+**Nested witness tables are therefore not built either.** 5.6 left `WitnessTable.nested` empty and named `List<Item>` →
+`Iterable<Item>` as what needs it. The mechanism is clear - `nested[i]` is the table of the i-th direct supertrait, and a
+narrowing reads `value.w0->nested[i]` through `WitnessSource.steps`, whose indices are a static property of the *trait*
+and not of the erased target - but it is only useful once step 2 above can build a collection's table at all, so building
+it now would add a table nothing can fill. The two occurrences in the repository stay the clean finding 5.6 wrote.
+
+- **Element descriptors are still the finding 5.3 wrote** (`an element descriptor of a runtime container (milestone
+  5.7)`), because nothing creates one yet: the only thing that would is a container literal. When they arrive,
+  `ElementDescriptor.retain`/`release` should stay `None` and be generated by the emitter from `item` the way `R_`/`D_`
+  are - they are ABI helpers over `void *` and not functions of the language - while `equals` and `hash` are the real
+  `Equals`/`Hash` members with a thunk around them.
+- **`torb ir --statistics` over the repository: 854 of 2662 lowered before, 867 of 2685 after** (32% to 32%). The step is
+  small on purpose: what this sub-milestone added is an *ABI*, and the constructs that would use it in bulk (480 list
+  literals, 240 `a[key]`, 215 `for` over a collection, 69 map literals) all sit behind the chain above. The top blockers
+  are unchanged.
 
 ### How the C emitter is written
 

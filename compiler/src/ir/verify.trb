@@ -223,7 +223,7 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
   const reachable = reachableBlocks function
   const predecessors = predecessorsOf function
   // What a block writes, so that what leaves it is what arrived plus that - the loop below needs both ends of a block
-  const defines = definitionsOf function, slotCount
+  const defines = definitionsOf program, function, slotCount
   var definedIn: List<List<Bool>> = []
   for index in 0..blockCount {
     definedIn.add filledBooleans(slotCount, index != 0)
@@ -257,12 +257,20 @@ fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<S
     const block = function.blocks[index]
     const at = "{function.name} b{index}"
     for instruction in block.instructions {
+      const outs = outParameterSlotsOf program, instruction
       for slot in usedSlots(instruction) {
-        checkDefined function, found, defined, at, slot
+        if !outs.contains(slot) {
+          checkDefined function, found, defined, at, slot
+        }
       }
       if const Some(target) = definedSlot(instruction) {
         if function.hasSlot(target) {
           defined.set target.value, true
+        }
+      }
+      for slot in outs {
+        if function.hasSlot(slot) {
+          defined.set slot.value, true
         }
       }
     }
@@ -312,7 +320,7 @@ fn predecessorsOf(function: IrFunction): List<List<Int>> {
 }
 
 /** Which slots a block writes, whatever arrived in it: what leaves the block is the union of the two. */
-fn definitionsOf(function: IrFunction, slotCount: Int): List<List<Bool>> {
+fn definitionsOf(program: IrProgram, function: IrFunction, slotCount: Int): List<List<Bool>> {
   var defines: List<List<Bool>> = []
   for block in function.blocks {
     var written = filledBooleans slotCount, false
@@ -322,10 +330,48 @@ fn definitionsOf(function: IrFunction, slotCount: Int): List<List<Bool>> {
           written.set target.value, true
         }
       }
+      for slot in outParameterSlotsOf(program, instruction) {
+        if slot.value >= 0 && slot.value < slotCount {
+          written.set slot.value, true
+        }
+      }
     }
     defines.add written
   }
   defines
+}
+
+/**
+ * The slots an **out** parameter of a call writes: the callee never reads what is there and leaves a value the caller
+ * owns (BACKEND 5.R1's `bool` plus out parameter convention, which is what the wrapper around `torb_list_get` uses).
+ *
+ * So such a slot is *defined by* the call and is not read at it - which is the one position where the base of a place
+ * does not have to hold anything yet.
+ */
+public fn outParameterSlotsOf(program: IrProgram, instruction: Instruction): List<Slot> {
+  var found: List<Slot> = []
+  const (callee, arguments) = match instruction {
+    .Call(_, called, given, _, _) => (called, given)
+    _ => {
+      return found
+    }
+  }
+  if !program.hasFunction(callee) {
+    return found
+  }
+  const parameters = program.functionAt(callee).signature.parameters
+  for index in 0..arguments.length() {
+    if index >= parameters.length() {
+      continue
+    }
+    if !parameters[index].isOut {
+      continue
+    }
+    if const Some(place) = arguments[index].place {
+      found.add place.base
+    }
+  }
+  found
 }
 
 /**

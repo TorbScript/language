@@ -131,7 +131,7 @@ public fn matchPrototype(
   prototype: Prototype,
   name: String,
 ): PrototypeMatch {
-  const expectedResult = cTypeOf program, signature.result
+  const expectedResult = resultSpellingOf program, signature.result, prototype.result
   var conversion = ""
   if expectedResult != prototype.result {
     if !isSameWidthInteger(expectedResult, prototype.result) {
@@ -154,7 +154,7 @@ public fn matchPrototype(
     const expected = cTypeOf program, signature.parameters[index].annotation
     const isReference = signature.parameters[index].isReference
     const wanted = if isReference { "{expected} *" } else { expected }
-    if wanted != prototype.parameters[index] {
+    if !isSameParameter(wanted, prototype.parameters[index], isReference) {
       return PrototypeMatch.Mismatch(
         "`{name}`: parameter {index + 1} of the runtime is a `{prototype.parameters[index]}`"
           + " where the lowering passes a `{wanted}`"
@@ -177,6 +177,39 @@ public fn matchPrototype(
     "`{name}`: the runtime takes one parameter more than the lowering passes,"
       + " and it is not the source location"
   )
+}
+
+/**
+ * The result the lowering expects, as a C *result* type. `Void` is `torb_void` as a value and `void` as the result of a
+ * function - which is what the emitter writes for the prototype of one, so it is what the manifest's prototype says too.
+ */
+fn resultSpellingOf(program: IrProgram, result: IrTypeId, declared: String): String {
+  const spelling = cTypeOf program, result
+  if spelling == "torb_void" && declared == "void" {
+    return "void"
+  }
+  spelling
+}
+
+/**
+ * Whether the pointer or the value the lowering passes is what the runtime declares.
+ *
+ * Two spellings are allowed to differ, and both of them are a conversion C does on its own at the call:
+ *
+ * - **An opaque pointer.** There is one C list and one C hash table for every element type (BACKEND 3.1), so an element
+ *   and an out parameter are `const void *` / `void *` whatever they really hold. Any object pointer converts to one.
+ * - **The other signedness of one width.** `combineHashes(first: Int, second: Int)` against
+ *   `torb_hash_combine(uint64_t, uint64_t)`: the bits are the hash either way, which is the same reason the *result* of
+ *   `Hash.hash` is allowed to differ.
+ */
+fn isSameParameter(wanted: String, declared: String, isReference: Bool): Bool {
+  if wanted == declared {
+    return true
+  }
+  if isReference {
+    return declared == "void *" || declared == "const void *"
+  }
+  isSameWidthInteger wanted, declared
 }
 
 /** `int64_t` against `uint64_t`: two integers of one width, which differ in nothing a call has to wrap. */

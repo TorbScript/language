@@ -73,6 +73,8 @@ double torb_floor_f64(double value);
 uint64_t torb_hash_bool(bool value);
 /* Char.hash */
 uint64_t torb_hash_char(torb_char character);
+/* combineHashes */
+uint64_t torb_hash_combine(uint64_t first, uint64_t second);
 /* Int16.hash, Int32.hash, Int64.hash, Int8.hash */
 uint64_t torb_hash_i64(int64_t value);
 /* UInt16.hash, UInt32.hash, UInt64.hash, UInt8.hash */

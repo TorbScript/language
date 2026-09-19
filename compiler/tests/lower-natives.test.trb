@@ -1,0 +1,182 @@
+use test, group from "std/test"
+use lowered, irOf, ownedIrOf, unsupportedIn, textOf from "./lower-harness"
+use insertOwnership from "../src/ir/ownership"
+use emittedProgramText from "../src/backend/c/emit"
+
+/**
+ * The two conventions of `runtime/` and the wrapper the lowering builds around them (milestone 5.7).
+ *
+ * A function of the runtime may not build a layout of the program, so an `Option` or a `Result` result is `bool` plus an
+ * out parameter; and there is one C list and one C hash table for every element type, so an element is passed by
+ * address. Both are a generated **wrapper** whose signature is exactly the declaration's - which is what makes every pass
+ * after the lowering see an ordinary `Call`, and what gives a witness table a function to point at.
+ *
+ * A wrapper is named with the prefix `n`, because the raw runtime function keeps the ordinary `t` name of the same
+ * declaration and both are in the program at once.
+ */
+
+group "an element the runtime takes by address" {
+  test "a `var self` receiver of a native is an ordinary place now" {
+    assert(unsupportedIn("fn push(var items: ArrayList<Int>) \{\n  items.add(1)\n\}") == [])
+  }
+
+  test "the wrapper hands the receiver and the element over as places" {
+    const source = r"""
+      fn push(var items: ArrayList<Int>) {
+        items.add(1)
+      }
+      """
+    assert(
+      irOf(source, "n_std_x2f_prelude_types_List_add__List_Int64_Int64") == r"""
+        fn n_std_x2f_prelude_types_List_add__List_Int64_Int64(var self: List(Int64) borrowed, value: Int64 borrowed) -> Void {
+          slot %0 parameter self: List(Int64)
+          slot %1 parameter value: Int64
+        b0: # std/prelude/src/types.trb:202 native wrapper
+          call t_std_x2f_prelude_types_List_add__List_Int64_Int64(&%0 borrowed, &%1 borrowed) at std/prelude/src/types.trb:202:6
+          return
+        }"""
+    )
+  }
+
+  test "the call site calls the wrapper and never the runtime symbol" {
+    const source = r"""
+      fn push(var items: ArrayList<Int>) {
+        items.add(1)
+      }
+      """
+    const shown = textOf source
+    assert(
+      shown.contains(
+        "  call n_std_x2f_prelude_types_List_add__List_Int64_Int64(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:2:3"
+      )
+    )
+  }
+
+  test "the runtime function itself takes the addressed parameter by reference" {
+    const source = r"""
+      fn push(var items: ArrayList<Int>) {
+        items.add(1)
+      }
+      """
+    const shown = textOf source
+    assert(
+      shown.contains(
+        "runtime fn t_std_x2f_prelude_types_List_add__List_Int64_Int64(var self: List(Int64) borrowed, var value: Int64 borrowed) -> Void = torb_list_add"
+      )
+    )
+  }
+}
+
+group "`bool` plus an out parameter" {
+  test "an `Option` result becomes a branch over the two cases" {
+    const source = r"""
+      fn found(text: String, part: String): Int {
+        match text.indexOf(part) {
+          Some(index) => index
+          None => 0 - 1
+        }
+      }
+      """
+    assert(
+      irOf(source, "n_std_x2f_prelude_types_String_indexOf") == r"""
+        fn n_std_x2f_prelude_types_String_indexOf(self: String borrowed, part: String borrowed) -> Variant(T_std_x2f_prelude_types_Option__Int64) {
+          slot %0 parameter self: String
+          slot %1 parameter part: String
+          slot %2 temporary: Int64
+          slot %3 temporary: Bool
+          slot %4 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+        b0: # std/prelude/src/types.trb:139 native wrapper
+          %3 = call t_std_x2f_prelude_types_String_indexOf(%0 borrowed, %1 borrowed, &%2 borrowed) at std/prelude/src/types.trb:139:13
+          branch %3 then b1 else b2
+        b1: # std/prelude/src/types.trb:139 then
+          %4 = construct T_std_x2f_prelude_types_Option__Int64.Some (%2 borrowed)
+          jump b3
+        b2: # std/prelude/src/types.trb:139 else
+          %4 = construct T_std_x2f_prelude_types_Option__Int64.None ()
+          jump b3
+        b3: # std/prelude/src/types.trb:139 done
+          return %4 borrowed
+        }"""
+    )
+  }
+
+  test "the out parameter of the runtime function is written out as `out`" {
+    const source = r"""
+      fn found(text: String, part: String): Int {
+        match text.indexOf(part) {
+          Some(index) => index
+          None => 0 - 1
+        }
+      }
+      """
+    const shown = textOf source
+    assert(
+      shown.contains(
+        "runtime fn t_std_x2f_prelude_types_String_indexOf(self: String borrowed, part: String borrowed, out out: Int64 borrowed) -> Bool = torb_text_index_of"
+      )
+    )
+  }
+
+  test "the out parameter owns what the runtime wrote, and the extended verifier agrees" {
+    const source = r"""
+      fn found(text: String, part: String): Int {
+        match text.indexOf(part) {
+          Some(index) => index
+          None => 0 - 1
+        }
+      }
+      """
+    const shown = ownedIrOf source, "n_std_x2f_prelude_types_String_indexOf"
+    assert shown.contains("  %3 = call t_std_x2f_prelude_types_String_indexOf(%0 borrowed, %1 borrowed, &%2 borrowed) at")
+    assert shown.contains("  %4 = construct T_std_x2f_prelude_types_Option__Int64.Some (%2 borrowed)")
+  }
+}
+
+/** The emitted C of one function, from its comment to its closing brace, after the ownership pass. */
+fn functionOf(source: String, name: String): String {
+  var found = lowered source
+  insertOwnership found.program
+  const text = emittedProgramText found.program, "t_acme_x2f_app_main"
+  var lines: List<String> = []
+  var isInside = false
+  for line in text.lines() {
+    if line == "/* {name} */" {
+      isInside = true
+      continue
+    }
+    if !isInside {
+      continue
+    }
+    lines.add line
+    if line == "\}" {
+      break
+    }
+  }
+  lines.joined separator: "\n"
+}
+
+group "the C of a wrapper" {
+  test "an element goes to the runtime as the address of the slot that holds it" {
+    const source = r"""
+      fn push(var items: ArrayList<Int>) {
+        items.add(1)
+      }
+      """
+    const shown = functionOf source, "n_std_x2f_prelude_types_List_add__List_Int64_Int64"
+    assert shown.contains("  torb_list_add(s0_self, &s1_value);")
+  }
+
+  test "an out parameter is the address of a slot of the wrapper's own frame" {
+    const source = r"""
+      fn found(text: String, part: String): Int {
+        match text.indexOf(part) {
+          Some(index) => index
+          None => 0 - 1
+        }
+      }
+      """
+    const shown = functionOf source, "n_std_x2f_prelude_types_String_indexOf"
+    assert shown.contains("  s3 = torb_text_index_of(s0_self, s1_part, &s2);")
+    assert shown.contains("  s4 = (T_std_x2f_prelude_types_Option__Int64)\{ .tag = 0, .payload = \{ .v0 = \{ s2 \} \} \};")
+  }
+}

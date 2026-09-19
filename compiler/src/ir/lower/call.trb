@@ -15,7 +15,8 @@ use layoutOfType from "../verify"
 use describeIrType from "../print"
 use memberInValue, derivedKindOf, generatedKindOf from "../witness"
 use generatedFunctionOf from "./derive"
-use instanceFor, runtimeFunctionUnder, needsReference, isMonomorphic from "../instances"
+use instanceFor, needsReference, isMonomorphic from "../instances"
+use nativeFunctionOf from "./native"
 use Lowering, reportUnsupported, locationOf, nativeNamed, producesValue from "./context"
 use isNeverType, finishBlock, borrowedArguments from "./context"
 use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
@@ -139,16 +140,6 @@ fn lowerCallable(
   const signature = lowering.checker.signature identifier
   const owner = dispatched.owner
   const name = memberNameOf lowering, member
-  // A `native fn` whose receiver or argument is a place needs a wrapper around the runtime's own pointer convention, and
-  // every native that declares one is a member of a container - so the wrapper belongs to 5.7, with them
-  if needsReference(signature) {
-    if !signature.hasBody {
-      if nativeNamed(lowering, owner, name).isSome() {
-        const what = "a `var` receiver of a `native fn` (milestone 5.7)"
-        return unsupportedSlot lowering, builder, destination, what, expression.span
-      }
-    }
-  }
   // The receiver comes first, because evaluation order is source order and the receiver is written first
   var operands: List<Slot> = []
   var places: List<Reference?> = []
@@ -189,7 +180,17 @@ fn lowerCallable(
   }
   if !signature.hasBody {
     if const Some(entry) = nativeNamed(lowering, owner, name) {
-      return lowerNativeCall lowering, builder, destination, expression, operands, annotation, dispatched, entry
+      return lowerNativeCall(
+        lowering,
+        builder,
+        destination,
+        expression,
+        operands,
+        annotation,
+        dispatched,
+        entry,
+        places,
+      )
     }
     // No body and no manifest entry: a member of a **derived** implementation, generated from the layout
     if const Some(generated) = generatedMemberFor(lowering, dispatched, expression.span) {
@@ -320,6 +321,7 @@ fn lowerNativeCall(
   annotation: IrTypeId,
   dispatched: Dispatched,
   entry: NativeEntry,
+  places: List<Reference?> = [],
 ): Slot {
   if const .Planned(milestone) = entry.state {
     const what = "`{entry.name}`, which the runtime provides from milestone {milestone} on"
@@ -337,15 +339,19 @@ fn lowerNativeCall(
       emitIntrinsic lowering, builder, Some(target), intrinsic.operation, intrinsic.kind, operands, expression.span
       target
     }
+    // The runtime's own conventions - an out parameter, an element by address - are a generated wrapper (`native.trb`)
     .Runtime(function) => {
-      const identifier = match runtimeFunctionUnder(lowering, member, function, mapping) {
+      const identifier = match nativeFunctionOf(lowering, member, mapping, entry, function, expression.span) {
         Some(found) => found
         None => {
+          if !lowering.isSupported {
+            return abandonedSlot lowering, builder, destination
+          }
           const what = "`{entry.name}`, whose declaration is not monomorphic"
           return unsupportedSlot lowering, builder, destination, what, expression.span
         }
       }
-      emitCall lowering, builder, destination, identifier, operands, annotation, expression.span
+      emitCall lowering, builder, destination, identifier, operands, annotation, expression.span, places
     }
     // A member the language generates has no source anywhere: the body is built from the layout and called like any other
     .Derived(derived) => {
@@ -1038,9 +1044,12 @@ fn lowerNativeOperator(
       target
     }
     .Runtime(function) => {
-      const identifier = match runtimeFunctionUnder(lowering, member, function, mapping) {
+      const identifier = match nativeFunctionOf(lowering, member, mapping, entry, function, at) {
         Some(found) => found
         None => {
+          if !lowering.isSupported {
+            return abandonedSlot lowering, builder, destination
+          }
           return unsupportedSlot lowering, builder, destination, "`{entry.name}`", at
         }
       }

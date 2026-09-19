@@ -99,7 +99,18 @@ fn parameterFormOf(parameter: ParameterId): TypeForm {
   TypeForm.Parameter parameter
 }
 
+/**
+ * The receiver, where there is one. What stands in front of the dot of `Int.parse(text)` is a **type**, and the checker
+ * records the type of its *constructor* there (`() => Int64`) - a function type is never a receiver, so such a call has
+ * none at all and the target of the implementation says which type the member is reached on (`staticDispatch`).
+ *
+ * Without this the `Self` of `trait Parse<Failure>` would be bound to that function type, the trait's own arguments
+ * would not be found for it, and `Int.parse` would come out as "not monomorphic".
+ */
 fn closedReceiver(var lowering: Lowering, found: TypeId): TypeId? {
+  if const .Function(_) = lowering.checker.types.form(found) {
+    return None
+  }
   if isClosedType(lowering, found) {
     return Some found
   }

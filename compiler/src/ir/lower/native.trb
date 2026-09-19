@@ -1,0 +1,315 @@
+use Span from "../../syntax/source"
+use SymbolId from "../../semantics/symbols"
+use TypeId, ParameterId from "../../semantics/checker/type"
+use signatureOf from "../../semantics/checker/signature"
+use NativeEntry, NativeResult from "../../backend/c/natives"
+use IrType, IrTypeId, IrSignature, FunctionId, LayoutId, Slot, BlockId, LocationId from "../ir"
+use Reference, WitnessSource, Instruction, Terminator, Argument, borrowed, referenced from "../ir"
+use FunctionBuilder, newFunction, addTemporary, addBlock, emit, terminate, switchTo from "../build"
+use terminateBlock, finishFunction, setBlockLocation from "../build"
+use layoutOfType from "../verify"
+use nativeWrapperName from "../mangle"
+use symbolPathOf from "../instantiate"
+use RuntimeShape, runtimeFunctionShaped, instanceArgumentsOf, irSignatureUnder from "../instances"
+use Lowering, reportUnsupported, locationOf, irTypeOfClosed from "./context"
+use variantLayoutOfType, variantNamed from "./match"
+
+/**
+ * The two conventions of `runtime/`, and the wrapper the lowering builds around them.
+ *
+ * A function of the runtime may not build a layout of the *program* (BACKEND 5.R1), and there is exactly **one** C list
+ * and one C hash table for every element type (3.1). So two things differ between what `std/` declares and what the
+ * runtime offers, and the manifest writes both of them down per entry:
+ *
+ * - an `Option` or a `Result` result becomes `bool` plus an out parameter (`torb_list_get`, `torb_text_index_of`,
+ *   `torb_parse_i64`),
+ * - an element of a container is passed **by address**, because the runtime spells it `const void *`
+ *   (`torb_list_add`, `torb_map_set`).
+ *
+ * Where either applies, a call does not reach the runtime symbol directly: it reaches a generated **wrapper** of the
+ * program, whose signature is exactly what the declaration says and whose body is the call plus the `Construct` of the
+ * `Option` or the `Result`. That keeps the knowledge of the conventions in this one file, keeps `Instruction.Call` an
+ * ordinary call for every pass after the lowering, and gives a witness table a function to point at.
+ *
+ * The wrapper is built in full where it is first needed rather than through the worklist: its body mentions nothing but
+ * the runtime function and the layouts of its own result, so it cannot need an instance that is not there yet.
+ */
+
+/**
+ * The function a call of a `.Runtime` native reaches: the runtime symbol itself where the declaration *is* its ABI, and
+ * the generated wrapper otherwise.
+ */
+public fn nativeFunctionOf(
+  var lowering: Lowering,
+  member: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+  entry: NativeEntry,
+  symbol: String,
+  at: Span,
+): FunctionId? {
+  const shape = runtimeShapeOf lowering, member, mapping, entry
+  if !needsWrapper(entry) {
+    return runtimeFunctionShaped lowering, member, symbol, mapping, shape
+  }
+  const arguments = match instanceArgumentsOf(lowering, member, mapping) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`{entry.name}`, whose declaration is not monomorphic", at
+      return None
+    }
+  }
+  const path = symbolPathOf lowering.checker, member
+  const name = nativeWrapperName lowering.program, path, arguments
+  if const Some(found) = lowering.nativeWrappers.get(name) {
+    return Some found
+  }
+  const raw = match runtimeFunctionShaped(lowering, member, symbol, mapping, shape) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`{entry.name}`, whose declaration is not monomorphic", at
+      return None
+    }
+  }
+  const identifier = signatureOf lowering.checker, member
+  const signature = lowering.checker.signature identifier
+  const declared = irSignatureUnder lowering, signature, mapping
+  buildWrapper lowering, name, member, declared, raw, entry, at
+}
+
+/** Whether the runtime's own ABI differs from the declaration at all. */
+fn needsWrapper(entry: NativeEntry): Bool {
+  if !entry.addressedParameters.isEmpty() {
+    return true
+  }
+  match entry.result {
+    .Direct => false
+    _ => true
+  }
+}
+
+/** The shape the manifest gives one entry, with the payload of an out parameter read off the declared result. */
+fn runtimeShapeOf(
+  var lowering: Lowering,
+  member: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+  entry: NativeEntry,
+): RuntimeShape {
+  if const .Direct = entry.result {
+    return RuntimeShape entry.addressedParameters, None
+  }
+  const identifier = signatureOf lowering.checker, member
+  const signature = lowering.checker.signature identifier
+  const declared = irSignatureUnder lowering, signature, mapping
+  RuntimeShape entry.addressedParameters, payloadOfResult(lowering, declared.result)
+}
+
+/** The payload an `Option` or a `Result` carries in its successful case, which is what the out parameter holds. */
+fn payloadOfResult(var lowering: Lowering, result: IrTypeId): IrTypeId? {
+  const layout = variantLayoutOfType(lowering, result)?
+  const index = successVariantOf lowering, layout
+  if index < 0 {
+    return None
+  }
+  const shape = lowering.program.layoutAt layout
+  const fields = shape.fieldsOfVariant index
+  const first = fields.first()?
+  Some first.annotation
+}
+
+/** `Some` of an `Option`, `Ok` of a `Result`. */
+fn successVariantOf(var lowering: Lowering, layout: LayoutId): Int {
+  const some = variantNamed lowering, layout, "Some"
+  if some >= 0 {
+    return some
+  }
+  variantNamed lowering, layout, "Ok"
+}
+
+/** `None` of an `Option`, `Fail` of a `Result`. */
+fn failureVariantOf(var lowering: Lowering, layout: LayoutId): Int {
+  const none = variantNamed lowering, layout, "None"
+  if none >= 0 {
+    return none
+  }
+  variantNamed lowering, layout, "Fail"
+}
+
+/**
+ * The body of one wrapper: the call of the runtime function, and where its result is an `Option` or a `Result`, the
+ * branch that turns `bool` plus the out parameter into the two cases.
+ */
+fn buildWrapper(
+  var lowering: Lowering,
+  name: String,
+  member: SymbolId,
+  declared: IrSignature,
+  raw: FunctionId,
+  entry: NativeEntry,
+  at: Span,
+): FunctionId? {
+  var builder = newFunction name, Some(member), declared, "native wrapper"
+  const location = declarationLocationOf lowering, member
+  setBlockLocation builder, BlockId(0), Some(location)
+  var given: List<Argument> = []
+  for index in 0..declared.parameters.length() {
+    if declared.parameters[index].isReference || entry.addressedParameters.contains(index) {
+      given.add referenced(Reference(Slot(index), []))
+      continue
+    }
+    given.add borrowed(Slot(index))
+  }
+  const empty: List<WitnessSource> = []
+  if const .Direct = entry.result {
+    directWrapperBody lowering, builder, declared, raw, given, location
+    const direct = finishFunction lowering.program, builder
+    lowering.nativeWrappers.set name, direct
+    return Some direct
+  }
+  const layout = match variantLayoutOfType(lowering, declared.result) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`{entry.name}`, whose result is not an `Option` or a `Result`", at
+      return None
+    }
+  }
+  const success = successVariantOf lowering, layout
+  const failure = failureVariantOf lowering, layout
+  if success < 0 || failure < 0 {
+    reportUnsupported lowering, "`{entry.name}`, whose result has no success and no failure case", at
+    return None
+  }
+  const payload = match payloadOfResult(lowering, declared.result) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`{entry.name}`, whose result carries no payload", at
+      return None
+    }
+  }
+  const out = addTemporary builder, payload
+  given.add referenced(Reference(out, []))
+  const boolean = lowering.program.internType IrType.Boolean
+  const answered = addTemporary builder, boolean
+  const target = addTemporary builder, declared.result
+  emit builder, Instruction.Call(Some(answered), raw, given, empty, Some(location))
+  const good = addBlock builder, "then", Some(location)
+  const bad = addBlock builder, "else", Some(location)
+  const done = addBlock builder, "done", Some(location)
+  terminate builder, Terminator.Branch(answered, good, bad)
+  switchTo builder, good
+  emit builder, Instruction.Construct(target, layout, success, [borrowed(out)])
+  terminate builder, Terminator.Jump(done)
+  switchTo builder, bad
+  if !failureConstruct(lowering, builder, declared, target, layout, failure, entry, at) {
+    return None
+  }
+  terminate builder, Terminator.Jump(done)
+  switchTo builder, done
+  terminate builder, Terminator.Return(Some(borrowed(target)))
+  const added = finishFunction lowering.program, builder
+  lowering.nativeWrappers.set name, added
+  Some added
+}
+
+/**
+ * Where the `native fn` itself is written. One wrapper serves every call of one native, so taking the location from
+ * whichever call site the worklist reached first would make the output depend on the traversal - and a location reaches
+ * the generated C as a `#line`, which the fixpoint of milestone 6 compares byte for byte.
+ */
+fn declarationLocationOf(var lowering: Lowering, member: SymbolId): LocationId {
+  const outer = lowering.module
+  if const Some(site) = lowering.checker.siteOf(member) {
+    lowering.module = site.module
+  }
+  const at = lowering.checker.symbolAt(member).span
+  const location = locationOf lowering, at
+  lowering.module = outer
+  location
+}
+
+/** A wrapper that only has to pass an element by address: one call, and the result straight through. */
+fn directWrapperBody(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  declared: IrSignature,
+  raw: FunctionId,
+  given: List<Argument>,
+  location: LocationId,
+) {
+  const empty: List<WitnessSource> = []
+  if isVoidResult(lowering, declared.result) {
+    emit builder, Instruction.Call(None, raw, given, empty, Some(location))
+    terminate builder, Terminator.Return(None)
+    return
+  }
+  const target = addTemporary builder, declared.result
+  emit builder, Instruction.Call(Some(target), raw, given, empty, Some(location))
+  terminate builder, Terminator.Return(Some(borrowed(target)))
+}
+
+fn isVoidResult(var lowering: Lowering, annotation: IrTypeId): Bool {
+  if const .VoidType = lowering.program.typeAt(annotation) {
+    return true
+  }
+  false
+}
+
+/**
+ * The failing case. `None` carries nothing; the `Fail` of a `Result` carries the error the declaration names, and the
+ * runtime gives nothing for it - so the wrapper builds it from the error type's own **fields, each taken from the
+ * parameter of the same name**: `Int.parse(text)` fails with `NumberParseError(text)`. An error type with a field no
+ * parameter names is a clean finding and no guess.
+ */
+fn failureConstruct(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  declared: IrSignature,
+  target: Slot,
+  layout: LayoutId,
+  failure: Int,
+  entry: NativeEntry,
+  at: Span,
+): Bool {
+  const shape = lowering.program.layoutAt layout
+  const fields = shape.fieldsOfVariant failure
+  if fields.isEmpty() {
+    emit builder, Instruction.Construct(target, layout, failure, [])
+    return true
+  }
+  const error = fields[0].annotation
+  const errorLayout = match layoutOfType(lowering.program, error) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`{entry.name}`, whose failure type has no layout", at
+      return false
+    }
+  }
+  const errorShape = lowering.program.layoutAt errorLayout
+  if !errorShape.variants.isEmpty() {
+    reportUnsupported lowering, "`{entry.name}`, whose failure type has cases of its own", at
+    return false
+  }
+  var parts: List<Argument> = []
+  for field in errorShape.fields {
+    const found = parameterNamed declared, field.name
+    if found < 0 {
+      const what = "`{entry.name}`, whose failure needs a `{field.name}` the runtime does not answer"
+      reportUnsupported lowering, what, at
+      return false
+    }
+    parts.add borrowed(Slot(found))
+  }
+  const value = addTemporary builder, error
+  emit builder, Instruction.Construct(value, errorLayout, 0, parts)
+  emit builder, Instruction.Construct(target, layout, failure, [borrowed(value)])
+  true
+}
+
+/** The index of the parameter of this name, or -1. */
+fn parameterNamed(declared: IrSignature, name: String): Int {
+  for index in 0..declared.parameters.length() {
+    if declared.parameters[index].name == name {
+      return index
+    }
+  }
+  -1
+}

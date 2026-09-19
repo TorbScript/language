@@ -1,0 +1,74 @@
+use Process from "std/process"
+
+/**
+ * Assignment to a **counted local**: what the slot held has to be released before the new value lands in it.
+ *
+ * `a = b` between two counted locals used to lower to a plain store, which dropped the count of what `a` held on the
+ * floor - found by 5.9a outside of the place paths and fixed in 5.7. Every function here overwrites a local that still
+ * owns something, through every shape an assignment has: another local, the result of a call, a literal, and a whole
+ * counted record. The gate is `live blocks at exit: 0` under `TORB_REPORT_LEAKS=1`.
+ */
+
+/** Forty bytes, so this one is a counted block with two counted fields: a whole block replaced at once. */
+type Pair {
+  first: String
+  second: String
+  weight: Int
+}
+
+fn sizeOf(text: String): Int {
+  text.byteLength()
+}
+
+fn grown(part: String, times: Int): String {
+  var total = ""
+  var index = 0
+  while index < times {
+    total = total + part
+    index = index + 1
+  }
+  total
+}
+
+/** `a = b` between two counted locals: the count `a` held goes away, and `b` keeps its own. */
+fn longer(first: String, second: String): Int {
+  var chosen = first
+  const other = second
+  chosen = other
+  sizeOf(chosen) + sizeOf(other)
+}
+
+/** The result of a call, and then a literal, into a local that still owns a value. */
+fn rebuilt(part: String): Int {
+  var current = grown part, 2
+  current = grown part, 3
+  current = "."
+  sizeOf current
+}
+
+/** A counted record replaced as a whole, so the release goes through the drop helper of its layout. */
+fn repaired(text: String): Int {
+  var pair = Pair text, text, 0
+  pair = Pair grown(text, 2), "z", 1
+  sizeOf(pair.first) + sizeOf(pair.second) + pair.weight
+}
+
+/** The same in a loop, where the slot is live across the back edge. */
+fn replaced(part: String, times: Int): Int {
+  var current = part
+  var index = 0
+  while index < times {
+    current = grown part, index
+    index = index + 1
+  }
+  sizeOf current
+}
+
+var total = 0
+
+total = total + longer("abcd", "ef")
+total = total + rebuilt("gh")
+total = total + repaired("ij")
+total = total + replaced("kl", 4)
+
+Process.exit(total % 200)

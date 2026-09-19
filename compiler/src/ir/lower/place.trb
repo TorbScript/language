@@ -390,6 +390,23 @@ public fn lowerPropertyWrite(
 }
 
 /**
+ * `text = other`, `list = other` - an assignment to a plain local whose type carries a count.
+ *
+ * It is a `Write` through the slot and not a value computed *into* the slot, because a write releases what was there
+ * and a store does not: `var a = "x"  a = b` would otherwise drop the count of `"x"` on the floor. Only the counted
+ * locals go through here, so the arithmetic half of a program is byte for byte what it was.
+ */
+public fn lowerSlotAssignment(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  slot: Slot,
+  value: Expression,
+) {
+  const annotation = builder.typeOfSlot slot
+  writtenPlace lowering, builder, PlacePath(Reference(slot, []), annotation), value
+}
+
+/**
  * The result of a call that would otherwise overwrite the base of its own place: it is produced into a slot of its own
  * and stored through the destination, so that what the destination held is released before the new value lands in it.
  */

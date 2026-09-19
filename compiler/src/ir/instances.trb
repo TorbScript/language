@@ -80,12 +80,36 @@ public fn runtimeFunctionOf(var lowering: Lowering, symbol: SymbolId, runtime: S
   runtimeFunctionUnder lowering, symbol, runtime, empty
 }
 
+/**
+ * What the ABI of one function of the runtime really is, where it is not the declaration's: which declared parameters go
+ * by address because there is one C implementation per container (BACKEND 3.1), and the out parameter through which it
+ * writes the payload of an `Option` or a `Result` while answering `bool` (5.R1).
+ *
+ * It comes out of the natives manifest and nothing else, so both back ends read the same shape.
+ */
+public type RuntimeShape {
+  addressed: List<Int> = []
+  /** The payload the runtime writes through an out parameter. The result of the function is then `Bool`. */
+  out: IrTypeId? = None
+}
+
 /** The same for a native of a generic owner, whose parameters the caller has filled in. */
 public fn runtimeFunctionUnder(
   var lowering: Lowering,
   symbol: SymbolId,
   runtime: String,
   mapping: Map<ParameterId, TypeId>,
+): FunctionId? {
+  runtimeFunctionShaped lowering, symbol, runtime, mapping, RuntimeShape()
+}
+
+/** The same, with the runtime's own convention applied to the signature. */
+public fn runtimeFunctionShaped(
+  var lowering: Lowering,
+  symbol: SymbolId,
+  runtime: String,
+  mapping: Map<ParameterId, TypeId>,
+  shape: RuntimeShape,
 ): FunctionId? {
   const arguments = match instanceArgumentsOf(lowering, symbol, mapping) {
     Some(found) => found
@@ -100,7 +124,8 @@ public fn runtimeFunctionUnder(
   }
   const identifier = signatureOf lowering.checker, symbol
   const signature = lowering.checker.signature identifier
-  const built = irSignatureUnder lowering, signature, mapping
+  const declared = irSignatureUnder lowering, signature, mapping
+  const built = shapedSignature lowering, declared, shape
   const name = nameOfInstance lowering, symbol, arguments
   var function = IrFunction name, Some(symbol), built, [], [], FunctionKind.Runtime(runtime)
   for index in 0..built.parameters.length() {
@@ -110,6 +135,34 @@ public fn runtimeFunctionUnder(
   const added = lowering.program.addFunction function
   lowering.program.instances.set key, added
   Some added
+}
+
+/**
+ * The declared signature with the runtime's convention applied: an addressed parameter becomes a reference, and an out
+ * parameter is appended after the declared ones while the result becomes `Bool`.
+ */
+fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: RuntimeShape): IrSignature {
+  if shape.addressed.isEmpty() && shape.out.isNone() {
+    return declared
+  }
+  var parameters: List<IrParameter> = []
+  for index in 0..declared.parameters.length() {
+    const parameter = declared.parameters[index]
+    if shape.addressed.contains(index) {
+      parameters.add parameter.copy(isReference: true)
+      continue
+    }
+    parameters.add parameter
+  }
+  const payload = match shape.out {
+    Some(found) => found
+    None => {
+      return IrSignature parameters, declared.result
+    }
+  }
+  parameters.add IrParameter("out", payload, true, Ownership.Borrowed, true)
+  const boolean = lowering.program.internType IrType.Boolean
+  IrSignature parameters, boolean
 }
 
 /** The mangled name of an instance: a pure function of where the declaration is written and of its arguments. */

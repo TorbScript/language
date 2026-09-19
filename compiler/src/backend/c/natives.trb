@@ -30,12 +30,44 @@ public type NativeEntry {
   target: NativeTarget
   /** Which parameters the callee stores, so the ownership pass knows (BACKEND 2.1). `self` is index 0. */
   ownedParameters: List<Int> = []
+  /**
+   * Which parameters the runtime takes **by address**, because there is one C implementation of the list and one of the
+   * hash table for every element type: an element is `const void *value` whatever it really is (BACKEND 3.1). `self` is
+   * index 0, and a `var self` is by address anyway.
+   */
+  addressedParameters: List<Int> = []
+  /** What the lowering has to build around the result. */
+  result: NativeResult = NativeResult.Direct
   state: NativeState = NativeState.Ready
   /**
    * The C prototype of a `.Ready` `.Runtime` target, exactly as `torb_natives.h` writes it. Empty for every other
    * target. It lives here so that the generated header is a pure function of this table.
    */
   prototype: String = ""
+}
+
+/**
+ * What the lowering builds around the result of a function of the runtime, because `runtime/` may not build a layout of
+ * the program (BACKEND 5.R1): `Option`, `Result` and `IoError` are types of the *program*.
+ *
+ * Everything but `.Direct` needs a **wrapper**, which the lowering generates once per instance
+ * (`ir/lower/native.trb`) - so the one place that knows the runtime's conventions stays the one place that knows them,
+ * and both back ends get the same answer out of the same IR.
+ */
+public type NativeResult {
+  /** The runtime answers exactly what the declaration does, and a call of it is an ordinary `Call`. */
+  case Direct
+  /**
+   * The runtime answers `bool` and writes the payload through an out parameter appended after the declared ones:
+   * `Value?` is `Some(out)` where it answered true and `None` otherwise (`torb_list_get`, `torb_text_index_of`).
+   */
+  case Optional
+  /**
+   * The same for a declaration that answers a `Result`: `Ok(out)`, and a failure the wrapper builds from the fields of
+   * the error type, each taken from the parameter of the **same name** - `Int.parse(text)` fails with
+   * `NumberParseError(text)`. An error type whose fields no parameter names is a clean finding.
+   */
+  case Fallible
 }
 
 public type NativeTarget {
@@ -88,6 +120,48 @@ fn ownedRuntimeOf(name: String, function: String, prototype: String, owned: List
   NativeEntry name: name, target: NativeTarget.Runtime(function), ownedParameters: owned, prototype: prototype
 }
 
+/** A function of the runtime that answers `bool` and writes the payload of an `Option` through an out parameter. */
+fn optionalRuntimeOf(name: String, function: String, prototype: String): NativeEntry {
+  NativeEntry(
+    name: name,
+    target: NativeTarget.Runtime(function),
+    result: NativeResult.Optional,
+    prototype: prototype,
+  )
+}
+
+/** The same for a declaration that answers a `Result`, whose failure the wrapper builds from the error's fields. */
+fn fallibleRuntimeOf(name: String, function: String, prototype: String): NativeEntry {
+  NativeEntry(
+    name: name,
+    target: NativeTarget.Runtime(function),
+    result: NativeResult.Fallible,
+    prototype: prototype,
+  )
+}
+
+/**
+ * A member of a runtime container: whatever mix of stored parameters, parameters the one C implementation takes by
+ * address, and an `Option` through an out parameter the symbol has.
+ */
+fn containerRuntimeOf(
+  name: String,
+  function: String,
+  prototype: String,
+  owned: List<Int>,
+  addressed: List<Int>,
+  result: NativeResult,
+): NativeEntry {
+  NativeEntry(
+    name: name,
+    target: NativeTarget.Runtime(function),
+    ownedParameters: owned,
+    addressedParameters: addressed,
+    result: result,
+    prototype: prototype,
+  )
+}
+
 fn derivedOf(name: String, derived: DerivedKind): NativeEntry {
   NativeEntry name: name, target: NativeTarget.Derived(derived)
 }
@@ -129,7 +203,7 @@ fn numericMembers(var entries: List<NativeEntry>, owner: String, kind: NumericKi
   entries.add numericOf("{owner}.remainder", IntrinsicOperation.Remainder, kind)
   entries.add numericOf("{owner}.equals", IntrinsicOperation.Equal, kind)
   entries.add runtimeOf("{owner}.show", showFunction, showPrototype)
-  entries.add runtimeOf("{owner}.parse", parseFunction, parsePrototype)
+  entries.add fallibleRuntimeOf("{owner}.parse", parseFunction, parsePrototype)
 }
 
 /** `Signed` adds `negate` and `absolute` on top of `Numeric`. */
@@ -246,7 +320,7 @@ fn conversionEntries(var entries: List<NativeEntry>) {
     "torb_convert_f64_i64_checked",
     "bool torb_convert_f64_i64_checked(double value, int64_t *out);",
   ))
-  entries.add(runtimeOf(
+  entries.add(fallibleRuntimeOf(
     "Int64.parseDigits",
     "torb_parse_i64_digits",
     "bool torb_parse_i64_digits(torb_text text, int64_t radix, int64_t *out);",
@@ -269,7 +343,11 @@ fn conversionEntries(var entries: List<NativeEntry>) {
  * from the runtime. Planned for the same milestone as the rest of the collections' natives (see `listEntries` below).
  */
 fn compareEntries(var entries: List<NativeEntry>) {
-  entries.add plannedRuntimeOf("combineHashes", "torb_combine_hashes", "5.7")
+  entries.add(runtimeOf(
+    "combineHashes",
+    "torb_hash_combine",
+    "uint64_t torb_hash_combine(uint64_t first, uint64_t second);",
+  ))
 }
 
 // --- Bool, Char, String, Void ---------------------------------------------------------------------------------------
@@ -350,7 +428,7 @@ fn textEntries(var entries: List<NativeEntry>) {
     "torb_text_ends_with",
     "bool torb_text_ends_with(torb_text text, torb_text suffix);",
   ))
-  entries.add(runtimeOf(
+  entries.add(optionalRuntimeOf(
     "String.indexOf",
     "torb_text_index_of",
     "bool torb_text_index_of(torb_text text, torb_text part, int64_t *out);",
@@ -420,7 +498,7 @@ fn listEntries(var entries: List<NativeEntry>, owner: String) {
     "torb_list torb_list_with_capacity(const torb_element *element, int64_t capacity, torb_location at);",
   ))
   entries.add runtimeOf("{owner}.length", "torb_list_length", "int64_t torb_list_length(torb_list list);")
-  entries.add(runtimeOf(
+  entries.add(optionalRuntimeOf(
     "{owner}.get",
     "torb_list_get",
     "bool torb_list_get(torb_list list, int64_t index, void *out);",
@@ -430,25 +508,31 @@ fn listEntries(var entries: List<NativeEntry>, owner: String) {
     "torb_list_slice",
     "torb_list torb_list_slice(torb_list list, int64_t from, int64_t to, torb_location at);",
   ))
-  entries.add(ownedRuntimeOf(
+  entries.add(containerRuntimeOf(
     "{owner}.add",
     "torb_list_add",
     "void torb_list_add(torb_list *list, const void *value);",
     [1],
+    [1],
+    NativeResult.Direct,
   ))
-  entries.add(ownedRuntimeOf(
+  entries.add(containerRuntimeOf(
     "{owner}.set",
     "torb_list_set",
     "void torb_list_set(torb_list *list, int64_t index, const void *value, torb_location at);",
     [2],
+    [2],
+    NativeResult.Direct,
   ))
-  entries.add(ownedRuntimeOf(
+  entries.add(containerRuntimeOf(
     "{owner}.insert",
     "torb_list_insert",
     "void torb_list_insert(torb_list *list, int64_t index, const void *value, torb_location at);",
     [2],
+    [2],
+    NativeResult.Direct,
   ))
-  entries.add(runtimeOf(
+  entries.add(optionalRuntimeOf(
     "{owner}.removeAt",
     "torb_list_remove_at",
     "bool torb_list_remove_at(torb_list *list, int64_t index, void *out);",
@@ -480,21 +564,29 @@ fn mapEntries(var entries: List<NativeEntry>, owner: String, hasCapacity: Bool) 
     ))
   }
   entries.add runtimeOf("{owner}.length", "torb_map_length", "int64_t torb_map_length(torb_map map);")
-  entries.add(runtimeOf(
+  entries.add(containerRuntimeOf(
     "{owner}.get",
     "torb_map_get",
     "bool torb_map_get(torb_map map, const void *key, void *out);",
+    [],
+    [1],
+    NativeResult.Optional,
   ))
-  entries.add(ownedRuntimeOf(
+  entries.add(containerRuntimeOf(
     "{owner}.set",
     "torb_map_set",
     "void torb_map_set(torb_map *map, const void *key, const void *value);",
     [1, 2],
+    [1, 2],
+    NativeResult.Direct,
   ))
-  entries.add(runtimeOf(
+  entries.add(containerRuntimeOf(
     "{owner}.remove",
     "torb_map_remove",
     "bool torb_map_remove(torb_map *map, const void *key, void *out);",
+    [],
+    [1],
+    NativeResult.Optional,
   ))
   entries.add runtimeOf("{owner}.clear", "torb_map_clear", "void torb_map_clear(torb_map *map);")
 }
@@ -503,21 +595,29 @@ fn setEntries(var entries: List<NativeEntry>, owner: String) {
   entries.add plannedRuntimeOf("{owner}.from", "torb_set_from_iterable", "5.7")
   entries.add plannedRuntimeOf("{owner}.iterator", "torb_set_iterator", "5.7")
   entries.add runtimeOf("{owner}.length", "torb_set_length", "int64_t torb_set_length(torb_set set);")
-  entries.add(runtimeOf(
+  entries.add(containerRuntimeOf(
     "{owner}.contains",
     "torb_set_contains",
     "bool torb_set_contains(torb_set set, const void *item);",
+    [],
+    [1],
+    NativeResult.Direct,
   ))
-  entries.add(ownedRuntimeOf(
+  entries.add(containerRuntimeOf(
     "{owner}.add",
     "torb_set_add",
     "void torb_set_add(torb_set *set, const void *item);",
     [1],
+    [1],
+    NativeResult.Direct,
   ))
-  entries.add(runtimeOf(
+  entries.add(containerRuntimeOf(
     "{owner}.remove",
     "torb_set_remove",
     "bool torb_set_remove(torb_set *set, const void *item);",
+    [],
+    [1],
+    NativeResult.Direct,
   ))
   entries.add runtimeOf("{owner}.clear", "torb_set_clear", "void torb_set_clear(torb_set *set);")
 }
@@ -594,7 +694,7 @@ fn fileEntries(var entries: List<NativeEntry>) {
   // ABI early instead of waiting for the real one.
   entries.add plannedRuntimeOf("File.lines", "torb_file_lines", "5.7")
 
-  entries.add runtimeOf("readLine", "torb_read_line", "bool torb_read_line(torb_text *out);")
+  entries.add optionalRuntimeOf("readLine", "torb_read_line", "bool torb_read_line(torb_text *out);")
 
   // `mkdir -p` as a native: `torb build` has to create the directory it writes the C and the binary into. The runtime
   // has the whole platform layer for it (`runtime/platform.c`) and only the two functions on top are missing, which is
@@ -685,7 +785,7 @@ fn timeEntries(var entries: List<NativeEntry>) {
 
 /** `std/environment`: capability filtering for the sandbox (`environment "APP_*"`) is a front-end concern of 7.4. */
 fn environmentEntries(var entries: List<NativeEntry>) {
-  entries.add(runtimeOf(
+  entries.add(optionalRuntimeOf(
     "Environment.get",
     "torb_environment_get",
     "bool torb_environment_get(torb_text name, torb_text *out);",

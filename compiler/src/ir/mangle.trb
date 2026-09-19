@@ -6,7 +6,8 @@ use IrTypeId, IrType, TraitId, IrSignatureId, IrProgram, Instance, RuntimeKind, 
  * program:
  *
  *     name      ::= prefix "_" package "_" module "_" owner* "_" member ( "__" instance )?
- *     prefix    ::= "t" function | "T" layout | "w" witness table | "d" element descriptor | "s" static value
+ *     prefix    ::= "t" function | "n" native wrapper | "T" layout | "w" witness table
+ *                 | "d" element descriptor | "s" static value
  *     component ::= escaped   ( [A-Za-z0-9] kept, every other byte "_xHH_" )
  *     instance  ::= the canonical argument spelling, at most 160 characters, plus "_h" and 16 hexadecimal digits
  *                   of a hash of the whole spelling when it was longer
@@ -262,6 +263,18 @@ public fn canonicalLiteral(value: LiteralValue): String {
 /** `t_main_translated`, `t_std_x2f_collections_list_ArrayList_add__Int64`. */
 public fn functionName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
   mangledName "t", path.components(), canonicalTypes(program, arguments)
+}
+
+/**
+ * `n_std_x2f_collections_list_ArrayList_get__Int64`: the wrapper the lowering generates around a function of the
+ * runtime whose convention needs one - an out parameter, or an element the one C implementation takes by address
+ * (BACKEND 5.R1, and the note of 5.7).
+ *
+ * It needs a prefix of its own because the *raw* runtime function keeps the ordinary `t` name of the declaration, and
+ * both are in the program at once: only the wrapper is emitted, and only the wrapper is ever called.
+ */
+public fn nativeWrapperName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
+  mangledName "n", path.components(), canonicalTypes(program, arguments)
 }
 
 /** `T_main_Point`, `T_std_x2f_core_option_Option__Int64`. */

@@ -1,6 +1,7 @@
 use IrProgram, IrFunction, IrSignature, Ownership, Slot, SlotRole, Instruction, Terminator from "./ir"
 use Argument, FunctionId from "./ir"
 use verifyProgram, verifyFunction, usedSlots, definedSlot, usedByTerminator from "./verify"
+use outParameterSlotsOf from "./verify"
 use successorsOf, reachableBlocks from "./verify"
 use Counted, countedSlotsOf, postorderOf from "./liveness"
 use SlotFacts, slotFactsOf, consumedSlotsOf from "./operand"
@@ -326,13 +327,14 @@ fn runBlock(
   const at = "{function.name} b{block}"
   const instructions = function.blocks[block].instructions
   for instruction in instructions {
-    runInstruction counted, at, instruction, state, found, reports
+    runInstruction program, counted, at, instruction, state, found, reports
   }
   const terminator = function.blocks[block].terminator
   runTerminator counted, at, terminator, state, found, reports
 }
 
 fn runInstruction(
+  program: IrProgram,
   counted: Counted,
   at: String,
   instruction: Instruction,
@@ -344,6 +346,7 @@ fn runInstruction(
   if const .Panic(_, _) = instruction {
     return
   }
+  const outs = outParameterSlotsOf program, instruction
   if const .Release(slot) = instruction {
     const position = counted.positionOf slot
     if position < 0 {
@@ -357,7 +360,7 @@ fn runInstruction(
   }
   for slot in usedSlots(instruction) {
     const position = counted.positionOf slot
-    if position < 0 || !reports {
+    if position < 0 || !reports || outs.contains(slot) {
       continue
     }
     reportUse at, slot, state[position], found
@@ -366,6 +369,13 @@ fn runInstruction(
     const position = counted.positionOf slot
     if position >= 0 {
       state.set position, emptyState
+    }
+  }
+  // An out parameter is written by the callee and never read by it: the slot holds nothing before and owns one after
+  for slot in outs {
+    const position = counted.positionOf slot
+    if position >= 0 {
+      state.set position, owningState
     }
   }
   if const Some(target) = definedSlot(instruction) {
