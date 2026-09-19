@@ -1,0 +1,450 @@
+use Visibility, TypeReference from "../../syntax/ast"
+use ModuleId from "../module"
+use SymbolId, Symbols from "../symbols"
+
+/**
+ * The index of a type in the `TypeTable`. Types are interned, so `==` on a `TypeId` means "the same type" - which is
+ * what every hot path of the checker asks. A wrapper instead of a bare `Int`, so it can never be confused with a
+ * `SymbolId`, a `ParameterId` or a count.
+ */
+public type TypeId {
+  value: Int
+}
+
+/** The index of a generic parameter in the `TypeTable`: `Item`, `Key`, the `Self` of a trait, `const Size`. */
+public type ParameterId {
+  value: Int
+}
+
+/** The index of a unification variable. It lives inside one inference context and is gone when that closes. */
+public type VariableId {
+  value: Int
+}
+
+/**
+ * How the checker represents a type. Every child is a `TypeId`, so one form is one level deep: that is what makes
+ * interning a single map lookup instead of a walk over the whole type.
+ *
+ * The type with one value is `VoidType` and the one without any is `NeverType`, because a case may not shadow a type
+ * name of the prelude - the same reason the syntax tree says `TupleType` and `FunctionType`. The field that holds a
+ * type is called `annotation` for the same kind of reason: `type` is a keyword.
+ */
+public type TypeForm {
+  /** `Point`, `List<Int>`, `Option<User>`. Aliases are expanded, so `symbol` is never an alias. */
+  case Nominal(symbol: SymbolId, arguments: List<TypeId>)
+  /** A value of one or more traits: `Shape`, `Show + Encode`. Every bound is a `Nominal` of a trait, sorted. */
+  case Traits(bounds: List<TypeId>)
+  /** `Item`, `Key`, `Self` inside of a trait, `const Size`. The parameter table says which. */
+  case Parameter(parameter: ParameterId)
+  /** A unification variable, solved while one statement is checked (milestone 4.4). */
+  case Variable(variable: VariableId)
+  /** `(Int, String)`, `(lowest: Int, highest: Int)` */
+  case Tuple(fields: List<TupleField>)
+  case Function(form: FunctionForm)
+  /** `"online" | "offline"`, `0 | 1 | 3`. `base` is `String`, `Int64`, `Char` or `Bool`, the values are sorted. */
+  case Literals(base: TypeId, values: List<LiteralValue>)
+  /** A const argument: the `16` of `Array<Float, 16>`. `Matrix<Rows, Other>` holds `Parameter`s instead. */
+  case Constant(value: LiteralValue, of: TypeId)
+  /** The type with exactly one value. */
+  case VoidType
+  /** `panic`, `return`, `break`, `continue`: the type of what does not return. Coerces to everything. */
+  case NeverType
+  /** Something was already reported here. Every operation on it yields it again, and says nothing. */
+  case Invalid
+}
+
+/** A label is documentation for a position, not part of type identity - see `sameType` in `unify.trb`. */
+public type TupleField {
+  label: String?
+  annotation: TypeId
+}
+
+public type FunctionForm {
+  parameters: List<ParameterForm>
+  result: TypeId
+}
+
+public type ParameterForm {
+  /** The label at a call site, and the name a closure may use implicitly. `None` in a bare function type. */
+  name: String?
+  mode: ParameterMode
+  /** For a variadic parameter this is the type of one item, not the list the parameter holds. */
+  annotation: TypeId
+  /** A default makes the parameter optional. Only in a signature, never in a function type. */
+  hasDefault: Bool = false
+}
+
+public type ParameterMode {
+  case Value
+  /** `var counter: Counter`: the argument is a `var` path. */
+  case Var
+  /** `lazy Value`: the argument is an expression, evaluated at most once on first use. */
+  case Lazy
+  /** `...rest: Int`: the parameter holds a `List<Int>`, the argument list does not. */
+  case Variadic
+  /** `(self: Receiver) => Value`, `(var self: Receiver) => Void`: names inside resolve against the receiver. */
+  case Receiver(isVar: Bool)
+}
+
+/** The value of a literal type and of a const argument. There is no arithmetic in types, so equality is enough. */
+public type LiteralValue {
+  case Integer(value: Int)
+  case Text(value: String)
+  case Character(value: Char)
+  case Boolean(value: Bool)
+}
+
+/**
+ * One generic parameter of one declaration. The `Self` of a trait is one of these as well, because that is what makes
+ * `fn combine(self, other: Self): Self` an ordinary signature instead of a special case.
+ */
+public type ParameterDeclaration {
+  name: String
+  /** `None` for the `Self` of a trait, which is declared in no source. */
+  symbol: SymbolId?
+  /** The `fn`, `type`, `trait` or `extend` the parameter belongs to. */
+  owner: SymbolId?
+  /** `<const Size: Int>`: the parameter is a value, and its type is the single item of its bounds. */
+  isConst: Bool
+  /** The position in the parameter list it was declared in, `-1` for the `Self` of a trait. */
+  index: Int
+  /** `<Other = Self>`: filled in where the argument list is shorter, never inferred. */
+  default: TypeReference?
+  /** The module the declaration is in: that is where `default` is written. */
+  module: ModuleId
+}
+
+/**
+ * Every type of the program, by id, and every generic parameter a type can mention. One table for both, because a
+ * `Parameter` form only means something together with the declaration it comes from.
+ */
+public type TypeTable {
+  private var forms: List<TypeForm> = []
+  private var identifiers: Map<String, TypeId> = [:]
+  private var declarations: List<ParameterDeclaration> = []
+  /** The `SymbolId.value` of a generic parameter to its `ParameterId`: a declaration has exactly one. */
+  private var bySymbol: Map<Int, ParameterId> = [:]
+
+  /**
+   * Interning. `formKey` is a full structural key although it is one level deep, because the children are ids
+   * already - so this is O(size of the form), never O(size of the type).
+   */
+  fn intern(var self, form: TypeForm): TypeId {
+    const key = formKey(form)
+    if const Some(existing) = identifiers.get(key) {
+      return existing
+    }
+    const identifier = TypeId(forms.length())
+    forms.add(form)
+    identifiers.set(key, identifier)
+    identifier
+  }
+
+  fn form(self, id: TypeId): TypeForm {
+    forms[id.value]
+  }
+
+  fn length(self): Int {
+    forms.length()
+  }
+
+  /** Ids are append-only and never renumbered, which is what keeps an incremental re-check possible. */
+  fn declareParameter(var self, declaration: ParameterDeclaration): ParameterId {
+    if const Some(symbol) = declaration.symbol {
+      if const Some(existing) = bySymbol.get(symbol.value) {
+        return existing
+      }
+    }
+    declarations.add(declaration)
+    const identifier = ParameterId(declarations.length() - 1)
+    if const Some(symbol) = declaration.symbol {
+      bySymbol.set(symbol.value, identifier)
+    }
+    identifier
+  }
+
+  fn parameter(self, identifier: ParameterId): ParameterDeclaration {
+    declarations[identifier.value]
+  }
+
+  fn parameterOf(self, symbol: SymbolId): ParameterId? {
+    bySymbol.get(symbol.value)
+  }
+}
+
+/**
+ * The key a form is interned under. It has to tell any two forms apart, so everything that is not a number is
+ * written with its byte length in front of it - a label or a text value can contain anything.
+ */
+public fn formKey(form: TypeForm): String {
+  match form {
+    .Nominal(symbol, arguments) => "N{symbol.value}{keyOfTypes(arguments)}"
+    .Traits(bounds) => "T{keyOfTypes(bounds)}"
+    .Parameter(parameter) => "P{parameter.value}"
+    .Variable(variable) => "V{variable.value}"
+    .Tuple(fields) => {
+      var key = "U"
+      for field in fields {
+        key = key + ";{keyOfText(field.label ?? "")}#{field.annotation.value}"
+      }
+      key
+    }
+    .Function(inner) => keyOfFunction(inner)
+    .Literals(base, values) => {
+      var key = "L{base.value}"
+      for value in values {
+        key = key + ";{literalKey(value)}"
+      }
+      key
+    }
+    .Constant(value, of) => "C{of.value};{literalKey(value)}"
+    .VoidType => "v"
+    .NeverType => "n"
+    .Invalid => "i"
+  }
+}
+
+fn keyOfTypes(arguments: List<TypeId>): String {
+  var key = ""
+  for argument in arguments {
+    key = key + ";{argument.value}"
+  }
+  key
+}
+
+fn keyOfFunction(form: FunctionForm): String {
+  var key = "F"
+  for parameter in form.parameters {
+    const default = if parameter.hasDefault { "=" } else { "" }
+    key = key + ";{keyOfMode(parameter.mode)}{default}{keyOfText(parameter.name ?? "")}#{parameter.annotation.value}"
+  }
+  key + "->{form.result.value}"
+}
+
+fn keyOfMode(mode: ParameterMode): String {
+  match mode {
+    .Value => "p"
+    .Var => "m"
+    .Lazy => "l"
+    .Variadic => "r"
+    .Receiver(isVar) => if isVar { "S" } else { "s" }
+  }
+}
+
+/** Also the sort key of the members of a literal type, so `"a" | "b"` and `"b" | "a"` intern to one type. */
+public fn literalKey(value: LiteralValue): String {
+  match value {
+    .Integer(inner) => "i{inner}"
+    .Text(inner) => "t{keyOfText(inner)}"
+    .Character(inner) => "c{keyOfText("{inner}")}"
+    .Boolean(inner) => if inner { "bt" } else { "bf" }
+  }
+}
+
+/** A length in front of the text, because the text itself may contain anything the key uses as a separator. */
+fn keyOfText(text: String): String {
+  "{text.byteLength()}:{text}"
+}
+
+// --- Messages -------------------------------------------------------------------------------------------------------
+
+/**
+ * How a type is written in a message. Aliases are expanded while a type is built, so what comes out here is always
+ * the type itself: `EntityId` prints as `Int64`.
+ */
+public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
+  match types.form(id) {
+    .Nominal(symbol, arguments) => {
+      if arguments.isEmpty() {
+        return symbols.at(symbol).name
+      }
+      "{symbols.at(symbol).name}<{describeTypes(types, symbols, arguments)}>"
+    }
+    .Traits(bounds) => {
+      var parts: List<String> = []
+      for bound in bounds {
+        parts.add(describeType(types, symbols, bound))
+      }
+      String.join(parts, separator: " + ")
+    }
+    .Parameter(parameter) => types.parameter(parameter).name
+    // A variable stands for "whatever fits here", as in "expected `Matrix<4, _>`"
+    .Variable(_) => "_"
+    .Tuple(fields) => {
+      var parts: List<String> = []
+      for field in fields {
+        const shown = describeType(types, symbols, field.annotation)
+        parts.add(match field.label {
+          Some(label) => "{label}: {shown}"
+          .None => shown
+        })
+      }
+      "({String.join(parts, separator: ", ")})"
+    }
+    .Function(form) => describeFunction(types, symbols, form)
+    .Literals(_, values) => {
+      var parts: List<String> = []
+      for value in values {
+        parts.add(describeLiteral(value))
+      }
+      String.join(parts, separator: " | ")
+    }
+    .Constant(value, _) => describeLiteral(value)
+    .VoidType => "Void"
+    .NeverType => "Never"
+    // Nothing is ever said about a type that is already broken, so this only shows up in a test
+    .Invalid => "?"
+  }
+}
+
+public fn describeFunction(types: TypeTable, symbols: Symbols, form: FunctionForm): String {
+  var parts: List<String> = []
+  for parameter in form.parameters {
+    parts.add(describeParameter(types, symbols, parameter))
+  }
+  "({String.join(parts, separator: ", ")}) => {describeType(types, symbols, form.result)}"
+}
+
+fn describeParameter(types: TypeTable, symbols: Symbols, parameter: ParameterForm): String {
+  const shown = describeType(types, symbols, parameter.annotation)
+  const named = match parameter.name {
+    Some(name) => "{name}: {shown}"
+    .None => shown
+  }
+  match parameter.mode {
+    .Value => named
+    .Var => "var {named}"
+    .Lazy => "lazy {named}"
+    .Variadic => "...{named}"
+    .Receiver(isVar) => if isVar { "var {named}" } else { named }
+  }
+}
+
+fn describeTypes(types: TypeTable, symbols: Symbols, arguments: List<TypeId>): String {
+  var parts: List<String> = []
+  for argument in arguments {
+    parts.add(describeType(types, symbols, argument))
+  }
+  String.join(parts, separator: ", ")
+}
+
+/** `"online"`, `'a'`, `16`, `true`: a literal the way it is written in the source. */
+public fn describeLiteral(value: LiteralValue): String {
+  match value {
+    .Integer(inner) => "{inner}"
+    .Text(inner) => "\"{escapeLiteral(inner)}\""
+    .Character(inner) => "'{escapeLiteral("{inner}")}'"
+    .Boolean(inner) => if inner { "true" } else { "false" }
+  }
+}
+
+/** Only what would end the literal or the line, so a message stays one line and reads like the source. */
+fn escapeLiteral(text: String): String {
+  var result = ""
+  for character in text.chars() {
+    if character == '\\' {
+      result = result + "\\\\"
+    } else if character == '"' {
+      result = result + "\\\""
+    } else if character == '\'' {
+      result = result + "\\'"
+    } else if character == '\n' {
+      result = result + "\\n"
+    } else if character == '\t' {
+      result = result + "\\t"
+    } else {
+      result = result + "{character}"
+    }
+  }
+  result
+}
+
+// --- Signatures -----------------------------------------------------------------------------------------------------
+
+/** The index of a `Signature`. */
+public type SignatureId {
+  value: Int
+}
+
+/** The index of a `TypeSignature`. */
+public type TypeSignatureId {
+  value: Int
+}
+
+/** One requirement: `<Item: Hash>`, `where Item: Hash + Equals`, `with Show`. The spellings are one thing. */
+public type Bound {
+  subject: TypeId
+  /** One `Nominal` of a trait per trait. */
+  traits: List<TypeId>
+}
+
+/**
+ * What a `fn`, a method, a case constructor, a field or a `const` is, as a type. A field has no parameters and its
+ * type as the result, so everything that holds a value answers the same question.
+ */
+public type Signature {
+  symbol: SymbolId
+  /** The generic parameters that are in scope, the ones of the declaration around it first. */
+  generics: List<ParameterId>
+  form: FunctionForm
+  /** The inline bounds and `where` clauses of the declaration, resolved. */
+  bounds: List<Bound>
+  /** The type whose member this is, `None` for a top-level function. */
+  owner: TypeId?
+  /** `fn area(self)` against `fn square(size: Int)`. */
+  takesSelf: Bool
+  isVarSelf: Bool
+  /** A requirement of a trait and a `native` function have none. */
+  hasBody: Bool
+}
+
+/** One field of a type or of a case, with everything a write to it has to obey. */
+public type FieldSignature {
+  symbol: SymbolId
+  name: String
+  annotation: TypeId
+  isVar: Bool
+  hasDefault: Bool
+  visibility: Visibility
+}
+
+public type CaseSignature {
+  symbol: SymbolId
+  name: String
+  fields: List<FieldSignature>
+}
+
+/**
+ * What a `type` or a `trait` declaration says about its instances. The signatures of its members are built on demand
+ * from `members`, so asking for the shape of a type never drags the whole standard library along.
+ */
+public type TypeSignature {
+  symbol: SymbolId
+  generics: List<ParameterId>
+  /** `Point`, `List<Item>` for a type; the `Self` parameter for a trait. This is what `Self` means in the body. */
+  own: TypeId
+  /** `with Show, Encode` of a type, the supertraits of a trait: one `Nominal` of a trait each. */
+  traits: List<TypeId>
+  bounds: List<Bound>
+  fields: List<FieldSignature>
+  cases: List<CaseSignature>
+  /** The constants and functions of the body, by name. */
+  members: Map<String, SymbolId>
+  /** `with Add, Compare by value`: the field everything required is forwarded to. */
+  delegate: String?
+  isNative: Bool
+  isShared: Bool
+}
+
+/**
+ * A signature is built the first time somebody asks for it, because building it needs the types of other
+ * declarations. `Running` is how a cycle is found: it is reported once, at the declaration.
+ */
+public type SignatureState {
+  case Missing
+  case Running
+  /** The index in the table this state belongs to. */
+  case Ready(index: Int)
+  /** A cycle or a broken annotation. Everything about this declaration is `Invalid`. */
+  case Failed
+}

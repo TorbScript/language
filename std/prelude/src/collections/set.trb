@@ -1,5 +1,5 @@
 use Hash from "../compare"
-use From from "../convert"
+use From, Show from "../convert"
 use Collection from "./collection"
 
 /**
@@ -7,6 +7,9 @@ use Collection from "./collection"
  *
  * Verbs change the set in place (`add`, `remove`, `addAll`, `removeAll`, `retainAll`). The set operations are
  * nouns and never change anything (`union`, `intersection`, `difference`).
+ *
+ * **Every implementation iterates in insertion order,** and removing a value does not reorder the rest. The order
+ * reaches the output through `Show`, so it is a rule of the language and not of the implementation.
  */
 public trait Set<Item>
   with Collection<Item>
@@ -69,9 +72,22 @@ extend<Item: Hash> Set<Item> with From<Iterable<Item>> {
   }
 }
 
+/** `{a, b}` - braces, so a set is never mistaken for a list. */
+extend<Item: Show> Set<Item> with Show {
+  fn show(self): String {
+    const parts = map { _.showNested() }
+    "\{{String.join(parts, separator: ", ")}\}"
+  }
+}
+
 // --- Implementations -----------------------------------------------------------------------------------
 
-/** Hash array mapped trie - the default. Cheap to keep in many versions. Iterates in insertion order. */
+/**
+ * Hash array mapped trie - the default. Cheap to keep in many versions. Iterates in insertion order.
+ *
+ * Until the trie exists, this name is a documented alias of [HashSet]. Only performance differs: iteration order and
+ * `Show` are the same either way.
+ */
 public native type TrieSet<Item: Hash>
   with Set<Item>, From<Iterable<Item>>
 {
@@ -86,7 +102,10 @@ public native type TrieSet<Item: Hash>
   native fn clear(var self)
 }
 
-/** Flat hash table: the fastest lookups and writes, but a write to a shared table copies all of it. */
+/**
+ * Flat hash table: the fastest lookups and writes, but a write to a shared table copies all of it.
+ * Iterates in insertion order.
+ */
 public native type HashSet<Item: Hash>
   with Set<Item>, From<Iterable<Item>>
 {

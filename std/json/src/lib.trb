@@ -1,0 +1,104 @@
+/**
+ * JSON as a format: an implementation of the prelude's `Encoder`/`Decoder` (see "Types, Values and Reflection" in
+ * CONCEPT.md), plus `JsonValue` for the rare case of a document whose shape is not known ahead of time.
+ *
+ *     const text = Json.encode(user)
+ *     const user = Json.decode<User>(text)?
+ */
+
+/**
+ * A JSON document without a fixed shape. `Encoder`/`Decoder` are driven by the type that is being read or written,
+ * so they cannot express "whatever is there" - this ADT is the library type for that (config previews, diffing,
+ * passthrough of fields nobody has a type for yet).
+ */
+public type JsonValue {
+  case Null
+  case Bool(value: Bool)
+  /** JSON does not distinguish integers from floating point, so every number is a `Float64`. */
+  case Number(value: Float64)
+  case String(value: String)
+  case Array(items: List<JsonValue>)
+  case Object(entries: Map<String, JsonValue>)
+}
+
+/** A `JsonValue` describes itself to any `Encoder`, not only `Json`'s own. */
+extend JsonValue with Encode {
+  fn encode(self, var encoder: Encoder) {
+    match self {
+      .Null => encoder.nothing()
+      .Bool(value) => encoder.bool(value)
+      .Number(value) => encoder.float(value)
+      .String(value) => encoder.string(value)
+      .Array(items) => encoder.sequence(Some(items.length())) { sequence =>
+        for item in items {
+          sequence.item(item)
+        }
+      }
+      .Object(entries) => encoder.map(Some(entries.length())) { map =>
+        for (key, value) in entries {
+          map.entry(key, value)
+        }
+      }
+    }
+  }
+}
+
+/**
+ * What went wrong turning text into a value and back: malformed JSON text, or JSON that parsed fine but does not
+ * fit the requested type.
+ */
+public type JsonError with Show {
+  private kind: JsonErrorKind
+
+  /** The text was not well-formed JSON. */
+  fn syntax(line: Int, message: String): JsonError {
+    Self(kind: .Syntax(line, message))
+  }
+
+  /** The text was well-formed JSON, but `Decode` rejected it. */
+  fn decodeFailed(cause: DecodeError): JsonError {
+    Self(kind: .Decode(cause))
+  }
+
+  /** `true` for malformed JSON text, as opposed to well-formed JSON that did not fit the target type. */
+  fn isSyntaxError(self): Bool {
+    match kind {
+      .Syntax(_, _) => true
+      .Decode(_) => false
+    }
+  }
+
+  fn show(self): String {
+    match kind {
+      .Syntax(line, message) => "line {line}: {message}"
+      .Decode(cause) => "{cause}"
+    }
+  }
+}
+
+type JsonErrorKind {
+  case Syntax(line: Int, message: String)
+  case Decode(cause: DecodeError)
+}
+
+/** JSON reading and writing. A format is an implementation of `Encoder`/`Decoder` and never sees a type. */
+public native type Json {
+  /** Renders any `Encode` value as JSON text. */
+  native fn encode(value: Encode): String
+
+  /**
+   * Parses `text` and decodes it as `Value`. Fails on malformed JSON as well as on JSON that does not fit `Value`.
+   *
+   *     match Json.decode<User>(text) {
+   *       Ok(user) => print user.name
+   *       Error(error) => print "Rejected: {error}"
+   *     }
+   */
+  native fn decode<Value: Decode>(text: String): Result<Value, JsonError>
+
+  /** Parses `text` into a `JsonValue`, without knowing its shape. */
+  native fn parse(text: String): Result<JsonValue, JsonError>
+
+  /** Any `Encode` value as a `JsonValue` tree, e.g. to diff two versions of it structurally. */
+  native fn value<Value: Encode>(value: Value): JsonValue
+}

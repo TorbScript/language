@@ -80,6 +80,20 @@ fn both_toolchains_render_diagnostics_the_same_way() {
     ));
 }
 
+/// `torb check` over the repository: the module graph, the symbols, every name in a type position and the type every
+/// one of those positions stands for, in `std/`, `compiler/` and `examples/`. The standard library and the examples
+/// are the conformance suite, so this has to stay free of problems. That every type position really becomes a type
+/// is asserted in `compiler/tests/types.test.trb`, which checks the same repository in process.
+#[test]
+fn the_compiler_resolves_the_names_of_the_whole_repository() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let compiler = root.join("compiler");
+    let output = torb(&["run", compiler.to_str().expect("UTF-8 path"), "check", root.to_str().expect("UTF-8 path")]);
+    assert!(output.ends_with("files, no problems\n"), "{output}");
+    let checked: usize = output.split(' ').next().unwrap_or_default().parse().unwrap_or_default();
+    assert!(checked > 50, "expected every file of the workspace to be checked, checked {checked}");
+}
+
 /// `bootstrap/tests/scripts/*.trb` with their expected output: the behavior of the interpreter itself.
 #[test]
 fn scripts_print_what_they_should() {

@@ -1,0 +1,83 @@
+use File, IoError from "std/fs"
+use normalizePath, parentPath, joinPath, pathDepth from "./path"
+use SourceTree from "./source-tree"
+
+/**
+ * The one place in the front end that does IO. It reads everything that could matter before anything is resolved:
+ * the `project.trb` of every directory above the given paths (that is where the workspace is), and every `.trb` file
+ * below the outermost of those directories (that is where the standard library is, as a member of the workspace).
+ *
+ * Reading more than necessary is deliberate: a repository of this size is a few hundred kilobytes, and in exchange
+ * the module graph, the symbols and the whole name resolution are pure functions over a `SourceTree`.
+ */
+public fn readSourceTree(paths: List<String>): Result<SourceTree, IoError> {
+  var files: Map<String, String> = [:]
+  var roots: List<String> = []
+  for path in paths {
+    const absolute = normalizePath(File.absolutePath(path)?)
+    if !File.exists(absolute) {
+      return Error(IoError(path, "The file does not exist"))
+    }
+    const directory = if File.isDirectory(absolute) { absolute } else { parentPath(absolute) }
+    roots.add(readProjectsAbove(files, directory)? ?? absolute)
+  }
+  for root in roots {
+    readBelow(files, root)?
+  }
+  Ok(SourceTree.of(files, normalizePath(File.absolutePath(".")?)))
+}
+
+/** The paths of the command line the way the `SourceTree` spells them: absolute and normalized. */
+public fn absolutePaths(paths: List<String>): Result<List<String>, IoError> {
+  var absolute: List<String> = []
+  for path in paths {
+    absolute.add(normalizePath(File.absolutePath(path)?))
+  }
+  Ok(absolute)
+}
+
+/**
+ * Reads the `project.trb` of the directory and of every directory above it, and answers with the outermost one that
+ * has a `project.trb`: the candidate for the workspace root.
+ */
+fn readProjectsAbove(var files: Map<String, String>, directory: String): Result<String?, IoError> {
+  var outermost: String? = None
+  var current = directory
+  while true {
+    const manifest = joinPath(current, "project.trb")
+    if File.exists(manifest) {
+      files.set(manifest, File.readText(manifest)?)
+      outermost = Some(current)
+    }
+    const parent = parentPath(current)
+    // Stop at the root: one step further and the path would stop being absolute and be read relative to the
+    // working directory, which is a different place entirely
+    if parent == current || pathDepth(parent) < 1 {
+      break
+    }
+    current = parent
+  }
+  Ok(outermost)
+}
+
+/** Every `.trb` file below the path. Hidden directories, `target` and `node_modules` are skipped, as in `torb parse`. */
+fn readBelow(var files: Map<String, String>, path: String): Result<Void, IoError> {
+  if !File.isDirectory(path) {
+    if path.endsWith(".trb") && !files.containsKey(path) {
+      files.set(path, File.readText(path)?)
+    }
+    return Ok(Void)
+  }
+  for entry in File.list(path)? {
+    const child = joinPath(path, entry)
+    if File.isDirectory(child) {
+      const isSkipped = entry.startsWith(".") || entry == "target" || entry == "node_modules"
+      if !isSkipped {
+        readBelow(files, child)?
+      }
+    } else if entry.endsWith(".trb") && !files.containsKey(child) {
+      files.set(child, File.readText(child)?)
+    }
+  }
+  Ok(Void)
+}

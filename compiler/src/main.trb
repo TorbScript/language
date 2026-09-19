@@ -6,6 +6,8 @@ use parse from "./syntax/parser/parser"
 use dumpTokens from "./syntax/dump"
 use collectSourceFiles from "./cli/files"
 use renderDiagnostic from "./cli/render"
+use readSourceTree, absolutePaths from "./project/read"
+use check from "./semantics/check"
 
 /**
  * The TorbScript toolchain, written in TorbScript. Until it can compile itself it is run by the bootstrap
@@ -15,6 +17,7 @@ fn printUsage() {
   printError "torb - the TorbScript toolchain (self-hosted)"
   printError ""
   printError "Usage:"
+  printError "  torb check [path]...   Check projects, workspaces or single files (default: the current directory)"
   printError "  torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)"
   printError "  torb tokens <file>     Print the tokens of a file"
   printError "  torb ast <file>        Print the syntax tree of a file"
@@ -66,7 +69,45 @@ fn checkSyntax(paths: List<String>): Result<Int, IoError> {
   Ok(problems)
 }
 
+/**
+ * Modules, imports, visibility and every name in a type position. Names in expressions are not resolved yet: what
+ * they mean depends on types (see docs/ARCHITECTURE.md, milestone 4). Returns the number of problems.
+ */
+fn checkProjects(paths: List<String>): Result<Int, IoError> {
+  const tree = readSourceTree(paths)?
+  const checked = check(tree, absolutePaths(paths)?)
+  var problems = checked.problems.length()
+  var filesWithProblems = 0
+  for problem in checked.problems {
+    printError "error: {problem}"
+  }
+  for file in checked.files {
+    if file.diagnostics.isEmpty() {
+      continue
+    }
+    filesWithProblems = filesWithProblems + 1
+    problems = problems + file.diagnostics.length()
+    const lines = LineIndex.of(file.text)
+    for diagnostic in file.diagnostics {
+      printError renderDiagnostic(file.path, lines, diagnostic)
+      printError ""
+    }
+  }
+  if problems == 0 {
+    print "{checked.files.length()} files, no problems"
+  } else {
+    printError "{problems} problems in {filesWithProblems} of {checked.files.length()} files"
+  }
+  Ok(problems)
+}
+
 match Process.arguments() {
+  ["check", ...more] => {
+    const paths = if more.isEmpty() { ["."] } else { more }
+    if checkProjects(paths)? > 0 {
+      Process.exit(1)
+    }
+  }
   ["parse", first, ...more] => {
     if checkSyntax([first, ...more])? > 0 {
       Process.exit(1)

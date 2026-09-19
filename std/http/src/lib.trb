@@ -1,0 +1,122 @@
+/**
+ * A minimal HTTP client.
+ *
+ *     use * as http from "std/http"
+ *
+ *     fn fetchUser(id: Int): Task<Result<User, HttpError>> {
+ *       const response = http.get("https://example.test/users/{id}").await()?
+ *       response.json<User>()
+ *     }
+ *
+ * Needs the network capability inside a sandboxed script.
+ */
+
+use Json, JsonError from "std/json"
+
+/** One HTTP request, for `request()`. `get` and `post` build one of these for the common cases. */
+public type Request {
+  method: String
+  url: String
+  headers: Map<String, String> = [:]
+  body: String = ""
+}
+
+/** What came back. The body is text: binary responses are outside the scope of this client. */
+public type Response {
+  status: Int
+  headers: Map<String, String> = [:]
+  body: String = ""
+
+  /** Decodes the body as JSON. A malformed or mismatched body becomes an `HttpError`, like every other failure. */
+  fn json<Value: Decode>(self): Result<Value, HttpError> {
+    Json.decode<Value>(body).mapError { HttpError.decodeFailed(_) }
+  }
+}
+
+/**
+ * What went wrong making a request. A single wrapper type, so new kinds of failure are never a breaking change
+ * (see "Algebraic Data Types and Pattern Matching" in CONCEPT.md).
+ */
+public type HttpError with Show {
+  private kind: HttpErrorKind
+
+  /** The server did not respond in time. */
+  fn timeout(): HttpError {
+    Self(kind: .Timeout)
+  }
+
+  /** The request never reached a server (DNS, refused connection, broken transport, ...). */
+  fn connectionFailed(message: String): HttpError {
+    Self(kind: .ConnectionFailed(message))
+  }
+
+  /** The server responded, but not with success. */
+  fn status(code: Int, message: String): HttpError {
+    Self(kind: .Status(code, message))
+  }
+
+  fn invalidUrl(message: String): HttpError {
+    Self(kind: .InvalidUrl(message))
+  }
+
+  /** `Response.json` failed: the body was not the JSON `Value` expected. */
+  fn decodeFailed(cause: JsonError): HttpError {
+    Self(kind: .Decode(cause))
+  }
+
+  fn isTimeout(self): Bool {
+    match kind {
+      .Timeout => true
+      _ => false
+    }
+  }
+
+  /** Worth trying again unchanged: timeouts, connection failures, `5xx` responses. */
+  fn isRetryable(self): Bool {
+    match kind {
+      .Timeout => true
+      .ConnectionFailed(_) => true
+      .Status(code, _) => code >= 500
+      _ => false
+    }
+  }
+
+  /** The status code, if the request reached the server at all. */
+  fn statusCode(self): Int? {
+    match kind {
+      .Status(code, _) => Some(code)
+      _ => None
+    }
+  }
+
+  fn show(self): String {
+    match kind {
+      .Timeout => "request timed out"
+      .ConnectionFailed(message) => "connection failed: {message}"
+      .Status(code, message) => "{code}: {message}"
+      .InvalidUrl(message) => "invalid URL: {message}"
+      .Decode(cause) => "{cause}"
+    }
+  }
+}
+
+type HttpErrorKind {
+  case Timeout
+  case ConnectionFailed(message: String)
+  case Status(code: Int, message: String)
+  case InvalidUrl(message: String)
+  case Decode(cause: JsonError)
+}
+
+/** `http.get(url).await()?` */
+public native fn get(url: String, headers: Map<String, String> = [:]): Task<Result<Response, HttpError>>
+
+/** `http.post(url, body).await()?` */
+public native fn post(
+  url: String,
+  body: String,
+  headers: Map<String, String> = [:],
+): Task<Result<Response, HttpError>>
+
+/** For methods and headers `get`/`post` do not cover. */
+public native fn request(request: Request): Task<Result<Response, HttpError>>

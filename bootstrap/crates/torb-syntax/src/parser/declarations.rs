@@ -14,6 +14,7 @@ impl Parser<'_> {
             TokenKind::Keyword(Keyword::Trait) => self.trait_declaration(),
             TokenKind::Keyword(Keyword::Extend) => self.extend_declaration(),
             TokenKind::Keyword(Keyword::Foreign) => self.foreign_declaration(),
+            TokenKind::Keyword(Keyword::Const | Keyword::Var) => self.constant_declaration(modifiers),
             _ => {
                 self.error_here(format!(
                     "Expected a declaration (`fn`, `type`, `trait`, `extend`, `use`), found {}",
@@ -48,6 +49,16 @@ impl Parser<'_> {
             }
             self.bump();
         }
+    }
+
+    /// `public const pi = 3.14` at the top level of a module. `public var` is an error: a module has no mutable
+    /// state, so there is nothing a top-level `var` could export.
+    fn constant_declaration(&mut self, modifiers: Modifiers) -> DeclarationKind {
+        let binding = self.binding();
+        if binding.is_var && modifiers.visibility == Visibility::Public {
+            self.error("A module has no mutable state: only `const` can be public", binding.pattern.span);
+        }
+        DeclarationKind::Constant(binding)
     }
 
     /// `use A, B from "./file"`, `use * as http from "std/net/http"`

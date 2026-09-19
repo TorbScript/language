@@ -1,0 +1,130 @@
+use SourceText from "../syntax/source"
+use parse from "../syntax/parser/parser"
+use normalizePath, parentPath, joinPath, isInside, pathName, pathDepth from "./path"
+use SourceTree from "./source-tree"
+use Manifest, readManifest from "./manifest"
+
+/** One project: one `project.trb`, one package name, the files below its `src/` and its test directory. */
+public type Package {
+  /** `owner/name` from `project.trb`. Empty if the project does not say, which makes it unimportable. */
+  name: String
+  /** The directory that contains the `project.trb`. Empty for a standalone script. */
+  directory: String
+  manifest: Manifest
+  /** Every `.trb` file of the package, sorted: the modules it consists of. */
+  files: List<String>
+}
+
+/**
+ * The projects one run of the toolchain works with. A path on the command line names a workspace root (then all of
+ * its members are here), a single project (then its whole workspace is here anyway, because that is where the
+ * standard library is), or a script that belongs to no project at all.
+ */
+public type Workspace {
+  packages: List<Package>
+  /** What went wrong before any source was looked at: a member that is not there, a path without a project */
+  problems: List<String> = []
+
+  fn packageNamed(self, name: String): Package? {
+    if name.isEmpty() {
+      return None
+    }
+    packages.find({ _.name == name })
+  }
+}
+
+/**
+ * The workspace of a path: the outermost `project.trb` above it whose `workspace { members ... }` contains the
+ * project the path belongs to. A project that nobody lists is its own workspace, and a file below no `project.trb`
+ * at all becomes a package of its own, checked with the default prelude.
+ */
+public fn findWorkspace(tree: SourceTree, path: String): Workspace {
+  const target = normalizePath(path)
+  const directory = if tree.exists(target) { parentPath(target) } else { target }
+  const manifests = manifestDirectories(tree)
+  // Innermost first: the project the path belongs to, then everything it could be a member of
+  const owners = manifests.filter({ isInside(directory, _) }).toList().reversed()
+  if const Some(project) = owners.first() {
+    return workspaceOf(tree, manifests, owners, project)
+  }
+  const files = if tree.exists(target) { [target] } else { tree.below(directory) }
+  Workspace([Package("", directory, Manifest(), files)])
+}
+
+/** The directories with a `project.trb`, the outermost first: a directory always comes before what is inside it. */
+fn manifestDirectories(tree: SourceTree): List<String> {
+  var directories = tree.paths().filter({ pathName(_) == "project.trb" }).map({ parentPath(_) }).toList()
+  directories.sort({ pathDepth(_) })
+  directories
+}
+
+fn workspaceOf(tree: SourceTree, manifests: List<String>, owners: List<String>, project: String): Workspace {
+  var problems: List<String> = []
+  // `owners` is innermost first, so the last workspace that contains the project is the outermost one
+  var root = project
+  var members: List<String> = []
+  for owner in owners {
+    const candidate = manifestOf(tree, owner)
+    if !candidate.isWorkspace() {
+      continue
+    }
+    const expanded = expandMembers(tree, manifests, owner, candidate.workspaceMembers, problems)
+    if owner == project || expanded.contains(project) {
+      root = owner
+      members = expanded
+    }
+  }
+  var directories = [root]
+  for member in members {
+    if !directories.contains(member) {
+      directories.add(member)
+    }
+  }
+  Workspace(directories.map({ packageAt(tree, _) }).toList(), problems)
+}
+
+/** `members "std/*", "compiler"`: a pattern is a directory, or `directory/*` for every project directly below it. */
+fn expandMembers(
+  tree: SourceTree,
+  manifests: List<String>,
+  root: String,
+  patterns: List<String>,
+  var problems: List<String>,
+): List<String> {
+  var members: List<String> = []
+  for pattern in patterns {
+    if pattern.endsWith("/*") {
+      const parent = joinPath(root, pattern[0..(pattern.byteLength() - 2)])
+      const matched = manifests.filter({ _ != root && parentPath(_) == parent }).toList()
+      if matched.isEmpty() {
+        problems.add("The workspace member pattern `{pattern}` of {root} matches no project")
+      }
+      members.addAll(matched)
+      continue
+    }
+    const directory = joinPath(root, pattern)
+    if manifests.contains(directory) {
+      members.add(directory)
+    } else {
+      problems.add("The workspace member `{pattern}` of {root} has no `project.trb`")
+    }
+  }
+  members
+}
+
+fn packageAt(tree: SourceTree, directory: String): Package {
+  const manifest = manifestOf(tree, directory)
+  var files = tree.below(joinPath(directory, "src"))
+  for file in tree.below(joinPath(directory, manifest.testInput)) {
+    if !files.contains(file) {
+      files.add(file)
+    }
+  }
+  Package(manifest.name, directory, manifest, files)
+}
+
+/** The `project.trb` of a directory, read from its syntax tree. An unreadable one is an empty manifest. */
+public fn manifestOf(tree: SourceTree, directory: String): Manifest {
+  const text = tree.text(joinPath(directory, "project.trb")) ?? ""
+  readManifest(parse(SourceText.of(text)).file)
+}

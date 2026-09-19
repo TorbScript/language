@@ -1,6 +1,7 @@
 use test, group from "std/test"
 use SourceText from "../src/syntax/source"
 use Statement, StatementKind, Expression, ExpressionKind, CallStyle, InfixOperator, TypeKind, PatternKind from "../src/syntax/ast"
+use Visibility from "../src/syntax/ast"
 use parse from "../src/syntax/parser/parser"
 
 fn statements(text: String): List<Statement> {
@@ -212,6 +213,75 @@ group "Cases" {
 
   test "cases can be imported by name" {
     assert(messages("use Some, None from Option\nuse \"./text-extensions\"").isEmpty())
+  }
+
+  test "a label in a variant pattern is kept, not discarded" {
+    match bound("const area = match shape \{ Point(x: 0, y: 0) => 0 \}") {
+      .Match(_, arms) => match arms[0].pattern.kind {
+        .Variant(_, fields) => {
+          assert(fields.length() == 2)
+          assert(fields[0].label.map({ _.text }) == Some("x"))
+          assert(fields[1].label.map({ _.text }) == Some("y"))
+        }
+        other => panic "Unexpected pattern: {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+    // Without a label, fields are still matched by position
+    match bound("const area = match shape \{ .Circle(radius) => radius \}") {
+      .Match(_, arms) => match arms[0].pattern.kind {
+        .ImplicitVariant(_, fields) => {
+          assert(fields.length() == 1)
+          assert(fields[0].label.isNone())
+        }
+        other => panic "Unexpected pattern: {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+}
+
+group "Constants at top level" {
+  test "`public const` is a declaration, a plain `const` stays a binding" {
+    match statements("public const pi = 3.14")[0].kind {
+      .Declare(declaration) => {
+        assert(declaration.modifiers.visibility == Visibility.Public)
+        match declaration.kind {
+          .Constant(binding) => assert(!binding.isVar)
+          other => panic "Unexpected declaration: {other}"
+        }
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+    match statements("const pi = 3.14")[0].kind {
+      .Bind(_) => {}
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "`private const` is accepted, it is the default anyway" {
+    assert(messages("private const secret = 1").isEmpty())
+  }
+
+  test "`public var` at top level is an error: a module has no mutable state" {
+    assert(messages("public var mutable = 1") == ["A module has no mutable state: only `const` can be public"])
+  }
+
+  test "the doc comment of a top-level `const` is attached, with or without modifiers" {
+    match statements("/** Pi. */\npublic const pi = 3.14")[0].kind {
+      .Declare(declaration) => {
+        assert(declaration.doc == Some("Pi."))
+        match declaration.kind {
+          .Constant(binding) => assert(binding.doc == None)
+          other => panic "Unexpected declaration: {other}"
+        }
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+    match statements("/** Pi. */\nconst pi = 3.14")[0].kind {
+      .Bind(binding) => assert(binding.doc == Some("Pi."))
+      other => panic "Unexpected tree: {other}"
+    }
   }
 }
 

@@ -46,6 +46,11 @@ public type DeclarationKind {
   case Trait(declaration: TraitDeclaration)
   case Extend(declaration: ExtendDeclaration)
   case Foreign(declaration: ForeignDeclaration)
+  /**
+   * `public const pi = 3.14` at the top level of a module. `public var` is an error: a module has no mutable
+   * state. `Binding.doc` is always `None` here, the doc comment is `Declaration.doc`.
+   */
+  case Constant(binding: Binding)
 }
 
 public type UseDeclaration {
@@ -227,6 +232,12 @@ public type StatementKind {
 
 /** `const x: Int = 1`, `var (a, b) = pair` */
 public type Binding {
+  /**
+   * The doc comment in front of a top-level `const`/`var` **statement** (`StatementKind.Bind`). `None` when this
+   * binding is the payload of a `Declaration` or a `Member`: the doc comment belongs to that instead, so it is
+   * never duplicated.
+   */
+  doc: String?
   isVar: Bool
   pattern: Pattern
   annotation: TypeReference?
@@ -353,9 +364,9 @@ public type PatternKind {
   /** `[first, ...rest]` */
   case ListPattern(items: List<Pattern>, rest: RestPattern?)
   /** `Some(x)`, `Shape.Circle(radius)`, `Point(x, y)` */
-  case Variant(path: List<Name>, fields: List<Pattern>)
+  case Variant(path: List<Name>, fields: List<FieldPattern>)
   /** `.Circle(radius)`, `.Empty`: a case of the type of the value */
-  case ImplicitVariant(name: Name, fields: List<Pattern>)
+  case ImplicitVariant(name: Name, fields: List<FieldPattern>)
   /** `1 | 2 | 3` */
   case Alternatives(patterns: List<Pattern>)
   case Invalid
@@ -365,4 +376,13 @@ public type RestPattern {
   /** Number of patterns in front of the rest */
   position: Int
   name: Name?
+}
+
+/**
+ * `Point(x: 0, y: 0)`: the label is documentation today. The type checker will verify that it names the field at
+ * this position; fields are still matched by position, never by label.
+ */
+public type FieldPattern {
+  label: Name?
+  pattern: Pattern
 }

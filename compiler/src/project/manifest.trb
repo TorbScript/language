@@ -1,0 +1,180 @@
+use SourceFile, Statement, TextSegment from "../syntax/ast"
+
+/**
+ * What the toolchain needs to know about a project. Names of dependencies are stored without their version
+ * requirement (`"acme/http:^1.2.3"` is the package `acme/http`): resolving versions is the business of the package
+ * manager, the front end only asks "may this project import that package".
+ */
+public type Manifest {
+  /** `owner/name`. Empty if the `project.trb` does not say. */
+  name: String = ""
+  version: String = ""
+  /** The package whose public names are in scope in every file of the project. */
+  prelude: String = "std/prelude"
+  runtimeDependencies: List<String> = []
+  /** Tests and tools. Never part of what dependents get. */
+  developmentDependencies: List<String> = []
+  /** Patterns, each either a directory or `directory/*`. Empty for a project that is not a workspace. */
+  workspaceMembers: List<String> = []
+  buildInput: String = "src/main.trb"
+  testInput: String = "tests"
+
+  fn isWorkspace(self): Bool {
+    !workspaceMembers.isEmpty()
+  }
+
+  fn dependsOn(self, package: String): Bool {
+    runtimeDependencies.contains(package) || developmentDependencies.contains(package)
+  }
+}
+
+/**
+ * A `command argument..., { block }` line of a receiver script, as far as it is literal: the word, the string
+ * arguments, and the settings of its block.
+ */
+public type Setting {
+  word: String
+  texts: List<String>
+  block: List<Setting>
+
+  fn first(self): String? {
+    texts.get(0)
+  }
+
+  /** The string arguments of every `word` line of the block, in order. */
+  fn textsOf(self, word: String): List<String> {
+    var found: List<String> = []
+    for setting in block {
+      if setting.word == word {
+        found.addAll(setting.texts)
+      }
+    }
+    found
+  }
+
+  fn find(self, word: String): Setting? {
+    block.find({ _.word == word })
+  }
+}
+
+/**
+ * The manifest, read from the syntax tree instead of evaluated: top-level command calls with literal arguments
+ * (`name "x"`) and the blocks the toolchain knows (`dependencies { runtime "acme/http:^1.2.3" }`).
+ *
+ * Everything else in the file is ignored silently - a `project.trb` is a receiver script, and the VM will evaluate it
+ * properly in a sandbox once it exists (milestone 7). Until then reading it statically is what lets the compiler find
+ * its own standard library, and it covers every `project.trb` that exists so far.
+ */
+public fn readManifest(file: SourceFile): Manifest {
+  var manifest = Manifest()
+  for setting in readSettings(file.statements) {
+    match setting.word {
+      "name" => {
+        if const Some(text) = setting.first() {
+          manifest = manifest.copy(name: text)
+        }
+      }
+      "version" => {
+        if const Some(text) = setting.first() {
+          manifest = manifest.copy(version: text)
+        }
+      }
+      "prelude" => {
+        if const Some(text) = setting.first() {
+          manifest = manifest.copy(prelude: text)
+        }
+      }
+      "dependencies" => {
+        manifest = manifest.copy(
+          runtimeDependencies: setting.textsOf("runtime").map({ packageNameOf(_) }).toList(),
+          developmentDependencies: setting.textsOf("development").map({ packageNameOf(_) }).toList(),
+        )
+      }
+      "workspace" => {
+        manifest = manifest.copy(workspaceMembers: setting.textsOf("members"))
+      }
+      "build" => {
+        if const Some(text) = firstTextOf(setting, "input") {
+          manifest = manifest.copy(buildInput: text)
+        }
+      }
+      "test" => {
+        if const Some(text) = firstTextOf(setting, "input") {
+          manifest = manifest.copy(testInput: text)
+        }
+      }
+      _ => {}
+    }
+  }
+  manifest
+}
+
+/** The first string argument of a `word` line inside the block of the setting. */
+fn firstTextOf(setting: Setting, word: String): String? {
+  const found = setting.find(word)?
+  found.first()
+}
+
+/** `"acme/http:^1.2.3"` is the package `acme/http`. */
+fn packageNameOf(requirement: String): String {
+  requirement.substringBefore(":") ?? requirement
+}
+
+/** The literal `command argument...` lines of a block, recursively. Anything else is skipped. */
+public fn readSettings(statements: List<Statement>): List<Setting> {
+  var settings: List<Setting> = []
+  for statement in statements {
+    if const Some(setting) = settingOf(statement) {
+      settings.add(setting)
+    }
+  }
+  settings
+}
+
+fn settingOf(statement: Statement): Setting? {
+  const expression = match statement.kind {
+    .Evaluate(expression) => expression
+    _ => {
+      return None
+    }
+  }
+  const (callee, arguments) = match expression.kind {
+    .Call(callee, arguments, _) => (callee, arguments)
+    _ => {
+      return None
+    }
+  }
+  const word = match callee.kind {
+    .Name(text) => text
+    _ => {
+      return None
+    }
+  }
+  var texts: List<String> = []
+  var block: List<Setting> = []
+  for argument in arguments {
+    match argument.value.kind {
+      .TextLiteral(segments) => {
+        if const Some(text) = plainText(segments) {
+          texts.add(text)
+        }
+      }
+      .Closure(closure) => {
+        block = readSettings(closure.body.statements)
+      }
+      _ => {}
+    }
+  }
+  Some(Setting(word, texts, block))
+}
+
+/** `None` for a string with `{...}` in it: what it means depends on evaluation. */
+fn plainText(segments: List<TextSegment>): String? {
+  if const [.Literal(text)] = segments {
+    return Some(text)
+  }
+  if segments.isEmpty() {
+    return Some("")
+  }
+  None
+}

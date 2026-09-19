@@ -1,0 +1,407 @@
+use Span from "../syntax/source"
+use Diagnostic from "../syntax/diagnostic"
+use Name, Visibility, UseDeclaration from "../syntax/ast"
+use Workspace from "../project/workspace"
+use joinPath from "../project/path"
+use ModuleId, Module from "./module"
+use SymbolId, SymbolKind, Symbol, Symbols, Definition, declareModule from "./symbols"
+use Graph, resolveImport from "./graph"
+
+/** The names of one module: everything it can see, and the part of that other modules may import. */
+public type ModuleScope {
+  var names: Map<String, SymbolId> = [:]
+  /** The `public` declarations and everything a `public use` re-exports */
+  var exported: Map<String, SymbolId> = [:]
+}
+
+/**
+ * A program as the front end knows it. Everything program-wide is here, by id: this is what `torb check` produces and
+ * what the type checker of the next milestone starts from.
+ */
+public type Program {
+  workspace: Workspace
+  graph: Graph
+  symbols: Symbols
+  /** One per module, in the order of `graph.modules` */
+  scopes: List<ModuleScope>
+  /** The names a module declares itself, one list per module, in source order */
+  definitions: List<List<Definition>>
+  /** The `src/lib.trb` of the prelude of every package, in the order of `workspace.packages` */
+  preludeModules: List<ModuleId?>
+  /** The names the language provides itself. A file that declares one of them shadows it, like a prelude name. */
+  builtins: Map<String, SymbolId>
+  /** Problems that belong to no file: a prelude package that is not there */
+  problems: List<String>
+
+  /** The names the prelude of the package of this module adds. */
+  fn preludeOf(self, id: ModuleId): Map<String, SymbolId> {
+    match preludeModules[graph.at(id).package] {
+      Some(prelude) => scopes[prelude.value].exported
+      None => [:]
+    }
+  }
+
+  fn lookUp(self, id: ModuleId, name: String): SymbolId? {
+    if const Some(symbol) = scopes[id.value].names.get(name) {
+      return Some(symbol)
+    }
+    builtins.get(name)
+  }
+}
+
+/**
+ * The names of every module: its own declarations, what it imports, and the public names of its prelude.
+ *
+ * Re-exports form chains (`lib.trb` of a package is usually nothing but `public use`) and imports may be cyclic, so
+ * the imports are bound to a fixpoint. That is sound because nothing runs when a module is imported: a cycle is a
+ * reason not to recurse, never an error.
+ */
+public fn resolveNames(graph: Graph, workspace: Workspace): Program {
+  var symbols = Symbols()
+  var builtins: Map<String, SymbolId> = [:]
+  // `Void` has exactly one value, `Never` is the type of what does not return. Everything else a program can name
+  // is declared somewhere - `Int`, `String` and `List` are the prelude, not the language.
+  for name in ["Void", "Never"] {
+    builtins.set(name, symbols.add(Symbol(name, SymbolKind.Builtin, true, None, Span(0, 0))))
+  }
+  var definitions: List<List<Definition>> = []
+  var scopes: List<ModuleScope> = []
+  for module in graph.modules {
+    const declared = declareModule(symbols, module)
+    var scope = ModuleScope()
+    for definition in declared {
+      if !scope.names.containsKey(definition.name) {
+        scope.names.set(definition.name, definition.symbol)
+        if symbols.at(definition.symbol).isPublic {
+          scope.exported.set(definition.name, definition.symbol)
+        }
+      }
+    }
+    definitions.add(declared)
+    scopes.add(scope)
+  }
+
+  var problems: List<String> = []
+  var preludeModules: List<ModuleId?> = []
+  for package in workspace.packages {
+    const name = package.manifest.prelude
+    var found: ModuleId? = None
+    if const Some(prelude) = workspace.packageNamed(name) {
+      found = graph.moduleAt(joinPath(prelude.directory, "src/lib.trb"))
+    }
+    if found.isNone() && !name.isEmpty() {
+      problems.add("The prelude package `{name}` of {package.directory} was not found")
+    }
+    preludeModules.add(found)
+  }
+
+  var binder = Binder(graph, workspace, preludeModules, symbols, scopes)
+  binder.bindToFixpoint()
+  binder.addPreludes()
+  Program(workspace, graph, binder.symbols, binder.scopes, definitions, preludeModules, builtins, problems)
+}
+
+/** Binds the imports of every module, over and over until nothing changes anymore. */
+type Binder {
+  graph: Graph
+  workspace: Workspace
+  preludeModules: List<ModuleId?>
+  var symbols: Symbols
+  var scopes: List<ModuleScope>
+  var isChanged: Bool = false
+
+  fn bindToFixpoint(var self) {
+    isChanged = true
+    while isChanged {
+      isChanged = false
+      for index in 0..scopes.length() {
+        bindImports(ModuleId(index))
+      }
+    }
+  }
+
+  /**
+   * The prelude comes last: an import of a name the prelude also has shadows it, and so does a declaration of the
+   * file. Adding it during the fixpoint would make the prelude win instead.
+   */
+  fn addPreludes(var self) {
+    for index in 0..scopes.length() {
+      const prelude = preludeNamesOf(ModuleId(index))
+      var scope = scopes[index]
+      for (name, symbol) in prelude {
+        if !scope.names.containsKey(name) {
+          scope.names.set(name, symbol)
+        }
+      }
+      scopes.set(index, scope)
+    }
+  }
+
+  fn preludeNamesOf(self, id: ModuleId): Map<String, SymbolId> {
+    match preludeModules[graph.at(id).package] {
+      Some(prelude) => scopes[prelude.value].exported
+      None => [:]
+    }
+  }
+
+  /** The name as the module sees it while the imports are being bound: its own names, then those of its prelude. */
+  fn visibleName(self, id: ModuleId, name: String): SymbolId? {
+    if const Some(symbol) = scopes[id.value].names.get(name) {
+      return Some(symbol)
+    }
+    preludeNamesOf(id).get(name)
+  }
+
+  fn bind(var self, id: ModuleId, name: String, symbol: SymbolId, isPublic: Bool) {
+    if name.isEmpty() {
+      return
+    }
+    var scope = scopes[id.value]
+    var hasChanged = false
+    if !scope.names.containsKey(name) {
+      scope.names.set(name, symbol)
+      hasChanged = true
+    }
+    if isPublic && !scope.exported.containsKey(name) {
+      scope.exported.set(name, symbol)
+      hasChanged = true
+    }
+    if hasChanged {
+      scopes.set(id.value, scope)
+      isChanged = true
+    }
+  }
+
+  fn bindImports(var self, id: ModuleId) {
+    for statement in graph.at(id).file.statements {
+      if const .Declare(declaration) = statement.kind {
+        if const .Use(usage) = declaration.kind {
+          bindOne(id, usage, declaration.modifiers.visibility == Visibility.Public)
+        }
+      }
+    }
+  }
+
+  fn bindOne(var self, id: ModuleId, usage: UseDeclaration, isPublic: Bool) {
+    match usage.source {
+      .Module(path) => {
+        if const .Found(target) = resolveImport(graph, workspace, id, path) {
+          match usage.items {
+            .Names(names) => {
+              for name in names {
+                if const Some(symbol) = scopes[target.value].exported.get(name.text) {
+                  bind(id, name.text, symbol, isPublic)
+                }
+              }
+            }
+            .All(alias) => {
+              if !scopes[id.value].names.containsKey(alias.text) && !alias.text.isEmpty() {
+                const symbol = symbols.add(Symbol(alias.text, SymbolKind.Namespace(target), isPublic, Some(id), alias.span))
+                bind(id, alias.text, symbol, isPublic)
+              }
+            }
+            // `use "./text-extensions"`: only what the module adds to types with `extend`, so no name at all
+            .OnlyExtensions => {}
+          }
+        }
+      }
+      // `use Some, None from Option`: the cases of a type
+      .Type(path) => {
+        if const .Names(names) = usage.items {
+          if const Some(owner) = resolveTypePath(id, path) {
+            for name in names {
+              if const Some(symbol) = symbols.caseNamed(owner, name.text) {
+                bind(id, name.text, symbol, isPublic)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  /** `use Circle from shapes.Shape`: a path through namespace imports to a type. */
+  fn resolveTypePath(self, id: ModuleId, path: List<Name>): SymbolId? {
+    var current = visibleName(id, path[0].text)?
+    for index in 1..path.length() {
+      const namespace = match symbols.at(current).kind {
+        .Namespace(module) => module
+        _ => {
+          return None
+        }
+      }
+      current = scopes[namespace.value].exported.get(path[index].text)?
+    }
+    if const .Type = symbols.at(current).kind {
+      return Some(current)
+    }
+    None
+  }
+}
+
+/**
+ * Everything that can be wrong about the top-level names of a file: a name twice, an import of something that is not
+ * there, and a `use` of a module or package that is not there. Names in type positions are `resolve-types.trb`.
+ */
+public fn checkNames(program: Program, id: ModuleId): List<Diagnostic> {
+  var diagnostics: List<Diagnostic> = []
+  var declared: Set<String> = Set.new()
+  for definition in program.definitions[id.value] {
+    if declared.contains(definition.name) {
+      diagnostics.add(
+        Diagnostic.error("`{definition.name}` is already declared in this file", definition.span)
+          .withNote("Two top-level declarations of a file cannot have the same name, even when neither is `public`")
+      )
+      continue
+    }
+    declared.add(definition.name)
+  }
+  var imported: Set<String> = Set.new()
+  for statement in program.graph.at(id).file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(usage) = declaration.kind {
+        checkImport(program, id, usage, declaration.span, declared, imported, diagnostics)
+      }
+    }
+  }
+  diagnostics
+}
+
+fn checkImport(
+  program: Program,
+  id: ModuleId,
+  usage: UseDeclaration,
+  at: Span,
+  declared: Set<String>,
+  var imported: Set<String>,
+  var diagnostics: List<Diagnostic>,
+) {
+  match usage.source {
+    .Module(path) => {
+      const target = match resolveImport(program.graph, program.workspace, id, path) {
+        .Found(target) => target
+        .NoModule(missing) => {
+          diagnostics.add(
+            Diagnostic.error("There is no module `{missing}`", at)
+              .withNote("A path that starts with `./` or `../` is a file next to this one, without its extension")
+          )
+          return
+        }
+        .NoPackage(name) => {
+          diagnostics.add(
+            Diagnostic.error("There is no package `{name}`", at)
+              .withNote(
+                "A package is `owner/name`. The standard library comes with the toolchain; everything else has to be a"
+                  + " dependency or a member of the workspace"
+              )
+          )
+          return
+        }
+        .NotADependency(name) => {
+          const importer = program.workspace.packages[program.graph.at(id).package].name
+          diagnostics.add(
+            Diagnostic.error("The package `{name}` is not a dependency of `{importer}`", at)
+              .withNote("Add it: `dependencies \{ runtime \"{name}\" \}` in project.trb")
+          )
+          return
+        }
+        .NoModuleInPackage(name, missing) => {
+          diagnostics.add(
+            Diagnostic.error("The package `{name}` has no module `{missing}`", at)
+              .withNote("`\"owner/name\"` is `src/lib.trb` of a package, `\"owner/name/path\"` is `src/path.trb` of it")
+          )
+          return
+        }
+      }
+      match usage.items {
+        .Names(names) => {
+          for name in names {
+            if !program.scopes[target.value].exported.containsKey(name.text) {
+              var problem = Diagnostic.error("`{name.text}` is not exported by `{path}`", name.span)
+              if program.scopes[target.value].names.containsKey(name.text) {
+                problem = problem.withNote("It is declared there, but not `public`")
+              }
+              diagnostics.add(problem)
+              continue
+            }
+            reportDuplicate(name, declared, imported, diagnostics)
+          }
+        }
+        .All(alias) => reportDuplicate(alias, declared, imported, diagnostics)
+        .OnlyExtensions => {}
+      }
+    }
+    .Type(path) => {
+      const at = path[0].span.to(path[path.length() - 1].span)
+      const names = match usage.items {
+        .Names(names) => names
+        _ => {
+          diagnostics.add(Diagnostic.error("`use * as name from Type` does not exist: cases are imported by name", at))
+          return
+        }
+      }
+      const owner = match symbolOfPath(program, id, path) {
+        Some(symbol) => symbol
+        None => {
+          diagnostics.add(Diagnostic.error("Unknown name `{dottedName(path)}`", at))
+          return
+        }
+      }
+      if const .Type = program.symbols.at(owner).kind {
+        for name in names {
+          if program.symbols.caseNamed(owner, name.text).isNone() {
+            diagnostics.add(Diagnostic.error("`{program.symbols.at(owner).name}` has no case `{name.text}`", name.span))
+            continue
+          }
+          reportDuplicate(name, declared, imported, diagnostics)
+        }
+        return
+      }
+      diagnostics.add(
+        Diagnostic.error("{program.symbols.describe(owner)} has no cases", at)
+          .withNote("`use ... from Type` imports the cases of a type. A module is imported with `from \"path\"`")
+      )
+    }
+  }
+}
+
+/** `use Circle from shapes.Shape`: a path through namespace imports. `None` if any step is not there. */
+fn symbolOfPath(program: Program, id: ModuleId, path: List<Name>): SymbolId? {
+  var current = program.lookUp(id, path[0].text)?
+  for index in 1..path.length() {
+    const namespace = match program.symbols.at(current).kind {
+      .Namespace(module) => module
+      _ => {
+        return None
+      }
+    }
+    current = program.scopes[namespace.value].exported.get(path[index].text)?
+  }
+  Some(current)
+}
+
+fn dottedName(path: List<Name>): String {
+  var segments: List<String> = []
+  for name in path {
+    segments.add(name.text)
+  }
+  String.join(segments, separator: ".")
+}
+
+fn reportDuplicate(name: Name, declared: Set<String>, var imported: Set<String>, var diagnostics: List<Diagnostic>) {
+  if name.text.isEmpty() {
+    return
+  }
+  if declared.contains(name.text) {
+    diagnostics.add(
+      Diagnostic.error("`{name.text}` is already declared in this file", name.span)
+        .withNote("An import cannot bring in a name the file declares itself")
+    )
+    return
+  }
+  if imported.contains(name.text) {
+    diagnostics.add(Diagnostic.error("`{name.text}` is already imported", name.span))
+    return
+  }
+  imported.add(name.text)
+}

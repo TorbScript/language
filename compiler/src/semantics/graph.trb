@@ -1,0 +1,105 @@
+use SourceText from "../syntax/source"
+use parse from "../syntax/parser/parser"
+use normalizePath, parentPath, joinPath from "../project/path"
+use SourceTree from "../project/source-tree"
+use Workspace, Package from "../project/workspace"
+use ModuleId, Module from "./module"
+
+/** Every module of every package, and the index that turns an import path into a module. */
+public type Graph {
+  modules: List<Module>
+  private byPath: Map<String, Int>
+
+  fn of(modules: List<Module>): Graph {
+    var byPath: Map<String, Int> = [:]
+    for module in modules {
+      byPath.set(module.path, module.id.value)
+    }
+    Self(modules, byPath)
+  }
+
+  fn at(self, id: ModuleId): Module {
+    modules[id.value]
+  }
+
+  fn moduleAt(self, path: String): ModuleId? {
+    byPath.get(normalizePath(path)).map({ ModuleId(_) })
+  }
+}
+
+/** Parses every file of every package. This is the only place the syntax trees of a program come from. */
+public fn buildGraph(tree: SourceTree, workspace: Workspace): Graph {
+  var modules: List<Module> = []
+  for index in 0..workspace.packages.length() {
+    const package = workspace.packages[index]
+    for path in package.files {
+      const source = SourceText.of(tree.text(path) ?? "")
+      const parsed = parse(source)
+      const id = ModuleId(modules.length())
+      modules.add(Module(id, index, path, source, parsed.file, parsed.diagnostics, isEntryFile(package, path)))
+    }
+  }
+  Graph.of(modules)
+}
+
+/** A script that belongs to no project is always an entry: nobody imports it. */
+fn isEntryFile(package: Package, path: String): Bool {
+  package.name.isEmpty() || path == joinPath(package.directory, package.manifest.buildInput) || path.endsWith(".test.trb")
+}
+
+/** What a `use "..."` path names, or why it names nothing. */
+public type Import {
+  case Found(module: ModuleId)
+  /** A relative path with no file behind it */
+  case NoModule(path: String)
+  case NoPackage(name: String)
+  /** The package is there, but the importing project does not depend on it */
+  case NotADependency(name: String)
+  case NoModuleInPackage(package: String, path: String)
+}
+
+/**
+ * A path that starts with `./` or `../` is a file next to the importing one. Everything else starts with the name of
+ * a package: `"owner/name"` is its `src/lib.trb`, `"owner/name/path"` is `src/path.trb` of it.
+ */
+public fn resolveImport(graph: Graph, workspace: Workspace, from: ModuleId, path: String): Import {
+  const module = graph.at(from)
+  if path.startsWith("./") || path.startsWith("../") {
+    const target = "{joinPath(parentPath(module.path), path)}.trb"
+    if const Some(id) = graph.moduleAt(target) {
+      return Import.Found(id)
+    }
+    return Import.NoModule(path)
+  }
+  const segments = path.split("/")
+  if segments.length() < 2 {
+    return Import.NoPackage(path)
+  }
+  const name = "{segments[0]}/{segments[1]}"
+  const package = match workspace.packageNamed(name) {
+    Some(found) => found
+    None => {
+      return Import.NoPackage(name)
+    }
+  }
+  if !isAvailable(workspace.packages[module.package], name) {
+    return Import.NotADependency(name)
+  }
+  const inside = if segments.length() == 2 {
+    "src/lib.trb"
+  } else {
+    "src/{String.join(segments.skip(2), separator: "/")}.trb"
+  }
+  if const Some(id) = graph.moduleAt(joinPath(package.directory, inside)) {
+    return Import.Found(id)
+  }
+  Import.NoModuleInPackage(name, path)
+}
+
+/**
+ * Packages of the owner `std` come with the toolchain and have its version, so they need no entry in `dependencies`
+ * (CONCEPT.md, "Modules and Packages"). Everything else a project imports it has to have asked for.
+ */
+fn isAvailable(importer: Package, name: String): Bool {
+  name == importer.name || name.startsWith("std/") || importer.manifest.dependsOn(name)
+}

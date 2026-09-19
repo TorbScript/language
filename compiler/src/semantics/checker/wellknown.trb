@@ -1,0 +1,86 @@
+use joinPath from "../../project/path"
+use SymbolId from "../symbols"
+use Program from "../scope"
+
+/**
+ * The declarations the *language* refers to, looked up once per run: `Item?` is an `Option`, a text literal type has
+ * `String` as its base, `Void` is both a name of the language and a `native type` of the prelude.
+ *
+ * Everything here is optional. A workspace without `std/prelude` (a script with another prelude, a test that brings
+ * its own) has to keep working: what is missing simply yields `Invalid`, and the message about it was already written
+ * where the name did not resolve.
+ */
+public type WellKnown {
+  /** Everything `std/prelude` exports, by name. Empty when the workspace has no such package. */
+  names: Map<String, SymbolId> = [:]
+  /** Every symbol that means `Void`: the name the language provides, and the `native type Void` of the prelude. */
+  voidSymbols: List<SymbolId> = []
+  neverSymbols: List<SymbolId> = []
+  /** `Item?` is sugar for `Option<Item>`, so building a type needs this one. */
+  option: SymbolId? = None
+  /** The base types of a literal type and of a const argument. */
+  string: SymbolId? = None
+  integer: SymbolId? = None
+  character: SymbolId? = None
+  boolean: SymbolId? = None
+
+  fn symbolNamed(self, name: String): SymbolId? {
+    names.get(name)
+  }
+
+  fn isVoid(self, symbol: SymbolId): Bool {
+    voidSymbols.contains(symbol)
+  }
+
+  fn isNever(self, symbol: SymbolId): Bool {
+    neverSymbols.contains(symbol)
+  }
+}
+
+/**
+ * The names the checker knows, from the `std/prelude` of this workspace - not from the prelude of a single package:
+ * a project may name another prelude, but `Item?` still means the `Option` of the standard library.
+ */
+public fn wellKnownOf(program: Program): WellKnown {
+  const exports = preludeExports(program)
+  WellKnown(
+    exports,
+    bothNames(program, exports, "Void"),
+    bothNames(program, exports, "Never"),
+    option: exports.get("Option"),
+    string: exports.get("String"),
+    integer: exports.get("Int64"),
+    character: exports.get("Char"),
+    boolean: exports.get("Bool"),
+  )
+}
+
+/**
+ * `Void` and `Never` are names of the language *and* declarations of the prelude, and both have to build the same
+ * type. Which of the two a file sees depends on its scope, so the checker accepts either.
+ */
+fn bothNames(program: Program, exports: Map<String, SymbolId>, name: String): List<SymbolId> {
+  var found: List<SymbolId> = []
+  if const Some(builtin) = program.builtins.get(name) {
+    found.add(builtin)
+  }
+  if const Some(declared) = exports.get(name) {
+    if !found.contains(declared) {
+      found.add(declared)
+    }
+  }
+  found
+}
+
+fn preludeExports(program: Program): Map<String, SymbolId> {
+  const package = match program.workspace.packageNamed("std/prelude") {
+    Some(found) => found
+    .None => {
+      return [:]
+    }
+  }
+  match program.graph.moduleAt(joinPath(package.directory, "src/lib.trb")) {
+    Some(module) => program.scopes[module.value].exported
+    .None => [:]
+  }
+}

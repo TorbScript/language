@@ -114,6 +114,52 @@ fn declarations() {
 }
 
 #[test]
+fn public_constants_at_top_level() {
+    // A plain `const` stays a `Binding` statement
+    let file = parse_ok("const pi = 3.14");
+    assert!(matches!(file.statements[0].kind, StatementKind::Binding(_)));
+
+    // Modifiers route it through `Declaration` instead, with the same `Binding` payload
+    let file = parse_ok("public const pi = 3.14");
+    let StatementKind::Declaration(declaration) = &file.statements[0].kind else { panic!() };
+    assert_eq!(declaration.modifiers.visibility, Visibility::Public);
+    let DeclarationKind::Constant(binding) = &declaration.kind else { panic!() };
+    assert!(!binding.is_var);
+
+    // `private const` is accepted, it is the default anyway
+    parse_ok("private const secret = 1");
+
+    // `public var` is an error: a module has no mutable state
+    assert!(first_error("public var mutable = 1").contains("A module has no mutable state"));
+
+    // The doc comment of a top-level `const` is attached, whether it stays a `Binding` or becomes a `Declaration`
+    let file = parse_ok("/** Pi. */\npublic const pi = 3.14");
+    let StatementKind::Declaration(declaration) = &file.statements[0].kind else { panic!() };
+    assert_eq!(declaration.doc.as_deref(), Some("Pi."));
+    let DeclarationKind::Constant(binding) = &declaration.kind else { panic!() };
+    assert_eq!(binding.doc, None);
+
+    let file = parse_ok("/** Pi. */\nconst pi = 3.14");
+    let StatementKind::Binding(binding) = &file.statements[0].kind else { panic!() };
+    assert_eq!(binding.doc.as_deref(), Some("Pi."));
+}
+
+#[test]
+fn labels_in_variant_patterns_are_kept() {
+    let ExpressionKind::Match { arms, .. } = expression("match shape {\n  Point(x: 0, y: 0) => 0\n}") else { panic!() };
+    let PatternKind::Variant { fields, .. } = &arms[0].pattern.kind else { panic!() };
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].label.as_ref().map(|label| label.text.as_str()), Some("x"));
+    assert_eq!(fields[1].label.as_ref().map(|label| label.text.as_str()), Some("y"));
+
+    // Without a label, fields are still matched by position
+    let ExpressionKind::Match { arms, .. } = expression("match shape {\n  .Circle(radius) => radius\n}") else { panic!() };
+    let PatternKind::ImplicitVariant { fields, .. } = &arms[0].pattern.kind else { panic!() };
+    assert_eq!(fields.len(), 1);
+    assert!(fields[0].label.is_none());
+}
+
+#[test]
 fn patterns_and_strings() {
     parse_ok("match value {\n  0 => \"zero\"\n  1 | 2 | 3 => \"small\"\n  4..=9 => \"medium\"\n  -1 => \"minus one\"\n  [first, ...rest] => \"list\"\n  Some((a, b)) if a < b => \"pair\"\n  _ => {\n    log value\n    \"other\"\n  }\n}");
     parse_ok("if const Some(user) = find(id) { print user.name }");

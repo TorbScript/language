@@ -10,6 +10,25 @@ public trait Signed
   fn absolute(self): Self
 }
 
+/**
+ * The bit operations of an integer. The language has no bit operators - `|` is the union of literal types, and a
+ * method needs no precedence rule and no new token - so masking and shifting are named:
+ *
+ *     const low = value.bitwiseAnd(0xFF)
+ *     const mixed = seed.bitwiseExclusiveOr(byte).shiftedLeft(by: 5)
+ *
+ * The shift of a signed type is arithmetic (it keeps the sign), the shift of an unsigned type is logical. A shift by
+ * a negative amount or by the width of the type or more panics, like every other operation that leaves its range.
+ */
+public trait Bits {
+  fn bitwiseAnd(self, other: Self): Self
+  fn bitwiseOr(self, other: Self): Self
+  fn bitwiseExclusiveOr(self, other: Self): Self
+  fn bitwiseNot(self): Self
+  fn shiftedLeft(self, by: Int64): Self
+  fn shiftedRight(self, by: Int64): Self
+}
+
 public type NumberParseError {
   text: String
 }
@@ -23,22 +42,27 @@ public type NumberRangeError {
 
 // The types always carry their width. This file uses the sized names only, because here the width is the point.
 
-public native type Int8 with Signed, Hash {}
-public native type Int16 with Signed, Hash {}
-public native type Int32 with Signed, Hash {}
+public native type Int8 with Signed, Hash, Bits {}
+public native type Int16 with Signed, Hash, Bits {}
+public native type Int32 with Signed, Hash, Bits {}
 /** The type of integer literals. */
-public native type Int64 with Signed, Hash {}
+public native type Int64 with Signed, Hash, Bits {}
 
-public native type UInt8 with Numeric, Hash {}
-public native type UInt16 with Numeric, Hash {}
-public native type UInt32 with Numeric, Hash {}
-public native type UInt64 with Numeric, Hash {}
+public native type UInt8 with Numeric, Hash, Bits {}
+public native type UInt16 with Numeric, Hash, Bits {}
+public native type UInt32 with Numeric, Hash, Bits {}
+public native type UInt64 with Numeric, Hash, Bits {}
 
 public native type Float32 with Signed {}
 /** The type of decimal literals. */
 public native type Float64 with Signed {}
 
-/** Exact base-10 arithmetic. Decimal literals adapt to it: `const price: Decimal = 19.99` */
+/**
+ * Exact base-10 arithmetic. Decimal literals adapt to it: `const price: Decimal = 19.99`
+ *
+ * The runtime does not implement it yet, so using it is a compile error that names the milestone - a `native`
+ * declaration the runtime is missing is never a link error.
+ */
 public native type Decimal with Signed, Hash {}
 
 // The defaults. Plain aliases, nothing the language treats specially.
@@ -51,6 +75,21 @@ extend Int64 {
   native fn parseDigits(text: String, radix: Int64): Result<Int64, NumberParseError>
 }
 
+extend UInt64 {
+  /**
+   * Addition that wraps around instead of panicking. Together with [UInt64.multipliedWrapping] this is the only
+   * arithmetic in the language that does not panic on overflow, and it exists for one reason: a hash function mixes
+   * bits and needs the wrap. Everywhere else, overflow is a bug and `+` says so.
+   *
+   *     var hash: UInt64 = 14695981039346656037
+   *     hash = hash.bitwiseExclusiveOr(value).multipliedWrapping(1099511628211)
+   */
+  native fn addedWrapping(self, other: UInt64): UInt64
+
+  /** Multiplication that wraps around instead of panicking. See [UInt64.addedWrapping]. */
+  native fn multipliedWrapping(self, other: UInt64): UInt64
+}
+
 extend Float64 {
   const pi: Float64 = 3.141592653589793
   const e: Float64 = 2.718281828459045
@@ -61,7 +100,17 @@ extend Float64 {
   native fn round(self): Float64
   native fn isNaN(self): Bool
 
-  /** Floats are compared with a tolerance: `assert(length.isCloseTo(1.0))` */
+  /**
+   * Floats are compared with a tolerance: `assert(length.isCloseTo(1.0))`
+   *
+   * The three exact comparisons a float has are deliberately different from each other, because IEEE-754 equality is
+   * not an equivalence relation and there is no total order with `nan` in it:
+   *
+   * - `==` is IEEE-754: `nan != nan`, and `0.0 == -0.0`.
+   * - `compare` is a **total** order: `nan` is above everything, and `-0.0` compares equal to `0.0`. So `sorted`
+   *   terminates whatever pivot it picks, whatever is in the list.
+   * - `Float32` and `Float64` are not `Hash`, so a float is never a `Map` key and the `nan` key does not exist.
+   */
   fn isCloseTo(self, other: Float64, tolerance: Float64 = 0.000001): Bool {
     (self - other).absolute() <= tolerance
   }

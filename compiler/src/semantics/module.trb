@@ -1,0 +1,30 @@
+use SourceText from "../syntax/source"
+use SourceFile from "../syntax/ast"
+use Diagnostic from "../syntax/diagnostic"
+
+/**
+ * Values have no identity in TorbScript: two modules with the same content are the same value. So everything the
+ * front end needs to talk *about* lives in a list and is referred to by its index. A wrapper instead of a bare `Int`
+ * because a `ModuleId` and a `SymbolId` are never the same thing, and no signature should let them be confused.
+ */
+public type ModuleId {
+  value: Int
+}
+
+/** One `.trb` file of one package, parsed. */
+public type Module {
+  id: ModuleId
+  /** The index of the package in `Workspace.packages` */
+  package: Int
+  /** Normalized path, the key of the file in the `SourceTree` */
+  path: String
+  source: SourceText
+  file: SourceFile
+  /** What the parser found. A file with syntax errors still contributes its symbols. */
+  diagnostics: List<Diagnostic>
+  /**
+   * An entry file may contain top-level code: the build input of its package and every test. Imported modules
+   * consist of declarations only, which is why cyclic imports are unproblematic.
+   */
+  isEntry: Bool
+}

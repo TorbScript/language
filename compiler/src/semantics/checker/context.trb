@@ -1,0 +1,238 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Declaration, Member, Binding from "../../syntax/ast"
+use ModuleId from "../module"
+use SymbolId, Symbol, Symbols from "../symbols"
+use Program from "../scope"
+use TypeId, TypeForm, TypeTable, FunctionForm, ParameterId, describeType from "./type"
+use Signature, SignatureId, SignatureState, TypeSignature, TypeSignatureId from "./type"
+use WellKnown, wellKnownOf from "./wellknown"
+
+/** What may stand in a type position: a type, or the value a `const` parameter asks for. */
+public type TypePosition {
+  /** A field, a result, a bound, the argument of an ordinary type parameter. */
+  case Type
+  /** `Array<Float, 16>`: the parameter is a `const`, so a value stands here and not a type. */
+  case Constant
+  /**
+   * `Matrix<Rows, Other>()` in an expression: which parameter an argument fills is only known once the callee is
+   * resolved, which is milestone 4.2. Until then both are allowed here.
+   */
+  case Either
+}
+
+/**
+ * Where a type reference stands, and what may stand there. One small value instead of five parameters, because every
+ * position of the language differs in exactly these points.
+ */
+public type TypeScope {
+  module: ModuleId
+  /** What `Self` means here. `None` outside of a type, a trait or an `extend`. */
+  selfType: TypeId? = None
+  position: TypePosition = TypePosition.Type
+  /** The subject of the bound that is being built: `with Add` means `Add<Self, Self>` with `Self` the subject. */
+  subject: TypeId? = None
+  /** A default of a generic parameter is recorded where it is written, not again at every use. */
+  records: Bool = true
+
+  /** An ordinary type position: a field, a result, a type argument. */
+  fn forType(self): TypeScope {
+    copy(position: TypePosition.Type, subject: None)
+  }
+
+  /** `with Show`, `where Item: Hash`: the trait, plus what it is asked of. */
+  fn forBound(self, of: TypeId): TypeScope {
+    copy(position: TypePosition.Type, subject: Some(of))
+  }
+
+  /** The argument of a `const` parameter. */
+  fn forConstant(self): TypeScope {
+    copy(position: TypePosition.Constant, subject: None)
+  }
+
+  /** The explicit type arguments of an expression, where the callee is not resolved yet. */
+  fn forEither(self): TypeScope {
+    copy(position: TypePosition.Either, subject: None)
+  }
+
+  /** A const argument is one value. Where the checker does not know yet, a lone literal is taken as one. */
+  fn takesConstant(self): Bool {
+    match position {
+      .Type => false
+      _ => true
+    }
+  }
+
+  fn takesType(self): Bool {
+    match position {
+      .Constant => false
+      _ => true
+    }
+  }
+}
+
+/** Where the declaration of a symbol is, so its signature can be built when somebody asks for it. */
+public type DeclarationSite {
+  module: ModuleId
+  kind: DeclarationSiteKind
+}
+
+public type DeclarationSiteKind {
+  /** A `fn`, `type`, `trait` or `type X =`, at the top level of a file or inside of a block. */
+  case Declared(declaration: Declaration)
+  /**
+   * A member of a type, a trait, an `extend` or a `foreign` block. `owner` is what `Self` means in it and `generics`
+   * are the parameters of the declaration around it - both `None`/empty inside a `foreign` block.
+   */
+  case Owned(owner: TypeId?, generics: List<ParameterId>, member: Member)
+  /** A top-level `const` of a module. */
+  case Constant(binding: Binding)
+}
+
+/**
+ * Everything the type checker knows, threaded through the pass as `var checker: Checker` - exactly as
+ * `var parser: Parser` is threaded through the grammar. Values have no identity, so every program-wide table lives
+ * here in a list and is addressed by an id.
+ */
+public type Checker {
+  program: Program
+  /** Every name in a type position, by module and span: what milestone 3 resolved. */
+  resolutions: List<Map<Span, SymbolId>>
+  /** The name of every top-level declaration, by module and span. Milestone 3 has it as a list, the checker looks up. */
+  definitions: List<Map<Span, SymbolId>>
+  wellKnown: WellKnown
+  /**
+   * What name resolution produced, plus what the checker adds: fields, cases and members get their ids here.
+   * `program.symbols` is the state before that, so everything after milestone 3 reads this one.
+   */
+  var symbols: Symbols
+  var types: TypeTable
+  voidType: TypeId
+  neverType: TypeId
+  invalidType: TypeId
+  /** Index 0 is the signature of a declaration that could not be built: no parameters, an `Invalid` result. */
+  var signatures: List<Signature> = []
+  var signatureStates: Map<SymbolId, SignatureState> = [:]
+  /** Index 0 is the shape of a type that could not be built. */
+  var typeSignatures: List<TypeSignature> = []
+  var typeSignatureStates: Map<SymbolId, SignatureState> = [:]
+  /** `type Pair<Value> = (Value, Value)`: the target in terms of the alias's own parameters. Index 0 is `Invalid`. */
+  var aliasTargets: List<TypeId> = []
+  var aliasStates: Map<SymbolId, SignatureState> = [:]
+  /** The generic parameters of a declaration. Cheap and separate, because an arity check must not build a signature. */
+  var genericParameters: Map<SymbolId, List<ParameterId>> = [:]
+  /** What `Self` means inside a declaration: the trait's own parameter, or the type with its own parameters. */
+  var selfTypes: Map<SymbolId, TypeId> = [:]
+  var sites: Map<SymbolId, DeclarationSite> = [:]
+  /** One per module, in the order of `program.graph.modules`: the type of every type position, by its span. */
+  var typePositions: List<Map<Span, TypeId>> = []
+  /** One per module, so a message can be rendered with the file it belongs to. */
+  var diagnostics: List<List<Diagnostic>> = []
+
+  fn symbolAt(self, id: SymbolId): Symbol {
+    symbols.at(id)
+  }
+
+  /** What a name in a type position, or the name of a declaration, resolved to. */
+  fn resolvedName(self, module: ModuleId, at: Span): SymbolId? {
+    if const Some(found) = resolutions[module.value].get(at) {
+      return Some(found)
+    }
+    definitions[module.value].get(at)
+  }
+
+  fn describe(self, id: TypeId): String {
+    describeType(types, symbols, id)
+  }
+
+  fn nominal(var self, symbol: SymbolId, arguments: List<TypeId>): TypeId {
+    types.intern(TypeForm.Nominal(symbol, arguments))
+  }
+
+  fn signature(self, id: SignatureId): Signature {
+    signatures[id.value]
+  }
+
+  fn typeSignature(self, id: TypeSignatureId): TypeSignature {
+    typeSignatures[id.value]
+  }
+
+  fn addSignature(var self, signature: Signature): SignatureId {
+    signatures.add(signature)
+    SignatureId(signatures.length() - 1)
+  }
+
+  fn addTypeSignature(var self, signature: TypeSignature): TypeSignatureId {
+    typeSignatures.add(signature)
+    TypeSignatureId(typeSignatures.length() - 1)
+  }
+
+  /** What every failed lookup returns: `Invalid` everywhere, so nothing after it says anything again. */
+  fn brokenSignature(self): SignatureId {
+    SignatureId(0)
+  }
+
+  fn brokenTypeSignature(self): TypeSignatureId {
+    TypeSignatureId(0)
+  }
+
+  /** One message per span, as in the parser: a second one at the same position is a consequence of the first. */
+  fn report(var self, module: ModuleId, problem: Diagnostic) {
+    if diagnostics[module.value].any({ _.span == problem.span }) {
+      return
+    }
+    diagnostics[module.value].add(problem)
+  }
+
+  fn recordType(var self, module: ModuleId, at: Span, id: TypeId) {
+    typePositions[module.value].set(at, id)
+  }
+
+  fn siteOf(self, symbol: SymbolId): DeclarationSite? {
+    sites.get(symbol)
+  }
+
+  fn addSite(var self, symbol: SymbolId, site: DeclarationSite) {
+    if !sites.containsKey(symbol) {
+      sites.set(symbol, site)
+    }
+  }
+}
+
+/** A checker for one workspace: the tables of milestone 3 plus what it resolved in every type position. */
+public fn newChecker(program: Program, resolutions: List<Map<Span, SymbolId>>): Checker {
+  var types = TypeTable()
+  const void = types.intern(TypeForm.VoidType)
+  const never = types.intern(TypeForm.NeverType)
+  const invalid = types.intern(TypeForm.Invalid)
+  var definitions: List<Map<Span, SymbolId>> = []
+  var typePositions: List<Map<Span, TypeId>> = []
+  var diagnostics: List<List<Diagnostic>> = []
+  for module in program.graph.modules {
+    var bySpan: Map<Span, SymbolId> = [:]
+    for definition in program.definitions[module.id.value] {
+      bySpan.set(definition.span, definition.symbol)
+    }
+    definitions.add(bySpan)
+    typePositions.add([:])
+    diagnostics.add([])
+  }
+  const broken = Signature(SymbolId(0), [], FunctionForm([], invalid), [], None, false, false, false)
+  const brokenType = TypeSignature(SymbolId(0), [], invalid, [], [], [], [], [:], None, false, false)
+  Checker(
+    program,
+    resolutions,
+    definitions,
+    wellKnownOf(program),
+    program.symbols,
+    types,
+    void,
+    never,
+    invalid,
+    signatures: [broken],
+    typeSignatures: [brokenType],
+    aliasTargets: [invalid],
+    typePositions: typePositions,
+    diagnostics: diagnostics,
+  )
+}

@@ -16,11 +16,18 @@ public native type Char with Equals, Compare, Hash, Show {
   native fn byteLength(self): Int
   native fn toUpperCase(self): Char
   native fn toLowerCase(self): Char
+
+  /** `'A'`: inside of another value a character is written in single quotes, with escapes. */
+  native fn showNested(self): String
 }
 
 /**
  * UTF-8 text. There is no `length()` and no `text[i]` on purpose: say what you count (`chars()`, `bytes()`).
  * Positions come from searching and are byte offsets. Slicing with them is O(1) and shares the storage.
+ *
+ * **A `String` is always valid UTF-8.** The only ways in are literals, slices at character boundaries,
+ * `String.from(Iterable<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is
+ * an `IoError`, and there is no replacement character anywhere in the language.
  */
 public native type String
   with Equals, Compare, Hash, Show, Add, Slice
@@ -30,7 +37,13 @@ public native type String
   native fn byteLength(self): Int
   native fn isEmpty(self): Bool
 
-  /** `text[from..to]` with byte offsets. Panics if an offset is inside of a character. */
+  /** `"a\nb"`: inside of another value a string is quoted, with escapes. `show()` is the text itself. */
+  native fn showNested(self): String
+
+  /**
+   * `text[from..to]` with byte offsets. An offset on a UTF-8 continuation byte, an offset greater than
+   * `byteLength()` and a start greater than the end each panic, with the offset and the length in the message.
+   */
   native fn slice(self, range: Range<Int>): String
 
   native fn contains(self, part: String): Bool

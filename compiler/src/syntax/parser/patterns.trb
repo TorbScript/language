@@ -1,5 +1,5 @@
 use TokenKind, Keyword from "../token"
-use Pattern, PatternKind, RestPattern, Name, Expression, ExpressionKind, PrefixOperator from "../ast"
+use Pattern, PatternKind, RestPattern, FieldPattern, Name, Expression, ExpressionKind, PrefixOperator from "../ast"
 use Parser from "./parser"
 use parsePrimaryExpression from "./expressions"
 
@@ -67,17 +67,21 @@ fn parseNameOrVariant(var parser: Parser): PatternKind {
   PatternKind.Binding(path[0].text)
 }
 
-fn parseVariantFields(var parser: Parser): List<Pattern> {
+fn parseVariantFields(var parser: Parser): List<FieldPattern> {
   parser.commaSeparated(TokenKind.ParenClose, parseVariantField)
 }
 
-/** `Circle(radius: r)`: the label is documentation, fields are matched by position. */
-fn parseVariantField(var parser: Parser): Pattern {
+/**
+ * `Circle(radius: r)`: the label is kept, the type checker will verify it names the field at this position. Fields
+ * are still matched by position, never by label.
+ */
+fn parseVariantField(var parser: Parser): FieldPattern {
+  var label: Name? = None
   if parser.isAt(TokenKind.Identifier) && parser.kindAt(1) == TokenKind.Colon {
-    parser.bump()
+    label = Some(parser.name())
     parser.bump()
   }
-  parsePattern(parser)
+  FieldPattern(label, parsePattern(parser))
 }
 
 /** `[]`, `[first, second]`, `[first, ...rest]`, `[..., last]` */

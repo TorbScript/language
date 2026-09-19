@@ -1,0 +1,50 @@
+use normalizePath, isInside, relativePath from "./path"
+
+/**
+ * Every file the front end may look at, with its text. Reading happens once, in `read.trb`; from here on the whole
+ * front end is a function of this value. That is what makes the tests of the module graph projects in memory instead
+ * of fixtures on disk, and it is what a language server needs anyway (it has newer text than the disk).
+ */
+public type SourceTree {
+  /** Normalized path to the text of the file */
+  private files: Map<String, String>
+  /** The paths of `files`, sorted. A directory is "there is a file below it", so there is nothing else to store. */
+  private sortedPaths: List<String>
+  /** Paths are shown relative to this directory: the way they were typed on the command line. */
+  private base: String
+
+  fn of(files: Map<String, String>, base: String = "."): SourceTree {
+    var normalized: Map<String, String> = [:]
+    for (path, text) in files {
+      normalized.set(normalizePath(path), text)
+    }
+    var paths = normalized.keys().toList()
+    paths.sort({ _ })
+    Self(normalized, paths, normalizePath(base))
+  }
+
+  /** `None` if the file is not part of the tree. */
+  fn text(self, path: String): String? {
+    files.get(normalizePath(path))
+  }
+
+  fn exists(self, path: String): Bool {
+    files.containsKey(normalizePath(path))
+  }
+
+  /** Every file of the tree, sorted by path. */
+  fn paths(self): List<String> {
+    sortedPaths
+  }
+
+  /** Every file below the directory, sorted by path. */
+  fn below(self, directory: String): List<String> {
+    const normalized = normalizePath(directory)
+    sortedPaths.filter({ isInside(_, normalized) }).toList()
+  }
+
+  /** How a path is written in a message. */
+  fn display(self, path: String): String {
+    relativePath(base, path)
+  }
+}

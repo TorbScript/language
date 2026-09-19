@@ -433,6 +433,22 @@ fn declare_one(module: &Rc<Module>, declaration: &'static ast::Declaration) {
             }
             scope.insert(&declaration_of_trait.name.text, Item::Value(Value::Trait(info)));
         }
+        // `public var` is an error the checker reports; the bootstrap interpreter does not check visibility, and a
+        // top-level `var` exports nothing, like the plain `StatementKind::Binding` above.
+        DeclarationKind::Constant(binding) => {
+            if let (ast::PatternKind::Name(name), false) = (&binding.pattern.kind, binding.is_var) {
+                let constant = Constant {
+                    name,
+                    value_expression: &binding.value,
+                    annotation: binding.annotation.as_ref(),
+                    module: module.clone(),
+                    owner: None,
+                    value: RefCell::new(None),
+                    is_evaluating: Cell::new(false),
+                };
+                scope.insert(name, Item::Constant(Rc::new(constant)));
+            }
+        }
         DeclarationKind::Use(_) | DeclarationKind::Alias(_) | DeclarationKind::Extend(_) | DeclarationKind::Foreign(_) => {}
     }
 }

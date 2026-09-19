@@ -270,6 +270,9 @@ var b: Int          // Compile error: no implied default value
   a `var` that is changed but never read afterwards (`var first = list[0]` followed by `first.increment()` - the
   message points to `list[0].increment()`), and the discarded result of a method that takes `self`
   (`list.added(4)` as a statement - the message points to `add`). Discard on purpose with `const _ = ...`.
+- **An expression statement must have the type `Void` or `Never`,** unless the call has a `var` receiver or a `var`
+  argument. That is the whole rule behind the one above: `parser.bump()` and `cursor.next()` change something and
+  stay statements, `Email.parse(text)` and `1 + 2` are values that go nowhere.
 
 `const` is deep from the perspective of the binding: through a `const` binding you can neither reassign, nor assign
 fields, nor call `var self` methods. `var` means "mutable through this path".
@@ -285,7 +288,7 @@ const someChar = 'A'                       // Char (Unicode scalar value)
 const someString = "Hello"                 // String (UTF-8, see below)
 const someBool = true                      // Bool
 const someTuple = (1, "one")               // (Int, String), access with `.0`, `.1` or destructuring
-const someRange = (lowest: 1, highest: 9)  // Named tuple: `.lowest` is a name for `.0`, nothing more
+const someBounds = (lowest: 1, highest: 9) // Named tuple: `.lowest` is a name for `.0`, nothing more
 const someList = [1, 2, 3]                 // List<Int>
 const someMap = ["a": 1, "b": 2]           // Map<String, Int>
 const someRange = 0..10                    // Range<Int>, `0..=10` is inclusive, `0..` and `..10` are open
@@ -310,7 +313,37 @@ const emptyMap: Map<String, Int> = [:]
   behavior everywhere). A pointer-sized integer, if ever needed, belongs to the FFI module.
 - `Decimal`: exact base-10 arithmetic for money and the like (`const price: Decimal = 19.99`)
 - No implicit numeric conversions. Use `From`/`Into`: `Float.from(someInt)`.
+- **A literal that does not fit the type it adapts to is a compile error** ("`300` does not fit into `Int8`"), and so
+  is an `Array` index that is known to be out of bounds. Overflow at runtime panics; overflow that is written in the
+  source is caught where it is written.
+- **Integer division truncates toward zero, and the remainder takes the sign of the dividend:** `-7 / 2` is `-3`,
+  `-7 % 2` is `-1`. `x / 0` and `x % 0` panic, and so does dividing the smallest value of a signed type by `-1`
+  (an overflow like any other).
+- **There are no bit operators.** `&`, `|`, `^`, `<<` and `>>` are not operators of the language (`|` already means a
+  literal-type union); the integer types come `with Bits` instead, whose methods are native: `bitwiseAnd`, `bitwiseOr`,
+  `bitwiseExclusiveOr`, `bitwiseNot`, `shiftedLeft(by:)` and `shiftedRight(by:)` (an arithmetic shift on the signed
+  types; a shift by a negative amount or by the width of the type or more panics). `UInt64` additionally has
+  `addedWrapping` and `multipliedWrapping`, the only arithmetic in the language that does not panic on overflow -
+  a hash function cannot be written without it. Methods need no precedence rules and no new tokens, and keeping the
+  wrapping pair off the signed types keeps "overflow panics" true everywhere a `+` is written.
+- **On a `Float`, `==` is IEEE-754 and `compare` is a total order.** `nan != nan` and `0.0 == -0.0`, while `compare`
+  puts `nan` above everything and treats `-0.0` as equal to `0.0`, so `sorted` terminates whatever pivot it picks.
+  `Float32` and `Float64` are deliberately not `Hash`, so a float can never be a `Map` key and the `nan` key does not
+  exist. Where a tolerance is meant, `isCloseTo` says so.
+- **A label is not part of the type of a tuple.** `(lowest: Int, highest: Int)`, `(highest: Int, lowest: Int)` and
+  `(Int, Int)` are one type, and a labeled tuple may be used where an unlabeled one is expected and back. A label at
+  a position where the expected type has a different one is an error, so a swap cannot happen silently.
 - `Void` is the type with exactly one value, `Never` the type of expressions that do not return (`panic`, `return`).
+  **`Void` is the one name that is both a type and its only value** (as `Unit` is in Kotlin): a function without a
+  result type returns `Void`, a block that ends in a statement has the value `Void`, and `Ok(Void)` passes it on.
+  `Never` has no value at all and converts to every type, which is why `panic "..."` fits into any expression.
+- `Void`, `Never` and `Range<Value>` are declared in the prelude like every other type. `0..10` is
+  `Range(start: Some(0), end: Some(10))`, `0..=10` sets `isInclusive`, and `0..` and `..10` leave one end `None`.
+  `list[from..to]` is a `Range` passed to `Slice.slice`.
+- **`Range<Int>` is `Iterable<Int>` and `Length`, and the open ends are checked at runtime,** because "has a start" is
+  a property of a field and not of the type: `iterator()` panics for a range without a start ("a range without a start
+  has no first value"), `length()` panics for a range without both ends, and `0..` iterates forever. A compile-time
+  version of that condition would need dependent types.
 
 ### Strings
 
@@ -328,6 +361,12 @@ const at = text.indexOf("ß")       // Some(3): positions come from searching an
 const tail = text[3..]             // Slicing with offsets is O(1). An offset inside of a character panics.
 text.substringAfter("ü")           // Some("ße 👋") - most code never sees an offset
 ```
+
+- **Every offset is checked.** An offset greater than `byteLength()`, a start greater than the end, and an offset on a
+  UTF-8 continuation byte each panic, with the offset and the length in the message.
+- **A `String` is therefore always valid UTF-8.** The only ways in are literals, slices at character boundaries,
+  `String.from(Iterable<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is an
+  `IoError`, never a replacement character, and neither `chars()` nor a back end needs a rule for broken text.
 
 ### Literal Types
 
@@ -351,6 +390,8 @@ fn connect(host: String, transport: "tcp" | "udp" = "tcp") { ... }   // They wor
   or accept `<Value: Into<Width>>`.
 - `match` on a literal type is exhaustive without `_`. Back to the base type: interpolation or `status.into()`.
 - Two literal types are the same type if they have the same members. A subset is not assignable (no subtyping).
+  That identity is structural, so a literal type has no owner and **cannot be extended**: `extend "tcp" | "udp"` is
+  an error, with or without a trait. Only the generated members exist. For behavior, declare a type with cases.
 - For everything with data or behavior attached, a type with cases is the tool. Literal types are for "one of these
   strings" in signatures, configuration and wire formats.
 
@@ -436,6 +477,9 @@ const raw = distance.value                     // Explicit way out
 - Where a forwarded signature mentions `Self` (`add(self, other: Self): Self`), arguments are unwrapped and results
   wrapped again. That only works for single-field types. Traits without `Self` in arguments or results can be
   delegated by any type (`type Team with Iterable<User> by members { ... }`).
+- **`by` forwards the required members, the default members come from the trait.** `distance.max(Meters(10.0))` is
+  `Compare.max` over the forwarded `compare`, so it returns a `Meters` and nothing has to be rewrapped. A default
+  that is written in terms of the required members stays correct by construction.
 - Everything else comes from the existing rules: visibility of the constructor, factories, `From`/`Into`, methods,
   `extend`. `Equals`, `Hash` and `Show` are generated as for every `type`.
 - A single-field `type` is guaranteed to have the representation of its field (no allocation, no indirection).
@@ -471,6 +515,11 @@ largest(0, ...someSet)                         // Spread works with every `Itera
 
 A variadic parameter never accepts a collection implicitly (`List.of([1, 2])` is a `List<List<Int>>` with one
 element). Spreading is always explicit.
+
+**A parameter default is evaluated at the call site, at every call, in the scope of the declaration** - without `self`
+and without the other parameters. That is the same rule as for a field default (see [Construction](#construction)), so
+`limits(memory: Int = 64.megabytes())` is a call that happens where `limits` is called, and a default can never depend
+on an argument order that is not visible at the call site.
 
 Parameters are `const`. A `var` parameter allows mutation through it (`fn reset(var counter: Counter)`), the caller
 must pass something mutable. `var self` is just the most common case.
@@ -537,8 +586,9 @@ Rules:
 - Never inside parentheses, brackets, operators or argument lists. Commands do not nest: the arguments of a command
   are ordinary expressions (`print describe(numbers)`, not `print describe numbers`).
 - The callee is a name or a member path (`print`, `Email.parse`, `server.route`).
-- Arguments are separated by `,`. The first argument must not start with `(`, `[`, `-` or `!`
-  (`f [1]` is always indexing, `f -1` is always subtraction). Use parentheses in these cases.
+- Arguments are separated by `,`. The first argument must not start with `(`, `[`, `-`, `!` or `.`
+  (`f [1]` is always indexing, `f -1` is always subtraction, `f .Case` is always the member `f.Case`). Use
+  parentheses in these cases.
 - A trailing closure always belongs to the outermost command call of the statement
   (`unless list.isEmpty() { ... }` passes the closure to `unless`). Consequently, the arguments of a command call
   cannot contain trailing closures themselves: `print numbers.map { _ * 2 }` is an error, write
@@ -549,7 +599,7 @@ Rules:
 - **Formatter canon:** a call is written as a command if it is a statement, or if it ends with a trailing closure
   (`const result = retry 3 { ... }`), and if its arguments fit on one line. Everything else gets parentheses: calls
   whose value is used without a closure (`const email = Email.parse("a@b.c")`), calls without arguments, and calls
-  whose first argument starts with `(`, `[`, `-` or `!`.
+  whose first argument starts with `(`, `[`, `-`, `!` or `.`.
 - Calls without arguments always need `()`. A bare name is always a reference.
 
 ### Parameter Modes
@@ -581,7 +631,7 @@ assert(adults.length() > limit)                             // fn assert(conditi
 ```trb
 // std/expression
 native type Expression<Value> {
-  tree: ExpressionNode                  // Static data, created at compile time. Quoting costs nothing at runtime.
+  tree: ExpressionNode                  // Static data, created at compile time
   source: String                  // "_.age >= minAge"
   location: SourceLocation
   native fn value(self): Value               // The ordinary value/closure. Evaluated at most once for non-functions.
@@ -617,9 +667,18 @@ type ExpressionNode {
   explicit `Parameter`, `Field` and `Call` nodes, each with its type.
 - **The tree is data, not reflection.** `TypeReference` is a description (`name`, `arguments`), there is no way back from it
   to a type. Trees are values: they can be matched, transformed and encoded.
+- **A binding of type `Expression<Value>` behaves exactly like a parameter:** the initializer is checked as a
+  `Value` and quoted, with the same restrictions. `const condition: Expression<Bool> = age > 1` is the quotation of
+  `age > 1`, not of some value it was computed from.
+- **The tree is free, the captures are not.** The tree is static data and costs nothing at runtime, but `captures()`
+  has to return the current values, so they are collected at the quotation site into a list of trait-typed values:
+  a quotation without captures is free, one with captures costs one small allocation every time it is evaluated.
+  `assert` is in every test, which is why the cost is written down here instead of being discovered.
 - **Captured variables must be `Encode`**, because a provider has to be able to look at them (a SQL driver binds them
   as parameters with its own `Encoder`).
-  Capturing anything else in a quotation is a compile error.
+  Capturing anything else in a quotation is a compile error. That holds for `assert` too, so the error names it as
+  the reason ("`assert` quotes its condition, so `parsed` has to be `Encode`"); what cannot be `Encode` is compared
+  in a `match` instead.
 - **The tree cannot be executed**, the value can. There is no `compile()` like in C#, so compiled binaries need no
   interpreter for this. An in-memory provider calls `value()`, a SQL provider reads `tree`.
 - What a provider does not understand (`filter { myOwnFunction(_) }`) is the provider's error at runtime
@@ -723,6 +782,17 @@ p = p.copy(y: 30)              // `copy` is generated for every `type`
   binding (`id`, `step`). `const` is deep: through a `const` binding nothing changes, whatever the type looks like.
 - Structural `Equals`, `Hash`, `Show` and `copy` are generated, there is no identity.
   (Each of them only if all fields support it: a type with a function in a field has no generated `Equals`.)
+- **The generated `Show` has a fixed format,** because two implementations of the language are compared through it
+  (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)): a type is `Type(field: value, ...)` with all fields in
+  declaration order, a case is `Case(field: value)` or its bare name when it has none, a `List` is `[a, b]`, a `Map`
+  `["k": v]` (`[:]` when it is empty), a `Set` `{a, b}`, a tuple `(a, b)` with the labels where there are any, an
+  `Option` `Some(x)` or `None`. Inside such a value a `String` is quoted with escapes and a `Char` written in single
+  quotes. **A `Float` is the shortest decimal that parses back to the same value,** with `.0` appended when that text
+  contains neither `.` nor `e` - so a `Float` always carries a decimal point or an exponent; the special values are
+  `nan`, `inf` and `-inf`, and `-0.0` prints as `-0.0`. `"{name}"` is still the text itself: the nesting uses
+  `Show.showNested`, which defaults to `show()` and is overridden by `String` and `Char` alone.
+- Tuples and function types cannot be declared in TorbScript, so what a `type` gets generated they get generated
+  too: `Equals`, `Hash` and `Show` for a tuple whose elements have them, `Show` for a function value (its type).
 - What a copy costs is the business of the implementation and not observable (see [Execution Model](#execution-model)):
   small values are copied, the storage of collections and strings is shared until somebody writes to it.
 - Values are freely passed between tasks.
@@ -754,8 +824,15 @@ it sees the same object. Typical cases are handles to the outside world (`File`,
 
 - The rule stays the same: mutation needs a `var` path. A `const` binding to a shared object is a read-only view
   (the object can still change, but not through this path).
+- **A read-only view cannot be widened again.** A `var` binding, `var` field or `var` argument may not be
+  initialized from a `const` path to a shared object - there is no copy that would make it a different object, so
+  `var writable = view` would hand out exactly what the `const` withheld. For a value it is simply a copy and fine.
 - `Equals`, `Hash`, `copy` and `Encode` are not generated. `==` is about content and does not exist for objects;
   `isSame(a, b)` compares identity. `Show` is a `shared trait`, so objects can be printed.
+- **`isSame` only works on shared objects.** On a value the answer would expose whether the implementation shares
+  storage, so the compiler rejects it - a named special case next to object safety, because the language has no bound
+  that says "shared" and adding one for a single function is worse ("`isSame` compares identity, and a `Point` is a
+  value. Use `==`.").
 - `Shared<Value>` from the standard library is the ad hoc version: a box that puts a value in a place that several
   owners can hold.
 - A value can contain a shared object. Copies of the value then refer to the same object, and the value no longer
@@ -784,18 +861,31 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   back - without a copy. This is what other languages need mutable slices and spans for.
 - **References are second-class.** They only exist as a `var` parameter or `var self`, for the duration of a call.
   They cannot be stored in a field, returned, or captured by a closure that is stored. So there are no lifetimes, no
-  borrow checker, and nothing can dangle.
+  borrow checker, and nothing can dangle. (A captured `var` binding is the one thing that outlives a call, and it is
+  not a reference - see below.)
+- **A closure that captures a reference may not escape, and the compiler decides that per closure.** A closure may
+  capture a `var` parameter or `var self` only when it cannot outlive the call; conservatively that is a closure
+  written directly as the argument of a call that does not store it, which is exactly what the receiver closures, the
+  DSLs and the pipeline stages are. Everything else captures copies, or the shared box of a captured `var` binding
+  (see below). The decision is recorded, because it is also what lets an implementation put the closure's environment
+  on the stack.
 - **Exclusivity:** while a `var` access to a path is running, the same path (or a path above or below it) cannot be
   accessed in any other way. The check is static and conservative: what the compiler cannot prove is an error, there
   is no check at runtime. `swap(a, a)` is a compile error, and so is changing `root` inside of `root.div { ... }`.
   Different fields are fine (`project.build { output "{project.name}" }`). Two indices or ranges of the same
   collection are not, because they cannot be compared statically (`swap(items[i], items[j])`: use `items.swapAt(i, j)`).
 - A temporary is not a `var` path: `iterator().next()` is a compile error, `var cursor = iterator()` comes first.
-  (Changing something that is thrown away is always a mistake.)
+  (Changing something that is thrown away is always a mistake.) As the _argument_ of a `var` parameter a temporary
+  is fine - the callee is its only owner, so "copy in, copy out" is exact and nothing is written back anywhere:
+  `using File.open(path)? { ... }`. The rule is about the base of a path (`f().x = 1`), not about ownership.
 - The variable of a `for` loop is a `const`. To change elements, use the path (`items[index].x = 1`,
   `items.update(index) { ... }`) or build a new collection with `map`.
 - Closures capture `const` bindings as copies. A captured `var` binding is shared between the closure and its scope -
   the one place where a variable is shared. Closures passed to `spawn` cannot capture `var` bindings.
+- **A captured `var` binding is a shared box, not a reference.** It may escape (a closure that captures it can be
+  returned or stored), it is reference counted like a `shared type` object, and it is the only sharing of a
+  variable there is. Every call that may run such a closure counts as an access to the binding, and the binding is
+  exempt from the dead-change rule: the read can be anywhere.
 - **The copy trap** is the price of values, for everybody who comes from a language with references:
 
   ```trb
@@ -810,8 +900,13 @@ Every type has exactly one constructor. It is generated from the fields, in decl
 written by hand. **Constructors never contain logic.**
 
 - Fields with a default value can be omitted.
+- **A field default is evaluated at every construction, in a scope without `self` and without the other fields.**
+  So the order of the fields is not observable, and a default that depends on another field is what a factory is for.
 - Outside of the type, `private` fields cannot be passed. So the constructor is usable from outside if and only if
   every private field has a default value. Inside of the type (`Self(...)`) all fields can be passed.
+- **`copy` has the shape of the constructor, with every field optional:**
+  `fn copy(self, <field>: <Type> = <the current value>, ...): Self`, all fields in declaration order, and `private`
+  fields not passable from outside. There is no `copy` for a `shared type` - it has an identity, not a value.
 
 Everything else is a static factory function:
 
@@ -881,6 +976,11 @@ account.balance = 1_000_000              // Compile error: only Account can writ
 - `private(var)` reads as "the `var` is private": the field is public, its mutability is not. It hands outsiders a _const path_ to the field, and const is deep: with `private(var) routes: List<Route>`,
   `config.routes` can be read and iterated from outside, but `config.routes.add(...)` is a compile error. What
   somebody takes out of it is a copy anyway. No defensive copies by hand, no accessor methods.
+- `private(var)` is a modifier of a field and of nothing else. On a member that has no `var` it has nothing to say
+  and is an error.
+- **`private` reaches as far as the type does.** A private member is visible in the body of its type and in every
+  `extend` of that type in the same package - an `extend` without a trait _is_ part of the type - and nowhere else.
+  The package is the unit of coherence, so it is the unit of privacy, too.
 - **There are no getters, setters or properties.** A field is storage, a method computes, and the `()` tells which one
   it is (`list.length()` may cost something, `point.x` never does). No `get` prefixes; predicates are called
   `isEmpty()`/`hasX()`, mutators are verbs with `var self`.
@@ -889,6 +989,9 @@ account.balance = 1_000_000              // Compile error: only Account can writ
   (`account.withdraw(amount)`).
 - **Top-level declarations are private to their file unless marked `public`.** This is a different question - the
   surface of a module is opt-in, `lib.trb` defines the API of a package.
+- **`public const` is legal at top level, `public var` is not.** A module can export a constant (its initializer is
+  compile-time evaluable, see [Modules and Packages](#modules-and-packages)); a module has no mutable state, so
+  there is nothing a top-level `var` could export.
 
 ### Members: a method is a constant that holds a closure
 
@@ -942,6 +1045,10 @@ There is no case where the same line could mean two things: command on a method 
 
 Both forms need a `var` path to the field. Calling a function in a field always takes parentheses (`onClick()`,
 `onClick(event)`); `onClick { ... }` sets it.
+
+**A call of a non-callable member writes it, with or without parentheses.** `tls true` and `tls(true)` are the same
+line. The parenthesized form is not optional style: the formatter's canon demands parentheses as soon as the first
+argument starts with `(`, so `tls(port == 8443)` is the only way to write that value at all.
 
 ## Algebraic Data Types and Pattern Matching
 
@@ -1036,6 +1143,11 @@ match list {
 }
 ```
 
+- **Fields are matched by position, and a label that is present must name the field at that position.**
+  `Point(y: 0, x: 1)` is an error, not a silent swap: a pattern mirrors the constructor, where labels are checked.
+- **An arm that can never be reached is an error** ("This arm is never reached"), for the same reason as a dead
+  change or a discarded value - with value semantics it is always a mistake, never a defensive line.
+
 Patterns also work in bindings and conditions:
 
 ```trb
@@ -1052,6 +1164,10 @@ if var Some(iterator) = current { iterator.next() }     // `var` instead of `con
 
 for (key, value) in someMap { ... }
 ```
+
+**`if var P = place` binds into the place,** exactly like a `var` parameter - it does not bind a copy. The subject
+must be a `var` path, and the body runs inside a `var` access to it, so `iterator.next()` advances the iterator that
+`current` holds. A `var` pattern that bound a copy would be a dead change by construction.
 
 In a pattern `_` is the wildcard, in an expression `_` is the implicit closure parameter. The positions never overlap.
 
@@ -1095,7 +1211,22 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   Hash, Compare` reads as what it is. No `-able`/`-ible` adjectives. Traits that are mainly used _as types_ are nouns:
   `Iterable`, `Iterator`, `Collection`, `List`, `Map`, `Collector`, `Accumulator`.
 - `with` is the only keyword for "implements" and for supertraits. Bounds use `where Item: Hash + Equals` or inline `<Item: Hash>`.
+- **Type parameters of a `type` and of a `trait` can have defaults** (`trait Add<Other = Self, Output = Self>`), so
+  `with Add` means `Add<Self, Self>` and nobody writes it out. A default may name earlier parameters and `Self`, and
+  it is filled in, never inferred. `fn` has no defaults: its type arguments come from the call.
+- **A member may carry a `where` clause of its own** (`fn toSet(self): Set<Item> where Item: Hash`). It is not a
+  requirement for implementors - the member simply exists only where the clause holds, and a use that does not
+  satisfy it reports the unmet bound. Same rule as for a conditional `extend`.
+- **`Self` is allowed in every type position inside a trait,** including as a trait argument
+  (`trait Collection<Item> with Iterable<Item>, Length, Accumulator<Item, Self>`). `Self` is a type, not a type
+  constructor, so this is not the `Self<U>` that ["One Vocabulary"](#one-vocabulary-instead-of-higher-kinded-types)
+  rules out, and it costs nothing.
 - **Coherence:** you can only `extend X with Trait` if your package owns `X` or `Trait`.
+- **Blanket implementations:** an implementation whose target is a bare type parameter
+  (`extend<Source, Target> Source with Into<Target> where Target: From<Source>`) covers every type, and is allowed
+  when the package owns the trait. Two implementations of one trait may never overlap. Disjointness is proved by
+  different target heads, or by bounds on the same subject that no type can satisfy together - so two blanket
+  implementations of one trait always overlap, whatever their bounds say.
 - **`extend` without a trait:** for a type of your own package it is simply a part of the type, in whatever file it
   is written, and visible wherever the type is. For a type of another package (`extend String { fn shout(self) ... }`)
   it is visible in every file that imports the module it is declared in - no matter what it imports from it. A
@@ -1103,6 +1234,9 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   modules bring a method of the same name for the same type, calling it is a compile error; a namespace import
   (`use * as text from "./text-extensions"`, `text.shout(value)`) says which one is meant. Nothing runs when a
   module is imported, this is purely a rule about which names are visible.
+- **An `extend` adds constants and functions, nothing else.** A field or a `case` in an `extend` is an error
+  ("fields and cases belong to the declaration of the type"), because exhaustiveness and the generated constructor
+  have to be decidable from the declaration alone.
 - Traits are implemented by values. A `shared type` can only implement a `shared trait` (`shared trait Close`), and a
   value of such a trait type counts as shared. So a `List<Item>` or an `Iterable<Item>` is always a value: nobody
   changes it while you hold it, and it can be passed to another task.
@@ -1110,14 +1244,32 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   type position, and only traits can be combined (two different types have no values in common).
 - A trait can be used as a type (`fn draw(shape: Shape)`). Whether this is dispatched statically or dynamically is
   up to the implementation and not observable.
+- **A trait type is the one place where the language has subtyping,** and it has exactly four coercions: a value to
+  a trait it implements, a trait value to fewer bounds or to a supertrait, `Never` to anything, and a literal to a
+  literal type. They apply only where a type is expected and never solve an inference variable. **There is no
+  variance:** `List<Square>` is not a `List<Shape>`, the list is built as one
+  (`const shapes: List<Shape> = [Square(2.0), Circle(1.0)]`).
+- **A generic member can be called on a trait-typed value.** Every trait-typed value carries a witness table per
+  bound, and a generic call passes one witness per bound; where no trait-typed value is involved, a back end
+  monomorphizes as before. **Object safety is checked per call, not per type:** a member that mentions `Self` in a
+  parameter or in its result, or that has no `self`, cannot be called on a trait-typed value. So `List<Show + Hash>`
+  and `fn audit(entry: Show + Encode)` stay legal, and only calls that have no meaning are rejected.
 - Functions without `self` in a trait: without a body they are a requirement for the implementing types
   (`From.from`, `Parse.parse`). With a body they are functions of the trait itself - the place for factories that pick
   a default implementation (`List.of(1, 2)`, `Set.of("a")`).
 - Because a trait is a type, it can be extended like one. `extend<Item> List<Item> with Show where Item: Show` makes every list
   showable, `extend<Item> List<Item> with From<Iterable<Item>>` makes `List<Item>` itself a valid target of `to<List<Item>>()`.
+- **`Trait.member` reads the trait's own members first, then the members of implementations whose target is the
+  trait itself.** That is what makes `List.from(...)` and `Map.from(...)` work, where `from` comes from
+  `extend<Key: Hash, Value> Map<Key, Value> with From<Iterable<(Key, Value)>>`. Two such implementations are an
+  ambiguity error, and the fix is to name a type (`TrieMap.from(...)`).
 - Operators are traits: `+` is `Add.add`, `==` is `Equals.equals`, `<` is `Compare.compare`, `a[i]` is `Indexed.at`,
   `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`, `a[from..to] = v` is `MutableSlice.replace`,
   string interpolation is `Show.show`.
+- `&&`, `||` and `!` are the exception: they are built in on `Bool`, they short-circuit, and they cannot be
+  overloaded. A trait method evaluates its argument, so a trait would mean something else.
+- There are no bit operators and therefore no traits for them: shifting and masking are native methods of the integer
+  types (see [Built-in Types](#built-in-types)).
 
 ## Types, Values and Reflection
 
@@ -1125,6 +1277,7 @@ Types and values are strictly separate worlds:
 
 - A type never flows as a value. There is no `Type` type, no `typeof`, no `value is Value` on generic `Value`, no
   `Class.forName`. Types appear only in type positions (after `:`, in `<>`, after `with`/`where`, right of `type X =`).
+  `Void` is the one name that is both a type and a value, and it is no bridge: it carries nothing to look at.
 - The only bridges are syntactic: `Point(...)` (constructor), `Point.origin` / `Point.parse(...)` (static members),
   `Shape.Circle` (variants), `Point.area` (method reference).
 - So there is **no runtime reflection**. It could not be implemented identically in all back ends (monomorphized vs.
@@ -1207,10 +1360,24 @@ fn start(): Result<Void, AppError> {
   Ok(Void)
 }
 
-panic "unreachable"                                      // Bugs. Not catchable, aborts the task.
+panic "unreachable"                                      // Bugs. Not catchable, aborts the program.
 ```
 
 - `collection.get(i)` returns `Item?`, `collection[i]` panics when out of bounds.
+- **`?.` is `Option.map`, and `Option.flatMap` when the member's result is itself an `Option`.** So `?.` never
+  produces a nested Option: `first()?.position()` is a `Vector2?`, whatever `position()` returns. It is not
+  defined on `Result`.
+- **`??` is `orElse`, on `Option` and on `Result` alike.** The right side is `lazy` and is checked against the
+  `Value`, so `Status.parse(text) ?? "offline"` needs no `.ok()` in between.
+- **A panic is output, so its format is part of the language:** to standard error, `panic: <message>`, then
+  `  at src/file.trb:12:5` for the panic site and, in the debug profile, the frames of the task. The exit code is
+  **101**, and both back ends agree on the text to the character because the conformance suite compares it.
+- **Nothing runs while a program falls over.** No destructor, no `Close`, no `using` cleanup - a panic is a bug, and
+  running more code in a broken program is how bugs get worse.
+- **A panic aborts the process,** because the language has no supervision. The one exception is a sandboxed script: the
+  VM is interpreting it and the script has a heap of its own, so the VM stops it and reports a `SandboxError`
+  (see [Receiver Scripts and the Sandbox](#receiver-scripts-and-the-sandbox)).
+- **A top-level `?` is not a panic.** It prints `error: <the error through Show>` and exits with 1.
 
 ## Collections and Iteration
 
@@ -1245,6 +1412,10 @@ fn fill(var target: Collection<Int>) { ... }            // Fills the caller's li
 var index: Map<String, Int> = HashMap()                 // Trait as the type, implementation at construction
 ```
 
+- **Iteration order is insertion order, for every `Map` and `Set` implementation.** Removing an entry does not reorder
+  the rest, and an empty map shows as `[:]`. The order reaches the output through `Show`, so it is part of the language
+  and not of an implementation - and insertion order is the only one a reader can predict. It costs a hash table an
+  index vector (which makes iterating it faster anyway) and a trie a vector next to the table.
 - **One trait per kind.** There is no `MutableList`, no `ImmutableList`, no read-only view: a `const` binding or a
   parameter without `var` _is_ the immutable list, a `var` is the mutable one, and because values are never aliased
   nobody can change a collection while somebody else reads it.
@@ -1273,14 +1444,19 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
   many versions of a big map is cheap - undo, history, snapshots). Alternatives: `TrieList`, `HashMap`, `HashSet`.
   `ArrayStack` and `ArrayQueue` (ring buffer) are written in plain TorbScript. Your own implementation is a
   type `with Map<Key, Value>` and works everywhere.
+- Until the tries are implemented, `TrieList`, `TrieMap` and `TrieSet` are documented aliases of the array and hash
+  implementations. That is observable through performance only: iteration order and `Show` are the same either way.
 - The native collections (`ArrayList`, `TrieMap`, `HashMap`, ...) are the one place where "share the storage, copy on
   write" is implemented. Every type that is built from them is a value without doing anything for it (`ArrayQueue`
   is a ring buffer in a `List`). `Array<Item, Size>` is not a collection but a small inline value, see
   [Const Parameters](#const-parameters-and-array).
 - Every `Collection` is an `Accumulator` and therefore a valid target for collectors and channels.
 - Lists have no `+`: `Add.add` and `add(value)` would be the same member. Use `addedAll`.
-- `for x in xs` works with everything that is `Iterable<Item>`. It iterates over a copy, so changing `xs` inside of the
-  loop is safe (and does not affect the loop).
+- `List`, `Set`, `Map`, `Option` and `Result` are `Show` wherever their items are, in the format of the generated
+  `Show` (see [Values](#values)): `[1, 2]`, `{a, b}`, `["k": v]`, `Some(x)`.
+- `for x in xs` works with everything that is `Iterable<Item>`. **The subject is evaluated once, into a temporary,**
+  so it is not an open `var` access: changing `xs` inside of the loop is safe and does not affect the loop, and the
+  loop variable is a `const` copy of each item.
 - Creation: literals, `List.of(1, 2, 3)`, `List.of(...iterable)`, `List.from(iterable)`, `iterable.toList()`,
   `HashMap()`, `Set.of(1, 2)`.
 
@@ -1351,7 +1527,8 @@ code runs against a database: the provider's `filter` takes an `Expression<(row:
 (`Task` is part of the concurrency draft and not in the standard library yet.)
 
 This is a convention of the standard library, not an abstraction of the language. There are **no higher-kinded types**
-(`Functor<F<_>>`, `Monad`), no `Self<U>`, no F-bounded tricks:
+(`Functor<F<_>>`, `Monad`), no `Self<U>`, no F-bounded tricks. (`Self` as a trait _argument_ is fine -
+`Accumulator<Item, Self>` names a type, not a type constructor, see [Traits](#traits).)
 
 - The operations look alike but are not the same: an Option is a value and `map` runs immediately, an Iterable is a
   pipeline and `map` runs when it is pulled. An abstraction over both would hide exactly that difference.
@@ -1392,10 +1569,22 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
   package (`Option`, `Result`, `List`, `Map`, `print`, `do`, ...) are in scope in every file of the project.
   A project can name another one (a teaching subset, the vocabulary of an embedded DSL); a sandbox gives its scripts
   the prelude of the host plus the receiver.
-- In entry files and scripts, a top-level `?` ends the program with the error, and top-level `await()` is allowed.
-- **Top-level code is only allowed in entry files and scripts.** Imported modules consist of declarations only,
-  top-level `const` initializers of modules must be compile-time evaluable. So there is no module initialization
-  order, and cyclic imports are unproblematic.
+- **Top-level code is only allowed in entry files (`src/main.trb`), scripts, receiver scripts and
+  `tests/*.test.trb`.** A test file consists of nothing but top-level `group` and `test` calls, and the test
+  framework is ordinary functions, so its files are scripts. Everything that is imported consists of declarations
+  only. So there is no module initialization order, and cyclic imports are unproblematic.
+- In exactly those files a top-level `?` ends the program with the error, and top-level `await()` is allowed.
+- Top-level `const` initializers of modules must be **compile-time evaluable**: literals, unary minus, the
+  arithmetic, comparison and logical operators of the built-in number types and of `Bool`, string interpolation of
+  such, tuple/list/map literals of such, constructor and case-constructor calls whose arguments are such, and other
+  compile-time constants. `const frameTime = 1.0 / 60.0` and `const origin = Point(0, 0)` fit. **No function calls
+  and no `native` calls** - and `+` on `String` is a function call like any other, interpolation is not - so the
+  checker needs no evaluator beyond the operators it knows anyway.
+- **A constant whose evaluation overflows, divides by zero or produces a `nan` from a literal expression is a compile
+  error at that expression.** It is the same rule as "overflow that is written in the source is caught where it is
+  written", it is free once the checker evaluates these operators anyway, and a program that cannot start is worse than
+  one that does not compile.
+- `public const` exports the constant. There is no `public var` at top level: a module has no mutable state.
 
 ## Configuration DSL
 
@@ -1438,8 +1627,8 @@ const config = server {
 }
 ```
 
-Name resolution order inside of closures and methods: local scope, then the _innermost_ receiver, then the
-surrounding `self`, then the module. **Only the innermost receiver is implicit.** To reach an outer receiver, name
+Name resolution order inside of closures and methods: local scope, then the _innermost_ receiver, then the module.
+**Exactly one receiver is implicit,** in a method as in a receiver closure. To reach an outer receiver, name
 the parameter (`server { s => s.database { url "{s.host}/db" } }`). This prevents the scope leaking that Kotlin
 needs `@DslMarker` for.
 
@@ -1460,18 +1649,28 @@ for name in ["users", "orders"] {
 ```
 
 ```trb
-const configure = Sandbox.load<ServerConfig>("./config.trb")?   // (var self: ServerConfig) => Void
-const config = server(configure)
+const script = Sandbox.load<ServerConfig>("./config.trb")?      // Script<ServerConfig>
+
+var config = ServerConfig()
+script.apply(config)?                                           // The body of the file runs here
 ```
 
 - The file is type checked against `ServerConfig` (errors with line numbers, autocompletion in the editor).
-- The script can only reach what the receiver type exposes, plus the pure parts of the prelude. The type argument is
-  the whitelist.
+- **Loading and running are two steps, and each has its own failures.**
+  `Sandbox.load<Value>(path, capabilities): Result<Script<Value>, SandboxError>` reports what is wrong with the file:
+  a syntax error, a type error against the receiver, a module the script may not import.
+  `Script.apply(self, var value: Value): Result<Void, SandboxError>` runs the body against a value of the caller's own
+  and reports what went wrong while it ran: a step, memory or time limit, or a panic inside the script. A sandbox whose
+  failures aborted the host would not be a sandbox - and the panic that can be recovered from is exactly the one that
+  happens inside an interpreter with a heap of its own.
+- The script is checked as the body of `(var self: ServerConfig) => Void`, with the file scope "the prelude, and
+  nothing else". The type argument is the whitelist. There is no purity analysis behind that: the prelude has no IO
+  to begin with, and what a script may reach beyond it is the **module allowlist** below (`modules "std/text"`).
 - **Everything else is granted at the call site,** never in a project file - whoever loads a script decides what it
   can do:
 
   ```trb
-  const configure = Sandbox.load<ServerConfig>("./config.trb") {
+  const script = Sandbox.load<ServerConfig>("./config.trb") {
     modules "std/text", "std/time"             // Additional parts of the standard library
     files readOnly: "./config"                 // File system roots
     environment "APP_*"                        // Visible environment variables
@@ -1538,6 +1737,13 @@ const channel = Channel<Int>()
 - `native` marks declarations that are implemented _by the compiler and its runtime_: `Array`, `String`,
   the collections, IO. Only the standard library can use it. The interpreter looks them up in a built-in table, the
   compiler links the same functions.
+- In a `native type`, a required trait member without a body is a requirement on the runtime, not a missing
+  implementation: `public native type Int64 with Signed, Hash {}` asks the runtime for `compare`, `hash` and the
+  arithmetic. The checker records what was asked for, so a back end reports a missing intrinsic instead of losing
+  it silently.
+- **A `native` declaration the runtime does not implement yet is marked as planned, and using one is a compile error
+  that names the milestone** - never a link error with a mangled name in it. The manifest of natives is therefore also
+  the list of what does not exist yet (`Decimal`, `Float32` arithmetic and `std/http` today).
 - `foreign` declares functions of a C library. It is available to every package:
 
 ```trb
@@ -1597,10 +1803,25 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Binaries that use `Sandbox.load` embed the front end and the VM. Interpreted code calls compiled methods through a
   bridge that is generated for the receiver types.
 - Generics may be monomorphized or boxed. Not observable (no `sizeof`, no layout, no reflection on type parameters).
-- Integer overflow panics, in every back end. Evaluation order is left to right. Tail calls in tail position are guaranteed.
+- Integer overflow panics, in every back end, and so do division by zero and a remainder by zero
+  (see [Built-in Types](#built-in-types)).
+- **Evaluation order is source order:** the receiver first, then the arguments **in written order** - labeled arguments
+  are reordered into declaration order after they were evaluated, not before - then the parameter defaults in
+  declaration order. In `place = value` the subexpressions of the place come first, then the value. `&&` and `||`
+  short-circuit, and `??` evaluates its right side only when it is needed. "Left to right" can only mean the order a
+  reader sees; anything else makes a side effect in an argument unpredictable.
+- **Tail calls are guaranteed for direct self-recursion in tail position,** which is what `retry` and every fold need,
+  and which both back ends implement as the same jump to the entry block. Every other call uses the stack, and a
+  per-task frame limit (100 000 by default, `--stack-limit`) panics with "stack overflow" - a counter is the only way
+  the VM, which has a frame list, and a native binary, which has a C stack, can agree on when that happens. An
+  unspecified crash is not a semantics.
 - Memory: reference counting. Values cannot form cycles, so they need no cycle collection. Only `shared type`
   objects (and `var` bindings captured by closures) are tracked by a cycle collector. Deterministic cleanup enables
   `using file { ... }`.
+- **There are no destructors.** `Close` is an ordinary method, `using` an ordinary function, and the only observable
+  destruction order is the nesting of `using` blocks. When a reference count reaches zero is not observable, so a
+  release never runs user code - which is why there are no drop flags, no field order rule and no question what a
+  panic in a destructor would mean.
 - Value semantics say _what_ happens, not _how_. "A copy" is implemented depending on the shape of the type, and
   none of it is observable:
 
@@ -1648,7 +1869,8 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   at the declaration.
 - `Expression<Value>` is part of the language from the start. The quotation carries the static tree _and_ the ordinary value,
   so there is no runtime `compile()` (C#) and no interpreter in binaries because of it. Captures are separate from
-  the tree (`captures()`), so the tree is a compile-time constant and quoting is free.
+  the tree (`captures()`), so the tree is a compile-time constant. Quoting an expression without captures is free;
+  the captures are collected at the quotation site, which is one small allocation per evaluation.
 - Types and values are strictly separate, no runtime reflection. Generated `Encode`/`Decode` replace the usual
   reflection use cases. `Decode` is not generated for types with a private constructor, so invariants survive
   deserialization.
@@ -1767,15 +1989,77 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Only the innermost receiver is implicit (instead of an annotation like `@DslMarker`)
 - `await()` is a postfix method (composes with `?` and chaining)
 - No AST macros, no annotations (for now)
+- `Void` is the one name that is both a type and its only value (as `Unit` in Kotlin), and `Void`, `Never` and
+  `Range<Value>` are ordinary declarations of the prelude. Rejected: a zero-field constructor call `Void()` - it
+  would make the only value of the language the one that has to be called into existence, and `Ok(Void)` reads
+  like what it is. `Void` carries nothing, so it is no bridge from types to values.
+- A temporary is a valid _argument_ for a `var` parameter and still not a valid _base of a path_.
+  `using File.open(path)? { ... }` is not an exception to "no dead changes": the callee is the only owner, so there
+  is nowhere the change could have to be written back to.
+- `if var P = place` binds into the place, exactly like a `var` parameter. A mutable copy would make every `if var`
+  a dead change by construction, starting with `FlatMappedIterator`.
+- Blanket implementations (`extend<Source, Target> Source with Into<Target> where Target: From<Source>`) are
+  allowed for traits the package owns. Overlap is decided conservatively - different target heads, or bounds no
+  type can satisfy together - so two blanket implementations of one trait always collide. Conservative keeps
+  resolution decidable and the error messages readable.
+- Generic members on a trait-typed value work through witness tables, one per bound, and object safety is checked
+  per call, not per type. So `List<Show + Hash>` stays a type and only the calls that have no meaning are rejected.
+- Coercion to a trait type is the only subtyping in the language: four coercions, never solving an inference
+  variable, and no variance (`List<Square>` is not a `List<Shape>`). Written down because it is where inference and
+  error messages would otherwise become unpredictable.
+- Labels in patterns are kept in the tree and checked; fields still match by position. A label that is not checked
+  is worse than none - `Point(y: 0, x: 1)` must not silently match something else.
+- An expression statement must have the type `Void` or `Never`, unless the call has a `var` receiver or a `var`
+  argument. One rule instead of a list of discarded-value cases, and everything a `var` makes effectful stays
+  writable (`parser.bump()`).
+- A captured `var` binding is a shared box, not a reference: it may escape, it is reference counted, and it is
+  exempt from the dead-change rule. The one exception to "references are second-class" - the cycle collector had to
+  do this anyway.
+- An unreachable `match` arm is an error. Dead changes and discarded values are errors for the same reason.
+- Compile-time evaluable is: literals, the operators of the built-in numbers and of `Bool`, interpolation,
+  collection literals, constructor calls - and no function calls. So `const frameTime = 1.0 / 60.0` and
+  `const origin = Point(0, 0)` work, and the checker needs no evaluator of its own.
+- `Trait.member` also finds the members of implementations whose target is the trait itself. That is all
+  `List.from` and `Map.from` are (`List.of` is the trait's own); a trait is a namespace because it is a type.
+- Evaluation order is source order, spelled out: receiver, then the arguments as they are written, then the defaults
+  in declaration order; the place before the value in an assignment. "Left to right" can only mean the order a reader
+  sees, and the reorder of labeled arguments into declaration order happens after the evaluation, into slots.
+- Integer division truncates toward zero and the remainder takes the sign of the dividend, division and remainder by
+  zero panic, and so does the smallest signed value divided by `-1`. C11 and Rust agree on exactly this, so every back
+  end gets it for one instruction instead of a correction.
+- No bit operators, but a `Bits` trait the integer types come `with` (`bitwiseAnd`, `shiftedLeft(by:)`, ...) plus
+  `addedWrapping`/`multipliedWrapping` on `UInt64`. Operators would need precedence rules and a token that `|`
+  already spends on literal types; without the methods, `Hash` for a user type, UTF-8 decoding, the bytecode encoding
+  and the build cache's hash cannot be written in TorbScript at all. Keeping the wrapping pair off the signed types
+  keeps "overflow panics" true wherever a `+` is written.
+- `Show` of a `Float` is the shortest decimal that parses back to the same value, with `.0` appended when it has
+  neither `.` nor `e`. Two implementations are compared through `Show`, and `printf("%.17g")` is neither shortest nor
+  the same across libcs, so the runtime carries its own conversion.
+- On floats, `==` stays IEEE-754 and `compare` is a total order with `nan` on top and `-0.0` equal to `0.0`. A "fixed"
+  equality would make `==` disagree with `<`, and `sorted` must not depend on the pivot. Floats are not `Hash`, so a
+  `nan` key cannot happen.
+- `Map` and `Set` iterate in insertion order, in every implementation. The order reaches the output through `Show`, so
+  it is language, not implementation - and it is the only order a reader can predict. It costs an index vector.
+- A panic prints `panic: <message>` and the site to stderr and exits with 101; nothing else runs (no destructor, no
+  `Close`). The message is output, so the conformance suite compares it. A top-level `?` is not a panic: `error: ...`
+  and exit code 1.
+- No destructors. `Close` is a method, `using` a function, and the only observable destruction order is the nesting of
+  `using` blocks. A destructor would need drop flags, a field order rule and a story for a panic inside one, and
+  `using` already covers everything that has to be deterministic.
+- `Sandbox.load` returns a `Script<Value>` instead of a closure, and `Script.apply(self, var value: Value)` returns a
+  `Result<Void, SandboxError>`. A closure of type `(var self: Value) => Void` has nowhere to say that the step limit
+  was hit or that the script panicked, and a sandbox whose failures abort the host is not a sandbox.
+- A parameter default is evaluated at the call site, at every call, in the scope of the declaration - the same rule as
+  for a field default. One rule for both kinds of default, and a default cannot depend on an invisible argument order.
+- Tail calls are guaranteed for direct self-recursion in tail position only, and a per-task frame limit panics with
+  "stack overflow". Portable C cannot guarantee a general tail call; the guarantee that can be kept is the one `retry`
+  and every fold need, and a counter is the only way a frame list and a C stack agree on when the stack is full.
 
 ## Open Questions
 
 - Exclusivity is conservative for now. Collect the correct programs it rejects (closures that capture a `var`
   binding and run during a `var` access, paths through `[]`) here, and decide with a compiler at hand:
   - (none yet)
-- `Encode`/`Decode`: generic methods on a trait-typed value (`fields.field<Value: Decode>(...)` on a `RecordDecoder`)
-  need dictionary passing in the compiled back end, monomorphization alone cannot do it. Fine (Swift does the same),
-  but it is a requirement for the back ends.
 - `deprecated` (and `since`): not documentation but something the compiler has to read. A modifier? Decide when the
   first API needs it.
 - Registry protocol and the exact format of `project.lock.trb`

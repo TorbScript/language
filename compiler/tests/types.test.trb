@@ -1,0 +1,528 @@
+use test, group from "std/test"
+use File from "std/fs"
+use Span from "../src/syntax/source"
+use Visibility from "../src/syntax/ast"
+use normalizePath, parentPath, joinPath, pathDepth from "../src/project/path"
+use SourceTree from "../src/project/source-tree"
+use readSourceTree from "../src/project/read"
+use ModuleId from "../src/semantics/module"
+use SymbolId from "../src/semantics/symbols"
+use check from "../src/semantics/check"
+use TypeId, ParameterId, Signature, describeFunction from "../src/semantics/checker/type"
+use Checker from "../src/semantics/checker/context"
+use signatureOf, typeSignatureOf, instantiate from "../src/semantics/checker/signature"
+use sameType, substitute from "../src/semantics/checker/unify"
+
+/**
+ * The projects of these tests only exist in memory, as in `check.test.trb`. The prelude here is a small one of its
+ * own: the checker looks up what the *language* refers to (`Option` for `Item?`, `String` for a text literal type,
+ * `Int64` for an integer one) in `std/prelude`, so a test that talks about those names has to bring them.
+ */
+const workspace = [
+  "project.trb": r"""
+name "acme/all"
+workspace { members "std/*", "app" }
+""",
+  "std/prelude/project.trb": r"""
+name "std/prelude"
+""",
+  "std/prelude/src/types.trb": r"""
+public type Int64 {}
+public type Float64 {}
+public type String {}
+public type Char {}
+public type Bool {}
+public type Int = Int64
+
+public trait Show {
+  fn show(self): String
+}
+
+public trait Hash {
+  fn hash(self): Int
+}
+
+public trait Compare {
+  fn compare(self, other: Self): Int
+}
+
+public trait Add<Other = Self, Output = Self> {
+  fn add(self, other: Other): Output
+}
+
+public type Option<Value> {
+  case Some(value: Value)
+  case None
+}
+
+public trait List<Item> {}
+public trait Map<Key, Value> {}
+public type Array<Item, const Size: Int> {}
+""",
+  "std/prelude/src/lib.trb": r"""
+public use Int64, Float64, String, Char, Bool, Int from "./types"
+public use Show, Hash, Compare, Add from "./types"
+public use Option, List, Map, Array from "./types"
+public use Some, None from Option
+""",
+  "app/project.trb": r"""
+name "acme/app"
+""",
+]
+
+fn workspaceWith(files: Map<String, String>): SourceTree {
+  var all = workspace
+  for (path, text) in files {
+    all.set(path, text)
+  }
+  SourceTree.of(all)
+}
+
+/** One checked `app`, and what a test asks about it. */
+type Probed {
+  source: String
+  var checker: Checker
+  module: ModuleId
+
+  /**
+   * The type of the position `written`. The source has to contain `written` exactly once, which is what makes its
+   * span known without parsing it a second time.
+   */
+  fn at(self, written: String): TypeId {
+    const start = source.indexOf(written).expect("`{written}` in the source")
+    checker.typePositions[module.value].get(Span(start, start + written.byteLength())).expect("a type at `{written}`")
+  }
+
+  fn show(self, id: TypeId): String {
+    checker.describe(id)
+  }
+
+  fn symbolNamed(self, name: String): SymbolId {
+    checker.program.lookUp(module, name).expect("the declaration `{name}`")
+  }
+}
+
+fn probe(source: String): Probed {
+  const checked = check(workspaceWith(["app/src/main.trb": source]), ["app"])
+  const module = checked.program.graph.moduleAt("app/src/main.trb").expect("the module of the file")
+  Probed(source, checked.checker, module)
+}
+
+/** The type `written` stands for, described the way a message would show it. */
+fn typeIn(source: String, written: String): String {
+  const found = probe(source)
+  found.show(found.at(written))
+}
+
+/** The shortest thing that has a type position: the annotation of a field. */
+fn typeOf(written: String): String {
+  typeIn("type Probe \{\n  field: {written}\n\}", written)
+}
+
+/** Everything that is wrong in `app`, in the order the compiler reports it. */
+fn problems(source: String): List<String> {
+  var found: List<String> = []
+  for file in check(workspaceWith(["app/src/main.trb": source]), ["app"]).files {
+    for diagnostic in file.diagnostics {
+      found.add(diagnostic.message)
+    }
+  }
+  found
+}
+
+/** The notes of the first problem of `app`. */
+fn notes(source: String): List<String> {
+  for file in check(workspaceWith(["app/src/main.trb": source]), ["app"]).files {
+    if const Some(first) = file.diagnostics.first() {
+      return first.notes
+    }
+  }
+  []
+}
+
+/** A signature the way a message shows it, with what is not part of the function type spelled out. */
+fn describeSignature(checker: Checker, signature: Signature): String {
+  var parts = [describeFunction(checker.types, checker.symbols, signature.form)]
+  if signature.takesSelf {
+    parts.add(if signature.isVarSelf { "var self" } else { "self" })
+  }
+  for bound in signature.bounds {
+    var traits: List<String> = []
+    for one in bound.traits {
+      traits.add(checker.describe(one))
+    }
+    parts.add("where {checker.describe(bound.subject)}: {String.join(traits, separator: " + ")}")
+  }
+  String.join(parts, separator: ", ")
+}
+
+/** The signature of a top-level declaration of `app`. */
+fn signatureIn(source: String, name: String): String {
+  var found = probe(source)
+  const symbol = found.symbolNamed(name)
+  const identifier = signatureOf(found.checker, symbol)
+  const signature = found.checker.signature(identifier)
+  describeSignature(found.checker, signature)
+}
+
+/** The signature of a member of the type or trait `owner`. */
+fn memberSignatureIn(source: String, owner: String, name: String): String {
+  var found = probe(source)
+  const owning = found.symbolNamed(owner)
+  const shape = typeSignatureOf(found.checker, owning)
+  const members = found.checker.typeSignature(shape).members
+  const member = members.get(name).expect("the member `{name}` of `{owner}`")
+  const identifier = signatureOf(found.checker, member)
+  const signature = found.checker.signature(identifier)
+  describeSignature(found.checker, signature)
+}
+
+group "Forms of a type" {
+  test "a nominal type, with and without arguments" {
+    assert(typeOf("Int64") == "Int64")
+    assert(typeOf("List<Int64>") == "List<Int64>")
+    assert(typeOf("Map<String, List<Bool>>") == "Map<String, List<Bool>>")
+  }
+
+  test "an alias is transparent: the type itself is what a message shows" {
+    assert(typeOf("Int") == "Int64")
+    // The use comes first, so that the name under test appears exactly once in front of its declaration
+    const source = "type Probe \{\n  field: Handler\n\}\n\ntype Handler = (value: Int) => Bool"
+    assert(typeIn(source, "Handler") == "(value: Int64) => Bool")
+  }
+
+  test "a generic alias is expanded with its arguments" {
+    const source = "type Pair<Value> = (Value, Value)\n\ntype Probe \{\n  field: Pair<Int>\n\}"
+    assert(typeIn(source, "Pair<Int>") == "(Int64, Int64)")
+  }
+
+  test "`Item?` is `Option<Item>`: there is no optional form" {
+    assert(typeOf("Int?") == "Option<Int64>")
+    assert(typeOf("List<Bool>?") == "Option<List<Bool>>")
+  }
+
+  test "a tuple, with and without labels" {
+    assert(typeOf("(Int, String)") == "(Int64, String)")
+    assert(typeOf("(lowest: Int, highest: Int)") == "(lowest: Int64, highest: Int64)")
+  }
+
+  test "a function type keeps the names and the modes of its parameters" {
+    assert(typeOf("(value: Int) => String") == "(value: Int64) => String")
+    assert(typeOf("(Int, Bool) => Void") == "(Int64, Bool) => Void")
+    assert(typeOf("(var counter: Int) => Void") == "(var counter: Int64) => Void")
+    assert(typeOf("(self: Int) => Bool") == "(self: Int64) => Bool")
+    assert(typeOf("(lazy Int) => Void") == "(lazy Int64) => Void")
+  }
+
+  test "a trait as a type, and an intersection of traits" {
+    assert(typeOf("Show") == "Show")
+    assert(typeOf("Show + Hash") == "Show + Hash")
+  }
+
+  test "`Show + Hash` and `Hash + Show` are the same type" {
+    var found = probe("type Probe \{\n  first: Show + Hash\n  second: Hash + Show\n\}")
+    assert(found.at("Show + Hash") == found.at("Hash + Show"))
+    assert(found.show(found.at("Hash + Show")) == "Show + Hash")
+  }
+
+  test "a literal type, sorted so that the order it is written in does not matter" {
+    assert(typeOf("\"online\" | \"offline\"") == "\"offline\" | \"online\"")
+    assert(typeOf("3 | 1 | 2") == "1 | 2 | 3")
+    assert(typeOf("'a' | 'b'") == "'a' | 'b'")
+    assert(typeOf("\"only\"") == "\"only\"")
+  }
+
+  test "a literal type is one type however it is written, and duplicates fall away" {
+    var found = probe("type Probe \{\n  first: \"a\" | \"b\"\n  second: \"b\" | \"a\" | \"b\"\n\}")
+    assert(found.at("\"a\" | \"b\"") == found.at("\"b\" | \"a\" | \"b\""))
+  }
+
+  test "a const argument is a value, not a type" {
+    assert(typeOf("Array<Int, 16>") == "Array<Int64, 16>")
+    const named = "const size = 8\n\ntype Probe \{\n  field: Array<Int, size>\n\}"
+    assert(typeIn(named, "Array<Int, size>") == "Array<Int64, 8>")
+    const forwarded = "type Holder<const Size: Int> \{\n  cells: Array<Int, Size>\n\}"
+    assert(typeIn(forwarded, "Array<Int, Size>") == "Array<Int64, Size>")
+  }
+
+  test "`Void` and `Never` are names of the language and declarations of the prelude, and one type each" {
+    assert(typeOf("Void") == "Void")
+    assert(typeOf("Never") == "Never")
+  }
+
+  test "`Self` is the trait's own parameter inside a trait, and the target everywhere else" {
+    assert(typeIn("trait Combine \{\n  fn combine(self, other: Self): Bool\n\}", "Self") == "Self")
+    assert(typeIn("type Amount \{\n  fn same(self, other: Self): Bool\n\}", "Self") == "Amount")
+    assert(typeIn("type Pair<Key> \{\n  fn same(self, other: Self): Bool\n\}", "Self") == "Pair<Key>")
+    assert(typeIn("extend List<Int> \{\n  fn same(self, other: Self): Bool\n\}", "Self") == "List<Int64>")
+  }
+
+  test "a default type argument is filled in where the list is shorter, never inferred" {
+    // In a type position the `Self` of the default is the trait's own: nothing there says what implements it
+    assert(typeOf("Add") == "Add<Self, Self>")
+    assert(typeOf("Add<Int>") == "Add<Int64, Self>")
+    assert(typeOf("Add<Int, Bool>") == "Add<Int64, Bool>")
+  }
+
+  test "a bound fills the defaults of the trait with what the bound is asked of" {
+    var found = probe("type Amount with Add \{\n  value: Int\n\}")
+    const symbol = found.symbolNamed("Amount")
+    const shape = typeSignatureOf(found.checker, symbol)
+    const signature = found.checker.typeSignature(shape)
+    assert(found.show(signature.traits[0]) == "Add<Amount, Amount>")
+  }
+}
+
+group "Signatures" {
+  test "a top-level function" {
+    assert(signatureIn("fn sum(a: Int, b: Int): Int \{\n  a\n\}", "sum") == "(a: Int64, b: Int64) => Int64")
+  }
+
+  test "a declaration without a body and without a return type returns `Void`" {
+    assert(signatureIn("fn stop(reason: String)", "stop") == "(reason: String) => Void")
+  }
+
+  test "the modes of the parameters" {
+    const modes = "fn write(var target: String, ...parts: String)"
+    assert(signatureIn(modes, "write") == "(var target: String, ...parts: String) => Void")
+    assert(signatureIn("fn orElse(fallback: lazy Int): Int", "orElse") == "(lazy fallback: Int64) => Int64")
+  }
+
+  test "a default makes a parameter optional" {
+    var found = probe("fn connect(host: String, port: Int = 80)")
+    const symbol = found.symbolNamed("connect")
+    const identifier = signatureOf(found.checker, symbol)
+    const parameters = found.checker.signature(identifier).form.parameters
+    assert(!parameters[0].hasDefault)
+    assert(parameters[1].hasDefault)
+  }
+
+  test "`self` is not a parameter of the form, it is what the signature says about itself" {
+    const source = "type Counter \{\n  var value: Int\n\n  fn increment(var self)\n\n  fn area(self): Int\n\}"
+    assert(memberSignatureIn(source, "Counter", "increment") == "() => Void, var self")
+    assert(memberSignatureIn(source, "Counter", "area") == "() => Int64, self")
+  }
+
+  test "the bounds of a declaration, inline and in a `where` clause, are one thing" {
+    const inline = "fn sorted<Key: Compare + Hash>(key: Key): Key \{\n  key\n\}"
+    assert(signatureIn(inline, "sorted") == "(key: Key) => Key, where Key: Compare + Hash")
+    const clause = "fn grouped<Key>(key: Key): Key where Key: Hash \{\n  key\n\}"
+    assert(signatureIn(clause, "grouped") == "(key: Key) => Key, where Key: Hash")
+  }
+
+  test "a member sees the parameters of its type" {
+    const source = "type Holder<Item> \{\n  item: Item\n\n  fn mapped<Output>(self, change: (value: Item) => Output): Output\n\}"
+    assert(memberSignatureIn(source, "Holder", "mapped") == "(change: (value: Item) => Output) => Output, self")
+  }
+
+  test "a case is a function from its fields to the type it belongs to" {
+    var found = probe("type Shape \{\n  case Circle(radius: Int)\n  case Empty\n\}")
+    const symbol = found.symbolNamed("Shape")
+    const shape = typeSignatureOf(found.checker, symbol)
+    const signature = found.checker.typeSignature(shape)
+    const identifier = signatureOf(found.checker, signature.cases[0].symbol)
+    const form = found.checker.signature(identifier).form
+    assert(describeFunction(found.checker.types, found.checker.symbols, form) == "(radius: Int64) => Shape")
+    assert(signature.cases[1].name == "Empty")
+    assert(signature.cases[1].fields.isEmpty())
+  }
+
+  test "the shape of a type: its fields, its traits and its members" {
+    const source = "type Point with Show, Hash \{\n  x: Int\n  var y: Int = 0\n  private label: String\n\n  fn area(self): Int\n\}"
+    var found = probe(source)
+    const symbol = found.symbolNamed("Point")
+    const shape = typeSignatureOf(found.checker, symbol)
+    const signature = found.checker.typeSignature(shape)
+    assert(signature.fields.length() == 3)
+    assert(found.show(signature.fields[0].annotation) == "Int64")
+    assert(!signature.fields[0].isVar)
+    assert(signature.fields[1].isVar && signature.fields[1].hasDefault)
+    assert(signature.fields[2].name == "label")
+    assert(signature.fields[2].visibility == Visibility.Private)
+    assert(found.show(signature.traits[0]) == "Show")
+    assert(found.show(signature.traits[1]) == "Hash")
+    assert(signature.members.containsKey("area"))
+  }
+
+  test "`with ... by field` is remembered, and so is `native`" {
+    var found = probe("public native type Meters with Add by value \{\n  value: Float64\n\}")
+    const symbol = found.symbolNamed("Meters")
+    const shape = typeSignatureOf(found.checker, symbol)
+    const signature = found.checker.typeSignature(shape)
+    assert(signature.delegate == Some("value"))
+    assert(signature.isNative)
+  }
+
+  test "a signature is instantiated by substituting its parameters" {
+    const source = "fn first<Item>(items: List<Item>, fallback: Item): Item \{\n  fallback\n\}\n\ntype Probe \{\n  field: Int\n\}"
+    var found = probe(source)
+    const integer = found.at("Int")
+    const symbol = found.symbolNamed("first")
+    const identifier = signatureOf(found.checker, symbol)
+    const form = instantiate(found.checker, identifier, [integer])
+    assert(
+      describeFunction(found.checker.types, found.checker.symbols, form)
+        == "(items: List<Int64>, fallback: Int64) => Int64"
+    )
+  }
+}
+
+group "Equality and substitution" {
+  test "interning makes `==` on a `TypeId` mean `the same type`" {
+    var found = probe("type Probe \{\n  first: List<Int>\n  second: List<Int64>\n\}")
+    assert(found.at("List<Int>") == found.at("List<Int64>"))
+  }
+
+  test "a label is documentation for a position, not part of the type" {
+    var found = probe("type Probe \{\n  labeled: (lowest: Int, highest: Int)\n  plain: (Int, Int)\n\}")
+    const labeled = found.at("(lowest: Int, highest: Int)")
+    const plain = found.at("(Int, Int)")
+    assert(labeled != plain)
+    assert(sameType(found.checker.types, labeled, plain))
+  }
+
+  test "the name of a parameter of a function type is documentation, too" {
+    var found = probe("type Probe \{\n  named: (value: Int) => Bool\n  bare: (Int) => Bool\n\}")
+    assert(sameType(found.checker.types, found.at("(value: Int) => Bool"), found.at("(Int) => Bool")))
+  }
+
+  test "a mode belongs to the type of a function, and there is no variance" {
+    const source = "type Probe \{\n  plain: (Int) => Bool\n  mutable: (var Int) => Bool\n  wider: (Int) => Never\n\}"
+    var found = probe(source)
+    assert(!sameType(found.checker.types, found.at("(Int) => Bool"), found.at("(var Int) => Bool")))
+    assert(!sameType(found.checker.types, found.at("(Int) => Bool"), found.at("(Int) => Never")))
+  }
+
+  test "substitution replaces a parameter and gives a closed type back unchanged" {
+    const source = "type Holder<Item> \{\n  items: List<Item>\n\n  fn plain(self): List<Bool>\n\}\n\ntype Probe \{\n  field: Int\n\}"
+    var found = probe(source)
+    const symbol = found.symbolNamed("Holder")
+    const shape = typeSignatureOf(found.checker, symbol)
+    const parameter = found.checker.typeSignature(shape).generics[0]
+    var mapping: Map<ParameterId, TypeId> = [:]
+    mapping.set(parameter, found.at("Int"))
+    const items = found.at("List<Item>")
+    const open = substitute(found.checker.types, items, mapping)
+    assert(found.show(open) == "List<Int64>")
+    const closed = found.at("List<Bool>")
+    assert(substitute(found.checker.types, closed, mapping) == closed)
+  }
+}
+
+group "Diagnostics" {
+  test "too many and too few type arguments" {
+    assert(problems("type Probe \{\n  field: List<Int, Bool>\n\}") == ["`List` takes 1 type argument, 2 were given"])
+    assert(problems("type Probe \{\n  field: Map<Int>\n\}") == ["`Map` takes 2 type arguments, 1 was given"])
+    assert(problems("type Probe \{\n  field: Map\n\}") == ["`Map` takes 2 type arguments, none were given"])
+    assert(problems("type Probe \{\n  field: String<Int>\n\}") == ["`String` takes no type arguments, 1 was given"])
+  }
+
+  test "a type parameter is a type, not a type constructor" {
+    assert(
+      problems("type Holder<Item> \{\n  field: Item<Int>\n\}")
+        == ["`Item` is a type parameter and takes no type arguments"]
+    )
+  }
+
+  test "a type where a trait is asked for" {
+    assert(problems("type Probe with Int \{\n  field: Int\n\}") == ["`Int64` is a type, not a trait"])
+    assert(problems("type Probe \{\n  field: Show + Int\n\}") == ["`Int64` is a type, not a trait"])
+    assert(problems("fn sorted<Key: Int>(key: Key): Key \{\n  key\n\}") == ["`Int64` is a type, not a trait"])
+  }
+
+  test "`lazy` is only the type of a parameter" {
+    assert(problems("type Probe \{\n  field: lazy Int\n\}") == ["`lazy` is only the type of a parameter"])
+    assert(
+      notes("type Probe \{\n  field: lazy Int\n\}")
+        == [
+          "A `lazy` argument is an expression the function evaluates at most once, so only a parameter asks for one",
+        ]
+    )
+  }
+
+  test "a value where a type belongs, and a type where a value belongs" {
+    assert(
+      problems("type Holder<const Size: Int> \{\n  field: Size\n\}")
+        == ["`Size` is a const parameter, and a type belongs here"]
+    )
+    assert(
+      problems("type Probe \{\n  field: Array<Int, String>\n\}") == ["`String` is a type, and a value belongs here"]
+    )
+    assert(problems("const size = 8\n\ntype Probe \{\n  field: size\n\}") == ["`size` is a constant, not a type"])
+  }
+
+  test "a const argument has to reduce to one literal" {
+    assert(
+      problems("const size = 4 + 4\n\ntype Probe \{\n  field: Array<Int, size>\n\}")
+        == ["The const argument `size` has to be a literal"]
+    )
+    assert(
+      problems("type Probe \{\n  field: Array<Int, 1 | 2>\n\}") == ["A const argument is one value, not a literal type"]
+    )
+  }
+
+  test "the members of a literal type are literals of one type" {
+    assert(
+      problems("type Probe \{\n  field: \"a\" | 1\n\}")
+        == ["The members of a literal type have to be literals of one type"]
+    )
+    assert(
+      problems("type Probe \{\n  field: -1.5\n\}")
+        == ["A literal type is built from `String`, `Int` and `Char` literals"]
+    )
+  }
+
+  test "an alias that names itself, directly or through another one" {
+    assert(problems("type Handler = Handler") == ["`Handler` is a cycle: it names itself"])
+    assert(problems("type First = Second\ntype Second = First") == ["`First` is a cycle: it names itself"])
+    assert(
+      notes("type Handler = Handler")
+        == [r"An alias is another name for a type that exists. For a type of its own, write `type Handler { ... }`"]
+    )
+  }
+}
+
+group "The whole repository" {
+  /** The root of the repository, found from wherever the test runner was started. */
+  fn repositoryRoot(): String? {
+    var current = normalizePath(File.absolutePath(".").expect("the working directory"))
+    while pathDepth(current) >= 1 {
+      if File.exists(joinPath(current, "compiler/project.trb")) && File.exists(joinPath(current, "std/prelude/project.trb")) {
+        return Some(current)
+      }
+      const parent = parentPath(current)
+      if parent == current {
+        return None
+      }
+      current = parent
+    }
+    None
+  }
+
+  test "every type position of `std`, `compiler` and `examples` becomes a type, and nothing is reported" {
+    const root = repositoryRoot().expect("the root of the repository above the working directory")
+    const checked = check(readSourceTree([root]).expect("the sources of the repository"), [root])
+    var reported: List<String> = []
+    for file in checked.files {
+      for diagnostic in file.diagnostics {
+        reported.add("{file.path}: {diagnostic.message}")
+      }
+    }
+    assert(reported.isEmpty())
+    assert(checked.problems.isEmpty())
+    // Every position has a type, and none of them is the type of something that went wrong
+    var positions = 0
+    var broken = 0
+    for perModule in checked.checker.typePositions {
+      for (_, id) in perModule {
+        positions = positions + 1
+        if checked.checker.describe(id) == "?" {
+          broken = broken + 1
+        }
+      }
+    }
+    assert(broken == 0)
+    // Around 4900 today: a number that only says "this really walked the whole repository"
+    assert(positions > 4000)
+  }
+}

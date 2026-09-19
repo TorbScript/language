@@ -896,8 +896,8 @@ impl Interpreter {
                         format!("`.{}` has {} fields, the pattern has {}", name.text, payload.len(), fields.len()),
                     );
                 }
-                for (pattern, item) in fields.iter().zip(&payload) {
-                    if !self.bind_pattern(pattern, item, environment, is_var)? {
+                for (field, item) in fields.iter().zip(&payload) {
+                    if !self.bind_pattern(&field.pattern, item, environment, is_var)? {
                         return Ok(false);
                     }
                 }
@@ -992,8 +992,8 @@ impl Interpreter {
                         format!("`{name}` has {} fields, the pattern has {}", payload.len(), fields.len()),
                     );
                 }
-                for (pattern, item) in fields.iter().zip(&payload) {
-                    if !self.bind_pattern(pattern, item, environment, is_var)? {
+                for (field, item) in fields.iter().zip(&payload) {
+                    if !self.bind_pattern(&field.pattern, item, environment, is_var)? {
                         return Ok(false);
                     }
                 }

@@ -20,6 +20,7 @@ public fn parseDeclaration(var parser: Parser): Declaration {
     .Reserved(.Trait) => parseTrait(parser)
     .Reserved(.Extend) => parseExtend(parser)
     .Reserved(.Foreign) => parseForeign(parser)
+    .Reserved(.Const | .Var) => parseConstant(parser, modifiers)
     other => {
       parser.errorHere("Expected a declaration (`fn`, `type`, `trait`, `extend`, `use`), found {other.describe()}")
       DeclarationKind.Use(UseDeclaration(UseItems.Names([]), UseSource.Module("")))
@@ -60,6 +61,18 @@ fn parseModifiers(var parser: Parser): Modifiers {
     parser.bump()
   }
   modifiers
+}
+
+/**
+ * `public const pi = 3.14` at the top level of a module. `public var` is an error: a module has no mutable state,
+ * so there is nothing a top-level `var` could export.
+ */
+fn parseConstant(var parser: Parser, modifiers: Modifiers): DeclarationKind {
+  const binding = parseBinding(parser)
+  if binding.isVar && modifiers.visibility == Visibility.Public {
+    parser.error("A module has no mutable state: only `const` can be public", binding.pattern.span)
+  }
+  DeclarationKind.Constant(binding)
 }
 
 /** `use A, B from "./file"`, `use * as http from "std/net/http"` */

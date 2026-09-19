@@ -72,14 +72,16 @@ impl Parser<'_> {
         PatternKind::Name(path.remove(0).text)
     }
 
-    /// The fields of `Circle(radius: r)`: the label is documentation, fields are matched by position.
-    fn variant_fields(&mut self) -> Vec<Pattern> {
+    /// The fields of `Circle(radius: r)`: the label is kept, the type checker will verify it names the field at
+    /// this position. Fields are still matched by position, never by label.
+    fn variant_fields(&mut self) -> Vec<FieldPattern> {
         self.comma_separated(TokenKind::ParenClose, |parser| {
-            if *parser.kind() == TokenKind::Identifier && *parser.kind_at(1) == TokenKind::Colon {
+            let label = (*parser.kind() == TokenKind::Identifier && *parser.kind_at(1) == TokenKind::Colon).then(|| {
+                let label = parser.name();
                 parser.bump();
-                parser.bump();
-            }
-            parser.pattern()
+                label
+            });
+            FieldPattern { label, pattern: parser.pattern() }
         })
     }
 

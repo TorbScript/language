@@ -10,18 +10,18 @@ type StartupError {
 // Both cases wrap exactly one error, so `From<SandboxError>` and `From<ConfigError>` are generated and `?` converts.
 
 fn loadConfig(path: String): Result<ServerConfig, StartupError> {
-  // Parses and type checks the file against ServerConfig.
-  // The result is an ordinary closure: (var self: ServerConfig) => Void
+  // Parses and type checks the file against ServerConfig. The result is a Script<ServerConfig>: loading reports what
+  // is wrong with the file, `apply` what goes wrong while it runs (a limit, or a panic inside the script).
   //
   // What a script can do is decided here, where it is loaded. Without the block it could not do any IO at all;
   // this one may read files below ./config. The limits guard against `while true {}`.
-  const configure = Sandbox.load<ServerConfig>(path) {
+  const script = Sandbox.load<ServerConfig>(path) {
     files readOnly: "./config"
     limits steps: 1_000_000, memory: 16.megabytes()
   }?
 
   var config = ServerConfig.withSecrets(["DB_PASSWORD": Environment.get("DB_PASSWORD") ?? ""])
-  configure(config)
+  script.apply(config)?
   Ok(config.validate()?)
 }
 

@@ -51,6 +51,9 @@ pub enum DeclarationKind {
     Trait(TraitDeclaration),
     Extend(ExtendDeclaration),
     Foreign(ForeignDeclaration),
+    /// `public const pi = 3.14` at the top level of a module. `public var` is an error: a module has no mutable
+    /// state. `Binding::doc` is always `None` here, the doc comment is `Declaration::doc`.
+    Constant(Binding),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -264,6 +267,10 @@ pub enum StatementKind {
 /// `const x: Int = 1`, `var (a, b) = pair`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Binding {
+    /// The doc comment in front of a top-level `const`/`var` **statement** (`StatementKind::Binding`). `None` when
+    /// this binding is the payload of a `Declaration` or a `Member`: the doc comment belongs to that instead, so it
+    /// is never duplicated.
+    pub doc: Option<String>,
     pub is_var: bool,
     pub pattern: Pattern,
     pub annotation: Option<TypeReference>,
@@ -444,12 +451,12 @@ pub enum PatternKind {
     /// `Some(x)`, `Shape.Circle(radius)`, `Point(x, y)`
     Variant {
         path: Vec<Name>,
-        fields: Vec<Pattern>,
+        fields: Vec<FieldPattern>,
     },
     /// `.Circle(radius)`, `.Empty`: a case of the type of the value
     ImplicitVariant {
         name: Name,
-        fields: Vec<Pattern>,
+        fields: Vec<FieldPattern>,
     },
     /// `1 | 2 | 3`
     Or(Vec<Pattern>),
@@ -461,4 +468,12 @@ pub struct RestPattern {
     /// Number of patterns in front of the rest
     pub position: usize,
     pub name: Option<Name>,
+}
+
+/// `Point(x: 0, y: 0)`: the label is documentation today. The type checker will verify that it names the field at
+/// this position; fields are still matched by position, never by label.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldPattern {
+    pub label: Option<Name>,
+    pub pattern: Pattern,
 }

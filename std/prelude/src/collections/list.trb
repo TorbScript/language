@@ -1,6 +1,6 @@
 use Equals, Compare from "../compare"
 use MutableIndexed, MutableSlice from "../operators"
-use From from "../convert"
+use From, Show from "../convert"
 use Collection from "./collection"
 
 /**
@@ -107,6 +107,14 @@ extend<Item> List<Item> with From<Iterable<Item>> {
   }
 }
 
+/** `[1, 2, 3]`, and `[]` when it is empty - the format of the literal. */
+extend<Item: Show> List<Item> with Show {
+  fn show(self): String {
+    const parts = map { _.showNested() }
+    "[{String.join(parts, separator: ", ")}]"
+  }
+}
+
 // --- Implementations -----------------------------------------------------------------------------------
 
 /**
@@ -138,6 +146,9 @@ public native type ArrayList<Item>
 /**
  * Bit-partitioned trie. A write to a shared list copies one path (O(log n)) instead of the whole buffer:
  * the one for big lists that are kept in many versions (undo, history, snapshots).
+ *
+ * Until the trie exists, this name is a documented alias of [ArrayList]. Only performance differs: iteration order
+ * and `Show` are the same either way.
  */
 public native type TrieList<Item>
   with List<Item>, From<Iterable<Item>>

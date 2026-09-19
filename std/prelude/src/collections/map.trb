@@ -1,6 +1,6 @@
 use Hash from "../compare"
 use MutableIndexed from "../operators"
-use From from "../convert"
+use From, Show from "../convert"
 use Collection from "./collection"
 
 /**
@@ -14,6 +14,10 @@ use Collection from "./collection"
  *
  * The trait asks nothing of `Key`. What a key has to be able to do is a matter of the implementation
  * (`TrieMap` and `HashMap` need `Hash`, a sorted map needs `Compare`), so only the factories carry a bound.
+ *
+ * **Every implementation iterates in insertion order,** and removing an entry does not reorder the rest. The order
+ * reaches the output through `Show` (an empty map shows as `[:]`), so it is a rule of the language and not of the
+ * implementation.
  */
 public trait Map<Key, Value>
   with Collection<(Key, Value)>, MutableIndexed<Key, Value>
@@ -91,11 +95,25 @@ extend<Key: Hash, Value> Map<Key, Value> with From<Iterable<(Key, Value)>> {
   }
 }
 
+/** `["a": 1, "b": 2]`, and `[:]` when it is empty - the format of the literal. */
+extend<Key: Show, Value: Show> Map<Key, Value> with Show {
+  fn show(self): String {
+    if isEmpty() {
+      return "[:]"
+    }
+    const parts = map { entry => "{entry.0.showNested()}: {entry.1.showNested()}" }
+    "[{String.join(parts, separator: ", ")}]"
+  }
+}
+
 // --- Implementations -----------------------------------------------------------------------------------
 
 /**
  * Hash array mapped trie - the default. A write to a shared map copies one path (O(log n)), so keeping many
  * versions of a big map is cheap. Iterates in insertion order.
+ *
+ * Until the trie exists, this name is a documented alias of [HashMap]. Only performance differs: iteration order
+ * and `Show` are the same either way.
  */
 public native type TrieMap<Key: Hash, Value>
   with Map<Key, Value>, From<Iterable<(Key, Value)>>

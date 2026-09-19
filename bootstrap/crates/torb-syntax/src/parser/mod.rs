@@ -306,6 +306,7 @@ impl<'source> Parser<'source> {
     }
 
     fn binding(&mut self) -> Binding {
+        let doc = self.take_doc();
         let is_var = self.at_keyword(Keyword::Var);
         self.bump();
         let pattern = self.pattern();
@@ -313,10 +314,10 @@ impl<'source> Parser<'source> {
         if !self.at(TokenKind::Equal) {
             self.error_here("A binding needs a value: there are no uninitialized bindings and no default values");
             let value = Expression { kind: ExpressionKind::Error, span: self.span() };
-            return Binding { is_var, pattern, annotation, value };
+            return Binding { doc, is_var, pattern, annotation, value };
         }
         self.bump();
-        Binding { is_var, pattern, annotation, value: self.command_expression() }
+        Binding { doc, is_var, pattern, annotation, value: self.command_expression() }
     }
 
     fn for_statement(&mut self) -> StatementKind {

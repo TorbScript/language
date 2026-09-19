@@ -86,16 +86,17 @@ fn parseStatement(var parser: Parser): Statement {
 
 /** `const x: Int = 1`, `var (a, b) = pair`. The position is at `const` or `var`. */
 public fn parseBinding(var parser: Parser): Binding {
+  const doc = parser.takeDoc()
   const isVar = parser.isAtKeyword(Keyword.Var)
   parser.bump()
   const pattern = parsePattern(parser)
   const annotation = if parser.eat(TokenKind.Colon) { Some(parseType(parser)) } else { None }
   if !parser.isAt(TokenKind.Equal) {
     parser.errorHere("A binding needs a value: there are no uninitialized bindings and no default values")
-    return Binding(isVar, pattern, annotation, Expression(ExpressionKind.Invalid, parser.span()))
+    return Binding(doc, isVar, pattern, annotation, Expression(ExpressionKind.Invalid, parser.span()))
   }
   parser.bump()
-  Binding(isVar, pattern, annotation, parseCommandExpression(parser))
+  Binding(doc, isVar, pattern, annotation, parseCommandExpression(parser))
 }
 
 fn parseFor(var parser: Parser): StatementKind {

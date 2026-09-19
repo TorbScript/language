@@ -58,8 +58,10 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 | Module (`compiler/src/`) | Contains                                                              | State    |
 |--------------------------|-----------------------------------------------------------------------|----------|
 | `syntax/`                | Source text, spans, diagnostics, tokens, lexer, AST, parser           | done, verified against stage 0 |
+| `project/`               | Paths, the source tree, `project.trb`, workspaces and their members   | done     |
+| `semantics/`             | Modules, symbols, visibility, names in type positions (`torb check`)  | done     |
+| `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: types, signatures (4.1) |
 | `cli/`                   | Collecting files, rendering diagnostics                               | started  |
-| `semantics/`             | Name resolution, modules, type checker, trait resolution              | planned  |
 | `ir/`                    | Typed IR, lowering, last-use analysis                                 | planned  |
 | `backend/c/`             | Typed IR to C                                                         | planned  |
 | `backend/bytecode/`, `vm/` | Bytecode and the VM that runs it (`torb run`, sandbox, REPL)        | planned  |
@@ -89,6 +91,26 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
   an arm (`.Circle(r) => ...`), everywhere else it continues the line above. The newline filter tracks which `{`
   belongs to a `match` for that.
 - Diagnostics are data (`Diagnostic(message, span, notes)`). Rendering is the business of the CLI and the LSP.
+- **IO happens at the edge.** `project/read.trb` reads every file that could matter - the `project.trb` of every
+  directory above the given paths, and every `.trb` below the outermost of them - into a `SourceTree`. Everything
+  after that (workspace, module graph, symbols, name resolution) is a pure function of that value. So the tests build
+  whole projects in memory, and a language server can hand in text that is newer than the disk.
+- **`project.trb` is read from its syntax tree, not evaluated.** Top-level command calls with literal arguments and
+  the blocks the toolchain knows; everything else in the file is ignored silently. It is a receiver script, and the
+  sandboxed VM will evaluate it properly in milestone 7 - the static reading is what lets the compiler find its own
+  standard library before there is a VM.
+- **Program-wide things are ids, not references.** Values have no identity in TorbScript, so modules and symbols live
+  in lists and are referred to by `ModuleId` and `SymbolId`. Anything a later pass has to look up (what a name in a
+  type position resolved to) is a side table keyed by module and span, never a field in the syntax tree - the tree
+  stays what the parser produced, and the differential tests stay meaningful.
+- **Exports are computed to a fixpoint.** `lib.trb` of a package is usually nothing but `public use`, and imports may
+  be cyclic. Nothing runs when a module is imported, so a cycle is only a reason not to recurse: the binder adds what
+  it can until nothing changes anymore, and reports what is missing afterwards, once.
+- **The scope of a file** is the public names of its prelude package, plus its imports, plus its own top-level
+  declarations, with the later ones shadowing the earlier ones. `Void` and `Never` are a fixed table behind all of
+  that, so a script without a prelude can still name them; `std/prelude` declares them as well and wins.
+- **Only names in type positions are resolved here.** Names in expressions cannot be (see milestone 4), so the front
+  end does not pretend to: it checks that every imported name exists, and every name that stands where a type stands.
 
 ### Back Ends
 
@@ -126,7 +148,8 @@ The language has value semantics; identity is the marked exception (`shared type
 - **Last use is a move.** The lowering to IR marks the last use of every binding. A moved value keeps its count at 1,
   so `list = list.added(x)` and the default participles (`var result = self`) change in place instead of copying.
   This is what makes the functional style as fast as the mutating one, and it has to be identical in both back ends.
-- No tracing garbage collector. Deterministic destruction is part of the language (`using`, `Close`).
+- No tracing garbage collector, and no destructors: releasing storage never runs user code. What is deterministic in
+  the language is the cleanup that is written down (`using`, `Close`), not when a count reaches zero.
 
 (Stage 0 does the same with `Rc::make_mut` and moves values out of their path for the duration of a change. It has no
 last-use analysis; the patterns the compiler relies on - building lists and maps in `var` fields - are in place
@@ -140,8 +163,9 @@ regardless.)
   the TorbScript AST, which stage 0 prints for its own tree (`torb ast`). Neither side can drift.
 - The tests of the compiler are TorbScript (`compiler/tests/*.test.trb`, `torb test`), so they move to stage 1 and 2
   unchanged.
-- `examples/`, `std/` and `compiler/` are the conformance suite: every file parses today; later every file type
-  checks, and the runnable ones produce the same output in every stage and back end.
+- `examples/`, `std/` and `compiler/` are the conformance suite: every file parses and resolves today (`torb check`
+  over the repository is a test in `bootstrap/`); later every file type checks, and the runnable ones produce the
+  same output in every stage and back end.
 - Stage 0: `#![forbid(unsafe_code)]`, `clippy -D warnings`, `rustfmt`, no dependencies.
 
 ## Milestones
@@ -149,13 +173,18 @@ regardless.)
 1. **Done:** stage 0 (parser, interpreter, `torb run`, `torb test`), the lexer in TorbScript, verified against stage 0.
 2. **Done:** AST and parser in TorbScript. Trees, diagnostics and their rendering agree with stage 0 on every file of
    the repository, including files full of errors. The compiler parses itself.
-3. Modules and declarations: the module graph (`use`, packages, the prelude from `std/`), the symbols of every
-   module, visibility, and every name in a _type position_. `torb check` reports what does not resolve - for the
-   first time also in `std/` and the examples, which no tool has looked at beyond their syntax.
+3. **Done:** modules and declarations. Projects and workspaces (`project.trb`, `members "std/*"`), the module graph
+   (`use`, packages, the prelude from `std/`), the symbols of every module, visibility, and every name in a _type
+   position_. `torb check <path>...` takes a workspace root, a project or a single script, reports what does not
+   resolve, and hands the type checker the tables (modules, symbols, the scope of every module, and the symbol every
+   name in a type position resolved to). It looked at `std/` and the examples for the first time beyond their
+   syntax and found `Range`, `NumberParseError` and `NumberRangeError` missing from the prelude.
 4. Type checker: inference, traits, generics, exhaustiveness, `var` paths, exclusivity, dead changes - and the names
    in _expressions_. They cannot be resolved earlier: what `port` means in `server { port 8080 }` depends on the type
    of the parameter the closure is passed to (design principle 1), so resolving names and checking types is one pass.
-   From here on the compiler checks itself, which stage 0 never could.
+   From here on the compiler checks itself, which stage 0 never could. The plan and the state of its ten steps are in
+   [docs/TYPECHECKER.md](TYPECHECKER.md); **4.1 is done**: every type position of the repository becomes a type, and
+   every declaration a signature.
 5. Typed IR and the C back end. The tour runs natively, with the same output as under stage 0.
 6. The compiler compiles itself, stage 1 and stage 2 agree. `bootstrap/` is frozen.
 7. Bytecode and VM, tasks, channels, the sandbox (`Sandbox.load`, receiver scripts, `project.trb`).

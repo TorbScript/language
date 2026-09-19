@@ -1,0 +1,154 @@
+use TypeId, TypeForm, TypeTable, TupleField, FunctionForm, ParameterForm, ParameterId, Bound from "./type"
+
+/**
+ * "The same type" the way the language means it.
+ *
+ * Types are interned, so this is `==` in almost every case. The one exception is a *name*: a tuple label and the name
+ * of a function parameter are documentation for a position, not part of type identity, so `(lowest: Int, highest: Int)`
+ * and `(Int, Int)` are one type. That a label at the same position must still be the right one is a separate rule
+ * (milestone 4.2), which is exactly why the names stay in the form and only this function ignores them.
+ */
+public fn sameType(types: TypeTable, left: TypeId, right: TypeId): Bool {
+  if left == right {
+    return true
+  }
+  match types.form(left) {
+    .Nominal(symbol, arguments) => {
+      if const .Nominal(otherSymbol, otherArguments) = types.form(right) {
+        return symbol == otherSymbol && sameTypes(types, arguments, otherArguments)
+      }
+      false
+    }
+    .Traits(bounds) => {
+      if const .Traits(otherBounds) = types.form(right) {
+        return sameTypes(types, bounds, otherBounds)
+      }
+      false
+    }
+    .Tuple(fields) => {
+      if const .Tuple(otherFields) = types.form(right) {
+        if fields.length() != otherFields.length() {
+          return false
+        }
+        for index in 0..fields.length() {
+          if !sameType(types, fields[index].annotation, otherFields[index].annotation) {
+            return false
+          }
+        }
+        return true
+      }
+      false
+    }
+    .Function(form) => {
+      if const .Function(otherForm) = types.form(right) {
+        return sameFunction(types, form, otherForm)
+      }
+      false
+    }
+    // Everything else carries no name, so two of them that are not the same id are different types
+    _ => false
+  }
+}
+
+public fn sameTypes(types: TypeTable, left: List<TypeId>, right: List<TypeId>): Bool {
+  if left.length() != right.length() {
+    return false
+  }
+  for index in 0..left.length() {
+    if !sameType(types, left[index], right[index]) {
+      return false
+    }
+  }
+  true
+}
+
+/** Modes and defaults belong to the type of a function, the names of its parameters do not. */
+public fn sameFunction(types: TypeTable, left: FunctionForm, right: FunctionForm): Bool {
+  if left.parameters.length() != right.parameters.length() {
+    return false
+  }
+  for index in 0..left.parameters.length() {
+    const parameter = left.parameters[index]
+    const other = right.parameters[index]
+    if parameter.mode != other.mode || parameter.hasDefault != other.hasDefault {
+      return false
+    }
+    if !sameType(types, parameter.annotation, other.annotation) {
+      return false
+    }
+  }
+  sameType(types, left.result, right.result)
+}
+
+/**
+ * Replaces generic parameters by types: what a call, an implementation and every use of a generic declaration needs.
+ * The result is interned again, so substituting into a type that mentions no parameter gives back the very same id.
+ */
+public fn substitute(var types: TypeTable, id: TypeId, mapping: Map<ParameterId, TypeId>): TypeId {
+  if mapping.isEmpty() {
+    return id
+  }
+  match types.form(id) {
+    .Parameter(parameter) => mapping.get(parameter) ?? id
+    .Nominal(symbol, arguments) => {
+      const replaced = substituteAll(types, arguments, mapping)
+      if replaced == arguments {
+        return id
+      }
+      types.intern(TypeForm.Nominal(symbol, replaced))
+    }
+    .Traits(bounds) => {
+      const replaced = substituteAll(types, bounds, mapping)
+      if replaced == bounds {
+        return id
+      }
+      types.intern(TypeForm.Traits(replaced))
+    }
+    .Tuple(fields) => {
+      var replaced: List<TupleField> = []
+      var isChanged = false
+      for field in fields {
+        const inner = substitute(types, field.annotation, mapping)
+        isChanged = isChanged || inner != field.annotation
+        replaced.add(TupleField(field.label, inner))
+      }
+      if !isChanged {
+        return id
+      }
+      types.intern(TypeForm.Tuple(replaced))
+    }
+    .Function(form) => {
+      const replaced = substituteFunction(types, form, mapping)
+      if replaced == form {
+        return id
+      }
+      types.intern(TypeForm.Function(replaced))
+    }
+    // A literal type, a const value, `Void`, `Never`, `Invalid` and a variable mention no parameter
+    _ => id
+  }
+}
+
+public fn substituteAll(var types: TypeTable, arguments: List<TypeId>, mapping: Map<ParameterId, TypeId>): List<TypeId> {
+  var replaced: List<TypeId> = []
+  for argument in arguments {
+    replaced.add(substitute(types, argument, mapping))
+  }
+  replaced
+}
+
+public fn substituteFunction(var types: TypeTable, form: FunctionForm, mapping: Map<ParameterId, TypeId>): FunctionForm {
+  var parameters: List<ParameterForm> = []
+  for parameter in form.parameters {
+    parameters.add(parameter.copy(annotation: substitute(types, parameter.annotation, mapping)))
+  }
+  FunctionForm(parameters, substitute(types, form.result, mapping))
+}
+
+public fn substituteBounds(var types: TypeTable, bounds: List<Bound>, mapping: Map<ParameterId, TypeId>): List<Bound> {
+  var replaced: List<Bound> = []
+  for bound in bounds {
+    replaced.add(Bound(substitute(types, bound.subject, mapping), substituteAll(types, bound.traits, mapping)))
+  }
+  replaced
+}

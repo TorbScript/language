@@ -267,6 +267,13 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
                 Err(error) => Value::error(io_error(interpreter, &path, &error)),
             })
         }
+        ("File", "absolutePath") => {
+            let path = text_of(&arguments.required(0, "path")?, "path")?;
+            Ok(match std::path::absolute(&path) {
+                Ok(absolute) => Value::ok(Value::text(&crate::program::display_path(&absolute))),
+                Err(error) => Value::error(io_error(interpreter, &path, &error)),
+            })
+        }
         ("File", "exists") => Ok(Value::Bool(std::path::Path::new(&text_of(&arguments.required(0, "path")?, "path")?).exists())),
         ("File", "isDirectory") => Ok(Value::Bool(std::path::Path::new(&text_of(&arguments.required(0, "path")?, "path")?).is_dir())),
         ("File", "list") => {

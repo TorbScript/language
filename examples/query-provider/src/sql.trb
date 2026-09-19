@@ -61,12 +61,12 @@ public fn translate(node: ExpressionNode, captures: List<Encode>): Result<Fragme
       const c = translate(condition, captures)?
       const t = translate(then, captures)?
       const o = translate(otherwise, captures)?
-      Ok(Fragment("CASE WHEN {c.sql} THEN {t.sql} ELSE {o.sql} END", c.parameters + t.parameters + o.parameters))
+      Ok(Fragment("CASE WHEN {c.sql} THEN {t.sql} ELSE {o.sql} END", c.parameters.addedAll(t.parameters).addedAll(o.parameters)))
     }
 
     // Everything else - and every node kind that is added in the future
-    .Call(_, owner, method, _, _) => Error(Unsupported("{owner}.{method}()"))
-    _ => Error(Unsupported("this kind of expression"))
+    .Call(_, owner, method, _, _) => Error(QueryError.Unsupported("{owner}.{method}()"))
+    _ => Error(QueryError.Unsupported("this kind of expression"))
   }
 }
 

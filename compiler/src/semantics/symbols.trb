@@ -1,0 +1,173 @@
+use Span from "../syntax/source"
+use Name, Declaration, Visibility from "../syntax/ast"
+use ModuleId, Module from "./module"
+
+/** The index of a symbol in `Symbols`. A wrapper, so it can never be confused with a `ModuleId` or a count. */
+public type SymbolId {
+  value: Int
+}
+
+public type SymbolKind {
+  case Function
+  case Type
+  /** `type Handler = (request: Request) => Response`: another name for an existing type */
+  case Alias
+  case Trait
+  /** A top-level `const` of a module, a `const` member of a type, or a `const` parameter used as a const argument */
+  case Constant
+  /** A case of a type: `Shape.Circle` */
+  case Case(owner: SymbolId)
+  /**
+   * A field of a type or of one of its cases. Fields are not names of a scope, so the type checker gives them their
+   * ids when it builds the shape of the type they belong to - which is what lets a message point at one.
+   */
+  case Field(owner: SymbolId)
+  /** `use * as http from "acme/http"`: a name that stands for a module */
+  case Namespace(module: ModuleId)
+  /** A type parameter of a function, type, trait or `extend`, including `const` parameters */
+  case GenericParameter
+  /** `Void`, `Never`, `Self`: what the language provides without declaring it anywhere */
+  case Builtin
+}
+
+/** Everything that has a name. What a name in a type position resolves to is one of these. */
+public type Symbol {
+  name: String
+  kind: SymbolKind
+  isPublic: Bool
+  /** `None` for a name the language provides itself (`Void`, `Never`), which is declared in no file */
+  module: ModuleId?
+  /** The span of the name, which is what a message about the declaration points at */
+  span: Span
+  /** The cases of a type, in the order they are declared. Empty for everything else. */
+  cases: List<SymbolId> = []
+}
+
+/** A name a module declares itself, with the symbol it introduces. In source order. */
+public type Definition {
+  name: String
+  span: Span
+  symbol: SymbolId
+}
+
+/** Every symbol of the program. The index in `all` is the `SymbolId`. */
+public type Symbols {
+  var all: List<Symbol> = []
+
+  fn add(var self, symbol: Symbol): SymbolId {
+    all.add(symbol)
+    SymbolId(all.length() - 1)
+  }
+
+  fn at(self, id: SymbolId): Symbol {
+    all[id.value]
+  }
+
+  /** The cases of a type are only known after the type itself has an id, because they point back at it. */
+  fn setCases(var self, id: SymbolId, cases: List<SymbolId>) {
+    all.set(id.value, all[id.value].copy(cases: cases))
+  }
+
+  fn caseNamed(self, owner: SymbolId, name: String): SymbolId? {
+    at(owner).cases.find({ at(_).name == name })
+  }
+
+  /** How a symbol appears in a message: "the function `parse`". */
+  fn describe(self, id: SymbolId): String {
+    const symbol = at(id)
+    match symbol.kind {
+      .Function => "the function `{symbol.name}`"
+      .Type => "the type `{symbol.name}`"
+      .Alias => "the type alias `{symbol.name}`"
+      .Trait => "the trait `{symbol.name}`"
+      .Constant => "the constant `{symbol.name}`"
+      .Case(_) => "the case `{symbol.name}`"
+      .Field(_) => "the field `{symbol.name}`"
+      .Namespace(_) => "the module `{symbol.name}`"
+      .GenericParameter => "the type parameter `{symbol.name}`"
+      .Builtin => "`{symbol.name}`"
+    }
+  }
+}
+
+/**
+ * The names a module declares itself, in the order they appear. Imports are not here: they bind names of *other*
+ * modules, and that needs the exports of those modules to exist first (see `scope.trb`).
+ */
+public fn declareModule(var symbols: Symbols, module: Module): List<Definition> {
+  var definitions: List<Definition> = []
+  for statement in module.file.statements {
+    match statement.kind {
+      .Declare(declaration) => declareOne(symbols, definitions, module.id, declaration)
+      // A plain top-level `const`/`var` without modifiers is always private to its file: `public const` parses as
+      // a `Declaration` with `DeclarationKind.Constant` instead, and is handled in `declareOne`.
+      .Bind(binding) => {
+        if const .Binding(name) = binding.pattern.kind {
+          define(symbols, definitions, module.id, Name(name, binding.pattern.span), SymbolKind.Constant, false)
+        }
+      }
+      _ => {}
+    }
+  }
+  definitions
+}
+
+fn declareOne(var symbols: Symbols, var definitions: List<Definition>, module: ModuleId, declaration: Declaration) {
+  const isPublic = declaration.modifiers.visibility == Visibility.Public
+  match declaration.kind {
+    .Function(function) => {
+      define(symbols, definitions, module, function.name, SymbolKind.Function, isPublic)
+    }
+    .Type(typeDeclaration) => {
+      const owner = define(symbols, definitions, module, typeDeclaration.name, SymbolKind.Type, isPublic)
+      var cases: List<SymbolId> = []
+      for member in typeDeclaration.members {
+        if const .Case(caseDeclaration) = member.kind {
+          const name = caseDeclaration.name
+          if !name.text.isEmpty() {
+            cases.add(symbols.add(Symbol(name.text, SymbolKind.Case(owner), isPublic, Some(module), name.span)))
+          }
+        }
+      }
+      symbols.setCases(owner, cases)
+    }
+    .Alias(alias) => {
+      define(symbols, definitions, module, alias.name, SymbolKind.Alias, isPublic)
+    }
+    .Trait(traitDeclaration) => {
+      define(symbols, definitions, module, traitDeclaration.name, SymbolKind.Trait, isPublic)
+    }
+    // The functions of a `foreign` block are functions of the module, like any other
+    .Foreign(library) => {
+      for member in library.members {
+        if const .Function(function) = member.kind {
+          define(symbols, definitions, module, function.name, SymbolKind.Function, isPublic)
+        }
+      }
+    }
+    // `extend` adds members to a type that is declared elsewhere, so it introduces no name
+    .Extend(_) => {}
+    .Use(_) => {}
+    .Constant(binding) => {
+      if const .Binding(name) = binding.pattern.kind {
+        define(symbols, definitions, module, Name(name, binding.pattern.span), SymbolKind.Constant, isPublic)
+      }
+    }
+  }
+}
+
+/** A declaration without a name is a parse error that was already reported: it gets no symbol. */
+fn define(
+  var symbols: Symbols,
+  var definitions: List<Definition>,
+  module: ModuleId,
+  name: Name,
+  kind: SymbolKind,
+  isPublic: Bool,
+): SymbolId {
+  const id = symbols.add(Symbol(name.text, kind, isPublic, Some(module), name.span))
+  if !name.text.isEmpty() {
+    definitions.add(Definition(name.text, name.span, id))
+  }
+  id
+}

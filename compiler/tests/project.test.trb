@@ -1,0 +1,150 @@
+use test, group from "std/test"
+use normalizePath, parentPath, pathName, joinPath, isInside, pathDepth, relativePath from "../src/project/path"
+use SourceTree from "../src/project/source-tree"
+use Manifest, readManifest from "../src/project/manifest"
+use findWorkspace from "../src/project/workspace"
+use SourceText from "../src/syntax/source"
+use parse from "../src/syntax/parser/parser"
+
+fn manifestOf(text: String): Manifest {
+  readManifest(parse(SourceText.of(text)).file)
+}
+
+/** The name and the files of every package of the workspace a path belongs to, in the order the toolchain sees them. */
+fn packagesOf(files: Map<String, String>, path: String): List<String> {
+  var described: List<String> = []
+  for package in findWorkspace(SourceTree.of(files), path).packages {
+    const paths = String.join(package.files, separator: ", ")
+    described.add("{package.name}: {paths}")
+  }
+  described
+}
+
+group "Paths" {
+  test "normalizing resolves `.`, `..` and backslashes" {
+    assert(normalizePath("std\\fs\\src") == "std/fs/src")
+    assert(normalizePath("std/fs/../io/./src") == "std/io/src")
+    assert(normalizePath("") == ".")
+    assert(normalizePath("../..") == "../..")
+    assert(normalizePath("/usr/local/../bin") == "/usr/bin")
+  }
+
+  test "parent, name and join" {
+    assert(parentPath("std/fs/src") == "std/fs")
+    assert(parentPath("std") == ".")
+    assert(parentPath(".") == "..")
+    assert(pathName("std/fs/src/lib.trb") == "lib.trb")
+    assert(joinPath("std/fs/src", "../../io") == "std/io")
+  }
+
+  test "everything is inside of the working directory" {
+    assert(isInside("app/src/main.trb", "app"))
+    assert(isInside("app", "app"))
+    assert(!isInside("application", "app"))
+    assert(isInside("app/src", "."))
+  }
+
+  test "depth orders a directory before what is inside it" {
+    assert(pathDepth(".") == 0)
+    assert(pathDepth("app") == 1)
+    assert(pathDepth("..") == -1)
+    assert(pathDepth("../std/fs") == 1)
+    // The walk up to the workspace root stops where the depth does: one step further and the path would be relative
+    assert(pathDepth("/") == 0)
+    assert(pathDepth("C:") == 1)
+    assert(pathDepth(parentPath("C:")) == 0)
+  }
+
+  test "paths are shown the way they were typed" {
+    assert(relativePath("/repository/bootstrap", "/repository/std/fs/src/lib.trb") == "../std/fs/src/lib.trb")
+    assert(relativePath("/repository", "/repository/compiler") == "compiler")
+    assert(relativePath("/repository", "/repository") == ".")
+  }
+}
+
+group "Manifest" {
+  test "settings, blocks and dependencies" {
+    const manifest = manifestOf(
+      "name \"acme/shop\"\nversion \"1.4.0\"\nprelude \"acme/teaching\"\n"
+        + "dependencies \{\n  runtime \"acme/http:^1.2.3\"\n  development \"acme/mock-server:^3.4.5\"\n\}\n"
+        + "build \{\n  input \"src/api.trb\"\n  output \"build/api\"\n\}\ntest \{\n  input \"spec\"\n\}\n"
+    )
+    assert(manifest.name == "acme/shop")
+    assert(manifest.version == "1.4.0")
+    assert(manifest.prelude == "acme/teaching")
+    assert(manifest.runtimeDependencies == ["acme/http"])
+    assert(manifest.developmentDependencies == ["acme/mock-server"])
+    assert(manifest.buildInput == "src/api.trb")
+    assert(manifest.testInput == "spec")
+    assert(manifest.dependsOn("acme/http"))
+    assert(!manifest.dependsOn("acme/other"))
+  }
+
+  test "the defaults are the layout of a project" {
+    const manifest = manifestOf("name \"acme/app\"")
+    assert(manifest.prelude == "std/prelude")
+    assert(manifest.buildInput == "src/main.trb")
+    assert(manifest.testInput == "tests")
+    assert(!manifest.isWorkspace())
+  }
+
+  test "everything the toolchain does not know is ignored silently" {
+    const manifest = manifestOf(
+      r"""
+name "acme/app"
+const binary = name.substringAfter("/") ?? name
+authors "Someone"
+registry "acme", url: "https://x.test"
+"""
+    )
+    assert(manifest.name == "acme/app")
+  }
+
+  test "a name with an interpolation is not a literal, so it is not read" {
+    assert(manifestOf("name \"acme/\{suffix\}\"").name == "")
+  }
+}
+
+group "Workspaces" {
+  const workspace = [
+    "project.trb": "name \"acme/all\"\nworkspace \{ members \"packages/*\", \"tools/importer\" \}",
+    "packages/core/project.trb": "name \"acme/core\"",
+    "packages/core/src/lib.trb": "public type Core \{\}",
+    "packages/core/tests/core.test.trb": "",
+    "packages/api/project.trb": "name \"acme/api\"",
+    "packages/api/src/lib.trb": "public type Api \{\}",
+    "tools/importer/project.trb": "name \"acme/importer\"",
+    "tools/importer/src/main.trb": "",
+    "elsewhere/script.trb": "",
+  ]
+
+  test "members are globbed, and every member is a package" {
+    assert(
+      packagesOf(workspace, ".")
+        == [
+          "acme/all: ",
+          "acme/api: packages/api/src/lib.trb",
+          "acme/core: packages/core/src/lib.trb, packages/core/tests/core.test.trb",
+          "acme/importer: tools/importer/src/main.trb",
+        ]
+    )
+  }
+
+  test "a member brings its whole workspace, because that is where its dependencies are" {
+    assert(packagesOf(workspace, "packages/api").length() == 4)
+    assert(packagesOf(workspace, "packages/api/src/lib.trb").length() == 4)
+  }
+
+  test "a file below no project is a package of its own" {
+    const packages = packagesOf(["script.trb": "const answer = 42"], "script.trb")
+    assert(packages == [": script.trb"])
+  }
+
+  test "a pattern that matches nothing is a problem of the workspace" {
+    const found = findWorkspace(
+      SourceTree.of(["project.trb": "name \"acme/all\"\nworkspace \{ members \"packages/*\" \}"]),
+      "."
+    )
+    assert(found.problems == ["The workspace member pattern `packages/*` of . matches no project"])
+  }
+}

@@ -85,6 +85,7 @@ fn declaration(declaration: &Declaration) -> String {
             text(&declaration.library),
             list(&declaration.members, member),
         ),
+        DeclarationKind::Constant(inner) => format!("Constant(binding: {})", binding(inner)),
     };
     format!(
         "Declaration(doc: {}, modifiers: {}, kind: {kind}, span: {})",
@@ -213,7 +214,8 @@ fn statement(statement: &Statement) -> String {
 
 fn binding(binding: &Binding) -> String {
     format!(
-        "Binding(isVar: {}, pattern: {}, annotation: {}, value: {})",
+        "Binding(doc: {}, isVar: {}, pattern: {}, annotation: {}, value: {})",
+        option(&binding.doc, |doc| text(doc)),
         binding.is_var,
         pattern(&binding.pattern),
         option(&binding.annotation, type_reference),
@@ -318,12 +320,18 @@ fn pattern(node: &Pattern) -> String {
             list(items, pattern),
             option(rest, |rest| format!("RestPattern(position: {}, name: {})", rest.position, option(&rest.name, name))),
         ),
-        PatternKind::Variant { path, fields } => format!("Variant(path: {}, fields: {})", list(path, name), list(fields, pattern)),
+        PatternKind::Variant { path, fields } => {
+            format!("Variant(path: {}, fields: {})", list(path, name), list(fields, field_pattern))
+        }
         PatternKind::ImplicitVariant { name: case, fields } => {
-            format!("ImplicitVariant(name: {}, fields: {})", name(case), list(fields, pattern))
+            format!("ImplicitVariant(name: {}, fields: {})", name(case), list(fields, field_pattern))
         }
         PatternKind::Or(patterns) => format!("Alternatives(patterns: {})", list(patterns, pattern)),
         PatternKind::Error => "Invalid".to_string(),
     };
     format!("Pattern(kind: {kind}, span: {})", span(&node.span))
+}
+
+fn field_pattern(field: &FieldPattern) -> String {
+    format!("FieldPattern(label: {}, pattern: {})", option(&field.label, name), pattern(&field.pattern))
 }

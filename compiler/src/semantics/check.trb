@@ -1,0 +1,104 @@
+use Span, SourceText from "../syntax/source"
+use Diagnostic from "../syntax/diagnostic"
+use parse from "../syntax/parser/parser"
+use normalizePath, isInside, joinPath from "../project/path"
+use SourceTree from "../project/source-tree"
+use Workspace, Package, findWorkspace from "../project/workspace"
+use ModuleId from "./module"
+use SymbolId from "./symbols"
+use buildGraph from "./graph"
+use Program, resolveNames, checkNames from "./scope"
+use resolveTypes from "./resolve-types"
+use Checker from "./checker/context"
+use checkTypes from "./checker/check"
+
+/** One file that was checked, with everything that is wrong in it, sorted by position. */
+public type CheckedFile {
+  /** The path the way it is shown to the user, relative to where the toolchain was started */
+  path: String
+  text: String
+  diagnostics: List<Diagnostic>
+}
+
+/** What `torb check` found - and the tables the type checker of the next milestone continues with. */
+public type Checked {
+  program: Program
+  /** Sorted by path, and inside of a file by position: the same input always gives the same output */
+  files: List<CheckedFile>
+  /** Problems that belong to no file, such as a prelude package that is not there */
+  problems: List<String>
+  /** Every name in a type position, one entry per module of `program.graph`, by the span of the name */
+  resolutions: List<Map<Span, SymbolId>>
+  /** What the type checker knows: every type by id, the type of every type position, and every signature it built */
+  checker: Checker
+}
+
+/**
+ * Checks everything the paths point at: a workspace root (all of its members), a single project, or a script that
+ * belongs to no project. Everything around it is loaded as well, because that is where the imports lead, but only
+ * what was asked for is reported.
+ *
+ * This is a pure function of the `SourceTree`, so a test builds a project in memory and checks it.
+ */
+public fn check(tree: SourceTree, paths: List<String>): Checked {
+  const targets = paths.map({ normalizePath(_) }).toList()
+  var packages: List<Package> = []
+  var problems: List<String> = []
+  for path in targets {
+    const found = findWorkspace(tree, path)
+    problems.addAll(found.problems)
+    for package in found.packages {
+      if !packages.any({ _.directory == package.directory }) {
+        packages.add(package)
+      }
+    }
+  }
+  const workspace = Workspace(packages)
+  const graph = buildGraph(tree, workspace)
+  const program = resolveNames(graph, workspace)
+  problems.addAll(program.problems)
+
+  // Every module, not only the requested ones: the type checker looks a name of an imported module up the same way
+  var symbols = program.symbols
+  var resolutions: List<Map<Span, SymbolId>> = []
+  var unresolved: List<List<Diagnostic>> = []
+  var requested: List<ModuleId> = []
+  for module in graph.modules {
+    const resolved = resolveTypes(symbols, program, module.id)
+    resolutions.add(resolved.names)
+    unresolved.add(resolved.diagnostics)
+    if isRequested(targets, module.path) {
+      requested.add(module.id)
+    }
+  }
+  const resolvedProgram = program.copy(symbols: symbols)
+  const checked = checkTypes(resolvedProgram, resolutions, requested)
+
+  var files: List<CheckedFile> = []
+  for module in graph.modules {
+    if !isRequested(targets, module.path) {
+      continue
+    }
+    var diagnostics = module.diagnostics
+    diagnostics.addAll(checkNames(resolvedProgram, module.id))
+    diagnostics.addAll(unresolved[module.id.value])
+    diagnostics.addAll(checked.diagnostics[module.id.value])
+    diagnostics.sort({ (_.span.start, _.span.end) })
+    files.add(CheckedFile(tree.display(module.path), module.source.text, diagnostics))
+  }
+  for package in packages {
+    const manifest = joinPath(package.directory, "project.trb")
+    if isRequested(targets, manifest) {
+      if const Some(text) = tree.text(manifest) {
+        files.add(CheckedFile(tree.display(manifest), text, parse(SourceText.of(text)).diagnostics))
+      }
+    }
+  }
+  files.sort({ _.path })
+  Checked(resolvedProgram.copy(symbols: checked.symbols), files, problems, resolutions, checked)
+}
+
+/** Only what the command line pointed at is reported; the rest is loaded because the imports lead there. */
+fn isRequested(targets: List<String>, path: String): Bool {
+  targets.any({ isInside(path, _) })
+}

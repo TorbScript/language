@@ -1,0 +1,95 @@
+/**
+ * Paths as text, with `/` as the separator. Only `read.trb` ever asks the operating system about a path; everything
+ * that resolves a project, a workspace member or an import is a pure function over strings, so it can be tested
+ * without touching a disk.
+ */
+
+/** `\` becomes `/`, and empty, `.` and `..` segments are resolved. An absolute path keeps its root. */
+public fn normalizePath(path: String): String {
+  const slashed = path.replace("\\", "/")
+  const root = if slashed.startsWith("/") { "/" } else { "" }
+  var segments: List<String> = []
+  for segment in slashed.split("/") {
+    if segment.isEmpty() || segment == "." {
+      continue
+    }
+    const previous = segments.last() ?? ".."
+    if segment == ".." && previous != ".." {
+      segments.removeAt(segments.length() - 1)
+      continue
+    }
+    segments.add(segment)
+  }
+  const joined = String.join(segments, separator: "/")
+  if joined.isEmpty() {
+    if root.isEmpty() { "." } else { root }
+  } else {
+    "{root}{joined}"
+  }
+}
+
+/** The directory that contains the path: `parentPath("std/fs")` is `"std"`, `parentPath("std")` is `"."`. */
+public fn parentPath(path: String): String {
+  normalizePath("{path}/..")
+}
+
+/** The last segment of the path: the name of the file or directory. */
+public fn pathName(path: String): String {
+  normalizePath(path).split("/").last() ?? ""
+}
+
+/** `relative` resolved against the directory `base`. */
+public fn joinPath(base: String, relative: String): String {
+  normalizePath("{base}/{relative}")
+}
+
+/** Is `path` the directory itself, or something below it? Both have to be normalized. */
+public fn isInside(path: String, directory: String): Bool {
+  // `.` is the working directory, and every relative path is below it
+  directory == "." || path == directory || path.startsWith("{directory}/")
+}
+
+/**
+ * How deep a path is: its segments, with every `..` counting -1. A directory always has a smaller depth than
+ * everything inside it, and the working directory has depth 0. That makes "there is nothing above this anymore" a
+ * condition that holds for absolute and for relative paths alike.
+ */
+public fn pathDepth(path: String): Int {
+  var depth = 0
+  for segment in normalizePath(path).split("/") {
+    if segment == ".." {
+      depth = depth - 1
+    } else if !segment.isEmpty() && segment != "." {
+      depth = depth + 1
+    }
+  }
+  depth
+}
+
+/**
+ * The path as seen from `base`, which is how paths are shown to the user: the same way they were typed on the
+ * command line. Paths on different roots (`C:` and `D:`) have nothing in common, so the absolute path is the answer.
+ */
+public fn relativePath(base: String, path: String): String {
+  const from = normalizePath(base).split("/")
+  const to = normalizePath(path).split("/")
+  var common = 0
+  while common < from.length() && common < to.length() && from[common] == to[common] {
+    common = common + 1
+  }
+  if common == 0 {
+    return normalizePath(path)
+  }
+  var segments: List<String> = []
+  for _ in common..from.length() {
+    segments.add("..")
+  }
+  for index in common..to.length() {
+    segments.add(to[index])
+  }
+  if segments.isEmpty() {
+    "."
+  } else {
+    String.join(segments, separator: "/")
+  }
+}
