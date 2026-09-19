@@ -873,3 +873,5 @@ Wenn nicht, was bedeutet, bewirkt es?
     - Verworfen: alles asynchron (fs2/Web - tötet `list.map(…).toList()`), Effekt-Polymorphie/HKT (Rusts ungelöste
       "keyword generics"), blockierendes `await` mit Stack pro Task (Go/Loom - im Konzept schon abgelehnt, JS-Target).
     - Folge: `std/iteration/stages.trb` wird auf `Stage`-Werte umgebaut (Stage 0 lädt `std/` nicht, Risiko klein).
+  - **Entschieden (Nutzer):** v3 gilt erst mal so. Spezifikation + std-Deklarationen + Umbau von `std/iteration` starten
+    nach dem 5.6-Merge und der Canon-Anwendung.
