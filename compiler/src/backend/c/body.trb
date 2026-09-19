@@ -183,7 +183,7 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
     }
     parameters.add(declarationOf(spelling, name))
   }
-  const written = if parameters.isEmpty() { "void" } else { String.join(parameters, separator: ", ") }
+  const written = if parameters.isEmpty() { "void" } else { parameters.joined(separator: ", ") }
   const result = returnTypeOf(program, function)
   "{qualifiersOf(program, function)}{declarationOf(result, "{function.name}({written})")}"
 }
@@ -277,7 +277,7 @@ fn emitSlotDeclarations(var emission: Emission, program: IrProgram, body: Body) 
     add(emission, "  {declarationOf(spelling, name)} = \{ 0 \};")
   }
   if !silenced.isEmpty() {
-    add(emission, "  {String.join(silenced, separator: " ")}")
+    add(emission, "  {silenced.joined(separator: " ")}")
   }
 }
 
@@ -628,11 +628,11 @@ fn emitCallStatement(
       const place = slotText(body, slot)
       if byPointer {
         given.insert(0, "&{place}")
-        const call = String.join(given, separator: ", ")
+        const call = given.joined(separator: ", ")
         add(emission, "  {symbol}({call});")
         return
       }
-      const call = String.join(given, separator: ", ")
+      const call = given.joined(separator: ", ")
       add(emission, "  {place} = {symbol}({call});")
     }
     .None => {
@@ -640,7 +640,7 @@ fn emitCallStatement(
         report(emission, "a call whose big result nobody takes (milestone 5.4)")
         return
       }
-      const call = String.join(given, separator: ", ")
+      const call = given.joined(separator: ", ")
       add(emission, "  {symbol}({call});")
     }
   }
@@ -754,7 +754,7 @@ fn emitTextConcat(var emission: Emission, body: Body, place: String, arguments: 
   for slot in arguments {
     parts.add(slotText(body, slot))
   }
-  const written = String.join(parts, separator: ", ")
+  const written = parts.joined(separator: ", ")
   add(emission, "  \{")
   add(emission, "    const torb_text parts[{parts.length()}] = \{ {written} \};")
   add(emission, "    {place} = torb_text_concat(parts, {parts.length()});")
@@ -1034,7 +1034,7 @@ fn inlineInitializerOf(shape: Layout, variant: Int, written: List<String>): Stri
     if written.isEmpty() {
       return "\{ 0 \}"
     }
-    return "\{ {String.join(written, separator: ", ")} \}"
+    return "\{ {written.joined(separator: ", ")} \}"
   }
   var parts: List<String> = []
   var index = 0
@@ -1049,10 +1049,10 @@ fn inlineInitializerOf(shape: Layout, variant: Int, written: List<String>): Stri
     index = index + 1
   }
   if !group.isEmpty() {
-    const inner = String.join(group, separator: ", ")
+    const inner = group.joined(separator: ", ")
     parts.add("\{ .{variantMemberNameOf(variant)} = \{ {inner} \} \}")
   }
-  "\{ {String.join(parts, separator: ", ")} \}"
+  "\{ {parts.joined(separator: ", ")} \}"
 }
 
 /** A counted block of count one, then one field at a time: an aggregate initializer cannot write through a pointer. */
