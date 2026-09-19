@@ -14,6 +14,8 @@ use lowerChecked, loweredText, loweredProblems, statisticsLines from "./ir/lower
 use BuildOptions, build from "./cli/build"
 use insertOwnership from "./ir/ownership"
 use verifyOwnedProgram from "./ir/ownership-verify"
+use documentationOptionsOf, printDocumentationUsage from "./documentation/command"
+use runCheck, runIndex, runSkill, runBundle from "./documentation/command"
 
 /**
  * The TorbScript toolchain, written in TorbScript. Until it can compile itself it is run by the bootstrap
@@ -35,6 +37,7 @@ fn printUsage() {
   printError "  torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)"
   printError "  torb tokens <file>     Print the tokens of a file"
   printError "  torb ast <file>        Print the syntax tree of a file"
+  printDocumentationUsage()
 }
 
 fn printTokens(path: String): Result<Void, IoError> {
@@ -274,6 +277,26 @@ match Process.arguments() {
     const given = more.filter({ _ != "--statistics" && _ != "--no-ownership" }).toList()
     const paths = if given.isEmpty() { ["."] } else { given }
     if printIr(paths, onlyStatistics, withOwnership)? > 0 {
+      Process.exit 1
+    }
+  }
+  ["docs", "check", ...more] => {
+    if runCheck(documentationOptionsOf(more))? > 0 {
+      Process.exit 1
+    }
+  }
+  ["docs", "index", ...more] => {
+    if runIndex(documentationOptionsOf(more))? > 0 {
+      Process.exit 1
+    }
+  }
+  ["docs", "skill", ...more] => {
+    if runSkill(documentationOptionsOf(more))? > 0 {
+      Process.exit 1
+    }
+  }
+  ["docs", "bundle", ...more] => {
+    if runBundle(documentationOptionsOf(more))? > 0 {
       Process.exit 1
     }
   }

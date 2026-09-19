@@ -1,0 +1,793 @@
+use Span, SourceText from "../syntax/source"
+use Token, TokenKind, Keyword from "../syntax/token"
+use lex from "../syntax/lexer"
+use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "../syntax/ast"
+use FunctionDeclaration, Binding, Condition, Block, Expression, ExpressionKind, Argument, CallStyle from "../syntax/ast"
+use Pattern, PatternKind, TextSegment from "../syntax/ast"
+
+/**
+ * The part of the formatter canon that a documentation snippet is checked against. `torb canon` writes the canon over
+ * a whole file; here nothing is written, so this is the same decision asked as a question - which is what a fenced
+ * block needs, because a block is not a file anybody can rewrite.
+ *
+ * Two rules are checked, the two `torb canon` has (CONCEPT, "Formatter Canon"):
+ *
+ * - **calls**: a call is a command wherever the grammar allows it. A call in command position that is written with
+ *   parentheses although all conditions for a command hold is reported, and so is a command whose arguments have an
+ *   operator at their top level or run over several lines.
+ * - **strings**: a multi-line `"""` or `r"""` is indented two spaces deeper than the line its statement starts on,
+ *   with a closing `"""` that stands alone aligned with the content.
+ *
+ * What it does **not** check is the layout the formatter of milestone 8 will own - line length, blank lines, where a
+ * long call breaks. A snippet that passes here is in the canon of `torb canon`; the reverse is not promised, and
+ * `docs/contributing/checks.md` says so.
+ */
+
+/** One place in a snippet where the canon says something else. `line` and `column` are inside the block. */
+public type CanonProblem {
+  line: Int
+  message: String
+}
+
+/** Every call the walk found, with the two questions the rule `calls` asks about its place. */
+type CallSite {
+  call: Expression
+  isCommandPosition: Bool
+  /** The callee names a field or a constant of the type this call stands in: there parentheses are meaning, not style */
+  calleeCouldBeAField: Bool
+}
+
+type Walk {
+  var sites: List<CallSite>
+  /** The fields and constants of the innermost `type`, `trait` or `extend` */
+  var fields: List<String>
+}
+
+/**
+ * The canon problems of one snippet. The source has to have parsed without diagnostics: the rule reads a tree, and a
+ * tree with holes in it would report the holes instead of the style.
+ */
+public fn canonProblems(text: String, file: SourceFile): List<CanonProblem> {
+  const source = SourceText.of text
+  const tokens = lex(source).tokens
+  const lines = linesWithOffsets text
+  var walk = Walk([], [])
+  walkStatements walk, file.statements
+  var problems: List<CanonProblem> = []
+  const sites = walk.sites
+  for site in sites {
+    const found = callProblem text, tokens, lines, site
+    match found {
+      Some(problem) => problems.add problem
+      None => {}
+    }
+  }
+  problems.addAll stringProblems(text, tokens, lines)
+  problems.sort({ _.line })
+  problems
+}
+
+/**
+ * The lines of a snippet with the byte offset each of them starts at. Every check works on lines and on token spans,
+ * never on a byte offset inside a line, because a slice that lands on a UTF-8 continuation byte panics and a snippet
+ * may contain any text at all.
+ */
+type Lines {
+  starts: List<Int>
+  texts: List<String>
+}
+
+fn linesWithOffsets(text: String): Lines {
+  var starts = [0]
+  var texts: List<String> = []
+  var lineStart = 0
+  var offset = 0
+  for character in text.chars() {
+    offset = offset + character.byteLength()
+    if character == '\n' {
+      texts.add text.slice(lineStart..(offset - 1))
+      starts.add offset
+      lineStart = offset
+    }
+  }
+  texts.add text.slice(lineStart..text.byteLength())
+  Lines starts, texts
+}
+
+/** The 0-based index of the line a byte offset is on. */
+fn lineIndexAt(lines: Lines, offset: Int): Int {
+  var index = 0
+  while index + 1 < lines.starts.length() {
+    if lines.starts[index + 1] > offset {
+      return index
+    }
+    index = index + 1
+  }
+  index
+}
+
+/** The 1-based line of a byte offset, which is what a problem names. */
+fn lineAt(lines: Lines, offset: Int): Int {
+  lineIndexAt(lines, offset) + 1
+}
+
+/** The whitespace at the start of a line. */
+fn indentationOf(line: String): String {
+  var length = 0
+  for character in line.chars() {
+    if character != ' ' && character != '\t' {
+      break
+    }
+    length = length + character.byteLength()
+  }
+  line.slice(0..length)
+}
+
+// --- The walk -----------------------------------------------------------------------------------------------------
+
+fn walkStatements(var walk: Walk, statements: List<Statement>) {
+  for statement in statements {
+    walkStatement walk, statement
+  }
+}
+
+fn walkStatement(var walk: Walk, statement: Statement) {
+  match statement.kind {
+    .Declare(declaration) => walkDeclaration walk, declaration
+    .Bind(binding) => walkBinding walk, binding
+    .Assign(target, value) => {
+      walkExpression walk, target, false
+      walkExpression walk, value, true
+    }
+    .For(pattern, iterable, body) => {
+      walkPattern walk, pattern
+      walkExpression walk, iterable, false
+      walkStatements walk, body.statements
+    }
+    .While(condition, body) => {
+      walkCondition walk, condition
+      walkStatements walk, body.statements
+    }
+    .Return(value) => {
+      match value {
+        Some(found) => walkExpression walk, found, true
+        None => {}
+      }
+    }
+    .Break => {}
+    .Continue => {}
+    .Evaluate(expression) => walkExpression walk, expression, true
+  }
+}
+
+fn walkDeclaration(var walk: Walk, declaration: Declaration) {
+  match declaration.kind {
+    .Use(_) => {}
+    .Alias(_) => {}
+    .Function(inner) => walkFunction walk, inner
+    .Type(inner) => walkMembers walk, inner.members
+    .Trait(inner) => walkMembers walk, inner.members
+    .Extend(inner) => walkMembers walk, inner.members
+    .Foreign(inner) => walkMembers walk, inner.members
+    .Constant(binding) => walkBinding walk, binding
+  }
+}
+
+fn walkMembers(var walk: Walk, members: List<Member>) {
+  const outer = walk.fields
+  walk.fields = fieldNames members
+  for member in members {
+    match member.kind {
+      // A member of a type ends at the end of its line, so a command in a default has nothing to swallow
+      .Field(field) => {
+        match field.default {
+          Some(found) => walkExpression walk, found, true
+          None => {}
+        }
+      }
+      .Constant(binding) => walkBinding walk, binding
+      .Function(inner) => walkFunction walk, inner
+      // The fields of a case are separated by commas, which a command would read as further arguments
+      .Case(inner) => {
+        for field in inner.fields {
+          match field.default {
+            Some(found) => walkExpression walk, found, false
+            None => {}
+          }
+        }
+      }
+    }
+  }
+  walk.fields = outer
+}
+
+fn walkFunction(var walk: Walk, declaration: FunctionDeclaration) {
+  for parameter in declaration.parameters {
+    match parameter.default {
+      Some(found) => walkExpression walk, found, false
+      None => {}
+    }
+  }
+  match declaration.body {
+    Some(body) => walkStatements walk, body.statements
+    None => {}
+  }
+}
+
+fn walkBinding(var walk: Walk, binding: Binding) {
+  walkPattern walk, binding.pattern
+  walkExpression walk, binding.value, true
+}
+
+fn walkCondition(var walk: Walk, condition: Condition) {
+  match condition {
+    .Test(expression) => walkExpression walk, expression, false
+    .Bind(_, pattern, value) => {
+      walkPattern walk, pattern
+      walkExpression walk, value, false
+    }
+  }
+}
+
+fn walkArguments(var walk: Walk, arguments: List<Argument>) {
+  for argument in arguments {
+    walkExpression walk, argument.value, false
+  }
+}
+
+fn walkExpression(var walk: Walk, expression: Expression, isCommandPosition: Bool) {
+  if const .Call(callee, _, _) = expression.kind {
+    const couldBeAField = isFieldName walk.fields, callee
+    walk.sites.add CallSite(expression, isCommandPosition, couldBeAField)
+  }
+  match expression.kind {
+    .IntegerLiteral(_) => {}
+    .FloatLiteral(_) => {}
+    .BoolLiteral(_) => {}
+    .VoidLiteral => {}
+    .CharLiteral(_) => {}
+    .Name(_) => {}
+    .ImplicitMember(_) => {}
+    .Invalid => {}
+    .TextLiteral(segments) => {
+      for segment in segments {
+        if const .Interpolated(inner) = segment {
+          walkExpression walk, inner, false
+        }
+      }
+    }
+    .Generic(target, _) => walkExpression walk, target, false
+    .TupleLiteral(items) => walkArguments walk, items
+    .ListLiteral(items) => walkArguments walk, items
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        walkExpression walk, key, false
+        walkExpression walk, value, false
+      }
+    }
+    .Member(target, _, _) => walkExpression walk, target, false
+    .Index(target, index) => {
+      walkExpression walk, target, false
+      walkExpression walk, index, false
+    }
+    .Call(callee, arguments, _) => {
+      walkExpression walk, callee, false
+      walkArguments walk, arguments
+    }
+    .Unary(_, operand) => walkExpression walk, operand, false
+    .Binary(_, left, right) => {
+      walkExpression walk, left, false
+      walkExpression walk, right, false
+    }
+    .RangeLiteral(start, end, _) => {
+      match start {
+        Some(found) => walkExpression walk, found, false
+        None => {}
+      }
+      match end {
+        Some(found) => walkExpression walk, found, false
+        None => {}
+      }
+    }
+    .Try(inner) => walkExpression walk, inner, false
+    .Closure(closure) => {
+      for parameter in closure.parameters {
+        walkPattern walk, parameter.pattern
+      }
+      walkStatements walk, closure.body.statements
+    }
+    .If(condition, then, otherwise) => {
+      walkCondition walk, condition
+      walkStatements walk, then.statements
+      match otherwise {
+        Some(found) => walkExpression walk, found, false
+        None => {}
+      }
+    }
+    .Match(subject, arms) => {
+      walkExpression walk, subject, false
+      for arm in arms {
+        walkPattern walk, arm.pattern
+        match arm.guard {
+          Some(found) => walkExpression walk, found, false
+          None => {}
+        }
+        walkExpression walk, arm.body, true
+      }
+    }
+    .Block(block) => walkStatements walk, block.statements
+  }
+}
+
+fn walkPattern(var walk: Walk, pattern: Pattern) {
+  match pattern.kind {
+    .Wildcard => {}
+    .Binding(_) => {}
+    .Invalid => {}
+    .Literal(value) => walkExpression walk, value, false
+    .RangePattern(start, end, _) => {
+      walkExpression walk, start, false
+      walkExpression walk, end, false
+    }
+    .TuplePattern(items) => {
+      for item in items {
+        walkPattern walk, item
+      }
+    }
+    .Alternatives(items) => {
+      for item in items {
+        walkPattern walk, item
+      }
+    }
+    .ListPattern(items, _) => {
+      for item in items {
+        walkPattern walk, item
+      }
+    }
+    .Variant(_, fields) => {
+      for field in fields {
+        walkPattern walk, field.pattern
+      }
+    }
+    .ImplicitVariant(_, fields) => {
+      for field in fields {
+        walkPattern walk, field.pattern
+      }
+    }
+  }
+}
+
+/** The fields and constants of a type, trait or extend: the names a command writes instead of calling. */
+fn fieldNames(members: List<Member>): List<String> {
+  var names: List<String> = []
+  for member in members {
+    match member.kind {
+      .Field(field) => names.add field.name.text
+      .Constant(binding) => {
+        if const .Binding(name) = binding.pattern.kind {
+          names.add name
+        }
+      }
+      _ => {}
+    }
+  }
+  names
+}
+
+/** `step` and `self.step` inside of a type that has a field `step`. A field of somebody else's value is not this. */
+fn isFieldName(fields: List<String>, callee: Expression): Bool {
+  match callee.kind {
+    .Name(name) => fields.contains name
+    .Member(target, name, isOptional) => {
+      if isOptional {
+        return false
+      }
+      match target.kind {
+        .Name(inner) => inner == "self" && fields.contains(name.text)
+        _ => false
+      }
+    }
+    _ => false
+  }
+}
+
+// --- Rule `calls` -------------------------------------------------------------------------------------------------
+
+fn callProblem(text: String, tokens: List<Token>, lines: Lines, site: CallSite): CanonProblem? {
+  // Where the callee names a field, the parentheses decide what the line means, not how it looks (property commands)
+  if site.calleeCouldBeAField {
+    return None
+  }
+  match site.call.kind {
+    .Call(callee, arguments, style) => {
+      match style {
+        .Parentheses => shouldBeACommand text, tokens, lines, site, callee, arguments
+        .Command => shouldHaveParentheses text, lines, site, callee, arguments
+      }
+    }
+    _ => None
+  }
+}
+
+/** `f(a, b)` in command position where every condition of the canon holds: the parentheses have to go. */
+fn shouldBeACommand(
+  text: String,
+  tokens: List<Token>,
+  lines: Lines,
+  site: CallSite,
+  callee: Expression,
+  arguments: List<Argument>,
+): CanonProblem? {
+  if !site.isCommandPosition || !isCommandPath(text, callee) {
+    return None
+  }
+  const open = tokenStartingAt tokens, callee.span.end
+  const openIndex = match open {
+    Some(index) => index
+    // `f { ... }` has no parentheses at all, and a `(` that does not sit directly behind the callee is left alone
+    None => {
+      return None
+    }
+  }
+  if tokens[openIndex].kind != TokenKind.ParenOpen {
+    return None
+  }
+  const close = matchingParenthesis tokens, openIndex
+  const closeIndex = match close {
+    Some(index) => index
+    None => {
+      return None
+    }
+  }
+  const closeSpan = tokens[closeIndex].span
+  const plain = plainArgumentCount tokens, arguments, closeSpan.start
+  if plain == 0 {
+    return None
+  }
+  const first = arguments[0]
+  const last = arguments[plain - 1]
+  if first.isSpread || !startsCommandArgument(text, tokens, argumentStart(first)) {
+    return None
+  }
+  if arguments.slice(0..plain).any(hasTopLevelOperator) {
+    return None
+  }
+  // A `{` inside the parentheses would become the trailing closure of the command
+  if hasBraceBetween(tokens, tokens[openIndex].span.start, closeSpan.start) {
+    return None
+  }
+  if closeSpan.start != last.value.span.end {
+    return None
+  }
+  if text.slice(callee.span.end..closeSpan.end).contains("\n") {
+    return None
+  }
+  // A command swallows what follows a comma as a further argument
+  if const Some(next) = tokenAtOrAfter(tokens, site.call.span.end) {
+    if tokens[next].kind == TokenKind.Comma {
+      return None
+    }
+  }
+  const written = text.slice(callee.span.start..callee.span.end)
+  const line = lineAt lines, site.call.span.start
+  Some CanonProblem(line, "A call is a command wherever the grammar allows it. Write `{written} ...` without parentheses")
+}
+
+/** `f a, b` where a condition of the canon does not hold: the parentheses have to come back. */
+fn shouldHaveParentheses(
+  text: String,
+  lines: Lines,
+  site: CallSite,
+  callee: Expression,
+  arguments: List<Argument>,
+): CanonProblem? {
+  if arguments.isEmpty() {
+    return None
+  }
+  const last = arguments[arguments.length() - 1]
+  const overSeveralLines = text.slice(callee.span.end..last.value.span.end).contains("\n")
+  const hasOperator = arguments.any hasTopLevelOperator
+  if !site.isCommandPosition {
+    // The parser only reads a command in command position, so this cannot happen from a parsed file
+    return None
+  }
+  if !hasOperator && !overSeveralLines {
+    return None
+  }
+  const written = text.slice(callee.span.start..callee.span.end)
+  const line = lineAt lines, site.call.span.start
+  const reason = if hasOperator {
+    "an operator at the top level of an argument"
+  } else {
+    "arguments over several lines"
+  }
+  Some CanonProblem(line, "`{written}` has {reason}, so it is written with parentheses")
+}
+
+/** `Ok`, `Email.parse`, `self.builder.add`: what the parser reads as the callee of a command. */
+fn isCommandPath(text: String, callee: Expression): Bool {
+  if !isCommandPathTree(callee) {
+    return false
+  }
+  // `(a).b` is the same tree as `a.b`, but the parser does not read a command there
+  const written = text.slice(callee.span.start..callee.span.end)
+  isPathText written
+}
+
+fn isCommandPathTree(callee: Expression): Bool {
+  match callee.kind {
+    .Name(_) => true
+    .Member(target, name, isOptional) => {
+      if isOptional {
+        return false
+      }
+      if !startsPathSegment(name.text) {
+        return false
+      }
+      isCommandPathTree target
+    }
+    _ => false
+  }
+}
+
+fn startsPathSegment(name: String): Bool {
+  match name.chars().first() {
+    Some(character) => character == '_' || character.isLetter()
+    None => false
+  }
+}
+
+/** A name, then any number of `.name`, and nothing else - no spaces, no parentheses, no comment. */
+fn isPathText(written: String): Bool {
+  if written.isEmpty() {
+    return false
+  }
+  var isSegmentStart = true
+  for character in written.chars() {
+    if character == '.' {
+      if isSegmentStart {
+        return false
+      }
+      isSegmentStart = true
+      continue
+    }
+    const isWord = character.isLetter() || character.isDigit() || character == '_'
+    if !isWord {
+      return false
+    }
+    if isSegmentStart && character.isDigit() {
+      return false
+    }
+    isSegmentStart = false
+  }
+  !isSegmentStart
+}
+
+/** Where an argument starts in the source: at its label, where it has one. */
+fn argumentStart(argument: Argument): Int {
+  match argument.label {
+    Some(label) => label.span.start
+    None => argument.value.span.start
+  }
+}
+
+/** An operator at the top level of an argument keeps the parentheses: `assert sum == 3` reads as `(assert sum) == 3`. */
+fn hasTopLevelOperator(argument: Argument): Bool {
+  match argument.value.kind {
+    .Unary(_, _) => true
+    .Binary(_, _, _) => true
+    .RangeLiteral(_, _, _) => true
+    .Try(_) => true
+    .Generic(_, _) => true
+    _ => false
+  }
+}
+
+/**
+ * How many arguments stand inside the parentheses. The parser appends a trailing closure to the arguments of a call,
+ * but in the source it stands behind the `)`.
+ */
+fn plainArgumentCount(tokens: List<Token>, arguments: List<Argument>, closeAt: Int): Int {
+  const count = arguments.length()
+  if count == 0 {
+    return 0
+  }
+  const last = arguments[count - 1]
+  const isClosure = last.label.isNone() && !last.isSpread && isClosureExpression(last.value)
+  if !isClosure {
+    return count
+  }
+  if last.value.span.start <= closeAt {
+    return count
+  }
+  count - 1
+}
+
+fn isClosureExpression(expression: Expression): Bool {
+  match expression.kind {
+    .Closure(_) => true
+    _ => false
+  }
+}
+
+/** `startsCommandArgument` of the parser, asked at an offset. `if` and `match` bring a `{`, which is rejected anyway. */
+fn startsCommandArgument(text: String, tokens: List<Token>, offset: Int): Bool {
+  const at = tokenStartingAt tokens, offset
+  const index = match at {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const nextIsColon = match tokens.get(index + 1) {
+    Some(next) => next.kind == TokenKind.Colon
+    None => false
+  }
+  const span = tokens[index].span
+  match tokens[index].kind {
+    .Identifier => {
+      const written = text.slice(span.start..span.end)
+      const isContextual = written == "as" || written == "by" || written == "from"
+      !isContextual || nextIsColon
+    }
+    .IntegerLiteral => true
+    .FloatLiteral => true
+    .CharLiteral(_) => true
+    .TextLiteral(_) => true
+    // A label that is a keyword (`move from: a`), and the four keyword values
+    .Reserved(keyword) => isKeywordValue(keyword) || nextIsColon
+    _ => false
+  }
+}
+
+fn isKeywordValue(keyword: Keyword): Bool {
+  match keyword {
+    .True => true
+    .False => true
+    .SelfValue => true
+    .SelfType => true
+    _ => false
+  }
+}
+
+fn tokenStartingAt(tokens: List<Token>, offset: Int): Int? {
+  var index = 0
+  while index < tokens.length() {
+    const start = tokens[index].span.start
+    if start == offset {
+      return Some index
+    }
+    if start > offset {
+      return None
+    }
+    index = index + 1
+  }
+  None
+}
+
+fn tokenAtOrAfter(tokens: List<Token>, offset: Int): Int? {
+  var index = 0
+  while index < tokens.length() {
+    if tokens[index].span.start >= offset {
+      return Some index
+    }
+    index = index + 1
+  }
+  None
+}
+
+fn matchingParenthesis(tokens: List<Token>, open: Int): Int? {
+  var depth = 0
+  var index = open
+  while index < tokens.length() {
+    match tokens[index].kind {
+      .ParenOpen => {
+        depth = depth + 1
+      }
+      .ParenClose => {
+        depth = depth - 1
+        if depth == 0 {
+          return Some index
+        }
+      }
+      _ => {}
+    }
+    index = index + 1
+  }
+  None
+}
+
+fn hasBraceBetween(tokens: List<Token>, from: Int, to: Int): Bool {
+  var index = 0
+  while index < tokens.length() {
+    const start = tokens[index].span.start
+    if start > from && start < to && tokens[index].kind == TokenKind.BraceOpen {
+      return true
+    }
+    index = index + 1
+  }
+  false
+}
+
+// --- Rule `strings` ----------------------------------------------------------------------------------------------
+
+/**
+ * A multi-line `"""` or `r"""` is indented two spaces deeper than the line its statement starts on, and a closing
+ * `"""` that stands alone is aligned with the content. The **value** does not depend on any of it: the lexer takes the
+ * indentation of the first content line as the reference and subtracts it from every line, so moving a whole block
+ * left or right changes nothing about what it says.
+ */
+fn stringProblems(text: String, tokens: List<Token>, lines: Lines): List<CanonProblem> {
+  var problems: List<CanonProblem> = []
+  for token in tokens {
+    if !isTextLiteral(token.kind) {
+      continue
+    }
+    const literal = text.slice(token.span.start..token.span.end)
+    const quotes = if literal.startsWith("\"\"\"") {
+      3
+    } else if literal.startsWith("r\"\"\"") {
+      4
+    } else {
+      0
+    }
+    // A one-line `"""text"""` is not dedented by the lexer and keeps its form
+    if quotes == 0 || !literal.contains("\n") {
+      continue
+    }
+    const found = stringProblem lines, token.span, quotes
+    match found {
+      Some(problem) => problems.add problem
+      None => {}
+    }
+  }
+  problems
+}
+
+fn isTextLiteral(kind: TokenKind): Bool {
+  match kind {
+    .TextLiteral(_) => true
+    _ => false
+  }
+}
+
+fn stringProblem(lines: Lines, span: Span, quotes: Int): CanonProblem? {
+  const openLine = lineIndexAt lines, span.start
+  const closeLine = lineIndexAt(lines, span.end - 3)
+  const target = "{indentationOf(lines.texts[openLine])}  "
+  // Rule 1 of multi-line strings: behind the opening quotes there is nothing but the line break
+  const behindQuotes = span.start - lines.starts[openLine] + quotes
+  const openText = lines.texts[openLine]
+  const afterQuotes = openText.slice(behindQuotes.min(openText.byteLength())..openText.byteLength())
+  if !afterQuotes.trim().isEmpty() {
+    const note = "A multi-line string starts with a line break behind its opening quotes"
+    return Some CanonProblem(openLine + 1, note)
+  }
+  var index = openLine + 1
+  while index < closeLine {
+    const line = lines.texts[index]
+    if line.trim().isEmpty() {
+      if !line.isEmpty() {
+        return Some CanonProblem(index + 1, "A blank line inside of a multi-line string is empty")
+      }
+    } else if indentationOf(line) != target {
+      const note = "A multi-line string is indented two spaces deeper than the line it starts on. Expected {target.byteLength()} spaces"
+      return Some CanonProblem(index + 1, note)
+    }
+    index = index + 1
+  }
+  const closeText = lines.texts[closeLine]
+  const closeColumn = span.end - 3 - lines.starts[closeLine]
+  const beforeQuotes = closeText.slice(0..closeColumn.min(closeText.byteLength()))
+  if beforeQuotes.trim().isEmpty() {
+    if beforeQuotes != target {
+      return Some CanonProblem(closeLine + 1, "The closing `\"\"\"` is aligned with the content of the string")
+    }
+    return None
+  }
+  if indentationOf(closeText) != target {
+    const note = "A multi-line string is indented two spaces deeper than the line it starts on. Expected {target.byteLength()} spaces"
+    return Some CanonProblem(closeLine + 1, note)
+  }
+  None
+}

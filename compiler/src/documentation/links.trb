@@ -1,0 +1,167 @@
+use normalizePath, joinPath from "../project/path"
+use DocumentationProblem from "./markdown"
+use Page, Documentation, folderOf, joinDocumentationPath from "./tree"
+use anchorsOf from "./schema"
+
+/**
+ * Where the links lead. An internal link that does not resolve is an error and not a warning: the documentation is
+ * read by an agent that follows a path instead of guessing, and a path that is wrong sends it nowhere. External links
+ * are not followed at all - the gate has to be the same offline as online.
+ */
+
+/** Whether a path that leaves the documentation tree exists. The command passes `File.exists`, a test a list. */
+public type PathExists {
+  probe: (path: String) => Bool
+}
+
+public fn linkProblems(documentation: Documentation, exists: PathExists): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for page in documentation.pages {
+    problems.addAll pageLinkProblems(documentation, exists, page)
+  }
+  problems
+}
+
+fn pageLinkProblems(documentation: Documentation, exists: PathExists, page: Page): List<DocumentationProblem> {
+  const shown = page.shown documentation.root
+  var problems: List<DocumentationProblem> = []
+  for link in page.read.links {
+    if link.target.startsWith("http://") || link.target.startsWith("https://") {
+      continue
+    }
+    if link.target.startsWith("mailto:") {
+      continue
+    }
+    if link.target.isEmpty() {
+      // `[text](#anchor)`: the same page
+      if !link.anchor.isEmpty() && !anchorsOf(page).contains(link.anchor) {
+        const note = "This page has no heading with the anchor `{link.anchor}`"
+        problems.add DocumentationProblem(shown, link.line, note)
+      }
+      continue
+    }
+    if link.target.startsWith("/") {
+      const note = "A link inside the documentation is relative, so the tree can be moved: `{link.target}` is absolute"
+      problems.add DocumentationProblem(shown, link.line, note)
+      continue
+    }
+    const resolved = normalizePath joinDocumentationPath(page.folder, link.target)
+    if resolved.startsWith("..") {
+      // Outside of the documentation: the concept, a source file, an example
+      const outside = joinPath documentation.root, joinDocumentationPath(page.folder, link.target)
+      if !exists.probe(outside) {
+        problems.add DocumentationProblem(shown, link.line, "`{link.target}` does not exist")
+      }
+      continue
+    }
+    problems.addAll insideLinkProblems(documentation, shown, page, link.line, link.target, link.anchor, resolved)
+  }
+  problems
+}
+
+fn insideLinkProblems(
+  documentation: Documentation,
+  shown: String,
+  page: Page,
+  line: Int,
+  target: String,
+  anchor: String,
+  resolved: String,
+): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  const found = documentation.pageAt resolved
+  match found {
+    Some(other) => {
+      if !anchor.isEmpty() && !anchorsOf(other).contains(anchor) {
+        const note = "`{target}` has no heading with the anchor `{anchor}`"
+        problems.add DocumentationProblem(shown, line, note)
+      }
+    }
+    None => {
+      if isPlainDocument(documentation, resolved) {
+        return problems
+      }
+      if target.endsWith("/") || !target.endsWith(".md") {
+        const note = "A link inside the documentation names a `.md` file: `{target}` does not"
+        problems.add DocumentationProblem(shown, line, note)
+        return problems
+      }
+      problems.add DocumentationProblem(shown, line, "`{target}` is not a page of this documentation")
+    }
+  }
+  problems
+}
+
+fn isPlainDocument(documentation: Documentation, resolved: String): Bool {
+  const folder = folderOf resolved
+  match documentation.folderAt(folder) {
+    Some(found) => found.plain.contains resolved
+    None => false
+  }
+}
+
+/**
+ * The shape of the tree: every folder has an index, and every plain Markdown file is named by an index. Reachability
+ * from `index.md` follows from those two, because the body of an index is generated from its children.
+ */
+public fn shapeProblems(documentation: Documentation): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  const root = documentation.root
+  for folder in documentation.folders {
+    const shownFolder = if folder.path.isEmpty() { root } else { "{root}/{folder.path}" }
+    match folder.index {
+      Some(_) => {}
+      None => {
+        const note = "Every folder of the documentation has an `index.md`"
+        problems.add DocumentationProblem(shownFolder, 0, note)
+      }
+    }
+    const documents = match folder.index {
+      Some(index) => index.frontMatter.items "documents"
+      None => []
+    }
+    const isEmpty = folder.pages.isEmpty() && folder.folders.isEmpty() && folder.plain.isEmpty() && documents.isEmpty()
+    if isEmpty {
+      const note = "This folder has nothing but its index. An empty section teaches a reader nothing"
+      problems.add DocumentationProblem(shownFolder, 0, note)
+    }
+  }
+  problems.addAll plainDocumentProblems(documentation)
+  problems
+}
+
+/** A `.md` file without front matter is a design document. It has to be named by the index of its folder. */
+fn plainDocumentProblems(documentation: Documentation): List<DocumentationProblem> {
+  var declared: List<String> = []
+  for page in documentation.pages {
+    for document in page.frontMatter.items("documents") {
+      declared.add normalizePath(joinDocumentationPath(page.folder, document))
+    }
+  }
+  var problems: List<DocumentationProblem> = []
+  for folder in documentation.folders {
+    for plain in folder.plain {
+      if declared.contains(plain) {
+        continue
+      }
+      const shown = "{documentation.root}/{plain}"
+      const note = "This file has no front matter, so it is a design document. Name it in the `documents` of an index"
+      problems.add DocumentationProblem(shown, 0, note)
+    }
+  }
+  for document in declared {
+    if isKnown(documentation, document) {
+      continue
+    }
+    const note = "`{document}` is named in a `documents` list but is not there"
+    problems.add DocumentationProblem(documentation.root, 0, note)
+  }
+  problems
+}
+
+fn isKnown(documentation: Documentation, path: String): Bool {
+  if documentation.pageAt(path).isSome() {
+    return true
+  }
+  isPlainDocument documentation, path
+}

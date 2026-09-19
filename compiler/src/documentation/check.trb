@@ -1,0 +1,85 @@
+use DocumentationProblem from "./markdown"
+use Documentation from "./tree"
+use schemaProblems, skillRoleProblems, nameProblems from "./schema"
+use PathExists, linkProblems, shapeProblems from "./links"
+use Snippet, SnippetKind, collectSnippets, verifySyntax, verifyTypes from "./snippets"
+use generateIndexes, staleIndexes from "./index"
+
+/**
+ * `torb docs check`: every rule of `docs/contributing` asked of a whole documentation tree at once. The order of the
+ * checks is the order of the report, and the report is sorted by path and line, so the same tree always produces the
+ * same output - a gate that reorders its own findings cannot be diffed.
+ */
+
+public type CheckedDocumentation {
+  problems: List<DocumentationProblem>
+  /** How many pages, folders and blocks were looked at: the number a gate prints when it is green */
+  pages: Int
+  folders: Int
+  snippets: Int
+  /** Every `trb skip` with its reason, so a skip is visible without reading the sources */
+  skipped: List<String>
+}
+
+/**
+ * Everything except the type checker. Separated because the type check of the snippets needs the standard library on
+ * disk, and because it is what a test of the rules does not want to pay for.
+ */
+public fn checkDocumentation(documentation: Documentation, exists: PathExists): CheckedDocumentation {
+  var problems = documentation.problems
+  problems.addAll shapeProblems(documentation)
+  problems.addAll nameProblems(documentation)
+  problems.addAll skillRoleProblems(documentation)
+  for page in documentation.pages {
+    problems.addAll schemaProblems(documentation, page)
+  }
+  problems.addAll linkProblems(documentation, exists)
+  const indexes = generateIndexes documentation
+  problems.addAll indexes.problems
+  problems.addAll staleIndexes(documentation, indexes)
+  const collected = collectSnippets documentation
+  problems.addAll collected.problems
+  problems.addAll verifySyntax(collected.snippets)
+  var skipped: List<String> = []
+  for snippet in collected.snippets {
+    if snippet.kind == SnippetKind.Skipped {
+      skipped.add "{snippet.path}:{snippet.line}: {snippet.reason}"
+    }
+  }
+  CheckedDocumentation(
+    sortedProblems(problems),
+    documentation.pages.length(),
+    documentation.folders.length(),
+    collected.snippets.length(),
+    skipped,
+  )
+}
+
+/** The snippets that asked for the type checker, checked in one run against the standard library. */
+public fn checkSnippetTypes(documentation: Documentation, standardLibrary: Map<String, String>): List<DocumentationProblem> {
+  const collected = collectSnippets documentation
+  const clean = withoutBrokenSyntax collected.snippets
+  verifyTypes standardLibrary, clean
+}
+
+/**
+ * A snippet that does not parse is not handed to the type checker: its diagnostics were already reported, and the
+ * checker would add a second wave of them about the same line.
+ */
+fn withoutBrokenSyntax(snippets: List<Snippet>): List<Snippet> {
+  var kept: List<Snippet> = []
+  for snippet in snippets {
+    const own = verifySyntax([snippet])
+    if own.isEmpty() {
+      kept.add snippet
+    }
+  }
+  kept
+}
+
+/** By path, then by line: the same tree always reports the same way. */
+public fn sortedProblems(problems: List<DocumentationProblem>): List<DocumentationProblem> {
+  var sorted = problems
+  sorted.sort({ (_.path, _.line, _.message) })
+  sorted
+}

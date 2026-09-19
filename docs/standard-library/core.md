@@ -1,0 +1,159 @@
+---
+title: std/core
+summary: "The bottom of the standard library: Option, Result, Error, the operator and conversion traits, and the control structures that are functions."
+kind: package
+status: stable
+order: 10
+keywords:
+  - std/core
+  - Option
+  - Result
+  - Error
+  - operators
+  - using
+source:
+  - std/core/src/lib.trb
+---
+
+`std/core` is what every other package builds on: the two types the language itself refers to, the two that model absence
+and failure, the traits the operators and the conversions go through, and the control flow that is an ordinary function.
+Everything in it is re-exported by the prelude, so a file rarely imports it by name.
+
+Nothing in `std/core` knows about text, numbers or collections - with the one exception that `String` is unavoidable in a
+signature (`Show.show`, `panic`). That import points at `std/text`, which is why the packages of the standard library are
+cyclic, and cycles between modules are allowed because nothing runs when a module is imported.
+
+## Import
+
+```trb fragment
+use Option, Result, Error from "std/core"
+use Option.Some, Option.None, Result.Ok, Result.Fail from "std/core"
+```
+
+Every name below is already in scope through the prelude, so an import is only needed in a file whose project names
+another prelude, or to make the dependency explicit.
+
+## Declarations
+
+<!-- torb:declarations:begin -->
+
+### Option
+
+```trb fragment
+public type Option<Value> {
+  case Some(value: Value)
+  case None
+}
+```
+
+A value that may be absent. `Value?` is sugar for `Option<Value>`. `map`, `flatMap`, `filter` and `forEach` mean the same
+as everywhere else and run immediately, because an Option is a value and not a pipeline. `orElse` is the `??` operator,
+`okOr` turns it into a `Result`, `toList()` brings it into the world of pipelines, and `expect(message)` panics where
+absence is a bug.
+
+### Result
+
+```trb fragment
+public type Result<Value, Failure> {
+  case Ok(value: Value)
+  case Fail(error: Failure)
+}
+```
+
+The result of an operation that can fail. The postfix `?` unwraps `Ok` or returns the `Fail` from the surrounding
+function, converting the error type through `From`. `map`, `flatMap` and `forEach` work on the `Ok` side, `mapError` on the
+`Fail` side. `isOk`, `isError`, `ok`, `orElse`, `toList` and `expect` are the rest. See
+[Result](../language/errors/result.md) for the rules.
+
+### Error
+
+```trb fragment
+public trait Error with Show {
+  fn cause(self): Error? {
+    None
+  }
+}
+```
+
+"Some error, hand it up." Every error type that carries this trait fits into `Result<Value, Error>`, which lets an
+application pass a failure through layers that have nothing to say about it. Precise error types stay the norm for a
+library, because a caller can only `match` on what a signature names. `cause()` is the chain, and its default is `None`, so
+a type that has nothing to add implements the trait by writing `with Error` and nothing else.
+
+### Void, Never and panic
+
+`Void` is the type with exactly one value, and that value is the keyword literal `void`. A function without a result type
+answers `Void`, a block that ends in a statement has the value `void`, and `Ok(void)` passes it on. `Never` is the type of
+an expression that does not return, which is why `panic "..."` fits into any expression. `panic` prints
+`panic: <message>` and the site to standard error and exits with **101**; nothing else runs on the way out.
+
+### Bool
+
+`Bool` with `Equals`, `Hash`, `Show` and `Encode`. `&&`, `||` and `!` are built in, they short-circuit, and they cannot be
+overloaded, because a trait method would evaluate its argument.
+
+### Equals, Compare, Ordering, Hash, combineHashes
+
+`Equals` has `equals` and is `==`. `Compare` has `compare`, requires `Equals`, and is `<`, `<=`, `>` and `>=`; its default
+members include `min` and `max`. `Ordering` is what `compare` answers. `Hash` has `hash`, and `combineHashes` is what a
+hand-written `hash` folds with. `Float32` and `Float64` are deliberately not `Hash`, so a float can never be a `Map` key
+and the `nan` key does not exist.
+
+### From, Into, TryFrom, Parse, Show, LiteralParseError
+
+Conversions follow `From` and `Into`: implementing `From` provides `Into` for free through a blanket implementation.
+`TryFrom` is the fallible form and `Parse` is the one for text. Every type has `From<Self>`, and that conversion is the
+value itself. `Show` has `show` and is what string interpolation calls; `showNested` is what a value inside another value
+uses, and only `String` and `Char` override it. `LiteralParseError` is what a generated `Parse` of a literal type answers.
+
+### The operator traits
+
+`Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Negate`, `Indexed`, `MutableIndexed`, `Slice`, `MutableSlice`. Each
+one has a type parameter list with defaults, which is why `with Add` means `Add<Self, Self>`. `a[i]` is `Indexed.at`,
+`a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`, and `a[from..to] = v` is `MutableSlice.replace`.
+
+### Range
+
+```trb fragment
+public type Range<Value> {
+  start: Value?
+  end: Value?
+  isInclusive: Bool = false
+}
+```
+
+`0..10` is `Range(start: Some(0), end: Some(10))`, `0..=10` sets `isInclusive`, and `0..` and `..10` leave one end `None`.
+`Range<Int>` is `Iterable<Int>` and `Length`, and the open ends are checked at runtime: `iterator()` panics for a range
+without a start, `length()` panics for a range without both ends, and `0..` iterates forever.
+
+### Shared and isSame
+
+`Shared<Value>` is a box that puts a value in a place several owners can hold - the ad hoc version of a `shared type`.
+`isSame(first, second)` compares identity and works on a shared object only: on a value the answer would expose whether
+the implementation shares storage, so the compiler rejects it.
+
+### `do`, `unless`, `retry`, `using` and `Close`
+
+Control structures that are ordinary functions, because only a construct that binds names or jumps is built in.
+
+```trb fragment
+public fn do<Value>(body: () => Value): Value
+public fn unless(condition: Bool, body: () => Void)
+public fn retry<Value, Failure>(times: Int, action: () => Result<Value, Failure>): Result<Value, Failure>
+public fn using<Resource: Close, Value>(var resource: Resource, body: (var Resource) => Value): Value
+public shared trait Close { fn close(var self) }
+```
+
+`using` takes a `var` resource and a receiver closure over it, so the body reaches the resource's members without naming
+it and may change it: `using File.open(path)? { writeLine "done" }`. Passing a temporary to that `var` parameter is
+allowed, because the callee is its only owner. There are no destructors, so the nesting of `using` blocks is the only
+observable destruction order in the language.
+
+<!-- torb:declarations:end -->
+
+## Related
+
+- [Result](../language/errors/result.md) - the rules of `Result` and `?`.
+- [Bindings](../language/values-and-types/bindings.md) - what `const` and `var` decide.
+- [Traits](../language/traits/traits.md) - how the operator traits are implemented.
+- [The standard library](index.md) - the other packages.

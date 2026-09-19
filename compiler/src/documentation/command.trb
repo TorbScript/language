@@ -1,0 +1,179 @@
+use File, IoError from "std/fs"
+use DocumentationProblem from "./markdown"
+use Page, readDocumentation from "./tree"
+use PathExists from "./links"
+use readStandardLibrary from "./snippets"
+use checkDocumentation, checkSnippetTypes, sortedProblems from "./check"
+use generateIndexes, writeIndexes, staleIndexes from "./index"
+use buildSkill, writeSkill, installationHint, skillName from "./skill"
+use bundleDocumentation, writeBundle from "./bundle"
+
+/**
+ * `torb docs <command>`: the commands that keep the documentation true. Every one of them is a gate that can be run
+ * from a script, so all of them answer with the number of problems and print nothing but problems when there are any.
+ */
+
+public type DocumentationOptions {
+  root: String
+  /** Where `std/` is, for the type check of the snippets. Empty means `<root>/../std`. */
+  standardLibrary: String
+  /** `--no-snippets`: skip the type check, which is the slow part */
+  withoutSnippets: Bool
+  /** `--check` of `docs index` */
+  onlyCheck: Bool
+  /** The output directory of `skill` and `bundle` */
+  out: String
+}
+
+public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions {
+  var paths: List<String> = []
+  var standardLibrary = ""
+  var withoutSnippets = false
+  var onlyCheck = false
+  var wantsStandardLibrary = false
+  for argument in arguments {
+    if wantsStandardLibrary {
+      standardLibrary = argument
+      wantsStandardLibrary = false
+      continue
+    }
+    if argument == "--standard-library" {
+      wantsStandardLibrary = true
+      continue
+    }
+    if argument == "--no-snippets" {
+      withoutSnippets = true
+      continue
+    }
+    if argument == "--check" {
+      onlyCheck = true
+      continue
+    }
+    paths.add argument
+  }
+  const root = paths.get(0) ?? "docs"
+  const out = paths.get(1) ?? ""
+  DocumentationOptions root, standardLibrary, withoutSnippets, onlyCheck, out
+}
+
+/** Where the standard library is, for the type check of the snippets. */
+fn standardLibraryPath(options: DocumentationOptions): String {
+  if !options.standardLibrary.isEmpty() {
+    return options.standardLibrary
+  }
+  "{options.root}/../std"
+}
+
+fn reportProblems(problems: List<DocumentationProblem>): Int {
+  for problem in sortedProblems(problems) {
+    printError problem.show()
+  }
+  problems.length()
+}
+
+/** `torb docs check <root>`. Returns the number of problems. */
+public fn runCheck(options: DocumentationOptions): Result<Int, IoError> {
+  const documentation = readDocumentation(options.root)?
+  const exists = PathExists({ File.exists _ })
+  const checked = checkDocumentation documentation, exists
+  var problems = checked.problems
+  if !options.withoutSnippets {
+    const path = standardLibraryPath options
+    const standardLibrary = readStandardLibrary(path)?
+    problems.addAll checkSnippetTypes(documentation, standardLibrary)
+  }
+  const count = reportProblems problems
+  if count > 0 {
+    printError ""
+    printError "{count} problems in {checked.pages} pages"
+    return Ok count
+  }
+  print "{checked.pages} pages, {checked.folders} folders, {checked.snippets} snippets, no problems"
+  for skipped in checked.skipped {
+    print "skipped: {skipped}"
+  }
+  Ok 0
+}
+
+/** `torb docs index <root> [--check]`. Returns the number of problems. */
+public fn runIndex(options: DocumentationOptions): Result<Int, IoError> {
+  const documentation = readDocumentation(options.root)?
+  const result = generateIndexes documentation
+  if options.onlyCheck {
+    var problems = result.problems
+    problems.addAll staleIndexes(documentation, result)
+    const count = reportProblems problems
+    if count == 0 {
+      print "{result.generated.length()} indexes, all up to date"
+    }
+    return Ok count
+  }
+  const count = reportProblems result.problems
+  const written = writeIndexes(documentation, result)?
+  for path in written {
+    print "wrote {path}"
+  }
+  if written.isEmpty() {
+    print "{result.generated.length()} indexes, nothing to write"
+  }
+  Ok count
+}
+
+/** `torb docs skill <root> <out>`. Returns the number of problems. */
+public fn runSkill(options: DocumentationOptions): Result<Int, IoError> {
+  if options.out.isEmpty() {
+    printError "torb docs skill <root> <out>: where the skill goes is missing"
+    return Ok 1
+  }
+  const documentation = readDocumentation(options.root)?
+  const skill = buildSkill documentation
+  const count = reportProblems skill.problems
+  if count > 0 {
+    return Ok count
+  }
+  writeSkill(options.out, skill)?
+  print "{skillName}: {skill.files.length()} files, SKILL.md has {skill.bodyLines} lines"
+  print "{skill.included} pages, {skill.excluded} left out (planned or omitted)"
+  print installationHint(options.out)
+  Ok 0
+}
+
+/** `torb docs bundle <root> <out>`. */
+public fn runBundle(options: DocumentationOptions): Result<Int, IoError> {
+  if options.out.isEmpty() {
+    printError "torb docs bundle <root> <out>: where the bundle goes is missing"
+    return Ok 1
+  }
+  const documentation = readDocumentation(options.root)?
+  const index = documentation.pageAt "index.md"
+  const title = titleOf index
+  const summary = summaryOf index
+  const bundled = bundleDocumentation documentation, title, summary
+  writeBundle(options.out, bundled)?
+  print "wrote {options.out}/llms.txt and {options.out}/llms-full.txt"
+  Ok 0
+}
+
+fn titleOf(page: Page?): String {
+  match page {
+    Some(found) => found.frontMatter.text("title") ?? "TorbScript"
+    None => "TorbScript"
+  }
+}
+
+fn summaryOf(page: Page?): String {
+  match page {
+    Some(found) => found.frontMatter.text("summary") ?? ""
+    None => ""
+  }
+}
+
+public fn printDocumentationUsage() {
+  printError "  torb docs check [root]  Check the documentation (default root: docs)"
+  printError "                         --standard-library <path>: where std/ is, for the snippets"
+  printError "                         --no-snippets: do not type check the snippets, which is the slow part"
+  printError "  torb docs index [root]  Write the generated part of every index.md"
+  printError "                         --check: report instead of writing, for the gate"
+  printError "  torb docs skill <root> <out>   Write the Agent Skill of the language"
+  printError "  torb docs bundle <root> <out>  Write llms.txt and llms-full.txt"
+}

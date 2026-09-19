@@ -1,0 +1,465 @@
+use DocumentationProblem, FrontMatter, Heading, anchorOf from "./markdown"
+use Page, Documentation, fileName from "./tree"
+
+/**
+ * The schema of the front matter, the vocabularies behind it, the section order of every kind of page, and the writing
+ * rules a tool can decide. Everything in here is normative and is written down for a reader in
+ * `docs/contributing/front-matter.md` and `docs/contributing/writing.md`; this file is the same rules as a program, so
+ * that a page cannot pass review and fail the gate, or the other way round.
+ */
+
+/** Every field a page may carry. A field that is not in here is a typo, and a typo is silence. */
+public const knownFields: List<String> = [
+  "title",
+  "summary",
+  "kind",
+  "status",
+  "order",
+  "source",
+  "keywords",
+  "prerequisites",
+  "documents",
+  "skill",
+]
+
+public const requiredFields: List<String> = ["title", "summary", "kind", "status"]
+
+/**
+ * What a page is. The kind picks the template, the required sections and what the skill builder does with the page -
+ * which is why it is a closed list and not a tag.
+ */
+public const kinds: List<String> = [
+  "index",
+  "guide",
+  "reference",
+  "how-to",
+  "explanation",
+  "contrast",
+  "tooling",
+  "package",
+  "glossary",
+]
+
+/** How far a page can be trusted. A `planned` page must never read like an available feature. */
+public const statuses: List<String> = ["stable", "draft", "planned"]
+
+/** What the skill builder does with a page beyond copying it into `reference/`. */
+public const skillRoles: List<String> = ["model", "cheat-sheet", "mistakes", "verify", "omit"]
+
+/** The kinds whose facts have to name where they come from, so drift against the implementation can be found. */
+public const kindsThatNeedASource: List<String> = ["reference", "package"]
+
+/** The marker comments the generated part of an index body stands between. */
+public const indexBegin = "<!-- torb:index:begin -->"
+public const indexEnd = "<!-- torb:index:end -->"
+
+/** The marker comments the generated part of a standard-library page stands between (milestone 8's `torb doc`). */
+public const declarationsBegin = "<!-- torb:declarations:begin -->"
+public const declarationsEnd = "<!-- torb:declarations:end -->"
+
+/** The shortest and the longest a summary may be. A summary is what an agent decides from without opening the page. */
+public const shortestSummary = 40
+public const longestSummary = 240
+public const longestTitle = 60
+
+/** The first line of the body of a page that is not `stable`. The renderer cannot forget what the checker demands. */
+public fn bannerOf(status: String): String {
+  match status {
+    "planned" => "> **Planned.**"
+    "draft" => "> **Draft.**"
+    _ => ""
+  }
+}
+
+/** The H2 headings a kind has to have, in the order they have to appear in. Others may stand between them. */
+public fn requiredSections(kind: String): List<String> {
+  match kind {
+    "reference" => ["Example", "Syntax", "Rules", "What this is not", "Related"]
+    "guide" => ["Goal", "Next"]
+    "how-to" => ["Steps", "Full example", "Related"]
+    "explanation" => ["The decision", "Why", "Consequences", "Related"]
+    "contrast" => ["At a glance", "What changes in your code", "Habits to unlearn", "Related"]
+    "tooling" => ["Synopsis", "What it does", "Examples", "Related"]
+    "package" => ["Import", "Declarations", "Related"]
+    "glossary" => ["Terms"]
+    _ => []
+  }
+}
+
+/** Words that say nothing exactly. A rule with one of them in it is not a rule. */
+public const forbiddenWords: List<String> = [
+  "simply",
+  "obviously",
+  "basically",
+  "easily",
+  "of course",
+  "and so on",
+  "as we saw",
+  "see above",
+  "as mentioned",
+  "please note",
+  "usually",
+  "etc.",
+]
+
+/** Everything the schema has to say about one page. */
+public fn schemaProblems(documentation: Documentation, page: Page): List<DocumentationProblem> {
+  const shown = page.shown documentation.root
+  var problems: List<DocumentationProblem> = []
+  problems.addAll fieldProblems(shown, page)
+  const kind = page.frontMatter.text("kind") ?? ""
+  const status = page.frontMatter.text("status") ?? ""
+  problems.addAll headingProblems(shown, page, kind)
+  problems.addAll bannerProblems(shown, page, status)
+  problems.addAll proseProblems(shown, page)
+  problems
+}
+
+fn fieldProblems(shown: String, page: Page): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  const frontMatter = page.frontMatter
+  for field in frontMatter.fields {
+    if !knownFields.contains(field.key) {
+      const all = knownFields.joined separator: ", "
+      const note = "`{field.key}` is not a field of the front matter. One of: {all}"
+      problems.add DocumentationProblem(shown, field.line, note)
+    }
+  }
+  for required in requiredFields {
+    if !frontMatter.has(required) {
+      problems.add DocumentationProblem(shown, 1, "The front matter needs a `{required}`")
+    }
+  }
+  problems.addAll titleProblems(shown, frontMatter)
+  problems.addAll summaryProblems(shown, frontMatter)
+  problems.addAll kindProblems(shown, page, frontMatter)
+  problems.addAll statusProblems(shown, frontMatter)
+  problems.addAll listProblems(shown, page, frontMatter)
+  problems
+}
+
+fn titleProblems(shown: String, frontMatter: FrontMatter): List<DocumentationProblem> {
+  const title = frontMatter.text("title") ?? ""
+  if title.isEmpty() {
+    return []
+  }
+  var problems: List<DocumentationProblem> = []
+  const line = frontMatter.lineOf "title"
+  if title.byteLength() > longestTitle {
+    problems.add DocumentationProblem(shown, line, "A title is at most {longestTitle} characters long")
+  }
+  if title.endsWith(".") {
+    problems.add DocumentationProblem(shown, line, "A title has no full stop at the end")
+  }
+  problems
+}
+
+fn summaryProblems(shown: String, frontMatter: FrontMatter): List<DocumentationProblem> {
+  const summary = frontMatter.text("summary") ?? ""
+  if summary.isEmpty() {
+    return []
+  }
+  var problems: List<DocumentationProblem> = []
+  const line = frontMatter.lineOf "summary"
+  const length = summary.byteLength()
+  if length < shortestSummary {
+    const note = "A summary says what the page answers and is at least {shortestSummary} characters long"
+    problems.add DocumentationProblem(shown, line, note)
+  }
+  if length > longestSummary {
+    const note = "A summary is at most {longestSummary} characters long. This one has {length}"
+    problems.add DocumentationProblem(shown, line, note)
+  }
+  const endsSentence = summary.endsWith(".") || summary.endsWith("?") || summary.endsWith("!")
+  if !endsSentence {
+    problems.add DocumentationProblem(shown, line, "A summary is one or two whole sentences and ends with a full stop")
+  }
+  if summary.toLowerCase().contains("this page") {
+    const note = "A summary is about the subject, not about the document. Leave out `this page`"
+    problems.add DocumentationProblem(shown, line, note)
+  }
+  problems
+}
+
+fn kindProblems(shown: String, page: Page, frontMatter: FrontMatter): List<DocumentationProblem> {
+  const kind = frontMatter.text("kind") ?? ""
+  if kind.isEmpty() {
+    return []
+  }
+  var problems: List<DocumentationProblem> = []
+  const line = frontMatter.lineOf "kind"
+  if !kinds.contains(kind) {
+    const all = kinds.joined separator: ", "
+    const note = "`{kind}` is not a kind of page. One of: {all}"
+    problems.add DocumentationProblem(shown, line, note)
+    return problems
+  }
+  if page.isIndex && kind != "index" {
+    problems.add DocumentationProblem(shown, line, "An `index.md` has the kind `index`")
+  }
+  if !page.isIndex && kind == "index" {
+    problems.add DocumentationProblem(shown, line, "Only an `index.md` has the kind `index`")
+  }
+  if kindsThatNeedASource.contains(kind) && frontMatter.items("source").isEmpty() {
+    const note = "A `{kind}` page names in `source` where its facts come from, so drift can be found"
+    problems.add DocumentationProblem(shown, 1, note)
+  }
+  const title = frontMatter.text("title") ?? ""
+  if kind == "how-to" && title.toLowerCase().startsWith("how to") {
+    const note = "The title of a how-to starts with the verb, not with `How to`"
+    problems.add DocumentationProblem(shown, frontMatter.lineOf("title"), note)
+  }
+  if kind == "contrast" && !title.startsWith("Coming from ") {
+    const note = "The title of a contrast page is `Coming from <language>`"
+    problems.add DocumentationProblem(shown, frontMatter.lineOf("title"), note)
+  }
+  problems
+}
+
+fn statusProblems(shown: String, frontMatter: FrontMatter): List<DocumentationProblem> {
+  const status = frontMatter.text("status") ?? ""
+  if status.isEmpty() || statuses.contains(status) {
+    return []
+  }
+  const all = statuses.joined separator: ", "
+  const note = "`{status}` is not a status. One of: {all}"
+  [DocumentationProblem(shown, frontMatter.lineOf("status"), note)]
+}
+
+fn listProblems(shown: String, page: Page, frontMatter: FrontMatter): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  if frontMatter.has("documents") && !page.isIndex {
+    const note = "`documents` names plain Markdown files an index links, so only an `index.md` has it"
+    problems.add DocumentationProblem(shown, frontMatter.lineOf("documents"), note)
+  }
+  const kind = frontMatter.text("kind") ?? ""
+  if frontMatter.has("prerequisites") && kind != "guide" {
+    const note = "`prerequisites` belongs to a learning path, so only a `guide` page has it"
+    problems.add DocumentationProblem(shown, frontMatter.lineOf("prerequisites"), note)
+  }
+  const role = frontMatter.text "skill"
+  match role {
+    Some(found) => {
+      if !skillRoles.contains(found) {
+        const all = skillRoles.joined separator: ", "
+        const note = "`{found}` is not a role in the skill. One of: {all}"
+        problems.add DocumentationProblem(shown, frontMatter.lineOf("skill"), note)
+      }
+    }
+    None => {}
+  }
+  problems
+}
+
+fn headingProblems(shown: String, page: Page, kind: String): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  var anchors: List<String> = []
+  var previousLevel = 2
+  var isFirst = true
+  for heading in page.read.headings {
+    if heading.level == 1 {
+      const note = "The `title` of the front matter is the heading of the page. A body starts at `##`"
+      problems.add DocumentationProblem(shown, heading.line, note)
+    }
+    if isFirst && heading.level != 2 {
+      problems.add DocumentationProblem(shown, heading.line, "The first heading of a body is a `##`")
+    }
+    if !isFirst && heading.level > previousLevel + 1 {
+      const deepest = previousLevel + 1
+      const note = "A heading level is never skipped: below a level {previousLevel} heading comes level {deepest} at the deepest"
+      problems.add DocumentationProblem(shown, heading.line, note)
+    }
+    problems.addAll headingTextProblems(shown, heading)
+    if anchors.contains(heading.anchor) {
+      const note = "Two headings of this page have the anchor `{heading.anchor}`. A link could not tell them apart"
+      problems.add DocumentationProblem(shown, heading.line, note)
+    }
+    anchors.add heading.anchor
+    previousLevel = heading.level
+    isFirst = false
+  }
+  problems.addAll sectionProblems(shown, page, kind)
+  problems
+}
+
+fn headingTextProblems(shown: String, heading: Heading): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  if heading.text.isEmpty() {
+    problems.add DocumentationProblem(shown, heading.line, "A heading has text")
+    return problems
+  }
+  if heading.text.endsWith(".") || heading.text.endsWith(":") {
+    problems.add DocumentationProblem(shown, heading.line, "A heading ends without a full stop and without a colon")
+  }
+  const first = heading.text.chars().first() ?? ' '
+  if first.isLetter() && first != first.toUpperCase() {
+    const note = "A heading is written in sentence case: the first word is capitalized"
+    problems.add DocumentationProblem(shown, heading.line, note)
+  }
+  problems
+}
+
+/** The required H2 headings of the kind, in the order they have to appear in. Others may stand between them. */
+fn sectionProblems(shown: String, page: Page, kind: String): List<DocumentationProblem> {
+  const required = requiredSections kind
+  if required.isEmpty() {
+    return indexSectionProblems shown, page, kind
+  }
+  var problems: List<DocumentationProblem> = []
+  var titles: List<String> = []
+  for heading in page.read.headings {
+    if heading.level == 2 {
+      titles.add heading.text
+    }
+  }
+  var from = 0
+  for section in required {
+    var found = -1
+    var index = from
+    while index < titles.length() {
+      if titles[index] == section {
+        found = index
+        break
+      }
+      index = index + 1
+    }
+    if found < 0 {
+      const isPresent = titles.contains section
+      const order = required.joined separator: ", "
+      const note = if isPresent {
+        "The section `## {section}` stands in the wrong place. The order of a `{kind}` page is: {order}"
+      } else {
+        "A `{kind}` page has a section `## {section}`"
+      }
+      problems.add DocumentationProblem(shown, 1, note)
+      continue
+    }
+    from = found + 1
+  }
+  if kind == "guide" && !titles.isEmpty() {
+    if titles[0] != "Goal" {
+      problems.add DocumentationProblem(shown, 1, "A guide page starts with `## Goal`")
+    }
+    if titles[titles.length() - 1] != "Next" {
+      problems.add DocumentationProblem(shown, 1, "A guide page ends with `## Next`")
+    }
+  }
+  problems
+}
+
+/** Every index except the root one says what belongs in its folder: that is where the non-goals are written down. */
+fn indexSectionProblems(shown: String, page: Page, kind: String): List<DocumentationProblem> {
+  if kind != "index" || page.folder.isEmpty() {
+    return []
+  }
+  var titles: List<String> = []
+  for heading in page.read.headings {
+    if heading.level == 2 {
+      titles.add heading.text
+    }
+  }
+  if titles.contains("What belongs here") {
+    return []
+  }
+  [DocumentationProblem(shown, 1, "An index of a folder has a section `## What belongs here`")]
+}
+
+fn bannerProblems(shown: String, page: Page, status: String): List<DocumentationProblem> {
+  const banner = bannerOf status
+  if banner.isEmpty() {
+    return []
+  }
+  const first = page.read.prose.first()
+  match first {
+    Some(line) => {
+      if line.text.trim().startsWith(banner) {
+        return []
+      }
+      const note = "A `{status}` page starts its body with a line that begins `{banner}`"
+      [DocumentationProblem(shown, line.line, note)]
+    }
+    None => [DocumentationProblem(shown, 1, "A `{status}` page starts its body with a line that begins `{banner}`")]
+  }
+}
+
+fn proseProblems(shown: String, page: Page): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for line in page.read.prose {
+    const bare = withoutInlineCode(line.text).toLowerCase()
+    for word in forbiddenWords {
+      if bare.contains(word) {
+        const note = "`{word}` says nothing exactly. Name the rule, the number or the limit instead"
+        problems.add DocumentationProblem(shown, line.line, note)
+      }
+    }
+  }
+  problems
+}
+
+/** A line without what stands between backticks: a rule may quote `etc.` as a token without breaking the rule. */
+public fn withoutInlineCode(text: String): String {
+  var kept: List<Char> = []
+  var isInside = false
+  for character in text.chars() {
+    if character == '`' {
+      isInside = !isInside
+      continue
+    }
+    if !isInside {
+      kept.add character
+    }
+  }
+  String.from kept
+}
+
+/** The pages that carry a role in the skill, and whether two of them claim the same one. */
+public fn skillRoleProblems(documentation: Documentation): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  var taken: List<String> = []
+  for page in documentation.pages {
+    const role = page.frontMatter.text "skill"
+    match role {
+      Some(found) => {
+        if found == "omit" {
+          continue
+        }
+        if taken.contains(found) {
+          const shown = page.shown documentation.root
+          const note = "Another page already is the `{found}` of the skill. There is exactly one of each"
+          problems.add DocumentationProblem(shown, page.frontMatter.lineOf("skill"), note)
+        }
+        taken.add found
+      }
+      None => {}
+    }
+  }
+  problems
+}
+
+/** Whether a folder or page name is one a link can be written by hand: lowercase, hyphens, no spaces. */
+public fn nameProblems(documentation: Documentation): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for page in documentation.pages {
+    const name = fileName page.path
+    if name != name.toLowerCase() || name.contains(" ") || name.contains("_") {
+      const shown = page.shown documentation.root
+      const note = "A file name is lowercase and uses hyphens: a path is part of every link to it"
+      problems.add DocumentationProblem(shown, 1, note)
+    }
+  }
+  problems
+}
+
+/** The anchor a heading of a page has, so a link check and the index generator agree on it. */
+public fn anchorsOf(page: Page): List<String> {
+  var anchors: List<String> = []
+  for heading in page.read.headings {
+    anchors.add heading.anchor
+  }
+  anchors
+}
+
+/** The anchor a text would get. Re-exported so that the whole tool has one answer. */
+public fn anchorFor(text: String): String {
+  anchorOf text
+}

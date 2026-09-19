@@ -1,0 +1,216 @@
+use File, IoError from "std/fs"
+use DocumentationProblem, ReadPage, FrontMatter, readPage from "./markdown"
+
+/**
+ * The documentation as one value: every page with everything the reader found in it, and every folder with its
+ * children. Reading from disk happens in `readDocumentation` alone, so every check, the index generator and the skill
+ * builder are pure functions of this - which is what lets the tests hold a whole documentation tree in a `Map`.
+ */
+
+/** One `.md` file that has front matter. */
+public type Page {
+  /** Relative to the documentation root, always with `/`: `language/types/values.md` */
+  path: String
+  /** The folder of the page, relative to the root. `""` for the root folder. */
+  folder: String
+  isIndex: Bool
+  /** The whole file, unchanged. `docs index` keeps everything above its marker byte for byte. */
+  text: String
+  frontMatter: FrontMatter
+  read: ReadPage
+
+  /** The path as a message shows it: below the root the command was given. */
+  fn shown(self, root: String): String {
+    if root.isEmpty() || root == "." {
+      return path
+    }
+    "{root}/{path}"
+  }
+}
+
+/** One directory of the documentation. Every directory has an `index.md`; a missing one is a problem, not a shape. */
+public type Folder {
+  /** Relative to the documentation root. `""` for the root folder. */
+  path: String
+  index: Page?
+  /** The pages of this folder without its `index.md`, sorted by path */
+  pages: List<Page>
+  /** The directories directly below this one, sorted */
+  folders: List<String>
+  /** The `.md` files of this folder that have no front matter, sorted */
+  plain: List<String>
+}
+
+public type Documentation {
+  /** The root as it was typed on the command line, for messages */
+  root: String
+  /** Every page, sorted by path */
+  pages: List<Page>
+  /** Every folder, the root first, then sorted by path */
+  folders: List<Folder>
+  /** The first `# ` heading of every `.md` file that has no front matter, by path: what an index shows for it */
+  plainTitles: Map<String, String>
+  problems: List<DocumentationProblem>
+
+  fn pageAt(self, path: String): Page? {
+    pages.find({ _.path == path })
+  }
+
+  fn folderAt(self, path: String): Folder? {
+    folders.find({ _.path == path })
+  }
+
+  /** The index of a folder, which is the page every other page of it is reachable through. */
+  fn indexOf(self, folder: String): Page? {
+    match folderAt(folder) {
+      Some(found) => found.index
+      None => None
+    }
+  }
+}
+
+/** The name of the file at the end of a path. */
+public fn fileName(path: String): String {
+  match lastSlash(path) {
+    Some(at) => path.slice((at + 1)..path.byteLength())
+    None => path
+  }
+}
+
+/** The folder of a path, relative like the path itself. `""` when the path has none. */
+public fn folderOf(path: String): String {
+  match lastSlash(path) {
+    Some(at) => path.slice(0..at)
+    None => ""
+  }
+}
+
+fn lastSlash(path: String): Int? {
+  var found: Int? = None
+  var index = 0
+  const characters = path.chars().toList()
+  while index < characters.length() {
+    if characters[index] == '/' {
+      found = Some index
+    }
+    index = index + 1
+  }
+  found
+}
+
+/** `a` and `b` joined with a `/`, with an empty part dropped. */
+public fn joinDocumentationPath(first: String, second: String): String {
+  if first.isEmpty() {
+    return second
+  }
+  if second.isEmpty() {
+    return first
+  }
+  "{first}/{second}"
+}
+
+/**
+ * The documentation of a set of files, keyed by their path relative to the root. This is the whole front end of every
+ * `torb docs` command; `readDocumentation` below is nothing but the `File` calls that fill the map.
+ */
+public fn documentationOf(root: String, files: Map<String, String>): Documentation {
+  var paths = files.keys().toList()
+  paths.sort({ _ })
+  var pages: List<Page> = []
+  var problems: List<DocumentationProblem> = []
+  var plainByFolder: Map<String, List<String>> = [:]
+  var plainTitles: Map<String, String> = [:]
+  var folderPaths: List<String> = [""]
+  for path in paths {
+    if !path.endsWith(".md") {
+      continue
+    }
+    const folder = folderOf path
+    addFolderChain folderPaths, folder
+    const text = files.get(path) ?? ""
+    const read = readPage shownPath(root, path), text
+    match read.frontMatter {
+      Some(frontMatter) => {
+        problems.addAll read.problems
+        pages.add Page(path, folder, fileName(path) == "index.md", text, frontMatter, read)
+      }
+      None => {
+        const existing = plainByFolder.get(folder) ?? []
+        plainByFolder.set folder, existing.added(path)
+        plainTitles.set path, firstHeadingOf(text, path)
+      }
+    }
+  }
+  folderPaths.sort({ _ })
+  var folders: List<Folder> = []
+  for folderPath in folderPaths {
+    const index = pages.find({ _.folder == folderPath && _.isIndex })
+    const own = pages.filter({ _.folder == folderPath && !_.isIndex }).toList()
+    var children: List<String> = []
+    for candidate in folderPaths {
+      if candidate != folderPath && folderOf(candidate) == folderPath {
+        children.add candidate
+      }
+    }
+    folders.add Folder(folderPath, index, own, children, plainByFolder.get(folderPath) ?? [])
+  }
+  Documentation root, pages, folders, plainTitles, problems
+}
+
+/** The first `# ` heading of a plain Markdown file, or its file name when it has none. */
+fn firstHeadingOf(text: String, path: String): String {
+  for line in text.split("\n") {
+    if line.startsWith("# ") {
+      return line.slice(2..line.byteLength()).trim()
+    }
+  }
+  fileName path
+}
+
+/** Every folder of the path, so a folder without a single `.md` file of its own is still known. */
+fn addFolderChain(var folders: List<String>, folder: String) {
+  var current = folder
+  while !current.isEmpty() {
+    if !folders.contains(current) {
+      folders.add current
+    }
+    current = folderOf current
+  }
+}
+
+fn shownPath(root: String, path: String): String {
+  if root.isEmpty() || root == "." {
+    return path
+  }
+  "{root}/{path}"
+}
+
+/** Reads every `.md` file below the root. Hidden directories, `target` and `node_modules` are skipped, as everywhere. */
+public fn readDocumentation(root: String): Result<Documentation, IoError> {
+  if !File.isDirectory(root) {
+    return Fail IoError(root, "The documentation root is not a directory")
+  }
+  var files: Map<String, String> = [:]
+  readInto(files, root, "")?
+  Ok documentationOf(root, files)
+}
+
+fn readInto(var files: Map<String, String>, root: String, relative: String): Result<Void, IoError> {
+  const directory = if relative.isEmpty() { root } else { "{root}/{relative}" }
+  for entry in File.list(directory)? {
+    const child = joinDocumentationPath relative, entry
+    const absolute = "{root}/{child}"
+    if File.isDirectory(absolute) {
+      const isSkipped = entry.startsWith(".") || entry == "target" || entry == "node_modules"
+      if !isSkipped {
+        readInto(files, root, child)?
+      }
+      continue
+    }
+    if entry.endsWith(".md") {
+      const text = File.readText(absolute)?
+      files.set child, text
+    }
+  }
+  Ok(void)
+}

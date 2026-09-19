@@ -1,0 +1,719 @@
+use test, group from "std/test"
+use preludeSource from "./harness"
+use readPage, anchorOf, linesOf, DocumentationProblem from "../src/documentation/markdown"
+use documentationOf, Documentation from "../src/documentation/tree"
+use PathExists from "../src/documentation/links"
+use checkDocumentation, checkSnippetTypes from "../src/documentation/check"
+use generateIndexes from "../src/documentation/index"
+use buildSkill from "../src/documentation/skill"
+use bundleDocumentation from "../src/documentation/bundle"
+use indexBegin, indexEnd from "../src/documentation/schema"
+
+/**
+ * The tests of `torb docs`. Every one of them builds a documentation tree in a `Map`, exactly as the tests of the front
+ * end build a workspace in one: the whole tool is a pure function of that map, so nothing here touches a disk.
+ */
+
+/** A page that passes every check, so that a test can change one thing about it and see one problem. */
+fn referencePage(title: String): String {
+  """
+    ---
+    title: {title}
+    summary: What this construct means, in one sentence that is long enough to be useful.
+    kind: reference
+    status: stable
+    source:
+      - CONCEPT.md#bindings
+    ---
+
+    One paragraph about the construct.
+
+    ## Example
+
+    ```trb
+    const answer = 42
+    print answer
+    ```
+
+    ## Syntax
+
+    ```text
+    const <name> = <value>
+    ```
+
+    ## Rules
+
+    1. **A claim.** The rule that follows from it.
+
+    ## What this is not
+
+    It is not something else.
+
+    ## Related
+
+    - [Nothing](index.md) - the index.
+    """
+}
+
+fn rootIndex(): String {
+  """
+    ---
+    title: The documentation
+    summary: The index of the whole documentation, which every page is reachable from.
+    kind: index
+    status: stable
+    ---
+
+    The root.
+
+    {indexBegin}
+    {indexEnd}
+    """
+}
+
+fn folderIndex(title: String): String {
+  """
+    ---
+    title: {title}
+    summary: What a reader finds in this folder, said in one sentence that is long enough.
+    kind: index
+    status: stable
+    ---
+
+    The folder.
+
+    ## What belongs here
+
+    Pages about one thing.
+
+    {indexBegin}
+    {indexEnd}
+    """
+}
+
+/** Everything exists: the tests that are not about a link to the outside say so with this. */
+fn everything(): PathExists {
+  PathExists({ _ != "" })
+}
+
+/**
+ * The problems of a tree whose indexes were generated first. A hand-written index body would be stale by construction,
+ * so every test that is not about the generator itself runs `docs index` over the tree before `docs check`.
+ */
+fn check(files: Map<String, String>): List<String> {
+  checkRaw withGeneratedIndexes(files)
+}
+
+/** The problems of the tree exactly as it is written: what the tests about the index generator ask. */
+fn checkRaw(files: Map<String, String>): List<String> {
+  const documentation = documentationOf "docs", files
+  var messages: List<String> = []
+  for problem in checkDocumentation(documentation, everything()).problems {
+    messages.add problem.show()
+  }
+  messages
+}
+
+fn withGeneratedIndexes(files: Map<String, String>): Map<String, String> {
+  const documentation = documentationOf "docs", files
+  var written = files
+  for generated in generateIndexes(documentation).generated {
+    written.set generated.page.path, generated.text
+  }
+  written
+}
+
+/** One tree that passes, which is what every test about a single broken rule starts from. */
+fn goodTree(): Map<String, String> {
+  [
+    "index.md": rootIndex(),
+    "language/index.md": folderIndex("The language"),
+    "language/bindings.md": referencePage("Bindings"),
+  ]
+}
+
+group "the reader of a page" {
+  test "reads the front matter, the headings, the blocks and the links" {
+    const page = readPage "docs/a.md", referencePage("Bindings")
+    assert page.frontMatter.isSome()
+    const found = page.frontMatter.expect "the front matter"
+    assert(found.text("title") == Some("Bindings"))
+    assert(found.text("kind") == Some("reference"))
+    assert(found.items("source") == ["CONCEPT.md#bindings"])
+    assert(page.headings.length() == 5)
+    assert(page.blocks.length() == 2)
+    assert(page.links.length() == 1)
+    assert(page.links[0].target == "index.md")
+  }
+
+  test "a file without a front matter is not a page" {
+    const page = readPage "docs/ARCHITECTURE.md", "# Architecture\n\nHow it is built.\n"
+    assert page.frontMatter.isNone()
+  }
+
+  test "a block list and an inline list read the same" {
+    const block = readPage "docs/a.md", "---\nkeywords:\n  - one\n  - two\n---\n"
+    const inline = readPage "docs/a.md", "---\nkeywords: [one, two]\n---\n"
+    const first = block.frontMatter.expect "the front matter"
+    const second = inline.frontMatter.expect "the front matter"
+    assert(first.items("keywords") == second.items("keywords"))
+    assert(first.items("keywords") == ["one", "two"])
+  }
+
+  test "a value that contains a colon and a space has to be quoted" {
+    const page = readPage "docs/a.md", "---\ntitle: Values: and types\n---\n"
+    assert(page.problems.length() == 1)
+    assert page.problems[0].message.contains("has to be written in double quotes")
+  }
+
+  test "a quoted value keeps its colon" {
+    const page = readPage "docs/a.md", "---\ntitle: \"Values: and types\"\n---\n"
+    assert page.problems.isEmpty()
+    assert(page.frontMatter.expect("the front matter").text("title") == Some("Values: and types"))
+  }
+
+  test "a field that is written twice is a problem" {
+    const page = readPage "docs/a.md", "---\ntitle: One\ntitle: Two\n---\n"
+    assert(page.problems.length() == 1)
+    assert(page.problems[0].message == "The field `title` is written twice")
+  }
+
+  test "a front matter that is never closed is a problem" {
+    const page = readPage "docs/a.md", "---\ntitle: One\n"
+    assert(page.problems.length() == 1)
+    assert page.problems[0].message.contains("never closed")
+  }
+
+  test "an indented fence does not close the block that shows it" {
+    const source = "---\ntitle: One\n---\n\n```md\n   ```trb\n   const x = 1\n   ```\n```\n"
+    const page = readPage "docs/a.md", source
+    assert(page.blocks.length() == 1)
+    assert(page.blocks[0].language == "md")
+  }
+
+  test "a fence of four backticks is closed by four" {
+    const source = "---\ntitle: One\n---\n\n````md\n```trb\nconst x = 1\n```\n````\n"
+    const page = readPage "docs/a.md", source
+    assert(page.blocks.length() == 1)
+    assert(page.blocks[0].language == "md")
+  }
+
+  test "an anchor is the slug of the heading" {
+    assert(anchorOf("What this is not") == "what-this-is-not")
+    assert(anchorOf("The `const` binding") == "the-const-binding")
+    assert(anchorOf("Rule 1: bindings") == "rule-1-bindings")
+  }
+
+  test "a line without a trailing carriage return is the same line" {
+    assert(linesOf("a\r\nb") == ["a", "b"])
+  }
+}
+
+group "the schema" {
+  test "a tree that follows every rule has no problems" {
+    assert check(goodTree()).isEmpty()
+  }
+
+  test "a missing required field is reported once" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("status: stable\n", "")
+    const found = check files
+    assert found.contains("docs/language/bindings.md:1: The front matter needs a `status`")
+  }
+
+  test "a kind outside the vocabulary is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("kind: reference", "kind: tutorial")
+    const found = check files
+    assert(found.any({ _.contains "`tutorial` is not a kind of page" }))
+  }
+
+  test "a summary that is too short is reported" {
+    var files = goodTree()
+    const short = referencePage("Bindings").replace(
+      "summary: What this construct means, in one sentence that is long enough to be useful.",
+      "summary: Short.",
+    )
+    files.set "language/bindings.md", short
+    const found = check files
+    assert(found.any({ _.contains "at least 40 characters long" }))
+  }
+
+  test "a summary that talks about the document is reported" {
+    var files = goodTree()
+    const aboutItself = referencePage("Bindings").replace(
+      "summary: What this construct means, in one sentence that is long enough to be useful.",
+      "summary: This page describes what the construct means and gives a few examples of it.",
+    )
+    files.set "language/bindings.md", aboutItself
+    const found = check files
+    assert(found.any({ _.contains "Leave out `this page`" }))
+  }
+
+  test "a missing required section names the kind and the section" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("## What this is not", "## Something else")
+    const found = check files
+    assert found.contains("docs/language/bindings.md:1: A `reference` page has a section `## What this is not`")
+  }
+
+  test "sections in the wrong order are reported" {
+    const page = referencePage("Bindings").replace("## Syntax", "## Rules").replace("## Rules\n\n1. **A claim.**", "## Syntax\n\n1. **A claim.**")
+    var files = goodTree()
+    files.set "language/bindings.md", page
+    const found = check files
+    assert(found.any({ _.contains "stands in the wrong place" }))
+  }
+
+  test "a level one heading in the body is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("## Example", "# Example\n\n## Example")
+    const found = check files
+    assert(found.any({ _.contains "A body starts at `##`" }))
+  }
+
+  test "a heading that is not in sentence case is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("## Rules", "## Rules\n\n### rules of thumb")
+    const found = check files
+    assert(found.any({ _.contains "sentence case" }))
+  }
+
+  test "a word that says nothing exactly is reported with its line" {
+    var files = goodTree()
+    const hedged = referencePage("Bindings").replace(
+      "One paragraph about the construct.",
+      "A binding usually cannot be changed.",
+    )
+    files.set "language/bindings.md", hedged
+    const found = check files
+    assert(found.any({ _.contains "`usually` says nothing exactly" }))
+  }
+
+  test "a word between backticks is not prose" {
+    var files = goodTree()
+    const quoted = referencePage("Bindings").replace(
+      "One paragraph about the construct.",
+      "The word `usually` is rejected by the checker.",
+    )
+    files.set "language/bindings.md", quoted
+    assert check(files).isEmpty()
+  }
+
+  test "an index of a folder says what belongs in it" {
+    var files = goodTree()
+    files.set "language/index.md", folderIndex("The language").replace("## What belongs here", "## Contents")
+    const found = check files
+    assert(found.any({ _.contains "`## What belongs here`" }))
+  }
+
+  test "a folder without an index is reported" {
+    var files = goodTree()
+    files.set "language/deeper/page.md", referencePage("Deeper")
+    const found = check files
+    assert(found.any({ _.contains "Every folder of the documentation has an `index.md`" }))
+  }
+
+  test "a folder with nothing but an index is reported" {
+    var files = goodTree()
+    files.set "empty/index.md", folderIndex("Empty")
+    const found = check files
+    assert(found.any({ _.contains "nothing but its index" }))
+  }
+
+  test "a planned page has to carry the planned banner" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("status: stable", "status: planned")
+    const found = check files
+    assert(found.any({ _.contains "> **Planned.**" }))
+  }
+
+  test "two pages cannot claim the same role in the skill" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("status: stable", "status: stable\nskill: model")
+    files.set "language/other.md", referencePage("Other").replace("status: stable", "status: stable\nskill: model")
+    const found = check files
+    assert(found.any({ _.contains "already is the `model` of the skill" }))
+  }
+}
+
+group "the links" {
+  test "a link to a page that is not there is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("(index.md)", "(missing.md)")
+    const found = check files
+    assert(found.any({ _.contains "`missing.md` is not a page of this documentation" }))
+  }
+
+  test "an anchor that no heading produces is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("(index.md)", "(index.md#nowhere)")
+    const found = check files
+    assert(found.any({ _.contains "has no heading with the anchor `nowhere`" }))
+  }
+
+  test "an anchor of a heading of the same page resolves" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("(index.md)", "(#what-this-is-not)")
+    assert check(files).isEmpty()
+  }
+
+  test "an absolute link is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("(index.md)", "(/language/index.md)")
+    const found = check files
+    assert(found.any({ _.contains "is absolute" }))
+  }
+
+  test "an external link is not followed" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("(index.md)", "(https://example.test/nothing)")
+    assert check(files).isEmpty()
+  }
+
+  test "a link that leaves the tree is asked of the file system" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("(index.md)", "(../../CONCEPT.md)")
+    const documentation = documentationOf "docs", files
+    var found: List<String> = []
+    for problem in checkDocumentation(documentation, PathExists({ _ == "nothing" })).problems {
+      found.add problem.show()
+    }
+    assert(found.any({ _.contains "`../../CONCEPT.md` does not exist" }))
+  }
+
+  test "a plain markdown file has to be named by an index" {
+    var files = goodTree()
+    files.set "DESIGN.md", "# Design\n\nHow it works.\n"
+    const found = check files
+    assert(found.any({ _.contains "Name it in the `documents` of an index" }))
+  }
+
+  test "a plain markdown file that an index names is fine" {
+    var files = goodTree()
+    files.set "DESIGN.md", "# Design\n\nHow it works.\n"
+    files.set "index.md", rootIndex().replace("kind: index", "kind: index\ndocuments:\n  - DESIGN.md")
+    assert check(files).isEmpty()
+  }
+}
+
+group "the generated index" {
+  test "the body is the children, with their summaries" {
+    const documentation = documentationOf "docs", goodTree()
+    const result = generateIndexes documentation
+    assert result.problems.isEmpty()
+    const language = result.generated.find({ _.page.path == "language/index.md" }).expect("the index")
+    assert language.text.contains("## Pages")
+    assert language.text.contains("- **[Bindings](bindings.md)** - What this construct means")
+  }
+
+  test "a subfolder is a section and a page is a page" {
+    var files = goodTree()
+    files.set "language/deeper/index.md", folderIndex("Deeper")
+    files.set "language/deeper/page.md", referencePage("Deeper page")
+    const documentation = documentationOf "docs", files
+    const result = generateIndexes documentation
+    const language = result.generated.find({ _.page.path == "language/index.md" }).expect("the index")
+    assert language.text.contains("## Sections")
+    assert language.text.contains("- **[Deeper](deeper/index.md)**")
+  }
+
+  test "a planned child is marked in the entry" {
+    var files = goodTree()
+    const planned = referencePage("Bindings").replace("status: stable", "status: planned").replace(
+      "One paragraph about the construct.",
+      "> **Planned.** Not implemented.",
+    )
+    files.set "language/bindings.md", planned
+    const documentation = documentationOf "docs", files
+    const result = generateIndexes documentation
+    const language = result.generated.find({ _.page.path == "language/index.md" }).expect("the index")
+    assert language.text.contains("_(planned)_")
+  }
+
+  test "everything above the first marker is kept byte for byte" {
+    const documentation = documentationOf "docs", goodTree()
+    const result = generateIndexes documentation
+    const root = result.generated.find({ _.page.path == "index.md" }).expect("the index")
+    assert root.text.startsWith("---\ntitle: The documentation\n")
+    assert root.text.contains("\nThe root.\n")
+  }
+
+  test "nothing is allowed below the closing marker" {
+    var files = goodTree()
+    const base = folderIndex "The language"
+    files.set "language/index.md", "{base}\nSomething after the marker.\n"
+    const found = checkRaw files
+    assert(found.any({ _.contains "Nothing stands below the generated part" }))
+  }
+
+  test "an index without the markers is reported" {
+    var files = goodTree()
+    files.set "language/index.md", folderIndex("The language").replace(indexBegin, "").replace(indexEnd, "")
+    const found = checkRaw files
+    assert(found.any({ _.contains "Run `torb docs index`" }))
+  }
+
+  test "an index whose body is not up to date is reported" {
+    var files = goodTree()
+    const stale = folderIndex("The language").replace(indexEnd, "- **[Something](else.md)**\n{indexEnd}")
+    files.set "language/index.md", stale
+    const found = checkRaw files
+    assert(found.any({ _.contains "not up to date" }))
+  }
+}
+
+group "the snippets" {
+  test "a block whose language is unknown is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("```trb\n", "```torbscript\n")
+    const found = check files
+    assert(found.any({ _.contains "`torbscript` is not a language of this documentation" }))
+  }
+
+  test "a marker that does not exist is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("```trb\n", "```trb verify\n")
+    const found = check files
+    assert(found.any({ _.contains "`verify` is not a marker" }))
+  }
+
+  test "a skip needs a reason of its own" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("```trb\n", "```trb skip why\n")
+    const found = check files
+    assert(found.any({ _.contains "needs a reason of its own" }))
+  }
+
+  test "a snippet that does not parse is reported at its line in the page" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("const answer = 42", "const answer = 42;")
+    const found = check files
+    assert(found.any({ _.contains "There are no semicolons" }))
+  }
+
+  test "a snippet that is not in the canon is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("print answer", "print(answer)")
+    const found = check files
+    assert(found.any({ _.contains "Write `print ...` without parentheses" }))
+  }
+
+  test "a command with an operator in an argument is reported" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("print answer", "print answer + 1")
+    const found = check files
+    assert(found.any({ _.contains "has an operator at the top level of an argument" }))
+  }
+
+  test "a multi-line string that is not indented is reported" {
+    const source = "const text = \"\"\"\nhello\n\"\"\"\nprint text"
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("const answer = 42\nprint answer", source)
+    const found = check files
+    assert(found.any({ _.contains "two spaces deeper" }))
+  }
+
+  test "a fragment is only lexed, so a signature is fine" {
+    var files = goodTree()
+    const signature = "fn map<Output>(self, transform: (value: Item) => Output): Iterable<Output>"
+    const page = referencePage("Bindings").replace("```trb\nconst answer = 42\nprint answer\n```", "```trb fragment\n{signature}\n```")
+    files.set "language/bindings.md", page
+    assert check(files).isEmpty()
+  }
+
+  test "an error block needs an expectation" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("```trb\n", "```trb error\n")
+    const found = check files
+    assert(found.any({ _.contains "names the diagnostic it expects" }))
+  }
+
+  test "an expectation only means something in an error block" {
+    var files = goodTree()
+    const page = referencePage("Bindings").replace("print answer", "print answer\n// error: something")
+    files.set "language/bindings.md", page
+    const found = check files
+    assert(found.any({ _.contains "only means something in a `trb error` block" }))
+  }
+}
+
+group "the type check of a snippet" {
+  test "a checked snippet is type checked against the standard library" {
+    var files = goodTree()
+    const page = referencePage("Bindings").replace("```trb\nconst answer = 42", "```trb check\nconst answer: Bool = 42")
+    files.set "language/bindings.md", page
+    const documentation = documentationOf "docs", files
+    var found: List<String> = []
+    for problem in checkSnippetTypes(documentation, standardLibrary()) {
+      found.add problem.show()
+    }
+    assert(found.any({ _.contains "Bool" }))
+  }
+
+  test "a checked snippet that holds has no problems" {
+    var files = goodTree()
+    files.set "language/bindings.md", referencePage("Bindings").replace("```trb\n", "```trb check\n")
+    const documentation = documentationOf "docs", files
+    assert checkSnippetTypes(documentation, standardLibrary()).isEmpty()
+  }
+
+  test "an error block whose expectation does not come true is reported" {
+    var files = goodTree()
+    const wrong = "```trb error\nconst answer: Bool = 42\n// error: something that is not the message\n```"
+    const page = referencePage("Bindings").replace("```trb\nconst answer = 42\nprint answer\n```", wrong)
+    files.set "language/bindings.md", page
+    const documentation = documentationOf "docs", files
+    var found: List<String> = []
+    for problem in checkSnippetTypes(documentation, standardLibrary()) {
+      found.add problem.show()
+    }
+    assert(found.any({ _.contains "No diagnostic of this block contains" }))
+  }
+
+  test "an error block that is not wrong at all is reported" {
+    var files = goodTree()
+    const notWrong = "```trb error\nconst answer = 42\nprint answer\n// error: something\n```"
+    const page = referencePage("Bindings").replace("```trb\nconst answer = 42\nprint answer\n```", notWrong)
+    files.set "language/bindings.md", page
+    const documentation = documentationOf "docs", files
+    var found: List<String> = []
+    for problem in checkSnippetTypes(documentation, standardLibrary()) {
+      found.add problem.show()
+    }
+    assert(found.any({ _.contains "has no diagnostic at all" }))
+  }
+}
+
+/** The small standard library the snippet checks run against: the prelude of the harness, as a package of `std`. */
+fn standardLibrary(): Map<String, String> {
+  [
+    "std/prelude/project.trb": "name \"std/prelude\"\n",
+    "std/prelude/src/types.trb": preludeSource,
+    "std/prelude/src/lib.trb": r"""
+      public use Show, Equals, Compare, Hash, Negate, Iterable, Iterator from "./types"
+      public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
+      public use MutableIndexed, MutableSlice from "./types"
+      public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
+      public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
+      public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
+      public use print, panic, using, do, assert, nameOf, Expression from "./types"
+      public use Void from "./types"
+      public use isSame from "./types"
+      public use Option.Some, Option.None from "./types"
+      public use Result.Ok, Result.Fail from "./types"
+      """,
+  ]
+}
+
+group "the skill" {
+  test "the body carries the model and the verification, and points at the other two" {
+    const documentation = documentationOf "docs", skillTree()
+    const skill = buildSkill documentation
+    assert skill.problems.isEmpty()
+    const body = skill.files.find({ _.path == "SKILL.md" }).expect("the body").text
+    assert body.startsWith("---\nname: torbscript\n")
+    assert body.contains("## The language in sixty seconds")
+    assert body.contains("## How to verify your work")
+    assert body.contains("`reference/language/cheat-sheet.md`")
+    assert body.contains("`reference/explanation/mistakes.md`")
+  }
+
+  test "a heading of an inlined page is one level deeper" {
+    const documentation = documentationOf "docs", skillTree()
+    const skill = buildSkill documentation
+    const body = skill.files.find({ _.path == "SKILL.md" }).expect("the body").text
+    assert body.contains("### Goal")
+  }
+
+  test "a planned page is not in the skill at all" {
+    var files = skillTree()
+    const planned = referencePage("Planned").replace("status: stable", "status: planned").replace(
+      "One paragraph about the construct.",
+      "> **Planned.** Not implemented.",
+    )
+    files.set "language/planned.md", planned
+    const documentation = documentationOf "docs", files
+    const skill = buildSkill documentation
+    assert(skill.excluded == 1)
+    assert(!skill.files.any({ _.path == "reference/language/planned.md" }))
+  }
+
+  test "a page that says omit is not in the skill" {
+    var files = skillTree()
+    files.set "language/omitted.md", referencePage("Omitted").replace("status: stable", "status: stable\nskill: omit")
+    const documentation = documentationOf "docs", files
+    const skill = buildSkill documentation
+    assert(!skill.files.any({ _.path == "reference/language/omitted.md" }))
+  }
+
+  test "the reference index names every page with its summary" {
+    const documentation = documentationOf "docs", skillTree()
+    const skill = buildSkill documentation
+    const index = skill.files.find({ _.path == "reference/index.md" }).expect("the index").text
+    assert index.contains("## Contents")
+    assert index.contains("`language/cheat-sheet.md`")
+    assert index.contains("What this construct means")
+  }
+
+  test "a missing role is reported" {
+    var files = skillTree()
+    files.remove "language/cheat-sheet.md"
+    const documentation = documentationOf "docs", files
+    const skill = buildSkill documentation
+    assert(skill.problems.any({ _.message.contains "`skill: cheat-sheet`" }))
+  }
+}
+
+/** A tree with one page per role of the skill. */
+fn skillTree(): Map<String, String> {
+  var files = goodTree()
+  files.set "language/cheat-sheet.md", referencePage("Cheat sheet").replace("status: stable", "status: stable\nskill: cheat-sheet")
+  files.set "explanation/index.md", folderIndex("Why")
+  files.set "explanation/mistakes.md", referencePage("Mistakes").replace("status: stable", "status: stable\nskill: mistakes")
+  files.set "guide/index.md", folderIndex("The guide")
+  files.set "guide/model.md", guidePage()
+  files.set "tooling/index.md", folderIndex("The toolchain")
+  files.set "tooling/verify.md", referencePage("Verify").replace("status: stable", "status: stable\nskill: verify")
+  files
+}
+
+fn guidePage(): String {
+  """
+    ---
+    title: The language in sixty seconds
+    summary: The mental model of the language in one screen, which is what a reader needs before anything else.
+    kind: guide
+    status: stable
+    skill: model
+    ---
+
+    One paragraph.
+
+    ## Goal
+
+    To know the shape of the language.
+
+    ## Next
+
+    - [Nothing](index.md) - the index.
+    """
+}
+
+group "the bundle" {
+  test "the index has an H1, a summary and one section per folder" {
+    const documentation = documentationOf "docs", goodTree()
+    const bundled = bundleDocumentation documentation, "TorbScript", "The documentation."
+    assert bundled.index.startsWith("# TorbScript\n\n> The documentation.\n")
+    assert bundled.index.contains("## The language")
+    assert bundled.index.contains("- [Bindings](language/bindings.md): What this construct means")
+    assert bundled.index.contains("## Optional")
+  }
+
+  test "the full bundle holds the text of every page" {
+    const documentation = documentationOf "docs", goodTree()
+    const bundled = bundleDocumentation documentation, "TorbScript", "The documentation."
+    assert bundled.full.contains("<!-- language/bindings.md -->")
+    assert bundled.full.contains("## What this is not")
+  }
+}

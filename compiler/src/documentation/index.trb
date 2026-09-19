@@ -1,0 +1,228 @@
+use File, IoError from "std/fs"
+use normalizePath from "../project/path"
+use DocumentationProblem, linesOf from "./markdown"
+use Page, Folder, Documentation, joinDocumentationPath, fileName from "./tree"
+use indexBegin, indexEnd from "./schema"
+
+/**
+ * The body of an `index.md` between the two marker comments is generated from the `title`, the `summary` and the
+ * `order` of its children. Nobody maintains a list of links by hand, so an index can never be stale, and an agent
+ * navigates index to summary to page while loading almost nothing.
+ *
+ * Everything above the first marker is the author's: the front matter and an introduction that says what belongs in
+ * the folder. Below the closing marker nothing is allowed, so that the generated part is always the end of the file
+ * and a diff of it is one block.
+ */
+
+/** What `docs index` would write for one index page. */
+public type GeneratedIndex {
+  page: Page
+  text: String
+}
+
+public type IndexResult {
+  generated: List<GeneratedIndex>
+  problems: List<DocumentationProblem>
+}
+
+/** The whole documentation, with the body of every index as it has to look. */
+public fn generateIndexes(documentation: Documentation): IndexResult {
+  var generated: List<GeneratedIndex> = []
+  var problems: List<DocumentationProblem> = []
+  for folder in documentation.folders {
+    match folder.index {
+      Some(page) => {
+        const written = indexTextOf documentation, folder, page
+        problems.addAll written.problems
+        generated.add GeneratedIndex(page, written.text)
+      }
+      None => {}
+    }
+  }
+  IndexResult generated, problems
+}
+
+type WrittenIndex {
+  text: String
+  problems: List<DocumentationProblem>
+}
+
+fn indexTextOf(documentation: Documentation, folder: Folder, page: Page): WrittenIndex {
+  const shown = page.shown documentation.root
+  const lines = linesOf page.text
+  var problems: List<DocumentationProblem> = []
+  var beginAt = -1
+  var endAt = -1
+  var index = 0
+  while index < lines.length() {
+    const trimmed = lines[index].trim()
+    if trimmed == indexBegin && beginAt < 0 {
+      beginAt = index
+    }
+    if trimmed == indexEnd && beginAt >= 0 && endAt < 0 {
+      endAt = index
+    }
+    index = index + 1
+  }
+  var head: List<String> = []
+  if beginAt < 0 {
+    const note = "The generated part of an index stands between `{indexBegin}` and `{indexEnd}`. Run `torb docs index`"
+    problems.add DocumentationProblem(shown, 1, note)
+    head = lines
+  } else {
+    if endAt < 0 {
+      const note = "The generated part of this index is never closed by `{indexEnd}`"
+      problems.add DocumentationProblem(shown, beginAt + 1, note)
+    }
+    var line = 0
+    while line < beginAt {
+      head.add lines[line]
+      line = line + 1
+    }
+    if endAt >= 0 {
+      var after = endAt + 1
+      while after < lines.length() {
+        if !lines[after].trim().isEmpty() {
+          const note = "Nothing stands below the generated part of an index"
+          problems.add DocumentationProblem(shown, after + 1, note)
+          break
+        }
+        after = after + 1
+      }
+    }
+  }
+  while !head.isEmpty() && head[head.length() - 1].trim().isEmpty() {
+    head.removeAt(head.length() - 1)
+  }
+  var body = head
+  if !body.isEmpty() {
+    body.add ""
+  }
+  body.add indexBegin
+  body.addAll entriesOf(documentation, folder, page)
+  body.add indexEnd
+  const text = body.joined separator: "\n"
+  WrittenIndex "{text}\n", problems
+}
+
+/** A value gets quotes exactly where the subset of the front matter needs them. */
+public fn quotedIfNeeded(value: String): String {
+  const indicators = ["-", "?", ":", ",", "[", "]", "{", "}", "#", "&", "*", "!", "|", ">", "'", "\"", "%", "@", "`"]
+  const startsBadly = indicators.any({ value.startsWith _ })
+  if startsBadly || value.contains(": ") {
+    const escaped = value.replace("\\", "\\\\").replace("\"", "\\\"")
+    return "\"{escaped}\""
+  }
+  value
+}
+
+/** The generated lines: the subfolders, then the pages, then the design documents the index names. */
+fn entriesOf(documentation: Documentation, folder: Folder, page: Page): List<String> {
+  var lines: List<String> = []
+  const sections = sortedChildren documentation, folder
+  if !sections.isEmpty() {
+    lines.add ""
+    lines.add "## Sections"
+    lines.add ""
+    for child in sections {
+      lines.add entryOf(child, indexLinkOf(folder, child))
+    }
+  }
+  const pages = sortedPages folder
+  if !pages.isEmpty() {
+    lines.add ""
+    lines.add "## Pages"
+    lines.add ""
+    for child in pages {
+      lines.add entryOf(child, fileName(child.path))
+    }
+  }
+  const documents = page.frontMatter.items "documents"
+  if !documents.isEmpty() {
+    lines.add ""
+    lines.add "## Design documents"
+    lines.add ""
+    for document in documents {
+      const resolved = normalizePath joinDocumentationPath(folder.path, document)
+      const title = documentation.plainTitles.get(resolved) ?? fileName(document)
+      lines.add "- **[{title}]({document})**"
+    }
+  }
+  lines.add ""
+  lines
+}
+
+fn indexLinkOf(folder: Folder, child: Page): String {
+  const name = childFolderName folder.path, child.folder
+  "{name}/index.md"
+}
+
+fn childFolderName(parent: String, child: String): String {
+  if parent.isEmpty() {
+    return child
+  }
+  child.slice((parent.byteLength() + 1)..child.byteLength())
+}
+
+fn entryOf(child: Page, target: String): String {
+  const title = child.frontMatter.text("title") ?? ""
+  const summary = child.frontMatter.text("summary") ?? ""
+  const status = child.frontMatter.text("status") ?? "stable"
+  const mark = match status {
+    "planned" => " _(planned)_"
+    "draft" => " _(draft)_"
+    _ => ""
+  }
+  "- **[{title}]({target})**{mark} - {summary}"
+}
+
+/** The indexes of the folders directly below this one, in the order they are shown. */
+fn sortedChildren(documentation: Documentation, folder: Folder): List<Page> {
+  var found: List<Page> = []
+  for child in folder.folders {
+    match documentation.indexOf(child) {
+      Some(index) => found.add index
+      None => {}
+    }
+  }
+  sortedByOrder found
+}
+
+fn sortedPages(folder: Folder): List<Page> {
+  sortedByOrder folder.pages
+}
+
+/** By `order` where there is one, then by title. A page without an `order` follows every page that has one. */
+fn sortedByOrder(pages: List<Page>): List<Page> {
+  var sorted = pages
+  sorted.sort({ (_.frontMatter.number("order") ?? 1_000_000, _.frontMatter.text("title") ?? "") })
+  sorted
+}
+
+/** Writes every index whose body is not what it has to be. Returns the paths that changed. */
+public fn writeIndexes(documentation: Documentation, result: IndexResult): Result<List<String>, IoError> {
+  var written: List<String> = []
+  for generated in result.generated {
+    if generated.page.text == generated.text {
+      continue
+    }
+    const path = "{documentation.root}/{generated.page.path}"
+    File.writeText(path, generated.text)?
+    written.add generated.page.path
+  }
+  Ok written
+}
+
+/** What `docs index --check` reports: every index whose generated part is not what it would be. */
+public fn staleIndexes(documentation: Documentation, result: IndexResult): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for generated in result.generated {
+    if generated.page.text == generated.text {
+      continue
+    }
+    const shown = generated.page.shown documentation.root
+    const note = "The generated part of this index is not up to date. Run `torb docs index`"
+    problems.add DocumentationProblem(shown, 1, note)
+  }
+  problems
+}

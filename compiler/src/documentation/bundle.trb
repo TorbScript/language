@@ -1,0 +1,100 @@
+use File, IoError from "std/fs"
+use Documentation, Page, folderOf from "./tree"
+
+/**
+ * `torb docs bundle`: an `llms.txt` and an `llms-full.txt` (https://llmstxt.org/).
+ *
+ * The format is an H1, a blockquote summary, and H2 sections whose lists are `[title](path): notes`. It is worth the
+ * sixty lines it costs here as a **manifest of the tree in one file** - something a person or a tool can be pointed at
+ * with a single path - and for nothing else: measurements of real traffic (Ahrefs, May 2026: 97% of published
+ * `llms.txt` files were never requested; SE Ranking over about 300 000 domains: no correlation with being cited) show
+ * that no crawler reads it. Google has said it does not support it. So this file is an output of the documentation and
+ * never an input to it, and the agent-facing form of the documentation is the skill.
+ *
+ * `llms-full.txt` is not part of that proposal - it is a convention Mintlify popularized - and it is the concatenation
+ * of every page. It exists here for the one case the index cannot serve: a model without a file system that has to be
+ * handed the whole documentation at once.
+ */
+
+public type BundledDocumentation {
+  index: String
+  full: String
+}
+
+public fn bundleDocumentation(documentation: Documentation, title: String, summary: String): BundledDocumentation {
+  BundledDocumentation bundleIndex(documentation, title, summary), bundleFull(documentation, title)
+}
+
+fn bundleIndex(documentation: Documentation, title: String, summary: String): String {
+  var lines: List<String> = ["# {title}", "", "> {summary}", ""]
+  lines.add "Every page is Markdown with front matter. `kind` says what a page is for, `status` how far it can be"
+  lines.add "trusted, and `summary` what it answers."
+  lines.add ""
+  for folder in documentation.folders {
+    const own = published folder.path, documentation
+    if own.isEmpty() {
+      continue
+    }
+    const heading = if folder.path.isEmpty() {
+      "Start here"
+    } else {
+      match folder.index {
+        Some(index) => index.frontMatter.text("title") ?? folder.path
+        None => folder.path
+      }
+    }
+    lines.add "## {heading}"
+    lines.add ""
+    for page in own {
+      const pageTitle = page.frontMatter.text("title") ?? ""
+      const pageSummary = page.frontMatter.text("summary") ?? ""
+      lines.add "- [{pageTitle}]({page.path}): {pageSummary}"
+    }
+    lines.add ""
+  }
+  lines.add "## Optional"
+  lines.add ""
+  lines.add "- [The concept](../CONCEPT.md): the design source of truth of the language, longer and less finished than"
+  lines.add "  the documentation."
+  lines.add ""
+  lines.joined separator: "\n"
+}
+
+/** Everything of one folder that a reader outside the repository should see, in path order. */
+fn published(folder: String, documentation: Documentation): List<Page> {
+  var kept: List<Page> = []
+  for page in documentation.pages {
+    if page.folder != folder {
+      continue
+    }
+    const status = page.frontMatter.text("status") ?? "stable"
+    const role = page.frontMatter.text("skill") ?? ""
+    // The same two exclusions as the skill: a planned feature is not a feature, and a page about the documentation
+    // itself is of no use to somebody reading the documentation from outside
+    if status == "planned" || role == "omit" || page.path == "index.md" {
+      continue
+    }
+    kept.add page
+  }
+  kept
+}
+
+fn bundleFull(documentation: Documentation, title: String): String {
+  var parts: List<String> = ["# {title}", ""]
+  for folder in documentation.folders {
+    for page in published(folder.path, documentation) {
+      parts.add "<!-- {page.path} -->"
+      parts.add ""
+      parts.add page.text
+      parts.add ""
+    }
+  }
+  parts.joined separator: "\n"
+}
+
+public fn writeBundle(out: String, bundled: BundledDocumentation): Result<Void, IoError> {
+  File.createDirectory(out)?
+  File.writeText("{out}/llms.txt", bundled.index)?
+  File.writeText("{out}/llms-full.txt", bundled.full)?
+  Ok(void)
+}

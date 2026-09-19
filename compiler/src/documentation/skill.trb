@@ -1,0 +1,409 @@
+use File, IoError from "std/fs"
+use normalizePath from "../project/path"
+use DocumentationProblem, linesOf from "./markdown"
+use Page, Documentation, folderOf, fileName, joinDocumentationPath from "./tree"
+
+/**
+ * `torb docs skill`: the documentation as an Agent Skill, in the format Anthropic published
+ * (https://agentskills.io/specification): a folder whose `SKILL.md` has the front matter `name` and `description`, a
+ * body that is loaded when the skill triggers, and further files that are read only when they are needed.
+ *
+ * The three levels of progressive disclosure are what the shape follows:
+ *
+ * 1. `name` and `description` are always in the model's context (about 100 tokens). They decide whether the skill is
+ *    used at all, so the description says what the skill is **and when to use it**, in the third person.
+ * 2. `SKILL.md` is read when the skill triggers and stays under `longestSkillBody` lines: the mental model of the
+ *    language, a syntax cheat sheet, the mistakes a model trained on other languages makes, how to verify work, and a
+ *    table into the reference.
+ * 3. `reference/` holds the pages. `reference/index.md` is the whole map with one summary per page, so the agent reads
+ *    one file to decide which page to open instead of opening pages to find out.
+ *
+ * Nothing in the body is written here: every section is the body of a page that carries the matching `skill` role in
+ * its front matter, so the skill cannot drift away from the documentation. What this file decides is the *shape*.
+ */
+
+/**
+ * The name of the skill. It is also the name of its directory, which the format requires, and it may only contain
+ * lowercase letters, digits and single hyphens.
+ */
+public const skillName = "torbscript"
+
+/**
+ * What the model matches a request against. It says what the skill is and when to use it, in the third person, and it
+ * names the words that should trigger it - a description that does not name them is a skill nobody reaches. The format
+ * allows 1024 characters; this one stays far below that on purpose, because it is in the context of every request.
+ */
+public const skillDescription = "Writes, reads and reviews TorbScript, a functional-first language with value semantics whose CLI is `torb` and whose files end in `.trb`. Use it for any task that touches TorbScript source, a `project.trb`, the `torb` toolchain, or the TorbScript standard library - and use it before writing TorbScript from memory, because the language looks like Rust, Swift and Kotlin but differs from all three in mutation, error handling, cases and call syntax."
+
+/** Anthropic's guidance: under 500 lines keeps the body inside the token budget of level two. */
+public const longestSkillBody = 500
+
+/** One file of the generated skill. Writing happens in `writeSkill`, so building it is a pure function. */
+public type SkillFile {
+  /** Relative to the skill directory, always with `/` */
+  path: String
+  text: String
+}
+
+public type BuiltSkill {
+  files: List<SkillFile>
+  problems: List<DocumentationProblem>
+  /** The lines of `SKILL.md`, the number the size limit is about */
+  bodyLines: Int
+  /** How many pages went into `reference/`, and how many were left out because they are planned */
+  included: Int
+  excluded: Int
+}
+
+public fn buildSkill(documentation: Documentation): BuiltSkill {
+  var problems: List<DocumentationProblem> = []
+  const pages = includedPages documentation
+  const excluded = documentation.pages.length() - pages.length()
+  var files: List<SkillFile> = []
+  const body = skillBody documentation, pages
+  problems.addAll body.problems
+  files.add SkillFile("SKILL.md", body.text)
+  files.add SkillFile("reference/index.md", referenceIndex(documentation, pages))
+  for page in pages {
+    // `reference/index.md` is the generated map of every page, which is worth more here than the root index
+    if page.path == "index.md" {
+      continue
+    }
+    files.add SkillFile("reference/{page.path}", page.text)
+  }
+  const lines = linesOf(body.text).length()
+  if lines > longestSkillBody {
+    const note = "`SKILL.md` has {lines} lines. A skill body stays under {longestSkillBody}: move material into a page"
+    problems.add DocumentationProblem("SKILL.md", 0, note)
+  }
+  BuiltSkill files, problems, lines, pages.length(), excluded
+}
+
+/**
+ * Everything the skill carries. A `planned` page is left out completely - a model that reads a designed feature as an
+ * available one writes code that cannot compile - and a page that says `skill: omit` is left out because its author
+ * said so.
+ */
+fn includedPages(documentation: Documentation): List<Page> {
+  var kept: List<Page> = []
+  for page in documentation.pages {
+    const status = page.frontMatter.text("status") ?? "stable"
+    const role = page.frontMatter.text("skill") ?? ""
+    if status == "planned" || role == "omit" {
+      continue
+    }
+    kept.add page
+  }
+  kept
+}
+
+type WrittenBody {
+  text: String
+  problems: List<DocumentationProblem>
+}
+
+fn skillBody(documentation: Documentation, pages: List<Page>): WrittenBody {
+  var problems: List<DocumentationProblem> = []
+  var lines: List<String> = ["---", "name: {skillName}"]
+  lines.add "description: \"{skillDescription}\""
+  lines.add "---"
+  lines.add ""
+  lines.add "# TorbScript"
+  lines.add ""
+  // Two sections are needed on every task and are short, so they stand in the body. The two that are long lookup
+  // material are one `Read` away instead, which is what keeps the body inside the published budget of 500 lines.
+  const inlined = [("model", "The language in sixty seconds"), ("verify", "How to verify your work")]
+  const referenced = [
+    ("cheat-sheet", "Every form of the language, with its exact spelling"),
+    ("mistakes", "The mistakes a model trained on other languages makes, each with its diagnostic"),
+  ]
+  const first = pageWithRole documentation, "model"
+  match first {
+    Some(page) => {
+      problems.addAll danglingLinks(page, pages)
+      lines.addAll inlinedSection("The language in sixty seconds", page)
+    }
+    None => {
+      problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: model`")
+    }
+  }
+  lines.add "## Read these two files before writing TorbScript"
+  lines.add ""
+  for (role, why) in referenced {
+    const source = pageWithRole documentation, role
+    match source {
+      Some(page) => {
+        lines.add "- `reference/{page.path}` - {why}."
+      }
+      None => {
+        problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: {role}`")
+      }
+    }
+  }
+  lines.add ""
+  lines.add "They are lookup material, not background: the first one is the only place every form of the language is"
+  lines.add "written down, and the second one is the list of lines that look right and are not. Read both once at the start"
+  lines.add "of a task that writes TorbScript."
+  lines.add ""
+  const verify = pageWithRole documentation, "verify"
+  match verify {
+    Some(page) => {
+      problems.addAll danglingLinks(page, pages)
+      lines.addAll inlinedSection("How to verify your work", page)
+    }
+    None => {
+      problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: verify`")
+    }
+  }
+  for (role, _) in inlined {
+    if pageWithRole(documentation, role).isNone() {
+      problems.add DocumentationProblem("SKILL.md", 0, "No page carries `skill: {role}`")
+    }
+  }
+  lines.addAll navigation(documentation, pages)
+  WrittenBody lines.joined(separator: "\n"), problems
+}
+
+/**
+ * A page whose body stands in `SKILL.md` may only link pages the skill carries. A link into a page that was left out -
+ * a planned one, or one about the documentation itself - would be a path that leads nowhere, which is the one thing an
+ * agent cannot recover from.
+ */
+fn danglingLinks(page: Page, pages: List<Page>): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for link in page.read.links {
+    const target = rewrittenTarget link.target, page.folder, false
+    if !target.startsWith("reference/") {
+      continue
+    }
+    const inside = target.slice(10..target.byteLength())
+    const path = match inside.indexOf("#") {
+      Some(at) => inside.slice(0..at)
+      None => inside
+    }
+    if pages.any({ _.path == path }) {
+      continue
+    }
+    const note = "`{link.target}` is not part of the skill, so a body that is inlined into `SKILL.md` cannot link it"
+    problems.add DocumentationProblem(page.path, link.line, note)
+  }
+  problems
+}
+
+/** One section of the body: the heading, the page's body one level deeper, and where it came from. */
+fn inlinedSection(heading: String, page: Page): List<String> {
+  var lines = ["## {heading}", ""]
+  lines.addAll demoted(page)
+  lines.add ""
+  lines.add "Source: `reference/{page.path}`"
+  lines.add ""
+  lines
+}
+
+fn pageWithRole(documentation: Documentation, role: String): Page? {
+  documentation.pages.find({ (_.frontMatter.text("skill") ?? "") == role })
+}
+
+/**
+ * The body of a page, one heading level deeper, so that its sections sit below the section of the skill they fill. The
+ * body is copied verbatim otherwise: a condensed copy would be a second version of the same text, and two versions of
+ * one rule is how a documentation starts to contradict itself.
+ */
+fn demoted(page: Page): List<String> {
+  var lines: List<String> = []
+  var isInsideFence = false
+  for line in linesOf(page.read.body) {
+    if line.startsWith("```") {
+      isInsideFence = !isInsideFence
+      lines.add line
+      continue
+    }
+    if isInsideFence {
+      lines.add line
+      continue
+    }
+    if line.startsWith("#") {
+      lines.add "#{line}"
+      continue
+    }
+    lines.add withRewrittenLinks(line, page.folder)
+  }
+  trimmedBlankLines lines
+}
+
+/**
+ * A link of an inlined body, seen from `SKILL.md` instead of from the page it was written on. The page itself is copied
+ * into `reference/`, so a link that was relative to its folder has to become relative to the skill's root - otherwise
+ * every link of the two inlined sections points nowhere.
+ */
+fn withRewrittenLinks(line: String, folder: String): String {
+  var rewritten = ""
+  var rest = line
+  var isInsideCode = false
+  while !rest.isEmpty() {
+    const opening = rest.indexOf "]("
+    const at = match opening {
+      Some(found) => found
+      None => {
+        rewritten = rewritten + rest
+        rest = ""
+        continue
+      }
+    }
+    const tail = rest.slice(at..rest.byteLength())
+    const closing = tail.indexOf ")"
+    const end = match closing {
+      Some(found) => at + found
+      None => {
+        rewritten = rewritten + rest
+        rest = ""
+        continue
+      }
+    }
+    const head = rest.slice(0..(at + 2))
+    isInsideCode = hasOddBackticks head, isInsideCode
+    const target = rest.slice((at + 2)..end)
+    rewritten = rewritten + head + rewrittenTarget(target, folder, isInsideCode)
+    rest = rest.slice(end..rest.byteLength())
+    const kept = rest.slice(0..1)
+    rewritten = rewritten + kept
+    rest = rest.slice(1..rest.byteLength())
+  }
+  rewritten
+}
+
+fn hasOddBackticks(text: String, before: Bool): Bool {
+  var isInside = before
+  for character in text.chars() {
+    if character == '`' {
+      isInside = !isInside
+    }
+  }
+  isInside
+}
+
+fn rewrittenTarget(target: String, folder: String, isInsideCode: Bool): String {
+  const isExternal = target.startsWith("http://") || target.startsWith("https://") || target.startsWith("mailto:")
+  if isInsideCode || isExternal || target.isEmpty() || target.startsWith("#") {
+    return target
+  }
+  const hash = target.indexOf "#"
+  const path = match hash {
+    Some(at) => target.slice(0..at)
+    None => target
+  }
+  const anchor = match hash {
+    Some(at) => target.slice(at..target.byteLength())
+    None => ""
+  }
+  const resolved = normalizePath joinDocumentationPath(folder, path)
+  if resolved.startsWith("..") {
+    // A link that leaves the documentation cannot be followed from a skill either, so it keeps its text
+    return target
+  }
+  "reference/{resolved}{anchor}"
+}
+
+fn trimmedBlankLines(lines: List<String>): List<String> {
+  var kept = lines
+  while !kept.isEmpty() && kept[0].trim().isEmpty() {
+    kept.removeAt 0
+  }
+  while !kept.isEmpty() && kept[kept.length() - 1].trim().isEmpty() {
+    kept.removeAt(kept.length() - 1)
+  }
+  kept
+}
+
+/** The table into the reference: one row per section, and the one file that holds the whole map. */
+fn navigation(documentation: Documentation, pages: List<Page>): List<String> {
+  var lines: List<String> = ["## Where to look things up", ""]
+  lines.add "Read `reference/index.md` first: it is one file with every page of the documentation and a one-sentence"
+  lines.add "summary of each, so the right page can be chosen without opening any. The sections are:"
+  lines.add ""
+  lines.add "| Section | What is in it |"
+  lines.add "|---------|---------------|"
+  for folder in documentation.folders {
+    if folder.path.isEmpty() || folder.path.contains("/") {
+      continue
+    }
+    match folder.index {
+      Some(index) => {
+        // A folder whose index is not part of the skill has no file to point at
+        if pages.any({ _.path == index.path }) {
+          const summary = index.frontMatter.text("summary") ?? ""
+          lines.add "| `reference/{folder.path}/index.md` | {summary} |"
+        }
+      }
+      None => {}
+    }
+  }
+  lines.add ""
+  lines.add "Every page is self-contained: it defines or links every term it uses, so one page is enough to answer one"
+  lines.add "question. A page marked `status: draft` may still be wrong; verify it against the compiler."
+  lines.add ""
+  lines.add "There are {pages.length()} pages. Pages of features that are designed but not implemented are not part of"
+  lines.add "this skill at all, so everything in `reference/` is a feature that exists today."
+  lines
+}
+
+/**
+ * One file with every page: its path, its title and its summary, grouped by folder. This is the level between the body
+ * of the skill and a page - an index of summaries costs a fraction of the pages it describes.
+ */
+fn referenceIndex(documentation: Documentation, pages: List<Page>): String {
+  var lines: List<String> = ["# The TorbScript documentation", ""]
+  lines.add "Every page of the reference, with what it answers. Open the one page that answers the question."
+  lines.add ""
+  lines.add "## Contents"
+  lines.add ""
+  for folder in documentation.folders {
+    if carried(pages, folder.path).isEmpty() {
+      continue
+    }
+    const shown = if folder.path.isEmpty() { "the root" } else { folder.path }
+    lines.add "- {shown}"
+  }
+  lines.add ""
+  for folder in documentation.folders {
+    const own = carried pages, folder.path
+    if own.isEmpty() {
+      continue
+    }
+    const heading = if folder.path.isEmpty() { "The root" } else { folder.path }
+    lines.add "## {heading}"
+    lines.add ""
+    for page in own {
+      const title = page.frontMatter.text("title") ?? ""
+      const summary = page.frontMatter.text("summary") ?? ""
+      const kind = page.frontMatter.text("kind") ?? ""
+      lines.add "- `{page.path}` - **{title}** ({kind}): {summary}"
+    }
+    lines.add ""
+  }
+  lines.joined separator: "\n"
+}
+
+/** The pages of one folder that the skill carries, without the root index, which `reference/index.md` replaces. */
+fn carried(pages: List<Page>, folder: String): List<Page> {
+  pages.filter({ _.folder == folder && _.path != "index.md" }).toList()
+}
+
+/** Writes the skill. Every directory is created before the file that goes into it. */
+public fn writeSkill(out: String, skill: BuiltSkill): Result<Void, IoError> {
+  for file in skill.files {
+    const path = "{out}/{file.path}"
+    const directory = folderOf path
+    if !directory.isEmpty() {
+      File.createDirectory(directory)?
+    }
+    File.writeText(path, file.text)?
+  }
+  Ok(void)
+}
+
+/** The name of the file the skill is installed as, for the message the command prints. */
+public fn installationHint(out: String): String {
+  const name = fileName out
+  "Copy `{out}` to `~/.claude/skills/{name}` for yourself, or to `.claude/skills/{name}` of a project to share it"
+}

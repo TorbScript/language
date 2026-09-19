@@ -1,0 +1,216 @@
+---
+title: Syntax cheat sheet
+summary: "Every form of the language in one place: declarations, expressions, patterns, types and the call rules, with the exact spelling of each."
+kind: reference
+status: stable
+order: 10
+skill: cheat-sheet
+keywords:
+  - cheat sheet
+  - syntax
+  - forms
+  - quick reference
+source:
+  - CONCEPT.md#lexical-structure
+  - CONCEPT.md#formatter-canon
+  - examples/tour/src
+---
+
+Every form the language has, with its exact spelling. Each line is the canonical form: it is what `torb canon` writes and
+what the compiler accepts.
+
+## Example
+
+```trb
+use File from "std/fs"
+
+type Config {
+  var host: String = "localhost"
+  var port: Int = 8080
+}
+
+type ConfigError {
+  case Missing(path: String)
+  case Malformed(line: Int)
+}
+
+fn load(path: String): Result<Config, ConfigError> {
+  if !File.exists(path) {
+    return Fail ConfigError.Missing(path)
+  }
+  Ok Config()
+}
+
+match load("project.trb") {
+  Ok(config) => print "{config.host}:{config.port}"
+  Fail(problem) => printError "{problem}"
+}
+```
+
+## Syntax
+
+### Declarations
+
+```text
+const name = value                          an immutable binding
+var name: Type = value                      a mutable binding with an annotation
+fn name(a: Int, b: Int = 1): Int { ... }     a function; a default is evaluated at every call
+fn name(self): Int { ... }                   a method
+fn name(var self) { ... }                    a method that changes its receiver in place
+fn name(var target: Counter) { ... }         a parameter the function may change
+fn name(...rest: Int): Int { ... }           a variadic parameter; `rest` is a `List<Int>`
+type Name { ... }                            a type
+type Name = Other                            an alias for an existing type
+shared type Name { ... }                     a type with an identity instead of a value
+trait Name { ... }                           a capability
+extend Name with Trait { ... }               an implementation written afterwards
+extend Name { ... }                          members added to a type
+public fn name() { ... }                     exported from its file
+private var field: Int = 0                   invisible outside its type
+private(var) field: Int = 0                  read by everyone, written by the type only
+use Name from "std/core"                     an import
+use Type.Case from "./module"                a case, by its path
+use * as math from "std/math"                a namespace import
+use Name as Other from "./module"            an import under a local name
+public use Name from "./module"              a re-export
+```
+
+### Expressions
+
+```text
+f a, b                                       a command call: the canonical form
+f(a, b)                                      needed when a rule of the canon says so
+f()                                          no arguments: always parentheses
+f(a) { x => x }                              a trailing closure
+f a { x => x }                               a command call with a trailing closure
+f(label: value)                              a labelled argument; labels follow the positional ones
+f(...values)                                 a spread of any `Iterable`
+{ x: Int => x * 2 }                          a closure with a typed parameter
+{ _ * 2 }                                    a closure with implicit parameters `_`, `_2`, `_3`
+Type.Case(field)                             a case, written out
+.Case(field)                                 a case where the expected type is known
+Case(field)                                  a case that the file imports
+value.member                                 a method reference, bound to `value`
+Type.member                                  the member itself: `(self: Type) => ...`
+value?                                       unwrap an `Ok` or a `Some`, or return early
+value ?? fallback                            the value, or a lazy fallback
+value?.member                                `Option.map`, or `flatMap` for an optional member
+value.into()                                 a conversion chosen by the expected type
+value.to<Target>()                           a conversion with the target written out
+do { ... }                                   a block evaluated immediately
+if condition { a } else { b }                an expression
+match subject { pattern => value }           an expression, and exhaustive
+"text {expression}"                          interpolation; a literal brace is `\{`
+r"text"                                      a raw string: no escapes, no interpolation
+"""                                          a multi-line string, dedented by its first line
+  text
+  """
+```
+
+### Patterns
+
+```text
+_                                            the wildcard
+name                                         binds, because it starts lowercase
+Case(field)                                  an imported case; never binds
+.Case(field)                                 a case of the type being matched
+Type.Case(field)                             a case written out
+Type(field, other)                           a type read backwards
+Type(label: value)                           a label that has to name the field at that position
+(a, b)                                       a tuple
+[first, ...rest]                             a list, with a rest
+[]                                           the empty list
+1 | 2 | 3                                    alternatives
+4..=9                                        a range
+n if n < 0                                   a binding with a guard
+```
+
+### Types
+
+```text
+Int Int8 Int16 Int32 Int64                   signed; `Int` is an alias for `Int64`
+UInt UInt8 UInt16 UInt32 UInt64              unsigned
+Float Float32 Float64                        `Float` is an alias for `Float64`
+Bool Char String Void Never                  the rest of the built-ins
+Value?                                       `Option<Value>`
+List<Item> Map<Key, Value> Set<Item>         collection traits
+Array<Item, 16>                              a fixed size in the type
+Range<Int>                                   `0..10`, `0..=10`, `0..`, `..10`
+(Int, String)                                a tuple
+(lowest: Int, highest: Int)                  a labelled tuple; a label is not part of the type
+(value: Int) => Int                          a function type
+(var self: Config) => Void                   a receiver closure
+lazy Value                                   evaluated at most once, on first use
+Expression<Bool>                             the value and its syntax tree
+Show & Encode                                an intersection of traits
+"tcp" | "udp"                                a union of literals of one base type
+```
+
+### Statements
+
+```text
+return value                                 an early return
+for item in items { ... }                     over anything `Iterable`
+for (key, value) in table { ... }             destructuring in a loop
+while condition { ... }                      `break` and `continue` work
+if const Some(user) = find(id) { ... }        a pattern in a condition
+if var Some(cursor) = current { ... }         binds into the place, not into a copy
+place = value                                 a statement, never an expression
+panic "message"                               aborts with exit code 101
+```
+
+## Rules
+
+1. **A statement ends at the end of its line.** There are no semicolons, and two statements never share a line.
+2. **A call is a command wherever the grammar allows it**: in command position, with a path as the callee, at least one
+   argument whose first token is not `(`, `[`, `-`, `!` or `.`, no operator at the top level of an argument, and all
+   arguments on one line. Parentheses everywhere else.
+3. **A case is never bare unless the file imports it.** `Some`, `None`, `Ok` and `Fail` are bare because the prelude
+   imports them.
+4. **In a pattern, a lowercase name binds and an uppercase name never does.** An uppercase binding is a compile error.
+5. **`const` is deep.** Through a `const` binding nothing changes.
+6. **A field is `const` unless marked `var`; a member is public unless marked `private`; a top-level declaration is
+   private to its file unless marked `public`.**
+7. **A `public` function and a trait method never infer their result type.** Without one they answer `Void`.
+8. **`{` in expression position is always a closure**, never a block. `do { ... }` evaluates a block immediately.
+9. **A `match` is exhaustive, and an unreachable arm is an error.**
+10. **An expression statement has to be `Void` or `Never`**, unless the call has a `var` receiver or a `var` argument.
+11. **Mutation needs a `var` path from the binding down**: a `var` binding, `var` parameter or `var self`, then `var`
+    fields.
+12. **A `var` that is changed and never read afterwards is a compile error**, and so is the discarded result of a method
+    that takes `self`.
+
+## What this is not
+
+The forms that look right and are not:
+
+| Wrong | Right | Why |
+|-------|-------|-----|
+| `let x = 1` | `const x = 1` | `let` is not a keyword |
+| `const x = 1;` | `const x = 1` | there are no semicolons |
+| `Circle(2.0)` | `Shape.Circle 2.0` | a case is never bare unless imported |
+| `Err(problem)` | `Fail problem` | the case is `Fail`; the field is `error` |
+| `Some(x)` where a value is expected | `x` | there is no implicit `Some`, and no implicit unwrap |
+| `null`, `nil`, `undefined` | `None` | absence is an `Option` |
+| `throw error` | `return Fail error` | there are no exceptions |
+| `text.length` | `text.chars().count()` | a `String` has no `length()` |
+| `list[i]` for a missing index | `list.get(i)` | `list[i]` panics out of bounds |
+| `a & b` on integers | `a.bitwiseAnd(b)` | there are no bit operators |
+| `x as Int` | `Int.from(x)` | there are no casts |
+| `class`, `interface`, `enum`, `struct` | `type`, `trait` | one keyword for data, one for capability |
+| `impl Trait for Type` | `extend Type with Trait` | `with` is the only word for it |
+| `Hashable`, `Comparable` | `Hash`, `Compare` | a single-method trait is its method |
+| `print(x)` | `print x` | the canon writes a command |
+| `assert sum == 3` | `assert(sum == 3)` | an operator at the top level of an argument |
+| `Ok Some x` | `Ok Some(x)` | commands do not nest |
+| `list.map { _ * 2 }` inside a command | `list.map({ _ * 2 })` | the `{` would belong to the outer command |
+
+## Related
+
+- [Command calls](command-calls.md) - the call rules in full, with the canon.
+- [Bindings](../values-and-types/bindings.md) - `const`, `var` and the copy trap.
+- [Cases and match](../pattern-matching/cases-and-match.md) - how a case is spelled and matched.
+- [Result](../errors/result.md) - `Ok`, `Fail` and `?`.
+- [Traits](../traits/traits.md) - `with`, `extend` and the trait names.
+- [What a model trained on other languages gets wrong](../../explanation/mistakes-models-make.md) - the same table with
+  the diagnostics.

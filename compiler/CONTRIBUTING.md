@@ -18,10 +18,18 @@ cargo test --release                                    # Everything, including 
 sh ../runtime/build.sh                                  # The C runtime and its tests (gcc or clang)
 cargo run --release -q -- canon --check ..              # Is the whole repository in the formatter canon?
 cargo run --release -q -- canon ../std ../compiler ../examples ../bootstrap/tests    # ...write it (a minute)
+cargo run --release -q -- run ../compiler docs check ../docs         # The documentation: schema, links, every snippet
+cargo run --release -q -- run ../compiler docs index --check ../docs # Is the generated part of every index.md current?
+cargo run --release -q -- run ../compiler docs index ../docs         # ...write it
 ```
 
 A change is done when all of them are green and the repository still checks with "no problems". A false positive of
 the checker is a bug of the checker.
+
+`docs/` is the user-facing documentation of the language and has its own rules and its own gate
+([docs/contributing](../docs/contributing/index.md)): every page carries front matter, the body of every `index.md` is
+generated from its children, and every `trb` code block is verified by this front end. A change that changes what the
+language *means* changes the page that says so - `docs check` names the page whose `source` points at what you touched.
 
 ## Style
 

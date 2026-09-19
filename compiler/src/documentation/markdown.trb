@@ -1,0 +1,659 @@
+/**
+ * The reader of a documentation page: the front matter, the headings, the fenced code blocks and the links.
+ *
+ * It is deliberately not a Markdown parser. A page of this documentation is a fixed shape (`docs/contributing`), and
+ * every construct the checker judges is recognizable line by line: the front matter between two `---` lines, an ATX
+ * heading, a fence of exactly three backticks at the start of a line, and an inline link. Everything else is prose
+ * that is carried along unchanged. A line-based reader is what lets a diagnostic name a line number, which is what a
+ * writer and an agent both need.
+ */
+
+/** A value of the front matter. The subset is documented in `docs/contributing/front-matter.md`. */
+public type FieldValue {
+  case Text(value: String)
+  case Number(value: Int)
+  /** An inline list (`[a, b]`) or a block list of scalars */
+  case Items(values: List<String>)
+}
+
+/** One `key: value` of the front matter, with the line it stands on. */
+public type Field {
+  key: String
+  value: FieldValue
+  line: Int
+}
+
+/**
+ * The front matter of a page. The order of the fields is the order of the file, so a message about a field points at
+ * the line it was written on.
+ */
+public type FrontMatter {
+  fields: List<Field>
+
+  fn has(self, key: String): Bool {
+    fields.any({ _.key == key })
+  }
+
+  fn at(self, key: String): Field? {
+    fields.find({ _.key == key })
+  }
+
+  /** The value of a scalar field, or `None` when it is absent or a list. */
+  fn text(self, key: String): String? {
+    match at(key) {
+      Some(field) => match field.value {
+        .Text(value) => Some value
+        .Number(value) => Some "{value}"
+        .Items(_) => None
+      }
+      None => None
+    }
+  }
+
+  fn number(self, key: String): Int? {
+    match at(key) {
+      Some(field) => match field.value {
+        .Number(value) => Some value
+        _ => None
+      }
+      None => None
+    }
+  }
+
+  /** The items of a list field. A scalar counts as a list of one, so `source: CONCEPT.md` needs no brackets. */
+  fn items(self, key: String): List<String> {
+    match at(key) {
+      Some(field) => match field.value {
+        .Items(values) => values
+        .Text(value) => [value]
+        .Number(value) => ["{value}"]
+      }
+      None => []
+    }
+  }
+
+  fn lineOf(self, key: String): Int {
+    match at(key) {
+      Some(field) => field.line
+      None => 1
+    }
+  }
+}
+
+/** A heading of the body. The anchor is what a link after a `#` has to name. */
+public type Heading {
+  level: Int
+  /** The text without the `#`, without an explicit `{#anchor}`, trimmed */
+  text: String
+  anchor: String
+  /** `true` when the anchor was written as `{#anchor}` instead of derived from the text */
+  isExplicit: Bool
+  line: Int
+}
+
+/**
+ * A fenced code block. `info` is what stands behind the three backticks; `language` is its first word and `marker`
+ * the second one (`trb check`, `trb error`, `trb skip <reason>`).
+ */
+public type CodeBlock {
+  info: String
+  language: String
+  marker: String
+  /** Everything behind the marker: the reason of a `skip` */
+  reason: String
+  /** The lines of the block, joined with a line break. Never ends with one. */
+  text: String
+  /** The line of the opening fence */
+  line: Int
+  /** The line the content starts on */
+  contentLine: Int
+}
+
+/** An inline link `[text](target)` or `[text](target#anchor)`. */
+public type Link {
+  text: String
+  target: String
+  /** Without the `#`, empty when the link has none */
+  anchor: String
+  line: Int
+}
+
+/** A problem of a documentation file, in the shape every command reports. */
+public type DocumentationProblem {
+  /** The path as it is shown: relative to the directory the command was started in */
+  path: String
+  /** 1-based; 0 for a problem that belongs to no line */
+  line: Int
+  message: String
+
+  fn show(self): String {
+    if line == 0 {
+      return "{path}: {message}"
+    }
+    "{path}:{line}: {message}"
+  }
+}
+
+/** Everything the reader found in one file. */
+public type ReadPage {
+  /** `None` when the file does not start with a `---` line: then it is not a page */
+  frontMatter: FrontMatter?
+  /** The line the body starts on, 1-based */
+  bodyLine: Int
+  headings: List<Heading>
+  blocks: List<CodeBlock>
+  links: List<Link>
+  /** Every line of the body that is neither blank, nor a heading, nor inside a fence */
+  prose: List<(line: Int, text: String)>
+  /** The body as text, without the front matter */
+  body: String
+  problems: List<DocumentationProblem>
+}
+
+/** The lines of a file, without their line breaks and without a trailing carriage return. */
+public fn linesOf(text: String): List<String> {
+  var lines: List<String> = []
+  for line in text.split("\n") {
+    if line.endsWith("\r") {
+      lines.add line.slice(0..(line.byteLength() - 1))
+    } else {
+      lines.add line
+    }
+  }
+  lines
+}
+
+/**
+ * Reads one file. `path` is only used in the problems, so this is a pure function over the text - which is what lets
+ * the tests hold their documents in a `Map`.
+ */
+public fn readPage(path: String, text: String): ReadPage {
+  const lines = linesOf text
+  var problems: List<DocumentationProblem> = []
+  var bodyStart = 0
+  var frontMatter: FrontMatter? = None
+  if !lines.isEmpty() && lines[0].trim() == "---" {
+    const end = closingDelimiter lines
+    match end {
+      Some(index) => {
+        const read = readFrontMatter path, lines, 1, index
+        problems.addAll read.problems
+        frontMatter = Some read.frontMatter
+        bodyStart = index + 1
+      }
+      None => {
+        problems.add DocumentationProblem(path, 1, "The front matter is never closed. A second `---` line ends it")
+      }
+    }
+  }
+  const scanned = scanBody path, lines, bodyStart
+  scanned.copy frontMatter: frontMatter, problems: problems.addedAll(scanned.problems)
+}
+
+/** The index of the `---` line that closes the front matter. */
+fn closingDelimiter(lines: List<String>): Int? {
+  var index = 1
+  while index < lines.length() {
+    if lines[index].trim() == "---" {
+      return Some index
+    }
+    index = index + 1
+  }
+  None
+}
+
+type ReadFields {
+  frontMatter: FrontMatter
+  problems: List<DocumentationProblem>
+}
+
+/**
+ * The front matter, between the two `---` lines. The subset: one `key: value` per line, a scalar or a list, and a
+ * block list whose items are indented by two spaces and start with `- `. Anything else is a problem that names the
+ * line, because a front matter that is read differently by two tools is worse than one that is rejected.
+ */
+fn readFrontMatter(path: String, lines: List<String>, from: Int, to: Int): ReadFields {
+  var fields: List<Field> = []
+  var problems: List<DocumentationProblem> = []
+  var index = from
+  while index < to {
+    const line = lines[index]
+    const number = index + 1
+    if line.trim().isEmpty() {
+      index = index + 1
+      continue
+    }
+    if line.startsWith(" ") || line.startsWith("\t") {
+      problems.add DocumentationProblem(path, number, "An indented line in the front matter belongs to a list item and has to start with `- `")
+      index = index + 1
+      continue
+    }
+    const colon = line.indexOf ":"
+    const at = match colon {
+      Some(found) => found
+      None => {
+        problems.add DocumentationProblem(path, number, "A line of the front matter is `key: value`. There is no colon on this one")
+        index = index + 1
+        continue
+      }
+    }
+    const key = line.slice(0..at)
+    if !isFieldKey(key) {
+      problems.add DocumentationProblem(path, number, "`{key}` is not a field name. A field name is lowercase letters and hyphens")
+      index = index + 1
+      continue
+    }
+    if fields.any({ _.key == key }) {
+      problems.add DocumentationProblem(path, number, "The field `{key}` is written twice")
+      index = index + 1
+      continue
+    }
+    const rest = line.slice((at + 1)..line.byteLength()).trim()
+    if rest.isEmpty() {
+      const collected = collectItems(path, lines, index + 1, to)
+      if collected.items.isEmpty() {
+        problems.add DocumentationProblem(path, number, "`{key}` has no value. A block list needs at least one `- ` item below it")
+      }
+      problems.addAll collected.problems
+      fields.add Field(key, FieldValue.Items(collected.items), number)
+      index = collected.next
+      continue
+    }
+    const read = readScalarOrList path, number, rest
+    problems.addAll read.problems
+    fields.add Field(key, read.value, number)
+    index = index + 1
+  }
+  ReadFields FrontMatter(fields), problems
+}
+
+type CollectedItems {
+  items: List<String>
+  /** The index of the first line that is not an item any more */
+  next: Int
+  problems: List<DocumentationProblem>
+}
+
+/** The items of a block list: `  - value`, two spaces deep. */
+fn collectItems(path: String, lines: List<String>, from: Int, to: Int): CollectedItems {
+  var items: List<String> = []
+  var problems: List<DocumentationProblem> = []
+  var index = from
+  while index < to {
+    const line = lines[index]
+    if line.trim().isEmpty() {
+      index = index + 1
+      continue
+    }
+    if !line.startsWith("  - ") {
+      break
+    }
+    const value = line.slice(4..line.byteLength()).trim()
+    const read = readScalar(path, index + 1, value)
+    problems.addAll read.problems
+    items.add read.value
+    index = index + 1
+  }
+  CollectedItems items, index, problems
+}
+
+type ReadValue {
+  value: FieldValue
+  problems: List<DocumentationProblem>
+}
+
+/** A scalar, an inline list `[a, b]`, or a number. */
+fn readScalarOrList(path: String, line: Int, text: String): ReadValue {
+  if text.startsWith("[") {
+    if !text.endsWith("]") {
+      return ReadValue FieldValue.Items([]), [DocumentationProblem(path, line, "An inline list ends with `]` on the same line")]
+    }
+    const inside = text.slice(1..(text.byteLength() - 1)).trim()
+    if inside.isEmpty() {
+      return ReadValue FieldValue.Items([]), []
+    }
+    var items: List<String> = []
+    var problems: List<DocumentationProblem> = []
+    for part in inside.split(",") {
+      const read = readScalar path, line, part.trim()
+      problems.addAll read.problems
+      items.add read.value
+    }
+    return ReadValue FieldValue.Items(items), problems
+  }
+  if isNumber(text) {
+    return ReadValue FieldValue.Number(numberOf(text)), []
+  }
+  const read = readScalar path, line, text
+  ReadValue FieldValue.Text(read.value), read.problems
+}
+
+type ReadText {
+  value: String
+  problems: List<DocumentationProblem>
+}
+
+/**
+ * One scalar. Either in double quotes - then `\"` and `\\` are the only escapes - or bare, and then it must not
+ * start with a character that YAML gives a meaning to and must not contain `: `, which ends a plain scalar there.
+ * That is the whole rule, so a simple reader and a YAML library read the same value.
+ */
+fn readScalar(path: String, line: Int, text: String): ReadText {
+  if text.startsWith("\"") {
+    if !text.endsWith("\"") || text.byteLength() < 2 {
+      return ReadText text, [DocumentationProblem(path, line, "A quoted value ends with `\"` on the same line")]
+    }
+    return ReadText unescaped(text.slice(1..(text.byteLength() - 1))), []
+  }
+  if text.contains(": ") {
+    const note = "`{text}` contains `: ` and has to be written in double quotes"
+    return ReadText text, [DocumentationProblem(path, line, note)]
+  }
+  if startsWithIndicator(text) {
+    const note = "`{text}` starts with a character YAML reserves and has to be written in double quotes"
+    return ReadText text, [DocumentationProblem(path, line, note)]
+  }
+  ReadText text, []
+}
+
+fn unescaped(text: String): String {
+  text.replace("\\\"", "\"").replace("\\\\", "\\")
+}
+
+/** The indicator characters of YAML that cannot start a plain scalar. */
+fn startsWithIndicator(text: String): Bool {
+  const indicators = ["-", "?", ":", ",", "[", "]", "{", "}", "#", "&", "*", "!", "|", ">", "'", "\"", "%", "@", "`"]
+  indicators.any({ text.startsWith _ })
+}
+
+fn isNumber(text: String): Bool {
+  const digits = if text.startsWith("-") { text.slice(1..text.byteLength()) } else { text }
+  if digits.isEmpty() {
+    return false
+  }
+  digits.chars().all({ _.isDigit() })
+}
+
+fn numberOf(text: String): Int {
+  const isNegative = text.startsWith "-"
+  const digits = if isNegative { text.slice(1..text.byteLength()) } else { text }
+  var value = 0
+  for character in digits.chars() {
+    value = value * 10 + (Int.from(character) - Int.from('0'))
+  }
+  if isNegative { -value } else { value }
+}
+
+/** A field name: lowercase letters and hyphens, starting with a letter. */
+fn isFieldKey(key: String): Bool {
+  if key.isEmpty() {
+    return false
+  }
+  var first = true
+  for character in key.chars() {
+    const isLower = character >= 'a' && character <= 'z'
+    if first {
+      if !isLower {
+        return false
+      }
+      first = false
+      continue
+    }
+    if !isLower && character != '-' {
+      return false
+    }
+  }
+  true
+}
+
+/** The headings, the fenced blocks, the links and the prose of the body. */
+fn scanBody(path: String, lines: List<String>, from: Int): ReadPage {
+  var headings: List<Heading> = []
+  var blocks: List<CodeBlock> = []
+  var links: List<Link> = []
+  var prose: List<(line: Int, text: String)> = []
+  var problems: List<DocumentationProblem> = []
+  var body: List<String> = []
+  var index = from
+  while index < lines.length() {
+    const line = lines[index]
+    const number = index + 1
+    body.add line
+    if line.startsWith("```") {
+      const collected = collectBlock path, lines, index
+      problems.addAll collected.problems
+      blocks.add collected.block
+      var inside = index + 1
+      while inside < collected.next {
+        body.add lines[inside]
+        inside = inside + 1
+      }
+      index = collected.next
+      continue
+    }
+    // A tilde fence and an indented code block name no language, so nothing could verify what is in them
+    if line.startsWith("~~~") {
+      problems.add DocumentationProblem(path, number, "A code block is fenced with three backticks and names its language")
+    }
+    if line.startsWith("#") {
+      const read = readHeading path, number, line
+      problems.addAll read.problems
+      headings.add read.heading
+      index = index + 1
+      continue
+    }
+    links.addAll linksOf(number, line)
+    if !line.trim().isEmpty() {
+      prose.add((line: number, text: line))
+    }
+    index = index + 1
+  }
+  ReadPage(None, from + 1, headings, blocks, links, prose, body.joined(separator: "\n"), problems)
+}
+
+type CollectedBlock {
+  block: CodeBlock
+  /** The index of the line behind the closing fence */
+  next: Int
+  problems: List<DocumentationProblem>
+}
+
+/** How many backticks a line starts with. A fence needs at least three. */
+public fn fenceLengthOf(line: String): Int {
+  var length = 0
+  for character in line.chars() {
+    if character != '`' {
+      break
+    }
+    length = length + 1
+  }
+  length
+}
+
+/**
+ * A line that closes a fence: it starts at the first column with at least as many backticks as the fence that was
+ * opened, and holds nothing else. An indented run of backticks is content, which is what lets a block show a fence.
+ */
+fn closesFence(line: String, opened: Int): Bool {
+  const length = fenceLengthOf line
+  if length < opened {
+    return false
+  }
+  line.slice(length..line.byteLength()).trim().isEmpty()
+}
+
+fn collectBlock(path: String, lines: List<String>, at: Int): CollectedBlock {
+  const opening = lines[at]
+  var problems: List<DocumentationProblem> = []
+  const fence = fenceLengthOf opening
+  const info = opening.slice(fence..opening.byteLength()).trim()
+  const parts = words info
+  const language = parts.get(0) ?? ""
+  const marker = parts.get(1) ?? ""
+  var reasonParts: List<String> = []
+  var word = 2
+  while word < parts.length() {
+    reasonParts.add parts[word]
+    word = word + 1
+  }
+  const reason = reasonParts.joined separator: " "
+  var content: List<String> = []
+  var index = at + 1
+  var isClosed = false
+  while index < lines.length() {
+    const line = lines[index]
+    if closesFence(line, fence) {
+      isClosed = true
+      index = index + 1
+      break
+    }
+    content.add line
+    index = index + 1
+  }
+  if !isClosed {
+    problems.add DocumentationProblem(path, at + 1, "This code block is never closed")
+  }
+  const block = CodeBlock(info, language, marker, reason, content.joined(separator: "\n"), at + 1, at + 2)
+  CollectedBlock block, index, problems
+}
+
+/** The words of a text, separated by runs of spaces. */
+public fn words(text: String): List<String> {
+  var found: List<String> = []
+  for part in text.split(" ") {
+    const trimmed = part.trim()
+    if !trimmed.isEmpty() {
+      found.add trimmed
+    }
+  }
+  found
+}
+
+type ReadHeading {
+  heading: Heading
+  problems: List<DocumentationProblem>
+}
+
+fn readHeading(path: String, number: Int, line: String): ReadHeading {
+  var level = 0
+  for character in line.chars() {
+    if character != '#' {
+      break
+    }
+    level = level + 1
+  }
+  var problems: List<DocumentationProblem> = []
+  const rest = line.slice(level..line.byteLength())
+  if !rest.startsWith(" ") && !rest.isEmpty() {
+    problems.add DocumentationProblem(path, number, "A heading has a space behind its `#`")
+  }
+  var text = rest.trim()
+  var anchor = ""
+  var isExplicit = false
+  if text.endsWith("}") {
+    match text.indexOf("\{#") {
+      Some(found) => {
+        anchor = text.slice((found + 2)..(text.byteLength() - 1))
+        text = text.slice(0..found).trim()
+        isExplicit = true
+      }
+      None => {}
+    }
+  }
+  if !isExplicit {
+    anchor = anchorOf text
+  }
+  ReadHeading Heading(level, text, anchor, isExplicit, number), problems
+}
+
+/**
+ * The anchor a heading gets: lowercase, every run of characters that is neither a letter, a digit, a hyphen nor an
+ * underscore becomes one hyphen. That is the slug GitHub, Docusaurus and MkDocs agree on for plain headings, so a
+ * link that works here works in every renderer.
+ */
+public fn anchorOf(text: String): String {
+  var characters: List<Char> = []
+  var lastWasHyphen = false
+  for character in text.toLowerCase().chars() {
+    const isKept = character.isLetter() || character.isDigit() || character == '-' || character == '_'
+    if isKept {
+      characters.add character
+      lastWasHyphen = false
+      continue
+    }
+    if !lastWasHyphen && !characters.isEmpty() {
+      characters.add '-'
+      lastWasHyphen = true
+    }
+  }
+  var slug = String.from characters
+  while slug.endsWith("-") {
+    slug = slug.slice(0..(slug.byteLength() - 1))
+  }
+  slug
+}
+
+/**
+ * Every inline link of one line. A reference link is not part of the format and is not looked for, and what stands
+ * between backticks is not a link: a page about the link syntax has to be able to write it down.
+ */
+fn linksOf(number: Int, line: String): List<Link> {
+  var found: List<Link> = []
+  const characters = line.chars().toList()
+  var index = 0
+  var isInsideCode = false
+  while index < characters.length() {
+    if characters[index] == '`' {
+      isInsideCode = !isInsideCode
+      index = index + 1
+      continue
+    }
+    if isInsideCode || characters[index] != '[' {
+      index = index + 1
+      continue
+    }
+    const closing = indexOfCharacter(characters, ']', index + 1)
+    const textEnd = match closing {
+      Some(position) => position
+      None => {
+        index = index + 1
+        continue
+      }
+    }
+    if textEnd + 1 >= characters.length() || characters[textEnd + 1] != '(' {
+      index = textEnd + 1
+      continue
+    }
+    const target = indexOfCharacter(characters, ')', textEnd + 2)
+    const targetEnd = match target {
+      Some(position) => position
+      None => {
+        index = textEnd + 1
+        continue
+      }
+    }
+    const label = characters.slice((index + 1)..textEnd)
+    const inside = characters.slice((textEnd + 2)..targetEnd)
+    const text = String.from label
+    const whole = String.from inside
+    const hash = whole.indexOf "#"
+    const link = match hash {
+      Some(at) => Link text, whole.slice(0..at), whole.slice((at + 1)..whole.byteLength()), number
+      None => Link text, whole, "", number
+    }
+    found.add link
+    index = targetEnd + 1
+  }
+  found
+}
+
+fn indexOfCharacter(characters: List<Char>, wanted: Char, from: Int): Int? {
+  var index = from
+  while index < characters.length() {
+    if characters[index] == wanted {
+      return Some index
+    }
+    index = index + 1
+  }
+  None
+}
