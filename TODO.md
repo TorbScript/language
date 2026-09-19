@@ -357,6 +357,20 @@ Falls wir das hier _nicht_ automatisch deriven, sollten wir vielleicht ein impli
     Subtract` (kurz, aber `as` klingt nach Cast) oder am Typ mit Klammern `with (Add, Subtract) by value, Show`
     (bleibt nah am Heutigen, beantwortet aber nur Frage 1). Sag ein Wort, dann stelle ich die 8 Stellen, beide
     Parser, den Checker (`derive.trb`/Delegation) und das Konzept um.
+  - Antwort User: In dem Fall ist es ja immer noch verwirrend: Was, wenn ich Equals auf amount und currency anwende?
+    Was, wenn ich Add auf Amount und Currency anwende? Das Verhalten ist total undurchsichtig.
+
+    Eine Regel ist gut: Nur auf Single-Field-Typen anwendbar. Ein `Add by a, Subtract by b` auf einen Multi-Field-Typ ist nicht erlaubt.
+    Damit ist es nicht sinnvoll, die Anweisung an das Feld zu machen.
+
+    Ich finde glaube ich diese Syntax gut:, das ist schön explizit:
+
+    ```trb
+    type Seconds with Show, Add & Subtract by value, Compare by value {
+      value: Int
+    }
+
+    Wie findest du die?
 
 - Oftmals wird z.B. `Ok(x)` statt `Ok x` geschrieben, ganz oft könnte man `Error a` oder `.SomeThing x, y, z` schreiben. Finde da am besten eine "Best Practice" die das strikt deklariert und an die sich alle halten und passe das rückwirkend auf der Codebase an (eventuell durch den Linter)
   - **Antwort:** Das Konzept hat dafür schon eine Formatter-Canon ("Command Calls"), sie ist nur nicht scharf genug
@@ -380,6 +394,35 @@ Falls wir das hier _nicht_ automatisch deriven, sollten wir vielleicht ein impli
     Strings, direkt nach dem 5.5-Merge. `torb lint`/`torb format` (Meilenstein 8) setzen sie danach durch. Wenn du
     Regel 1 andersherum willst (`Ok x` als Stil), sag es vorher - dann wäre die Konsequenz, dass Kommandos
     schachteln dürfen müssten, und das hat das Konzept bewusst ausgeschlossen.
+  - Antwort user: Ist case nicht ein Type im Grunde? Müsste
+  
+    ```trb
+    trait A {
+      case B(x: Int)
+      case C(y: String)
+    }
+    ```
+
+    nicht technisch dasselbe sein wie
+
+    ```trb
+    trait A {}
+
+    type B with A {
+      x: Int
+    }
+
+    type C with A {
+      y: String
+    }
+    ```
+
+    Was ist mit `Ok Some(x)`? Die Konstruktoren sind doch quasi auch "Funktionen", ich kann doch auch so was wie
+    ```trb
+    ["admin", "moderator", "user"].map Role
+    ```
+
+    machen, oder?
 
 - In
 
@@ -430,6 +473,8 @@ Wenn nicht, was bedeutet, bewirkt es?
     Release-Profil nichts, braucht keine Änderung an Fehlertypen. Panics bekommen ihre Frames ohnehin (BACKEND 7.9).
   - **Deine Entscheidung:** beides so? Dann plane ich den Trait mit der nächsten Prelude-Runde ein und die
     `?`-Traces als Teil von 5.13/5.14 (Treiber-Profile), weil sie das Debug-/Release-Profil brauchen.
+  - Vorschlag 1: Ja, aber ich will, dass der Trait Error heißt (wir brauchen bei use auch noch aliase for einzelne Typen)
+  - Vorschlag 2: Auch ja, denke ich. Entscheide du
 
 - Das prelude enthält gerade jede menge Dinge, aber jede menge dinge auch nicht (math gehört z.B. ins prelude)
   Die ganzen Sachen im Prelude sollten in eigene, entsprechende Projekte und das Prelude sollte einfach mehrere dieser Projekte zusammenfassen
@@ -456,3 +501,6 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Deine Entscheidung:** Prelude = Reines (inkl. `math`, `json`, Zeit-Werte), Capabilities bleiben Importe - ok?
     Den Umbau in Pakete starte ich unabhängig davon nach dem 5.5-Merge (er verschiebt nur Dateien und `use`-Zeilen,
     Stage 0 lädt `std/` nicht, der Checker prüft das Ergebnis).
+  - Antwort User: Ja mach so
+
+- Wir brauchen ein Konstrukt für Bitmaks/Bitflags. Momentan gibt es keine Bit-Operatoren, wie könnte man so ein Konstrukt sauber implementieren, sodass es auch interoperabel konsumiert werden kann?
