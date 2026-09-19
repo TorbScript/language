@@ -643,3 +643,11 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Zurückgestellt (nach dem Fixpunkt, als Vorschlag):** `const Some(x) = … else { return … }` - nimmt die häufigste
     hässliche Form weg (ein `match`, nur um bei `.None` auszusteigen; `.None =>` steht 317-mal in `compiler/src`).
     Kommt nicht in Stage 0 (keine neuen Sprachfeatures dort), sondern danach mit Beispielen zur Entscheidung.
+  - **Nachtrag (Nutzer: "None sollte dann halt mit ins Prelude") - wird gelöst:** `None` IST schon in der Prelude
+    (`use Some, None from Option`), im Ausdruck steht es 260-mal nackt. Die Lücke ist nur das Pattern: dort bindet ein
+    nackter Name immer, also musste es `.None` heißen, während `Some(x)` wegen der Klammern geht. Neue Regel: **ein
+    importierter Case gilt nackt überall, auch im Pattern; eine Bindung beginnt klein (Compile-Fehler statt Lint).**
+    Damit bleibt die alte Falle zu: ein vertipptes `Nome` ist kein Catch-all, sondern "kein Case im Scope". Es hängt
+    am Scope (`use`), nicht am erwarteten Typ - für alles nicht Importierte bleibt `.Case`. Also `Some(found) =>` /
+    `None =>`, `Ok(value) =>` / `Fail(problem) =>`. Umsetzung (beide Parser, Checker, Stage 0) und Umstellung des
+    Bestands im Werkzeuglauf zusammen mit K2, nach den drei Merges.
