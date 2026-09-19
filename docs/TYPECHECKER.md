@@ -977,7 +977,7 @@ files that have to check cleanly afterwards.
 | **4.1** | **Done.** Type representation and signatures. `TypeForm`, interning, `TypeReference` to `TypeId`, alias expansion, `Self`, generic parameters, const arguments, literal types, tuples, function types, intersections. Signatures on demand with cycle detection. `describeType` for messages. No expression checking. | `type.trb`, `wellknown.trb`, `signature.trb`, `context.trb`, `unify.trb` (equality and substitution only), `check.trb` (skeleton) | M3 |
 | **4.2** | **Done.** Statements, blocks and monomorphic expressions. Literals with adaptation, locals, bindings with irrefutable patterns, assignment, `if`/`match` types without exhaustiveness, calls of top-level functions and of methods on concrete types, arguments/labels/defaults/variadics, field and static member access, definite return, `Never`. Everything else becomes `TypeForm.Deferred` and is counted (`torb check --statistics`). | `expression.trb`, `statement.trb`, `call.trb`, `member.trb`, `name.trb`, `pattern.trb` | 4.1 |
 | **4.3** | **Done.** Traits and implementations. The index, bound resolution with memoization, coherence, overlap, supertraits, member lookup through traits and extensions (the `extend` visibility rule), delegation `by`, derived implementations, operators, interpolation through `Show`, `Iterable` in `for`, `?`/`??`/`?.`, `into()`. | `implementation.trb`, `derive.trb`, `member.trb`, `expression.trb` | 4.2 |
-| **4.4** | Generics and inference. Unification variables, inference contexts, two-pass argument checking, closures from expected function types, implicit `_`/named parameters, `.Case`, empty literals, const generic inference, bounds at call sites, witnesses, trait-typed values and per-call object safety. **Gate: `torb check compiler/src/syntax` is clean.** | `unify.trb`, `closure.trb`, `call.trb`, `implementation.trb` | 4.3 |
+| **4.4** | **Done.** Generics and inference. Unification variables, inference contexts, two-pass argument checking, closures from expected function types, implicit `_`/named parameters, `.Case`, empty literals, bounds at call sites, witnesses, trait-typed values and per-call object safety. **Gate: `torb check compiler/src/syntax` is clean** - and so is all of `std/` and `compiler/`, at 100% of their expressions. | `unify.trb`, `closure.trb`, `call.trb`, `implementation.trb` | 4.3 |
 | **4.5** | Exhaustiveness and redundancy. The pattern matrix over ADTs, literals, ranges, tuples, lists with rest, literal unions, `Option`/`Result`; witnesses; `MatchPlan`; `if const`/`if var`/`while const`. | `exhaustive.trb`, `pattern.trb` | 4.4 |
 | **4.6** | Places and the mutation rules. `const`/`var`, valid paths, `var` parameters and temporaries, `private(var)`, exclusivity, dead changes, `break`/`continue`. | `place.trb`, `statement.trb` | 4.4 |
 | **4.7** | Receivers and the DSL. Receiver closures, the innermost-receiver rule, command calls, property commands (`.Assign`, `.AssignClosure`, `.Configure`), receiver scripts (`Sandbox.load<T>` checks a file as a closure body). | `name.trb`, `closure.trb` | 4.4 |
@@ -1168,6 +1168,83 @@ list. Everything else is as written.
 - **`checkExtension` reads its members back out of the index.** Building the index gives every member of an `extend` its
   id; building them a second time would hand the same source two sets of symbols, so `check.trb` looks the
   implementation up by the span of the `extend`'s target and only checks the bodies.
+
+### What 4.4 does differently from sections 1 to 7
+
+- **The variable table is append-only and the tables of a statement are walked once at its end.** An interned
+  `Variable(n)` names a variable by index, so an id may never be reused; a context is therefore a *watermark* into
+  `Checker.variables` and not a table of its own. And because an expression is recorded before the variable in its type
+  is solved (`const items: List<Int> = []` records `List<_>` and learns `Int64` afterwards), every span that was written
+  to while a variable was open is remembered and re-read when the outermost context closes - `pruneAt` puts the
+  solutions into `expressionTypes`, `patternTypes`, `resolutions`, `adaptations`, `typeArguments` and `witnesses`. That
+  walk is the only thing inference allocates beyond the variable table.
+- **Only the outermost context settles and reports.** A block inside an expression has statements of its own, and the
+  last one of them belongs to the statement *around* it: `const end = if c { None } else { Some(x) }` learns what `None`
+  is from the other branch. Nested contexts are therefore bookkeeping, and "cannot infer" is said once, per statement.
+- **A literal solves a variable right away** instead of falling back when the context closes. Design 2.2 defers the
+  default, design 2.6 needs `0` to have solved `State` before `fold(0) { sum, number => ... }` reads its closure - and
+  the second one is what real code depends on, so the literal adapts to `Int64` / `Float64` and unification takes it
+  from there. `Adaptation.Literal` therefore replaces instead of accumulating (`Checker.adaptedLiteral`), because
+  picking the right `Int.from` reads its argument before it checks it.
+- **The arms of an `if` and a `match` are unified afterwards, not checked against the first one.** Section 2.1 makes the
+  first arm the expectation of the others, which reports `declareOne`'s `match` (whose first arm gives a `SymbolId` and
+  whose others do not give anything) although its value is never used. So every arm is checked against what was expected
+  of the whole - nothing, usually - and `armResult` unifies what came out: where the arms agree that is the value, and
+  where they do not they were *statements* and the whole is `Void`, silently.
+- **The expected type of a call reaches the result of its callee before its arguments are read** (`matchResult`).
+  `employees.collect(maxBy { _.age })` learns the `Item` of `maxBy` from the parameter of `collect` and only then reads
+  the closure. Nothing is reported there - the real check happens where the value arrives - and a bare variable is never
+  solved with a trait type, because a value *coerces* into one and a coercion may not solve a variable (2.5).
+- **A coercion into a trait type solves the arguments of the trait** (`matchedBound`). Every collection parameter of the
+  prelude is an `Iterable<Item>` whose `Item` is open at the call, and what carries the answer is the implementation the
+  coercion finds: `traitArgumentsOf` gives `[Int64]` for a `List<Int64>` and those unify with the bound's arguments.
+- **`Self` is a name, so `Receiver` and `Value` are the same parameter mode** (`sameMode`). `Point.area` read as a value
+  is `(self: Point) => Int64`, and `[p, q].map(Point.area)` passes it where `(value: Point) => Int64` is wanted.
+- **A witness carries the witnesses of its own bounds**, and they are recorded per call in a table of their own
+  (`Tables.witnesses`), because `Dispatch.Direct` has none and a free generic function has bounds. `Dispatch` gets the
+  same list, so 4.3's empty lists are filled either way. The whole tree is memoized by the two interned ids.
+- **`Compare` is derived for a tuple, and `From<Self>` for every type.** An order is a decision and not a structure, so
+  no `type` gets a derived `Compare` - but a tuple has no declaration anybody could write one in, and
+  `diagnostics.sort { (_.span.start, _.span.end) }` is the idiom of the language. And `fn sum(self): Item where Item:
+  Add + From<Int>` asks `Int64` for `From<Int64>`: every type converts from itself, and a reflexive `From` cannot be
+  written as a blanket implementation because it would overlap with every other one.
+- **A supertrait requirement is satisfied by any implementation of the same target.**
+  `extend<Item: Hash> List<Item> with Hash` leans on `extend<Item: Equals> List<Item> with Equals` for the `equals` that
+  `Hash with Equals` requires; `providerOf` searches the open implementations (a trait as a target is not in `byHead`)
+  and checks the other implementation's bounds under the match.
+- **Object safety is narrower than section 4.4 says.** Only a parameter whose type *is* `Self`, and a member without
+  `self`, are rejected on a trait-typed value. `Self` in the *result* stays legal: `List<Item>` is a trait and
+  `items.added(x)` gives back a value of the same trait type, which is representable.
+- **Implicit parameters are reached through the closure frame, not through the scope chain.** A frame holds the names
+  and types the expected function type gives, and the binding of one is made the first time it is used, so the unused
+  ones cost nothing. `_` means the innermost closure without a parameter list; a *name* reaches outward, and reading one
+  from further out captures it. The design's "an implicit parameter name that would shadow a visible name is an error"
+  is **not** implemented: the local wins, silently. Reporting it needs a look at the body before it is checked, and
+  `any { _ == value }` next to a parameter called `value` is ordinary prelude code that must not be a mistake.
+- **A closure body is checked against the expected result even when that result is still a variable.**
+  `flatMap { _.manager.toList() }` learns its `Output` from the `Iterable<Output>` the closure has to produce, and that
+  is a coercion and not a unification, so `Expectation.None` would lose it. The result is still what the body produces.
+- **A closure whose parameters do not line up counts as the type that was asked for**, and its body is checked without
+  an expectation: one root cause, one message.
+- **A receiver closure and a quotation defer, and the variables of their call are marked as answered**
+  (`suppressVariables`). What is missing is the construct (4.7, 4.8) and not an annotation, so "cannot infer" would be a
+  message about the checker.
+- **A field or a `const` that holds a function is callable with `()`.** `state = step(state, value)` and
+  `button.onClick()` need the function type of the member as a call form, which `Candidate.form` does not carry for a
+  field. One holding a *receiver* closure (`const perimeter: (self: Rectangle) => Int`) stays 4.7's.
+- **A name that denotes a type or a namespace is recorded with the type it names.** `TokenKind` in `TokenKind.Dot` is
+  not a value, but recording `Deferred` for it would say "not checked yet" about something that is fully understood, so
+  a type name records its type, a constructor records the function type of the constructor, and a namespace records
+  `Void`. Nothing reads it: the resolution (`TypeOf`, `Construct`, `Namespace`) is what milestone 5 uses.
+- **`?` decides the failure type of a subject that nothing else does** (`matchedFailure`):
+  `value.okOr(.Missing("port"))?` in a function that returns `Result<_, ConfigError>` unifies the open failure type with
+  `ConfigError`. A failure type that is already known stays what it is and is converted through `From` as always.
+- **`if const`, `while const` and a list pattern get their types here**, although 4.5 owns the patterns: the type of the
+  subject and the `Item` of its `Iterable` are available, and leaving them `Deferred` would have left a tenth of the
+  parser unchecked for no reason.
+- **`closure.trb` is the only new file.** `unify.trb` grew the contexts and the unifier, `call.trb` the instantiation,
+  the two argument passes and the bounds, `name.trb` the generic targets and the captures, `member.trb` the generic
+  members and the overload sets, and `expression.trb` the collection literals, `.Case` and the arms.
 
 ---
 

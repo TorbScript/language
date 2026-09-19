@@ -61,7 +61,7 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 | `syntax/`                | Source text, spans, diagnostics, tokens, lexer, AST, parser           | done, verified against stage 0 |
 | `project/`               | Paths, the source tree, `project.trb`, workspaces and their members   | done     |
 | `semantics/`             | Modules, symbols, visibility, names in type positions (`torb check`)  | done     |
-| `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: types and signatures (4.1), statements and monomorphic expressions (4.2), traits and implementations (4.3) |
+| `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: types and signatures (4.1), statements and monomorphic expressions (4.2), traits and implementations (4.3), generics, inference and closures (4.4) |
 | `cli/`                   | Collecting files, rendering diagnostics                               | started  |
 | `ir/`                    | Typed IR, lowering, last-use analysis                                 | started: the IR, layouts, mangling, the verifier, the text format (5.1) |
 | `backend/c/`             | Typed IR to C                                                         | started: the manifest of natives (5.R1) |
@@ -192,12 +192,15 @@ regardless.)
    in _expressions_. They cannot be resolved earlier: what `port` means in `server { port 8080 }` depends on the type
    of the parameter the closure is passed to (design principle 1), so resolving names and checking types is one pass.
    From here on the compiler checks itself, which stage 0 never could. The plan and the state of its ten steps are in
-   [docs/TYPECHECKER.md](TYPECHECKER.md); **4.1, 4.2 and 4.3 are done**: every type position of the repository becomes
-   a type, every declaration a signature, and every expression that needs no inference a type - traits and their
-   implementations included, so the operators, `for`, indexing, interpolation, `?`, `??`, `?.` and `into()` all resolve
-   through the trait they mean. Two thirds of the expressions of the repository today, with the rest recorded as "not
-   checked yet" and counted by `torb check --statistics`. The first thing it found by checking the compiler itself was
-   that `compiler/src/ir/mangle.trb` mixed the `UInt8` of a byte with `Int64` arithmetic.
+   [docs/TYPECHECKER.md](TYPECHECKER.md); **4.1 to 4.4 are done**: every type position of the repository becomes a
+   type, every declaration a signature, and every expression a type - traits and their implementations included, so the
+   operators, `for`, indexing, interpolation, `?`, `??`, `?.` and `into()` all resolve through the trait they mean, and
+   generics, closures and inference included, so every call records the type arguments it was instantiated with, one
+   witness per bound, and what every closure captures. 99% of the expressions of the repository today; what is left is
+   the DSL (4.7) and the quotations (4.8), recorded as "not checked yet" and counted by `torb check --statistics`.
+   `std/` and `compiler/` are at 100%. The first thing it found by checking the compiler itself was that
+   `compiler/src/ir/mangle.trb` mixed the `UInt8` of a byte with `Int64` arithmetic; checking the generic code found
+   `Set.new()`, which the standard library never had.
 5. Typed IR and the C back end. The tour runs natively, with the same output as under stage 0. The plan and the state
    of its sub-milestones are in [docs/BACKEND.md](BACKEND.md); **5.1 is done**: the IR's data model, the layouts and
    their representation classes, the mangling, a builder, a verifier and the text format. **5.R1 is done**: the C

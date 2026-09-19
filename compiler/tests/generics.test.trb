@@ -1,0 +1,224 @@
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
+/**
+ * Generic calls of every kind - functions, methods, constructors, case constructors, a trait as a namespace, a generic
+ * parameter as a namespace - with the bounds checked at the call site and one witness recorded per bound.
+ *
+ * Milestone 5 monomorphizes from exactly these records, so every one of them is asserted: the type arguments a call was
+ * instantiated with, how it reaches its target, and which implementation makes every bound hold.
+ */
+
+/** A generic type, a generic method on it, and a bounded generic function: the three shapes of a generic call. */
+const declarations = r"""
+
+type Holder<Item> {
+  item: Item
+
+  fn map<Output>(self, transform: (value: Item) => Output): Holder<Output> {
+    Holder(transform(item))
+  }
+}
+
+fn render<Value: Show>(value: Value): String {
+  value.show()
+}
+
+type Square {
+  size: Int
+}
+
+extend Square with Show {
+  fn show(self): String {
+    "square"
+  }
+}
+"""
+
+fn inBody(body: String): String {
+  "fn probe() \{\n{body}\n\}\n{declarations}"
+}
+
+group "Generic functions" {
+  test "a bound is checked at the call site and one witness per bound is recorded" {
+    const source = inBody("  const shown = render(Square(2))")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeArgumentsOf("render(Square(2))") == ["Square"])
+    assert(found.witnessesOf("render(Square(2))") == ["Square: Show"])
+  }
+
+  test "a bound that does not hold names the type and the trait" {
+    // `Compare` is the one structural trait that is *not* derived: an order is a decision and not a structure
+    const source = "fn probe() \{\n  const found = biggest(Plain(), Plain())\n\}\n\ntype Plain \{\n\}\n"
+      + "\nfn biggest<Value: Compare>(first: Value, second: Value): Value \{\n  first\n\}"
+    assert(problems(source) == ["`Plain` does not implement `Compare`"])
+    assert(notes(source) == ["`biggest` asks for it"])
+  }
+
+  test "a bound on a generic parameter of the caller has to be written down" {
+    const source = "fn probe<Value>(value: Value): String \{\n  render(value)\n\}\n"
+      + "\nfn render<Other: Show>(value: Other): String \{\n  value.show()\n\}"
+    assert(problems(source) == ["`Value` is not `Show`"])
+    assert(notes(source) == ["Add the bound to the declaration: `where Value: Show`"])
+  }
+
+  test "a bound that the caller declares is forwarded, and the witness says so" {
+    const source = "fn probe<Value: Show>(value: Value): String \{\n  render(value)\n\}\n"
+      + "\nfn render<Other: Show>(value: Other): String \{\n  value.show()\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.witnessesOf("render(value)") == ["forwarded Show"])
+  }
+
+  test "the witness of an implementation carries the witnesses of its own bounds" {
+    const source = "fn probe(items: List<Square>) \{\n  const shown = render(items)\n\}\n{declarations}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.witnessesOf("render(items)") == ["List<Item>: Show [Square: Show]"])
+  }
+}
+
+group "Generic types and methods" {
+  test "a constructor of a generic type infers its arguments from the fields" {
+    const source = inBody("  const holder = Holder(1)")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Holder(1)") == "Holder<Int64>")
+    assert(found.resolutionOf("Holder(1)") == "construct Holder<Int64>")
+  }
+
+  test "explicit type arguments of a constructor fill its parameters" {
+    const source = inBody("  const holder = Holder<Int>(1)")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Holder<Int>(1)") == "Holder<Int64>")
+  }
+
+  test "a generic method takes the arguments of its owner and solves its own" {
+    const source = inBody("  const shown = Holder(1).map \{ \"\{_\}\" \}")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Holder(1).map \{ \"\{_\}\" \}") == "Holder<String>")
+    assert(found.typeArgumentsOf("Holder(1).map \{ \"\{_\}\" \}") == ["String"])
+  }
+
+  test "the field of a generic type has the argument put in" {
+    const source = inBody("  const item = Holder(\"a\").item")
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Holder(\"a\").item") == "String")
+  }
+
+  test "a case constructor of a generic type infers from its argument" {
+    const source = inBody("  const found = Ok(1)")
+    assert(problems(source) == ["Cannot infer `Failure` of `Ok`"])
+  }
+
+  test "a case constructor takes what the expected type gives it" {
+    const source = "fn probe(): Result<Int, String> \{\n  Ok(1)\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Ok(1)") == "Result<Int64, String>")
+    assert(found.resolutionOf("Ok(1)") == "case Result<Int64, String>.Ok")
+  }
+}
+
+group "A trait as a namespace (gap 31)" {
+  test "`List.of` is a member of the trait, and its item type comes from the arguments" {
+    const source = "fn probe() \{\n  const items = List.of(1, 2)\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("List.of(1, 2)") == "List<Int64>")
+  }
+
+  test "the expected type decides the item type of a factory" {
+    const source = "fn probe() \{\n  const items: List<Int> = List.of()\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("List.of()") == "List<Int64>")
+  }
+
+  test "explicit type arguments of a trait namespace are its own" {
+    const source = "fn probe() \{\n  const items = List<String>.of(\"a\")\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("List<String>.of(\"a\")") == "List<String>")
+  }
+}
+
+group "A generic parameter as a namespace" {
+  test "`Target.from(value)` reaches a static member of a bound, forwarded to the caller's witness" {
+    const source = "fn convert<Target: From<Int>>(value: Int): Target \{\n  Target.from(value)\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Target.from(value)") == "Target")
+    assert(found.dispatchOf("Target.from(value)") == "forwarded From<Int64>")
+  }
+
+  test "a member the bounds do not have is not reachable" {
+    const source = "fn convert<Target: Show>(value: Target): String \{\n  value.show()\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.dispatchOf("value.show()") == "forwarded Show")
+  }
+}
+
+group "Trait-typed values and object safety (gap 7)" {
+  test "a trait may always be used as a type, and a member that only reads the value is callable" {
+    const source = "fn probe(value: Show): String \{\n  value.show()\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("value.show()") == "String")
+    assert(found.dispatchOf("value.show()") == "object Show")
+  }
+
+  test "a member that takes a second `Self` has no meaning on a trait-typed value" {
+    const source = "fn probe(left: Equals, right: Equals): Bool \{\n  left.equals(right)\n\}"
+    assert(problems(source) == ["`equals` cannot be called on a `Equals` value"])
+    assert(
+      notes(source) == ["It takes a second `Self`, and two values of a trait type need not have the same type"]
+    )
+  }
+
+  test "an intersection is one type, and both of its members are reachable" {
+    const source = "fn probe(value: Show + Hash): Int \{\n  value.hash()\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.dispatchOf("value.hash()") == "object Hash")
+  }
+
+  test "a value becomes a trait-typed value where one is expected, with the witness of every bound" {
+    const source = "fn probe() \{\n  const shown = describe(Square(2))\n\}\n\n"
+      + "fn describe(value: Show): String \{\n  value.show()\n\}\n{declarations}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.adaptationsOf("Square(2)") == ["trait value Show"])
+  }
+}
+
+group "`using` and other generic functions of the prelude" {
+  test "`using` with a temporary checks: a temporary is a valid argument for a `var` parameter (gap 2)" {
+    const source = "type File with Close \{\n  path: String\n\n"
+      + "  fn open(path: String): Result<File, String> \{\n    Ok(File(path))\n  \}\n\n"
+      + "  fn readAll(self): String \{\n    path\n  \}\n\n"
+      + "  fn close(var self) \{\n  \}\n\}\n\n"
+      + "fn probe(path: String): Result<String, String> \{\n"
+      + "  const text = using File.open(path)? \{ file => file.readAll() \}\n  Ok(text)\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("using File.open(path)? \{ file => file.readAll() \}") == "String")
+    assert(found.typeArgumentsOf("using File.open(path)? \{ file => file.readAll() \}") == ["File", "String"])
+    assert(found.witnessesOf("using File.open(path)? \{ file => file.readAll() \}") == ["File: Close"])
+  }
+
+  test "`into()` and `to<Target>()` take their target from the expectation" {
+    const source = "type Meters \{\n  value: Int\n\}\n\n"
+      + "extend Meters with From<Int> \{\n  fn from(value: Int): Meters \{\n    Meters(value)\n  \}\n\}\n\n"
+      + "fn probe() \{\n  const distance: Meters = 5.into()\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("5.into()") == "Meters")
+    assert(found.adaptationsOf("5.into()") == ["convert from through Meters: From<Int64>"])
+  }
+}

@@ -94,15 +94,9 @@ extend<Item: Equals> Set<Item> with Equals {
  * Order-independent, unlike [List.hash]: entries are combined with `bitwiseExclusiveOr`, so insertion order never
  * changes the hash of equal sets.
  *
- * `Hash` requires `Equals`, and `Item: Hash` already implies `Item: Equals` - but the checker looks for the
- * requirement inside the `extend` that names the supertrait, not across separate `extend` blocks of the same
- * target, so `equals` is repeated here instead of leaning on the `Equals` implementation above.
+ * `Hash` requires `Equals`, and the `Equals` implementation above satisfies that: `Item: Hash` implies `Item: Equals`.
  */
 extend<Item: Hash> Set<Item> with Hash {
-  fn equals(self, other: Self): Bool {
-    length() == other.length() && all { other.contains(_) }
-  }
-
   fn hash(self): Int {
     fold(0) { seed, item => seed.bitwiseExclusiveOr(item.hash()) }
   }

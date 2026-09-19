@@ -11,6 +11,7 @@ use expectationOf, isNested from "./expression"
 use isFullyKnown from "./name"
 use checkPattern from "./pattern"
 use traitArgumentsOf from "./implementation"
+use openInference, closeInference, resolveType, unify from "./unify"
 use signatureOf, functionOfSite, declareSites from "./signature"
 use typeFromReference from "./lowering"
 use checkDeclaration from "./check"
@@ -50,7 +51,10 @@ public fn checkBlock(var checker: Checker, block: Block, expected: Expectation):
     const statement = block.statements[index]
     if index == last {
       if const .Evaluate(expression) = statement.kind {
+        openInference(checker)
         annotation = checkExpression(checker, expression, expected)
+        closeInference(checker)
+        annotation = resolveType(checker, annotation)
         diverges = diverges || annotation == checker.neverType
         endsWithValue = true
         continue
@@ -89,8 +93,20 @@ fn declaredName(declaration: Declaration): Name? {
   }
 }
 
-/** Answers whether control never reaches the statement after this one. */
+/**
+ * Answers whether control never reaches the statement after this one.
+ *
+ * One statement is one inference context: the unification variables a call in it makes are solved inside of it, and
+ * closing it reports the ones that are left and writes the solutions into the tables of this statement (design 2.2).
+ */
 public fn checkStatement(var checker: Checker, statement: Statement): Bool {
+  openInference(checker)
+  const diverges = checkStatementIn(checker, statement)
+  closeInference(checker)
+  diverges
+}
+
+fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
   match statement.kind {
     .Declare(declaration) => {
       const scope = scopeHere(checker)
@@ -465,21 +481,35 @@ public fn checkFunctionBody(
       return checker.voidType
     }
   }
-  const saved = checker.enterBody(module, result, isInferred, owner)
+  // `fn fetch(): Task<User>`: its body produces the `User`, exactly as the body of a `Result` function produces the
+  // value and `?` returns the error (concept, Concurrency). Where `await()` is allowed is milestone 4.9's rule
+  const produced = taskValueOf(checker, result) ?? result
+  const saved = checker.enterBody(module, produced, isInferred, owner)
   checker.openScope()
   declareGenerics(checker, generics)
   declareBindingsFor(checker, function.parameters, parameters, takesSelf, isVarSelf, owner)
-  const inner = bodyExpectation(checker, result, isInferred)
+  const inner = bodyExpectation(checker, produced, isInferred)
   const outcome = checkBlock(checker, body, inner)
   var found = outcome.annotation
   if isInferred {
     found = inferredResult(checker, outcome)
   } else {
-    requireResult(checker, outcome, result, body.span)
+    requireResult(checker, outcome, produced, body.span)
   }
   checker.closeScope()
   checker.leaveBody(saved)
   found
+}
+
+/** The `Value` of a `Task<Value>`, which is what the body of such a function produces. */
+public fn taskValueOf(checker: Checker, result: TypeId): TypeId? {
+  const task = checker.wellKnown.task?
+  if const .Nominal(symbol, arguments) = checker.types.form(result) {
+    if symbol == task && arguments.length() == 1 {
+      return Some(arguments[0])
+    }
+  }
+  None
 }
 
 /** The initializer of a `const`, and every default: a scope without `self` and without the other fields (gap 26). */
@@ -492,19 +522,22 @@ public fn checkInitializer(
 ): TypeId {
   const saved = checker.enterBody(module, checker.voidType, true, owner)
   checker.openScope()
-  const found = match annotation {
+  openInference(checker)
+  var found = match annotation {
     Some(wanted) => {
       const inner = expectationOf(checker, wanted)
       checkExpression(checker, value, inner)
     }
     .None => inferExpression(checker, value)
   }
+  closeInference(checker)
+  found = resolveType(checker, found)
   checker.closeScope()
   checker.leaveBody(saved)
   annotation ?? found
 }
 
-fn bodyExpectation(checker: Checker, result: TypeId, isInferred: Bool): Expectation {
+public fn bodyExpectation(checker: Checker, result: TypeId, isInferred: Bool): Expectation {
   if isInferred {
     return Expectation.None
   }
@@ -514,18 +547,28 @@ fn bodyExpectation(checker: Checker, result: TypeId, isInferred: Bool): Expectat
   expectationOf(checker, result)
 }
 
-/** Without a declared result the body is the result: the last expression, or the first `return` that has a value. */
-fn inferredResult(checker: Checker, outcome: BlockResult): TypeId {
-  var found = outcome.annotation
-  if found != checker.voidType && found != checker.neverType {
+/**
+ * Without a declared result the body is the result: the last expression, or the first `return` that has a value. Where
+ * both are there they have to agree, and where one of them still holds a variable the other one solves it - which is
+ * what makes `{ parser => ... return Some(parsePattern(parser)) ... None }` an `Option<Pattern>`.
+ */
+public fn inferredResult(var checker: Checker, outcome: BlockResult): TypeId {
+  const found = outcome.annotation
+  const returns = checker.returnTypes
+  if found == checker.voidType || found == checker.neverType || checker.isBroken(found) {
+    for candidate in returns {
+      if candidate != checker.neverType && !checker.isBroken(candidate) {
+        return candidate
+      }
+    }
     return found
   }
-  for candidate in checker.returnTypes {
+  for candidate in returns {
     if candidate != checker.neverType && !checker.isBroken(candidate) {
-      return candidate
+      const _ = unify(checker, found, candidate)
     }
   }
-  found
+  resolveType(checker, found)
 }
 
 /**

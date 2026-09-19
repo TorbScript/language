@@ -6,7 +6,7 @@ use TypeId, FunctionForm, ParameterForm, ParameterMode, ParameterId from "./type
 use FieldSignature, CaseSignature, TypeSignature, Signature, SignatureId from "./type"
 use Checker, Resolution, Dispatch, Adaptation, Candidate, CandidateKind from "./context"
 use signatureOf, typeSignatureOf from "./signature"
-use substitute, substituteFunction, sameType from "./unify"
+use substitute, substituteFunction, substituteBounds, sameType, hasVariable from "./unify"
 use resolveTrait, traitsOf, traitArgumentsOf from "./implementation"
 use inherentExtensionsOf, mappingOfImplementation, buildImplementations from "./implementation"
 
@@ -56,6 +56,41 @@ public fn recordDelegation(var checker: Checker, at: Span, candidate: Candidate)
   checker.adapted(at, Adaptation.Delegate(field))
 }
 
+/**
+ * Object safety, checked **per call and not per type** (gap 7): a trait may always be used as a type, and what cannot be
+ * done with a value of one is call a member that needs a second value of the same concrete type (`equals`, `compare`) or
+ * a member without `self` (`Type.from`). Everything else keeps its meaning, so `List<Show + Hash>` stays a legal type
+ * and `items.added(x)` stays a legal call - the result is a value of the same trait type.
+ *
+ * Using the trait as a *namespace* (`List.from(pairs)`, gap 31) is a different question and goes through the static
+ * lookup, which never reaches this.
+ */
+public fn requireObjectSafe(var checker: Checker, receiver: TypeId, candidate: Candidate, name: String, at: Span) {
+  if const .Traits(_) = checker.types.form(receiver) {
+    const shown = checker.describe(receiver)
+    if candidate.takesSelfArgument {
+      checker.reportHere(
+        Diagnostic.error("`{name}` cannot be called on a `{shown}` value", at)
+          .withNote("It takes a second `Self`, and two values of a trait type need not have the same type")
+      )
+      return
+    }
+    if !candidate.takesSelf && isMethod(candidate) {
+      checker.reportHere(
+        Diagnostic.error("`{name}` cannot be called on a `{shown}` value: it has no `self`", at)
+          .withNote("A member without `self` belongs to a concrete type, and a trait value does not name one")
+      )
+    }
+  }
+}
+
+fn isMethod(candidate: Candidate): Bool {
+  match candidate.kind {
+    .Method(_, _) => true
+    _ => false
+  }
+}
+
 /** What a member resolves to for milestone 5, which is the same question with the answer in the other shape. */
 public fn resolutionOfCandidate(candidate: Candidate): Resolution {
   match candidate.kind {
@@ -87,6 +122,11 @@ public fn lookupStaticMember(var checker: Checker, owner: TypeId, name: String, 
 fn lookupMemberAt(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool, at: Span?): Candidate? {
   if checker.absorbs(receiver) {
     return None
+  }
+  // A receiver that still holds an unsolved variable is one call's own type and nobody will ever ask about it again, so
+  // keeping the answer would only grow the table
+  if hasVariable(checker, receiver) {
+    return searchMember(checker, receiver, name, isStatic, at)
   }
   // The answer depends on the module (extensions of a foreign type reach the files that import them), the receiver and
   // the name, and on nothing else - so it is kept
@@ -238,7 +278,7 @@ fn reportAmbiguousExtension(var checker: Checker, name: String, first: ModuleId,
  */
 fn traitMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool): Candidate? {
   const bounds = traitsOf(checker, receiver)
-  var found: Candidate? = None
+  var found: List<Candidate> = []
   for bound in bounds {
     const candidate = match memberOfTrait(checker, receiver, bound, name, isStatic) {
       Some(inner) => inner
@@ -246,18 +286,28 @@ fn traitMember(var checker: Checker, receiver: TypeId, name: String, isStatic: B
         continue
       }
     }
-    match found {
-      Some(known) => {
-        if known.annotation != candidate.annotation {
-          return Some(known.copy(needsArguments: true))
-        }
-      }
-      .None => {
-        found = Some(candidate)
+    var isKnown = false
+    for known in found {
+      if known.annotation == candidate.annotation {
+        isKnown = true
       }
     }
+    if !isKnown {
+      found.add(candidate)
+    }
   }
-  found
+  const first = match found.first() {
+    Some(inner) => inner
+    .None => {
+      return None
+    }
+  }
+  if found.length() == 1 {
+    return Some(first)
+  }
+  // `Int.from` is one name with five signatures, because `Int64` implements `From<Int32>`, `From<UInt8>` and three
+  // more: the argument decides which one is meant, and the call site picks (design 4.3)
+  Some(first.copy(needsArguments: true, overloads: found))
 }
 
 fn memberOfTrait(
@@ -283,7 +333,8 @@ fn memberOfTrait(
   }
   const own = shape.generics.length()
   const dispatch = dispatchOf(checker, receiver, symbol, bound)
-  Some(memberCandidate(checker, receiver, member, mapping, own, isStatic, dispatch))
+  // `Self` of the trait is what makes `equals(self, other: Self)` meaningless on a trait-typed value (gap 7)
+  Some(memberCandidate(checker, receiver, member, mapping, own, isStatic, dispatch, Some(shape.own)))
 }
 
 /**
@@ -324,6 +375,7 @@ fn memberCandidate(
   own: Int,
   isStatic: Bool,
   dispatch: Dispatch,
+  selfParameter: TypeId? = None,
 ): Candidate {
   const identifier = signatureOf(checker, member)
   const signature = checker.signature(identifier)
@@ -332,8 +384,17 @@ fn memberCandidate(
   } else {
     substituteFunction(checker.types, signature.form, mapping)
   }
-  // The parameters of the owner are filled in; anything else the member declared is 4.4's to solve
-  const isGeneric = signature.generics.length() > own
+  // The parameters of the owner are filled in; the ones the member declares itself are what a call site solves
+  var generics: List<ParameterId> = []
+  for index in own..signature.generics.length() {
+    generics.add(signature.generics[index])
+  }
+  const bounds = if mapping.isEmpty() {
+    signature.bounds
+  } else {
+    substituteBounds(checker.types, signature.bounds, mapping)
+  }
+  const takesSelfArgument = mentionsSelf(signature.form, selfParameter)
   if signature.takesSelf {
     // `Point.area` is the member itself, `p.area` is the member bound to `p`: the same one, read two ways
     if isStatic {
@@ -345,7 +406,9 @@ fn memberCandidate(
         form: Some(value),
         takesSelf: true,
         isVarSelf: signature.isVarSelf,
-        isGeneric: isGeneric,
+        generics: generics,
+        bounds: bounds,
+        takesSelfArgument: takesSelfArgument,
         dispatch: dispatch,
       )
     }
@@ -356,22 +419,51 @@ fn memberCandidate(
       form: Some(form),
       takesSelf: true,
       isVarSelf: signature.isVarSelf,
-      isGeneric: isGeneric,
+      generics: generics,
+      bounds: bounds,
+      takesSelfArgument: takesSelfArgument,
       dispatch: dispatch,
     )
   }
   // A member without `self` is a constant of the type: a static function, or a `const`
   if signature.hasBody && form.parameters.isEmpty() && isConstantMember(checker, member) {
-    return Candidate(CandidateKind.Constant(receiver, member), form.result, isGeneric: isGeneric, dispatch: dispatch)
+    return Candidate(
+      CandidateKind.Constant(receiver, member),
+      form.result,
+      generics: generics,
+      bounds: bounds,
+      dispatch: dispatch,
+    )
   }
   const annotation = functionTypeOf(checker, identifier, form, mapping)
   Candidate(
     CandidateKind.Method(receiver, member),
     annotation,
     form: Some(form),
-    isGeneric: isGeneric,
+    generics: generics,
+    bounds: bounds,
+    takesSelfArgument: takesSelfArgument,
     dispatch: dispatch,
   )
+}
+
+/**
+ * Whether a parameter of the member *is* `Self`. Such a member needs two values of the same type, which a trait-typed
+ * value cannot promise, and that is what per-call object safety rejects (gap 7).
+ */
+fn mentionsSelf(form: FunctionForm, selfParameter: TypeId?): Bool {
+  const own = match selfParameter {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  for parameter in form.parameters {
+    if parameter.annotation == own {
+      return true
+    }
+  }
+  false
 }
 
 /** Interning a function type builds a key out of every parameter, so the answer for a whole signature is kept. */
@@ -409,17 +501,11 @@ fn caseCandidate(
   const identifier = signatureOf(checker, variant.symbol)
   const signature = checker.signature(identifier)
   const form = substituteFunction(checker.types, signature.form, mapping)
-  const isGeneric = signature.generics.length() > mapping.length()
   // A case without fields is the value itself, not a function of no arguments
   if form.parameters.isEmpty() {
-    return Candidate(CandidateKind.CaseConstructor(owner, variant.symbol), owner, form: None, isGeneric: isGeneric)
+    return Candidate(CandidateKind.CaseConstructor(owner, variant.symbol), owner, form: None)
   }
-  Candidate(
-    CandidateKind.CaseConstructor(owner, variant.symbol),
-    checker.functionType(form),
-    form: Some(form),
-    isGeneric: isGeneric,
-  )
+  Candidate(CandidateKind.CaseConstructor(owner, variant.symbol), checker.functionType(form), form: Some(form))
 }
 
 /** `Point.area` is `(self: Point) => Int`, `p.area` is `() => Int`: the same member, read through a type or a value. */

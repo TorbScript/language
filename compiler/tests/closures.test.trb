@@ -1,0 +1,231 @@
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
+/**
+ * Closures, read from the type that is expected of them: the parameters the function type names, the implicit `_` and
+ * `_2`, the result that comes out of the body, and the bindings the body reads from the scope around it.
+ *
+ * The captures are the reason this is recorded and not only checked: a captured `var` binding is a shared box and not a
+ * copy (gap 19), and both back ends have to build one.
+ *
+ * The declaration comes *after* the body in most of these sources, so that a name of the closure is the first
+ * occurrence of its text and the span the probe asks about is the one in the closure.
+ */
+
+/** A function that takes a closure of a known type, which is what every test here reads its closure from. */
+const apply = "\nfn apply(transform: (value: Int) => String): String \{\n  transform(1)\n\}\n"
+
+const twice = "\nfn twice(combine: (first: Int, second: Int) => Int): Int \{\n  combine(1, 2)\n\}\n"
+
+const run = "\nfn run(action: () => Int): Int \{\n  action()\n\}\n"
+
+fn inBody(body: String): String {
+  "fn probe() \{\n{body}\n\}\n{apply}"
+}
+
+group "Parameters from the expected function type" {
+  test "a named parameter takes the type the function type gives it" {
+    const source = inBody("  const found = apply \{ item => \"\{item\}\" \}")
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("\{ item => \"\{item\}\" \}") == "(item: Int64) => String")
+  }
+
+  test "the result of a closure is what its body produces" {
+    const source = "fn probe() \{\n  const found = run \{ 7 \}\n\}\n{run}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("\{ 7 \}") == "() => Int64")
+  }
+
+  test "an annotation that disagrees with the expected function type is a mistake" {
+    const source = inBody("  const found = apply \{ item: String => item \}")
+    assert(problems(source) == ["This parameter is a `Int64`, not a `String`"])
+  }
+
+  test "an annotation that agrees is fine" {
+    assert(problems(inBody("  const found = apply \{ item: Int => \"\{item\}\" \}")).isEmpty())
+  }
+
+  test "a closure that writes a different number of parameters says so" {
+    const source = inBody("  const found = apply \{ first, second => \"a\" \}")
+    assert(problems(source) == ["This closure takes 1 parameter, 2 were written"])
+  }
+
+  test "a pattern works as a parameter" {
+    const source = "fn probe() \{\n  const found = onPair \{ (a, b) => a + b \}\n\}\n\n"
+      + "fn onPair(action: (pair: (Int, Int)) => Int): Int \{\n  action((1, 2))\n\}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.patternTypeOf("(a, b)") == "(Int64, Int64)")
+  }
+
+  test "a `var` parameter of the expected function type stays a `var` parameter of the closure" {
+    const source = "fn probe() \{\n  step \{ counter => counter.count = 1 \}\n\}\n\n"
+      + "type Counter \{\n  var count: Int = 0\n\}\n\n"
+      + "fn step(action: (var it: Counter) => Void) \{\n  var counter = Counter()\n  action(counter)\n\}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("\{ counter => counter.count = 1 \}") == "(var counter: Counter) => Void")
+  }
+
+  test "without an expected function type every parameter needs an annotation" {
+    const source = "fn probe() \{\n  const found = take(\{ item => item \})\n\}\n\n"
+      + "fn take<Value>(value: Value): Value \{\n  value\n\}"
+    assert(problems(source).contains("The parameters of this closure need types: `\{ value: Int => ... \}`"))
+  }
+
+  test "an annotated parameter needs no expected type" {
+    const source = "fn probe() \{\n  const found = take(\{ item: Int => item \})\n\}\n\n"
+      + "fn take<Value>(value: Value): Value \{\n  value\n\}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("\{ item: Int => item \}") == "(item: Int64) => Int64")
+  }
+}
+
+group "Implicit parameters" {
+  test "`_` is the first parameter of the expected function type" {
+    const source = "fn probe() \{\n  const found = increase \{ _ \}\n\}\n\n"
+      + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.adaptationsOf("_") == ["parameter 0"])
+    assert(probed.typeOf("_") == "Int64")
+  }
+
+  test "`_2` is the second one" {
+    const source = "fn probe() \{\n  const found = twice \{ _ + _2 \}\n\}\n{twice}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.adaptationsOf("_2") == ["parameter 1"])
+  }
+
+  test "the name the function type gives the parameter works as well" {
+    const source = "fn probe() \{\n  const found = increase \{ amount + 1 \}\n\}\n\n"
+      + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.adaptationsOf("amount") == ["parameter 0"])
+    assert(probed.resolutionOf("amount") == "local _")
+  }
+
+  test "fewer implicit parameters than the function type has is allowed" {
+    const source = "fn probe() \{\n  const found = twice \{ _ + 1 \}\n\}\n{twice}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "a closure that wrote its parameters has no implicit ones" {
+    const source = inBody("  const found = apply \{ item => \"\{_\}\" \}")
+    assert(problems(source).contains("The parameters of this closure need types: `\{ value: Int => ... \}`"))
+  }
+
+  test "`_` without an expected function type asks for the annotation" {
+    const source = "fn probe() \{\n  const found = take(\{ _ + 1 \})\n\}\n\n"
+      + "fn take<Value>(value: Value): Value \{\n  value\n\}"
+    assert(problems(source).contains("The parameters of this closure need types: `\{ value: Int => ... \}`"))
+  }
+}
+
+group "Captures" {
+  test "a binding of the scope around the closure is recorded as a capture" {
+    const source = inBody("  const factor = 3\n  const found = apply \{ \"\{_ * factor\}\" \}")
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.capturesOf("\{ \"\{_ * factor\}\" \}") == ["factor"])
+  }
+
+  test "a captured `var` binding is recorded as one, because it is a shared box and not a copy (gap 19)" {
+    const source = inBody("  var seen = 0\n  const found = apply \{ \"\{seen + _\}\" \}")
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.capturesOf("\{ \"\{seen + _\}\" \}") == ["var seen"])
+  }
+
+  test "the closure's own parameters are not captures" {
+    const source = inBody("  const found = apply \{ item => \"\{item\}\" \}")
+    const probed = probe(source)
+    assert(probed.capturesOf("\{ item => \"\{item\}\" \}") == [])
+  }
+
+  test "a parameter of the enclosing function is a capture like any other binding" {
+    const source = "fn probe(offset: Int) \{\n  const found = apply \{ \"\{_ + offset\}\" \}\n\}\n{apply}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.capturesOf("\{ \"\{_ + offset\}\" \}") == ["offset"])
+  }
+
+  test "a nested closure captures what it reads from further out, and so does the one around it" {
+    const source = "fn probe() \{\n  const base = 1\n  const found = run \{ run \{ base \} \}\n\}\n{run}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.capturesOf("\{ base \}") == ["base"])
+    assert(probed.capturesOf("\{ run \{ base \} \}") == ["base"])
+  }
+}
+
+group "Control flow inside a closure" {
+  test "`return` returns from the closure and decides its result" {
+    const source = "fn probe() \{\n  const found = run \{ return 1 \}\n\}\n{run}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("\{ return 1 \}") == "() => Int64")
+  }
+
+  test "a `return` and a last expression have to agree, and one solves the other" {
+    const source = "fn probe(flag: Bool) \{\n  const found = maybe \{\n    if flag \{\n      return Some(1)\n"
+      + "    \}\n    None\n  \}\n\}\n\n"
+      + "fn maybe(action: () => Int?): Int? \{\n  action()\n\}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("None") == "Option<Int64>")
+  }
+
+  test "`break` cannot leave a closure" {
+    const source = "fn probe(items: List<Int>) \{\n  for item in items \{\n    const found = run \{ break \}\n  \}\n\}\n"
+      + run
+    assert(problems(source) == ["`break` is only allowed inside of a `for` or a `while`"])
+    assert(
+      notes(source)
+        == [
+          "A closure is a function, not a block: `break` cannot leave one, and `do \{ \}` is not a loop either",
+        ]
+    )
+  }
+
+  test "the body of a closure is checked against the result of the expected function type" {
+    const source = inBody("  const found = apply \{ 1 \}")
+    assert(problems(source) == ["Expected `String`, found `Int64`"])
+  }
+}
+
+group "Closures at a generic call" {
+  test "a non-closure argument is checked first, so the closure is read from what it decided (design 2.6)" {
+    const source = "fn probe(numbers: List<Int>) \{\n  const total = fold(0, numbers) \{ sum, number => sum + number \}\n\}\n\n"
+      + "fn fold<State, Item>(initial: State, items: List<Item>, combine: (State, Item) => State): State \{\n"
+      + "  initial\n\}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("\{ sum, number => sum + number \}") == "(sum: Int64, number: Int64) => Int64")
+  }
+
+  test "the result of the closure solves the parameter it stands for" {
+    const source = "fn probe(numbers: List<Int>) \{\n  const shown = convert(numbers) \{ \"\{_\}\" \}\n\}\n\n"
+      + "fn convert<Item, Output>(items: List<Item>, transform: (value: Item) => Output): List<Output> \{\n"
+      + "  []\n\}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("convert(numbers) \{ \"\{_\}\" \}") == "List<String>")
+    assert(probed.typeArgumentsOf("convert(numbers) \{ \"\{_\}\" \}") == ["Int64", "String"])
+    // The trailing closure is recorded at the closure, which is where the lowering has to move it from
+    assert(probed.adaptationsOf("\{ \"\{_\}\" \}") == ["trailing 1"])
+  }
+
+  test "`do` is an ordinary generic function that takes a closure" {
+    const source = "fn probe() \{\n  const found = do \{ 1 + 2 \}\n\}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.typeOf("do \{ 1 + 2 \}") == "Int64")
+    assert(probed.typeArgumentsOf("do \{ 1 + 2 \}") == ["Int64"])
+  }
+}

@@ -1,9 +1,10 @@
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Pattern, FieldPattern, Name from "../../syntax/ast"
-use TypeId, FieldSignature from "./type"
+use TypeId, TypeForm, FieldSignature from "./type"
 use Checker, Expectation, LocalBinding from "./context"
 use caseNamed, fieldsOf, hasCases, typeNameOf from "./member"
+use traitArgumentsOf from "./implementation"
 use checkExpression from "./expression"
 
 /**
@@ -30,15 +31,16 @@ public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, 
       const _ = checkExpression(checker, end, other)
     }
     .TuplePattern(items) => tuplePattern(checker, items, subject, pattern.span, isVar)
-    // The item type of a list pattern comes from `Iterable`, which milestone 4.3 resolves
+    // `[first, ...rest]`: the item type is the `Item` of the `Iterable<Item>` the subject is, and a rest pattern
+    // collects a list of the same items
     .ListPattern(items, rest) => {
-      const element = checker.deferredType
+      const element = itemOfSubject(checker, subject)
       for item in items {
         checkPattern(checker, item, element, isVar)
       }
       if const Some(more) = rest {
         if const Some(name) = more.name {
-          const collected = checker.deferredType
+          const collected = listOfItems(checker, element)
           declareName(checker, name.text, collected, name.span, isVar)
         }
       }
@@ -68,6 +70,34 @@ public fn declareName(var checker: Checker, name: String, annotation: TypeId, at
     return
   }
   const _ = checker.declareBinding(LocalBinding(name, annotation, isVar, at))
+}
+
+/** The `Item` of the `Iterable<Item>` a list pattern matches. */
+fn itemOfSubject(var checker: Checker, subject: TypeId): TypeId {
+  if checker.absorbs(subject) {
+    return checker.deferredType
+  }
+  const iterable = match checker.wellKnown.iterable {
+    Some(found) => found
+    .None => {
+      return checker.deferredType
+    }
+  }
+  match traitArgumentsOf(checker, subject, iterable) {
+    Some(arguments) => arguments.get(0) ?? checker.deferredType
+    .None => checker.deferredType
+  }
+}
+
+fn listOfItems(var checker: Checker, element: TypeId): TypeId {
+  const list = match checker.wellKnown.list {
+    Some(found) => found
+    .None => {
+      return checker.deferredType
+    }
+  }
+  const bound = checker.nominal(list, [element])
+  checker.types.intern(TypeForm.Traits([bound]))
 }
 
 fn expectationFor(checker: Checker, subject: TypeId): Expectation {

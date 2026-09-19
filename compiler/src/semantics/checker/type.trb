@@ -547,11 +547,13 @@ public type Resolved {
 }
 
 /**
- * How one bound of one type is satisfied at one place. Milestone 4.4 builds the whole tree; 4.3 fills in the leaves it
- * can see without inference, and `Unresolved` stands for "it holds, the tree comes with the inference contexts".
+ * How one bound of one type is satisfied at one place. A back end may monomorphize a call whose whole tree holds
+ * neither an `Object` nor a `Forwarded`, and has to pass a witness table otherwise - which is why the tree and not
+ * only its root is recorded. `Unresolved` means the bound does not hold, and a message was given where it was asked.
  */
 public type Witness {
-  case Implementation(implementation: ImplementationId, arguments: List<TypeId>)
+  /** `witnesses` are the bounds of the implementation itself, in its own order: `extend<Item: Show> List<Item>`. */
+  case Implementation(implementation: ImplementationId, arguments: List<TypeId>, witnesses: List<Witness>)
   /** The receiver's type is a generic parameter: the caller passed the witness. */
   case Forwarded(parameter: ParameterId, bound: TypeId)
   /** The receiver is a trait-typed value: the witness is in its table. */

@@ -2,18 +2,24 @@ use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, CallStyle from "../../syntax/ast"
 use editDistance from "../resolve-types"
-use TypeId, FunctionForm, ParameterForm from "./type"
-use Checker, Expectation, Resolution, Adaptation from "./context"
-use Target from "./name"
+use TypeId, FunctionForm, ParameterForm, ParameterMode, ParameterId, Bound, Witness from "./type"
+use Checker, Expectation, Resolution, Adaptation, Dispatch, Candidate from "./context"
+use Target, targetOfCandidate from "./name"
 use checkExpression, inferExpression, deferExpression, deferArguments from "./expression"
 use resolveTarget, expectationOf from "./expression"
+use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
+use witnessFor, isConcrete, traitArgumentsOf from "./implementation"
 
 /**
- * Arguments: positional before named, labels, defaults, variadics, spread and the trailing closure.
+ * Calls: which parameter every written argument fills, what the generic parameters of the callee turn out to be, and
+ * which implementation makes every bound of it hold.
  *
- * Which parameter every written argument fills is recorded per call, and so is everything the source does not spell
- * out - the defaults that were left out, the order the arguments have to be evaluated in, the list a variadic
- * parameter collects - because the back ends must not work any of that out again.
+ * The arguments are checked in **two passes** - everything that is not a closure first, in source order, then the
+ * closures. That is what makes `fold(0) { sum, number => sum + number }` work without an annotation: `State` is solved
+ * by the `0` before the closure is read from it.
+ *
+ * Everything the back ends must not work out again is recorded per call span: the parameter of every argument, the type
+ * arguments the call was instantiated with, one witness per bound, and everything the source did not spell out.
  */
 
 /** Which parameter every written argument fills, and what the call adds to what was written. */
@@ -27,6 +33,14 @@ public type ArgumentPlan {
   variadicFrom: Int
 }
 
+/** A generic callee with its parameters filled in: fresh variables where the call site did not write them out. */
+public type Instantiation {
+  form: FunctionForm
+  /** In the order of the callee's own generic parameters. This is what milestone 5 monomorphizes from. */
+  arguments: List<TypeId>
+  bounds: List<Bound>
+}
+
 public fn checkCall(
   var checker: Checker,
   expression: Expression,
@@ -35,23 +49,180 @@ public fn checkCall(
   style: CallStyle,
   expected: Expectation,
 ): TypeId {
-  const target = resolveTarget(checker, callee, None)
-  checker.resolved(callee.span, target.resolution)
-  const _ = checker.typed(callee.span, target.annotation)
+  // The expected type of the whole call reaches the callee, which is what makes `Some(keyword)` an `Option<Keyword>`
+  const wanted = expected.annotationOf()
+  var target = resolveTarget(checker, callee, wanted)
+  if !target.overloads.isEmpty() {
+    target = chooseOverload(checker, target, arguments, expression.span)
+  }
   const form = match target.form {
     Some(found) => found
-    // A property command (`port 8080`) and a call of something that is not a function yet: milestone 4.7 and 4.3
+    // A property command (`port 8080`) and a call of something that is not a function: milestone 4.7
     .None => {
+      checker.resolved(callee.span, target.resolution)
+      const _ = checker.typed(callee.span, target.annotation)
       deferArguments(checker, arguments)
       checker.resolved(expression.span, Resolution.Deferred)
       return checker.deferredType
     }
   }
-  checker.resolved(expression.span, target.resolution)
-  const plan = matchArguments(checker, target, form, arguments, expression.span)
-  checkArguments(checker, form, arguments, plan)
-  recordPlan(checker, expression.span, form, plan)
-  form.result
+  const instantiation = instantiateTarget(checker, target, form, expression.span)
+  const inner = instantiation.form
+  checker.resolved(callee.span, target.resolution)
+  const shown = checker.functionType(inner)
+  const _ = checker.typed(callee.span, shown)
+  // What the whole call has to produce is known before its arguments are: `employees.collect(maxBy { _.age })` learns
+  // the `Item` of `maxBy` from the parameter of `collect` and only then reads the closure. Nothing is reported here -
+  // the real check happens where the value arrives - and a variable is only ever solved by an exact type
+  if const Some(annotation) = wanted {
+    matchResult(checker, inner.result, annotation)
+  }
+  const plan = matchArguments(checker, target, inner, arguments, expression.span)
+  checkArguments(checker, inner, arguments, plan)
+  const witnesses = checkBounds(checker, instantiation.bounds, target.name, expression.span)
+  const solved = resolveTypes(checker, instantiation.arguments)
+  if !solved.isEmpty() {
+    checker.recordTypeArguments(expression.span, solved)
+  }
+  if !witnesses.isEmpty() {
+    checker.recordWitnesses(expression.span, witnesses)
+  }
+  const resolution = withInstantiation(target.resolution, solved, witnesses)
+  checker.resolved(expression.span, resolution)
+  recordPlan(checker, expression.span, inner, plan)
+  resolveType(checker, inner.result)
+}
+
+/**
+ * A fresh variable for every generic parameter the call site did not write out. Explicit type arguments are taken from
+ * the left (`into<Set<Employee>>()`), so a call may pin some of them down and leave the rest to inference.
+ */
+public fn instantiateTarget(
+  var checker: Checker,
+  target: Target,
+  form: FunctionForm,
+  at: Span,
+): Instantiation {
+  if target.generics.isEmpty() {
+    if !target.arguments.isEmpty() {
+      reportTypeArity(checker, target.name, 0, target.arguments.length(), at)
+    }
+    return Instantiation(form, [], target.bounds)
+  }
+  if target.arguments.length() > target.generics.length() {
+    reportTypeArity(checker, target.name, target.generics.length(), target.arguments.length(), at)
+  }
+  var mapping: Map<ParameterId, TypeId> = [:]
+  var solved: List<TypeId> = []
+  for index in 0..target.generics.length() {
+    const parameter = target.generics[index]
+    var argument = checker.deferredType
+    if index < target.arguments.length() {
+      argument = target.arguments[index]
+    } else {
+      const name = checker.types.parameter(parameter).name
+      argument = checker.newVariable(name, target.name, at)
+    }
+    mapping.set(parameter, argument)
+    solved.add(argument)
+  }
+  const instantiated = substituteFunction(checker.types, form, mapping)
+  const bounds = substituteBounds(checker.types, target.bounds, mapping)
+  Instantiation(instantiated, solved, bounds)
+}
+
+/**
+ * The result of the callee against the type that is expected of the whole call, silently: whatever the two have in
+ * common solves a variable. Where the value will have to *coerce* (a concrete type into a trait type) the arguments of
+ * the trait are what carries the information, so those are matched as well.
+ */
+fn matchResult(var checker: Checker, result: TypeId, expected: TypeId) {
+  if checker.absorbs(result) || checker.absorbs(expected) {
+    return
+  }
+  const bounds = match checker.types.form(expected) {
+    .Traits(found) => found
+    _ => {
+      const _ = unify(checker, result, expected)
+      return
+    }
+  }
+  // A value *coerces* into a trait type, and a coercion never solves a variable (design 2.5): `print(pipeline.collect(c))`
+  // must not decide that the `Output` of `collect` is `Show` itself
+  if openVariableOf(checker, result).isSome() {
+    return
+  }
+  if unify(checker, result, expected) {
+    return
+  }
+  for bound in bounds {
+    const (capability, arguments) = match checker.types.form(bound) {
+      .Nominal(symbol, given) => (symbol, given)
+      _ => {
+        continue
+      }
+    }
+    const actual = match traitArgumentsOf(checker, result, capability) {
+      Some(found) => found
+      .None => {
+        continue
+      }
+    }
+    if actual.length() != arguments.length() {
+      continue
+    }
+    for index in 0..arguments.length() {
+      const _ = unify(checker, arguments[index], actual[index])
+    }
+  }
+}
+
+/**
+ * `Int.from(value)`: `Int64` implements `From<Int32>`, `From<UInt8>`, `From<UInt16>`, `From<UInt32>` and `From<Char>`,
+ * so one name has five signatures and the argument says which one is meant. That is the only overload set the language
+ * has, and it only ever has one argument.
+ */
+fn chooseOverload(var checker: Checker, target: Target, arguments: List<Argument>, at: Span): Target {
+  if arguments.length() != 1 {
+    return target
+  }
+  const first = arguments[0]
+  if first.isSpread || isClosureArgument(first) {
+    return target
+  }
+  const given = inferExpression(checker, first.value)
+  if checker.absorbs(given) {
+    return target
+  }
+  for candidate in target.overloads {
+    if const Some(form) = candidate.form {
+      if form.parameters.length() == 1 {
+        if sameType(checker.types, form.parameters[0].annotation, given) {
+          return targetOfCandidate(checker, candidate, target.name)
+        }
+      }
+    }
+  }
+  reportNoOverload(checker, target, given, at)
+  // One root cause, one message: the argument is checked against nothing after this, and the call is `Invalid`
+  const broken = checker.invalidType
+  target.copy(form: Some(FunctionForm([ParameterForm(None, ParameterMode.Value, broken)], broken)))
+}
+
+fn reportNoOverload(var checker: Checker, target: Target, given: TypeId, at: Span) {
+  var offered: List<String> = []
+  for candidate in target.overloads {
+    if const Some(form) = candidate.form {
+      if const Some(parameter) = form.parameters.first() {
+        offered.add(checker.describe(parameter.annotation))
+      }
+    }
+  }
+  const shown = checker.describe(given)
+  checker.reportHere(
+    Diagnostic.error("`{target.name}` takes none of these from a `{shown}`", at)
+      .withNote("`{target.name}` exists for {String.join(offered, separator: ", ")}")
+  )
 }
 
 /**
@@ -205,27 +376,156 @@ fn indexOfParameter(parameters: List<ParameterForm>, name: String): Int {
 
 // --- Checking the arguments themselves ------------------------------------------------------------------------------
 
+/**
+ * Two passes: everything that is not a closure first, so that the generic parameters a closure is read from are solved
+ * by then (design 2.6). Within a pass the arguments are checked in source order, which is the order they are written in
+ * and not the one they are evaluated in - `Adaptation.Reorder` records that.
+ */
 fn checkArguments(var checker: Checker, form: FunctionForm, arguments: List<Argument>, plan: ArgumentPlan) {
+  checkArgumentPass(checker, form, arguments, plan, false)
+  checkArgumentPass(checker, form, arguments, plan, true)
+}
+
+fn checkArgumentPass(
+  var checker: Checker,
+  form: FunctionForm,
+  arguments: List<Argument>,
+  plan: ArgumentPlan,
+  isClosurePass: Bool,
+) {
   const parameters = form.parameters
   for index in 0..arguments.length() {
     const argument = arguments[index]
-    const position = plan.targets[index]
+    if isClosureArgument(argument) != isClosurePass {
+      continue
+    }
+    const position = plan.targets.get(index) ?? -1
     if position < 0 || position >= parameters.length() {
       const _ = inferExpression(checker, argument.value)
       continue
     }
     const parameter = parameters[position]
     if argument.isSpread {
-      // `...expression` spreads every `Iterable<Item>`, which needs the witness: milestone 4.3
-      deferExpression(checker, argument.value)
-      checker.adapted(argument.value.span, Adaptation.Spread)
+      checkSpread(checker, argument, parameter)
       continue
     }
     if const .Lazy = parameter.mode {
       checker.adapted(argument.value.span, Adaptation.Lazy)
     }
-    const inner = expectationOf(checker, parameter.annotation)
+    // What the parameter is may have been learned from an argument to its left, so it is resolved here and not before
+    const annotation = resolveType(checker, parameter.annotation)
+    const inner = expectationOf(checker, annotation)
     const _ = checkExpression(checker, argument.value, inner)
+  }
+}
+
+fn isClosureArgument(argument: Argument): Bool {
+  match argument.value.kind {
+    .Closure(_) => true
+    _ => false
+  }
+}
+
+/** `...expression` spreads any `Iterable<Item>` into a variadic parameter; a collection is never spread implicitly. */
+fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterForm) {
+  const given = inferExpression(checker, argument.value)
+  checker.adapted(argument.value.span, Adaptation.Spread)
+  if checker.absorbs(given) {
+    return
+  }
+  const iterable = match checker.wellKnown.iterable {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  match traitArgumentsOf(checker, given, iterable) {
+    Some(found) => {
+      if const Some(item) = found.first() {
+        const _ = unify(checker, item, parameter.annotation)
+      }
+    }
+    .None => {
+      if isConcrete(checker, given) {
+        const shown = checker.describe(given)
+        checker.reportHere(
+          Diagnostic.error("`{shown}` is not `Iterable`, so `...` cannot spread it", argument.value.span)
+        )
+      }
+    }
+  }
+}
+
+// --- Bounds and witnesses -------------------------------------------------------------------------------------------
+
+/**
+ * Every bound of the callee, with the solutions put in: one witness per trait, in the order of `Signature.bounds`. This
+ * is the list milestone 5 reads to decide between monomorphizing and passing a table, so it is recorded even where the
+ * call itself is `Dispatch.Direct`.
+ */
+public fn checkBounds(var checker: Checker, bounds: List<Bound>, owner: String, at: Span): List<Witness> {
+  var witnesses: List<Witness> = []
+  for bound in bounds {
+    const subject = resolveType(checker, bound.subject)
+    for capability in bound.traits {
+      const wanted = resolveType(checker, capability)
+      const found = witnessFor(checker, subject, wanted)
+      if const .Unresolved = found {
+        reportUnmetBound(checker, subject, wanted, owner, at)
+      }
+      witnesses.add(found)
+    }
+  }
+  witnesses
+}
+
+/**
+ * A bound that does not hold. Nothing is said about a subject that is not concrete: what a generic parameter of the
+ * *enclosing* declaration implements is decided where that one is called, and an unsolved variable was already reported
+ * as "cannot infer".
+ */
+fn reportUnmetBound(var checker: Checker, subject: TypeId, wanted: TypeId, owner: String, at: Span) {
+  if !isConcrete(checker, wanted) {
+    return
+  }
+  const shown = checker.describe(wanted)
+  if const .Parameter(_) = checker.types.form(subject) {
+    const name = checker.describe(subject)
+    checker.reportHere(
+      Diagnostic.error("`{name}` is not `{shown}`", at)
+        .withNote("Add the bound to the declaration: `where {name}: {shown}`")
+    )
+    return
+  }
+  if !isConcrete(checker, subject) {
+    return
+  }
+  const given = checker.describe(subject)
+  var problem = Diagnostic.error("`{given}` does not implement `{shown}`", at)
+  if !owner.isEmpty() {
+    problem = problem.withNote("`{owner}` asks for it")
+  }
+  checker.reportHere(problem)
+}
+
+/** The resolution of a call, with everything the call site learned: the type arguments and the witnesses. */
+public fn withInstantiation(
+  resolution: Resolution,
+  arguments: List<TypeId>,
+  witnesses: List<Witness>,
+): Resolution {
+  if const .Callable(symbol, _, dispatch) = resolution {
+    return Resolution.Callable(symbol, arguments, withWitnesses(dispatch, witnesses))
+  }
+  resolution
+}
+
+fn withWitnesses(dispatch: Dispatch, witnesses: List<Witness>): Dispatch {
+  match dispatch {
+    .Implementation(implementation, _) => Dispatch.Implementation(implementation, witnesses)
+    .Object(bound, _) => Dispatch.Object(bound, witnesses)
+    .Forwarded(parameter, bound, _) => Dispatch.Forwarded(parameter, bound, witnesses)
+    _ => dispatch
   }
 }
 
@@ -236,7 +536,7 @@ fn recordPlan(var checker: Checker, at: Span, form: FunctionForm, plan: Argument
     checker.adapted(at, Adaptation.Reorder(plan.targets))
   }
   if plan.variadic >= 0 {
-    const element = form.parameters[plan.variadic].annotation
+    const element = resolveType(checker, form.parameters[plan.variadic].annotation)
     checker.adapted(at, Adaptation.Variadic(element, plan.variadicFrom))
   }
   for position in plan.defaults {
@@ -278,6 +578,17 @@ fn reportArity(var checker: Checker, name: String, parameters: List<ParameterFor
     "{given} were given"
   }
   checker.reportHere(Diagnostic.error("`{name}` takes {takes}, {was}", at))
+}
+
+fn reportTypeArity(var checker: Checker, name: String, expected: Int, given: Int, at: Span) {
+  const wanted = if expected == 0 {
+    "no type arguments"
+  } else if expected == 1 {
+    "1 type argument"
+  } else {
+    "{expected} type arguments"
+  }
+  checker.reportHere(Diagnostic.error("`{name}` takes {wanted}, {given} were given", at))
 }
 
 fn isVariadic(parameter: ParameterForm): Bool {

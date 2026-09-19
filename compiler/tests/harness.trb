@@ -143,6 +143,13 @@ public type Option<Value> {
       .None => fallback
     }
   }
+
+  fn okOr<Failure>(self, error: lazy Failure): Result<Value, Failure> {
+    match self {
+      Some(value) => Ok(value)
+      .None => Error(error)
+    }
+  }
 }
 
 public type Result<Value, Failure> {
@@ -178,6 +185,18 @@ public trait List<Item> with Iterable<Item>, Indexed<Int, Item> {
   fn length(self): Int
   fn add(var self, value: Item)
   fn added(self, value: Item): Self
+
+  /** `List.of(1, 2)`: a factory of the trait itself, which is what a trait as a namespace means (gap 31). */
+  fn of(...items: Item): List<Item> {
+    ArrayList.from(items)
+  }
+}
+
+/** What makes `List.from(...)` and `toList()` work: an implementation whose target is the trait. */
+extend<Item> List<Item> with From<Iterable<Item>> {
+  fn from(items: Iterable<Item>): List<Item> {
+    ArrayList.from(items)
+  }
 }
 
 public trait Map<Key, Value> with Indexed<Key, Value> {}
@@ -189,13 +208,35 @@ extend<Item: Show> List<Item> with Show {
   }
 }
 
-public native type ArrayList<Item> with List<Item> {}
+public native type ArrayList<Item> with List<Item>, From<Iterable<Item>> {
+  native fn from(items: Iterable<Item>): ArrayList<Item>
+}
 
 public type Array<Item, const Size: Int> {}
 
 public native fn print(...values: Show)
 
 public native fn panic(message: String): Never
+
+/** Resources have an identity, so `using` takes a `var` and a temporary is a valid argument for one (gap 2). */
+public shared trait Close {
+  fn close(var self)
+}
+
+public fn using<Resource: Close, Value>(var resource: Resource, body: (Resource) => Value): Value {
+  const result = body(resource)
+  resource.close()
+  result
+}
+
+public fn do<Value>(body: () => Value): Value {
+  body()
+}
+
+/** A function that returns a `Task<Value>` has a body that produces the `Value`. */
+public native shared type Task<Value> {
+  native fn await(self): Value
+}
 """
 
 public const workspace = [
@@ -212,8 +253,8 @@ public use Show, Equals, Compare, Hash, Negate, Iterable, Iterator from "./types
 public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
 public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
 public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
-public use From, Into, TryFrom, Encode, Length from "./types"
-public use print, panic from "./types"
+public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
+public use print, panic, using, do from "./types"
 public use Some, None from Option
 public use Ok, Error from Result
 """,
@@ -288,6 +329,38 @@ public type Probed {
     checker.argumentTargetsAt(module, at).expect("a call at `{written}`")
   }
 
+  /** The type arguments the generic call at `written` was instantiated with, in declaration order. */
+  fn typeArgumentsOf(self, written: String): List<String> {
+    const at = spanOf(written)
+    const found = checker.typeArgumentsAt(module, at) ?? []
+    var shown: List<String> = []
+    for argument in found {
+      shown.add(checker.describe(argument))
+    }
+    shown
+  }
+
+  /** One witness per trait of every bound of the callee at `written`, in the order of the signature. */
+  fn witnessesOf(self, written: String): List<String> {
+    const at = spanOf(written)
+    var shown: List<String> = []
+    for witness in checker.witnessesAt(module, at) ?? [] {
+      shown.add(describeWitness(checker, witness))
+    }
+    shown
+  }
+
+  /** Which bindings the closure at `written` captures, and which of them are `var`. */
+  fn capturesOf(self, written: String): List<String> {
+    const at = spanOf(written)
+    var shown: List<String> = []
+    for capture in checker.capturesAt(module, at) ?? [] {
+      const name = checker.binding(capture.binding).name
+      shown.add(if capture.isVar { "var {name}" } else { name })
+    }
+    shown
+  }
+
   fn statistics(self): Statistics {
     checker.statisticsOf(module)
   }
@@ -349,6 +422,7 @@ public fn describeAdaptation(checker: Checker, adaptation: Adaptation): String {
     .Lazy => "lazy"
     .TrailingClosure(parameter) => "trailing {parameter}"
     .ImplicitSelf(receiver) => "self {checker.binding(receiver).name}"
+    .ImplicitParameter(index) => "parameter {index}"
     .ToTraitValue(bounds, _) => "trait value {describeBounds(checker, bounds)}"
     .Convert(witness, method) => "convert {checker.symbolAt(method).name} through {describeWitness(checker, witness)}"
     .ShowValue(witness) => "show through {describeWitness(checker, witness)}"
@@ -367,9 +441,17 @@ fn describeBounds(checker: Checker, bounds: List<TypeId>): String {
 /** A witness as a test writes it: which implementation makes a bound hold, and for which type. */
 public fn describeWitness(checker: Checker, witness: Witness): String {
   match witness {
-    .Implementation(implementation, _) => {
+    .Implementation(implementation, _, inner) => {
       const found = checker.implementations.at(implementation)
-      "{checker.describe(found.target)}: {describeTrait(checker, found.capability)}"
+      const shown = "{checker.describe(found.target)}: {describeTrait(checker, found.capability)}"
+      if inner.isEmpty() {
+        return shown
+      }
+      var parts: List<String> = []
+      for nested in inner {
+        parts.add(describeWitness(checker, nested))
+      }
+      "{shown} [{String.join(parts, separator: ", ")}]"
     }
     .Forwarded(_, bound) => "forwarded {checker.describe(bound)}"
     .Object(annotation, bound) => "object {checker.describe(annotation)}: {checker.describe(bound)}"
@@ -391,7 +473,8 @@ public fn describeDispatch(checker: Checker, dispatch: Dispatch): String {
     .Direct => "direct"
     .Implementation(implementation, _) => {
       const found = checker.implementations.at(implementation)
-      "implementation {checker.describe(found.target)}: {describeTrait(checker, found.capability)}"
+      const shown = describeTrait(checker, found.capability)
+      "implementation {checker.describe(found.target)}: {shown}"
     }
     .Object(bound, _) => "object {checker.describe(bound)}"
     .Forwarded(_, bound, _) => "forwarded {checker.describe(bound)}"

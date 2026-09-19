@@ -294,14 +294,14 @@ group "`if`, `match` and blocks" {
 }
 
 group "What waits for a later sub-milestone" {
-  test "a generic call is `unchecked` and says nothing, a trait member of a known type is not" {
+  test "a trait member of a known type and a generic call both have a type" {
     const source = "fn wrap<Value>(value: Value): Value \{\n  value\n\}\n\n"
       + inBody("  const numbers: List<Int> = [1, 2]\n  print numbers.length()\n  print wrap(1)")
     assert(problems(source).isEmpty())
     const found = probe(source)
-    // `length` comes from the `List` trait, which milestone 4.3 resolves; the arguments of `wrap` are 4.4's
+    // `length` comes from the `List` trait (milestone 4.3), `wrap` is instantiated at the call (4.4)
     assert(found.typeOf("numbers.length()") == "Int64")
-    assert(found.typeOf("wrap(1)") == "unchecked")
+    assert(found.typeOf("wrap(1)") == "Int64")
   }
 
   test "the statistics count what is typed and what waits" {
@@ -311,7 +311,7 @@ group "What waits for a later sub-milestone" {
     assert(statistics.total() == statistics.typed + statistics.deferred)
   }
 
-  test "a closure body is recorded and skipped, and nothing in it is reported" {
-    assert(problems(inBody("  const double = \{ value: Int => value * missing \}")).isEmpty())
+  test "a closure body is checked like any other body (milestone 4.4)" {
+    assert(problems(inBody("  const double = \{ value: Int => value * missing \}")) == ["Cannot find `missing` here"])
   }
 }

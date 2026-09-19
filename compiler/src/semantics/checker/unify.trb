@@ -1,4 +1,8 @@
-use TypeId, TypeForm, TypeTable, TupleField, FunctionForm, ParameterForm, ParameterId, Bound from "./type"
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use TypeId, TypeForm, TypeTable, TupleField, FunctionForm, ParameterForm, ParameterMode, ParameterId, Bound from "./type"
+use VariableId, Witness from "./type"
+use Checker, Adaptation, Resolution, Dispatch from "./context"
 
 /**
  * "The same type" the way the language means it.
@@ -62,6 +66,38 @@ public fn sameTypes(types: TypeTable, left: List<TypeId>, right: List<TypeId>): 
   true
 }
 
+/**
+ * How a parameter is passed belongs to the type of a function, what it is called does not - and `self` is a name.
+ * `Point.area` read as a value is `(self: Point) => Int64`, and that is the same type as `(value: Point) => Int64`, so
+ * `[p, q].map(Point.area)` works (design 3.2).
+ */
+public fn sameMode(left: ParameterMode, right: ParameterMode): Bool {
+  isByReference(left) == isByReference(right) && isVariadicMode(left) == isVariadicMode(right)
+    && isLazyMode(left) == isLazyMode(right)
+}
+
+fn isByReference(mode: ParameterMode): Bool {
+  match mode {
+    .Var => true
+    .Receiver(isVar) => isVar
+    _ => false
+  }
+}
+
+fn isVariadicMode(mode: ParameterMode): Bool {
+  match mode {
+    .Variadic => true
+    _ => false
+  }
+}
+
+fn isLazyMode(mode: ParameterMode): Bool {
+  match mode {
+    .Lazy => true
+    _ => false
+  }
+}
+
 /** Modes and defaults belong to the type of a function, the names of its parameters do not. */
 public fn sameFunction(types: TypeTable, left: FunctionForm, right: FunctionForm): Bool {
   if left.parameters.length() != right.parameters.length() {
@@ -70,7 +106,7 @@ public fn sameFunction(types: TypeTable, left: FunctionForm, right: FunctionForm
   for index in 0..left.parameters.length() {
     const parameter = left.parameters[index]
     const other = right.parameters[index]
-    if parameter.mode != other.mode || parameter.hasDefault != other.hasDefault {
+    if !sameMode(parameter.mode, other.mode) || parameter.hasDefault != other.hasDefault {
       return false
     }
     if !sameType(types, parameter.annotation, other.annotation) {
@@ -151,4 +187,534 @@ public fn substituteBounds(var types: TypeTable, bounds: List<Bound>, mapping: M
     replaced.add(Bound(substitute(types, bound.subject, mapping), substituteAll(types, bound.traits, mapping)))
   }
   replaced
+}
+
+// --- Inference contexts ---------------------------------------------------------------------------------------------
+
+/**
+ * Inference is bidirectional and local: a context is opened for one statement and closed at its end, and a variable
+ * never leaves it. There is no generalization and no propagation across statements, so `var items = []` on one line and
+ * `items.add(1)` on the next is an error by design - the annotation is the answer.
+ *
+ * Closing a context does two things: it reports every variable that is still open, and it walks the tables of the
+ * statement once to put the solutions in. That last step is needed because an expression is recorded before the
+ * variable in its type is solved: `const items: List<Int> = []` records `List<_>` and learns `Int64` afterwards.
+ */
+public fn openInference(var checker: Checker) {
+  if checker.contextStarts.isEmpty() {
+    checker.pendingSpans = []
+    checker.hasVariables = false
+  }
+  const start = checker.variables.length()
+  checker.contextStarts.add(start)
+}
+
+public fn closeInference(var checker: Checker) {
+  const last = checker.contextStarts.length() - 1
+  if last < 0 {
+    return
+  }
+  const start = checker.contextStarts.removeAt(last) ?? 0
+  // A block inside an expression has statements of its own, and the last one of them belongs to the statement around
+  // it: `const end = if c { None } else { Some(x) }` learns what `None` is from the other branch. So only the outermost
+  // context settles and prunes, and every nested one is bookkeeping
+  if !checker.contextStarts.isEmpty() {
+    return
+  }
+  settleVariables(checker, start)
+  if checker.hasVariables {
+    const pending = checker.pendingSpans
+    for at in pending {
+      pruneAt(checker, at)
+    }
+  }
+  checker.pendingSpans = []
+  checker.hasVariables = false
+}
+
+/** The message for every variable that is still open at the end of the statement that made it. */
+fn settleVariables(var checker: Checker, start: Int) {
+  var index = start
+  while index < checker.variables.length() {
+    const state = checker.variables[index]
+    if state.solution.isNone() && !state.isReported {
+      checker.markReported(VariableId(index))
+      reportUnsolved(checker, state.name, state.owner, state.at)
+    }
+    index = index + 1
+  }
+}
+
+fn reportUnsolved(var checker: Checker, name: String, owner: String, at: Span) {
+  // Only a collection literal makes a variable that belongs to no declaration
+  if owner.isEmpty() {
+    checker.reportHere(
+      Diagnostic.error("Cannot infer the type of this collection", at)
+        .withNote("An empty literal needs a type: annotate the binding (`const items: List<Int> = []`)")
+    )
+    return
+  }
+  checker.reportHere(
+    Diagnostic.error("Cannot infer `{name}` of `{owner}`", at)
+      .withNote("Annotate the closure parameter or the result, or write the type argument: `{owner}<{name}>(...)`")
+  )
+}
+
+/**
+ * What a variable was solved with, everywhere inside a type. The result is interned again, so a type that mentions no
+ * variable comes back as the very same id and costs nothing.
+ */
+public fn resolveType(var checker: Checker, id: TypeId): TypeId {
+  resolveDeep(checker, id, 0)
+}
+
+fn resolveDeep(var checker: Checker, id: TypeId, depth: Int): TypeId {
+  if depth > 24 {
+    return id
+  }
+  match checker.types.form(id) {
+    .Variable(variable) => {
+      match checker.solutionOf(variable) {
+        Some(found) => resolveDeep(checker, found, depth + 1)
+        .None => id
+      }
+    }
+    .Nominal(symbol, arguments) => {
+      const replaced = resolveList(checker, arguments, depth)
+      if replaced == arguments {
+        return id
+      }
+      checker.types.intern(TypeForm.Nominal(symbol, replaced))
+    }
+    .Traits(bounds) => {
+      const replaced = resolveList(checker, bounds, depth)
+      if replaced == bounds {
+        return id
+      }
+      checker.types.intern(TypeForm.Traits(replaced))
+    }
+    .Tuple(fields) => {
+      var replaced: List<TupleField> = []
+      var isChanged = false
+      for field in fields {
+        const inner = resolveDeep(checker, field.annotation, depth + 1)
+        isChanged = isChanged || inner != field.annotation
+        replaced.add(TupleField(field.label, inner))
+      }
+      if !isChanged {
+        return id
+      }
+      checker.types.intern(TypeForm.Tuple(replaced))
+    }
+    .Function(form) => {
+      const replaced = resolveFunction(checker, form, depth)
+      if replaced == form {
+        return id
+      }
+      checker.types.intern(TypeForm.Function(replaced))
+    }
+    _ => id
+  }
+}
+
+fn resolveList(var checker: Checker, arguments: List<TypeId>, depth: Int): List<TypeId> {
+  var replaced: List<TypeId> = []
+  for argument in arguments {
+    replaced.add(resolveDeep(checker, argument, depth + 1))
+  }
+  replaced
+}
+
+fn resolveFunction(var checker: Checker, form: FunctionForm, depth: Int): FunctionForm {
+  var parameters: List<ParameterForm> = []
+  for parameter in form.parameters {
+    parameters.add(parameter.copy(annotation: resolveDeep(checker, parameter.annotation, depth + 1)))
+  }
+  FunctionForm(parameters, resolveDeep(checker, form.result, depth + 1))
+}
+
+public fn resolveTypes(var checker: Checker, arguments: List<TypeId>): List<TypeId> {
+  resolveList(checker, arguments, 0)
+}
+
+/** Whether a type still mentions an unsolved variable, which is what "not inferred yet" means. */
+public fn hasVariable(var checker: Checker, id: TypeId): Bool {
+  match checker.types.form(id) {
+    .Variable(variable) => {
+      match checker.solutionOf(variable) {
+        Some(found) => hasVariable(checker, found)
+        .None => true
+      }
+    }
+    .Nominal(_, arguments) => anyVariable(checker, arguments)
+    .Traits(bounds) => anyVariable(checker, bounds)
+    .Tuple(fields) => {
+      for field in fields {
+        if hasVariable(checker, field.annotation) {
+          return true
+        }
+      }
+      false
+    }
+    .Function(form) => {
+      for parameter in form.parameters {
+        if hasVariable(checker, parameter.annotation) {
+          return true
+        }
+      }
+      hasVariable(checker, form.result)
+    }
+    _ => false
+  }
+}
+
+fn anyVariable(var checker: Checker, arguments: List<TypeId>): Bool {
+  for argument in arguments {
+    if hasVariable(checker, argument) {
+      return true
+    }
+  }
+  false
+}
+
+/**
+ * Marks every variable a type still holds as answered. A construct a later sub-milestone checks (a receiver closure, a
+ * quotation) leaves the parameters of its call open, and "cannot infer" would then be a message about the checker
+ * instead of about the source.
+ */
+public fn suppressVariables(var checker: Checker, id: TypeId) {
+  match checker.types.form(id) {
+    .Variable(variable) => {
+      match checker.solutionOf(variable) {
+        Some(found) => suppressVariables(checker, found)
+        .None => checker.markReported(variable)
+      }
+    }
+    .Nominal(_, arguments) => suppressAll(checker, arguments)
+    .Traits(bounds) => suppressAll(checker, bounds)
+    .Tuple(fields) => {
+      for field in fields {
+        suppressVariables(checker, field.annotation)
+      }
+    }
+    .Function(form) => {
+      for parameter in form.parameters {
+        suppressVariables(checker, parameter.annotation)
+      }
+      suppressVariables(checker, form.result)
+    }
+    _ => {}
+  }
+}
+
+fn suppressAll(var checker: Checker, arguments: List<TypeId>) {
+  for argument in arguments {
+    suppressVariables(checker, argument)
+  }
+}
+
+/** The variable a type *is*, if it is one and is still open: that is what a literal adapts against. */
+public fn openVariableOf(var checker: Checker, id: TypeId): VariableId? {
+  if const .Variable(variable) = checker.types.form(id) {
+    match checker.solutionOf(variable) {
+      Some(found) => {
+        return openVariableOf(checker, found)
+      }
+      .None => {
+        return Some(variable)
+      }
+    }
+  }
+  None
+}
+
+// --- Unification ----------------------------------------------------------------------------------------------------
+
+/**
+ * First-order unification over `TypeForm`, with an occurs check. The only thing it may do is solve a variable with an
+ * exact type: coercion is a separate, directed step (design 2.5) and never solves one, which is why
+ * `[Square(2.0), Circle(1.0)]` does not infer `List<Shape>`.
+ *
+ * A generic parameter is rigid: it unifies with itself and with nothing else. What is broken or not checked yet
+ * absorbs, exactly as it does everywhere else in the checker.
+ */
+public fn unify(var checker: Checker, left: TypeId, right: TypeId): Bool {
+  unifyDeep(checker, left, right, 0)
+}
+
+fn unifyDeep(var checker: Checker, left: TypeId, right: TypeId, depth: Int): Bool {
+  if left == right || depth > 24 {
+    return true
+  }
+  const one = resolveShallow(checker, left)
+  const other = resolveShallow(checker, right)
+  if one == other {
+    return true
+  }
+  if checker.absorbs(one) || checker.absorbs(other) {
+    return true
+  }
+  if const Some(variable) = openVariableOf(checker, one) {
+    return bindVariable(checker, variable, other)
+  }
+  if const Some(variable) = openVariableOf(checker, other) {
+    return bindVariable(checker, variable, one)
+  }
+  match checker.types.form(one) {
+    .Nominal(symbol, arguments) => {
+      if const .Nominal(otherSymbol, otherArguments) = checker.types.form(other) {
+        return symbol == otherSymbol && unifyAll(checker, arguments, otherArguments, depth)
+      }
+      false
+    }
+    .Traits(bounds) => {
+      if const .Traits(otherBounds) = checker.types.form(other) {
+        return unifyAll(checker, bounds, otherBounds, depth)
+      }
+      false
+    }
+    .Tuple(fields) => {
+      if const .Tuple(otherFields) = checker.types.form(other) {
+        if fields.length() != otherFields.length() {
+          return false
+        }
+        for index in 0..fields.length() {
+          if !unifyDeep(checker, fields[index].annotation, otherFields[index].annotation, depth + 1) {
+            return false
+          }
+        }
+        return true
+      }
+      false
+    }
+    .Function(form) => {
+      if const .Function(otherForm) = checker.types.form(other) {
+        return unifyFunction(checker, form, otherForm, depth)
+      }
+      false
+    }
+    // A parameter, a literal type, a const value, `Void`: two of them that are not the same id are different types
+    _ => false
+  }
+}
+
+/** One level of "what is this variable now", without rebuilding the type: the hot path of every unification. */
+fn resolveShallow(var checker: Checker, id: TypeId): TypeId {
+  if const .Variable(variable) = checker.types.form(id) {
+    if const Some(found) = checker.solutionOf(variable) {
+      return resolveShallow(checker, found)
+    }
+  }
+  id
+}
+
+fn bindVariable(var checker: Checker, variable: VariableId, id: TypeId): Bool {
+  const own = checker.types.intern(TypeForm.Variable(variable))
+  if own == id {
+    return true
+  }
+  if occursIn(checker, variable, id) {
+    return false
+  }
+  checker.solveVariable(variable, id)
+  true
+}
+
+/** The occurs check: a variable may not be solved with a type that mentions it, or resolving it would never end. */
+fn occursIn(var checker: Checker, variable: VariableId, id: TypeId): Bool {
+  match checker.types.form(id) {
+    .Variable(other) => {
+      if other == variable {
+        return true
+      }
+      match checker.solutionOf(other) {
+        Some(found) => occursIn(checker, variable, found)
+        .None => false
+      }
+    }
+    .Nominal(_, arguments) => occursInAny(checker, variable, arguments)
+    .Traits(bounds) => occursInAny(checker, variable, bounds)
+    .Tuple(fields) => {
+      for field in fields {
+        if occursIn(checker, variable, field.annotation) {
+          return true
+        }
+      }
+      false
+    }
+    .Function(form) => {
+      for parameter in form.parameters {
+        if occursIn(checker, variable, parameter.annotation) {
+          return true
+        }
+      }
+      occursIn(checker, variable, form.result)
+    }
+    _ => false
+  }
+}
+
+fn occursInAny(var checker: Checker, variable: VariableId, arguments: List<TypeId>): Bool {
+  for argument in arguments {
+    if occursIn(checker, variable, argument) {
+      return true
+    }
+  }
+  false
+}
+
+fn unifyAll(var checker: Checker, left: List<TypeId>, right: List<TypeId>, depth: Int): Bool {
+  if left.length() != right.length() {
+    return false
+  }
+  for index in 0..left.length() {
+    if !unifyDeep(checker, left[index], right[index], depth + 1) {
+      return false
+    }
+  }
+  true
+}
+
+/** The name of a parameter is not part of type identity (gap 17), so only the modes and the types have to line up. */
+fn unifyFunction(var checker: Checker, left: FunctionForm, right: FunctionForm, depth: Int): Bool {
+  if left.parameters.length() != right.parameters.length() {
+    return false
+  }
+  for index in 0..left.parameters.length() {
+    const parameter = left.parameters[index]
+    const other = right.parameters[index]
+    if !sameMode(parameter.mode, other.mode) {
+      return false
+    }
+    if !unifyDeep(checker, parameter.annotation, other.annotation, depth + 1) {
+      return false
+    }
+  }
+  unifyDeep(checker, left.result, right.result, depth + 1)
+}
+
+// --- Putting the solutions into the tables --------------------------------------------------------------------------
+
+/**
+ * One span of one statement, after its inference context closed: every table that holds a type at it gets the solved
+ * one. Writing the same span twice is harmless, which is what lets the list of pending spans be a plain list.
+ */
+fn pruneAt(var checker: Checker, at: Span) {
+  if const Some(found) = checker.expressionTypeHere(at) {
+    const solved = resolveType(checker, found)
+    if solved != found {
+      checker.setExpressionType(at, solved)
+    }
+  }
+  if const Some(found) = checker.patternTypeHere(at) {
+    const solved = resolveType(checker, found)
+    if solved != found {
+      checker.setPatternType(at, solved)
+    }
+  }
+  const adaptations = checker.adaptationsHere(at)
+  if !adaptations.isEmpty() {
+    var replaced: List<Adaptation> = []
+    var isChanged = false
+    for adaptation in adaptations {
+      const solved = pruneAdaptation(checker, adaptation)
+      isChanged = isChanged || solved != adaptation
+      replaced.add(solved)
+    }
+    if isChanged {
+      checker.setAdaptations(at, replaced)
+    }
+  }
+  if const Some(found) = checker.resolutionHere(at) {
+    const solved = pruneResolution(checker, found)
+    if solved != found {
+      checker.setResolution(at, solved)
+    }
+  }
+  if const Some(found) = checker.typeArgumentsAt(checker.module, at) {
+    const solved = resolveTypes(checker, found)
+    if solved != found {
+      checker.setTypeArguments(at, solved)
+    }
+  }
+  if const Some(found) = checker.witnessesAt(checker.module, at) {
+    const solved = pruneWitnesses(checker, found)
+    if solved != found {
+      checker.setWitnesses(at, solved)
+    }
+  }
+}
+
+fn pruneAdaptation(var checker: Checker, adaptation: Adaptation): Adaptation {
+  match adaptation {
+    .Literal(annotation) => Adaptation.Literal(resolveType(checker, annotation))
+    .Variadic(element, from) => Adaptation.Variadic(resolveType(checker, element), from)
+    .ToTraitValue(bounds, witnesses) => Adaptation.ToTraitValue(
+      resolveTypes(checker, bounds),
+      pruneWitnesses(checker, witnesses),
+    )
+    .Convert(witness, method) => Adaptation.Convert(pruneWitness(checker, witness), method)
+    .ShowValue(witness) => Adaptation.ShowValue(pruneWitness(checker, witness))
+    _ => adaptation
+  }
+}
+
+fn pruneResolution(var checker: Checker, resolution: Resolution): Resolution {
+  match resolution {
+    .Callable(symbol, arguments, dispatch) => Resolution.Callable(
+      symbol,
+      resolveTypes(checker, arguments),
+      pruneDispatch(checker, dispatch),
+    )
+    .Field(owner, field) => Resolution.Field(resolveType(checker, owner), field)
+    .Construct(owner) => Resolution.Construct(resolveType(checker, owner))
+    .CopyOf(owner) => Resolution.CopyOf(resolveType(checker, owner))
+    .CaseOf(owner, variant) => Resolution.CaseOf(resolveType(checker, owner), variant)
+    .TupleField(owner, index) => Resolution.TupleField(resolveType(checker, owner), index)
+    .TypeOf(owner) => Resolution.TypeOf(resolveType(checker, owner))
+    .Constant(symbol, owner) => {
+      match owner {
+        Some(found) => Resolution.Constant(symbol, Some(resolveType(checker, found)))
+        .None => resolution
+      }
+    }
+    _ => resolution
+  }
+}
+
+fn pruneDispatch(var checker: Checker, dispatch: Dispatch): Dispatch {
+  match dispatch {
+    .Implementation(implementation, witnesses) => Dispatch.Implementation(
+      implementation,
+      pruneWitnesses(checker, witnesses),
+    )
+    .Object(bound, witnesses) => Dispatch.Object(resolveType(checker, bound), pruneWitnesses(checker, witnesses))
+    .Forwarded(parameter, bound, witnesses) => Dispatch.Forwarded(
+      parameter,
+      resolveType(checker, bound),
+      pruneWitnesses(checker, witnesses),
+    )
+    _ => dispatch
+  }
+}
+
+public fn pruneWitnesses(var checker: Checker, witnesses: List<Witness>): List<Witness> {
+  var replaced: List<Witness> = []
+  for witness in witnesses {
+    replaced.add(pruneWitness(checker, witness))
+  }
+  replaced
+}
+
+fn pruneWitness(var checker: Checker, witness: Witness): Witness {
+  match witness {
+    .Implementation(implementation, arguments, inner) => Witness.Implementation(
+      implementation,
+      resolveTypes(checker, arguments),
+      pruneWitnesses(checker, inner),
+    )
+    .Object(annotation, bound) => Witness.Object(resolveType(checker, annotation), resolveType(checker, bound))
+    .Forwarded(parameter, bound) => Witness.Forwarded(parameter, resolveType(checker, bound))
+    _ => witness
+  }
 }

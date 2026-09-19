@@ -7,11 +7,12 @@ use TypeId, TypeForm, TupleField, LiteralValue, FunctionForm, Witness from "./ty
 use Checker, Expectation, Resolution, Adaptation, Dispatch from "./context"
 use Target, deferredTarget, resolveName, symbolTarget, targetOfCandidate from "./name"
 use formOf, reportUnknownMember, isFullyKnown from "./name"
-use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf from "./member"
+use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf, requireObjectSafe from "./member"
 use traitArgumentsOf, witnessFor, isConcrete from "./implementation"
 use typeFromReference, integerLiteral from "./lowering"
-use sameType from "./unify"
-use checkCall from "./call"
+use sameType, unify, resolveType, resolveTypes, hasVariable from "./unify"
+use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
+use checkClosure from "./closure"
 use checkBlock, checkDiscarded, scopeHere from "./statement"
 use checkPattern from "./pattern"
 use checkDeclaration from "./check"
@@ -78,9 +79,9 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     .Name(_) | .Member(_, _, _) => {
       const target = resolveTarget(checker, expression, annotation)
       checker.resolved(expression.span, target.resolution)
-      target.annotation
+      valueOfTarget(checker, target, expression.span)
     }
-    // `.Circle(1.0)` needs the type it belongs to; without a concrete one it is milestone 4.4's work
+    // `.Circle(1.0)`, `.None`: the case of the type that is expected here
     .ImplicitMember(name) => implicitMemberType(checker, name.text, annotation, expression.span)
     // `value.into()` is chosen by the expected type, so it is the one call the callee alone cannot answer
     .Call(callee, arguments, _) if isConversionCall(checker, callee, arguments, annotation) =>
@@ -88,8 +89,8 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     .Call(callee, arguments, style) => checkCall(checker, expression, callee, arguments, style, expected)
     .Index(target, index) => indexType(checker, target, index, expression.span)
     .TupleLiteral(items) => tupleLiteralType(checker, items, annotation)
-    .ListLiteral(items) => listLiteralType(checker, items, annotation)
-    .MapLiteral(entries) => mapLiteralType(checker, entries, annotation)
+    .ListLiteral(items) => listLiteralType(checker, items, annotation, expression.span)
+    .MapLiteral(entries) => mapLiteralType(checker, entries, annotation, expression.span)
     .RangeLiteral(start, end, _) => rangeLiteralType(checker, start, end)
     // `-300` is one literal, not a negation of `300`: only then can the range of the type it adapts to be checked
     .Unary(.Negate, operand) if isNumberLiteral(operand) => negatedLiteral(checker, operand, annotation, expression.span)
@@ -98,14 +99,13 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     .If(condition, then, otherwise) => ifType(checker, condition, then, otherwise, expected)
     .Match(subject, arms) => matchType(checker, subject, arms, expected)
     .Block(block) => checkBlock(checker, block, expected).annotation
-    // The explicit type arguments of a call are what milestone 4.4 matches against the callee's parameters
-    .Generic(target, arguments) => {
-      deferExpression(checker, target)
-      deferTypeArguments(checker, arguments)
-      checker.deferredType
+    // `to<Set<Int>>()`, `Map<String, Int>()`: the explicit type arguments fill the callee's parameters from the left
+    .Generic(_, _) => {
+      const target = resolveTarget(checker, expression, annotation)
+      checker.resolved(expression.span, target.resolution)
+      valueOfTarget(checker, target, expression.span)
     }
-    // A closure is read from the expected function type, and its body is checked with it: milestone 4.4
-    .Closure(closure) => closureType(checker, closure, annotation)
+    .Closure(closure) => checkClosure(checker, closure, expression.span, annotation)
     .Try(inner) => tryType(checker, inner, expression.span)
     .Invalid => checker.invalidType
   }
@@ -117,14 +117,27 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
  * A name or a member path, read as a value or as the callee of a call. One function for both, because `p.area` and
  * `p.area()` ask the very same question and only do different things with the answer.
  */
-public fn resolveTarget(var checker: Checker, expression: Expression, expected: TypeId?): Target {
+public fn resolveTarget(
+  var checker: Checker,
+  expression: Expression,
+  expected: TypeId?,
+  explicit: List<TypeId> = [],
+): Target {
   match expression.kind {
-    .Name(text) => resolveName(checker, text, expression.span, expected)
-    .Member(target, name, isOptional) => {
-      const found = memberTarget(checker, target, name.text, name.span, isOptional)
+    .Name(text) => resolveName(checker, text, expression.span, expected, explicit)
+    .Member(target, name, isOptional) => memberTarget(checker, target, name.text, name.span, isOptional, explicit)
+    .ImplicitMember(name) => implicitMemberTarget(checker, name.text, expected, expression.span)
+    // `List<Int>.of(1)`, `value.to<Set<Int>>()`: which parameters the type arguments fill is only known now
+    .Generic(inner, references) => {
+      const scope = scopeHere(checker)
+      var given: List<TypeId> = []
+      for reference in references {
+        given.add(typeFromReference(checker, reference, scope.forEither()))
+      }
+      const found = resolveTarget(checker, inner, expected, given)
+      const _ = checker.typed(inner.span, found.annotation)
       found
     }
-    .ImplicitMember(name) => implicitMemberTarget(checker, name.text, expected)
     _ => {
       const annotation = inferExpression(checker, expression)
       Target(Resolution.Deferred, annotation, form: formOf(checker, annotation))
@@ -132,8 +145,43 @@ public fn resolveTarget(var checker: Checker, expression: Expression, expected: 
   }
 }
 
+/**
+ * A target that is read as a value instead of being called. A generic one is instantiated here exactly as a call would,
+ * so `numbers.map` without `()` has a known function type and the bounds of the member are checked either way.
+ */
+public fn valueOfTarget(var checker: Checker, target: Target, at: Span): TypeId {
+  if target.generics.isEmpty() {
+    return target.annotation
+  }
+  const form = match target.form {
+    Some(found) => found
+    .None => {
+      return target.annotation
+    }
+  }
+  const instantiation = instantiateTarget(checker, target, form, at)
+  const witnesses = checkBounds(checker, instantiation.bounds, target.name, at)
+  const solved = resolveTypes(checker, instantiation.arguments)
+  if !solved.isEmpty() {
+    checker.recordTypeArguments(at, solved)
+  }
+  if !witnesses.isEmpty() {
+    checker.recordWitnesses(at, witnesses)
+  }
+  const resolution = withInstantiation(target.resolution, solved, witnesses)
+  checker.resolved(at, resolution)
+  checker.functionType(instantiation.form)
+}
+
 /** `a.b`, `Type.b`, `namespace.b`: which one it is depends on what the part in front of the dot turned out to be. */
-fn memberTarget(var checker: Checker, base: Expression, text: String, at: Span, isOptional: Bool): Target {
+fn memberTarget(
+  var checker: Checker,
+  base: Expression,
+  text: String,
+  at: Span,
+  isOptional: Bool,
+  explicit: List<TypeId>,
+): Target {
   const owner = resolveTarget(checker, base, None)
   checker.resolved(base.span, owner.resolution)
   const _ = checker.typed(base.span, owner.annotation)
@@ -145,7 +193,7 @@ fn memberTarget(var checker: Checker, base: Expression, text: String, at: Span, 
   if const .Namespace(target) = owner.resolution {
     match checker.program.scopes[target.value].exported.get(text) {
       Some(symbol) => {
-        return symbolTarget(checker, symbol, text)
+        return symbolTarget(checker, symbol, text, at, None, explicit)
       }
       .None => {
         checker.reportHere(
@@ -159,7 +207,8 @@ fn memberTarget(var checker: Checker, base: Expression, text: String, at: Span, 
   if const Some(own) = owner.constructs {
     match lookupStaticMember(checker, own, text, Some(at)) {
       Some(candidate) => {
-        return targetOfCandidate(checker, candidate, text)
+        const found = targetOfCandidate(checker, candidate, text)
+        return found.copy(arguments: explicit)
       }
       .None => {
         const _ = reportUnknownMember(checker, own, text, at)
@@ -171,7 +220,9 @@ fn memberTarget(var checker: Checker, base: Expression, text: String, at: Span, 
   match lookupMember(checker, receiver, text, Some(at)) {
     Some(candidate) => {
       recordDelegation(checker, at, candidate)
-      targetOfCandidate(checker, candidate, text)
+      requireObjectSafe(checker, receiver, candidate, text, at)
+      const found = targetOfCandidate(checker, candidate, text)
+      found.copy(arguments: explicit)
     }
     .None => {
       if reportUnknownMember(checker, receiver, text, at) {
@@ -266,23 +317,45 @@ public fn resultPartsOf(checker: Checker, annotation: TypeId): (TypeId, TypeId)?
 
 /** `.Circle(1.0)`, `.None`: the case of the type that is expected here. */
 fn implicitMemberType(var checker: Checker, text: String, expected: TypeId?, at: Span): TypeId {
-  const target = implicitMemberTarget(checker, text, expected)
+  const target = implicitMemberTarget(checker, text, expected, at)
   checker.resolved(at, target.resolution)
-  target.annotation
+  valueOfTarget(checker, target, at)
 }
 
-fn implicitMemberTarget(var checker: Checker, text: String, expected: TypeId?): Target {
+/**
+ * The expected type is what says which type the case belongs to, so `.Circle` without one is an error - the design's
+ * "`.Circle` needs a type. Nothing here says which one". A type that still holds an unsolved variable says nothing:
+ * the message about that one is "cannot infer", and one root cause gets one message.
+ */
+fn implicitMemberTarget(var checker: Checker, text: String, expected: TypeId?, at: Span): Target {
   const annotation = match expected {
-    Some(found) => found
-    // Nothing here says which type the case belongs to, which milestone 4.4 reports where it is worth reporting
+    Some(found) => resolveType(checker, found)
     .None => {
-      return deferredTarget(checker)
+      reportCaseWithoutType(checker, text, at)
+      return Target(Resolution.Deferred, checker.invalidType, name: text)
     }
+  }
+  if checker.absorbs(annotation) || hasVariable(checker, annotation) {
+    return deferredTarget(checker)
   }
   match lookupStaticMember(checker, annotation, text) {
     Some(candidate) => targetOfCandidate(checker, candidate, text)
-    .None => deferredTarget(checker)
+    .None => {
+      const owner = checker.describe(annotation)
+      if isFullyKnown(checker, annotation) {
+        checker.reportHere(Diagnostic.error("`{owner}` has no case `{text}`", at))
+        return Target(Resolution.Deferred, checker.invalidType, name: text)
+      }
+      deferredTarget(checker)
+    }
   }
+}
+
+fn reportCaseWithoutType(var checker: Checker, text: String, at: Span) {
+  checker.reportHere(
+    Diagnostic.error("`.{text}` needs a type, and nothing here says which one", at)
+      .withNote("Write it out: `Shape.{text}(...)`, or annotate what the value goes into")
+  )
 }
 
 /** `a[key]` is `Indexed.at`, `a[from..to]` is `Slice.slice`: both are looked up as implementations of those traits. */
@@ -504,7 +577,7 @@ fn adaptedLiteral(var checker: Checker, value: LiteralValue, base: TypeId, expec
 
 /** Every literal records what it became, because the back ends must not decide what `1` is. */
 fn adapt(var checker: Checker, at: Span, annotation: TypeId): TypeId {
-  checker.adapted(at, Adaptation.Literal(annotation))
+  checker.adaptedLiteral(at, annotation)
   annotation
 }
 
@@ -596,8 +669,13 @@ fn checkLabel(var checker: Checker, written: String?, wanted: String?, at: Span)
   }
 }
 
-/** `[1, 2, 3]` is a `List<Item>`, which is a trait: only the item type is decided here. */
-fn listLiteralType(var checker: Checker, items: List<Argument>, expected: TypeId?): TypeId {
+/**
+ * `[1, 2, 3]` is a `List<Item>`, which is a trait. The item type comes from the expected type where there is one - and
+ * then every item is *checked* against it, so `const shapes: List<Shape> = [Square(2.0), Circle(1.0)]` coerces each one
+ * (gap 8). Without an expectation the first item decides and the rest are checked against it; an empty literal makes a
+ * variable, which the statement has to solve or the message asks for the annotation.
+ */
+fn listLiteralType(var checker: Checker, items: List<Argument>, expected: TypeId?, at: Span): TypeId {
   const list = match checker.wellKnown.list {
     Some(found) => found
     .None => {
@@ -606,6 +684,7 @@ fn listLiteralType(var checker: Checker, items: List<Argument>, expected: TypeId
     }
   }
   var item = itemOfCollection(checker, expected, list, 0)
+  var isWanted = item.isSome()
   if item.isNone() {
     // Without an expectation the first item decides, and the others are checked against it
     if const Some(first) = items.first() {
@@ -614,33 +693,37 @@ fn listLiteralType(var checker: Checker, items: List<Argument>, expected: TypeId
       }
     }
   }
-  const element = match item {
-    Some(found) => found
-    // `[]` needs a type from somewhere: milestone 4.4 asks for the annotation
-    .None => {
-      deferArguments(checker, items)
-      return checker.deferredType
-    }
+  if item.isNone() {
+    item = Some(checker.newVariable("Item", "", at))
   }
+  const element = item ?? checker.deferredType
   const inner = expectationOf(checker, element)
   var index = 0
   for argument in items {
     if argument.isSpread {
       const _ = inferExpression(checker, argument.value)
       checker.adapted(argument.value.span, Adaptation.Spread)
-    } else if index > 0 || expected.isSome() {
+    } else if index > 0 || isWanted {
       const _ = checkExpression(checker, argument.value, inner)
     }
     index = index + 1
   }
+  // An expectation that is still open has to learn what the literal is, so the type is built out instead of handed back
   if const Some(annotation) = expected {
-    return annotation
+    if !hasVariable(checker, annotation) {
+      return annotation
+    }
   }
   const bound = checker.nominal(list, [element])
   checker.types.intern(TypeForm.Traits([bound]))
 }
 
-fn mapLiteralType(var checker: Checker, entries: List<(Expression, Expression)>, expected: TypeId?): TypeId {
+fn mapLiteralType(
+  var checker: Checker,
+  entries: List<(Expression, Expression)>,
+  expected: TypeId?,
+  at: Span,
+): TypeId {
   const map = match checker.wellKnown.map {
     Some(found) => found
     .None => {
@@ -648,26 +731,47 @@ fn mapLiteralType(var checker: Checker, entries: List<(Expression, Expression)>,
       return checker.deferredType
     }
   }
-  const key = itemOfCollection(checker, expected, map, 0)
-  const value = itemOfCollection(checker, expected, map, 1)
-  if key.isNone() || value.isNone() {
-    // `[:]` and `["a": 1]` without an annotation: the item types are milestone 4.4's to infer
-    deferEntries(checker, entries)
-    return checker.deferredType
+  var key = itemOfCollection(checker, expected, map, 0)
+  var value = itemOfCollection(checker, expected, map, 1)
+  const isWanted = key.isSome() && value.isSome()
+  if !isWanted {
+    if const Some((first, second)) = entries.first() {
+      key = Some(inferExpression(checker, first))
+      value = Some(inferExpression(checker, second))
+    }
+  }
+  if key.isNone() {
+    key = Some(checker.newVariable("Key", "", at))
+  }
+  if value.isNone() {
+    value = Some(checker.newVariable("Value", "", at))
   }
   const unknown = checker.deferredType
-  const keys = expectationOf(checker, key ?? unknown)
-  const values = expectationOf(checker, value ?? unknown)
+  const keyType = key ?? unknown
+  const valueType = value ?? unknown
+  const keys = expectationOf(checker, keyType)
+  const values = expectationOf(checker, valueType)
+  var index = 0
   for (written, given) in entries {
-    const _ = checkExpression(checker, written, keys)
-    const _ = checkExpression(checker, given, values)
+    if index > 0 || isWanted {
+      const _ = checkExpression(checker, written, keys)
+      const _ = checkExpression(checker, given, values)
+    }
+    index = index + 1
   }
-  expected ?? checker.deferredType
+  if const Some(annotation) = expected {
+    if !hasVariable(checker, annotation) {
+      return annotation
+    }
+  }
+  const bound = checker.nominal(map, [keyType, valueType])
+  checker.types.intern(TypeForm.Traits([bound]))
 }
 
 /** The `Item` of an expected `List<Item>`, the `Key` or `Value` of an expected `Map<Key, Value>`. */
 fn itemOfCollection(var checker: Checker, expected: TypeId?, capability: SymbolId, position: Int): TypeId? {
-  const annotation = expected?
+  const wanted = expected?
+  const annotation = resolveType(checker, wanted)
   match traitArgumentsOf(checker, annotation, capability) {
     Some(arguments) => arguments.get(position)
     .None => {
@@ -950,7 +1054,6 @@ fn ifType(
   }
   const first = checkBlock(checker, then, expected)
   checker.closeScope()
-  // Without an expectation the first branch that produces a value decides, and the other is checked against it
   const second = checkExpression(checker, alternative, expected)
   if const Some(annotation) = expected.annotationOf() {
     return annotation
@@ -971,10 +1074,11 @@ public fn checkCondition(var checker: Checker, condition: Condition) {
       const boolean = checker.booleanType()
       const _ = checkExpression(checker, expression, Expectation.Type(boolean))
     }
-    // The pattern of an `if const` matches *into* the subject, which milestone 4.5 decides the type of
+    // `if const Some(user) = lookup()`: the pattern is checked against the subject, and that it has to be refutable
+    // but possible is milestone 4.5's question
     .Bind(isVar, pattern, value) => {
-      const _ = inferExpression(checker, value)
-      const inner = checker.deferredType
+      const found = inferExpression(checker, value)
+      const inner = if checker.absorbs(found) { checker.deferredType } else { found }
       checkPattern(checker, pattern, inner, isVar)
     }
   }
@@ -1003,43 +1107,32 @@ fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, ex
 }
 
 /**
- * The type of an `if` or a `match` that nothing is expected of: the first arm that produces a value. The arms are not
- * checked against each other here - a body without a declared result would then have to agree on `Void` with every
- * arm that only does something - so an `if` whose branches disagree is what the inference contexts of milestone 4.4
- * report.
+ * The type of an `if` or a `match` that nothing is expected of: the arms are unified under the inference context of the
+ * statement, and what they agree on is the value. Where they do not agree the arms are *statements* - a body without a
+ * declared result whose last expression is a `match` used for effect is the ordinary case and must not be reported - so
+ * the whole has the type `Void`. With an expectation every arm was checked against it and said everything there is.
  */
-fn armResult(checker: Checker, arms: List<TypeId>): TypeId {
-  var fallback: TypeId? = None
-  for annotation in arms {
+fn armResult(var checker: Checker, arms: List<TypeId>): TypeId {
+  var found: TypeId? = None
+  for arm in arms {
+    const annotation = resolveType(checker, arm)
     if checker.absorbs(annotation) {
       continue
     }
-    if annotation != checker.voidType {
-      return annotation
-    }
-    if fallback.isNone() {
-      fallback = Some(annotation)
+    match found {
+      Some(known) => {
+        if !unify(checker, known, annotation) {
+          return checker.voidType
+        }
+      }
+      .None => {
+        found = Some(annotation)
+      }
     }
   }
-  fallback ?? checker.neverType
-}
-
-/**
- * A closure is read from the expected function type and its body is checked with the parameters that type names -
- * milestone 4.4. Here it takes the type that is expected of it, and its body is only walked for the type positions
- * inside of it, so that nothing in it is reported twice or reported at all.
- */
-fn closureType(var checker: Checker, closure: Closure, expected: TypeId?): TypeId {
-  deferClosureParameters(checker, closure)
-  deferBlock(checker, closure.body)
-  match expected {
-    Some(annotation) => {
-      if formOf(checker, annotation).isSome() {
-        return annotation
-      }
-      checker.deferredType
-    }
-    .None => checker.deferredType
+  match found {
+    Some(annotation) => resolveType(checker, annotation)
+    .None => checker.neverType
   }
 }
 
@@ -1051,7 +1144,8 @@ fn closureType(var checker: Checker, closure: Closure, expected: TypeId?): TypeI
  * work without anybody writing it (section 4.6).
  */
 fn tryType(var checker: Checker, inner: Expression, at: Span): TypeId {
-  const found = inferExpression(checker, inner)
+  const subject = inferExpression(checker, inner)
+  const found = matchedFailure(checker, subject)
   if checker.absorbs(found) {
     return checker.deferredType
   }
@@ -1097,6 +1191,31 @@ fn tryType(var checker: Checker, inner: Expression, at: Span): TypeId {
     )
   }
   value
+}
+
+/**
+ * `settings.get("port").okOr(.Missing("port"))?`: nothing but the `?` says what the error of `okOr` is, so where the
+ * subject's failure type is still open the enclosing result is what decides it. A failure type that is already known
+ * stays what it is and is converted through `From` as always.
+ */
+fn matchedFailure(var checker: Checker, subject: TypeId): TypeId {
+  if !hasVariable(checker, subject) {
+    return subject
+  }
+  const (_, failure) = match resultPartsOf(checker, subject) {
+    Some(parts) => parts
+    .None => {
+      return subject
+    }
+  }
+  if checker.isResultInferred {
+    return subject
+  }
+  const result = checker.resultType
+  if const Some((_, wanted)) = resultPartsOf(checker, result) {
+    const _ = unify(checker, failure, wanted)
+  }
+  resolveType(checker, subject)
 }
 
 /** `IoError` into `AppError`: the ordinary `From` lookup, including the one a wrapper case gets generated. */
@@ -1204,20 +1323,23 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
   if checker.absorbs(found) || checker.isBroken(expected) {
     return true
   }
-  if sameType(checker.types, found, expected) {
+  // Unification is the exact step: it solves the variables of this statement and nothing else
+  if unify(checker, found, expected) {
     return true
   }
-  if const .Traits(bounds) = checker.types.form(expected) {
-    return coerceToTraits(checker, found, bounds, at)
+  const wanted = resolveType(checker, expected)
+  const given = resolveType(checker, found)
+  if const .Traits(bounds) = checker.types.form(wanted) {
+    return coerceToTraits(checker, given, bounds, at)
   }
-  if isUndecided(checker, found) || isUndecided(checker, expected) {
+  if isUndecided(checker, given) || isUndecided(checker, wanted) {
     return true
   }
-  const wanted = checker.describe(expected)
-  const given = checker.describe(found)
-  var problem = Diagnostic.error("Expected `{wanted}`, found `{given}`", at)
-  if numericNameOf(checker, found).isSome() && numericNameOf(checker, expected).isSome() {
-    problem = problem.withNote("There are no implicit conversions: `{wanted}.tryFrom(value)?`")
+  const shown = checker.describe(wanted)
+  const written = checker.describe(given)
+  var problem = Diagnostic.error("Expected `{shown}`, found `{written}`", at)
+  if numericNameOf(checker, given).isSome() && numericNameOf(checker, wanted).isSome() {
+    problem = problem.withNote("There are no implicit conversions: `{shown}.tryFrom(value)?`")
   }
   checker.reportHere(problem)
   false
@@ -1230,8 +1352,12 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
  */
 fn coerceToTraits(var checker: Checker, found: TypeId, bounds: List<TypeId>, at: Span): Bool {
   var witnesses: List<Witness> = []
+  var applied: List<TypeId> = []
   var missing: TypeId? = None
-  for bound in bounds {
+  for wanted in bounds {
+    // `fn each<Item>(items: Iterable<Item>)` with a `List<Int64>`: the arguments of the bound come out of the coercion
+    const bound = matchedBound(checker, found, wanted)
+    applied.add(bound)
     const witness = witnessFor(checker, found, bound)
     if const .Unresolved = witness {
       if missing.isNone() {
@@ -1250,8 +1376,33 @@ fn coerceToTraits(var checker: Checker, found: TypeId, bounds: List<TypeId>, at:
     checker.reportHere(Diagnostic.error("`{given}` does not implement `{wanted}`", at))
     return false
   }
-  checker.adapted(at, Adaptation.ToTraitValue(bounds, witnesses))
+  checker.adapted(at, Adaptation.ToTraitValue(applied, witnesses))
   true
+}
+
+/**
+ * One bound of the expected trait type, with the arguments a coercion decides. `Iterable<Item>` with an unsolved `Item`
+ * is what every collection parameter of the prelude looks like at a call: the type that arrives says what `Item` is, and
+ * that is a solution and not a coercion, so it goes through `unify`.
+ */
+fn matchedBound(var checker: Checker, found: TypeId, wanted: TypeId): TypeId {
+  if !hasVariable(checker, wanted) && !hasVariable(checker, found) {
+    return wanted
+  }
+  const (capability, arguments) = match checker.types.form(wanted) {
+    .Nominal(symbol, given) => (symbol, given)
+    _ => {
+      return resolveType(checker, wanted)
+    }
+  }
+  if const Some(actual) = traitArgumentsOf(checker, found, capability) {
+    if actual.length() == arguments.length() {
+      for index in 0..arguments.length() {
+        const _ = unify(checker, arguments[index], actual[index])
+      }
+    }
+  }
+  resolveType(checker, wanted)
 }
 
 /**
@@ -1383,7 +1534,7 @@ fn deferTypeArguments(var checker: Checker, arguments: List<TypeReference>) {
   }
 }
 
-fn deferClosureParameters(var checker: Checker, closure: Closure) {
+public fn deferClosureParameters(var checker: Checker, closure: Closure) {
   const scope = scopeHere(checker)
   for parameter in closure.parameters {
     if const Some(annotation) = parameter.annotation {

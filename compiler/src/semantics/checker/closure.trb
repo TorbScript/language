@@ -1,0 +1,349 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Closure, ClosureParameter from "../../syntax/ast"
+use TypeId, FunctionForm, ParameterForm, ParameterMode from "./type"
+use Checker, Expectation, Resolution, Adaptation, LocalBinding, BindingId from "./context"
+use ClosureFrame from "./context"
+use Target, formOf, noteCapture from "./name"
+use resolveType, hasVariable, unify, suppressVariables from "./unify"
+use checkBlock, bodyExpectation, inferredResult, scopeHere from "./statement"
+use expectationOf, deferClosureParameters, deferBlock from "./expression"
+use checkPattern from "./pattern"
+use typeFromReference from "./lowering"
+
+/**
+ * A closure is read from the type that is expected of it: the expected function type names its parameters and its
+ * result, so `numbers.map { _ * 2 }` needs no annotation anywhere. What the body produces is the result - the expected
+ * one flows in, but it never overrides what comes out.
+ *
+ * Three things are recorded here that the back ends cannot work out again: which parameter an implicit `_` or a name
+ * from the function type stands for (`Adaptation.ImplicitParameter`), which bindings of the scope around the closure
+ * its body reads and which of those are `var` (gap 19), and the function type the closure turned out to have.
+ */
+
+/** `{ x => x + 1 }`, `{ _ * 2 }`, `{ value: Int => ... }`: the closure, checked against what is expected of it. */
+public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expected: TypeId?): TypeId {
+  const wanted = match expected {
+    Some(found) => resolveType(checker, found)
+    .None => checker.deferredType
+  }
+  const form = formOf(checker, wanted)
+  // `(var self: Element) => Void`: a receiver closure resolves names against the receiver, which is milestone 4.7
+  if const Some(found) = form {
+    if isReceiverForm(found) {
+      return deferredClosure(checker, closure, wanted)
+    }
+  }
+  // `filter(predicate: Expression<(row: Row) => Bool>)`: the closure is quoted instead of called, which is 4.8
+  if isQuotation(checker, wanted) {
+    return deferredClosure(checker, closure, wanted)
+  }
+  const hasParameters = !closure.parameters.isEmpty()
+  const written = parameterFormsOf(checker, closure, form, at)
+  const parameters = written.forms
+  var implicit: List<String?> = []
+  var types: List<TypeId> = []
+  var used: List<Int> = []
+  if !hasParameters {
+    for parameter in parameters {
+      implicit.add(parameter.name)
+      types.add(parameter.annotation)
+      used.add(-1)
+    }
+  }
+  // A closure whose parameters do not line up with what was expected of it said so already: its body is checked
+  // without an expectation and the closure counts as the type that was asked for, so nothing is reported twice
+  var expectedResult: TypeId? = None
+  if const Some(found) = form {
+    if !written.isBroken {
+      expectedResult = Some(found.result)
+    }
+  }
+  const result = checkClosureBody(checker, closure, at, parameters, implicit, types, used, hasParameters, expectedResult)
+  if written.isBroken {
+    return wanted
+  }
+  checker.functionType(FunctionForm(parameters, result))
+}
+
+/** The parameters a closure ends up with, and whether they disagreed with what was expected of it. */
+type ClosureParameters {
+  forms: List<ParameterForm>
+  isBroken: Bool
+}
+
+/**
+ * The parameters of the closure: the ones it wrote down, with their annotations where it has them and the types of the
+ * expected function type otherwise. Without an expected type every parameter needs an annotation (design 2.7).
+ */
+fn parameterFormsOf(
+  var checker: Checker,
+  closure: Closure,
+  form: FunctionForm?,
+  at: Span,
+): ClosureParameters {
+  const wanted = match form {
+    Some(found) => found.parameters
+    .None => []
+  }
+  if closure.parameters.isEmpty() {
+    return ClosureParameters(wanted, false)
+  }
+  const scope = scopeHere(checker)
+  var parameters: List<ParameterForm> = []
+  var isBroken = false
+  if form.isSome() && closure.parameters.length() != wanted.length() {
+    reportArity(checker, closure.parameters.length(), wanted.length(), at)
+    isBroken = true
+  }
+  for index in 0..closure.parameters.length() {
+    const parameter = closure.parameters[index]
+    // `commaSeparated(closer, parse: (var Parser) => Item)`: the mode belongs to the expected function type, and a
+    // closure that fills it takes its parameter the same way
+    var mode = ParameterMode.Value
+    if index < wanted.length() {
+      mode = wanted[index].mode
+    }
+    var annotation = checker.deferredType
+    match parameter.annotation {
+      Some(reference) => {
+        annotation = typeFromReference(checker, reference, scope.forType())
+        // An annotation that disagrees with the expected function type is a mistake in the closure, and the closure
+        // keeps the type it was asked for: one root cause gets one message
+        if index < wanted.length() {
+          if !unify(checker, annotation, wanted[index].annotation) {
+            reportParameterMismatch(checker, annotation, wanted[index].annotation, reference.span)
+            isBroken = true
+          }
+        }
+      }
+      .None => {
+        if index < wanted.length() {
+          annotation = wanted[index].annotation
+        } else if form.isNone() {
+          reportMissingParameterTypes(checker, parameter.pattern.span)
+        }
+      }
+    }
+    parameters.add(ParameterForm(nameOfParameter(parameter), mode, annotation))
+  }
+  ClosureParameters(parameters, isBroken)
+}
+
+/** A `var` parameter binds a mutable path into the caller's place, exactly as a `var` parameter of a `fn` does. */
+fn isVarMode(mode: ParameterMode): Bool {
+  match mode {
+    .Var => true
+    .Receiver(isVar) => isVar
+    _ => false
+  }
+}
+
+/** The name a written closure parameter is known under, where its pattern is a plain name. */
+fn nameOfParameter(parameter: ClosureParameter): String? {
+  if const .Binding(name) = parameter.pattern.kind {
+    return Some(name)
+  }
+  None
+}
+
+/**
+ * The body. `return` inside a closure returns from the closure, `break` cannot leave it (design 3.5), and the result is
+ * what the body produces - unified with the result of the expected function type, which is usually a variable of the
+ * call that takes the closure.
+ */
+fn checkClosureBody(
+  var checker: Checker,
+  closure: Closure,
+  at: Span,
+  parameters: List<ParameterForm>,
+  implicit: List<String?>,
+  types: List<TypeId>,
+  used: List<Int>,
+  hasParameters: Bool,
+  expectedResult: TypeId?,
+): TypeId {
+  const savedResult = checker.resultType
+  const savedInferred = checker.isResultInferred
+  const savedReturns = checker.returnTypes
+  const savedDepth = checker.loopDepth
+  // The result is inferred whenever the expected one is not pinned down yet, which is the ordinary case at a call. It
+  // still flows into the body: `flatMap { _.manager.toList() }` learns its `Output` from the `Iterable<Output>` the
+  // closure has to produce, and that is a coercion and not a unification
+  var isInferred = true
+  var declared = checker.voidType
+  var inner = Expectation.None
+  if const Some(found) = expectedResult {
+    if !checker.absorbs(found) {
+      declared = found
+      isInferred = hasVariable(checker, found)
+      inner = bodyExpectation(checker, found, false)
+    }
+  }
+  checker.resultType = declared
+  checker.isResultInferred = isInferred
+  checker.returnTypes = []
+  checker.loopDepth = 0
+  checker.openScope()
+  const start = checker.bindings.length()
+  checker.closureFrames.add(ClosureFrame(at, start, implicit, types, used, [], hasParameters))
+  if hasParameters {
+    for index in 0..closure.parameters.length() {
+      const form = parameters.get(index) ?? ParameterForm(None, ParameterMode.Value, checker.deferredType)
+      const isVar = isVarMode(form.mode)
+      checkPattern(checker, closure.parameters[index].pattern, form.annotation, isVar)
+    }
+  }
+  const outcome = checkBlock(checker, closure.body, inner)
+  var result = declared
+  if isInferred {
+    result = inferredResult(checker, outcome)
+  }
+  const last = checker.closureFrames.length() - 1
+  const frame = checker.closureFrames[last]
+  const captures = frame.captures
+  const _ = checker.closureFrames.removeAt(last)
+  checker.closeScope()
+  checker.resultType = savedResult
+  checker.isResultInferred = savedInferred
+  checker.returnTypes = savedReturns
+  checker.loopDepth = savedDepth
+  checker.recordCaptures(at, captures)
+  if const Some(found) = expectedResult {
+    if isInferred {
+      const _ = unify(checker, result, found)
+    }
+  }
+  result
+}
+
+/**
+ * A closure a later sub-milestone checks. Its body is still walked so that the type positions in it become types, and
+ * the variables the expected type still holds are marked as answered - the construct is what is missing, not an
+ * annotation, so "cannot infer" would be a message about the checker and not about the source.
+ */
+fn deferredClosure(var checker: Checker, closure: Closure, wanted: TypeId): TypeId {
+  deferClosureParameters(checker, closure)
+  deferBlock(checker, closure.body)
+  suppressVariables(checker, wanted)
+  wanted
+}
+
+/** `Expression<Value>` quotes what arrives at it instead of evaluating it, which is milestone 4.8. */
+fn isQuotation(checker: Checker, wanted: TypeId): Bool {
+  if const .Nominal(symbol, _) = checker.types.form(wanted) {
+    return checker.wellKnown.symbolNamed("Expression") == Some(symbol)
+  }
+  false
+}
+
+/** `(self: Receiver) => Value`: the names inside resolve against the receiver, which milestone 4.7 brings. */
+fn isReceiverForm(form: FunctionForm): Bool {
+  for parameter in form.parameters {
+    if const .Receiver(_) = parameter.mode {
+      return true
+    }
+  }
+  false
+}
+
+// --- Implicit parameters --------------------------------------------------------------------------------------------
+
+/** `_`, `_2`, `_3`, ...: the positional names of a closure that declared no parameters. */
+public fn isImplicitName(text: String): Bool {
+  implicitIndexOf(text) >= 0
+}
+
+fn implicitIndexOf(text: String): Int {
+  if text == "_" {
+    return 0
+  }
+  const names = ["_2", "_3", "_4", "_5", "_6", "_7", "_8", "_9"]
+  for index in 0..names.length() {
+    if text == names[index] {
+      return index + 1
+    }
+  }
+  -1
+}
+
+/**
+ * A name that means a parameter of the closure that is being checked: `_`, `_2`, or the name the expected function type
+ * gives the parameter (`numbers.map { value * 2 }`). Only a closure that declared no parameters of its own has them.
+ *
+ * `_` always means the innermost such closure; a name reaches outward, and reading one from further out captures it.
+ */
+public fn implicitParameterTarget(var checker: Checker, text: String, at: Span): Target? {
+  const isPositional = isImplicitName(text)
+  var frame = checker.closureFrames.length() - 1
+  while frame >= 0 {
+    if checker.closureFrames[frame].hasParameters {
+      frame = frame - 1
+      continue
+    }
+    const index = if isPositional {
+      implicitIndexOf(text)
+    } else {
+      nameIndexOf(checker.closureFrames[frame].implicit, text)
+    }
+    if index >= 0 && index < checker.closureFrames[frame].types.length() {
+      return Some(parameterBindingOf(checker, frame, index, text, at))
+    }
+    // `_` belongs to the innermost closure without a parameter list and never reaches an outer one
+    if isPositional {
+      return None
+    }
+    frame = frame - 1
+  }
+  None
+}
+
+fn nameIndexOf(implicit: List<String?>, text: String): Int {
+  for index in 0..implicit.length() {
+    if implicit[index] == Some(text) {
+      return index
+    }
+  }
+  -1
+}
+
+/** The binding of one implicit parameter, made the first time it is used so that the unused ones cost nothing. */
+fn parameterBindingOf(var checker: Checker, frame: Int, index: Int, text: String, at: Span): Target {
+  const known = checker.closureFrames[frame].used[index]
+  var identifier = BindingId(known)
+  if known < 0 {
+    const annotation = checker.closureFrames[frame].types[index]
+    const span = checker.closureFrames[frame].at
+    // The name stays out of the scope chain: an implicit parameter is reached through the frame and nowhere else
+    identifier = checker.declareBinding(LocalBinding("_", annotation, false, span))
+    var used = checker.closureFrames[frame].used
+    used.set(index, identifier.value)
+    const updated = checker.closureFrames[frame].copy(used: used)
+    checker.closureFrames.set(frame, updated)
+  }
+  checker.adapted(at, Adaptation.ImplicitParameter(index))
+  noteCapture(checker, identifier)
+  const annotation = checker.binding(identifier).annotation
+  Target(Resolution.Local(identifier), annotation, form: formOf(checker, annotation), name: text)
+}
+
+// --- Messages -------------------------------------------------------------------------------------------------------
+
+fn reportArity(var checker: Checker, given: Int, wanted: Int, at: Span) {
+  const takes = if wanted == 1 { "1 parameter" } else { "{wanted} parameters" }
+  const was = if given == 1 { "1 was written" } else { "{given} were written" }
+  checker.reportHere(Diagnostic.error("This closure takes {takes}, {was}", at))
+}
+
+fn reportParameterMismatch(var checker: Checker, given: TypeId, wanted: TypeId, at: Span) {
+  const shown = checker.describe(wanted)
+  const found = checker.describe(given)
+  checker.reportHere(Diagnostic.error("This parameter is a `{shown}`, not a `{found}`", at))
+}
+
+fn reportMissingParameterTypes(var checker: Checker, at: Span) {
+  checker.reportHere(
+    Diagnostic.error("The parameters of this closure need types: `\{ value: Int => ... \}`", at)
+      .withNote("Nothing here says what the closure is called with, so the annotation is the answer")
+  )
+}

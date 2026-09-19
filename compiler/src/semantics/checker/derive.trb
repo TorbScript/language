@@ -91,6 +91,10 @@ fn membersOf(name: String): List<String> {
   if name == "Into" {
     return ["into"]
   }
+  // Only for a tuple, see `canDerive`
+  if name == "Compare" {
+    return ["compare"]
+  }
   []
 }
 
@@ -107,6 +111,18 @@ fn canDerive(
   }
   if name == "Into" {
     return isIntoBase(checker, target, wanted)
+  }
+  /*
+   * `Compare` is generated for a **tuple** and for nothing else. An order is a decision and not a structure, so no
+   * `type` gets one - but a tuple has no declaration anybody could write one in, and sorting by a tuple key
+   * (`diagnostics.sort { (_.span.start, _.span.end) }`) is the idiom of the language. Lexicographic by position is the
+   * only reading there is.
+   */
+  if name == "Compare" {
+    if const .Tuple(_) = checker.types.form(target) {
+      return everyFieldImplements(checker, target, capability, wanted)
+    }
+    return false
   }
   match checker.types.form(target) {
     // A literal type has `Show`, `Equals`, `Hash`, `Encode` and `Decode` of its base, and nothing else (gap 32)
@@ -227,6 +243,12 @@ fn wrapsExactlyOnce(var checker: Checker, target: TypeId, wanted: TypeId?): Bool
     _ => {
       return false
     }
+  }
+  // Every type converts from itself, and that conversion is the value. `fn sum(self): Item where Item: Add + From<Int>`
+  // asks `Int64` for `From<Int64>`, and a reflexive `From` cannot be written down as a blanket implementation because
+  // it would overlap with every other one
+  if sameType(checker.types, target, source) {
+    return true
   }
   const (symbol, arguments) = match checker.types.form(target) {
     .Nominal(found, given) => (found, given)

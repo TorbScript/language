@@ -274,13 +274,63 @@ public fn implementsBound(var checker: Checker, annotation: TypeId, bound: TypeI
   resolveBound(checker, annotation, bound).isFound()
 }
 
-/** The witness a call or an adaptation records: which implementation makes the bound hold. */
+/**
+ * The witness a call or an adaptation records: which implementation makes the bound hold, and how the bounds of *that*
+ * implementation hold in turn. A back end may monomorphize a call whose whole tree holds neither an `Object` nor a
+ * `Forwarded`, so the tree and not only its root is what milestone 5 reads.
+ */
 public fn witnessFor(var checker: Checker, annotation: TypeId, bound: TypeId): Witness {
+  // A witness is a pure function of the two interned ids, and every interpolation, every `==` and every generic call
+  // asks for one - so the tree is kept, exactly as the trait answers are
+  const key = "{annotation.value}:{bound.value}"
+  if const Some(known) = checker.witnessAnswers.get(key) {
+    return known
+  }
+  const found = witnessDeep(checker, annotation, bound, 0)
+  checker.witnessAnswers.set(key, found)
+  found
+}
+
+fn witnessDeep(var checker: Checker, annotation: TypeId, bound: TypeId, depth: Int): Witness {
   match resolveBound(checker, annotation, bound) {
-    .Found(implementation, arguments) => Witness.Implementation(implementation, arguments)
+    .Found(implementation, arguments) => {
+      if depth > 6 {
+        return Witness.Implementation(implementation, arguments, [])
+      }
+      const inner = innerWitnesses(checker, implementation, annotation, bound, depth)
+      Witness.Implementation(implementation, arguments, inner)
+    }
     .Bounded(_) => witnessOfBound(checker, annotation, bound)
     _ => Witness.Unresolved
   }
+}
+
+/** `extend<Item: Show> List<Item> with Show`: the `Item: Show` of the implementation, for the type it was matched to. */
+fn innerWitnesses(
+  var checker: Checker,
+  implementation: ImplementationId,
+  annotation: TypeId,
+  bound: TypeId,
+  depth: Int,
+): List<Witness> {
+  const found = checker.implementations.at(implementation)
+  if found.bounds.isEmpty() {
+    return []
+  }
+  var mapping: Map<ParameterId, TypeId> = [:]
+  const _ = matchTarget(checker, found, annotation, mapping)
+  if const Some(applied) = found.capability {
+    const _ = matchPattern(checker, applied, bound, found.generics, mapping)
+  }
+  var witnesses: List<Witness> = []
+  for inner in found.bounds {
+    const subject = substitute(checker.types, inner.subject, mapping)
+    for capability in inner.traits {
+      const wanted = substitute(checker.types, capability, mapping)
+      witnesses.add(witnessDeep(checker, subject, wanted, depth + 1))
+    }
+  }
+  witnesses
 }
 
 fn witnessOfBound(checker: Checker, annotation: TypeId, bound: TypeId): Witness {
@@ -1362,9 +1412,29 @@ fn providerOf(var checker: Checker, index: Int, name: String): SymbolId? {
       return Some(member)
     }
   }
+  // A supertrait is satisfied by *any* implementation of the same target, not only by members of the same `extend`
+  // block: `extend<Item: Hash> List<Item> with Hash` leans on `extend<Item: Equals> List<Item> with Equals` for the
+  // `equals` that `Hash with Equals` requires. Those targets are a trait type, so they are in `open` and not in `byHead`
+  const open = checker.implementations.open
+  for other in open {
+    if const Some(member) = memberOfSameTarget(checker, other, target, name) {
+      return Some(member)
+    }
+  }
+  const openExtensions = checker.implementations.inherentOpen
+  for other in openExtensions {
+    if const Some(member) = memberOfSameTarget(checker, other, target, name) {
+      return Some(member)
+    }
+  }
   None
 }
 
+/**
+ * Whether one implementation provides a member for this very target. The other implementation's own parameters are
+ * bound by matching its target against this one, and its bounds have to hold under that match - `Item: Equals` of the
+ * `Equals` implementation holds for the `Item: Hash` of the `Hash` one, because `Hash` requires `Equals`.
+ */
 fn memberOfSameTarget(var checker: Checker, index: Int, target: TypeId, name: String): SymbolId? {
   const implementation = checker.implementations.all[index]
   const member = implementation.members.get(name)?
@@ -1372,10 +1442,13 @@ fn memberOfSameTarget(var checker: Checker, index: Int, target: TypeId, name: St
     return Some(member)
   }
   var mapping: Map<ParameterId, TypeId> = [:]
-  if matchTarget(checker, implementation, target, mapping) {
-    return Some(member)
+  if !matchTarget(checker, implementation, target, mapping) {
+    return None
   }
-  None
+  if !boundsHold(checker, implementation, mapping) {
+    return None
+  }
+  Some(member)
 }
 
 /**

@@ -4,7 +4,7 @@ use Declaration, Member, Binding from "../../syntax/ast"
 use ModuleId from "../module"
 use SymbolId, Symbol, Symbols from "../symbols"
 use Program from "../scope"
-use TypeId, TypeForm, TypeTable, FunctionForm, ParameterId, describeType from "./type"
+use TypeId, TypeForm, TypeTable, FunctionForm, ParameterId, VariableId, Bound, describeType from "./type"
 use Signature, SignatureId, SignatureState, TypeSignature, TypeSignatureId from "./type"
 use ImplementationId, ImplementationTable, Resolved, Witness, DerivedImplementation from "./type"
 use WellKnown, wellKnownOf from "./wellknown"
@@ -158,10 +158,16 @@ public type Candidate {
   form: FunctionForm? = None
   takesSelf: Bool = false
   isVarSelf: Bool = false
-  /** The member declares generic parameters of its own, so calling it is milestone 4.4's work. */
-  isGeneric: Bool = false
-  /** Several implementations of one trait provide it (`Int.from`), so the arguments decide: milestone 4.4. */
+  /** The generic parameters the member declares itself, which a call site has to solve. */
+  generics: List<ParameterId> = []
+  /** The bounds of those parameters, with the arguments of the owner already filled in. */
+  bounds: List<Bound> = []
+  /** A parameter of the member is `Self` itself, which has no meaning on a trait-typed value (gap 7). */
+  takesSelfArgument: Bool = false
+  /** Several implementations of one trait provide it (`Int.from`), so the arguments decide which one is meant. */
   needsArguments: Bool = false
+  /** The candidates of such an overload set, in the order they were found. */
+  overloads: List<Candidate> = []
   /** How the member is reached: a member of the type itself, or one of a trait it implements. */
   dispatch: Dispatch = Dispatch.Direct
   /** Where the member is declared, for the ambiguity message about two extensions. */
@@ -178,6 +184,51 @@ public type CandidateKind {
   /** The generated `copy` (gap 24). */
   case Copy(owner: TypeId)
   case TupleField(owner: TypeId, index: Int)
+}
+
+/**
+ * One unification variable. It stands for a generic parameter of one call, or for the item type of an empty collection
+ * literal, and it lives inside the inference context of one statement.
+ */
+public type VariableState {
+  /** The parameter it stands for: the `Output` of `map`. Empty for the item type of an empty literal. */
+  name: String
+  /** What the call is called, so a message can say "Cannot infer `Output` of `map`". */
+  owner: String
+  /** Where a message about it points: the call or the literal that created it. */
+  at: Span
+  /** What it was solved with. A variable is solved by an exact type only, never by a coercion. */
+  var solution: TypeId? = None
+  /** One message per variable, however often it is mentioned. */
+  var isReported: Bool = false
+}
+
+/** One binding a closure reads from the scope around it. The back ends need to know which ones, and which are `var`. */
+public type Capture {
+  binding: BindingId
+  /** A captured `var` binding is a shared box, not a copy (gap 19). */
+  isVar: Bool
+}
+
+/**
+ * One closure that is being checked. `bindings` is where its own bindings begin, which is what makes a name from
+ * further out a capture; `implicit` are the parameters its expected function type names, which a body without a
+ * parameter list may use as `_`, `_2` or by name.
+ */
+public type ClosureFrame {
+  /** The span of the closure, which is what the captures are recorded under. */
+  at: Span
+  /** The index in `Checker.bindings` where the closure's own bindings begin. */
+  bindings: Int
+  /** The names of the implicit parameters, `None` where the function type gives none, in declaration order. */
+  implicit: List<String?>
+  /** The type of each implicit parameter, in the same order. */
+  types: List<TypeId>
+  /** The binding of each implicit parameter, created when it is first used. `-1` while it is unused. */
+  var used: List<Int>
+  var captures: List<Capture>
+  /** Whether the closure declared its parameters itself: then no implicit parameter is available. */
+  hasParameters: Bool
 }
 
 /** Everything the source does not spell out, in the order in which it applies. */
@@ -198,6 +249,8 @@ public type Adaptation {
   case TrailingClosure(parameter: Int)
   /** A member of `self` that was written without it: `area()` inside a method of `Point`. */
   case ImplicitSelf(receiver: BindingId)
+  /** `_`, `_2` and a name the expected function type gives: the parameter of the closure this stands for. */
+  case ImplicitParameter(index: Int)
   /** A value that became a trait-typed value: `const shapes: List<Shape> = [Square(2.0)]` (gap 8). */
   case ToTraitValue(bounds: List<TypeId>, witnesses: List<Witness>)
   /** `?` and `into()`: the error or the value is converted through `From.from`. */
@@ -224,6 +277,18 @@ public type Tables {
    * be matched, which is the case a message was already given for.
    */
   var argumentTargets: Map<Span, List<Int>> = [:]
+  /**
+   * Per call span: the type arguments the call was instantiated with, in the order of the callee's own generic
+   * parameters. Milestone 5 monomorphizes from exactly these.
+   */
+  var typeArguments: Map<Span, List<TypeId>> = [:]
+  /**
+   * Per call span: one witness per trait of every bound of the callee, in the order of `Signature.bounds`. The
+   * witnesses of a `Dispatch` carry the same list; this table is the one a `.Direct` call has.
+   */
+  var witnesses: Map<Span, List<Witness>> = [:]
+  /** Per closure span: the bindings of the scope around it that its body reads. */
+  var captures: Map<Span, List<Capture>> = [:]
 }
 
 /** No expected type, a type, or "a value is not wanted here". */
@@ -265,6 +330,11 @@ public type BodyState {
   receiverType: TypeId?
   receiverBinding: BindingId?
   selfType: TypeId?
+  /** A body may start in the middle of a statement of another one, so its inference contexts are its own. */
+  closureFrames: List<ClosureFrame>
+  contextStarts: List<Int>
+  pendingSpans: List<Span>
+  hasVariables: Bool
 }
 
 /** How much of a module the checker already understands. `torb check --statistics` prints these. */
@@ -361,8 +431,27 @@ public type Checker {
   var receiverBinding: BindingId? = None
   /** What `Self` means in the body that is being checked. A static function has one without having a receiver. */
   var selfType: TypeId? = None
+  /** The closures that are being checked, innermost last: what a name may capture and what `_` means. */
+  var closureFrames: List<ClosureFrame> = []
   /** A body is checked exactly once, whether the walk reached it or a caller asked for its result type first. */
   var checkedBodies: Map<SymbolId, Bool> = [:]
+
+  // --- Inference (milestone 4.4) --------------------------------------------------------------------------------------
+
+  /**
+   * Every unification variable the pass ever made, append-only: an interned `Variable` form names one by index, so an
+   * id may never be reused. A variable belongs to the inference context that was open when it was made.
+   */
+  var variables: List<VariableState> = []
+  /** Where every open inference context begins in `variables`, outermost first. */
+  var contextStarts: List<Int> = []
+  /**
+   * The spans that were written to while a variable was open. A variable is solved *after* the expression that
+   * mentions it was recorded, so the tables of one statement are walked once at the end of it and the solutions put in.
+   */
+  var pendingSpans: List<Span> = []
+  /** Whether the open context ever made a variable, which is what makes the walk above worth doing at all. */
+  var hasVariables: Bool = false
   /** The declarations whose result is being inferred right now: naming one of them inside its own body is a cycle. */
   var inferringResults: Map<SymbolId, Bool> = [:]
   /**
@@ -380,6 +469,8 @@ public type Checker {
    * This is the memoization the whole pass rests on: every operator, every `for`, every interpolated part asks it.
    */
   var traitAnswers: Map<String, Resolved> = [:]
+  /** The whole witness tree of one type and one bound, by their interned ids: `"{type}:{bound}"`. */
+  var witnessAnswers: Map<String, Witness> = [:]
   /** Bound resolution recurses through the bounds of an implementation; a limit is an answer, never a hang. */
   var traitDepth: Int = 0
   /** Every trait a type implements, transitively over supertraits, by interned type id. */
@@ -540,24 +631,152 @@ public type Checker {
   /** Records the type of an expression and gives it back, which is what every branch of the checker ends with. */
   fn typed(var self, at: Span, id: TypeId): TypeId {
     tables[module.value].expressionTypes.set(at, id)
+    if hasVariables {
+      pendingSpans.add(at)
+    }
     id
   }
 
   fn typedPattern(var self, at: Span, id: TypeId) {
     tables[module.value].patternTypes.set(at, id)
+    if hasVariables {
+      pendingSpans.add(at)
+    }
   }
 
   fn resolved(var self, at: Span, resolution: Resolution) {
     tables[module.value].resolutions.set(at, resolution)
+    if hasVariables {
+      pendingSpans.add(at)
+    }
   }
 
   fn adapted(var self, at: Span, adaptation: Adaptation) {
     const known = tables[module.value].adaptations.get(at) ?? []
     tables[module.value].adaptations.set(at, known.added(adaptation))
+    if hasVariables {
+      pendingSpans.add(at)
+    }
+  }
+
+  /**
+   * A literal adapts exactly once, whatever it took to find out to which type - so this one replaces instead of adding.
+   * Picking the right `Int.from` reads its argument before it checks it against the parameter, which would otherwise
+   * leave two `Literal` adaptations at one span.
+   */
+  fn adaptedLiteral(var self, at: Span, annotation: TypeId) {
+    var kept: List<Adaptation> = []
+    for adaptation in tables[module.value].adaptations.get(at) ?? [] {
+      if const .Literal(_) = adaptation {
+        continue
+      }
+      kept.add(adaptation)
+    }
+    kept.add(Adaptation.Literal(annotation))
+    tables[module.value].adaptations.set(at, kept)
+    if hasVariables {
+      pendingSpans.add(at)
+    }
   }
 
   fn recordArguments(var self, at: Span, targets: List<Int>) {
     tables[module.value].argumentTargets.set(at, targets)
+  }
+
+  /** The type arguments one call was instantiated with: what milestone 5 monomorphizes from. */
+  fn recordTypeArguments(var self, at: Span, arguments: List<TypeId>) {
+    tables[module.value].typeArguments.set(at, arguments)
+    if hasVariables {
+      pendingSpans.add(at)
+    }
+  }
+
+  fn typeArgumentsAt(self, module: ModuleId, at: Span): List<TypeId>? {
+    tables[module.value].typeArguments.get(at)
+  }
+
+  /** One witness per trait of every bound of the callee, in the order of `Signature.bounds`. */
+  fn recordWitnesses(var self, at: Span, found: List<Witness>) {
+    tables[module.value].witnesses.set(at, found)
+    if hasVariables {
+      pendingSpans.add(at)
+    }
+  }
+
+  fn witnessesAt(self, module: ModuleId, at: Span): List<Witness>? {
+    tables[module.value].witnesses.get(at)
+  }
+
+  /** Which bindings of the scope around a closure its body reads, and which of them are `var` (gap 19). */
+  fn recordCaptures(var self, at: Span, found: List<Capture>) {
+    tables[module.value].captures.set(at, found)
+  }
+
+  fn capturesAt(self, module: ModuleId, at: Span): List<Capture>? {
+    tables[module.value].captures.get(at)
+  }
+
+  /** A variable that was solved: every table of the statement is walked once at its end, through these. */
+  fn expressionTypeHere(self, at: Span): TypeId? {
+    tables[module.value].expressionTypes.get(at)
+  }
+
+  fn patternTypeHere(self, at: Span): TypeId? {
+    tables[module.value].patternTypes.get(at)
+  }
+
+  fn adaptationsHere(self, at: Span): List<Adaptation> {
+    tables[module.value].adaptations.get(at) ?? []
+  }
+
+  fn setExpressionType(var self, at: Span, id: TypeId) {
+    tables[module.value].expressionTypes.set(at, id)
+  }
+
+  fn setPatternType(var self, at: Span, id: TypeId) {
+    tables[module.value].patternTypes.set(at, id)
+  }
+
+  fn setAdaptations(var self, at: Span, found: List<Adaptation>) {
+    tables[module.value].adaptations.set(at, found)
+  }
+
+  fn setResolution(var self, at: Span, resolution: Resolution) {
+    tables[module.value].resolutions.set(at, resolution)
+  }
+
+  fn setTypeArguments(var self, at: Span, arguments: List<TypeId>) {
+    tables[module.value].typeArguments.set(at, arguments)
+  }
+
+  fn setWitnesses(var self, at: Span, found: List<Witness>) {
+    tables[module.value].witnesses.set(at, found)
+  }
+
+  // --- Unification variables ------------------------------------------------------------------------------------------
+
+  /** A fresh variable for one generic parameter of one call. Ids are never reused: an interned form names one. */
+  fn newVariable(var self, name: String, owner: String, at: Span): TypeId {
+    variables.add(VariableState(name, owner, at))
+    const identifier = VariableId(variables.length() - 1)
+    hasVariables = true
+    types.intern(TypeForm.Variable(identifier))
+  }
+
+  fn variableState(self, variable: VariableId): VariableState {
+    variables[variable.value]
+  }
+
+  fn solutionOf(self, variable: VariableId): TypeId? {
+    variables[variable.value].solution
+  }
+
+  fn solveVariable(var self, variable: VariableId, id: TypeId) {
+    variables.set(variable.value, variables[variable.value].copy(solution: Some(id)))
+  }
+
+  fn markReported(var self, variable: VariableId) {
+    variables.set(variable.value, variables[variable.value].copy(isReported: true))
   }
 
   fn resolutionHere(self, at: Span): Resolution? {
@@ -675,6 +894,10 @@ public type Checker {
       receiverType,
       receiverBinding,
       selfType,
+      closureFrames,
+      contextStarts,
+      pendingSpans,
+      hasVariables,
     )
     module = inside
     locals = []
@@ -686,6 +909,10 @@ public type Checker {
     receiverType = None
     receiverBinding = None
     selfType = own
+    closureFrames = []
+    contextStarts = []
+    pendingSpans = []
+    hasVariables = false
     saved
   }
 
@@ -700,6 +927,10 @@ public type Checker {
     receiverType = saved.receiverType
     receiverBinding = saved.receiverBinding
     selfType = saved.selfType
+    closureFrames = saved.closureFrames
+    contextStarts = saved.contextStarts
+    pendingSpans = saved.pendingSpans
+    hasVariables = saved.hasVariables
   }
 
   /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */

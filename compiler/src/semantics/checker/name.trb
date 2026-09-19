@@ -2,22 +2,22 @@ use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use SymbolId from "../symbols"
 use editDistance from "../resolve-types"
-use TypeId, TypeForm, FunctionForm from "./type"
-use Checker, Resolution, Dispatch, Adaptation, LocalKind, Candidate from "./context"
+use TypeId, TypeForm, FunctionForm, ParameterId, Bound from "./type"
+use Checker, Resolution, Dispatch, Adaptation, LocalKind, Candidate, BindingId, Capture from "./context"
 use lookupMember, lookupStaticMember, resolutionOfCandidate from "./member"
 use constructorOf, memberNames, caseNamed from "./member"
 use isConcrete, hiddenExtensionOf from "./implementation"
 use signatureOf, aliasTargetOf, genericsOf, resultOf from "./signature"
+use substitute from "./unify"
+use implicitParameterTarget, isImplicitName from "./closure"
 
 /**
  * What a name in an *expression* means. This cannot happen before type checking: what `port` means in
  * `server { port 8080 }` depends on the type of the parameter that closure is passed to, so resolving a name and
  * checking a type are one pass (design principle 1).
  *
- * The order is the one of the design: the local scope chain, then the innermost receiver (and only that one, gap 4),
- * then the file scope, then the prelude. What milestone 4.2 leaves out - implicit closure parameters, property
- * commands, trait members, generic calls - is not reported as missing: it becomes a `Deferred` target, so a file that
- * uses it stays free of messages that are not about it.
+ * The order is the one of the design: the local scope chain, then the implicit parameters of the closure that is being
+ * checked, then the innermost receiver (and only that one, gap 4), then the file scope, then the prelude.
  */
 
 /** What a name, a member path or any other callee resolved to. */
@@ -33,6 +33,17 @@ public type Target {
   isVarSelf: Bool = false
   /** The name denotes a type, so a call of it is a construction: `Point(10, 20)`, `Self(text)`. */
   constructs: TypeId? = None
+  /** The generic parameters the call site has to solve, in declaration order. */
+  generics: List<ParameterId> = []
+  /** Their bounds, with everything the owner already fixed filled in. */
+  bounds: List<Bound> = []
+  /** Explicit type arguments (`to<Set<Int>>()`), taken from the left. */
+  arguments: List<TypeId> = []
+  /** `Int.from`: several implementations provide the member, so the argument decides which one is meant. */
+  overloads: List<Candidate> = []
+  /** A parameter of the member is `Self`, which has no meaning on a trait-typed value (gap 7). */
+  takesSelfArgument: Bool = false
+  takesSelf: Bool = false
 }
 
 /** A target nothing is known about yet. Every operation on it yields `Deferred` again and says nothing. */
@@ -41,10 +52,17 @@ public fn deferredTarget(checker: Checker): Target {
 }
 
 /**
- * A bare name in an expression. `expected` only feeds the notes of a message: nothing in 4.2 resolves a name *by* the
- * expected type (`.Case` does, and that is milestone 4.4).
+ * A bare name in an expression. `expected` decides where the language lets it: a case of a generic type takes the
+ * arguments of the expected type (`Some(keyword)` in a function that returns a `Keyword?`), and the notes of a message
+ * about an unknown name read better with it.
  */
-public fn resolveName(var checker: Checker, text: String, at: Span, expected: TypeId?): Target {
+public fn resolveName(
+  var checker: Checker,
+  text: String,
+  at: Span,
+  expected: TypeId?,
+  explicit: List<TypeId> = [],
+): Target {
   if text == "self" {
     match checker.receiverBinding {
       Some(receiver) => {
@@ -67,7 +85,11 @@ public fn resolveName(var checker: Checker, text: String, at: Span, expected: Ty
     }
   }
   if const Some(found) = checker.findLocal(text) {
-    return localTarget(checker, found, text)
+    return localTarget(checker, found, text, at, expected, explicit)
+  }
+  // `numbers.map { value * 2 }`, `{ _ * 3 }`: the parameters the expected function type names
+  if const Some(found) = implicitParameterTarget(checker, text, at) {
+    return found
   }
   // The innermost receiver, and only that one: `server { s => s.database { ... } }` names the outer one (gap 4)
   if const Some(receiver) = checker.receiverType {
@@ -76,20 +98,53 @@ public fn resolveName(var checker: Checker, text: String, at: Span, expected: Ty
     }
   }
   if const Some(symbol) = checker.program.lookUp(checker.module, text) {
-    return symbolTarget(checker, symbol, text)
+    return symbolTarget(checker, symbol, text, at, expected, explicit)
   }
   reportUnknownName(checker, text, at, expected)
   Target(Resolution.Deferred, checker.invalidType, name: text)
 }
 
-fn localTarget(var checker: Checker, found: LocalKind, text: String): Target {
+fn localTarget(
+  var checker: Checker,
+  found: LocalKind,
+  text: String,
+  at: Span,
+  expected: TypeId?,
+  explicit: List<TypeId>,
+): Target {
   match found {
     .Bound(binding) => {
+      noteCapture(checker, binding)
       const annotation = checker.binding(binding).annotation
       Target(Resolution.Local(binding), annotation, form: formOf(checker, annotation), name: text)
     }
     // A `fn`, `type` or `trait` of a block, and a generic parameter that is in scope
-    .Declared(symbol) => symbolTarget(checker, symbol, text)
+    .Declared(symbol) => symbolTarget(checker, symbol, text, at, expected, explicit)
+  }
+}
+
+/**
+ * A binding that was declared outside of the closure that is being checked is captured by it, and by every closure in
+ * between. The back ends need the list: a captured `var` binding is a shared box, not a copy (gap 19).
+ */
+public fn noteCapture(var checker: Checker, binding: BindingId) {
+  if checker.closureFrames.isEmpty() {
+    return
+  }
+  const isVar = checker.binding(binding).isVar
+  var index = 0
+  while index < checker.closureFrames.length() {
+    const frame = checker.closureFrames[index]
+    if binding.value >= frame.bindings {
+      index = index + 1
+      continue
+    }
+    var captures = frame.captures
+    if !captures.any({ _.binding == binding }) {
+      captures.add(Capture(binding, isVar))
+      checker.closureFrames.set(index, frame.copy(captures: captures))
+    }
+    index = index + 1
   }
 }
 
@@ -103,48 +158,57 @@ fn implicitTarget(var checker: Checker, candidate: Candidate, text: String, at: 
 
 /** A member that was found on a type: the same answer in the shape the rest of the checker works with. */
 public fn targetOfCandidate(var checker: Checker, candidate: Candidate, text: String): Target {
-  if candidate.isGeneric || candidate.needsArguments {
-    return Target(Resolution.Deferred, checker.deferredType, name: text)
-  }
   Target(
     resolutionOfCandidate(candidate),
     candidate.annotation,
-    form: candidate.form,
+    form: formOfCandidate(checker, candidate),
     name: text,
     isVarSelf: candidate.isVarSelf,
+    generics: candidate.generics,
+    bounds: candidate.bounds,
+    overloads: candidate.overloads,
+    takesSelfArgument: candidate.takesSelfArgument,
+    takesSelf: candidate.takesSelf,
   )
 }
 
 /** A name of the file scope, of the prelude, or one the language provides. */
-public fn symbolTarget(var checker: Checker, symbol: SymbolId, text: String): Target {
+public fn symbolTarget(
+  var checker: Checker,
+  symbol: SymbolId,
+  text: String,
+  at: Span,
+  expected: TypeId? = None,
+  explicit: List<TypeId> = [],
+): Target {
+  // `Void` is the one name that is both a type and its only value (gap 1), whether it is the name of the language or
+  // the `native type Void` of the prelude - so `Ok(Void)` needs no call site of its own
+  if checker.wellKnown.isVoid(symbol) {
+    return Target(Resolution.VoidValue, checker.voidType, name: text)
+  }
   match checker.symbolAt(symbol).kind {
-    .Function => callableTarget(checker, symbol, text)
+    .Function => callableTarget(checker, symbol, text, explicit)
     .Constant => {
       const annotation = resultOf(checker, symbol)
       Target(Resolution.Constant(symbol, None), annotation, form: formOf(checker, annotation), name: text)
     }
-    .Type => namedTypeTarget(checker, symbol, text)
+    .Type => namedTypeTarget(checker, symbol, text, at, expected, explicit)
     .Alias => {
-      if genericsOf(checker, symbol).isEmpty() {
-        const target = aliasTargetOf(checker, symbol)
+      const generics = genericsOf(checker, symbol)
+      const target = aliasTargetOf(checker, symbol)
+      if generics.isEmpty() {
         return typeTarget(checker, target, text)
       }
-      deferredTarget(checker)
+      // `type Handles = Map<Int, Handle>` used as a callee: the arguments the alias takes have to be solved first
+      const arguments = argumentsFor(checker, generics, explicit, None, text, at)
+      typeTarget(checker, substituteInto(checker, target, generics, arguments), text)
     }
-    // A trait is a namespace for its own members and for the ones an implementation of it provides (gap 31). A
-    // generic one (`List.of`, `Map.from`) has to infer its arguments from the call, which is milestone 4.4
-    .Trait => {
-      if !genericsOf(checker, symbol).isEmpty() {
-        return deferredTarget(checker)
-      }
-      const bound = checker.nominal(symbol, [])
-      const own = checker.types.intern(TypeForm.Traits([bound]))
-      Target(Resolution.TypeOf(own), checker.deferredType, name: text, constructs: Some(own))
-    }
-    .Case(owner) => caseTarget(checker, owner, text)
-    .Namespace(target) => Target(Resolution.Namespace(target), checker.deferredType, name: text)
-    // A generic parameter as a namespace (`Item.from(0)`) forwards to a witness: milestone 4.4
-    .GenericParameter => deferredTarget(checker)
+    // A trait is a namespace for its own members and for the ones an implementation of it provides (gap 31)
+    .Trait => traitNamespaceTarget(checker, symbol, text, at, expected, explicit)
+    .Case(owner) => caseTarget(checker, owner, text, at, expected, explicit)
+    .Namespace(target) => Target(Resolution.Namespace(target), checker.voidType, name: text)
+    // `Target.from(self)`, `Item.from(0)`: a generic parameter is a namespace for the members of its bounds
+    .GenericParameter => parameterNamespaceTarget(checker, symbol, text)
     .Field(_) => deferredTarget(checker)
     // `Void` is the one name that is both a type and its only value (gap 1)
     .Builtin => {
@@ -156,41 +220,143 @@ public fn symbolTarget(var checker: Checker, symbol: SymbolId, text: String): Ta
   }
 }
 
-fn callableTarget(var checker: Checker, symbol: SymbolId, text: String): Target {
+fn callableTarget(var checker: Checker, symbol: SymbolId, text: String, explicit: List<TypeId>): Target {
   const identifier = signatureOf(checker, symbol)
   const signature = checker.signature(identifier)
-  // A generic function needs inference at the call site: milestone 4.4
-  if !signature.generics.isEmpty() {
-    return Target(Resolution.Deferred, checker.deferredType, name: text)
-  }
   Target(
     Resolution.Callable(symbol, [], Dispatch.Direct),
     checker.functionType(signature.form),
     form: Some(signature.form),
     name: text,
+    generics: signature.generics,
+    bounds: signature.bounds,
+    arguments: explicit,
   )
 }
 
 /** A case that was imported by name: `use Some, None from Option`, then `Some(value)`. */
-fn caseTarget(var checker: Checker, owner: SymbolId, text: String): Target {
-  // A case of a generic type has to infer its arguments from the call: milestone 4.4
-  if !genericsOf(checker, owner).isEmpty() {
-    return deferredTarget(checker)
-  }
-  const own = checker.nominal(owner, [])
+fn caseTarget(
+  var checker: Checker,
+  owner: SymbolId,
+  text: String,
+  at: Span,
+  expected: TypeId?,
+  explicit: List<TypeId>,
+): Target {
+  const generics = genericsOf(checker, owner)
+  const wanted = headOf(checker, owner, expected)
+  const arguments = argumentsFor(checker, generics, explicit, wanted, text, at)
+  const own = checker.nominal(owner, arguments)
   match lookupStaticMember(checker, own, text) {
     Some(candidate) => targetOfCandidate(checker, candidate, text)
     .None => deferredTarget(checker)
   }
 }
 
-/** A `type` by name. A generic one without arguments is what milestone 4.4 infers, so it waits. */
-fn namedTypeTarget(var checker: Checker, symbol: SymbolId, text: String): Target {
-  if !genericsOf(checker, symbol).isEmpty() {
-    return deferredTarget(checker)
-  }
-  const own = checker.nominal(symbol, [])
+/** A `type` by name: `Point(10, 20)`, `Holder(value)`, `Map<String, Int>()`. */
+fn namedTypeTarget(
+  var checker: Checker,
+  symbol: SymbolId,
+  text: String,
+  at: Span,
+  expected: TypeId?,
+  explicit: List<TypeId>,
+): Target {
+  const generics = genericsOf(checker, symbol)
+  const wanted = headOf(checker, symbol, expected)
+  const arguments = argumentsFor(checker, generics, explicit, wanted, text, at)
+  const own = checker.nominal(symbol, arguments)
   typeTarget(checker, own, text)
+}
+
+/** `List.of(1, 2)`, `Map.from(pairs)`: the trait is the namespace, and its own arguments are inferred like any others. */
+fn traitNamespaceTarget(
+  var checker: Checker,
+  symbol: SymbolId,
+  text: String,
+  at: Span,
+  expected: TypeId?,
+  explicit: List<TypeId>,
+): Target {
+  const generics = genericsOf(checker, symbol)
+  const wanted = headOf(checker, symbol, expected)
+  const arguments = argumentsFor(checker, generics, explicit, wanted, text, at)
+  const bound = checker.nominal(symbol, arguments)
+  const own = checker.types.intern(TypeForm.Traits([bound]))
+  Target(Resolution.TypeOf(own), own, name: text, constructs: Some(own))
+}
+
+/** `Target.from(self)` inside a generic function: the members of the bounds, reached through the caller's witness. */
+fn parameterNamespaceTarget(var checker: Checker, symbol: SymbolId, text: String): Target {
+  const identifier = match checker.types.parameterOf(symbol) {
+    Some(found) => found
+    .None => {
+      return deferredTarget(checker)
+    }
+  }
+  const own = checker.types.intern(TypeForm.Parameter(identifier))
+  Target(Resolution.TypeOf(own), own, name: text, constructs: Some(own))
+}
+
+/**
+ * The arguments of a generic declaration at a use in an expression: the explicit ones from the left, then the ones the
+ * expected type gives (`Some(keyword)` where a `Keyword?` is wanted), then a fresh variable each.
+ */
+public fn argumentsFor(
+  var checker: Checker,
+  generics: List<ParameterId>,
+  explicit: List<TypeId>,
+  wanted: List<TypeId>?,
+  owner: String,
+  at: Span,
+): List<TypeId> {
+  var arguments: List<TypeId> = []
+  const known = wanted ?? []
+  for index in 0..generics.length() {
+    if index < explicit.length() {
+      arguments.add(explicit[index])
+      continue
+    }
+    if index < known.length() {
+      arguments.add(known[index])
+      continue
+    }
+    const name = checker.types.parameter(generics[index]).name
+    arguments.add(checker.newVariable(name, owner, at))
+  }
+  arguments
+}
+
+/** The arguments of the expected type, but only when it is a value of this very declaration. */
+fn headOf(checker: Checker, symbol: SymbolId, expected: TypeId?): List<TypeId>? {
+  const annotation = expected?
+  match checker.types.form(annotation) {
+    .Nominal(head, arguments) => {
+      if head == symbol {
+        return Some(arguments)
+      }
+      None
+    }
+    .Traits(bounds) => {
+      for bound in bounds {
+        if const .Nominal(head, arguments) = checker.types.form(bound) {
+          if head == symbol {
+            return Some(arguments)
+          }
+        }
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+fn substituteInto(var checker: Checker, target: TypeId, generics: List<ParameterId>, arguments: List<TypeId>): TypeId {
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for index in 0..generics.length().min(arguments.length()) {
+    mapping.set(generics[index], arguments[index])
+  }
+  substitute(checker.types, target, mapping)
 }
 
 /** The type a name stands for, as the target of a constructor call or of a static member. */
@@ -198,13 +364,13 @@ public fn typeTarget(var checker: Checker, own: TypeId, text: String): Target {
   match constructorOf(checker, own) {
     Some(found) => Target(
       Resolution.Construct(own),
-      checker.deferredType,
+      checker.functionType(found),
       form: Some(found),
       name: text,
       constructs: Some(own),
     )
     // A type with cases is constructed through them, so the name itself is only a namespace
-    .None => Target(Resolution.TypeOf(own), checker.deferredType, name: text, constructs: Some(own))
+    .None => Target(Resolution.TypeOf(own), own, name: text, constructs: Some(own))
   }
 }
 
@@ -216,13 +382,40 @@ public fn formOf(checker: Checker, annotation: TypeId): FunctionForm? {
   None
 }
 
+/**
+ * What a member is when it is *called*. A field or a `const` that holds a function is callable with `()` - that is what
+ * `state = step(state, value)` and `button.onClick()` are - and only with `()`, because a command on it writes it
+ * instead (design 3.3). A receiver closure in a field (`const perimeter: (self: Rectangle) => Int`) applies its
+ * receiver, which is milestone 4.7.
+ */
+fn formOfCandidate(checker: Checker, candidate: Candidate): FunctionForm? {
+  if const Some(found) = candidate.form {
+    return Some(found)
+  }
+  const form = formOf(checker, candidate.annotation)?
+  for parameter in form.parameters {
+    if const .Receiver(_) = parameter.mode {
+      return None
+    }
+  }
+  Some(form)
+}
+
 // --- Messages -------------------------------------------------------------------------------------------------------
 
 /**
- * A name that is nowhere. Inside a body with a receiver whose members the checker cannot all see yet nothing is said:
- * the name may well be a trait member or come from an `extend`, and milestone 4.3 answers for those.
+ * A name that is nowhere. Inside a body with a receiver whose members the checker cannot all see nothing is said: the
+ * name may well be a trait member the bounds of a generic parameter decide about.
  */
 fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: TypeId?) {
+  // `{ _ * 2 }` where nothing says what the closure takes: the parameters are what is missing, not the name
+  if isImplicitName(text) && !checker.closureFrames.isEmpty() {
+    checker.reportHere(
+      Diagnostic.error("The parameters of this closure need types: `\{ value: Int => ... \}`", at)
+        .withNote("`_` is the first parameter of the expected function type, and nothing here expects one")
+    )
+    return
+  }
   if const Some(receiver) = checker.receiverType {
     if !isFullyKnown(checker, receiver) {
       return
@@ -256,7 +449,7 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
 
 /**
  * `a.b` where `b` is not there. Answers whether it said anything: what a generic parameter or a trait-typed value has
- * depends on bounds that milestone 4.4 solves, so nothing is said about those.
+ * depends on bounds a call site solves, so nothing is said about those.
  */
 public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: String, at: Span): Bool {
   if !isFullyKnown(checker, receiver) {
@@ -282,8 +475,8 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
 
 /**
  * Whether every member of a type is visible: a concrete type has the members of its body, of every extension of it
- * and of every trait it implements, and milestone 4.3 sees all three. A generic parameter and a trait-typed value do
- * not: what they have depends on the bounds a call site solves, which is 4.4.
+ * and of every trait it implements. A generic parameter and a trait-typed value do not, and a type that still holds an
+ * unsolved variable says nothing either.
  */
 public fn isFullyKnown(var checker: Checker, of: TypeId): Bool {
   if checker.absorbs(of) {

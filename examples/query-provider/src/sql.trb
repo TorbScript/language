@@ -27,6 +27,16 @@ public type Fragment {
   }
 }
 
+/** The parameters are `Encode` values and `Encode` does not require `Show`, so a fragment shows the count of them. */
+extend Fragment with Show {
+  fn show(self): String {
+    if parameters.isEmpty() {
+      return sql
+    }
+    "{sql} with {parameters.length()} parameters"
+  }
+}
+
 public fn translate(node: ExpressionNode, captures: List<Encode>): Result<Fragment, QueryError> {
   match node {
     // `_.age`: a field of the row parameter is a column
@@ -36,8 +46,8 @@ public fn translate(node: ExpressionNode, captures: List<Encode>): Result<Fragme
     .Literal(value, _) => Ok(Fragment.parameter(value))
     .Captured(index, _, _) => Ok(Fragment.parameter(captures[index]))
 
-    .Unary(.Not, operand, _) => Ok(translate(operand, captures)?.wrap("NOT (", ")"))
-    .Unary(.Negate, operand, _) => Ok(translate(operand, captures)?.wrap("-"))
+    .Unary(.Not, operand, _) => Ok((translate(operand, captures)?).wrap("NOT (", ")"))
+    .Unary(.Negate, operand, _) => Ok((translate(operand, captures)?).wrap("-"))
 
     .Binary(operator, left, right, _) => {
       const a = translate(left, captures)?
@@ -48,14 +58,14 @@ public fn translate(node: ExpressionNode, captures: List<Encode>): Result<Fragme
     // A few methods this provider knows
     .Call(Some(target), _, "startsWith", [prefix], _) => {
       const column = translate(target, captures)?
-      Ok(column.join("LIKE", translate(prefix, captures)?.wrap("", " || '%'")))
+      Ok(column.join("LIKE", (translate(prefix, captures)?).wrap("", " || '%'")))
     }
     .Call(Some(target), _, "contains", [part], _) => {
       const column = translate(target, captures)?
-      Ok(column.join("LIKE", translate(part, captures)?.wrap("'%' || ", " || '%'")))
+      Ok(column.join("LIKE", (translate(part, captures)?).wrap("'%' || ", " || '%'")))
     }
-    .Call(Some(target), _, "toLowerCase", [], _) => Ok(translate(target, captures)?.wrap("LOWER(", ")"))
-    .Call(Some(target), _, "isSome", [], _) => Ok(translate(target, captures)?.wrap("", " IS NOT NULL"))
+    .Call(Some(target), _, "toLowerCase", [], _) => Ok((translate(target, captures)?).wrap("LOWER(", ")"))
+    .Call(Some(target), _, "isSome", [], _) => Ok((translate(target, captures)?).wrap("", " IS NOT NULL"))
 
     .Conditional(condition, then, otherwise, _) => {
       const c = translate(condition, captures)?
