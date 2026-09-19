@@ -699,6 +699,15 @@ impl Interpreter {
             (Value::Implicit(implicit), Value::Object(object)) => (self.resolve_implicit(implicit, &object.info)?, right.clone()),
             _ => (left, right),
         };
+        // The same one level down: `kinds() == [.Number, .Dot]`. A list, a tuple or `Some(...)` on either side of
+        // `==`/`!=` resolves its `.Case`s against the value at the same position on the other side, instead of
+        // comparing an unresolved `Implicit` structurally (which is never equal to anything, and so was a silent
+        // `false`).
+        let (left, right) = match operator {
+            Equal | NotEqual if contains_implicit(&left) => (self.resolve_implicits_in(left, &right)?, right),
+            Equal | NotEqual if contains_implicit(&right) => (left.clone(), self.resolve_implicits_in(right, &left)?),
+            _ => (left, right),
+        };
         match operator {
             Equal => return Ok(Value::Bool(left == right)),
             NotEqual => return Ok(Value::Bool(left != right)),
@@ -863,6 +872,49 @@ impl Interpreter {
             Some((positional, labeled)) => {
                 self.construct(info, Some(case), Arguments { positional: positional.clone(), labeled: labeled.clone() })
             }
+        }
+    }
+
+    /// `kinds() == [.Number, .Dot]`: `value` is one side of `==`/`!=` and still holds a `.Case` somewhere inside of a
+    /// list, a tuple or `Some(...)`; `template` is the other side, at the same position, which is where the type
+    /// comes from (`expect` does the same for a single value at an annotation). A `.Case` that has no counterpart to
+    /// resolve against - the shapes differ, or the position on `template` is not a value of that case's type - is a
+    /// runtime error: silently leaving it unresolved would make the comparison structurally `false` no matter what
+    /// the other side is.
+    fn resolve_implicits_in(&mut self, value: Value, template: &Value) -> Eval {
+        match &value {
+            Value::Implicit(implicit) => match template {
+                Value::Object(object) => self.resolve_implicit(implicit, &object.info),
+                _ => Err(failure(format!(
+                    "The bootstrap interpreter cannot tell which type `.{}` belongs to here. Write the type in front of it",
+                    implicit.name
+                ))),
+            },
+            Value::List(items) if contains_implicit(&value) => match template {
+                Value::List(other) if items.len() == other.len() => {
+                    let mut resolved = Vec::with_capacity(items.len());
+                    for (item, counterpart) in items.iter().zip(other.iter()) {
+                        resolved.push(self.resolve_implicits_in(item.clone(), counterpart)?);
+                    }
+                    Ok(Value::list(resolved))
+                }
+                _ => Err(failure("The bootstrap interpreter cannot tell which type a `.Case` in this list belongs to: the other side of `==` is not a list of the same length")),
+            },
+            Value::Tuple(tuple) if contains_implicit(&value) => match template {
+                Value::Tuple(other) if tuple.items.len() == other.items.len() => {
+                    let mut resolved = Vec::with_capacity(tuple.items.len());
+                    for (item, counterpart) in tuple.items.iter().zip(other.items.iter()) {
+                        resolved.push(self.resolve_implicits_in(item.clone(), counterpart)?);
+                    }
+                    Ok(Value::Tuple(Rc::new(Tuple { labels: tuple.labels.clone(), items: resolved })))
+                }
+                _ => Err(failure("The bootstrap interpreter cannot tell which type a `.Case` in this tuple belongs to: the other side of `==` is not a matching tuple")),
+            },
+            Value::Option(Some(inner)) if contains_implicit(&value) => match template {
+                Value::Option(Some(other)) => Ok(Value::some(self.resolve_implicits_in((**inner).clone(), other)?)),
+                _ => Err(failure("The bootstrap interpreter cannot tell which type a `.Case` in this `Some(...)` belongs to: the other side of `==` is not `Some(...)`")),
+            },
+            _ => Ok(value),
         }
     }
 
@@ -1817,6 +1869,17 @@ fn to_float(value: Value) -> Value {
     match value {
         Value::Int(value) => Value::Float(value as f64),
         other => other,
+    }
+}
+
+/// Whether a `.Case` is still waiting for its type somewhere inside of a list, a tuple or `Some(...)`.
+fn contains_implicit(value: &Value) -> bool {
+    match value {
+        Value::Implicit(_) => true,
+        Value::List(items) => items.iter().any(contains_implicit),
+        Value::Tuple(tuple) => tuple.items.iter().any(contains_implicit),
+        Value::Option(Some(inner)) => contains_implicit(inner),
+        _ => false,
     }
 }
 

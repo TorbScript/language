@@ -186,17 +186,6 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
         ("Map", "of") => map_of(arguments.positional),
         ("Map", "from") => map_of(items_of(&arguments.required(0, "entries")?)?),
 
-        ("String", "join") => {
-            let separator = match arguments.get(1, "separator") {
-                Some(separator) => text_of(&separator, "separator")?,
-                None => String::new(),
-            };
-            let mut parts = Vec::new();
-            for part in items_of(&arguments.required(0, "parts")?)? {
-                parts.push(text_of(&part, "parts")?);
-            }
-            Ok(Value::text(&parts.join(&separator)))
-        }
         ("String", "from") => {
             let value = arguments.required(0, "value")?;
             if let Value::List(items) = &value {
@@ -925,6 +914,17 @@ fn iterable_method(interpreter: &mut Interpreter, items: Vec<Value>, name: &str,
             Value::list(items.into_iter().enumerate().map(|(index, item)| Value::tuple(vec![Value::Int(index as i64), item])).collect())
         }
         "sorted" => Value::list(sort(interpreter, items, arguments.get(0, "by"))?),
+        "joined" => {
+            let separator = match arguments.get(0, "separator") {
+                Some(separator) => text_of(&separator, "separator")?,
+                None => String::new(),
+            };
+            let mut parts = Vec::with_capacity(items.len());
+            for item in items {
+                parts.push(interpreter.show(&item, true)?);
+            }
+            Value::text(&parts.join(&separator))
+        }
         "forEach" => {
             let action = function("action")?;
             for item in items {

@@ -49,12 +49,12 @@ public fn printProgram(program: IrProgram): String {
     }
     lines.addAll(functionLines(program, function))
   }
-  String.join(lines, separator: "\n")
+  lines.joined(separator: "\n")
 }
 
 /** One function, as the snapshot tests compare it. */
 public fn printFunction(program: IrProgram, function: IrFunction): String {
-  String.join(functionLines(program, function), separator: "\n")
+  functionLines(program, function).joined(separator: "\n")
 }
 
 fn functionLines(program: IrProgram, function: IrFunction): List<String> {
@@ -92,7 +92,7 @@ fn printParameters(program: IrProgram, signature: IrSignature): String {
   for index in 0..signature.witnesses.length() {
     parts.add("witness {index}: {describeTrait(program, signature.witnesses[index])}")
   }
-  String.join(parts, separator: ", ")
+  parts.joined(separator: ", ")
 }
 
 fn printParameter(program: IrProgram, parameter: IrParameter): String {
@@ -133,7 +133,7 @@ fn printBlockComment(program: IrProgram, block: Block): String {
   if parts.isEmpty() {
     return ""
   }
-  " # {String.join(parts, separator: " ")}"
+  " # {parts.joined(separator: " ")}"
 }
 
 // --- Instructions ---------------------------------------------------------------------------------------------------
@@ -162,7 +162,7 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
       for slot in arguments {
         parts.add("%{slot.value}")
       }
-      const operands = String.join(parts, separator: ", ")
+      const operands = parts.joined(separator: ", ")
       const head = "{printOptionalTarget(target)}intrinsic {describeIntrinsic(intrinsic)}"
       "{head} {operands} at {printLocation(program, at)}"
     }
@@ -178,7 +178,7 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
       for capture in captures {
         parts.add(printCapture(program, capture))
       }
-      const taken = String.join(parts, separator: ", ")
+      const taken = parts.joined(separator: ", ")
       "{printTarget(target)}closure {program.functionAt(callee).name} captures({taken}) {escaping}"
     }
     .BoxNew(target, value) => "{printTarget(target)}boxNew {printArgument(value)}"
@@ -187,7 +187,7 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
       for table in tables {
         parts.add(printWitnessSource(program, table))
       }
-      "{printTarget(target)}traitValue {printArgument(value)} tables({String.join(parts, separator: ", ")})"
+      "{printTarget(target)}traitValue {printArgument(value)} tables({parts.joined(separator: ", ")})"
     }
     .TakeOut(target, container, key, kind) => {
       const place = printReference(program, container)
@@ -212,7 +212,7 @@ public fn printTerminator(program: IrProgram, function: IrFunction, terminator: 
         parts.add("case {values[index]} b{targets[index].value}")
       }
       parts.add("otherwise b{otherwise.value}")
-      "switch %{scrutinee.value} {String.join(parts, separator: ", ")}"
+      "switch %{scrutinee.value} {parts.joined(separator: ", ")}"
     }
     .Return(value) => {
       match value {
@@ -240,7 +240,7 @@ fn printArguments(arguments: List<Argument>): String {
   for argument in arguments {
     parts.add(printArgument(argument))
   }
-  String.join(parts, separator: ", ")
+  parts.joined(separator: ", ")
 }
 
 fn printArgument(argument: Argument): String {
@@ -263,7 +263,7 @@ fn printWitnesses(program: IrProgram, witnesses: List<WitnessSource>): String {
   for witness in witnesses {
     parts.add(printWitnessSource(program, witness))
   }
-  " witnesses({String.join(parts, separator: ", ")})"
+  " witnesses({parts.joined(separator: ", ")})"
 }
 
 fn printWitnessSource(program: IrProgram, witness: WitnessSource): String {
@@ -381,9 +381,9 @@ public fn printLayout(program: IrProgram, layout: Layout): String {
       }
       shown.add("{variant.name}({printFields(program, fields)})")
     }
-    parts.add("variants({String.join(shown, separator: ", ")})")
+    parts.add("variants({shown.joined(separator: ", ")})")
   }
-  String.join(parts, separator: " ")
+  parts.joined(separator: " ")
 }
 
 fn printFields(program: IrProgram, fields: List<FieldLayout>): String {
@@ -391,7 +391,7 @@ fn printFields(program: IrProgram, fields: List<FieldLayout>): String {
   for field in fields {
     parts.add("{field.name}: {describeIrType(program, field.annotation)}")
   }
-  String.join(parts, separator: ", ")
+  parts.joined(separator: ", ")
 }
 
 fn printRepresentation(representation: Representation): String {
@@ -416,7 +416,7 @@ public fn printElement(program: IrProgram, element: ElementDescriptor): String {
   addFunctionPart(program, parts, "release", element.release)
   addFunctionPart(program, parts, "equals", element.equals)
   addFunctionPart(program, parts, "hash", element.hash)
-  String.join(parts, separator: " ")
+  parts.joined(separator: " ")
 }
 
 fn addFunctionPart(program: IrProgram, var parts: List<String>, word: String, function: FunctionId?) {
@@ -436,7 +436,7 @@ public fn printWitnessTable(program: IrProgram, table: WitnessTable): String {
     nested.add(program.witnessTableAt(inner).name)
   }
   const head = "witness {table.name} {describeTrait(program, table.applied)} for {describeIrType(program, table.target)}"
-  "{head} members({String.join(members, separator: ", ")}) nested({String.join(nested, separator: ", ")})"
+  "{head} members({members.joined(separator: ", ")}) nested({nested.joined(separator: ", ")})"
 }
 
 public fn printStatic(program: IrProgram, value: StaticValue): String {
@@ -453,14 +453,14 @@ fn printContents(program: IrProgram, contents: StaticContents): String {
       for field in fields {
         parts.add(program.staticAt(field).name)
       }
-      "{printConstructed(program, layout, variant)}({String.join(parts, separator: ", ")})"
+      "{printConstructed(program, layout, variant)}({parts.joined(separator: ", ")})"
     }
     .Items(item, items) => {
       var parts: List<String> = []
       for one in items {
         parts.add(program.staticAt(one).name)
       }
-      "{describeIrType(program, item)}[{String.join(parts, separator: ", ")}]"
+      "{describeIrType(program, item)}[{parts.joined(separator: ", ")}]"
     }
   }
 }
@@ -496,7 +496,7 @@ public fn describeIrType(program: IrProgram, id: IrTypeId): String {
       for bound in bounds {
         parts.add(describeTrait(program, bound))
       }
-      "Object({String.join(parts, separator: " + ")})"
+      "Object({parts.joined(separator: " + ")})"
     }
     .Box(item) => "Box({describeIrType(program, item)})"
     .Lazy(item) => "Lazy({describeIrType(program, item)})"
@@ -509,7 +509,7 @@ public fn describeIrType(program: IrProgram, id: IrTypeId): String {
       for argument in arguments {
         parts.add(describeIrType(program, argument))
       }
-      "{head}({String.join(parts, separator: ", ")})"
+      "{head}({parts.joined(separator: ", ")})"
     }
     .ConstantValue(value, _) => "const {describeLiteral(value)}"
   }
@@ -533,7 +533,7 @@ public fn describeIrSignature(program: IrProgram, id: IrSignatureId): String {
   for witness in signature.witnesses {
     parts.add("witness {describeTrait(program, witness)}")
   }
-  "({String.join(parts, separator: ", ")}) -> {describeIrType(program, signature.result)}"
+  "({parts.joined(separator: ", ")}) -> {describeIrType(program, signature.result)}"
 }
 
 /** `Show`, `Iterable<Int64>`: the trait the way the source names it, not its mangled spelling. */
@@ -546,7 +546,7 @@ public fn describeTrait(program: IrProgram, id: TraitId): String {
   for argument in applied.arguments {
     parts.add(describeIrType(program, argument))
   }
-  "{applied.path.name}<{String.join(parts, separator: ", ")}>"
+  "{applied.path.name}<{parts.joined(separator: ", ")}>"
 }
 
 public fn describeRuntimeKind(kind: RuntimeKind): String {

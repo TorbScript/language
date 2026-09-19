@@ -1,5 +1,5 @@
 use Compare, Hash from "./compare"
-use From from "./convert"
+use From, Show from "./convert"
 use Add from "./operators"
 use Collector, groupingBy from "./collectors"
 use Mapped, Filtered, FilterMapped, MappedWhile, FlatMapped, Taken, Skipped, TakenWhile, Zipped, Sorted from "./stages"
@@ -110,6 +110,13 @@ public trait Iterable<Item> {
 
   fn toSet(self): Set<Item> where Item: Hash {
     to<Set<Item>>()
+  }
+
+  /** `["a", "b"].joined(separator: ", ")` is `"a, b"`. For `String` items, `show()` is the text itself. */
+  fn joined(self, separator: String = ""): String where Item: Show {
+    fold("") { result, item =>
+      if result.isEmpty() { item.show() } else { result + separator + item.show() }
+    }
   }
 
   fn forEach(self, action: (value: Item) => Void) {

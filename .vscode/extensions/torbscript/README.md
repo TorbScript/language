@@ -47,3 +47,30 @@ ln -s "$PWD/.vscode/extensions/torbscript" ~/.vscode/extensions/torbscript
 
 The grammar follows `CONCEPT.md`. When the syntax changes, change `trb.tmLanguage.json` and the keyword lists in
 `extension.js`.
+
+## Tasks
+
+`.vscode/tasks.json` has two tasks (Terminal > Run Task...), both run from `bootstrap/` on stage 0:
+
+| Task                       | Runs                                                | Problem matcher |
+|-----------------------------|-----------------------------------------------------|------------------|
+| `torb: check workspace`    | `cargo run --release -q -- run ../compiler check ..` | `$torb`, so every diagnostic becomes an entry in the Problems panel with a click-through location |
+| `torb: test compiler`      | `cargo run --release -q -- test ../compiler/tests`   | none - the pass/fail counts are read from the terminal |
+
+The `torb` problem matcher (contributed by this extension) reads the two-line diagnostics of `torb check`/`parse`
+(`compiler/src/cli/render.trb`):
+
+```text
+error: Comparisons do not chain. Use `&&`: `a < b && b < c`
+ --> ../compiler/src/example.trb:12:19
+  |
+12 | const chained = a < b > c
+  |                       ^
+```
+
+The first line is the message, the second the location; `torb`'s diagnostics show the path relative to where the
+toolchain was started (here `bootstrap/`, which is why the task's problem matcher resolves file locations against
+`bootstrap/` rather than the workspace root).
+
+There is no language server yet (milestone 8): these tasks are the whole IDE integration for now, and the reason
+`torb check`/`torb test` do not need their own terminal habits memorized.

@@ -1497,12 +1497,17 @@ const adults = users                     // 1. A source: anything Iterable (coll
   `sorted` return an `Iterable` again. A pipeline can be stored, passed around, extended and iterated more than once.
   Values are pulled one by one and only as far as needed, so infinite sources (`1..`) and big files just work.
 - **Terminal operations decide where the values end up:** `toList()`, `to<Set<String>>()` (any `From<Iterable<Item>>`),
-  `fold`, `find`, `first`, `any`, `all`, `count`, `sum`, `forEach`, `for ... in` - and the general one, `collect`.
+  `fold`, `find`, `first`, `any`, `all`, `count`, `sum`, `joined(separator:)`, `forEach`, `for ... in` - and the
+  general one, `collect`.
+- `joined(separator: String = "")` is `Iterable` where `Item: Show`: `[1, 2].joined(separator: ", ")` is `"1, 2"`,
+  `show()` of each item, joined. For `String` items `show()` is the text itself. The collector `joining` below is
+  for the same thing plugged into a pipeline that needs a prefix or a suffix, or that combines with another
+  collector; a plain join is `joined`, not `collect(joining(...))`.
 - **Collectors** are reusable, composable descriptions of "what to do with the values":
 
 ```trb
 const payroll = employees.collect(summing { _.salary })
-const names = employees.map { _.name }.collect(joining(", "))
+const names = employees.map { _.name }.joined(separator: ", ")
 const (veterans, others) = employees.collect(partitioningBy { _.age >= 40 })
 
 const salaryByDepartment = employees.collect(groupingBy { _.department }.then(averaging { _.salary }))
@@ -2080,6 +2085,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Tail calls are guaranteed for direct self-recursion in tail position only, and a per-task frame limit panics with
   "stack overflow". Portable C cannot guarantee a general tail call; the guarantee that can be kept is the one `retry`
   and every fold need, and a counter is the only way a frame list and a C stack agree on when the stack is full.
+- `String.join(parts, separator:)` became `Iterable.joined(separator:)`, now that a member can carry its own `where`
+  clause (`where Item: Show`). One way to join instead of two, and it reads left to right with the rest of a
+  pipeline; the collector `joining` stays for a prefix, a suffix, or a step inside `collect`.
 
 ## Open Questions
 

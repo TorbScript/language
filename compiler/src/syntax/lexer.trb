@@ -80,8 +80,8 @@ fn isWordPart(character: Char): Bool {
 /** The text of a doc comment: without the comment markers and the star in front of every line. */
 fn docText(comment: String): String {
   const inner = comment[3..(comment.byteLength() - 2)]
-  const lines = inner.split("\n").map({ stripMargin(_) }).toList()
-  String.join(lines, separator: "\n").trim()
+  const lines = inner.split("\n").map(stripMargin).toList()
+  lines.joined(separator: "\n").trim()
 }
 
 fn stripMargin(line: String): String {
@@ -227,24 +227,24 @@ type Lexer {
     const isAfterDot = tokens.last()?.kind == Some(TokenKind.Dot)
     if isAt("0x") || isAt("0b") {
       position = position + 2
-      digits({ isHexDigit(_) })
+      digits(isHexDigit)
       push(TokenKind.IntegerLiteral, start)
       return
     }
-    digits({ isAsciiDigit(_) })
+    digits(isAsciiDigit)
     var kind = TokenKind.IntegerLiteral
     // `tuple.0.1` and `1..5` are not floats, `16.megabytes()` is a call on an integer
-    const hasFraction = !isAfterDot && peek() == Some('.') && (peekAt(1).map({ isAsciiDigit(_) }) ?? false)
+    const hasFraction = !isAfterDot && peek() == Some('.') && (peekAt(1).map(isAsciiDigit) ?? false)
     if hasFraction {
       position = position + 1
-      digits({ isAsciiDigit(_) })
+      digits(isAsciiDigit)
       kind = TokenKind.FloatLiteral
     }
     if !isAfterDot && (peek() == Some('e') || peek() == Some('E')) {
       const sign = if peekAt(1) == Some('+') || peekAt(1) == Some('-') { 1 } else { 0 }
-      if peekAt(1 + sign).map({ isAsciiDigit(_) }) ?? false {
+      if peekAt(1 + sign).map(isAsciiDigit) ?? false {
         position = position + 1 + sign
-        digits({ isAsciiDigit(_) })
+        digits(isAsciiDigit)
         kind = TokenKind.FloatLiteral
       }
     }
