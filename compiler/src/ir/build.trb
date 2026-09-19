@@ -1,0 +1,116 @@
+use SymbolId from "../semantics/symbols"
+use IrTypeId, IrProgram, IrFunction, IrSignature, FunctionId, FunctionKind from "./ir"
+use Block, BlockId, Slot, SlotDeclaration, SlotRole, Instruction, Terminator, LocationId from "./ir"
+
+/**
+ * How a function is built: one small value that holds the function under construction and which block instructions go
+ * into. The lowering threads it as `var builder: FunctionBuilder`, exactly as the grammar threads `var parser: Parser`
+ * and the checker `var checker: Checker`.
+ *
+ * Nothing here decides anything. It numbers slots and blocks, keeps the order the lowering created them in - which the
+ * text format and every snapshot test rely on - and appends through a path (`builder.function.blocks[i].instructions`)
+ * so that no instruction list is ever copied.
+ */
+public type FunctionBuilder {
+  var function: IrFunction
+  /** The block `emit` appends to. */
+  var current: BlockId = BlockId(0)
+
+  fn currentBlock(self): BlockId {
+    current
+  }
+
+  fn blockCount(self): Int {
+    function.blocks.length()
+  }
+
+  fn slotCount(self): Int {
+    function.slots.length()
+  }
+
+  fn typeOfSlot(self, slot: Slot): IrTypeId {
+    function.typeOfSlot(slot)
+  }
+}
+
+/**
+ * A function with one slot per declared parameter, in declaration order, and one entry block. `self` is the first
+ * parameter of a method, so nothing here has to know about receivers.
+ */
+public fn newFunction(name: String, origin: SymbolId?, signature: IrSignature, label: String): FunctionBuilder {
+  var function = IrFunction(name, origin, signature)
+  for index in 0..signature.parameters.length() {
+    const parameter = signature.parameters[index]
+    function.slots.add(SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name))
+  }
+  function.blocks.add(Block([], Terminator.Unreachable, label, None))
+  FunctionBuilder(function, BlockId(0))
+}
+
+/** A slot of any role. The lowering usually asks for `addLocal` or `addTemporary` instead. */
+public fn addSlot(var builder: FunctionBuilder, annotation: IrTypeId, role: SlotRole, name: String): Slot {
+  builder.function.slots.add(SlotDeclaration(annotation, role, name))
+  Slot(builder.function.slots.length() - 1)
+}
+
+/** A binding of the source. Its name is kept, so the C identifier and `torb ir` read like the program. */
+public fn addLocal(var builder: FunctionBuilder, annotation: IrTypeId, name: String): Slot {
+  addSlot(builder, annotation, SlotRole.Local, name)
+}
+
+/** A value the source does not name: the result of a subexpression. */
+public fn addTemporary(var builder: FunctionBuilder, annotation: IrTypeId): Slot {
+  addSlot(builder, annotation, SlotRole.Temporary, "")
+}
+
+/**
+ * A new block, at the end. A fresh block is terminated by `Unreachable`, which is what an unterminated one would mean
+ * anyway - and what the verifier rejects when anything can reach it.
+ */
+public fn addBlock(var builder: FunctionBuilder, label: String, at: LocationId?): BlockId {
+  builder.function.blocks.add(Block([], Terminator.Unreachable, label, at))
+  BlockId(builder.function.blocks.length() - 1)
+}
+
+/** Where the next instructions go. */
+public fn switchTo(var builder: FunctionBuilder, block: BlockId) {
+  builder.current = block
+}
+
+/** One block, opened and switched to in one step: what a lowering does at almost every branch. */
+public fn openBlock(var builder: FunctionBuilder, label: String, at: LocationId?): BlockId {
+  const opened = addBlock(builder, label, at)
+  builder.current = opened
+  opened
+}
+
+public fn emit(var builder: FunctionBuilder, instruction: Instruction) {
+  const index = builder.current.value
+  builder.function.blocks[index].instructions.add(instruction)
+}
+
+/** Replaces the terminator of the current block. A block has exactly one, so this is not an append. */
+public fn terminate(var builder: FunctionBuilder, terminator: Terminator) {
+  const index = builder.current.value
+  builder.function.blocks[index].terminator = terminator
+}
+
+/** Terminates a block that is not the current one: the head of a loop, once its body is known. */
+public fn terminateBlock(var builder: FunctionBuilder, block: BlockId, terminator: Terminator) {
+  builder.function.blocks[block.value].terminator = terminator
+}
+
+/** Where the construct a block came from is written. The entry block learns it once the body is entered. */
+public fn setBlockLocation(var builder: FunctionBuilder, block: BlockId, at: LocationId?) {
+  builder.function.blocks[block.value].at = at
+}
+
+/** A body is a state machine over `Task<Value>`: only the task lowering of 7.3 sets this. */
+public fn setFunctionKind(var builder: FunctionBuilder, kind: FunctionKind) {
+  builder.function = builder.function.copy(kind: kind)
+}
+
+/** The function the builder built, added to the program. */
+public fn finishFunction(var program: IrProgram, builder: FunctionBuilder): FunctionId {
+  program.addFunction(builder.function)
+}

@@ -1,0 +1,828 @@
+use SymbolId from "../semantics/symbols"
+use LiteralValue, literalKey from "../semantics/checker/type"
+use Layout, LayoutKind from "./layout"
+use SymbolPath from "./mangle"
+
+/**
+ * The typed IR: a control flow graph of basic blocks holding three-address instructions over numbered slots.
+ *
+ * It is not a structured tree and not SSA, for four reasons that all point the same way (docs/BACKEND.md 1.1): the
+ * VM's bytecode is a near 1:1 encoding of this form, C has `goto`, the state-machine transformation for tasks is a
+ * CFG transformation, and backward liveness over a block graph is the shortest correct last-use analysis there is.
+ *
+ * Everything program-wide lives in a list of `IrProgram` and is addressed by an id, because values have no identity -
+ * the same rule the front end follows with `ModuleId` and `SymbolId`. Types, layouts, traits, signatures and source
+ * locations are *interned*, so `==` on their ids means "the same thing" and a back end never walks a type twice.
+ */
+
+// --- Ids ------------------------------------------------------------------------------------------------------------
+
+/** The index of a type in `IrProgram.types`. Interned, so `==` means "the same type". */
+public type IrTypeId {
+  value: Int
+}
+
+/** The index of a layout in `IrProgram.layouts`. */
+public type LayoutId {
+  value: Int
+}
+
+/** The index of a function in `IrProgram.functions`. The only identity a back end needs is its mangled name. */
+public type FunctionId {
+  value: Int
+}
+
+/** The index of a block in the `blocks` of its own function. */
+public type BlockId {
+  value: Int
+}
+
+/** The index of a slot in the `slots` of its own function: a register of the frame. */
+public type Slot {
+  value: Int
+}
+
+/** The index of a static value in `IrProgram.statics`. */
+public type StaticId {
+  value: Int
+}
+
+/** The index of a source location in `IrProgram.locations`. */
+public type LocationId {
+  value: Int
+}
+
+/** The index of a witness table in `IrProgram.witnessTables`. */
+public type WitnessTableId {
+  value: Int
+}
+
+/** The index of an element descriptor in `IrProgram.elements`: what a runtime container knows about its items. */
+public type ElementId {
+  value: Int
+}
+
+/**
+ * The index of a function signature in `IrProgram.signatures`. Not the checker's `SignatureId`: this one is
+ * monomorphic and interned, and it is what the type of a closure value is made of.
+ */
+public type IrSignatureId {
+  value: Int
+}
+
+/** The index of an applied trait in `IrProgram.traits`: `Show`, `Iterable<Int64>`. */
+public type TraitId {
+  value: Int
+}
+
+// --- Types ----------------------------------------------------------------------------------------------------------
+
+/**
+ * A type after monomorphization: every one of them is concrete, and every child is an id, so one form is one level
+ * deep and interning is a single map lookup.
+ *
+ * The names differ from the types of the language where a case may not shadow a type name of the prelude - `Floating`
+ * for `Float`, `Boolean` for `Bool`, `Character` for `Char`, `SharedObject` for a `shared type` - which is the rule
+ * that makes the syntax tree say `TupleType` and the checker `VoidType`.
+ */
+public type IrType {
+  /** `Int8` ... `Int64`, `UInt8` ... `UInt64`. The width is in bits. */
+  case Integer(width: Int, isSigned: Bool)
+  /** `Float32`, `Float64` */
+  case Floating(width: Int)
+  case Boolean
+  /** A Unicode scalar value, 32 bits wide. */
+  case Character
+  /** The type with exactly one value. A parameter and a field of it still exist; only a result becomes `void` in C. */
+  case VoidType
+  /**
+   * The result of a function that does not return. It is never the type of a slot, a field or a parameter, because
+   * there is no value of it - the C back end turns it into `_Noreturn void`.
+   */
+  case NeverType
+  /** `String`: a counted storage block plus a byte offset and a byte length. */
+  case Text
+  case Record(layout: LayoutId)
+  case Variant(layout: LayoutId)
+  case Tuple(layout: LayoutId)
+  /** `Array<Item, Size>`: the size is the const argument, so it is part of the type. */
+  case FixedArray(item: IrTypeId, size: Int)
+  /** A closure value: the code pointer plus its environment. */
+  case Closure(signature: IrSignatureId)
+  /** A trait-typed value: the boxed payload plus one witness pointer per bound, in the order of `bounds`. */
+  case Object(bounds: List<TraitId>)
+  /** A `shared type` object: counted, with a trace function, may be in a cycle. */
+  case SharedObject(layout: LayoutId)
+  /** A captured `var` binding. Counted, traced, may be in a cycle - the only sharing of a variable in the language. */
+  case Box(item: IrTypeId)
+  /** `lazy Value` as a parameter: a one-shot memo cell holding the thunk and, after the first use, the value. */
+  case Lazy(item: IrTypeId)
+  /** What the runtime owns: the list, the ordered hash table, the set, `Task`, `Channel`, `Expression`, `Decimal`. */
+  case Runtime(kind: RuntimeKind, arguments: List<IrTypeId>)
+  /**
+   * A const generic argument: the `16` of `Array<Float, 16>`. It is not the type of any value - it stands in a type
+   * argument list, so that an instance key and a mangled name are a function of *all* arguments of an instance.
+   */
+  case ConstantValue(value: LiteralValue, of: IrTypeId)
+}
+
+/**
+ * The runtime's own types. There is one list implementation and one ordered hash table for every collection name of
+ * the standard library: `ArrayList` and `TrieList` are the list, `TrieMap`/`HashMap` and `TrieSet`/`HashSet` the
+ * table, which is observable only through performance because iteration order and `Show` are the same either way.
+ */
+public type RuntimeKind {
+  /** `ArrayList<Item>`, `TrieList<Item>`: contiguous storage, an offset and a length. */
+  case ListStorage
+  /** `HashMap<Key, Value>`, `TrieMap<Key, Value>`: open addressing plus an insertion-ordered entry vector. */
+  case MapStorage
+  /** `HashSet<Item>`, `TrieSet<Item>`: the table with a value descriptor of size zero. */
+  case SetStorage
+  case TaskObject
+  case ChannelObject
+  /** `Expression<Value>`: a static tree plus the captures collected at the quotation site. */
+  case ExpressionTree
+  /** Exact base-10 arithmetic. Not implemented before milestone 8; using one is a clean compile error. */
+  case DecimalNumber
+}
+
+/**
+ * `Show`, `Iterable<Int64>`: a trait with its type arguments applied. Interned.
+ *
+ * It carries where the trait is declared, because a mangled name has to be a pure function of the *program*: a
+ * witness table and a trait-typed value are named after the trait, and two traits of the same name in two packages
+ * are two traits.
+ */
+public type IrTrait {
+  symbol: SymbolId
+  path: SymbolPath
+  arguments: List<IrTypeId>
+}
+
+/** Whether a result is returned in a register or written through a pointer the caller passes first (BACKEND 3.2). */
+public type ResultMode {
+  case ByValue
+  /** The layout model estimates more than 64 bytes: the caller passes `T *result` as the first parameter. */
+  case ByPointer
+}
+
+/** How one operand position consumes its value. Filled in by the ownership pass of 5.4. */
+public type Ownership {
+  /** The value must be live at that point and no count changes: the caller keeps it for the whole call. */
+  case Borrowed
+  /** The position takes the count: `Construct`, `BoxNew`, `TraitValue`, `Return` and a parameter the callee stores. */
+  case Owned
+}
+
+/** One parameter of a monomorphic function. Its name is for `torb ir` and for readable C, never load bearing. */
+public type IrParameter {
+  name: String
+  annotation: IrTypeId
+  /** A `var` parameter or `var self`: a reference into the caller's frame, never counted (BACKEND 2.3). */
+  isReference: Bool = false
+  ownership: Ownership = Ownership.Borrowed
+}
+
+/**
+ * The type of a function, and of a closure value. Interned, because `Closure` names one - two closures of the same
+ * shape are the same type.
+ */
+public type IrSignature {
+  parameters: List<IrParameter>
+  result: IrTypeId
+  /** One per witness table the caller appends after the declared parameters, in bound order (BACKEND 1.4). */
+  witnesses: List<TraitId> = []
+  /**
+   * Decided by `finishProgram`, not by whoever interned the signature: it follows from the size of the result, and
+   * that size is only final once every layout is. It is therefore not part of the interning key either.
+   */
+  resultMode: ResultMode = ResultMode.ByValue
+}
+
+/** A source location, relative to the workspace root with forward slashes: no path of a machine ever leaks in. */
+public type Location {
+  path: String
+  line: Int
+  column: Int
+}
+
+// --- Static data ----------------------------------------------------------------------------------------------------
+
+/** A compile-time constant: a literal, a top-level `const` of a module, a quoted expression tree. */
+public type StaticValue {
+  /** Mangled, prefix `s`. */
+  name: String
+  annotation: IrTypeId
+  contents: StaticContents
+}
+
+/**
+ * What a static value holds. Text, integers, characters and booleans are the checker's `LiteralValue`, because a
+ * compile-time constant of one of those types is exactly what the checker already evaluated.
+ */
+public type StaticContents {
+  case Literal(value: LiteralValue)
+  /** There is no float literal *type*, so a float constant is not a `LiteralValue`. */
+  case Floating(value: Float)
+  case VoidValue
+  /** A record, a tuple or one variant of a variant layout, from static fields. */
+  case Aggregate(layout: LayoutId, variant: Int, fields: List<StaticId>)
+  /** `Array<Item, Size>` of static items. */
+  case Items(item: IrTypeId, items: List<StaticId>)
+}
+
+/**
+ * What one element type of a runtime container is, as static data. There is one list and one hash table in C, and
+ * they are parameterized by this instead of by a template (BACKEND 3.1), so the VM and the C back end share them.
+ */
+public type ElementDescriptor {
+  /** Mangled, prefix `d`. */
+  name: String
+  item: IrTypeId
+  size: Int
+  alignment: Int
+  /** `None` when the element is trivial, which is what lets the runtime skip the indirect call entirely. */
+  retain: FunctionId? = None
+  release: FunctionId? = None
+  equals: FunctionId? = None
+  hash: FunctionId? = None
+}
+
+/**
+ * One witness table: what a trait-typed value and a generic function that was not monomorphized call through.
+ *
+ * Required members in declaration order, then the supertraits' tables in declaration order, then the witnesses of the
+ * trait's own generic parameters. Default members are *not* in a table: calling one is a call of the monomorphic
+ * instance of the default body with the table passed in, which is what makes `by` forward the required members only.
+ */
+public type WitnessTable {
+  /** Mangled, prefix `w`. */
+  name: String
+  applied: TraitId
+  /** The type the implementation is for. */
+  target: IrTypeId
+  members: List<FunctionId>
+  nested: List<WitnessTableId>
+}
+
+/**
+ * One monomorphic instance of one declaration: what the worklist of 5.6 holds and what a mangled name is a function
+ * of. Two instances with the same key are one function, however the lowering reached them.
+ */
+public type Instance {
+  symbol: SymbolId
+  /** Type arguments and const arguments together, in declaration order. */
+  arguments: List<IrTypeId>
+  /** The witness tables the instance was reached with, for a call that passes dictionaries instead of specializing. */
+  witnesses: List<WitnessTableId> = []
+}
+
+// --- Functions, blocks, slots ---------------------------------------------------------------------------------------
+
+/** What role a slot plays in its frame. Only `.Parameter` is load bearing; the rest is for readable output. */
+public type SlotRole {
+  case Parameter(index: Int)
+  case Local
+  case Temporary
+  /** A slot that holds a closure's environment, or a field of it. */
+  case Environment
+  /** The place a `.ByPointer` result is written to. */
+  case ResultPointer
+}
+
+public type SlotDeclaration {
+  annotation: IrTypeId
+  role: SlotRole
+  /** A name from the source, for `torb ir` and for `#line`-friendly C identifiers. Never load bearing. */
+  name: String = ""
+}
+
+/** A function whose body is a state machine over `Task<Value>` is not a plain function (BACKEND 5.3). */
+public type FunctionKind {
+  case Plain
+  /** `resume(task, state) -> Poll<Value>`: the entry block switches on the state. */
+  case TaskResume
+}
+
+public type Block {
+  var instructions: List<Instruction> = []
+  /**
+   * Exactly one, always. A fresh block carries `Unreachable`, which is also what an unterminated block would mean -
+   * and the verifier rejects one that anything can reach.
+   */
+  var terminator: Terminator = Terminator.Unreachable
+  /** The source construct this block came from. Only a comment in the output. */
+  label: String = ""
+  /** Where that construct is, for the block comment of the text format and for `#line` in C. */
+  var at: LocationId? = None
+}
+
+public type IrFunction {
+  /** The mangled name. Unique, deterministic, the only identity a back end needs. */
+  name: String
+  /** The declaration this instance came from, for messages and `torb ir`. `None` for a generated body. */
+  origin: SymbolId? = None
+  signature: IrSignature
+  var slots: List<SlotDeclaration> = []
+  var blocks: List<Block> = []
+  kind: FunctionKind = FunctionKind.Plain
+
+  fn typeOfSlot(self, slot: Slot): IrTypeId {
+    slots[slot.value].annotation
+  }
+
+  fn hasSlot(self, slot: Slot): Bool {
+    slot.value >= 0 && slot.value < slots.length()
+  }
+
+  fn hasBlock(self, block: BlockId): Bool {
+    block.value >= 0 && block.value < blocks.length()
+  }
+}
+
+// --- Places ---------------------------------------------------------------------------------------------------------
+
+/**
+ * A place: the base slot plus a static path of steps. Never counted and never escaping, because exclusivity is
+ * checked statically, references are second class, and `MakeUnique` at the moment the path is formed leaves the
+ * storage with count one (BACKEND 2.3).
+ */
+public type Reference {
+  base: Slot
+  steps: List<PathStep> = []
+}
+
+public type PathStep {
+  case Field(layout: LayoutId, index: Int)
+  case Variant(layout: LayoutId, variant: Int, index: Int)
+  case TupleField(layout: LayoutId, index: Int)
+  /** `Array<Item, Size>` and the contiguous list: an interior pointer after `MakeUnique`. */
+  case Element(item: IrTypeId, index: Slot)
+  /** Dereference a boxed layout, a `Box`, a `Lazy` cell or a `shared` object. */
+  case Contents(annotation: IrTypeId)
+}
+
+/** How one operand is consumed. Filled in by the ownership pass (BACKEND 2). */
+public type Argument {
+  slot: Slot
+  ownership: Ownership = Ownership.Borrowed
+  isLastUse: Bool = false
+}
+
+/** A borrowed operand: what phase 1 of the lowering emits everywhere. */
+public fn borrowed(slot: Slot): Argument {
+  Argument(slot, Ownership.Borrowed, false)
+}
+
+/** An operand position that takes the count: `Construct`, `BoxNew`, `TraitValue`, `Return`, a stored parameter. */
+public fn owned(slot: Slot): Argument {
+  Argument(slot, Ownership.Owned, false)
+}
+
+// --- Witnesses at a call site ---------------------------------------------------------------------------------------
+
+/** Where a witness table comes from at the point where it is used. */
+public type WitnessRoot {
+  /** A static table of the program: the implementation is known. */
+  case Table(table: WitnessTableId)
+  /** A table the caller appended after the declared parameters: the index among them. */
+  case Parameter(index: Int)
+  /** One of the witness pointers inside a trait-typed value: which of its bounds. */
+  case Value(slot: Slot, bound: Int)
+}
+
+/**
+ * A witness table, possibly one that sits inside another one. `path` walks the `nested` lists of the tables,
+ * outermost first - a supertrait's table, or the witness of a trait's own generic parameter.
+ *
+ * Flat instead of recursive on purpose: a value type may not contain itself, and a list of indices is what both back
+ * ends index with anyway.
+ */
+public type WitnessSource {
+  root: WitnessRoot
+  steps: List<Int> = []
+}
+
+/** What a closure takes from the frame that creates it. */
+public type Capture {
+  /** A `const` binding: copied into the environment. */
+  case Value(slot: Slot)
+  /** A `var` binding that some closure captures: the `Box` is retained, so both sides see one variable. */
+  case Boxed(slot: Slot)
+  /** A `var` parameter or `var self`, captured by a closure that provably does not escape. */
+  case Place(reference: Reference)
+}
+
+// --- Intrinsics -----------------------------------------------------------------------------------------------------
+
+/** Which numeric type an operation works on. The suffix of the printed intrinsic name comes from this. */
+public type NumericKind {
+  case Signed(width: Int)
+  case Unsigned(width: Int)
+  case Floating(width: Int)
+}
+
+/**
+ * What the C back end emits inline and the VM has an opcode for. Arithmetic is always checked, because overflow
+ * panics in every back end - that is semantics, not a diagnostic.
+ */
+public type IntrinsicOperation {
+  case Add
+  case Subtract
+  case Multiply
+  case Divide
+  case Remainder
+  case Negate
+  case BitwiseAnd
+  case BitwiseOr
+  case BitwiseExclusiveOr
+  case BitwiseNot
+  case ShiftedLeft
+  case ShiftedRight
+  case Equal
+  case NotEqual
+  case Less
+  case LessOrEqual
+  case Greater
+  case GreaterOrEqual
+  /** A numeric conversion. `kind` is what it comes from, `to` what it becomes. */
+  case Convert(to: NumericKind)
+  case BooleanNot
+  /** One concatenation of all parts of an interpolation, never repeated `String.add`. */
+  case TextConcat
+  case TextEqual
+  case TextCompare
+  case TextByteLength
+  /** The first use of a `lazy` parameter runs its thunk and remembers the value. */
+  case LazyForce
+}
+
+/**
+ * One intrinsic: an operation and, where the operation has more than one form, the numeric type it works on. The
+ * pair is what prints as `add.i64` and what the natives manifest of 5.R1 maps a `native fn` to.
+ */
+public type Intrinsic {
+  operation: IntrinsicOperation
+  kind: NumericKind? = None
+}
+
+// --- Instructions ---------------------------------------------------------------------------------------------------
+
+public type Instruction {
+  case Constant(target: Slot, value: StaticId)
+  /** Ownership moves: the source is dead afterwards. Inserted by 5.4. */
+  case Move(target: Slot, source: Slot)
+  /** Ownership is shared: a retain for a managed type, a plain copy otherwise. */
+  case Copy(target: Slot, source: Slot)
+  case Retain(slot: Slot)
+  case Release(slot: Slot)
+  /** Before every write through a counted owner on a path, outermost first. A no-op when the count is one. */
+  case MakeUnique(reference: Reference)
+
+  /**
+   * A call of a known function. `witnesses` is empty for a monomorphic instance and holds one table per bound of the
+   * callee where the caller passes dictionaries instead (BACKEND 1.4) - they arrive after the declared parameters.
+   */
+  case Call(target: Slot?, callee: FunctionId, arguments: List<Argument>, witnesses: List<WitnessSource>)
+  /** A closure value, a function in a field, a `lazy` force. */
+  case CallClosure(target: Slot?, callee: Slot, arguments: List<Argument>)
+  /** A member of a witness table: a trait-typed receiver, or a forwarded witness. */
+  case CallWitness(target: Slot?, witness: WitnessSource, member: Int, arguments: List<Argument>)
+  /** Arithmetic, comparisons, conversions, string building: what the C back end emits inline. */
+  case Intrinsic(target: Slot?, intrinsic: Intrinsic, arguments: List<Slot>, at: LocationId)
+
+  case Construct(target: Slot, layout: LayoutId, variant: Int, fields: List<Argument>)
+  case Read(target: Slot, reference: Reference)
+  case Write(reference: Reference, value: Argument)
+  /** The variant index of a value of a variant layout. */
+  case Tag(target: Slot, source: Slot)
+
+  case Closure(target: Slot, function: FunctionId, captures: List<Capture>, isEscaping: Bool)
+  case BoxNew(target: Slot, value: Argument)
+  case TraitValue(target: Slot, value: Argument, tables: List<WitnessSource>)
+
+  /** A `var` path through a container whose storage is not contiguous: take out, change, put back (BACKEND 2.3). */
+  case TakeOut(target: Slot, container: Reference, key: Slot, kind: RuntimeKind)
+  case PutBack(container: Reference, key: Slot, value: Slot, kind: RuntimeKind)
+
+  case Panic(message: Argument, at: LocationId)
+  /** Only in the body of a task (BACKEND 5.3). */
+  case Suspend(state: Int, awaited: Slot)
+}
+
+public type Terminator {
+  case Jump(target: BlockId)
+  case Branch(condition: Slot, then: BlockId, otherwise: BlockId)
+  /** Variant tags, integer and char literals. Dense or sparse is the back end's business. */
+  case Switch(scrutinee: Slot, values: List<Int>, targets: List<BlockId>, otherwise: BlockId)
+  case Return(value: Argument?)
+  /** `panic`, `Process.exit`, a call of a `Never` function, an exhausted decision tree. */
+  case Unreachable
+}
+
+// --- The program ----------------------------------------------------------------------------------------------------
+
+/**
+ * Everything the back ends read, threaded through the lowering as `var program: IrProgram` - exactly as
+ * `var parser: Parser` is threaded through the grammar and `var checker: Checker` through the type checker.
+ *
+ * The interning tables are `Map<String, Id>` over a key that is one level deep, so adding a type is one map lookup
+ * and never a walk. Nothing here is ever renumbered: an id that was handed out stays valid.
+ */
+public type IrProgram {
+  private var types: List<IrType> = []
+  private var typeIdentifiers: Map<String, IrTypeId> = [:]
+  private var traits: List<IrTrait> = []
+  private var traitIdentifiers: Map<String, TraitId> = [:]
+  private var signatures: List<IrSignature> = []
+  private var signatureIdentifiers: Map<String, IrSignatureId> = [:]
+  private var locationIdentifiers: Map<String, LocationId> = [:]
+  /** Layouts, addressed by `LayoutId`. Reserved before they are filled, so a recursive type terminates. */
+  var layouts: List<Layout> = []
+  /** The mangled name of a layout to its id: that name is the whole identity of a layout. */
+  private var layoutIdentifiers: Map<String, LayoutId> = [:]
+  var functions: List<IrFunction> = []
+  var witnessTables: List<WitnessTable> = []
+  var elements: List<ElementDescriptor> = []
+  var statics: List<StaticValue> = []
+  var locations: List<Location> = []
+  /** An instance key to the function it became: the memo of the monomorphization worklist. */
+  var instances: Map<String, FunctionId> = [:]
+  /** Instances that are known to be needed and not lowered yet. */
+  var pending: List<Instance> = []
+  /** What could not be represented. An entry here is an internal error of the compiler, never the user's fault. */
+  var problems: List<String> = []
+
+  // --- Types
+
+  fn internType(var self, form: IrType): IrTypeId {
+    const key = keyOfIrType(form)
+    if const Some(existing) = typeIdentifiers.get(key) {
+      return existing
+    }
+    const identifier = IrTypeId(types.length())
+    types.add(form)
+    typeIdentifiers.set(key, identifier)
+    identifier
+  }
+
+  fn typeAt(self, id: IrTypeId): IrType {
+    types[id.value]
+  }
+
+  fn typeCount(self): Int {
+    types.length()
+  }
+
+  fn hasType(self, id: IrTypeId): Bool {
+    id.value >= 0 && id.value < types.length()
+  }
+
+  // --- Traits
+
+  fn internTrait(var self, applied: IrTrait): TraitId {
+    const key = keyOfTrait(applied)
+    if const Some(existing) = traitIdentifiers.get(key) {
+      return existing
+    }
+    const identifier = TraitId(traits.length())
+    traits.add(applied)
+    traitIdentifiers.set(key, identifier)
+    identifier
+  }
+
+  fn traitAt(self, id: TraitId): IrTrait {
+    traits[id.value]
+  }
+
+  // --- Signatures
+
+  fn internSignature(var self, signature: IrSignature): IrSignatureId {
+    const key = keyOfSignature(signature)
+    if const Some(existing) = signatureIdentifiers.get(key) {
+      return existing
+    }
+    const identifier = IrSignatureId(signatures.length())
+    signatures.add(signature)
+    signatureIdentifiers.set(key, identifier)
+    identifier
+  }
+
+  fn signatureAt(self, id: IrSignatureId): IrSignature {
+    signatures[id.value]
+  }
+
+  fn signatureCount(self): Int {
+    signatures.length()
+  }
+
+  /** Only `finishProgram` uses this, to fill in what follows from the finished layouts. */
+  fn setSignature(var self, id: IrSignatureId, signature: IrSignature) {
+    signatures.set(id.value, signature)
+  }
+
+  // --- Layouts
+
+  /**
+   * The id of the layout with this name, reserving one when it is new. A layout is reserved *before* its fields are
+   * built, so a type that contains itself finds its own id instead of recursing forever.
+   */
+  fn reserveLayout(var self, name: String, kind: LayoutKind): ReservedLayout {
+    if const Some(existing) = layoutIdentifiers.get(name) {
+      return ReservedLayout(existing, false)
+    }
+    const identifier = LayoutId(layouts.length())
+    layouts.add(Layout(name, kind))
+    layoutIdentifiers.set(name, identifier)
+    ReservedLayout(identifier, true)
+  }
+
+  fn layoutAt(self, id: LayoutId): Layout {
+    layouts[id.value]
+  }
+
+  fn setLayout(var self, id: LayoutId, layout: Layout) {
+    layouts.set(id.value, layout)
+  }
+
+  fn hasLayout(self, id: LayoutId): Bool {
+    id.value >= 0 && id.value < layouts.length()
+  }
+
+  // --- Locations
+
+  fn internLocation(var self, location: Location): LocationId {
+    const key = "{location.path}:{location.line}:{location.column}"
+    if const Some(existing) = locationIdentifiers.get(key) {
+      return existing
+    }
+    const identifier = LocationId(locations.length())
+    locations.add(location)
+    locationIdentifiers.set(key, identifier)
+    identifier
+  }
+
+  fn locationAt(self, id: LocationId): Location {
+    locations[id.value]
+  }
+
+  fn hasLocation(self, id: LocationId): Bool {
+    id.value >= 0 && id.value < locations.length()
+  }
+
+  // --- Everything else
+
+  fn addFunction(var self, function: IrFunction): FunctionId {
+    functions.add(function)
+    FunctionId(functions.length() - 1)
+  }
+
+  fn functionAt(self, id: FunctionId): IrFunction {
+    functions[id.value]
+  }
+
+  fn hasFunction(self, id: FunctionId): Bool {
+    id.value >= 0 && id.value < functions.length()
+  }
+
+  fn addStatic(var self, value: StaticValue): StaticId {
+    statics.add(value)
+    StaticId(statics.length() - 1)
+  }
+
+  fn staticAt(self, id: StaticId): StaticValue {
+    statics[id.value]
+  }
+
+  fn hasStatic(self, id: StaticId): Bool {
+    id.value >= 0 && id.value < statics.length()
+  }
+
+  fn addWitnessTable(var self, table: WitnessTable): WitnessTableId {
+    witnessTables.add(table)
+    WitnessTableId(witnessTables.length() - 1)
+  }
+
+  fn witnessTableAt(self, id: WitnessTableId): WitnessTable {
+    witnessTables[id.value]
+  }
+
+  fn hasWitnessTable(self, id: WitnessTableId): Bool {
+    id.value >= 0 && id.value < witnessTables.length()
+  }
+
+  fn addElement(var self, descriptor: ElementDescriptor): ElementId {
+    elements.add(descriptor)
+    ElementId(elements.length() - 1)
+  }
+
+  fn elementAt(self, id: ElementId): ElementDescriptor {
+    elements[id.value]
+  }
+
+  fn setElement(var self, id: ElementId, descriptor: ElementDescriptor) {
+    elements.set(id.value, descriptor)
+  }
+
+  /** An internal error of the compiler: the lowering produced something no back end can represent. */
+  fn reportProblem(var self, message: String) {
+    if !problems.contains(message) {
+      problems.add(message)
+    }
+  }
+}
+
+/** What `reserveLayout` answers: the id, and whether the caller still has to fill the layout in. */
+public type ReservedLayout {
+  layout: LayoutId
+  /** `false` when the layout was there already - which, while it is being built, means the type is recursive. */
+  isFresh: Bool
+}
+
+// --- Interning keys -------------------------------------------------------------------------------------------------
+
+/**
+ * The key a type is interned under. One level deep, because every child is an id already, and everything that is not
+ * a number carries its byte length so that no separator can be forged.
+ */
+public fn keyOfIrType(form: IrType): String {
+  match form {
+    .Integer(width, isSigned) => {
+      const sign = if isSigned { "s" } else { "u" }
+      "i{width}{sign}"
+    }
+    .Floating(width) => "f{width}"
+    .Boolean => "b"
+    .Character => "c"
+    .VoidType => "v"
+    .NeverType => "n"
+    .Text => "t"
+    .Record(layout) => "R{layout.value}"
+    .Variant(layout) => "V{layout.value}"
+    .Tuple(layout) => "U{layout.value}"
+    .FixedArray(item, size) => "A{item.value};{size}"
+    .Closure(signature) => "C{signature.value}"
+    .Object(bounds) => {
+      var key = "O"
+      for bound in bounds {
+        key = key + ";{bound.value}"
+      }
+      key
+    }
+    .SharedObject(layout) => "H{layout.value}"
+    .Box(item) => "B{item.value}"
+    .Lazy(item) => "L{item.value}"
+    .Runtime(kind, arguments) => "N{keyOfRuntimeKind(kind)}{keyOfIrTypes(arguments)}"
+    .ConstantValue(value, of) => "K{of.value};{literalKey(value)}"
+  }
+}
+
+fn keyOfIrTypes(arguments: List<IrTypeId>): String {
+  var key = ""
+  for argument in arguments {
+    key = key + ";{argument.value}"
+  }
+  key
+}
+
+public fn keyOfRuntimeKind(kind: RuntimeKind): String {
+  match kind {
+    .ListStorage => "list"
+    .MapStorage => "map"
+    .SetStorage => "set"
+    .TaskObject => "task"
+    .ChannelObject => "channel"
+    .ExpressionTree => "expression"
+    .DecimalNumber => "decimal"
+  }
+}
+
+public fn keyOfTrait(applied: IrTrait): String {
+  "{applied.symbol.value}{keyOfIrTypes(applied.arguments)}"
+}
+
+/**
+ * The key of a signature. The *names* of the parameters are left out on purpose: a name is documentation for a
+ * position, not part of type identity - the same rule the checker follows for a tuple label. `resultMode` is left out
+ * because it is a function of the result type, and `finishProgram` fills it in afterwards.
+ */
+public fn keyOfSignature(signature: IrSignature): String {
+  var key = ""
+  for parameter in signature.parameters {
+    const reference = if parameter.isReference { "&" } else { "" }
+    const ownership = keyOfOwnership(parameter.ownership)
+    key = key + ";{reference}{ownership}{parameter.annotation.value}"
+  }
+  var witnesses = ""
+  for witness in signature.witnesses {
+    witnesses = witnesses + ";{witness.value}"
+  }
+  "{key}->{signature.result.value}!{witnesses}"
+}
+
+fn keyOfOwnership(ownership: Ownership): String {
+  match ownership {
+    .Borrowed => "b"
+    .Owned => "o"
+  }
+}

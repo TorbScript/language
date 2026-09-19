@@ -1,0 +1,451 @@
+use relativePath, joinPath, pathName, isInside from "../project/path"
+use ModuleId from "../semantics/module"
+use SymbolId, SymbolKind from "../semantics/symbols"
+use TypeId, TypeForm, TupleField, FunctionForm, ParameterForm, ParameterMode from "../semantics/checker/type"
+use ParameterId, LiteralValue, TypeSignature from "../semantics/checker/type"
+use Checker from "../semantics/checker/context"
+use typeSignatureOf from "../semantics/checker/signature"
+use substitute from "../semantics/checker/unify"
+use IrTypeId, IrType, IrProgram, IrTrait, TraitId, RuntimeKind from "./ir"
+use IrSignature, IrSignatureId, IrParameter, Ownership, LayoutId from "./ir"
+use Layout, LayoutKind, FieldLayout, VariantLayout from "./layout"
+use SymbolPath, layoutName, tupleLayoutName from "./mangle"
+
+/**
+ * From a checker type to an IR type: one `TypeId` plus a substitution for the generic parameters that are in scope,
+ * and out comes the monomorphic type a back end can lay out.
+ *
+ * **The substituted checker type is the monomorphization key.** Checker types are interned, so a closed `TypeId` is
+ * already the canonical name of one type - the memo here is keyed by it, and two instantiations that arrive at the
+ * same type share one IR type, one layout and one mangled name whatever route they took.
+ */
+
+/** What the back end represents a `native` declaration of the prelude as. Everything else is a record or a variant. */
+public type PrimitiveKind {
+  case Integer(width: Int, isSigned: Bool)
+  case Floating(width: Int)
+  case Boolean
+  case Character
+  case Text
+  case VoidType
+  case NeverType
+  /** `Array<Item, const Size>`: the item type and the const argument. */
+  case FixedArray
+  case Runtime(kind: RuntimeKind)
+}
+
+/**
+ * The state of turning checker types into IR types: which declarations are primitive, and what every closed type has
+ * already become. One of these per run of the lowering.
+ */
+public type Instantiation {
+  /** `SymbolId.value` of a `native type` of the prelude to how the runtime represents it. */
+  primitives: Map<Int, PrimitiveKind> = [:]
+  /** `TypeId.value` of a closed checker type to the IR type it became. */
+  var memo: Map<Int, IrTypeId> = [:]
+}
+
+/** The declarations the *runtime* provides, looked up once, by the names `std/prelude` exports. */
+public fn newInstantiation(checker: Checker): Instantiation {
+  var table: Map<Int, PrimitiveKind> = [:]
+  for width in [8, 16, 32, 64] {
+    addPrimitive(checker, table, "Int{width}", PrimitiveKind.Integer(width, true))
+    addPrimitive(checker, table, "UInt{width}", PrimitiveKind.Integer(width, false))
+  }
+  addPrimitive(checker, table, "Float32", PrimitiveKind.Floating(32))
+  addPrimitive(checker, table, "Float64", PrimitiveKind.Floating(64))
+  addPrimitive(checker, table, "Bool", PrimitiveKind.Boolean)
+  addPrimitive(checker, table, "Char", PrimitiveKind.Character)
+  addPrimitive(checker, table, "String", PrimitiveKind.Text)
+  addPrimitive(checker, table, "Array", PrimitiveKind.FixedArray)
+  // One list implementation and one ordered hash table for every collection name of the standard library
+  addPrimitive(checker, table, "ArrayList", PrimitiveKind.Runtime(RuntimeKind.ListStorage))
+  addPrimitive(checker, table, "TrieList", PrimitiveKind.Runtime(RuntimeKind.ListStorage))
+  addPrimitive(checker, table, "HashMap", PrimitiveKind.Runtime(RuntimeKind.MapStorage))
+  addPrimitive(checker, table, "TrieMap", PrimitiveKind.Runtime(RuntimeKind.MapStorage))
+  addPrimitive(checker, table, "HashSet", PrimitiveKind.Runtime(RuntimeKind.SetStorage))
+  addPrimitive(checker, table, "TrieSet", PrimitiveKind.Runtime(RuntimeKind.SetStorage))
+  addPrimitive(checker, table, "Task", PrimitiveKind.Runtime(RuntimeKind.TaskObject))
+  addPrimitive(checker, table, "Channel", PrimitiveKind.Runtime(RuntimeKind.ChannelObject))
+  addPrimitive(checker, table, "Expression", PrimitiveKind.Runtime(RuntimeKind.ExpressionTree))
+  addPrimitive(checker, table, "Decimal", PrimitiveKind.Runtime(RuntimeKind.DecimalNumber))
+  // `Void` and `Never` are names of the language *and* declarations of the prelude, and one type each
+  for symbol in checker.wellKnown.voidSymbols {
+    table.set(symbol.value, PrimitiveKind.VoidType)
+  }
+  for symbol in checker.wellKnown.neverSymbols {
+    table.set(symbol.value, PrimitiveKind.NeverType)
+  }
+  Instantiation(table)
+}
+
+fn addPrimitive(checker: Checker, var table: Map<Int, PrimitiveKind>, name: String, kind: PrimitiveKind) {
+  if const Some(symbol) = checker.wellKnown.symbolNamed(name) {
+    table.set(symbol.value, kind)
+  }
+}
+
+/**
+ * The IR type a checker type stands for, with `mapping` filled in for every generic parameter that is in scope.
+ * Pass an empty mapping for a type that is closed already.
+ */
+public fn instantiateType(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  mapping: Map<ParameterId, TypeId>,
+  id: TypeId,
+): IrTypeId {
+  const closed = substitute(checker.types, id, mapping)
+  if const Some(found) = instantiation.memo.get(closed.value) {
+    return found
+  }
+  const built = buildType(program, checker, instantiation, closed)
+  instantiation.memo.set(closed.value, built)
+  built
+}
+
+/** Every type argument of an instance, in declaration order: what a mangled name and an instance key are made of. */
+public fn instantiateTypes(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  mapping: Map<ParameterId, TypeId>,
+  arguments: List<TypeId>,
+): List<IrTypeId> {
+  var built: List<IrTypeId> = []
+  for argument in arguments {
+    built.add(instantiateType(program, checker, instantiation, mapping, argument))
+  }
+  built
+}
+
+fn buildType(var program: IrProgram, var checker: Checker, var instantiation: Instantiation, id: TypeId): IrTypeId {
+  const empty: Map<ParameterId, TypeId> = [:]
+  match checker.types.form(id) {
+    .VoidType => program.internType(IrType.VoidType)
+    .NeverType => program.internType(IrType.NeverType)
+    .Invalid => {
+      program.reportProblem("A type the checker had already reported as broken reached the back end")
+      program.internType(IrType.VoidType)
+    }
+    .Variable(_) => {
+      program.reportProblem("An unsolved inference variable reached the back end")
+      program.internType(IrType.VoidType)
+    }
+    .Parameter(parameter) => {
+      const name = checker.types.parameter(parameter).name
+      program.reportProblem("The generic parameter `{name}` was not substituted before the back end saw it")
+      program.internType(IrType.VoidType)
+    }
+    // `"online" | "offline"` erases to `String`: a literal type has no representation of its own
+    .Literals(base, _) => instantiateType(program, checker, instantiation, empty, base)
+    .Constant(value, of) => {
+      const inner = instantiateType(program, checker, instantiation, empty, of)
+      program.internType(IrType.ConstantValue(value, inner))
+    }
+    .Tuple(fields) => tupleType(program, checker, instantiation, fields)
+    .Function(form) => {
+      const signature = instantiateSignature(program, checker, instantiation, form)
+      program.internType(IrType.Closure(signature))
+    }
+    .Traits(bounds) => {
+      var traits: List<TraitId> = []
+      for bound in bounds {
+        traits.add(instantiateTrait(program, checker, instantiation, bound))
+      }
+      program.internType(IrType.Object(traits))
+    }
+    .Nominal(symbol, arguments) => nominalType(program, checker, instantiation, symbol, arguments)
+  }
+}
+
+/** A tuple layout is named after its field types, because a label is not part of type identity (gap 17). */
+fn tupleType(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  fields: List<TupleField>,
+): IrTypeId {
+  const empty: Map<ParameterId, TypeId> = [:]
+  var annotations: List<IrTypeId> = []
+  for field in fields {
+    annotations.add(instantiateType(program, checker, instantiation, empty, field.annotation))
+  }
+  const name = tupleLayoutName(program, annotations)
+  const reserved = program.reserveLayout(name, LayoutKind.Tuple)
+  if reserved.isFresh {
+    var built: List<FieldLayout> = []
+    for index in 0..annotations.length() {
+      built.add(FieldLayout("{index}", annotations[index], None))
+    }
+    const layout = program.layoutAt(reserved.layout)
+    program.setLayout(reserved.layout, layout.copy(arguments: annotations, fields: built, isBuilt: true))
+  }
+  program.internType(IrType.Tuple(reserved.layout))
+}
+
+/** The type of a closure value, interned: two closures of the same shape are one type. */
+public fn instantiateSignature(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  form: FunctionForm,
+): IrSignatureId {
+  const empty: Map<ParameterId, TypeId> = [:]
+  var parameters: List<IrParameter> = []
+  for parameter in form.parameters {
+    const annotation = instantiateParameterType(program, checker, instantiation, parameter)
+    parameters.add(IrParameter(parameter.name ?? "", annotation, isReferenceMode(parameter.mode), Ownership.Borrowed))
+  }
+  const result = instantiateType(program, checker, instantiation, empty, form.result)
+  const signature = IrSignature(parameters, result)
+  program.internSignature(signature)
+}
+
+/**
+ * The type of one parameter. Two modes change it: `lazy Value` is a one-shot memo cell, and a variadic parameter
+ * holds the list the call site builds - the checker keeps the type of one *item* there.
+ */
+fn instantiateParameterType(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  parameter: ParameterForm,
+): IrTypeId {
+  const empty: Map<ParameterId, TypeId> = [:]
+  const annotation = instantiateType(program, checker, instantiation, empty, parameter.annotation)
+  match parameter.mode {
+    .Lazy => program.internType(IrType.Lazy(annotation))
+    .Variadic => program.internType(IrType.Runtime(RuntimeKind.ListStorage, [annotation]))
+    _ => annotation
+  }
+}
+
+fn isReferenceMode(mode: ParameterMode): Bool {
+  match mode {
+    .Var => true
+    .Receiver(isVar) => isVar
+    _ => false
+  }
+}
+
+/** `Show`, `Iterable<Int64>`: one bound of a trait-typed value, or the trait a witness table belongs to. */
+public fn instantiateTrait(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  bound: TypeId,
+): TraitId {
+  const empty: Map<ParameterId, TypeId> = [:]
+  if const .Nominal(symbol, arguments) = checker.types.form(bound) {
+    const applied = instantiateTypes(program, checker, instantiation, empty, arguments)
+    const path = symbolPathOf(checker, symbol)
+    return program.internTrait(IrTrait(symbol, path, applied))
+  }
+  program.reportProblem("A bound that is not a trait reached the back end")
+  program.internTrait(IrTrait(SymbolId(0), SymbolPath(), []))
+}
+
+/** A declaration with a name: a primitive of the runtime, a `shared type` object, a variant, or a record. */
+fn nominalType(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  symbol: SymbolId,
+  arguments: List<TypeId>,
+): IrTypeId {
+  if const Some(kind) = instantiation.primitives.get(symbol.value) {
+    return primitiveType(program, checker, instantiation, kind, symbol, arguments)
+  }
+  const empty: Map<ParameterId, TypeId> = [:]
+  const applied = instantiateTypes(program, checker, instantiation, empty, arguments)
+  const shape = typeSignatureOf(checker, symbol)
+  const signature = checker.typeSignature(shape)
+  const isVariant = !signature.cases.isEmpty()
+  if signature.isNative && signature.fields.isEmpty() && !isVariant {
+    const name = checker.symbolAt(symbol).name
+    program.reportProblem("The native type `{name}` has no representation in the back end")
+    return program.internType(IrType.VoidType)
+  }
+  const path = symbolPathOf(checker, symbol)
+  const name = layoutName(program, path, applied)
+  const kind = if isVariant { LayoutKind.Variant } else { LayoutKind.Record }
+  const reserved = program.reserveLayout(name, kind)
+  // Not fresh while it is being built means the type contains itself: its own id is all that is needed here
+  if reserved.isFresh {
+    buildNominalLayout(program, checker, instantiation, reserved.layout, signature, arguments, applied)
+  }
+  if signature.isShared {
+    return program.internType(IrType.SharedObject(reserved.layout))
+  }
+  if isVariant {
+    return program.internType(IrType.Variant(reserved.layout))
+  }
+  program.internType(IrType.Record(reserved.layout))
+}
+
+fn buildNominalLayout(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  id: LayoutId,
+  signature: TypeSignature,
+  arguments: List<TypeId>,
+  applied: List<IrTypeId>,
+) {
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for index in 0..signature.generics.length().min(arguments.length()) {
+    mapping.set(signature.generics[index], arguments[index])
+  }
+  var fields: List<FieldLayout> = []
+  // A type may carry fields of its own *and* cases; those fields are in front of every group
+  for field in signature.fields {
+    const annotation = instantiateType(program, checker, instantiation, mapping, field.annotation)
+    fields.add(FieldLayout(field.name, annotation, Some(field.symbol)))
+  }
+  const common = fields.length()
+  var variants: List<VariantLayout> = []
+  for declared in signature.cases {
+    const first = fields.length()
+    for field in declared.fields {
+      const annotation = instantiateType(program, checker, instantiation, mapping, field.annotation)
+      fields.add(FieldLayout(field.name, annotation, Some(field.symbol)))
+    }
+    variants.add(VariantLayout(declared.name, first, fields.length() - first, Some(declared.symbol)))
+  }
+  const layout = program.layoutAt(id)
+  program.setLayout(
+    id,
+    layout.copy(
+      origin: Some(signature.symbol),
+      arguments: applied,
+      fields: fields,
+      variants: variants,
+      commonFieldCount: if variants.isEmpty() { 0 } else { common },
+      isBuilt: true,
+    ),
+  )
+}
+
+fn primitiveType(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  kind: PrimitiveKind,
+  symbol: SymbolId,
+  arguments: List<TypeId>,
+): IrTypeId {
+  const empty: Map<ParameterId, TypeId> = [:]
+  match kind {
+    .Integer(width, isSigned) => program.internType(IrType.Integer(width, isSigned))
+    .Floating(width) => program.internType(IrType.Floating(width))
+    .Boolean => program.internType(IrType.Boolean)
+    .Character => program.internType(IrType.Character)
+    .Text => program.internType(IrType.Text)
+    .VoidType => program.internType(IrType.VoidType)
+    .NeverType => program.internType(IrType.NeverType)
+    .FixedArray => {
+      if arguments.length() < 2 {
+        program.reportProblem("`Array` needs an item type and a size")
+        return program.internType(IrType.VoidType)
+      }
+      const item = instantiateType(program, checker, instantiation, empty, arguments[0])
+      const size = constantIntegerOf(program, checker, arguments[1])
+      program.internType(IrType.FixedArray(item, size))
+    }
+    .Runtime(runtime) => {
+      const applied = instantiateTypes(program, checker, instantiation, empty, arguments)
+      program.internType(IrType.Runtime(runtime, applied))
+    }
+  }
+}
+
+/** The `16` of `Array<Float, 16>`. Anything else was reported by the checker, so nothing is said about it twice. */
+fn constantIntegerOf(var program: IrProgram, checker: Checker, id: TypeId): Int {
+  if const .Constant(value, _) = checker.types.form(id) {
+    if const .Integer(size) = value {
+      return size
+    }
+  }
+  program.reportProblem("The size of an `Array` is not an integer")
+  0
+}
+
+// --- Where a declaration is written ---------------------------------------------------------------------------------
+
+/**
+ * The components of the mangled name of a declaration: its package, the module below that package's `src/`, the
+ * declarations around it, and its own name. A pure function of where the source is, so a name does not move when an
+ * unrelated module is added to the workspace.
+ */
+public fn symbolPathOf(checker: Checker, symbol: SymbolId): SymbolPath {
+  const declared = checker.symbolAt(symbol)
+  var owners: List<String> = []
+  var current = symbol
+  // A bound, in case a broken owner chain ever points at itself
+  for _ in 0..8 {
+    const owner = ownerSymbolOf(checker, current)
+    if const Some(found) = owner {
+      owners.insert(0, checker.symbolAt(found).name)
+      current = found
+      continue
+    }
+    break
+  }
+  match declared.module {
+    Some(module) => {
+      const inside = checker.program.graph.at(module)
+      const package = checker.program.workspace.packages[inside.package]
+      SymbolPath(package.name, moduleComponentOf(package.directory, inside.path), owners, declared.name)
+    }
+    // `Void`, `Never`: names of the language, declared in no file
+    .None => SymbolPath("", "", owners, declared.name)
+  }
+}
+
+/** `collections/list` for `std/prelude/src/collections/list.trb`; `main` for a script that belongs to no project. */
+public fn moduleComponentOf(directory: String, path: String): String {
+  // A script that belongs to no project is named after its file and nothing else
+  var relative = pathName(path)
+  if !directory.isEmpty() {
+    const source = joinPath(directory, "src")
+    if isInside(path, source) {
+      relative = relativePath(source, path)
+    } else if isInside(path, directory) {
+      relative = relativePath(directory, path)
+    }
+  }
+  if relative.endsWith(".trb") {
+    return relative[0..relative.byteLength() - 4]
+  }
+  relative
+}
+
+/**
+ * The declaration a member belongs to. A field and a case know it from their kind; a method, a `const` and the members
+ * of an `extend` know it from the site the checker remembered for them.
+ */
+fn ownerSymbolOf(checker: Checker, symbol: SymbolId): SymbolId? {
+  match checker.symbolAt(symbol).kind {
+    .Field(owner) => Some(owner)
+    .Case(owner) => Some(owner)
+    _ => {
+      const site = checker.siteOf(symbol)?
+      if const .Owned(owner, _, _) = site.kind {
+        const found = owner?
+        return symbolOfOwnerType(checker, found)
+      }
+      None
+    }
+  }
+}
+
+/** `Point` from `Point`, `Holder<Item>` from the nominal, and the trait from the `Self` of a trait. */
+fn symbolOfOwnerType(checker: Checker, owner: TypeId): SymbolId? {
+  match checker.types.form(owner) {
+    .Nominal(symbol, _) => Some(symbol)
+    .Parameter(parameter) => checker.types.parameter(parameter).owner
+    _ => None
+  }
+}

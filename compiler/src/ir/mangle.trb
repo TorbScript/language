@@ -1,0 +1,313 @@
+use LiteralValue from "../semantics/checker/type"
+use IrTypeId, IrType, TraitId, IrSignatureId, IrProgram, Instance, RuntimeKind, Ownership from "./ir"
+
+/**
+ * The names a back end sees. Deterministic, ASCII, collision free, and stable under anything that does not change the
+ * program:
+ *
+ *     name      ::= prefix "_" package "_" module "_" owner* "_" member ( "__" instance )?
+ *     prefix    ::= "t" function | "T" layout | "w" witness table | "d" element descriptor | "s" static value
+ *     component ::= escaped   ( [A-Za-z0-9] kept, every other byte "_xHH_" )
+ *     instance  ::= the canonical argument spelling, at most 160 characters, plus "_h" and 16 hexadecimal digits
+ *                   of a hash of the whole spelling when it was longer
+ *
+ * `t_std_x2f_prelude_collections_x2f_list_ArrayList_add__Int64`. **No id ever appears in a name:** a name is a
+ * function of the source path plus the arguments, so it does not move when an unrelated module is added, and the
+ * fixpoint of milestone 6 compares two C files that were produced by two different binaries.
+ *
+ * C reserved spellings cannot be hit, because every name starts with a lowercase or uppercase prefix letter and a
+ * component never ends in a way that could be confused with the `__` of an instance.
+ */
+
+/** Where a declaration is written, unescaped: the components of its mangled name, in order. */
+public type SymbolPath {
+  /** `std/prelude`. Empty for a standalone script, which belongs to no package. */
+  package: String = ""
+  /** `collections/list`: the path below the `src/` of the package, without the extension. */
+  module: String = ""
+  /** The declarations around it, outermost first - the type a method belongs to. */
+  owners: List<String> = []
+  name: String = ""
+
+  /** The components of the mangled name, in order. Empty ones are dropped by `mangledName`. */
+  fn components(self): List<String> {
+    var parts = [package, module]
+    parts.addAll(owners)
+    parts.add(name)
+    parts
+  }
+}
+
+/** Longer than this an instance spelling is cut and a hash of the whole of it is appended. */
+public const instanceLengthLimit = 160
+
+// --- Escaping -------------------------------------------------------------------------------------------------------
+
+/**
+ * One component of a name, as a C identifier. Letters and digits survive, every other byte becomes `_xHH_` - which is
+ * also what happens to an underscore of the source, so that an escape is the only place a `_` can come from and two
+ * components can never be read as one.
+ */
+public fn escapedComponent(text: String): String {
+  var result = ""
+  for character in text.chars() {
+    if isPlainCharacter(character) {
+      result = result + "{character}"
+      continue
+    }
+    for byte in "{character}".bytes() {
+      result = result + "_x{hexDigits(byte, 2)}_"
+    }
+  }
+  result
+}
+
+fn isPlainCharacter(character: Char): Bool {
+  if character >= '0' && character <= '9' {
+    return true
+  }
+  if character >= 'a' && character <= 'z' {
+    return true
+  }
+  character >= 'A' && character <= 'Z'
+}
+
+/** Exactly `count` lowercase hexadecimal digits of a value that is not negative, most significant first. */
+public fn hexDigits(value: Int, count: Int): String {
+  const alphabet = "0123456789abcdef"
+  var result = ""
+  var rest = value
+  for _ in 0..count {
+    const digit = rest % 16
+    result = alphabet[digit..digit + 1] + result
+    rest = rest / 16
+  }
+  result
+}
+
+/**
+ * Sixteen hexadecimal digits that stand for a spelling which was too long to write out.
+ *
+ * Two polynomial hashes over prime moduli rather than the FNV-1a-64 the design asked for: FNV needs wrapping
+ * multiplication of 64 bit values, and every arithmetic operation of the language panics on overflow - the wrapping
+ * operations of gap 3 are `native` and the runtime does not have them yet. Each half stays below 2^31, so no
+ * multiplication here can leave the range of an `Int64`.
+ */
+public fn nameHash(text: String): String {
+  var high = 2166136261
+  var low = 305419896
+  for byte in text.bytes() {
+    high = (high * 16777619 + byte) % 2147483647
+    low = (low * 31 + byte + 7) % 2147483629
+  }
+  "{hexDigits(high, 8)}{hexDigits(low, 8)}"
+}
+
+/**
+ * A mangled name from its parts. The components are escaped here, so a caller hands in what the source says and
+ * never an already escaped spelling.
+ */
+public fn mangledName(prefix: String, components: List<String>, instance: String): String {
+  var name = prefix
+  for component in components {
+    if component.isEmpty() {
+      continue
+    }
+    name = name + "_{escapedComponent(component)}"
+  }
+  if instance.isEmpty() {
+    return name
+  }
+  "{name}__{boundedInstance(instance)}"
+}
+
+fn boundedInstance(instance: String): String {
+  if instance.byteLength() <= instanceLengthLimit {
+    return instance
+  }
+  "{instance[0..instanceLengthLimit]}_h{nameHash(instance)}"
+}
+
+// --- What a type is called -------------------------------------------------------------------------------------------
+
+/**
+ * How a type is spelled inside a name: `Int64`, `T_main_Point`, `List_String`, `Array_Float64_16`. A pure function of
+ * the type, and a C identifier, so it can be a component of any other name.
+ */
+public fn canonicalType(program: IrProgram, id: IrTypeId): String {
+  match program.typeAt(id) {
+    .Integer(width, isSigned) => {
+      if isSigned {
+        return "Int{width}"
+      }
+      "UInt{width}"
+    }
+    .Floating(width) => "Float{width}"
+    .Boolean => "Bool"
+    .Character => "Char"
+    .VoidType => "Void"
+    .NeverType => "Never"
+    .Text => "String"
+    // A layout carries its own mangled name, and that name is its whole identity
+    .Record(layout) => program.layoutAt(layout).name
+    .Variant(layout) => program.layoutAt(layout).name
+    .Tuple(layout) => program.layoutAt(layout).name
+    .SharedObject(layout) => program.layoutAt(layout).name
+    .FixedArray(item, size) => "Array_{canonicalType(program, item)}_{size}"
+    .Closure(signature) => canonicalSignature(program, signature)
+    .Object(bounds) => {
+      var name = "Object"
+      for bound in bounds {
+        name = name + "_{canonicalTrait(program, bound)}"
+      }
+      name
+    }
+    .Box(item) => "Box_{canonicalType(program, item)}"
+    .Lazy(item) => "Lazy_{canonicalType(program, item)}"
+    .Runtime(kind, arguments) => {
+      const head = canonicalRuntime(kind)
+      if arguments.isEmpty() {
+        return head
+      }
+      "{head}_{canonicalTypes(program, arguments)}"
+    }
+    .ConstantValue(value, _) => canonicalLiteral(value)
+  }
+}
+
+/** The arguments of an instance, in declaration order, joined the way a name joins its components. */
+public fn canonicalTypes(program: IrProgram, arguments: List<IrTypeId>): String {
+  var parts: List<String> = []
+  for argument in arguments {
+    parts.add(canonicalType(program, argument))
+  }
+  String.join(parts, separator: "_")
+}
+
+fn canonicalRuntime(kind: RuntimeKind): String {
+  match kind {
+    .ListStorage => "List"
+    .MapStorage => "Map"
+    .SetStorage => "Set"
+    .TaskObject => "Task"
+    .ChannelObject => "Channel"
+    .ExpressionTree => "Expression"
+    .DecimalNumber => "Decimal"
+  }
+}
+
+/**
+ * `Function_Int64_to_Bool`. The modes are part of it because they are part of the type: a `var` parameter is a pointer
+ * and an owned one takes the count, so two signatures that differ in one are two calling shapes and may not share a
+ * name.
+ */
+public fn canonicalSignature(program: IrProgram, id: IrSignatureId): String {
+  const signature = program.signatureAt(id)
+  var name = "Function"
+  for parameter in signature.parameters {
+    if parameter.isReference {
+      name = name + "_ref"
+    }
+    if parameter.ownership == Ownership.Owned {
+      name = name + "_owned"
+    }
+    name = name + "_{canonicalType(program, parameter.annotation)}"
+  }
+  for witness in signature.witnesses {
+    name = name + "_witness_{canonicalTrait(program, witness)}"
+  }
+  "{name}_to_{canonicalType(program, signature.result)}"
+}
+
+/** `std_x2f_prelude_convert_Show`, with the trait's own arguments behind it. */
+public fn canonicalTrait(program: IrProgram, id: TraitId): String {
+  const applied = program.traitAt(id)
+  const path = applied.path
+  var name = ""
+  for component in path.components() {
+    if component.isEmpty() {
+      continue
+    }
+    if name.isEmpty() {
+      name = escapedComponent(component)
+      continue
+    }
+    name = name + "_{escapedComponent(component)}"
+  }
+  if applied.arguments.isEmpty() {
+    return name
+  }
+  "{name}_{canonicalTypes(program, applied.arguments)}"
+}
+
+/** `16`, `minus3`, `true`, and a text or character value escaped like any other component. */
+public fn canonicalLiteral(value: LiteralValue): String {
+  match value {
+    .Integer(inner) => {
+      if inner < 0 {
+        return "minus{0 - inner}"
+      }
+      "{inner}"
+    }
+    .Text(inner) => escapedComponent(inner)
+    .Character(inner) => escapedComponent("{inner}")
+    .Boolean(inner) => if inner { "true" } else { "false" }
+  }
+}
+
+// --- The five kinds of name -----------------------------------------------------------------------------------------
+
+/** `t_main_translated`, `t_std_x2f_prelude_collections_x2f_list_ArrayList_add__Int64`. */
+public fn functionName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
+  mangledName("t", path.components(), canonicalTypes(program, arguments))
+}
+
+/** `T_main_Point`, `T_std_x2f_prelude_option_Option__Int64`. */
+public fn layoutName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
+  mangledName("T", path.components(), canonicalTypes(program, arguments))
+}
+
+/**
+ * `T_tuple__Int64_String`. A tuple has no declaration anywhere, so its one component is the word `tuple` and its
+ * instance is the list of its field types - labels are not part of type identity (gap 17), so `(lowest: Int,
+ * highest: Int)` and `(Int, Int)` are one layout and one name.
+ */
+public fn tupleLayoutName(program: IrProgram, fields: List<IrTypeId>): String {
+  mangledName("T", ["tuple"], canonicalTypes(program, fields))
+}
+
+/** `s_main_greeting`. */
+public fn staticName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
+  mangledName("s", path.components(), canonicalTypes(program, arguments))
+}
+
+/** `d_Int64`, `d_T_main_Point`: one element descriptor per element type, whatever container asks for it. */
+public fn elementName(program: IrProgram, item: IrTypeId): String {
+  "d_{canonicalType(program, item)}"
+}
+
+/** `w_std_x2f_prelude_convert_Show__T_main_Point`: one table per applied trait and target type. */
+public fn witnessTableName(program: IrProgram, applied: TraitId, target: IrTypeId): String {
+  const declared = program.traitAt(applied)
+  var instance = canonicalType(program, target)
+  if !declared.arguments.isEmpty() {
+    instance = "{instance}_{canonicalTypes(program, declared.arguments)}"
+  }
+  mangledName("w", declared.path.components(), instance)
+}
+
+/**
+ * The key an instance is memoized under. Ids are enough here and mangled names are not needed: the key never leaves
+ * the run that built it, while a *name* has to be stable across runs.
+ */
+public fn instanceKey(instance: Instance): String {
+  var key = "{instance.symbol.value}"
+  for argument in instance.arguments {
+    key = key + ";{argument.value}"
+  }
+  key = key + "!"
+  for witness in instance.witnesses {
+    key = key + ";{witness.value}"
+  }
+  key
+}

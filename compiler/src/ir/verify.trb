@@ -1,0 +1,1188 @@
+use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, FunctionKind, RuntimeKind from "./ir"
+use Block, BlockId, Slot, SlotRole, Instruction, Terminator, Argument, Reference, PathStep from "./ir"
+use Intrinsic, IntrinsicOperation, NumericKind, WitnessSource, WitnessRoot, Capture, LayoutId from "./ir"
+use isManagedType from "./layout"
+use describeIrType, describeIntrinsic, describeNumericKind from "./print"
+
+/**
+ * The IR verifier. The lowering runs on stage 0, an untyped tree walker, so a bug in it shows up as a wrong C file and
+ * not as an error - unless something checks the IR itself. This is that something: it runs in the tests, in the debug
+ * profile of `torb build`, and behind `torb ir`.
+ *
+ * What it demands:
+ *
+ * - the parameter slots are the signature's parameters, in order, with their types;
+ * - every block's terminator points at blocks that exist, and a `Switch` has one target per value;
+ * - every block is reachable from the entry block, or is an empty `Unreachable` marker;
+ * - every slot is defined before it is used, **on every path** that reaches the use;
+ * - the type of every operand is the type the position asks for, and the type of every result is what it produces;
+ * - `Retain`, `Release` and `MakeUnique` only ever touch something that is counted.
+ *
+ * What it does *not* demand yet: that every managed slot is released on every path. Nothing emits a `Release` before
+ * milestone 5.4, so that check would reject every function there is; it belongs to the pass that inserts them.
+ */
+public fn verifyFunction(program: IrProgram, function: IrFunction): List<String> {
+  var found: List<String> = []
+  verifyParameters(program, function, found)
+  verifyGraph(program, function, found)
+  // A dataflow over a graph with a dangling edge says nothing useful, so the shape has to be right first
+  if !found.isEmpty() {
+    return found
+  }
+  verifyReachability(program, function, found)
+  verifyDefinedness(program, function, found)
+  verifyTypes(program, function, found)
+  found
+}
+
+/** Every function of a program, in the order they were lowered. */
+public fn verifyProgram(program: IrProgram): List<String> {
+  var found: List<String> = []
+  for function in program.functions {
+    found.addAll(verifyFunction(program, function))
+  }
+  found
+}
+
+fn verifyParameters(program: IrProgram, function: IrFunction, var found: List<String>) {
+  const parameters = function.signature.parameters
+  if function.slots.length() < parameters.length() {
+    found.add("{function.name}: the signature has {parameters.length()} parameters and the function only {function.slots.length()} slots")
+    return
+  }
+  for index in 0..parameters.length() {
+    const slot = function.slots[index]
+    if slot.role != SlotRole.Parameter(index) {
+      found.add("{function.name}: slot %{index} has to be parameter {index}")
+    }
+    if slot.annotation != parameters[index].annotation {
+      const wanted = describeIrType(program, parameters[index].annotation)
+      const actual = describeIrType(program, slot.annotation)
+      found.add("{function.name}: parameter {index} is `{wanted}` and its slot is `{actual}`")
+    }
+  }
+  for index in 0..function.slots.length() {
+    const annotation = function.slots[index].annotation
+    match program.typeAt(annotation) {
+      .NeverType => found.add("{function.name}: slot %{index} has the type `Never`, which has no values")
+      .ConstantValue(_, _) => found.add("{function.name}: slot %{index} holds a const argument, which is not a value")
+      _ => {}
+    }
+  }
+}
+
+/** The shape of the graph: every edge points at a block that exists, and a switch has one target per value. */
+fn verifyGraph(program: IrProgram, function: IrFunction, var found: List<String>) {
+  if function.blocks.isEmpty() {
+    found.add("{function.name}: a function needs at least the entry block")
+    return
+  }
+  for index in 0..function.blocks.length() {
+    const block = function.blocks[index]
+    const at = "{function.name} b{index}"
+    match block.terminator {
+      .Jump(target) => checkTarget(function, found, at, target)
+      .Branch(_, then, otherwise) => {
+        checkTarget(function, found, at, then)
+        checkTarget(function, found, at, otherwise)
+      }
+      .Switch(_, values, targets, otherwise) => {
+        if values.length() != targets.length() {
+          found.add("{at}: the switch has {values.length()} values and {targets.length()} targets")
+        }
+        for target in targets {
+          checkTarget(function, found, at, target)
+        }
+        checkTarget(function, found, at, otherwise)
+      }
+      _ => {}
+    }
+  }
+}
+
+/** A block nothing reaches is a bug of the lowering, unless it is deliberately an empty `unreachable` marker. */
+fn verifyReachability(program: IrProgram, function: IrFunction, var found: List<String>) {
+  const reachable = reachableBlocks(function)
+  for index in 1..function.blocks.length() {
+    if reachable[index] {
+      continue
+    }
+    const block = function.blocks[index]
+    if !block.instructions.isEmpty() || !isUnreachableTerminator(block.terminator) {
+      found.add("{function.name} b{index}: nothing reaches this block, and it is not an `unreachable` marker")
+    }
+  }
+}
+
+fn isUnreachableTerminator(terminator: Terminator): Bool {
+  match terminator {
+    .Unreachable => true
+    _ => false
+  }
+}
+
+fn checkTarget(function: IrFunction, var found: List<String>, at: String, target: BlockId) {
+  if !function.hasBlock(target) {
+    found.add("{at}: there is no block b{target.value}")
+  }
+}
+
+fn checkReturn(program: IrProgram, function: IrFunction, var found: List<String>, at: String, value: Argument?) {
+  const result = function.signature.result
+  match program.typeAt(result) {
+    .VoidType => {
+      if value.isSome() {
+        found.add("{at}: the function returns `Void`, so `return` carries no value")
+      }
+    }
+    .NeverType => found.add("{at}: the function returns `Never`, so it may not return at all")
+    _ => {
+      match value {
+        .None => found.add("{at}: the function returns `{describeIrType(program, result)}`, so `return` needs a value")
+        Some(argument) => {
+          if !function.hasSlot(argument.slot) {
+            found.add("{at}: there is no slot %{argument.slot.value}")
+            return
+          }
+          const actual = function.typeOfSlot(argument.slot)
+          if actual != result {
+            const wanted = describeIrType(program, result)
+            found.add("{at}: the function returns `{wanted}` and `return` carries `{describeIrType(program, actual)}`")
+          }
+        }
+      }
+    }
+  }
+}
+
+// --- Reachability and definedness -----------------------------------------------------------------------------------
+
+/** Which blocks the entry block can reach. Every terminator target of a reachable block is reachable. */
+public fn reachableBlocks(function: IrFunction): List<Bool> {
+  var reachable = filledBooleans(function.blocks.length(), false)
+  if function.blocks.isEmpty() {
+    return reachable
+  }
+  var pending = [0]
+  reachable.set(0, true)
+  while !pending.isEmpty() {
+    const current = pending[pending.length() - 1]
+    pending.removeAt(pending.length() - 1)
+    for target in successorsOf(function.blocks[current]) {
+      if target < 0 || target >= reachable.length() || reachable[target] {
+        continue
+      }
+      reachable.set(target, true)
+      pending.add(target)
+    }
+  }
+  reachable
+}
+
+/** The blocks a terminator can go to, in the order they are written. */
+public fn successorsOf(block: Block): List<Int> {
+  match block.terminator {
+    .Jump(target) => [target.value]
+    .Branch(_, then, otherwise) => [then.value, otherwise.value]
+    .Switch(_, _, targets, otherwise) => {
+      var all: List<Int> = []
+      for target in targets {
+        all.add(target.value)
+      }
+      all.add(otherwise.value)
+      all
+    }
+    _ => []
+  }
+}
+
+fn filledBooleans(count: Int, value: Bool): List<Bool> {
+  var filled: List<Bool> = []
+  for _ in 0..count {
+    filled.add(value)
+  }
+  filled
+}
+
+/**
+ * "Defined on every path": the intersection over the predecessors, iterated until nothing changes. A slot that is
+ * written in one arm of an `if` and read after it is exactly what this catches, and it is the mistake a lowering makes.
+ */
+fn verifyDefinedness(program: IrProgram, function: IrFunction, var found: List<String>) {
+  const slotCount = function.slots.length()
+  const blockCount = function.blocks.length()
+  const reachable = reachableBlocks(function)
+  const predecessors = predecessorsOf(function)
+  var definedIn: List<List<Bool>> = []
+  for index in 0..blockCount {
+    definedIn.add(filledBooleans(slotCount, index != 0))
+  }
+  definedIn.set(0, parameterSlots(function, slotCount))
+  var rounds = 0
+  var isChanged = true
+  while isChanged {
+    isChanged = false
+    rounds = rounds + 1
+    if rounds > blockCount + 2 {
+      found.add("{function.name}: the definedness of the slots did not settle")
+      return
+    }
+    for index in 1..blockCount {
+      if !reachable[index] {
+        continue
+      }
+      const incoming = intersected(definedIn, predecessors[index], slotCount)
+      if incoming != definedIn[index] {
+        definedIn.set(index, incoming)
+        isChanged = true
+      }
+    }
+  }
+  for index in 0..blockCount {
+    if !reachable[index] {
+      continue
+    }
+    var defined = definedIn[index]
+    const block = function.blocks[index]
+    const at = "{function.name} b{index}"
+    for instruction in block.instructions {
+      for slot in usedSlots(instruction) {
+        checkDefined(function, found, defined, at, slot)
+      }
+      if const Some(target) = definedSlot(instruction) {
+        if function.hasSlot(target) {
+          defined.set(target.value, true)
+        }
+      }
+    }
+    for slot in usedByTerminator(block.terminator) {
+      checkDefined(function, found, defined, at, slot)
+    }
+  }
+}
+
+fn checkDefined(function: IrFunction, var found: List<String>, defined: List<Bool>, at: String, slot: Slot) {
+  if !function.hasSlot(slot) {
+    found.add("{at}: there is no slot %{slot.value}")
+    return
+  }
+  if defined[slot.value] {
+    return
+  }
+  found.add("{at}: %{slot.value} is used before it is defined on every path")
+}
+
+fn parameterSlots(function: IrFunction, slotCount: Int): List<Bool> {
+  var defined = filledBooleans(slotCount, false)
+  for index in 0..function.slots.length() {
+    match function.slots[index].role {
+      .Parameter(_) => defined.set(index, true)
+      // The place a `.ByPointer` result is written to is the caller's, so it arrives defined as well
+      .ResultPointer => defined.set(index, true)
+      _ => {}
+    }
+  }
+  defined
+}
+
+fn predecessorsOf(function: IrFunction): List<List<Int>> {
+  var predecessors: List<List<Int>> = []
+  for _ in 0..function.blocks.length() {
+    predecessors.add([])
+  }
+  for index in 0..function.blocks.length() {
+    for target in successorsOf(function.blocks[index]) {
+      if target >= 0 && target < predecessors.length() {
+        predecessors[target].add(index)
+      }
+    }
+  }
+  predecessors
+}
+
+fn intersected(definedIn: List<List<Bool>>, predecessors: List<Int>, slotCount: Int): List<Bool> {
+  if predecessors.isEmpty() {
+    return filledBooleans(slotCount, false)
+  }
+  var common = definedIn[predecessors[0]]
+  for index in 1..predecessors.length() {
+    const other = definedIn[predecessors[index]]
+    for slot in 0..slotCount {
+      if !other[slot] {
+        common.set(slot, false)
+      }
+    }
+  }
+  common
+}
+
+// --- What an instruction reads and writes ---------------------------------------------------------------------------
+
+/** Every slot an instruction reads, in evaluation order. The ownership pass of 5.4 walks this list backwards. */
+public fn usedSlots(instruction: Instruction): List<Slot> {
+  match instruction {
+    .Constant(_, _) => []
+    .Move(_, source) => [source]
+    .Copy(_, source) => [source]
+    .Retain(slot) => [slot]
+    .Release(slot) => [slot]
+    .MakeUnique(reference) => slotsOfReference(reference)
+    .Call(_, _, arguments, witnesses) => {
+      var used = slotsOfArguments(arguments)
+      used.addAll(slotsOfWitnesses(witnesses))
+      used
+    }
+    .CallClosure(_, callee, arguments) => {
+      var used = [callee]
+      used.addAll(slotsOfArguments(arguments))
+      used
+    }
+    .CallWitness(_, witness, _, arguments) => {
+      var used = slotsOfWitness(witness)
+      used.addAll(slotsOfArguments(arguments))
+      used
+    }
+    .Intrinsic(_, _, arguments, _) => arguments
+    .Construct(_, _, _, fields) => slotsOfArguments(fields)
+    .Read(_, reference) => slotsOfReference(reference)
+    .Write(reference, value) => {
+      var used = slotsOfReference(reference)
+      used.add(value.slot)
+      used
+    }
+    .Tag(_, source) => [source]
+    .Closure(_, _, captures, _) => {
+      var used: List<Slot> = []
+      for capture in captures {
+        used.addAll(slotsOfCapture(capture))
+      }
+      used
+    }
+    .BoxNew(_, value) => [value.slot]
+    .TraitValue(_, value, tables) => {
+      var used = [value.slot]
+      used.addAll(slotsOfWitnesses(tables))
+      used
+    }
+    .TakeOut(_, container, key, _) => {
+      var used = slotsOfReference(container)
+      used.add(key)
+      used
+    }
+    .PutBack(container, key, value, _) => {
+      var used = slotsOfReference(container)
+      used.add(key)
+      used.add(value)
+      used
+    }
+    .Panic(message, _) => [message.slot]
+    .Suspend(_, awaited) => [awaited]
+  }
+}
+
+/** The slot an instruction writes, if it writes one. */
+public fn definedSlot(instruction: Instruction): Slot? {
+  match instruction {
+    .Constant(target, _) => Some(target)
+    .Move(target, _) => Some(target)
+    .Copy(target, _) => Some(target)
+    .Call(target, _, _, _) => target
+    .CallClosure(target, _, _) => target
+    .CallWitness(target, _, _, _) => target
+    .Intrinsic(target, _, _, _) => target
+    .Construct(target, _, _, _) => Some(target)
+    .Read(target, _) => Some(target)
+    .Tag(target, _) => Some(target)
+    .Closure(target, _, _, _) => Some(target)
+    .BoxNew(target, _) => Some(target)
+    .TraitValue(target, _, _) => Some(target)
+    .TakeOut(target, _, _, _) => Some(target)
+    _ => None
+  }
+}
+
+public fn usedByTerminator(terminator: Terminator): List<Slot> {
+  match terminator {
+    .Branch(condition, _, _) => [condition]
+    .Switch(scrutinee, _, _, _) => [scrutinee]
+    .Return(value) => {
+      match value {
+        Some(argument) => [argument.slot]
+        .None => []
+      }
+    }
+    _ => []
+  }
+}
+
+fn slotsOfArguments(arguments: List<Argument>): List<Slot> {
+  var used: List<Slot> = []
+  for argument in arguments {
+    used.add(argument.slot)
+  }
+  used
+}
+
+public fn slotsOfReference(reference: Reference): List<Slot> {
+  var used = [reference.base]
+  for step in reference.steps {
+    if const .Element(_, index) = step {
+      used.add(index)
+    }
+  }
+  used
+}
+
+fn slotsOfWitnesses(witnesses: List<WitnessSource>): List<Slot> {
+  var used: List<Slot> = []
+  for witness in witnesses {
+    used.addAll(slotsOfWitness(witness))
+  }
+  used
+}
+
+fn slotsOfWitness(witness: WitnessSource): List<Slot> {
+  if const .Value(slot, _) = witness.root {
+    return [slot]
+  }
+  []
+}
+
+fn slotsOfCapture(capture: Capture): List<Slot> {
+  match capture {
+    .Value(slot) => [slot]
+    .Boxed(slot) => [slot]
+    .Place(reference) => slotsOfReference(reference)
+  }
+}
+
+// --- Types ----------------------------------------------------------------------------------------------------------
+
+fn verifyTypes(program: IrProgram, function: IrFunction, var found: List<String>) {
+  for index in 0..function.blocks.length() {
+    const at = "{function.name} b{index}"
+    const block = function.blocks[index]
+    for instruction in block.instructions {
+      verifyInstruction(program, function, found, at, instruction)
+    }
+    if const .Return(value) = block.terminator {
+      checkReturn(program, function, found, at, value)
+    }
+  }
+}
+
+fn verifyInstruction(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  instruction: Instruction,
+) {
+  match instruction {
+    .Constant(target, value) => {
+      if !program.hasStatic(value) {
+        found.add("{at}: there is no static value s{value.value}")
+        return
+      }
+      expectType(program, function, found, at, target, program.staticAt(value).annotation, "the constant")
+    }
+    .Move(target, source) => expectSame(program, function, found, at, target, source, "a move")
+    .Copy(target, source) => expectSame(program, function, found, at, target, source, "a copy")
+    .Retain(slot) => expectManaged(program, function, found, at, slot, "retain")
+    .Release(slot) => expectManaged(program, function, found, at, slot, "release")
+    .MakeUnique(reference) => {
+      const annotation = typeOfReference(program, function, found, at, reference)
+      if const Some(inner) = annotation {
+        if !isManagedType(program, inner) {
+          found.add("{at}: `makeUnique` needs a place that is counted, and `{describeIrType(program, inner)}` is not")
+        }
+      }
+    }
+    .Call(target, callee, arguments, witnesses) => {
+      if !program.hasFunction(callee) {
+        found.add("{at}: there is no function t{callee.value}")
+        return
+      }
+      const signature = program.functionAt(callee).signature
+      const name = program.functionAt(callee).name
+      verifyCall(program, function, found, at, target, signature, arguments, witnesses, "`{name}`")
+    }
+    .CallClosure(target, callee, arguments) => {
+      if !function.hasSlot(callee) {
+        found.add("{at}: there is no slot %{callee.value}")
+        return
+      }
+      const annotation = function.typeOfSlot(callee)
+      match program.typeAt(annotation) {
+        .Closure(signature) => {
+          const shape = program.signatureAt(signature)
+          verifyCall(program, function, found, at, target, shape, arguments, [], "the closure in %{callee.value}")
+        }
+        _ => found.add("{at}: %{callee.value} is `{describeIrType(program, annotation)}` and not a closure")
+      }
+    }
+    .CallWitness(_, witness, member, _) => {
+      if member < 0 {
+        found.add("{at}: a witness member index cannot be negative")
+      }
+      verifyWitness(program, function, found, at, witness)
+    }
+    .Intrinsic(target, intrinsic, arguments, location) => {
+      if !program.hasLocation(location) {
+        found.add("{at}: there is no location for the intrinsic")
+      }
+      verifyIntrinsic(program, function, found, at, target, intrinsic, arguments)
+    }
+    .Construct(target, layout, variant, fields) => {
+      verifyConstruct(program, function, found, at, target, layout, variant, fields)
+    }
+    .Read(target, reference) => {
+      const annotation = typeOfReference(program, function, found, at, reference)
+      if const Some(inner) = annotation {
+        expectType(program, function, found, at, target, inner, "the place that is read")
+      }
+    }
+    .Write(reference, value) => {
+      const annotation = typeOfReference(program, function, found, at, reference)
+      if const Some(inner) = annotation {
+        expectType(program, function, found, at, value.slot, inner, "the place that is written")
+      }
+    }
+    .Tag(target, source) => {
+      if !function.hasSlot(source) || !function.hasSlot(target) {
+        found.add("{at}: a tag needs two slots that exist")
+        return
+      }
+      const annotation = function.typeOfSlot(source)
+      if !isVariantType(program, annotation) {
+        found.add("{at}: `tag` needs a value of a variant layout, and %{source.value} is `{describeIrType(program, annotation)}`")
+      }
+      if !isIntegerType(program, function.typeOfSlot(target)) {
+        found.add("{at}: a tag is an integer")
+      }
+    }
+    .Closure(target, callee, _, _) => {
+      if !program.hasFunction(callee) {
+        found.add("{at}: there is no function t{callee.value}")
+      }
+      if !function.hasSlot(target) {
+        found.add("{at}: there is no slot %{target.value}")
+        return
+      }
+      const annotation = function.typeOfSlot(target)
+      match program.typeAt(annotation) {
+        .Closure(_) => {}
+        _ => found.add("{at}: a closure value is not `{describeIrType(program, annotation)}`")
+      }
+    }
+    .BoxNew(target, value) => {
+      if !function.hasSlot(target) || !function.hasSlot(value.slot) {
+        found.add("{at}: a box needs two slots that exist")
+        return
+      }
+      const annotation = function.typeOfSlot(target)
+      match program.typeAt(annotation) {
+        .Box(item) => expectType(program, function, found, at, value.slot, item, "the boxed value")
+        .Lazy(item) => expectType(program, function, found, at, value.slot, item, "the lazy value")
+        _ => found.add("{at}: %{target.value} is `{describeIrType(program, annotation)}` and not a box")
+      }
+    }
+    .TraitValue(target, value, tables) => {
+      if !function.hasSlot(target) || !function.hasSlot(value.slot) {
+        found.add("{at}: a trait-typed value needs two slots that exist")
+        return
+      }
+      const annotation = function.typeOfSlot(target)
+      match program.typeAt(annotation) {
+        .Object(bounds) => {
+          if bounds.length() != tables.length() {
+            found.add("{at}: `{describeIrType(program, annotation)}` has {bounds.length()} bounds and {tables.length()} witness tables were given")
+          }
+          for table in tables {
+            verifyWitness(program, function, found, at, table)
+          }
+        }
+        _ => found.add("{at}: %{target.value} is `{describeIrType(program, annotation)}` and not a trait-typed value")
+      }
+    }
+    .TakeOut(target, container, key, kind) => {
+      const annotation = typeOfReference(program, function, found, at, container)
+      if const Some(inner) = annotation {
+        expectRuntime(program, found, at, inner, kind)
+      }
+      if !function.hasSlot(key) || !function.hasSlot(target) {
+        found.add("{at}: `takeOut` needs a key slot and a target slot that exist")
+      }
+    }
+    .PutBack(container, key, value, kind) => {
+      const annotation = typeOfReference(program, function, found, at, container)
+      if const Some(inner) = annotation {
+        expectRuntime(program, found, at, inner, kind)
+      }
+      if !function.hasSlot(key) || !function.hasSlot(value) {
+        found.add("{at}: `putBack` needs a key slot and a value slot that exist")
+      }
+    }
+    .Panic(message, location) => {
+      if !program.hasLocation(location) {
+        found.add("{at}: there is no location for the panic")
+      }
+      if !function.hasSlot(message.slot) {
+        found.add("{at}: there is no slot %{message.slot.value}")
+        return
+      }
+      if !isTextType(program, function.typeOfSlot(message.slot)) {
+        found.add("{at}: the message of a panic is a `String`")
+      }
+    }
+    .Suspend(_, awaited) => {
+      if function.kind != FunctionKind.TaskResume {
+        found.add("{at}: only the body of a task suspends")
+      }
+      if !function.hasSlot(awaited) {
+        found.add("{at}: there is no slot %{awaited.value}")
+      }
+    }
+  }
+}
+
+fn verifyCall(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  target: Slot?,
+  signature: IrSignature,
+  arguments: List<Argument>,
+  witnesses: List<WitnessSource>,
+  callee: String,
+) {
+  if arguments.length() != signature.parameters.length() {
+    found.add("{at}: {callee} takes {signature.parameters.length()} arguments and {arguments.length()} were given")
+  } else {
+    for index in 0..arguments.length() {
+      const wanted = signature.parameters[index].annotation
+      expectType(program, function, found, at, arguments[index].slot, wanted, "argument {index}")
+    }
+  }
+  if witnesses.length() != signature.witnesses.length() {
+    found.add("{at}: {callee} takes {signature.witnesses.length()} witness tables and {witnesses.length()} were given")
+  }
+  for witness in witnesses {
+    verifyWitness(program, function, found, at, witness)
+  }
+  const returnsNothing = isVoidType(program, signature.result) || isNeverType(program, signature.result)
+  match target {
+    .None => {
+      if !returnsNothing {
+        found.add("{at}: {callee} produces `{describeIrType(program, signature.result)}` and nothing takes it")
+      }
+    }
+    Some(slot) => {
+      if returnsNothing {
+        found.add("{at}: {callee} produces no value, so nothing can take one")
+        return
+      }
+      expectType(program, function, found, at, slot, signature.result, "the result")
+    }
+  }
+}
+
+fn verifyWitness(program: IrProgram, function: IrFunction, var found: List<String>, at: String, witness: WitnessSource) {
+  match witness.root {
+    .Table(table) => {
+      if !program.hasWitnessTable(table) {
+        found.add("{at}: there is no witness table w{table.value}")
+      }
+    }
+    .Parameter(index) => {
+      if index < 0 || index >= function.signature.witnesses.length() {
+        found.add("{at}: the function has no witness parameter {index}")
+      }
+    }
+    .Value(slot, bound) => {
+      if !function.hasSlot(slot) {
+        found.add("{at}: there is no slot %{slot.value}")
+        return
+      }
+      const annotation = function.typeOfSlot(slot)
+      match program.typeAt(annotation) {
+        .Object(bounds) => {
+          if bound < 0 || bound >= bounds.length() {
+            found.add("{at}: `{describeIrType(program, annotation)}` has no bound {bound}")
+          }
+        }
+        _ => found.add("{at}: %{slot.value} is `{describeIrType(program, annotation)}` and carries no witness table")
+      }
+    }
+  }
+}
+
+fn verifyConstruct(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  target: Slot,
+  layout: LayoutId,
+  variant: Int,
+  fields: List<Argument>,
+) {
+  if !program.hasLayout(layout) {
+    found.add("{at}: there is no layout T{layout.value}")
+    return
+  }
+  const shape = program.layoutAt(layout)
+  if !shape.variants.isEmpty() && !shape.hasVariant(variant) {
+    found.add("{at}: `{shape.name}` has no variant {variant}")
+    return
+  }
+  if shape.variants.isEmpty() && variant != 0 {
+    found.add("{at}: `{shape.name}` is a record, so its variant is 0")
+    return
+  }
+  const wanted = shape.fieldsOfConstruction(variant)
+  if wanted.length() != fields.length() {
+    found.add("{at}: `{shape.name}` is built from {wanted.length()} fields and {fields.length()} were given")
+  } else {
+    for index in 0..fields.length() {
+      expectType(program, function, found, at, fields[index].slot, wanted[index].annotation, "the field `{wanted[index].name}`")
+    }
+  }
+  if !function.hasSlot(target) {
+    found.add("{at}: there is no slot %{target.value}")
+    return
+  }
+  const annotation = function.typeOfSlot(target)
+  if layoutOfType(program, annotation) != Some(layout) {
+    found.add("{at}: `{shape.name}` was built into %{target.value}, which is `{describeIrType(program, annotation)}`")
+  }
+}
+
+fn verifyIntrinsic(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  target: Slot?,
+  intrinsic: Intrinsic,
+  arguments: List<Slot>,
+) {
+  const name = describeIntrinsic(intrinsic)
+  const wanted = operandCountOf(intrinsic.operation)
+  if wanted >= 0 && arguments.length() != wanted {
+    found.add("{at}: `{name}` takes {wanted} operands and {arguments.length()} were given")
+  }
+  for slot in arguments {
+    if !function.hasSlot(slot) {
+      found.add("{at}: there is no slot %{slot.value}")
+      return
+    }
+  }
+  if needsNumericKind(intrinsic.operation) && intrinsic.kind.isNone() {
+    found.add("{at}: `{name}` needs to say which numeric type it works on")
+  }
+  if !needsNumericKind(intrinsic.operation) && intrinsic.kind.isSome() {
+    found.add("{at}: `{name}` has only one form, so it names no numeric type")
+  }
+  if const Some(kind) = intrinsic.kind {
+    verifyOperands(program, function, found, at, name, intrinsic.operation, kind, arguments)
+  }
+  match target {
+    .None => found.add("{at}: `{name}` produces a value and nothing takes it")
+    Some(slot) => {
+      if !function.hasSlot(slot) {
+        found.add("{at}: there is no slot %{slot.value}")
+        return
+      }
+      verifyIntrinsicResult(program, function, found, at, name, intrinsic, arguments, slot)
+    }
+  }
+}
+
+/**
+ * Every operand of a numeric intrinsic has the type the intrinsic names - except the amount of a shift, which is an
+ * `Int64` whatever is shifted, as `shiftedLeft(by: Int64)` says.
+ */
+fn verifyOperands(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  name: String,
+  operation: IntrinsicOperation,
+  kind: NumericKind,
+  arguments: List<Slot>,
+) {
+  const isShift = isShiftOperation(operation)
+  for index in 0..arguments.length() {
+    if isShift && index == 1 {
+      expectNumeric(program, function, found, at, arguments[index], NumericKind.Signed(64), name)
+      continue
+    }
+    expectNumeric(program, function, found, at, arguments[index], kind, name)
+  }
+}
+
+fn isShiftOperation(operation: IntrinsicOperation): Bool {
+  match operation {
+    .ShiftedLeft => true
+    .ShiftedRight => true
+    _ => false
+  }
+}
+
+/** What an intrinsic produces. Every one of them is decided by the operation, so a wrong target slot is found here. */
+fn verifyIntrinsicResult(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  name: String,
+  intrinsic: Intrinsic,
+  arguments: List<Slot>,
+  slot: Slot,
+) {
+  const actual = function.typeOfSlot(slot)
+  const what = "the result of `{name}`"
+  match intrinsic.operation {
+    .Convert(to) => expectNumeric(program, function, found, at, slot, to, name)
+    .TextCompare => expectInteger(program, found, at, actual, what)
+    .TextByteLength => expectInteger(program, found, at, actual, what)
+    .TextConcat => {
+      if !isTextType(program, actual) {
+        found.add("{at}: {what} is a `String`, and %{slot.value} is `{describeIrType(program, actual)}`")
+      }
+    }
+    .LazyForce => {
+      if arguments.isEmpty() {
+        return
+      }
+      if const .Lazy(item) = program.typeAt(function.typeOfSlot(arguments[0])) {
+        expectType(program, function, found, at, slot, item, what)
+        return
+      }
+      found.add("{at}: `{name}` needs a lazy cell, and %{arguments[0].value} is not one")
+    }
+    _ => {
+      if isComparisonOperation(intrinsic.operation) || isBooleanOperation(intrinsic.operation) {
+        if !isBooleanType(program, actual) {
+          found.add("{at}: {what} is a `Bool`, and %{slot.value} is `{describeIrType(program, actual)}`")
+        }
+        return
+      }
+      if arguments.isEmpty() {
+        return
+      }
+      const first = function.typeOfSlot(arguments[0])
+      expectType(program, function, found, at, slot, first, what)
+    }
+  }
+}
+
+fn isComparisonOperation(operation: IntrinsicOperation): Bool {
+  match operation {
+    .Equal => true
+    .NotEqual => true
+    .Less => true
+    .LessOrEqual => true
+    .Greater => true
+    .GreaterOrEqual => true
+    .TextEqual => true
+    _ => false
+  }
+}
+
+fn isBooleanOperation(operation: IntrinsicOperation): Bool {
+  match operation {
+    .BooleanNot => true
+    _ => false
+  }
+}
+
+/** How many operands an operation takes. `-1` means "as many as there are parts", which only `TextConcat` is. */
+public fn operandCountOf(operation: IntrinsicOperation): Int {
+  match operation {
+    .Negate => 1
+    .BitwiseNot => 1
+    .BooleanNot => 1
+    .Convert(_) => 1
+    .TextByteLength => 1
+    .LazyForce => 1
+    .TextConcat => 0 - 1
+    _ => 2
+  }
+}
+
+fn needsNumericKind(operation: IntrinsicOperation): Bool {
+  match operation {
+    .BooleanNot => false
+    .TextConcat => false
+    .TextEqual => false
+    .TextCompare => false
+    .TextByteLength => false
+    .LazyForce => false
+    _ => true
+  }
+}
+
+// --- Small questions about a type ------------------------------------------------------------------------------------
+
+fn expectSame(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  target: Slot,
+  source: Slot,
+  what: String,
+) {
+  if !function.hasSlot(target) || !function.hasSlot(source) {
+    found.add("{at}: {what} needs two slots that exist")
+    return
+  }
+  const annotation = function.typeOfSlot(source)
+  expectType(program, function, found, at, target, annotation, what)
+}
+
+fn expectType(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  slot: Slot,
+  wanted: IrTypeId,
+  what: String,
+) {
+  if !function.hasSlot(slot) {
+    found.add("{at}: there is no slot %{slot.value}")
+    return
+  }
+  const actual = function.typeOfSlot(slot)
+  if actual == wanted {
+    return
+  }
+  found.add("{at}: {what} is `{describeIrType(program, wanted)}` and %{slot.value} is `{describeIrType(program, actual)}`")
+}
+
+fn expectManaged(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  slot: Slot,
+  what: String,
+) {
+  if !function.hasSlot(slot) {
+    found.add("{at}: there is no slot %{slot.value}")
+    return
+  }
+  const annotation = function.typeOfSlot(slot)
+  if isManagedType(program, annotation) {
+    return
+  }
+  found.add("{at}: `{what}` needs a value that is counted, and `{describeIrType(program, annotation)}` is not")
+}
+
+/** A numeric operand or result: the type has to be exactly the form the intrinsic names. */
+fn expectNumeric(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  slot: Slot,
+  kind: NumericKind,
+  name: String,
+) {
+  if !function.hasSlot(slot) {
+    found.add("{at}: there is no slot %{slot.value}")
+    return
+  }
+  const annotation = function.typeOfSlot(slot)
+  if numericKindOf(program, annotation) == Some(kind) {
+    return
+  }
+  const wanted = describeNumericKind(kind)
+  found.add("{at}: `{name}` works on `{wanted}`, and %{slot.value} is `{describeIrType(program, annotation)}`")
+}
+
+/** What numeric type a value has, if it has one at all. */
+public fn numericKindOf(program: IrProgram, id: IrTypeId): NumericKind? {
+  match program.typeAt(id) {
+    .Integer(width, isSigned) => {
+      if isSigned {
+        return Some(NumericKind.Signed(width))
+      }
+      Some(NumericKind.Unsigned(width))
+    }
+    .Floating(width) => Some(NumericKind.Floating(width))
+    _ => None
+  }
+}
+
+fn expectInteger(program: IrProgram, var found: List<String>, at: String, annotation: IrTypeId, what: String) {
+  if isIntegerType(program, annotation) {
+    return
+  }
+  found.add("{at}: {what} is an integer, and `{describeIrType(program, annotation)}` is not")
+}
+
+fn expectRuntime(program: IrProgram, var found: List<String>, at: String, annotation: IrTypeId, kind: RuntimeKind) {
+  if const .Runtime(actual, _) = program.typeAt(annotation) {
+    if actual == kind {
+      return
+    }
+  }
+  found.add("{at}: the container is `{describeIrType(program, annotation)}` and not the one the step names")
+}
+
+/** The type a place has, or `None` when the path does not fit the value it starts from. */
+public fn typeOfReference(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  reference: Reference,
+): IrTypeId? {
+  if !function.hasSlot(reference.base) {
+    found.add("{at}: there is no slot %{reference.base.value}")
+    return None
+  }
+  var current = function.typeOfSlot(reference.base)
+  for step in reference.steps {
+    const next = stepOf(program, current, step)
+    match next {
+      Some(inner) => {
+        current = inner
+      }
+      .None => {
+        found.add("{at}: `{describeIrType(program, current)}` has no {describeStep(program, step)}")
+        return None
+      }
+    }
+  }
+  Some(current)
+}
+
+fn stepOf(program: IrProgram, current: IrTypeId, step: PathStep): IrTypeId? {
+  match step {
+    .Field(layout, index) => {
+      if layoutOfType(program, current) != Some(layout) || !program.hasLayout(layout) {
+        return None
+      }
+      const shape = program.layoutAt(layout)
+      if index < 0 || index >= shape.fields.length() {
+        return None
+      }
+      Some(shape.fields[index].annotation)
+    }
+    .TupleField(layout, index) => {
+      if layoutOfType(program, current) != Some(layout) || !program.hasLayout(layout) {
+        return None
+      }
+      const shape = program.layoutAt(layout)
+      if index < 0 || index >= shape.fields.length() {
+        return None
+      }
+      Some(shape.fields[index].annotation)
+    }
+    .Variant(layout, variant, index) => {
+      if layoutOfType(program, current) != Some(layout) || !program.hasLayout(layout) {
+        return None
+      }
+      const shape = program.layoutAt(layout)
+      if !shape.hasVariant(variant) {
+        return None
+      }
+      const fields = shape.fieldsOfVariant(variant)
+      if index < 0 || index >= fields.length() {
+        return None
+      }
+      Some(fields[index].annotation)
+    }
+    .Element(item, _) => {
+      match program.typeAt(current) {
+        .FixedArray(inner, _) => if inner == item { Some(item) } else { None }
+        .Runtime(kind, arguments) => {
+          if kind != RuntimeKind.ListStorage || arguments.length() != 1 || arguments[0] != item {
+            return None
+          }
+          Some(item)
+        }
+        _ => None
+      }
+    }
+    .Contents(annotation) => {
+      match program.typeAt(current) {
+        .Box(item) => if item == annotation { Some(item) } else { None }
+        .Lazy(item) => if item == annotation { Some(item) } else { None }
+        .SharedObject(_) => Some(annotation)
+        .Record(_) => Some(annotation)
+        .Variant(_) => Some(annotation)
+        _ => None
+      }
+    }
+  }
+}
+
+fn describeStep(program: IrProgram, step: PathStep): String {
+  match step {
+    .Field(_, index) => "field {index}"
+    .TupleField(_, index) => "tuple field {index}"
+    .Variant(_, variant, index) => "field {index} of variant {variant}"
+    .Element(_, _) => "elements"
+    .Contents(_) => "contents"
+  }
+}
+
+public fn layoutOfType(program: IrProgram, id: IrTypeId): LayoutId? {
+  match program.typeAt(id) {
+    .Record(layout) => Some(layout)
+    .Variant(layout) => Some(layout)
+    .Tuple(layout) => Some(layout)
+    .SharedObject(layout) => Some(layout)
+    _ => None
+  }
+}
+
+fn isVariantType(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .Variant(_) => true
+    _ => false
+  }
+}
+
+fn isIntegerType(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .Integer(_, _) => true
+    _ => false
+  }
+}
+
+fn isTextType(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .Text => true
+    _ => false
+  }
+}
+
+fn isBooleanType(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .Boolean => true
+    _ => false
+  }
+}
+
+fn isVoidType(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .VoidType => true
+    _ => false
+  }
+}
+
+fn isNeverType(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .NeverType => true
+    _ => false
+  }
+}

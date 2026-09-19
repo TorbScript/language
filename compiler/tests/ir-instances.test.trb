@@ -1,0 +1,332 @@
+use test, group from "std/test"
+use Span from "../src/syntax/source"
+use SourceTree from "../src/project/source-tree"
+use ModuleId from "../src/semantics/module"
+use SymbolId from "../src/semantics/symbols"
+use check from "../src/semantics/check"
+use TypeId, ParameterId, FunctionForm, ParameterForm, ParameterMode from "../src/semantics/checker/type"
+use Checker from "../src/semantics/checker/context"
+use typeSignatureOf, signatureOf from "../src/semantics/checker/signature"
+use IrProgram, IrTypeId, IrType from "../src/ir/ir"
+use finishProgram from "../src/ir/layout"
+use Instantiation, newInstantiation, instantiateType, instantiateSignature from "../src/ir/instantiate"
+use symbolPathOf, moduleComponentOf from "../src/ir/instantiate"
+use functionName, layoutName from "../src/ir/mangle"
+use describeIrType, describeIrSignature, printProgram from "../src/ir/print"
+
+/**
+ * From a checked program to IR types. The projects here only exist in memory, as in `types.test.trb`: the back end
+ * looks the `native` declarations of `std/prelude` up by name, so a test that talks about `Int64` or `ArrayList` has
+ * to bring a prelude that declares them.
+ */
+const workspace = [
+  "project.trb": r"""
+name "acme/all"
+workspace { members "std/*", "app" }
+""",
+  "std/prelude/project.trb": r"""
+name "std/prelude"
+""",
+  "std/prelude/src/types.trb": r"""
+public native type Int64 {}
+public native type Int32 {}
+public native type Float64 {}
+public native type String {}
+public native type Char {}
+public native type Bool {}
+public type Int = Int64
+
+public trait Show {
+  fn show(self): String
+}
+
+public trait Hash {
+  fn hash(self): Int
+}
+
+public type Option<Value> {
+  case Some(value: Value)
+  case None
+}
+
+public native type ArrayList<Item> {}
+public native type HashMap<Key, Value> {}
+public native type Array<Item, const Size: Int> {}
+public native type Decimal {}
+""",
+  "std/prelude/src/lib.trb": r"""
+public use Int64, Int32, Float64, String, Char, Bool, Int from "./types"
+public use Show, Hash from "./types"
+public use Option, ArrayList, HashMap, Array, Decimal from "./types"
+public use Some, None from Option
+""",
+  "app/project.trb": r"""
+name "acme/app"
+""",
+]
+
+fn workspaceWith(files: Map<String, String>): SourceTree {
+  var all = workspace
+  for (path, text) in files {
+    all.set(path, text)
+  }
+  SourceTree.of(all)
+}
+
+/** One checked `app`, the IR that was built from it, and what a test asks about the two. */
+type Probed {
+  source: String
+  var checker: Checker
+  var program: IrProgram
+  var instantiation: Instantiation
+  module: ModuleId
+
+  /** The checker type of the position `written`, which has to stand exactly once in front of its declaration. */
+  fn at(self, written: String): TypeId {
+    const start = source.indexOf(written).expect("`{written}` in the source")
+    checker.typePositions[module.value].get(Span(start, start + written.byteLength())).expect("a type at `{written}`")
+  }
+
+  fn symbolNamed(self, name: String): SymbolId {
+    checker.program.lookUp(module, name).expect("the declaration `{name}`")
+  }
+
+  /** The IR type of the position `written`, without any substitution. */
+  fn build(var self, written: String): IrTypeId {
+    const id = at(written)
+    const empty: Map<ParameterId, TypeId> = [:]
+    instantiateType(program, checker, instantiation, empty, id)
+  }
+
+  fn show(var self, written: String): String {
+    const built = build(written)
+    describeIrType(program, built)
+  }
+}
+
+fn probe(source: String): Probed {
+  const checked = check(workspaceWith(["app/src/main.trb": source]), ["app"])
+  const module = checked.program.graph.moduleAt("app/src/main.trb").expect("the module of the file")
+  var checker = checked.checker
+  const instantiation = newInstantiation(checker)
+  Probed(source, checker, IrProgram(), instantiation, module)
+}
+
+/** The IR type of a field's annotation: the shortest thing that has a type position. */
+fn irTypeOf(written: String): String {
+  var found = probe("type Probe \{\n  field: {written}\n\}")
+  found.show(written)
+}
+
+group "Instantiating a checker type" {
+  test "the primitives of the prelude are the types of the runtime" {
+    assert(irTypeOf("Int") == "Int64")
+    assert(irTypeOf("Int32") == "Int32")
+    assert(irTypeOf("Float64") == "Float64")
+    assert(irTypeOf("String") == "String")
+    assert(irTypeOf("Char") == "Char")
+    assert(irTypeOf("Bool") == "Bool")
+    assert(irTypeOf("Void") == "Void")
+    assert(irTypeOf("Decimal") == "Decimal")
+  }
+
+  test "one list implementation and one hash table stand behind the collection names" {
+    assert(irTypeOf("ArrayList<Int>") == "List(Int64)")
+    assert(irTypeOf("HashMap<String, Int>") == "Map(String, Int64)")
+    assert(irTypeOf("ArrayList<ArrayList<Bool>>") == "List(List(Bool))")
+  }
+
+  test "a const argument becomes part of the type, not a type of its own" {
+    assert(irTypeOf("Array<Float64, 16>") == "Array(Float64, 16)")
+  }
+
+  test "a tuple is a layout, and a label is not part of it" {
+    var found = probe("type Probe \{\n  labeled: (lowest: Int, highest: Int)\n  plain: (Int, Int)\n\}")
+    const labeled = found.build("(lowest: Int, highest: Int)")
+    const plain = found.build("(Int, Int)")
+    assert(labeled == plain)
+    assert(found.show("(Int, Int)") == "Tuple(T_tuple__Int64_Int64)")
+  }
+
+  test "a function type is a closure value, with the modes of its parameters" {
+    assert(irTypeOf("(value: Int) => Bool") == "Closure((Int64) -> Bool)")
+    assert(irTypeOf("(var counter: Int) => Void") == "Closure((var Int64) -> Void)")
+    assert(irTypeOf("(Int, String) => Int") == "Closure((Int64, String) -> Int64)")
+    // `lazy Value` is a one-shot memo cell, which is a type and not a mode once the IR sees it
+    assert(irTypeOf("(fallback: lazy Int) => Int") == "Closure((Lazy(Int64)) -> Int64)")
+  }
+
+  test "a variadic parameter holds the list the call site builds" {
+    var found = probe("type Probe \{\n  field: Int\n\}")
+    const integer = found.at("Int")
+    const form = FunctionForm(
+      [ParameterForm(Some("parts"), ParameterMode.Variadic, integer, false)],
+      found.checker.voidType,
+    )
+    const signature = instantiateSignature(found.program, found.checker, found.instantiation, form)
+    assert(describeIrSignature(found.program, signature) == "(List(Int64)) -> Void")
+  }
+
+  test "a trait as a type is a value with one witness pointer per bound" {
+    assert(irTypeOf("Show") == "Object(Show)")
+    assert(irTypeOf("Show + Hash") == "Object(Show + Hash)")
+  }
+
+  test "a literal type erases to the type its members are literals of" {
+    assert(irTypeOf("\"online\" | \"offline\"") == "String")
+    assert(irTypeOf("1 | 2 | 3") == "Int64")
+  }
+
+  test "`Item?` is a variant with a niche, because a list is a pointer" {
+    var found = probe("type Probe \{\n  first: ArrayList<Int>?\n  second: Int?\n\}")
+    const ofList = found.show("ArrayList<Int>?")
+    const ofInteger = found.show("Int?")
+    finishProgram(found.program)
+    assert(ofList == "Variant(T_std_x2f_prelude_types_Option__List_Int64)")
+    assert(ofInteger == "Variant(T_std_x2f_prelude_types_Option__Int64)")
+    const printed = printProgram(found.program)
+    // `Some` is the first case of the prelude's `Option`, so the niche names variant 0 and its one field
+    assert(
+      printed.contains(
+        "layout T_std_x2f_prelude_types_Option__List_Int64 niche(0, 0) size 16 align 8 counted variants(Some(value: List(Int64)), None)"
+      )
+    )
+    assert(
+      printed.contains("layout T_std_x2f_prelude_types_Option__Int64 inline size 16 align 8 variants(Some(value: Int64), None)")
+    )
+  }
+
+  test "a type of the program becomes a record with its fields, named after where it is written" {
+    // The use comes first, so that the name under test appears once in front of its declaration
+    var found = probe("type Probe \{\n  field: Point\n\}\n\ntype Point \{\n  x: Int\n  y: Int\n\}")
+    const built = found.show("Point")
+    finishProgram(found.program)
+    assert(built == "Record(T_acme_x2f_app_main_Point)")
+    assert(
+      printProgram(found.program).contains("layout T_acme_x2f_app_main_Point inline size 16 align 8 fields(x: Int64, y: Int64)")
+    )
+  }
+
+  test "a generic type is one layout per instance, and the arguments are in its name" {
+    var found = probe(
+      "type Probe \{\n  first: Holder<Int>\n  second: Holder<String>\n\}\n\ntype Holder<Item> \{\n  item: Item\n\}"
+    )
+    const ofInteger = found.show("Holder<Int>")
+    const ofText = found.show("Holder<String>")
+    finishProgram(found.program)
+    assert(ofInteger == "Record(T_acme_x2f_app_main_Holder__Int64)")
+    assert(ofText == "Record(T_acme_x2f_app_main_Holder__String)")
+    const printed = printProgram(found.program)
+    assert(printed.contains("layout T_acme_x2f_app_main_Holder__Int64 inline size 8 align 8 fields(item: Int64)"))
+    assert(printed.contains("layout T_acme_x2f_app_main_Holder__String inline size 16 align 8 counted fields(item: String)"))
+  }
+
+  test "a substitution is what makes a generic declaration monomorphic" {
+    var found = probe("type Holder<Item> \{\n  item: Item\n\}\n\ntype Probe \{\n  field: Int\n\}")
+    const symbol = found.symbolNamed("Holder")
+    const shape = typeSignatureOf(found.checker, symbol)
+    const parameter = found.checker.typeSignature(shape).generics[0]
+    const own = found.checker.typeSignature(shape).own
+    const integer = found.at("Int")
+    var mapping: Map<ParameterId, TypeId> = [:]
+    mapping.set(parameter, integer)
+    const built = instantiateType(found.program, found.checker, found.instantiation, mapping, own)
+    finishProgram(found.program)
+    assert(describeIrType(found.program, built) == "Record(T_acme_x2f_app_main_Holder__Int64)")
+  }
+
+  test "the same checker type gives the same IR type and one layout, however often it is asked for" {
+    var found = probe("type Probe \{\n  first: ArrayList<Int>\n  second: ArrayList<Int64>\n\}")
+    const first = found.build("ArrayList<Int>")
+    const second = found.build("ArrayList<Int64>")
+    assert(first == second)
+    // `Int64` and the list of it, and nothing else: `Int` is an alias and the checker interned both spellings as one
+    assert(found.program.typeCount() == 2)
+  }
+
+  test "a type that contains itself through its cases is boxed, and its nodes are counted" {
+    var found = probe(
+      "type Probe \{\n  field: Tree\n\}\n\ntype Tree \{\n  case Leaf(value: Int)\n  case Branch(left: Tree, right: Tree)\n\}"
+    )
+    const built = found.show("Tree")
+    finishProgram(found.program)
+    assert(built == "Variant(T_acme_x2f_app_main_Tree)")
+    assert(printProgram(found.program).contains("layout T_acme_x2f_app_main_Tree boxed recursive size 24 align 8 counted"))
+  }
+
+  test "a `shared type` is an object with a header, and everything that holds one can be in a cycle" {
+    const source = "type Probe \{\n  field: Holder\n\}\n\ntype Holder \{\n  counter: Counter\n\}\n\nshared type Counter \{\n  var value: Int\n\}"
+    var found = probe(source)
+    const built = found.show("Holder")
+    finishProgram(found.program)
+    assert(built == "Record(T_acme_x2f_app_main_Holder)")
+    const printed = printProgram(found.program)
+    assert(
+      printed.contains(
+        "layout T_acme_x2f_app_main_Holder inline size 8 align 8 counted shared fields(counter: Shared(T_acme_x2f_app_main_Counter))"
+      )
+    )
+    assert(printed.contains("layout T_acme_x2f_app_main_Counter inline size 8 align 8 fields(value: Int64)"))
+  }
+}
+
+group "Where a declaration is written" {
+  test "the components of a name come from the package, the module and the owners" {
+    var found = probe("type Point \{\n  fn area(self): Int\n\}\n\nfn scale(value: Int): Int \{\n  value\n\}")
+    const scale = found.symbolNamed("scale")
+    assert(functionName(found.program, symbolPathOf(found.checker, scale), []) == "t_acme_x2f_app_main_scale")
+    const point = found.symbolNamed("Point")
+    assert(layoutName(found.program, symbolPathOf(found.checker, point), []) == "T_acme_x2f_app_main_Point")
+    const shape = typeSignatureOf(found.checker, point)
+    const area = found.checker.typeSignature(shape).members.get("area").expect("the member `area`")
+    assert(functionName(found.program, symbolPathOf(found.checker, area), []) == "t_acme_x2f_app_main_Point_area")
+  }
+
+  test "a member of a trait is named after the trait, which its `Self` parameter points at" {
+    var found = probe("trait Greet \{\n  fn hello(self): String\n\}")
+    const greet = found.symbolNamed("Greet")
+    const shape = typeSignatureOf(found.checker, greet)
+    const hello = found.checker.typeSignature(shape).members.get("hello").expect("the member `hello`")
+    assert(functionName(found.program, symbolPathOf(found.checker, hello), []) == "t_acme_x2f_app_main_Greet_hello")
+  }
+
+  test "the module component is the path below `src`, without the extension" {
+    assert(moduleComponentOf("std/prelude", "std/prelude/src/collections/list.trb") == "collections/list")
+    assert(moduleComponentOf("app", "app/src/main.trb") == "main")
+    assert(moduleComponentOf("app", "app/tests/one.test.trb") == "tests/one.test")
+    assert(moduleComponentOf("", "somewhere/script.trb") == "script")
+  }
+}
+
+group "What the back end cannot represent" {
+  test "a generic parameter that nobody substituted is an internal error, not a wrong C file" {
+    var found = probe("type Holder<Item> \{\n  item: Item\n\}\n\ntype Probe \{\n  field: Int\n\}")
+    const symbol = found.symbolNamed("Holder")
+    const shape = typeSignatureOf(found.checker, symbol)
+    const own = found.checker.typeSignature(shape).own
+    const empty: Map<ParameterId, TypeId> = [:]
+    const built = instantiateType(found.program, found.checker, found.instantiation, empty, own)
+    assert(found.program.problems == ["The generic parameter `Item` was not substituted before the back end saw it"])
+  }
+
+  test "a `native type` the runtime does not provide is named, and so is a size that is not a literal" {
+    var found = probe("type Probe \{\n  field: Mystery\n\}\n\npublic native type Mystery \{\}")
+    const built = found.show("Mystery")
+    assert(built == "Void")
+    assert(found.program.problems == ["The native type `Mystery` has no representation in the back end"])
+    var other = probe("type Holder<const Size: Int> \{\n  cells: Array<Int, Size>\n\}\n\ntype Probe \{\n  field: Int\n\}")
+    const symbol = other.symbolNamed("Holder")
+    const shape = typeSignatureOf(other.checker, symbol)
+    const own = other.checker.typeSignature(shape).own
+    const empty: Map<ParameterId, TypeId> = [:]
+    const nothing = instantiateType(other.program, other.checker, other.instantiation, empty, own)
+    assert(other.program.problems.contains("The size of an `Array` is not an integer"))
+  }
+
+  test "a type the checker already reported as broken says nothing a second time to the user" {
+    var found = probe("type Probe \{\n  field: Nonexistent\n\}")
+    const built = found.show("Nonexistent")
+    assert(built == "Void")
+    assert(found.program.problems == ["A type the checker had already reported as broken reached the back end"])
+  }
+}

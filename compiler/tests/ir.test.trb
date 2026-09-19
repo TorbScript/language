@@ -1,0 +1,693 @@
+use test, group from "std/test"
+use SymbolId from "../src/semantics/symbols"
+use SymbolPath from "../src/ir/mangle"
+use IrProgram, IrType, IrTypeId, IrTrait, IrSignature, IrParameter, Ownership, ResultMode from "../src/ir/ir"
+use WitnessTable from "../src/ir/ir"
+use Slot, SlotRole, BlockId, LayoutId, LocationId, Location, Instruction, Terminator from "../src/ir/ir"
+use Argument, Reference, PathStep, Intrinsic, IntrinsicOperation, NumericKind from "../src/ir/ir"
+use StaticValue, StaticContents, FunctionKind, WitnessSource, WitnessRoot, Capture from "../src/ir/ir"
+use RuntimeKind, borrowed, owned from "../src/ir/ir"
+use LayoutKind, FieldLayout, VariantLayout, finishProgram from "../src/ir/layout"
+use newFunction, addSlot, addLocal, addTemporary, addBlock, openBlock from "../src/ir/build"
+use switchTo, emit, terminate, terminateBlock, setBlockLocation, finishFunction from "../src/ir/build"
+use printFunction, printProgram, describeIrType from "../src/ir/print"
+use verifyFunction from "../src/ir/verify"
+use LiteralValue from "../src/semantics/checker/type"
+
+/**
+ * The IR as a data model: built by hand with the builder, printed, and verified. There is no lowering yet (that is
+ * 5.2), so every function here is written the way the lowering will write one - which is exactly what makes these
+ * tests the contract between 5.1 and 5.2.
+ */
+
+/** A snapshot, written as the lines it consists of: what `printFunction` produces, with nothing else on a line. */
+fn text(lines: List<String>): String {
+  String.join(lines, separator: "\n")
+}
+
+fn integerType(var program: IrProgram, width: Int): IrTypeId {
+  program.internType(IrType.Integer(width, true))
+}
+
+fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
+  const reserved = program.reserveLayout(name, LayoutKind.Record)
+  const layout = program.layoutAt(reserved.layout)
+  program.setLayout(reserved.layout, layout.copy(fields: fields, isBuilt: true))
+  reserved.layout
+}
+
+/** A layout with one group of fields per variant, the groups in the order the cases are declared. */
+fn variantLayout(var program: IrProgram, name: String, cases: List<List<FieldLayout>>, names: List<String>): LayoutId {
+  const reserved = program.reserveLayout(name, LayoutKind.Variant)
+  var fields: List<FieldLayout> = []
+  var variants: List<VariantLayout> = []
+  for index in 0..cases.length() {
+    const first = fields.length()
+    fields.addAll(cases[index])
+    variants.add(VariantLayout(names[index], first, cases[index].length()))
+  }
+  const layout = program.layoutAt(reserved.layout)
+  program.setLayout(reserved.layout, layout.copy(fields: fields, variants: variants, isBuilt: true))
+  reserved.layout
+}
+
+fn arithmetic(kind: NumericKind, operation: IntrinsicOperation): Intrinsic {
+  Intrinsic(operation, Some(kind))
+}
+
+group "The text format" {
+  test "a function reads like the design's example" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const point = recordLayout(program, "T_main_Point", [FieldLayout("x", int64), FieldLayout("y", int64)])
+    const pointType = program.internType(IrType.Record(point))
+    const body = program.internLocation(Location("main.trb", 19, 3))
+    const firstAt = program.internLocation(Location("main.trb", 20, 11))
+    const secondAt = program.internLocation(Location("main.trb", 20, 26))
+    const signature = IrSignature(
+      [IrParameter("self", pointType), IrParameter("deltaX", int64), IrParameter("deltaY", int64)],
+      pointType,
+    )
+    var builder = newFunction("t_main_translated", None, signature, "body")
+    setBlockLocation(builder, BlockId(0), Some(body))
+    const firstField = addTemporary(builder, int64)
+    const firstSum = addTemporary(builder, int64)
+    const secondField = addTemporary(builder, int64)
+    const secondSum = addTemporary(builder, int64)
+    const result = addTemporary(builder, pointType)
+    const add = arithmetic(NumericKind.Signed(64), IntrinsicOperation.Add)
+    emit(builder, Instruction.Read(firstField, Reference(Slot(0), [PathStep.Field(point, 0)])))
+    emit(builder, Instruction.Intrinsic(Some(firstSum), add, [firstField, Slot(1)], firstAt))
+    emit(builder, Instruction.Read(secondField, Reference(Slot(0), [PathStep.Field(point, 1)])))
+    emit(builder, Instruction.Intrinsic(Some(secondSum), add, [secondField, Slot(2)], secondAt))
+    emit(builder, Instruction.Construct(result, point, 0, [owned(firstSum), owned(secondSum)]))
+    terminate(builder, Terminator.Return(Some(owned(result))))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(verifyFunction(program, program.functionAt(identifier)).isEmpty())
+    assert(
+      printFunction(program, program.functionAt(identifier))
+        == text([
+          "fn t_main_translated(self: Record(T_main_Point) borrowed, deltaX: Int64 borrowed, deltaY: Int64 borrowed) -> Record(T_main_Point) \{",
+          "  slot %0 parameter self: Record(T_main_Point)",
+          "  slot %1 parameter deltaX: Int64",
+          "  slot %2 parameter deltaY: Int64",
+          "  slot %3 temporary: Int64",
+          "  slot %4 temporary: Int64",
+          "  slot %5 temporary: Int64",
+          "  slot %6 temporary: Int64",
+          "  slot %7 temporary: Record(T_main_Point)",
+          "b0: # main.trb:19 body",
+          "  %3 = read %0.x",
+          "  %4 = intrinsic add.i64 %3, %1 at main.trb:20:11",
+          "  %5 = read %0.y",
+          "  %6 = intrinsic add.i64 %5, %2 at main.trb:20:26",
+          "  %7 = construct T_main_Point (%4 owned, %6 owned)",
+          "  return %7 owned",
+          "\}",
+        ])
+    )
+  }
+
+  test "blocks come in the order they were created, with their label and their line" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const boolean = program.internType(IrType.Boolean)
+    const void = program.internType(IrType.VoidType)
+    const head = program.internLocation(Location("src/count.trb", 4, 1))
+    var builder = newFunction("t_main_count", None, IrSignature([IrParameter("limit", int64)], void), "body")
+    const condition = addLocal(builder, boolean, "isMore")
+    const loop = addBlock(builder, "while", Some(head))
+    const done = addBlock(builder, "after", None)
+    terminate(builder, Terminator.Jump(loop))
+    switchTo(builder, loop)
+    emit(builder, Instruction.Copy(condition, condition))
+    terminate(builder, Terminator.Branch(condition, loop, done))
+    switchTo(builder, done)
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      printFunction(program, program.functionAt(identifier))
+        == text([
+          "fn t_main_count(limit: Int64 borrowed) -> Void \{",
+          "  slot %0 parameter limit: Int64",
+          "  slot %1 local isMore: Bool",
+          "b0: # body",
+          "  jump b1",
+          "b1: # src/count.trb:4 while",
+          "  %1 = copy %1",
+          "  branch %1 then b1 else b2",
+          "b2: # after",
+          "  return",
+          "\}",
+        ])
+    )
+  }
+
+  test "every instruction of the design has a line of its own" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const boolean = program.internType(IrType.Boolean)
+    const void = program.internType(IrType.VoidType)
+    const strings = program.internType(IrType.Text)
+    const listOfInteger = program.internType(IrType.Runtime(RuntimeKind.ListStorage, [int64]))
+    const mapping = program.internType(IrType.Runtime(RuntimeKind.MapStorage, [strings, int64]))
+    const box = program.internType(IrType.Box(int64))
+    const lazyCell = program.internType(IrType.Lazy(int64))
+    const shape = variantLayout(program, "T_main_Shape", [[], [FieldLayout("radius", int64)]], ["Empty", "Circle"])
+    const shapeType = program.internType(IrType.Variant(shape))
+    const holder = recordLayout(program, "T_main_Holder", [FieldLayout("items", listOfInteger)])
+    const holderType = program.internType(IrType.Record(holder))
+    const greeting = program.addStatic(StaticValue("s_main_greeting", strings, StaticContents.Literal(LiteralValue.Text("hi"))))
+    const at = program.internLocation(Location("src/all.trb", 7, 2))
+    const shown = newFunction("t_main_show", None, IrSignature([IrParameter("value", strings)], void), "body")
+    const printer = finishFunction(program, shown)
+    var builder = newFunction(
+      "t_main_everything",
+      None,
+      IrSignature([IrParameter("table", mapping), IrParameter("holder", holderType)], void),
+      "body",
+    )
+    const message = addTemporary(builder, strings)
+    const key = addTemporary(builder, strings)
+    const count = addTemporary(builder, int64)
+    const index = addTemporary(builder, int64)
+    const tag = addTemporary(builder, int64)
+    const circle = addTemporary(builder, shapeType)
+    const boxed = addTemporary(builder, box)
+    const cell = addTemporary(builder, lazyCell)
+    const forced = addTemporary(builder, int64)
+    const items = addTemporary(builder, listOfInteger)
+    const same = addTemporary(builder, boolean)
+    emit(builder, Instruction.Constant(message, greeting))
+    emit(builder, Instruction.Copy(key, message))
+    emit(builder, Instruction.Move(message, key))
+    emit(builder, Instruction.Retain(message))
+    emit(builder, Instruction.Release(message))
+    emit(builder, Instruction.MakeUnique(Reference(Slot(1), [PathStep.Field(holder, 0)])))
+    emit(builder, Instruction.Call(None, printer, [borrowed(message)], []))
+    emit(builder, Instruction.Intrinsic(Some(same), Intrinsic(IntrinsicOperation.TextEqual, None), [message, key], at))
+    emit(builder, Instruction.Construct(circle, shape, 1, [owned(count)]))
+    emit(builder, Instruction.Tag(tag, circle))
+    emit(builder, Instruction.Read(items, Reference(Slot(1), [PathStep.Field(holder, 0)])))
+    emit(builder, Instruction.Write(Reference(Slot(1), [PathStep.Field(holder, 0)]), owned(items)))
+    emit(builder, Instruction.Read(count, Reference(Slot(1), [PathStep.Field(holder, 0), PathStep.Element(int64, index)])))
+    emit(builder, Instruction.BoxNew(boxed, owned(count)))
+    emit(builder, Instruction.BoxNew(cell, owned(count)))
+    emit(builder, Instruction.Intrinsic(Some(forced), Intrinsic(IntrinsicOperation.LazyForce, None), [cell], at))
+    emit(builder, Instruction.TakeOut(count, Reference(Slot(0)), key, RuntimeKind.MapStorage))
+    emit(builder, Instruction.PutBack(Reference(Slot(0)), key, count, RuntimeKind.MapStorage))
+    emit(builder, Instruction.Panic(owned(message), at))
+    terminate(builder, Terminator.Unreachable)
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    const printed = printFunction(program, program.functionAt(identifier))
+    const all = printed.lines()
+    // One header line, thirteen slots, one block header, then the body
+    const body = all[15..all.length() - 1]
+    assert(
+      text(body)
+        == text([
+          "  %2 = constant s_main_greeting",
+          "  %3 = copy %2",
+          "  %2 = move %3",
+          "  retain %2",
+          "  release %2",
+          "  makeUnique %1.items",
+          "  call t_main_show(%2 borrowed)",
+          "  %12 = intrinsic textEqual %2, %3 at src/all.trb:7:2",
+          "  %7 = construct T_main_Shape.Circle (%4 owned)",
+          "  %6 = tag %7",
+          "  %11 = read %1.items",
+          "  write %1.items = %11 owned",
+          "  %4 = read %1.items[%5]",
+          "  %8 = boxNew %4 owned",
+          "  %9 = boxNew %4 owned",
+          "  %10 = intrinsic lazyForce %9 at src/all.trb:7:2",
+          "  %4 = takeOut %0[%3] Map",
+          "  putBack %0[%3] = %4 Map",
+          "  panic %2 owned at src/all.trb:7:2",
+          "  unreachable",
+        ])
+    )
+  }
+
+  test "a closure, a trait-typed value and a witness call write their sources out" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const void = program.internType(IrType.VoidType)
+    const strings = program.internType(IrType.Text)
+    const signature = program.internSignature(IrSignature([IrParameter("value", int64)], void))
+    const closureType = program.internType(IrType.Closure(signature))
+    var builder = newFunction("t_main_outer", None, IrSignature([], void), "body")
+    const counter = addLocal(builder, int64, "counter")
+    const made = addTemporary(builder, closureType)
+    const innerBuilder = newFunction("t_main_inner", None, IrSignature([IrParameter("value", int64)], void), "body")
+    const inner = finishFunction(program, innerBuilder)
+    emit(builder, Instruction.Copy(counter, counter))
+    emit(builder, Instruction.Closure(made, inner, [Capture.Value(counter)], false))
+    emit(builder, Instruction.CallClosure(None, made, [borrowed(counter)]))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      printFunction(program, program.functionAt(identifier))
+        == text([
+          "fn t_main_outer() -> Void \{",
+          "  slot %0 local counter: Int64",
+          "  slot %1 temporary: Closure((Int64) -> Void)",
+          "b0: # body",
+          "  %0 = copy %0",
+          "  %1 = closure t_main_inner captures(%0 value) local",
+          "  callClosure %1(%0 borrowed)",
+          "  return",
+          "\}",
+        ])
+    )
+  }
+
+  test "a switch writes every case out, and a task body says that it is one" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const void = program.internType(IrType.VoidType)
+    var builder = newFunction("t_main_pick", None, IrSignature([IrParameter("value", int64)], void), "body")
+    const first = addBlock(builder, "first", None)
+    const second = addBlock(builder, "second", None)
+    const other = addBlock(builder, "otherwise", None)
+    terminate(builder, Terminator.Switch(Slot(0), [0, 1], [first, second], other))
+    terminateBlock(builder, first, Terminator.Return(None))
+    terminateBlock(builder, second, Terminator.Return(None))
+    terminateBlock(builder, other, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    const printed = printFunction(program, program.functionAt(identifier))
+    assert(printed.contains("  switch %0 case 0 b1, case 1 b2, otherwise b3"))
+    assert(verifyFunction(program, program.functionAt(identifier)).isEmpty())
+  }
+
+  test "a witness that is passed, a witness parameter in the header, and a block that only has a line" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const void = program.internType(IrType.VoidType)
+    const show = program.internTrait(IrTrait(SymbolId(1), SymbolPath("std/prelude", "convert", [], "Show"), []))
+    const objectType = program.internType(IrType.Object([show]))
+    const shape = program.internSignature(IrSignature([IrParameter("value", int64)], void, [show]))
+    const closureType = program.internType(IrType.Closure(shape))
+    var calleeBuilder = newFunction(
+      "t_main_describe",
+      None,
+      IrSignature([IrParameter("value", int64)], void, [show]),
+      "",
+    )
+    terminate(calleeBuilder, Terminator.Return(None))
+    const callee = finishFunction(program, calleeBuilder)
+    const table = program.addWitnessTable(WitnessTable("w_show__Int64", show, int64, [], []))
+    const at = program.internLocation(Location("src/show.trb", 3, 1))
+    var builder = newFunction("t_main_report", None, IrSignature([IrParameter("value", int64)], void), "")
+    const held = addTemporary(builder, closureType)
+    setBlockLocation(builder, BlockId(0), Some(at))
+    emit(builder, Instruction.Call(None, callee, [borrowed(Slot(0))], [WitnessSource(WitnessRoot.Table(table))]))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(verifyFunction(program, program.functionAt(identifier)).isEmpty())
+    const printed = printFunction(program, program.functionAt(identifier))
+    assert(printed.contains("\n  slot %1 temporary: Closure((Int64, witness Show) -> Void)\n"))
+    assert(printed.contains("\nb0: # src/show.trb:3\n"))
+    assert(printed.contains("\n  call t_main_describe(%0 borrowed) witnesses(table w_show__Int64)\n"))
+    assert(
+      printFunction(program, program.functionAt(callee))
+        .startsWith("fn t_main_describe(value: Int64 borrowed, witness 0: Show) -> Void \{")
+    )
+  }
+
+  test "the whole program is sorted by mangled name, whatever order it was built in" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const void = program.internType(IrType.VoidType)
+    var secondBuilder = newFunction("t_main_second", None, IrSignature([], void), "")
+    terminate(secondBuilder, Terminator.Return(None))
+    const second = finishFunction(program, secondBuilder)
+    var firstBuilder = newFunction("t_main_first", None, IrSignature([], void), "")
+    terminate(firstBuilder, Terminator.Return(None))
+    const first = finishFunction(program, firstBuilder)
+    const later = recordLayout(program, "T_main_Zebra", [FieldLayout("value", int64)])
+    const earlier = recordLayout(program, "T_main_Apple", [FieldLayout("value", int64)])
+    finishProgram(program)
+    const printed = printProgram(program)
+    const apple = printed.indexOf("T_main_Apple").expect("the first layout")
+    const zebra = printed.indexOf("T_main_Zebra").expect("the second layout")
+    const firstAt = printed.indexOf("t_main_first").expect("the first function")
+    const secondAt = printed.indexOf("t_main_second").expect("the second function")
+    assert(apple < zebra)
+    assert(firstAt < secondAt)
+    // Layouts come before the functions that use them, as a reader needs them
+    assert(printed.indexOf("layout").expect("a layout") < printed.indexOf("fn ").expect("a function"))
+  }
+}
+
+group "The verifier" {
+  test "a slot that is only defined in one arm of a branch is not defined after it" {
+    var program = IrProgram()
+    const boolean = program.internType(IrType.Boolean)
+    var builder = newFunction("t_main_broken", None, IrSignature([IrParameter("flag", boolean)], boolean), "body")
+    const answer = addLocal(builder, boolean, "answer")
+    const then = addBlock(builder, "then", None)
+    const after = addBlock(builder, "after", None)
+    terminate(builder, Terminator.Branch(Slot(0), then, after))
+    switchTo(builder, then)
+    emit(builder, Instruction.Copy(answer, Slot(0)))
+    terminate(builder, Terminator.Jump(after))
+    switchTo(builder, after)
+    terminate(builder, Terminator.Return(Some(owned(answer))))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_broken b2: %1 is used before it is defined on every path"]
+    )
+  }
+
+  test "a terminator that points at a block which is not there" {
+    var program = IrProgram()
+    const void = program.internType(IrType.VoidType)
+    var builder = newFunction("t_main_jump", None, IrSignature([], void), "body")
+    terminate(builder, Terminator.Jump(BlockId(7)))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(verifyFunction(program, program.functionAt(identifier)) == ["t_main_jump b0: there is no block b7"])
+  }
+
+  test "a block nothing reaches has to be an empty `unreachable` marker" {
+    var program = IrProgram()
+    const void = program.internType(IrType.VoidType)
+    var builder = newFunction("t_main_dead", None, IrSignature([], void), "body")
+    const marker = addBlock(builder, "marker", None)
+    const dead = addBlock(builder, "dead", None)
+    terminate(builder, Terminator.Return(None))
+    terminateBlock(builder, dead, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_dead b2: nothing reaches this block, and it is not an `unreachable` marker"]
+    )
+  }
+
+  test "a switch needs one target per value" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const void = program.internType(IrType.VoidType)
+    var builder = newFunction("t_main_pick", None, IrSignature([IrParameter("value", int64)], void), "body")
+    const other = addBlock(builder, "otherwise", None)
+    terminate(builder, Terminator.Switch(Slot(0), [0, 1], [other], other))
+    terminateBlock(builder, other, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_pick b0: the switch has 2 values and 1 targets"]
+    )
+  }
+
+  test "`return` says what the signature says" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const boolean = program.internType(IrType.Boolean)
+    var builder = newFunction("t_main_answer", None, IrSignature([IrParameter("flag", boolean)], int64), "body")
+    terminate(builder, Terminator.Return(Some(owned(Slot(0)))))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_answer b0: the function returns `Int64` and `return` carries `Bool`"]
+    )
+  }
+
+  test "a function that returns something has to carry it" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    var builder = newFunction("t_main_empty", None, IrSignature([], int64), "body")
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_empty b0: the function returns `Int64`, so `return` needs a value"]
+    )
+  }
+
+  test "only something that is counted is retained, released or made unique" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const void = program.internType(IrType.VoidType)
+    var builder = newFunction("t_main_count", None, IrSignature([IrParameter("value", int64)], void), "body")
+    emit(builder, Instruction.Retain(Slot(0)))
+    emit(builder, Instruction.Release(Slot(0)))
+    emit(builder, Instruction.MakeUnique(Reference(Slot(0))))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == [
+          "t_main_count b0: `retain` needs a value that is counted, and `Int64` is not",
+          "t_main_count b0: `release` needs a value that is counted, and `Int64` is not",
+          "t_main_count b0: `makeUnique` needs a place that is counted, and `Int64` is not",
+        ]
+    )
+  }
+
+  test "a call takes the arguments of its callee, with their types" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const boolean = program.internType(IrType.Boolean)
+    const void = program.internType(IrType.VoidType)
+    var calleeBuilder = newFunction(
+      "t_main_takesTwo",
+      None,
+      IrSignature([IrParameter("a", int64), IrParameter("b", int64)], void),
+      "",
+    )
+    terminate(calleeBuilder, Terminator.Return(None))
+    const callee = finishFunction(program, calleeBuilder)
+    var builder = newFunction("t_main_caller", None, IrSignature([IrParameter("flag", boolean)], void), "body")
+    emit(builder, Instruction.Call(None, callee, [borrowed(Slot(0))], []))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_caller b0: `t_main_takesTwo` takes 2 arguments and 1 were given"]
+    )
+  }
+
+  test "a construct takes the fields of the variant it names" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const shape = variantLayout(program, "T_main_Shape", [[], [FieldLayout("radius", int64)]], ["Empty", "Circle"])
+    const shapeType = program.internType(IrType.Variant(shape))
+    var builder = newFunction("t_main_build", None, IrSignature([IrParameter("radius", int64)], shapeType), "body")
+    const made = addTemporary(builder, shapeType)
+    emit(builder, Instruction.Construct(made, shape, 1, []))
+    emit(builder, Instruction.Construct(made, shape, 4, [owned(Slot(0))]))
+    terminate(builder, Terminator.Return(Some(owned(made))))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == [
+          "t_main_build b0: `T_main_Shape` is built from 1 fields and 0 were given",
+          "t_main_build b0: `T_main_Shape` has no variant 4",
+        ]
+    )
+  }
+
+  test "an intrinsic says which numeric type it works on, and produces what it promises" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const boolean = program.internType(IrType.Boolean)
+    const at = program.internLocation(Location("src/math.trb", 2, 4))
+    var builder = newFunction(
+      "t_main_compare",
+      None,
+      IrSignature([IrParameter("a", int64), IrParameter("b", int64)], boolean),
+      "body",
+    )
+    const wrong = addTemporary(builder, int64)
+    const plain = Intrinsic(IntrinsicOperation.Less, None)
+    emit(builder, Instruction.Intrinsic(Some(wrong), plain, [Slot(0), Slot(1)], at))
+    terminate(builder, Terminator.Return(Some(owned(Slot(0)))))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == [
+          "t_main_compare b0: `less` needs to say which numeric type it works on",
+          "t_main_compare b0: the result of `less` is a `Bool`, and %2 is `Int64`",
+          "t_main_compare b0: the function returns `Bool` and `return` carries `Int64`",
+        ]
+    )
+  }
+
+  test "an intrinsic operand has the type the intrinsic names" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const int32 = program.internType(IrType.Integer(32, true))
+    const at = program.internLocation(Location("src/math.trb", 3, 5))
+    var builder = newFunction("t_main_add", None, IrSignature([IrParameter("a", int32)], int64), "body")
+    const total = addTemporary(builder, int64)
+    const add = arithmetic(NumericKind.Signed(64), IntrinsicOperation.Add)
+    emit(builder, Instruction.Intrinsic(Some(total), add, [Slot(0), Slot(0)], at))
+    terminate(builder, Terminator.Return(Some(owned(total))))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == [
+          "t_main_add b0: `add.i64` works on `Int64`, and %0 is `Int32`",
+          "t_main_add b0: `add.i64` works on `Int64`, and %0 is `Int32`",
+          "t_main_add b0: the result of `add.i64` is `Int32` and %1 is `Int64`",
+        ]
+    )
+  }
+
+  test "a path step has to fit the value it starts from" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const point = recordLayout(program, "T_main_Point", [FieldLayout("x", int64)])
+    const pointType = program.internType(IrType.Record(point))
+    var builder = newFunction("t_main_reach", None, IrSignature([IrParameter("self", pointType)], int64), "body")
+    const taken = addTemporary(builder, int64)
+    emit(builder, Instruction.Read(taken, Reference(Slot(0), [PathStep.Field(point, 3)])))
+    terminate(builder, Terminator.Return(Some(owned(taken))))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_reach b0: `Record(T_main_Point)` has no field 3"]
+    )
+  }
+
+  test "the parameter slots are the signature's parameters, in order" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const boolean = program.internType(IrType.Boolean)
+    var builder = newFunction("t_main_wrong", None, IrSignature([IrParameter("flag", boolean)], int64), "body")
+    const wrongSlot = builder.function.slots[0].copy(annotation: int64)
+    builder.function.slots.set(0, wrongSlot)
+    terminate(builder, Terminator.Return(Some(owned(Slot(0)))))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_wrong: parameter 0 is `Bool` and its slot is `Int64`"]
+    )
+  }
+
+  test "a slot may not hold `Never`, and may not hold a const argument" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const never = program.internType(IrType.NeverType)
+    const size = program.internType(IrType.ConstantValue(LiteralValue.Integer(16), int64))
+    var builder = newFunction("t_main_impossible", None, IrSignature([], never), "body")
+    const nothing = addTemporary(builder, never)
+    const constant = addTemporary(builder, size)
+    terminate(builder, Terminator.Unreachable)
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == [
+          "t_main_impossible: slot %0 has the type `Never`, which has no values",
+          "t_main_impossible: slot %1 holds a const argument, which is not a value",
+        ]
+    )
+  }
+
+  test "an intrinsic that has only one form names no numeric type" {
+    var program = IrProgram()
+    const strings = program.internType(IrType.Text)
+    const at = program.internLocation(Location("src/text.trb", 5, 3))
+    var builder = newFunction("t_main_join", None, IrSignature([IrParameter("text", strings)], strings), "body")
+    const joined = addTemporary(builder, strings)
+    const concat = Intrinsic(IntrinsicOperation.TextConcat, Some(NumericKind.Signed(64)))
+    emit(builder, Instruction.Intrinsic(Some(joined), concat, [Slot(0)], at))
+    terminate(builder, Terminator.Return(Some(owned(joined))))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == [
+          "t_main_join b0: `textConcat.i64` has only one form, so it names no numeric type",
+          "t_main_join b0: `textConcat.i64` works on `Int64`, and %0 is `String`",
+        ]
+    )
+  }
+
+  test "a container step names the container it walks through" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const strings = program.internType(IrType.Text)
+    const void = program.internType(IrType.VoidType)
+    const listOfInteger = program.internType(IrType.Runtime(RuntimeKind.ListStorage, [int64]))
+    var builder = newFunction(
+      "t_main_take",
+      None,
+      IrSignature([IrParameter("items", listOfInteger), IrParameter("key", strings)], void),
+      "body",
+    )
+    const taken = addTemporary(builder, int64)
+    emit(builder, Instruction.TakeOut(taken, Reference(Slot(0)), Slot(1), RuntimeKind.MapStorage))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_take b0: the container is `List(Int64)` and not the one the step names"]
+    )
+  }
+
+  test "a float intrinsic names its width, and so does an unsigned one" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const float64 = program.internType(IrType.Floating(64))
+    const unsigned = program.internType(IrType.Integer(8, false))
+    const at = program.internLocation(Location("src/math.trb", 9, 1))
+    var builder = newFunction("t_main_mix", None, IrSignature([IrParameter("value", int64)], int64), "body")
+    const sum = addTemporary(builder, int64)
+    const scaled = addTemporary(builder, int64)
+    const add = arithmetic(NumericKind.Floating(64), IntrinsicOperation.Add)
+    const widen = arithmetic(NumericKind.Unsigned(8), IntrinsicOperation.Multiply)
+    emit(builder, Instruction.Intrinsic(Some(sum), add, [Slot(0)], at))
+    emit(builder, Instruction.Intrinsic(Some(scaled), widen, [Slot(0)], at))
+    terminate(builder, Terminator.Return(Some(owned(sum))))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == [
+          "t_main_mix b0: `add.f64` takes 2 operands and 1 were given",
+          "t_main_mix b0: `add.f64` works on `Float64`, and %0 is `Int64`",
+          "t_main_mix b0: `multiply.u8` takes 2 operands and 1 were given",
+          "t_main_mix b0: `multiply.u8` works on `UInt8`, and %0 is `Int64`",
+        ]
+    )
+  }
+
+  test "only the body of a task suspends" {
+    var program = IrProgram()
+    const int64 = integerType(program, 64)
+    const void = program.internType(IrType.VoidType)
+    var builder = newFunction("t_main_wait", None, IrSignature([IrParameter("value", int64)], void), "body")
+    emit(builder, Instruction.Suspend(1, Slot(0)))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    finishProgram(program)
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_wait b0: only the body of a task suspends"]
+    )
+  }
+}

@@ -1,0 +1,571 @@
+use SymbolId from "../semantics/symbols"
+use IrTypeId, IrType, LayoutId, IrProgram, RuntimeKind from "./ir"
+use IrSignatureId, ElementId, ResultMode from "./ir"
+
+/**
+ * Layouts and the representation classes.
+ *
+ * **The representation class is in the IR, not in a back end.** It decides where a `Retain` is needed, so the two back
+ * ends may not compute it separately. Sizes are estimated with a fixed model (`Int8` 1 ... `Int64` 8, `Float32` 4,
+ * `Float64` 8, `Bool` 1, `Char` 4, a pointer 8, C-like alignment padding); the *actual* layout is the C compiler's
+ * business, because it is not observable - there is no `sizeof`, no field offset and no reflection in the language.
+ */
+
+/** What shape a layout has. A tuple is a record without names, an environment a record the lowering invented. */
+public type LayoutKind {
+  case Record
+  case Variant
+  case Tuple
+  /** The captured values of one closure (milestone 5.8). */
+  case Environment
+}
+
+public type Representation {
+  /** Copied, no count. All fields inline, estimated size at most 32 bytes, not part of a cycle of the field graph. */
+  case Inline
+  /** A reference counted block. Big types, and every type that is on a cycle of the field graph. */
+  case Boxed
+  /**
+   * `Option<P>` where the payload of the one non-empty variant is a single pointer-like field: the empty variant is
+   * the null pointer, so `Option` of a list, a string or a boxed record costs nothing.
+   */
+  case Niche(variant: Int, field: Int)
+}
+
+public type FieldLayout {
+  name: String
+  annotation: IrTypeId
+  /** The field of the source. `None` for a tuple field and for a field the lowering invented. */
+  symbol: SymbolId? = None
+}
+
+/** One variant of a variant layout. Its fields are the group `first ..< first + count` of `Layout.fields`. */
+public type VariantLayout {
+  name: String
+  first: Int
+  count: Int
+  symbol: SymbolId? = None
+}
+
+/**
+ * The shape of one monomorphic type. Its `name` is the whole identity: it is a pure function of the declaration and
+ * the type arguments, so two lowerings of the same program produce the same layouts in the same order.
+ */
+public type Layout {
+  /** Mangled, prefix `T`. Also the C type name. */
+  name: String
+  kind: LayoutKind
+  /** The declaration this layout is the shape of. `None` for a tuple and for a generated layout. */
+  origin: SymbolId? = None
+  /** The type arguments of the instance, for `torb ir` and for the element descriptors. */
+  arguments: List<IrTypeId> = []
+  /**
+   * A record and a tuple have their fields here; a variant layout has the fields every variant carries first, then
+   * one group per variant.
+   */
+  fields: List<FieldLayout> = []
+  variants: List<VariantLayout> = []
+  /** How many of `fields` belong to every variant. Zero for a record and for a variant layout without common fields. */
+  commonFieldCount: Int = 0
+  representation: Representation = Representation.Inline
+  /**
+   * The estimated size of the contents in bytes: of the inline value, of the heap block without its header, or of the
+   * payload field of a niche.
+   */
+  size: Int = 0
+  alignment: Int = 1
+  /** Drives the `spawn`/`Channel` rules and the trace functions of the cycle collector. */
+  containsShared: Bool = false
+  containsCounted: Bool = false
+  /** On a cycle of the field graph: every layout of the cycle is `Boxed`, which is what makes a tree work. */
+  isRecursive: Bool = false
+  /** `false` while the layout is only reserved and its fields are not built yet. */
+  isBuilt: Bool = false
+
+  fn fieldsOfVariant(self, variant: Int): List<FieldLayout> {
+    const group = variants[variant]
+    fields[group.first..group.first + group.count]
+  }
+
+  /** The common fields of every variant, in front of every group. */
+  fn commonFields(self): List<FieldLayout> {
+    fields[0..commonFieldCount]
+  }
+
+  /** The fields one `Construct` of this layout takes: all of them for a record, common plus group otherwise. */
+  fn fieldsOfConstruction(self, variant: Int): List<FieldLayout> {
+    if variants.isEmpty() {
+      return fields
+    }
+    var taken = commonFields()
+    taken.addAll(fieldsOfVariant(variant))
+    taken
+  }
+
+  fn hasVariant(self, variant: Int): Bool {
+    variant >= 0 && variant < variants.length()
+  }
+}
+
+// --- The size model -------------------------------------------------------------------------------------------------
+
+/** What a pointer costs. Every target the C back end supports is 64 bit; a 32 bit one would only ever be smaller. */
+public const pointerSize = 8
+
+/** Above this an inline value is copied too often, so it becomes a counted block instead. */
+public const inlineSizeLimit = 32
+
+/** Above this a result is written through a pointer the caller passes, instead of returned in registers. */
+public const resultByValueLimit = 64
+
+/** How many bytes a value of this type takes where it is stored: a pointer for everything that is counted. */
+public fn sizeOfType(program: IrProgram, id: IrTypeId): Int {
+  match program.typeAt(id) {
+    .Integer(width, _) => width / 8
+    .Floating(width) => width / 8
+    .Boolean => 1
+    .Character => 4
+    .VoidType => 1
+    .NeverType => 0
+    // The storage pointer, a byte offset and a byte length
+    .Text => pointerSize + 8
+    .Record(layout) => sizeOfLayoutAsField(program, layout)
+    .Variant(layout) => sizeOfLayoutAsField(program, layout)
+    .Tuple(layout) => sizeOfLayoutAsField(program, layout)
+    .FixedArray(item, size) => sizeOfType(program, item) * size
+    // The code pointer and the environment pointer
+    .Closure(_) => pointerSize * 2
+    .Object(bounds) => pointerSize * (bounds.length() + 1)
+    .SharedObject(_) => pointerSize
+    .Box(_) => pointerSize
+    .Lazy(_) => pointerSize
+    .Runtime(kind, _) => sizeOfRuntime(kind)
+    // A const argument is never stored anywhere
+    .ConstantValue(_, _) => 0
+  }
+}
+
+fn sizeOfRuntime(kind: RuntimeKind): Int {
+  match kind {
+    // The storage pointer, an offset and a length, as a string has
+    .ListStorage => pointerSize + 8
+    .MapStorage => pointerSize
+    .SetStorage => pointerSize
+    .TaskObject => pointerSize
+    .ChannelObject => pointerSize
+    .ExpressionTree => pointerSize
+    // A sign, an exponent and a counted digit block
+    .DecimalNumber => pointerSize + 8
+  }
+}
+
+fn sizeOfLayoutAsField(program: IrProgram, id: LayoutId): Int {
+  const layout = program.layoutAt(id)
+  match layout.representation {
+    .Boxed => pointerSize
+    _ => layout.size
+  }
+}
+
+public fn alignmentOfType(program: IrProgram, id: IrTypeId): Int {
+  match program.typeAt(id) {
+    .Integer(width, _) => width / 8
+    .Floating(width) => width / 8
+    .Boolean => 1
+    .Character => 4
+    .VoidType => 1
+    .NeverType => 1
+    .Text => pointerSize
+    .Record(layout) => alignmentOfLayoutAsField(program, layout)
+    .Variant(layout) => alignmentOfLayoutAsField(program, layout)
+    .Tuple(layout) => alignmentOfLayoutAsField(program, layout)
+    .FixedArray(item, _) => alignmentOfType(program, item)
+    .Closure(_) => pointerSize
+    .Object(_) => pointerSize
+    .SharedObject(_) => pointerSize
+    .Box(_) => pointerSize
+    .Lazy(_) => pointerSize
+    .Runtime(_, _) => pointerSize
+    .ConstantValue(_, _) => 1
+  }
+}
+
+fn alignmentOfLayoutAsField(program: IrProgram, id: LayoutId): Int {
+  const layout = program.layoutAt(id)
+  match layout.representation {
+    .Boxed => pointerSize
+    _ => layout.alignment
+  }
+}
+
+/** The next offset at or after `offset` that `alignment` allows. */
+public fn alignedOffset(offset: Int, alignment: Int): Int {
+  if alignment <= 1 {
+    return offset
+  }
+  const remainder = offset % alignment
+  if remainder == 0 {
+    return offset
+  }
+  offset + alignment - remainder
+}
+
+// --- Counted, shared, and the niche ---------------------------------------------------------------------------------
+
+/**
+ * Whether a value of this type carries a reference count of its own. That is the whole table of BACKEND 2.1: numbers
+ * and inline records are copied and never touched, everything with storage behind it is retained and released.
+ */
+public fn isManagedType(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .Text => true
+    .Runtime(_, _) => true
+    .Object(_) => true
+    // Two pointers, one of which owns an environment. A retain of a closure without one is a no-op at runtime
+    .Closure(_) => true
+    .SharedObject(_) => true
+    .Box(_) => true
+    .Lazy(_) => true
+    .Record(layout) => isBoxedLayout(program, layout)
+    .Variant(layout) => isBoxedLayout(program, layout)
+    .Tuple(layout) => isBoxedLayout(program, layout)
+    _ => false
+  }
+}
+
+fn isBoxedLayout(program: IrProgram, id: LayoutId): Bool {
+  match program.layoutAt(id).representation {
+    .Boxed => true
+    _ => false
+  }
+}
+
+/**
+ * Whether the value itself, or anything inside of it, is counted. Asked of the *stored* flag of a nested layout and
+ * never by recursion into it, so a recursive type does not have to be a special case here.
+ */
+public fn containsCountedType(program: IrProgram, id: IrTypeId): Bool {
+  if isManagedType(program, id) {
+    return true
+  }
+  match program.typeAt(id) {
+    .Record(layout) => program.layoutAt(layout).containsCounted
+    .Variant(layout) => program.layoutAt(layout).containsCounted
+    .Tuple(layout) => program.layoutAt(layout).containsCounted
+    .FixedArray(item, size) => size > 0 && containsCountedType(program, item)
+    _ => false
+  }
+}
+
+/**
+ * Whether the value can *reach* a `shared` object or a `Box` - the two things that can be part of a cycle. A trace
+ * function is emitted for a layout where this is true and is `NULL` everywhere else, which is most layouts.
+ */
+public fn containsSharedType(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .SharedObject(_) => true
+    .Box(_) => true
+    // A trait-typed value may hold anything that satisfies its bounds
+    .Object(_) => true
+    .Record(layout) => program.layoutAt(layout).containsShared
+    .Variant(layout) => program.layoutAt(layout).containsShared
+    .Tuple(layout) => program.layoutAt(layout).containsShared
+    .FixedArray(item, size) => size > 0 && containsSharedType(program, item)
+    .Lazy(item) => containsSharedType(program, item)
+    .Runtime(_, arguments) => arguments.any({ containsSharedType(program, _) })
+    _ => false
+  }
+}
+
+/**
+ * Whether a single field of this type can carry the empty variant of a niche in a null pointer. A `Boxed` record, a
+ * `shared` object, a `Box`, a `Lazy` cell, a runtime container, a `String` (its storage pointer) and a closure (its
+ * code pointer) all begin with a pointer that is never null in a value that exists.
+ *
+ * A layout that already uses a niche is not one: `Option<Option<T>>` cannot use the same null twice and falls back to
+ * a tag.
+ */
+public fn isNichePayload(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .Text => true
+    .Runtime(_, _) => true
+    .Closure(_) => true
+    .SharedObject(_) => true
+    .Box(_) => true
+    .Lazy(_) => true
+    .Record(layout) => isBoxedLayout(program, layout)
+    .Variant(layout) => isBoxedLayout(program, layout)
+    .Tuple(layout) => isBoxedLayout(program, layout)
+    _ => false
+  }
+}
+
+// --- Computing every representation to a fixpoint -------------------------------------------------------------------
+
+/**
+ * Everything that follows from the finished set of layouts: the representations, then the sizes of the element
+ * descriptors and the result mode of every signature.
+ *
+ * The lowering calls this once, after the last instance was lowered and before anything is printed, verified or
+ * emitted. Nothing before it may ask for a size, because a size is only final when every layout is.
+ */
+public fn finishProgram(var program: IrProgram) {
+  finishLayouts(program)
+  finishSignatures(program)
+  finishElements(program)
+}
+
+/** A result larger than the model's limit is written through a pointer the caller passes first (BACKEND 3.2). */
+public fn resultModeOf(program: IrProgram, result: IrTypeId): ResultMode {
+  if sizeOfType(program, result) > resultByValueLimit {
+    return ResultMode.ByPointer
+  }
+  ResultMode.ByValue
+}
+
+fn finishSignatures(var program: IrProgram) {
+  for index in 0..program.signatureCount() {
+    const identifier = IrSignatureId(index)
+    const signature = program.signatureAt(identifier)
+    const mode = resultModeOf(program, signature.result)
+    if mode != signature.resultMode {
+      program.setSignature(identifier, signature.copy(resultMode: mode))
+    }
+  }
+  // A function carries its signature as a value, not as an id: two functions of the same shape are still two functions
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    const mode = resultModeOf(program, function.signature.result)
+    if mode == function.signature.resultMode {
+      continue
+    }
+    const updated = function.copy(signature: function.signature.copy(resultMode: mode))
+    program.functions.set(index, updated)
+  }
+}
+
+fn finishElements(var program: IrProgram) {
+  for index in 0..program.elements.length() {
+    const identifier = ElementId(index)
+    const descriptor = program.elementAt(identifier)
+    const size = sizeOfType(program, descriptor.item)
+    const alignment = alignmentOfType(program, descriptor.item)
+    if size != descriptor.size || alignment != descriptor.alignment {
+      program.setElement(identifier, descriptor.copy(size: size, alignment: alignment))
+    }
+  }
+}
+
+/**
+ * Decides the representation, the size, the alignment and the two flags of every layout of the program.
+ *
+ * It has to be a fixpoint over the whole table and not a recursion over one layout, because the size of a field
+ * depends on the representation of its own layout, and a type that contains itself would never terminate that way.
+ * The layouts on a cycle of the field graph are pinned to `Boxed` first, so what is left is a DAG and the sweep
+ * converges in as many rounds as the field graph is deep.
+ */
+public fn finishLayouts(var program: IrProgram) {
+  markRecursiveLayouts(program)
+  const limit = program.layouts.length() + 8
+  var rounds = 0
+  var isChanged = true
+  while isChanged {
+    isChanged = false
+    rounds = rounds + 1
+    if rounds > limit {
+      program.reportProblem("The layouts of the program did not settle after {limit} rounds")
+      return
+    }
+    for index in 0..program.layouts.length() {
+      const identifier = LayoutId(index)
+      if updateLayout(program, identifier) {
+        isChanged = true
+      }
+    }
+  }
+}
+
+/** One layout, recomputed from its fields. `true` when something about it changed. */
+fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
+  const before = program.layoutAt(id)
+  const packed = packedSize(program, before)
+  var representation = Representation.Inline
+  var size = packed.size
+  var alignment = packed.alignment
+  const niche = nicheOf(program, before)
+  if before.isRecursive {
+    representation = Representation.Boxed
+  } else if const Some(found) = niche {
+    representation = found
+    const payload = before.fields[fieldOfNiche(found)]
+    size = sizeOfType(program, payload.annotation)
+    alignment = alignmentOfType(program, payload.annotation)
+  } else if packed.size > inlineSizeLimit {
+    representation = Representation.Boxed
+  }
+  const after = before.copy(
+    representation: representation,
+    size: size,
+    alignment: alignment,
+    containsShared: anyFieldIsShared(program, before),
+    containsCounted: anyFieldIsCounted(program, before),
+  )
+  if after == before {
+    return false
+  }
+  program.setLayout(id, after)
+  true
+}
+
+fn fieldOfNiche(representation: Representation): Int {
+  match representation {
+    .Niche(_, field) => field
+    _ => 0
+  }
+}
+
+/** The size and the alignment of the contents, with C-like padding. A variant layout carries a 32 bit tag in front. */
+fn packedSize(program: IrProgram, layout: Layout): PackedSize {
+  if layout.variants.isEmpty() {
+    return packedGroup(program, layout.fields)
+  }
+  const common = packedGroup(program, layout.commonFields())
+  var payload = 0
+  var alignment = common.alignment.max(4)
+  for variant in layout.variants {
+    const group = packedGroup(program, layout.fields[variant.first..variant.first + variant.count])
+    payload = payload.max(group.size)
+    alignment = alignment.max(group.alignment)
+  }
+  // The common fields, then the tag, then the widest variant
+  const tag = alignedOffset(common.size, 4) + 4
+  PackedSize(alignedOffset(alignedOffset(tag, alignment) + payload, alignment), alignment)
+}
+
+fn packedGroup(program: IrProgram, fields: List<FieldLayout>): PackedSize {
+  var offset = 0
+  var alignment = 1
+  for field in fields {
+    const own = alignmentOfType(program, field.annotation)
+    alignment = alignment.max(own)
+    offset = alignedOffset(offset, own) + sizeOfType(program, field.annotation)
+  }
+  PackedSize(alignedOffset(offset, alignment), alignment)
+}
+
+type PackedSize {
+  size: Int
+  alignment: Int
+}
+
+/** `Option<P>`: two variants, one of them empty, the other one field that is a pointer which is never null. */
+fn nicheOf(program: IrProgram, layout: Layout): Representation? {
+  if layout.variants.length() != 2 || layout.commonFieldCount > 0 {
+    return None
+  }
+  var empty = -1
+  var payload = -1
+  for index in 0..2 {
+    const variant = layout.variants[index]
+    if variant.count == 0 {
+      empty = index
+    } else if variant.count == 1 {
+      payload = index
+    }
+  }
+  if empty < 0 || payload < 0 {
+    return None
+  }
+  const field = layout.variants[payload].first
+  if !isNichePayload(program, layout.fields[field].annotation) {
+    return None
+  }
+  Some(Representation.Niche(payload, field))
+}
+
+fn anyFieldIsCounted(program: IrProgram, layout: Layout): Bool {
+  layout.fields.any({ containsCountedType(program, _.annotation) })
+}
+
+fn anyFieldIsShared(program: IrProgram, layout: Layout): Bool {
+  layout.fields.any({ containsSharedType(program, _.annotation) })
+}
+
+/**
+ * Marks every layout that can reach itself through fields that are stored inline. `type Node { next: Node }` never
+ * gets here - the checker reports it - but `case Binary(left: Expression, right: Expression)` does, and one counted
+ * node per tree node is exactly what "recursive ADTs are reference counted nodes" means.
+ */
+fn markRecursiveLayouts(var program: IrProgram) {
+  const edges = valueEdges(program)
+  for index in 0..program.layouts.length() {
+    if !reachesItself(edges, index) {
+      continue
+    }
+    const layout = program.layouts[index]
+    if !layout.isRecursive {
+      program.setLayout(LayoutId(index), layout.copy(isRecursive: true))
+    }
+  }
+}
+
+/** Layout to the layouts it stores inline, directly. A pointer is not an edge: it is what breaks a cycle. */
+fn valueEdges(program: IrProgram): List<List<Int>> {
+  var edges: List<List<Int>> = []
+  for layout in program.layouts {
+    var targets: List<Int> = []
+    for field in layout.fields {
+      for target in inlineLayoutsOf(program, field.annotation) {
+        if !targets.contains(target) {
+          targets.add(target)
+        }
+      }
+    }
+    edges.add(targets)
+  }
+  edges
+}
+
+/**
+ * Which layouts a field of this type stores inline. `Boxed` is deliberately not one of them - but while the
+ * representations are still being decided every layout looks `Inline`, which is what makes the cycle visible in the
+ * first place.
+ */
+fn inlineLayoutsOf(program: IrProgram, id: IrTypeId): List<Int> {
+  match program.typeAt(id) {
+    .Record(layout) => inlineLayout(program, layout)
+    .Variant(layout) => inlineLayout(program, layout)
+    .Tuple(layout) => inlineLayout(program, layout)
+    .FixedArray(item, size) => if size > 0 { inlineLayoutsOf(program, item) } else { [] }
+    _ => []
+  }
+}
+
+fn inlineLayout(program: IrProgram, id: LayoutId): List<Int> {
+  if isBoxedLayout(program, id) {
+    return []
+  }
+  [id.value]
+}
+
+/** A walk from the direct children of one layout, asking whether it comes back to itself. */
+fn reachesItself(edges: List<List<Int>>, start: Int): Bool {
+  var seen: List<Bool> = []
+  for _ in 0..edges.length() {
+    seen.add(false)
+  }
+  var pending = edges[start]
+  while !pending.isEmpty() {
+    const current = pending[pending.length() - 1]
+    pending.removeAt(pending.length() - 1)
+    if current == start {
+      return true
+    }
+    if seen[current] {
+      continue
+    }
+    seen.set(current, true)
+    pending.addAll(edges[current])
+  }
+  false
+}

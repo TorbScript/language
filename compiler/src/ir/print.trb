@@ -1,0 +1,624 @@
+use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, IrParameter, TraitId, RuntimeKind from "./ir"
+use Block, BlockId, Slot, SlotDeclaration, SlotRole, Instruction, Terminator, Argument, Ownership from "./ir"
+use Reference, PathStep, Capture, WitnessSource, Intrinsic, IntrinsicOperation, NumericKind from "./ir"
+use LayoutId, LocationId, Location, StaticValue, StaticContents, ElementDescriptor, WitnessTable from "./ir"
+use FunctionKind, ResultMode, IrSignatureId, FunctionId from "./ir"
+use Layout, FieldLayout, Representation from "./layout"
+use LiteralValue, describeLiteral from "../semantics/checker/type"
+
+/**
+ * The text format of the IR: what `torb ir <path>`, `torb build --emit-ir` and every snapshot test show.
+ *
+ * It is deterministic by construction. Blocks come in the order the lowering created them, slots in declaration order,
+ * one instruction per line, `owned`/`borrowed`/`last` written out on every argument, source locations as
+ * `path:line:column` with forward slashes relative to the workspace root, and nothing else on a line. Everything that
+ * is program-wide - layouts, element descriptors, witness tables, static values, functions - is sorted by its mangled
+ * name before it is written, so the text is a function of the *instance set* and not of the traversal that found it.
+ *
+ * A test that compares this text catches an ownership regression far earlier than a C-level test can.
+ */
+
+/** The whole program, in the order a reader needs it: what things are, then what they do. */
+public fn printProgram(program: IrProgram): String {
+  var lines: List<String> = []
+  var layouts = program.layouts
+  layouts.sort({ _.name })
+  for layout in layouts {
+    lines.add(printLayout(program, layout))
+  }
+  var elements = program.elements
+  elements.sort({ _.name })
+  for element in elements {
+    lines.add(printElement(program, element))
+  }
+  var tables = program.witnessTables
+  tables.sort({ _.name })
+  for table in tables {
+    lines.add(printWitnessTable(program, table))
+  }
+  var statics = program.statics
+  statics.sort({ _.name })
+  for value in statics {
+    lines.add(printStatic(program, value))
+  }
+  var functions = program.functions
+  functions.sort({ _.name })
+  for function in functions {
+    if !lines.isEmpty() {
+      lines.add("")
+    }
+    lines.addAll(functionLines(program, function))
+  }
+  String.join(lines, separator: "\n")
+}
+
+/** One function, as the snapshot tests compare it. */
+public fn printFunction(program: IrProgram, function: IrFunction): String {
+  String.join(functionLines(program, function), separator: "\n")
+}
+
+fn functionLines(program: IrProgram, function: IrFunction): List<String> {
+  var lines: List<String> = []
+  const prefix = match function.kind {
+    .Plain => ""
+    .TaskResume => "task "
+  }
+  lines.add("{prefix}fn {function.name}({printParameters(program, function.signature)}) -> {printResult(program, function.signature)} \{")
+  for index in 0..function.slots.length() {
+    lines.add("  {printSlot(program, index, function.slots[index])}")
+  }
+  for index in 0..function.blocks.length() {
+    const block = function.blocks[index]
+    lines.add("b{index}:{printBlockComment(program, block)}")
+    for instruction in block.instructions {
+      lines.add("  {printInstruction(program, function, instruction)}")
+    }
+    lines.add("  {printTerminator(program, function, block.terminator)}")
+  }
+  lines.add("\}")
+  lines
+}
+
+fn printParameters(program: IrProgram, signature: IrSignature): String {
+  var parts: List<String> = []
+  for parameter in signature.parameters {
+    parts.add(printParameter(program, parameter))
+  }
+  for index in 0..signature.witnesses.length() {
+    parts.add("witness {index}: {describeTrait(program, signature.witnesses[index])}")
+  }
+  String.join(parts, separator: ", ")
+}
+
+fn printParameter(program: IrProgram, parameter: IrParameter): String {
+  const reference = if parameter.isReference { "var " } else { "" }
+  const name = if parameter.name.isEmpty() { "" } else { "{parameter.name}: " }
+  "{reference}{name}{describeIrType(program, parameter.annotation)} {printOwnership(parameter.ownership)}"
+}
+
+fn printResult(program: IrProgram, signature: IrSignature): String {
+  const shown = describeIrType(program, signature.result)
+  match signature.resultMode {
+    .ByValue => shown
+    .ByPointer => "{shown} byPointer"
+  }
+}
+
+fn printSlot(program: IrProgram, index: Int, slot: SlotDeclaration): String {
+  const role = match slot.role {
+    .Parameter(_) => "parameter"
+    .Local => "local"
+    .Temporary => "temporary"
+    .Environment => "environment"
+    .ResultPointer => "result"
+  }
+  const name = if slot.name.isEmpty() { "" } else { " {slot.name}" }
+  "slot %{index} {role}{name}: {describeIrType(program, slot.annotation)}"
+}
+
+fn printBlockComment(program: IrProgram, block: Block): String {
+  var parts: List<String> = []
+  if const Some(at) = block.at {
+    const location = program.locationAt(at)
+    parts.add("{location.path}:{location.line}")
+  }
+  if !block.label.isEmpty() {
+    parts.add(block.label)
+  }
+  if parts.isEmpty() {
+    return ""
+  }
+  " # {String.join(parts, separator: " ")}"
+}
+
+// --- Instructions ---------------------------------------------------------------------------------------------------
+
+public fn printInstruction(program: IrProgram, function: IrFunction, instruction: Instruction): String {
+  match instruction {
+    .Constant(target, value) => "{printTarget(target)}constant {program.staticAt(value).name}"
+    .Move(target, source) => "{printTarget(target)}move %{source.value}"
+    .Copy(target, source) => "{printTarget(target)}copy %{source.value}"
+    .Retain(slot) => "retain %{slot.value}"
+    .Release(slot) => "release %{slot.value}"
+    .MakeUnique(reference) => "makeUnique {printReference(program, reference)}"
+    .Call(target, callee, arguments, witnesses) => {
+      const head = "{printOptionalTarget(target)}call {program.functionAt(callee).name}"
+      "{head}({printArguments(arguments)}){printWitnesses(program, witnesses)}"
+    }
+    .CallClosure(target, callee, arguments) => {
+      "{printOptionalTarget(target)}callClosure %{callee.value}({printArguments(arguments)})"
+    }
+    .CallWitness(target, witness, member, arguments) => {
+      const source = printWitnessSource(program, witness)
+      "{printOptionalTarget(target)}callWitness {source} member {member}({printArguments(arguments)})"
+    }
+    .Intrinsic(target, intrinsic, arguments, at) => {
+      var parts: List<String> = []
+      for slot in arguments {
+        parts.add("%{slot.value}")
+      }
+      const operands = String.join(parts, separator: ", ")
+      const head = "{printOptionalTarget(target)}intrinsic {describeIntrinsic(intrinsic)}"
+      "{head} {operands} at {printLocation(program, at)}"
+    }
+    .Construct(target, layout, variant, fields) => {
+      "{printTarget(target)}construct {printConstructed(program, layout, variant)} ({printArguments(fields)})"
+    }
+    .Read(target, reference) => "{printTarget(target)}read {printReference(program, reference)}"
+    .Write(reference, value) => "write {printReference(program, reference)} = {printArgument(value)}"
+    .Tag(target, source) => "{printTarget(target)}tag %{source.value}"
+    .Closure(target, callee, captures, isEscaping) => {
+      const escaping = if isEscaping { "escaping" } else { "local" }
+      var parts: List<String> = []
+      for capture in captures {
+        parts.add(printCapture(program, capture))
+      }
+      const taken = String.join(parts, separator: ", ")
+      "{printTarget(target)}closure {program.functionAt(callee).name} captures({taken}) {escaping}"
+    }
+    .BoxNew(target, value) => "{printTarget(target)}boxNew {printArgument(value)}"
+    .TraitValue(target, value, tables) => {
+      var parts: List<String> = []
+      for table in tables {
+        parts.add(printWitnessSource(program, table))
+      }
+      "{printTarget(target)}traitValue {printArgument(value)} tables({String.join(parts, separator: ", ")})"
+    }
+    .TakeOut(target, container, key, kind) => {
+      const place = printReference(program, container)
+      "{printTarget(target)}takeOut {place}[%{key.value}] {describeRuntimeKind(kind)}"
+    }
+    .PutBack(container, key, value, kind) => {
+      const place = printReference(program, container)
+      "putBack {place}[%{key.value}] = %{value.value} {describeRuntimeKind(kind)}"
+    }
+    .Panic(message, at) => "panic {printArgument(message)} at {printLocation(program, at)}"
+    .Suspend(state, awaited) => "suspend state {state} %{awaited.value}"
+  }
+}
+
+public fn printTerminator(program: IrProgram, function: IrFunction, terminator: Terminator): String {
+  match terminator {
+    .Jump(target) => "jump b{target.value}"
+    .Branch(condition, then, otherwise) => "branch %{condition.value} then b{then.value} else b{otherwise.value}"
+    .Switch(scrutinee, values, targets, otherwise) => {
+      var parts: List<String> = []
+      for index in 0..values.length().min(targets.length()) {
+        parts.add("case {values[index]} b{targets[index].value}")
+      }
+      parts.add("otherwise b{otherwise.value}")
+      "switch %{scrutinee.value} {String.join(parts, separator: ", ")}"
+    }
+    .Return(value) => {
+      match value {
+        Some(argument) => "return {printArgument(argument)}"
+        .None => "return"
+      }
+    }
+    .Unreachable => "unreachable"
+  }
+}
+
+fn printTarget(target: Slot): String {
+  "%{target.value} = "
+}
+
+fn printOptionalTarget(target: Slot?): String {
+  match target {
+    Some(slot) => printTarget(slot)
+    .None => ""
+  }
+}
+
+fn printArguments(arguments: List<Argument>): String {
+  var parts: List<String> = []
+  for argument in arguments {
+    parts.add(printArgument(argument))
+  }
+  String.join(parts, separator: ", ")
+}
+
+fn printArgument(argument: Argument): String {
+  const last = if argument.isLastUse { " last" } else { "" }
+  "%{argument.slot.value} {printOwnership(argument.ownership)}{last}"
+}
+
+fn printOwnership(ownership: Ownership): String {
+  match ownership {
+    .Borrowed => "borrowed"
+    .Owned => "owned"
+  }
+}
+
+fn printWitnesses(program: IrProgram, witnesses: List<WitnessSource>): String {
+  if witnesses.isEmpty() {
+    return ""
+  }
+  var parts: List<String> = []
+  for witness in witnesses {
+    parts.add(printWitnessSource(program, witness))
+  }
+  " witnesses({String.join(parts, separator: ", ")})"
+}
+
+fn printWitnessSource(program: IrProgram, witness: WitnessSource): String {
+  var head = match witness.root {
+    .Table(table) => "table {program.witnessTableAt(table).name}"
+    .Parameter(index) => "parameter {index}"
+    .Value(slot, bound) => "value %{slot.value} bound {bound}"
+  }
+  for step in witness.steps {
+    head = head + ".{step}"
+  }
+  head
+}
+
+fn printCapture(program: IrProgram, capture: Capture): String {
+  match capture {
+    .Value(slot) => "%{slot.value} value"
+    .Boxed(slot) => "%{slot.value} boxed"
+    .Place(reference) => "{printReference(program, reference)} place"
+  }
+}
+
+fn printConstructed(program: IrProgram, layout: LayoutId, variant: Int): String {
+  if !program.hasLayout(layout) {
+    return "T?{layout.value}"
+  }
+  const shape = program.layoutAt(layout)
+  if !shape.hasVariant(variant) {
+    return shape.name
+  }
+  "{shape.name}.{shape.variants[variant].name}"
+}
+
+/** `%0.x`, `%0.Circle.radius`, `%0[%3]`, `%0.*`: a place, the way the source wrote it. */
+public fn printReference(program: IrProgram, reference: Reference): String {
+  var shown = "%{reference.base.value}"
+  for step in reference.steps {
+    shown = shown + printStep(program, step)
+  }
+  shown
+}
+
+fn printStep(program: IrProgram, step: PathStep): String {
+  match step {
+    .Field(layout, index) => ".{fieldNameOf(program, layout, index)}"
+    .TupleField(_, index) => ".{index}"
+    .Variant(layout, variant, index) => {
+      if !program.hasLayout(layout) {
+        return ".variant{variant}.{index}"
+      }
+      const shape = program.layoutAt(layout)
+      if !shape.hasVariant(variant) {
+        return ".variant{variant}.{index}"
+      }
+      const fields = shape.fieldsOfVariant(variant)
+      if index < 0 || index >= fields.length() {
+        return ".{shape.variants[variant].name}.{index}"
+      }
+      ".{shape.variants[variant].name}.{fields[index].name}"
+    }
+    .Element(_, index) => "[%{index.value}]"
+    .Contents(_) => ".*"
+  }
+}
+
+fn fieldNameOf(program: IrProgram, layout: LayoutId, index: Int): String {
+  if !program.hasLayout(layout) {
+    return "field{index}"
+  }
+  const shape = program.layoutAt(layout)
+  if index < 0 || index >= shape.fields.length() {
+    return "field{index}"
+  }
+  shape.fields[index].name
+}
+
+public fn printLocation(program: IrProgram, at: LocationId): String {
+  if !program.hasLocation(at) {
+    return "?"
+  }
+  const location = program.locationAt(at)
+  "{location.path}:{location.line}:{location.column}"
+}
+
+// --- Layouts, static data, witnesses --------------------------------------------------------------------------------
+
+public fn printLayout(program: IrProgram, layout: Layout): String {
+  var parts = ["layout", layout.name, printRepresentation(layout.representation)]
+  if layout.isRecursive {
+    parts.add("recursive")
+  }
+  parts.add("size")
+  parts.add("{layout.size}")
+  parts.add("align")
+  parts.add("{layout.alignment}")
+  if layout.containsCounted {
+    parts.add("counted")
+  }
+  if layout.containsShared {
+    parts.add("shared")
+  }
+  if layout.commonFieldCount > 0 {
+    parts.add("common({printFields(program, layout.commonFields())})")
+  }
+  if layout.variants.isEmpty() {
+    parts.add("fields({printFields(program, layout.fields)})")
+  } else {
+    var shown: List<String> = []
+    for index in 0..layout.variants.length() {
+      const variant = layout.variants[index]
+      const fields = layout.fieldsOfVariant(index)
+      if fields.isEmpty() {
+        shown.add(variant.name)
+        continue
+      }
+      shown.add("{variant.name}({printFields(program, fields)})")
+    }
+    parts.add("variants({String.join(shown, separator: ", ")})")
+  }
+  String.join(parts, separator: " ")
+}
+
+fn printFields(program: IrProgram, fields: List<FieldLayout>): String {
+  var parts: List<String> = []
+  for field in fields {
+    parts.add("{field.name}: {describeIrType(program, field.annotation)}")
+  }
+  String.join(parts, separator: ", ")
+}
+
+fn printRepresentation(representation: Representation): String {
+  match representation {
+    .Inline => "inline"
+    .Boxed => "boxed"
+    .Niche(variant, field) => "niche({variant}, {field})"
+  }
+}
+
+public fn printElement(program: IrProgram, element: ElementDescriptor): String {
+  var parts = [
+    "element",
+    element.name,
+    describeIrType(program, element.item),
+    "size",
+    "{element.size}",
+    "align",
+    "{element.alignment}",
+  ]
+  addFunctionPart(program, parts, "retain", element.retain)
+  addFunctionPart(program, parts, "release", element.release)
+  addFunctionPart(program, parts, "equals", element.equals)
+  addFunctionPart(program, parts, "hash", element.hash)
+  String.join(parts, separator: " ")
+}
+
+fn addFunctionPart(program: IrProgram, var parts: List<String>, word: String, function: FunctionId?) {
+  if const Some(found) = function {
+    parts.add(word)
+    parts.add(program.functionAt(found).name)
+  }
+}
+
+public fn printWitnessTable(program: IrProgram, table: WitnessTable): String {
+  var members: List<String> = []
+  for member in table.members {
+    members.add(program.functionAt(member).name)
+  }
+  var nested: List<String> = []
+  for inner in table.nested {
+    nested.add(program.witnessTableAt(inner).name)
+  }
+  const head = "witness {table.name} {describeTrait(program, table.applied)} for {describeIrType(program, table.target)}"
+  "{head} members({String.join(members, separator: ", ")}) nested({String.join(nested, separator: ", ")})"
+}
+
+public fn printStatic(program: IrProgram, value: StaticValue): String {
+  "static {value.name}: {describeIrType(program, value.annotation)} = {printContents(program, value.contents)}"
+}
+
+fn printContents(program: IrProgram, contents: StaticContents): String {
+  match contents {
+    .Literal(value) => describeLiteral(value)
+    .Floating(value) => "{value}"
+    .VoidValue => "void"
+    .Aggregate(layout, variant, fields) => {
+      var parts: List<String> = []
+      for field in fields {
+        parts.add(program.staticAt(field).name)
+      }
+      "{printConstructed(program, layout, variant)}({String.join(parts, separator: ", ")})"
+    }
+    .Items(item, items) => {
+      var parts: List<String> = []
+      for one in items {
+        parts.add(program.staticAt(one).name)
+      }
+      "{describeIrType(program, item)}[{String.join(parts, separator: ", ")}]"
+    }
+  }
+}
+
+// --- Types ----------------------------------------------------------------------------------------------------------
+
+/** How a type is written in the text format and in every message about the IR. */
+public fn describeIrType(program: IrProgram, id: IrTypeId): String {
+  if !program.hasType(id) {
+    return "?"
+  }
+  match program.typeAt(id) {
+    .Integer(width, isSigned) => {
+      if isSigned {
+        return "Int{width}"
+      }
+      "UInt{width}"
+    }
+    .Floating(width) => "Float{width}"
+    .Boolean => "Bool"
+    .Character => "Char"
+    .VoidType => "Void"
+    .NeverType => "Never"
+    .Text => "String"
+    .Record(layout) => "Record({layoutNameOf(program, layout)})"
+    .Variant(layout) => "Variant({layoutNameOf(program, layout)})"
+    .Tuple(layout) => "Tuple({layoutNameOf(program, layout)})"
+    .SharedObject(layout) => "Shared({layoutNameOf(program, layout)})"
+    .FixedArray(item, size) => "Array({describeIrType(program, item)}, {size})"
+    .Closure(signature) => "Closure({describeIrSignature(program, signature)})"
+    .Object(bounds) => {
+      var parts: List<String> = []
+      for bound in bounds {
+        parts.add(describeTrait(program, bound))
+      }
+      "Object({String.join(parts, separator: " + ")})"
+    }
+    .Box(item) => "Box({describeIrType(program, item)})"
+    .Lazy(item) => "Lazy({describeIrType(program, item)})"
+    .Runtime(kind, arguments) => {
+      const head = describeRuntimeKind(kind)
+      if arguments.isEmpty() {
+        return head
+      }
+      var parts: List<String> = []
+      for argument in arguments {
+        parts.add(describeIrType(program, argument))
+      }
+      "{head}({String.join(parts, separator: ", ")})"
+    }
+    .ConstantValue(value, _) => "const {describeLiteral(value)}"
+  }
+}
+
+fn layoutNameOf(program: IrProgram, layout: LayoutId): String {
+  if !program.hasLayout(layout) {
+    return "T?{layout.value}"
+  }
+  program.layoutAt(layout).name
+}
+
+/** `(Int64, var Bool) -> Void`: the shape a closure value is called with. */
+public fn describeIrSignature(program: IrProgram, id: IrSignatureId): String {
+  const signature = program.signatureAt(id)
+  var parts: List<String> = []
+  for parameter in signature.parameters {
+    const reference = if parameter.isReference { "var " } else { "" }
+    parts.add("{reference}{describeIrType(program, parameter.annotation)}")
+  }
+  for witness in signature.witnesses {
+    parts.add("witness {describeTrait(program, witness)}")
+  }
+  "({String.join(parts, separator: ", ")}) -> {describeIrType(program, signature.result)}"
+}
+
+/** `Show`, `Iterable<Int64>`: the trait the way the source names it, not its mangled spelling. */
+public fn describeTrait(program: IrProgram, id: TraitId): String {
+  const applied = program.traitAt(id)
+  if applied.arguments.isEmpty() {
+    return applied.path.name
+  }
+  var parts: List<String> = []
+  for argument in applied.arguments {
+    parts.add(describeIrType(program, argument))
+  }
+  "{applied.path.name}<{String.join(parts, separator: ", ")}>"
+}
+
+public fn describeRuntimeKind(kind: RuntimeKind): String {
+  match kind {
+    .ListStorage => "List"
+    .MapStorage => "Map"
+    .SetStorage => "Set"
+    .TaskObject => "Task"
+    .ChannelObject => "Channel"
+    .ExpressionTree => "Expression"
+    .DecimalNumber => "Decimal"
+  }
+}
+
+/**
+ * `add.i64`, `less.f64`, `convert.i32.i64`, `textConcat`: the operation and the numeric type it works on. A conversion
+ * names both, what it comes from first.
+ */
+public fn describeIntrinsic(intrinsic: Intrinsic): String {
+  if const .Convert(to) = intrinsic.operation {
+    const from = match intrinsic.kind {
+      Some(kind) => suffixOfNumeric(kind)
+      .None => "?"
+    }
+    return "convert.{from}.{suffixOfNumeric(to)}"
+  }
+  const head = describeOperation(intrinsic.operation)
+  match intrinsic.kind {
+    .None => head
+    Some(kind) => "{head}.{suffixOfNumeric(kind)}"
+  }
+}
+
+fn describeOperation(operation: IntrinsicOperation): String {
+  match operation {
+    .Add => "add"
+    .Subtract => "subtract"
+    .Multiply => "multiply"
+    .Divide => "divide"
+    .Remainder => "remainder"
+    .Negate => "negate"
+    .BitwiseAnd => "bitwiseAnd"
+    .BitwiseOr => "bitwiseOr"
+    .BitwiseExclusiveOr => "bitwiseExclusiveOr"
+    .BitwiseNot => "bitwiseNot"
+    .ShiftedLeft => "shiftedLeft"
+    .ShiftedRight => "shiftedRight"
+    .Equal => "equal"
+    .NotEqual => "notEqual"
+    .Less => "less"
+    .LessOrEqual => "lessOrEqual"
+    .Greater => "greater"
+    .GreaterOrEqual => "greaterOrEqual"
+    .Convert(_) => "convert"
+    .BooleanNot => "booleanNot"
+    .TextConcat => "textConcat"
+    .TextEqual => "textEqual"
+    .TextCompare => "textCompare"
+    .TextByteLength => "textByteLength"
+    .LazyForce => "lazyForce"
+  }
+}
+
+/** `i64`, `u8`, `f64`: how a numeric type is spelled in the name of an intrinsic. */
+public fn suffixOfNumeric(kind: NumericKind): String {
+  match kind {
+    .Signed(width) => "i{width}"
+    .Unsigned(width) => "u{width}"
+    .Floating(width) => "f{width}"
+  }
+}
+
+/** `Int64`, `UInt8`, `Float64`: how a numeric type is named in a message. */
+public fn describeNumericKind(kind: NumericKind): String {
+  match kind {
+    .Signed(width) => "Int{width}"
+    .Unsigned(width) => "UInt{width}"
+    .Floating(width) => "Float{width}"
+  }
+}
