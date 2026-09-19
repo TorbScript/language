@@ -53,6 +53,36 @@ public native type UInt16 with Numeric, Hash, Bits {}
 public native type UInt32 with Numeric, Hash, Bits {}
 public native type UInt64 with Numeric, Hash, Bits {}
 
+extend Int8 {
+  const minimum: Int8 = -128
+  const maximum: Int8 = 127
+}
+
+extend Int16 {
+  const minimum: Int16 = -32768
+  const maximum: Int16 = 32767
+}
+
+extend Int32 {
+  const minimum: Int32 = -2147483648
+  const maximum: Int32 = 2147483647
+}
+
+extend UInt8 {
+  const minimum: UInt8 = 0
+  const maximum: UInt8 = 255
+}
+
+extend UInt16 {
+  const minimum: UInt16 = 0
+  const maximum: UInt16 = 65535
+}
+
+extend UInt32 {
+  const minimum: UInt32 = 0
+  const maximum: UInt32 = 4294967295
+}
+
 public native type Float32 with Signed {}
 /** The type of decimal literals. */
 public native type Float64 with Signed {}
@@ -71,11 +101,23 @@ public type UInt = UInt64
 public type Float = Float64
 
 extend Int64 {
+  /**
+   * The smallest `Int64` cannot be written as a positive literal negated (`9223372036854775808` alone does not fit
+   * any integer type), so it is spelled the way C spells `INT64_MIN`: one more than the smallest literal there is.
+   */
+  const minimum: Int64 = -9223372036854775807 - 1
+  const maximum: Int64 = 9223372036854775807
+
   /** Digits in another base: `Int.parseDigits("ff", radix: 16)`. No sign, no prefix, `_` is allowed between digits. */
   native fn parseDigits(text: String, radix: Int64): Result<Int64, NumberParseError>
 }
 
 extend UInt64 {
+  const minimum: UInt64 = 0
+  /** Every integer literal is parsed as an `Int64` first, so `18446744073709551615` does not fit as a literal here
+   * either - `UInt64.minimum.bitwiseNot()` is all ones, which is the largest `UInt64` there is. */
+  const maximum: UInt64 = UInt64.minimum.bitwiseNot()
+
   /**
    * Addition that wraps around instead of panicking. Together with [UInt64.multipliedWrapping] this is the only
    * arithmetic in the language that does not panic on overflow, and it exists for one reason: a hash function mixes

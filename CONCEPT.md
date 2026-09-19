@@ -315,7 +315,8 @@ const emptyMap: Map<String, Int> = [:]
 - No implicit numeric conversions. Use `From`/`Into`: `Float.from(someInt)`.
 - **A literal that does not fit the type it adapts to is a compile error** ("`300` does not fit into `Int8`"), and so
   is an `Array` index that is known to be out of bounds. Overflow at runtime panics; overflow that is written in the
-  source is caught where it is written.
+  source is caught where it is written. Every integer type carries its own range as `minimum` and `maximum`
+  (`Int8.minimum` is `-128`, `UInt64.maximum` is `18446744073709551615`), so a bound can be named instead of repeated.
 - **Integer division truncates toward zero, and the remainder takes the sign of the dividend:** `-7 / 2` is `-3`,
   `-7 % 2` is `-1`. `x / 0` and `x % 0` panic, and so does dividing the smallest value of a signed type by `-1`
   (an overflow like any other).
