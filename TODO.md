@@ -261,6 +261,7 @@ fmt sollte das enforcieren auch eventuell
     das wäre Meta-Programmierung durch die Hintertür. Für die *Bodies* (Instruktion für Instruktion) ist ein kleiner
     strukturierter C-Writer (Blöcke, Einrückung, Ausdrücke als Werte statt Strings) das richtige Werkzeug, keine
     Templates. **Wird gelöst** als Refactoring des Emitters nach 5.5 und dem Dedent-Merge, vor 5.6.
+  - **Erledigt:** `backend/c/writer.trb` macht Ausdrücke, Anweisungen und Deklarationen zu Werten mit einem Renderer, der Klammern, Einrückung und Leerzeilen an je einer Stelle entscheidet, und Kopf und `main` sind ausgerückte `"""`-Blöcke - das erzeugte C ist dabei byteweise unverändert (siehe docs/BACKEND.md, "How the C emitter is written").
 
 - Jetzt gerade wird sehr viel mit Funktionen und expliziten parametern gearbeitet statt mit methoden und UFCS, woran liegt das?  - **Antwort:** Drei Gründe, zwei davon sind inzwischen weg.
     1. Als Parser und Checker entstanden, war nicht entschieden, ob ein `extend` eines eigenen Typs in einer anderen

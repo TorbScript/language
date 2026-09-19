@@ -1,0 +1,542 @@
+/**
+ * A small structured writer for C, and the one renderer that turns it into lines.
+ *
+ * The emitter used to build its output by concatenating and interpolating strings: a statement, an expression, a struct
+ * member and a whole helper function were all `String`. That made three things easy to get subtly wrong - where the
+ * parentheses go, how deep a line is indented, and where a blank line belongs - and every new slice of milestone 5 added
+ * more of it. So everything that **has structure** is a value here (`CExpression`, `CStatement`, `CMember`,
+ * `CDeclaration`), and the renderer below is the only code in the back end that decides:
+ *
+ * - **where a parenthesis goes** (`rendered`, one table of precedences),
+ * - **how far a line is indented** (`CWriter.depth`, two spaces a level),
+ * - **which lines a construct spans** (a `case` whose body is one line shares that line, a `switch` never does),
+ * - **where a blank line belongs** (`needsBlankLine`: a section comment, a struct, a definition open a paragraph).
+ *
+ * It is deliberately **not** a C syntax tree for its own sake: every case is one the emitter really builds. A *type*
+ * spelling stays a `String`, because deciding it is `type.trb`'s job and the emitter never takes one apart; what a fixed
+ * block of C text is, is a `"""` string in the emitter and arrives here as `CDeclaration.Fixed`.
+ */
+
+// --- Expressions ----------------------------------------------------------------------------------------------------
+
+/** One field of a designated initializer: `.tag = 1`. */
+public type CDesignatedField {
+  name: String
+  value: CExpression
+}
+
+/**
+ * A C expression. Nothing here carries a parenthesis: where one is needed is decided once, from the precedence of the
+ * node and of the place it stands in, so a shape the emitter builds can never come out misread.
+ */
+public type CExpression {
+  /** An identifier the program declares: a slot, a mangled function, a helper, a macro. */
+  case Name(name: String)
+  /** A token that is already C: a number, a string literal, `true`, `NULL`. */
+  case Literal(text: String)
+  /** `value.member` */
+  case Member(value: CExpression, member: String)
+  /** `value->member` */
+  case PointerMember(value: CExpression, member: String)
+  case AddressOf(value: CExpression)
+  case Dereference(value: CExpression)
+  case Call(callee: CExpression, arguments: List<CExpression>)
+  /** `(int64_t)value`. The spelling of the type is text, which is what `type.trb` answers. */
+  case Cast(annotation: String, value: CExpression)
+  /** A prefix operator: `!`, `-`, `~`. */
+  case Unary(operator: String, value: CExpression)
+  case Binary(left: CExpression, operator: String, right: CExpression)
+  case Conditional(condition: CExpression, then: CExpression, otherwise: CExpression)
+  /** `{ a, b }`: the members in order. An empty one is `{ 0 }`, because an empty initializer is not C. */
+  case Initializer(values: List<CExpression>)
+  /** `{ .tag = 1, .payload = { .v0 = { x } } }` */
+  case Designated(parts: List<CDesignatedField>)
+  /** `(T_x){ ... }`: an unnamed value of a named type. */
+  case CompoundLiteral(annotation: String, value: CExpression)
+}
+
+/** The limit that allows every expression, which is what an argument and the right side of an assignment are. */
+public const anyPrecedence = 15
+
+/**
+ * Where a node binds on C's ladder: 0 is a name, 1 a postfix operator (`.`, `->`, a call), 2 a prefix one (`!`, `&`, a
+ * cast), 3 to 12 the binary operators and 13 the question mark. A smaller number binds tighter.
+ */
+fn precedenceOf(expression: CExpression): Int {
+  match expression {
+    .Name(_) => 0
+    .Literal(_) => 0
+    .Initializer(_) => 0
+    .Designated(_) => 0
+    .Member(_, _) => 1
+    .PointerMember(_, _) => 1
+    .Call(_, _) => 1
+    .CompoundLiteral(_, _) => 1
+    .AddressOf(_) => 2
+    .Dereference(_) => 2
+    .Unary(_, _) => 2
+    .Cast(_, _) => 2
+    .Binary(_, operator, _) => precedenceOfOperator(operator)
+    .Conditional(_, _, _) => 13
+  }
+}
+
+/** C's binary ladder. An operator the emitter never writes is treated as the loosest one, which only adds a bracket. */
+fn precedenceOfOperator(operator: String): Int {
+  if operator == "*" || operator == "/" || operator == "%" {
+    return 3
+  }
+  if operator == "+" || operator == "-" {
+    return 4
+  }
+  if operator == "<<" || operator == ">>" {
+    return 5
+  }
+  if operator == "<" || operator == "<=" || operator == ">" || operator == ">=" {
+    return 6
+  }
+  if operator == "==" || operator == "!=" {
+    return 7
+  }
+  if operator == "&" {
+    return 8
+  }
+  if operator == "^" {
+    return 9
+  }
+  if operator == "|" {
+    return 10
+  }
+  if operator == "&&" {
+    return 11
+  }
+  if operator == "||" {
+    return 12
+  }
+  12
+}
+
+/** The C of one expression, as it stands on its own. */
+public fn renderExpression(expression: CExpression): String {
+  rendered(expression, anyPrecedence)
+}
+
+/**
+ * One expression in a place that allows everything up to `limit`. **This is the only place in the back end that decides
+ * a parenthesis**: a node that binds looser than its place allows gets one, and nothing else ever does.
+ */
+fn rendered(expression: CExpression, limit: Int): String {
+  const text = spelled(expression)
+  if precedenceOf(expression) > limit {
+    return "({text})"
+  }
+  text
+}
+
+fn spelled(expression: CExpression): String {
+  match expression {
+    .Name(name) => name
+    .Literal(text) => text
+    .Member(value, member) => "{rendered(value, 1)}.{member}"
+    .PointerMember(value, member) => "{rendered(value, 1)}->{member}"
+    .AddressOf(value) => "&{rendered(value, 2)}"
+    .Dereference(value) => "*{rendered(value, 2)}"
+    .Unary(operator, value) => "{operator}{rendered(value, 2)}"
+    .Cast(annotation, value) => "({annotation}){rendered(value, 2)}"
+    .Call(callee, arguments) => "{rendered(callee, 1)}({renderedList(arguments)})"
+    .Binary(left, operator, right) => {
+      const own = precedenceOfOperator(operator)
+      // Every binary operator of C associates to the left, so the right side of two of equal rank needs a bracket
+      "{rendered(left, own)} {operator} {rendered(right, own - 1)}"
+    }
+    .Conditional(condition, then, otherwise) => {
+      // The condition is bracketed whatever it is: the question mark binds looser than every operator that can stand
+      // in it, and a reader of the generated C should not have to know C's ladder to see where the question ends
+      "{rendered(condition, 0)} ? {rendered(then, anyPrecedence)} : {rendered(otherwise, 13)}"
+    }
+    .Initializer(values) => {
+      if values.isEmpty() {
+        return "\{ 0 \}"
+      }
+      "\{ {renderedList(values)} \}"
+    }
+    .Designated(parts) => {
+      var written: List<String> = []
+      for part in parts {
+        written.add(".{part.name} = {rendered(part.value, anyPrecedence)}")
+      }
+      "\{ {written.joined(separator: ", ")} \}"
+    }
+    .CompoundLiteral(annotation, value) => "({annotation}){rendered(value, 0)}"
+  }
+}
+
+fn renderedList(expressions: List<CExpression>): String {
+  var written: List<String> = []
+  for expression in expressions {
+    written.add(rendered(expression, anyPrecedence))
+  }
+  written.joined(separator: ", ")
+}
+
+// --- Statements -----------------------------------------------------------------------------------------------------
+
+/** One arm of a C `switch`: the value of the label, and what happens under it. */
+public type CSwitchCase {
+  value: Int
+  body: List<CStatement>
+}
+
+/** A statement of a function body. */
+public type CStatement {
+  /**
+   * `int64_t s3 = { 0 };`. A `count` above zero makes an array of that many items
+   * (`const torb_text parts[2] = { ... }`), which is the only declarator besides a plain name the emitter writes.
+   */
+  case Declaration(annotation: String, name: String, value: CExpression? = None, count: Int = 0)
+  case Assignment(target: CExpression, value: CExpression)
+  /** An expression statement: a call whose result nobody takes, a `(void)` that silences an unread slot. */
+  case Evaluate(value: CExpression)
+  /** `if (c) { ... }`. A body of one line shares the line, which is what every branch of the lowering is. */
+  case If(condition: CExpression, then: List<CStatement>)
+  case Switch(scrutinee: CExpression, cases: List<CSwitchCase>, otherwise: List<CStatement>)
+  case Goto(label: String)
+  /** The label of a block, with the label the IR gave it written after it as a comment. */
+  case Label(label: String, comment: String = "")
+  case Return(value: CExpression? = None)
+  case Break
+  /** Braces of their own, for a temporary that must not outlive the statement that needs it. */
+  case Block(body: List<CStatement>)
+  /**
+   * Several statements on one line. It is what the `(void)` casts of every slot nothing reads are: one per slot would
+   * be a screen of them in front of every body, and together they are one line a reader skips.
+   */
+  case Joined(statements: List<CStatement>)
+  /** `#line 12 "src/main.trb"`: what makes a C compiler error and a debugger point into the TorbScript source. */
+  case LineDirective(line: Int, path: String)
+  case Comment(text: String)
+}
+
+/**
+ * The text of one statement when it fits on one line, and the empty string when it spans several. It carries no
+ * indentation, so a `case` label, an `if` and the `(void)` casts of a whole function can put it on a line of their own
+ * making.
+ */
+fn textOf(statement: CStatement): String {
+  match statement {
+    .Declaration(annotation, name, value, count) => {
+      const declared = declarationOf(annotation, declaratorOf(name, count))
+      match value {
+        Some(found) => "{declared} = {renderExpression(found)};"
+        .None => "{declared};"
+      }
+    }
+    // The target of an assignment is a unary expression in C, which is what keeps `*p = v` from needing a bracket
+    .Assignment(target, value) => "{rendered(target, 2)} = {renderExpression(value)};"
+    .Evaluate(value) => "{renderExpression(value)};"
+    .Goto(label) => "goto {label};"
+    .Return(value) => {
+      match value {
+        Some(found) => "return {renderExpression(found)};"
+        .None => "return;"
+      }
+    }
+    .Break => "break;"
+    .Comment(text) => "/* {text} */"
+    .LineDirective(line, path) => "#line {line} {cStringOf(path)}"
+    .Label(label, comment) => {
+      if comment.isEmpty() {
+        return "{label}:"
+      }
+      "{label}:  /* {comment} */"
+    }
+    .If(condition, then) => {
+      if then.length() != 1 {
+        return ""
+      }
+      const inner = textOf(then[0])
+      if inner.isEmpty() {
+        return ""
+      }
+      "if ({renderExpression(condition)}) \{ {inner} \}"
+    }
+    .Joined(statements) => joinedTextOf(statements)
+    .Switch(_, _, _) => ""
+    .Block(_) => ""
+  }
+}
+
+/** Empty as soon as one of them spans lines, because half a line is worse than a line each. */
+fn joinedTextOf(statements: List<CStatement>): String {
+  if statements.isEmpty() {
+    return ""
+  }
+  var written: List<String> = []
+  for statement in statements {
+    const text = textOf(statement)
+    if text.isEmpty() {
+      return ""
+    }
+    written.add(text)
+  }
+  written.joined(separator: " ")
+}
+
+/** A label and a `#line` are read by a C compiler and a debugger, and both belong at the left margin. */
+fn isAtMargin(statement: CStatement): Bool {
+  match statement {
+    .Label(_, _) => true
+    .LineDirective(_, _) => true
+    _ => false
+  }
+}
+
+// --- Struct members -------------------------------------------------------------------------------------------------
+
+/** What stands between the braces of a struct: a field, an unnamed struct under a name, an unnamed union under one. */
+public type CMember {
+  case Field(annotation: String, name: String)
+  /** `struct { ... } v0;`: one group of a variant layout. */
+  case Group(name: String, members: List<CMember>)
+  /** `union { ... } payload;`: the groups of a variant layout together. */
+  case Union(name: String, members: List<CMember>)
+}
+
+// --- Declarations ---------------------------------------------------------------------------------------------------
+
+/** A declaration of the translation unit, in the order the file is read in. */
+public type CDeclaration {
+  /** `typedef struct T_x T_x;` */
+  case Typedef(target: String, name: String)
+  case Struct(name: String, members: List<CMember>)
+  /** `static int64_t t_double(int64_t s0);`. The head is one spelling, which `body.trb` builds from the signature. */
+  case Prototype(head: String)
+  /** The same head, with a body and the comment that says which TorbScript declaration it is. */
+  case Definition(comment: String, head: String, body: List<CStatement>)
+  /**
+   * `static const int64_t s_x = 2;`. `isWrapped` puts the name and the initializer on a continuation line indented by
+   * two, which is what keeps the immortal storage of a string literal - whose type is a whole anonymous struct - from
+   * being one very long line. It is the only line the emitter ever breaks: everything else carries a mangled name, and
+   * a name cannot be broken.
+   */
+  case StaticData(annotation: String, name: String, value: CExpression, isWrapped: Bool = false)
+  /** A comment of its own, which is how the sections of the file are named. */
+  case Comment(text: String)
+  /** A fixed block of C the emitter wrote as a `"""` string: the head of the unit, `main`. Written as it is. */
+  case Fixed(text: String)
+}
+
+/**
+ * Which declarations open a paragraph of the file. A section comment, a struct, a definition and a fixed block each
+ * start one; a typedef, a prototype and a static datum belong to the list above them. Asked once, in `emission.trb`,
+ * so that no part of the emitter has to remember to write a blank line.
+ */
+public fn needsBlankLine(declaration: CDeclaration): Bool {
+  match declaration {
+    .Comment(_) => true
+    .Struct(_, _) => true
+    .Definition(_, _, _) => true
+    .Fixed(_) => true
+    _ => false
+  }
+}
+
+// --- The renderer ---------------------------------------------------------------------------------------------------
+
+/** The lines of one declaration, and how deep the renderer currently is. One level is two spaces. */
+public type CWriter {
+  var lines: List<String> = []
+  var depth: Int = 0
+}
+
+/** Every line of one declaration. The only entry point: a declaration is written whole or not at all. */
+public fn declarationLines(declaration: CDeclaration): List<String> {
+  var writer = CWriter()
+  writeDeclaration(writer, declaration)
+  writer.lines
+}
+
+fn writeDeclaration(var writer: CWriter, declaration: CDeclaration) {
+  match declaration {
+    .Typedef(target, name) => writeLine(writer, "typedef {target} {name};")
+    .Prototype(head) => writeLine(writer, "{head};")
+    .Comment(text) => writeLine(writer, "/* {text} */")
+    .Fixed(text) => writeFixed(writer, text)
+    .Struct(name, members) => {
+      writeLine(writer, "struct {name} \{")
+      writeMembers(writer, members)
+      writeLine(writer, "\};")
+    }
+    .Definition(comment, head, body) => {
+      if !comment.isEmpty() {
+        writeLine(writer, "/* {comment} */")
+      }
+      writeLine(writer, "{head} \{")
+      writeStatements(writer, body)
+      writeLine(writer, "\}")
+    }
+    .StaticData(annotation, name, value, isWrapped) => {
+      const initializer = renderExpression(value)
+      if isWrapped {
+        writer.lines.add(annotation)
+        const continued = "  {name} = {initializer};"
+        writer.lines.add(continued)
+        return
+      }
+      writeLine(writer, "{declarationOf(annotation, name)} = {initializer};")
+    }
+  }
+}
+
+/** A `"""` block as it was written. Its last line break ends the block and is not a line of its own. */
+fn writeFixed(var writer: CWriter, text: String) {
+  const lines = text.lines()
+  const last = lines.length() - 1
+  for index in 0..lines.length() {
+    if index == last && lines[index].isEmpty() {
+      continue
+    }
+    writer.lines.add(lines[index])
+  }
+}
+
+fn writeMembers(var writer: CWriter, members: List<CMember>) {
+  writer.depth = writer.depth + 1
+  for member in members {
+    writeMember(writer, member)
+  }
+  writer.depth = writer.depth - 1
+}
+
+fn writeMember(var writer: CWriter, member: CMember) {
+  match member {
+    .Field(annotation, name) => writeLine(writer, "{declarationOf(annotation, name)};")
+    .Group(name, members) => {
+      writeLine(writer, "struct \{")
+      writeMembers(writer, members)
+      writeLine(writer, "\} {name};")
+    }
+    .Union(name, members) => {
+      writeLine(writer, "union \{")
+      writeMembers(writer, members)
+      writeLine(writer, "\} {name};")
+    }
+  }
+}
+
+/** A body, one level deeper than the construct that owns it. */
+fn writeStatements(var writer: CWriter, body: List<CStatement>) {
+  writer.depth = writer.depth + 1
+  for statement in body {
+    writeStatement(writer, statement)
+  }
+  writer.depth = writer.depth - 1
+}
+
+fn writeStatement(var writer: CWriter, statement: CStatement) {
+  const text = textOf(statement)
+  if !text.isEmpty() {
+    if isAtMargin(statement) {
+      writer.lines.add(text)
+      return
+    }
+    writeLine(writer, text)
+    return
+  }
+  match statement {
+    .Switch(scrutinee, cases, otherwise) => writeSwitch(writer, scrutinee, cases, otherwise)
+    .Block(body) => {
+      writeLine(writer, "\{")
+      writeStatements(writer, body)
+      writeLine(writer, "\}")
+    }
+    .If(condition, then) => {
+      writeLine(writer, "if ({renderExpression(condition)}) \{")
+      writeStatements(writer, then)
+      writeLine(writer, "\}")
+    }
+    _ => {}
+  }
+}
+
+fn writeSwitch(
+  var writer: CWriter,
+  scrutinee: CExpression,
+  cases: List<CSwitchCase>,
+  otherwise: List<CStatement>,
+) {
+  writeLine(writer, "switch ({renderExpression(scrutinee)}) \{")
+  writer.depth = writer.depth + 1
+  for found in cases {
+    writeCase(writer, "case {found.value}:", found.body)
+  }
+  if !otherwise.isEmpty() {
+    writeCase(writer, "default:", otherwise)
+  }
+  writer.depth = writer.depth - 1
+  writeLine(writer, "\}")
+}
+
+/** An arm whose body is one line shares the label's line, which is what keeps a jump table readable. */
+fn writeCase(var writer: CWriter, label: String, body: List<CStatement>) {
+  if body.length() == 1 {
+    const text = textOf(body[0])
+    if !text.isEmpty() {
+      writeLine(writer, "{label} {text}")
+      return
+    }
+  }
+  writeLine(writer, label)
+  writeStatements(writer, body)
+}
+
+fn writeLine(var writer: CWriter, text: String) {
+  const line = "{indentationOf(writer.depth)}{text}"
+  writer.lines.add(line)
+}
+
+fn indentationOf(depth: Int): String {
+  var text = ""
+  for _ in 0..depth {
+    text = text + "  "
+  }
+  text
+}
+
+// --- The two spellings every part of the writer needs ---------------------------------------------------------------
+
+/**
+ * One declaration: `int64_t s3`, `T_main_Node *s4`. The `*` of a pointer binds to the name, which is where C wants it
+ * and what keeps `T *x, y` from ever being written by accident - the emitter declares one name per line.
+ */
+public fn declarationOf(spelling: String, name: String): String {
+  if spelling.endsWith("*") {
+    return "{spelling}{name}"
+  }
+  "{spelling} {name}"
+}
+
+/** `parts[2]` where the declaration is an array of two, and the name itself otherwise. */
+fn declaratorOf(name: String, count: Int): String {
+  if count <= 0 {
+    return name
+  }
+  "{name}[{count}]"
+}
+
+/** A `"..."` literal for a C compiler: the only two bytes that need an escape are the backslash and the quote. */
+public fn cStringOf(text: String): String {
+  var result = "\""
+  for character in text.chars() {
+    if character == '\\' {
+      result = result + "\\\\"
+      continue
+    }
+    if character == '"' {
+      result = result + "\\\""
+      continue
+    }
+    result = result + "{character}"
+  }
+  result + "\""
+}

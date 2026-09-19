@@ -59,6 +59,11 @@ fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).replace("\r\n", "\n")
 }
 
+/// A scratch directory of this test process, which is what keeps two runs at once from disturbing each other.
+fn scratch(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("{name}-{}", std::process::id()))
+}
+
 /// The binary a build produced. A C compiler on Windows appends `.exe` to an output name without an extension.
 fn binary_of(path: &Path) -> PathBuf {
     if path.exists() {
@@ -84,8 +89,10 @@ fn every_native_program_behaves_like_it_does_on_stage_0() {
     let directory = root.join("bootstrap/tests/native");
     let files = programs(&directory);
     assert!(!files.is_empty(), "expected the programs of the native test suite");
-    let output = std::env::temp_dir().join("torb-native-tests");
-    let twice = std::env::temp_dir().join("torb-native-tests-again");
+    // One directory per test process, because two runs at once (another worktree, a second `cargo test`) would
+    // otherwise overwrite each other's `program.c` between the build and the comparison
+    let output = scratch("torb-native-tests");
+    let twice = scratch("torb-native-tests-again");
     let compiler_path = root.join("compiler");
     let compiler_path = compiler_path.to_str().expect("UTF-8 path");
 
@@ -163,4 +170,8 @@ fn every_native_program_behaves_like_it_does_on_stage_0() {
             }
         }
     }
+
+    // Nothing here is read after the loop, and a temporary directory per process would otherwise pile up
+    let _ = std::fs::remove_dir_all(&output);
+    let _ = std::fs::remove_dir_all(&twice);
 }

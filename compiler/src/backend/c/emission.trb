@@ -1,8 +1,11 @@
 use IrProgram, IrFunction, Slot, LocationId, Location from "../../ir/ir"
 use escapedComponent from "../../ir/mangle"
+use CExpression, CStatement, CDeclaration from "./writer"
+use declarationLines, needsBlankLine, cStringOf from "./writer"
 
 /**
- * What the C emitter writes into, and the two things every part of it needs: a line of output, and a finding.
+ * What the C emitter writes into, and the two things every part of it needs: a declaration of the translation unit, and
+ * a finding.
  *
  * A finding is **not** an internal error: it is a construct of the program that a later sub-milestone teaches the C
  * back end, counted and named the same way `torb ir` counts what the lowering does not lower yet. `torb build` refuses
@@ -15,17 +18,17 @@ public type Emission {
   var unsupportedIndex: Map<String, Bool> = [:]
 }
 
-public fn add(var emission: Emission, line: String) {
-  emission.lines.add(line)
-}
-
-public fn addAll(var emission: Emission, lines: List<String>) {
+/**
+ * One declaration of the translation unit, with the blank line in front of it that `writer.trb` says it needs. **This
+ * is the only way anything reaches the output**, which is what keeps the paragraphs of the file out of every part of
+ * the emitter that builds one.
+ */
+public fn write(var emission: Emission, declaration: CDeclaration) {
+  if needsBlankLine(declaration) && !emission.lines.isEmpty() {
+    emission.lines.add("")
+  }
+  const lines = declarationLines(declaration)
   emission.lines.addAll(lines)
-}
-
-/** An empty line, for the paragraphs the output is read in. */
-public fn addBlank(var emission: Emission) {
-  emission.lines.add("")
 }
 
 /**
@@ -45,7 +48,7 @@ public fn emittedText(emission: Emission): String {
   emission.lines.joined(separator: "\n") + "\n"
 }
 
-// --- The spellings every part of the emitter needs ------------------------------------------------------------------
+// --- The spellings every part of the emitter needs -------------------------------------------------------------------
 
 /**
  * The C variable of a slot: its number, and the name the source gave it where there is one, so that the generated C
@@ -62,41 +65,31 @@ public fn slotNameOf(function: IrFunction, slot: Slot): String {
   "s{slot.value}_{escapedComponent(declared.name)}"
 }
 
-/** A `"..."` literal for a C compiler: the only two bytes that need an escape are the backslash and the quote. */
-public fn cStringOf(text: String): String {
-  var result = "\""
-  for character in text.chars() {
-    if character == '\\' {
-      result = result + "\\\\"
-      continue
-    }
-    if character == '"' {
-      result = result + "\\\""
-      continue
-    }
-    result = result + "{character}"
-  }
-  result + "\""
-}
-
 /**
  * `TORB_LOCATION("src/main.trb", 12, 5)`: what every checked operation and every panic carries. The path is the one
  * the lowering interned - relative to the workspace root, with forward slashes - so no path of a machine can reach the
  * output.
  */
-public fn locationText(program: IrProgram, at: LocationId): String {
+public fn locationExpression(program: IrProgram, at: LocationId): CExpression {
   if !program.hasLocation(at) {
-    return "torb_location_unknown"
+    return CExpression.Name("torb_location_unknown")
   }
   const location = program.locationAt(at)
-  "TORB_LOCATION({cStringOf(location.path)}, {location.line}, {location.column})"
+  CExpression.Call(CExpression.Name("TORB_LOCATION"), [
+    CExpression.Literal(cStringOf(location.path)),
+    CExpression.Literal("{location.line}"),
+    CExpression.Literal("{location.column}"),
+  ])
 }
 
-/** `#line 12 "src/main.trb"`: what makes a C compiler error and a debugger point into the TorbScript source. */
-public fn lineDirectiveOf(program: IrProgram, at: LocationId): String {
+/**
+ * `#line 12 "src/main.trb"`: what makes a C compiler error and a debugger point into the TorbScript source. `None`
+ * where the instruction carries no location, because a wrong line is worse than none.
+ */
+public fn lineDirectiveOf(program: IrProgram, at: LocationId): CStatement? {
   if !program.hasLocation(at) {
-    return ""
+    return None
   }
   const location = program.locationAt(at)
-  "#line {location.line} {cStringOf(location.path)}"
+  Some(CStatement.LineDirective(location.line, location.path))
 }

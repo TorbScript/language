@@ -1263,6 +1263,59 @@ accepts, the code won and this is the list. Everything else is as written.
   5.5 needs of `Option` and `Result` is their *layout*, which 5.1 already builds, and the constructors and patterns over
   it, which are here.
 
+### How the C emitter is written
+
+The emitter used to build its C by concatenating and interpolating strings: a statement, an expression, a struct member
+and a whole helper function were all `String`. Three things were therefore easy to get subtly wrong and invisible in
+review - where a parenthesis goes, how deep a line is indented, where a blank line belongs - and every slice of
+milestone 5 added more of it. `backend/c/writer.trb` is the replacement, and 5.6 to 5.11 extend it rather than going
+back to text.
+
+**Everything with structure is a value.** Four types, and every case of them is one the emitter really builds - it is
+not a C syntax tree for its own sake, and a case nothing uses is deleted rather than kept for later:
+
+| Type           | Cases                                                                                                                                  |
+|----------------|----------------------------------------------------------------------------------------------------------------------------------------|
+| `CExpression`  | `Name`, `Literal`, `Member`, `PointerMember`, `AddressOf`, `Dereference`, `Call`, `Cast`, `Unary`, `Binary`, `Conditional`, `Initializer`, `Designated`, `CompoundLiteral` |
+| `CStatement`   | `Declaration`, `Assignment`, `Evaluate`, `If`, `Switch`, `Goto`, `Label`, `Return`, `Break`, `Block`, `Joined`, `LineDirective`, `Comment` |
+| `CMember`      | `Field`, `Group` (an unnamed struct under a name), `Union`                                                                               |
+| `CDeclaration` | `Typedef`, `Struct`, `Prototype`, `Definition`, `StaticData`, `Comment`, `Fixed`                                                         |
+
+There is deliberately **no `enum`** and no top-level `union`: nothing emits one, and `sizeof(T)` is a `Call` of a
+`Name`, which needs no case of its own. A **type spelling stays a `String`** - deciding it is `type.trb`'s job and
+nothing ever takes one apart again - and so does a function head, which is types and a name all the way down.
+
+**One place decides a parenthesis.** `rendered(expression, limit)` in `writer.trb`: every node has a precedence (0 a
+name, 1 a postfix operator, 2 a prefix one, 3 to 12 the binary ladder, 13 the question mark), every place says the
+loosest it allows, and a node that binds looser than its place gets a bracket. Nothing else in the back end ever writes
+one. Two rules in it are chosen rather than forced by C, and both are there because the generated C is read by people:
+the **condition of a `?:` is always bracketed**, and the right side of two binary operators of equal rank is, so
+`a - (b + c)` never has to be re-derived from the ladder. An operand that binds tighter than its place never gets one,
+which is why `(int64_t)torb_text_compare(a, b)` and `(torb_bytes *)&s_storage` come out flat.
+
+**One place decides indentation and line breaks.** `CWriter.depth`, two spaces a level, threaded through the renderer.
+A `Label` and a `#line` go to the left margin whatever the depth is. A construct spans one line where it can: an `if`
+whose body is a single one-line statement, a `case` whose body is one, and `Joined`, which is what the `(void)` casts
+of every unread slot are. `StaticData` is the only declaration the emitter ever breaks over two lines, for the immortal
+storage of a string literal whose type is a whole anonymous struct; **nothing wraps by column**, because a mangled name
+makes a line far longer than 120 and cannot be broken at all.
+
+**One place decides the blank lines.** `needsBlankLine`: a section `Comment`, a `Struct`, a `Definition` and a `Fixed`
+block each open a paragraph; a `Typedef`, a `Prototype` and a `StaticData` belong to the list above them. `emission.write`
+is the only way anything reaches the output and asks that question once, so no part of the emitter has to remember the
+shape of the file. A `Definition` carries its own comment, which is why the comment of a function and its body are not
+two paragraphs.
+
+**When a `"""` block instead of the writer.** Judge by braces, because stage 0 needs `\{` for every one of them
+(`compiler/CONTRIBUTING.md`, trap 6) and a block full of `\{` is less readable than the values, not more. Fixed C text
+with few braces and a hole or two is a `"""` block with interpolation: the head of the translation unit (the comment and
+the two `#include`s) and `main`. Everything whose shape depends on the program - a body, a helper, a struct, an
+initializer - is the writer, even where the skeleton around it looks fixed: the retain and drop helpers are a
+`CDeclaration.Definition` whose body is built, not a template with a hole.
+
+**`prototype.trb` stays string-based on purpose.** It takes a *manifest* prototype apart - text that comes from
+`natives.trb` and is compared spelling by spelling - and never builds C.
+
 ### Integration of 5.3 and 5.4
 
 5.3 (the C emitter) and 5.4 (ownership) were written in parallel against section 2's contract. What did not fit, and how

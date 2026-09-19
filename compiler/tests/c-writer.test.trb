@@ -1,0 +1,304 @@
+use test, group from "std/test"
+use CExpression, CDesignatedField, CStatement, CSwitchCase, CMember, CDeclaration from "../src/backend/c/writer"
+use renderExpression, declarationLines, needsBlankLine, declarationOf, cStringOf from "../src/backend/c/writer"
+
+/**
+ * The structured C writer: every node kind, the one table that decides a parenthesis, the indentation and the line
+ * breaks.
+ *
+ * What the emitter builds out of these values is `emit-c.test.trb`'s business; here every case is asked on its own, so
+ * that a wrong bracket or a wrong indentation is one failing line and not a diff of a whole translation unit.
+ */
+
+fn shown(statement: CStatement): String {
+  const lines = declarationLines(CDeclaration.Definition("", "static void f(void)", [statement]))
+  lines.joined(separator: "\n")
+}
+
+fn written(declaration: CDeclaration): String {
+  declarationLines(declaration).joined(separator: "\n")
+}
+
+/** A slot, which is what almost every operand of the emitter is. */
+fn slot(name: String): CExpression {
+  CExpression.Name(name)
+}
+
+group "C expressions" {
+  test "a name and a literal are themselves" {
+    assert(renderExpression(CExpression.Name("s0_value")) == "s0_value")
+    assert(renderExpression(CExpression.Literal("0x000041")) == "0x000041")
+  }
+
+  test "a member access is `.` by value and `->` through a pointer" {
+    assert(renderExpression(CExpression.Member(slot("s7"), "f_weight")) == "s7.f_weight")
+    assert(renderExpression(CExpression.PointerMember(slot("s5"), "f_first")) == "s5->f_first")
+    const nested = CExpression.Member(CExpression.Member(slot("s0"), "payload"), "v0")
+    assert(renderExpression(nested) == "s0.payload.v0")
+  }
+
+  test "the address of a slot and the value behind a pointer" {
+    assert(renderExpression(CExpression.AddressOf(slot("s1_kept"))) == "&s1_kept")
+    assert(renderExpression(CExpression.Dereference(slot("s0_total"))) == "*s0_total")
+  }
+
+  test "a call, and a call of a call" {
+    const call = CExpression.Call(CExpression.Name("torb_add_i64"), [slot("s0"), slot("s1")])
+    assert(renderExpression(call) == "torb_add_i64(s0, s1)")
+    assert(renderExpression(CExpression.Call(CExpression.Name("TORB_UNREACHABLE"), [])) == "TORB_UNREACHABLE()")
+    const sized = CExpression.Call(CExpression.Name("sizeof"), [CExpression.Name("T_Node")])
+    assert(renderExpression(sized) == "sizeof(T_Node)")
+  }
+
+  test "a cast, a unary operator and a binary one" {
+    const tag = CExpression.Cast("int64_t", CExpression.Member(slot("s0_shape"), "tag"))
+    assert(renderExpression(tag) == "(int64_t)s0_shape.tag")
+    const equal = CExpression.Call(CExpression.Name("torb_text_equal"), [slot("s0"), slot("s1")])
+    assert(renderExpression(CExpression.Unary("!", equal)) == "!torb_text_equal(s0, s1)")
+    assert(renderExpression(CExpression.Binary(slot("s3"), "<", slot("s4"))) == "s3 < s4")
+  }
+
+  test "an initializer, a designated one and a compound literal" {
+    const zero = CExpression.Initializer([CExpression.Literal("0")])
+    assert(renderExpression(zero) == "\{ 0 \}")
+    assert(renderExpression(CExpression.Initializer([])) == "\{ 0 \}")
+    assert(renderExpression(CExpression.Initializer([slot("s3"), slot("s4")])) == "\{ s3, s4 \}")
+    const fields = CExpression.Initializer([slot("s1")])
+    const payload = CExpression.Designated([CDesignatedField("v0", fields)])
+    const value = CExpression.Designated([
+      CDesignatedField("tag", CExpression.Literal("0")),
+      CDesignatedField("payload", payload),
+    ])
+    assert(renderExpression(value) == "\{ .tag = 0, .payload = \{ .v0 = \{ s1 \} \} \}")
+    assert(renderExpression(CExpression.CompoundLiteral("T_Shape", value))
+      == "(T_Shape)\{ .tag = 0, .payload = \{ .v0 = \{ s1 \} \} \}")
+  }
+}
+
+/**
+ * The precedence table, which is the whole point of the writer: a bracket appears exactly where a node binds looser
+ * than the place it stands in, and nowhere else.
+ */
+group "Where a bracket goes" {
+  test "a postfix operator brackets an operand that binds looser" {
+    const inner = CExpression.Dereference(slot("s0_total"))
+    assert(renderExpression(CExpression.Member(inner, "f_x")) == "(*s0_total).f_x")
+    const cast = CExpression.Cast("T_Node *", slot("block"))
+    assert(renderExpression(CExpression.PointerMember(cast, "f_left")) == "((T_Node *)block)->f_left")
+  }
+
+  test "a prefix operator brackets everything below a prefix operator" {
+    const sum = CExpression.Binary(slot("s0"), "+", slot("s1"))
+    assert(renderExpression(CExpression.Unary("-", sum)) == "-(s0 + s1)")
+    // A call and a member access bind tighter than a cast, so neither needs one
+    const call = CExpression.Call(CExpression.Name("torb_text_compare"), [slot("s0"), slot("s1")])
+    assert(renderExpression(CExpression.Cast("int64_t", call)) == "(int64_t)torb_text_compare(s0, s1)")
+    const address = CExpression.AddressOf(slot("s_storage"))
+    assert(renderExpression(CExpression.Cast("torb_bytes *", address)) == "(torb_bytes *)&s_storage")
+  }
+
+  test "a binary operator brackets by rank, and the right side of two of equal rank" {
+    const product = CExpression.Binary(slot("a"), "*", slot("b"))
+    assert(renderExpression(CExpression.Binary(product, "+", slot("c"))) == "a * b + c")
+    const sum = CExpression.Binary(slot("a"), "+", slot("b"))
+    assert(renderExpression(CExpression.Binary(sum, "*", slot("c"))) == "(a + b) * c")
+    assert(renderExpression(CExpression.Binary(slot("c"), "-", sum)) == "c - (a + b)")
+    assert(renderExpression(CExpression.Binary(product, "*", slot("c"))) == "a * b * c")
+    const compared = CExpression.Binary(slot("a"), "<", slot("b"))
+    const also = CExpression.Binary(slot("c"), "<", slot("d"))
+    assert(renderExpression(CExpression.Binary(compared, "&&", also)) == "a < b && c < d")
+  }
+
+  test "the condition of a question mark is always bracketed, and its own place decides the rest" {
+    const isSome = CExpression.Binary(CExpression.Member(slot("s0_value"), "storage"), "!=", CExpression.Literal("NULL"))
+    const question = CExpression.Conditional(isSome, CExpression.Literal("0"), CExpression.Literal("1"))
+    assert(renderExpression(question) == "(s0_value.storage != NULL) ? 0 : 1")
+    assert(renderExpression(CExpression.Cast("int64_t", question)) == "(int64_t)((s0_value.storage != NULL) ? 0 : 1)")
+    // A name needs none: there is nothing in it a reader could take for the end of the question
+    const plain = CExpression.Conditional(slot("s1"), slot("s2"), slot("s3"))
+    assert(renderExpression(plain) == "s1 ? s2 : s3")
+  }
+}
+
+group "C statements" {
+  test "a declaration, with and without a value, and as an array" {
+    assert(shown(CStatement.Declaration("int64_t", "s3")) == "static void f(void) \{\n  int64_t s3;\n\}")
+    const zero = CExpression.Initializer([CExpression.Literal("0")])
+    assert(shown(CStatement.Declaration("int64_t", "s3", Some(zero))).contains("  int64_t s3 = \{ 0 \};"))
+    // The `*` of a pointer binds to the name, which is where C wants it
+    assert(shown(CStatement.Declaration("T_Node *", "value")).contains("  T_Node *value;"))
+    const parts = CExpression.Initializer([slot("s7"), slot("s0_part")])
+    assert(
+      shown(CStatement.Declaration("const torb_text", "parts", Some(parts), 2))
+        .contains("  const torb_text parts[2] = \{ s7, s0_part \};")
+    )
+  }
+
+  test "an assignment writes its target as a unary expression, so a store through a pointer needs no bracket" {
+    const store = CStatement.Assignment(CExpression.Dereference(slot("torb_result")), slot("s3"))
+    assert(shown(store).contains("  *torb_result = s3;"))
+    const field = CStatement.Assignment(CExpression.PointerMember(slot("s5"), "f_a"), slot("s0"))
+    assert(shown(field).contains("  s5->f_a = s0;"))
+  }
+
+  test "an expression statement, a `goto`, a `return` and a `break`" {
+    const release = CExpression.Call(CExpression.Name("torb_text_release"), [slot("s3")])
+    assert(shown(CStatement.Evaluate(release)).contains("  torb_text_release(s3);"))
+    assert(shown(CStatement.Evaluate(CExpression.Cast("void", slot("s1")))).contains("  (void)s1;"))
+    assert(shown(CStatement.Goto("L1")).contains("  goto L1;"))
+    assert(shown(CStatement.Return()).contains("  return;"))
+    assert(shown(CStatement.Return(Some(slot("s2")))).contains("  return s2;"))
+    assert(shown(CStatement.Break).contains("  break;"))
+  }
+
+  test "an `if` of one line stays on one line, and one of several opens a block" {
+    const one = CStatement.If(slot("s3"), [CStatement.Goto("L1")])
+    assert(shown(one).contains("  if (s3) \{ goto L1; \}"))
+    const two = CStatement.If(slot("s3"), [CStatement.Goto("L1"), CStatement.Goto("L2")])
+    assert(
+      shown(two) == r"""static void f(void) {
+  if (s3) {
+    goto L1;
+    goto L2;
+  }
+}"""
+    )
+  }
+
+  test "a label and a `#line` stand at the left margin whatever the depth is" {
+    assert(shown(CStatement.Label("L1")) == "static void f(void) \{\nL1:\n\}")
+    assert(shown(CStatement.Label("L1", "while")) == "static void f(void) \{\nL1:  /* while */\n\}")
+    const directive = CStatement.LineDirective(12, "src/main.trb")
+    assert(shown(directive) == "static void f(void) \{\n#line 12 \"src/main.trb\"\n\}")
+    assert(shown(CStatement.Comment("body")) == "static void f(void) \{\n  /* body */\n\}")
+  }
+
+  test "a block of its own is two levels deep inside it" {
+    const parts = CExpression.Initializer([slot("s7")])
+    const body = [
+      CStatement.Declaration("const torb_text", "parts", Some(parts), 1),
+      CStatement.Assignment(slot("s2"), CExpression.Name("torb_text_concat")),
+    ]
+    assert(
+      shown(CStatement.Block(body)) == r"""static void f(void) {
+  {
+    const torb_text parts[1] = { s7 };
+    s2 = torb_text_concat;
+  }
+}"""
+    )
+  }
+
+  test "a switch puts an arm of one line on the label's line, and indents a longer one" {
+    const jumps = CStatement.Switch(
+      slot("s5"),
+      [CSwitchCase(0, [CStatement.Goto("L5")]), CSwitchCase(1, [CStatement.Goto("L6")])],
+      [CStatement.Goto("L8")],
+    )
+    assert(
+      shown(jumps) == r"""static void f(void) {
+  switch (s5) {
+    case 0: goto L5;
+    case 1: goto L6;
+    default: goto L8;
+  }
+}"""
+    )
+    const release = CExpression.Call(CExpression.Name("torb_text_release"), [slot("value")])
+    const drops = CStatement.Switch(
+      CExpression.PointerMember(slot("value"), "tag"),
+      [CSwitchCase(0, [CStatement.Evaluate(release), CStatement.Break])],
+      [CStatement.Break],
+    )
+    assert(
+      shown(drops) == r"""static void f(void) {
+  switch (value->tag) {
+    case 0:
+      torb_text_release(value);
+      break;
+    default: break;
+  }
+}"""
+    )
+  }
+}
+
+group "C declarations" {
+  test "a typedef, a prototype and a section comment are one line each" {
+    assert(written(CDeclaration.Typedef("struct T_Node", "T_Node")) == "typedef struct T_Node T_Node;")
+    assert(written(CDeclaration.Prototype("static void t_main(void)")) == "static void t_main(void);")
+    assert(written(CDeclaration.Comment("The layouts of the program.")) == "/* The layouts of the program. */")
+  }
+
+  test "a struct indents its fields, and a union of groups two levels more" {
+    const members = [
+      CMember.Field("uint32_t", "tag"),
+      CMember.Union("payload", [CMember.Group("v0", [CMember.Field("int64_t", "f_value")])]),
+    ]
+    assert(
+      written(CDeclaration.Struct("T_Option", members)) == r"""struct T_Option {
+  uint32_t tag;
+  union {
+    struct {
+      int64_t f_value;
+    } v0;
+  } payload;
+};"""
+    )
+  }
+
+  test "a definition carries its comment, and its body is one level deep" {
+    const body = [CStatement.Declaration("int64_t", "s1"), CStatement.Return(Some(slot("s1")))]
+    assert(
+      written(CDeclaration.Definition("t_main_double", "static int64_t t_main_double(void)", body))
+        == r"""/* t_main_double */
+static int64_t t_main_double(void) {
+  int64_t s1;
+  return s1;
+}"""
+    )
+  }
+
+  test "static data is one line, or two where the type is a whole anonymous struct" {
+    assert(
+      written(CDeclaration.StaticData("static const int64_t", "s_two", CExpression.Literal("2")))
+        == "static const int64_t s_two = 2;"
+    )
+    const bytes = CExpression.Initializer([CExpression.Literal("0x61"), CExpression.Literal("0x62")])
+    const value = CExpression.Initializer([CExpression.Name("TORB_IMMORTAL_HEADER"), CExpression.Literal("2"), bytes])
+    const head = "static struct \{ torb_header header; uint32_t capacity; uint8_t data[2]; \}"
+    assert(
+      written(CDeclaration.StaticData(head, "s_ab_storage", value, true)) == r"""static struct { torb_header header; uint32_t capacity; uint8_t data[2]; }
+  s_ab_storage = { TORB_IMMORTAL_HEADER, 2, { 0x61, 0x62 } };"""
+    )
+  }
+
+  test "a fixed block is written as it was, without the line break that ended it" {
+    const text = "int main(void) \{\n\n  return 0;\n\}\n"
+    assert(written(CDeclaration.Fixed(text)) == "int main(void) \{\n\n  return 0;\n\}")
+  }
+
+  /** Which declarations open a paragraph is one question, asked once, so no part of the emitter has to remember. */
+  test "a comment, a struct, a definition and a fixed block open a paragraph; a list does not" {
+    assert(needsBlankLine(CDeclaration.Comment("x")))
+    assert(needsBlankLine(CDeclaration.Struct("T", [])))
+    assert(needsBlankLine(CDeclaration.Definition("", "void f(void)", [])))
+    assert(needsBlankLine(CDeclaration.Fixed("x")))
+    assert(!needsBlankLine(CDeclaration.Typedef("struct T", "T")))
+    assert(!needsBlankLine(CDeclaration.Prototype("void f(void)")))
+    assert(!needsBlankLine(CDeclaration.StaticData("static const int64_t", "s", CExpression.Literal("0"))))
+  }
+}
+
+group "The two spellings" {
+  test "a pointer binds its star to the name, and everything else takes a space" {
+    assert(declarationOf("int64_t", "s3") == "int64_t s3")
+    assert(declarationOf("T_Node *", "s4") == "T_Node *s4")
+  }
+
+  test "a C string escapes the backslash and the quote, and nothing else" {
+    assert(cStringOf("src/main.trb") == "\"src/main.trb\"")
+    assert(cStringOf("a\\b") == "\"a\\\\b\"")
+    assert(cStringOf("say \"hi\"") == "\"say \\\"hi\\\"\"")
+  }
+}

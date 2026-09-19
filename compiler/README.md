@@ -35,8 +35,9 @@ src/
 ├ ir/                   The typed IR and the lowering (milestone 5.1, 5.2)
 ├ backend/c/
 │ ├ natives.trb         The manifest: every `native` declaration of `std/` and what it becomes
-│ ├ type.trb            Every IR type as C, and the type definition of every layout
-│ ├ emission.trb        What the emitter writes into: lines, findings, slot names, locations
+│ ├ writer.trb          C as values: expressions, statements, members, declarations, and the one renderer
+│ ├ type.trb            Every IR type as C, and the struct declaration of every layout
+│ ├ emission.trb        What the emitter writes into: declarations, findings, slot names, locations
 │ ├ prototype.trb       A manifest prototype, and whether a call of the native is the one the lowering wrote
 │ ├ body.trb            One function body: slots, labels, `goto`, instructions, places
 │ └ emit.trb            One C11 translation unit: types, static data, functions, `main`
@@ -88,6 +89,7 @@ tests/
 ├ check.test.trb        Modules, symbols, visibility, type positions
 ├ types.test.trb        Types, signatures, equality, substitution, the messages about them
 ├ harness.trb           The in-memory workspace of the type checker's tests, and what they ask about it
+├ c-writer.test.trb     The structured C writer: every node kind, the brackets, the indentation, the paragraphs
 ├ emit-c.test.trb       The generated C: types, static data, bodies, `main`, and what it cannot emit yet
 ├ expressions.test.trb  Literals and their adaptation, names, members, operators, `if` and `match`
 ├ statements.test.trb   Bindings, scopes, assignment, loops, definite return, discarded values

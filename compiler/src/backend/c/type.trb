@@ -1,6 +1,7 @@
 use IrProgram, IrTypeId, IrType, LayoutId, RuntimeKind from "../../ir/ir"
 use Layout, LayoutKind, Representation, FieldLayout from "../../ir/layout"
 use escapedComponent from "../../ir/mangle"
+use CMember, CDeclaration from "./writer"
 
 /**
  * Every IR type as C, and the type definition of every layout (BACKEND 3.1).
@@ -103,17 +104,6 @@ public fn cTypeOfLayout(program: IrProgram, id: LayoutId): String {
   }
 }
 
-/**
- * One declaration: `int64_t s3`, `T_main_Node *s4`. The `*` of a pointer binds to the name, which is where C wants it
- * and what keeps `T *x, y` from ever being written by accident - the emitter declares one name per line.
- */
-public fn declarationOf(spelling: String, name: String): String {
-  if spelling.endsWith("*") {
-    return "{spelling}{name}"
-  }
-  "{spelling} {name}"
-}
-
 /** A niche layout is the payload field itself, so it has no struct of its own; everything else has one. */
 public fn hasStructDefinition(layout: Layout): Bool {
   match layout.representation {
@@ -148,56 +138,54 @@ public fn variantMemberNameOf(variant: Int): String {
  *
  * A struct with no members is not C, so a layout without fields carries one byte that nothing reads.
  */
-public fn typeDefinitionLines(program: IrProgram, layout: Layout): List<String> {
-  var lines = ["struct {layout.name} \{"]
+public fn structDeclarationOf(program: IrProgram, layout: Layout): CDeclaration {
+  var members: List<CMember> = []
   if isBoxed(layout) {
-    lines.add("  torb_header header;")
+    members.add(CMember.Field("torb_header", "header"))
   }
   if layout.variants.isEmpty() {
     for field in layout.fields {
-      lines.add("  {memberLine(program, field)}")
+      members.add(memberOf(program, field))
     }
   } else {
     for field in layout.commonFields() {
-      lines.add("  {memberLine(program, field)}")
+      members.add(memberOf(program, field))
     }
-    lines.add("  uint32_t tag;")
-    lines.addAll(unionLines(program, layout))
+    members.add(CMember.Field("uint32_t", "tag"))
+    if const Some(payload) = unionMemberOf(program, layout) {
+      members.add(payload)
+    }
   }
-  if lines.length() == 1 {
-    lines.add("  unsigned char nothing;")
+  if members.isEmpty() {
+    members.add(CMember.Field("unsigned char", "nothing"))
   }
-  lines.add("\};")
-  lines
+  CDeclaration.Struct(layout.name, members)
 }
 
-fn memberLine(program: IrProgram, field: FieldLayout): String {
+fn memberOf(program: IrProgram, field: FieldLayout): CMember {
   const spelling = cTypeOf(program, field.annotation)
   const shown = if spelling.isEmpty() { "torb_void" } else { spelling }
-  "{declarationOf(shown, memberNameOf(field))};"
+  CMember.Field(shown, memberNameOf(field))
 }
 
-/** One member per variant that carries fields. A variant layout whose every case is empty needs no union at all. */
-fn unionLines(program: IrProgram, layout: Layout): List<String> {
-  var groups: List<String> = []
+/** One group per variant that carries fields. A variant layout whose every case is empty needs no union at all. */
+fn unionMemberOf(program: IrProgram, layout: Layout): CMember? {
+  var groups: List<CMember> = []
   for index in 0..layout.variants.length() {
     const fields = layout.fieldsOfVariant(index)
     if fields.isEmpty() {
       continue
     }
-    groups.add("    struct \{")
+    var inner: List<CMember> = []
     for field in fields {
-      groups.add("      {memberLine(program, field)}")
+      inner.add(memberOf(program, field))
     }
-    groups.add("    \} {variantMemberNameOf(index)};")
+    groups.add(CMember.Group(variantMemberNameOf(index), inner))
   }
   if groups.isEmpty() {
-    return []
+    return None
   }
-  var lines = ["  union \{"]
-  lines.addAll(groups)
-  lines.add("  \} payload;")
-  lines
+  Some(CMember.Union("payload", groups))
 }
 
 // --- The order the definitions have to come in ----------------------------------------------------------------------
