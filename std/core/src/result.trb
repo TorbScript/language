@@ -34,15 +34,15 @@ public type Result<Value, Failure> {
 
   fn mapError<OtherFailure>(self, transform: (error: Failure) => OtherFailure): Result<Value, OtherFailure> {
     match self {
-      Ok(value) => .Ok(value)
-      Fail(error) => .Fail(transform(error))
+      Ok(value) => Ok(value)
+      Fail(error) => Fail(transform(error))
     }
   }
 
   fn flatMap<Output>(self, transform: (value: Value) => Result<Output, Failure>): Result<Output, Failure> {
     match self {
       Ok(value) => transform(value)
-      Fail(error) => .Fail(error)
+      Fail(error) => Fail(error)
     }
   }
 
@@ -106,7 +106,7 @@ extend<Value, Failure, Target: From<Iterable<Value>>> Result<Target, Failure> wi
     })
     match failure {
       Some(error) => Fail(error)
-      .None => Ok(target)
+      None => Ok(target)
     }
   }
 }
