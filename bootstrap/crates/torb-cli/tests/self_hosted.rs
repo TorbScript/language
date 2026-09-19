@@ -152,6 +152,19 @@ fn scripts_print_what_they_should() {
     first_problem(problems);
 }
 
+/// Stage 0 has no checker, so an uppercase pattern name - which the parser made a case, by its first letter - is looked
+/// up when the pattern runs. One that is nowhere is a loud failure instead of an arm that quietly matches nothing.
+#[test]
+fn an_uppercase_pattern_name_that_is_no_case_fails_loudly() {
+    let script = std::env::temp_dir().join(format!("torb-unknown-case-{}.trb", std::process::id()));
+    std::fs::write(&script, "const found = match 1 {\n  Nome => 1\n  _ => 2\n}\nprint found\n").expect("a writable scratch file");
+    let output = Command::new(env!("CARGO_BIN_EXE_torb")).args(["run", script.to_str().expect("UTF-8 path")]).output().expect("torb runs");
+    let _ = std::fs::remove_file(&script);
+    assert!(!output.status.success(), "expected a failure, printed {}", String::from_utf8_lossy(&output.stdout));
+    let problem = String::from_utf8_lossy(&output.stderr);
+    assert!(problem.contains("`Nome` is not a case in scope"), "{problem}");
+}
+
 #[test]
 fn the_tests_of_the_compiler_pass() {
     let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../compiler/tests");

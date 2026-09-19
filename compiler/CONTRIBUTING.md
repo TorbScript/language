@@ -31,7 +31,9 @@ the checker is a bug of the checker.
   `var program: IrProgram`). Values have no identity, so program-wide data lives in lists and is addressed by
   integer ids (`ModuleId`, `SymbolId`, `TypeId`, ...).
 - Cases: `.Case` in patterns, `Type.Case` in expressions unless stage 0 can see the expected type (the table in
-  `bootstrap/README.md`). A bare name in a pattern always binds. Positional arguments come before named ones.
+  `bootstrap/README.md`). An **imported** case needs nothing in front of it, in an expression and in a pattern
+  (`Some(found) =>`, `None =>`); a pattern name that starts with a lowercase letter binds, an uppercase one never does.
+  Positional arguments come before named ones.
 - Prefer the short form where the type is expected and stage 0 can see it: `addNode(graph, .SwitchCase(path))` for a
   parameter of a declared function, `const kind: TokenKind = .Dot`, `kinds == [.Dot, .Name]`. Write `Type.Case` only
   where stage 0 cannot (trap 8).

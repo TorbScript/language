@@ -69,6 +69,34 @@ group "Bindings" {
       + "fn probe(shape: Shape) \{\n  match shape \{\n    .Circle(radius, width) => print \"circle\"\n  \}\n\}"
     assert(problems(source) == ["`Circle` has 1 field, 2 patterns were given"])
   }
+
+  test "an imported case is bare in a pattern, with fields and without" {
+    const found = probe(inBody("  const text = match Some(2) \{\n    Some(value) => \"one\"\n    None => \"none\"\n  \}"))
+    assert(found.patternTypeOf("None") == "Option<Int64>")
+    assert(problems(inBody("  const text = match Some(2) \{\n    Some(value) => \"one\"\n    None => \"none\"\n  \}")).isEmpty())
+  }
+
+  test "an uppercase name that is no case in scope, instead of a catch-all binding" {
+    const source = inBody("  const text = match Some(2) \{\n    Some(value) => \"one\"\n    Nome => \"none\"\n  \}")
+    assert(problems(source) == ["`Nome` is not a case in scope"])
+    const rule = "A name that starts with an uppercase letter is a case, never a binding: a binding starts lowercase"
+    assert(notes(source)[0] == rule)
+    // A case of the matched type that is close enough is offered, with the dot it would need if it is not imported
+    const shapes = "type Shape \{\n  case Circle(radius: Int)\n  case Empty\n\}\n\n"
+      + "fn probe(shape: Shape): Int \{\n  match shape \{\n    Cirle => 1\n    _ => 0\n  \}\n\}"
+    assert(problems(shapes) == ["`Cirle` is not a case in scope"])
+    assert(notes(shapes) == [rule, "Did you mean `.Circle`?"])
+  }
+
+  test "a binding starts with a lowercase letter, and an underscore keeps its own rule" {
+    assert(problems(inBody("  const text = match 1 \{\n    found => \"one\"\n  \}")).isEmpty())
+    assert(problems(inBody("  const text = match 1 \{\n    _found => \"one\"\n  \}")).isEmpty())
+    // Even where nothing about the subject has cases, an uppercase name is not a binding
+    assert(
+      problems(inBody("  const text = match 1 \{\n    Found => \"one\"\n  \}"))
+        == ["`Found` is not a case in scope"]
+    )
+  }
 }
 
 group "Scopes" {

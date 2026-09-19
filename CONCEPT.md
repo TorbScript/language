@@ -1266,10 +1266,13 @@ must be a `var` path, and the body runs inside a `var` access to it, so `iterato
 
 In a pattern `_` is the wildcard, in an expression `_` is the implicit closure parameter. The positions never overlap.
 
-**A bare name in a pattern is always a new binding.** A case is `.Case`, `Type.Case` or an imported `Case(...)`, a
-type is `Point(x, y)`, and a constant is compared with a guard (`n if n == limit`). So a pattern never changes its
-meaning because of what happens to be in scope: a misspelled case is an error instead of a catch-all, and renaming
-a constant cannot turn an arm into one. (`None` in a pattern is `.None`. The linter flags uppercase bindings.)
+**A binding in a pattern starts with a lowercase letter, and a name that starts with an uppercase one is never a
+binding.** An uppercase name is resolved through the scope: an imported case (`None`, `Some(value)`) or a type read
+backwards (`Point(x, y)`). A case that is not imported keeps its dot or its type (`.Circle`, `Shape.Circle`), and a
+constant is compared with a guard (`n if n == limit`). So the trap stays closed: a misspelled `Nome` is "`Nome` is not
+a case in scope", never a catch-all, and renaming a constant cannot turn an arm into one. What decides is the `use` at
+the top of the file, never the expected type. An uppercase binding is a compile error, not a lint (`_Found` and `_`
+keep their own rule and bind).
 
 ## Traits
 
@@ -2136,6 +2139,17 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   scope and a binding otherwise, and inside of a type its cases shadowed types of the same name
   (`case Keyword(keyword: Keyword)`). Now names mean one thing. The price is a rule for line breaks: a leading `.`
   continues the line above, except directly inside of a `match`, where it starts an arm.
+- **A case is imported by its path** (`use Option, Option.Some from "./option"`), so behind `from` there is always a
+  module - one step instead of two, and the import reads like the name in the code. Rejected: `use Option.*`, the one
+  import form under which a file changes because a dependency gained a case, and `use Option.{Some, None}`, a second
+  grammar for a repeated `Option.`.
+- **In a pattern the first letter decides:** an uppercase name is a case that is in scope or a type, a lowercase one is
+  a binding, and an uppercase binding is a compile error. That is what lets `Some(found)` and `None` read the same way
+  (before, the parentheses made the difference), and it keeps the trap that "cases are never bare" closed - what a
+  pattern name means hangs on the `use` at the top of the file, never on the expected type. Checked: Rust (a bare name
+  over the scope, where a misspelled case becomes a catch-all), Haskell and Elm (capitalization decides, which is this),
+  and "the case of the expected type wins" for expressions, which would make `Transform(a, b)` mean different things in
+  different places.
 - Doc comments on every declaration (parameters, fields, cases) instead of `@param` tags or YAML front matter;
   Markdown with conventional headings; examples are run by `torb test`. A tag language would be annotations through
   the back door.

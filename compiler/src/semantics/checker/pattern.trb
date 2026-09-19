@@ -1,16 +1,20 @@
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Pattern, FieldPattern, Name from "../../syntax/ast"
+use SymbolId from "../symbols"
+use editDistance from "../resolve-types"
 use TypeId, TypeForm, FieldSignature from "./type"
 use Checker, Expectation, LocalBinding from "./context"
-use caseNamed, fieldsOf, hasCases, typeNameOf from "./member"
+use caseNamed, caseNamesOf, fieldsOf, hasCases, typeNameOf from "./member"
 use traitArgumentsOf from "./implementation"
 use checkExpression from "./expression"
 use requireVisibleFields from "./declaration"
 
 /**
- * Patterns, as far as the names they bind. A bare name always binds - a case is written `.Circle` or `Shape.Circle` -
- * and every pattern is checked against the type of the value it matches, so that the names it introduces have types.
+ * Patterns, as far as the names they bind. A name that starts with a lowercase letter binds; an uppercase one is a case
+ * the scope knows (`None`) or a type read backwards (`Point(x, y)`), never a binding - a case of the matched type that
+ * is not in scope is written `.Circle` or `Shape.Circle`. Every pattern is checked against the type of the value it
+ * matches, so that the names it introduces have types.
  *
  * Whether the arms of a `match` cover every value, and whether one of them can never match, is `exhaustive.trb`: one
  * algorithm over a pattern matrix, which needs nothing from here but the types.
@@ -19,7 +23,7 @@ public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, 
   checker.typedPattern(pattern.span, subject)
   match pattern.kind {
     .Wildcard => {}
-    // A bare name always binds, and shadowing in a nested scope is allowed
+    // A lowercase name always binds, and shadowing in a nested scope is allowed
     .Binding(name) => declareName(checker, name, subject, pattern.span, isVar)
     .Literal(value) => {
       const inner = expectationFor(checker, subject)
@@ -48,6 +52,11 @@ public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, 
     }
     .Variant(path, fields) => {
       const name = path[path.length() - 1]
+      // `None`: a bare uppercase name is resolved through the scope, so a misspelled case is not a catch-all
+      if path.length() == 1 && fields.isEmpty() && !isNameInScope(checker, name.text) {
+        reportUnknownCase(checker, name, subject)
+        return
+      }
       variantPattern(checker, name, fields, subject, pattern.span, isVar)
     }
     .ImplicitVariant(name, fields) => variantPattern(checker, name, fields, subject, pattern.span, isVar)
@@ -211,6 +220,64 @@ fn tuplePattern(var checker: Checker, items: List<Pattern>, subject: TypeId, at:
     const inner = fields.get(index) ?? checker.deferredType
     checkPattern(checker, items[index], inner, isVar)
   }
+}
+
+/**
+ * Whether a bare uppercase pattern name stands for something: an imported case, or a type that is read backwards.
+ * A local binding can never be one, because a binding starts with a lowercase letter.
+ */
+fn isNameInScope(var checker: Checker, text: String): Bool {
+  if text == "Self" {
+    return checker.selfType.isSome()
+  }
+  if const Some(found) = checker.findLocal(text) {
+    if const .Declared(symbol) = found {
+      return namesACase(checker, symbol)
+    }
+    return false
+  }
+  match checker.program.lookUp(checker.module, text) {
+    Some(symbol) => namesACase(checker, symbol)
+    .None => false
+  }
+}
+
+/** A case, or a type whose one constructor a pattern reads backwards. A function or a constant is neither. */
+fn namesACase(var checker: Checker, symbol: SymbolId): Bool {
+  match checker.symbolAt(symbol).kind {
+    .Case(_) | .Type | .Alias | .Trait | .GenericParameter | .Builtin => true
+    _ => false
+  }
+}
+
+/**
+ * `Nome =>`: the whole point of deciding by the first letter is that this is an error and not a catch-all. The note
+ * says the rule, and a case of the matched type is offered where one is close enough.
+ */
+fn reportUnknownCase(var checker: Checker, name: Name, subject: TypeId) {
+  var problem = Diagnostic.error("`{name.text}` is not a case in scope", name.span)
+    .withNote("A name that starts with an uppercase letter is a case, never a binding: a binding starts lowercase")
+  if const Some(similar) = nearestCase(checker, subject, name.text) {
+    problem = problem.withNote("Did you mean `.{similar}`?")
+  }
+  checker.reportHere(problem)
+}
+
+/** A case of the matched type that is at most two edits away from what was written. */
+fn nearestCase(var checker: Checker, subject: TypeId, text: String): String? {
+  var best: String? = None
+  var distance = 3
+  for name in caseNamesOf(checker, subject) {
+    if name == text || name.isEmpty() {
+      continue
+    }
+    const found = editDistance(name, text, distance - 1)
+    if found < distance {
+      distance = found
+      best = Some(name)
+    }
+  }
+  best
 }
 
 /**

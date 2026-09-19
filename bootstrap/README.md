@@ -30,6 +30,7 @@ Where the language lets types decide, the interpreter uses what it sees at runti
 | Language                                              | Stage 0                                                          |
 |-------------------------------------------------------|------------------------------------------------------------------|
 | Literals adapt to the expected type                   | An `Int` becomes a `Float` where a `Float` is annotated, and next to a `Float` in arithmetic |
+| A bare uppercase name in a pattern is a case in scope  | The parser decides by the first letter; the interpreter looks the name up when the pattern runs and fails loudly if it is nowhere |
 | `.Case` where the type is expected                    | In patterns always. In expressions where the value arrives at an annotation, a parameter, a field, a result, an assignment or `==`. Inside a list, a tuple or `Some(...)` on either side of `==`/`!=`, resolved element-wise against the value at the same position on the other side; an implicit case with no counterpart to resolve against is a runtime error. Elsewhere: `TokenKind.Dot` |
 | `value.into()`, `to<Target>()`, `Json.decode<T>()`    | Not available (they are chosen by the expected type). `Target.from(value)` works |
 | `?` converts errors through `From`                    | By the declared return type of the function: a `from` for the type of the error, or a case that wraps it |

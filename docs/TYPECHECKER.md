@@ -778,7 +778,8 @@ value; `if` and `match` are expressions, and an `if` without an `else` has type 
 
 ### 5.5 Patterns, exhaustiveness and redundancy
 
-Patterns are checked against a type and bind names (a bare name always binds, never matches a constant). Then
+Patterns are checked against a type and bind names (a name that starts with a lowercase letter binds, never
+matches a constant; an uppercase one is resolved through the scope and is a case or a type, never a binding). Then
 exhaustiveness and reachability are decided with Maranget's usefulness algorithm over a pattern matrix, which gives
 both answers and a witness for free:
 

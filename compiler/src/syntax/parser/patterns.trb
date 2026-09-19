@@ -61,10 +61,22 @@ fn parseNameOrVariant(var parser: Parser): PatternKind {
   if parser.eat(TokenKind.ParenOpen) {
     return PatternKind.Variant(path, parseVariantFields(parser))
   }
-  if path.length() > 1 {
+  // A name that starts with an uppercase letter is never a binding: it is a case the scope has to know (`None`)
+  if path.length() > 1 || startsUpperCase(path[0].text) {
     return PatternKind.Variant(path, [])
   }
   PatternKind.Binding(path[0].text)
+}
+
+/**
+ * Whether a name starts with an uppercase letter, which is what decides between a binding and a case. "Uppercase" is
+ * "the character changes when it is lowercased", so `_found` and `found` bind and `Found` does not.
+ */
+fn startsUpperCase(text: String): Bool {
+  match text.chars().first() {
+    Some(first) => first.toLowerCase() != first
+    .None => false
+  }
 }
 
 fn parseVariantFields(var parser: Parser): List<FieldPattern> {

@@ -66,7 +66,8 @@ impl Parser<'_> {
         if self.eat(TokenKind::ParenOpen) {
             return PatternKind::Variant { path, fields: self.variant_fields() };
         }
-        if path.len() > 1 {
+        // A name that starts with an uppercase letter is never a binding: it is a case the scope has to know (`None`)
+        if path.len() > 1 || starts_upper_case(&path[0].text) {
             return PatternKind::Variant { path, fields: Vec::new() };
         }
         PatternKind::Name(path.remove(0).text)
@@ -129,4 +130,12 @@ impl Parser<'_> {
         }
         self.primary_expression()
     }
+}
+
+/// Whether a name starts with an uppercase letter, which is what decides between a binding and a case. "Uppercase" is
+/// "the character changes when it is lowercased" - the same rule as `Char.toLowerCase` of the standard library - so
+/// `_found` and `found` bind and `Found` does not.
+fn starts_upper_case(text: &str) -> bool {
+    let Some(first) = text.chars().next() else { return false };
+    first.to_lowercase().next().unwrap_or(first) != first
 }

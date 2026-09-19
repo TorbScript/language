@@ -638,6 +638,18 @@ impl Interpreter {
         self.fail(environment, span, format!("Unknown name `{name}`"))
     }
 
+    /// Whether a bare uppercase pattern name stands for something: a binding of a surrounding scope, a name of the
+    /// module or of the prelude, a built-in type, or one of the four cases the interpreter knows without a declaration.
+    fn knows_case_name(&self, name: &str, environment: &Rc<Environment>) -> bool {
+        if matches!(name, "Some" | "None" | "Ok" | "Fail" | "Self") {
+            return true;
+        }
+        if environment.lookup(name).is_some() || environment.module.scope.borrow().contains_key(name) {
+            return true;
+        }
+        self.program.prelude.scope.borrow().contains_key(name) || builtin_type(name).is_some()
+    }
+
     fn implicit_member(&self, receiver: &Value, name: &'static str) -> Option<Value> {
         match receiver {
             Value::Object(object) if object.info.may_have(name) => {
@@ -1157,6 +1169,11 @@ impl Interpreter {
             }
             PatternKind::Variant { path, fields } => {
                 let name = path.last().map_or("", |name| name.text.as_str());
+                // The parser made a bare uppercase name a case, by its first letter. Stage 0 has no checker, so a name
+                // that is nowhere is reported here instead of quietly matching nothing.
+                if path.len() == 1 && fields.is_empty() && !self.knows_case_name(name, environment) {
+                    return self.fail(environment, pattern.span, format!("`{name}` is not a case in scope"));
+                }
                 let payload: &[Value] = match (name, value) {
                     ("Some", Value::Option(Some(inner))) => std::slice::from_ref(&**inner),
                     ("None", Value::Option(None)) => &[],
@@ -1166,12 +1183,9 @@ impl Interpreter {
                         // `Shape.Circle(r)` is a case, `Point(x, y)` is a type. A case without its type is `.Circle(r)`
                         let is_case = path.len() > 1 && object.case.is_some() && object.info.case_index(name) == object.case;
                         let is_type = path.len() == 1 && object.case.is_none() && object.info.name == name;
-                        // ...or `Circle(r)` after `use Circle from Shape`
+                        // ...or `Circle(r)` / `Empty` after `use Shape.Circle, Shape.Empty`
                         let imported = environment.module.scope.borrow().get(name).cloned();
-                        let is_imported_case = path.len() == 1
-                            && matches!(&imported, Some(Item::Value(Value::Function(function)))
-                                if matches!(&**function, Function::Constructor { info, case }
-                                    if Rc::ptr_eq(info, &object.info) && *case == object.case));
+                        let is_imported_case = path.len() == 1 && names_case_of(&imported, object);
                         if !is_case && !is_type && !is_imported_case {
                             return Ok(false);
                         }
@@ -2184,6 +2198,17 @@ fn flatten_option(value: Value) -> Value {
     match value {
         Value::Option(_) => value,
         other => Value::some(other),
+    }
+}
+
+/// Whether an imported name is the very case this object is: a constructor where the case has fields, the one value
+/// of the case where it has none (`use Shape.Circle, Shape.Empty`).
+fn names_case_of(imported: &Option<Item>, object: &Rc<crate::value::Object>) -> bool {
+    match imported {
+        Some(Item::Value(Value::Function(function))) => matches!(&**function, Function::Constructor { info, case }
+            if Rc::ptr_eq(info, &object.info) && *case == object.case),
+        Some(Item::Value(Value::Object(other))) => Rc::ptr_eq(&other.info, &object.info) && other.case == object.case,
+        _ => false,
     }
 }
 
