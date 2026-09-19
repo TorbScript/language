@@ -1,0 +1,186 @@
+use test, group from "std/test"
+use SymbolId from "../src/semantics/symbols"
+use SymbolPath from "../src/ir/mangle"
+use IrProgram, IrType, IrTypeId, IrTrait, IrSignature, IrParameter, LayoutId, FunctionId from "../src/ir/ir"
+use RuntimeKind, WitnessTable, WitnessSource, WitnessRoot, Capture from "../src/ir/ir"
+use Slot, Instruction, Terminator, Reference, PathStep, borrowed from "../src/ir/ir"
+use LayoutKind, FieldLayout, VariantLayout, finishProgram from "../src/ir/layout"
+use newFunction, addTemporary, emit, terminate, finishFunction from "../src/ir/build"
+use printFunction from "../src/ir/print"
+use insertOwnership from "../src/ir/ownership"
+use verifyOwnedProgram from "../src/ir/ownership-verify"
+
+/**
+ * Every operand position of every instruction, through the pass.
+ *
+ * `operandsOf` and `withOperands` in `operand.trb` are the one place that knows the shape of an instruction, and the
+ * lowering of 5.2 writes only a third of the forms there are - so the rest is built by hand here. Stage 0 has no type
+ * checker: an arm nothing runs is an arm nobody knows about, and 5.5 to 5.9 are the ones who would find out.
+ */
+
+fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
+  const reserved = program.reserveLayout(name, LayoutKind.Record)
+  const layout = program.layoutAt(reserved.layout)
+  program.setLayout(reserved.layout, layout.copy(fields: fields, isBuilt: true))
+  reserved.layout
+}
+
+/** One group of fields per variant, the groups in the order the cases are declared. */
+fn variantLayout(var program: IrProgram, name: String, cases: List<List<FieldLayout>>, names: List<String>): LayoutId {
+  const reserved = program.reserveLayout(name, LayoutKind.Variant)
+  var fields: List<FieldLayout> = []
+  var variants: List<VariantLayout> = []
+  for index in 0..cases.length() {
+    const first = fields.length()
+    fields.addAll(cases[index])
+    variants.add(VariantLayout(names[index], first, cases[index].length()))
+  }
+  const layout = program.layoutAt(reserved.layout)
+  program.setLayout(reserved.layout, layout.copy(fields: fields, variants: variants, isBuilt: true))
+  reserved.layout
+}
+
+/**
+ * The final IR of one hand-built function, with the verifier's findings in its place if it has any.
+ *
+ * It takes the program **by value** on purpose: `assert` holds an `Expression<Bool>` and evaluates it a second time to
+ * show what the parts of it were, so a question that changed the program it was asked about would answer differently the
+ * second time - and a pass that is written to run once would be reported as if it had run twice.
+ */
+fn ownedTextOfFunction(program: IrProgram, identifier: FunctionId): String {
+  var built = program
+  finishProgram(built)
+  insertOwnership(built)
+  const problems = verifyOwnedProgram(built)
+  if !problems.isEmpty() {
+    return String.join(problems, separator: "\n")
+  }
+  printFunction(built, built.functionAt(identifier))
+}
+
+group "Every operand position of every instruction" {
+  test "a place with an element step, a box and a write keep their operands" {
+    var program = IrProgram()
+    const text = program.internType(IrType.Text)
+    const int64 = program.internType(IrType.Integer(64, true))
+    const void = program.internType(IrType.VoidType)
+    const items = program.internType(IrType.Runtime(RuntimeKind.ListStorage, [text]))
+    const box = program.internType(IrType.Box(text))
+    const holder = recordLayout(program, "T_Holder", [FieldLayout("items", items)])
+    const holderType = program.internType(IrType.Record(holder))
+    const signature = IrSignature([IrParameter("holder", holderType), IrParameter("index", int64)], void)
+    var builder = newFunction("t_places", None, signature, "body")
+    const list = addTemporary(builder, items)
+    const item = addTemporary(builder, text)
+    const cell = addTemporary(builder, box)
+    const place = Reference(Slot(0), [PathStep.Field(holder, 0)])
+    const element = Reference(Slot(0), [PathStep.Field(holder, 0), PathStep.Element(text, Slot(1))])
+    emit(builder, Instruction.Read(list, place))
+    emit(builder, Instruction.Read(item, element))
+    emit(builder, Instruction.BoxNew(cell, borrowed(item)))
+    emit(builder, Instruction.Write(place, borrowed(list)))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    assert(
+      ownedTextOfFunction(program, identifier) == r"""fn t_places(holder: Record(T_Holder) owned, index: Int64 borrowed) -> Void {
+  slot %0 parameter holder: Record(T_Holder)
+  slot %1 parameter index: Int64
+  slot %2 temporary: List(String)
+  slot %3 temporary: String
+  slot %4 temporary: Box(String)
+b0: # body
+  %2 = read %0.items
+  %3 = read %0.items[%1]
+  %4 = boxNew %3 owned last
+  release %4
+  write %0.items = %2 owned last
+  release %0
+  return
+}"""
+    )
+  }
+
+  /**
+   * `takeOut` hands the frame the value and `putBack` takes it again, so a value that comes out of a container and goes
+   * straight back into it is neither retained nor released: the count never moves at all.
+   */
+  test "a container that is taken out of and put back into, and the tag of a variant" {
+    var program = IrProgram()
+    const text = program.internType(IrType.Text)
+    const int64 = program.internType(IrType.Integer(64, true))
+    const void = program.internType(IrType.VoidType)
+    const mapping = program.internType(IrType.Runtime(RuntimeKind.MapStorage, [text, text]))
+    const choice = variantLayout(program, "T_Choice", [[FieldLayout("name", text)], []], ["First", "Second"])
+    const choiceType = program.internType(IrType.Variant(choice))
+    const signature = IrSignature([IrParameter("table", mapping, true), IrParameter("key", text)], void)
+    var builder = newFunction("t_container", None, signature, "body")
+    const taken = addTemporary(builder, text)
+    const made = addTemporary(builder, choiceType)
+    const tag = addTemporary(builder, int64)
+    emit(builder, Instruction.TakeOut(taken, Reference(Slot(0)), Slot(1), RuntimeKind.MapStorage))
+    emit(builder, Instruction.PutBack(Reference(Slot(0)), Slot(1), taken, RuntimeKind.MapStorage))
+    emit(builder, Instruction.Construct(made, choice, 1, []))
+    emit(builder, Instruction.Tag(tag, made))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    assert(
+      ownedTextOfFunction(program, identifier) == r"""fn t_container(var table: Map(String, String) borrowed, key: String borrowed) -> Void {
+  slot %0 parameter table: Map(String, String)
+  slot %1 parameter key: String
+  slot %2 temporary: String
+  slot %3 temporary: Variant(T_Choice)
+  slot %4 temporary: Int64
+b0: # body
+  %2 = takeOut %0[%1] Map
+  putBack %0[%1] = %2 Map
+  %3 = construct T_Choice.Second ()
+  %4 = tag %3
+  release %3
+  return
+}"""
+    )
+  }
+
+  test "a closure, a call of it, a trait-typed value and a call through a witness table" {
+    var program = IrProgram()
+    const text = program.internType(IrType.Text)
+    const void = program.internType(IrType.VoidType)
+    const show = program.internTrait(IrTrait(SymbolId(1), SymbolPath("std/prelude", "convert", [], "Show"), []))
+    const objectType = program.internType(IrType.Object([show]))
+    const shape = program.internSignature(IrSignature([IrParameter("value", text)], void))
+    const closureType = program.internType(IrType.Closure(shape))
+    const table = program.addWitnessTable(WitnessTable("w_show__String", show, text, [], []))
+    var innerBuilder = newFunction("t_inner", None, IrSignature([IrParameter("value", text)], void), "body")
+    terminate(innerBuilder, Terminator.Return(None))
+    const inner = finishFunction(program, innerBuilder)
+    const signature = IrSignature([IrParameter("text", text)], void)
+    var builder = newFunction("t_indirect", None, signature, "body")
+    const made = addTemporary(builder, closureType)
+    const shownValue = addTemporary(builder, objectType)
+    emit(builder, Instruction.Closure(made, inner, [Capture.Value(Slot(0))], false))
+    emit(builder, Instruction.CallClosure(None, made, [borrowed(Slot(0))]))
+    emit(builder, Instruction.TraitValue(shownValue, borrowed(Slot(0)), [WitnessSource(WitnessRoot.Table(table))]))
+    emit(
+      builder,
+      Instruction.CallWitness(None, WitnessSource(WitnessRoot.Table(table)), 0, [borrowed(shownValue)]),
+    )
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    assert(
+      ownedTextOfFunction(program, identifier) == r"""fn t_indirect(text: String owned) -> Void {
+  slot %0 parameter text: String
+  slot %1 temporary: Closure((String) -> Void)
+  slot %2 temporary: Object(Show)
+b0: # body
+  retain %0
+  %1 = closure t_inner captures(%0 value) local
+  callClosure %1(%0 borrowed)
+  release %1
+  %2 = traitValue %0 owned last tables(table w_show__String)
+  callWitness table w_show__String member 0(%2 borrowed last)
+  release %2
+  return
+}"""
+    )
+  }
+}

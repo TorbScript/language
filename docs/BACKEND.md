@@ -827,7 +827,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.R1** | **Done.** Runtime skeleton and the manifest format: header, heap, retain/release/make-unique, `torb_text`, panic, overflow, console, the manifest with the header it renders, the C test harness | `runtime/*`, `backend/c/natives.trb` | `runtime/tests` (67, zero live blocks after each); the generated header compiles against the runtime and the table's shape is pinned | - |
 | **5.2** | **Done.** Lowering: functions, slots, blocks, literals, locals, arithmetic intrinsics, calls of top-level functions and concrete methods, fields, constructors, tuples, `if`, `while`, `for` over `Range<Int>`, `return`, blocks, the const evaluator, static values | `ir/lower/*.trb`, `ir/instances.trb`, `ir/constant.trb` | IR snapshots for ~15 small programs | 5.1, M4.4 |
 | **5.3** | **Done.** The C emitter, minimum path. Types, functions, blocks and gotos, `#line`, slot declarations, static data, `main`, the driver's minimum (`torb build`, compiler discovery, `--emit-c`). **Gate: a program of monomorphic functions becomes a native binary and behaves like it does on stage 0** (`print` needs the witness tables of 5.6) | `backend/c/type.trb`, `emission.trb`, `prototype.trb`, `body.trb`, `emit.trb`, `cli/build.trb` | `compiler/tests/emit-c.test.trb` (20); `bootstrap/tests/native/*` compiled, run and compared with stage 0 by `bootstrap/crates/torb-cli/tests/native.rs`; `--emit-c` twice is byte identical | 5.2, 5.R1 |
-| **5.4** | Ownership: the summary pass, liveness, `Copy`/`Move`/`Release` insertion, edge splitting, `MakeUnique` | `ir/ownership.trb` | IR snapshots pinning every insertion point; the live-block counter is zero after every conformance script | 5.2 |
+| **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
 | **5.5** | ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, `Option`/`Result`, `?` with its conversion, `if const`/`if var`/`while const` | `ir/lower/match.trb`, `ir/decision.trb` | Snapshots of the decision trees; `04-adts-and-matching.trb` and `06-errors.trb` run | 5.2, 5.4 |
 | **5.6** | Generics: instance keys, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`copy`. **Gate: `bootstrap/tests/scripts/basics.trb` produces its `.expected` natively** | `ir/lower/generic.trb`, `ir/witness.trb`, `ir/lower/derive.trb` | basics.trb; instance counts are asserted so an accidental explosion fails a test | 5.5 |
 | **5.7** | Collections: the list and the ordered hash table in C, element descriptors, the natives of `List`/`Map`/`Set`/`String`, `Iterable` pipelines (ordinary TorbScript once closures work). **Gate: `language.trb` passes** | `runtime/list.c`, `runtime/map.c`, `runtime/text.c`, manifest entries | language.trb, `07-collections.trb` | 5.3, 5.6, 5.8 |
@@ -1109,6 +1109,87 @@ can run, the code won and this is the list. Everything else is as written.
   leaves with 101 (decided gap 9), and the messages of the checked arithmetic differ (`Integer overflow` against
   `` arithmetic overflow in `*` ``). The end-to-end test knows about exactly this one difference: for a program that
   panics, stage 0 only has to fail. Unifying them is 5.14's.
+
+### What 5.4 does differently
+
+Section 2 is the plan; where it did not fit what 5.1 and 5.2 built, or where it was wrong about a case, the code won and
+this is the list. Everything else is as written.
+
+- **Four files, and one of them is the whole answer to "which positions are there".** `ir/liveness.trb` (which slots a
+  frame counts, postorder, the backward fixpoint), `ir/operand.trb` (`operandsOf` and `withOperands`, the one pair that
+  knows the shape of every instruction, plus `SlotFacts` and `consumedSlotsOf`), `ir/ownership.trb` (the summary, the
+  rewrite, `MakeUnique`, edge splitting) and `ir/ownership-verify.trb` (the invariants). A new instruction is added in
+  `operand.trb` and the three passes over it need no change at all.
+- **`Counted` is `containsCountedType`, not `isManagedType`.** The table of section 2.1 puts an "`Inline` layout of
+  such" in the *not counted* row, meaning an inline layout of numbers - but an inline record of two `String`s carries no
+  count of its own and owns one on each of its fields. So a copy of it retains both, a release of it releases both, and
+  the pass tracks it like any other value. Only **`MakeUnique`** asks the narrower question (`isManagedType`), because
+  only storage that is *shared* has to be made unique: a value in a slot is nobody else's. `expectManaged` in
+  `verify.trb` was widened the same way, which is the one change this sub-milestone made to a file it did not own.
+- **A retain is a `Retain`, not a `Copy`.** Section 2.2 step 4 says an `Owned` position whose operand is live afterwards
+  "gets a `Copy` before the instruction". A `Copy` needs a target slot, so that would mean a new slot and a rewritten
+  operand at every retain; `Retain(slot)` in front of the instruction plus `owned` on the operand is the same semantics
+  with neither. Where the instruction *is* a `Copy`, the instruction carries the answer instead: a `Copy` whose source is
+  at its last use becomes a `Move`, and one whose source is still live stays a `Copy`, which already means "retain".
+- **The transfer function puts the definition before the uses, and step 4's order is not used.** Step 4 walks the
+  operands against `liveOut` and asks about the defined slot afterwards, which makes an instruction that reads and writes
+  one slot (`%2 = textConcat %2, %1`) release the value it has just produced. The transfer is
+  `live before = uses union (live after minus the defined slot)` - kill, then gen - which is also what the set equation
+  of step 3 says at block granularity.
+- **An instruction that reads and writes one counted slot gets a `Move` in front of it.** `total = total + other` is
+  `%2 = intrinsic textConcat %2, %1`, and the old value of `%2` has to be released *after* the concatenation read it and
+  *before* the slot holds the new one - which no order of instructions can do while the old value has no slot of its own.
+  A prepass writes `%9 = move %2` and rewrites the reads, and then every rule after it is the ordinary rule for a value
+  that dies. It is the only thing the pass adds slots for.
+- **The summary is a fixpoint over the call graph, not one pass.** Section 2.1's last bullet says the summary runs
+  exactly once with no fixpoint between functions. But rule 3's own example needs one: `self.added(a).added(b)` makes the
+  *caller's* `self` escape only because `added`'s parameter is already `Owned`, and one pass over the functions in
+  lowering order would answer differently depending on that order. It is a worklist over the callers, ownership only
+  ever grows from `Borrowed` to `Owned`, so the least fixpoint is unique, recursion is not a special case, and the answer
+  does not depend on anything but the program. The rule itself is also generalized: a parameter is `Owned` when its value
+  escapes the frame at all (returned, built into something, stored, handed to another `Owned` position, or copied into a
+  slot that is later written through), not only when its "only use" is such a copy - which is strictly better, because a
+  parameter that is read *and* returned then costs no retain either.
+- **Borrowed and `var` parameters are not in a live set at all.** A value the frame does not own has no last use here:
+  the caller keeps its count for the whole call, so it is never moved out of and never released, and where such a value
+  is needed owned it is retained. Leaving them out makes that structural rather than a rule, and it is why
+  `fn length(text: String)` comes out of the pass with not one instruction added.
+- **An unmanaged operand keeps the mode phase one gave it.** Section 2.2 makes `Return` an `Owned` position, which for an
+  `Int64` would print `owned` and mean nothing: nothing is counted, so nothing is decided. A function that counts
+  nothing is not even walked, and the arithmetic half of a program is therefore byte for byte what the lowering wrote -
+  which a test asserts by comparing the two texts.
+- **A `Release` before a `return` is never needed, because a value dies at its last use.** Section 2.2 step 5 puts the
+  early exits on the edges, and that is exactly what happens; what the section does not say is that nothing else is
+  needed. The one value that dies without a use to die at is a parameter the caller handed over and the body never reads,
+  and that gets its `Release` at the top of the entry block.
+- **`Capture` has no room for a mode**, so a `Closure` retains what it captures and never moves it (`Capture.Value` and
+  `.Boxed` are positions that take the count, but nothing can say `last` about them). The frame's own count still dies at
+  its last use, so a capture at the last use is a retain and a release. 5.8 can do better once a capture carries a mode.
+  `CallWitness` arguments are `Borrowed` for the same kind of reason: which parameters a witness member keeps is the
+  signature of the member, which arrives with 5.6. Both are a missing `Owned`, which costs one copy and never
+  correctness.
+- **A signature that is *interned* is never changed.** A closure type is `Closure(IrSignatureId)` and the ownership of
+  the parameters is part of a signature's interning key, so promoting one would change type identity. Only the signature
+  a *function* carries by value is written to, and a `CallClosure` therefore reads `Borrowed` until 5.8 gives a closure
+  its own summary.
+- **`MakeUnique` is inserted by this pass, not by the lowering.** Section 2.2 phase 1 puts it in the lowering, "because
+  it is a property of the path and not of liveness". It is - and there is no lowering that writes a place yet (an
+  assignment to one is 5.9's), so the hook lives here, in front of every `Write` and every `TakeOut`, one per counted
+  owner of the path and outermost first. A write the lowering already made unique is left alone, which is what a
+  `MakeUnique` directly in front of it says, so 5.7 and 5.9 can take the decision over without this pass doubling it.
+- **The verifier's invariants are a file of their own, and `verifyOwnedProgram` is the two verifiers together.** They are
+  only true of the IR *after* this pass, so `verifyFunction` cannot demand them (a `torb ir --no-ownership` prints phase
+  one and is verified by the old rules). What was added: every counted value is consumed or released exactly once on
+  every path, as a forward analysis over four states per slot whose fourth state - owning on one path and empty on
+  another - is how a leak on one path is found; nothing is used after it was moved out of; nothing is released twice; a
+  slot is not overwritten while it still owns a value; a parameter the caller keeps the count of is never released and
+  never moved out of; and a position that keeps a managed value says `owned`, with a call's arguments matching the
+  callee's signature exactly.
+- **What the emitter has to do, beyond the instructions.** Three contracts that are not instructions and that 5.3 has to
+  keep, because the IR counts on them: a `Read` of a counted field hands the frame a count of it (it retains); a `Call`
+  answers a value the caller owns; and a `Write` through a counted place releases what was there before it stores the new
+  value - which is why the value operand of a write is `owned`. `Copy` retains, `Move` does not, and for an inline
+  aggregate both of them mean "per counted field".
 
 ### What 5.R1 does differently
 

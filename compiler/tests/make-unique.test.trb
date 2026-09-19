@@ -1,0 +1,145 @@
+use test, group from "std/test"
+use IrProgram, IrType, IrSignature, IrParameter, FunctionId, LayoutId from "../src/ir/ir"
+use Slot, Instruction, Terminator, Reference, PathStep, borrowed from "../src/ir/ir"
+use LayoutKind, FieldLayout, finishProgram from "../src/ir/layout"
+use newFunction, emit, terminate, finishFunction from "../src/ir/build"
+use printFunction from "../src/ir/print"
+use insertOwnership from "../src/ir/ownership"
+use verifyOwnedProgram from "../src/ir/ownership-verify"
+
+/**
+ * The hook `MakeUnique` hangs on: every *owner* along the path a write goes through is made unique before the write,
+ * outermost first, and only the owners that carry a count of their own. At runtime each of them is
+ * `if (count == 1) { } else { shallow copy, retain the children, release the old }`, so a write to a value nobody shares
+ * costs one comparison - which is the other half of what makes `list = list.added(x)` change in place.
+ *
+ * Nothing the lowering writes today goes through a place - an assignment to one waits for 5.9 - so every body here is
+ * built by hand. That is the point: 5.7 and 5.9 plug their writes in, and these tests say what they will get.
+ */
+
+fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
+  const reserved = program.reserveLayout(name, LayoutKind.Record)
+  const layout = program.layoutAt(reserved.layout)
+  program.setLayout(reserved.layout, layout.copy(fields: fields, isBuilt: true))
+  reserved.layout
+}
+
+/** Five `Int64` fields are 40 bytes, which is over the inline limit, so the layout is `Boxed` and carries a count. */
+fn boxedLayout(var program: IrProgram, name: String): LayoutId {
+  const int64 = program.internType(IrType.Integer(64, true))
+  var fields: List<FieldLayout> = []
+  for index in 0..5 {
+    fields.add(FieldLayout("f{index}", int64))
+  }
+  recordLayout(program, name, fields)
+}
+
+/**
+ * The final IR of one hand-built function, with the verifier's findings in its place if it has any.
+ *
+ * It takes the program **by value** on purpose: `assert` holds an `Expression<Bool>` and evaluates it a second time to
+ * show what the parts of it were, so a question that changed the program it was asked about would answer differently the
+ * second time - and a pass that is written to run once would be reported as if it had run twice.
+ */
+fn ownedTextOfFunction(program: IrProgram, identifier: FunctionId): String {
+  var built = program
+  finishProgram(built)
+  insertOwnership(built)
+  const problems = verifyOwnedProgram(built)
+  if !problems.isEmpty() {
+    return String.join(problems, separator: "\n")
+  }
+  printFunction(built, built.functionAt(identifier))
+}
+
+group "Make unique before a write" {
+  test "a write through a boxed owner makes it unique first" {
+    var program = IrProgram()
+    const int64 = program.internType(IrType.Integer(64, true))
+    const big = boxedLayout(program, "T_Big")
+    const bigType = program.internType(IrType.Record(big))
+    const signature = IrSignature([IrParameter("self", bigType), IrParameter("value", int64)], bigType)
+    var builder = newFunction("t_changed", None, signature, "body")
+    emit(builder, Instruction.Write(Reference(Slot(0), [PathStep.Field(big, 0)]), borrowed(Slot(1))))
+    terminate(builder, Terminator.Return(Some(borrowed(Slot(0)))))
+    const identifier = finishFunction(program, builder)
+    assert(
+      ownedTextOfFunction(program, identifier) == r"""fn t_changed(self: Record(T_Big) owned, value: Int64 borrowed) -> Record(T_Big) {
+  slot %0 parameter self: Record(T_Big)
+  slot %1 parameter value: Int64
+b0: # body
+  makeUnique %0
+  write %0.f0 = %1 borrowed
+  return %0 owned last
+}"""
+    )
+  }
+
+  /**
+   * `T_Outer` holds a pointer to the boxed `T_Big` plus a `String`, which is 24 bytes and therefore inline: the slot is
+   * not shared with anybody, so nothing is made unique for it, while the boxed value it points at is.
+   */
+  test "the counted owner inside an inline one is made unique, and the inline slot itself is not" {
+    var program = IrProgram()
+    const text = program.internType(IrType.Text)
+    const int64 = program.internType(IrType.Integer(64, true))
+    const big = boxedLayout(program, "T_Big")
+    const bigType = program.internType(IrType.Record(big))
+    const outer = recordLayout(program, "T_Outer", [FieldLayout("inner", bigType), FieldLayout("name", text)])
+    const outerType = program.internType(IrType.Record(outer))
+    const signature = IrSignature([IrParameter("self", outerType), IrParameter("value", int64)], outerType)
+    var builder = newFunction("t_deep", None, signature, "body")
+    const place = Reference(Slot(0), [PathStep.Field(outer, 0), PathStep.Field(big, 0)])
+    emit(builder, Instruction.Write(place, borrowed(Slot(1))))
+    terminate(builder, Terminator.Return(Some(borrowed(Slot(0)))))
+    const identifier = finishFunction(program, builder)
+    assert(
+      ownedTextOfFunction(program, identifier) == r"""fn t_deep(self: Record(T_Outer) owned, value: Int64 borrowed) -> Record(T_Outer) {
+  slot %0 parameter self: Record(T_Outer)
+  slot %1 parameter value: Int64
+b0: # body
+  makeUnique %0.inner
+  write %0.inner.f0 = %1 borrowed
+  return %0 owned last
+}"""
+    )
+  }
+
+  test "a write to a field of an inline record in a slot needs nothing at all" {
+    var program = IrProgram()
+    const text = program.internType(IrType.Text)
+    const int64 = program.internType(IrType.Integer(64, true))
+    const small = recordLayout(program, "T_Small", [FieldLayout("name", text), FieldLayout("size", int64)])
+    const smallType = program.internType(IrType.Record(small))
+    const signature = IrSignature([IrParameter("self", smallType), IrParameter("value", int64)], smallType)
+    var builder = newFunction("t_resized", None, signature, "body")
+    emit(builder, Instruction.Write(Reference(Slot(0), [PathStep.Field(small, 1)]), borrowed(Slot(1))))
+    terminate(builder, Terminator.Return(Some(borrowed(Slot(0)))))
+    const identifier = finishFunction(program, builder)
+    assert(
+      ownedTextOfFunction(program, identifier) == r"""fn t_resized(self: Record(T_Small) owned, value: Int64 borrowed) -> Record(T_Small) {
+  slot %0 parameter self: Record(T_Small)
+  slot %1 parameter value: Int64
+b0: # body
+  write %0.size = %1 borrowed
+  return %0 owned last
+}"""
+    )
+  }
+
+  /** The lowering of 5.9 forms the path and knows more about it than this pass can see, so its answer wins. */
+  test "a write the lowering already made unique is left exactly as it is" {
+    var program = IrProgram()
+    const int64 = program.internType(IrType.Integer(64, true))
+    const big = boxedLayout(program, "T_Big")
+    const bigType = program.internType(IrType.Record(big))
+    const signature = IrSignature([IrParameter("self", bigType), IrParameter("value", int64)], bigType)
+    var builder = newFunction("t_once", None, signature, "body")
+    emit(builder, Instruction.MakeUnique(Reference(Slot(0), [])))
+    emit(builder, Instruction.Write(Reference(Slot(0), [PathStep.Field(big, 0)]), borrowed(Slot(1))))
+    terminate(builder, Terminator.Return(Some(borrowed(Slot(0)))))
+    const identifier = finishFunction(program, builder)
+    const shown = ownedTextOfFunction(program, identifier)
+    assert(shown.contains("b0: # body\n  makeUnique %0\n  write %0.f0 = %1 borrowed\n  return %0 owned last"))
+  }
+}

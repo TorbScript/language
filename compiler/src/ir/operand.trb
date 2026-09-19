@@ -1,0 +1,380 @@
+use IrProgram, IrFunction, IrSignature, IrTypeId, Ownership, FunctionId from "./ir"
+use Slot, SlotRole, Instruction, Argument from "./ir"
+use Reference, PathStep, Capture, WitnessSource from "./ir"
+use containsCountedType from "./layout"
+
+/**
+ * Every operand occurrence of an instruction, and what the position it stands in does with the count.
+ *
+ * `operandsOf` and `withOperands` are one pair: the second one takes the answers of the first, in the same order, and
+ * writes them back into the instruction. Everything that asks a question about ownership - the summary, the rewrite,
+ * the verifier - asks it through this pair, so a position that is forgotten is forgotten in one place and not in three.
+ *
+ * It is the one file of the ownership pass that knows the *shape* of every instruction, which is why it is a file of its
+ * own: a new instruction is added here, and the three passes over it need no change at all.
+ */
+
+// --- What the pass needs to know about the slots of one function ----------------------------------------------------
+
+/**
+ * The little bit of a function the rewrite asks about a slot, so that the function itself is not carried through every
+ * call: a second live copy of a body across a write is what makes an interpreter slow.
+ */
+public type SlotFacts {
+  /** The type of every slot, by slot index. */
+  types: List<IrTypeId>
+  /** Whether a value of that slot's type carries a count anywhere inside it, which is what makes it own something. */
+  isCounted: List<Bool>
+  /** Whether the slot is a parameter, which is the only kind of slot that holds a value before the first block runs. */
+  isParameter: List<Bool>
+
+  fn isCountedSlot(self, slot: Slot): Bool {
+    if slot.value < 0 || slot.value >= isCounted.length() {
+      return false
+    }
+    isCounted[slot.value]
+  }
+
+  fn typeOfSlot(self, slot: Slot): IrTypeId {
+    types[slot.value]
+  }
+}
+
+public fn slotFactsOf(program: IrProgram, function: IrFunction): SlotFacts {
+  var types: List<IrTypeId> = []
+  var isCounted: List<Bool> = []
+  var isParameter: List<Bool> = []
+  for declaration in function.slots {
+    types.add(declaration.annotation)
+    isCounted.add(containsCountedType(program, declaration.annotation))
+    match declaration.role {
+      .Parameter(_) => isParameter.add(true)
+      _ => isParameter.add(false)
+    }
+  }
+  SlotFacts(types, isCounted, isParameter)
+}
+
+// --- The operands of an instruction ---------------------------------------------------------------------------------
+
+/**
+ * One operand occurrence of an instruction: which slot it reads, and what the position does with the count.
+ *
+ * `operandsOf` and `withOperands` are one pair: the second one takes the answers of the first, in the same order, and
+ * writes them back. Everything that asks a question about ownership - the summary, the rewrite, the verifier - asks it
+ * through this pair, so a position that is forgotten is forgotten in one place and not in three.
+ */
+public type Operand {
+  slot: Slot
+  /** The position takes the count: `Construct`, `BoxNew`, `TraitValue`, a store, `Return`, a parameter a callee keeps. */
+  takesCount: Bool = false
+  /** The position can say `last`, so a value that dies here may be moved into it instead of retained. */
+  canMove: Bool = false
+  /** The instruction is its own retain, which `Copy` is: an owned position that needs no `Retain` in front of it. */
+  retainsItself: Bool = false
+}
+
+fn borrowedOperand(slot: Slot): Operand {
+  Operand(slot, false, false, false)
+}
+
+fn ownedOperand(slot: Slot): Operand {
+  Operand(slot, true, true, false)
+}
+
+fn borrowedOperands(slots: List<Slot>): List<Operand> {
+  var found: List<Operand> = []
+  for slot in slots {
+    found.add(borrowedOperand(slot))
+  }
+  found
+}
+
+fn ownedOperands(arguments: List<Argument>): List<Operand> {
+  var found: List<Operand> = []
+  for argument in arguments {
+    found.add(ownedOperand(argument.slot))
+  }
+  found
+}
+
+/**
+ * Every operand occurrence of an instruction, in **evaluation order**: the receiver before the arguments, the base of a
+ * place before what indexes into it. The rewrite walks the list backwards, which is what makes only the *second*
+ * occurrence of `f(x, x)` the last use of `x`.
+ */
+public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruction): List<Operand> {
+  match instruction {
+    .Constant(_, _) => []
+    .Move(_, source) => [Operand(source, true, true, true)]
+    .Copy(_, source) => [Operand(source, true, true, true)]
+    // What this pass inserted itself. They are not uses a position could decide anything about
+    .Retain(_) => []
+    .Release(_) => []
+    .MakeUnique(reference) => borrowedOperands(placeSlotsOf(reference))
+    .Call(_, callee, arguments, witnesses) => {
+      var found = callOperands(program, callee, arguments)
+      found.addAll(borrowedOperands(witnessSlotsOf(witnesses)))
+      found
+    }
+    .CallClosure(_, callee, arguments) => {
+      var found = [borrowedOperand(callee)]
+      found.addAll(closureOperands(program, facts, callee, arguments))
+      found
+    }
+    // Which parameters a witness member keeps is the signature of the member, which arrives with 5.6
+    .CallWitness(_, witness, _, arguments) => {
+      var found = borrowedOperands(witnessSlotsOf([witness]))
+      found.addAll(borrowedOperands(slotsOfArguments(arguments)))
+      found
+    }
+    // An intrinsic reads its operands and builds its answer out of them: `textConcat` allocates, it does not store
+    .Intrinsic(_, _, arguments, _) => borrowedOperands(arguments)
+    .Construct(_, _, _, fields) => ownedOperands(fields)
+    .Read(_, reference) => borrowedOperands(placeSlotsOf(reference))
+    .Write(reference, value) => {
+      var found = borrowedOperands(placeSlotsOf(reference))
+      found.add(ownedOperand(value.slot))
+      found
+    }
+    .Tag(_, source) => [borrowedOperand(source)]
+    // An environment stores what it captures, and a `Capture` has no room for a mode: it is retained, never moved
+    .Closure(_, _, captures, _) => captureOperands(captures)
+    .BoxNew(_, value) => [ownedOperand(value.slot)]
+    .TraitValue(_, value, tables) => {
+      var found = [ownedOperand(value.slot)]
+      found.addAll(borrowedOperands(witnessSlotsOf(tables)))
+      found
+    }
+    .TakeOut(_, container, key, _) => {
+      var found = borrowedOperands(placeSlotsOf(container))
+      found.add(borrowedOperand(key))
+      found
+    }
+    .PutBack(container, key, value, _) => {
+      var found = borrowedOperands(placeSlotsOf(container))
+      found.add(borrowedOperand(key))
+      found.add(ownedOperand(value))
+      found
+    }
+    .Panic(message, _) => [borrowedOperand(message.slot)]
+    .Suspend(_, awaited) => [borrowedOperand(awaited)]
+  }
+}
+
+fn callOperands(program: IrProgram, callee: FunctionId, arguments: List<Argument>): List<Operand> {
+  if !program.hasFunction(callee) {
+    return borrowedOperands(slotsOfArguments(arguments))
+  }
+  const signature = program.functionAt(callee).signature
+  signatureOperands(signature, arguments)
+}
+
+fn closureOperands(
+  program: IrProgram,
+  facts: SlotFacts,
+  callee: Slot,
+  arguments: List<Argument>,
+): List<Operand> {
+  if callee.value < 0 || callee.value >= facts.types.length() {
+    return borrowedOperands(slotsOfArguments(arguments))
+  }
+  if const .Closure(identifier) = program.typeAt(facts.typeOfSlot(callee)) {
+    const signature = program.signatureAt(identifier)
+    return signatureOperands(signature, arguments)
+  }
+  borrowedOperands(slotsOfArguments(arguments))
+}
+
+/** Which arguments of a call take the count: exactly the parameters the callee's signature calls `Owned`. */
+fn signatureOperands(signature: IrSignature, arguments: List<Argument>): List<Operand> {
+  var found: List<Operand> = []
+  for index in 0..arguments.length() {
+    const slot = arguments[index].slot
+    if index >= signature.parameters.length() {
+      found.add(borrowedOperand(slot))
+      continue
+    }
+    if signature.parameters[index].ownership == Ownership.Owned {
+      found.add(ownedOperand(slot))
+      continue
+    }
+    found.add(borrowedOperand(slot))
+  }
+  found
+}
+
+fn captureOperands(captures: List<Capture>): List<Operand> {
+  var found: List<Operand> = []
+  for capture in captures {
+    match capture {
+      .Value(slot) => found.add(Operand(slot, true, false, false))
+      .Boxed(slot) => found.add(Operand(slot, true, false, false))
+      .Place(reference) => found.addAll(borrowedOperands(placeSlotsOf(reference)))
+    }
+  }
+  found
+}
+
+/** The base of a place and every slot that indexes into it, the base first. */
+public fn placeSlotsOf(reference: Reference): List<Slot> {
+  var found = [reference.base]
+  for step in reference.steps {
+    if const .Element(_, index) = step {
+      found.add(index)
+    }
+  }
+  found
+}
+
+fn witnessSlotsOf(witnesses: List<WitnessSource>): List<Slot> {
+  var found: List<Slot> = []
+  for witness in witnesses {
+    if const .Value(slot, _) = witness.root {
+      found.add(slot)
+    }
+  }
+  found
+}
+
+fn slotsOfArguments(arguments: List<Argument>): List<Slot> {
+  var found: List<Slot> = []
+  for argument in arguments {
+    found.add(argument.slot)
+  }
+  found
+}
+
+/**
+ * Which slots an instruction takes the count of and does not give back: the source of a `move`, and every operand that
+ * says `owned last`. It is what the verifier reads to follow a value from the point it is made to the point it is gone.
+ *
+ * `PutBack` is the one that says nothing: it stores a value into a container and has no room for a mode, so **it always
+ * takes the count** - the same kind of contract that makes a `Copy` always a retain. A frame that still needs the value
+ * afterwards therefore retains it first, which is exactly what the rewrite does at a position that is not a last use.
+ */
+public fn consumedSlotsOf(instruction: Instruction): List<Slot> {
+  match instruction {
+    .Move(_, source) => [source]
+    .Call(_, _, arguments, _) => movedSlotsOf(arguments)
+    .CallClosure(_, _, arguments) => movedSlotsOf(arguments)
+    .CallWitness(_, _, _, arguments) => movedSlotsOf(arguments)
+    .Construct(_, _, _, fields) => movedSlotsOf(fields)
+    .Write(_, value) => movedSlotsOf([value])
+    .BoxNew(_, value) => movedSlotsOf([value])
+    .TraitValue(_, value, _) => movedSlotsOf([value])
+    .PutBack(_, _, value, _) => [value]
+    _ => []
+  }
+}
+
+fn movedSlotsOf(arguments: List<Argument>): List<Slot> {
+  var found: List<Slot> = []
+  for argument in arguments {
+    if argument.ownership == Ownership.Owned && argument.isLastUse {
+      found.add(argument.slot)
+    }
+  }
+  found
+}
+
+// --- Writing the answers back ---------------------------------------------------------------------------------------
+
+/**
+ * The same instruction with the decided mode, and the decided slot, in every position `operandsOf` answered for - in the
+ * same order. A `Copy` whose source is at its last use becomes a `Move`, which is the one place where the *instruction*
+ * and not a mode carries the ownership.
+ *
+ * Witness tables and captures keep the slots they had: neither of them can ever be the slot its own instruction writes,
+ * which is the only reason a slot is ever renamed here.
+ */
+public fn withOperands(instruction: Instruction, decided: List<Argument>): Instruction {
+  match instruction {
+    .Constant(_, _) => instruction
+    .Move(target, _) => movedOrCopied(target, decidedAt(decided, 0))
+    .Copy(target, _) => movedOrCopied(target, decidedAt(decided, 0))
+    .Retain(_) => instruction
+    .Release(_) => instruction
+    .MakeUnique(reference) => Instruction.MakeUnique(withPlace(reference, decided, 0))
+    .Call(target, callee, arguments, witnesses) => {
+      Instruction.Call(target, callee, takenArguments(arguments, decided, 0), witnesses)
+    }
+    .CallClosure(target, _, arguments) => {
+      const slot = decidedAt(decided, 0).slot
+      Instruction.CallClosure(target, slot, takenArguments(arguments, decided, 1))
+    }
+    .CallWitness(target, witness, member, arguments) => {
+      const first = witnessSlotsOf([witness]).length()
+      Instruction.CallWitness(target, witness, member, takenArguments(arguments, decided, first))
+    }
+    .Intrinsic(target, intrinsic, arguments, at) => {
+      var slots: List<Slot> = []
+      for index in 0..arguments.length() {
+        slots.add(decidedAt(decided, index).slot)
+      }
+      Instruction.Intrinsic(target, intrinsic, slots, at)
+    }
+    .Construct(target, layout, variant, fields) => {
+      Instruction.Construct(target, layout, variant, takenArguments(fields, decided, 0))
+    }
+    .Read(target, reference) => Instruction.Read(target, withPlace(reference, decided, 0))
+    .Write(reference, _) => {
+      const count = placeSlotsOf(reference).length()
+      Instruction.Write(withPlace(reference, decided, 0), decidedAt(decided, count))
+    }
+    .Tag(target, _) => Instruction.Tag(target, decidedAt(decided, 0).slot)
+    .Closure(_, _, _, _) => instruction
+    .BoxNew(target, _) => Instruction.BoxNew(target, decidedAt(decided, 0))
+    .TraitValue(target, _, tables) => Instruction.TraitValue(target, decidedAt(decided, 0), tables)
+    .TakeOut(target, container, _, kind) => {
+      const count = placeSlotsOf(container).length()
+      const place = withPlace(container, decided, 0)
+      Instruction.TakeOut(target, place, decidedAt(decided, count).slot, kind)
+    }
+    .PutBack(container, _, _, kind) => {
+      const count = placeSlotsOf(container).length()
+      const place = withPlace(container, decided, 0)
+      const key = decidedAt(decided, count).slot
+      Instruction.PutBack(place, key, decidedAt(decided, count + 1).slot, kind)
+    }
+    .Panic(_, at) => Instruction.Panic(decidedAt(decided, 0), at)
+    .Suspend(state, _) => Instruction.Suspend(state, decidedAt(decided, 0).slot)
+  }
+}
+
+/** A `copy` whose source dies here is a `move`: the count stays where it is, and nothing is retained. */
+fn movedOrCopied(target: Slot, source: Argument): Instruction {
+  if source.ownership == Ownership.Owned && source.isLastUse {
+    return Instruction.Move(target, source.slot)
+  }
+  Instruction.Copy(target, source.slot)
+}
+
+fn takenArguments(arguments: List<Argument>, decided: List<Argument>, first: Int): List<Argument> {
+  var taken: List<Argument> = []
+  for index in 0..arguments.length() {
+    taken.add(decidedAt(decided, first + index))
+  }
+  taken
+}
+
+fn withPlace(reference: Reference, decided: List<Argument>, first: Int): Reference {
+  var steps: List<PathStep> = []
+  var at = first + 1
+  for step in reference.steps {
+    if const .Element(item, _) = step {
+      steps.add(PathStep.Element(item, decidedAt(decided, at).slot))
+      at = at + 1
+      continue
+    }
+    steps.add(step)
+  }
+  Reference(decidedAt(decided, first).slot, steps)
+}
+
+fn decidedAt(decided: List<Argument>, index: Int): Argument {
+  match decided.get(index) {
+    Some(found) => found
+    .None => Argument(Slot(0), Ownership.Borrowed, false)
+  }
+}

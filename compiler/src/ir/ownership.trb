@@ -1,0 +1,811 @@
+use IrProgram, IrFunction, Ownership, Slot, SlotRole, SlotDeclaration from "./ir"
+use BlockId, Block, Instruction, Terminator, Argument, Reference from "./ir"
+use isManagedType, containsCountedType from "./layout"
+use usedSlots, definedSlot, successorsOf, reachableBlocks, typeOfReference from "./verify"
+use Counted, LiveSets, countedSlotsOf, livenessOf, filledFlags from "./liveness"
+use SlotFacts, Operand, slotFactsOf, operandsOf, withOperands from "./operand"
+use NativeTarget, nativeEntries from "../backend/c/natives"
+
+/**
+ * Ownership in the IR: which parameter takes the count, where the last use of a value is, and therefore where a `Move`
+ * stands instead of a `Copy`, where a `Retain` has to, where a `Release` goes, and what is made unique before a write
+ * (docs/BACKEND.md 2).
+ *
+ * The lowering writes phase one: every operand `Borrowed`, no `Copy` that counts, no `Release`, no `MakeUnique`. This
+ * pass turns that into the final IR in three steps, none of which depends on the order the functions were lowered in:
+ *
+ * 1. **The summary.** Which parameters the callee *stores*, to a fixpoint over the call graph. A parameter is `Owned`
+ *    when its value escapes the frame - returned, built into something, written into a place, handed on to another
+ *    `Owned` position, or copied into a slot that is later written through. That last rule is what makes the participles
+ *    free: `fn added(self, value): Self \{ var result = self  result.add(value)  result \}` receives `self` owned, so at
+ *    a call site where the receiver is dead the `Copy` is a `Move`, the count stays one, `MakeUnique` is a no-op, and
+ *    `list = list.added(x)` changes in place.
+ * 2. **Liveness** over the slots the frame counts (`liveness.trb`).
+ * 3. **The rewrite.** Every operand occurrence, walked backwards; a value that dies on an edge is released on that edge,
+ *    and an edge that needs releases and is not the only one out of its block is split. Which positions there *are* and
+ *    what each of them does with the count is `operand.trb`, and every pass here asks that one pair of functions.
+ *
+ * Two invariants hold everything together. **An unmanaged value is never touched**: a function without a single counted
+ * slot is not even looked at, and an operand of a number, a `Bool` or an inline record of those keeps the mode phase one
+ * gave it - so the arithmetic half of a program comes out of this pass byte for byte as it went in. And **a borrowed
+ * parameter belongs to the caller**: it is never moved out of and never released, and where such a value is needed
+ * owned it is retained.
+ *
+ * Getting the summary wrong costs speed and never correctness (a missing `Owned` is one copy, a superfluous one is one
+ * retain), which is what makes a fixpoint over the call graph a safe thing to run at all.
+ */
+
+// --- The whole pass -------------------------------------------------------------------------------------------------
+
+/**
+ * The ownership of a whole program: the summaries first, because a call site reads the ownership of the callee's
+ * parameters, then one rewrite per function. It runs after `finishProgram`, because whether a type is counted follows
+ * from the representation of its layout, and a representation is only final once every layout is.
+ *
+ * It is written to run **exactly once** over a program. Running it twice would count the `Retain`s and `Release`s it
+ * inserted itself as ordinary uses.
+ */
+public fn insertOwnership(var program: IrProgram) {
+  summarizeParameters(program)
+  for index in 0..program.functions.length() {
+    rewriteFunction(program, index)
+  }
+}
+
+// --- Phase 2: the summaries -----------------------------------------------------------------------------------------
+
+/**
+ * Which parameters of every function of the program take the count, as the least fixpoint over the call graph.
+ *
+ * A worklist rather than rounds over everything: a function whose summary grew re-queues its *callers*, because an
+ * argument that reaches an `Owned` position is what makes the caller's own parameter escape. Ownership only ever grows
+ * from `Borrowed` to `Owned`, so the fixpoint is unique and recursion - a function that calls itself is its own caller -
+ * needs no special case at all.
+ */
+public fn summarizeParameters(var program: IrProgram) {
+  const count = program.functions.length()
+  if count == 0 {
+    return
+  }
+  applyManifest(program)
+  const callers = callersOf(program)
+  var queue: List<Int> = []
+  var isQueued = filledFlags(count, true)
+  for index in 0..count {
+    queue.add(index)
+  }
+  var cursor = 0
+  while cursor < queue.length() {
+    const index = queue[cursor]
+    cursor = cursor + 1
+    isQueued.set(index, false)
+    if !promoteParameters(program, index) {
+      continue
+    }
+    for caller in callers[index] {
+      if isQueued[caller] {
+        continue
+      }
+      isQueued.set(caller, true)
+      queue.add(caller)
+    }
+  }
+}
+
+/**
+ * The parameters a function of the runtime stores, out of the natives manifest (BACKEND 3.7): `ArrayList.add`,
+ * `Map.set`, `ArrayStack.push`. Keyed by the C symbol, because that is what a `FunctionKind.Runtime` carries - and two
+ * manifest entries that map to one symbol (`ArrayList.add` and `TrieList.add` are one `torb_list_add`) agree about it
+ * by construction.
+ */
+fn applyManifest(var program: IrProgram) {
+  const owned = ownedParametersBySymbol()
+  for index in 0..program.functions.length() {
+    const kind = program.functions[index].kind
+    if const .Runtime(symbol) = kind {
+      if const Some(positions) = owned.get(symbol) {
+        applyOwnedParameters(program, index, positions)
+      }
+    }
+  }
+}
+
+fn ownedParametersBySymbol(): Map<String, List<Int>> {
+  var found: Map<String, List<Int>> = [:]
+  for entry in nativeEntries() {
+    if entry.ownedParameters.isEmpty() {
+      continue
+    }
+    if const .Runtime(symbol) = entry.target {
+      found.set(symbol, entry.ownedParameters)
+    }
+  }
+  found
+}
+
+fn applyOwnedParameters(var program: IrProgram, index: Int, positions: List<Int>) {
+  const function = program.functions[index]
+  var parameters = function.signature.parameters
+  var isChanged = false
+  for position in positions {
+    if position < 0 || position >= parameters.length() {
+      continue
+    }
+    const parameter = parameters[position]
+    if parameter.isReference || parameter.ownership == Ownership.Owned {
+      continue
+    }
+    // A list of numbers stores its items as bytes: there is no count to hand over, so the mode would only be noise
+    if !containsCountedType(program, parameter.annotation) {
+      continue
+    }
+    const promoted = parameter.copy(ownership: Ownership.Owned)
+    parameters.set(position, promoted)
+    isChanged = true
+  }
+  if !isChanged {
+    return
+  }
+  const signature = function.signature.copy(parameters: parameters)
+  const updated = function.copy(signature: signature)
+  program.functions.set(index, updated)
+}
+
+/** Which function calls which, so that a summary that grew only wakes the call sites it can change. */
+fn callersOf(program: IrProgram): List<List<Int>> {
+  const count = program.functions.length()
+  var callers: List<List<Int>> = []
+  for _ in 0..count {
+    callers.add([])
+  }
+  for index in 0..count {
+    for block in program.functions[index].blocks {
+      for instruction in block.instructions {
+        if const .Call(_, callee, _, _) = instruction {
+          if callee.value < 0 || callee.value >= count {
+            continue
+          }
+          if callers[callee.value].contains(index) {
+            continue
+          }
+          callers[callee.value].add(index)
+        }
+      }
+    }
+  }
+  callers
+}
+
+/** One function's summary, applied. Answers whether anything became `Owned` that was not. */
+fn promoteParameters(var program: IrProgram, index: Int): Bool {
+  const function = program.functions[index]
+  // A function of the runtime has no body to read: the manifest is the whole answer
+  if const .Runtime(_) = function.kind {
+    return false
+  }
+  const escaping = escapingSlots(program, function)
+  var parameters = function.signature.parameters
+  var isChanged = false
+  for position in 0..parameters.length() {
+    const parameter = parameters[position]
+    if parameter.isReference || parameter.ownership == Ownership.Owned {
+      continue
+    }
+    if !containsCountedType(program, parameter.annotation) {
+      continue
+    }
+    if position >= function.slots.length() || !escaping[position] {
+      continue
+    }
+    const promoted = parameter.copy(ownership: Ownership.Owned)
+    parameters.set(position, promoted)
+    isChanged = true
+  }
+  if !isChanged {
+    return false
+  }
+  const signature = function.signature.copy(parameters: parameters)
+  const updated = function.copy(signature: signature)
+  program.functions.set(index, updated)
+  true
+}
+
+/**
+ * Which slots of a function hold a value that leaves the frame. Three sources, which are exactly the three rules of
+ * BACKEND 2.1: a position that takes the count (`Construct`, `BoxNew`, `TraitValue`, a store, `Return`), a parameter of
+ * a callee that is already `Owned`, and a `Copy` into a slot that is written through or escapes itself.
+ *
+ * A slot that is *itself* written through counts too. A write through a place releases what was there before it, and the
+ * value it releases has to be the frame's - so a parameter the body writes into is one the caller hands over. From
+ * source that can only be a `var` parameter, which is a `Reference` and never counted at all; the rule is here because
+ * the *answer* has to be right whatever built the body, not only for what the lowering happens to write.
+ */
+fn escapingSlots(program: IrProgram, function: IrFunction): List<Bool> {
+  const slotCount = function.slots.length()
+  var escapes = filledFlags(slotCount, false)
+  var mutated = filledFlags(slotCount, false)
+  const facts = slotFactsOf(program, function)
+  for block in function.blocks {
+    for instruction in block.instructions {
+      for operand in operandsOf(program, facts, instruction) {
+        if operand.takesCount {
+          setFlag(escapes, operand.slot)
+        }
+      }
+      markMutated(mutated, instruction)
+    }
+    if const .Return(value) = block.terminator {
+      if const Some(argument) = value {
+        setFlag(escapes, argument.slot)
+      }
+    }
+  }
+  for index in 0..slotCount {
+    if mutated[index] {
+      escapes.set(index, true)
+    }
+  }
+  var rounds = 0
+  var isChanged = true
+  while isChanged {
+    isChanged = false
+    rounds = rounds + 1
+    if rounds > slotCount + 1 {
+      return escapes
+    }
+    for block in function.blocks {
+      for instruction in block.instructions {
+        if const Some(edge) = copyEdgeOf(instruction) {
+          const (target, source) = edge
+          if !isFlagged(escapes, target) && !isFlagged(mutated, target) {
+            continue
+          }
+          if isFlagged(escapes, source) {
+            continue
+          }
+          setFlag(escapes, source)
+          isChanged = true
+        }
+      }
+    }
+  }
+  escapes
+}
+
+/** A slot whose storage is written through: the owner of a place, which is what `MakeUnique` needs a count of one for. */
+fn markMutated(var mutated: List<Bool>, instruction: Instruction) {
+  match instruction {
+    .Write(reference, _) => setFlag(mutated, reference.base)
+    .MakeUnique(reference) => setFlag(mutated, reference.base)
+    .TakeOut(_, container, _, _) => setFlag(mutated, container.base)
+    .PutBack(container, _, _, _) => setFlag(mutated, container.base)
+    _ => {}
+  }
+}
+
+/** `%4 = copy %2` and `%4 = move %2`: the edge a value travels along inside a frame. */
+fn copyEdgeOf(instruction: Instruction): (Slot, Slot)? {
+  match instruction {
+    .Copy(target, source) => Some((target, source))
+    .Move(target, source) => Some((target, source))
+    _ => None
+  }
+}
+
+fn setFlag(var flags: List<Bool>, slot: Slot) {
+  if slot.value >= 0 && slot.value < flags.length() {
+    flags.set(slot.value, true)
+  }
+}
+
+fn isFlagged(flags: List<Bool>, slot: Slot): Bool {
+  if slot.value < 0 || slot.value >= flags.length() {
+    return false
+  }
+  flags[slot.value]
+}
+
+// --- Phase 3: one function ------------------------------------------------------------------------------------------
+
+/** What one rewritten block is, before it goes back into the function. */
+type RewrittenBlock {
+  instructions: List<Instruction>
+  terminator: Terminator
+  /** Counted slots whose last use is the terminator itself, so their release belongs on every outgoing edge. */
+  endDrops: List<Slot>
+}
+
+fn rewriteFunction(var program: IrProgram, index: Int) {
+  const original = program.functions[index]
+  // A function of the runtime is a signature and nothing else, and a body nothing reaches has nothing to own
+  if const .Runtime(_) = original.kind {
+    return
+  }
+  if original.blocks.isEmpty() {
+    return
+  }
+  const before = countedSlotsOf(program, original)
+  // Not one counted slot: the function is left exactly as the lowering wrote it, down to the bytes of its text
+  if before.isEmpty() {
+    return
+  }
+  var function = prepared(program, original, before)
+  const facts = slotFactsOf(program, function)
+  const counted = countedSlotsOf(program, function)
+  const live = livenessOf(program, function, counted)
+  const reachable = reachableBlocks(function)
+  const blockCount = function.blocks.length()
+  var endDrops: List<List<Slot>> = []
+  for block in 0..blockCount {
+    if !reachable[block] {
+      endDrops.add([])
+      continue
+    }
+    const rewritten = rewriteBlock(program, facts, counted, live, function.blocks[block], block)
+    function.blocks[block].instructions = rewritten.instructions
+    function.blocks[block].terminator = rewritten.terminator
+    endDrops.add(rewritten.endDrops)
+  }
+  splitEdges(function, counted, live, endDrops, blockCount)
+  program.functions.set(index, function)
+}
+
+/**
+ * What has to be in place before liveness can be read: a `MakeUnique` in front of every write through a counted owner,
+ * and a `Move` in front of every instruction that reads and writes one counted slot.
+ *
+ * The second one is not a nicety. `total = total + other` on two strings is `%2 = intrinsic textConcat %2, %1`, and the
+ * old value of `%2` has to be released *after* the concatenation has read it and *before* the slot holds the new one -
+ * which is impossible unless the old value has a slot of its own. `%9 = move %2` gives it one, and every rule after it
+ * is the ordinary rule for a value that dies.
+ */
+fn prepared(program: IrProgram, function: IrFunction, counted: Counted): IrFunction {
+  var built = function
+  const facts = slotFactsOf(program, function)
+  for block in 0..function.blocks.length() {
+    const instructions = function.blocks[block].instructions
+    var written: List<Instruction> = []
+    var isChanged = false
+    for at in 0..instructions.length() {
+      const instruction = instructions[at]
+      const owners = uniqueOwnersOf(program, function, instructions, at)
+      if !owners.isEmpty() {
+        written.addAll(owners)
+        isChanged = true
+      }
+      if const Some(slot) = conflictingSlot(instruction, counted) {
+        const annotation = function.typeOfSlot(slot)
+        built.slots.add(SlotDeclaration(annotation, SlotRole.Temporary, ""))
+        const saved = Slot(built.slots.length() - 1)
+        written.add(Instruction.Move(saved, slot))
+        written.add(renamedUse(program, facts, instruction, slot, saved))
+        isChanged = true
+        continue
+      }
+      written.add(instruction)
+    }
+    if isChanged {
+      built.blocks[block].instructions = written
+    }
+  }
+  built
+}
+
+/**
+ * The `MakeUnique`s one instruction needs: every *owner* along the path it writes through that carries a count of its
+ * own, outermost first. At runtime each of them is `if (count == 1) \{ \} else \{ shallow copy, retain the children,
+ * release the old \}`, so a write to a value that nobody shares costs one comparison.
+ *
+ * A write whose owners were already made unique is left alone, which is what a `MakeUnique` directly in front of it
+ * says: the lowering of 5.9 forms the path and knows more about it than this pass can see.
+ */
+fn uniqueOwnersOf(
+  program: IrProgram,
+  function: IrFunction,
+  instructions: List<Instruction>,
+  at: Int,
+): List<Instruction> {
+  const reference = writtenPlaceOf(instructions[at])
+  var needed: List<Instruction> = []
+  const found = match reference {
+    Some(place) => place
+    .None => {
+      return needed
+    }
+  }
+  if at > 0 {
+    if const .MakeUnique(_) = instructions[at - 1] {
+      return needed
+    }
+  }
+  var ignored: List<String> = []
+  for count in 0..found.steps.length() {
+    const prefix = Reference(found.base, found.steps[0..count])
+    const annotation = typeOfReference(program, function, ignored, "", prefix)
+    if const Some(inner) = annotation {
+      if isManagedType(program, inner) {
+        needed.add(Instruction.MakeUnique(prefix))
+      }
+    }
+  }
+  needed
+}
+
+/**
+ * The place an instruction writes through, if it writes through one. `PutBack` is not one: the container it puts a value
+ * back into is the one a `TakeOut` formed the path to, and that is where it was made unique.
+ */
+fn writtenPlaceOf(instruction: Instruction): Reference? {
+  match instruction {
+    .Write(reference, _) => Some(reference)
+    .TakeOut(_, container, _, _) => Some(container)
+    _ => None
+  }
+}
+
+/** The slot an instruction both reads and writes, when the frame counts it. */
+fn conflictingSlot(instruction: Instruction, counted: Counted): Slot? {
+  const target = definedSlot(instruction)?
+  if !counted.counts(target) {
+    return None
+  }
+  for slot in usedSlots(instruction) {
+    if slot == target {
+      return Some(target)
+    }
+  }
+  None
+}
+
+/** The same instruction, reading `saved` wherever it read `slot`. Every mode stays what phase one wrote. */
+fn renamedUse(
+  program: IrProgram,
+  facts: SlotFacts,
+  instruction: Instruction,
+  slot: Slot,
+  saved: Slot,
+): Instruction {
+  var decided: List<Argument> = []
+  for operand in operandsOf(program, facts, instruction) {
+    if operand.slot == slot {
+      decided.add(Argument(saved, Ownership.Borrowed, false))
+      continue
+    }
+    decided.add(Argument(operand.slot, Ownership.Borrowed, false))
+  }
+  withOperands(instruction, decided)
+}
+
+// --- Phase 3: one block ---------------------------------------------------------------------------------------------
+
+/**
+ * One block, walked backwards from what is live when it ends. The terminator comes first because it is the last thing
+ * that runs, and for every instruction the *definition* is answered before the operands - the transfer function is
+ * `live before = uses union (live after minus the defined slot)`, and any other order releases the wrong value.
+ */
+fn rewriteBlock(
+  program: IrProgram,
+  facts: SlotFacts,
+  counted: Counted,
+  live: LiveSets,
+  block: Block,
+  index: Int,
+): RewrittenBlock {
+  var alive = live.liveOut[index]
+  var endDrops: List<Slot> = []
+  var tail: List<Instruction> = []
+  const terminator = rewriteTerminator(program, facts, counted, alive, endDrops, tail, block.terminator)
+  const count = block.instructions.length()
+  var before: List<List<Instruction>> = []
+  var after: List<List<Instruction>> = []
+  var updated: List<Instruction> = []
+  for position in 0..count {
+    before.add([])
+    after.add([])
+    updated.add(block.instructions[position])
+  }
+  var at = count - 1
+  while at >= 0 {
+    var retains: List<Instruction> = []
+    var releases: List<Instruction> = []
+    const instruction = block.instructions[at]
+    const rewritten = rewriteInstruction(program, facts, counted, alive, retains, releases, instruction)
+    updated.set(at, rewritten)
+    before.set(at, retains)
+    after.set(at, releases)
+    at = at - 1
+  }
+  var instructions = entryReleases(facts, counted, alive, index)
+  for position in 0..count {
+    instructions.addAll(before[position])
+    instructions.add(updated[position])
+    instructions.addAll(after[position])
+  }
+  instructions.addAll(tail)
+  RewrittenBlock(instructions, terminator, endDrops)
+}
+
+/**
+ * A parameter the caller handed over and this body never uses is released where the body begins. It is the one place
+ * where a value dies without a use to die at - everything else dies at its last one.
+ */
+fn entryReleases(facts: SlotFacts, counted: Counted, arriving: List<Bool>, index: Int): List<Instruction> {
+  var released: List<Instruction> = []
+  if index != 0 {
+    return released
+  }
+  for position in 0..counted.width() {
+    if arriving[position] {
+      continue
+    }
+    const slot = counted.slots[position]
+    if !facts.isParameter[slot.value] {
+      continue
+    }
+    released.add(Instruction.Release(slot))
+  }
+  released
+}
+
+fn rewriteTerminator(
+  program: IrProgram,
+  facts: SlotFacts,
+  counted: Counted,
+  var alive: List<Bool>,
+  var endDrops: List<Slot>,
+  var tail: List<Instruction>,
+  terminator: Terminator,
+): Terminator {
+  match terminator {
+    .Return(value) => {
+      const argument = match value {
+        Some(found) => found
+        .None => {
+          return terminator
+        }
+      }
+      var retains: List<Instruction> = []
+      var releases: List<Instruction> = []
+      const operand = Operand(argument.slot, true, true, false)
+      const answer = decideOperand(program, facts, counted, alive, retains, releases, operand)
+      // Nothing can follow a `return`, and a value that is returned is never released: only a retain can land here
+      tail.addAll(retains)
+      markAlive(alive, counted, argument.slot)
+      Terminator.Return(Some(answer))
+    }
+    // A condition and a scrutinee are read and nothing else, so their last use is the end of the block
+    .Branch(condition, _, _) => {
+      dropAtEnd(counted, alive, endDrops, condition)
+      terminator
+    }
+    .Switch(scrutinee, _, _, _) => {
+      dropAtEnd(counted, alive, endDrops, scrutinee)
+      terminator
+    }
+    _ => terminator
+  }
+}
+
+fn dropAtEnd(counted: Counted, var alive: List<Bool>, var endDrops: List<Slot>, slot: Slot) {
+  const position = counted.positionOf(slot)
+  if position < 0 {
+    return
+  }
+  if !alive[position] {
+    endDrops.add(slot)
+  }
+  alive.set(position, true)
+}
+
+/**
+ * One instruction: the ownership of every operand, the retains that have to run before it and the releases that have to
+ * run after it. `retains` and `releases` come out in evaluation order although the walk is backwards, because the text
+ * of a block should read the way it runs.
+ */
+fn rewriteInstruction(
+  program: IrProgram,
+  facts: SlotFacts,
+  counted: Counted,
+  var alive: List<Bool>,
+  var retains: List<Instruction>,
+  var releases: List<Instruction>,
+  instruction: Instruction,
+): Instruction {
+  const operands = operandsOf(program, facts, instruction)
+  // A panic runs nothing at all: no retain, no release, and what it read is left behind (decided gap 9)
+  if const .Panic(_, _) = instruction {
+    for operand in operands {
+      markAlive(alive, counted, operand.slot)
+    }
+    return instruction
+  }
+  const defined = definedSlot(instruction)
+  var isDeadDefinition = false
+  if const Some(target) = defined {
+    const position = counted.positionOf(target)
+    if position >= 0 {
+      isDeadDefinition = !alive[position]
+      alive.set(position, false)
+    }
+  }
+  var decided: List<Argument> = []
+  for operand in operands {
+    decided.add(Argument(operand.slot, Ownership.Borrowed, false))
+  }
+  var taken: List<Instruction> = []
+  var dropped: List<Instruction> = []
+  var at = operands.length() - 1
+  while at >= 0 {
+    const operand = operands[at]
+    const answer = decideOperand(program, facts, counted, alive, taken, dropped, operand)
+    decided.set(at, answer)
+    markAlive(alive, counted, operand.slot)
+    at = at - 1
+  }
+  retains.addAll(reversedInstructions(taken))
+  releases.addAll(reversedInstructions(dropped))
+  // `const _ = text.trimmed()`: a value nobody takes is dead where it is made
+  if isDeadDefinition {
+    if const Some(target) = defined {
+      releases.add(Instruction.Release(target))
+    }
+  }
+  withOperands(instruction, decided)
+}
+
+/**
+ * What one operand occurrence becomes. The whole of BACKEND 2.1 in one function:
+ *
+ * - unmanaged: nothing at all, and the mode phase one wrote stays;
+ * - a position that takes the count, at the last use of a value the frame owns: a `Move`;
+ * - a position that takes the count, anywhere else: a `Retain` - unless the instruction is its own retain, which a
+ *   `Copy` is;
+ * - a position that borrows, at the last use: the borrow stays and a `Release` follows the instruction.
+ *
+ * A value the frame does not own - a borrowed parameter, a `var` path - has no last use here at all: the caller keeps
+ * its count for the whole call, so it is never moved out of and never released, and where it is needed owned it is
+ * retained.
+ */
+fn decideOperand(
+  program: IrProgram,
+  facts: SlotFacts,
+  counted: Counted,
+  alive: List<Bool>,
+  var retains: List<Instruction>,
+  var releases: List<Instruction>,
+  operand: Operand,
+): Argument {
+  const slot = operand.slot
+  if !facts.isCountedSlot(slot) {
+    return Argument(slot, Ownership.Borrowed, false)
+  }
+  const position = counted.positionOf(slot)
+  const isLast = position >= 0 && !alive[position]
+  if !operand.takesCount {
+    if isLast {
+      releases.add(Instruction.Release(slot))
+    }
+    return Argument(slot, Ownership.Borrowed, isLast)
+  }
+  if isLast && operand.canMove {
+    return Argument(slot, Ownership.Owned, true)
+  }
+  if !operand.retainsItself {
+    retains.add(Instruction.Retain(slot))
+  }
+  if isLast {
+    releases.add(Instruction.Release(slot))
+  }
+  Argument(slot, Ownership.Owned, false)
+}
+
+fn markAlive(var alive: List<Bool>, counted: Counted, slot: Slot) {
+  const position = counted.positionOf(slot)
+  if position >= 0 {
+    alive.set(position, true)
+  }
+}
+
+fn reversedInstructions(instructions: List<Instruction>): List<Instruction> {
+  var reversed: List<Instruction> = []
+  var at = instructions.length() - 1
+  while at >= 0 {
+    reversed.add(instructions[at])
+    at = at - 1
+  }
+  reversed
+}
+
+// --- Phase 3: the edges ---------------------------------------------------------------------------------------------
+
+/**
+ * `drops(B -> S) = liveOut(B) minus liveIn(S)`: the values that are still owned when a block ends and that the block it
+ * goes to does not need. With one successor they go at the end of the block; with several the edge is **split** into a
+ * block that holds the releases and a `Jump`.
+ *
+ * This is the whole mechanism for the early exits. A `return` in the middle of a loop, a `break`, a `continue`, the arms
+ * of an `if` that bind different things: every one of them is an ordinary edge with its own drop set, and nothing
+ * special is written for any of them. The new blocks are appended in block order and, inside a block, in the order the
+ * terminator writes its targets, so the graph is a function of the graph and not of a traversal.
+ */
+fn splitEdges(
+  var function: IrFunction,
+  counted: Counted,
+  live: LiveSets,
+  endDrops: List<List<Slot>>,
+  blockCount: Int,
+) {
+  for block in 0..blockCount {
+    const targets = successorsOf(function.blocks[block])
+    if targets.isEmpty() {
+      continue
+    }
+    if targets.length() == 1 {
+      // A `jump` reads nothing, so a release at the end of the block is on the edge
+      const drops = dropsOnEdge(counted, live, endDrops, block, targets[0])
+      for slot in drops {
+        function.blocks[block].instructions.add(Instruction.Release(slot))
+      }
+      continue
+    }
+    for position in 0..targets.length() {
+      const drops = dropsOnEdge(counted, live, endDrops, block, targets[position])
+      if drops.isEmpty() {
+        continue
+      }
+      var instructions: List<Instruction> = []
+      for slot in drops {
+        instructions.add(Instruction.Release(slot))
+      }
+      const at = function.blocks[block].at
+      const jump = Terminator.Jump(BlockId(targets[position]))
+      function.blocks.add(Block(instructions, jump, "drop", at))
+      const added = BlockId(function.blocks.length() - 1)
+      const replaced = withEdge(function.blocks[block].terminator, position, added)
+      function.blocks[block].terminator = replaced
+    }
+  }
+}
+
+fn dropsOnEdge(
+  counted: Counted,
+  live: LiveSets,
+  endDrops: List<List<Slot>>,
+  block: Int,
+  target: Int,
+): List<Slot> {
+  var drops: List<Slot> = []
+  if target >= 0 && target < live.liveIn.length() {
+    const leaving = live.liveOut[block]
+    const arriving = live.liveIn[target]
+    for position in 0..counted.width() {
+      if leaving[position] && !arriving[position] {
+        drops.add(counted.slots[position])
+      }
+    }
+  }
+  drops.addAll(endDrops[block])
+  drops
+}
+
+/** One edge of a terminator, in the order `successorsOf` writes them: a switch's targets first, `otherwise` last. */
+fn withEdge(terminator: Terminator, position: Int, block: BlockId): Terminator {
+  match terminator {
+    .Jump(_) => Terminator.Jump(block)
+    .Branch(condition, then, otherwise) => {
+      if position == 0 {
+        return Terminator.Branch(condition, block, otherwise)
+      }
+      Terminator.Branch(condition, then, block)
+    }
+    .Switch(scrutinee, values, targets, otherwise) => {
+      if position >= targets.length() {
+        return Terminator.Switch(scrutinee, values, targets, block)
+      }
+      var replaced = targets
+      replaced.set(position, block)
+      Terminator.Switch(scrutinee, values, replaced, otherwise)
+    }
+    _ => terminator
+  }
+}

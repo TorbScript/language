@@ -63,6 +63,9 @@ Stage 0 has no type checker: a mistake is found when the line runs, so **every f
 7. `harness.trb`'s `spanOf` finds the first occurrence of a text. Put the use in front of the declaration.
 8. `.Case` in an expression only works where stage 0 sees the type (annotation, parameter, field, result,
    assignment, `==`). Elsewhere write `Type.Case`.
+9. **A failing `assert` evaluates its expression a second time** to show the values in it. A call inside one that takes a
+   `var` argument therefore *runs twice*, and a pass that is written to run once is then reported as if it had run twice.
+   Hoist it into a `const` first, or let the question take its argument by value.
 
 If the compiler legitimately needs a native that stage 0 lacks, add it minimally in
 `bootstrap/crates/torb-interpreter/src/natives.rs` **and** declare it in `std/`. Stage 0 gets no language features

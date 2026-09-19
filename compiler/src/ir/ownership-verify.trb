@@ -1,0 +1,453 @@
+use IrProgram, IrFunction, IrSignature, Ownership, Slot, SlotRole, Instruction, Terminator from "./ir"
+use Argument, FunctionId from "./ir"
+use verifyProgram, verifyFunction, usedSlots, definedSlot, usedByTerminator from "./verify"
+use successorsOf, reachableBlocks from "./verify"
+use Counted, countedSlotsOf, postorderOf from "./liveness"
+use SlotFacts, slotFactsOf, consumedSlotsOf from "./operand"
+
+/**
+ * The ownership invariants of the IR: the safety net every sub-milestone after 5.4 leans on.
+ *
+ * `verify.trb` asks whether a body is well *typed* and well *formed*. This asks whether it is well *counted*, which is
+ * the one thing a wrong answer in the back end shows up as a leak or a double free rather than as an error:
+ *
+ * - **every owned value is consumed or released exactly once on every path.** A slot that still owns a value when the
+ *   function returns is a leak; a slot that owns one on one path into a `return` and not on another is a leak on that
+ *   path; a slot that is overwritten while it still owns a value is a leak as well;
+ * - **nothing is used after it was moved out of**, and nothing is released twice;
+ * - **a parameter the caller keeps the count of is never released and never moved out of**;
+ * - **a position that keeps a value says so**: a managed operand of `construct`, `boxNew`, `traitValue`, a write or a
+ *   `return` is `owned`, and an argument of a call carries exactly the mode the callee's signature asks for;
+ * - nothing that is not counted is retained or released, which `verify.trb` already demands of `retain`, `release` and
+ *   `makeUnique`.
+ *
+ * The flow is a forward must-analysis over four states per counted slot - nothing known yet, empty, owning, and *both*,
+ * which is the state a leak on one path shows up as. It settles because a block either passes a state through or
+ * overwrites it, and `unknown` only ever grows.
+ *
+ * A panic runs nothing (decided gap 9), so an instruction after one is never reached and an `unreachable` terminator
+ * demands nothing at all: what a panicking task still owns is not a leak, it is a program that is over.
+ */
+
+/** Nothing is known about the slot on the paths into this block yet. */
+const unknownState = 0
+/** The slot holds no value: it was never given one, or it was moved out of or released. */
+const emptyState = 1
+const owningState = 2
+/** Owning on one path and empty on another - which is a leak on one of them. */
+const conflictState = 3
+
+/** Everything `verifyProgram` finds, plus the ownership invariants. This is what `torb ir` runs over the final IR. */
+public fn verifyOwnedProgram(program: IrProgram): List<String> {
+  var found = verifyProgram(program)
+  for function in program.functions {
+    found.addAll(verifyOwnership(program, function))
+  }
+  found
+}
+
+/** One function, after `verifyFunction` has said that its shape and its types are right. */
+public fn verifyOwnedFunction(program: IrProgram, function: IrFunction): List<String> {
+  var found = verifyFunction(program, function)
+  if !found.isEmpty() {
+    return found
+  }
+  verifyOwnership(program, function)
+}
+
+/**
+ * The ownership invariants alone. The modes are checked first: a flow over a body whose modes are wrong would report the
+ * same mistake a second time, one block further on, and one root cause gets one message.
+ */
+public fn verifyOwnership(program: IrProgram, function: IrFunction): List<String> {
+  var found: List<String> = []
+  if const .Runtime(_) = function.kind {
+    return found
+  }
+  if function.blocks.isEmpty() {
+    return found
+  }
+  const facts = slotFactsOf(program, function)
+  const counted = countedSlotsOf(program, function)
+  verifyModes(program, function, facts, found)
+  if !found.isEmpty() {
+    return found
+  }
+  verifyFlow(program, function, facts, counted, found)
+  found
+}
+
+// --- The modes of the operands --------------------------------------------------------------------------------------
+
+fn verifyModes(program: IrProgram, function: IrFunction, facts: SlotFacts, var found: List<String>) {
+  for index in 0..function.blocks.length() {
+    const at = "{function.name} b{index}"
+    const block = function.blocks[index]
+    for instruction in block.instructions {
+      verifyInstructionModes(program, function, facts, at, instruction, found)
+    }
+    if const .Return(value) = block.terminator {
+      if const Some(argument) = value {
+        checkKeptOperand(function, facts, at, argument, "`return`", found)
+      }
+    }
+  }
+}
+
+fn verifyInstructionModes(
+  program: IrProgram,
+  function: IrFunction,
+  facts: SlotFacts,
+  at: String,
+  instruction: Instruction,
+  var found: List<String>,
+) {
+  match instruction {
+    .Construct(_, _, _, fields) => {
+      for field in fields {
+        checkKeptOperand(function, facts, at, field, "`construct`", found)
+      }
+    }
+    .BoxNew(_, value) => checkKeptOperand(function, facts, at, value, "`boxNew`", found)
+    .TraitValue(_, value, _) => checkKeptOperand(function, facts, at, value, "`traitValue`", found)
+    .Write(_, value) => checkKeptOperand(function, facts, at, value, "a write", found)
+    .Call(_, callee, arguments, _) => {
+      if program.hasFunction(callee) {
+        const signature = program.functionAt(callee).signature
+        const name = program.functionAt(callee).name
+        checkArgumentModes(function, facts, at, signature, arguments, "`{name}`", found)
+      }
+    }
+    .CallClosure(_, callee, arguments) => {
+      if const .Closure(identifier) = program.typeAt(facts.typeOfSlot(callee)) {
+        const signature = program.signatureAt(identifier)
+        const name = "the closure in %{callee.value}"
+        checkArgumentModes(function, facts, at, signature, arguments, name, found)
+      }
+    }
+    .Move(_, source) => {
+      if isLentParameter(function, source) {
+        found.add("{at}: %{source.value} is a parameter the caller keeps the count of, so it cannot be moved out of")
+      }
+    }
+    .Release(slot) => {
+      if isLentParameter(function, slot) {
+        found.add("{at}: %{slot.value} is a parameter the caller keeps the count of, so it is never released")
+      }
+    }
+    _ => {}
+  }
+}
+
+/** A position that keeps a managed value says `owned`, and only a value the frame owns is ever moved into one. */
+fn checkKeptOperand(
+  function: IrFunction,
+  facts: SlotFacts,
+  at: String,
+  argument: Argument,
+  what: String,
+  var found: List<String>,
+) {
+  if !facts.isCountedSlot(argument.slot) {
+    return
+  }
+  if argument.ownership != Ownership.Owned {
+    found.add("{at}: {what} keeps %{argument.slot.value}, so the operand has to be `owned`")
+    return
+  }
+  checkMovedOperand(function, at, argument, found)
+}
+
+fn checkMovedOperand(function: IrFunction, at: String, argument: Argument, var found: List<String>) {
+  if !argument.isLastUse {
+    return
+  }
+  if !isLentParameter(function, argument.slot) {
+    return
+  }
+  found.add("{at}: %{argument.slot.value} is a parameter the caller keeps the count of, so it cannot be moved out of")
+}
+
+/** Every argument of a call carries exactly the mode the callee's signature asks for - it is one contract, not two. */
+fn checkArgumentModes(
+  function: IrFunction,
+  facts: SlotFacts,
+  at: String,
+  signature: IrSignature,
+  arguments: List<Argument>,
+  callee: String,
+  var found: List<String>,
+) {
+  for index in 0..arguments.length() {
+    if index >= signature.parameters.length() {
+      return
+    }
+    const argument = arguments[index]
+    if !facts.isCountedSlot(argument.slot) {
+      continue
+    }
+    const wanted = signature.parameters[index].ownership
+    if argument.ownership == wanted {
+      checkMovedOperand(function, at, argument, found)
+      continue
+    }
+    if wanted == Ownership.Owned {
+      found.add("{at}: {callee} keeps argument {index}, so %{argument.slot.value} has to be `owned`")
+      continue
+    }
+    found.add("{at}: {callee} borrows argument {index}, so %{argument.slot.value} cannot be `owned`")
+  }
+}
+
+/** A parameter whose count belongs to the caller for the whole call: borrowed, or a `var` path, which is never counted. */
+fn isLentParameter(function: IrFunction, slot: Slot): Bool {
+  if slot.value < 0 || slot.value >= function.slots.length() {
+    return false
+  }
+  if const .Parameter(index) = function.slots[slot.value].role {
+    const parameters = function.signature.parameters
+    if index < 0 || index >= parameters.length() {
+      return false
+    }
+    const parameter = parameters[index]
+    return parameter.isReference || parameter.ownership == Ownership.Borrowed
+  }
+  false
+}
+
+// --- Consumed or released exactly once, on every path ---------------------------------------------------------------
+
+fn verifyFlow(
+  program: IrProgram,
+  function: IrFunction,
+  facts: SlotFacts,
+  counted: Counted,
+  var found: List<String>,
+) {
+  const width = counted.width()
+  if width == 0 {
+    return
+  }
+  const blockCount = function.blocks.length()
+  const order = reverseOf(postorderOf(function))
+  var entry: List<List<Int>> = []
+  for _ in 0..blockCount {
+    entry.add(filledStates(width, unknownState))
+  }
+  entry.set(0, initialState(function, counted, width))
+  var ignored: List<String> = []
+  var rounds = 0
+  var isChanged = true
+  while isChanged {
+    isChanged = false
+    rounds = rounds + 1
+    if rounds > blockCount + 2 {
+      found.add("{function.name}: the ownership of the slots did not settle")
+      return
+    }
+    for block in order {
+      var state = entry[block]
+      runBlock(program, function, facts, counted, block, state, ignored, false)
+      for target in successorsOf(function.blocks[block]) {
+        if target < 0 || target >= blockCount {
+          continue
+        }
+        var merged = entry[target]
+        mergeStates(merged, state)
+        if merged != entry[target] {
+          entry.set(target, merged)
+          isChanged = true
+        }
+      }
+    }
+  }
+  for block in order {
+    var state = entry[block]
+    runBlock(program, function, facts, counted, block, state, found, true)
+  }
+}
+
+/** Where a body starts: the parameters the caller handed over own a value, and every other slot holds nothing. */
+fn initialState(function: IrFunction, counted: Counted, width: Int): List<Int> {
+  var state = filledStates(width, emptyState)
+  for position in 0..width {
+    const slot = counted.slots[position]
+    if const .Parameter(_) = function.slots[slot.value].role {
+      state.set(position, owningState)
+    }
+  }
+  state
+}
+
+fn filledStates(count: Int, value: Int): List<Int> {
+  var filled: List<Int> = []
+  for _ in 0..count {
+    filled.add(value)
+  }
+  filled
+}
+
+fn reverseOf(order: List<Int>): List<Int> {
+  var reversed: List<Int> = []
+  var at = order.length() - 1
+  while at >= 0 {
+    reversed.add(order[at])
+    at = at - 1
+  }
+  reversed
+}
+
+/** Owning on one path and empty on another is `conflict`, which is how a leak on one path is found. */
+fn mergeStates(var target: List<Int>, other: List<Int>) {
+  for position in 0..target.length() {
+    const arriving = other[position]
+    const known = target[position]
+    if known == arriving || arriving == unknownState {
+      continue
+    }
+    if known == unknownState {
+      target.set(position, arriving)
+      continue
+    }
+    target.set(position, conflictState)
+  }
+}
+
+fn runBlock(
+  program: IrProgram,
+  function: IrFunction,
+  facts: SlotFacts,
+  counted: Counted,
+  block: Int,
+  var state: List<Int>,
+  var found: List<String>,
+  reports: Bool,
+) {
+  const at = "{function.name} b{block}"
+  const instructions = function.blocks[block].instructions
+  for instruction in instructions {
+    runInstruction(counted, at, instruction, state, found, reports)
+  }
+  const terminator = function.blocks[block].terminator
+  runTerminator(counted, at, terminator, state, found, reports)
+}
+
+fn runInstruction(
+  counted: Counted,
+  at: String,
+  instruction: Instruction,
+  var state: List<Int>,
+  var found: List<String>,
+  reports: Bool,
+) {
+  // A panic aborts without running anything, so what it reads is neither consumed nor released (decided gap 9)
+  if const .Panic(_, _) = instruction {
+    return
+  }
+  if const .Release(slot) = instruction {
+    const position = counted.positionOf(slot)
+    if position < 0 {
+      return
+    }
+    if reports {
+      reportRelease(at, slot, state[position], found)
+    }
+    state.set(position, emptyState)
+    return
+  }
+  for slot in usedSlots(instruction) {
+    const position = counted.positionOf(slot)
+    if position < 0 || !reports {
+      continue
+    }
+    reportUse(at, slot, state[position], found)
+  }
+  for slot in consumedSlotsOf(instruction) {
+    const position = counted.positionOf(slot)
+    if position >= 0 {
+      state.set(position, emptyState)
+    }
+  }
+  if const Some(target) = definedSlot(instruction) {
+    const position = counted.positionOf(target)
+    if position < 0 {
+      return
+    }
+    if reports && state[position] == owningState {
+      found.add("{at}: %{target.value} is overwritten while it still owns a value")
+    }
+    state.set(position, owningState)
+  }
+}
+
+fn runTerminator(
+  counted: Counted,
+  at: String,
+  terminator: Terminator,
+  var state: List<Int>,
+  var found: List<String>,
+  reports: Bool,
+) {
+  // Nothing runs after a panic or a call that does not return, so nothing has to be released before one either
+  if isUnreachable(terminator) {
+    return
+  }
+  for slot in usedByTerminator(terminator) {
+    const position = counted.positionOf(slot)
+    if position >= 0 && reports {
+      reportUse(at, slot, state[position], found)
+    }
+  }
+  const value = match terminator {
+    .Return(returned) => returned
+    _ => {
+      return
+    }
+  }
+  if const Some(argument) = value {
+    const position = counted.positionOf(argument.slot)
+    if position >= 0 && argument.ownership == Ownership.Owned && argument.isLastUse {
+      state.set(position, emptyState)
+    }
+  }
+  if !reports {
+    return
+  }
+  for position in 0..counted.width() {
+    const slot = counted.slots[position]
+    if state[position] == owningState {
+      found.add("{at}: %{slot.value} still owns a value where the function returns")
+      continue
+    }
+    if state[position] == conflictState {
+      found.add("{at}: %{slot.value} owns a value on one path to this `return` and not on another")
+    }
+  }
+}
+
+fn isUnreachable(terminator: Terminator): Bool {
+  match terminator {
+    .Unreachable => true
+    _ => false
+  }
+}
+
+fn reportUse(at: String, slot: Slot, state: Int, var found: List<String>) {
+  if state == emptyState {
+    found.add("{at}: %{slot.value} is used after it was moved out of or released")
+    return
+  }
+  if state == conflictState {
+    found.add("{at}: %{slot.value} owns a value on one path here and not on another")
+  }
+}
+
+fn reportRelease(at: String, slot: Slot, state: Int, var found: List<String>) {
+  if state == emptyState {
+    found.add("{at}: %{slot.value} is released twice")
+    return
+  }
+  if state == conflictState {
+    found.add("{at}: %{slot.value} is released on a path where it holds no value")
+  }
+}

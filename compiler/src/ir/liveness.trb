@@ -1,0 +1,273 @@
+use IrProgram, IrFunction, Ownership, Slot, SlotRole from "./ir"
+use containsCountedType from "./layout"
+use usedSlots, definedSlot, usedByTerminator, successorsOf from "./verify"
+
+/**
+ * Liveness over the slots a frame owns a count of: the analysis that says where the last use of a value is, and
+ * therefore where a `Move` may stand instead of a `Copy`, where a `Retain` has to, and where a `Release` goes
+ * (docs/BACKEND.md 2.2, phase 3).
+ *
+ * Two decisions shape everything here:
+ *
+ * - **Only the slots the frame counts are in a set.** A number, a `Bool`, an inline record of those and every
+ *   `Reference` carry no count, and a **borrowed parameter** belongs to the caller for the whole call - none of them
+ *   can ever be moved out of or released here, so none of them needs liveness. A function without a single counted
+ *   slot is therefore not analyzed at all, which is what makes the ownership pass free for the arithmetic half of a
+ *   program.
+ * - **A backward analysis over reverse postorder.** Source is structured, so the graph is reducible and the fixpoint
+ *   settles in `loop nesting depth + 1` rounds; the implementation iterates until nothing changes and answers with the
+ *   number of rounds it took, so a test can pin the bound instead of trusting it.
+ *
+ * The transfer function of one instruction is `live before = uses union (live after minus the defined slot)`: the
+ * *definition* kills the slot and the *uses* revive it, in that order. The order is what makes an instruction that
+ * reads and writes one slot (`%2 = textConcat %2, %1`) come out right - the old value is used there, so the slot is
+ * live before it.
+ */
+
+/**
+ * Which slots of one function carry a count the frame is responsible for, and where each of them sits in a live set.
+ *
+ * `indices` is one entry per slot so that the question "is this slot counted" is an index and never a scan; `slots` is
+ * the other direction, so that walking a set answers with slots.
+ */
+public type Counted {
+  /** Per slot: its position in a live set, or `-1` for everything the frame does not count. */
+  indices: List<Int>
+  /** Per position of a live set: the slot it stands for, in increasing slot order. */
+  slots: List<Slot>
+
+  fn width(self): Int {
+    slots.length()
+  }
+
+  fn isEmpty(self): Bool {
+    slots.isEmpty()
+  }
+
+  /** The position of a slot in a live set, or `-1`. */
+  fn positionOf(self, slot: Slot): Int {
+    if slot.value < 0 || slot.value >= indices.length() {
+      return 0 - 1
+    }
+    indices[slot.value]
+  }
+
+  fn counts(self, slot: Slot): Bool {
+    positionOf(slot) >= 0
+  }
+}
+
+/**
+ * The counted slots of a function: a type that carries a count anywhere inside it, not a `Reference`, and not a
+ * parameter the caller keeps the count of. It reads the *ownership of the parameters*, so it is only meaningful after
+ * the summary pass has run.
+ *
+ * "Anywhere inside it" and not "of its own": an `Inline` record of two `String`s carries no count itself, but it owns
+ * one on each of its fields, so a copy of it retains both and a release of it releases both. That is what a layout's
+ * `containsCounted` says, and what the per-layout retain and drop functions of the runtime do (BACKEND 5.R1). Only
+ * `MakeUnique` asks the narrower question, because only storage that is *shared* has to be made unique.
+ */
+public fn countedSlotsOf(program: IrProgram, function: IrFunction): Counted {
+  var indices: List<Int> = []
+  var slots: List<Slot> = []
+  for index in 0..function.slots.length() {
+    const declaration = function.slots[index]
+    if !isCountedSlot(program, function, index, declaration.role) {
+      indices.add(0 - 1)
+      continue
+    }
+    indices.add(slots.length())
+    slots.add(Slot(index))
+  }
+  Counted(indices, slots)
+}
+
+fn isCountedSlot(program: IrProgram, function: IrFunction, index: Int, role: SlotRole): Bool {
+  if !containsCountedType(program, function.slots[index].annotation) {
+    return false
+  }
+  if const .Parameter(position) = role {
+    const parameters = function.signature.parameters
+    if position < 0 || position >= parameters.length() {
+      return false
+    }
+    const parameter = parameters[position]
+    // A `var` parameter is an interior pointer and carries no count; a borrowed one belongs to the caller
+    if parameter.isReference {
+      return false
+    }
+    return parameter.ownership == Ownership.Owned
+  }
+  // The place a `.ByPointer` result is written to is the caller's storage, not a value of this frame
+  if const .ResultPointer = role {
+    return false
+  }
+  true
+}
+
+// --- The sets -------------------------------------------------------------------------------------------------------
+
+/** What the liveness of one function is: the sets at both ends of every block, plus how the fixpoint went. */
+public type LiveSets {
+  /** Per block: which counted slots hold a value that is still used at the beginning of the block. */
+  var liveIn: List<List<Bool>>
+  /** Per block: the union of the `liveIn` of its successors. */
+  var liveOut: List<List<Bool>>
+  /** The blocks the entry block reaches, in postorder - which is the order a backward analysis wants. */
+  postorder: List<Int>
+  /** How many rounds the fixpoint took, the last one being the one that changed nothing. */
+  rounds: Int
+}
+
+/** A list of `count` flags. Small by construction: only the counted slots of one function are ever in one. */
+public fn filledFlags(count: Int, value: Bool): List<Bool> {
+  var filled: List<Bool> = []
+  for _ in 0..count {
+    filled.add(value)
+  }
+  filled
+}
+
+/** Everything of `other` into `target`. */
+public fn unionFlags(var target: List<Bool>, other: List<Bool>) {
+  for index in 0..target.length() {
+    if other[index] {
+      target.set(index, true)
+    }
+  }
+}
+
+/**
+ * The blocks the entry block reaches, in postorder: a depth-first walk that takes the successors of a terminator in the
+ * order they are written, so the answer is a function of the graph and never of a traversal that could differ.
+ *
+ * Iterative, with the walk's own stack, because a chain of blocks is as long as a function body is and nothing here may
+ * recurse that deep on stage 0.
+ */
+public fn postorderOf(function: IrFunction): List<Int> {
+  const blockCount = function.blocks.length()
+  var order: List<Int> = []
+  if blockCount == 0 {
+    return order
+  }
+  var visited = filledFlags(blockCount, false)
+  var stack = [0]
+  var cursor = [0]
+  visited.set(0, true)
+  while !stack.isEmpty() {
+    const top = stack.length() - 1
+    const block = stack[top]
+    const targets = successorsOf(function.blocks[block])
+    const at = cursor[top]
+    if at >= targets.length() {
+      order.add(block)
+      stack.removeAt(top)
+      cursor.removeAt(top)
+      continue
+    }
+    cursor.set(top, at + 1)
+    const next = targets[at]
+    if next < 0 || next >= blockCount || visited[next] {
+      continue
+    }
+    visited.set(next, true)
+    stack.add(next)
+    cursor.add(0)
+  }
+  order
+}
+
+/**
+ * The liveness of one function. `gen` and `kill` are computed once per block by walking it backwards, and then only the
+ * two sets per block move - which is what keeps the fixpoint near-linear on an interpreter.
+ */
+public fn livenessOf(program: IrProgram, function: IrFunction, counted: Counted): LiveSets {
+  const blockCount = function.blocks.length()
+  const width = counted.width()
+  const postorder = postorderOf(function)
+  var liveIn: List<List<Bool>> = []
+  var liveOut: List<List<Bool>> = []
+  for _ in 0..blockCount {
+    liveIn.add(filledFlags(width, false))
+    liveOut.add(filledFlags(width, false))
+  }
+  if width == 0 || blockCount == 0 {
+    return LiveSets(liveIn, liveOut, postorder, 0)
+  }
+  var generated: List<List<Bool>> = []
+  var killed: List<List<Bool>> = []
+  for index in 0..blockCount {
+    const (upward, written) = effectOfBlock(function, counted, index, width)
+    generated.add(upward)
+    killed.add(written)
+  }
+  var rounds = 0
+  var isChanged = true
+  while isChanged {
+    isChanged = false
+    rounds = rounds + 1
+    for block in postorder {
+      var leaving = filledFlags(width, false)
+      for target in successorsOf(function.blocks[block]) {
+        if target >= 0 && target < blockCount {
+          unionFlags(leaving, liveIn[target])
+        }
+      }
+      var arriving = filledFlags(width, false)
+      const kills = killed[block]
+      for position in 0..width {
+        if leaving[position] && !kills[position] {
+          arriving.set(position, true)
+        }
+      }
+      unionFlags(arriving, generated[block])
+      if leaving != liveOut[block] {
+        liveOut.set(block, leaving)
+        isChanged = true
+      }
+      if arriving != liveIn[block] {
+        liveIn.set(block, arriving)
+        isChanged = true
+      }
+    }
+  }
+  LiveSets(liveIn, liveOut, postorder, rounds)
+}
+
+/**
+ * What one block does to a live set: which counted slots it needs from above (`generated`) and which it overwrites
+ * without needing them (`killed`). Walked backwards, terminator first, and per instruction the definition before the
+ * uses - the order of the transfer function.
+ */
+fn effectOfBlock(function: IrFunction, counted: Counted, index: Int, width: Int): (List<Bool>, List<Bool>) {
+  var generated = filledFlags(width, false)
+  var killed = filledFlags(width, false)
+  const block = function.blocks[index]
+  for slot in usedByTerminator(block.terminator) {
+    const position = counted.positionOf(slot)
+    if position >= 0 {
+      generated.set(position, true)
+      killed.set(position, false)
+    }
+  }
+  var at = block.instructions.length() - 1
+  while at >= 0 {
+    const instruction = block.instructions[at]
+    if const Some(target) = definedSlot(instruction) {
+      const position = counted.positionOf(target)
+      if position >= 0 {
+        generated.set(position, false)
+        killed.set(position, true)
+      }
+    }
+    for slot in usedSlots(instruction) {
+      const position = counted.positionOf(slot)
+      if position >= 0 {
+        generated.set(position, true)
+        killed.set(position, false)
+      }
+    }
+    at = at - 1
+  }
+  (generated, killed)
+}

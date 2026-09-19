@@ -2,6 +2,8 @@ use workspaceWith from "./harness"
 use check from "../src/semantics/check"
 use printFunction from "../src/ir/print"
 use verifyProgram from "../src/ir/verify"
+use insertOwnership from "../src/ir/ownership"
+use verifyOwnedProgram from "../src/ir/ownership-verify"
 use Lowering from "../src/ir/lower/context"
 use lowerChecked, loweredText from "../src/ir/lower/lower"
 
@@ -68,6 +70,29 @@ public fn irOf(source: String, name: String, extra: Map<String, String> = [:]): 
 public fn textOf(source: String): String {
   var found = lowered(source)
   loweredText(found)
+}
+
+/**
+ * One function of the **final** IR: after the ownership pass of 5.4, which is what both back ends read. The extended
+ * verifier runs over it as well, so a snapshot that matches and a body that leaks a count cannot pass together - which
+ * is the whole reason these snapshots are worth writing down.
+ */
+public fn ownedIrOf(source: String, name: String): String {
+  var found = lowered(source)
+  insertOwnership(found.program)
+  const problems = verifyOwnedProgram(found.program)
+  if !problems.isEmpty() {
+    return String.join(problems, separator: "\n")
+  }
+  if !found.program.problems.isEmpty() {
+    return String.join(found.program.problems, separator: "\n")
+  }
+  for function in found.program.functions {
+    if function.name == name {
+      return printFunction(found.program, function)
+    }
+  }
+  "there is no function `{name}`"
 }
 
 /** Which constructs blocked a function, in the order they were first seen. */

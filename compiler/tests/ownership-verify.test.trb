@@ -1,0 +1,227 @@
+use test, group from "std/test"
+use IrProgram, IrType, IrTypeId, IrSignature, IrParameter, Ownership, LayoutId, FunctionId from "../src/ir/ir"
+use Slot, BlockId, Instruction, Terminator, Argument, Intrinsic, IntrinsicOperation from "../src/ir/ir"
+use Location, LocationId, borrowed, owned from "../src/ir/ir"
+use LayoutKind, FieldLayout, finishProgram from "../src/ir/layout"
+use newFunction, addTemporary, addBlock, switchTo, emit from "../src/ir/build"
+use terminate, terminateBlock, finishFunction from "../src/ir/build"
+use verifyOwnedFunction from "../src/ir/ownership-verify"
+
+/**
+ * What the extended verifier says about IR that is wrong on purpose. It is the safety net every sub-milestone after 5.4
+ * leans on, so its messages are worth pinning to the character: a leak that is reported as "something is wrong
+ * somewhere" costs an afternoon.
+ *
+ * Every body here is built by hand, because no pass produces one of these - which is the point.
+ */
+
+fn textType(var program: IrProgram): IrTypeId {
+  program.internType(IrType.Text)
+}
+
+fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
+  const reserved = program.reserveLayout(name, LayoutKind.Record)
+  const layout = program.layoutAt(reserved.layout)
+  program.setLayout(reserved.layout, layout.copy(fields: fields, isBuilt: true))
+  reserved.layout
+}
+
+fn byteLength(): Intrinsic {
+  Intrinsic(IntrinsicOperation.TextByteLength, None)
+}
+
+fn someLocation(var program: IrProgram): LocationId {
+  program.internLocation(Location("wrong.trb", 1, 1))
+}
+
+fn problemsOf(var program: IrProgram, identifier: FunctionId): List<String> {
+  finishProgram(program)
+  verifyOwnedFunction(program, program.functionAt(identifier))
+}
+
+/** A callee with one parameter of the given mode and no body worth reading: only its signature is ever asked about. */
+fn calleeTaking(var program: IrProgram, name: String, ownership: Ownership): FunctionId {
+  const text = textType(program)
+  const void = program.internType(IrType.VoidType)
+  const signature = IrSignature([IrParameter("value", text, false, ownership)], void)
+  var builder = newFunction(name, None, signature, "body")
+  emit(builder, Instruction.Release(Slot(0)))
+  terminate(builder, Terminator.Return(None))
+  finishFunction(program, builder)
+}
+
+group "A value that is released twice, or used after it is gone" {
+  test "a second release of the same value is reported where it stands" {
+    var program = IrProgram()
+    const text = textType(program)
+    const void = program.internType(IrType.VoidType)
+    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], void)
+    var builder = newFunction("t_double", None, signature, "body")
+    emit(builder, Instruction.Release(Slot(0)))
+    emit(builder, Instruction.Release(Slot(0)))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    assert(problemsOf(program, identifier) == ["t_double b0: %0 is released twice"])
+  }
+
+  test "a use after a move is reported at the use, not at the move" {
+    var program = IrProgram()
+    const text = textType(program)
+    const int64 = program.internType(IrType.Integer(64, true))
+    const callee = calleeTaking(program, "t_keep", Ownership.Owned)
+    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], int64)
+    var builder = newFunction("t_afterMove", None, signature, "body")
+    const length = addTemporary(builder, int64)
+    const at = someLocation(program)
+    emit(builder, Instruction.Call(None, callee, [Argument(Slot(0), Ownership.Owned, true)], []))
+    emit(builder, Instruction.Intrinsic(Some(length), byteLength(), [Slot(0)], at))
+    terminate(builder, Terminator.Return(Some(borrowed(length))))
+    const identifier = finishFunction(program, builder)
+    assert(problemsOf(program, identifier) == ["t_afterMove b0: %0 is used after it was moved out of or released"])
+  }
+
+  test "a slot that is written while it still holds a value is a leak, and says so" {
+    var program = IrProgram()
+    const text = textType(program)
+    const signature = IrSignature(
+      [IrParameter("first", text), IrParameter("second", text)],
+      text,
+    )
+    var builder = newFunction("t_overwritten", None, signature, "body")
+    const kept = addTemporary(builder, text)
+    emit(builder, Instruction.Copy(kept, Slot(0)))
+    emit(builder, Instruction.Copy(kept, Slot(1)))
+    terminate(builder, Terminator.Return(Some(Argument(kept, Ownership.Owned, true))))
+    const identifier = finishFunction(program, builder)
+    assert(problemsOf(program, identifier) == ["t_overwritten b0: %2 is overwritten while it still owns a value"])
+  }
+}
+
+group "A value that is never let go of" {
+  test "a parameter the caller handed over and nothing consumed is a leak at the return" {
+    var program = IrProgram()
+    const text = textType(program)
+    const void = program.internType(IrType.VoidType)
+    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], void)
+    var builder = newFunction("t_leak", None, signature, "body")
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    assert(problemsOf(program, identifier) == ["t_leak b0: %0 still owns a value where the function returns"])
+  }
+
+  /**
+   * The one a drop flag would be needed for, and the reason the pass releases on *edges* instead: one arm let the value
+   * go and the other did not, so what arrives at the `return` is neither.
+   */
+  test "a value that is released on one path and not on the other is reported at the join" {
+    var program = IrProgram()
+    const text = textType(program)
+    const boolean = program.internType(IrType.Boolean)
+    const void = program.internType(IrType.VoidType)
+    const signature = IrSignature(
+      [IrParameter("flag", boolean), IrParameter("text", text, false, Ownership.Owned)],
+      void,
+    )
+    var builder = newFunction("t_oneSide", None, signature, "body")
+    const then = addBlock(builder, "then", None)
+    const otherwise = addBlock(builder, "else", None)
+    const join = addBlock(builder, "join", None)
+    terminate(builder, Terminator.Branch(Slot(0), then, otherwise))
+    switchTo(builder, then)
+    emit(builder, Instruction.Release(Slot(1)))
+    terminate(builder, Terminator.Jump(join))
+    terminateBlock(builder, otherwise, Terminator.Jump(join))
+    terminateBlock(builder, join, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    assert(
+      problemsOf(program, identifier)
+        == ["t_oneSide b3: %1 owns a value on one path to this `return` and not on another"]
+    )
+  }
+}
+
+group "A parameter the caller keeps the count of" {
+  test "a borrowed parameter is never released" {
+    var program = IrProgram()
+    const text = textType(program)
+    const void = program.internType(IrType.VoidType)
+    const signature = IrSignature([IrParameter("text", text)], void)
+    var builder = newFunction("t_lent", None, signature, "body")
+    emit(builder, Instruction.Release(Slot(0)))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    assert(
+      problemsOf(program, identifier)
+        == ["t_lent b0: %0 is a parameter the caller keeps the count of, so it is never released"]
+    )
+  }
+
+  test "a borrowed parameter is never moved out of either" {
+    var program = IrProgram()
+    const text = textType(program)
+    const signature = IrSignature([IrParameter("text", text)], text)
+    var builder = newFunction("t_stolen", None, signature, "body")
+    const taken = addTemporary(builder, text)
+    emit(builder, Instruction.Move(taken, Slot(0)))
+    terminate(builder, Terminator.Return(Some(Argument(taken, Ownership.Owned, true))))
+    const identifier = finishFunction(program, builder)
+    assert(
+      problemsOf(program, identifier)
+        == ["t_stolen b0: %0 is a parameter the caller keeps the count of, so it cannot be moved out of"]
+    )
+  }
+
+  test "nothing that is not counted is released: the type says so" {
+    var program = IrProgram()
+    const int64 = program.internType(IrType.Integer(64, true))
+    const void = program.internType(IrType.VoidType)
+    const signature = IrSignature([IrParameter("value", int64)], void)
+    var builder = newFunction("t_number", None, signature, "body")
+    emit(builder, Instruction.Release(Slot(0)))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    assert(
+      problemsOf(program, identifier)
+        == ["t_number b0: `release` needs a value that is counted, and `Int64` is not"]
+    )
+  }
+}
+
+group "A position that keeps a value says so" {
+  test "a field of a `construct` that only borrows is reported" {
+    var program = IrProgram()
+    const text = textType(program)
+    const pair = recordLayout(program, "T_Pair", [FieldLayout("name", text)])
+    const pairType = program.internType(IrType.Record(pair))
+    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], pairType)
+    var builder = newFunction("t_field", None, signature, "body")
+    const built = addTemporary(builder, pairType)
+    emit(builder, Instruction.Construct(built, pair, 0, [borrowed(Slot(0))]))
+    terminate(builder, Terminator.Return(Some(Argument(built, Ownership.Owned, true))))
+    const identifier = finishFunction(program, builder)
+    assert(
+      problemsOf(program, identifier) == ["t_field b0: `construct` keeps %0, so the operand has to be `owned`"]
+    )
+  }
+
+  test "an argument that disagrees with the callee's signature is reported either way round" {
+    var program = IrProgram()
+    const text = textType(program)
+    const void = program.internType(IrType.VoidType)
+    const keeps = calleeTaking(program, "t_keeps", Ownership.Owned)
+    const borrows = calleeTaking(program, "t_borrows", Ownership.Borrowed)
+    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], void)
+    var builder = newFunction("t_disagrees", None, signature, "body")
+    emit(builder, Instruction.Call(None, keeps, [borrowed(Slot(0))], []))
+    emit(builder, Instruction.Call(None, borrows, [Argument(Slot(0), Ownership.Owned, true)], []))
+    terminate(builder, Terminator.Return(None))
+    const identifier = finishFunction(program, builder)
+    assert(
+      problemsOf(program, identifier)
+        == [
+          "t_disagrees b0: `t_keeps` keeps argument 0, so %0 has to be `owned`",
+          "t_disagrees b0: `t_borrows` borrows argument 0, so %0 cannot be `owned`",
+        ]
+    )
+  }
+}

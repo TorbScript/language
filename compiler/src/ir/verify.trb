@@ -1,7 +1,7 @@
 use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, FunctionKind, RuntimeKind from "./ir"
 use Block, BlockId, Slot, SlotRole, Instruction, Terminator, Argument, Reference, PathStep from "./ir"
 use Intrinsic, IntrinsicOperation, NumericKind, WitnessSource, WitnessRoot, Capture, LayoutId from "./ir"
-use isManagedType from "./layout"
+use isManagedType, containsCountedType from "./layout"
 use describeIrType, describeIntrinsic, describeNumericKind from "./print"
 
 /**
@@ -18,8 +18,9 @@ use describeIrType, describeIntrinsic, describeNumericKind from "./print"
  * - the type of every operand is the type the position asks for, and the type of every result is what it produces;
  * - `Retain`, `Release` and `MakeUnique` only ever touch something that is counted.
  *
- * What it does *not* demand yet: that every managed slot is released on every path. Nothing emits a `Release` before
- * milestone 5.4, so that check would reject every function there is; it belongs to the pass that inserts them.
+ * What it does *not* demand: that every counted value is consumed or released exactly once on every path. That is only
+ * true of the IR **after** the ownership pass, and asking it of phase one would reject every function there is - so it
+ * lives next to the pass that inserts them, in `ownership-verify.trb`, and `verifyOwnedProgram` is the two together.
  */
 public fn verifyFunction(program: IrProgram, function: IrFunction): List<String> {
   var found: List<String> = []
@@ -1053,6 +1054,12 @@ fn expectType(
   found.add("{at}: {what} is `{describeIrType(program, wanted)}` and %{slot.value} is `{describeIrType(program, actual)}`")
 }
 
+/**
+ * A `retain` and a `release` need a value that owns a count. That is `containsCountedType` and not `isManagedType`: an
+ * inline record of two `String`s carries no count of its own but owns one on each of its fields, so retaining it
+ * retains both and releasing it releases both - which is what the per-layout retain and drop functions of the runtime
+ * do. `makeUnique` asks the narrower question, because only *shared* storage has to be made unique.
+ */
 fn expectManaged(
   program: IrProgram,
   function: IrFunction,
@@ -1066,7 +1073,7 @@ fn expectManaged(
     return
   }
   const annotation = function.typeOfSlot(slot)
-  if isManagedType(program, annotation) {
+  if containsCountedType(program, annotation) {
     return
   }
   found.add("{at}: `{what}` needs a value that is counted, and `{describeIrType(program, annotation)}` is not")

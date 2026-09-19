@@ -12,6 +12,8 @@ use check, Checked from "./semantics/check"
 use Lowering from "./ir/lower/context"
 use lowerChecked, loweredText, loweredProblems, statisticsLines from "./ir/lower/lower"
 use BuildOptions, build from "./cli/build"
+use insertOwnership from "./ir/ownership"
+use verifyOwnedProgram from "./ir/ownership-verify"
 
 /**
  * The TorbScript toolchain, written in TorbScript. Until it can compile itself it is run by the bootstrap
@@ -28,6 +30,7 @@ fn printUsage() {
   printError "                         --output <file>: where the binary goes (the C is written next to it)"
   printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
   printError "                         --statistics: only the counts, without the IR itself"
+  printError "                         --no-ownership: the IR the lowering writes, before the ownership pass"
   printError "  torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)"
   printError "  torb tokens <file>     Print the tokens of a file"
   printError "  torb ast <file>        Print the syntax tree of a file"
@@ -138,7 +141,7 @@ fn printStatistics(checked: Checked, tree: SourceTree) {
  * The typed IR of what the back end lowers today, in the deterministic text format of docs/BACKEND.md 1.7, plus the
  * list of the constructs a later sub-milestone has to replace. Returns the number of problems.
  */
-fn printIr(paths: List<String>, onlyStatistics: Bool): Result<Int, IoError> {
+fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
   const checked = check(tree, absolutePaths(paths)?)
   var problems = checked.problems.length()
@@ -158,6 +161,10 @@ fn printIr(paths: List<String>, onlyStatistics: Bool): Result<Int, IoError> {
     return Ok(problems)
   }
   var lowering = lowerChecked(checked)
+  // Phase one plus ownership is the IR both back ends read; `--no-ownership` shows what the lowering alone writes
+  if withOwnership {
+    insertOwnership(lowering.program)
+  }
   if !onlyStatistics {
     const text = loweredText(lowering)
     if !text.isEmpty() {
@@ -169,10 +176,23 @@ fn printIr(paths: List<String>, onlyStatistics: Bool): Result<Int, IoError> {
   for line in statisticsLines(lowering) {
     print line
   }
-  for line in loweredProblems(lowering) {
+  const broken = irProblems(lowering, withOwnership)
+  for line in broken {
     printError "internal error: {line}"
   }
-  Ok(found + loweredProblems(lowering).length())
+  Ok(found + broken.length())
+}
+
+/** The verifier that fits what was built: the ownership invariants are only checkable once the pass has run. */
+fn irProblems(lowering: Lowering, withOwnership: Bool): List<String> {
+  if !withOwnership {
+    return loweredProblems(lowering)
+  }
+  var found = verifyOwnedProgram(lowering.program)
+  for problem in lowering.program.problems {
+    found.add(problem)
+  }
+  found
 }
 
 /**
@@ -232,9 +252,10 @@ match Process.arguments() {
   }
   ["ir", ...more] => {
     const onlyStatistics = more.contains("--statistics")
-    const given = more.filter({ _ != "--statistics" }).toList()
+    const withOwnership = !more.contains("--no-ownership")
+    const given = more.filter({ _ != "--statistics" && _ != "--no-ownership" }).toList()
     const paths = if given.isEmpty() { ["."] } else { given }
-    if printIr(paths, onlyStatistics)? > 0 {
+    if printIr(paths, onlyStatistics, withOwnership)? > 0 {
       Process.exit(1)
     }
   }
