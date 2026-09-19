@@ -1346,6 +1346,17 @@ extend User with Encode, Decode {
   A type with a private constructor has invariants, so it writes `decode` by hand and the invariant holds for
   decoded values, too (`Email.decode` calls `Email.parse`).
 - Different field names, skipped fields, versioning: write the two functions by hand, there are no annotations.
+  What is a convention of the format and not of the type is an option of the format (`Json.encode(user, naming: .SnakeCase)`).
+- **`Encode`/`Decode` are data binding, for every format whose model is "values, sequences, maps, records"**: JSON,
+  MessagePack, CBOR, TOML, YAML, query strings, database rows. A type says once what it consists of, a format says
+  once how that is written: N + M implementations instead of N × M, a format somebody else wrote works with every
+  type that exists, and `List<Encode>` stays possible. (`length` in `sequence` and `map` is there for the binary
+  formats, which write it in front.)
+- **A format with a document model of its own gets its own traits, in its own package, in addition.** XML and HTML
+  know attributes next to elements, namespaces, text between elements and an order that matters - none of that fits
+  into four shapes, and squeezing it in ends in naming tricks (`@id`, `$text`). So `std/xml` has the tree (`XmlNode`,
+  like `JsonValue`) and `XmlEncode`/`XmlDecode` for types that need the whole format. Data that merely travels as XML
+  needs neither: `Xml.encode(value: Encode)` writes records as elements by convention.
 - `describe(value)` renders every `Encode` value as text, for messages and debugging.
 - Generated code only exists where it is used, like every generic instantiation. Nothing is kept alive "just in case".
 
@@ -1887,6 +1898,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   `Data` tree (was: `ToData`/`FromData` over a closed `Data` ADT). The tree had a parallel vocabulary
   (`Boolean`/`Integer`/`Text`/`Sequence`), built every document twice, lost precision, and was a dynamically typed
   island. Document trees are library types now (`JsonValue`).
+- One generic `Encode`/`Decode` instead of a pair per format (`JsonEncode`, `TomlEncode`, ...): a pair per format is
+  N × M implementations and a new format could not be retrofitted onto foreign types (coherence). Document formats
+  (XML, HTML) get their own traits in addition, because their model does not fit into values, sequences, maps and records.
 - Tests use `assert` only. It takes an `Expression<Bool>`, so a failure shows the source and the values of both
   sides; there is no matcher vocabulary (`expect(x).toEqual y`) to learn. `test` and `group` are ordinary functions.
 - `Show` is a `shared trait` (objects can be printed), `Equals` and `Hash` are not: `==` always means content,
