@@ -854,3 +854,22 @@ Wenn nicht, was bedeutet, bewirkt es?
       `Format.encoded<Item>()` liefern `Stage`s. Bequemlichkeit zuerst (Bun): `body.text()`, `body.json<User>()`,
       `File.write(path, source)`; der Stream ist die Ebene darunter.
     - Offen beim Nutzer: die Namen `Source`/`Sink` (Alternative `Producer`/`Consumer`).
+  - **Entschieden (Nutzer):** Die Namen sind `Source` + `Sink` neben `Iterator` + `Accumulator`.
+  - **Konzept v3 - die Stufen nur einmal (Nutzer: "Konzepte nahe zusammenbringen, Collector passt zu beiden"):**
+    Eine Stufe hängt nicht an der Quelle, sondern am Ziel: `trait Stage<Input, Output> { fn onto<Final>(self,
+    downstream: Accumulator<Output, Final>): Accumulator<Input, Final> }` - sie macht aus einem Accumulator einen
+    Accumulator (Clojure-Transducer; genau so sind Javas Streams intern gebaut). `map`, `filter`, `take`,
+    `takeWhile`, `skip`, `flatMap`, `indexed`, `lines`, `Json.items<User>()` gibt es damit EINMAL, synchron,
+    quellenunabhängig; `stage.then(other)` macht Pipelines zu Werten, die auf eine Liste wie auf einen HTTP-Body passen.
+    - `Accumulator` bekommt `isDone(self): Bool` (Default `false`) für `take`/`first`/`find`.
+    - Der Unterschied synchron/asynchron schrumpft auf zwei **Treiber**: `Iterable.through(stage)`/`collect` (Schleife)
+      und `Source.through(stage)`/`collect` (Schleife mit `await`). `map`/`filter`/… auf beiden Traits sind Einzeiler
+      `through(Stage.map(transform))` (ohne Higher-Kinded Types lassen sich die Namen nicht teilen, die Logik schon).
+    - Ziehen aus einer gestuften Pipeline (`for`, `zip`) läuft über eine kleine Warteschlange (Clojures `sequence`);
+      `collect` läuft verschmolzen ohne sie. `zip` (zwei Quellen) bleibt Treibersache, `sorted` ist Sammeln + neu Liefern.
+    - Stufen, die scheitern können, liefern `Result`-Elemente; `source.checked()` hebt sie in den `Failure` des
+      Streams, auf Iterables sammelt das vorhandene `Result … with From<Iterable<…>>`.
+    - Nur asynchron bleibt, was warten muss: `Source`, `Sink`, `source.then { … }` (Stufe mit Task-Funktion).
+    - Verworfen: alles asynchron (fs2/Web - tötet `list.map(…).toList()`), Effekt-Polymorphie/HKT (Rusts ungelöste
+      "keyword generics"), blockierendes `await` mit Stack pro Task (Go/Loom - im Konzept schon abgelehnt, JS-Target).
+    - Folge: `std/iteration/stages.trb` wird auf `Stage`-Werte umgebaut (Stage 0 lädt `std/` nicht, Risiko klein).
