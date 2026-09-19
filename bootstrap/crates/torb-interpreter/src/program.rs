@@ -160,6 +160,7 @@ pub fn builtin_type(name: &str) -> Option<&'static str> {
         "File" => "File",
         "Process" => "Process",
         "Environment" => "Environment",
+        "Clock" => "Clock",
         _ => return None,
     })
 }

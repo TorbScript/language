@@ -2,15 +2,17 @@ use test, group from "std/test"
 use probe, problems, notes from "./harness"
 
 /**
- * Exclusivity (design 5.2): within one call - the receiver and every argument - no two accesses to overlapping places
- * may run where one of them is a `var`. An access stays open while the other arguments are evaluated and while a closure
- * argument runs, which is what makes the DSL rule work and what rejects the two traps of stage 0.
+ * Exclusivity (design 5.2, after the model of Swift): the `var` access of a call begins once **every argument has been
+ * evaluated**. So everything the arguments read has ended before the access starts, and three conflicts are left: two
+ * `var` accesses of the *same* call, a closure argument that reaches the place its own call is changing (it runs while
+ * the access runs), and a write from inside such a closure.
  *
  * Overlap is decided on the path: the same root and neither path leaving the other. Two fields with different names are
  * disjoint, two indexes only where both were written as different literals, and a window covers everything of its base.
  */
 const report = "type Report \{\n  var title: String = \"\"\n  var subtitle: String = \"\"\n\n"
   + "  fn rename(var self, text: String) \{\n    title = text\n  \}\n\n"
+  + "  fn merge(var self, var other: Report) \{\n    title = other.title\n  \}\n\n"
   + "  fn around(var self, body: () => Void) \{\n    body()\n  \}\n\}\n\n"
 
 const swap = "fn swap(var first: Report, var second: Report) \{\n  const kept = first\n"
@@ -18,7 +20,10 @@ const swap = "fn swap(var first: Report, var second: Report) \{\n  const kept = 
 
 const rename = "fn rename(var target: Report, text: String) \{\n  target.title = text\n\}\n\n"
 
-group "Two `var` arguments of one call" {
+/** Two `var` parameters of different types, so that a value and one of its fields can be held against each other. */
+const touch = "fn touch(var whole: Report, var part: String) \{\n  part = whole.subtitle\n\}\n\n"
+
+group "Two `var` accesses of one call" {
   test "`swap(a, a)` cannot be told apart from itself" {
     const source = "{report}{swap}fn probe(var entry: Report) \{\n  swap(entry, entry)\n\}"
     assert(problems(source) == ["`entry` is being changed by `swap` right now"])
@@ -28,6 +33,11 @@ group "Two `var` arguments of one call" {
   test "two different bindings are two different places" {
     const source = "{report}{swap}fn probe(var first: Report, var second: Report) \{\n  swap(first, second)\n\}"
     assert(problems(source).isEmpty())
+  }
+
+  test "the receiver of a `var self` call is one of the accesses" {
+    const source = "{report}fn probe(var entry: Report) \{\n  entry.merge(entry)\n\}"
+    assert(problems(source) == ["`entry` is being changed by `merge` right now"])
   }
 
   test "two indexes of one collection cannot be told apart" {
@@ -47,6 +57,12 @@ group "Two `var` arguments of one call" {
     assert(problems(source) == ["`entries[...]` is being changed by `swap` right now"])
   }
 
+  test "an item and the collection it is in are not disjoint" {
+    const source = "fn move(var item: Int, var whole: List<Int>) \{\n  item = whole.length()\n\}\n\n"
+      + "fn probe(var entries: List<Int>) \{\n  move(entries[0], entries)\n\}"
+    assert(problems(source) == ["`entries[...]` is being changed by `move` right now"])
+  }
+
   test "two different fields of one value are disjoint" {
     const source = "{report}fn both(var one: String, var other: String) \{\n  one = other\n\}\n\n"
       + "fn probe(var entry: Report) \{\n  both(entry.title, entry.subtitle)\n\}"
@@ -54,53 +70,48 @@ group "Two `var` arguments of one call" {
   }
 
   test "a field and the value it belongs to are not" {
-    const source = "{report}{rename}fn probe(var entry: Report) \{\n  rename(entry, entry.title)\n\}"
-    assert(problems(source) == ["`entry` is being changed by `rename` right now"])
+    const source = "{report}{touch}fn probe(var entry: Report) \{\n  touch(entry, entry.title)\n\}"
+    assert(problems(source) == ["`entry` is being changed by `touch` right now"])
   }
 
   test "a window covers every index of its base" {
-    const source = "fn fill(var target: List<Int>, value: Int) \{\n  target[0] = value\n\}\n\n"
+    const source = "fn fill(var target: List<Int>, var value: Int) \{\n  value = target.length()\n\}\n\n"
       + "fn probe(var samples: List<Int>) \{\n  fill(samples[0..4], samples[7])\n\}"
     assert(problems(source) == ["`samples[...]` is being changed by `fill` right now"])
   }
 }
 
-group "What a call reads while it changes something" {
-  test "an argument that reads the place a `var` parameter owns (trap 1 of stage 0)" {
+group "What the arguments read has ended before the access begins" {
+  test "an argument that reads the place a `var` parameter will own" {
     const source = "{report}{rename}fn probe(var entry: Report) \{\n  rename(entry, entry.subtitle)\n\}"
-    assert(problems(source) == ["`entry` is being changed by `rename` right now"])
+    assert(problems(source).isEmpty())
   }
 
-  test "a nested call that reads it is the same mistake" {
+  test "a nested call that reads it is fine too" {
     const source = "{report}{rename}fn shout(text: String): String \{\n  text\n\}\n\n"
       + "fn probe(var entry: Report) \{\n  rename(entry, shout(entry.subtitle))\n\}"
-    assert(problems(source) == ["`entry` is being changed by `rename` right now"])
-  }
-
-  test "an argument that reads a disjoint field is fine" {
-    const source = "{report}fn both(var one: String, text: String) \{\n  one = text\n\}\n\n"
-      + "fn probe(var entry: Report) \{\n  both(entry.title, entry.subtitle)\n\}"
     assert(problems(source).isEmpty())
   }
 
-  test "an argument that reads the receiver of a `var self` call (trap 2 of stage 0)" {
+  test "an argument that reads the receiver of a `var self` call" {
     const source = "{report}fn probe(var entry: Report) \{\n  entry.rename(entry.subtitle)\n\}"
-    assert(problems(source) == ["`entry` is being changed by `rename` right now"])
-  }
-
-  test "the classic pop: the argument reads the collection the verb is changing" {
-    const source = "fn probe(var pending: List<Int>) \{\n  pending.removeAt(pending.length() - 1)\n\}"
-    assert(problems(source) == ["`pending` is being changed by `removeAt` right now"])
-  }
-
-  test "hoisting the read into a `const` is the fix" {
-    const source = "fn probe(var pending: List<Int>) \{\n  const last = pending.length() - 1\n  pending.removeAt(last)\n\}"
     assert(problems(source).isEmpty())
   }
 
-  test "an interpolated part is read like any other" {
+  test "the classic pop, which the stricter rule used to reject" {
+    const source = "fn probe(var pending: List<Int>) \{\n  pending.removeAt(pending.length() - 1)\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "an interpolated part is read before the access, like every other read" {
     const source = "{report}{rename}fn probe(var entry: Report) \{\n  rename(entry, \"a \{entry.subtitle\}\")\n\}"
-    assert(problems(source) == ["`entry` is being changed by `rename` right now"])
+    assert(problems(source).isEmpty())
+  }
+
+  test "an index key is a read of its own and runs in source order" {
+    const source = "fn probe(var entries: List<Int>, var value: Int) \{\n"
+      + "  entries.set(entries.length() - 1, value)\n\}"
+    assert(problems(source).isEmpty())
   }
 }
 
@@ -119,6 +130,12 @@ group "An access stays open while a closure argument runs" {
   test "the field the block reads is the one the call is changing" {
     const source = "{report}fn edit(var one: String, body: () => Void) \{\n  body()\n\}\n\n"
       + "fn probe(var entry: Report) \{\n  edit(entry.title) \{\n    print entry.title\n  \}\n\}"
+    assert(problems(source) == ["`entry.title` is being changed by `edit` right now"])
+  }
+
+  test "a write from inside the block is the same conflict" {
+    const source = "{report}fn edit(var one: String, body: () => Void) \{\n  body()\n\}\n\n"
+      + "fn probe(var entry: Report) \{\n  edit(entry.title) \{\n    entry.title = \"inside\"\n  \}\n\}"
     assert(problems(source) == ["`entry.title` is being changed by `edit` right now"])
   }
 
@@ -143,6 +160,12 @@ group "What is not an access" {
 
   test "two calls one after the other each have their own access" {
     const source = "{report}fn probe(var entry: Report) \{\n  entry.rename(\"one\")\n  entry.rename(\"two\")\n  print entry.title\n\}"
+    assert(problems(source).isEmpty())
+  }
+
+  test "the `var` argument of an inner call has ended when the outer access begins (trap 1 of stage 0)" {
+    const source = "{report}{rename}fn pick(var target: Report): String \{\n  target.title\n\}\n\n"
+      + "fn probe(var entry: Report) \{\n  rename(entry, pick(entry))\n\}"
     assert(problems(source).isEmpty())
   }
 }

@@ -577,7 +577,7 @@ public type DerivedImplementation {
 public type ImplementationTable {
   var all: List<Implementation> = []
   /** `"{trait}:{head}"`: the implementations of one trait for one concrete head symbol. */
-  var byTraitAndHead: Map<String, List<Int>> = [:]
+  var byTraitAndHead: Map<(Int, Int), List<Int>> = [:]
   /** Per trait symbol: the implementations whose target is a trait type or a bare parameter. */
   var byTraitOpen: Map<Int, List<Int>> = [:]
   /** Per concrete head symbol: every implementation of any trait for it, for the walk over supertraits. */
@@ -608,7 +608,7 @@ public type ImplementationTable {
       known.add(index)
       byHead.set(head.value, known)
       if const Some(symbol) = capability {
-        const key = "{symbol.value}:{head.value}"
+        const key = (symbol.value, head.value)
         var candidates = byTraitAndHead.get(key) ?? []
         candidates.add(index)
         byTraitAndHead.set(key, candidates)
@@ -639,7 +639,7 @@ public type ImplementationTable {
   fn candidatesOf(self, capability: SymbolId, head: SymbolId?): List<Int> {
     var found: List<Int> = []
     if const Some(symbol) = head {
-      for index in byTraitAndHead.get("{capability.value}:{symbol.value}") ?? [] {
+      for index in byTraitAndHead.get((capability.value, symbol.value)) ?? [] {
         found.add(index)
       }
     }

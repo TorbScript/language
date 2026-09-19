@@ -32,8 +32,10 @@ type ConfigError {
 }
 
 fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
-  const raw = settings.get("port").okOr(.Missing("port"))?     // `?` on Option -> early return
-  const port = Int.parse(raw).mapError { .Invalid("port", "not a number") }?
+  // The short form needs a type that is already known: here only the `?` would decide the failure type, and it runs
+  // after the argument has been read - so the case is written with its type
+  const raw = settings.get("port").okOr(ConfigError.Missing("port"))?    // `?` on Option -> early return
+  const port = Int.parse(raw).mapError { ConfigError.Invalid("port", "not a number") }?
   if port < 1 || port > 65535 {
     return Error(.Invalid("port", "out of range"))
   }

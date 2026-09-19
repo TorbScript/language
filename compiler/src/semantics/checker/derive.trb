@@ -4,7 +4,7 @@ use TypeId, ParameterId, FieldSignature from "./type"
 use Checker from "./context"
 use typeSignatureOf from "./signature"
 use substitute, sameType from "./unify"
-use implementsBound from "./implementation"
+use implementsBound, literalParseBound from "./implementation"
 
 /**
  * The implementations the language generates: `Equals`, `Hash`, `Show`, `Encode`, `Decode`, the `From` of a wrapper
@@ -29,7 +29,7 @@ public fn derivableMembers(
   if name.isEmpty() {
     return None
   }
-  const key = "{target.value}:{capability.value}:{wantedKey(wanted)}"
+  const key = (target.value, capability.value, wantedKey(wanted))
   if checker.derivationsMissing.containsKey(key) {
     return None
   }
@@ -125,8 +125,10 @@ fn canDerive(
     return false
   }
   match checker.types.form(target) {
-    // A literal type has `Show`, `Equals`, `Hash`, `Encode` and `Decode` of its base, and nothing else (gap 32)
-    .Literals(_, _) => true
+    // A literal type has exactly what the concept's "Literal Types" names - `Parse<LiteralParseError>`, `Show`,
+    // `Equals`, `Hash`, `Encode`, `Decode`, and the `Into` of its base above - and nothing else (gap 32). `Compare` is
+    // not among them: an order over three strings is a decision, exactly as it is for a `type`
+    .Literals(_, _) => isLiteralTrait(checker, name, wanted)
     // Tuples and function types cannot be declared, so what a `type` gets generated they get generated too (gap 35)
     .Tuple(_) => everyFieldImplements(checker, target, capability, wanted)
     .Function(_) => name == "Show"
@@ -151,6 +153,27 @@ fn canDerive(
       everyFieldImplements(checker, target, capability, wanted)
     }
     _ => false
+  }
+}
+
+/**
+ * The traits a literal type carries. `Parse` is the one whose argument is fixed: a literal type fails to parse with a
+ * `LiteralParseError` and with nothing else, so `Status with Parse<NumberParseError>` is not generated.
+ */
+fn isLiteralTrait(var checker: Checker, name: String, wanted: TypeId?): Bool {
+  if name == "Parse" {
+    const generated = match literalParseBound(checker) {
+      Some(found) => found
+      .None => {
+        return false
+      }
+    }
+    match wanted {
+      Some(asked) => sameType(checker.types, asked, generated)
+      .None => true
+    }
+  } else {
+    name == "Show" || name == "Equals" || name == "Hash" || name == "Encode" || name == "Decode"
   }
 }
 

@@ -265,7 +265,10 @@ var a               // Compile error: bindings must be initialized
 var b: Int          // Compile error: no implied default value
 ```
 
-- A name can be shadowed in a nested scope, but not redeclared in the same scope.
+- A name can be shadowed in a nested scope, but not redeclared in the same scope. **The parameters of a function and
+  the top level of its body are one scope**, so a `const` there may not take a parameter's name: there is no silent
+  shadowing anywhere in the language, and a parameter is the most surprising place for it. A nested block and a closure
+  are scopes of their own.
 - **Changes that cannot have an effect are compile errors,** because with value semantics they are always a mistake:
   a `var` that is changed but never read afterwards (`var first = list[0]` followed by `first.increment()` - the
   message points to `list[0].increment()`), and the discarded result of a method that takes `self`
@@ -552,6 +555,12 @@ const clamp = { x: Int, low: Int, high: Int =>     // The body is a list of stat
   (which is the "full form" of a function anyway, and can be passed by name).
 - `return` inside a closure returns from the closure. There is no non-local return.
 - `=>` has exactly three jobs: function types (`(Int) => Int`), closure parameters (`{ x => ... }`) and match arms.
+- **A `fn` inside a block is not a closure.** It is the same declaration as at the top level and sees the same things: its
+  own parameters and its file. A local `fn` is therefore the way to write a helper that must not capture; a closure is
+  the way to write one that must.
+- The names of the parameters of a function *type* are documentation, exactly as the labels of a tuple are: `(host:
+  String) => Bool` and `(String) => Bool` are the same type. A *declaration* is different - there the name is how a
+  caller passes the argument.
 
 ### Trailing Closures
 
@@ -663,6 +672,9 @@ type ExpressionNode {
   constructors, `if`/`else`, nested closures, list literals, string interpolation. A quoted closure must consist of
   a single expression. Statements (`const`, `var`, assignment, loops, `return`, `await()`) and the early return `?`
   are a compile error inside of a quotation. `match` is not quotable yet (patterns would double the node set).
+- A tuple literal, a map literal and a range are **constructions** and therefore quotable: `(a, b)` and `0..2` are a
+  `Construct` node, `["a": 1]` a `Call` of `Map.of`. A spread has no node and neither has a closure parameter that
+  destructures, because a `Lambda` node names its parameters.
 - `?.` and `??` have no nodes of their own. They are what they mean: calls of `Option.map`/`flatMap` and
   `Option.orElse`. A provider that knows `Option` knows them.
 - `nameOf(user.email)` is `"email"`: an ordinary function over `Expression<Value>` that reads the last `Field` or
@@ -728,6 +740,12 @@ unless user.isAdmin {
   deny()
 }
 ```
+
+`using` is one of those functions, and its closure is a **receiver closure over the resource**:
+`fn using<Resource: Close, Value>(var resource: Resource, body: (var Resource) => Value): Value`. So the body reaches
+the members of the resource without naming it (`using File.open(path)? { writeLine "done" }`), and it may change it -
+which is what a resource is for. Passing a temporary to that `var` parameter is allowed: the callee is its only owner
+(see [`var` Paths](#var-paths-and-var-parameters)).
 
 ## Types
 
@@ -798,6 +816,9 @@ p = p.copy(y: 30)              // `copy` is generated for every `type`
   `Show.showNested`, which defaults to `show()` and is overridden by `String` and `Char` alone.
 - Tuples and function types cannot be declared in TorbScript, so what a `type` gets generated they get generated
   too: `Equals`, `Hash` and `Show` for a tuple whose elements have them, `Show` for a function value (its type).
+- **A tuple also has a generated `Compare`, lexicographic by position; a `type` does not.** An order is a decision and
+  not a structure, so a `type` that wants one writes it - but a tuple has no declaration anybody could write it in, and
+  `diagnostics.sort { (_.span.start, _.span.end) }` is how the language sorts by more than one key.
 - What a copy costs is the business of the implementation and not observable (see [Execution Model](#execution-model)):
   small values are copied, the storage of collections and strings is shared until somebody writes to it.
 - Values are freely passed between tasks.
@@ -875,10 +896,14 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   (see below). The decision is recorded, because it is also what lets an implementation put the closure's environment
   on the stack.
 - **Exclusivity:** while a `var` access to a path is running, the same path (or a path above or below it) cannot be
-  accessed in any other way. The check is static and conservative: what the compiler cannot prove is an error, there
-  is no check at runtime. `swap(a, a)` is a compile error, and so is changing `root` inside of `root.div { ... }`.
-  Different fields are fine (`project.build { output "{project.name}" }`). Two indices or ranges of the same
-  collection are not, because they cannot be compared statically (`swap(items[i], items[j])`: use `items.swapAt(i, j)`).
+  accessed in any other way. **The access of a call begins once all of its arguments have been evaluated**, so
+  everything the arguments *read* has already finished and `items.removeAt(items.length() - 1)` is ordinary code. What
+  is left is what really overlaps: two `var` accesses of the **same** call (`swap(a, a)`, `move(list[0], list)`), and a
+  closure argument of a call reaching the path that call is changing - the closure runs *inside* the access, which is
+  what makes changing `root` inside `root.div { ... }` an error. Different fields are fine
+  (`project.build { output "{project.name}" }`). Two indices or ranges of the same collection are not, because they
+  cannot be compared statically (`swap(items[i], items[j])`: use `items.swapAt(i, j)`). The check is static and
+  conservative: what the compiler cannot prove is an error, and there is no check at runtime.
 - A temporary is not a `var` path: `iterator().next()` is a compile error, `var cursor = iterator()` comes first.
   (Changing something that is thrown away is always a mistake.) As the _argument_ of a `var` parameter a temporary
   is fine - the callee is its only owner, so "copy in, copy out" is exact and nothing is written back anywhere:
@@ -948,6 +973,22 @@ const b: Celsius = Fahrenheit(100.0).into()
 
 The `?` operator uses `From` to convert error types.
 
+**Every type has `From<Self>`**, and that conversion is the value itself. It is not written down anywhere and could not
+be: a blanket `extend<Value> Value with From<Value>` would overlap with every other implementation of `From`. It is what
+lets `fn sum(self): Item where Item: Add + From<Int>` be called with a list of `Int`.
+
+The language has exactly **four coercions**, and all of them only apply where a type is expected - never to decide what
+an expression means on its own, and never to solve an inference variable:
+
+- a value where a trait type is expected (`Square` into a `Shape`),
+- a trait value where fewer bounds or a supertrait are expected (`Show + Hash` into a `Show`),
+- `Never` where anything is expected,
+- a literal where a literal type is expected (`"online"` into a `Status`).
+
+**There is no implicit `Some`.** A value never wraps itself into an `Option`: `fn find(...): Item?` has to write
+`Some(item)`, and `const x: Int? = 1` is an error. `None` is the one value of the language that takes its type from what
+is expected of it. There is no variance either: a `List<Square>` is not a `List<Shape>`.
+
 ### Visibility and Encapsulation
 
 **Members are public unless marked `private`** - fields, methods and constants alike. In a language where values are
@@ -982,7 +1023,8 @@ account.balance = 1_000_000              // Compile error: only Account can writ
   `config.routes` can be read and iterated from outside, but `config.routes.add(...)` is a compile error. What
   somebody takes out of it is a copy anyway. No defensive copies by hand, no accessor methods.
 - `private(var)` is a modifier of a field and of nothing else. On a member that has no `var` it has nothing to say
-  and is an error.
+  and is an error. It also already *is* the `var`, so `private(var) var balance: Int` is an error: one of the two says
+  it twice.
 - **`private` reaches as far as the type does.** A private member is visible in the body of its type and in every
   `extend` of that type in the same package - an `extend` without a trait _is_ part of the type - and nowhere else.
   The package is the unit of coherence, so it is the unit of privacy, too.
@@ -994,6 +1036,10 @@ account.balance = 1_000_000              // Compile error: only Account can writ
   (`account.withdraw(amount)`).
 - **Top-level declarations are private to their file unless marked `public`.** This is a different question - the
   surface of a module is opt-in, `lib.trb` defines the API of a package.
+- **A `public` declaration may not expose a type that is private to its file.** A caller who cannot name the type
+  cannot do anything with the value, so the parameters, the result, the fields and the case fields of a `public`
+  declaration, the members of a `public trait` and the type of a `public const` all have to be at least as visible as
+  the declaration itself. A `private` *field* is not part of that surface: nobody outside can name it either way.
 - **`public const` is legal at top level, `public var` is not.** A module can export a constant (its initializer is
   compile-time evaluable, see [Modules and Packages](#modules-and-packages)); a module has no mutable state, so
   there is nothing a top-level `var` could export.
@@ -1598,6 +1644,9 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
   `tests/*.test.trb`.** A test file consists of nothing but top-level `group` and `test` calls, and the test
   framework is ordinary functions, so its files are scripts. Everything that is imported consists of declarations
   only. So there is no module initialization order, and cyclic imports are unproblematic.
+- The rule is about being *imported*, not about the file name: a file that nothing imports cannot create an
+  initialization order, so it is a script and may hold top-level code. That is what the twelve files of
+  `examples/tour` are. The `src/lib.trb` of a named package is always a module, because it is what others import.
 - In exactly those files a top-level `?` ends the program with the error, and top-level `await()` is allowed.
 - Top-level `const` initializers of modules must be **compile-time evaluable**: literals, unary minus, the
   arithmetic, comparison and logical operators of the built-in number types and of `Bool`, string interpolation of
@@ -1688,6 +1737,10 @@ script.apply(config)?                                           // The body of t
   and reports what went wrong while it ran: a step, memory or time limit, or a panic inside the script. A sandbox whose
   failures aborted the host would not be a sandbox - and the panic that can be recovered from is exactly the one that
   happens inside an interpreter with a heap of its own.
+- The path of `Sandbox.load` is relative to the **directory of the project**, not to the file that loads it: that is
+  where the program runs, and where a `config.trb` next to `project.trb` sits. `use "./x"` is the other way round - an
+  import is relative to the *file*, because that is a question about the source tree and not about the working
+  directory.
 - The script is checked as the body of `(var self: ServerConfig) => Void`, with the file scope "the prelude, and
   nothing else". The type argument is the whitelist. There is no purity analysis behind that: the prelude has no IO
   to begin with, and what a script may reach beyond it is the **module allowlist** below (`modules "std/text"`).
@@ -2046,6 +2099,12 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - A captured `var` binding is a shared box, not a reference: it may escape, it is reference counted, and it is
   exempt from the dead-change rule. The one exception to "references are second-class" - the cycle collector had to
   do this anyway.
+- **The `var` access of a call begins after all of its arguments have been evaluated** (the model of Swift), not when
+  the path is formed. So the reads inside the arguments have ended before it starts, and
+  `items.removeAt(items.length() - 1)` and `f(checker, checker.count)` are legal; what is left is what really overlaps
+  in time - two `var` accesses of the same call, and a closure argument of the call, which runs inside the access.
+  The stricter reading rejected the most ordinary line there is ("pop the last item") and its fix - hoisting the read
+  into a `const` - bought no safety, because the copy is what the argument would have been anyway.
 - An unreachable `match` arm is an error. Dead changes and discarded values are errors for the same reason.
 - Compile-time evaluable is: literals, the operators of the built-in numbers and of `Bool`, interpolation,
   collection literals, constructor calls - and no function calls. So `const frameTime = 1.0 / 60.0` and

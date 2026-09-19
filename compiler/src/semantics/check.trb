@@ -9,8 +9,8 @@ use SymbolId from "./symbols"
 use buildGraph from "./graph"
 use Program, resolveNames, checkNames from "./scope"
 use resolveTypes from "./resolve-types"
-use Checker from "./checker/context"
-use checkTypes from "./checker/check"
+use Checker, Timing from "./checker/context"
+use checkTypes, Stopwatch from "./checker/check"
 
 /** One file that was checked, with everything that is wrong in it, sorted by position. */
 public type CheckedFile {
@@ -42,7 +42,10 @@ public type Checked {
  *
  * This is a pure function of the `SourceTree`, so a test builds a project in memory and checks it.
  */
-public fn check(tree: SourceTree, paths: List<String>): Checked {
+public fn check(tree: SourceTree, paths: List<String>, withTimings: Bool = false): Checked {
+  var clock = Stopwatch(withTimings)
+  clock.start()
+  var before: List<Timing> = []
   const targets = paths.map(normalizePath).toList()
   var packages: List<Package> = []
   var problems: List<String> = []
@@ -56,9 +59,12 @@ public fn check(tree: SourceTree, paths: List<String>): Checked {
     }
   }
   const workspace = Workspace(packages)
+  before.add(Timing("finding the workspace", clock.taken()))
   const graph = buildGraph(tree, workspace)
+  before.add(Timing("lexing, parsing and the module graph", clock.taken()))
   const program = resolveNames(graph, workspace)
   problems.addAll(program.problems)
+  before.add(Timing("name resolution", clock.taken()))
 
   // Every module, not only the requested ones: the type checker looks a name of an imported module up the same way
   var symbols = program.symbols
@@ -73,8 +79,13 @@ public fn check(tree: SourceTree, paths: List<String>): Checked {
       requested.add(module.id)
     }
   }
+  before.add(Timing("names in type positions", clock.taken()))
   const resolvedProgram = program.copy(symbols: symbols)
-  const checked = checkTypes(resolvedProgram, resolutions, requested)
+  var checked = checkTypes(resolvedProgram, resolutions, requested, withTimings)
+  // The passes before the checker existed cannot be recorded on it as they run, so they are put in front here
+  if withTimings {
+    checked.timings = before.addedAll(checked.timings)
+  }
 
   var files: List<CheckedFile> = []
   for module in graph.modules {

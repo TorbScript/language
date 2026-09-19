@@ -195,6 +195,9 @@ fn checkClosureBody(
   checker.returnTypes = []
   checker.loopDepth = 0
   checker.openScope()
+  // A closure argument runs *during* the `var` access of its call, which is the one thing the Swift model of exclusivity
+  // still holds a call responsible for once its arguments have been evaluated (4.10)
+  checker.runningClosures = checker.runningClosures + 1
   const start = checker.bindings.length()
   checker.closureFrames.add(frame.copy(bindings: start, enclosingLoopDepth: savedDepth))
   if receiver >= 0 {
@@ -223,6 +226,7 @@ fn checkClosureBody(
   const last = checker.closureFrames.length() - 1
   const captures = checker.closureFrames[last].captures
   const _ = checker.closureFrames.removeAt(last)
+  checker.runningClosures = checker.runningClosures - 1
   checker.closeScope()
   checker.resultType = savedResult
   checker.isResultInferred = savedInferred

@@ -379,6 +379,17 @@ public type Access {
   /** The member or the parameter that is changing it: "`root` is being changed by `div` right now". */
   changedBy: String
   at: Span
+  /**
+   * Which call opened it. Two accesses of the *same* call conflict wherever they overlap (`swap(a, a)`), because they
+   * run at the same time; two accesses of two calls do not, because the inner call has ended before the outer one
+   * begins its access.
+   */
+  call: Int = 0
+  /**
+   * How many closures were being checked when it was opened. A read or a change from *deeper* in runs while the access
+   * runs - that is the closure argument of the same call - and one at the same depth has ended before it begins.
+   */
+  closureDepth: Int = 0
 }
 
 /**
@@ -559,6 +570,17 @@ public type BodyState {
   accesses: List<Access>
   bindingUses: List<BindingUse>
   resultRule: ResultRule
+  runningClosures: Int = 0
+}
+
+/**
+ * One pass and the wall time it took, in milliseconds, in the order the passes ran. `torb check --timings` prints them,
+ * and it stays: the checker runs on a tree-walking interpreter, so which pass got slower is a question that comes up
+ * with every change.
+ */
+public type Timing {
+  pass: String
+  milliseconds: Int64
 }
 
 /** How much of a module the checker already understands. `torb check --statistics` prints these. */
@@ -631,6 +653,12 @@ public type Checker {
   var tables: List<Tables> = []
   /** One per module, so a message can be rendered with the file it belongs to. */
   var diagnostics: List<List<Diagnostic>> = []
+  /** What every pass of the run cost, for `torb check --timings`. Empty unless the flag was given. */
+  var timings: List<Timing> = []
+  /** Whether the clock is read at all. Two passes run per module and have to add their time up themselves. */
+  var withTimings: Bool = false
+  /** What the shape pass (4.9) cost, added up over the modules: it runs inside the walk over the bodies. */
+  var shapeMilliseconds: Int64 = 0
 
   // --- The state of the walk over one body ---------------------------------------------------------------------------
 
@@ -666,6 +694,10 @@ public type Checker {
 
   /** The `var` accesses that are running, outermost first: what the exclusivity rule compares against (design 5.2). */
   var accesses: List<Access> = []
+  /** One number per call, so that the accesses of one call can be told from the accesses of the call around it. */
+  var callSerial: Int = 0
+  /** How many closure bodies are being checked. A quotation is not run, so it does not count here (4.8). */
+  var runningClosures: Int = 0
   /** Every read and every change of a local `var` binding of the body that is being checked, in source order. */
   var bindingUses: List<BindingUse> = []
   /** Every binding a closure captures, by `BindingId.value`: a captured binding is a shared box and never dead (gap 19). */
@@ -696,6 +728,10 @@ public type Checker {
   /**
    * The spans that were written to while a variable was open. A variable is solved *after* the expression that
    * mentions it was recorded, so the tables of one statement are walked once at the end of it and the solutions put in.
+   *
+   * One span is usually written two or three times in a row (its type, its resolution, its adaptations) and `pruneAt` is
+   * seven map lookups, so a run of duplicates is dropped as it is noted: one comparison here instead of seven lookups
+   * later.
    */
   var pendingSpans: List<Span> = []
   /** Whether the open context ever made a variable, which is what makes the walk above worth doing at all. */
@@ -716,9 +752,9 @@ public type Checker {
    * "Does this type implement that trait, and through which implementation" - by interned type id and trait symbol.
    * This is the memoization the whole pass rests on: every operator, every `for`, every interpolated part asks it.
    */
-  var traitAnswers: Map<String, Resolved> = [:]
+  var traitAnswers: Map<(Int, Int, Bool), Resolved> = [:]
   /** The whole witness tree of one type and one bound, by their interned ids: `"{type}:{bound}"`. */
-  var witnessAnswers: Map<String, Witness> = [:]
+  var witnessAnswers: Map<(Int, Int), Witness> = [:]
   /** Bound resolution recurses through the bounds of an implementation; a limit is an answer, never a hang. */
   var traitDepth: Int = 0
   /** Every trait a type implements, transitively over supertraits, by interned type id. */
@@ -728,10 +764,10 @@ public type Checker {
   /** Every derived implementation that was generated, which milestone 5 has to emit the members of. */
   var derived: List<DerivedImplementation> = []
   /** `"{target}:{trait}"` to the index in `derived`, so one is generated once. */
-  var derivedIndex: Map<String, Int> = [:]
+  var derivedIndex: Map<(Int, Int), Int> = [:]
   /** What a derived implementation would generate, by target and trait. Two maps, because the answer may be "no". */
-  var derivations: Map<String, List<String>> = [:]
-  var derivationsMissing: Map<String, Bool> = [:]
+  var derivations: Map<(Int, Int, Int), List<String>> = [:]
+  var derivationsMissing: Map<(Int, Int, Int), Bool> = [:]
   /** Per module: which modules' extensions of *foreign* types are visible in it. Built on the first question. */
   var visibleModules: Map<Int, Map<Int, Bool>> = [:]
   /**
@@ -739,10 +775,10 @@ public type Checker {
    * of the type, the extensions this file can see, the traits the type implements - and it is the hottest question of
    * the whole pass, so the answer is kept. Two maps, because "there is no such member" is an answer too.
    */
-  var memberAnswers: Map<String, Candidate> = [:]
-  var memberMissing: Map<String, Bool> = [:]
+  var memberAnswers: Map<(Int, Int, Bool, String), Candidate> = [:]
+  var memberMissing: Map<(Int, Int, Bool, String), Bool> = [:]
   /** The inherent extensions of one type that one module may use, by module and type. */
-  var visibleExtensions: Map<String, List<Int>> = [:]
+  var visibleExtensions: Map<(Int, Int), List<Int>> = [:]
 
   // --- Visibility and program shape (milestone 4.9) -------------------------------------------------------------------
 
@@ -871,6 +907,27 @@ public type Checker {
     Statistics(typed, deferred)
   }
 
+  /**
+   * The first expression of a module that has no type. `Deferred` is reachable only from a construct a message was
+   * already given about, so this is what a module without any message must not have (4.10).
+   */
+  fn uncheckedSpanOf(self, module: ModuleId): Span? {
+    var found: Span? = None
+    for (at, id) in tables[module.value].expressionTypes {
+      if id != deferredType {
+        continue
+      }
+      const isEarlier = match found {
+        Some(known) => at.start < known.start
+        .None => true
+      }
+      if isEarlier {
+        found = Some(at)
+      }
+    }
+    found
+  }
+
   // --- The module that is being checked ------------------------------------------------------------------------------
 
   /**
@@ -888,7 +945,7 @@ public type Checker {
   /** Records the type of an expression and gives it back, which is what every branch of the checker ends with. */
   fn typed(var self, at: Span, id: TypeId): TypeId {
     tables[module.value].expressionTypes.set(at, id)
-    if hasVariables {
+    if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add(at)
     }
     id
@@ -896,14 +953,14 @@ public type Checker {
 
   fn typedPattern(var self, at: Span, id: TypeId) {
     tables[module.value].patternTypes.set(at, id)
-    if hasVariables {
+    if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add(at)
     }
   }
 
   fn resolved(var self, at: Span, resolution: Resolution) {
     tables[module.value].resolutions.set(at, resolution)
-    if hasVariables {
+    if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add(at)
     }
   }
@@ -911,7 +968,7 @@ public type Checker {
   fn adapted(var self, at: Span, adaptation: Adaptation) {
     const known = tables[module.value].adaptations.get(at) ?? []
     tables[module.value].adaptations.set(at, known.added(adaptation))
-    if hasVariables {
+    if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add(at)
     }
   }
@@ -931,7 +988,7 @@ public type Checker {
     }
     kept.add(Adaptation.Literal(annotation))
     tables[module.value].adaptations.set(at, kept)
-    if hasVariables {
+    if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add(at)
     }
   }
@@ -943,7 +1000,7 @@ public type Checker {
   /** The type arguments one call was instantiated with: what milestone 5 monomorphizes from. */
   fn recordTypeArguments(var self, at: Span, arguments: List<TypeId>) {
     tables[module.value].typeArguments.set(at, arguments)
-    if hasVariables {
+    if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add(at)
     }
   }
@@ -955,7 +1012,7 @@ public type Checker {
   /** One witness per trait of every bound of the callee, in the order of `Signature.bounds`. */
   fn recordWitnesses(var self, at: Span, found: List<Witness>) {
     tables[module.value].witnesses.set(at, found)
-    if hasVariables {
+    if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add(at)
     }
   }
@@ -1214,6 +1271,7 @@ public type Checker {
       accesses,
       bindingUses,
       resultRule,
+      runningClosures,
     )
     module = inside
     locals = []
@@ -1232,6 +1290,7 @@ public type Checker {
     hasVariables = false
     accesses = []
     bindingUses = []
+    runningClosures = 0
     saved
   }
 
@@ -1253,6 +1312,7 @@ public type Checker {
     hasVariables = saved.hasVariables
     accesses = saved.accesses
     bindingUses = saved.bindingUses
+    runningClosures = saved.runningClosures
   }
 
   /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */

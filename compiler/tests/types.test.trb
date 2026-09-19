@@ -533,23 +533,62 @@ group "The whole repository" {
     assert(positions > 4000)
   }
 
-  test "most of the expressions of the repository have a type, and the rest is counted" {
+  /**
+   * The conformance assertion of milestone 4: **every** expression of the repository has a type. `Deferred` meant "a
+   * later sub-milestone decides" and there is no later one, so a single unchecked expression is a hole in the checker -
+   * and `checkModule` says so at the span since 4.10, which is why the message list above is the same assertion twice.
+   */
+  test "every expression of the repository has a type, and every quotation and match recorded its tables" {
     const root = repositoryRoot().expect("the root of the repository above the working directory")
     const checked = check(readSourceTree([root]).expect("the sources of the repository"), [root])
     var typed = 0
     var deferred = 0
     var quotations = 0
+    var matches = 0
+    var places = 0
     for module in checked.requested {
       const statistics = checked.checker.statisticsOf(module)
       typed = typed + statistics.typed
       deferred = deferred + statistics.deferred
-      quotations = quotations + checked.checker.tables[module.value].quotations.length()
+      const tables = checked.checker.tables[module.value]
+      quotations = quotations + tables.quotations.length()
+      matches = matches + tables.matches.length()
+      places = places + tables.places.length()
     }
-    // After milestone 4.8 only the generated members of a literal type and the `.Case` of `06-errors.trb` are left (4.10)
     assert(typed > 60000)
-    assert(deferred > 0)
-    assert(typed * 100 / (typed + deferred) >= 99)
+    assert(deferred == 0)
     // `assert` is in every test, so the repository is full of quotations, and every one of them recorded its tree (4.8)
     assert(quotations > 1000)
+    // Every `match`, `if const`, `for` pattern and destructuring binding recorded its plan (4.5), and every `var` access
+    // and every assignment its place (4.6)
+    assert(matches > 1000)
+    assert(places > 1000)
+  }
+
+  /** Every example checks on its own, without the rest of the repository around it: they are separate projects. */
+  test "every example project checks standalone" {
+    const root = repositoryRoot().expect("the root of the repository above the working directory")
+    const examples = ["examples/tour", "examples/game-engine", "examples/query-provider", "examples/config-dsl"]
+    var reported: List<String> = []
+    for example in examples {
+      const path = joinPath(root, example)
+      const checked = check(readSourceTree([path]).expect("the sources of {example}"), [path])
+      for problem in checked.problems {
+        reported.add("{example}: {problem}")
+      }
+      for file in checked.files {
+        for diagnostic in file.diagnostics {
+          reported.add("{file.path}: {diagnostic.message}")
+        }
+      }
+      var deferred = 0
+      for module in checked.requested {
+        deferred = deferred + checked.checker.statisticsOf(module).deferred
+      }
+      if deferred > 0 {
+        reported.add("{example}: {deferred} expressions without a type")
+      }
+    }
+    assert(reported.isEmpty())
   }
 }

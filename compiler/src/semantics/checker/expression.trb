@@ -3,14 +3,14 @@ use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, TextSegment, Condition, Block, Statement from "../../syntax/ast"
 use MatchArm, PrefixOperator, InfixOperator, Closure, TypeReference from "../../syntax/ast"
 use SymbolId from "../symbols"
-use TypeId, TypeForm, TupleField, LiteralValue, FunctionForm, Witness from "./type"
+use TypeId, TypeForm, TupleField, LiteralValue, FunctionForm, ParameterForm, ParameterMode, Witness from "./type"
 use Checker, Expectation, Resolution, Adaptation, Dispatch from "./context"
 use Target, deferredTarget, resolveName, symbolTarget, targetOfCandidate from "./name"
 use formOf, reportUnknownMember, isFullyKnown from "./name"
 use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf, requireObjectSafe from "./member"
 use traitArgumentsOf, witnessFor, isConcrete from "./implementation"
 use typeFromReference, integerLiteral from "./lowering"
-use sameType, unify, resolveType, resolveTypes, hasVariable from "./unify"
+use sameType, unify, resolveType, resolveTypes, hasVariable, openVariableOf from "./unify"
 use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
 use checkClosure from "./closure"
 use isQuotation, isQuotationValue, checkQuotation, openThunk, closeThunk from "./quote"
@@ -157,7 +157,11 @@ public fn resolveTarget(
     }
     _ => {
       const annotation = inferExpression(checker, expression)
-      Target(Resolution.Deferred, annotation, form: formOf(checker, annotation))
+      // `text.trim().replace(a, b)`, `items[0].name`: the inner node resolved itself while it was checked, so its
+      // answer is read back instead of being overwritten with `.Deferred` by whoever asked about the part in front
+      // of the dot.
+      const known = checker.resolutionHere(expression.span) ?? Resolution.Deferred
+      Target(known, annotation, form: formOf(checker, annotation))
     }
   }
 }
@@ -352,7 +356,18 @@ fn implicitMemberTarget(var checker: Checker, text: String, expected: TypeId?, a
       return Target(Resolution.Deferred, checker.invalidType, name: text)
     }
   }
-  if checker.absorbs(annotation) || hasVariable(checker, annotation) {
+  if checker.absorbs(annotation) {
+    return deferredTarget(checker)
+  }
+  // A type that is *nothing but* an open variable names no type at all, and nothing before the `?` ever will: only
+  // `matchedFailure` (4.4) decides such a failure type, and it runs after the argument has been read. So the short form
+  // is reported here instead of being left unchecked - `Result<Int, Failure>` is a different matter, because the case's
+  // owner is `Result` whatever the failure turns out to be
+  if openVariableOf(checker, annotation).isSome() {
+    reportCaseBeforeTry(checker, text, at)
+    return Target(Resolution.Deferred, checker.invalidType, name: text)
+  }
+  if hasVariable(checker, annotation) {
     return deferredTarget(checker)
   }
   match lookupStaticMember(checker, annotation, text) {
@@ -372,6 +387,19 @@ fn reportCaseWithoutType(var checker: Checker, text: String, at: Span) {
   checker.reportHere(
     Diagnostic.error("`.{text}` needs a type, and nothing here says which one", at)
       .withNote("Write it out: `Shape.{text}(...)`, or annotate what the value goes into")
+  )
+}
+
+/**
+ * `settings.get("port").okOr(.Missing("port"))?`: the failure type of the subject is open here, and only the `?` around
+ * it would say what it is - which happens after this argument has been read. The short form has nothing to take its type
+ * from, so it is an error and not an inference the checker could make later.
+ */
+fn reportCaseBeforeTry(var checker: Checker, text: String, at: Span) {
+  checker.reportHere(
+    Diagnostic.error("`.{text}` needs its type here: nothing expects one before the `?`", at)
+      .withNote("Write it out: `ConfigError.{text}(...)`. The `?` only decides the failure type once the argument"
+        + " has been read")
   )
 }
 
@@ -954,6 +982,15 @@ fn recordComparison(var checker: Checker, operator: InfixOperator, found: TypeId
     .Equal | .NotEqual => false
     _ => true
   }
+  const member = if isOrdering { "compare" } else { "equals" }
+  /*
+   * Gap 7 would have `a == b` on two trait-typed values reported: `equals(self, other: Self)` takes a second `Self`,
+   * and two values of a trait type need not have the same type. It is **not** reported, and it cannot be: every
+   * collection of the language has a trait type (`List<String>` is `List` applied to `String`), so the rule would
+   * reject `parts == ["a"]` and with it half of every test in the repository. Object safety stays what 4.4 made it -
+   * a rule about a member that is *named* - and the operators are outside it until a literal-type-like "the two sides
+   * are the same type here" is written down. 4.10 tried it and took it back out.
+   */
   const capability = if isOrdering { checker.wellKnown.compare } else { checker.wellKnown.equals }
   const symbol = match capability {
     Some(inner) => inner
@@ -962,9 +999,10 @@ fn recordComparison(var checker: Checker, operator: InfixOperator, found: TypeId
     }
   }
   if traitArgumentsOf(checker, found, symbol).isSome() {
-    recordTraitCall(checker, at, found, symbol, if isOrdering { "compare" } else { "equals" })
+    recordTraitCall(checker, at, found, symbol, member)
   }
 }
+
 
 /** `a ?? b`: the `Value` of the left side, with the fallback checked against it and evaluated only when needed. */
 fn coalesceType(var checker: Checker, left: Expression, right: Expression, at: Span): TypeId {
@@ -1366,8 +1404,11 @@ fn conversionType(var checker: Checker, expression: Expression, callee: Expressi
     }
   }
   const source = inferExpression(checker, base)
-  const deferred = checker.deferredType
-  const _ = checker.typed(callee.span, deferred)
+  // `value.into` is `(self: Source) => Target` - the one member whose type the expected type decides and the receiver
+  // alone cannot. That is a fact and not a construct a later pass looks at, so the callee is typed and not deferred
+  const form = FunctionForm([ParameterForm(Some("self"), ParameterMode.Value, source)], target)
+  const shown = checker.functionType(form)
+  const _ = checker.typed(callee.span, shown)
   if checker.absorbs(source) || checker.absorbs(target) {
     return target
   }

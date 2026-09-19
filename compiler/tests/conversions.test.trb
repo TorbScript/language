@@ -188,4 +188,15 @@ group "`into()` and `From`" {
     const found = probe(source)
     assert(found.typeOf("Port.tryFrom(8080)") == "Result<Port, String>")
   }
+
+  /** There is no implicit `Some`: wrapping a value into an `Option` is written, the four coercions do not include it. */
+  test "a value does not wrap itself into an `Option`" {
+    const source = "fn probe() \{\n  const maybe: Int? = 1\n\}"
+    assert(problems(source) == ["Expected `Option<Int64>`, found `Int64`"])
+  }
+
+  test "`Some` is what wraps it, and `None` takes its type from what is expected" {
+    const source = "fn probe() \{\n  const maybe: Int? = Some(1)\n  const empty: Int? = None\n\}"
+    assert(problems(source).isEmpty())
+  }
 }

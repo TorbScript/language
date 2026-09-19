@@ -1,10 +1,12 @@
 use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
 use Statement, Binding, Declaration, Member from "../../syntax/ast"
 use FunctionDeclaration, ExtendDeclaration, Expression from "../../syntax/ast"
 use ModuleId from "../module"
 use SymbolId from "../symbols"
 use Program from "../scope"
-use Checker, TypeScope, Statistics, newChecker from "./context"
+use Clock from "std/time"
+use Checker, TypeScope, Statistics, Timing, newChecker from "./context"
 use TypeId from "./type"
 use declareSites, declareParameters, genericsOf from "./signature"
 use signatureOf, typeSignatureOf, aliasTargetOf from "./signature"
@@ -25,23 +27,69 @@ use checkShape from "./declaration"
  * The `Checker` it gives back *is* the result: it holds the types, the signatures, the type of every type position,
  * the tables of every module (milestone 4.2 on) and the diagnostics.
  */
-public fn checkTypes(program: Program, resolutions: List<Map<Span, SymbolId>>, modules: List<ModuleId>): Checker {
+public fn checkTypes(
+  program: Program,
+  resolutions: List<Map<Span, SymbolId>>,
+  modules: List<ModuleId>,
+  withTimings: Bool = false,
+): Checker {
   var checker = newChecker(program, resolutions)
+  checker.withTimings = withTimings
+  var clock = Stopwatch(withTimings)
+  clock.start()
   // Where every declaration is written, for every module: a signature of one module is built from another's
   for module in program.graph.modules {
     declareSites(checker, module.id, module.file.statements)
   }
+  const sites = clock.taken()
+  checker.timings.add(Timing("declaration sites", sites))
   // Every implementation of the program, then the two rules that need all of them: the orphan rule and overlap
   buildImplementations(checker)
+  const index = clock.taken()
+  checker.timings.add(Timing("the implementation index", index))
   checkCoherence(checker)
+  const coherence = clock.taken()
+  checker.timings.add(Timing("coherence", coherence))
   for module in modules {
     checkImplementations(checker, module)
   }
+  const requirements = clock.taken()
+  checker.timings.add(Timing("trait requirements", requirements))
   for module in modules {
     checkModule(checker, module)
   }
+  const bodies = clock.taken()
+  const shape = checker.shapeMilliseconds
+  checker.timings.add(Timing("bodies", bodies - shape))
+  checker.timings.add(Timing("program shape and constant folding", shape))
   checker
 }
+
+/**
+ * The wall time of one pass. It only reads the clock where the flag asked for it, so the measurement never costs a
+ * native call in an ordinary run.
+ */
+public type Stopwatch {
+  isOn: Bool
+  var last: Int64 = 0
+
+  fn start(var self) {
+    if isOn {
+      last = Clock.milliseconds()
+    }
+  }
+
+  fn taken(var self): Int64 {
+    if !isOn {
+      return 0
+    }
+    const now = Clock.milliseconds()
+    const spent = now - last
+    last = now
+    spent
+  }
+}
+
 
 /**
  * Every declaration of one module, and every expression inside of its bodies. The top level of a file is one body:
@@ -69,7 +117,35 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   checker.closeScope()
   checker.leaveBody(saved)
   // Visibility and the shape of the declarations (4.9), last: folding a top-level `const` reads what its names meant
+  const withTimings = checker.withTimings
+  var clock = Stopwatch(withTimings)
+  clock.start()
   checkShape(checker, module)
+  const spent = clock.taken()
+  checker.shapeMilliseconds = checker.shapeMilliseconds + spent
+  reportUnchecked(checker, module)
+}
+
+/**
+ * `Deferred` meant "a later sub-milestone decides" while the checker was being built. There is no later one: every
+ * construct of the language is checked now, and the only way an expression can still be without a type is a construct a
+ * message was already given about - a parse error, a name that does not resolve, a call that could not be resolved.
+ *
+ * So a module that has an unchecked expression and **no message at all** is a hole in the checker, and it says so
+ * instead of leaving the number in `--statistics` for somebody to notice. One message per module: the first span.
+ */
+fn reportUnchecked(var checker: Checker, module: ModuleId) {
+  if !checker.diagnostics[module.value].isEmpty() {
+    return
+  }
+  const unchecked = checker.uncheckedSpanOf(module)
+  if const Some(at) = unchecked {
+    checker.report(
+      module,
+      Diagnostic.error("The checker did not work out the type of this expression", at)
+        .withNote("This is a bug of the compiler, not of this file. Please report it with the line it points at")
+    )
+  }
 }
 
 /** How much of a module the checker already understands, for `torb check --statistics`. */

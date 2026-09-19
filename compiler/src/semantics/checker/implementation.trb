@@ -210,7 +210,7 @@ public fn headSymbolOf(checker: Checker, annotation: TypeId): SymbolId? {
  */
 public fn resolveTrait(var checker: Checker, annotation: TypeId, capability: SymbolId): Resolved {
   buildImplementations(checker)
-  const key = "{annotation.value}:{capability.value}"
+  const key = (annotation.value, capability.value, false)
   if const Some(known) = checker.traitAnswers.get(key) {
     return known
   }
@@ -237,7 +237,8 @@ public fn resolveBound(var checker: Checker, annotation: TypeId, bound: TypeId):
       return Resolved.Missing
     }
   }
-  const key = "{annotation.value}:b{bound.value}"
+  // The same table answers `resolveTrait`; the flag is what keeps "this trait" and "this applied bound" apart
+  const key = (annotation.value, bound.value, true)
   if const Some(known) = checker.traitAnswers.get(key) {
     return known
   }
@@ -282,7 +283,7 @@ public fn implementsBound(var checker: Checker, annotation: TypeId, bound: TypeI
 public fn witnessFor(var checker: Checker, annotation: TypeId, bound: TypeId): Witness {
   // A witness is a pure function of the two interned ids, and every interpolation, every `==` and every generic call
   // asks for one - so the tree is kept, exactly as the trait answers are
-  const key = "{annotation.value}:{bound.value}"
+  const key = (annotation.value, bound.value)
   if const Some(known) = checker.witnessAnswers.get(key) {
     return known
   }
@@ -802,7 +803,25 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
   match checker.types.form(annotation) {
     .Traits(bounds) => bounds
     .Parameter(parameter) => checker.parameterBounds.get(parameter.value) ?? []
-    .Literals(base, _) => directTraitsOf(checker, base)
+    // A literal type has the traits of its base plus the `Parse` the language generates for it, which replaces the
+    // base's own: `Status.parse(text)` fails with a `LiteralParseError` and not with a `NumberParseError` (gap 32)
+    .Literals(base, _) => {
+      const inherited = directTraitsOf(checker, base)
+      const parse = literalParseBound(checker)
+      var found: List<TypeId> = []
+      for bound in inherited {
+        if parse.isSome() && isParseBound(checker, bound) {
+          continue
+        }
+        found.add(bound)
+      }
+      if const Some(generated) = parse {
+        if !found.contains(generated) {
+          found.add(generated)
+        }
+      }
+      found
+    }
     _ => {
       const head = headSymbolOf(checker, annotation)
       const candidates = checker.implementations.declaredFor(head)
@@ -830,6 +849,27 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
       found
     }
   }
+}
+
+/**
+ * `Parse<LiteralParseError>`: the one member of a literal type that is not already a member of its base. The failure
+ * names the text and the members it could have been, which is what `LiteralParseError` is for (concept, Literal Types).
+ */
+public fn literalParseBound(var checker: Checker): TypeId? {
+  const parse = checker.wellKnown.symbolNamed("Parse")?
+  const failure = checker.wellKnown.symbolNamed("LiteralParseError")?
+  const argument = checker.nominal(failure, [])
+  Some(checker.nominal(parse, [argument]))
+}
+
+fn isParseBound(checker: Checker, bound: TypeId): Bool {
+  const symbol = match checker.types.form(bound) {
+    .Nominal(found, _) => found
+    _ => {
+      return false
+    }
+  }
+  checker.wellKnown.symbolNamed("Parse") == Some(symbol)
 }
 
 /** Whether a type is concrete enough to say "it does not implement that": no parameter, no variable, nothing open. */
@@ -887,7 +927,7 @@ fn deriveFor(var checker: Checker, annotation: TypeId, capability: SymbolId, wan
       return Resolved.Missing
     }
   }
-  const key = "{annotation.value}:{bound.value}"
+  const key = (annotation.value, bound.value)
   if const Some(known) = checker.derivedIndex.get(key) {
     return Resolved.Found(ImplementationId(known), argumentsOfBound(checker, bound))
   }
@@ -1016,7 +1056,7 @@ public fn packageOfSymbol(checker: Checker, symbol: SymbolId): Int {
  */
 public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<Int> {
   buildImplementations(checker)
-  const key = "{checker.module.value}:{annotation.value}"
+  const key = (checker.module.value, annotation.value)
   if const Some(known) = checker.visibleExtensions.get(key) {
     return known
   }

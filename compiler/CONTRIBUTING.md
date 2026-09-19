@@ -9,7 +9,8 @@ tree-walking interpreter. These are the rules of the code base and the traps of 
 cargo build --release                                   # Stage 0. Rebuild after every change of the Rust sources
 cargo run --release -q -- test ../compiler/tests        # The TorbScript tests of the compiler
 cargo run --release -q -- run ../compiler check ..      # The compiler checks the whole repository: "no problems"
-cargo run --release -q -- run ../compiler check --statistics ..
+cargo run --release -q -- run ../compiler check --statistics ..    # Every expression has a type: "0 deferred"
+cargo run --release -q -- run ../compiler check --timings ..       # The wall time of every pass, in the order they ran
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --release                                    # Everything, including the differential tests (minutes)
@@ -50,8 +51,9 @@ Stage 0 has no type checker: a mistake is found when the line runs, so **every f
 1. **A `var` argument is taken before the other arguments are evaluated.** `f(checker, checker.something)`,
    `f(checker, g(checker, x))` and `checker.method(g(checker, x))` read a place that was moved out, and fail far away
    ("Void has no method ...", "a value of type Function has no method ..."). Hoist the inner read or call into a
-   `const` first. `grep -nE "\(checker, [^)]*checker\."` finds most of them. (The exclusivity rule of the language
-   rejects exactly this; stage 0 does not check it.)
+   `const` first. `grep -nE "\(checker, [^)]*checker\."` finds most of them. **This is a limitation of stage 0, not a
+   rule of the language:** exclusivity begins the `var` access of a call after all of its arguments have been evaluated
+   (CONCEPT, `var` Paths), so all three lines above are legal TorbScript. The hoists stay until stage 0 is gone.
 2. The same one level down: `checker.list.add(Item(checker.other.length()))` has to be two statements, and a
    `var self` method must not hand a field of `self` to another `var self` method.
 3. **Copy on write is O(n).** Never hold a second live copy of a big table across a write. Big tables live in one

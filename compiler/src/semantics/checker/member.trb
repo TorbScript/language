@@ -142,8 +142,9 @@ fn findMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bo
     return searchMember(checker, receiver, name, isStatic, at)
   }
   // The answer depends on the module (extensions of a foreign type reach the files that import them), the receiver and
-  // the name, and on nothing else - so it is kept
-  const key = "{checker.module.value}:{receiver.value}:{isStatic}:{name}"
+  // the name, and on nothing else - so it is kept. The key is a tuple and not a string: this is the hottest question of
+  // the pass, and interpolating four values into a text for every member of every expression cost seconds (4.10)
+  const key = (checker.module.value, receiver.value, isStatic, name)
   if checker.memberMissing.containsKey(key) {
     return None
   }
@@ -173,8 +174,13 @@ fn searchMember(var checker: Checker, receiver: TypeId, name: String, isStatic: 
     }
     return None
   }
-  // A literal type has the members of its base plus the generated ones (design 4.1)
+  // A literal type has the generated members - `parse`, `show`, `equals`, `hash`, `encode`, `decode` - plus the members
+  // of its base (design 4.1). The generated ones come first, because `Status.parse` is the one of the literal type and
+  // not the one of `String` or of `Int64`, and its `Self` is the literal type (concept, Literal Types)
   if const .Literals(base, _) = checker.types.form(receiver) {
+    if const Some(found) = traitMember(checker, receiver, name, isStatic) {
+      return Some(found)
+    }
     return lookupMemberAt(checker, base, name, isStatic, at)
   }
   if const .Nominal(symbol, arguments) = checker.types.form(receiver) {

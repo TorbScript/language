@@ -545,8 +545,9 @@ public fn checkSubject(var checker: Checker, value: Expression) {
 }
 
 /**
- * The receiver of a `var self` call. It stays an open access while the arguments are evaluated and while a closure
- * argument runs, which is exactly what makes `root.div { root.attribute "lang", "en" }` a mistake (design 5.2).
+ * The receiver of a `var self` call. The access begins once every argument has been evaluated, and it stays open while a
+ * closure argument runs - which is exactly what makes `root.div { root.attribute "lang", "en" }` a mistake (design 5.2)
+ * while `items.removeAt(items.length() - 1)` is legal.
  */
 public fn openReceiverAccess(
   var checker: Checker,
@@ -554,13 +555,14 @@ public fn openReceiverAccess(
   isVarSelf: Bool,
   member: String,
   isDiscarded: Bool,
+  call: Int = 0,
 ) {
   if !isVarSelf {
     return
   }
   const place = receiverPlaceOf(checker, callee)
   const at = receiverSpanOf(callee)
-  const _ = checkAccess(checker, place, at)
+  const _ = checkNewAccess(checker, place, at, call)
   // The reason a place cannot be written is only built where there is one: the message costs a value and a string, and
   // almost every receiver of a `var self` call is a plain `var` binding
   if isMutable(checker, place) {
@@ -573,7 +575,7 @@ public fn openReceiverAccess(
   if isDiscarded {
     noteChange(checker, place, member)
   }
-  openAccess(checker, place, member, at)
+  openAccess(checker, place, member, at, call)
 }
 
 /** What a `var self` call changes: the base of the member path, or `self` where the member was written bare. */
@@ -606,9 +608,9 @@ fn receiverSpanOf(callee: Expression): Span {
 }
 
 /**
- * One argument that fills a `var` parameter. It is pushed onto the access stack right away, so that the arguments after
- * it and every closure of the same call are checked against it - which is what rejects `swap(a, a)` and
- * `f(checker, checker.something)`.
+ * One argument that fills a `var` parameter. It is held against every other `var` access of the *same* call - which is
+ * what rejects `swap(a, a)` and `move(list[0], list)` - and against the access of any call whose closure argument this
+ * one stands in. `f(checker, checker.count)` is not one of them: the read has ended before the access begins.
  */
 public fn openArgumentAccess(
   var checker: Checker,
@@ -616,10 +618,11 @@ public fn openArgumentAccess(
   parameter: String,
   callee: String,
   isDiscarded: Bool,
+  call: Int = 0,
 ) {
   const place = placeOf(checker, value)
   const at = value.span
-  const _ = checkAccess(checker, place, at)
+  const _ = checkNewAccess(checker, place, at, call)
   if isMutable(checker, place) {
     checker.recordPlace(at, place)
   } else {
@@ -632,15 +635,16 @@ public fn openArgumentAccess(
   if isDiscarded {
     noteChange(checker, place, callee)
   }
-  openAccess(checker, place, callee, at)
+  openAccess(checker, place, callee, at, call)
 }
 
 // --- Exclusivity ----------------------------------------------------------------------------------------------------
 
-public fn openAccess(var checker: Checker, place: Place, changedBy: String, at: Span) {
+public fn openAccess(var checker: Checker, place: Place, changedBy: String, at: Span, call: Int = 0) {
   // A path that leads nowhere cannot be reached a second time either, so it is not worth a place on the stack
   if rootKey(place.root) != -1 {
-    checker.accesses.add(Access(place, changedBy, at))
+    const depth = checker.runningClosures
+    checker.accesses.add(Access(place, changedBy, at, call, depth))
   }
 }
 
@@ -653,17 +657,43 @@ public fn closeAccessesTo(var checker: Checker, depth: Int) {
 }
 
 /**
- * Whether the place may be reached while everything on the stack is running. Every entry of the stack is a `var`
- * access, so any overlap is a conflict whether this access is a read or a change.
+ * Whether a new `var` access may be opened while everything on the stack is running. The `var` access of a call begins
+ * after all of its arguments have been evaluated (the Swift model), so an access of *another* call at the same closure
+ * depth has already ended by then and is no conflict - `items.removeAt(items.length() - 1)` is legal. Two accesses of
+ * the **same** call run at the same time (`swap(a, a)`), and an access opened inside a closure argument runs *during*
+ * the access of the call that closure belongs to (`entry.around { entry.rename("x") }`).
+ */
+public fn checkNewAccess(var checker: Checker, place: Place, at: Span, call: Int): Bool {
+  if checker.accesses.isEmpty() {
+    return true
+  }
+  const depth = checker.runningClosures
+  var index = checker.accesses.length() - 1
+  while index >= 0 {
+    const access = checker.accesses[index]
+    if (access.call == call || access.closureDepth < depth) && overlaps(access.place, place) {
+      reportConflict(checker, place, access, at)
+      return false
+    }
+    index = index - 1
+  }
+  true
+}
+
+/**
+ * Whether the place may be *read* or written here. Only an access that is still running when this line runs counts,
+ * and after the Swift model that is exactly an access of a call whose closure argument this line stands in: everything
+ * an argument reads has ended before the access of its own call begins.
  */
 public fn checkAccess(var checker: Checker, place: Place, at: Span): Bool {
   if checker.accesses.isEmpty() {
     return true
   }
+  const depth = checker.runningClosures
   var index = checker.accesses.length() - 1
   while index >= 0 {
     const access = checker.accesses[index]
-    if overlaps(access.place, place) {
+    if access.closureDepth < depth && overlaps(access.place, place) {
       reportConflict(checker, place, access, at)
       return false
     }
@@ -754,12 +784,13 @@ fn hasIndex(place: Place): Bool {
 // --- What a call reads ----------------------------------------------------------------------------------------------
 
 /**
- * The other half of the exclusivity rule: what the call *reads* while a `var` access is running. The `var` accesses of
- * this call are on the stack by the time this runs, and so are the ones of every call around it, so one walk over the
- * receiver and over every argument that is not itself a `var` argument answers both questions at once.
+ * The other half of the exclusivity rule: what a call *reads* while a `var` access of a call *around* it is running.
+ * After the Swift model that can only be an access whose closure argument this call stands in, and `checkAccess` is what
+ * decides it - everything an ordinary argument reads has ended before the access of its own call begins, so
+ * `f(checker, checker.count)` and `items.removeAt(items.length() - 1)` are legal and nothing here reports them.
  *
- * This is what catches the two traps of stage 0: `f(checker, checker.something)` and `checker.method(g(checker, x))`
- * read a place that the `var` parameter owns for the whole call.
+ * The walk itself is still needed: `edit(entry.title) { print entry.title }` reads the very field the call is changing,
+ * and the read stands in an argument of `print` and nowhere the pass would ask about a place otherwise.
  */
 public fn checkCallReads(
   var checker: Checker,
@@ -769,7 +800,7 @@ public fn checkCallReads(
   parameters: List<ParameterForm>,
   isVarReceiver: Bool,
 ) {
-  if checker.accesses.isEmpty() {
+  if checker.accesses.isEmpty() || checker.runningClosures == 0 {
     return
   }
   // The receiver of a `var self` call *is* the access, so reading it again is not a second one

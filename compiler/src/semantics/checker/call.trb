@@ -92,15 +92,17 @@ public fn checkCall(
   // arguments are evaluated and while a closure argument runs, which is what makes the DSL rule work; every `var`
   // argument joins it as it is checked; and at the end everything the call *reads* is held against all of them
   const openAccesses = checker.accesses.length()
+  checker.callSerial = checker.callSerial + 1
+  const call = checker.callSerial
   const isVarReceiver = target.isVarSelf
   // A call that changes something and produces nothing, and a call whose result is thrown away, are changes and nothing
   // else - the only case the dead-change rule has anything to say about (design 5.3). `cursor.next()` hands its value on
   // and is therefore never one, wherever it stands
   const isDiscarded = expected.isStatement() || isEffectOnly(checker, inner.result)
-  openReceiverAccess(checker, callee, isVarReceiver, target.name, isDiscarded)
+  openReceiverAccess(checker, callee, isVarReceiver, target.name, isDiscarded, call)
   const plan = matchArguments(checker, target, inner, arguments, expression.span)
   const calleeName = target.name
-  checkArguments(checker, inner, arguments, plan, calleeName, isDiscarded)
+  checkArguments(checker, inner, arguments, plan, calleeName, isDiscarded, call)
   checkCallReads(checker, callee, arguments, plan.targets, inner.parameters, isVarReceiver)
   closeAccessesTo(checker, openAccesses)
   const witnesses = checkBounds(checker, instantiation.bounds, target.name, expression.span)
@@ -419,11 +421,15 @@ fn checkArguments(
   plan: ArgumentPlan,
   callee: String,
   isDiscarded: Bool,
+  /** Which call this is, so that two `var` accesses of it are told from an access of the call around it (4.10). */
+  call: Int,
 ) {
   // A closure written straight as an argument cannot outlive the call, which is what lets it hold a reference (gap 14)
   noteArgumentClosures(checker, arguments)
-  checkArgumentPass(checker, form, arguments, plan, false, callee, isDiscarded)
-  checkArgumentPass(checker, form, arguments, plan, true, callee, isDiscarded)
+  // The ordinary arguments first, then the closures: every `var` access of the call is open by the time a closure of it
+  // runs, and every read of an ordinary argument has ended before the accesses begin (the Swift model, 4.10)
+  checkArgumentPass(checker, form, arguments, plan, false, callee, isDiscarded, call)
+  checkArgumentPass(checker, form, arguments, plan, true, callee, isDiscarded, call)
 }
 
 fn checkArgumentPass(
@@ -435,6 +441,7 @@ fn checkArgumentPass(
   /** The name of the callee: what the exclusivity message calls the change, and what quotes a quoted argument. */
   callee: String,
   isDiscarded: Bool,
+  call: Int,
 ) {
   const parameters = form.parameters
   for index in 0..arguments.length() {
@@ -473,7 +480,7 @@ fn checkArgumentPass(
     // A `var` argument is a path into the caller's value, and it owns that path for the rest of the call (4.6)
     if const .Var = parameter.mode {
       const named = parameter.name ?? ""
-      openArgumentAccess(checker, argument.value, named, callee, isDiscarded)
+      openArgumentAccess(checker, argument.value, named, callee, isDiscarded, call)
     }
   }
 }

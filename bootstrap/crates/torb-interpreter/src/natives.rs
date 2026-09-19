@@ -311,6 +311,14 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
                 Err(error) => Value::error(io_error(interpreter, &command, &error)),
             })
         }
+        // The compiler times its own passes with this one (`torb check --timings`). Monotonic, in milliseconds, counted
+        // from the first call: only differences between two readings are meaningful.
+        ("Clock", "milliseconds") => {
+            use std::sync::OnceLock;
+            static START: OnceLock<std::time::Instant> = OnceLock::new();
+            let start = START.get_or_init(std::time::Instant::now);
+            Ok(Value::Int(start.elapsed().as_millis() as i64))
+        }
         ("Environment", "get") => {
             let name = text_of(&arguments.required(0, "name")?, "name")?;
             Ok(match std::env::var(&name) {

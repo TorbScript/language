@@ -24,7 +24,8 @@ fn printUsage() {
   printError ""
   printError "Usage:"
   printError "  torb check [path]...   Check projects, workspaces or single files (default: the current directory)"
-  printError "                         --statistics: how many expressions are typed and how many wait for milestone 4"
+  printError "                         --statistics: how many expressions of every file have a type"
+  printError "                         --timings: the wall time of every pass, in the order they ran"
   printError "  torb build [path]      Compile an entry file to a native binary through C"
   printError "                         --emit-c: write the C and stop, which needs no C compiler"
   printError "                         --output <file>: where the binary goes (the C is written next to it)"
@@ -86,9 +87,12 @@ fn checkSyntax(paths: List<String>): Result<Int, IoError> {
  * Modules, imports, visibility and every name in a type position. Names in expressions are not resolved yet: what
  * they mean depends on types (see docs/ARCHITECTURE.md, milestone 4). Returns the number of problems.
  */
-fn checkProjects(paths: List<String>, withStatistics: Bool): Result<Int, IoError> {
+fn checkProjects(paths: List<String>, withStatistics: Bool, withTimings: Bool): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
-  const checked = check(tree, absolutePaths(paths)?)
+  const checked = check(tree, absolutePaths(paths)?, withTimings)
+  if withTimings {
+    printTimings(checked)
+  }
   if withStatistics {
     printStatistics(checked, tree)
   }
@@ -135,6 +139,19 @@ fn printStatistics(checked: Checked, tree: SourceTree) {
   const total = typed + deferred
   const share = if total == 0 { 100 } else { typed * 100 / total }
   print "{typed} of {total} expressions typed ({share}%), {deferred} deferred"
+}
+
+/**
+ * What every pass of the run cost. The checker runs on a tree-walking interpreter, so "which pass got slower" is the
+ * question that every change to it raises, and the answer should not need a profiler.
+ */
+fn printTimings(checked: Checked) {
+  var total: Int64 = 0
+  for timing in checked.checker.timings {
+    total = total + timing.milliseconds
+    print "{timing.pass}: {timing.milliseconds} ms"
+  }
+  print "all passes: {total} ms"
 }
 
 /**
@@ -238,9 +255,10 @@ fn reportLoweredProblems(checked: Checked, tree: SourceTree, lowering: Lowering)
 match Process.arguments() {
   ["check", ...more] => {
     const withStatistics = more.contains("--statistics")
-    const given = more.filter({ _ != "--statistics" }).toList()
+    const withTimings = more.contains("--timings")
+    const given = more.filter({ _ != "--statistics" && _ != "--timings" }).toList()
     const paths = if given.isEmpty() { ["."] } else { given }
-    if checkProjects(paths, withStatistics)? > 0 {
+    if checkProjects(paths, withStatistics, withTimings)? > 0 {
       Process.exit(1)
     }
   }

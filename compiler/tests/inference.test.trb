@@ -251,9 +251,27 @@ group "What the expected type reaches" {
   test "`?` decides the failure type of a subject that nothing else does" {
     const source = "type ConfigError \{\n  case Missing(key: String)\n\}\n\n"
       + "fn probe(value: Int?): Result<Int, ConfigError> \{\n"
-      + "  const found = value.okOr(.Missing(\"port\"))?\n  Ok(found)\n\}"
+      + "  const found = value.okOr(ConfigError.Missing(\"port\"))?\n  Ok(found)\n\}"
     assert(problems(source).isEmpty())
     const probed = probe(source)
-    assert(probed.typeOf("value.okOr(.Missing(\"port\"))?") == "Int64")
+    assert(probed.typeOf("value.okOr(ConfigError.Missing(\"port\"))?") == "Int64")
+  }
+
+  /**
+   * The short form cannot be used there, though: the failure type is still open when the argument is read, and only the
+   * `?` around the call would decide it (milestone 4.10 - before it, the case was silently left unchecked).
+   */
+  test "a `.Case` whose type only the `?` would decide is an error, not an inference" {
+    const source = "type ConfigError \{\n  case Missing(key: String)\n\}\n\n"
+      + "fn probe(value: Int?): Result<Int, ConfigError> \{\n"
+      + "  const found = value.okOr(.Missing(\"port\"))?\n  Ok(found)\n\}"
+    assert(problems(source) == ["`.Missing` needs its type here: nothing expects one before the `?`"])
+    assert(
+      notes(source)
+        == [
+          "Write it out: `ConfigError.Missing(...)`. The `?` only decides the failure type once the argument has been"
+            + " read",
+        ]
+    )
   }
 }

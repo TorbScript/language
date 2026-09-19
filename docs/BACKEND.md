@@ -427,10 +427,13 @@ for, and:
 - references are second class - they cannot be returned, stored in a field or captured by an escaping closure - so
   nothing can dangle.
 
-Therefore an interior pointer needs no count, no lifetime and no write barrier. `MakeUnique` at the moment the path
-is formed is what makes the pointer safe to write through: after it the storage has count 1 and, by exclusivity, one
-path. The **one** exception is a captured `var` binding, which is a `Box` and not a reference (gap 19): it is counted,
-it may escape, and it is the only sharing of a variable in the language.
+Therefore an interior pointer needs no count, no lifetime and no write barrier. `MakeUnique` is what makes the pointer
+safe to write through: after it the storage has count 1 and, by exclusivity, one path. It happens **after the arguments
+of the call have been evaluated**, which is where the `var` access begins (TYPECHECKER 5.2, after the model of Swift) -
+not when the path is formed. That is what makes `items.removeAt(items.length() - 1)` work: the read of `items` for the
+argument finishes first, and only then is the storage made unique. The **one** exception to the reference rules is a
+captured `var` binding, which is a `Box` and not a reference (gap 19): it is counted, it may escape, and it is the only
+sharing of a variable in the language.
 
 `TakeOut`/`PutBack` is the second form, for containers whose storage is not contiguous (the hash map, the tries): read
 the value into a slot, run the access against a `Reference` to that slot, write it back. Literally the concept's "take

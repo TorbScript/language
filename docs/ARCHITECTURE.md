@@ -210,9 +210,11 @@ regardless.)
    milestone 5 has to build, the captures it hands on and their `Encode` witness, and `examples/query-provider`
    translates `filter { _.age >= minAge }` to SQL. **4.9 is done** too: `private` and `private(var)`, what a `public`
    declaration promises, which files may contain top-level code, top-level constants that are evaluated at compile time,
-   and the rules of `native`, `shared type`, `isSame`, `extend` and `foreign`. What is left is the generated members of a
-   literal type (4.10),
-   recorded as "not checked yet" and counted by `torb check --statistics`.
+   and the rules of `native`, `shared type`, `isSame`, `extend` and `foreign`. **Milestone 4 is done**: 4.10 closed the
+   last unchecked expressions (the generated members of a literal type, a `.Case` whose type only a following `?` would
+   decide, the callee of `into`), made exclusivity follow the model of Swift, and added `torb check --timings` - the
+   whole repository checks with "no problems" and **every** expression of it has a type, which `torb check --statistics`
+   now reports as 0 deferred.
    `std/` and `compiler/` are at 100%. The first thing it found by checking the compiler itself was that
    `compiler/src/ir/mangle.trb` mixed the `UInt8` of a byte with `Int64` arithmetic; checking the generic code found
    `Set.new()`, which the standard library never had.

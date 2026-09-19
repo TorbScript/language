@@ -718,9 +718,20 @@ parameter is allowed: the callee is its only owner, "copy in, copy out" is exact
 
 A stack of active accesses in the `Checker`. Opening a `var` access to place `P` pushes `P`; checking any place `Q`
 against the stack fails when `Q` and some `P` are equal, one is a prefix of the other, or both pass through an
-`Index`/`Range` of the same base (two indices cannot be compared statically). The access stays open while the other
-arguments of the same call are evaluated **and** while a closure argument runs, which is exactly what makes the DSL
-rule work:
+`Index`/`Range` of the same base (two indices cannot be compared statically).
+
+**When the access begins is the model of Swift** (decided in 4.10, replacing the stricter rule of 4.6): the `var` access
+of a call starts once **every argument has been evaluated**. So everything the arguments read has ended before it, and
+`items.removeAt(items.length() - 1)` and `f(checker, checker.count)` are ordinary code. Three conflicts are left:
+
+1. two `var` accesses of the **same** call (`swap(a, a)`, `move(list[0], list)`, `a.merge(a)` with two `var`s) - they
+   really do run at the same time,
+2. a **closure argument** of the call reaching the place that call is changing: the closure runs *inside* the access,
+   which is exactly what makes the DSL rule work,
+3. a write from inside such a closure, for the same reason.
+
+An `Access` therefore carries a per-call serial and the closure depth it was opened at, and the two questions are two
+functions: `checkNewAccess` (a new `var` access) and `checkAccess` (a read or a write). The DSL rule:
 
 ```trb
 html { root =>
@@ -734,7 +745,8 @@ html { root =>
 `swap(a, a)` and `swap(items[i], items[j])` are errors (the second with the note "use `items.swapAt(i, j)`").
 Different fields are fine (`project.build { output "{project.name}" }`), because `Field` steps with different symbols
 never conflict. A closure that captures a `var` binding counts as an access to that binding for every call that may
-run it. The check is conservative and static; correct programs it rejects go into the Open Questions of CONCEPT.md.
+run it. A quotation is not a closure here: it is never run at the call site. The check is conservative and static;
+correct programs it rejects go into the Open Questions of CONCEPT.md.
 
 The subject of a `for` loop is evaluated once into a temporary, so `for x in xs { xs.add(y) }` is allowed - the loop
 iterates over a copy, as the concept promises.
@@ -834,6 +846,8 @@ The catalogue (the ~40 that matter):
 | Unknown name | ``Cannot find `count` here`` - _`count` is a field of `Report`. Only the innermost receiver is implicit: name the parameter (`report { r => r.count }`)_ |
 | Bare case | ``` `Circle` alone is a type, a function or a variable. A case is written `.Circle` or `Shape.Circle` ``` |
 | `.Case` without an expectation | ``` `.Circle` needs a type. Nothing here says which one: write `Shape.Circle(1.0)` ``` |
+| `.Case` before a `?` | ``` `.Missing` needs its type here: nothing expects one before the `?` ``` - _Write it out: `ConfigError.Missing(...)`. The `?` only decides the failure type once the argument has been read_ |
+| An expression the checker could not type | ``` The checker did not work out the type of this expression ``` - _This is a bug of the compiler, not of this file. Please report it with the line it points at_ |
 | Unknown member | ``` `Point` has no member `aera`. Did you mean `area`? ``` |
 | Ambiguous extension | ``` `shout` comes from `./text-extensions` and from `./html-extensions`. A namespace import says which one: `use * as text from "./text-extensions"` ``` |
 | Extension not imported | ``` `shout` is declared in `./text-extensions`, which this file does not import ``` |
@@ -845,7 +859,7 @@ The catalogue (the ~40 that matter):
 | Verb on a const path | ``` `add` needs a `var`. Did you mean `added`? ``` |
 | Non-`var` field / `private(var)` / `private` | ``` `id` never changes after construction ``` / ``` `balance` can only be written by `Account` ``` / ``` `history` is private to `Account` ``` |
 | `var` path through a temporary | ``` `iterator()` is a temporary, and `next` changes its receiver: bind it first (`var cursor = iterator()`) ``` |
-| Exclusivity | ``` `root` is being changed by `div` right now ``` / ``` `items[i]` and `items[j]` cannot be told apart. Use `items.swapAt(i, j)` ``` |
+| Exclusivity | ``` `root` is being changed by `div` right now ``` / ``` `items[i]` and `items[j]` cannot be told apart. Use `items.swapAt(i, j)` ``` - _While a `var` access runs, the same path cannot be reached a second time_ |
 | Dead change | ``` This change has no effect: `first` is never read again. Did you mean `counters[0].increment()`? ``` |
 | Discarded value | ``` The result of `added` is not used. Did you mean `add`? Discard it with `const _ = ...` ``` |
 | Not exhaustive | ``` `match` does not handle `.Rectangle(_, _)` ``` |
@@ -998,7 +1012,7 @@ files that have to check cleanly afterwards.
 | **4.7** | **Done.** Receivers and the DSL. Receiver closures, the innermost-receiver rule, command calls, property commands (`.Assign`, `.AssignClosure`, `.Configure`), receiver scripts (`project.trb` against the `Project` of the new `std/project`, and every file a `Sandbox.load<Value>` names with a literal path). | `closure.trb`, `command.trb`, `receiver.trb`, `scripts.trb`, `name.trb` | 4.4 |
 | **4.8** | **Done.** `Expression<Value>` and `lazy`. What is quotable, building the tree after resolution, captures and their `Encode` bound, `Quotation` in the tables, `lazy` parameters. **Gate: `compiler/tests/*.test.trb` check cleanly** (they are full of `assert`): 1606 quotation sites, every one with a recorded `Quotation`. | `quote.trb`, `call.trb` | 4.4, 4.7 |
 | **4.9** | **Done.** Visibility and program shape. `private`/`private(var)`/`public`, top-level code, compile-time constants with folding, field and parameter defaults, `native`, `shared type`/`shared trait`, `isSame`, `foreign`, entry files vs. modules. | `declaration.trb`, `constant.trb` | 4.2 |
-| **4.10** | The conformance suite. `torb check std`, `torb check examples`, `torb check compiler` clean; the spec gaps of section 9 resolved in the sources; diagnostics polished against real output; performance (the whole workspace well under a minute on stage 0; a timing test in the suite). | all | 4.1 - 4.9 |
+| **4.10** | **Done.** The conformance suite. `torb check std`, `torb check examples`, `torb check compiler` clean, and **every expression of the repository has a type** (`Deferred` is unreachable from valid code); the exclusivity rule after the model of Swift; the generated members of a literal type; `torb check --timings`. | all | 4.1 - 4.9 |
 
 Parallelism:
 
@@ -1599,6 +1613,74 @@ list. Everything else is as written.
   - **The types a `foreign` signature may name** (`Pointer<Value>`, `CString`, the sized numbers, a `foreign type`
     struct): none of those exist in the AST or in `std/` yet. What is checked is the shape of a `foreign` block - only
     function declarations, without bodies, with result types.
+
+### What 4.10 does differently from sections 1 to 7
+
+- **`Deferred` is checked for, not counted down.** The number in `--statistics` is 0 for the whole repository, and the
+  way it stays 0 is one choke point instead of an audit of 87 `defer*` sites: `checkModule` ends with
+  `reportUnchecked`, which reports "The checker did not work out the type of this expression" where a module has an
+  expression without a type **and no message at all**. Every remaining `defer*` path is therefore what `Invalid` is -
+  "a message was already given about this" (a parse error, a name that does not resolve, a call that could not be
+  resolved) - and a hole in the checker names itself at the span instead of hiding in a counter. It found one right
+  away: the test harness's `Map` trait had no `isEmpty`, and a test had been asserting "no problems" about a call that
+  was silently not checked.
+- **Exclusivity follows the model of Swift, which replaces 4.6's stricter rule.** The `var` access of a call begins
+  once **every argument has been evaluated**, so what the arguments read has ended before it starts. Three conflicts
+  are left, and `Access` carries what it takes to tell them apart: `call` (a serial per call) and `closureDepth` (how
+  many closure bodies were being checked). `checkNewAccess` conflicts with an access of the *same* call always
+  (`swap(a, a)`, `move(list[0], list)`, `a.merge(a)` where both are `var`), and with an access from further out only
+  when the new one stands inside a closure of it; `checkAccess` - which every read and every write goes through - only
+  ever conflicts with an access whose closure argument this line stands in. A quotation does not count as a closure
+  here, because it is not run at the call site (`runningClosures` is bumped by `checkClosure` alone). Six of the
+  fourteen tests of `exclusivity.test.trb` turned from "this is an error" into "this is ordinary code", which is the
+  whole point: `items.removeAt(items.length() - 1)` was the most common line the stricter rule rejected.
+- **The 39+ hoists in the sources stay, and CONTRIBUTING trap 1 is reworded.** `f(checker, checker.something)` is
+  legal in the *language* now and still breaks *stage 0*, which takes a `var` argument before the other arguments are
+  evaluated. So the trap is a limitation of the interpreter, not a rule of TorbScript, and it says so.
+- **A `.Case` whose type only a following `?` would decide is an error.** `value.okOr(.Missing("port"))?` left seven
+  expressions of `examples/tour/src/06-errors.trb` unchecked, because the failure type of the subject is still a bare
+  variable when the argument is read and only `matchedFailure` (4.4) settles it afterwards. A type that *is* a variable
+  names no type at all, so the short form gets "`.Missing` needs its type here: nothing expects one before the `?`"
+  and the tour writes `ConfigError.Missing("port")`. A type that merely *contains* a variable is a different matter -
+  in `Result<Int, Failure>` the case's owner is `Result` whatever the failure turns out to be - and stays silent.
+- **A literal type's `parse` is generated, and its members are reportable.** `directTraitsOf` gives a `.Literals` form
+  the traits of its base **minus** the base's `Parse` **plus** `Parse<LiteralParseError>`, which is what makes
+  `Status.parse(text)` the literal type's own (`0 | 1 | 3` must not inherit `Int64`'s `Parse<NumberParseError>` - both
+  take a `String` and the overload could not be resolved). `searchMember` asks the traits before it falls back to the
+  base, so the `Self` of `parse` is the literal type. `canDerive` no longer says yes to every trait for a literal type
+  but to exactly the seven the concept names (`Parse`, `Show`, `Equals`, `Hash`, `Encode`, `Decode`, `Into<base>`) -
+  `Compare` is not among them, because an order over three strings is a decision exactly as it is for a `type`. And
+  `isFullyKnown` now holds for a literal type, so a member it does not have is reported like any other.
+- **`value.into` is typed, not deferred.** The callee of the one call the receiver alone cannot answer is
+  `(self: Source) => Target`, which is a fact about it and not a construct a later pass looks at.
+- **The resolution of an inner call survives a dot.** `resolveTarget`'s fallback branch read `Resolution.Deferred` for
+  anything that is not a name or a member path, and `memberTarget` then wrote that over what the inner call had already
+  recorded - so `text.trim().replace(a, b)` lost the `Callable` of `trim()`. The branch reads the recorded resolution
+  back instead (`resolutionHere`). **The back end's workaround for this can go.**
+- **`torb check --timings` prints the wall time of every pass**, and it stays: the checker runs on a tree-walking
+  interpreter, so "which pass got slower" comes up with every change and should not need a profiler. `Stopwatch` only
+  reads the clock where the flag asked for it, and the clock is one new native (`Clock.milliseconds()`, in `std/time`
+  and in stage 0) because an `Instant` and a `Duration` per measurement would be two allocations for a number.
+  What it shows is that the premise was wrong: **lexing and parsing is 60% of the run** (22 s of 37 s over 191 files),
+  the shape pass of 4.9 costs 0.15 s, and the checker's own share is the 13 s of "bodies". The one accidental cost
+  inside it that was found and removed: the member-lookup cache built its key by interpolating four values into a
+  string, for every member of every expression of the program - the key is a tuple now, and so are the keys of the
+  trait answers, the witnesses, the derivations, the derived index, the visible extensions and `byTraitAndHead`.
+- **What is left off, and why:**
+  - **The messages about a missing `Equals`/`Compare`/`Hash`/`Show`** (4.3's note) need `Equals` and `Hash` for
+    `List`, `Set` and `Map` in the prelude first: without them the message would be about the standard library. The
+    prelude change is small, the number of new diagnostics it would turn on across `std/` and `examples/` is not, so
+    it wants a slice of its own.
+  - **An unmet `where` clause on a member**, **object safety for an operator on two trait-typed values**, **an
+    implicit parameter name that shadows a visible name** and the **exhaustiveness leftovers** (a closure parameter
+    re-checked after the inference context closes, a qualified case path against the subject, an impossible pattern in
+    `if const`, `Int64`/`UInt64`/`Char` ranges) are all still open, for the same reason: each is a message with its own
+    tests and none of them is what kept an expression from having a type.
+  - **`EntityId (Int64)` in a message** needs the alias to survive out of the type, which is a side table keyed by the
+    span of the reference. It is cheap and correct, and it is not in.
+  - **A literal above the `Int64` maximum** (`UInt64.maximum` as `18446744073709551615`) needs the checker to hold a
+    value that does not fit its own `Int`. `LiteralValue.Integer` is an `Int64` and the IR reads it, so the change
+    crosses into milestone 5's contract; `UInt64.maximum` stays `UInt64.minimum.bitwiseNot()`, which is exact.
 
 ---
 
