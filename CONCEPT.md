@@ -498,8 +498,10 @@ fn sum(a: Int, b: Int): Int {
 
 - `fn` declarations are hoisted within their scope, so (mutual) recursion just works.
 - Type arguments can be given partially, from the left; the rest is inferred (`into<Set<Employee>>()`).
-- Parameter types are mandatory on `fn`. The return type can be inferred, but is mandatory for `public` functions
-  and trait methods.
+- Parameter types are mandatory on `fn`. The return type can be inferred - except for `public` functions and trait
+  methods: **they never infer it.** Without a return type they return `Void` (`fn add(var self, value: Item)`), and a
+  body that produces a value is an error at that value. Whoever calls a public function must not have to read its
+  body to know what it returns.
 - The last expression of the body is the return value. `return` exits early.
 
 ### Arguments
