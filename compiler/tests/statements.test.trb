@@ -203,6 +203,15 @@ group "Returning" {
   test "a `return` without a value in a function that has a result" {
     assert(problems("fn probe(): Int \{\n  return\n\}") == ["This function has to return a `Int64`"])
   }
+
+  test "a bare `return` makes an inferred result `Void`, even out of a loop that never ends" {
+    // The block of `while true` without a `break` is `Never`, and the `return` inside it does leave the function -
+    // so what the function produces is nothing, not "it never returns"
+    const body = "fn recover(var flag: Bool) \{\n  while true \{\n    if flag \{\n      return\n    \}\n    flag = true\n  \}\n\}\n\n"
+    assert(problems(body + "fn caller(var flag: Bool): Int \{\n  const nothing: Int = recover(flag)\n  1\n\}") == ["Expected `Int64`, found `Void`"])
+    // As a statement it is fine, which is what an inferred `Never` allowed as well
+    assert(problems(body + "fn caller(var flag: Bool): Int \{\n  recover(flag)\n  1\n\}").isEmpty())
+  }
 }
 
 group "Discarded values" {

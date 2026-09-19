@@ -773,7 +773,9 @@ an expression statement, `Void` otherwise. It diverges when its last statement d
 (`return`, `panic`, `break`, `continue`, an `if` whose branches all diverge, a `match` whose arms all diverge). A
 function whose return type is not `Void` and whose body neither produces that type nor diverges gets "This function
 has to return a `Float`", pointing at the closing brace of the body. `while` and `for` are statements and have no
-value; `if` and `match` are expressions, and an `if` without an `else` has type `Void`.
+value; `if` and `match` are expressions, and an `if` without an `else` has type `Void`. Where the result is inferred, a
+`return` **without** a value contributes `Void` to it (gap 44), so a body that never ends but leaves through a bare
+`return` produces nothing instead of `Never`.
 
 ### 5.5 Patterns, exhaustiveness and redundancy
 
@@ -2113,3 +2115,19 @@ _Decision:_ accepted. The supertrait half was already implemented (`boundArgumen
 "`Result<Void, Error>` does not implement `Show`" and is fixed in `resolveUncached` and `directTraitsOf`. Object
 safety is untouched: what a trait value may *call* is decided per call (gap 7), and an operator is deliberately not
 checked there - witnessing a bound is not a call.
+
+**44. What a bare `return` contributes to an inferred result.**
+Section 5.4 says a body without a declared result *is* the result, and 5.5 that `while true` without a `break` never
+ends - so a function whose whole body is such a loop infers `Never`. Nothing said what a `return` **without a value**
+inside that loop contributes: `returnTypes` only ever collected the types of valued returns, so it stayed empty and
+the `Never` of the loop won. `Parser.recoverToLineEnd` in the compiler is exactly that function, and the back end had
+to refuse it ("a `return` in a function whose result was inferred as `Never`") because the body contradicted its own
+signature.
+_Proposal:_ a bare `return` contributes `Void`, like the end of a body that produces nothing. _Reason:_ a `return`
+without a value says "this function is done and produces nothing", and that is `Void` whatever the block around it
+does; `Never` is for what never gets there at all.
+
+_Decision:_ accepted. Such a function infers `Void`, the back end finding stays where it is as a guard and is now
+unreachable for this shape. What a valued `return` that disagrees with the last expression of the body does is
+unchanged, and still says nothing: `inferredResult` unifies the two and drops the answer where they do not fit, for a
+bare `return` exactly as for a valued one. That is its own gap, not this one.

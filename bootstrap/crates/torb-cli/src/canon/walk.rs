@@ -152,6 +152,7 @@ impl<'tree> Walk<'tree> {
             ExpressionKind::Integer(_)
             | ExpressionKind::Float(_)
             | ExpressionKind::Bool(_)
+            | ExpressionKind::VoidLiteral
             | ExpressionKind::Char(_)
             | ExpressionKind::Name(_)
             | ExpressionKind::ImplicitMember(_)

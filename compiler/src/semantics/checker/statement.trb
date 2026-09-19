@@ -269,7 +269,14 @@ fn checkReturn(var checker: Checker, value: Expression?, at: Span) {
   const expression = match value {
     Some(found) => found
     .None => {
-      if !checker.isResultInferred && checker.resultType != checker.voidType {
+      // A bare `return` says the function produces nothing, so an inferred result hears `Void` from it:
+      // `while true { ... return ... }` would otherwise infer `Never` from the loop that never ends
+      if checker.isResultInferred {
+        const nothing = checker.voidType
+        checker.returnTypes.add(nothing)
+        return
+      }
+      if checker.resultType != checker.voidType {
         if !checker.absorbs(checker.resultType) {
           const wanted = checker.describe(checker.resultType)
           checker.reportHere(Diagnostic.error("This function has to return a `{wanted}`", at))
