@@ -4,21 +4,50 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use torb_syntax::ast::{self, DeclarationKind, MemberKind, StatementKind, TypeKind, UseItems, UseSource};
 use torb_syntax::{LineIndex, Span};
 
-use crate::value::{Environment, Function, Value};
+use crate::value::{mark, Environment, Function, Value};
 
 const PRELUDE: &str = include_str!("prelude.trb");
+
+/// FNV-1a over the name. Everything the interpreter looks up while it runs is keyed by a short name, and the hasher
+/// of the standard library is built to resist collisions an attacker picks, which costs several times as much.
+pub struct NameHasher(u64);
+
+impl Default for NameHasher {
+    fn default() -> NameHasher {
+        NameHasher(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl Hasher for NameHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut hash = self.0;
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+        self.0 = hash;
+    }
+}
+
+/// A table keyed by a name of the program.
+pub type Names<Value> = HashMap<&'static str, Value, BuildHasherDefault<NameHasher>>;
 
 pub struct Module {
     pub path: PathBuf,
     pub source: &'static str,
     pub file: &'static ast::File,
-    pub scope: RefCell<HashMap<&'static str, Item>>,
+    pub scope: RefCell<Names<Item>>,
     /// Top-level code of an entry file runs here, and the functions of the file see it.
     pub top_level: RefCell<Option<Rc<Environment>>>,
 }
@@ -62,6 +91,8 @@ pub struct Constant {
 
 pub struct FieldInfo {
     pub name: &'static str,
+    /// `mark(name)`: every member access looks for a name among the fields of a type
+    mark: u32,
     pub is_var: bool,
     pub annotation: &'static ast::TypeReference,
     pub default: Option<&'static ast::Expression>,
@@ -69,6 +100,7 @@ pub struct FieldInfo {
 
 pub struct CaseInfo {
     pub name: &'static str,
+    mark: u32,
     pub fields: Vec<FieldInfo>,
 }
 
@@ -78,14 +110,28 @@ pub struct TypeInfo {
     pub is_shared: bool,
     pub fields: Vec<FieldInfo>,
     pub cases: Vec<CaseInfo>,
-    pub methods: RefCell<HashMap<&'static str, Rc<FunctionInfo>>>,
-    pub statics: RefCell<HashMap<&'static str, Item>>,
+    pub methods: RefCell<Names<Rc<FunctionInfo>>>,
+    pub statics: RefCell<Names<Item>>,
     /// `from` exists once per source type, so it is kept apart and chosen by the type of the argument
     pub conversions: RefCell<Vec<Rc<FunctionInfo>>>,
     pub traits: RefCell<Vec<&'static ast::TypeReference>>,
+    /// One bit per name the type has, from any of its fields, cases, methods and statics. Most questions about a name
+    /// are "is this a member of the receiver, or of `Self`?", and for a top-level function the answer is no - this
+    /// answers that without looking at the fields or the methods at all.
+    names: Cell<u64>,
 }
 
 impl TypeInfo {
+    /// Whether the type can have a member with this name. `false` is certain, `true` has to be checked.
+    pub fn may_have(&self, name: &str) -> bool {
+        self.names.get() & crate::value::bit_of(mark(name)) != 0
+    }
+
+    /// Records that the type has a member with this name.
+    fn remember(&self, name: &str) {
+        self.names.set(self.names.get() | crate::value::bit_of(mark(name)));
+    }
+
     pub fn fields_of(&self, case: Option<usize>) -> &[FieldInfo] {
         match case {
             Some(case) => &self.cases[case].fields,
@@ -93,8 +139,18 @@ impl TypeInfo {
         }
     }
 
+    /// Where the field with this name is, in the type itself or in one of its cases.
+    pub fn field_position(&self, case: Option<usize>, name: &str) -> Option<usize> {
+        let fields = self.fields_of(case);
+        crate::profile::add("scan.fields", fields.len());
+        let mark = mark(name);
+        fields.iter().position(|field| field.mark == mark && field.name == name)
+    }
+
     pub fn case_index(&self, name: &str) -> Option<usize> {
-        self.cases.iter().position(|case| case.name == name)
+        crate::profile::add("scan.cases", self.cases.len());
+        let mark = mark(name);
+        self.cases.iter().position(|case| case.mark == mark && case.name == name)
     }
 }
 
@@ -104,7 +160,7 @@ pub struct TraitInfo {
     pub supertraits: &'static [ast::TypeReference],
     /// Default methods. They are copied into every type that implements the trait.
     pub methods: RefCell<Vec<&'static ast::FunctionDeclaration>>,
-    pub statics: RefCell<HashMap<&'static str, Rc<FunctionInfo>>>,
+    pub statics: RefCell<Names<Rc<FunctionInfo>>>,
 }
 
 pub struct FunctionInfo {
@@ -114,20 +170,44 @@ pub struct FunctionInfo {
     pub owner: Option<Rc<TypeInfo>>,
     /// The scope a local `fn` was declared in. Functions of a module see the top-level scope of their file.
     pub environment: Option<Rc<Environment>>,
+    /// Answered for every call, several times: worth reading off the declaration once
+    has_self: bool,
+    is_var_self: bool,
+    parameters: &'static [ast::Parameter],
 }
 
 impl FunctionInfo {
+    pub fn new(
+        name: &'static str,
+        declaration: &'static ast::FunctionDeclaration,
+        module: Rc<Module>,
+        owner: Option<Rc<TypeInfo>>,
+        environment: Option<Rc<Environment>>,
+    ) -> FunctionInfo {
+        let has_self = has_self(declaration);
+        FunctionInfo {
+            name,
+            declaration,
+            module,
+            owner,
+            environment,
+            has_self,
+            is_var_self: has_self && declaration.parameters[0].is_var,
+            parameters: &declaration.parameters[usize::from(has_self)..],
+        }
+    }
+
     pub fn has_self(&self) -> bool {
-        has_self(self.declaration)
+        self.has_self
     }
 
     pub fn is_var_self(&self) -> bool {
-        self.has_self() && self.declaration.parameters[0].is_var
+        self.is_var_self
     }
 
     /// The parameters without `self`.
     pub fn parameters(&self) -> &'static [ast::Parameter] {
-        &self.declaration.parameters[usize::from(self.has_self())..]
+        self.parameters
     }
 }
 
@@ -139,7 +219,7 @@ pub struct Program {
     pub entry: Rc<Module>,
     pub prelude: Rc<Module>,
     /// Methods that `extend` adds to built-in types, by the name of the type
-    pub extensions: HashMap<&'static str, HashMap<&'static str, Rc<FunctionInfo>>>,
+    pub extensions: Names<Names<Rc<FunctionInfo>>>,
 }
 
 /// The canonical name of a built-in type. All integer types are one type for the bootstrap interpreter, and the
@@ -187,7 +267,7 @@ pub fn load(entry: &Path) -> Result<Program, Vec<String>> {
     }
     loader.resolve_imports();
     loader.resolve_aliases();
-    let mut extensions = HashMap::new();
+    let mut extensions = Extensions::default();
     for module in &loader.order {
         loader.problems.extend(apply_extends(module, &prelude, &mut extensions));
     }
@@ -244,7 +324,7 @@ impl Loader {
         }
         let file: &'static ast::File = Box::leak(Box::new(parsed.file));
         let module =
-            Rc::new(Module { path: path.clone(), source, file, scope: RefCell::new(HashMap::new()), top_level: RefCell::new(None) });
+            Rc::new(Module { path: path.clone(), source, file, scope: RefCell::new(Names::default()), top_level: RefCell::new(None) });
         *module.top_level.borrow_mut() = Some(Environment::root(module.clone()));
         self.modules.insert(path, module.clone());
         self.order.push(module.clone());
@@ -394,13 +474,7 @@ fn declare_one(module: &Rc<Module>, declaration: &'static ast::Declaration) {
     let mut scope = module.scope.borrow_mut();
     match &declaration.kind {
         DeclarationKind::Function(function) => {
-            let info = Rc::new(FunctionInfo {
-                name: &function.name.text,
-                declaration: function,
-                module: module.clone(),
-                owner: None,
-                environment: None,
-            });
+            let info = Rc::new(FunctionInfo::new(&function.name.text, function, module.clone(), None, None));
             scope.insert(&function.name.text, Item::Value(Value::Function(Rc::new(Function::Declared { info, receiver: None }))));
         }
         DeclarationKind::Type(declaration_of_type) => {
@@ -413,7 +487,7 @@ fn declare_one(module: &Rc<Module>, declaration: &'static ast::Declaration) {
                 module: module.clone(),
                 supertraits: &declaration_of_trait.supertraits,
                 methods: RefCell::new(Vec::new()),
-                statics: RefCell::new(HashMap::new()),
+                statics: RefCell::new(Names::default()),
             });
             for member in &declaration_of_trait.members {
                 let MemberKind::Function(function) = &member.kind else { continue };
@@ -423,13 +497,7 @@ fn declare_one(module: &Rc<Module>, declaration: &'static ast::Declaration) {
                 if has_self(function) {
                     info.methods.borrow_mut().push(function);
                 } else {
-                    let function = Rc::new(FunctionInfo {
-                        name: &function.name.text,
-                        declaration: function,
-                        module: module.clone(),
-                        owner: None,
-                        environment: None,
-                    });
+                    let function = Rc::new(FunctionInfo::new(&function.name.text, function, module.clone(), None, None));
                     info.statics.borrow_mut().insert(function.name, function);
                 }
             }
@@ -459,6 +527,7 @@ fn declare_one(module: &Rc<Module>, declaration: &'static ast::Declaration) {
 fn field_info(field: &'static ast::Field, is_private_var: bool) -> FieldInfo {
     FieldInfo {
         name: &field.name.text,
+        mark: mark(&field.name.text),
         is_var: field.is_var || is_private_var,
         annotation: &field.annotation,
         default: field.default.as_ref(),
@@ -471,9 +540,11 @@ fn declare_type(module: &Rc<Module>, declaration: &'static ast::TypeDeclaration,
     for member in &declaration.members {
         match &member.kind {
             MemberKind::Field(field) => fields.push(field_info(field, member.modifiers.visibility == ast::Visibility::PrivateVar)),
-            MemberKind::Case(case) => {
-                cases.push(CaseInfo { name: &case.name.text, fields: case.fields.iter().map(|field| field_info(field, false)).collect() })
-            }
+            MemberKind::Case(case) => cases.push(CaseInfo {
+                name: &case.name.text,
+                mark: mark(&case.name.text),
+                fields: case.fields.iter().map(|field| field_info(field, false)).collect(),
+            }),
             MemberKind::Constant(_) | MemberKind::Function(_) => {}
         }
     }
@@ -483,11 +554,18 @@ fn declare_type(module: &Rc<Module>, declaration: &'static ast::TypeDeclaration,
         is_shared,
         fields,
         cases,
-        methods: RefCell::new(HashMap::new()),
-        statics: RefCell::new(HashMap::new()),
+        methods: RefCell::new(Names::default()),
+        statics: RefCell::new(Names::default()),
         conversions: RefCell::new(Vec::new()),
         traits: RefCell::new(declaration.traits.iter().collect()),
+        names: Cell::new(0),
     });
+    for field in &info.fields {
+        info.remember(field.name);
+    }
+    for case in &info.cases {
+        info.remember(case.name);
+    }
     add_members(&info, module, &declaration.members);
     info
 }
@@ -498,13 +576,8 @@ fn add_members(info: &Rc<TypeInfo>, module: &Rc<Module>, members: &'static [ast:
         match &member.kind {
             MemberKind::Function(function) => {
                 let name: &'static str = &function.name.text;
-                let function = Rc::new(FunctionInfo {
-                    name,
-                    declaration: function,
-                    module: module.clone(),
-                    owner: Some(info.clone()),
-                    environment: None,
-                });
+                let function = Rc::new(FunctionInfo::new(name, function, module.clone(), Some(info.clone()), None));
+                info.remember(name);
                 if function.has_self() {
                     info.methods.borrow_mut().insert(name, function);
                 } else if name == "from" {
@@ -526,6 +599,7 @@ fn add_members(info: &Rc<TypeInfo>, module: &Rc<Module>, members: &'static [ast:
                         value: RefCell::new(None),
                         is_evaluating: Cell::new(false),
                     };
+                    info.remember(name);
                     info.statics.borrow_mut().insert(name, Item::Constant(Rc::new(constant)));
                 }
             }
@@ -562,7 +636,7 @@ pub fn intern(name: &str) -> &'static str {
     })
 }
 
-type Extensions = HashMap<&'static str, HashMap<&'static str, Rc<FunctionInfo>>>;
+type Extensions = Names<Names<Rc<FunctionInfo>>>;
 
 fn apply_extends(module: &Rc<Module>, prelude: &Rc<Module>, extensions: &mut Extensions) -> Vec<String> {
     let mut problems = Vec::new();
@@ -601,8 +675,7 @@ fn apply_extends(module: &Rc<Module>, prelude: &Rc<Module>, extensions: &mut Ext
                     let MemberKind::Function(function) = &member.kind else { continue };
                     if has_self(function) && function.body.is_some() {
                         let name: &'static str = &function.name.text;
-                        let function =
-                            Rc::new(FunctionInfo { name, declaration: function, module: module.clone(), owner: None, environment: None });
+                        let function = Rc::new(FunctionInfo::new(name, function, module.clone(), None, None));
                         extensions.entry(builtin).or_default().insert(name, function);
                     }
                 }
@@ -648,13 +721,8 @@ fn apply_traits(module: &Rc<Module>, prelude: &Rc<Module>) -> Vec<String> {
                         info.name
                     ));
                 }
-                let function = FunctionInfo {
-                    name: method_name,
-                    declaration: method,
-                    module: implemented.module.clone(),
-                    owner: Some(info.clone()),
-                    environment: None,
-                };
+                let function = FunctionInfo::new(method_name, method, implemented.module.clone(), Some(info.clone()), None);
+                info.remember(method_name);
                 info.methods.borrow_mut().insert(method_name, Rc::new(function));
             }
             pending.extend(implemented.supertraits.iter().map(|supertrait| (supertrait, implemented.module.clone())));

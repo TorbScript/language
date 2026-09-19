@@ -1,7 +1,9 @@
 //! The `torb` command line tool.
 
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 use torb_syntax::{Diagnostic, LineIndex};
 
@@ -10,7 +12,8 @@ torb - the TorbScript toolchain
 
 Usage:
   torb run <file> [arguments]   Run a file (or `src/main.trb` of a project directory)
-  torb test [path]       Run every `*.test.trb` below the path (default: tests)
+  torb test [path] [--jobs N]   Run every `*.test.trb` below the path (default: tests), N files at a
+                                time in one process each (default: as many as the machine has cores)
   torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)
   torb tokens <file>     Print the tokens of a file
   torb ast <file>        Print the syntax tree of a file
@@ -27,7 +30,10 @@ fn dispatch() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     match arguments.split_first() {
         Some((command, rest)) if command == "run" && !rest.is_empty() => run(&rest[0], rest[1..].to_vec()),
-        Some((command, rest)) if command == "test" && rest.len() <= 1 => test(rest.first().map_or("tests", String::as_str)),
+        Some((command, rest)) if command == "test" && test_arguments(rest).is_some() => {
+            let (path, jobs) = test_arguments(rest).expect("just checked");
+            test(&path, jobs)
+        }
         Some((command, paths)) if command == "parse" && !paths.is_empty() => parse(paths),
         Some((command, paths)) if command == "tokens" && paths.len() == 1 => tokens(&paths[0]),
         Some((command, paths)) if command == "ast" && paths.len() == 1 => ast(&paths[0]),
@@ -53,7 +59,30 @@ fn run(path: &str, arguments: Vec<String>) -> ExitCode {
     }
 }
 
-fn test(path: &str) -> ExitCode {
+/// `torb test [path] [--jobs N]`. `None` if the arguments are not that.
+fn test_arguments(arguments: &[String]) -> Option<(String, usize)> {
+    let mut path = None;
+    let mut jobs = None;
+    let mut rest = arguments.iter();
+    while let Some(argument) = rest.next() {
+        if let Some(count) = argument.strip_prefix("--jobs=") {
+            jobs = Some(count.parse::<usize>().ok()?);
+        } else if argument == "--jobs" {
+            jobs = Some(rest.next()?.parse::<usize>().ok()?);
+        } else if argument.starts_with('-') || path.is_some() {
+            return None;
+        } else {
+            path = Some(argument.clone());
+        }
+    }
+    Some((path.unwrap_or_else(|| "tests".to_string()), jobs.unwrap_or_else(cores).max(1)))
+}
+
+fn cores() -> usize {
+    std::thread::available_parallelism().map_or(1, |count| count.get())
+}
+
+fn test(path: &str, jobs: usize) -> ExitCode {
     let mut files = Vec::new();
     if let Err(error) = collect_files(Path::new(path), &mut files) {
         eprintln!("error: {path}: {error}");
@@ -61,8 +90,22 @@ fn test(path: &str) -> ExitCode {
     }
     files.retain(|file| file.to_string_lossy().ends_with(".test.trb"));
     files.sort();
+    let (passed, failed) = if jobs > 1 && files.len() > 1 { test_in_parallel(&files, jobs) } else { test_one_after_another(&files) };
+    println!(
+        "
+{passed} passed, {failed} failed ({} files)",
+        files.len()
+    );
+    if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+fn test_one_after_another(files: &[PathBuf]) -> (usize, usize) {
     let (mut passed, mut failed) = (0, 0);
-    for file in &files {
+    for file in files {
         println!("{}", file.display());
         match torb_interpreter::run(file, Vec::new()) {
             torb_interpreter::Outcome::Finished(tests) => {
@@ -75,16 +118,61 @@ fn test(path: &str) -> ExitCode {
             }
         }
     }
-    println!(
-        "
-{passed} passed, {failed} failed ({} files)",
-        files.len()
-    );
-    if failed == 0 {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
+    (passed, failed)
+}
+
+/// One process per test file, `jobs` of them at a time. The interpreter is built on `Rc`, so a process is what an
+/// independent run is; what they printed is passed on in the order of the files, so the output does not depend on
+/// which of them finished first.
+fn test_in_parallel(files: &[PathBuf], jobs: usize) -> (usize, usize) {
+    let executable = match std::env::current_exe() {
+        Ok(executable) => executable,
+        Err(error) => {
+            eprintln!("error: cannot find the running `torb` to run the files in parallel: {error}");
+            return test_one_after_another(files);
+        }
+    };
+    let next = AtomicUsize::new(0);
+    let outputs: Vec<Mutex<Option<std::process::Output>>> = files.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.min(files.len()) {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(file) = files.get(index) else { break };
+                let output = Command::new(&executable).arg("test").arg(file).args(["--jobs", "1"]).output();
+                *outputs[index].lock().expect("no thread fails while it holds the lock") = output.ok();
+            });
+        }
+    });
+    let (mut passed, mut failed) = (0, 0);
+    for (file, output) in files.iter().zip(outputs) {
+        let output = output.into_inner().expect("no thread fails while it holds the lock");
+        let Some(output) = output.filter(|output| counts_of(&String::from_utf8_lossy(&output.stdout)).is_some()) else {
+            println!("{}", file.display());
+            eprintln!("error: {}: the process that runs this file did not report its tests", file.display());
+            failed += 1;
+            continue;
+        };
+        let text = String::from_utf8_lossy(&output.stdout).to_string();
+        let (body, file_passed, file_failed) = counts_of(&text).expect("just checked");
+        println!("{body}");
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        passed += file_passed;
+        failed += file_failed;
     }
+    (passed, failed)
+}
+
+/// Splits what one test process printed into its lines and the counts of the summary it ends with.
+fn counts_of(text: &str) -> Option<(&str, usize, usize)> {
+    let (body, summary) = text.rsplit_once("\n\n")?;
+    let mut words = summary.split_whitespace();
+    let passed = words.next()?.parse().ok()?;
+    if words.next()? != "passed," {
+        return None;
+    }
+    let failed = words.next()?.parse().ok()?;
+    Some((body, passed, failed))
 }
 
 fn report(outcome: torb_interpreter::Outcome) -> ExitCode {

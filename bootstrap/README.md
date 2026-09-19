@@ -8,7 +8,8 @@ A parser and a tree-walking interpreter for TorbScript, written in Rust. It exis
 cargo run --release -- run ../compiler tokens some-file.trb   # Run the compiler (src/main.trb of the project)
 cargo run --release -- run ../compiler build some-file.trb    # A native binary, through C (needs a C compiler)
 cargo run --release -- run script.trb [arguments]             # Run a single file
-cargo run --release -- test ../compiler/tests                 # Run *.test.trb files
+cargo run --release -- test ../compiler/tests                 # Run *.test.trb files (one process per file, see below)
+cargo run --release -- test ../compiler/tests --jobs 1        # ...one after another, in this process
 cargo run --release -- parse ..                               # Check the syntax of every .trb file
 cargo run --release -- tokens file.trb                        # Tokens, in the format of compiler/src/syntax/dump.trb
 cargo run --release -- ast file.trb                           # Syntax tree, as the generated Show of compiler/src/syntax/ast.trb
@@ -52,3 +53,49 @@ field order `std/process` declares - the natives build it positionally.
 (`crates/torb-cli/tests/native.rs`): every one of them is compiled to a native binary, run, and compared with itself on
 stage 0. It is a workspace of its own whose only member is `std/`, so `torb check ..` over the repository does not look
 at it, and it is the seed of the conformance runner of milestone 5.14.
+
+## Performance
+
+Stage 0 is the edit-test cycle of the whole project, so it is worth keeping fast. It is a tree-walking interpreter and
+stays one; what made it slow was not the walking but what every step around it paid for.
+
+- **Scopes come from a pool.** A block, a turn of a loop, an arm of a `match` and a call each need a scope, 47 million
+  of them per `check ..`, and allocating them (and the `Vec` of their slots) was the single biggest cost. A scope goes
+  back to the pool of `Interpreter` when its reference count is one again, which is why a scope a closure captured is
+  never recycled, and it keeps the capacity its slots have.
+- **Every scope carries a filter of the names it declares**, one bit each. A name that is not a local - a top-level
+  function, a field of `self` - used to be looked for in every scope up to the root, several times per call site;
+  now the scopes that cannot have it are skipped without reading their slots.
+- **Names are compared as fingerprints first.** `mark(name)` is the length and the first and the last character in one
+  `u32`. Slots, fields and cases carry it, so scanning a list of names compares integers; only a fingerprint that
+  matches leads to comparing the characters. The maps that are asked while the program runs use FNV-1a.
+- **The buffers of a call come from a pool too**, `Text` keeps its offsets in `u32` so that `Value` is 32 bytes
+  instead of 40, a `Some(x)` or `.Case(x)` pattern matches the values where they are instead of copying them out,
+  and `eval` keeps its stack frame small: it runs for every node of a program, and the arms that need room for a
+  `String`, a `Vec` or a message are functions of their own. The release profile links with full LTO.
+- **`torb test <dir>` runs one process per test file**, as many at a time as the machine has cores (`--jobs N`, and
+  `--jobs 1` is the old behaviour in this process). The interpreter is built on `Rc`, so a process is the unit of an
+  independent run. The output is passed on in the order of the files, so it does not depend on which finished first.
+  `crates/torb-cli/tests/self_hosted.rs` compares the files of the repository on as many threads, the same way.
+
+None of this changes what a program does: the same output, the same messages, the same order of evaluation.
+
+### Profiling
+
+There is no profiler on every machine, so the interpreter can count what it does itself. The counters cost nothing in
+a normal build (`is_enabled` is a compile-time `false` there and everything folds away), so they need their feature:
+
+```text
+cargo build --release --features profile
+TORB_PROFILE=1 target/release/torb run ../compiler check ..
+```
+
+The report goes to standard error, sorted by time and then by count: one line per kind of syntax tree node, per native
+that was called (with the time it took, *inclusive* - a native that calls a closure back counts what the closure
+does), and per thing worth counting (`environment.find`, `environment.scope_walked`, `scan.fields`, `scan.cases`,
+`allocate.*`, `items_of`, `copy_on_write.*`). `src/profile.rs` is where a new counter goes; `profile::count`,
+`profile::add` and `profile::timed` are the three hooks.
+
+How much stack a function needs matters as much as what it does, because the interpreter recurses through the tree.
+`cargo rustc --release -p torb-interpreter --lib -- --emit asm -C lto=off` writes a `.s` file into
+`target/release/deps`, where the `subq $N, %rsp` after a symbol is the size of its frame.

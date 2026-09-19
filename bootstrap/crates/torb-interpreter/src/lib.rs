@@ -6,6 +6,7 @@
 
 mod interpreter;
 mod natives;
+mod profile;
 mod program;
 mod value;
 
@@ -27,8 +28,10 @@ pub fn run(entry: &Path, arguments: Vec<String>) -> Outcome {
         Err(problems) => return Outcome::NotLoaded(problems),
     };
     let mut interpreter = interpreter::Interpreter::new(program, arguments);
-    match interpreter.run() {
+    let outcome = match interpreter.run() {
         Ok(()) => Outcome::Finished(std::mem::take(&mut interpreter.tests)),
         Err(failure) => Outcome::Failed(failure),
-    }
+    };
+    profile::report();
+    outcome
 }

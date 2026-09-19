@@ -40,6 +40,9 @@ pub fn is_object_method(name: &str) -> bool {
 
 /// The items of everything that is `Iterable`.
 pub fn items_of(value: &Value) -> Eval<Vec<Value>> {
+    if crate::profile::is_enabled() {
+        crate::profile::add("items_of", if let Value::List(items) = value { items.len() } else { 0 });
+    }
     match value {
         Value::List(items) => Ok(items.to_vec()),
         Value::Set(table) => Ok(table.keys().cloned().collect()),

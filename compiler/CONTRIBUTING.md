@@ -7,7 +7,8 @@ tree-walking interpreter. These are the rules of the code base and the traps of 
 
 ```text
 cargo build --release                                   # Stage 0. Rebuild after every change of the Rust sources
-cargo run --release -q -- test ../compiler/tests        # The TorbScript tests of the compiler
+cargo run --release -q -- test ../compiler/tests        # The TorbScript tests of the compiler (one process per file)
+cargo run --release -q -- test ../compiler/tests --jobs 1   # ...one after another, when output order of a crash matters
 cargo run --release -q -- run ../compiler check ..      # The compiler checks the whole repository: "no problems"
 cargo run --release -q -- run ../compiler check --statistics ..    # Every expression has a type: "0 deferred"
 cargo run --release -q -- run ../compiler check --timings ..       # The wall time of every pass, in the order they ran

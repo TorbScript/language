@@ -1,8 +1,13 @@
 //! The compiler in `compiler/` is run by the bootstrap interpreter and compared with the Rust implementation it is
 //! a port of. As long as both exist, neither can drift.
+//!
+//! Every comparison here is one process per file and independent of the others, so they run on as many threads as the
+//! machine has cores. What is reported is still the first problem in the order of the files.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
 
 fn collect(directory: &Path, files: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(directory).expect("readable directory") {
@@ -23,6 +28,34 @@ fn torb(arguments: &[&str]) -> String {
     String::from_utf8(output.stdout).expect("UTF-8 output")
 }
 
+/// Does the same work for every item, on as many threads as the machine has cores, and returns what each of them
+/// produced in the order of the items. `std::thread::scope` needs nothing beyond the standard library.
+fn for_each_in_parallel<Item: Sync, Problem: Send>(
+    items: &[Item],
+    work: impl Fn(&Item) -> Option<Problem> + Send + Sync,
+) -> Vec<Option<Problem>> {
+    let next = AtomicUsize::new(0);
+    let problems: Vec<Mutex<Option<Problem>>> = items.iter().map(|_| Mutex::new(None)).collect();
+    let threads = std::thread::available_parallelism().map_or(2, |count| count.get()).min(items.len().max(1));
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(index) else { break };
+                *problems[index].lock().expect("no thread fails while it holds the lock") = work(item);
+            });
+        }
+    });
+    problems.into_iter().map(|problem| problem.into_inner().expect("no thread fails while it holds the lock")).collect()
+}
+
+/// The first problem in the order of the items, so that a failure does not depend on which thread was first.
+fn first_problem(problems: Vec<Option<String>>) {
+    if let Some(problem) = problems.into_iter().flatten().next() {
+        panic!("{problem}");
+    }
+}
+
 /// Tokens and syntax trees of every `.trb` file in the repository, including the files that are full of errors.
 #[test]
 fn the_front_end_written_in_torbscript_agrees_with_the_bootstrap_front_end() {
@@ -31,28 +64,33 @@ fn the_front_end_written_in_torbscript_agrees_with_the_bootstrap_front_end() {
     let mut files = Vec::new();
     collect(&root, &mut files);
     assert!(files.len() > 50, "expected the TorbScript files of the repository, found {}", files.len());
+    files.sort();
 
-    for file in &files {
+    let problems = for_each_in_parallel(&files, |file| {
         let file = file.to_str().expect("UTF-8 path");
         let compiler = compiler.to_str().expect("UTF-8 path");
-        assert!(torb(&["tokens", file]) == torb(&["run", compiler, "tokens", file]), "different tokens for {file}");
+        if torb(&["tokens", file]) != torb(&["run", compiler, "tokens", file]) {
+            return Some(format!("different tokens for {file}"));
+        }
 
         let expected = torb(&["ast", file]);
         let actual = torb(&["run", compiler, "ast", file]);
-        if expected != actual {
-            let position = expected.bytes().zip(actual.bytes()).position(|(left, right)| left != right).unwrap_or(0);
-            let context = |text: &str| {
-                String::from_utf8_lossy(&text.as_bytes()[position.saturating_sub(200)..(position + 200).min(text.len())]).to_string()
-            };
-            panic!(
-                "different syntax trees for {file}
+        if expected == actual {
+            return None;
+        }
+        let position = expected.bytes().zip(actual.bytes()).position(|(left, right)| left != right).unwrap_or(0);
+        let context = |text: &str| {
+            String::from_utf8_lossy(&text.as_bytes()[position.saturating_sub(200)..(position + 200).min(text.len())]).to_string()
+        };
+        Some(format!(
+            "different syntax trees for {file}
 bootstrap: ...{}...
 compiler:  ...{}...",
-                context(&expected),
-                context(&actual)
-            );
-        }
-    }
+            context(&expected),
+            context(&actual)
+        ))
+    });
+    first_problem(problems);
 }
 
 /// `torb parse`: the same files, the same problems, rendered the same way.
@@ -101,11 +139,14 @@ fn scripts_print_what_they_should() {
     let mut files = Vec::new();
     collect(&scripts, &mut files);
     assert!(!files.is_empty());
-    for file in &files {
+    files.sort();
+    let problems = for_each_in_parallel(&files, |file| {
         let expected = std::fs::read_to_string(file.with_extension("expected")).expect("an .expected file next to the script");
         let actual = torb(&["run", file.to_str().expect("UTF-8 path")]);
-        assert!(expected.replace("\r\n", "\n") == actual.replace("\r\n", "\n"), "unexpected output of {}:\n{actual}", file.display());
-    }
+        (expected.replace("\r\n", "\n") != actual.replace("\r\n", "\n"))
+            .then(|| format!("unexpected output of {}:\n{actual}", file.display()))
+    });
+    first_problem(problems);
 }
 
 #[test]

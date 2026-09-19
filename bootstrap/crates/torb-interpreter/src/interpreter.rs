@@ -10,6 +10,7 @@ use torb_syntax::ast::{
 use torb_syntax::Span;
 
 use crate::natives;
+use crate::profile;
 use crate::program::{builtin_type, Constant, FunctionInfo, Item, Module, Program, TypeInfo};
 use crate::value::{compare_values, Closure, Environment, Function, ImplicitCase, Object, Range, Tuple, Value};
 
@@ -86,6 +87,12 @@ pub struct Interpreter {
     pub arguments: Vec<String>,
     pub tests: TestReport,
     frames: Vec<Frame>,
+    /// Scopes nobody references anymore. Every block, every turn of a loop and every call needs one, so allocating
+    /// them was the single biggest cost of a run; a closure keeps its scope alive, which is why one is only taken
+    /// back when its reference count is down to one again.
+    scopes: Vec<Rc<Environment>>,
+    /// The buffers of matched arguments, for the same reason: one per call of a declared function.
+    argument_buffers: Vec<Vec<Option<Value>>>,
 }
 
 struct BoundArguments {
@@ -96,7 +103,56 @@ struct BoundArguments {
 
 impl Interpreter {
     pub fn new(program: Program, arguments: Vec<String>) -> Interpreter {
-        Interpreter { program, arguments, tests: TestReport::default(), frames: Vec::new() }
+        Interpreter {
+            program,
+            arguments,
+            tests: TestReport::default(),
+            frames: Vec::new(),
+            scopes: Vec::new(),
+            argument_buffers: Vec::new(),
+        }
+    }
+
+    /// A buffer of `length` empty places for the arguments of one call, from the pool if there is one.
+    fn argument_buffer(&mut self, length: usize) -> Vec<Option<Value>> {
+        let mut buffer = self.argument_buffers.pop().unwrap_or_default();
+        buffer.clear();
+        buffer.resize(length, None);
+        buffer
+    }
+
+    fn release_argument_buffer(&mut self, mut buffer: Vec<Option<Value>>) {
+        if self.argument_buffers.len() < 512 {
+            buffer.clear();
+            self.argument_buffers.push(buffer);
+        }
+    }
+
+    /// A scope below another one, from the pool if there is one.
+    fn scope(&mut self, parent: &Rc<Environment>) -> Rc<Environment> {
+        self.scope_of(parent.module.clone(), parent.clone())
+    }
+
+    /// The scope of a call: its module is the one the function was written in, not the one of its caller.
+    fn scope_of(&mut self, module: Rc<Module>, parent: Rc<Environment>) -> Rc<Environment> {
+        match self.scopes.pop() {
+            Some(mut scope) => {
+                Rc::get_mut(&mut scope).expect("a scope in the pool is not referenced anywhere").reuse(module, parent);
+                scope
+            }
+            None => Environment::of_call(module, parent),
+        }
+    }
+
+    /// Offers a scope back to the pool. Nothing happens if something still references it.
+    fn release(&mut self, mut scope: Rc<Environment>) {
+        if self.scopes.len() >= 512 {
+            return;
+        }
+        if let Some(inner) = Rc::get_mut(&mut scope) {
+            inner.empty();
+            self.scopes.push(scope);
+        }
     }
 
     /// Runs the top-level code of the entry file. A top-level `?` ends the program with the error.
@@ -136,23 +192,21 @@ impl Interpreter {
     // --- Statements -------------------------------------------------------------------------------------------------
 
     pub fn exec_block(&mut self, block: &'static Block, environment: &Rc<Environment>) -> Eval {
-        let scope = Environment::child(environment);
-        self.exec_statements(&block.statements, &scope)
+        let scope = self.scope(environment);
+        let result = self.exec_statements(&block.statements, &scope);
+        self.release(scope);
+        result
     }
 
     fn exec_statements(&mut self, statements: &'static [Statement], environment: &Rc<Environment>) -> Eval {
+        profile::add("hoist.scan", statements.len());
         // Local functions are hoisted
         for statement in statements {
             if let StatementKind::Declaration(ast::Declaration { kind: ast::DeclarationKind::Function(function), .. }) = &statement.kind {
-                let is_top_level = Rc::ptr_eq(environment, &environment.module.top_level());
+                let is_top_level = environment.is_top_level;
                 if !is_top_level {
-                    let info = FunctionInfo {
-                        name: &function.name.text,
-                        declaration: function,
-                        module: environment.module.clone(),
-                        owner: None,
-                        environment: Some(environment.clone()),
-                    };
+                    let info =
+                        FunctionInfo::new(&function.name.text, function, environment.module.clone(), None, Some(environment.clone()));
                     let value = Value::Function(Rc::new(Function::Declared { info: Rc::new(info), receiver: None }));
                     environment.declare(&function.name.text, value, false);
                 }
@@ -166,9 +220,12 @@ impl Interpreter {
     }
 
     fn exec_statement(&mut self, statement: &'static Statement, environment: &Rc<Environment>) -> Eval {
+        if profile::is_enabled() {
+            profile::count(statement_kind(&statement.kind));
+        }
         match &statement.kind {
             StatementKind::Declaration(declaration) => {
-                let is_top_level = Rc::ptr_eq(environment, &environment.module.top_level());
+                let is_top_level = environment.is_top_level;
                 let is_function = matches!(declaration.kind, ast::DeclarationKind::Function(_));
                 if !is_top_level && !is_function {
                     return self.fail(
@@ -202,11 +259,15 @@ impl Interpreter {
                 self.exec_for(pattern, iterable_value, body, environment, iterable.span)?;
             }
             StatementKind::While { condition, body } => loop {
-                let scope = Environment::child(environment);
-                if !self.check_condition(condition, &scope)? {
+                let scope = self.scope(environment);
+                let goes_on = self.check_condition(condition, &scope)?;
+                if !goes_on {
+                    self.release(scope);
                     break;
                 }
-                match self.exec_statements(&body.statements, &scope) {
+                let outcome = self.exec_statements(&body.statements, &scope);
+                self.release(scope);
+                match outcome {
                     Err(Flow::Break) => break,
                     Ok(_) | Err(Flow::Continue) => {}
                     Err(other) => return Err(other),
@@ -229,7 +290,7 @@ impl Interpreter {
     fn binding_value(&mut self, binding: &'static ast::Binding, environment: &Rc<Environment>) -> Eval {
         // A top-level constant of the entry file is also what the functions of the file see: evaluate it once
         if let (false, PatternKind::Name(name)) = (binding.is_var, &binding.pattern.kind) {
-            if Rc::ptr_eq(environment, &environment.module.top_level()) {
+            if environment.is_top_level {
                 let item = environment.module.scope.borrow().get(name.as_str()).cloned();
                 if let Some(Item::Constant(constant)) = item {
                     if std::ptr::eq(constant.value_expression, &binding.value) {
@@ -239,8 +300,12 @@ impl Interpreter {
             }
         }
         let value = self.eval(&binding.value, environment)?;
-        let owner = match environment.lookup("Self") {
-            Some(Value::Type(owner)) => Some(owner),
+        // Only `.Case` needs to know which type `Self` is here, and only then is it worth looking it up
+        let owner = match &value {
+            Value::Implicit(_) => match environment.lookup("Self") {
+                Some(Value::Type(owner)) => Some(owner),
+                _ => None,
+            },
             _ => None,
         };
         let expected = self.expect(value, binding.annotation.as_ref(), &environment.module, owner.as_ref());
@@ -256,11 +321,13 @@ impl Interpreter {
         span: Span,
     ) -> Eval<()> {
         let run = |interpreter: &mut Interpreter, item: Value| -> Eval<bool> {
-            let scope = Environment::child(environment);
+            let scope = interpreter.scope(environment);
             if !interpreter.bind_pattern(pattern, &item, &scope, false)? {
                 return interpreter.fail(environment, pattern.span, format!("The pattern does not match {}", interpreter.describe(&item)));
             }
-            match interpreter.exec_statements(&body.statements, &scope) {
+            let outcome = interpreter.exec_statements(&body.statements, &scope);
+            interpreter.release(scope);
+            match outcome {
                 Err(Flow::Break) => Ok(false),
                 Ok(_) | Err(Flow::Continue) => Ok(true),
                 Err(other) => Err(other),
@@ -302,39 +369,175 @@ impl Interpreter {
 
     // --- Expressions ------------------------------------------------------------------------------------------------
 
+    /// The interpreter walks the tree, so this runs for every node of a program and is entered 255 million times per
+    /// `check ..`. What matters as much as what it does is how large its stack frame is: everything that needs room -
+    /// a `String`, a `Vec`, a message - is in a function of its own, which keeps this frame small enough to stay in
+    /// the cache while the recursion goes down. Do not inline those back in.
     pub fn eval(&mut self, expression: &'static Expression, environment: &Rc<Environment>) -> Eval {
         let span = expression.span;
+        if profile::is_enabled() {
+            profile::count(expression_kind(&expression.kind));
+        }
         match &expression.kind {
-            ExpressionKind::Integer(text) => match parse_integer(text) {
-                Some(value) => Ok(Value::Int(value)),
-                None => self.fail(environment, span, format!("`{text}` does not fit into an Int")),
-            },
+            ExpressionKind::Name(name) => self.lookup_name(name, environment, span),
+            ExpressionKind::Call { callee, arguments, style } => {
+                let result = self.eval_call(callee, arguments, *style, environment, span);
+                self.located(result, environment, span)
+            }
+            ExpressionKind::Binary { operator, left, right } => self.binary(*operator, left, right, environment, span),
+            ExpressionKind::Member { target, name, optional } => self.eval_member(target, name, *optional, environment, span),
+            ExpressionKind::Bool(value) => Ok(Value::Bool(*value)),
+            ExpressionKind::Char(value) => Ok(Value::Char(*value)),
+            ExpressionKind::Integer(text) => self.eval_integer(text, environment, span),
+            ExpressionKind::Index { target, index } => {
+                let target_value = self.eval(target, environment)?;
+                let index_value = self.eval(index, environment)?;
+                let result = self.index(&target_value, &index_value);
+                self.located(result, environment, span)
+            }
+            ExpressionKind::Unary { operator, operand } => {
+                let value = self.eval(operand, environment)?;
+                let result = self.unary(*operator, value);
+                self.located(result, environment, span)
+            }
+            ExpressionKind::Generic { target, .. } => self.eval(target, environment),
+            ExpressionKind::Block(block) => self.exec_block(block, environment),
+            ExpressionKind::If { condition, then, otherwise } => self.eval_if(condition, then, otherwise, environment),
+            ExpressionKind::Match { subject, arms } => self.eval_match(subject, arms, environment),
+            ExpressionKind::Text(segments) => self.eval_text(segments, environment),
+            ExpressionKind::Try(inner) => self.eval_try(inner, environment, span),
+            _ => self.eval_rest(expression, environment, span),
+        }
+    }
+
+    #[inline(never)]
+    fn eval_integer(&mut self, text: &'static str, environment: &Rc<Environment>, span: Span) -> Eval {
+        match parse_integer(text) {
+            Some(value) => Ok(Value::Int(value)),
+            None => self.fail(environment, span, format!("`{text}` does not fit into an Int")),
+        }
+    }
+
+    #[inline(never)]
+    fn eval_member(
+        &mut self,
+        target: &'static Expression,
+        name: &'static ast::Name,
+        optional: bool,
+        environment: &Rc<Environment>,
+        span: Span,
+    ) -> Eval {
+        let target_value = self.eval(target, environment)?;
+        if optional {
+            return match target_value {
+                Value::Option(None) => Ok(Value::NONE),
+                Value::Option(Some(inner)) => {
+                    let member = self.member(&inner, &name.text, environment, span)?;
+                    Ok(flatten_option(member))
+                }
+                other => self.fail(environment, span, format!("`?.` needs an Option, this is {}", self.describe(&other))),
+            };
+        }
+        self.member(&target_value, &name.text, environment, span)
+    }
+
+    #[inline(never)]
+    fn eval_text(&mut self, segments: &'static [TextSegment], environment: &Rc<Environment>) -> Eval {
+        if let [TextSegment::Literal(literal)] = segments {
+            return Ok(Value::text(literal));
+        }
+        let mut text = String::new();
+        for segment in segments {
+            match segment {
+                TextSegment::Literal(literal) => text.push_str(literal),
+                TextSegment::Expression(inner) => {
+                    let value = self.eval(inner, environment)?;
+                    let shown = self.show(&value, true);
+                    text.push_str(&self.located(shown, environment, inner.span)?);
+                }
+            }
+        }
+        Ok(Value::text(&text))
+    }
+
+    #[inline(never)]
+    fn eval_try(&mut self, inner: &'static Expression, environment: &Rc<Environment>, span: Span) -> Eval {
+        let value = self.eval(inner, environment)?;
+        match value {
+            Value::Option(Some(value)) => Ok((*value).clone()),
+            Value::Option(None) => Err(Flow::Return(Value::NONE)),
+            Value::Result(Ok(value)) => Ok((*value).clone()),
+            Value::Result(Err(error)) => {
+                let converted = self.convert_error((*error).clone());
+                let converted = self.located(converted, environment, span)?;
+                Err(Flow::Return(Value::error(converted)))
+            }
+            other => self.fail(environment, span, format!("`?` needs an Option or a Result, this is {}", self.describe(&other))),
+        }
+    }
+
+    #[inline(never)]
+    fn eval_if(
+        &mut self,
+        condition: &'static Condition,
+        then: &'static Block,
+        otherwise: &'static Option<Box<Expression>>,
+        environment: &Rc<Environment>,
+    ) -> Eval {
+        let scope = self.scope(environment);
+        if self.check_condition(condition, &scope)? {
+            let result = self.exec_statements(&then.statements, &scope);
+            self.release(scope);
+            return result;
+        }
+        self.release(scope);
+        match otherwise {
+            Some(otherwise) => self.eval(otherwise, environment),
+            None => Ok(Value::Void),
+        }
+    }
+
+    #[inline(never)]
+    fn eval_match(&mut self, subject: &'static Expression, arms: &'static [ast::MatchArm], environment: &Rc<Environment>) -> Eval {
+        let value = self.eval(subject, environment)?;
+        for arm in arms {
+            let scope = self.scope(environment);
+            if !self.bind_pattern(&arm.pattern, &value, &scope, false)? {
+                self.release(scope);
+                continue;
+            }
+            if let Some(guard) = &arm.guard {
+                match self.eval(guard, &scope)? {
+                    Value::Bool(true) => {}
+                    Value::Bool(false) => {
+                        self.release(scope);
+                        continue;
+                    }
+                    other => {
+                        return self.fail(environment, guard.span, format!("A guard must be a Bool, this is {}", self.describe(&other)))
+                    }
+                }
+            }
+            let result = match &arm.body.kind {
+                ExpressionKind::Block(block) => self.exec_statements(&block.statements, &scope),
+                _ => self.eval(&arm.body, &scope),
+            };
+            self.release(scope);
+            return result;
+        }
+        self.fail(environment, subject.span, format!("No arm of this `match` matches {}", self.describe(&value)))
+    }
+
+    /// The kinds of node that are neither frequent nor small. They are here so that `eval` does not have to make room
+    /// for what they need.
+    #[inline(never)]
+    fn eval_rest(&mut self, expression: &'static Expression, environment: &Rc<Environment>, span: Span) -> Eval {
+        match &expression.kind {
             ExpressionKind::Float(text) => match text.replace('_', "").parse() {
                 Ok(value) => Ok(Value::Float(value)),
                 Err(_) => self.fail(environment, span, format!("`{text}` is not a number")),
             },
-            ExpressionKind::Bool(value) => Ok(Value::Bool(*value)),
-            ExpressionKind::Char(value) => Ok(Value::Char(*value)),
-            ExpressionKind::Text(segments) => {
-                if let [TextSegment::Literal(literal)] = segments.as_slice() {
-                    return Ok(Value::text(literal));
-                }
-                let mut text = String::new();
-                for segment in segments {
-                    match segment {
-                        TextSegment::Literal(literal) => text.push_str(literal),
-                        TextSegment::Expression(inner) => {
-                            let value = self.eval(inner, environment)?;
-                            let shown = self.show(&value, true);
-                            text.push_str(&self.located(shown, environment, inner.span)?);
-                        }
-                    }
-                }
-                Ok(Value::text(&text))
-            }
-            ExpressionKind::Name(name) => self.lookup_name(name, environment, span),
             ExpressionKind::ImplicitMember(name) => Ok(Value::Implicit(Rc::new(ImplicitCase { name: &name.text, arguments: None }))),
-            ExpressionKind::Generic { target, .. } => self.eval(target, environment),
             ExpressionKind::Tuple(arguments) => {
                 let mut tuple = Tuple { labels: Vec::new(), items: Vec::new() };
                 for argument in arguments {
@@ -365,36 +568,6 @@ impl Interpreter {
                 }
                 Ok(Value::Map(Rc::new(table)))
             }
-            ExpressionKind::Member { target, name, optional } => {
-                let target_value = self.eval(target, environment)?;
-                if *optional {
-                    return match target_value {
-                        Value::Option(None) => Ok(Value::NONE),
-                        Value::Option(Some(inner)) => {
-                            let member = self.member(&inner, &name.text, environment, span)?;
-                            Ok(flatten_option(member))
-                        }
-                        other => self.fail(environment, span, format!("`?.` needs an Option, this is {}", self.describe(&other))),
-                    };
-                }
-                self.member(&target_value, &name.text, environment, span)
-            }
-            ExpressionKind::Index { target, index } => {
-                let target_value = self.eval(target, environment)?;
-                let index_value = self.eval(index, environment)?;
-                let result = self.index(&target_value, &index_value);
-                self.located(result, environment, span)
-            }
-            ExpressionKind::Call { callee, arguments, style } => {
-                let result = self.eval_call(callee, arguments, *style, environment, span);
-                self.located(result, environment, span)
-            }
-            ExpressionKind::Unary { operator, operand } => {
-                let value = self.eval(operand, environment)?;
-                let result = self.unary(*operator, value);
-                self.located(result, environment, span)
-            }
-            ExpressionKind::Binary { operator, left, right } => self.binary(*operator, left, right, environment, span),
             ExpressionKind::Range { start, end, inclusive } => {
                 let bound = |interpreter: &mut Interpreter, side: &'static Option<Box<Expression>>| -> Eval<Option<i64>> {
                     let Some(side) = side else { return Ok(None) };
@@ -411,62 +584,12 @@ impl Interpreter {
                 let end = bound(self, end)?.map(|end| if *inclusive { end + 1 } else { end });
                 Ok(Value::Range(Range { start, end }))
             }
-            ExpressionKind::Try(inner) => {
-                let value = self.eval(inner, environment)?;
-                match value {
-                    Value::Option(Some(value)) => Ok((*value).clone()),
-                    Value::Option(None) => Err(Flow::Return(Value::NONE)),
-                    Value::Result(Ok(value)) => Ok((*value).clone()),
-                    Value::Result(Err(error)) => {
-                        let converted = self.convert_error((*error).clone());
-                        let converted = self.located(converted, environment, span)?;
-                        Err(Flow::Return(Value::error(converted)))
-                    }
-                    other => self.fail(environment, span, format!("`?` needs an Option or a Result, this is {}", self.describe(&other))),
-                }
-            }
             ExpressionKind::Closure(closure) => {
                 Ok(Value::Function(Rc::new(Function::Closure(Closure { ast: closure, environment: environment.clone(), signature: None }))))
             }
-            ExpressionKind::If { condition, then, otherwise } => {
-                let scope = Environment::child(environment);
-                if self.check_condition(condition, &scope)? {
-                    return self.exec_statements(&then.statements, &scope);
-                }
-                match otherwise {
-                    Some(otherwise) => self.eval(otherwise, environment),
-                    None => Ok(Value::Void),
-                }
-            }
-            ExpressionKind::Match { subject, arms } => {
-                let value = self.eval(subject, environment)?;
-                for arm in arms {
-                    let scope = Environment::child(environment);
-                    if !self.bind_pattern(&arm.pattern, &value, &scope, false)? {
-                        continue;
-                    }
-                    if let Some(guard) = &arm.guard {
-                        match self.eval(guard, &scope)? {
-                            Value::Bool(true) => {}
-                            Value::Bool(false) => continue,
-                            other => {
-                                return self.fail(
-                                    environment,
-                                    guard.span,
-                                    format!("A guard must be a Bool, this is {}", self.describe(&other)),
-                                )
-                            }
-                        }
-                    }
-                    return match &arm.body.kind {
-                        ExpressionKind::Block(block) => self.exec_statements(&block.statements, &scope),
-                        _ => self.eval(&arm.body, &scope),
-                    };
-                }
-                self.fail(environment, subject.span, format!("No arm of this `match` matches {}", self.describe(&value)))
-            }
-            ExpressionKind::Block(block) => self.exec_block(block, environment),
             ExpressionKind::Error => self.fail(environment, span, "This expression did not parse"),
+            // Everything else is answered by `eval` itself
+            _ => self.fail(environment, span, "This expression did not parse"),
         }
     }
 
@@ -487,7 +610,7 @@ impl Interpreter {
         }
         // Statics of `Self` are implicit, its cases are not: `.Circle` or `Shape.Circle`
         if let Some(Value::Type(owner)) = environment.lookup("Self") {
-            if owner.case_index(name).is_none() {
+            if !owner.may_have(name) || owner.case_index(name).is_none() {
                 if let Some(value) = self.type_member(&owner, name)? {
                     return Ok(value);
                 }
@@ -517,17 +640,19 @@ impl Interpreter {
 
     fn implicit_member(&self, receiver: &Value, name: &'static str) -> Option<Value> {
         match receiver {
-            Value::Object(object) => {
-                let fields = object.info.fields_of(object.case);
-                if let Some(position) = fields.iter().position(|field| field.name == name) {
+            Value::Object(object) if object.info.may_have(name) => {
+                if let Some(position) = object.info.field_position(object.case, name) {
                     return Some(object.fields[position].clone());
                 }
+                profile::count("methods.get");
                 if let Some(method) = object.info.methods.borrow().get(name).cloned() {
                     return Some(Value::Function(Rc::new(Function::Declared { info: method, receiver: Some(receiver.clone()) })));
                 }
                 natives::is_object_method(name)
                     .then(|| Value::Function(Rc::new(Function::NativeMethod { receiver: receiver.clone(), name })))
             }
+            Value::Object(_) => natives::is_object_method(name)
+                .then(|| Value::Function(Rc::new(Function::NativeMethod { receiver: receiver.clone(), name }))),
             _ => {
                 let method = self.program.extensions.get(receiver.type_name())?.get(name)?.clone();
                 Some(Value::Function(Rc::new(Function::Declared { info: method, receiver: Some(receiver.clone()) })))
@@ -594,6 +719,10 @@ impl Interpreter {
 
     /// `Point.origin`, `Point.square`, `Shape.Circle`, `Point.area` (the method as a function that takes `self`).
     fn type_member(&mut self, info: &Rc<TypeInfo>, name: &str) -> Eval<Option<Value>> {
+        // `from` is generated, everything else the type has is in its filter of names
+        if !info.may_have(name) && name != "from" {
+            return Ok(None);
+        }
         if let Some(case) = info.case_index(name) {
             if info.cases[case].fields.is_empty() {
                 return Ok(Some(Value::Object(Rc::new(Object { info: info.clone(), case: Some(case), fields: Vec::new() }))));
@@ -639,7 +768,8 @@ impl Interpreter {
                 match method {
                     Some(method) => {
                         let is_get = method.name == "get";
-                        let (value, _) = self.call_declared(&method, Some(target.clone()), vec![Some(index.clone())])?;
+                        let (value, scope) = self.call_declared(&method, Some(target.clone()), vec![Some(index.clone())])?;
+                        self.release(scope);
                         match (is_get, value) {
                             (true, Value::Option(Some(value))) => Ok((*value).clone()),
                             (true, _) => Err(failure(format!("There is no entry for {}", self.describe(index)))),
@@ -814,7 +944,8 @@ impl Interpreter {
             .find(|function| function.parameters().first().and_then(|parameter| parameter.annotation.as_ref()).is_some_and(accepts))
             .cloned();
         if let Some(conversion) = conversion {
-            let (result, _) = self.call_declared(&conversion, None, vec![Some(value)])?;
+            let (result, scope) = self.call_declared(&conversion, None, vec![Some(value)])?;
+            self.release(scope);
             return Ok(Some(result));
         }
         // A case that wraps exactly one value of this type generates `From`
@@ -830,6 +961,7 @@ impl Interpreter {
         module: &Rc<Module>,
         owner: Option<&Rc<TypeInfo>>,
     ) -> Eval {
+        profile::count("expect");
         let Value::Implicit(implicit) = &value else { return Ok(adapt(value, annotation)) };
         let Some(annotation) = annotation else { return Ok(value) };
         match &annotation.kind {
@@ -921,6 +1053,7 @@ impl Interpreter {
     // --- Patterns ---------------------------------------------------------------------------------------------------
 
     fn bind_pattern(&mut self, pattern: &'static Pattern, value: &Value, environment: &Rc<Environment>, is_var: bool) -> Eval<bool> {
+        profile::count("pattern.bind");
         match &pattern.kind {
             PatternKind::Wildcard => Ok(true),
             // A bare name always binds. Cases are `.Case` or `Type.Case`
@@ -929,13 +1062,14 @@ impl Interpreter {
                 Ok(true)
             }
             PatternKind::ImplicitVariant { name, fields } => {
-                let payload: Vec<Value> = match (name.text.as_str(), value) {
-                    ("Some", Value::Option(Some(inner))) => vec![(**inner).clone()],
-                    ("None", Value::Option(None)) => Vec::new(),
-                    ("Ok", Value::Result(Ok(inner))) => vec![(**inner).clone()],
-                    ("Error", Value::Result(Err(inner))) => vec![(**inner).clone()],
+                // The values stay where they are: copying them out was an allocation per `Some(x)` and per `.Case(x)`
+                let payload: &[Value] = match (name.text.as_str(), value) {
+                    ("Some", Value::Option(Some(inner))) => std::slice::from_ref(&**inner),
+                    ("None", Value::Option(None)) => &[],
+                    ("Ok", Value::Result(Ok(inner))) => std::slice::from_ref(&**inner),
+                    ("Error", Value::Result(Err(inner))) => std::slice::from_ref(&**inner),
                     (case, Value::Object(object)) => match object.info.case_index(case) {
-                        Some(index) if object.case == Some(index) => object.fields.clone(),
+                        Some(index) if object.case == Some(index) => &object.fields,
                         Some(_) => return Ok(false),
                         None => return self.fail(environment, name.span, format!("`{}` has no case `.{case}`", object.info.name)),
                     },
@@ -948,7 +1082,7 @@ impl Interpreter {
                         format!("`.{}` has {} fields, the pattern has {}", name.text, payload.len(), fields.len()),
                     );
                 }
-                for (field, item) in fields.iter().zip(&payload) {
+                for (field, item) in fields.iter().zip(payload) {
                     if !self.bind_pattern(&field.pattern, item, environment, is_var)? {
                         return Ok(false);
                     }
@@ -1015,11 +1149,11 @@ impl Interpreter {
             }
             PatternKind::Variant { path, fields } => {
                 let name = path.last().map_or("", |name| name.text.as_str());
-                let payload: Vec<Value> = match (name, value) {
-                    ("Some", Value::Option(Some(inner))) => vec![(**inner).clone()],
-                    ("None", Value::Option(None)) => Vec::new(),
-                    ("Ok", Value::Result(Ok(inner))) => vec![(**inner).clone()],
-                    ("Error", Value::Result(Err(inner))) => vec![(**inner).clone()],
+                let payload: &[Value] = match (name, value) {
+                    ("Some", Value::Option(Some(inner))) => std::slice::from_ref(&**inner),
+                    ("None", Value::Option(None)) => &[],
+                    ("Ok", Value::Result(Ok(inner))) => std::slice::from_ref(&**inner),
+                    ("Error", Value::Result(Err(inner))) => std::slice::from_ref(&**inner),
                     (_, Value::Object(object)) => {
                         // `Shape.Circle(r)` is a case, `Point(x, y)` is a type. A case without its type is `.Circle(r)`
                         let is_case = path.len() > 1 && object.case.is_some() && object.info.case_index(name) == object.case;
@@ -1033,7 +1167,7 @@ impl Interpreter {
                         if !is_case && !is_type && !is_imported_case {
                             return Ok(false);
                         }
-                        object.fields.clone()
+                        &object.fields
                     }
                     _ => return Ok(false),
                 };
@@ -1044,7 +1178,7 @@ impl Interpreter {
                         format!("`{name}` has {} fields, the pattern has {}", payload.len(), fields.len()),
                     );
                 }
-                for (field, item) in fields.iter().zip(&payload) {
+                for (field, item) in fields.iter().zip(payload) {
                     if !self.bind_pattern(&field.pattern, item, environment, is_var)? {
                         return Ok(false);
                     }
@@ -1069,18 +1203,20 @@ impl Interpreter {
 
     /// `None` if the expression is not a path (a temporary).
     fn resolve_place(&mut self, expression: &'static Expression, environment: &Rc<Environment>) -> Eval<Option<Place>> {
+        profile::count("place.resolve");
         match &expression.kind {
             ExpressionKind::Name(name) => Ok(self.resolve_name_place(name, environment)),
             ExpressionKind::Member { target, name, optional: false } => {
                 let Some(mut place) = self.resolve_place(target, environment)? else { return Ok(None) };
                 let position = match self.peek(&place)? {
-                    Value::Object(object) => object.info.fields_of(object.case).iter().position(|field| field.name == name.text),
+                    Value::Object(object) => object.info.field_position(object.case, &name.text),
                     Value::Tuple(tuple) => {
                         name.text.parse::<usize>().ok().or_else(|| tuple.labels.iter().position(|label| *label == Some(name.text.as_str())))
                     }
                     _ => None,
                 };
                 let Some(position) = position else { return Ok(None) };
+                profile::count("place.step");
                 place.steps.push(Step::Field(position));
                 Ok(Some(place))
             }
@@ -1099,6 +1235,7 @@ impl Interpreter {
                     }
                     index => Step::Index(index),
                 };
+                profile::count("place.step");
                 place.steps.push(step);
                 Ok(Some(place))
             }
@@ -1113,13 +1250,14 @@ impl Interpreter {
         // A field of the implicit `self`
         let (scope, slot) = environment.find_shared("self")?;
         let position = match &scope.slots.borrow()[slot].value {
-            Value::Object(object) => object.info.fields_of(object.case).iter().position(|field| field.name == name)?,
+            Value::Object(object) => object.info.field_position(object.case, name)?,
             _ => return None,
         };
         Some(Place { environment: scope, slot, steps: vec![Step::Field(position)] })
     }
 
     fn peek(&mut self, place: &Place) -> Eval {
+        profile::count("place.peek");
         let mut current = place.environment.slots.borrow()[place.slot].value.clone();
         for step in &place.steps {
             current = self.peek_step(&current, step)?;
@@ -1139,6 +1277,7 @@ impl Interpreter {
 
     /// Moves the value out of the path (so that its storage is not shared while it is changed). `put` brings it back.
     fn take(&mut self, place: &Place) -> Eval {
+        profile::count("place.take");
         let mut slots = place.environment.slots.borrow_mut();
         let slot = &mut slots[place.slot];
         if !slot.is_var {
@@ -1155,6 +1294,7 @@ impl Interpreter {
     }
 
     fn put(&mut self, place: &Place, value: Value) -> Eval<()> {
+        profile::count("place.put");
         let mut slots = place.environment.slots.borrow_mut();
         let slot = &mut slots[place.slot];
         if !slot.is_var {
@@ -1195,9 +1335,9 @@ impl Interpreter {
             ExpressionKind::Name(name) if name != "self" && environment.find(name).is_none() => {
                 let receiver = environment.lookup("self");
                 let is_field = matches!(&receiver, Some(Value::Object(object))
-                    if object.info.fields_of(object.case).iter().any(|field| field.name == name.as_str()));
+                    if object.info.may_have(name) && object.info.field_position(object.case, name).is_some());
                 let is_method = match &receiver {
-                    Some(Value::Object(object)) => object.info.methods.borrow().contains_key(name.as_str()),
+                    Some(Value::Object(object)) => object.info.may_have(name) && object.info.methods.borrow().contains_key(name.as_str()),
                     Some(other) => {
                         self.program.extensions.get(other.type_name()).is_some_and(|methods| methods.contains_key(name.as_str()))
                     }
@@ -1337,17 +1477,18 @@ impl Interpreter {
             }
             Value::Builtin(owner) => {
                 let arguments = self.eval_arguments(arguments, environment)?;
-                return natives::call_static(self, owner, name, arguments);
+                return profile::timed(name, || natives::call_static(self, owner, name, arguments));
             }
-            Value::Object(object) => {
-                let fields = object.info.fields_of(object.case);
-                if let Some(position) = fields.iter().position(|field| field.name == name) {
+            Value::Object(object) if object.info.may_have(name) => {
+                if let Some(position) = object.info.field_position(object.case, name) {
                     let function = object.fields[position].clone();
                     return self.call_with_arguments(function, arguments, environment, span);
                 }
+                profile::count("methods.get");
                 let method = object.info.methods.borrow().get(name).cloned();
                 method
             }
+            Value::Object(_) => None,
             other => self.program.extensions.get(other.type_name()).and_then(|methods| methods.get(name)).cloned(),
         };
 
@@ -1372,6 +1513,7 @@ impl Interpreter {
                 self.put(place, scope.lookup("self").unwrap_or(Value::Void))?;
             }
             self.write_back(bound.places, &scope)?;
+            self.release(scope);
             return Ok(result);
         }
 
@@ -1386,7 +1528,7 @@ impl Interpreter {
         let arguments = self.eval_arguments(arguments, environment)?;
         if !natives::is_mutating(&receiver, name) {
             let mut receiver = receiver;
-            return natives::call_method(self, &mut receiver, name, arguments);
+            return profile::timed(name, || natives::call_method(self, &mut receiver, name, arguments));
         }
         let Some(place) = place else {
             return self.fail(
@@ -1397,7 +1539,7 @@ impl Interpreter {
         };
         drop(receiver);
         let mut target = self.take(&place)?;
-        let result = natives::call_method(self, &mut target, name, arguments);
+        let result = profile::timed(name, || natives::call_method(self, &mut target, name, arguments));
         self.put(&place, target)?;
         result
     }
@@ -1410,6 +1552,9 @@ impl Interpreter {
     }
 
     fn eval_arguments(&mut self, arguments: &'static [Argument], environment: &Rc<Environment>) -> Eval<Arguments> {
+        if profile::is_enabled() && !arguments.is_empty() {
+            profile::add("allocate.arguments", arguments.len());
+        }
         let mut result = Arguments::default();
         for argument in arguments {
             let value = self.eval(&argument.value, environment)?;
@@ -1433,7 +1578,7 @@ impl Interpreter {
         arguments: &'static [Argument],
         environment: &Rc<Environment>,
     ) -> Eval<BoundArguments> {
-        let mut bound = BoundArguments { values: vec![None; parameters.len()], places: Vec::new() };
+        let mut bound = BoundArguments { values: self.argument_buffer(parameters.len()), places: Vec::new() };
         let mut variadic = Vec::new();
         let mut next = 0;
         let is_function =
@@ -1511,26 +1656,28 @@ impl Interpreter {
         receiver: Option<Value>,
         values: Vec<Option<Value>>,
     ) -> Eval<(Value, Rc<Environment>)> {
+        profile::count("call.declared");
         let Some(body) = &info.declaration.body else {
             return Err(failure(format!("`{}` has no body. The bootstrap interpreter does not know this native function", info.name)));
         };
         let parent = info.environment.clone().unwrap_or_else(|| info.module.top_level());
-        let scope = Rc::new(Environment { module: info.module.clone(), parent: Some(parent), slots: Default::default() });
+        let scope = self.scope_of(info.module.clone(), parent);
         if let Some(owner) = &info.owner {
             scope.declare("Self", Value::Type(owner.clone()), false);
         }
         if let Some(receiver) = receiver {
             scope.declare("self", receiver, info.is_var_self());
         }
-        let mut values = values.into_iter();
-        for parameter in info.parameters() {
-            let value = match (values.next().flatten(), &parameter.default) {
+        let mut values = values;
+        for (position, parameter) in info.parameters().iter().enumerate() {
+            let value = match (values.get_mut(position).and_then(Option::take), &parameter.default) {
                 (Some(value), _) => self.expect(value, parameter.annotation.as_ref(), &info.module, info.owner.as_ref())?,
                 (None, Some(default)) => adapt(self.eval(default, &scope)?, parameter.annotation.as_ref()),
                 (None, None) => return Err(failure(format!("Missing argument `{}` in the call of `{}`", parameter.name.text, info.name))),
             };
             scope.declare(&parameter.name.text, value, parameter.is_var);
         }
+        self.release_argument_buffer(values);
         if self.frames.len() > 2_000 {
             return Err(failure("The call stack is too deep (infinite recursion?)"));
         }
@@ -1564,7 +1711,8 @@ impl Interpreter {
     }
 
     fn call_closure(&mut self, closure: &Closure, arguments: Vec<Value>) -> Eval<(Value, Rc<Environment>)> {
-        let scope = Environment::child(&closure.environment);
+        profile::count("call.closure");
+        let scope = self.scope(&closure.environment);
         let parameters = &closure.ast.parameters;
         if parameters.is_empty() {
             // Implicit parameters: `_`, `_2`, ... and the names the parameter type gives them
@@ -1619,9 +1767,15 @@ impl Interpreter {
                         .zip(parameters)
                         .map(|(value, parameter)| value.map(|value| adapt(value, parameter.annotation.as_ref())))
                         .collect();
-                    Ok(self.call_declared(info, receiver, values)?.0)
+                    let (result, scope) = self.call_declared(info, receiver, values)?;
+                    self.release(scope);
+                    Ok(result)
                 }
-                Function::Closure(closure) => Ok(self.call_closure(closure, arguments)?.0),
+                Function::Closure(closure) => {
+                    let (result, scope) = self.call_closure(closure, arguments)?;
+                    self.release(scope);
+                    Ok(result)
+                }
                 Function::Native { owner, name } => natives::call_static(self, owner, name, Arguments::positional(arguments)),
                 Function::NativeMethod { receiver, name } => {
                     let mut receiver = receiver.clone();
@@ -1660,6 +1814,7 @@ impl Interpreter {
                     let bound = self.bind_arguments(info.parameters(), arguments, environment)?;
                     let (result, scope) = self.call_declared(info, receiver, bound.values)?;
                     self.write_back(bound.places, &scope)?;
+                    self.release(scope);
                     return Ok(result);
                 }
                 Function::Closure(closure)
@@ -1686,6 +1841,7 @@ impl Interpreter {
                     }
                     let (result, scope) = self.call_closure(closure, values)?;
                     self.write_back(places, &scope)?;
+                    self.release(scope);
                     return Ok(result);
                 }
                 _ => {}
@@ -1724,6 +1880,7 @@ impl Interpreter {
 
     /// The one constructor of a type: fields in declaration order, positional or labeled, defaults for the rest.
     pub fn construct(&mut self, info: &Rc<TypeInfo>, case: Option<usize>, arguments: Arguments) -> Eval {
+        profile::count("call.construct");
         if info.is_shared {
             return Err(failure(format!("`{}` is a `shared type`. The bootstrap interpreter does not support identity yet", info.name)));
         }
@@ -1750,6 +1907,7 @@ impl Interpreter {
             };
             values.push(self.expect(value, Some(field.annotation), &info.module, Some(info))?);
         }
+        profile::count("allocate.Object");
         Ok(Value::Object(Rc::new(Object { info: info.clone(), case, fields: values })))
     }
 
@@ -1757,6 +1915,7 @@ impl Interpreter {
 
     /// What string interpolation and `print` produce. Nested strings and characters are quoted.
     pub fn show(&mut self, value: &Value, is_top_level: bool) -> Eval<String> {
+        profile::count("show");
         Ok(match value {
             Value::Void => "Void".to_string(),
             Value::Bool(value) => value.to_string(),
@@ -1854,8 +2013,54 @@ impl Interpreter {
     }
 }
 
+/// The names the counters of `TORB_PROFILE` use for the nodes of the syntax tree.
+fn expression_kind(kind: &ExpressionKind) -> &'static str {
+    match kind {
+        ExpressionKind::Integer(_) => "eval.Integer",
+        ExpressionKind::Float(_) => "eval.Float",
+        ExpressionKind::Bool(_) => "eval.Bool",
+        ExpressionKind::Char(_) => "eval.Char",
+        ExpressionKind::Text(_) => "eval.Text",
+        ExpressionKind::Name(_) => "eval.Name",
+        ExpressionKind::ImplicitMember(_) => "eval.ImplicitMember",
+        ExpressionKind::Generic { .. } => "eval.Generic",
+        ExpressionKind::Tuple(_) => "eval.Tuple",
+        ExpressionKind::List(_) => "eval.List",
+        ExpressionKind::Map(_) => "eval.Map",
+        ExpressionKind::Member { .. } => "eval.Member",
+        ExpressionKind::Index { .. } => "eval.Index",
+        ExpressionKind::Call { .. } => "eval.Call",
+        ExpressionKind::Unary { .. } => "eval.Unary",
+        ExpressionKind::Binary { .. } => "eval.Binary",
+        ExpressionKind::Range { .. } => "eval.Range",
+        ExpressionKind::Try(_) => "eval.Try",
+        ExpressionKind::Closure(_) => "eval.Closure",
+        ExpressionKind::If { .. } => "eval.If",
+        ExpressionKind::Match { .. } => "eval.Match",
+        ExpressionKind::Block(_) => "eval.Block",
+        ExpressionKind::Error => "eval.Error",
+    }
+}
+
+fn statement_kind(kind: &StatementKind) -> &'static str {
+    match kind {
+        StatementKind::Declaration(_) => "exec.Declaration",
+        StatementKind::Binding(_) => "exec.Binding",
+        StatementKind::Assignment { .. } => "exec.Assignment",
+        StatementKind::For { .. } => "exec.For",
+        StatementKind::While { .. } => "exec.While",
+        StatementKind::Return(_) => "exec.Return",
+        StatementKind::Break => "exec.Break",
+        StatementKind::Continue => "exec.Continue",
+        StatementKind::Expression(_) => "exec.Expression",
+    }
+}
+
 fn parse_integer(text: &str) -> Option<i64> {
-    let text = text.replace('_', "");
+    // `1_000_000` is rare and every other literal would pay for the copy that removes the separators
+    if text.contains('_') {
+        return parse_integer(&text.replace('_', ""));
+    }
     if let Some(digits) = text.strip_prefix("0x") {
         return i64::from_str_radix(digits, 16).ok();
     }
@@ -1888,7 +2093,12 @@ fn contains_implicit(value: &Value) -> bool {
 fn adapt(value: Value, annotation: Option<&'static TypeReference>) -> Value {
     let Some(annotation) = annotation else { return value };
     match (&value, &annotation.kind) {
-        (Value::Int(_), TypeKind::Named { path, .. }) if path.len() == 1 && builtin_type(&path[0].text) == Some("Float") => to_float(value),
+        // Only `Float`, `Float32` and `Float64` can make an Int a Float, and this runs for every argument of every call
+        (Value::Int(_), TypeKind::Named { path, .. })
+            if path.len() == 1 && path[0].text.starts_with('F') && builtin_type(&path[0].text) == Some("Float") =>
+        {
+            to_float(value)
+        }
         (Value::Function(function), TypeKind::Function { parameters, .. }) => match &**function {
             Function::Closure(closure) if closure.signature.is_none() => Value::Function(Rc::new(Function::Closure(Closure {
                 ast: closure.ast,
@@ -1940,6 +2150,14 @@ pub fn slice_bounds(range: Range, length: usize) -> Eval<(usize, usize)> {
 /// Walks down a path for writing. Storage that is shared is copied on the way (`Rc::make_mut`).
 fn navigate<'value>(mut current: &'value mut Value, steps: &[Step]) -> Eval<&'value mut Value> {
     for step in steps {
+        if profile::is_enabled() {
+            match current {
+                Value::List(items) if Rc::strong_count(items) > 1 => profile::add("copy_on_write.List", items.len()),
+                Value::Map(table) if Rc::strong_count(table) > 1 => profile::add("copy_on_write.Map", table.len()),
+                Value::Object(object) if Rc::strong_count(object) > 1 => profile::add("copy_on_write.Object", object.fields.len()),
+                _ => {}
+            }
+        }
         current = match (step, current) {
             (Step::Field(position), Value::Object(object)) => {
                 let field = &object.info.fields_of(object.case)[*position];

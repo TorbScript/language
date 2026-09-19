@@ -1,7 +1,7 @@
 //! Runtime values. Everything is a value: storage is reference counted and copied on write (`Rc::make_mut`), which is
 //! exactly the memory model of the language, minus the optimizations.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -39,21 +39,24 @@ pub enum Value {
     Module(Rc<Module>),
 }
 
-/// A string or a slice of one. Slicing shares the buffer, as the language promises.
+/// A string or a slice of one. Slicing shares the buffer, as the language promises. The offsets are `u32`, which keeps
+/// `Value` at 32 bytes instead of 40 - it is moved and cloned for every step the interpreter takes.
 #[derive(Clone)]
 pub struct Text {
     buffer: Rc<str>,
-    start: usize,
-    end: usize,
+    start: u32,
+    end: u32,
 }
 
 impl Text {
     pub fn new(text: &str) -> Text {
-        Text { buffer: Rc::from(text), start: 0, end: text.len() }
+        crate::profile::add("text.allocate", text.len());
+        assert!(text.len() <= u32::MAX as usize, "the bootstrap interpreter handles strings up to 4 GB");
+        Text { buffer: Rc::from(text), start: 0, end: text.len() as u32 }
     }
 
     pub fn as_str(&self) -> &str {
-        &self.buffer[self.start..self.end]
+        &self.buffer[self.start as usize..self.end as usize]
     }
 
     /// `None` if an offset is out of range or inside of a character.
@@ -62,7 +65,7 @@ impl Text {
         if from > to || to > text.len() || !text.is_char_boundary(from) || !text.is_char_boundary(to) {
             return None;
         }
-        Some(Text { buffer: self.buffer.clone(), start: self.start + from, end: self.start + to })
+        Some(Text { buffer: self.buffer.clone(), start: self.start + from as u32, end: self.start + to as u32 })
     }
 }
 
@@ -140,24 +143,29 @@ impl Value {
     }
 
     pub fn some(value: Value) -> Value {
+        crate::profile::count("allocate.Some");
         Value::Option(Some(Rc::new(value)))
     }
 
     pub const NONE: Value = Value::Option(None);
 
     pub fn ok(value: Value) -> Value {
+        crate::profile::count("allocate.Ok");
         Value::Result(Ok(Rc::new(value)))
     }
 
     pub fn error(value: Value) -> Value {
+        crate::profile::count("allocate.Error");
         Value::Result(Err(Rc::new(value)))
     }
 
     pub fn list(items: Vec<Value>) -> Value {
+        crate::profile::add("allocate.List", items.len());
         Value::List(Rc::new(items))
     }
 
     pub fn tuple(items: Vec<Value>) -> Value {
+        crate::profile::count("allocate.Tuple");
         Value::Tuple(Rc::new(Tuple { labels: vec![None; items.len()], items }))
     }
 
@@ -268,6 +276,7 @@ impl Hash for Key {
 }
 
 fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
+    crate::profile::count("table.hash_node");
     match value {
         Value::Void => 0.hash(state),
         Value::Bool(value) => value.hash(state),
@@ -317,6 +326,7 @@ impl Table {
     }
 
     pub fn get(&self, key: &Value) -> Option<&Value> {
+        crate::profile::count("table.get");
         let position = *self.index.get(&Key(key.clone()))?;
         self.entries[position].as_ref().map(|(_, value)| value)
     }
@@ -327,10 +337,12 @@ impl Table {
     }
 
     pub fn contains(&self, key: &Value) -> bool {
+        crate::profile::count("table.contains");
         self.index.contains_key(&Key(key.clone()))
     }
 
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
+        crate::profile::count("table.insert");
         if let Some(existing) = self.get_mut(&key) {
             return Some(std::mem::replace(existing, value));
         }
@@ -376,51 +388,123 @@ pub struct Environment {
     pub module: Rc<Module>,
     pub parent: Option<Rc<Environment>>,
     pub slots: RefCell<Vec<Slot>>,
+    /// The one scope the top-level code of this module runs in. Constants of an entry file are evaluated there.
+    pub is_top_level: bool,
+    /// One bit per name this scope declares. A name whose bit is missing is not in this scope, so looking it up
+    /// somewhere in the chain does not have to read the slots at all - and most names are not in most scopes.
+    /// Names share bits; then the slots decide. Bits are only ever added, so the filter can never hide a binding.
+    names: Cell<u64>,
 }
 
 pub struct Slot {
     pub name: &'static str,
+    /// `mark(name)`, so that a scan over the slots compares integers
+    mark: u32,
     pub value: Value,
     pub is_var: bool,
 }
 
+/// A fingerprint of a name, from its length and its first and last character. Looking a name up means scanning a
+/// list of names - the slots of a scope, the fields of a type, the cases of a type - and comparing these instead of
+/// the characters is what makes those scans cheap. Names that share a fingerprint are still compared character by
+/// character, so a collision only costs time.
+pub fn mark(name: &str) -> u32 {
+    let bytes = name.as_bytes();
+    let first = u32::from(bytes.first().copied().unwrap_or(0));
+    let last = u32::from(bytes.last().copied().unwrap_or(0));
+    ((bytes.len() as u32) << 16) | (first << 8) | last
+}
+
+/// The bit of a name in a filter of 64 bits: one for the names a scope declares, one for the members a type has.
+/// A name whose bit is missing is certainly not in there; names share bits, so a bit that is set proves nothing.
+pub fn bit_of(mark: u32) -> u64 {
+    1u64 << (mark.wrapping_mul(0x9E37_79B9) >> 26)
+}
+
 impl Environment {
     pub fn root(module: Rc<Module>) -> Rc<Environment> {
-        Rc::new(Environment { module, parent: None, slots: RefCell::new(Vec::new()) })
+        Rc::new(Environment { module, parent: None, slots: RefCell::new(Vec::new()), is_top_level: true, names: Cell::new(0) })
     }
 
     pub fn child(parent: &Rc<Environment>) -> Rc<Environment> {
-        Rc::new(Environment { module: parent.module.clone(), parent: Some(parent.clone()), slots: RefCell::new(Vec::new()) })
+        crate::profile::count("environment.child");
+        Rc::new(Environment {
+            module: parent.module.clone(),
+            parent: Some(parent.clone()),
+            slots: RefCell::new(Vec::new()),
+            is_top_level: false,
+            names: Cell::new(0),
+        })
+    }
+
+    /// A scope that is not below the one it was written in: the body of a function sees its module, not its caller.
+    pub fn of_call(module: Rc<Module>, parent: Rc<Environment>) -> Rc<Environment> {
+        crate::profile::count("environment.child");
+        Rc::new(Environment { module, parent: Some(parent), slots: RefCell::new(Vec::new()), is_top_level: false, names: Cell::new(0) })
+    }
+
+    /// Makes a scope that nobody references anymore into a new one. It keeps the capacity its slots already have,
+    /// which is what a pool of scopes saves: a block, a turn of a loop and a call each need one.
+    pub fn reuse(&mut self, module: Rc<Module>, parent: Rc<Environment>) {
+        self.module = module;
+        self.parent = Some(parent);
+        self.slots.get_mut().clear();
+        self.names.set(0);
+    }
+
+    /// Drops everything the scope holds, so that nothing stays alive while it waits to be used again.
+    pub fn empty(&mut self) {
+        self.parent = None;
+        self.slots.get_mut().clear();
+        self.names.set(0);
     }
 
     pub fn declare(&self, name: &'static str, value: Value, is_var: bool) {
-        self.slots.borrow_mut().push(Slot { name, value, is_var });
+        crate::profile::count("environment.declare");
+        let mark = mark(name);
+        self.names.set(self.names.get() | bit_of(mark));
+        self.slots.borrow_mut().push(Slot { name, mark, value, is_var });
     }
 
     pub fn lookup(&self, name: &str) -> Option<Value> {
+        crate::profile::count("environment.lookup");
         self.find(name).map(|(environment, position)| environment.slots.borrow()[position].value.clone())
     }
 
     /// The scope and the position of the innermost binding with this name.
     pub fn find(&self, name: &str) -> Option<(&Environment, usize)> {
+        crate::profile::count("environment.find");
+        let mark = mark(name);
+        let bit = bit_of(mark);
         let mut current = self;
         loop {
-            if let Some(position) = current.slots.borrow().iter().rposition(|slot| slot.name == name) {
-                return Some((current, position));
+            if current.names.get() & bit != 0 {
+                if crate::profile::is_enabled() {
+                    crate::profile::add("environment.scope_searched", current.slots.borrow().len());
+                }
+                let found = current.slots.borrow().iter().rposition(|slot| slot.mark == mark && slot.name == name);
+                if let Some(position) = found {
+                    return Some((current, position));
+                }
             }
+            crate::profile::count("environment.scope_walked");
             current = current.parent.as_deref()?;
         }
     }
 
     pub fn find_shared(self: &Rc<Environment>, name: &str) -> Option<(Rc<Environment>, usize)> {
-        let mut current = self.clone();
+        crate::profile::count("environment.find_shared");
+        let mark = mark(name);
+        let bit = bit_of(mark);
+        let mut current = self;
         loop {
-            let position = current.slots.borrow().iter().rposition(|slot| slot.name == name);
-            if let Some(position) = position {
-                return Some((current, position));
+            if current.names.get() & bit != 0 {
+                let position = current.slots.borrow().iter().rposition(|slot| slot.mark == mark && slot.name == name);
+                if let Some(position) = position {
+                    return Some((current.clone(), position));
+                }
             }
-            let parent = current.parent.clone()?;
-            current = parent;
+            current = current.parent.as_ref()?;
         }
     }
 }
