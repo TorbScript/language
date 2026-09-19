@@ -301,19 +301,29 @@ fn text_of(source: &str) -> Vec<String> {
         .collect()
 }
 
-// --- The rule that waits for the parser -----------------------------------------------------------------------------
+// --- The rule that is not part of the default run -------------------------------------------------------------------
 
 #[test]
 fn imported_case_patterns_are_off_by_default() {
-    unchanged("use Some, None from Option\nfn f() {\n  match x {\n    .None => 0\n    _ => 1\n  }\n}");
+    unchanged("use Option.None from \"std/core\"\nfn f() {\n  match x {\n    .None => 0\n    _ => 1\n  }\n}");
 }
 
 #[test]
 fn an_imported_payload_less_case_loses_its_dot() {
     let rules = [Rule::ImportedCasePatterns];
     assert_eq!(
-        apply("use Some, None from Option\nfn f() {\n  match x {\n    .None => 0\n    _ => 1\n  }\n}", &rules),
-        "use Some, None from Option\nfn f() {\n  match x {\n    None => 0\n    _ => 1\n  }\n}"
+        apply("use Option.None from \"std/core\"\nfn f() {\n  match x {\n    .None => 0\n    _ => 1\n  }\n}", &rules),
+        "use Option.None from \"std/core\"\nfn f() {\n  match x {\n    None => 0\n    _ => 1\n  }\n}"
+    );
+    // Without `from` the path is resolved in the file's own scope, and a case out of it counts the same way
+    assert_eq!(
+        apply("use Shape.Empty\nfn f() {\n  match x {\n    .Empty => 0\n    _ => 1\n  }\n}", &rules),
+        "use Shape.Empty\nfn f() {\n  match x {\n    Empty => 0\n    _ => 1\n  }\n}"
+    );
+    // A single name is a whole export and not a case, so it shadows instead of importing one
+    assert_eq!(
+        apply("use Empty from \"./shape\"\nfn f() {\n  match x {\n    .Empty => 0\n    _ => 1\n  }\n}", &rules),
+        "use Empty from \"./shape\"\nfn f() {\n  match x {\n    .Empty => 0\n    _ => 1\n  }\n}"
     );
     // The prelude's four are imported everywhere
     assert_eq!(
@@ -335,8 +345,6 @@ fn an_imported_payload_less_case_loses_its_dot() {
         apply("type None {}\nfn f() {\n  match x {\n    .None => 0\n    _ => 1\n  }\n}", &rules),
         "type None {}\nfn f() {\n  match x {\n    .None => 0\n    _ => 1\n  }\n}"
     );
-    // `use Option.None from "std/core"` is understood by `imported_cases` as well, but no parser reads it yet: the very
-    // change this rule waits for is the one that brings it, and then this is where its test goes.
 }
 
 // --- The safety net -------------------------------------------------------------------------------------------------

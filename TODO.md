@@ -663,6 +663,12 @@ Wenn nicht, was bedeutet, bewirkt es?
     am Scope (`use`), nicht am erwarteten Typ - für alles nicht Importierte bleibt `.Case`. Also `Some(found) =>` /
     `None =>`, `Ok(value) =>` / `Fail(problem) =>`. Umsetzung (beide Parser, Checker, Stage 0) und Umstellung des
     Bestands im Werkzeuglauf zusammen mit K2, nach den drei Merges.
+  - **Erledigt:** in beiden Parsern entscheidet jetzt der erste Buchstabe - ein großgeschriebener Pattern-Name wird
+    derselbe Knoten wie `Shape.Circle` (`Variant`, ein Segment, keine Felder), ein kleingeschriebener bindet, `_Found`
+    und `_` behalten ihre Regel. Der Checker löst ihn über den Scope auf und meldet sonst "`Nome` is not a case in
+    scope" mit der Regel als Note und dem nächstliegenden Case des gematchten Typs; Stage 0 sucht den Namen zur
+    Laufzeit und scheitert laut. Der Bestand (`.None =>`) ist absichtlich nicht umgestellt: das macht `torb canon` mit
+    der Regel `imported-case-patterns`, die jetzt eingeschaltet werden kann.
 
 - (Chat, 2026-09-19) Cases importieren: `use Option.* from "…"`, `use Option.Some, Option.None from "…"`,
   `use Option.{Some, None} from "…"`?
@@ -678,12 +684,26 @@ Wenn nicht, was bedeutet, bewirkt es?
     `Component.Transform`). Seit großgeschriebene Pattern-Namen über den Scope laufen, muss der Scope oben ablesbar sein.
   - **Nein zu `Option.{Some, None}`** (mein Votum, sag Bescheid wenn du sie doch willst): eine zweite Grammatikform,
     die nur ein wiederholtes `Option.` spart - bei den wenigen Stellen, an denen Cases importiert werden, zu wenig.
+  - **Erledigt:** `UseItem.name` ist `UseItem.path` geworden und `UseSource.Type` ist `UseSource.Local`, also löst ein
+    Durchlauf jede Form auf: erstes Segment = Export des Moduls oder Name dieser Datei, jedes weitere = Case eines Typs
+    oder Name hinter einem Namensraum-Import (`use shapes.Shape.Circle`). Die alte Form ist ein Parserfehler, der die
+    neue nennt; eine Methode, eine Konstante oder ein Feld bekommt "Only a case can be imported from a type: `area` is
+    a method of `Shape`". Umgestellt: Prelude, die drei Test-Preludes, `language.trb`, `errors.trb`, CONCEPT,
+    CONTRIBUTING, `bootstrap/README.md`.
 
 - (Fund beim Prelude-Umbau, 2026-09-19) `Result<Void, Error>` erfüllt `Show` nicht.
   - **Wird gelöst:** Checker-Lücke: ein Trait-Wert erfüllt eine Bound, die sein eigener Trait verlangt
     (`trait Error with Show`), bisher nur bei der Koerzion, nicht als Bound-Witness
     (`extend<Value: Show, Failure: Show> Result<…> with Show`). Geht mit der Syntax-Runde (Case-Import per Pfad,
     importierter Case nackt im Pattern) an denselben Agent.
+  - **Erledigt, andere Ursache:** der Trait-Wert als Bound-Witness ging schon (`Result<Int, Error>` ist `Show`, auch
+    `Result<Int, Show & Hash>`) - er war nur nicht getestet. Kaputt war `Void`: eine Signatur schreibt es als den Typ
+    der Sprache (`TypeForm.VoidType`), `with Equals, Hash, Show` steht aber am `native type Void` von `std/core`, und
+    nichts verband die beiden - `Void` erfüllte also gar keinen Trait, weshalb das `Value: Show` der `Result`-
+    Implementierung scheiterte. Trait-Auflösung und Trait-Hülle fragen jetzt diese Deklaration (`declaredVoidOf`), was
+    auch `nothing.show()` zu einem normalen Memberaufruf macht. Tests halten die genauen Witness-Bäume fest
+    (`Result<Value, Failure>: Show [Void: Show, object Problem: Show]`); Entscheidung in `docs/TYPECHECKER.md` als
+    Lücke 43.
 
 - (Chat, 2026-09-19) Wieso `Void` → `Void`, aber `Bool` → `true`/`false`? Wäre `void` nicht besser (`Ok void`)?
   - **Entschieden - wird gelöst:** Ja. Der Wert von `Void` ist das Literal `void`, so wie `true`/`false` die Werte
@@ -693,6 +713,12 @@ Wenn nicht, was bedeutet, bewirkt es?
     Pattern ist Großes nie eine Bindung" wäre sie noch schiefer geworden. `Void` an Wertposition wird ein Fehler, der
     die neue Schreibweise nennt. Kosten: ein Schlüsselwort, ~16 Stellen + Doku; läuft in der Syntax-Runde mit
     (Case-Import per Pfad, importierter Case nackt im Pattern, Bound-Lücke bei Trait-Werten).
+  - **Erledigt:** `void` ist Schlüsselwort in beiden Lexern, Literal-Ausdruck und Literal-Pattern in beiden Parsern,
+    `VoidLiteral` in beiden Dumps; `Resolution.VoidValue` ist mit dem Namen weggefallen, für den es stand. `Void` an
+    Wertposition sagt "`Void` is a type, not a value: its one value is written `void`". Ein Schlüsselwort kann kein Name
+    sein: die 88 + 15 lokalen Variablen, die `void` hießen (fast alle `const void = program.internType(...)` in den
+    IR-Tests), heißen `voidType`. Nicht angefasst: `Show` von `Void` - Stage 0 druckt `Void`, das C-Runtime `()`, diese
+    Abweichung gab es vorher schon und gehört zu 5.14.
 
 - (Chat, 2026-09-19) `*` oder `?` statt `_` als Wildcard im Pattern, weil `_` schon der implizite Closure-Parameter ist?
   - **Entschieden (Nutzer):** `_` bleibt für beides. `?` hat schon drei Bedeutungen, `*` liest sich als Glob/Operator,
