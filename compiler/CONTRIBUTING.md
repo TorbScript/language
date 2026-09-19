@@ -67,6 +67,12 @@ Stage 0 has no type checker: a mistake is found when the line runs, so **every f
    `var` argument therefore *runs twice*, and a pass that is written to run once is then reported as if it had run twice.
    Hoist it into a `const` first, or let the question take its argument by value.
 
+**Natives stay few.** Every `native` declaration has to be rebuilt by every back end (C today, the VM, later
+JavaScript and PHP). Do not add a `native` to `std/` or a function to `runtime/` for something that can be written in
+TorbScript on top of the natives that exist; a new one needs a reason (the operating system, raw storage, a number
+operation) in its doc comment. After the fixpoint the runtime shrinks to a small kernel of intrinsics, and everything
+else becomes TorbScript with an optional native fast path.
+
 If the compiler legitimately needs a native that stage 0 lacks, add it minimally in
 `bootstrap/crates/torb-interpreter/src/natives.rs` **and** declare it in `std/`. Stage 0 gets no language features
 and no type checker.
