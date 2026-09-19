@@ -633,3 +633,13 @@ Wenn nicht, was bedeutet, bewirkt es?
     würde nur das Lesen abfangen. Faustregel: was später berechnet werden könnte, ist von Anfang an eine Methode.
     Für den Umbau `.x` → `.x()`: `deprecated` am Feld + Auto-Fix in `torb lint --fix` und als Quick-Fix im LSP
     (Meilenstein 8). Steht im Konzept unter "Visibility and Encapsulation" und bei den Open Questions (`deprecated`).
+
+- (Chat, 2026-09-19) Die `.` vor den Cases stören (`.None =>`, lange `match`-Listen). Kontextabhängig weglassen?
+  - **Entschieden (Nutzer):** Nein, der Punkt bleibt überall - `.Case` im Pattern wie im Ausdruck. Geprüft wurden
+    Rust (nackter Name über den Scope: vertippter Case wird zum Catch-all, genau das haben wir abgeschafft), Haskell/Elm
+    (Großschreibung entscheidet im Pattern) und "Case des erwarteten Typs gewinnt" im Ausdruck (Bedeutung von
+    `Transform(a, b)` hinge vom erwarteten Typ ab). Nur im Pattern ohne Punkt wäre gegangen, aber dann lieber
+    einheitlich: ein Case hat immer einen Punkt oder seinen Typ davor.
+  - **Zurückgestellt (nach dem Fixpunkt, als Vorschlag):** `const Some(x) = … else { return … }` - nimmt die häufigste
+    hässliche Form weg (ein `match`, nur um bei `.None` auszusteigen; `.None =>` steht 317-mal in `compiler/src`).
+    Kommt nicht in Stage 0 (keine neuen Sprachfeatures dort), sondern danach mit Beispielen zur Entscheidung.
