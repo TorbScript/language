@@ -253,22 +253,55 @@ group "Cases" {
     }
   }
 
-  test "cases can be imported by name" {
-    assert(messages("use Some, None from Option\nuse \"./text-extensions\"").isEmpty())
+  test "cases are imported by their path" {
+    assert(messages("use Option, Option.Some, Option.None from \"./option\"\nuse \"./text-extensions\"").isEmpty())
+    const items = useItems("use Option, Option.Some from \"./option\"")
+    assert(items[0].path.map({ _.text }).toList() == ["Option"])
+    assert(items[1].path.map({ _.text }).toList() == ["Option", "Some"])
+    // The name that is imported is the last segment, and it is what binds unless an alias says otherwise
+    assert(items[1].name().text == "Some")
+    assert(items[1].localName().text == "Some")
+  }
+
+  test "without `from` the path is resolved in the file's own scope" {
+    assert(messages("use Shape.Circle, Shape.Empty").isEmpty())
+    match statements("use Shape.Circle")[0].kind {
+      .Declare(declaration) => match declaration.kind {
+        .Use(usage) => match usage.source {
+          .Local => {}
+          other => panic "Expected a local source, found {other}"
+        }
+        other => panic "Expected a `use`, found {other}"
+      }
+      other => panic "Expected a declaration, found {other}"
+    }
+    // One bare name would rebind what is in scope already, so a path of one segment still needs a module
+    assert(messages("use Shape") == ["Expected `from \"...\"`"])
+  }
+
+  test "`use Names from Type` is gone, and the message teaches the path form" {
+    assert(
+      messages("use Some, None from Option")
+        == ["`from` takes a module in quotes, not the type `Option`: a case is imported by its path,"
+          + " `use Option.Some from \"...\"`"]
+    )
+    // A namespace import of a type never existed, so nothing is offered for it
+    assert(messages("use * as maybe from Option") == ["`from` takes a module in quotes, not the type `Option`"])
   }
 
   test "any name of a use list may get a local name of its own" {
     const items = useItems("public use IoError as FileProblem, File from \"std/fs\"")
-    assert(items[0].name.text == "IoError")
+    assert(items[0].name().text == "IoError")
     assert(items[0].alias.map({ _.text }) == Some("FileProblem"))
-    assert(items[1].name.text == "File")
+    assert(items[1].name().text == "File")
     assert(items[1].alias.isNone())
     // The spans of both names are kept: a message about the export points at it, one about the local name at the alias
-    assert(items[0].name.span.start == 11)
+    assert(items[0].name().span.start == 11)
     assert(items[0].alias.map({ _.span.start }) == Some(22))
     // A case is aliased the same way
-    const cases = useItems("use Some as Just from Option")
-    assert(cases[0].alias.map({ _.text }) == Some("Just"))
+    const cases = useItems("use Option.None as Nothing from \"./option\"")
+    assert(cases[0].alias.map({ _.text }) == Some("Nothing"))
+    assert(cases[0].localName().text == "Nothing")
   }
 
   test "a label in a variant pattern is kept, not discarded" {

@@ -28,7 +28,7 @@ public type Option<Value> {
 """,
   "std/prelude/src/lib.trb": r"""
 public use Int, Text, Bool, List, Show, Option from "./types"
-public use Some, None from Option
+public use Option.Some, Option.None from "./types"
 """,
   "app/project.trb": r"""
 name "acme/app"
@@ -254,7 +254,7 @@ fn take(value: Assistant) {}
     assert(
       problems(
         r"""
-use Some as Just, None from Option
+use Option.Some as Just, Option.None
 
 fn take(value: Option<Int>) {}
 """
@@ -269,7 +269,7 @@ fn take(value: Option<Int>) {}
         "app/src/main.trb": "use Missing as Present from \"./helper\"",
       ]) == ["`Missing` is not exported by `./helper`"]
     )
-    assert(problems("use Maybe as Perhaps from Option") == ["`Option` has no case `Maybe`"])
+    assert(problems("use Option.Maybe as Perhaps") == ["`Option` has no case `Maybe`"])
   }
 
   test "duplicates are about the local name" {
@@ -412,20 +412,74 @@ fn take(value: Helper) {}
 }
 
 group "Cases" {
-  test "cases are imported by name" {
+  test "a case is imported through the type it belongs to" {
+    assert(
+      messages([
+        "app/src/shapes.trb": r"""
+public type Shape {
+  case Circle(radius: Int)
+  case Empty
+}
+""",
+        "app/src/main.trb": r"""
+use Shape, Shape.Circle, Shape.Empty from "./shapes"
+
+fn take(shape: Shape): Shape { Circle(1) }
+""",
+      ]).isEmpty()
+    )
+  }
+
+  test "without `from` the path is resolved in the file's own scope" {
+    // What a file that declares the type itself writes, and what a name the prelude brings takes as well
     assert(
       problems(
         r"""
-use Some, None from Option
+use Option.Some, Option.None
 
 fn take(value: Option<Int>) {}
 """
       ).isEmpty()
     )
+    assert(
+      problems(
+        r"""
+type Shape {
+  case Circle(radius: Int)
+}
+use Shape.Circle
+
+fn take(shape: Shape): Shape { Circle(1) }
+"""
+      ).isEmpty()
+    )
+    assert(problems("use Shapes.Circle") == ["Unknown name `Shapes`"])
   }
 
   test "a case the type does not have" {
-    assert(problems("use Maybe from Option") == ["`Option` has no case `Maybe`"])
+    assert(problems("use Option.Maybe") == ["`Option` has no case `Maybe`"])
+  }
+
+  test "only a case can be imported from a type" {
+    var files = [
+      "app/src/shapes.trb": r"""
+public type Shape {
+  case Circle(radius: Int)
+
+  fn area(self): Int { 0 }
+}
+public type Point {
+  x: Int
+  const origin: Int = 0
+}
+""",
+      "app/src/main.trb": "use Shape.area from \"./shapes\"",
+    ]
+    assert(messages(files) == ["Only a case can be imported from a type: `area` is a method of `Shape`"])
+    files.set("app/src/main.trb", "use Point.x from \"./shapes\"")
+    assert(messages(files) == ["Only a case can be imported from a type: `x` is a field of `Point`"])
+    files.set("app/src/main.trb", "use Point.origin from \"./shapes\"")
+    assert(messages(files) == ["Only a case can be imported from a type: `origin` is a constant of `Point`"])
   }
 
   test "the type may be named through a namespace import" {
@@ -437,16 +491,16 @@ public type Shape {
 """,
       "app/src/main.trb": r"""
 use * as shapes from "./shapes"
-use Circle from shapes.Shape
+use shapes.Shape.Circle
 
 fn take(shape: shapes.Shape) {}
 """,
     ]
     assert(messages(files).isEmpty())
-    files.set("app/src/main.trb", "use * as shapes from \"./shapes\"\nuse Square from shapes.Shape")
+    files.set("app/src/main.trb", "use * as shapes from \"./shapes\"\nuse shapes.Shape.Square")
     assert(messages(files) == ["`Shape` has no case `Square`"])
-    files.set("app/src/main.trb", "use * as shapes from \"./shapes\"\nuse Circle from shapes.Missing")
-    assert(messages(files) == ["Unknown name `shapes.Missing`"])
+    files.set("app/src/main.trb", "use * as shapes from \"./shapes\"\nuse shapes.Missing.Circle")
+    assert(messages(files) == ["`Missing` is not exported by `shapes`"])
   }
 
   test "only a type has cases" {
@@ -454,9 +508,13 @@ fn take(shape: shapes.Shape) {}
       problems(
         r"""
 fn maker() {}
-use Case from maker
+use maker.Case
 """
       ) == ["the function `maker` has no cases"]
+    )
+    assert(
+      notes(["app/src/main.trb": "fn maker() \{\}\nuse maker.Case"])
+        == ["A path in a `use` names a case of a type: `use Shape.Circle from \"./shape\"`"]
     )
   }
 
@@ -464,7 +522,7 @@ use Case from maker
     assert(
       problems(
         r"""
-use Some from Option
+use Option.Some
 
 fn take(value: Some) {}
 """

@@ -75,7 +75,7 @@ fn parseConstant(var parser: Parser, modifiers: Modifiers): DeclarationKind {
   DeclarationKind.Constant(binding)
 }
 
-/** `use A, B from "./file"`, `use * as http from "std/net/http"` */
+/** `use A, B from "./file"`, `use Option.Some from "./option"`, `use Shape.Circle`, `use * as http from "std/http"` */
 fn parseUse(var parser: Parser): DeclarationKind {
   parser.bump()
   // `use "./text-extensions"`
@@ -100,29 +100,65 @@ fn parseUse(var parser: Parser): DeclarationKind {
   if parser.isAtWord("from") {
     parser.bump()
   } else {
+    // `use Shape.Circle`: without `from` every path is resolved in this file's own scope, which is what a type
+    // declared here needs. A path of one segment would rebind something that is in scope already.
+    if isLocalUse(items) {
+      return DeclarationKind.Use(UseDeclaration(items, UseSource.Local))
+    }
     parser.errorHere("Expected `from \"...\"`")
   }
-  // `use Some, None from Option`: the cases of a type
+  // `use Some, None from Option` is gone: after `from` there is always a module
   if parser.isAt(TokenKind.Identifier) {
+    const start = parser.span()
     var path = [parser.name()]
     while parser.isAt(TokenKind.Dot) && parser.kindAt(1) == TokenKind.Identifier {
       parser.bump()
       path.add(parser.name())
     }
-    return DeclarationKind.Use(UseDeclaration(items, UseSource.Type(path)))
+    const at = start.to(parser.previousSpan())
+    const message = typeSourceMessage(path, items)
+    parser.error(message, at)
+    return DeclarationKind.Use(UseDeclaration(items, UseSource.Module("")))
   }
   DeclarationKind.Use(UseDeclaration(items, UseSource.Module(parsePlainText(parser, "the path of a module"))))
 }
 
-/** `IoError as FileProblem`: one name of a `use` list, under the local name it is to get. */
+/** `Option.Some as Just`: one item of a `use` list, with its path and the local name it is to get. */
 fn parseUseItem(var parser: Parser): UseItem {
-  const name = parser.name()
+  var path = [parser.name()]
+  while parser.isAt(TokenKind.Dot) && parser.kindAt(1) == TokenKind.Identifier {
+    parser.bump()
+    path.add(parser.name())
+  }
   // `use A as B from "..."`: `as` is a word, not a keyword, so a type named `as` stays possible
   if !parser.isAtWord("as") {
-    return UseItem(name, None)
+    return UseItem(path, None)
   }
   parser.bump()
-  UseItem(name, Some(parser.name()))
+  UseItem(path, Some(parser.name()))
+}
+
+/**
+ * Whether a `use` without `from` is the local form: every item names a type of this file and a case of it
+ * (`use Shape.Circle`). A single bare name would rebind what is in scope already, so that stays a missing `from`.
+ */
+fn isLocalUse(items: UseItems): Bool {
+  match items {
+    .Names(names) => !names.isEmpty() && names.all({ _.path.length() > 1 })
+    _ => false
+  }
+}
+
+/** `use Some, None from Option` was the old spelling of a case import. The message teaches the path form instead. */
+fn typeSourceMessage(path: List<Name>, items: UseItems): String {
+  const owner = path.map({ _.text }).toList().joined(separator: ".")
+  const message = "`from` takes a module in quotes, not the type `{owner}`"
+  if const .Names(names) = items {
+    if const Some(first) = names.get(0) {
+      return "{message}: a case is imported by its path, `use {owner}.{first.name().text} from \"...\"`"
+    }
+  }
+  message
 }
 
 /** A string literal without interpolation. */

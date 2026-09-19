@@ -66,16 +66,29 @@ pub struct UseDeclaration {
 pub enum UseSource {
     /// `from "./file"`, `from "std/fs"`
     Module(String),
-    /// `use Some, None from Option`: cases of a type
-    Type(Vec<Name>),
+    /// `use Shape.Circle`: no `from`, so every path is resolved in the file's own scope
+    Local,
 }
 
-/// One name of a `use` list, with the local name it gets: `IoError as FileProblem`. Both carry their own span, so a
-/// message about the export points at the export and one about the local name at the alias.
+/// One item of a `use` list: a path and the local name it gets (`Option.Some as Just`). The last segment is what is
+/// imported, the ones before it the type it is a case of. Every name carries its own span, so a message about the
+/// export points at the export and one about the local name at the alias.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UseItem {
-    pub name: Name,
+    pub path: Vec<Name>,
     pub alias: Option<Name>,
+}
+
+impl UseItem {
+    /// The name that is imported: the last segment of the path. Empty only after a parse error.
+    pub fn name(&self) -> &Name {
+        self.path.last().expect("a use item always has at least one segment")
+    }
+
+    /// The name the importing file sees. Everything that is about the *export* keeps naming `name()` instead.
+    pub fn local_name(&self) -> &Name {
+        self.alias.as_ref().unwrap_or_else(|| self.name())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

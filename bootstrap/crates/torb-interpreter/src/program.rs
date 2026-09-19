@@ -363,8 +363,9 @@ impl Loader {
                     };
                     let path = match &usage.source {
                         UseSource::Module(path) => path,
-                        UseSource::Type(path) => {
-                            changed |= import_cases(module, path, &usage.items, &mut unresolved);
+                        // `use Shape.Circle`: no module, so the path starts in the scope of this module itself
+                        UseSource::Local => {
+                            changed |= import_local(module, &usage.items, &mut unresolved);
                             continue;
                         }
                     };
@@ -380,20 +381,25 @@ impl Loader {
                         UseItems::OnlyExtensions => {}
                         UseItems::Names(items) => {
                             for item in items {
-                                let text: &'static str = &item.name.text;
+                                let text: &'static str = &item.path[0].text;
                                 // `use IoError as FileProblem from "..."`: the module gets the name under the alias
-                                let local: &'static str = local_name(item);
+                                let local: &'static str = &item.local_name().text;
                                 if module.scope.borrow().contains_key(local) {
                                     continue;
                                 }
                                 let found = target.scope.borrow().get(text).cloned();
-                                match found {
+                                let Some(found) = found else {
+                                    unresolved
+                                        .push(format!("{}: \"{path}\" does not declare `{text}`", module.location(item.path[0].span)));
+                                    continue;
+                                };
+                                // `use Option, Option.Some from "./option"`: the segments after the first are cases
+                                match walk_path(found, &item.path) {
                                     Some(found) => {
                                         module.scope.borrow_mut().insert(local, found);
                                         changed = true;
                                     }
-                                    None => unresolved
-                                        .push(format!("{}: \"{path}\" does not declare `{text}`", module.location(item.name.span))),
+                                    None => unresolved.push(missing_step(module, item)),
                                 }
                             }
                         }
@@ -429,41 +435,63 @@ impl Loader {
     }
 }
 
-/// The local name an imported item gets: its alias where there is one, otherwise the name the module exports.
-fn local_name(item: &'static ast::UseItem) -> &'static str {
-    match &item.alias {
-        Some(alias) => &alias.text,
-        None => &item.name.text,
-    }
-}
-
-/// `use Circle, Empty from Shape`: the cases of a type as names of the module. Returns whether something was added.
-fn import_cases(module: &Rc<Module>, path: &'static [ast::Name], items: &'static UseItems, unresolved: &mut Vec<String>) -> bool {
-    let UseItems::Names(names) = items else { return false };
-    let owner = module.scope.borrow().get(path[0].text.as_str()).cloned();
-    // The cases of `Option` and `Result` are built in
-    let Some(Item::Value(Value::Type(info))) = owner else { return false };
+/// `use Shape.Circle`: a `use` without a module, so every path starts in the scope of the importing module itself.
+/// Returns whether something was added.
+fn import_local(module: &Rc<Module>, items: &'static UseItems, unresolved: &mut Vec<String>) -> bool {
+    let UseItems::Names(items) = items else { return false };
     let mut changed = false;
-    for item in names {
-        let text: &'static str = &item.name.text;
-        // `use Some as Just from Option`: the case is bound under the alias
-        let local: &'static str = local_name(item);
+    for item in items {
+        // `use Shape.Circle as Round`: the case is bound under the alias
+        let local: &'static str = &item.local_name().text;
         if module.scope.borrow().contains_key(local) {
             continue;
         }
-        let Some(case) = info.case_index(text) else {
-            unresolved.push(format!("{}: `{}` has no case `{text}`", module.location(item.name.span), info.name));
-            continue;
-        };
-        let value = if info.cases[case].fields.is_empty() {
-            Value::Object(Rc::new(crate::value::Object { info: info.clone(), case: Some(case), fields: Vec::new() }))
-        } else {
-            Value::Function(Rc::new(Function::Constructor { info: info.clone(), case: Some(case) }))
-        };
-        module.scope.borrow_mut().insert(local, Item::Value(value));
-        changed = true;
+        let start = module.scope.borrow().get(item.path[0].text.as_str()).cloned();
+        // Not there yet, or a built-in type whose cases the interpreter knows without a declaration
+        let Some(start) = start else { continue };
+        match walk_path(start, &item.path) {
+            Some(found) => {
+                module.scope.borrow_mut().insert(local, found);
+                changed = true;
+            }
+            None => unresolved.push(missing_step(module, item)),
+        }
     }
     changed
+}
+
+/// The segments after the first one of a `use` path, from the item the first one named.
+fn walk_path(start: Item, path: &'static [ast::Name]) -> Option<Item> {
+    let mut current = start;
+    for name in &path[1..] {
+        current = step_into(&current, &name.text)?;
+    }
+    Some(current)
+}
+
+/// One step of a `use` path: a case of a type, or a name a namespace import stands for.
+fn step_into(owner: &Item, name: &str) -> Option<Item> {
+    let Item::Value(value) = owner else { return None };
+    match value {
+        Value::Module(target) => target.scope.borrow().get(name).cloned(),
+        Value::Type(info) => {
+            let case = info.case_index(name)?;
+            let value = if info.cases[case].fields.is_empty() {
+                Value::Object(Rc::new(crate::value::Object { info: info.clone(), case: Some(case), fields: Vec::new() }))
+            } else {
+                Value::Function(Rc::new(Function::Constructor { info: info.clone(), case: Some(case) }))
+            };
+            Some(Item::Value(value))
+        }
+        _ => None,
+    }
+}
+
+/// `use Shape.Round`: the step that found nothing, named after the segment in front of it.
+fn missing_step(module: &Rc<Module>, item: &'static ast::UseItem) -> String {
+    let owner = &item.path[item.path.len() - 2].text;
+    let name = &item.name().text;
+    format!("{}: `{owner}` has no case `{name}`", module.location(item.name().span))
 }
 
 /// `None` for package imports ("std/fs"): the bootstrap interpreter has everything it knows built in.

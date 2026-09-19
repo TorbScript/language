@@ -61,17 +61,28 @@ public type UseDeclaration {
 public type UseSource {
   /** `from "./file"`, `from "std/fs"` */
   case Module(path: String)
-  /** `use Some, None from Option`: cases of a type */
-  case Type(path: List<Name>)
+  /** `use Shape.Circle`: no `from`, so every path is resolved in the file's own scope */
+  case Local
 }
 
 /**
- * One name of a `use` list, with the local name it gets: `IoError as FileProblem`. Both carry their own span, so a message
- * about the export points at the export and one about the local name at the alias.
+ * One item of a `use` list: a path and the local name it gets (`Option.Some as Just`). The last segment is what is
+ * imported, the ones before it the type it is a case of. Every name carries its own span, so a message about the export
+ * points at the export and one about the local name at the alias.
  */
 public type UseItem {
-  name: Name
+  path: List<Name>
   alias: Name?
+
+  /** The name that is imported: the last segment of the path. */
+  fn name(self): Name {
+    path[path.length() - 1]
+  }
+
+  /** The name the importing file sees. Everything about the *export* keeps naming `name()` instead. */
+  fn localName(self): Name {
+    alias ?? name()
+  }
 }
 
 public type UseItems {

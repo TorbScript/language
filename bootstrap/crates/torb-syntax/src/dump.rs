@@ -32,7 +32,7 @@ fn name(name: &Name) -> String {
 }
 
 fn use_item(item: &UseItem) -> String {
-    format!("UseItem(name: {}, alias: {})", name(&item.name), option(&item.alias, name))
+    format!("UseItem(path: {}, alias: {})", list(&item.path, name), option(&item.alias, name))
 }
 
 fn modifiers(modifiers: &Modifiers) -> String {
@@ -49,7 +49,7 @@ fn declaration(declaration: &Declaration) -> String {
             };
             let source = match &usage.source {
                 UseSource::Module(path) => format!("Module(path: {})", text(path)),
-                UseSource::Type(path) => format!("Type(path: {})", list(path, name)),
+                UseSource::Local => "Local".to_string(),
             };
             format!("Use(declaration: UseDeclaration(items: {items}, source: {source}))")
         }

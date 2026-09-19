@@ -1172,14 +1172,18 @@ shapes.add(.Empty)                             // The parameter does
 if shape == .Empty { ... }                     // The other side of the comparison does
 const other = Shape.Circle(1.0)                // Nothing does: write the type
 
-use Circle, Empty from Shape                   // Or import cases by name, like anything else
+use Shape.Circle, Shape.Empty                  // Or import the cases, and then they need nothing in front of them
 const third = Circle(3.0)
 ```
 
 - `.Case` works wherever a type is expected: annotations, arguments, fields, results, `==`, the arms of a `match`
   whose result is expected, and in patterns (the type is the one of the value that is matched).
-- `use Names from Type` brings cases into scope. That is all there is to `Some`, `None`, `Ok` and `Fail`: the
-  prelude imports them from `Option` and `Result`.
+- **A case is imported by its path:** `use Option, Option.Some, Option.None from "./option"`, and without `from` the
+  path is resolved in the file's own scope (`use Shape.Circle`, which is what the file that declares `Shape` writes).
+  Only cases can be imported through a type - a method, a constant or a field stays `Type.member`. That is all there is
+  to `Some`, `None`, `Ok` and `Fail`: the prelude imports them from `Option` and `Result`.
+- **An imported case needs nothing in front of it, in an expression and in a pattern** (`Some(found) =>`, `None =>`).
+  Everything that is not imported keeps its dot or its type.
 - Directly inside of the braces of a `match`, a line that starts with `.` starts an arm. Everywhere else it continues
   the expression of the line above (`.filter { ... }`). So the value of an arm that spans several lines of a call
   chain goes into a block (`=> { ... }`).
@@ -1693,6 +1697,8 @@ use Router from "acme/http/routing"                  // A public module of a pac
 use Vector2 from "./math/vector2"                    // Relative import, no file extension
 use * as math from "std/math"                        // Namespace import
 use IoError as FileProblem, File from "std/fs"           // Any name of the list may get a local name of its own
+use Option, Option.Some, Option.None from "./option"     // A case of a type, by its path
+use Shape.Circle                                         // Without `from`: the path is resolved in this file's scope
 public use Stack, ArrayStack from "./collections/stack"      // Re-export
 ```
 
@@ -1700,10 +1706,15 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
 - A path that starts with `./` or `../` is a file. Everything else starts with the name of a package:
   `"owner/name"` is its `src/lib.trb`, `"owner/name/path"` is `src/path.trb` of it. Only `public` declarations can
   be imported from another package, and only packages that `project.trb` lists as dependencies.
-- **`as` renames an import.** Any name of a `use` list may take a local name of its own (`use Some as Just from
-  Option` works for a case too), and `public use X as Y from "..."` re-exports it under the new name. From there on
-  the local name is the only one the file has: it is what shadows, what collides with a second import, and what a
-  "did you mean" note offers. Nothing else changes - an alias is a name in one file, not a second export.
+- **After `from` there is always a module.** A case is imported through the type it belongs to
+  (`use Option.Some from "./option"`), and only a case: a method, a constant or a field stays `Type.member`. Without
+  `from` the path is resolved in the file's own scope (`use Shape.Circle`), which is what a file that declares the type
+  itself writes. There is no `use Option.*` - it is the one import form under which a file would change because a
+  dependency gained a case - and no brace group.
+- **`as` renames an import.** Any item of a `use` list may take a local name of its own (`use Option.None as Nothing
+  from "./option"` works for a case too), and `public use X as Y from "..."` re-exports it under the new name. From
+  there on the local name is the only one the file has: it is what shadows, what collides with a second import, and
+  what a "did you mean" note offers. Nothing else changes - an alias is a name in one file, not a second export.
 - **The standard library is a set of packages of the owner `std`:** `std/core`, `std/text`, `std/number`,
   `std/collections`, `std/iteration`, `std/encoding`, `std/expression`, `std/task`, `std/console`, `std/math`,
   `std/json`, `std/time`, `std/fs`, `std/io`, `std/process`, `std/test`, `std/http`, `std/sandbox`, ... They come with

@@ -112,19 +112,26 @@ fn declarations() {
     parse_ok("use * as http from \"std/net/http\"\npublic use Stack, ArrayStack from \"./collections/stack\"");
     assert!(first_error("fn record(type: String) {}").contains("keyword"));
 
-    // Any name of a `use` list may get a local name of its own, and a case is imported the same way
-    let file = parse_ok("public use IoError as FileProblem, File from \"std/fs\"\nuse Some as Just from Option");
+    // Any name of a `use` list may get a local name of its own, and a case is imported by its path
+    let file = parse_ok("public use IoError as FileProblem, File from \"std/fs\"\nuse Option.None as Nothing from \"./option\"");
     let StatementKind::Declaration(declaration) = &file.statements[0].kind else { panic!() };
     let DeclarationKind::Use(usage) = &declaration.kind else { panic!() };
     let UseItems::Names(items) = &usage.items else { panic!() };
-    assert_eq!(items[0].name.text, "IoError");
+    assert_eq!(items[0].name().text, "IoError");
     assert_eq!(items[0].alias.as_ref().map(|alias| alias.text.as_str()), Some("FileProblem"));
     assert!(items[1].alias.is_none());
     let StatementKind::Declaration(declaration) = &file.statements[1].kind else { panic!() };
     let DeclarationKind::Use(usage) = &declaration.kind else { panic!() };
-    assert!(matches!(&usage.source, UseSource::Type(path) if path[0].text == "Option"));
     let UseItems::Names(items) = &usage.items else { panic!() };
-    assert_eq!(items[0].alias.as_ref().map(|alias| alias.text.as_str()), Some("Just"));
+    assert_eq!(items[0].path.iter().map(|name| name.text.as_str()).collect::<Vec<_>>(), ["Option", "None"]);
+    assert_eq!(items[0].local_name().text, "Nothing");
+
+    // Without `from`, the path is resolved in the file's own scope
+    let file = parse_ok("use Shape.Circle, Shape.Empty");
+    let StatementKind::Declaration(declaration) = &file.statements[0].kind else { panic!() };
+    let DeclarationKind::Use(usage) = &declaration.kind else { panic!() };
+    assert_eq!(usage.source, UseSource::Local);
+    assert!(first_error("use Some, None from Option").contains("a case is imported by its path"));
 }
 
 /// `by` binds to the one element of the `with` list directly in front of it, and that element may be an `&` group.

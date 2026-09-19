@@ -61,7 +61,7 @@ impl Parser<'_> {
         DeclarationKind::Constant(binding)
     }
 
-    /// `use A, B from "./file"`, `use * as http from "std/net/http"`
+    /// `use A, B from "./file"`, `use Option.Some from "./option"`, `use Shape.Circle`, `use * as http from "std/http"`
     fn use_declaration(&mut self) -> DeclarationKind {
         self.bump();
         // `use "./text-extensions"`
@@ -86,29 +86,41 @@ impl Parser<'_> {
         if self.at_word("from") {
             self.bump();
         } else {
+            // `use Shape.Circle`: without `from` every path is resolved in this file's own scope, which is what a
+            // type declared here needs. A path of one segment would name something that is in scope already.
+            if is_local_use(&items) {
+                return DeclarationKind::Use(UseDeclaration { items, source: UseSource::Local });
+            }
             self.error_here("Expected `from \"...\"`");
         }
-        // `use Some, None from Option`: the cases of a type
+        // `use Some, None from Option` is gone: after `from` there is always a module
         if self.at(TokenKind::Identifier) {
+            let start = self.span();
             let mut path = vec![self.name()];
             while self.at(TokenKind::Dot) && *self.kind_at(1) == TokenKind::Identifier {
                 self.bump();
                 path.push(self.name());
             }
-            return DeclarationKind::Use(UseDeclaration { items, source: UseSource::Type(path) });
+            let span = start.to(self.previous_span());
+            self.error(type_source_message(&path, &items), span);
+            return DeclarationKind::Use(UseDeclaration { items, source: UseSource::Module(String::new()) });
         }
         DeclarationKind::Use(UseDeclaration { items, source: UseSource::Module(self.plain_text("the path of a module")) })
     }
 
-    /// `IoError as FileProblem`: one name of a `use` list, under the local name it is to get.
+    /// `Option.Some as Just`: one item of a `use` list, with its path and the local name it is to get.
     fn use_item(&mut self) -> UseItem {
-        let name = self.name();
+        let mut path = vec![self.name()];
+        while self.at(TokenKind::Dot) && *self.kind_at(1) == TokenKind::Identifier {
+            self.bump();
+            path.push(self.name());
+        }
         // `use A as B from "..."`: `as` is a word, not a keyword, so a type named `as` stays possible
         if !self.at_word("as") {
-            return UseItem { name, alias: None };
+            return UseItem { path, alias: None };
         }
         self.bump();
-        UseItem { name, alias: Some(self.name()) }
+        UseItem { path, alias: Some(self.name()) }
     }
 
     /// A string literal without interpolation.
@@ -337,5 +349,25 @@ impl Parser<'_> {
         let annotation = self.type_reference();
         let default = self.eat(TokenKind::Equal).then(|| self.with_trailing_closures(true, Self::command_expression));
         Field { doc, name, is_var, annotation, default }
+    }
+}
+
+/// Whether a `use` without `from` is the local form: every item names a type of this file and a case of it
+/// (`use Shape.Circle`). A single bare name would rebind what is in scope already, so that stays a missing `from`.
+fn is_local_use(items: &UseItems) -> bool {
+    let UseItems::Names(items) = items else { return false };
+    !items.is_empty() && items.iter().all(|item| item.path.len() > 1)
+}
+
+/// `use Some, None from Option` was the old spelling of a case import. The message teaches the path form instead.
+fn type_source_message(path: &[Name], items: &UseItems) -> String {
+    let owner = path.iter().map(|name| name.text.as_str()).collect::<Vec<_>>().join(".");
+    let message = format!("`from` takes a module in quotes, not the type `{owner}`");
+    let UseItems::Names(items) = items else { return message };
+    match items.first() {
+        Some(first) => {
+            format!("{message}: a case is imported by its path, `use {owner}.{} from \"...\"`", first.name().text)
+        }
+        None => message,
     }
 }
