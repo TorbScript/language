@@ -1,0 +1,451 @@
+use SymbolId from "../symbols"
+use TypeId, FunctionForm, ParameterForm, ParameterMode, ParameterId from "./type"
+use FieldSignature, CaseSignature, TypeSignature, Signature, SignatureId from "./type"
+use Checker, Resolution, Dispatch from "./context"
+use signatureOf, typeSignatureOf from "./signature"
+use substitute, substituteFunction from "./unify"
+
+/**
+ * What `a.b` and `Type.b` mean, for the forms of type milestone 4.2 understands: a concrete `type`, a tuple, and the
+ * generated members (`copy`, the constructor, the cases).
+ *
+ * Everything that needs an *implementation* - a member of a trait the type comes with, a member an `extend` adds, a
+ * conditional member - is milestone 4.3. This file says "not found" for those, and the caller defers instead of
+ * reporting, which is what keeps the standard library free of false errors while only a part of the checker exists.
+ *
+ * The one thing it does read from a declaration is its `with` list, transitively: that is written down in the source
+ * and needs no resolution, so `a[key]` (`Indexed`), `a[from..to]` (`Slice`) and `for x in xs` (`Iterable`) can ask a
+ * type for the arguments of a trait it *declares* without any of 4.3 being there.
+ */
+
+/** One member that was found, with everything a call or a read of it needs. */
+public type Candidate {
+  kind: CandidateKind
+  /** The member as a value: the type of a field, or the function type of a method bound to its receiver. */
+  annotation: TypeId
+  /** When the member is a function: its form, with the generic parameters of its owner substituted. */
+  form: FunctionForm? = None
+  takesSelf: Bool = false
+  isVarSelf: Bool = false
+  /** The member declares generic parameters of its own, so calling it is milestone 4.4's work. */
+  isGeneric: Bool = false
+}
+
+public type CandidateKind {
+  case Field(owner: TypeId, field: SymbolId)
+  case Constant(owner: TypeId, symbol: SymbolId)
+  case Method(owner: TypeId, symbol: SymbolId)
+  case CaseConstructor(owner: TypeId, variant: SymbolId)
+  /** The generated constructor of a type. */
+  case Construct(owner: TypeId)
+  /** The generated `copy` (gap 24). */
+  case Copy(owner: TypeId)
+  case TupleField(owner: TypeId, index: Int)
+}
+
+/** What a member resolves to for milestone 5, which is the same question with the answer in the other shape. */
+public fn resolutionOfCandidate(candidate: Candidate): Resolution {
+  match candidate.kind {
+    .Field(owner, field) => Resolution.Field(owner, field)
+    .Constant(owner, symbol) => Resolution.Constant(symbol, Some(owner))
+    .Method(_, symbol) => Resolution.Callable(symbol, [], Dispatch.Direct)
+    .CaseConstructor(owner, variant) => Resolution.CaseOf(owner, variant)
+    .Construct(owner) => Resolution.Construct(owner)
+    .Copy(owner) => Resolution.CopyOf(owner)
+    .TupleField(owner, index) => Resolution.TupleField(owner, index)
+  }
+}
+
+// --- Instance members -----------------------------------------------------------------------------------------------
+
+/**
+ * `a.b` where `a` is a value of `receiver`. In order: the fields of the type, the constants and methods of its body,
+ * the generated `copy`, and for a tuple its positions and labels.
+ */
+public fn lookupMember(var checker: Checker, receiver: TypeId, name: String): Candidate? {
+  match checker.types.form(receiver) {
+    .Nominal(symbol, arguments) => nominalMember(checker, receiver, symbol, arguments, name, isStatic: false)
+    .Tuple(fields) => {
+      var index = 0
+      for field in fields {
+        if field.label == Some(name) || name == "{index}" {
+          return Some(Candidate(CandidateKind.TupleField(receiver, index), field.annotation))
+        }
+        index = index + 1
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+/** `Type.b`: a constant, a static function, a case, or the constructor of the type itself. */
+public fn lookupStaticMember(var checker: Checker, owner: TypeId, name: String): Candidate? {
+  match checker.types.form(owner) {
+    .Nominal(symbol, arguments) => nominalMember(checker, owner, symbol, arguments, name, isStatic: true)
+    _ => None
+  }
+}
+
+fn nominalMember(
+  var checker: Checker,
+  receiver: TypeId,
+  symbol: SymbolId,
+  arguments: List<TypeId>,
+  name: String,
+  isStatic: Bool,
+): Candidate? {
+  const identifier = typeSignatureOf(checker, symbol)
+  const shape = checker.typeSignature(identifier)
+  const mapping = argumentMapping(shape.generics, arguments)
+  if !isStatic {
+    for field in shape.fields {
+      if field.name == name {
+        const annotation = substitute(checker.types, field.annotation, mapping)
+        return Some(Candidate(CandidateKind.Field(receiver, field.symbol), annotation))
+      }
+    }
+  }
+  if isStatic {
+    for variant in shape.cases {
+      if variant.name == name {
+        return Some(caseCandidate(checker, receiver, variant, mapping))
+      }
+    }
+  }
+  if const Some(member) = shape.members.get(name) {
+    return Some(memberCandidate(checker, receiver, member, mapping, isStatic))
+  }
+  // `copy` is generated for every `type`, with the shape of the constructor and every field optional (gap 24)
+  if !isStatic && name == "copy" && shape.cases.isEmpty() && !shape.isShared {
+    const form = constructorForm(checker, receiver, shape, mapping, allOptional: true)
+    return Some(Candidate(CandidateKind.Copy(receiver), checker.functionType(form), form: Some(form)))
+  }
+  None
+}
+
+/** The signature of a member, with the parameters of its owner filled in: `Holder<Int>.item` is an `Int`. */
+fn memberCandidate(
+  var checker: Checker,
+  receiver: TypeId,
+  member: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+  isStatic: Bool,
+): Candidate {
+  const identifier = signatureOf(checker, member)
+  const signature = checker.signature(identifier)
+  const form = if mapping.isEmpty() {
+    signature.form
+  } else {
+    substituteFunction(checker.types, signature.form, mapping)
+  }
+  // The parameters of the owner are filled in; anything else the member declared is 4.4's to solve
+  const isGeneric = signature.generics.length() > mapping.length()
+  if signature.takesSelf {
+    // `Point.area` is the member itself, `p.area` is the member bound to `p`: the same one, read two ways
+    if isStatic {
+      const value = withReceiver(checker, receiver, form, signature.isVarSelf)
+      const annotation = checker.functionType(value)
+      return Candidate(
+        CandidateKind.Method(receiver, member),
+        annotation,
+        form: Some(value),
+        takesSelf: true,
+        isVarSelf: signature.isVarSelf,
+        isGeneric: isGeneric,
+      )
+    }
+    const annotation = functionTypeOf(checker, identifier, form, mapping)
+    return Candidate(
+      CandidateKind.Method(receiver, member),
+      annotation,
+      form: Some(form),
+      takesSelf: true,
+      isVarSelf: signature.isVarSelf,
+      isGeneric: isGeneric,
+    )
+  }
+  // A member without `self` is a constant of the type: a static function, or a `const`
+  if signature.hasBody && form.parameters.isEmpty() && isConstantMember(checker, member) {
+    return Candidate(CandidateKind.Constant(receiver, member), form.result, isGeneric: isGeneric)
+  }
+  const annotation = functionTypeOf(checker, identifier, form, mapping)
+  Candidate(CandidateKind.Method(receiver, member), annotation, form: Some(form), isGeneric: isGeneric)
+}
+
+/** Interning a function type builds a key out of every parameter, so the answer for a whole signature is kept. */
+fn functionTypeOf(
+  var checker: Checker,
+  identifier: SignatureId,
+  form: FunctionForm,
+  mapping: Map<ParameterId, TypeId>,
+): TypeId {
+  if !mapping.isEmpty() {
+    return checker.functionType(form)
+  }
+  if const Some(known) = checker.signatureTypes.get(identifier.value) {
+    return known
+  }
+  const built = checker.functionType(form)
+  checker.signatureTypes.set(identifier.value, built)
+  built
+}
+
+/** A `const` member has no parameters and no `self`, which is exactly what `Signature` says about it. */
+fn isConstantMember(checker: Checker, member: SymbolId): Bool {
+  match checker.symbolAt(member).kind {
+    .Constant => true
+    _ => false
+  }
+}
+
+fn caseCandidate(
+  var checker: Checker,
+  owner: TypeId,
+  variant: CaseSignature,
+  mapping: Map<ParameterId, TypeId>,
+): Candidate {
+  const identifier = signatureOf(checker, variant.symbol)
+  const signature = checker.signature(identifier)
+  const form = substituteFunction(checker.types, signature.form, mapping)
+  const isGeneric = signature.generics.length() > mapping.length()
+  // A case without fields is the value itself, not a function of no arguments
+  if form.parameters.isEmpty() {
+    return Candidate(CandidateKind.CaseConstructor(owner, variant.symbol), owner, form: None, isGeneric: isGeneric)
+  }
+  Candidate(
+    CandidateKind.CaseConstructor(owner, variant.symbol),
+    checker.functionType(form),
+    form: Some(form),
+    isGeneric: isGeneric,
+  )
+}
+
+/** `Point.area` is `(self: Point) => Int`, `p.area` is `() => Int`: the same member, read through a type or a value. */
+fn withReceiver(var checker: Checker, receiver: TypeId, form: FunctionForm, isVarSelf: Bool): FunctionForm {
+  var parameters = [ParameterForm(Some("self"), ParameterMode.Receiver(isVarSelf), receiver)]
+  parameters.addAll(form.parameters)
+  FunctionForm(parameters, form.result)
+}
+
+// --- The generated constructor --------------------------------------------------------------------------------------
+
+/** `Point(10, 20)` and `p.copy(y: 30)`: the fields in declaration order, `copy` with every one of them optional. */
+public fn constructorOf(var checker: Checker, owner: TypeId): FunctionForm? {
+  const (symbol, arguments) = match checker.types.form(owner) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return None
+    }
+  }
+  const identifier = typeSignatureOf(checker, symbol)
+  const shape = checker.typeSignature(identifier)
+  // A type with cases is constructed through them, never directly
+  if !shape.cases.isEmpty() {
+    return None
+  }
+  const mapping = argumentMapping(shape.generics, arguments)
+  Some(constructorForm(checker, owner, shape, mapping, allOptional: false))
+}
+
+fn constructorForm(
+  var checker: Checker,
+  owner: TypeId,
+  shape: TypeSignature,
+  mapping: Map<ParameterId, TypeId>,
+  allOptional: Bool,
+): FunctionForm {
+  var parameters: List<ParameterForm> = []
+  for field in shape.fields {
+    const annotation = substitute(checker.types, field.annotation, mapping)
+    const hasDefault = allOptional || field.hasDefault
+    parameters.add(ParameterForm(Some(field.name), ParameterMode.Value, annotation, hasDefault))
+  }
+  FunctionForm(parameters, owner)
+}
+
+/** The fields of a `type` or of one of its cases, with the arguments of the receiver filled in. */
+public fn fieldsOf(var checker: Checker, owner: TypeId): List<FieldSignature> {
+  match checker.types.form(owner) {
+    .Nominal(symbol, arguments) => {
+      const identifier = typeSignatureOf(checker, symbol)
+      const shape = checker.typeSignature(identifier)
+      const mapping = argumentMapping(shape.generics, arguments)
+      var found: List<FieldSignature> = []
+      for field in shape.fields {
+        found.add(field.copy(annotation: substitute(checker.types, field.annotation, mapping)))
+      }
+      found
+    }
+    _ => []
+  }
+}
+
+/** The case of `owner` that is written `name`, with its fields. */
+public fn caseNamed(var checker: Checker, owner: TypeId, name: String): CaseSignature? {
+  match checker.types.form(owner) {
+    .Nominal(symbol, arguments) => {
+      const identifier = typeSignatureOf(checker, symbol)
+      const shape = checker.typeSignature(identifier)
+      const mapping = argumentMapping(shape.generics, arguments)
+      for variant in shape.cases {
+        if variant.name == name {
+          var fields: List<FieldSignature> = []
+          for field in variant.fields {
+            fields.add(field.copy(annotation: substitute(checker.types, field.annotation, mapping)))
+          }
+          return Some(variant.copy(fields: fields))
+        }
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+public fn argumentMapping(generics: List<ParameterId>, arguments: List<TypeId>): Map<ParameterId, TypeId> {
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for index in 0..generics.length().min(arguments.length()) {
+    mapping.set(generics[index], arguments[index])
+  }
+  mapping
+}
+
+// --- What a declaration says it comes with --------------------------------------------------------------------------
+
+/**
+ * The arguments of `trait` as `type` declares it, following `with` transitively. `Int64 with Signed` and
+ * `Signed with Numeric` and `Numeric with Add<Self, Self>` answer `Int64 + Int64` with this and nothing else.
+ *
+ * This is not trait resolution: only what a declaration writes down is followed, never an `extend` and never a bound
+ * of a generic parameter. Milestone 4.3 replaces it with the real lookup; until then it is what makes the operators
+ * and `for` work on the types of the standard library without reporting anything that is not there.
+ */
+public fn declaredTraitArguments(var checker: Checker, of: TypeId, capability: SymbolId): List<TypeId>? {
+  const key = "{of.value}:{capability.value}"
+  if const Some(known) = checker.declaredTraits.get(key) {
+    return known
+  }
+  const found = traitArgumentsAt(checker, of, capability, of, 0)
+  checker.declaredTraits.set(key, found)
+  found
+}
+
+/**
+ * `subject` stays the type the question was asked about all the way down, because `Self` inside a supertrait means
+ * that type: `Int64 with Signed`, `Signed with Numeric`, `Numeric with Add<Self, Self>` is `Add<Int64, Int64>`.
+ */
+fn traitArgumentsAt(
+  var checker: Checker,
+  of: TypeId,
+  capability: SymbolId,
+  subject: TypeId,
+  depth: Int,
+): List<TypeId>? {
+  if depth > 8 {
+    return None
+  }
+  match checker.types.form(of) {
+    .Nominal(symbol, arguments) => {
+      const traits = declaredTraits(checker, symbol, arguments, subject)
+      searchTraits(checker, traits, capability, subject, depth)
+    }
+    .Traits(bounds) => searchTraits(checker, bounds, capability, subject, depth)
+    _ => None
+  }
+}
+
+fn searchTraits(
+  var checker: Checker,
+  traits: List<TypeId>,
+  capability: SymbolId,
+  subject: TypeId,
+  depth: Int,
+): List<TypeId>? {
+  for bound in traits {
+    if const .Nominal(head, arguments) = checker.types.form(bound) {
+      if head == capability {
+        return Some(arguments)
+      }
+    }
+  }
+  for bound in traits {
+    if const Some(found) = traitArgumentsAt(checker, bound, capability, subject, depth + 1) {
+      return Some(found)
+    }
+  }
+  None
+}
+
+/** The `with` list of a declaration, with its own parameters and its `Self` replaced by what is known here. */
+fn declaredTraits(var checker: Checker, symbol: SymbolId, arguments: List<TypeId>, of: TypeId): List<TypeId> {
+  const identifier = typeSignatureOf(checker, symbol)
+  const shape = checker.typeSignature(identifier)
+  var mapping = argumentMapping(shape.generics, arguments)
+  // Inside a trait, `Self` is the trait's own parameter: here it stands for the type that was asked about
+  if const .Parameter(parameter) = checker.types.form(shape.own) {
+    mapping.set(parameter, of)
+  }
+  var found: List<TypeId> = []
+  for bound in shape.traits {
+    found.add(substitute(checker.types, bound, mapping))
+  }
+  found
+}
+
+/** Whether an `extend` anywhere in the program adds members to this type: then a missing member is not a mistake. */
+public fn isExtended(var checker: Checker, of: TypeId): Bool {
+  match checker.types.form(of) {
+    .Nominal(symbol, _) => checker.extendedSymbols.containsKey(symbol.value)
+    _ => false
+  }
+}
+
+/** Whether a type has cases. They always belong to its declaration - an `extend` can add none (gap 39). */
+public fn hasCases(var checker: Checker, of: TypeId): Bool {
+  match checker.types.form(of) {
+    .Nominal(symbol, _) => {
+      const identifier = typeSignatureOf(checker, symbol)
+      !checker.typeSignature(identifier).cases.isEmpty()
+    }
+    _ => false
+  }
+}
+
+/** The name a nominal type was declared under, which is what `Point(x, y)` as a pattern has to match. */
+public fn typeNameOf(checker: Checker, of: TypeId): String? {
+  if const .Nominal(symbol, _) = checker.types.form(of) {
+    return Some(checker.symbolAt(symbol).name)
+  }
+  None
+}
+
+/** Whether a type comes with any trait at all: without one, a member that is not in its body does not exist. */
+public fn hasDeclaredTraits(var checker: Checker, of: TypeId): Bool {
+  match checker.types.form(of) {
+    .Nominal(symbol, _) => {
+      const identifier = typeSignatureOf(checker, symbol)
+      !checker.typeSignature(identifier).traits.isEmpty()
+    }
+    _ => true
+  }
+}
+
+/** The names a "did you mean" note may offer for a member that is not there. */
+public fn memberNames(var checker: Checker, of: TypeId): List<String> {
+  match checker.types.form(of) {
+    .Nominal(symbol, _) => {
+      const identifier = typeSignatureOf(checker, symbol)
+      const shape = checker.typeSignature(identifier)
+      var names: List<String> = []
+      for field in shape.fields {
+        names.add(field.name)
+      }
+      for (name, _) in shape.members {
+        names.add(name)
+      }
+      names
+    }
+    _ => []
+  }
+}

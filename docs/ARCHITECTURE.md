@@ -60,7 +60,7 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 | `syntax/`                | Source text, spans, diagnostics, tokens, lexer, AST, parser           | done, verified against stage 0 |
 | `project/`               | Paths, the source tree, `project.trb`, workspaces and their members   | done     |
 | `semantics/`             | Modules, symbols, visibility, names in type positions (`torb check`)  | done     |
-| `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: types, signatures (4.1) |
+| `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: types and signatures (4.1), statements and monomorphic expressions (4.2) |
 | `cli/`                   | Collecting files, rendering diagnostics                               | started  |
 | `ir/`                    | Typed IR, lowering, last-use analysis                                 | started: the IR, layouts, mangling, the verifier, the text format (5.1) |
 | `backend/c/`             | Typed IR to C                                                         | planned  |
@@ -183,8 +183,11 @@ regardless.)
    in _expressions_. They cannot be resolved earlier: what `port` means in `server { port 8080 }` depends on the type
    of the parameter the closure is passed to (design principle 1), so resolving names and checking types is one pass.
    From here on the compiler checks itself, which stage 0 never could. The plan and the state of its ten steps are in
-   [docs/TYPECHECKER.md](TYPECHECKER.md); **4.1 is done**: every type position of the repository becomes a type, and
-   every declaration a signature.
+   [docs/TYPECHECKER.md](TYPECHECKER.md); **4.1 and 4.2 are done**: every type position of the repository becomes a
+   type, every declaration a signature, and every expression of the monomorphic part of the language a type - about
+   half of the expressions of the repository today, with the rest recorded as "not checked yet" and counted by
+   `torb check --statistics`. The first thing it found by checking the compiler itself was that
+   `compiler/src/ir/mangle.trb` mixed the `UInt8` of a byte with `Int64` arithmetic.
 5. Typed IR and the C back end. The tour runs natively, with the same output as under stage 0. The plan and the state
    of its sub-milestones are in [docs/BACKEND.md](BACKEND.md); **5.1 is done**: the IR's data model, the layouts and
    their representation classes, the mangling, a builder, a verifier and the text format.

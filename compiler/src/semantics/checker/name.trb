@@ -1,0 +1,295 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use SymbolId from "../symbols"
+use editDistance from "../resolve-types"
+use TypeId, FunctionForm from "./type"
+use Checker, Resolution, Dispatch, Adaptation, LocalKind from "./context"
+use Candidate, lookupMember, lookupStaticMember, resolutionOfCandidate from "./member"
+use constructorOf, memberNames, isExtended, hasDeclaredTraits, caseNamed from "./member"
+use signatureOf, aliasTargetOf, genericsOf, resultOf from "./signature"
+
+/**
+ * What a name in an *expression* means. This cannot happen before type checking: what `port` means in
+ * `server { port 8080 }` depends on the type of the parameter that closure is passed to, so resolving a name and
+ * checking a type are one pass (design principle 1).
+ *
+ * The order is the one of the design: the local scope chain, then the innermost receiver (and only that one, gap 4),
+ * then the file scope, then the prelude. What milestone 4.2 leaves out - implicit closure parameters, property
+ * commands, trait members, generic calls - is not reported as missing: it becomes a `Deferred` target, so a file that
+ * uses it stays free of messages that are not about it.
+ */
+
+/** What a name, a member path or any other callee resolved to. */
+public type Target {
+  resolution: Resolution
+  /** The target read as a value. `Deferred` where a later sub-milestone decides. */
+  annotation: TypeId
+  /** When the target can be called: its form, with everything that is known already substituted. */
+  form: FunctionForm? = None
+  /** For a message: "`connect` takes 2 arguments". */
+  name: String = ""
+  /** A call through it changes its receiver, which milestone 4.6 checks the place of. */
+  isVarSelf: Bool = false
+  /** The name denotes a type, so a call of it is a construction: `Point(10, 20)`, `Self(text)`. */
+  constructs: TypeId? = None
+}
+
+/** A target nothing is known about yet. Every operation on it yields `Deferred` again and says nothing. */
+public fn deferredTarget(checker: Checker): Target {
+  Target(Resolution.Deferred, checker.deferredType)
+}
+
+/**
+ * A bare name in an expression. `expected` only feeds the notes of a message: nothing in 4.2 resolves a name *by* the
+ * expected type (`.Case` does, and that is milestone 4.4).
+ */
+public fn resolveName(var checker: Checker, text: String, at: Span, expected: TypeId?): Target {
+  if text == "self" {
+    match checker.receiverBinding {
+      Some(receiver) => {
+        const annotation = checker.binding(receiver).annotation
+        return Target(Resolution.Local(receiver), annotation, name: "self")
+      }
+      .None => {
+        return deferredTarget(checker)
+      }
+    }
+  }
+  if text == "Self" {
+    match checker.selfType {
+      Some(own) => {
+        return typeTarget(checker, own, "Self")
+      }
+      .None => {
+        return deferredTarget(checker)
+      }
+    }
+  }
+  if const Some(found) = checker.findLocal(text) {
+    return localTarget(checker, found, text)
+  }
+  // The innermost receiver, and only that one: `server { s => s.database { ... } }` names the outer one (gap 4)
+  if const Some(receiver) = checker.receiverType {
+    if const Some(candidate) = lookupMember(checker, receiver, text) {
+      return implicitTarget(checker, candidate, text, at)
+    }
+  }
+  if const Some(symbol) = checker.program.lookUp(checker.module, text) {
+    return symbolTarget(checker, symbol, text)
+  }
+  reportUnknownName(checker, text, at, expected)
+  Target(Resolution.Deferred, checker.invalidType, name: text)
+}
+
+fn localTarget(var checker: Checker, found: LocalKind, text: String): Target {
+  match found {
+    .Bound(binding) => {
+      const annotation = checker.binding(binding).annotation
+      Target(Resolution.Local(binding), annotation, form: formOf(checker, annotation), name: text)
+    }
+    // A `fn`, `type` or `trait` of a block, and a generic parameter that is in scope
+    .Declared(symbol) => symbolTarget(checker, symbol, text)
+  }
+}
+
+/** A member of `self` that was written without it. The lowering puts the receiver back, so it is recorded here. */
+fn implicitTarget(var checker: Checker, candidate: Candidate, text: String, at: Span): Target {
+  if const Some(receiver) = checker.receiverBinding {
+    checker.adapted(at, Adaptation.ImplicitSelf(receiver))
+  }
+  targetOfCandidate(checker, candidate, text)
+}
+
+/** A member that was found on a type: the same answer in the shape the rest of the checker works with. */
+public fn targetOfCandidate(var checker: Checker, candidate: Candidate, text: String): Target {
+  if candidate.isGeneric {
+    return Target(Resolution.Deferred, checker.deferredType, name: text)
+  }
+  Target(
+    resolutionOfCandidate(candidate),
+    candidate.annotation,
+    form: candidate.form,
+    name: text,
+    isVarSelf: candidate.isVarSelf,
+  )
+}
+
+/** A name of the file scope, of the prelude, or one the language provides. */
+public fn symbolTarget(var checker: Checker, symbol: SymbolId, text: String): Target {
+  match checker.symbolAt(symbol).kind {
+    .Function => callableTarget(checker, symbol, text)
+    .Constant => {
+      const annotation = resultOf(checker, symbol)
+      Target(Resolution.Constant(symbol, None), annotation, form: formOf(checker, annotation), name: text)
+    }
+    .Type => namedTypeTarget(checker, symbol, text)
+    .Alias => {
+      if genericsOf(checker, symbol).isEmpty() {
+        const target = aliasTargetOf(checker, symbol)
+        return typeTarget(checker, target, text)
+      }
+      deferredTarget(checker)
+    }
+    // A trait as a namespace (`List.of`, `Map.from`) needs its implementations: milestone 4.3
+    .Trait => deferredTarget(checker)
+    .Case(owner) => caseTarget(checker, owner, text)
+    .Namespace(target) => Target(Resolution.Namespace(target), checker.deferredType, name: text)
+    // A generic parameter as a namespace (`Item.from(0)`) forwards to a witness: milestone 4.4
+    .GenericParameter => deferredTarget(checker)
+    .Field(_) => deferredTarget(checker)
+    // `Void` is the one name that is both a type and its only value (gap 1)
+    .Builtin => {
+      if checker.wellKnown.isVoid(symbol) {
+        return Target(Resolution.VoidValue, checker.voidType, name: text)
+      }
+      deferredTarget(checker)
+    }
+  }
+}
+
+fn callableTarget(var checker: Checker, symbol: SymbolId, text: String): Target {
+  const identifier = signatureOf(checker, symbol)
+  const signature = checker.signature(identifier)
+  // A generic function needs inference at the call site: milestone 4.4
+  if !signature.generics.isEmpty() {
+    return Target(Resolution.Deferred, checker.deferredType, name: text)
+  }
+  Target(
+    Resolution.Callable(symbol, [], Dispatch.Direct),
+    checker.functionType(signature.form),
+    form: Some(signature.form),
+    name: text,
+  )
+}
+
+/** A case that was imported by name: `use Some, None from Option`, then `Some(value)`. */
+fn caseTarget(var checker: Checker, owner: SymbolId, text: String): Target {
+  // A case of a generic type has to infer its arguments from the call: milestone 4.4
+  if !genericsOf(checker, owner).isEmpty() {
+    return deferredTarget(checker)
+  }
+  const own = checker.nominal(owner, [])
+  match lookupStaticMember(checker, own, text) {
+    Some(candidate) => targetOfCandidate(checker, candidate, text)
+    .None => deferredTarget(checker)
+  }
+}
+
+/** A `type` by name. A generic one without arguments is what milestone 4.4 infers, so it waits. */
+fn namedTypeTarget(var checker: Checker, symbol: SymbolId, text: String): Target {
+  if !genericsOf(checker, symbol).isEmpty() {
+    return deferredTarget(checker)
+  }
+  const own = checker.nominal(symbol, [])
+  typeTarget(checker, own, text)
+}
+
+/** The type a name stands for, as the target of a constructor call or of a static member. */
+public fn typeTarget(var checker: Checker, own: TypeId, text: String): Target {
+  match constructorOf(checker, own) {
+    Some(found) => Target(
+      Resolution.Construct(own),
+      checker.deferredType,
+      form: Some(found),
+      name: text,
+      constructs: Some(own),
+    )
+    // A type with cases is constructed through them, so the name itself is only a namespace
+    .None => Target(Resolution.TypeOf(own), checker.deferredType, name: text, constructs: Some(own))
+  }
+}
+
+/** A function type is what makes a value callable: a binding or a field that holds a closure. */
+public fn formOf(checker: Checker, annotation: TypeId): FunctionForm? {
+  if const .Function(form) = checker.types.form(annotation) {
+    return Some(form)
+  }
+  None
+}
+
+// --- Messages -------------------------------------------------------------------------------------------------------
+
+/**
+ * A name that is nowhere. Inside a body with a receiver whose members the checker cannot all see yet nothing is said:
+ * the name may well be a trait member or come from an `extend`, and milestone 4.3 answers for those.
+ */
+fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: TypeId?) {
+  if const Some(receiver) = checker.receiverType {
+    if !isFullyKnown(checker, receiver) {
+      return
+    }
+  }
+  if const Some(own) = checker.selfType {
+    if !isFullyKnown(checker, own) {
+      return
+    }
+  }
+  if const Some(annotation) = expected {
+    if caseNamed(checker, annotation, text).isSome() {
+      const owner = checker.describe(annotation)
+      checker.reportHere(
+        Diagnostic.error(
+          "`{text}` alone is a type, a function or a variable. A case is written `.{text}` or `{owner}.{text}`",
+          at,
+        )
+      )
+      return
+    }
+  }
+  var problem = Diagnostic.error("Cannot find `{text}` here", at)
+  if checker.receiverType.isSome() {
+    problem = problem.withNote(
+      "Only the innermost receiver is implicit: name the parameter to reach an outer one (`report \{ r => r.{text} \}`)"
+    )
+  }
+  checker.reportHere(problem)
+}
+
+/**
+ * `a.b` where `b` is not there. Answers whether it said anything: a type that comes with a trait or that an `extend`
+ * adds to may well have the member, and only milestone 4.3 can tell.
+ */
+public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: String, at: Span): Bool {
+  if !isFullyKnown(checker, receiver) {
+    return false
+  }
+  const shown = checker.describe(receiver)
+  var problem = Diagnostic.error("`{shown}` has no member `{text}`", at)
+  if const Some(similar) = nearestMember(checker, receiver, text) {
+    problem = problem.withNote("Did you mean `{similar}`?")
+  }
+  checker.reportHere(problem)
+  true
+}
+
+/** Whether every member of a type is visible to milestone 4.2: a plain `type` with no traits and no extensions. */
+public fn isFullyKnown(var checker: Checker, of: TypeId): Bool {
+  if checker.absorbs(of) {
+    return false
+  }
+  const isNominal = match checker.types.form(of) {
+    .Nominal(_, _) => true
+    _ => false
+  }
+  if !isNominal {
+    return false
+  }
+  !hasDeclaredTraits(checker, of) && !isExtended(checker, of)
+}
+
+/** A member of the type that is at most two edits away from what was written. */
+fn nearestMember(var checker: Checker, receiver: TypeId, text: String): String? {
+  var best: String? = None
+  var distance = 3
+  for name in memberNames(checker, receiver) {
+    if name == text || name.isEmpty() {
+      continue
+    }
+    const found = editDistance(name, text, distance - 1)
+    if found < distance {
+      distance = found
+      best = Some(name)
+    }
+  }
+  best
+}

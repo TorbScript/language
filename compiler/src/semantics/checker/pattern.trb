@@ -1,0 +1,166 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Pattern, FieldPattern, Name from "../../syntax/ast"
+use TypeId, FieldSignature from "./type"
+use Checker, Expectation, LocalBinding from "./context"
+use caseNamed, fieldsOf, hasCases, typeNameOf from "./member"
+use checkExpression from "./expression"
+
+/**
+ * Patterns, as far as the names they bind. A bare name always binds - a case is written `.Circle` or `Shape.Circle` -
+ * and every pattern is checked against the type of the value it matches, so that the names it introduces have types.
+ *
+ * Whether the arms of a `match` cover every value, and whether one of them can never match, is milestone 4.5: that is
+ * one algorithm over a pattern matrix and it needs nothing from here but the types.
+ */
+public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, isVar: Bool) {
+  checker.typedPattern(pattern.span, subject)
+  match pattern.kind {
+    .Wildcard => {}
+    // A bare name always binds, and shadowing in a nested scope is allowed
+    .Binding(name) => declareName(checker, name, subject, pattern.span, isVar)
+    .Literal(value) => {
+      const inner = expectationFor(checker, subject)
+      const _ = checkExpression(checker, value, inner)
+    }
+    .RangePattern(start, end, _) => {
+      const inner = expectationFor(checker, subject)
+      const _ = checkExpression(checker, start, inner)
+      const other = expectationFor(checker, subject)
+      const _ = checkExpression(checker, end, other)
+    }
+    .TuplePattern(items) => tuplePattern(checker, items, subject, pattern.span, isVar)
+    // The item type of a list pattern comes from `Iterable`, which milestone 4.3 resolves
+    .ListPattern(items, rest) => {
+      const element = checker.deferredType
+      for item in items {
+        checkPattern(checker, item, element, isVar)
+      }
+      if const Some(more) = rest {
+        if const Some(name) = more.name {
+          const collected = checker.deferredType
+          declareName(checker, name.text, collected, name.span, isVar)
+        }
+      }
+    }
+    .Variant(path, fields) => {
+      const name = path[path.length() - 1]
+      variantPattern(checker, name, fields, subject, pattern.span, isVar)
+    }
+    .ImplicitVariant(name, fields) => variantPattern(checker, name, fields, subject, pattern.span, isVar)
+    // `1 | 2 | 3`: every alternative matches the same value, so every one of them is checked against its type
+    .Alternatives(patterns) => {
+      for alternative in patterns {
+        checkPattern(checker, alternative, subject, isVar)
+      }
+    }
+    .Invalid => {}
+  }
+}
+
+/** A name a pattern binds, with the rule that the same scope may not declare a name twice. */
+public fn declareName(var checker: Checker, name: String, annotation: TypeId, at: Span, isVar: Bool) {
+  if name == "_" {
+    return
+  }
+  if checker.isDeclaredHere(name) {
+    checker.reportHere(Diagnostic.error("`{name}` is already declared in this scope", at))
+    return
+  }
+  const _ = checker.declareBinding(LocalBinding(name, annotation, isVar, at))
+}
+
+fn expectationFor(checker: Checker, subject: TypeId): Expectation {
+  if checker.absorbs(subject) {
+    return Expectation.None
+  }
+  Expectation.Type(subject)
+}
+
+fn tuplePattern(var checker: Checker, items: List<Pattern>, subject: TypeId, at: Span, isVar: Bool) {
+  var fields: List<TypeId> = []
+  if const .Tuple(found) = checker.types.form(subject) {
+    for field in found {
+      fields.add(field.annotation)
+    }
+  }
+  if !fields.isEmpty() && fields.length() != items.length() {
+    const shown = checker.describe(subject)
+    checker.reportHere(
+      Diagnostic.error("This pattern has {items.length()} positions, `{shown}` has {fields.length()}", at)
+    )
+  }
+  for index in 0..items.length() {
+    const inner = fields.get(index) ?? checker.deferredType
+    checkPattern(checker, items[index], inner, isVar)
+  }
+}
+
+/**
+ * `Some(value)`, `.Circle(radius)`, `Point(x, y)`: a case of the type that is being matched, or the fields of that
+ * type itself. A case always belongs to the declaration of its type - an `extend` can add none (gap 39) - so a name
+ * that is none of them is a mistake even while the rest of member lookup waits for milestone 4.3.
+ */
+fn variantPattern(
+  var checker: Checker,
+  name: Name,
+  fields: List<FieldPattern>,
+  subject: TypeId,
+  at: Span,
+  isVar: Bool,
+) {
+  if const Some(variant) = caseNamed(checker, subject, name.text) {
+    checkFieldPatterns(checker, name.text, fields, variant.fields, at, isVar)
+    return
+  }
+  // `Point(x, y)` and `Self(value)`: the one constructor of the type, read backwards
+  if name.text == "Self" || typeNameOf(checker, subject) == Some(name.text) {
+    const declared = fieldsOf(checker, subject)
+    checkFieldPatterns(checker, name.text, fields, declared, at, isVar)
+    return
+  }
+  if hasCases(checker, subject) {
+    const shown = checker.describe(subject)
+    checker.reportHere(Diagnostic.error("`{shown}` has no case `{name.text}`", name.span))
+  }
+  for field in fields {
+    const inner = checker.deferredType
+    checkPattern(checker, field.pattern, inner, isVar)
+  }
+}
+
+/**
+ * The fields of a case are matched by position; a label that is written has to name the field at that position
+ * (gap 16), because a label that is not checked is worse than none.
+ */
+fn checkFieldPatterns(
+  var checker: Checker,
+  name: String,
+  written: List<FieldPattern>,
+  declared: List<FieldSignature>,
+  at: Span,
+  isVar: Bool,
+) {
+  if written.length() != declared.length() {
+    const has = if declared.length() == 1 { "1 field" } else { "{declared.length()} fields" }
+    const given = if written.length() == 1 { "1 pattern" } else { "{written.length()} patterns" }
+    checker.reportHere(Diagnostic.error("`{name}` has {has}, {given} were given", at))
+  }
+  for index in 0..written.length() {
+    const field = written[index]
+    if index >= declared.length() {
+      const inner = checker.deferredType
+      checkPattern(checker, field.pattern, inner, isVar)
+      continue
+    }
+    if const Some(label) = field.label {
+      if label.text != declared[index].name {
+        checker.reportHere(
+          Diagnostic.error("This position is `{declared[index].name}`, not `{label.text}`", label.span)
+            .withNote("The fields of a case are matched by position; a label has to name the field at that position")
+        )
+      }
+    }
+    checkPattern(checker, field.pattern, declared[index].annotation, isVar)
+  }
+}

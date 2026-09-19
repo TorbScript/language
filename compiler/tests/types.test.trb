@@ -525,4 +525,20 @@ group "The whole repository" {
     // Around 4900 today: a number that only says "this really walked the whole repository"
     assert(positions > 4000)
   }
+
+  test "most of the expressions of the repository have a type, and the rest is counted" {
+    const root = repositoryRoot().expect("the root of the repository above the working directory")
+    const checked = check(readSourceTree([root]).expect("the sources of the repository"), [root])
+    var typed = 0
+    var deferred = 0
+    for module in checked.requested {
+      const statistics = checked.checker.statisticsOf(module)
+      typed = typed + statistics.typed
+      deferred = deferred + statistics.deferred
+    }
+    // Milestone 4.2 types the monomorphic part of the language; everything else is counted, not guessed
+    assert(typed > 20000)
+    assert(deferred > 0)
+    assert(typed * 100 / (typed + deferred) > 40)
+  }
 }

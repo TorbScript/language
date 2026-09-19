@@ -7,7 +7,8 @@ use dumpTokens from "./syntax/dump"
 use collectSourceFiles from "./cli/files"
 use renderDiagnostic from "./cli/render"
 use readSourceTree, absolutePaths from "./project/read"
-use check from "./semantics/check"
+use SourceTree from "./project/source-tree"
+use check, Checked from "./semantics/check"
 
 /**
  * The TorbScript toolchain, written in TorbScript. Until it can compile itself it is run by the bootstrap
@@ -18,6 +19,7 @@ fn printUsage() {
   printError ""
   printError "Usage:"
   printError "  torb check [path]...   Check projects, workspaces or single files (default: the current directory)"
+  printError "                         --statistics: how many expressions are typed and how many wait for milestone 4"
   printError "  torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)"
   printError "  torb tokens <file>     Print the tokens of a file"
   printError "  torb ast <file>        Print the syntax tree of a file"
@@ -73,9 +75,12 @@ fn checkSyntax(paths: List<String>): Result<Int, IoError> {
  * Modules, imports, visibility and every name in a type position. Names in expressions are not resolved yet: what
  * they mean depends on types (see docs/ARCHITECTURE.md, milestone 4). Returns the number of problems.
  */
-fn checkProjects(paths: List<String>): Result<Int, IoError> {
+fn checkProjects(paths: List<String>, withStatistics: Bool): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
   const checked = check(tree, absolutePaths(paths)?)
+  if withStatistics {
+    printStatistics(checked, tree)
+  }
   var problems = checked.problems.length()
   var filesWithProblems = 0
   for problem in checked.problems {
@@ -101,10 +106,32 @@ fn checkProjects(paths: List<String>): Result<Int, IoError> {
   Ok(problems)
 }
 
+/**
+ * How far the type checker has come, per module: how many expressions have a type and how many wait for a later
+ * sub-milestone (a generic call, a trait member, a closure body). That is what makes the progress of milestone 4
+ * measurable instead of a feeling.
+ */
+fn printStatistics(checked: Checked, tree: SourceTree) {
+  var typed = 0
+  var deferred = 0
+  for module in checked.requested {
+    const statistics = checked.checker.statisticsOf(module)
+    typed = typed + statistics.typed
+    deferred = deferred + statistics.deferred
+    const path = tree.display(checked.program.graph.at(module).path)
+    print "{path}: {statistics.typed} typed, {statistics.deferred} deferred"
+  }
+  const total = typed + deferred
+  const share = if total == 0 { 100 } else { typed * 100 / total }
+  print "{typed} of {total} expressions typed ({share}%), {deferred} deferred"
+}
+
 match Process.arguments() {
   ["check", ...more] => {
-    const paths = if more.isEmpty() { ["."] } else { more }
-    if checkProjects(paths)? > 0 {
+    const withStatistics = more.contains("--statistics")
+    const given = more.filter({ _ != "--statistics" }).toList()
+    const paths = if given.isEmpty() { ["."] } else { given }
+    if checkProjects(paths, withStatistics)? > 0 {
       Process.exit(1)
     }
   }

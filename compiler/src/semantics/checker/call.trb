@@ -1,0 +1,319 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Expression, Argument, CallStyle from "../../syntax/ast"
+use editDistance from "../resolve-types"
+use TypeId, FunctionForm, ParameterForm from "./type"
+use Checker, Expectation, Resolution, Adaptation from "./context"
+use Target from "./name"
+use checkExpression, inferExpression, deferExpression, deferArguments from "./expression"
+use resolveTarget, expectationOf from "./expression"
+
+/**
+ * Arguments: positional before named, labels, defaults, variadics, spread and the trailing closure.
+ *
+ * Which parameter every written argument fills is recorded per call, and so is everything the source does not spell
+ * out - the defaults that were left out, the order the arguments have to be evaluated in, the list a variadic
+ * parameter collects - because the back ends must not work any of that out again.
+ */
+
+/** Which parameter every written argument fills, and what the call adds to what was written. */
+public type ArgumentPlan {
+  /** In written order: the parameter an argument fills, `-1` where nothing matched (a message was given). */
+  targets: List<Int>
+  /** In declaration order: the parameters that were not written and take their default. */
+  defaults: List<Int>
+  /** The parameter that collects the rest, and the written argument it starts at. `-1` when there is none. */
+  variadic: Int
+  variadicFrom: Int
+}
+
+public fn checkCall(
+  var checker: Checker,
+  expression: Expression,
+  callee: Expression,
+  arguments: List<Argument>,
+  style: CallStyle,
+  expected: Expectation,
+): TypeId {
+  const target = resolveTarget(checker, callee, None)
+  checker.resolved(callee.span, target.resolution)
+  const _ = checker.typed(callee.span, target.annotation)
+  const form = match target.form {
+    Some(found) => found
+    // A property command (`port 8080`) and a call of something that is not a function yet: milestone 4.7 and 4.3
+    .None => {
+      deferArguments(checker, arguments)
+      checker.resolved(expression.span, Resolution.Deferred)
+      return checker.deferredType
+    }
+  }
+  checker.resolved(expression.span, target.resolution)
+  const plan = matchArguments(checker, target, form, arguments, expression.span)
+  checkArguments(checker, form, arguments, plan)
+  recordPlan(checker, expression.span, form, plan)
+  form.result
+}
+
+/**
+ * Positional arguments fill the parameters from the left, labeled ones follow and match by name, and the trailing
+ * closure fills the last parameter whatever position it was written in.
+ */
+fn matchArguments(
+  var checker: Checker,
+  target: Target,
+  form: FunctionForm,
+  arguments: List<Argument>,
+  at: Span,
+): ArgumentPlan {
+  const parameters = form.parameters
+  const trailing = trailingClosureAt(arguments, at)
+  var targets: List<Int> = []
+  var filled: List<Bool> = []
+  for _ in parameters {
+    filled.add(false)
+  }
+  var variadic = -1
+  var variadicFrom = -1
+  var next = 0
+  var hasSurplus = false
+  for index in 0..arguments.length() {
+    const argument = arguments[index]
+    if index == trailing {
+      targets.add(-1)
+      continue
+    }
+    if const Some(label) = argument.label {
+      const position = indexOfParameter(parameters, label.text)
+      if position < 0 {
+        reportUnknownLabel(checker, target.name, parameters, label.text, label.span)
+        targets.add(-1)
+        continue
+      }
+      if filled[position] {
+        checker.reportHere(Diagnostic.error("`{label.text}` already has an argument", label.span))
+        targets.add(-1)
+        continue
+      }
+      filled.set(position, true)
+      targets.add(position)
+      continue
+    }
+    // A variadic parameter is last and collects every positional argument from here on
+    if variadic >= 0 {
+      targets.add(variadic)
+      continue
+    }
+    while next < parameters.length() && filled[next] {
+      next = next + 1
+    }
+    if next >= parameters.length() {
+      hasSurplus = true
+      targets.add(-1)
+      continue
+    }
+    if const .Variadic = parameters[next].mode {
+      variadic = next
+      variadicFrom = index
+      filled.set(next, true)
+      targets.add(next)
+      continue
+    }
+    filled.set(next, true)
+    targets.add(next)
+    next = next + 1
+  }
+  if trailing >= 0 {
+    const closure = arguments[trailing].value.span
+    placeTrailingClosure(checker, target, parameters, filled, targets, trailing, closure)
+  }
+  var defaults: List<Int> = []
+  var isMissing = false
+  for position in 0..parameters.length() {
+    if filled[position] {
+      continue
+    }
+    if parameters[position].hasDefault {
+      defaults.add(position)
+      continue
+    }
+    // A variadic parameter that collects nothing is an empty list, not a missing argument
+    if const .Variadic = parameters[position].mode {
+      continue
+    }
+    isMissing = true
+  }
+  if hasSurplus || isMissing {
+    reportArity(checker, target.name, parameters, arguments.length(), at)
+  }
+  ArgumentPlan(targets, defaults, variadic, variadicFrom)
+}
+
+/** The trailing closure fills the last parameter, which is what makes `fold(0) { ... }` and `html { ... }` work. */
+fn placeTrailingClosure(
+  var checker: Checker,
+  target: Target,
+  parameters: List<ParameterForm>,
+  var filled: List<Bool>,
+  var targets: List<Int>,
+  trailing: Int,
+  at: Span,
+) {
+  const last = parameters.length() - 1
+  if last < 0 {
+    reportArity(checker, target.name, parameters, trailing + 1, at)
+    return
+  }
+  if filled[last] {
+    const name = parameters[last].name ?? "the last parameter"
+    checker.reportHere(
+      Diagnostic.error("The trailing closure fills `{name}`, which was already given by name", at)
+    )
+    return
+  }
+  filled.set(last, true)
+  targets.set(trailing, last)
+  checker.adapted(at, Adaptation.TrailingClosure(last))
+}
+
+/**
+ * The index of the argument that is a trailing closure: written after the argument list, so its text ends where the
+ * whole call ends. A closure inside of the parentheses is an ordinary argument.
+ */
+fn trailingClosureAt(arguments: List<Argument>, at: Span): Int {
+  const index = arguments.length() - 1
+  if index < 0 {
+    return -1
+  }
+  const last = arguments[index]
+  if last.label.isSome() || last.isSpread || last.value.span.end != at.end {
+    return -1
+  }
+  if const .Closure(_) = last.value.kind {
+    return index
+  }
+  -1
+}
+
+fn indexOfParameter(parameters: List<ParameterForm>, name: String): Int {
+  for index in 0..parameters.length() {
+    if parameters[index].name == Some(name) {
+      return index
+    }
+  }
+  -1
+}
+
+// --- Checking the arguments themselves ------------------------------------------------------------------------------
+
+fn checkArguments(var checker: Checker, form: FunctionForm, arguments: List<Argument>, plan: ArgumentPlan) {
+  const parameters = form.parameters
+  for index in 0..arguments.length() {
+    const argument = arguments[index]
+    const position = plan.targets[index]
+    if position < 0 || position >= parameters.length() {
+      const _ = inferExpression(checker, argument.value)
+      continue
+    }
+    const parameter = parameters[position]
+    if argument.isSpread {
+      // `...expression` spreads every `Iterable<Item>`, which needs the witness: milestone 4.3
+      deferExpression(checker, argument.value)
+      checker.adapted(argument.value.span, Adaptation.Spread)
+      continue
+    }
+    if const .Lazy = parameter.mode {
+      checker.adapted(argument.value.span, Adaptation.Lazy)
+    }
+    const inner = expectationOf(checker, parameter.annotation)
+    const _ = checkExpression(checker, argument.value, inner)
+  }
+}
+
+/** What the source does not spell out, in the order the lowering has to replay it in. */
+fn recordPlan(var checker: Checker, at: Span, form: FunctionForm, plan: ArgumentPlan) {
+  checker.recordArguments(at, plan.targets)
+  if isReordered(plan.targets) {
+    checker.adapted(at, Adaptation.Reorder(plan.targets))
+  }
+  if plan.variadic >= 0 {
+    const element = form.parameters[plan.variadic].annotation
+    checker.adapted(at, Adaptation.Variadic(element, plan.variadicFrom))
+  }
+  for position in plan.defaults {
+    checker.adapted(at, Adaptation.DefaultArgument(position))
+  }
+}
+
+/** Whether the written order differs from the declaration order, which is the only case worth recording. */
+fn isReordered(targets: List<Int>): Bool {
+  var highest = -1
+  for position in targets {
+    if position < 0 {
+      continue
+    }
+    if position < highest {
+      return true
+    }
+    highest = position
+  }
+  false
+}
+
+// --- Messages -------------------------------------------------------------------------------------------------------
+
+fn reportArity(var checker: Checker, name: String, parameters: List<ParameterForm>, given: Int, at: Span) {
+  var required = 0
+  for parameter in parameters {
+    const isOptional = parameter.hasDefault || isVariadic(parameter)
+    if !isOptional {
+      required = required + 1
+    }
+  }
+  const takes = if required == 1 { "1 argument" } else { "{required} arguments" }
+  const was = if given == 0 {
+    "none were given"
+  } else if given == 1 {
+    "1 was given"
+  } else {
+    "{given} were given"
+  }
+  checker.reportHere(Diagnostic.error("`{name}` takes {takes}, {was}", at))
+}
+
+fn isVariadic(parameter: ParameterForm): Bool {
+  match parameter.mode {
+    .Variadic => true
+    _ => false
+  }
+}
+
+fn reportUnknownLabel(
+  var checker: Checker,
+  name: String,
+  parameters: List<ParameterForm>,
+  label: String,
+  at: Span,
+) {
+  var problem = Diagnostic.error("`{name}` has no parameter `{label}`", at)
+  if const Some(similar) = nearestParameter(parameters, label) {
+    problem = problem.withNote("Did you mean `{similar}`?")
+  }
+  checker.reportHere(problem)
+}
+
+fn nearestParameter(parameters: List<ParameterForm>, label: String): String? {
+  var best: String? = None
+  var distance = 3
+  for parameter in parameters {
+    const name = parameter.name ?? ""
+    if name.isEmpty() || name == label {
+      continue
+    }
+    const found = editDistance(name, label, distance - 1)
+    if found < distance {
+      distance = found
+      best = Some(name)
+    }
+  }
+  best
+}

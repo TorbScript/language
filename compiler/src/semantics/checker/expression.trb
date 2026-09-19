@@ -1,0 +1,1015 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Expression, Argument, TextSegment, Condition, Block, Statement from "../../syntax/ast"
+use MatchArm, PrefixOperator, InfixOperator, Closure, TypeReference from "../../syntax/ast"
+use SymbolId from "../symbols"
+use TypeId, TypeForm, TupleField, LiteralValue from "./type"
+use Checker, Expectation, Resolution, Adaptation from "./context"
+use Target, deferredTarget, resolveName, symbolTarget, targetOfCandidate from "./name"
+use formOf, reportUnknownMember from "./name"
+use lookupMember, lookupStaticMember, declaredTraitArguments from "./member"
+use typeFromReference, integerLiteral from "./lowering"
+use sameType from "./unify"
+use checkCall from "./call"
+use checkBlock, checkDiscarded, scopeHere from "./statement"
+use checkPattern from "./pattern"
+use checkDeclaration from "./check"
+
+/**
+ * The type of every expression, and what every name in it means.
+ *
+ * Milestone 4.2 checks the monomorphic part of the language: literals with their adaptation, locals, calls of
+ * top-level functions and of methods of concrete types, constructors, field and static member access, `if`, `match`
+ * and blocks as expressions. Everything that needs traits, generics or closures becomes `Deferred` - a type that
+ * absorbs every further message exactly as `Invalid` does, but that counts as "not checked yet" so that
+ * `torb check --statistics` can say how far the checker has come.
+ */
+
+/** The type of an expression in a position that expects one. Every expression that is looked at is recorded. */
+public fn checkExpression(var checker: Checker, expression: Expression, expected: Expectation): TypeId {
+  const found = evaluateExpression(checker, expression, expected)
+  // A block, an `if` and a `match` handed the expectation down to their parts, which said everything there is to say
+  if const Some(annotation) = expected.annotationOf() {
+    if !isNested(expression) {
+      const _ = checkValue(checker, found, annotation, expression.span)
+    }
+  }
+  // A value that goes nowhere is a mistake with value semantics (gap 18), whether it stands as a statement or as the
+  // body of an arm of a `match` that is used as one
+  if expected.isStatement() {
+    if !isNested(expression) {
+      checkDiscarded(checker, expression, found)
+    }
+  }
+  checker.typed(expression.span, found)
+}
+
+/** The type of an expression that nothing says anything about. */
+public fn inferExpression(var checker: Checker, expression: Expression): TypeId {
+  checkExpression(checker, expression, Expectation.None)
+}
+
+/**
+ * Whether an expression hands what is expected of it to its parts. A block, an `if` and a `match` do, so a message
+ * about one of their arms must not be given a second time about the whole.
+ */
+public fn isNested(expression: Expression): Bool {
+  match expression.kind {
+    .Block(_) | .If(_, _, _) | .Match(_, _) => true
+    _ => false
+  }
+}
+
+fn evaluateExpression(var checker: Checker, expression: Expression, expected: Expectation): TypeId {
+  const annotation = expected.annotationOf()
+  match expression.kind {
+    .IntegerLiteral(text) => integerLiteralType(checker, text, false, annotation, expression.span)
+    .FloatLiteral(_) => floatLiteralType(checker, annotation, expression.span)
+    .BoolLiteral(value) => {
+      const base = checker.booleanType()
+      adaptedLiteral(checker, LiteralValue.Boolean(value), base, annotation, expression.span)
+    }
+    .CharLiteral(value) => {
+      const base = checker.charType()
+      adaptedLiteral(checker, LiteralValue.Character(value), base, annotation, expression.span)
+    }
+    .TextLiteral(segments) => textLiteralType(checker, segments, annotation, expression.span)
+    .Name(_) | .Member(_, _, _) => {
+      const target = resolveTarget(checker, expression, annotation)
+      checker.resolved(expression.span, target.resolution)
+      target.annotation
+    }
+    // `.Circle(1.0)` needs the type it belongs to; without a concrete one it is milestone 4.4's work
+    .ImplicitMember(name) => implicitMemberType(checker, name.text, annotation, expression.span)
+    .Call(callee, arguments, style) => checkCall(checker, expression, callee, arguments, style, expected)
+    .Index(target, index) => indexType(checker, target, index, expression.span)
+    .TupleLiteral(items) => tupleLiteralType(checker, items, annotation)
+    .ListLiteral(items) => listLiteralType(checker, items, annotation)
+    .MapLiteral(entries) => mapLiteralType(checker, entries, annotation)
+    .RangeLiteral(start, end, _) => rangeLiteralType(checker, start, end)
+    // `-300` is one literal, not a negation of `300`: only then can the range of the type it adapts to be checked
+    .Unary(.Negate, operand) if isNumberLiteral(operand) => negatedLiteral(checker, operand, annotation, expression.span)
+    .Unary(operator, operand) => unaryType(checker, operator, operand, expression.span)
+    .Binary(operator, left, right) => binaryType(checker, operator, left, right, expression.span)
+    .If(condition, then, otherwise) => ifType(checker, condition, then, otherwise, expected)
+    .Match(subject, arms) => matchType(checker, subject, arms, expected)
+    .Block(block) => checkBlock(checker, block, expected).annotation
+    // The explicit type arguments of a call are what milestone 4.4 matches against the callee's parameters
+    .Generic(target, arguments) => {
+      deferExpression(checker, target)
+      deferTypeArguments(checker, arguments)
+      checker.deferredType
+    }
+    // A closure is read from the expected function type, and its body is checked with it: milestone 4.4
+    .Closure(closure) => closureType(checker, closure, annotation)
+    // `?` converts the error through `From` and needs the result type of the function: milestone 4.3
+    .Try(inner) => {
+      deferExpression(checker, inner)
+      checker.deferredType
+    }
+    .Invalid => checker.invalidType
+  }
+}
+
+// --- Names, members and places they lead to -------------------------------------------------------------------------
+
+/**
+ * A name or a member path, read as a value or as the callee of a call. One function for both, because `p.area` and
+ * `p.area()` ask the very same question and only do different things with the answer.
+ */
+public fn resolveTarget(var checker: Checker, expression: Expression, expected: TypeId?): Target {
+  match expression.kind {
+    .Name(text) => resolveName(checker, text, expression.span, expected)
+    .Member(target, name, isOptional) => {
+      // `a?.m` is `Option.map`, or `flatMap` when `m` returns an `Option` (gap 12): milestone 4.3
+      if isOptional {
+        deferExpression(checker, target)
+        return deferredTarget(checker)
+      }
+      memberTarget(checker, target, name.text, name.span)
+    }
+    .ImplicitMember(name) => implicitMemberTarget(checker, name.text, expected)
+    _ => {
+      const annotation = inferExpression(checker, expression)
+      Target(Resolution.Deferred, annotation, form: formOf(checker, annotation))
+    }
+  }
+}
+
+/** `a.b`, `Type.b`, `namespace.b`: which one it is depends on what the part in front of the dot turned out to be. */
+fn memberTarget(var checker: Checker, base: Expression, text: String, at: Span): Target {
+  const owner = resolveTarget(checker, base, None)
+  checker.resolved(base.span, owner.resolution)
+  const _ = checker.typed(base.span, owner.annotation)
+  // `namespace.b` from `use * as text from "./text"`: a top-level declaration of that module
+  if const .Namespace(target) = owner.resolution {
+    match checker.program.scopes[target.value].exported.get(text) {
+      Some(symbol) => {
+        return symbolTarget(checker, symbol, text)
+      }
+      .None => {
+        checker.reportHere(
+          Diagnostic.error("`{text}` is not exported by the module `{owner.name}`", at)
+        )
+        return Target(Resolution.Deferred, checker.invalidType, name: text)
+      }
+    }
+  }
+  // `Point.origin`, `Shape.Circle`, `Email.parse`: a constant, a static function or a case of the type
+  if const Some(own) = owner.constructs {
+    match lookupStaticMember(checker, own, text) {
+      Some(candidate) => {
+        return targetOfCandidate(checker, candidate, text)
+      }
+      .None => {
+        const _ = reportUnknownMember(checker, own, text, at)
+        return Target(Resolution.Deferred, checker.deferredType, name: text)
+      }
+    }
+  }
+  const receiver = owner.annotation
+  match lookupMember(checker, receiver, text) {
+    Some(candidate) => targetOfCandidate(checker, candidate, text)
+    .None => {
+      if reportUnknownMember(checker, receiver, text, at) {
+        return Target(Resolution.Deferred, checker.invalidType, name: text)
+      }
+      Target(Resolution.Deferred, checker.deferredType, name: text)
+    }
+  }
+}
+
+/** `.Circle(1.0)`, `.None`: the case of the type that is expected here. */
+fn implicitMemberType(var checker: Checker, text: String, expected: TypeId?, at: Span): TypeId {
+  const target = implicitMemberTarget(checker, text, expected)
+  checker.resolved(at, target.resolution)
+  target.annotation
+}
+
+fn implicitMemberTarget(var checker: Checker, text: String, expected: TypeId?): Target {
+  const annotation = match expected {
+    Some(found) => found
+    // Nothing here says which type the case belongs to, which milestone 4.4 reports where it is worth reporting
+    .None => {
+      return deferredTarget(checker)
+    }
+  }
+  match lookupStaticMember(checker, annotation, text) {
+    Some(candidate) => targetOfCandidate(checker, candidate, text)
+    .None => deferredTarget(checker)
+  }
+}
+
+/** `a[key]` is `Indexed.at`, `a[from..to]` is `Slice.slice`, which the type of `a` has to come with. */
+fn indexType(var checker: Checker, target: Expression, index: Expression, at: Span): TypeId {
+  const receiver = inferExpression(checker, target)
+  const key = inferExpression(checker, index)
+  if checker.absorbs(receiver) {
+    return checker.deferredType
+  }
+  // A range makes it a slice, which gives back a value of the same type
+  if isRange(checker, key) {
+    if const Some(slice) = checker.wellKnown.slice {
+      if declaredTraitArguments(checker, receiver, slice).isSome() {
+        return receiver
+      }
+    }
+    return checker.deferredType
+  }
+  const indexed = match checker.wellKnown.indexed {
+    Some(found) => found
+    .None => {
+      return checker.deferredType
+    }
+  }
+  match declaredTraitArguments(checker, receiver, indexed) {
+    Some(arguments) => {
+      if arguments.length() != 2 {
+        return checker.deferredType
+      }
+      const _ = checkValue(checker, key, arguments[0], index.span)
+      arguments[1]
+    }
+    .None => checker.deferredType
+  }
+}
+
+fn isRange(checker: Checker, annotation: TypeId): Bool {
+  if const .Nominal(symbol, _) = checker.types.form(annotation) {
+    return checker.wellKnown.range == Some(symbol)
+  }
+  false
+}
+
+// --- Literals -------------------------------------------------------------------------------------------------------
+
+/**
+ * An integer literal checks against every integer and floating point type, against a literal type that contains it,
+ * and is `Int64` without an expectation. A literal that does not fit the type it adapts to is an error (gap 38).
+ */
+/** `-3` and `-1.5`: the sign belongs to the literal, so the value that is checked against a range is the real one. */
+fn isNumberLiteral(operand: Expression): Bool {
+  match operand.kind {
+    .IntegerLiteral(_) | .FloatLiteral(_) => true
+    _ => false
+  }
+}
+
+fn negatedLiteral(var checker: Checker, operand: Expression, expected: TypeId?, at: Span): TypeId {
+  const found = match operand.kind {
+    .IntegerLiteral(text) => integerLiteralType(checker, text, true, expected, at)
+    _ => floatLiteralType(checker, expected, at)
+  }
+  checker.typed(operand.span, found)
+}
+
+fn integerLiteralType(var checker: Checker, text: String, isNegative: Bool, expected: TypeId?, at: Span): TypeId {
+  const value = match integerLiteral(text, isNegative) {
+    Some(.Integer(found)) => found
+    _ => {
+      return reportUnparsedInteger(checker, text, at)
+    }
+  }
+  const fallback = checker.integerType()
+  const annotation = match expected {
+    Some(found) => found
+    .None => {
+      return adapt(checker, at, fallback)
+    }
+  }
+  if const Some(name) = numericNameOf(checker, annotation) {
+    if !fitsInto(value, name) {
+      checker.reportHere(Diagnostic.error("`{describeInteger(text, value)}` does not fit into `{name}`", at))
+      return checker.invalidType
+    }
+    return adapt(checker, at, annotation)
+  }
+  if isLiteralTypeOf(checker, annotation, LiteralValue.Integer(value)) {
+    return adapt(checker, at, annotation)
+  }
+  adapt(checker, at, fallback)
+}
+
+/** The text as it was written, unless it was written in another base - then the value says more. */
+fn describeInteger(text: String, value: Int): String {
+  if text.startsWith("0x") || text.startsWith("0b") {
+    return "{text}"
+  }
+  "{value}"
+}
+
+/** A literal that does not parse at all is out of the range of every integer type there is. */
+fn reportUnparsedInteger(var checker: Checker, text: String, at: Span): TypeId {
+  checker.reportHere(Diagnostic.error("`{text}` does not fit into any integer type", at))
+  checker.invalidType
+}
+
+fn floatLiteralType(var checker: Checker, expected: TypeId?, at: Span): TypeId {
+  const fallback = checker.floatType()
+  if const Some(annotation) = expected {
+    if const Some(name) = numericNameOf(checker, annotation) {
+      if name == "Float32" || name == "Float64" || name == "Decimal" {
+        return adapt(checker, at, annotation)
+      }
+    }
+  }
+  adapt(checker, at, fallback)
+}
+
+/** A text literal is a `String`; only a literal type of the matching base makes it something else. */
+fn textLiteralType(var checker: Checker, segments: List<TextSegment>, expected: TypeId?, at: Span): TypeId {
+  var isPlain = true
+  var text = ""
+  for segment in segments {
+    match segment {
+      .Literal(part) => {
+        text = text + part
+      }
+      // Interpolation renders every part through `Show`, whose implementation milestone 4.3 resolves
+      .Interpolated(inner) => {
+        isPlain = false
+        const _ = inferExpression(checker, inner)
+      }
+    }
+  }
+  const fallback = checker.stringType()
+  if isPlain {
+    if const Some(annotation) = expected {
+      if isLiteralTypeOf(checker, annotation, LiteralValue.Text(text)) {
+        return adapt(checker, at, annotation)
+      }
+    }
+  }
+  adapt(checker, at, fallback)
+}
+
+/** A `Bool` or a `Char` literal: only a literal type of the matching base makes it anything but its own type. */
+fn adaptedLiteral(var checker: Checker, value: LiteralValue, base: TypeId, expected: TypeId?, at: Span): TypeId {
+  if const Some(annotation) = expected {
+    if isLiteralTypeOf(checker, annotation, value) {
+      return adapt(checker, at, annotation)
+    }
+  }
+  adapt(checker, at, base)
+}
+
+/** Every literal records what it became, because the back ends must not decide what `1` is. */
+fn adapt(var checker: Checker, at: Span, annotation: TypeId): TypeId {
+  checker.adapted(at, Adaptation.Literal(annotation))
+  annotation
+}
+
+/** Whether a literal type contains this value. A subset is never assignable, so equality of the value set decides. */
+fn isLiteralTypeOf(var checker: Checker, annotation: TypeId, value: LiteralValue): Bool {
+  if const .Literals(_, values) = checker.types.form(annotation) {
+    return values.contains(value)
+  }
+  false
+}
+
+/** `Int8`, `UInt64`, `Float32`, `Decimal`: which numeric type of the prelude this is, if it is one. */
+fn numericNameOf(checker: Checker, annotation: TypeId): String? {
+  if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
+    if arguments.isEmpty() {
+      return checker.wellKnown.numericNamed(symbol)
+    }
+  }
+  None
+}
+
+/** The range of the integer types. `Int64` and `UInt64` are as wide as the checker's own integers, so they fit. */
+fn fitsInto(value: Int, name: String): Bool {
+  if name == "Int8" {
+    return value >= -128 && value <= 127
+  }
+  if name == "Int16" {
+    return value >= -32768 && value <= 32767
+  }
+  if name == "Int32" {
+    return value >= -2147483648 && value <= 2147483647
+  }
+  if name == "UInt8" {
+    return value >= 0 && value <= 255
+  }
+  if name == "UInt16" {
+    return value >= 0 && value <= 65535
+  }
+  if name == "UInt32" {
+    return value >= 0 && value <= 4294967295
+  }
+  if name == "UInt64" {
+    return value >= 0
+  }
+  true
+}
+
+// --- Collection and tuple literals ----------------------------------------------------------------------------------
+
+fn tupleLiteralType(var checker: Checker, items: List<Argument>, expected: TypeId?): TypeId {
+  var wanted: List<TupleField> = []
+  if const Some(annotation) = expected {
+    if const .Tuple(fields) = checker.types.form(annotation) {
+      wanted = fields
+    }
+  }
+  var fields: List<TupleField> = []
+  for index in 0..items.length() {
+    const item = items[index]
+    const label = match item.label {
+      Some(name) => Some(name.text)
+      .None => None
+    }
+    const inner = if index < wanted.length() {
+      Expectation.Type(wanted[index].annotation)
+    } else {
+      Expectation.None
+    }
+    const annotation = checkExpression(checker, item.value, inner)
+    if index < wanted.length() {
+      checkLabel(checker, label, wanted[index].label, item.value.span)
+    }
+    fields.add(TupleField(label, annotation))
+  }
+  checker.types.intern(TypeForm.Tuple(fields))
+}
+
+/** A label is not part of the type of a tuple, but one at a position that has a different name is (gap 17). */
+fn checkLabel(var checker: Checker, written: String?, wanted: String?, at: Span) {
+  if const Some(label) = written {
+    if const Some(other) = wanted {
+      if label != other {
+        checker.reportHere(
+          Diagnostic.error("This position is `{other}`, not `{label}`", at)
+            .withNote("A label is a name for a position of a tuple: the positions have to line up")
+        )
+      }
+    }
+  }
+}
+
+/** `[1, 2, 3]` is a `List<Item>`, which is a trait: only the item type is decided here. */
+fn listLiteralType(var checker: Checker, items: List<Argument>, expected: TypeId?): TypeId {
+  const list = match checker.wellKnown.list {
+    Some(found) => found
+    .None => {
+      deferArguments(checker, items)
+      return checker.deferredType
+    }
+  }
+  var item = itemOfCollection(checker, expected, list, 0)
+  if item.isNone() {
+    // Without an expectation the first item decides, and the others are checked against it
+    if const Some(first) = items.first() {
+      if !first.isSpread {
+        item = Some(inferExpression(checker, first.value))
+      }
+    }
+  }
+  const element = match item {
+    Some(found) => found
+    // `[]` needs a type from somewhere: milestone 4.4 asks for the annotation
+    .None => {
+      deferArguments(checker, items)
+      return checker.deferredType
+    }
+  }
+  const inner = expectationOf(checker, element)
+  var index = 0
+  for argument in items {
+    if argument.isSpread {
+      const _ = inferExpression(checker, argument.value)
+      checker.adapted(argument.value.span, Adaptation.Spread)
+    } else if index > 0 || expected.isSome() {
+      const _ = checkExpression(checker, argument.value, inner)
+    }
+    index = index + 1
+  }
+  if const Some(annotation) = expected {
+    return annotation
+  }
+  const bound = checker.nominal(list, [element])
+  checker.types.intern(TypeForm.Traits([bound]))
+}
+
+fn mapLiteralType(var checker: Checker, entries: List<(Expression, Expression)>, expected: TypeId?): TypeId {
+  const map = match checker.wellKnown.map {
+    Some(found) => found
+    .None => {
+      deferEntries(checker, entries)
+      return checker.deferredType
+    }
+  }
+  const key = itemOfCollection(checker, expected, map, 0)
+  const value = itemOfCollection(checker, expected, map, 1)
+  if key.isNone() || value.isNone() {
+    // `[:]` and `["a": 1]` without an annotation: the item types are milestone 4.4's to infer
+    deferEntries(checker, entries)
+    return checker.deferredType
+  }
+  const unknown = checker.deferredType
+  const keys = expectationOf(checker, key ?? unknown)
+  const values = expectationOf(checker, value ?? unknown)
+  for (written, given) in entries {
+    const _ = checkExpression(checker, written, keys)
+    const _ = checkExpression(checker, given, values)
+  }
+  expected ?? checker.deferredType
+}
+
+/** The `Item` of an expected `List<Item>`, the `Key` or `Value` of an expected `Map<Key, Value>`. */
+fn itemOfCollection(var checker: Checker, expected: TypeId?, capability: SymbolId, position: Int): TypeId? {
+  const annotation = expected?
+  match declaredTraitArguments(checker, annotation, capability) {
+    Some(arguments) => arguments.get(position)
+    .None => {
+      // The expected type may be the trait itself: `List<Int>` as a type is `Traits([List<Int>])`
+      if const .Traits(bounds) = checker.types.form(annotation) {
+        for bound in bounds {
+          if const .Nominal(symbol, arguments) = checker.types.form(bound) {
+            if symbol == capability {
+              return arguments.get(position)
+            }
+          }
+        }
+      }
+      None
+    }
+  }
+}
+
+fn rangeLiteralType(var checker: Checker, start: Expression?, end: Expression?): TypeId {
+  var value = checker.deferredType
+  if const Some(from) = start {
+    value = inferExpression(checker, from)
+  }
+  if const Some(to) = end {
+    const inner = expectationOf(checker, value)
+    const other = checkExpression(checker, to, inner)
+    if checker.absorbs(value) {
+      value = other
+    }
+  }
+  match checker.wellKnown.range {
+    Some(range) => checker.nominal(range, [value])
+    .None => checker.deferredType
+  }
+}
+
+// --- Operators ------------------------------------------------------------------------------------------------------
+
+/**
+ * `!a` is built in on `Bool` (gap 21), `-a` is `Negate.negate`. A type that does not *declare* the trait waits for
+ * milestone 4.3, which looks implementations up instead of reading the `with` list of a declaration.
+ */
+fn unaryType(var checker: Checker, operator: PrefixOperator, operand: Expression, at: Span): TypeId {
+  match operator {
+    .Not => {
+      const boolean = checker.booleanType()
+      const _ = checkExpression(checker, operand, Expectation.Type(boolean))
+      boolean
+    }
+    .Negate => {
+      const found = inferExpression(checker, operand)
+      if checker.absorbs(found) {
+        return checker.deferredType
+      }
+      if numericNameOf(checker, found).isSome() {
+        return found
+      }
+      const negate = checker.wellKnown.symbolNamed("Negate")
+      if const Some(capability) = negate {
+        if declaredTraitArguments(checker, found, capability).isSome() {
+          return found
+        }
+      }
+      checker.deferredType
+    }
+  }
+}
+
+/**
+ * The binary operators. `&&` and `||` are built in on `Bool` and short-circuit; the comparisons always produce a
+ * `Bool`, whatever implements them; the arithmetic ones take `Other` and `Output` from the trait the left operand
+ * declares, so `Meters + Float` is a mistake and `1.0 / 60.0` is a `Float64`.
+ */
+fn binaryType(
+  var checker: Checker,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+  at: Span,
+): TypeId {
+  const boolean = checker.booleanType()
+  match operator {
+    .And | .Or => {
+      const _ = checkExpression(checker, left, Expectation.Type(boolean))
+      const _ = checkExpression(checker, right, Expectation.Type(boolean))
+      boolean
+    }
+    // `a == b` and `a < b` always produce a `Bool`; which `equals` or `compare` runs is milestone 4.3's answer
+    .Equal | .NotEqual | .Less | .LessOrEqual | .Greater | .GreaterOrEqual => {
+      const found = inferExpression(checker, left)
+      const inner = expectationOf(checker, found)
+      const _ = checkExpression(checker, right, inner)
+      boolean
+    }
+    // `a ?? b` is `orElse` on an `Option` or a `Result`, with `b` lazy: milestone 4.3
+    .Coalesce => {
+      deferExpression(checker, left)
+      deferExpression(checker, right)
+      checker.deferredType
+    }
+    _ => arithmeticType(checker, operator, left, right, at)
+  }
+}
+
+fn arithmeticType(
+  var checker: Checker,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+  at: Span,
+): TypeId {
+  const found = inferExpression(checker, left)
+  const capability = match checker.wellKnown.symbolNamed(traitNameOf(operator)) {
+    Some(symbol) => symbol
+    .None => {
+      deferExpression(checker, right)
+      return checker.deferredType
+    }
+  }
+  if checker.absorbs(found) {
+    deferExpression(checker, right)
+    return checker.deferredType
+  }
+  // `Other` and `Output` come from the trait the left operand declares, so `Meters + Float` is a mistake
+  const arguments = match declaredTraitArguments(checker, found, capability) {
+    Some(given) => given
+    // The type does not declare the operator; an `extend` may still bring it: milestone 4.3
+    .None => {
+      deferExpression(checker, right)
+      return checker.deferredType
+    }
+  }
+  if arguments.length() != 2 {
+    deferExpression(checker, right)
+    return checker.deferredType
+  }
+  const inner = expectationOf(checker, arguments[0])
+  const _ = checkExpression(checker, right, inner)
+  arguments[1]
+}
+
+fn traitNameOf(operator: InfixOperator): String {
+  match operator {
+    .Add => "Add"
+    .Subtract => "Subtract"
+    .Multiply => "Multiply"
+    .Divide => "Divide"
+    .Remainder => "Remainder"
+    _ => ""
+  }
+}
+
+/** A type that says nothing is no expectation at all: it must not turn into "expected `unchecked`". */
+public fn expectationOf(checker: Checker, annotation: TypeId): Expectation {
+  if checker.absorbs(annotation) {
+    return Expectation.None
+  }
+  Expectation.Type(annotation)
+}
+
+// --- `if`, `match` and closures -------------------------------------------------------------------------------------
+
+fn ifType(
+  var checker: Checker,
+  condition: Condition,
+  then: Block,
+  otherwise: Expression?,
+  expected: Expectation,
+): TypeId {
+  // `if const Some(user) = lookup()` binds for the body of the `if` and for nothing after it
+  checker.openScope()
+  checkCondition(checker, condition)
+  const alternative = match otherwise {
+    Some(found) => found
+    // An `if` without an `else` has no value, so its body is checked as a block of statements
+    .None => {
+      const _ = checkBlock(checker, then, Expectation.Statement)
+      checker.closeScope()
+      return checker.voidType
+    }
+  }
+  const first = checkBlock(checker, then, expected)
+  checker.closeScope()
+  // Without an expectation the first branch that produces a value decides, and the other is checked against it
+  const second = checkExpression(checker, alternative, expected)
+  if const Some(annotation) = expected.annotationOf() {
+    return annotation
+  }
+  if expected.isStatement() {
+    return checker.voidType
+  }
+  armResult(checker, [first.annotation, second])
+}
+
+/**
+ * The head of an `if` or a `while`. A pattern in it (`if const Some(user) = lookup()`) binds for the body only and
+ * has to be refutable, which milestone 4.5 decides; the names it binds are needed here already.
+ */
+public fn checkCondition(var checker: Checker, condition: Condition) {
+  match condition {
+    .Test(expression) => {
+      const boolean = checker.booleanType()
+      const _ = checkExpression(checker, expression, Expectation.Type(boolean))
+    }
+    // The pattern of an `if const` matches *into* the subject, which milestone 4.5 decides the type of
+    .Bind(isVar, pattern, value) => {
+      const _ = inferExpression(checker, value)
+      const inner = checker.deferredType
+      checkPattern(checker, pattern, inner, isVar)
+    }
+  }
+}
+
+fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, expected: Expectation): TypeId {
+  const found = inferExpression(checker, subject)
+  var produced: List<TypeId> = []
+  for arm in arms {
+    checker.openScope()
+    checkPattern(checker, arm.pattern, found, false)
+    if const Some(guard) = arm.guard {
+      const boolean = checker.booleanType()
+      const _ = checkExpression(checker, guard, Expectation.Type(boolean))
+    }
+    produced.add(checkExpression(checker, arm.body, expected))
+    checker.closeScope()
+  }
+  if const Some(annotation) = expected.annotationOf() {
+    return annotation
+  }
+  if expected.isStatement() {
+    return checker.voidType
+  }
+  armResult(checker, produced)
+}
+
+/**
+ * The type of an `if` or a `match` that nothing is expected of: the first arm that produces a value. The arms are not
+ * checked against each other here - a body without a declared result would then have to agree on `Void` with every
+ * arm that only does something - so an `if` whose branches disagree is what the inference contexts of milestone 4.4
+ * report.
+ */
+fn armResult(checker: Checker, arms: List<TypeId>): TypeId {
+  var fallback: TypeId? = None
+  for annotation in arms {
+    if checker.absorbs(annotation) {
+      continue
+    }
+    if annotation != checker.voidType {
+      return annotation
+    }
+    if fallback.isNone() {
+      fallback = Some(annotation)
+    }
+  }
+  fallback ?? checker.neverType
+}
+
+/**
+ * A closure is read from the expected function type and its body is checked with the parameters that type names -
+ * milestone 4.4. Here it takes the type that is expected of it, and its body is only walked for the type positions
+ * inside of it, so that nothing in it is reported twice or reported at all.
+ */
+fn closureType(var checker: Checker, closure: Closure, expected: TypeId?): TypeId {
+  deferClosureParameters(checker, closure)
+  deferBlock(checker, closure.body)
+  match expected {
+    Some(annotation) => {
+      if formOf(checker, annotation).isSome() {
+        return annotation
+      }
+      checker.deferredType
+    }
+    .None => checker.deferredType
+  }
+}
+
+// --- Checking a value against what is expected ----------------------------------------------------------------------
+
+/**
+ * Whether a value of type `found` may stand where `expected` is asked for. The four coercions of the design
+ * (to a trait value, to fewer bounds, from `Never`, a literal to a literal type) are milestone 4.3's and 4.4's, so
+ * everything that needs one says nothing here - and everything that says something is exact type equality.
+ */
+public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: Span): Bool {
+  if checker.absorbs(found) || checker.isBroken(expected) {
+    return true
+  }
+  if sameType(checker.types, found, expected) {
+    return true
+  }
+  if isUndecided(checker, found) || isUndecided(checker, expected) {
+    return true
+  }
+  const wanted = checker.describe(expected)
+  const given = checker.describe(found)
+  var problem = Diagnostic.error("Expected `{wanted}`, found `{given}`", at)
+  if numericNameOf(checker, found).isSome() && numericNameOf(checker, expected).isSome() {
+    problem = problem.withNote("There are no implicit conversions: `{wanted}.tryFrom(value)?`")
+  }
+  checker.reportHere(problem)
+  false
+}
+
+/**
+ * Types a later sub-milestone decides about. A trait value needs a coercion with a witness (4.3), a generic parameter
+ * and a unification variable need inference (4.4), and `Expression<Value>` quotes what arrives at it (4.8).
+ */
+fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
+  match checker.types.form(annotation) {
+    .Traits(_) => true
+    .Parameter(_) => true
+    .Variable(_) => true
+    // A type that carries one of these anywhere inside of it says as little as the type itself would
+    .Invalid => true
+    .Deferred => true
+    .Nominal(symbol, arguments) => {
+      if checker.wellKnown.symbolNamed("Expression") == Some(symbol) {
+        return true
+      }
+      for argument in arguments {
+        if isUndecided(checker, argument) {
+          return true
+        }
+      }
+      false
+    }
+    .Tuple(fields) => {
+      for field in fields {
+        if isUndecided(checker, field.annotation) {
+          return true
+        }
+      }
+      false
+    }
+    .Function(form) => {
+      for parameter in form.parameters {
+        if isUndecided(checker, parameter.annotation) {
+          return true
+        }
+      }
+      isUndecided(checker, form.result)
+    }
+    _ => false
+  }
+}
+
+// --- What waits for a later sub-milestone ---------------------------------------------------------------------------
+
+/**
+ * Records an expression, and everything in it, as not checked yet. The type positions inside of it are still built -
+ * they are milestone 4.1's answer and do not depend on anything here - and so are the signatures of declarations in
+ * nested blocks, so that a deferred closure body still contributes everything the earlier passes promise.
+ */
+public fn deferExpression(var checker: Checker, expression: Expression) {
+  const _ = checker.typed(expression.span, checker.deferredType)
+  match expression.kind {
+    .Generic(target, arguments) => {
+      deferExpression(checker, target)
+      deferTypeArguments(checker, arguments)
+    }
+    .Closure(closure) => {
+      deferClosureParameters(checker, closure)
+      deferBlock(checker, closure.body)
+    }
+    .If(condition, then, otherwise) => {
+      deferCondition(checker, condition)
+      deferBlock(checker, then)
+      if const Some(alternative) = otherwise {
+        deferExpression(checker, alternative)
+      }
+    }
+    .Match(subject, arms) => {
+      deferExpression(checker, subject)
+      for arm in arms {
+        if const Some(guard) = arm.guard {
+          deferExpression(checker, guard)
+        }
+        deferExpression(checker, arm.body)
+      }
+    }
+    .Block(block) => deferBlock(checker, block)
+    .TextLiteral(segments) => {
+      for segment in segments {
+        if const .Interpolated(inner) = segment {
+          deferExpression(checker, inner)
+        }
+      }
+    }
+    .TupleLiteral(items) => deferArguments(checker, items)
+    .ListLiteral(items) => deferArguments(checker, items)
+    .MapLiteral(entries) => deferEntries(checker, entries)
+    .Member(target, _, _) => deferExpression(checker, target)
+    .Index(target, index) => {
+      deferExpression(checker, target)
+      deferExpression(checker, index)
+    }
+    .Call(callee, arguments, _) => {
+      deferExpression(checker, callee)
+      deferArguments(checker, arguments)
+    }
+    .Unary(_, operand) => deferExpression(checker, operand)
+    .Binary(_, left, right) => {
+      deferExpression(checker, left)
+      deferExpression(checker, right)
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(from) = start {
+        deferExpression(checker, from)
+      }
+      if const Some(to) = end {
+        deferExpression(checker, to)
+      }
+    }
+    .Try(inner) => deferExpression(checker, inner)
+    _ => {}
+  }
+}
+
+public fn deferArguments(var checker: Checker, arguments: List<Argument>) {
+  for argument in arguments {
+    deferExpression(checker, argument.value)
+  }
+}
+
+/** The explicit type arguments of an expression are still built: which parameter they fill is milestone 4.4's. */
+fn deferTypeArguments(var checker: Checker, arguments: List<TypeReference>) {
+  const scope = scopeHere(checker)
+  for argument in arguments {
+    const _ = typeFromReference(checker, argument, scope.forEither())
+  }
+}
+
+fn deferClosureParameters(var checker: Checker, closure: Closure) {
+  const scope = scopeHere(checker)
+  for parameter in closure.parameters {
+    if const Some(annotation) = parameter.annotation {
+      const _ = typeFromReference(checker, annotation, scope.forType())
+    }
+  }
+}
+
+fn deferEntries(var checker: Checker, entries: List<(Expression, Expression)>) {
+  for (key, value) in entries {
+    deferExpression(checker, key)
+    deferExpression(checker, value)
+  }
+}
+
+fn deferCondition(var checker: Checker, condition: Condition) {
+  match condition {
+    .Test(expression) => deferExpression(checker, expression)
+    .Bind(_, _, value) => deferExpression(checker, value)
+  }
+}
+
+/** A block whose statements are not checked: its declarations still get their signatures and its types their ids. */
+public fn deferBlock(var checker: Checker, block: Block) {
+  for statement in block.statements {
+    deferStatement(checker, statement)
+  }
+}
+
+fn deferStatement(var checker: Checker, statement: Statement) {
+  const scope = scopeHere(checker)
+  match statement.kind {
+    .Declare(declaration) => checkDeclaration(checker, scope, declaration)
+    .Bind(binding) => {
+      if const Some(annotation) = binding.annotation {
+        const _ = typeFromReference(checker, annotation, scope.forType())
+      }
+      deferExpression(checker, binding.value)
+    }
+    .Assign(target, value) => {
+      deferExpression(checker, target)
+      deferExpression(checker, value)
+    }
+    .For(_, iterable, body) => {
+      deferExpression(checker, iterable)
+      deferBlock(checker, body)
+    }
+    .While(condition, body) => {
+      deferCondition(checker, condition)
+      deferBlock(checker, body)
+    }
+    .Return(value) => {
+      if const Some(expression) = value {
+        deferExpression(checker, expression)
+      }
+    }
+    .Break => {}
+    .Continue => {}
+    .Evaluate(expression) => deferExpression(checker, expression)
+  }
+}

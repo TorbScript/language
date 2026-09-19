@@ -12,7 +12,8 @@ cargo run --release -- test ../compiler/tests
 
 `torb check <path>...` takes a workspace root (then all of its members), a single project, or one script file. Every
 path around it is loaded too - that is where the imports and the prelude are - but only what was asked for is
-reported.
+reported. `--statistics` adds how many expressions of every module have a type and how many wait for a later
+sub-milestone of the type checker (see [docs/TYPECHECKER.md](../docs/TYPECHECKER.md)).
 
 ```text
 src/
@@ -36,10 +37,16 @@ src/
 │ └ checker/            The type checker (milestone 4)
 │   ├ type.trb          TypeForm, TypeId, the interning table, signatures, a type in a message
 │   ├ wellknown.trb     The declarations of `std/prelude` the language itself refers to
-│   ├ context.trb       Checker: every table of the pass, and where a type reference stands
+│   ├ context.trb       Checker: every table of the pass, the scopes, and what it resolved
 │   ├ unify.trb         Equality of types and substitution of generic parameters
 │   ├ lowering.trb      A `TypeReference` to a `TypeId`: names, tuples, functions, literals, const arguments
 │   ├ signature.trb     Declarations to signatures and aliases, on demand, with cycle detection
+│   ├ member.trb        What `a.b` and `Type.b` mean on a concrete type, and what a declaration comes with
+│   ├ name.trb          Names in expressions: the lookup order and the receiver
+│   ├ call.trb          Arguments, labels, defaults, variadics, spread, trailing closures
+│   ├ expression.trb    The type of every expression, and the operators
+│   ├ pattern.trb       Patterns and the names they bind
+│   ├ statement.trb     Statements, blocks, bodies, definite return
 │   └ check.trb         The walk over the declarations of a module
 └ syntax/
   ├ source.trb          Span, SourceText (characters and byte offsets), LineIndex
@@ -60,7 +67,11 @@ tests/
 ├ parser.test.trb
 ├ project.test.trb      Paths, manifests, workspaces
 ├ check.test.trb        Modules, symbols, visibility, type positions
-└ types.test.trb        Types, signatures, equality, substitution, the messages about them
+├ types.test.trb        Types, signatures, equality, substitution, the messages about them
+├ harness.trb           The in-memory workspace of the type checker's tests, and what they ask about it
+├ expressions.test.trb  Literals and their adaptation, names, members, operators, `if` and `match`
+├ statements.test.trb   Bindings, scopes, assignment, loops, definite return, discarded values
+└ calls.test.trb        Arguments, labels, defaults, variadics, constructors, `copy`, the side tables
 ```
 
 Rules for this code:

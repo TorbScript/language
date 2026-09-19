@@ -975,7 +975,7 @@ files that have to check cleanly afterwards.
 | # | Scope | Files | Depends on |
 |---|---|---|---|
 | **4.1** | **Done.** Type representation and signatures. `TypeForm`, interning, `TypeReference` to `TypeId`, alias expansion, `Self`, generic parameters, const arguments, literal types, tuples, function types, intersections. Signatures on demand with cycle detection. `describeType` for messages. No expression checking. | `type.trb`, `wellknown.trb`, `signature.trb`, `context.trb`, `unify.trb` (equality and substitution only), `check.trb` (skeleton) | M3 |
-| **4.2** | Statements, blocks and monomorphic expressions. Literals with adaptation, locals, bindings with irrefutable patterns, assignment, `if`/`match` types without exhaustiveness, calls of top-level functions and of methods on concrete types, arguments/labels/defaults/variadics, field and static member access, definite return, `Never`. | `expression.trb`, `statement.trb`, `call.trb`, `member.trb`, `name.trb`, `pattern.trb` | 4.1 |
+| **4.2** | **Done.** Statements, blocks and monomorphic expressions. Literals with adaptation, locals, bindings with irrefutable patterns, assignment, `if`/`match` types without exhaustiveness, calls of top-level functions and of methods on concrete types, arguments/labels/defaults/variadics, field and static member access, definite return, `Never`. Everything else becomes `TypeForm.Deferred` and is counted (`torb check --statistics`). | `expression.trb`, `statement.trb`, `call.trb`, `member.trb`, `name.trb`, `pattern.trb` | 4.1 |
 | **4.3** | Traits and implementations. The index, bound resolution with memoization, coherence, overlap, supertraits, member lookup through traits and extensions (the `extend` visibility rule), delegation `by`, derived implementations, operators, interpolation through `Show`, `Iterable` in `for`, `?`/`??`/`?.`, `into()`. | `implementation.trb`, `derive.trb`, `member.trb`, `expression.trb` | 4.2 |
 | **4.4** | Generics and inference. Unification variables, inference contexts, two-pass argument checking, closures from expected function types, implicit `_`/named parameters, `.Case`, empty literals, const generic inference, bounds at call sites, witnesses, trait-typed values and per-call object safety. **Gate: `torb check compiler/src/syntax` is clean.** | `unify.trb`, `closure.trb`, `call.trb`, `implementation.trb` | 4.3 |
 | **4.5** | Exhaustiveness and redundancy. The pattern matrix over ADTs, literals, ranges, tuples, lists with rest, literal unions, `Option`/`Result`; witnesses; `MatchPlan`; `if const`/`if var`/`while const`. | `exhaustive.trb`, `pattern.trb` | 4.4 |
@@ -1004,7 +1004,7 @@ What each one is tested with, beyond its own unit tests:
 | # | Real files that must check cleanly |
 |---|---|
 | 4.1 | -  (every type position of `compiler/`, `std/` and `examples/` builds a type without a crash; a test asserts that) |
-| 4.2 | `compiler/src/syntax/source.trb`, `diagnostic.trb` |
+| 4.2 | `compiler/src/syntax/source.trb`, `diagnostic.trb` (clean; 134 of their 198 expressions typed - what is left needs the trait members of `List`, `String` and `Option`, which is 4.3) |
 | 4.3 | `compiler/src/syntax/token.trb`, `std/prelude/src/compare.trb`, `convert.trb`, `operators.trb` |
 | 4.4 | `compiler/src/syntax/**` complete, `std/prelude/src/option.trb`, `result.trb`, `iteration.trb` |
 | 4.5 | `compiler/src/syntax/**` stays clean, `std/prelude/src/collections/**` |
@@ -1057,6 +1057,57 @@ list. Everything else is as written.
   it fills is only known once the callee is resolved, which is 4.2, so `TypePosition.Either` allows both there.
 - **`describeType` prints the expanded type, not the alias.** `EntityId (Int64)` needs the alias to survive in the
   form; showing it is part of polishing the messages in 4.10.
+
+### What 4.2 does differently from sections 1 to 7
+
+- **`TypeForm.Deferred` is the "not checked yet" type.** It absorbs every message exactly as `Invalid` does, but it
+  means "a later sub-milestone decides" instead of "this is wrong", and that is what makes progress measurable:
+  `Checker.statisticsOf(module)` counts the expressions of a module that have a type against the ones that do not, and
+  `torb check --statistics` prints it. Every expression the checker looks at is recorded, `Deferred` included, so the
+  number is a fact and not an estimate. `describeType` prints it as `unchecked`; it never appears in a message.
+- **Nothing that is not resolved yet is reported as missing.** A member that is not in the body of a type is only an
+  error when the type comes with no trait *and* no `extend` anywhere in the program adds to it (`isFullyKnown`); a bare
+  name that is not found is only an error when no receiver with unknown members is in scope. That is what keeps `std/`
+  and the examples free of messages that belong to 4.3, and it is why `checkTypes` collects the targets of every
+  `extend` of the program up front (one walk over the top-level declarations, no types built).
+- **Operators and `a[k]` go through the `with` list of a declaration, transitively** (`declaredTraitArguments`), not
+  through implementations. `Int64 with Signed`, `Signed with Numeric`, `Numeric with Add<Self, Self>` answers
+  `1 + 2` with `Int64` and makes `Meters + Float` a mistake, and it needs nothing from 4.3. The same walk answers
+  `Indexed` for `a[key]`, `Slice` for `a[from..to]` and `Iterable<Item>` for `for x in xs`, so `for` is *not* deferred.
+  4.3 replaces the walk with the real lookup; the memoization it needs is already there.
+- **A comparison is a `Bool` and an interpolated text is a `String`, whatever implements them.** Only the witness is
+  4.3's, and deferring the *type* of every `==` and of every `"{x}"` would have left almost nothing typed.
+- **The result of a `fn` without a declared one is inferred by checking its body, exactly once.** `signatureOf`
+  registers the signature with the result `Void` *before* it checks the body, so a recursive call still sees the
+  parameters it takes; if the body turns out to produce something else, the `Void` the recursion assumed was wrong and
+  the message of section 2.7 is given then. That is what lets every recursive `fn walk(...)` of the compiler stay
+  un-annotated while `fn count(value: Int) { ... return 0 ... }` is reported. A body is checked once, whether the walk
+  over the module reached it or a caller asked for its result first (`Checker.checkedBodies`).
+- **The arms of an `if` or a `match` that nothing is expected of are not checked against each other.** Section 2.1
+  makes the first arm the expectation of the others, which would force every body without a declared result whose last
+  statement is a `match` used for effect to agree on `Void` with every arm. The type of the whole is the first arm that
+  produces a value; an `if` whose branches disagree is what the inference contexts of 4.4 report.
+- **Closure bodies are walked but not checked.** A closure records `Deferred` for its body and everything in it, and
+  the type positions inside of it (the annotations of its parameters and of the bindings of its blocks, the signatures
+  of the `fn`s it declares) are still built - so what 4.1 promises stays true inside a construct 4.4 will check.
+- **`checkPattern` takes `isVar`**, because `var (a, b) = pair` binds mutable names and `match` arms do not.
+- **`BlockResult` says whether the block ends in an expression.** A body that does gets the message about that
+  expression (`Expected `Float64`, found `Void``), one that does not gets "This function has to return a `Float64`" at
+  its closing brace. One root cause, one message.
+- **`while true` without a `break` diverges**, so a function whose body is one needs no other result. Every other loop
+  may run zero times.
+- **`break` outside a loop reads "`break` is only allowed inside of a `for` or a `while`"**, with the note about
+  closures the catalogue asks for. The catalogue's "`break` cannot leave a closure" needs a checked closure body, which
+  is 4.4.
+- **The body of a function is a scope of its own**, so a `const` of it may shadow a parameter. Only two declarations of
+  the *same* block are a redeclaration.
+- **`Expectation` and `Tables` live in `context.trb`**, with `Resolution`, `Adaptation`, `Dispatch`, `BindingId`,
+  `LocalBinding` and `BodyState`. `Dispatch` has only `.Direct` and `Adaptation` only the cases 4.2 fills; 4.3 and 4.4
+  add the rest. `Tables` is one per module, in `Checker.tables`, in the shape the type positions already use.
+- **Two traps of stage 0 shaped the code.** `f(checker, checker.x)` and `f(checker, g(checker, x))` read a place that
+  the `var` parameter has already taken out, and a `var self` method whose argument reads another field of `self` does
+  the same - so every such read is hoisted into a local first, and the short forms on `Checker` (`typed`, `resolved`,
+  `adapted`, `reportHere`) write through their own path instead of calling the long form.
 
 ---
 

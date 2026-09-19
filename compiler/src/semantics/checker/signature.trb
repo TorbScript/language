@@ -11,6 +11,7 @@ use TypeSignature, TypeSignatureId from "./type"
 use Checker, TypeScope, DeclarationSite, DeclarationSiteKind from "./context"
 use typeFromReference, traitsFromReference from "./lowering"
 use substituteFunction from "./unify"
+use checkFunctionBody, checkInitializer from "./statement"
 
 /**
  * What a declaration is, as a type. A signature is built the first time somebody asks for it and kept afterwards,
@@ -174,15 +175,109 @@ fn isFailed(state: SignatureState?): Bool {
   }
 }
 
+/**
+ * The three things that can cycle, each with the fix in the message: an alias that names itself, a function whose
+ * result type has to be inferred from a body that calls it, and a `const` that is defined in terms of itself.
+ */
 fn reportCycle(var checker: Checker, symbol: SymbolId) {
   const declared = checker.symbolAt(symbol)
-  if const Some(module) = declared.module {
-    checker.report(
-      module,
-      Diagnostic.error("`{declared.name}` is a cycle: it names itself", declared.span)
-        .withNote("An alias is another name for a type that exists. For a type of its own, write `type {declared.name} \{ ... \}`")
-    )
+  const module = match declared.module {
+    Some(found) => found
+    .None => {
+      return
+    }
   }
+  const problem = match cycleKindOf(checker, symbol) {
+    .Result => {
+      const message = "The return type of `{declared.name}` cannot be inferred: it calls itself. Annotate it"
+      Diagnostic.error(message, declared.span)
+    }
+    .Initializer => {
+      const message = "The type of `{declared.name}` cannot be inferred: its value is defined in terms of itself"
+      Diagnostic.error(message, declared.span)
+    }
+    .Alias => {
+      const note = "An alias is another name for a type that exists."
+        + " For a type of its own, write `type {declared.name} \{ ... \}`"
+      Diagnostic.error("`{declared.name}` is a cycle: it names itself", declared.span).withNote(note)
+    }
+  }
+  checker.report(module, problem)
+}
+
+/** Which of the three it is, read from the declaration the symbol came from. */
+type CycleKind {
+  case Alias
+  case Result
+  case Initializer
+}
+
+fn cycleKindOf(checker: Checker, symbol: SymbolId): CycleKind {
+  const site = match checker.siteOf(symbol) {
+    Some(found) => found
+    .None => {
+      return CycleKind.Alias
+    }
+  }
+  if const Some(function) = functionOfSite(site) {
+    if function.returnType.isNone() && function.body.isSome() {
+      return CycleKind.Result
+    }
+    return CycleKind.Alias
+  }
+  if const Some(binding) = bindingOfSite(site) {
+    if binding.annotation.isNone() {
+      return CycleKind.Initializer
+    }
+  }
+  CycleKind.Alias
+}
+
+/** The `fn` a declaration site holds, whether it is a top-level one, a member or a `foreign` declaration. */
+public fn functionOfSite(site: DeclarationSite): FunctionDeclaration? {
+  match site.kind {
+    .Declared(declaration) => {
+      if const .Function(function) = declaration.kind {
+        return Some(function)
+      }
+      None
+    }
+    .Owned(_, _, member) => {
+      if const .Function(function) = member.kind {
+        return Some(function)
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+/** The `const` a declaration site holds: a top-level one, or a member of a type. */
+public fn bindingOfSite(site: DeclarationSite): Binding? {
+  match site.kind {
+    .Constant(binding) => Some(binding)
+    .Declared(declaration) => {
+      if const .Constant(binding) = declaration.kind {
+        return Some(binding)
+      }
+      None
+    }
+    .Owned(_, _, member) => {
+      if const .Constant(binding) = member.kind {
+        return Some(binding)
+      }
+      None
+    }
+  }
+}
+
+/**
+ * The type a declaration produces: the result of a function, the type of a `const` or of a field. Where it is not
+ * annotated it is inferred from the body, which is what `signatureOf` does on the way.
+ */
+public fn resultOf(var checker: Checker, symbol: SymbolId): TypeId {
+  const identifier = signatureOf(checker, symbol)
+  checker.signature(identifier).form.result
 }
 
 // --- Signatures -----------------------------------------------------------------------------------------------------
@@ -192,6 +287,12 @@ fn reportCycle(var checker: Checker, symbol: SymbolId) {
  * and kept afterwards. Building it needs the types of other declarations, which is why it cannot happen up front.
  */
 public fn signatureOf(var checker: Checker, symbol: SymbolId): SignatureId {
+  // The body of this very declaration is being checked to find out what it returns, and it names itself. The answer
+  // it gets is `Void`, which is right for every recursive statement; only if the body turns out to produce something
+  // else is the assumption wrong, and `inferredSignature` reports it then.
+  if checker.inferringResults.containsKey(symbol) {
+    checker.inferringResults.set(symbol, true)
+  }
   match checker.signatureStates.get(symbol) ?? SignatureState.Missing {
     .Ready(index) => {
       return SignatureId(index)
@@ -217,6 +318,11 @@ public fn signatureOf(var checker: Checker, symbol: SymbolId): SignatureId {
   const built = buildSignature(checker, symbol, site)
   if isFailed(checker.signatureStates.get(symbol)) {
     return checker.brokenSignature()
+  }
+  // A declaration whose result is inferred registered its own signature before it checked its body, so that a call of
+  // it inside of that body still sees the parameters it takes
+  if const Some(.Ready(index)) = checker.signatureStates.get(symbol) {
+    return SignatureId(index)
   }
   const identifier = checker.addSignature(built)
   checker.signatureStates.set(symbol, SignatureState.Ready(identifier.value))
@@ -264,7 +370,7 @@ fn brokenSignatureOf(checker: Checker, symbol: SymbolId): Signature {
   Signature(symbol, [], FunctionForm([], checker.invalidType), [], None, false, false, false)
 }
 
-/** Without an annotation the type of a `const` comes from its initializer, which is milestone 4.2. */
+/** Without an annotation the type of a `const` is the type of its initializer, which is checked here and once. */
 fn constantSignature(
   var checker: Checker,
   symbol: SymbolId,
@@ -275,7 +381,10 @@ fn constantSignature(
   const scope = TypeScope(module, selfType: owner)
   const annotation = match binding.annotation {
     Some(reference) => typeFromReference(checker, reference, scope.forType())
-    .None => checker.invalidType
+    .None => {
+      checker.checkedBodies.set(symbol, true)
+      checkInitializer(checker, module, binding.value, owner, None)
+    }
   }
   Signature(symbol, genericsOf(checker, symbol), FunctionForm([], annotation), [], owner, false, false, true)
 }
@@ -301,13 +410,72 @@ fn functionSignature(
     parameters.add(parameterForm(checker, parameter, scope))
   }
   const hasBody = function.body.isSome()
-  const result = match function.returnType {
-    Some(annotation) => typeFromReference(checker, annotation, scope.forType())
-    // Without a body there is nothing to infer from, so the result is `Void`. With one it is 4.2's work.
-    .None => if hasBody { checker.invalidType } else { checker.voidType }
-  }
   const bounds = boundsOf(checker, generics, function.generics, function.whereClauses, scope)
-  Signature(symbol, generics, FunctionForm(parameters, result), bounds, owner, takesSelf, isVarSelf, hasBody)
+  if const Some(annotation) = function.returnType {
+    const result = typeFromReference(checker, annotation, scope.forType())
+    return Signature(symbol, generics, FunctionForm(parameters, result), bounds, owner, takesSelf, isVarSelf, hasBody)
+  }
+  // Without a body there is nothing to infer from, so the result is `Void`
+  if !hasBody {
+    const void = checker.voidType
+    return Signature(symbol, generics, FunctionForm(parameters, void), bounds, owner, takesSelf, isVarSelf, false)
+  }
+  inferredSignature(checker, symbol, module, function, generics, parameters, bounds, owner, takesSelf, isVarSelf)
+}
+
+/**
+ * A `fn` with a body and no result type: the body is the answer, so it is checked right here. The signature is
+ * registered *before* that with an `Invalid` result, so that a call inside of the body still sees the parameters it
+ * takes - and asking for that signature while it is being built is the recursion `reportCycle` names.
+ */
+fn inferredSignature(
+  var checker: Checker,
+  symbol: SymbolId,
+  module: ModuleId,
+  function: FunctionDeclaration,
+  generics: List<ParameterId>,
+  parameters: List<ParameterForm>,
+  bounds: List<Bound>,
+  owner: TypeId?,
+  takesSelf: Bool,
+  isVarSelf: Bool,
+): Signature {
+  const void = checker.voidType
+  const provisional = Signature(
+    symbol,
+    generics,
+    FunctionForm(parameters, void),
+    bounds,
+    owner,
+    takesSelf,
+    isVarSelf,
+    true,
+  )
+  const identifier = checker.addSignature(provisional)
+  checker.signatureStates.set(symbol, SignatureState.Ready(identifier.value))
+  checker.inferringResults.set(symbol, false)
+  checker.checkedBodies.set(symbol, true)
+  const result = checkFunctionBody(
+    checker,
+    module,
+    function,
+    owner,
+    generics,
+    parameters,
+    takesSelf,
+    isVarSelf,
+    void,
+    true,
+  )
+  const namedItself = checker.inferringResults.get(symbol) ?? false
+  const _ = checker.inferringResults.remove(symbol)
+  // The recursion assumed `Void`, and the body produces something else: only an annotation can settle that
+  if namedItself && result != void && result != checker.neverType {
+    reportCycle(checker, symbol)
+  }
+  const found = provisional.copy(form: FunctionForm(parameters, result))
+  checker.signatures.set(identifier.value, found)
+  found
 }
 
 fn caseSignature(

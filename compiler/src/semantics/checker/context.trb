@@ -71,6 +71,162 @@ public type TypeScope {
   }
 }
 
+// --- What the checker resolves --------------------------------------------------------------------------------------
+
+/** The index of a local binding in `Checker.bindings`: a `const`, a `var`, a parameter, `self`, a pattern name. */
+public type BindingId {
+  value: Int
+}
+
+/**
+ * One local binding. Locals are not symbols: they belong to one body, nothing imports them, and a message about one
+ * points at the place it was written. They still get ids, because `Resolution.Local` has to name one.
+ */
+public type LocalBinding {
+  name: String
+  annotation: TypeId
+  isVar: Bool
+  /** The span of the name, which is what a message about the declaration points at. */
+  at: Span
+  /** `self` and a receiver closure's parameter: the one binding whose members a bare name may mean. */
+  isReceiver: Bool = false
+}
+
+/** One name in the scope chain. A list instead of a map: a scope has few names, and extending it must not copy one. */
+public type Local {
+  name: String
+  kind: LocalKind
+}
+
+public type LocalKind {
+  case Bound(binding: BindingId)
+  /** A `fn`, `type` or `trait` declared in this block, and a generic parameter that is in scope as a namespace. */
+  case Declared(symbol: SymbolId)
+}
+
+/**
+ * What a name, a member, a call or a constructor in an expression resolved to. Milestone 5 reads this instead of
+ * looking at a name a second time.
+ */
+public type Resolution {
+  case Local(binding: BindingId)
+  /** A `fn`, a method, a static function of a type, or a field that holds a closure that is being called. */
+  case Callable(symbol: SymbolId, arguments: List<TypeId>, dispatch: Dispatch)
+  case Field(owner: TypeId, field: SymbolId)
+  case Constant(symbol: SymbolId, owner: TypeId?)
+  /** The generated constructor of a type: `Point(10, 20)`, `Self(text)`. */
+  case Construct(owner: TypeId)
+  /** The generated `copy` of a type (gap 24). */
+  case CopyOf(owner: TypeId)
+  case CaseOf(owner: TypeId, variant: SymbolId)
+  /** `.0`, `.1`, `.lowest`: the position a tuple member means. */
+  case TupleField(owner: TypeId, index: Int)
+  case Namespace(module: ModuleId)
+  /** `Void` in an expression: the one name that is both a type and its only value (gap 1). */
+  case VoidValue
+  /** The type itself, as the target of a static member or of a constructor: `Point` in `Point.origin`. */
+  case TypeOf(owner: TypeId)
+  /** A construct a later sub-milestone resolves. It is recorded so that the statistics can count it. */
+  case Deferred
+}
+
+/**
+ * How a call reaches its target. Milestone 4.2 only ever produces `Direct`; the trait cases arrive with 4.3 and 4.4,
+ * which is why the back ends never have to decide between monomorphizing and passing a table.
+ */
+public type Dispatch {
+  case Direct
+}
+
+/** Everything the source does not spell out, in the order in which it applies. */
+public type Adaptation {
+  /** A literal that adapted to the expected type: `const x: Int8 = 1`. */
+  case Literal(annotation: TypeId)
+  /** A parameter that was not written and takes its default. The index is the position in the declaration. */
+  case DefaultArgument(parameter: Int)
+  /** Written order to declaration order: `order[written]` is the parameter the written argument fills. */
+  case Reorder(order: List<Int>)
+  /** `...rest: Int`: the arguments from `from` on are collected into a `List<element>`. */
+  case Variadic(element: TypeId, from: Int)
+  /** `...expression` in an argument list. */
+  case Spread
+  /** The argument of a `lazy` parameter is an expression, not a value. */
+  case Lazy
+  /** The trailing closure fills the last parameter, whatever position it was written in. */
+  case TrailingClosure(parameter: Int)
+  /** A member of `self` that was written without it: `area()` inside a method of `Point`. */
+  case ImplicitSelf(receiver: BindingId)
+}
+
+/**
+ * Everything milestone 5 reads, one of these per module. Keyed by the `Span` of the node it belongs to, as
+ * milestone 3 keys its type positions: no two nodes of the same kind in a file have the same span.
+ */
+public type Tables {
+  var expressionTypes: Map<Span, TypeId> = [:]
+  var patternTypes: Map<Span, TypeId> = [:]
+  /** What a name, a member, a call or a constructor resolved to, by the span of the expression that names it. */
+  var resolutions: Map<Span, Resolution> = [:]
+  /** Everything the source does not spell out, by the span of the expression it applies to. */
+  var adaptations: Map<Span, List<Adaptation>> = [:]
+  /**
+   * Per call span: which parameter every written argument fills, in written order. `-1` where an argument could not
+   * be matched, which is the case a message was already given for.
+   */
+  var argumentTargets: Map<Span, List<Int>> = [:]
+}
+
+/** No expected type, a type, or "a value is not wanted here". */
+public type Expectation {
+  /** Nothing says what the type should be: infer it. */
+  case None
+  case Type(annotation: TypeId)
+  /** The arms of a `match` that is used as a statement, and the body of a `for`: a value is not wanted. */
+  case Statement
+
+  /** The type that is expected, if any. */
+  fn annotationOf(self): TypeId? {
+    match self {
+      .Type(annotation) => Some(annotation)
+      _ => None
+    }
+  }
+
+  fn isStatement(self): Bool {
+    match self {
+      .Statement => true
+      _ => false
+    }
+  }
+}
+
+/**
+ * Everything the walk over one body holds. A body may start in the middle of another one - asking for the result type
+ * of a function that does not declare one checks its body right there - so the outer state is put aside and restored.
+ */
+public type BodyState {
+  module: ModuleId
+  locals: List<Local>
+  scopeStarts: List<Int>
+  resultType: TypeId
+  isResultInferred: Bool
+  returnTypes: List<TypeId>
+  loopDepth: Int
+  receiverType: TypeId?
+  receiverBinding: BindingId?
+  selfType: TypeId?
+}
+
+/** How much of a module the checker already understands. `torb check --statistics` prints these. */
+public type Statistics {
+  typed: Int
+  deferred: Int
+
+  fn total(self): Int {
+    typed + deferred
+  }
+}
+
 /** Where the declaration of a symbol is, so its signature can be built when somebody asks for it. */
 public type DeclarationSite {
   module: ModuleId
@@ -110,6 +266,7 @@ public type Checker {
   voidType: TypeId
   neverType: TypeId
   invalidType: TypeId
+  deferredType: TypeId
   /** Index 0 is the signature of a declaration that could not be built: no parameters, an `Invalid` result. */
   var signatures: List<Signature> = []
   var signatureStates: Map<SymbolId, SignatureState> = [:]
@@ -126,8 +283,51 @@ public type Checker {
   var sites: Map<SymbolId, DeclarationSite> = [:]
   /** One per module, in the order of `program.graph.modules`: the type of every type position, by its span. */
   var typePositions: List<Map<Span, TypeId>> = []
+  /** One per module, in the same order: everything about the expressions of that module (milestone 4.2 on). */
+  var tables: List<Tables> = []
   /** One per module, so a message can be rendered with the file it belongs to. */
   var diagnostics: List<List<Diagnostic>> = []
+
+  // --- The state of the walk over one body ---------------------------------------------------------------------------
+
+  /** The module whose body is being checked. Everything a message or a table needs to know goes through this one. */
+  var module: ModuleId = ModuleId(0)
+  /** Append-only, addressed by `BindingId`: every local of every body the checker has looked at. */
+  var bindings: List<LocalBinding> = []
+  /** The scope chain of the body that is being checked, innermost last. */
+  var locals: List<Local> = []
+  /** Where every open scope begins in `locals`, so leaving one is a truncation. */
+  var scopeStarts: List<Int> = []
+  /** The declared or inferred result of the function whose body is being checked. */
+  var resultType: TypeId
+  /** Without a declared result, `return` and the last expression *are* the result, so nothing is checked against it. */
+  var isResultInferred: Bool = false
+  /** What every `return` of the body produced, for the result of a function that does not declare one. */
+  var returnTypes: List<TypeId> = []
+  /** `break` and `continue` need an enclosing `for` or `while` of the same function. */
+  var loopDepth: Int = 0
+  /** The innermost receiver: the type whose members a bare name may mean. Only one is ever implicit (gap 4). */
+  var receiverType: TypeId? = None
+  var receiverBinding: BindingId? = None
+  /** What `Self` means in the body that is being checked. A static function has one without having a receiver. */
+  var selfType: TypeId? = None
+  /** A body is checked exactly once, whether the walk reached it or a caller asked for its result type first. */
+  var checkedBodies: Map<SymbolId, Bool> = [:]
+  /** The declarations whose result is being inferred right now: naming one of them inside its own body is a cycle. */
+  var inferringResults: Map<SymbolId, Bool> = [:]
+  /** Every type that an `extend` anywhere in the program adds members to. Built once, on the first question. */
+  var extendedSymbols: Map<Int, Bool> = [:]
+  var hasCollectedExtensions: Bool = false
+  /**
+   * "Does this type declare that trait, and with which arguments" - by type and trait. The operators and `for` ask it
+   * for every expression they look at, and the walk up the `with` list of `Int64` is the same one every time.
+   */
+  var declaredTraits: Map<String, List<TypeId>?> = [:]
+  /**
+   * The function type of a signature, by `SignatureId`. Reading a member builds one, interning it builds a key out of
+   * every parameter, and the same member is read over and over - so the answer is kept.
+   */
+  var signatureTypes: Map<Int, TypeId> = [:]
 
   fn symbolAt(self, id: SymbolId): Symbol {
     symbols.at(id)
@@ -188,6 +388,263 @@ public type Checker {
     typePositions[module.value].set(at, id)
   }
 
+  // --- The tables of one module ---------------------------------------------------------------------------------------
+
+  /** The type of one expression. Every expression the checker looks at lands here, `Deferred` included. */
+  fn recordExpression(var self, module: ModuleId, at: Span, id: TypeId) {
+    tables[module.value].expressionTypes.set(at, id)
+  }
+
+  fn expressionType(self, module: ModuleId, at: Span): TypeId? {
+    tables[module.value].expressionTypes.get(at)
+  }
+
+  fn recordPattern(var self, module: ModuleId, at: Span, id: TypeId) {
+    tables[module.value].patternTypes.set(at, id)
+  }
+
+  fn patternType(self, module: ModuleId, at: Span): TypeId? {
+    tables[module.value].patternTypes.get(at)
+  }
+
+  fn recordResolution(var self, module: ModuleId, at: Span, resolution: Resolution) {
+    tables[module.value].resolutions.set(at, resolution)
+  }
+
+  fn resolutionAt(self, module: ModuleId, at: Span): Resolution? {
+    tables[module.value].resolutions.get(at)
+  }
+
+  /** Adaptations apply in the order they were added, which is the order the lowering has to replay them in. */
+  fn recordAdaptation(var self, module: ModuleId, at: Span, adaptation: Adaptation) {
+    const known = tables[module.value].adaptations.get(at) ?? []
+    tables[module.value].adaptations.set(at, known.added(adaptation))
+  }
+
+  fn adaptationsAt(self, module: ModuleId, at: Span): List<Adaptation> {
+    tables[module.value].adaptations.get(at) ?? []
+  }
+
+  fn recordArgumentTargets(var self, module: ModuleId, at: Span, targets: List<Int>) {
+    tables[module.value].argumentTargets.set(at, targets)
+  }
+
+  fn argumentTargetsAt(self, module: ModuleId, at: Span): List<Int>? {
+    tables[module.value].argumentTargets.get(at)
+  }
+
+  /** How many expressions of a module are typed, and how many wait for a later sub-milestone. */
+  fn statisticsOf(self, module: ModuleId): Statistics {
+    var typed = 0
+    var deferred = 0
+    for (_, id) in tables[module.value].expressionTypes {
+      if id == deferredType {
+        deferred = deferred + 1
+      } else {
+        typed = typed + 1
+      }
+    }
+    Statistics(typed, deferred)
+  }
+
+  // --- The module that is being checked ------------------------------------------------------------------------------
+
+  /**
+   * The short forms for the module that is being checked. Every one of them writes through its own path instead of
+   * calling the version above: a `var self` method whose argument reads another field of `self` would read a place
+   * that has already been taken out, which the interpreter of stage 0 cannot see and cannot report.
+   */
+  fn reportHere(var self, problem: Diagnostic) {
+    if diagnostics[module.value].any({ _.span == problem.span }) {
+      return
+    }
+    diagnostics[module.value].add(problem)
+  }
+
+  /** Records the type of an expression and gives it back, which is what every branch of the checker ends with. */
+  fn typed(var self, at: Span, id: TypeId): TypeId {
+    tables[module.value].expressionTypes.set(at, id)
+    id
+  }
+
+  fn typedPattern(var self, at: Span, id: TypeId) {
+    tables[module.value].patternTypes.set(at, id)
+  }
+
+  fn resolved(var self, at: Span, resolution: Resolution) {
+    tables[module.value].resolutions.set(at, resolution)
+  }
+
+  fn adapted(var self, at: Span, adaptation: Adaptation) {
+    const known = tables[module.value].adaptations.get(at) ?? []
+    tables[module.value].adaptations.set(at, known.added(adaptation))
+  }
+
+  fn recordArguments(var self, at: Span, targets: List<Int>) {
+    tables[module.value].argumentTargets.set(at, targets)
+  }
+
+  fn resolutionHere(self, at: Span): Resolution? {
+    tables[module.value].resolutions.get(at)
+  }
+
+  // --- The types of the literals -------------------------------------------------------------------------------------
+
+  /** A workspace without a prelude has no `Int64`; what is missing was reported where the name did not resolve. */
+  fn nominalOrInvalid(var self, symbol: SymbolId?): TypeId {
+    match symbol {
+      Some(found) => types.intern(TypeForm.Nominal(found, []))
+      .None => invalidType
+    }
+  }
+
+  fn integerType(var self): TypeId {
+    const symbol = wellKnown.integer
+    nominalOrInvalid(symbol)
+  }
+
+  fn floatType(var self): TypeId {
+    const symbol = wellKnown.float
+    nominalOrInvalid(symbol)
+  }
+
+  fn stringType(var self): TypeId {
+    const symbol = wellKnown.string
+    nominalOrInvalid(symbol)
+  }
+
+  fn booleanType(var self): TypeId {
+    const symbol = wellKnown.boolean
+    nominalOrInvalid(symbol)
+  }
+
+  fn charType(var self): TypeId {
+    const symbol = wellKnown.character
+    nominalOrInvalid(symbol)
+  }
+
+  // --- Types the checker builds over and over ------------------------------------------------------------------------
+
+  fn isBroken(self, id: TypeId): Bool {
+    id == invalidType || id == deferredType
+  }
+
+  /** `Never` fits everywhere, and nothing is ever said about what is broken already. */
+  fn absorbs(self, id: TypeId): Bool {
+    id == invalidType || id == deferredType || id == neverType
+  }
+
+  fn functionType(var self, form: FunctionForm): TypeId {
+    types.intern(TypeForm.Function(form))
+  }
+
+  // --- Scopes --------------------------------------------------------------------------------------------------------
+
+  fn openScope(var self) {
+    scopeStarts.add(locals.length())
+  }
+
+  fn closeScope(var self) {
+    const start = scopeStarts.removeAt(scopeStarts.length() - 1) ?? 0
+    while locals.length() > start {
+      const _ = locals.removeAt(locals.length() - 1)
+    }
+  }
+
+  /** A binding gets an id, and the name it is reachable under. */
+  fn declareBinding(var self, binding: LocalBinding): BindingId {
+    bindings.add(binding)
+    const identifier = BindingId(bindings.length() - 1)
+    if !binding.name.isEmpty() && binding.name != "_" {
+      locals.add(Local(binding.name, LocalKind.Bound(identifier)))
+    }
+    identifier
+  }
+
+  /** A `fn`, `type` or `trait` of a block, and a generic parameter: a name of the scope that is not a value. */
+  fn declareLocalSymbol(var self, name: String, symbol: SymbolId) {
+    if !name.isEmpty() {
+      locals.add(Local(name, LocalKind.Declared(symbol)))
+    }
+  }
+
+  fn binding(self, identifier: BindingId): LocalBinding {
+    bindings[identifier.value]
+  }
+
+  /** The innermost hit wins: a nested scope may shadow, the same scope may not redeclare. */
+  fn findLocal(self, name: String): LocalKind? {
+    var index = locals.length() - 1
+    while index >= 0 {
+      if locals[index].name == name {
+        return Some(locals[index].kind)
+      }
+      index = index - 1
+    }
+    None
+  }
+
+  // --- One body at a time --------------------------------------------------------------------------------------------
+
+  /** Starts a body from scratch and gives back what was there, so that a nested one can put it back. */
+  fn enterBody(var self, inside: ModuleId, result: TypeId, isInferred: Bool, own: TypeId?): BodyState {
+    const saved = BodyState(
+      module,
+      locals,
+      scopeStarts,
+      resultType,
+      isResultInferred,
+      returnTypes,
+      loopDepth,
+      receiverType,
+      receiverBinding,
+      selfType,
+    )
+    module = inside
+    locals = []
+    scopeStarts = []
+    resultType = result
+    isResultInferred = isInferred
+    returnTypes = []
+    loopDepth = 0
+    receiverType = None
+    receiverBinding = None
+    selfType = own
+    saved
+  }
+
+  fn leaveBody(var self, saved: BodyState) {
+    module = saved.module
+    locals = saved.locals
+    scopeStarts = saved.scopeStarts
+    resultType = saved.resultType
+    isResultInferred = saved.isResultInferred
+    returnTypes = saved.returnTypes
+    loopDepth = saved.loopDepth
+    receiverType = saved.receiverType
+    receiverBinding = saved.receiverBinding
+    selfType = saved.selfType
+  }
+
+  /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */
+  fn setReceiver(var self, binding: BindingId) {
+    receiverBinding = Some(binding)
+    receiverType = Some(bindings[binding.value].annotation)
+  }
+
+  /** Whether the *innermost* scope already has this name, which is the only redeclaration that is an error. */
+  fn isDeclaredHere(self, name: String): Bool {
+    const start = scopeStarts.last() ?? 0
+    var index = locals.length() - 1
+    while index >= start {
+      if locals[index].name == name {
+        return true
+      }
+      index = index - 1
+    }
+    false
+  }
+
   fn siteOf(self, symbol: SymbolId): DeclarationSite? {
     sites.get(symbol)
   }
@@ -205,8 +662,10 @@ public fn newChecker(program: Program, resolutions: List<Map<Span, SymbolId>>): 
   const void = types.intern(TypeForm.VoidType)
   const never = types.intern(TypeForm.NeverType)
   const invalid = types.intern(TypeForm.Invalid)
+  const deferred = types.intern(TypeForm.Deferred)
   var definitions: List<Map<Span, SymbolId>> = []
   var typePositions: List<Map<Span, TypeId>> = []
+  var tables: List<Tables> = []
   var diagnostics: List<List<Diagnostic>> = []
   for module in program.graph.modules {
     var bySpan: Map<Span, SymbolId> = [:]
@@ -215,6 +674,7 @@ public fn newChecker(program: Program, resolutions: List<Map<Span, SymbolId>>): 
     }
     definitions.add(bySpan)
     typePositions.add([:])
+    tables.add(Tables())
     diagnostics.add([])
   }
   const broken = Signature(SymbolId(0), [], FunctionForm([], invalid), [], None, false, false, false)
@@ -229,10 +689,13 @@ public fn newChecker(program: Program, resolutions: List<Map<Span, SymbolId>>): 
     void,
     never,
     invalid,
+    deferred,
     signatures: [broken],
     typeSignatures: [brokenType],
     aliasTargets: [invalid],
     typePositions: typePositions,
+    tables: tables,
     diagnostics: diagnostics,
+    resultType: void,
   )
 }

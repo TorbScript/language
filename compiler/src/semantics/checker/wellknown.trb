@@ -23,9 +23,30 @@ public type WellKnown {
   integer: SymbolId? = None
   character: SymbolId? = None
   boolean: SymbolId? = None
+  /** The type of a decimal literal. */
+  float: SymbolId? = None
+  /** `0..10`, and the argument of `Slice.slice`. */
+  range: SymbolId? = None
+  /** `for x in xs` and `...x` ask a type for this one, `a[key]` for `Indexed`, `a[from..to]` for `Slice`. */
+  iterable: SymbolId? = None
+  indexed: SymbolId? = None
+  slice: SymbolId? = None
+  /** The traits the collection literals build, and the ones the operators go through. */
+  list: SymbolId? = None
+  map: SymbolId? = None
+  /**
+   * Every numeric type of the prelude, by `SymbolId.value`, with the name it was declared under. A literal adapts to
+   * one of these, and a literal that does not fit the width of the one it adapts to is an error (gap 38).
+   */
+  numerics: Map<Int, String> = [:]
 
   fn symbolNamed(self, name: String): SymbolId? {
     names.get(name)
+  }
+
+  /** `Int8`, `UInt64`, `Float32`, `Decimal`: the name a numeric type of the prelude was declared under. */
+  fn numericNamed(self, symbol: SymbolId): String? {
+    numerics.get(symbol.value)
   }
 
   fn isVoid(self, symbol: SymbolId): Bool {
@@ -52,7 +73,42 @@ public fn wellKnownOf(program: Program): WellKnown {
     integer: exports.get("Int64"),
     character: exports.get("Char"),
     boolean: exports.get("Bool"),
+    float: exports.get("Float64"),
+    range: exports.get("Range"),
+    iterable: exports.get("Iterable"),
+    indexed: exports.get("Indexed"),
+    slice: exports.get("Slice"),
+    list: exports.get("List"),
+    map: exports.get("Map"),
+    numerics: numericNames(exports),
   )
+}
+
+/**
+ * The numeric types by symbol, so that adapting a literal is one map lookup instead of eleven comparisons. The width
+ * is read from the name, which is the only place it is written down: the declarations themselves are `native`.
+ */
+fn numericNames(exports: Map<String, SymbolId>): Map<Int, String> {
+  var found: Map<Int, String> = [:]
+  const declared = [
+    "Int8",
+    "Int16",
+    "Int32",
+    "Int64",
+    "UInt8",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "Float32",
+    "Float64",
+    "Decimal",
+  ]
+  for name in declared {
+    if const Some(symbol) = exports.get(name) {
+      found.set(symbol.value, name)
+    }
+  }
+  found
 }
 
 /**

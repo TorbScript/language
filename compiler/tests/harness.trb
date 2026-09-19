@@ -1,0 +1,263 @@
+use Span from "../src/syntax/source"
+use SourceTree from "../src/project/source-tree"
+use ModuleId from "../src/semantics/module"
+use check from "../src/semantics/check"
+use Checker, Resolution, Adaptation, Statistics from "../src/semantics/checker/context"
+
+/**
+ * One in-memory workspace for the tests of the type checker, and the questions they ask about it.
+ *
+ * The prelude here is a small one of its own: the checker looks the declarations the *language* refers to up in
+ * `std/prelude` by name (`Option` for `Item?`, `Int64` for an integer literal, `Add` for `+`, `List` for `[1, 2]`),
+ * so a test that talks about one of them has to bring it. It is the same shape as the real prelude and a fraction of
+ * its size, which is what keeps these tests fast and readable.
+ */
+public const preludeSource = r"""
+public trait Show {
+  fn show(self): String
+}
+
+public trait Equals {
+  fn equals(self, other: Self): Bool
+}
+
+public trait Compare with Equals {
+  fn compare(self, other: Self): Int
+}
+
+public trait Hash {
+  fn hash(self): Int
+}
+
+public trait Add<Other = Self, Output = Self> {
+  fn add(self, other: Other): Output
+}
+
+public trait Subtract<Other = Self, Output = Self> {
+  fn subtract(self, other: Other): Output
+}
+
+public trait Multiply<Other = Self, Output = Self> {
+  fn multiply(self, other: Other): Output
+}
+
+public trait Divide<Other = Self, Output = Self> {
+  fn divide(self, other: Other): Output
+}
+
+public trait Remainder<Other = Self, Output = Self> {
+  fn remainder(self, other: Other): Output
+}
+
+public trait Negate {
+  fn negate(self): Self
+}
+
+public trait Indexed<Key, Value> {
+  fn at(self, key: Key): Value
+}
+
+public trait Slice {
+  fn slice(self, range: Range<Int>): Self
+}
+
+public trait Iterable<Item> {
+  fn iterator(self): Iterator<Item>
+}
+
+public trait Iterator<Item> {
+  fn next(var self): Item?
+}
+
+public trait Numeric with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show {}
+
+public trait Signed with Numeric, Negate {}
+
+public native type Int8 with Signed, Hash {}
+public native type Int32 with Signed, Hash {}
+public native type Int64 with Signed, Hash {}
+public native type UInt8 with Numeric, Hash {}
+public native type Float32 with Signed {}
+public native type Float64 with Signed {}
+public native type Bool with Equals, Hash, Show {}
+public native type Char with Equals, Compare, Hash, Show {}
+
+public native type String with Equals, Compare, Hash, Show, Add, Slice {
+  native fn byteLength(self): Int64
+  native fn isEmpty(self): Bool
+}
+
+public type Int = Int64
+public type Float = Float64
+
+public type Option<Value> {
+  case Some(value: Value)
+  case None
+}
+
+public type Range<Value> {
+  start: Value?
+  end: Value?
+  isInclusive: Bool = false
+}
+
+public trait List<Item> with Iterable<Item>, Indexed<Int, Item> {
+  fn length(self): Int
+  fn add(var self, value: Item)
+  fn added(self, value: Item): Self
+}
+
+public trait Map<Key, Value> with Indexed<Key, Value> {}
+
+public type Array<Item, const Size: Int> {}
+
+public native fn print(...values: Show)
+
+public native fn panic(message: String): Never
+"""
+
+public const workspace = [
+  "project.trb": r"""
+name "acme/all"
+workspace { members "std/*", "app" }
+""",
+  "std/prelude/project.trb": r"""
+name "std/prelude"
+""",
+  "std/prelude/src/types.trb": preludeSource,
+  "std/prelude/src/lib.trb": r"""
+public use Show, Equals, Compare, Hash, Negate, Iterable, Iterator from "./types"
+public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
+public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
+public use Bool, Char, String, Int, Float, Option, Range, List, Map, Array from "./types"
+public use print, panic from "./types"
+public use Some, None from Option
+""",
+  "app/project.trb": r"""
+name "acme/app"
+""",
+]
+
+public fn workspaceWith(files: Map<String, String>): SourceTree {
+  var all = workspace
+  for (path, text) in files {
+    all.set(path, text)
+  }
+  SourceTree.of(all)
+}
+
+/** One checked `app/src/main.trb`, and everything a test asks about it. */
+public type Probed {
+  source: String
+  var checker: Checker
+  module: ModuleId
+
+  /**
+   * The span of `written` in the source. It has to appear exactly once, which is what makes the span known without
+   * parsing the file a second time.
+   */
+  fn spanOf(self, written: String): Span {
+    const start = source.indexOf(written).expect("`{written}` in the source")
+    Span(start, start + written.byteLength())
+  }
+
+  /** The type of the expression that is written exactly like this, as a message would show it. */
+  fn typeOf(self, written: String): String {
+    const at = spanOf(written)
+    const found = checker.expressionType(module, at).expect("an expression at `{written}`")
+    checker.describe(found)
+  }
+
+  /** The type of the pattern that is written exactly like this. */
+  fn patternTypeOf(self, written: String): String {
+    const at = spanOf(written)
+    const found = checker.patternType(module, at).expect("a pattern at `{written}`")
+    checker.describe(found)
+  }
+
+  /** What the expression at `written` resolved to, in the shape a test can compare. */
+  fn resolutionOf(self, written: String): String {
+    const at = spanOf(written)
+    const found = checker.resolutionAt(module, at).expect("a resolution at `{written}`")
+    describeResolution(checker, found)
+  }
+
+  /** The adaptations of the expression at `written`, in the order they apply. */
+  fn adaptationsOf(self, written: String): List<String> {
+    const at = spanOf(written)
+    var found: List<String> = []
+    for adaptation in checker.adaptationsAt(module, at) {
+      found.add(describeAdaptation(checker, adaptation))
+    }
+    found
+  }
+
+  /** Which parameter every written argument of the call at `written` fills. */
+  fn argumentsOf(self, written: String): List<Int> {
+    const at = spanOf(written)
+    checker.argumentTargetsAt(module, at).expect("a call at `{written}`")
+  }
+
+  fn statistics(self): Statistics {
+    checker.statisticsOf(module)
+  }
+}
+
+public fn probe(source: String): Probed {
+  const checked = check(workspaceWith(["app/src/main.trb": source]), ["app"])
+  const module = checked.program.graph.moduleAt("app/src/main.trb").expect("the module of the file")
+  Probed(source, checked.checker, module)
+}
+
+/** Everything that is wrong in `app`, in the order the compiler reports it. */
+public fn problems(source: String): List<String> {
+  var found: List<String> = []
+  for file in check(workspaceWith(["app/src/main.trb": source]), ["app"]).files {
+    for diagnostic in file.diagnostics {
+      found.add(diagnostic.message)
+    }
+  }
+  found
+}
+
+/** The notes of the first problem of `app`. */
+public fn notes(source: String): List<String> {
+  for file in check(workspaceWith(["app/src/main.trb": source]), ["app"]).files {
+    if const Some(first) = file.diagnostics.first() {
+      return first.notes
+    }
+  }
+  []
+}
+
+/** A resolution as a test writes it: the kind, and the name of what it points at. */
+public fn describeResolution(checker: Checker, resolution: Resolution): String {
+  match resolution {
+    .Local(binding) => "local {checker.binding(binding).name}"
+    .Callable(symbol, _, _) => "call {checker.symbolAt(symbol).name}"
+    .Field(owner, field) => "field {checker.describe(owner)}.{checker.symbolAt(field).name}"
+    .Constant(symbol, _) => "constant {checker.symbolAt(symbol).name}"
+    .Construct(owner) => "construct {checker.describe(owner)}"
+    .CopyOf(owner) => "copy {checker.describe(owner)}"
+    .CaseOf(owner, variant) => "case {checker.describe(owner)}.{checker.symbolAt(variant).name}"
+    .TupleField(_, index) => "tuple {index}"
+    .Namespace(_) => "namespace"
+    .VoidValue => "void"
+    .TypeOf(owner) => "type {checker.describe(owner)}"
+    .Deferred => "deferred"
+  }
+}
+
+/** An adaptation as a test writes it. */
+public fn describeAdaptation(checker: Checker, adaptation: Adaptation): String {
+  match adaptation {
+    .Literal(annotation) => "literal {checker.describe(annotation)}"
+    .DefaultArgument(parameter) => "default {parameter}"
+    .Reorder(order) => "reorder {order}"
+    .Variadic(element, from) => "variadic {checker.describe(element)} from {from}"
+    .Spread => "spread"
+    .Lazy => "lazy"
+    .TrailingClosure(parameter) => "trailing {parameter}"
+    .ImplicitSelf(receiver) => "self {checker.binding(receiver).name}"
+  }
+}

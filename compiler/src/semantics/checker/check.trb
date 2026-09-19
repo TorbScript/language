@@ -1,23 +1,25 @@
 use Span from "../../syntax/source"
-use Statement, Block, Binding, Condition, Declaration, Member from "../../syntax/ast"
-use FunctionDeclaration, ExtendDeclaration, Expression, Argument from "../../syntax/ast"
+use Statement, Binding, Declaration, Member from "../../syntax/ast"
+use FunctionDeclaration, ExtendDeclaration, Expression, TypeReference from "../../syntax/ast"
 use ModuleId from "../module"
 use SymbolId from "../symbols"
 use Program from "../scope"
-use Checker, TypeScope, newChecker from "./context"
+use Checker, TypeScope, Statistics, newChecker from "./context"
+use TypeId from "./type"
 use declareSites, declareParameters, genericsOf from "./signature"
 use signatureOf, typeSignatureOf, aliasTargetOf, extensionMembers from "./signature"
-use traitList, boundsOf from "./signature"
+use traitList, boundsOf, resultOf from "./signature"
 use typeFromReference from "./lowering"
+use checkBodyOf, checkInitializer, checkStatement from "./statement"
+use deferBlock from "./expression"
 
 /**
- * Checks the declarations of the given modules: every type position becomes a type, and every declaration a
- * signature. Only what was asked for is checked; the signatures of everything it names are built on demand, which is
- * why `torb check app` does not have to walk the whole standard library.
+ * Checks the declarations of the given modules: every type position becomes a type, every declaration a signature, and
+ * every expression of every body a type. Only what was asked for is checked; the signatures of everything it names are
+ * built on demand, which is why `torb check app` does not have to walk the whole standard library.
  *
- * The `Checker` it gives back *is* the result: milestone 4.1 fills `typePositions` (the type of every type position,
- * by module and span, in the shape milestone 3 hands over its name resolutions), the signatures and the diagnostics.
- * The passes after it add the types of expressions, what every name resolved to, and what the source leaves out.
+ * The `Checker` it gives back *is* the result: it holds the types, the signatures, the type of every type position,
+ * the tables of every module (milestone 4.2 on) and the diagnostics.
  */
 public fn checkTypes(program: Program, resolutions: List<Map<Span, SymbolId>>, modules: List<ModuleId>): Checker {
   var checker = newChecker(program, resolutions)
@@ -25,71 +27,108 @@ public fn checkTypes(program: Program, resolutions: List<Map<Span, SymbolId>>, m
   for module in program.graph.modules {
     declareSites(checker, module.id, module.file.statements)
   }
+  collectExtensions(checker)
   for module in modules {
     checkModule(checker, module)
   }
   checker
 }
 
-/** Every declaration of one module, and every type position inside of its bodies. */
+/**
+ * Every type an `extend` anywhere in the program adds members to. Member lookup needs it to tell a typo apart from a
+ * member milestone 4.3 will find: a type nobody extends and that comes with no trait has exactly the members of its
+ * body, and everything else waits.
+ */
+fn collectExtensions(var checker: Checker) {
+  if checker.hasCollectedExtensions {
+    return
+  }
+  checker.hasCollectedExtensions = true
+  for module in checker.program.graph.modules {
+    for statement in module.file.statements {
+      if const .Declare(declaration) = statement.kind {
+        if const .Extend(extension) = declaration.kind {
+          if const Some(symbol) = headOfReference(checker, module.id, extension.target) {
+            checker.extendedSymbols.set(symbol.value, true)
+          }
+        }
+      }
+    }
+  }
+}
+
+/** The symbol a plain named type reference points at, which milestone 3 resolved already. */
+fn headOfReference(checker: Checker, module: ModuleId, reference: TypeReference): SymbolId? {
+  if const .Named(path, _) = reference.kind {
+    if path.isEmpty() {
+      return None
+    }
+    return checker.resolvedName(module, path[path.length() - 1].span)
+  }
+  None
+}
+
+/**
+ * Every declaration of one module, and every expression inside of its bodies. The top level of a file is one body:
+ * an entry file, a script and a `tests/*.test.trb` file are ordinary code, and the locals of one statement are in
+ * scope in the next.
+ */
 public fn checkModule(var checker: Checker, module: ModuleId) {
   const statements = checker.program.graph.at(module).file.statements
+  const saved = checker.enterBody(module, checker.voidType, true, None)
+  checker.openScope()
   // The sites of the top level are known already, so nothing is collected here
   for statement in statements {
-    checkStatement(checker, TypeScope(module), statement)
+    checkTopLevel(checker, TypeScope(module), statement)
   }
+  checker.closeScope()
+  checker.leaveBody(saved)
 }
 
-fn checkBlock(var checker: Checker, scope: TypeScope, block: Block) {
-  // A declaration is visible in the whole block it is written in, so all of them are found before any is built
-  declareSites(checker, scope.module, block.statements)
-  for statement in block.statements {
-    checkStatement(checker, scope, statement)
-  }
+/** How much of a module the checker already understands, for `torb check --statistics`. */
+public fn statisticsOf(checker: Checker, module: ModuleId): Statistics {
+  checker.statisticsOf(module)
 }
 
-fn checkStatement(var checker: Checker, scope: TypeScope, statement: Statement) {
+/**
+ * A statement at the top level of a module. Top-level code is only allowed in entry files and scripts, which is
+ * milestone 4.9's rule; here every one of them is checked, because a script is an ordinary body.
+ */
+fn checkTopLevel(var checker: Checker, scope: TypeScope, statement: Statement) {
   match statement.kind {
     .Declare(declaration) => checkDeclaration(checker, scope, declaration)
-    .Bind(binding) => checkBinding(checker, scope, binding)
-    .Assign(target, value) => {
-      walkExpression(checker, scope, target)
-      walkExpression(checker, scope, value)
+    .Bind(binding) => checkTopLevelBinding(checker, scope, binding)
+    _ => {
+      const _ = checkStatement(checker, statement)
     }
-    .For(_, iterable, body) => {
-      walkExpression(checker, scope, iterable)
-      checkBlock(checker, scope, body)
-    }
-    .While(condition, body) => {
-      walkCondition(checker, scope, condition)
-      checkBlock(checker, scope, body)
-    }
-    .Return(value) => {
-      if const Some(expression) = value {
-        walkExpression(checker, scope, expression)
-      }
-    }
-    .Break => {}
-    .Continue => {}
-    .Evaluate(expression) => walkExpression(checker, scope, expression)
   }
 }
 
-/** The annotation of a binding is a type position; what its initializer is worth is milestone 4.2. */
-fn checkBinding(var checker: Checker, scope: TypeScope, binding: Binding) {
-  if const Some(annotation) = binding.annotation {
-    const _ = typeFromReference(checker, annotation, scope.forType())
+/** A top-level `const` of a module is a declaration: asking for its type is what checks its initializer. */
+fn checkTopLevelBinding(var checker: Checker, scope: TypeScope, binding: Binding) {
+  if const .Binding(_) = binding.pattern.kind {
+    if const Some(symbol) = checker.resolvedName(scope.module, binding.pattern.span) {
+      const _ = resultOf(checker, symbol)
+      return
+    }
   }
-  walkExpression(checker, scope, binding.value)
+  var annotation: TypeId? = None
+  if const Some(reference) = binding.annotation {
+    annotation = Some(typeFromReference(checker, reference, scope.forType()))
+  }
+  const _ = checkInitializer(checker, scope.module, binding.value, scope.selfType, annotation)
 }
 
-fn checkDeclaration(var checker: Checker, scope: TypeScope, declaration: Declaration) {
+/** One declaration, wherever it stands: at the top level of a file, in a block, or in the body of a type. */
+public fn checkDeclaration(var checker: Checker, scope: TypeScope, declaration: Declaration) {
   match declaration.kind {
     .Function(function) => {
-      if const Some(symbol) = checker.resolvedName(scope.module, function.name.span) {
-        const _ = signatureOf(checker, symbol)
+      match checker.resolvedName(scope.module, function.name.span) {
+        Some(symbol) => checkBodyOf(checker, symbol)
+        // A declaration without a name is a parse error that was reported; its body still has type positions
+        .None => checkUnnamedBody(checker, scope, function)
       }
-      checkFunctionBody(checker, scope, function)
+      checkDefaults(checker, scope, function)
     }
     .Type(typeDeclaration) => {
       checkTypeBody(checker, scope, typeDeclaration.name.span, typeDeclaration.members)
@@ -117,7 +156,7 @@ fn checkDeclaration(var checker: Checker, scope: TypeScope, declaration: Declara
         }
       }
     }
-    .Constant(binding) => checkBinding(checker, scope, binding)
+    .Constant(binding) => checkTopLevelBinding(checker, scope, binding)
     .Use(_) => {}
   }
 }
@@ -137,38 +176,38 @@ fn checkTypeBody(var checker: Checker, scope: TypeScope, at: Span, members: List
     }
   }
   const identifier = typeSignatureOf(checker, symbol)
-  const signature = checker.typeSignature(identifier)
-  checkMembers(checker, scope.copy(selfType: Some(signature.own)), signature.members, members)
+  const shape = checker.typeSignature(identifier)
+  const inner = scope.copy(selfType: Some(shape.own))
+  checkMembers(checker, inner, shape.members, members)
 }
 
-fn checkMembers(
-  var checker: Checker,
-  scope: TypeScope,
-  known: Map<String, SymbolId>,
-  members: List<Member>,
-) {
+fn checkMembers(var checker: Checker, scope: TypeScope, known: Map<String, SymbolId>, members: List<Member>) {
   for member in members {
     match member.kind {
-      .Field(field) => walkDefault(checker, scope, field.default)
+      .Field(field) => {
+        const annotation = typeFromReference(checker, field.annotation, scope.forType())
+        checkDefault(checker, scope, field.default, Some(annotation))
+      }
       // The annotation of a `const` member is its signature; a `const` that got no id keeps the ordinary way
       .Constant(binding) => {
         match constantMember(known, binding) {
           Some(symbol) => {
-            const _ = signatureOf(checker, symbol)
-            walkExpression(checker, scope, binding.value)
+            const _ = resultOf(checker, symbol)
           }
-          .None => checkBinding(checker, scope, binding)
+          .None => checkTopLevelBinding(checker, scope, binding)
         }
       }
       .Function(function) => {
-        if const Some(symbol) = known.get(function.name.text) {
-          const _ = signatureOf(checker, symbol)
+        match known.get(function.name.text) {
+          Some(symbol) => checkBodyOf(checker, symbol)
+          .None => checkUnnamedBody(checker, scope, function)
         }
-        checkFunctionBody(checker, scope, function)
+        checkDefaults(checker, scope, function)
       }
       .Case(caseDeclaration) => {
         for field in caseDeclaration.fields {
-          walkDefault(checker, scope, field.default)
+          const annotation = typeFromReference(checker, field.annotation, scope.forType())
+          checkDefault(checker, scope, field.default, Some(annotation))
         }
       }
     }
@@ -185,7 +224,7 @@ fn constantMember(known: Map<String, SymbolId>, binding: Binding): SymbolId? {
 
 /**
  * An `extend` has no symbol of its own: milestone 4.3 turns it into an implementation. Here its target, its traits
- * and the signatures of its members are built, which is what finds everything that is wrong in them.
+ * and the signatures and bodies of its members are built, which is what finds everything that is wrong in them.
  */
 fn checkExtension(var checker: Checker, scope: TypeScope, extension: ExtendDeclaration) {
   const generics = declareParameters(checker, scope.module, None, extension.generics)
@@ -197,114 +236,47 @@ fn checkExtension(var checker: Checker, scope: TypeScope, extension: ExtendDecla
   checkMembers(checker, inner, members, extension.members)
 }
 
-fn checkFunctionBody(var checker: Checker, scope: TypeScope, function: FunctionDeclaration) {
+/**
+ * A default is evaluated at every call and at every construction, in the scope of the declaration - without `self`
+ * and without the other parameters or fields (gap 26).
+ */
+fn checkDefaults(var checker: Checker, scope: TypeScope, function: FunctionDeclaration) {
   for parameter in function.parameters {
-    walkDefault(checker, scope, parameter.default)
-  }
-  if const Some(body) = function.body {
-    checkBlock(checker, scope, body)
+    if parameter.default.isNone() {
+      continue
+    }
+    // The type of the parameter is the one its signature built: a `lazy` one records the type inside of it
+    var annotation: TypeId? = None
+    if const Some(reference) = parameter.annotation {
+      const known = checker.typePositions[scope.module.value]
+      annotation = known.get(reference.span)
+    }
+    checkDefault(checker, scope, parameter.default, annotation)
   }
 }
 
-fn walkDefault(var checker: Checker, scope: TypeScope, default: Expression?) {
+fn checkDefault(var checker: Checker, scope: TypeScope, default: Expression?, annotation: TypeId?) {
   if const Some(expression) = default {
-    walkExpression(checker, scope, expression)
+    const _ = checkInitializer(checker, scope.module, expression, scope.selfType, annotation)
   }
 }
-
-// --- Type positions inside of expressions ---------------------------------------------------------------------------
 
 /**
- * Expressions are walked for the type positions inside of them: the annotations of bindings and closure parameters,
- * the arguments of `List<Int>(...)`, and the declarations of nested blocks. What the expressions *mean* is
- * milestone 4.2.
+ * A `fn` whose name did not parse, so it has no symbol and no signature. Its types are still built and its body is
+ * still walked - nothing in it is checked, because without a signature its parameters have no types and every name in
+ * it would look unknown.
  */
-fn walkExpression(var checker: Checker, scope: TypeScope, expression: Expression) {
-  match expression.kind {
-    // `Matrix<2, 3>()`, `Json.decode<User>(text)`: which parameter an argument fills is milestone 4.2's answer,
-    // so a value and a type are both allowed here
-    .Generic(target, arguments) => {
-      walkExpression(checker, scope, target)
-      for argument in arguments {
-        const _ = typeFromReference(checker, argument, scope.forEither())
-      }
+fn checkUnnamedBody(var checker: Checker, scope: TypeScope, function: FunctionDeclaration) {
+  for parameter in function.parameters {
+    if const Some(reference) = parameter.annotation {
+      const _ = typeFromReference(checker, reference, scope.forType())
     }
-    .Closure(closure) => {
-      for parameter in closure.parameters {
-        if const Some(annotation) = parameter.annotation {
-          const _ = typeFromReference(checker, annotation, scope.forType())
-        }
-      }
-      checkBlock(checker, scope, closure.body)
-    }
-    .If(condition, then, otherwise) => {
-      walkCondition(checker, scope, condition)
-      checkBlock(checker, scope, then)
-      if const Some(alternative) = otherwise {
-        walkExpression(checker, scope, alternative)
-      }
-    }
-    .Match(subject, arms) => {
-      walkExpression(checker, scope, subject)
-      for arm in arms {
-        if const Some(guard) = arm.guard {
-          walkExpression(checker, scope, guard)
-        }
-        walkExpression(checker, scope, arm.body)
-      }
-    }
-    .Block(block) => checkBlock(checker, scope, block)
-    .TextLiteral(segments) => {
-      for segment in segments {
-        if const .Interpolated(inner) = segment {
-          walkExpression(checker, scope, inner)
-        }
-      }
-    }
-    .TupleLiteral(items) => walkArguments(checker, scope, items)
-    .ListLiteral(items) => walkArguments(checker, scope, items)
-    .MapLiteral(entries) => {
-      for (key, value) in entries {
-        walkExpression(checker, scope, key)
-        walkExpression(checker, scope, value)
-      }
-    }
-    .Member(target, _, _) => walkExpression(checker, scope, target)
-    .Index(target, index) => {
-      walkExpression(checker, scope, target)
-      walkExpression(checker, scope, index)
-    }
-    .Call(callee, arguments, _) => {
-      walkExpression(checker, scope, callee)
-      walkArguments(checker, scope, arguments)
-    }
-    .Unary(_, operand) => walkExpression(checker, scope, operand)
-    .Binary(_, left, right) => {
-      walkExpression(checker, scope, left)
-      walkExpression(checker, scope, right)
-    }
-    .RangeLiteral(start, end, _) => {
-      if const Some(from) = start {
-        walkExpression(checker, scope, from)
-      }
-      if const Some(to) = end {
-        walkExpression(checker, scope, to)
-      }
-    }
-    .Try(inner) => walkExpression(checker, scope, inner)
-    _ => {}
   }
-}
-
-fn walkArguments(var checker: Checker, scope: TypeScope, arguments: List<Argument>) {
-  for argument in arguments {
-    walkExpression(checker, scope, argument.value)
+  if const Some(returnType) = function.returnType {
+    const _ = typeFromReference(checker, returnType, scope.forType())
   }
-}
-
-fn walkCondition(var checker: Checker, scope: TypeScope, condition: Condition) {
-  match condition {
-    .Test(expression) => walkExpression(checker, scope, expression)
-    .Bind(_, _, value) => walkExpression(checker, scope, value)
+  if const Some(body) = function.body {
+    declareSites(checker, scope.module, body.statements)
+    deferBlock(checker, body)
   }
 }

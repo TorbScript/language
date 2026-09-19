@@ -1,0 +1,203 @@
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
+/**
+ * Calls: which parameter every argument fills, labels, defaults, variadics, spread and the trailing closure -
+ * and the side tables that say so, because milestone 5 must not work any of it out again.
+ */
+const connect = "fn connect(host: String, port: Int = 80, timeout: Int = 30): Int \{\n  port + timeout\n\}\n\n"
+
+const largest = "fn largest(first: Int, ...rest: Int): Int \{\n  first\n\}\n\n"
+
+fn inBody(body: String): String {
+  "{connect}fn probe() \{\n{body}\n\}"
+}
+
+group "Calling a function" {
+  test "a call of a top-level function, with what it resolved to and what it produces" {
+    const found = probe(inBody("  const port = connect(\"localhost\")"))
+    assert(found.typeOf("connect(\"localhost\")") == "Int64")
+    assert(found.resolutionOf("connect(\"localhost\")") == "call connect")
+  }
+
+  test "an argument is checked against the type of its parameter" {
+    assert(problems(inBody("  const port = connect(80)")) == ["Expected `String`, found `Int64`"])
+  }
+
+  test "positional arguments fill the parameters from the left" {
+    const found = probe(inBody("  const port = connect(\"localhost\", 8080, 5)"))
+    assert(found.argumentsOf("connect(\"localhost\", 8080, 5)") == [0, 1, 2])
+  }
+
+  test "a labeled argument matches by name, and the written order is recorded" {
+    const found = probe(inBody("  const port = connect(\"localhost\", timeout: 5)"))
+    assert(found.argumentsOf("connect(\"localhost\", timeout: 5)") == [0, 2])
+    assert(found.adaptationsOf("connect(\"localhost\", timeout: 5)") == ["default 1"])
+  }
+
+  test "arguments that were written out of declaration order are recorded as such" {
+    const found = probe(inBody("  const port = connect(\"localhost\", timeout: 5, port: 1)"))
+    assert(found.argumentsOf("connect(\"localhost\", timeout: 5, port: 1)") == [0, 2, 1])
+    assert(found.adaptationsOf("connect(\"localhost\", timeout: 5, port: 1)") == ["reorder [0, 2, 1]"])
+  }
+
+  test "a label that does not exist, with the nearest one as a note" {
+    const source = inBody("  const port = connect(\"localhost\", timout: 5)")
+    assert(problems(source) == ["`connect` has no parameter `timout`"])
+    assert(notes(source) == ["Did you mean `timeout`?"])
+  }
+
+  test "a parameter that is filled twice" {
+    assert(
+      problems(inBody("  const port = connect(\"localhost\", 1, port: 2)")) == ["`port` already has an argument"]
+    )
+  }
+
+  test "too many and too few arguments" {
+    assert(problems(inBody("  const port = connect()")) == ["`connect` takes 1 argument, none were given"])
+    assert(
+      problems(inBody("  const port = connect(\"a\", 1, 2, 3)")) == ["`connect` takes 1 argument, 4 were given"]
+    )
+  }
+
+  test "a variadic parameter collects the rest, and what it collects is recorded" {
+    const found = probe("{largest}fn probe() \{\n  const most = largest(1, 2, 3)\n\}")
+    assert(found.typeOf("largest(1, 2, 3)") == "Int64")
+    assert(found.argumentsOf("largest(1, 2, 3)") == [0, 1, 1])
+    assert(found.adaptationsOf("largest(1, 2, 3)") == ["variadic Int64 from 1"])
+  }
+
+  test "a variadic parameter that collects nothing is an empty list, not a missing argument" {
+    assert(problems("{largest}fn probe() \{\n  const most = largest(1)\n\}").isEmpty())
+  }
+
+  test "the items of a variadic parameter are checked against its item type" {
+    assert(
+      problems("{largest}fn probe() \{\n  const most = largest(1, \"two\")\n\}")
+        == ["Expected `Int64`, found `String`"]
+    )
+  }
+
+  test "`...expression` spreads, which is recorded and left to a later sub-milestone" {
+    const found = probe("{largest}fn probe() \{\n  const most = largest(1, ...[2, 3])\n\}")
+    assert(found.adaptationsOf("[2, 3]") == ["spread"])
+  }
+
+  test "a parameter of a variadic function is the list it holds" {
+    const found = probe("{largest}fn probe() \{\n  const most = largest(1)\n\}")
+    assert(found.typeOf("largest(1)") == "Int64")
+  }
+}
+
+group "Calling a member" {
+  const point = "type Point \{\n  x: Int\n  var y: Int\n\n  fn moved(self, by: Int): Point \{\n    Point(x + by, y)\n  \}\n\n  fn origin(): Point \{\n    Point(0, 0)\n  \}\n\}\n\n"
+
+  test "a method of a concrete type" {
+    const found = probe("{point}fn probe(place: Point): Point \{\n  place.moved(2)\n\}")
+    assert(found.typeOf("place.moved(2)") == "Point")
+    assert(found.resolutionOf("place.moved(2)") == "call moved")
+  }
+
+  test "a static function of a type" {
+    const found = probe("{point}fn probe(): Point \{\n  Point.origin()\n\}")
+    assert(found.typeOf("Point.origin()") == "Point")
+  }
+
+  test "a method of `self` is called by its bare name" {
+    assert(problems("{point}").isEmpty())
+  }
+
+  test "a method that is not there" {
+    assert(
+      problems("{point}fn probe(place: Point): Point \{\n  place.movedBy(2)\n\}")
+        == ["`Point` has no member `movedBy`"]
+    )
+  }
+
+  test "an argument of a method is checked like any other" {
+    assert(
+      problems("{point}fn probe(place: Point): Point \{\n  place.moved(\"two\")\n\}")
+        == ["Expected `Int64`, found `String`"]
+    )
+  }
+}
+
+group "Constructors, cases and `copy`" {
+  const point = "type Point \{\n  x: Int\n  var y: Int = 0\n\}\n\n"
+
+  test "the generated constructor takes the fields in declaration order" {
+    const found = probe("{point}fn probe(): Point \{\n  Point(1, 2)\n\}")
+    assert(found.typeOf("Point(1, 2)") == "Point")
+    assert(found.resolutionOf("Point(1, 2)") == "construct Point")
+  }
+
+  test "a field with a default may be left out, and the default is recorded" {
+    const found = probe("{point}fn probe(): Point \{\n  Point(1)\n\}")
+    assert(found.adaptationsOf("Point(1)") == ["default 1"])
+  }
+
+  test "the fields of a constructor can be labeled" {
+    const found = probe("{point}fn probe(): Point \{\n  Point(1, y: 2)\n\}")
+    assert(found.argumentsOf("Point(1, y: 2)") == [0, 1])
+  }
+
+  test "a field that does not exist" {
+    assert(problems("{point}fn probe(): Point \{\n  Point(1, z: 2)\n\}") == ["`Point` has no parameter `z`"])
+  }
+
+  test "`Self` constructs the type it stands in" {
+    const source = "type Email \{\n  value: String\n\n  fn of(text: String): Email \{\n    Self(text)\n  \}\n\}"
+    const found = probe(source)
+    assert(found.typeOf("Self(text)") == "Email")
+    assert(problems(source).isEmpty())
+  }
+
+  test "`copy` has the shape of the constructor with every field optional (gap 24)" {
+    const found = probe("{point}fn probe(place: Point): Point \{\n  place.copy(y: 3)\n\}")
+    assert(found.typeOf("place.copy(y: 3)") == "Point")
+    assert(found.resolutionOf("place.copy(y: 3)") == "copy Point")
+    assert(found.argumentsOf("place.copy(y: 3)") == [1])
+  }
+
+  test "a case constructor is a function from its fields to the type it belongs to" {
+    const source = "type Shape \{\n  case Circle(radius: Int)\n  case Empty\n\}\n\n"
+      + "fn probe(): Shape \{\n  Shape.Circle(2)\n\}"
+    const found = probe(source)
+    assert(found.typeOf("Shape.Circle(2)") == "Shape")
+    assert(found.resolutionOf("Shape.Circle(2)") == "case Shape.Circle")
+    assert(problems(source).isEmpty())
+  }
+
+  test "the field of a case is checked like any other argument" {
+    const source = "type Shape \{\n  case Circle(radius: Int)\n\}\n\nfn probe(): Shape \{\n  Shape.Circle(\"two\")\n\}"
+    assert(problems(source) == ["Expected `Int64`, found `String`"])
+  }
+}
+
+group "Closures as arguments" {
+  const apply = "fn twice(value: Int, change: (value: Int) => Int): Int \{\n  change(change(value))\n\}\n\n"
+
+  test "a trailing closure fills the last parameter, whatever position it was written in" {
+    const found = probe("{apply}fn probe(): Int \{\n  twice(1) \{ value: Int => value + 1 \}\n\}")
+    assert(found.argumentsOf("twice(1) \{ value: Int => value + 1 \}") == [0, 1])
+    assert(found.adaptationsOf("\{ value: Int => value + 1 \}") == ["trailing 1"])
+  }
+
+  test "a trailing closure for a parameter that already has an argument" {
+    const source = "{apply}fn probe(): Int \{\n  twice(1, change: \{ value: Int => value \}) \{ value: Int => value \}\n\}"
+    assert(problems(source) == ["The trailing closure fills `change`, which was already given by name"])
+  }
+
+  test "a parameter that holds a function is called through its name" {
+    const found = probe("{apply}fn probe(change: (value: Int) => Int): Int \{\n  change(1)\n\}")
+    assert(found.typeOf("change(1)") == "Int64")
+  }
+
+  test "a call of a generic function waits for milestone 4.4 and says nothing" {
+    const source = "fn first<Item>(items: List<Item>, fallback: Item): Item \{\n  fallback\n\}\n\n"
+      + "fn probe() \{\n  const numbers: List<Int> = [1]\n  const value = first(numbers, 0)\n\}"
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("first(numbers, 0)") == "unchecked")
+  }
+}

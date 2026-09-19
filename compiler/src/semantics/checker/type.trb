@@ -51,6 +51,12 @@ public type TypeForm {
   case NeverType
   /** Something was already reported here. Every operation on it yields it again, and says nothing. */
   case Invalid
+  /**
+   * A construct a later sub-milestone checks (a generic call, a trait member, a closure body, `?`). It absorbs
+   * every further message exactly as `Invalid` does, but it stands for "not checked yet" instead of "wrong", so that
+   * `torb check --statistics` can say how much of a module the checker already understands.
+   */
+  case Deferred
 }
 
 /** A label is documentation for a position, not part of type identity - see `sameType` in `unify.trb`. */
@@ -201,6 +207,7 @@ public fn formKey(form: TypeForm): String {
     .VoidType => "v"
     .NeverType => "n"
     .Invalid => "i"
+    .Deferred => "d"
   }
 }
 
@@ -294,6 +301,8 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
     .NeverType => "Never"
     // Nothing is ever said about a type that is already broken, so this only shows up in a test
     .Invalid => "?"
+    // Nothing is ever said about one that is not checked yet either; the statistics count them instead
+    .Deferred => "unchecked"
   }
 }
 

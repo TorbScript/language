@@ -1,0 +1,203 @@
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
+/**
+ * Statements and blocks: bindings with irrefutable patterns, scopes and shadowing, assignment, the loops, `return`
+ * and definite return, `break`/`continue`, and the rule that an expression statement has to have the type `Void` or
+ * `Never` (gap 18).
+ */
+fn inBody(body: String): String {
+  "fn probe() \{\n{body}\n\}"
+}
+
+group "Bindings" {
+  test "the annotation decides, and without one the initializer does" {
+    const found = probe(inBody("  const inferred = 2\n  const annotated: Float = 3\n  const value = (annotated)"))
+    assert(found.typeOf("2") == "Int64")
+    assert(found.typeOf("(annotated)") == "Float64")
+  }
+
+  test "the initializer is checked against the annotation" {
+    assert(problems(inBody("  const value: Int = \"text\"")) == ["Expected `Int64`, found `String`"])
+  }
+
+  test "a wildcard discards on purpose and binds nothing" {
+    assert(problems(inBody("  const _ = 1 + 2\n  const value = _")) == ["Cannot find `_` here"])
+  }
+
+  test "a tuple pattern binds every position with its own type" {
+    const found = probe(inBody("  const (first, second) = (1, \"one\")\n  const text = (second)"))
+    assert(found.typeOf("(second)") == "String")
+    assert(found.patternTypeOf("(first, second)") == "(Int64, String)")
+  }
+
+  test "a tuple pattern with the wrong number of positions" {
+    assert(
+      problems(inBody("  const (first, second, third) = (1, \"one\")"))
+        == ["This pattern has 3 positions, `(Int64, String)` has 2"]
+    )
+  }
+
+  test "a type with fields is destructured by its own name" {
+    const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\n"
+      + "fn probe(place: Point) \{\n  const Point(across, down) = place\n  const value = (down)\n\}"
+    const found = probe(source)
+    assert(found.typeOf("(down)") == "Int64")
+    assert(problems(source).isEmpty())
+  }
+
+  test "a label in a pattern has to name the field at that position" {
+    const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\n"
+      + "fn probe(place: Point) \{\n  const Point(y: across, x: down) = place\n\}"
+    assert(
+      problems(source) == ["This position is `x`, not `y`", "This position is `y`, not `x`"]
+    )
+    assert(
+      notes(source)
+        == ["The fields of a case are matched by position; a label has to name the field at that position"]
+    )
+  }
+
+  test "a case of a type that is not there" {
+    const source = "type Shape \{\n  case Circle(radius: Int)\n\}\n\n"
+      + "fn probe(shape: Shape) \{\n  match shape \{\n    .Square(size) => print \"square\"\n  \}\n\}"
+    assert(problems(source) == ["`Shape` has no case `Square`"])
+  }
+
+  test "a case that is given the wrong number of patterns" {
+    const source = "type Shape \{\n  case Circle(radius: Int)\n\}\n\n"
+      + "fn probe(shape: Shape) \{\n  match shape \{\n    .Circle(radius, width) => print \"circle\"\n  \}\n\}"
+    assert(problems(source) == ["`Circle` has 1 field, 2 patterns were given"])
+  }
+}
+
+group "Scopes" {
+  test "a nested scope may shadow a name" {
+    const source = inBody("  const value = 1\n  if true \{\n    const value = \"text\"\n    print value\n  \}")
+    assert(problems(source).isEmpty())
+  }
+
+  test "the same scope may not declare a name twice" {
+    assert(
+      problems(inBody("  const value = 1\n  const value = 2")) == ["`value` is already declared in this scope"]
+    )
+  }
+
+  test "the body of a function is a scope of its own, so it may shadow a parameter" {
+    assert(problems("fn probe(value: Int) \{\n  const value = 2\n  print value\n\}").isEmpty())
+  }
+
+  test "a name a block binds is gone after it" {
+    const source = inBody("  if true \{\n    const inner = 1\n  \}\n  const value = inner")
+    assert(problems(source) == ["Cannot find `inner` here"])
+  }
+
+  test "the pattern of an `if const` binds for the body of the `if` only" {
+    const source = inBody("  if const Some(found) = None \{\n    print \"yes\"\n  \}\n  const value = found")
+    assert(problems(source) == ["Cannot find `found` here"])
+  }
+
+  test "a `match` arm binds for its own body only" {
+    const source = "type Shape \{\n  case Circle(radius: Int)\n  case Empty\n\}\n\n"
+      + "fn probe(shape: Shape) \{\n  match shape \{\n    .Circle(radius) => print \"circle\"\n    .Empty => print \"none\"\n  \}\n  const value = radius\n\}"
+    assert(problems(source) == ["Cannot find `radius` here"])
+  }
+}
+
+group "Assignment" {
+  test "the value is checked against the type of the place" {
+    const source = "type Counter \{\n  var value: Int\n\n  fn reset(var self) \{\n    value = \"none\"\n  \}\n\}"
+    assert(problems(source) == ["Expected `Int64`, found `String`"])
+  }
+
+  test "assigning to a local of the same type is fine" {
+    assert(problems(inBody("  var total = 0\n  total = total + 1\n  print total")).isEmpty())
+  }
+}
+
+group "Loops" {
+  test "`for` over a `Range<Int>` binds an `Int64`" {
+    const found = probe(inBody("  for position in 0..10 \{\n    const shown = (position)\n    print shown\n  \}"))
+    assert(found.patternTypeOf("position") == "Int64")
+    assert(found.typeOf("(position)") == "Int64")
+  }
+
+  test "`for` over a `List<Item>` binds the item type its `Iterable` says" {
+    const found = probe(inBody("  const texts: List<String> = [\"a\"]\n  for part in texts \{\n    print (part)\n  \}"))
+    assert(found.patternTypeOf("part") == "String")
+  }
+
+  test "the condition of a `while` has to be a `Bool`" {
+    assert(problems(inBody("  while 1 \{\n    print \"loop\"\n  \}")) == ["Expected `Bool`, found `Int64`"])
+  }
+
+  test "`break` and `continue` need an enclosing loop" {
+    const source = inBody("  break")
+    assert(problems(source) == ["`break` is only allowed inside of a `for` or a `while`"])
+    assert(
+      notes(source)
+        == ["A closure is a function, not a block: `break` cannot leave one, and `do \{ \}` is not a loop either"]
+    )
+    assert(problems(inBody("  continue")) == ["`continue` is only allowed inside of a `for` or a `while`"])
+    assert(problems(inBody("  for index in 0..2 \{\n    break\n  \}")).isEmpty())
+  }
+}
+
+group "Returning" {
+  test "`return` is checked against the declared result" {
+    assert(problems("fn probe(): Int \{\n  return \"text\"\n\}") == ["Expected `Int64`, found `String`"])
+  }
+
+  test "a body whose last statement is not an expression at all" {
+    assert(
+      problems("fn probe(): Float \{\n  const value = 1\n\}") == ["This function has to return a `Float64`"]
+    )
+  }
+
+  test "a body that ends in an expression of the wrong type is told about that expression" {
+    assert(problems("fn probe(): Float \{\n  print \"nothing\"\n\}") == ["Expected `Float64`, found `Void`"])
+  }
+
+  test "a body that returns on every path is fine, and so is one that panics" {
+    assert(problems("fn probe(value: Bool): Int \{\n  if value \{\n    return 1\n  \}\n  2\n\}").isEmpty())
+    assert(problems("fn probe(): Int \{\n  panic \"never\"\n\}").isEmpty())
+  }
+
+  test "`while true` without a `break` never ends, so nothing has to follow it" {
+    assert(problems("fn probe(): Int \{\n  while true \{\n    print \"forever\"\n  \}\n\}").isEmpty())
+  }
+
+  test "a `return` without a value in a function that has a result" {
+    assert(problems("fn probe(): Int \{\n  return\n\}") == ["This function has to return a `Int64`"])
+  }
+}
+
+group "Discarded values" {
+  const holder = "type Holder \{\n  var value: Int\n\n  fn add(var self, more: Int) \{\n    value = value + more\n  \}\n\n  fn added(self, more: Int): Int \{\n    value + more\n  \}\n\}\n\n"
+
+  test "a call whose result is dropped and that changes nothing" {
+    const source = "{holder}fn probe(box: Holder) \{\n  box.added(1)\n  print \"done\"\n\}"
+    assert(problems(source) == ["The result of `added` is not used"])
+    assert(notes(source) == ["Did you mean `add`? Discard it on purpose with `const _ = ...`"])
+  }
+
+  test "a call with a `var` receiver stays a statement: the change is the effect" {
+    assert(problems("{holder}fn probe(var box: Holder) \{\n  box.add(1)\n  print \"done\"\n\}").isEmpty())
+  }
+
+  test "a value that is not a call at all" {
+    const source = inBody("  1 + 2\n  print \"done\"")
+    assert(problems(source) == ["This value is not used"])
+    assert(notes(source) == ["Discard it on purpose with `const _ = ...`"])
+  }
+
+  test "`const _ = ...` discards on purpose" {
+    assert(problems("{holder}fn probe(box: Holder) \{\n  const _ = box.added(1)\n\}").isEmpty())
+  }
+
+  test "every arm of a `match` that is used as a statement is checked as one" {
+    const source = "{holder}fn probe(box: Holder, value: Bool): Void \{\n"
+      + "  match value \{\n    true => box.added(1)\n    false => print \"no\"\n  \}\n\}"
+    assert(problems(source) == ["The result of `added` is not used"])
+  }
+}
