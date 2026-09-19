@@ -33,7 +33,7 @@ public fn loweredWith(source: String, expected: List<String>, extra: Map<String,
   var files = extra
   files.set("app/src/main.trb", source)
   const tree = workspaceWith(files)
-  const checked = check(tree, ["app"])
+  const checked = check(tree, ["app"], false, true)
   var found: List<String> = []
   for file in checked.files {
     for diagnostic in file.diagnostics {
@@ -109,4 +109,20 @@ public fn unsupportedIn(source: String, extra: Map<String, String> = [:]): List<
 public fn countsOf(source: String): (Int, Int) {
   var found = lowered(source)
   (found.lowered, found.stubbed)
+}
+
+/**
+ * How many functions of the program carry each mangled name. It is the instance set, and an accidental explosion of it is
+ * the one risk of monomorphization that a snapshot of one function cannot see (BACKEND section 7).
+ *
+ * A name that appears twice would be a bug of the memo, and a name that appears once per *type* where the design asks for
+ * once per *bound* is the sharing of BACKEND 1.4 gone wrong - so both are asked about by name.
+ */
+public fn instanceCountsOf(source: String): Map<String, Int> {
+  var found = lowered(source)
+  var counts: Map<String, Int> = [:]
+  for function in found.program.functions {
+    counts.set(function.name, (counts.get(function.name) ?? 0) + 1)
+  }
+  counts
 }

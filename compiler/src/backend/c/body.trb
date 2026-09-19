@@ -1,11 +1,12 @@
 use IrProgram, IrFunction, IrSignature, IrTypeId, LayoutId, FunctionId from "../../ir/ir"
 use Slot, SlotDeclaration, BlockId, Instruction, Terminator, Argument, WitnessSource from "../../ir/ir"
-use Reference, LocationId, RuntimeKind from "../../ir/ir"
+use Reference, LocationId, RuntimeKind, WitnessRoot, WitnessTableId from "../../ir/ir"
 use Intrinsic, IntrinsicOperation, NumericKind from "../../ir/ir"
 use Layout, isManagedType, containsCountedType from "../../ir/layout"
 use suffixOfNumeric from "../../ir/print"
+use payloadLayoutName from "../../ir/mangle"
 use Emission, reportUnsupported, slotNameOf, locationExpression, lineDirectiveOf from "./emission"
-use cTypeOf, memberNameOf, variantMemberNameOf from "./type"
+use cTypeOf, memberNameOf, variantMemberNameOf, witnessMemberNameOf from "./type"
 use CExpression, CDesignatedField, CStatement, CSwitchCase, declarationOf from "./writer"
 use readPrototype, matchPrototype from "./prototype"
 
@@ -77,6 +78,13 @@ fn markArguments(var reads: List<Bool>, arguments: List<Argument>) {
   }
 }
 
+/** A witness that comes out of a value is a read of that value: the payload of the call comes out of the same slot. */
+fn markWitness(var reads: List<Bool>, witness: WitnessSource) {
+  if const .Value(slot, _) = witness.root {
+    markRead(reads, slot)
+  }
+}
+
 fn markReference(var reads: List<Bool>, reference: Reference) {
   markRead(reads, reference.base)
   for step in reference.steps {
@@ -100,7 +108,10 @@ fn markReadSlots(var reads: List<Bool>, instruction: Instruction) {
       markRead(reads, callee)
       markArguments(reads, arguments)
     }
-    .CallWitness(_, _, _, arguments) => markArguments(reads, arguments)
+    .CallWitness(_, witness, _, arguments) => {
+      markWitness(reads, witness)
+      markArguments(reads, arguments)
+    }
     .Intrinsic(_, _, arguments, _) => {
       for slot in arguments {
         markRead(reads, slot)
@@ -123,7 +134,12 @@ fn markReadSlots(var reads: List<Bool>, instruction: Instruction) {
       }
     }
     .BoxNew(_, value) => markRead(reads, value.slot)
-    .TraitValue(_, value, _) => markRead(reads, value.slot)
+    .TraitValue(_, value, tables) => {
+      markRead(reads, value.slot)
+      for table in tables {
+        markWitness(reads, table)
+      }
+    }
     .TakeOut(_, container, key, _) => {
       markReference(reads, container)
       markRead(reads, key)
@@ -406,10 +422,14 @@ fn instructionStatements(
       statements
     }
     .CallClosure(_, _, _) => reported(emission, "a call of a closure value (milestone 5.8)")
-    .CallWitness(_, _, _, _) => reported(emission, "a call through a witness table (milestone 5.6)")
+    .CallWitness(target, witness, member, arguments) => {
+      witnessCallStatements(emission, program, body, target, witness, member, arguments)
+    }
     .Closure(_, _, _, _) => reported(emission, "a closure (milestone 5.8)")
     .BoxNew(_, _) => reported(emission, "a captured `var` binding (milestone 5.8)")
-    .TraitValue(_, _, _) => reported(emission, "a trait-typed value (milestone 5.6)")
+    .TraitValue(target, value, tables) => {
+      traitValueStatements(emission, program, body, target, value, tables)
+    }
     .TakeOut(_, _, _, _) => reported(emission, "a `var` path through a map (milestone 5.9b)")
     .PutBack(_, _, _, _) => reported(emission, "a `var` path through a map (milestone 5.9b)")
     .Suspend(_, _) => reported(emission, "a task that suspends (milestone 7.3)")
@@ -470,6 +490,11 @@ public fn retainStatement(program: IrProgram, id: IrTypeId, place: CExpression):
     return Some(CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [place])))
   }
   match program.typeAt(inner) {
+    // A trait-typed value owns its boxed payload and borrows its tables, which are static data
+    .Object(_) => {
+      const data = CExpression.Member(place, "data")
+      Some(CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_retain"), [data])))
+    }
     .Text => Some(retainedInto(place, "torb_text_retained"))
     .Runtime(kind, _) => {
       match kind {
@@ -500,6 +525,17 @@ public fn releaseStatement(program: IrProgram, id: IrTypeId, place: CExpression)
     return Some(CStatement.Evaluate(CExpression.Call(helper, [CExpression.AddressOf(place)])))
   }
   match program.typeAt(inner) {
+    // The payload is erased, so the drop function comes out of the first table the value carries: it is a function of the
+    // *target* type, which is what a table is per, and the payload is that type whichever bound one looks at
+    .Object(bounds) => {
+      if bounds.isEmpty() {
+        return None
+      }
+      const data = CExpression.Member(place, "data")
+      const table = CExpression.Member(place, witnessMemberNameOf(0))
+      const drop = CExpression.PointerMember(table, "drop")
+      Some(CStatement.Evaluate(CExpression.Call(CExpression.Name("torb_release"), [data, drop])))
+    }
     .Text => Some(releasedBy(place, "torb_text_release"))
     .Runtime(kind, _) => {
       match kind {
@@ -621,7 +657,7 @@ public fn describeCounted(program: IrProgram, id: IrTypeId): String {
     .SharedObject(_) => "a `shared type` object (milestone 5.9b)"
     .Box(_) => "a captured `var` binding (milestone 5.8)"
     .Lazy(_) => "a `lazy` cell (milestone 5.8)"
-    .Object(_) => "a trait-typed value (milestone 5.6)"
+    .Object(_) => "a trait-typed value without bounds"
     .Closure(_) => "a closure (milestone 5.8)"
     .FixedArray(_, _) => "an `Array<Item, Size>` (milestone 5.9b)"
     _ => "a counted value the back end does not know (milestone 5.6)"
@@ -739,7 +775,7 @@ fn callStatements(
     return reported(emission, "a call of a task (milestone 7.3)")
   }
   const written = argumentsOf(emission, program, body, function.signature, arguments)
-  callStatementOf(emission, body, target, function, function.name, written)
+  callStatementOf(emission, body, target, function, function.name, written, "")
 }
 
 /**
@@ -752,6 +788,7 @@ fn callStatementOf(
   function: IrFunction,
   symbol: String,
   written: List<CExpression>,
+  conversion: String,
 ): List<CStatement> {
   var given = written
   const byPointer = isByPointerResult(function)
@@ -762,7 +799,9 @@ fn callStatementOf(
         given.insert(0, CExpression.AddressOf(place))
         return [CStatement.Evaluate(CExpression.Call(CExpression.Name(symbol), given))]
       }
-      [CStatement.Assignment(place, CExpression.Call(CExpression.Name(symbol), given))]
+      const called = CExpression.Call(CExpression.Name(symbol), given)
+      const value = if conversion.isEmpty() { called } else { CExpression.Cast(conversion, called) }
+      [CStatement.Assignment(place, value)]
     }
     .None => {
       if byPointer {
@@ -851,7 +890,7 @@ fn runtimeCallStatements(
   match matched {
     .Direct => {
       const written = argumentsOf(emission, program, body, function.signature, arguments)
-      callStatementOf(emission, body, target, function, symbol, written)
+      callStatementOf(emission, body, target, function, symbol, written, "")
     }
     .WithLocation => {
       const site = match at {
@@ -862,9 +901,148 @@ fn runtimeCallStatements(
       }
       var written = argumentsOf(emission, program, body, function.signature, arguments)
       written.add(locationExpression(program, site))
-      callStatementOf(emission, body, target, function, symbol, written)
+      callStatementOf(emission, body, target, function, symbol, written, "")
+    }
+    .Converted(annotation, withLocation) => {
+      var written = argumentsOf(emission, program, body, function.signature, arguments)
+      if withLocation {
+        const site = match at {
+          Some(found) => found
+          .None => {
+            return reported(emission, "`{symbol}` takes the source location of the call, and the call carries none")
+          }
+        }
+        written.add(locationExpression(program, site))
+      }
+      callStatementOf(emission, body, target, function, symbol, written, annotation)
     }
     .Mismatch(what) => reported(emission, what)
+  }
+}
+
+// --- Trait-typed values -----------------------------------------------------------------------------------------------
+
+/**
+ * `TraitValue`: the payload goes into a counted block of its own and one witness pointer per bound goes next to it. The
+ * box is an ordinary layout, so it is allocated the way every other counted block is - only its kind says what it is.
+ */
+fn traitValueStatements(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot,
+  value: Argument,
+  tables: List<WitnessSource>,
+): List<CStatement> {
+  const place = slotExpression(body, target)
+  const item = typeOfSlot(body, value.slot)
+  // `Show & Hash` narrowed to `Show`: the payload is boxed already, so nothing is boxed twice and only the tables change
+  if isObjectType(program, item) {
+    var narrowed: List<CStatement> = []
+    const data = CExpression.Member(slotExpression(body, value.slot), "data")
+    narrowed.add(CStatement.Assignment(CExpression.Member(place, "data"), data))
+    for index in 0..tables.length() {
+      const found = witnessExpression(emission, program, body, tables[index])
+      narrowed.add(CStatement.Assignment(CExpression.Member(place, witnessMemberNameOf(index)), found))
+    }
+    return narrowed
+  }
+  const layout = match program.layoutNamed(payloadLayoutName(program, item)) {
+    Some(found) => found
+    .None => {
+      return reported(emission, "a trait-typed value whose payload has no layout")
+    }
+  }
+  const name = program.layoutAt(layout).name
+  const spelling = "{name} *"
+  var inner: List<CStatement> = []
+  const allocated = CExpression.Call(CExpression.Name("torb_allocate"), [
+    sizeOf(name),
+    CExpression.Name("TORB_BLOCK_OBJECT"),
+  ])
+  inner.add(CStatement.Declaration(spelling, "box", Some(CExpression.Cast(spelling, allocated))))
+  const shape = program.layoutAt(layout)
+  if shape.fields.isEmpty() {
+    return reported(emission, "a trait-typed value whose payload layout has no field")
+  }
+  const field = CExpression.PointerMember(CExpression.Name("box"), memberNameOf(shape.fields[0]))
+  inner.add(CStatement.Assignment(field, slotExpression(body, value.slot)))
+  const data = CExpression.Member(place, "data")
+  inner.add(CStatement.Assignment(data, CExpression.Cast("torb_object *", CExpression.Name("box"))))
+  for index in 0..tables.length() {
+    const found = witnessExpression(emission, program, body, tables[index])
+    inner.add(CStatement.Assignment(CExpression.Member(place, witnessMemberNameOf(index)), found))
+  }
+  [CStatement.Block(inner)]
+}
+
+/**
+ * A call through a witness table. The **receiver is not among the arguments**: it is the boxed payload of the value the
+ * witness came from, so both come out of one slot. The member is a thunk with the erased signature, and the pointer is
+ * converted back to exactly that signature here - which is what makes the call well defined C.
+ */
+fn witnessCallStatements(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot?,
+  witness: WitnessSource,
+  member: Int,
+  arguments: List<Argument>,
+): List<CStatement> {
+  const receiver = match witness.root {
+    .Value(slot, _) => slot
+    _ => {
+      return reported(emission, "a call through a witness table that does not belong to a value")
+    }
+  }
+  if !witness.steps.isEmpty() {
+    return reported(emission, "a call through a nested witness table")
+  }
+  const table = witnessExpression(emission, program, body, witness)
+  const result = match target {
+    Some(slot) => valueTypeOf(program, typeOfSlot(body, slot))
+    .None => "void"
+  }
+  var spellings = ["const void *"]
+  var given = [CExpression.Member(slotExpression(body, receiver), "data")]
+  for argument in arguments {
+    spellings.add(valueTypeOf(program, typeOfSlot(body, argument.slot)))
+    given.add(slotExpression(body, argument.slot))
+  }
+  const annotation = "{result} (*)({spellings.joined(separator: ", ")})"
+  const members = CExpression.PointerMember(table, "members")
+  const entry = CExpression.Index(members, CExpression.Literal("{member}"))
+  const callee = CExpression.Cast(annotation, entry)
+  const called = CExpression.Call(callee, given)
+  match target {
+    Some(inner) => [CStatement.Assignment(slotExpression(body, inner), called)]
+    .None => [CStatement.Evaluate(called)]
+  }
+}
+
+/** Which table a witness source names: one of the witness pointers of a value, or a static table of the program. */
+fn witnessExpression(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  witness: WitnessSource,
+): CExpression {
+  match witness.root {
+    .Value(slot, bound) => {
+      CExpression.Member(slotExpression(body, slot), witnessMemberNameOf(bound))
+    }
+    .Table(table) => {
+      if !program.hasWitnessTable(table) {
+        reportUnsupported(emission, "a witness table that is not in the program")
+        return nullPointer
+      }
+      CExpression.AddressOf(CExpression.Name(program.witnessTableAt(table).name))
+    }
+    .Parameter(_) => {
+      reportUnsupported(emission, "a witness table the caller passed, which the lowering never builds")
+      nullPointer
+    }
   }
 }
 
@@ -1079,6 +1257,16 @@ fn comparisonExpression(
   }
   reportUnsupported(emission, "a comparison of a value the C back end cannot compare directly (milestone 5.6)")
   None
+}
+
+fn isObjectType(program: IrProgram, id: IrTypeId): Bool {
+  if !program.hasType(id) {
+    return false
+  }
+  match program.typeAt(id) {
+    .Object(_) => true
+    _ => false
+  }
 }
 
 fn isTextType(program: IrProgram, id: IrTypeId): Bool {

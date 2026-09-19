@@ -7,6 +7,8 @@ use Checker from "../../semantics/checker/context"
 use NativeEntry, nativeEntries from "../../backend/c/natives"
 use IrProgram, IrTypeId, IrType, Slot, BlockId, StaticId, StaticValue, StaticContents from "../ir"
 use Location, LocationId, Terminator, Argument, Reference, borrowed, referenced from "../ir"
+use FunctionId, Intrinsic from "../ir"
+use substitute from "../../semantics/checker/unify"
 use Instantiation, newInstantiation, instantiateType from "../instantiate"
 use canonicalType, canonicalLiteral, escapedComponent, mangledName from "../mangle"
 use FunctionBuilder, terminate, switchTo from "../build"
@@ -40,6 +42,50 @@ public type Unsupported {
 public type LoweredProblem {
   module: ModuleId
   diagnostic: Diagnostic
+}
+
+/**
+ * What a member without a source does. Two kinds of declaration have no body anywhere: a member of a **derived**
+ * implementation (`Show`, `Equals`, `Hash`), and a `native fn` whose manifest entry is `.Derived` - plus the one case
+ * the manifest does not name, a member a witness table has to point at although it is an intrinsic or a function of the
+ * runtime. A table holds function pointers, so `Int64.equals` needs a function even where a call of it is one
+ * instruction.
+ *
+ * It lives here rather than in `lower/derive.trb` because `Lowering` carries the worklist of these, and a field of
+ * `Lowering` may not need a file that needs `Lowering` back.
+ */
+public type Generated {
+  /** A wrapper around one intrinsic, so that a witness table has something to point at: `Int64.equals`. */
+  case Operation(intrinsic: Intrinsic)
+  /** The same for a function of the runtime: `Int64.show`. */
+  case RuntimeCall(symbol: String)
+  /** `Type(field: value, ...)`, a case as `Case(field: value)` or as its bare name (gap 23). */
+  case Show
+  /** The same, with a `String` quoted and a `Char` in single quotes: what everything nested calls. */
+  case ShowNested
+  case Equals
+  case Hash
+  case Compare
+  /** `if self < 0 { -self } else { self }`, so the overflow of the smallest value falls out of `Negate`. */
+  case Absolute
+  /** `String.show()` is the text itself, `Void.equals` is always true: the argument, or one constant. */
+  case Identity
+  case Copy
+}
+
+/** One generated member that is known to be needed and not built yet. */
+public type GeneratedRequest {
+  /** The stub the worklist already added, whose body this replaces. */
+  function: FunctionId
+  kind: Generated
+  /** The declaration the trait or the `native type` wrote down, for its name and its signature. */
+  member: SymbolId
+  /** The type the member is generated for. */
+  subject: TypeId
+  /** The trait it satisfies, with its arguments. */
+  bound: TypeId
+  /** The generic parameters of the member's owner, filled in for `subject`. */
+  mapping: Map<ParameterId, TypeId>
 }
 
 public type Lowering {
@@ -92,6 +138,23 @@ public type Lowering {
   var stubbed: Int = 0
   /** How far the worklist has come. The cursor never goes back, so draining it is one pass over a growing list. */
   var drained: Int = 0
+  /**
+   * The type arguments of the instance whose body is being lowered, by the generic parameter each of them fills.
+   *
+   * Every type the body mentions goes through `irTypeOf`, which substitutes this first - so the body of
+   * `fn largest<Item: Compare>(items: Item, other: Item)` is lowered once per argument list and nothing inside it has
+   * to know that it is generic.
+   */
+  var substitution: Map<ParameterId, TypeId> = [:]
+  /** The substitution of every instance, by its key, so that draining the worklist can restore it. */
+  var instanceMappings: Map<String, Map<ParameterId, TypeId>> = [:]
+  /** The members the lowering generates from the layout, and how far that second worklist has come. */
+  var pendingGenerated: List<GeneratedRequest> = []
+  var drainedGenerated: Int = 0
+  /** The generated member of one target, by the mangled name it got: one body per member per type. */
+  var generatedInstances: Map<String, FunctionId> = [:]
+  /** The witness tables that are being built right now: a supertrait that leads back to its own subtrait. */
+  var buildingTables: Map<String, Bool> = [:]
   /** The static value of every module constant, by `SymbolId.value`. */
   var constants: Map<Int, StaticId> = [:]
   /** The constants whose initializer is being evaluated right now: a `const` in terms of itself is a cycle. */
@@ -185,10 +248,31 @@ fn lineIndexOf(var lowering: Lowering, index: Int): LineIndex {
 
 // --- Types ----------------------------------------------------------------------------------------------------------
 
-/** The IR type a checker type stands for. Everything here is monomorphic, so nothing is ever substituted. */
+/**
+ * The IR type a checker type stands for, with the type arguments of the instance that is being lowered filled in.
+ * Everything that comes out of it is monomorphic, which is what the whole back end rests on.
+ */
 public fn irTypeOf(var lowering: Lowering, id: TypeId): IrTypeId {
+  const mapping = lowering.substitution
+  instantiateType(lowering.program, lowering.checker, lowering.instantiation, mapping, id)
+}
+
+/**
+ * The same for a type that is closed already: a witness table and a generated member are built from types the caller
+ * has substituted, and applying the *current* instance's arguments to one of those would be one substitution too many.
+ */
+public fn irTypeOfClosed(var lowering: Lowering, id: TypeId): IrTypeId {
   const empty: Map<ParameterId, TypeId> = [:]
   instantiateType(lowering.program, lowering.checker, lowering.instantiation, empty, id)
+}
+
+/** A checker type with the arguments of the instance that is being lowered filled in. Still a checker type. */
+public fn substituted(var lowering: Lowering, id: TypeId): TypeId {
+  const mapping = lowering.substitution
+  if mapping.isEmpty() {
+    return id
+  }
+  substitute(lowering.checker.types, id, mapping)
 }
 
 /** The IR type of the expression at `at`, or `None` where the checker recorded nothing or something broken. */

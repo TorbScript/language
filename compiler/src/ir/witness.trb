@@ -1,0 +1,554 @@
+use Span from "../syntax/source"
+use SymbolId from "../semantics/symbols"
+use TypeId, ParameterId, Signature, ImplementationId from "../semantics/checker/type"
+use signatureOf, typeSignatureOf from "../semantics/checker/signature"
+use sameType from "../semantics/checker/unify"
+use witnessFor, supertraitsOfBound, memberOfImplementation, matchTypePattern from "../semantics/checker/implementation"
+use traitArgumentsOf from "../semantics/checker/implementation"
+use DerivedKind from "../backend/c/natives"
+use TraitId, FunctionId, Slot, WitnessTable, WitnessTableId from "./ir"
+use WitnessSource, WitnessRoot from "./ir"
+use witnessTableName from "./mangle"
+use instantiateTrait from "./instantiate"
+use instanceFor, isClosedType from "./instances"
+use Lowering, Generated, reportUnsupported, irTypeOfClosed, nativeNamed from "./lower/context"
+use generatedFunctionOf from "./lower/derive"
+
+/**
+ * Witness tables: what a trait-typed value and a dynamic call go through.
+ *
+ * A table is static data, one per `(trait with its arguments, target type)`, holding one function pointer per member the
+ * ABI can reach, in a deterministic order. A **default** member is deliberately not in a table: calling one is a call of
+ * the monomorphic instance of the default body with `Self` bound to the target, which is what makes `by` forward the
+ * required members only (gap 14).
+ *
+ * Two things are decided here and not in BACKEND section 1.4, and both are recorded in the note of 5.6:
+ *
+ * - **A trait-typed value carries its own tables, so nothing is ever passed as a witness parameter.** Every open bound
+ *   of the language belongs to a value that is in hand - the receiver of the call, the argument that is interpolated -
+ *   and reading the table out of that value is what `WitnessRoot.Value` is for.
+ * - **The members of the supertraits are flattened into the table instead of sitting in a nested one.** A call through a
+ *   table has to spell the member's C type, and the only trait a back end can name at a `CallWitness` is the bound the
+ *   value carries - so a path through nested tables could not be spelled at all. `WitnessTable.nested` stays empty.
+ */
+
+/**
+ * The static table of one concrete type and one trait, built once. Both types have to be closed: a table is named after
+ * them, and a generic parameter has no name in the back end.
+ */
+public fn witnessTableOf(var lowering: Lowering, subject: TypeId, bound: TypeId, at: Span): WitnessTableId? {
+  if !isClosedType(lowering, subject) || !isClosedType(lowering, bound) {
+    reportUnsupported(lowering, "a witness table of a type the call site did not decide", at)
+    return None
+  }
+  const applied = traitIdOf(lowering, bound)
+  const target = irTypeOfClosed(lowering, subject)
+  const name = witnessTableName(lowering.program, applied, target)
+  if const Some(found) = lowering.program.witnessTableNamed(name) {
+    return Some(found)
+  }
+  if lowering.buildingTables.containsKey(name) {
+    reportUnsupported(lowering, "a witness table that needs itself", at)
+    return None
+  }
+  const implementation = match witnessFor(lowering.checker, subject, bound) {
+    .Implementation(found, _, _) => found
+    .Object(_, _) => {
+      reportUnsupported(lowering, "a static witness table of a trait-typed value", at)
+      return None
+    }
+    _ => {
+      const shown = lowering.checker.describe(bound)
+      reportUnsupported(lowering, "a witness for `{shown}` the checker did not resolve", at)
+      return None
+    }
+  }
+  lowering.buildingTables.set(name, true)
+  const members = membersOfTable(lowering, subject, bound, implementation, at)
+  const _ = lowering.buildingTables.remove(name)
+  const found = match members {
+    Some(inner) => inner
+    .None => {
+      return None
+    }
+  }
+  const empty: List<WitnessTableId> = []
+  Some(lowering.program.addWitnessTable(WitnessTable(name, applied, target, found, empty)))
+}
+
+/** `Show`, `Iterable<Int64>`: one bound, interned, so that a name is a function of the trait and its arguments. */
+public fn traitIdOf(var lowering: Lowering, bound: TypeId): TraitId {
+  instantiateTrait(lowering.program, lowering.checker, lowering.instantiation, bound)
+}
+
+fn membersOfTable(
+  var lowering: Lowering,
+  subject: TypeId,
+  bound: TypeId,
+  implementation: ImplementationId,
+  at: Span,
+): List<FunctionId>? {
+  var found: List<FunctionId> = []
+  for member in tableMembersOf(lowering, bound, subject) {
+    const built = memberFunctionOf(lowering, subject, member.bound, implementation, member.member, at)?
+    found.add(built)
+  }
+  Some(found)
+}
+
+/**
+ * The function one member of a table points at. Three shapes: a member the source wrote down, a member of a **derived**
+ * implementation, and a member of a `native type` the runtime provides - the last two have no body anywhere and are
+ * generated from the layout.
+ */
+public fn memberFunctionOf(
+  var lowering: Lowering,
+  subject: TypeId,
+  bound: TypeId,
+  implementation: ImplementationId,
+  member: SymbolId,
+  at: Span,
+): FunctionId? {
+  const name = lowering.checker.symbolAt(member).name
+  const provider = memberOfImplementation(lowering.checker, implementation, name) ?? member
+  const mapping = memberMappingOf(lowering, provider, subject, bound)
+  const identifier = signatureOf(lowering.checker, provider)
+  const signature = lowering.checker.signature(identifier)
+  if signature.hasBody {
+    const built = instanceFor(lowering, provider, mapping)
+    if built.isNone() {
+      reportUnsupported(lowering, "`{name}`, a member the back end cannot build an instance of", at)
+    }
+    return built
+  }
+  // No body anywhere: the manifest says what the runtime provides, everything else is generated from the layout
+  const owner = manifestOwnerOf(lowering, subject, provider)
+  const kind = generatedKindOf(lowering, provider, owner, implementation, at)?
+  generatedFunctionOf(lowering, kind, provider, subject, bound, mapping, at)
+}
+
+/**
+ * Which manifest entry a member belongs to: the **target** type of the implementation and not the type that declares the
+ * member. `Int64.hash` is an entry although `hash` is written in `trait Hash`, and `native type Int64 with Signed {}`
+ * declares nothing at all - the runtime provides every member of every trait it comes with (gap 22).
+ */
+public fn manifestOwnerOf(var lowering: Lowering, subject: TypeId, member: SymbolId): String {
+  if const .Nominal(symbol, _) = lowering.checker.types.form(subject) {
+    return lowering.checker.symbolAt(symbol).name
+  }
+  ownerNameOf(lowering, member)
+}
+
+/**
+ * The function that implements one member of one trait for one concrete type: what a generated body calls per field, and
+ * what a `for` loop and an interpolation will ask for. It goes through the very same path a witness table member does, so
+ * a value that is shown through a table and one that is shown directly run the same code.
+ */
+public fn memberOfType(
+  var lowering: Lowering,
+  subject: TypeId,
+  bound: TypeId,
+  name: String,
+  at: Span,
+): FunctionId? {
+  const implementation = match witnessFor(lowering.checker, subject, bound) {
+    .Implementation(found, _, _) => found
+    _ => {
+      const given = lowering.checker.describe(subject)
+      const wanted = lowering.checker.describe(bound)
+      reportUnsupported(lowering, "`{given}` as a `{wanted}`, which the checker did not resolve", at)
+      return None
+    }
+  }
+  const declared = memberOfImplementation(lowering.checker, implementation, name)
+  const member = match declared {
+    Some(found) => found
+    .None => {
+      const found = traitMemberNamed(lowering, bound, name)?
+      found
+    }
+  }
+  memberFunctionOf(lowering, subject, bound, implementation, member, at)
+}
+
+/**
+ * What a member without a body does. A `native` declaration of `std/` is in the manifest; a member of a derived
+ * implementation is one of the ones the language generates; anything else waits for a milestone.
+ */
+public fn generatedKindOf(
+  var lowering: Lowering,
+  member: SymbolId,
+  owner: String,
+  implementation: ImplementationId,
+  at: Span,
+): Generated? {
+  const name = lowering.checker.symbolAt(member).name
+  if const Some(entry) = nativeNamed(lowering, owner, name) {
+    if const .Planned(milestone) = entry.state {
+      reportUnsupported(lowering, "`{entry.name}`, which the runtime provides from milestone {milestone} on", at)
+      return None
+    }
+    match entry.target {
+      .Intrinsic(intrinsic) => {
+        return Some(Generated.Operation(intrinsic))
+      }
+      .Runtime(symbol) => {
+        return Some(Generated.RuntimeCall(symbol))
+      }
+      .Derived(derived) => {
+        return derivedKindOf(lowering, derived, at)
+      }
+    }
+  }
+  const found = lowering.checker.implementations.at(implementation)
+  if const .Derived = found.origin {
+    return generatedForDerived(lowering, name, at)
+  }
+  if const .Delegated = found.origin {
+    reportUnsupported(lowering, "`by` delegation", at)
+    return None
+  }
+  reportUnsupported(lowering, "`{name}`, which neither the source nor the natives manifest provides", at)
+  None
+}
+
+/** The members the language generates for a derived implementation. `Encode` and `Decode` arrive with 5.10. */
+fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generated? {
+  if name == "show" {
+    return Some(Generated.Show)
+  }
+  if name == "showNested" {
+    return Some(Generated.ShowNested)
+  }
+  if name == "equals" {
+    return Some(Generated.Equals)
+  }
+  if name == "hash" {
+    return Some(Generated.Hash)
+  }
+  if name == "compare" {
+    return Some(Generated.Compare)
+  }
+  reportUnsupported(lowering, "a derived `{name}` (milestone 5.10)", at)
+  None
+}
+
+/** What the manifest's `.Derived` entry means for the lowering: the same vocabulary, in the lowering's own words. */
+public fn derivedKindOf(var lowering: Lowering, derived: DerivedKind, at: Span): Generated? {
+  match derived {
+    .Show => Some(Generated.Show)
+    .ShowNested => Some(Generated.ShowNested)
+    .Equals => Some(Generated.Equals)
+    .Compare => Some(Generated.Compare)
+    .Hash => Some(Generated.Hash)
+    .Absolute => Some(Generated.Absolute)
+    .Identity => Some(Generated.Identity)
+    .Copy => {
+      reportUnsupported(lowering, "a derived `copy` of a native type", at)
+      None
+    }
+  }
+}
+
+/** `"Int64"`, `"String"`, `""` for a free function: the owner component of a manifest entry. */
+public fn ownerNameOf(var lowering: Lowering, member: SymbolId): String {
+  const site = match lowering.checker.siteOf(member) {
+    Some(found) => found
+    .None => {
+      return ""
+    }
+  }
+  if const .Owned(owner, _, _) = site.kind {
+    const found = match owner {
+      Some(inner) => inner
+      .None => {
+        return ""
+      }
+    }
+    if const .Nominal(symbol, _) = lowering.checker.types.form(found) {
+      return lowering.checker.symbolAt(symbol).name
+    }
+  }
+  ""
+}
+
+/**
+ * The substitution one member is instantiated under: the generic parameters of its owner, filled in from the type the
+ * member was reached on, plus the `Self` of a trait where the owner is one.
+ */
+public fn memberMappingOf(
+  var lowering: Lowering,
+  member: SymbolId,
+  subject: TypeId,
+  bound: TypeId,
+): Map<ParameterId, TypeId> {
+  const identifier = signatureOf(lowering.checker, member)
+  const signature = lowering.checker.signature(identifier)
+  var mapping: Map<ParameterId, TypeId> = [:]
+  const owner = match signature.owner {
+    Some(found) => found
+    .None => {
+      return mapping
+    }
+  }
+  if const .Parameter(parameter) = lowering.checker.types.form(owner) {
+    // A member of the trait itself: `Self` is the target, and the trait's own arguments come out of the trait that
+    // *declares* the member for that target - the bound a call resolved may be a subtrait, whose arguments say nothing
+    // about this one (`Int64 with Signed` is what provides `Parse<NumberParseError>`)
+    mapping.set(parameter, subject)
+    const applied = appliedArgumentsOf(lowering, parameter, subject, bound)
+    addTraitArguments(lowering, mapping, signature.generics, applied)
+    return mapping
+  }
+  const generics = signature.generics
+  const _ = matchTypePattern(lowering.checker, owner, subject, generics, mapping)
+  mapping
+}
+
+/**
+ * The arguments the trait that declares a member has for one type: `Parse<NumberParseError>` for an `Int64`, whatever
+ * bound a call site happened to resolve. The bound's own arguments stand in where the declaring trait cannot be found.
+ */
+fn appliedArgumentsOf(
+  var lowering: Lowering,
+  parameter: ParameterId,
+  subject: TypeId,
+  bound: TypeId,
+): List<TypeId> {
+  if const Some(declaring) = lowering.checker.types.parameter(parameter).owner {
+    if const Some(found) = traitArgumentsOf(lowering.checker, subject, declaring) {
+      return found
+    }
+  }
+  match lowering.checker.types.form(bound) {
+    .Nominal(_, given) => given
+    _ => []
+  }
+}
+
+/** `trait Iterable<Item>`: the arguments of the trait fill its own parameters, in declaration order. */
+fn addTraitArguments(
+  var lowering: Lowering,
+  var mapping: Map<ParameterId, TypeId>,
+  generics: List<ParameterId>,
+  arguments: List<TypeId>,
+) {
+  for index in 0..generics.length().min(arguments.length()) {
+    mapping.set(generics[index], arguments[index])
+  }
+}
+
+// --- What is in a table, and where -----------------------------------------------------------------------------------
+
+/** One member of a table: the declaration, and the trait that requires it - which may be a supertrait. */
+public type TableMember {
+  member: SymbolId
+  bound: TypeId
+}
+
+/**
+ * The members of the table of one bound, in the order a back end indexes them: the required members the ABI can reach,
+ * in declaration order, then the same of every supertrait in declaration order.
+ *
+ * Three kinds of member are left out, and every one of them is a member object safety already forbids on a trait-typed
+ * value (TYPECHECKER 4.4): one that mentions `Self` anywhere but as its receiver (`equals`, `compare`), a static one,
+ * and one with generic parameters of its own, whose call would need witnesses appended. A call of one through a table is
+ * therefore a clean "the member is not in the table" finding and never a wrong call.
+ *
+ * A **default** member is in the table, which BACKEND 1.4 does not say: an implementation may override one, and which of
+ * the two a trait-typed value reaches is only known at run time. The entry is the override where there is one and an
+ * instance of the default body for the target type otherwise - so `by` still forwards the required members only, because
+ * a delegated implementation declares no override.
+ */
+public fn tableMembersOf(var lowering: Lowering, bound: TypeId, subject: TypeId): List<TableMember> {
+  var found: List<TableMember> = []
+  addTableMembers(lowering, found, bound, subject, 0)
+  found
+}
+
+/** Whether the list already holds a member of this name, which is what keeps a shared supertrait out of it twice. */
+fn hasMemberNamed(var lowering: Lowering, found: List<TableMember>, name: String): Bool {
+  for one in found {
+    if lowering.checker.symbolAt(one.member).name == name {
+      return true
+    }
+  }
+  false
+}
+
+fn addTableMembers(
+  var lowering: Lowering,
+  var found: List<TableMember>,
+  bound: TypeId,
+  subject: TypeId,
+  depth: Int,
+) {
+  if depth > 6 {
+    return
+  }
+  const symbol = match lowering.checker.types.form(bound) {
+    .Nominal(inner, _) => inner
+    _ => {
+      return
+    }
+  }
+  const identifier = typeSignatureOf(lowering.checker, symbol)
+  const shape = lowering.checker.typeSignature(identifier)
+  // The generic parameters of the trait itself are in scope of every one of its members, so only the ones behind them
+  // are the member's own - and a member with its own parameters would need witnesses appended
+  const inherited = shape.generics.length()
+  for (name, member) in shape.members {
+    if hasMemberNamed(lowering, found, name) {
+      continue
+    }
+    if !isTableMember(lowering, member, inherited) {
+      continue
+    }
+    found.add(TableMember(member, bound))
+  }
+  for supertrait in supertraitsOfBound(lowering.checker, bound, subject) {
+    addTableMembers(lowering, found, supertrait, subject, depth + 1)
+  }
+}
+
+fn isTableMember(var lowering: Lowering, member: SymbolId, inherited: Int): Bool {
+  if const .Function = lowering.checker.symbolAt(member).kind {
+    const identifier = signatureOf(lowering.checker, member)
+    const signature = lowering.checker.signature(identifier)
+    if !signature.takesSelf {
+      return false
+    }
+    // A member with generic parameters or a `where` clause of its own is conditionally available (4.3)
+    if signature.generics.length() > inherited || !signature.bounds.isEmpty() {
+      return false
+    }
+    if signature.isVarSelf {
+      return false
+    }
+    const owner = match signature.owner {
+      Some(found) => found
+      .None => {
+        return false
+      }
+    }
+    const parameter = match lowering.checker.types.form(owner) {
+      .Parameter(found) => found
+      _ => {
+        return false
+      }
+    }
+    return !mentionsSelfElsewhere(lowering, signature.form.result, parameter)
+      && !anyParameterMentions(lowering, signature, parameter)
+  }
+  false
+}
+
+fn anyParameterMentions(var lowering: Lowering, signature: Signature, parameter: ParameterId): Bool {
+  for one in signature.form.parameters {
+    if mentionsSelfElsewhere(lowering, one.annotation, parameter) {
+      return true
+    }
+  }
+  false
+}
+
+/** Whether `Self` occurs in a type. A member that says `Self` has no meaning on a trait-typed value (gap 7). */
+fn mentionsSelfElsewhere(var lowering: Lowering, id: TypeId, parameter: ParameterId): Bool {
+  match lowering.checker.types.form(id) {
+    .Parameter(found) => found == parameter
+    .Nominal(_, arguments) => anyMentions(lowering, arguments, parameter)
+    .Traits(bounds) => anyMentions(lowering, bounds, parameter)
+    .Literals(base, _) => mentionsSelfElsewhere(lowering, base, parameter)
+    .Constant(_, of) => mentionsSelfElsewhere(lowering, of, parameter)
+    .Tuple(fields) => {
+      for field in fields {
+        if mentionsSelfElsewhere(lowering, field.annotation, parameter) {
+          return true
+        }
+      }
+      false
+    }
+    .Function(form) => {
+      for one in form.parameters {
+        if mentionsSelfElsewhere(lowering, one.annotation, parameter) {
+          return true
+        }
+      }
+      mentionsSelfElsewhere(lowering, form.result, parameter)
+    }
+    _ => false
+  }
+}
+
+fn anyMentions(var lowering: Lowering, arguments: List<TypeId>, parameter: ParameterId): Bool {
+  for argument in arguments {
+    if mentionsSelfElsewhere(lowering, argument, parameter) {
+      return true
+    }
+  }
+  false
+}
+
+/** The member a trait declares under a name, whether it is required or a default. */
+public fn traitMemberNamed(var lowering: Lowering, bound: TypeId, name: String): SymbolId? {
+  const symbol = match lowering.checker.types.form(bound) {
+    .Nominal(found, _) => found
+    _ => {
+      return None
+    }
+  }
+  const identifier = typeSignatureOf(lowering.checker, symbol)
+  const shape = lowering.checker.typeSignature(identifier)
+  shape.members.get(name)
+}
+
+/** Where a member of a trait-typed value sits: the table one of its bounds carries, and the slot inside that table. */
+public type MemberInValue {
+  source: WitnessSource
+  member: Int
+}
+
+/**
+ * Which witness pointer of a trait-typed value carries a member, and at which index. The bounds of the value are walked
+ * in order and each one's table is searched, so a member the value reaches through a supertrait is found in the table of
+ * the bound that has that supertrait - which is why the members of a supertrait are flattened into it.
+ */
+public fn memberInValue(
+  var lowering: Lowering,
+  bounds: List<TypeId>,
+  subject: TypeId,
+  slot: Slot,
+  member: SymbolId,
+): MemberInValue? {
+  const name = lowering.checker.symbolAt(member).name
+  for index in 0..bounds.length() {
+    const members = tableMembersOf(lowering, bounds[index], subject)
+    for position in 0..members.length() {
+      if lowering.checker.symbolAt(members[position].member).name == name {
+        const empty: List<Int> = []
+        return Some(MemberInValue(WitnessSource(WitnessRoot.Value(slot, index), empty), position))
+      }
+    }
+  }
+  None
+}
+
+/** Whether a member can be reached through the table of one of the bounds at all, which is what makes a call dynamic. */
+public fn isInTable(
+  var lowering: Lowering,
+  bounds: List<TypeId>,
+  subject: TypeId,
+  member: SymbolId,
+): Bool {
+  memberInValue(lowering, bounds, subject, Slot(0), member).isSome()
+}
+
+/** Whether one of the bounds of a trait-typed value is exactly this trait, which a narrowing coercion asks. */
+public fn boundIndexOf(var lowering: Lowering, bounds: List<TypeId>, bound: TypeId): Int {
+  for index in 0..bounds.length() {
+    if sameType(lowering.checker.types, bounds[index], bound) {
+      return index
+    }
+  }
+  -1
+}

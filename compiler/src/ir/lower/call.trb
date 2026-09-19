@@ -1,11 +1,11 @@
 use Span from "../../syntax/source"
 use Expression, Argument, FunctionDeclaration from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
-use TypeId, Signature, FieldSignature, ImplementationId from "../../semantics/checker/type"
+use TypeId, ParameterId, Signature, FieldSignature from "../../semantics/checker/type"
 use Resolution, Dispatch from "../../semantics/checker/context"
 use signatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
-use NativeEntry from "../../backend/c/natives"
+use NativeEntry, DerivedKind from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
 use CallOperands, PlacePath from "./place"
 use referenceParametersOf, parameterTypeAt, receiverReference, argumentReference from "./place"
@@ -13,21 +13,23 @@ use collidesWithPlace, writtenResult, lowerPropertyWrite from "./place"
 use FunctionBuilder, emit from "../build"
 use layoutOfType from "../verify"
 use describeIrType from "../print"
-use symbolPathOf from "../instantiate"
-use instanceOfSymbol, runtimeFunctionOf, needsReference, isMonomorphic from "../instances"
+use memberInValue, derivedKindOf, generatedKindOf from "../witness"
+use generatedFunctionOf from "./derive"
+use instanceFor, runtimeFunctionUnder, needsReference, isMonomorphic from "../instances"
 use Lowering, reportUnsupported, locationOf, nativeNamed, producesValue from "./context"
 use isNeverType, finishBlock, borrowedArguments from "./context"
 use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use variantIndexOf from "./match"
 use emitIntrinsic, receiverSlot from "./expression"
+use Dispatched, dispatchedMember from "./generic"
 
 /**
  * Calls, constructors and operators: which function a call reaches, and in which order its arguments are evaluated.
  *
- * Milestone 5.2 lowers the **monomorphic** ones: a top-level function, a method of a concrete type, a `native`
- * declaration the manifest maps to an intrinsic or to a function of the runtime, and the generated constructor and
- * `copy` of a plain record. A generic call, a witness table, a trait-typed receiver, a `var` argument, a variadic list
- * and a closure each fail cleanly with the construct named, so 5.5 to 5.9 replace them one by one.
+ * A call is one of four things, and the checker decided which: a call of a known function (monomorphized here, with the
+ * type arguments of the enclosing instance filled in), an intrinsic, a function of the runtime, or a member of the
+ * witness table a trait-typed value carries. A `var` argument, a variadic list and a closure each still fail cleanly with
+ * the construct named, so 5.7 to 5.9 replace them one by one.
  *
  * The argument plan is the checker's: `argumentTargets` says which parameter every *written* argument fills, and the
  * adaptations say which parameters take their default. Written arguments are evaluated in written order - source
@@ -50,15 +52,10 @@ public fn lowerCall(
       return unsupportedSlot(lowering, builder, destination, "a call the checker did not resolve", expression.span)
     }
   }
-  if hasTypeArguments(lowering, expression.span) {
-    return unsupportedSlot(lowering, builder, destination, "a generic call", expression.span)
-  }
   match resolution {
     .Callable(symbol, typeArguments, dispatch) => {
-      if !typeArguments.isEmpty() {
-        return unsupportedSlot(lowering, builder, destination, "a generic call", expression.span)
-      }
-      lowerCallable(lowering, builder, destination, expression, callee, arguments, annotation, symbol, dispatch)
+      const given = if typeArguments.isEmpty() { writtenTypeArguments(lowering, expression.span) } else { typeArguments }
+      lowerCallable(lowering, builder, destination, expression, callee, arguments, annotation, symbol, given, dispatch)
     }
     .Construct(owner) => {
       lowerConstructorCall(lowering, builder, destination, expression, arguments, annotation, owner)
@@ -106,13 +103,17 @@ fn callResolutionOf(var lowering: Lowering, expression: Expression, callee: Expr
   }
 }
 
-fn hasTypeArguments(var lowering: Lowering, at: Span): Bool {
+/** Explicit type arguments (`to<Set<Int>>()`), where the resolution itself carries none. */
+fn writtenTypeArguments(var lowering: Lowering, at: Span): List<TypeId> {
   const module = lowering.module
-  const found = lowering.checker.typeArgumentsAt(module, at) ?? []
-  !found.isEmpty()
+  lowering.checker.typeArgumentsAt(module, at) ?? []
 }
 
-/** A call of a declaration: a function, a method, or a `native` the runtime provides. */
+/**
+ * A call of a declaration: a function, a method, a `native` the runtime provides, or a member of the witness table a
+ * trait-typed value carries. Which of them it is was decided by the checker and is worked out by `dispatchedMember`,
+ * with the type arguments of the *enclosing* instance filled in first.
+ */
 fn lowerCallable(
   var lowering: Lowering,
   var builder: FunctionBuilder,
@@ -122,22 +123,30 @@ fn lowerCallable(
   arguments: List<Argument>,
   annotation: IrTypeId,
   symbol: SymbolId,
+  typeArguments: List<TypeId>,
   dispatch: Dispatch,
 ): Slot {
-  const resolved = match resolveMember(lowering, symbol, dispatch, expression.span) {
+  const receiver = receiverTypeOf(lowering, callee)
+  const at = expression.span
+  const dispatched = match dispatchedMember(lowering, symbol, typeArguments, dispatch, receiver, at) {
     Some(found) => found
     .None => {
       return abandonedSlot(lowering, builder, destination)
     }
   }
-  const identifier = signatureOf(lowering.checker, resolved.member)
+  const member = dispatched.member
+  const identifier = signatureOf(lowering.checker, member)
   const signature = lowering.checker.signature(identifier)
+  const owner = dispatched.owner
+  const name = memberNameOf(lowering, member)
   // A `native fn` whose receiver or argument is a place needs a wrapper around the runtime's own pointer convention, and
   // every native that declares one is a member of a container - so the wrapper belongs to 5.7, with them
   if needsReference(signature) {
-    if nativeEntryOf(lowering, resolved, signature).isSome() {
-      const what = "a `var` receiver of a `native fn` (milestone 5.7)"
-      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    if !signature.hasBody {
+      if nativeNamed(lowering, owner, name).isSome() {
+        const what = "a `var` receiver of a `native fn` (milestone 5.7)"
+        return unsupportedSlot(lowering, builder, destination, what, expression.span)
+      }
     }
   }
   // The receiver comes first, because evaluation order is source order and the receiver is written first
@@ -172,119 +181,51 @@ fn lowerCallable(
   operands.addAll(written.slots)
   places.addAll(written.places)
   // `native fn panic(message): Never` is the one native with an instruction of its own
-  if resolved.key == "panic" {
+  if owner.isEmpty() && name == "panic" {
     return lowerPanic(lowering, builder, destination, operands, expression.span)
   }
-  if const Some(entry) = nativeEntryOf(lowering, resolved, signature) {
-    return lowerNativeCall(lowering, builder, destination, expression, operands, annotation, resolved, entry)
+  if dispatched.isDynamic {
+    return lowerWitnessCall(lowering, builder, destination, expression, dispatched, operands, annotation)
   }
-  const function = match instanceOfSymbol(lowering, resolved.member) {
+  if !signature.hasBody {
+    if const Some(entry) = nativeNamed(lowering, owner, name) {
+      return lowerNativeCall(lowering, builder, destination, expression, operands, annotation, dispatched, entry)
+    }
+    // No body and no manifest entry: a member of a **derived** implementation, generated from the layout
+    if const Some(generated) = generatedMemberFor(lowering, dispatched, expression.span) {
+      return emitCall(lowering, builder, destination, generated, operands, annotation, expression.span)
+    }
+    if !lowering.isSupported {
+      return abandonedSlot(lowering, builder, destination)
+    }
+  }
+  const mapping = dispatched.mapping
+  const function = match instanceFor(lowering, member, mapping) {
     Some(found) => found
     .None => {
-      const what = describeCallee(lowering, resolved.member, signature)
+      const what = describeCallee(lowering, member, signature)
       return unsupportedSlot(lowering, builder, destination, what, expression.span)
     }
   }
   emitCall(lowering, builder, destination, function, operands, annotation, expression.span, places)
 }
 
-/** Which member a call reaches, and the name the natives manifest would know it under. */
-type ResolvedMember {
-  member: SymbolId
-  /** `"Int64"`, `"String"`, `""` for a free function: the owner component of a manifest entry. */
-  owner: String
-  /** The manifest key, built once so it is not built twice. */
-  key: String
-}
-
 /**
- * From the checker's dispatch to one member. `.Direct` is the member itself; a known implementation provides the
- * member it declares, and where it declares none - a `native type` whose traits the runtime provides - the trait's
- * requirement stays and the *target* of the implementation says which manifest entry is meant, which is how `a + b`
- * on an `Int64` becomes `add.i64`.
+ * The checker type of what a call is written on: the receiver, or the `self` the source left out. `None` for a free
+ * function and for a static member, whose owner carries no arguments a call site could decide.
  */
-fn resolveMember(var lowering: Lowering, symbol: SymbolId, dispatch: Dispatch, at: Span): ResolvedMember? {
-  match dispatch {
-    .Direct => {
-      const path = symbolPathOf(lowering.checker, symbol)
-      const owner = path.owners.last() ?? ""
-      Some(ResolvedMember(symbol, owner, nativeKeyOf(owner, path.name)))
-    }
-    .Implementation(implementation, witnesses) => {
-      if !witnesses.isEmpty() {
-        reportUnsupported(lowering, "a call that passes a witness table", at)
-        return None
-      }
-      resolveImplementationMember(lowering, symbol, implementation, at)
-    }
-    .Object(_, _) => {
-      reportUnsupported(lowering, "a call on a trait-typed value", at)
-      None
-    }
-    .Forwarded(_, _, _) => {
-      reportUnsupported(lowering, "a call through a witness the caller passed", at)
-      None
-    }
+public fn receiverTypeOf(var lowering: Lowering, callee: Expression): TypeId? {
+  const module = lowering.module
+  if const .Member(base, _, _) = callee.kind {
+    return lowering.checker.expressionType(module, base.span)
   }
-}
-
-fn resolveImplementationMember(
-  var lowering: Lowering,
-  symbol: SymbolId,
-  implementation: ImplementationId,
-  at: Span,
-): ResolvedMember? {
-  const found = lowering.checker.implementations.at(implementation)
-  if found.delegate.isSome() {
-    reportUnsupported(lowering, "`by` delegation", at)
-    return None
-  }
-  // A derived `Show`, `Equals`, `Hash` or `copy` has no source anywhere: 5.6 generates its body from the layout
-  if const .Derived = found.origin {
-    const capability = match found.capability {
-      Some(inner) => lowering.checker.describe(inner)
-      .None => "a trait"
-    }
-    reportUnsupported(lowering, "a derived `{capability}` member", at)
-    return None
-  }
-  const owner = match headNameOf(lowering, found.target) {
-    Some(name) => name
-    .None => {
-      reportUnsupported(lowering, "an implementation whose target is not one concrete type", at)
-      return None
-    }
-  }
-  const name = lowering.checker.symbolAt(symbol).name
-  if const Some(member) = found.members.get(name) {
-    return Some(ResolvedMember(member, owner, nativeKeyOf(owner, name)))
-  }
-  Some(ResolvedMember(symbol, owner, nativeKeyOf(owner, name)))
-}
-
-fn nativeKeyOf(owner: String, name: String): String {
-  if owner.isEmpty() {
-    return name
-  }
-  "{owner}.{name}"
-}
-
-/** The name of the type an implementation is for, when that is exactly one type without arguments. */
-fn headNameOf(var lowering: Lowering, target: TypeId): String? {
-  if const .Nominal(symbol, arguments) = lowering.checker.types.form(target) {
-    if arguments.isEmpty() {
-      return Some(lowering.checker.symbolAt(symbol).name)
+  const adaptations = lowering.checker.adaptationsAt(module, callee.span)
+  for adaptation in adaptations {
+    if const .ImplicitSelf(receiver) = adaptation {
+      return Some(lowering.checker.binding(receiver).annotation)
     }
   }
   None
-}
-
-/** The manifest entry of a member the source gave no body: the runtime provides it, or nobody does. */
-fn nativeEntryOf(var lowering: Lowering, resolved: ResolvedMember, signature: Signature): NativeEntry? {
-  if signature.hasBody {
-    return None
-  }
-  nativeNamed(lowering, resolved.owner, memberNameOf(lowering, resolved.member))
 }
 
 fn memberNameOf(var lowering: Lowering, symbol: SymbolId): String {
@@ -303,6 +244,71 @@ fn describeCallee(var lowering: Lowering, symbol: SymbolId, signature: Signature
   "a function the back end cannot build an instance of"
 }
 
+// --- A call through a witness table ------------------------------------------------------------------------------------
+
+/**
+ * A member of the table a trait-typed value carries. The **receiver is not among the arguments**: it is the boxed payload
+ * of the value the witness came from, which the instruction already names through its `WitnessSource` - so a back end
+ * reads both out of one slot and nothing has to say twice which value the call is on.
+ */
+fn lowerWitnessCall(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  dispatched: Dispatched,
+  operands: List<Slot>,
+  annotation: IrTypeId,
+): Slot {
+  const receiver = match operands.first() {
+    Some(found) => found
+    .None => {
+      const what = "a call on a trait-typed value without a receiver"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
+  }
+  const subject = match dispatched.subject {
+    Some(found) => found
+    .None => {
+      const what = "a call on a trait-typed value of an unknown type"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
+  }
+  const bounds = dispatched.bounds
+  const member = dispatched.member
+  const found = match memberInValue(lowering, bounds, subject, receiver, member) {
+    Some(inner) => inner
+    .None => {
+      const name = memberNameOf(lowering, member)
+      const what = "`{name}`, which is not in the witness table of a trait-typed value"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
+  }
+  var rest: List<Slot> = []
+  for index in 1..operands.length() {
+    rest.add(operands[index])
+  }
+  const given = borrowedArguments(rest)
+  if !producesValue(lowering, annotation) {
+    emit(builder, Instruction.CallWitness(None, found.source, found.member, given))
+    if isNeverType(lowering, annotation) {
+      finishBlock(lowering, builder, Terminator.Unreachable)
+      return abandonedSlot(lowering, builder, destination)
+    }
+    match destination {
+      Some(_) => {
+        return voidSlot(lowering, builder, destination)
+      }
+      .None => {
+        return abandonedSlot(lowering, builder, destination)
+      }
+    }
+  }
+  const target = valueSlot(lowering, builder, destination, annotation)
+  emit(builder, Instruction.CallWitness(Some(target), found.source, found.member, given))
+  target
+}
+
 // --- Natives --------------------------------------------------------------------------------------------------------
 
 fn lowerNativeCall(
@@ -312,13 +318,15 @@ fn lowerNativeCall(
   expression: Expression,
   operands: List<Slot>,
   annotation: IrTypeId,
-  resolved: ResolvedMember,
+  dispatched: Dispatched,
   entry: NativeEntry,
 ): Slot {
   if const .Planned(milestone) = entry.state {
     const what = "`{entry.name}`, which the runtime provides from milestone {milestone} on"
     return unsupportedSlot(lowering, builder, destination, what, expression.span)
   }
+  const member = dispatched.member
+  const mapping = dispatched.mapping
   match entry.target {
     .Intrinsic(intrinsic) => {
       if !producesValue(lowering, annotation) {
@@ -330,7 +338,7 @@ fn lowerNativeCall(
       target
     }
     .Runtime(function) => {
-      const identifier = match runtimeFunctionOf(lowering, resolved.member, function) {
+      const identifier = match runtimeFunctionUnder(lowering, member, function, mapping) {
         Some(found) => found
         .None => {
           const what = "`{entry.name}`, whose declaration is not monomorphic"
@@ -339,11 +347,53 @@ fn lowerNativeCall(
       }
       emitCall(lowering, builder, destination, identifier, operands, annotation, expression.span)
     }
-    .Derived(_) => {
-      const what = "`{entry.name}`, a derived member"
-      unsupportedSlot(lowering, builder, destination, what, expression.span)
+    // A member the language generates has no source anywhere: the body is built from the layout and called like any other
+    .Derived(derived) => {
+      const generated = match generatedMemberOf(lowering, dispatched, derived, expression.span) {
+        Some(found) => found
+        .None => {
+          return abandonedSlot(lowering, builder, destination)
+        }
+      }
+      emitCall(lowering, builder, destination, generated, operands, annotation, expression.span)
     }
   }
+}
+
+/**
+ * The generated body of a member whose implementation is a **derived** one: `Show`, `Equals` and `Hash` of a `type` have
+ * no source anywhere, and a call of one is an ordinary call of the body the lowering builds from the layout.
+ */
+fn generatedMemberFor(var lowering: Lowering, dispatched: Dispatched, at: Span): FunctionId? {
+  const implementation = dispatched.implementation?
+  const subject = dispatched.subject?
+  const member = dispatched.member
+  const owner = dispatched.owner
+  const kind = generatedKindOf(lowering, member, owner, implementation, at)?
+  const bound = dispatched.capability
+  const mapping = dispatched.mapping
+  generatedFunctionOf(lowering, kind, member, subject, bound, mapping, at)
+}
+
+/** The generated body of a member the manifest marks `.Derived`: `Int64.compare`, `String.show`, `Range.hash`. */
+fn generatedMemberOf(
+  var lowering: Lowering,
+  dispatched: Dispatched,
+  derived: DerivedKind,
+  at: Span,
+): FunctionId? {
+  const subject = match dispatched.subject {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a generated member without a receiver", at)
+      return None
+    }
+  }
+  const kind = derivedKindOf(lowering, derived, at)?
+  const member = dispatched.member
+  const bound = dispatched.capability
+  const mapping = dispatched.mapping
+  generatedFunctionOf(lowering, kind, member, subject, bound, mapping, at)
 }
 
 /** `panic "unreachable"`: an instruction of its own, and nothing after it in the block is reachable (gap 9). */
@@ -906,39 +956,63 @@ public fn lowerOperator(
       return unsupportedSlot(lowering, builder, destination, "an operator the checker did not resolve", at)
     }
   }
-  const (symbol, dispatch) = match resolution {
-    .Callable(found, typeArguments, given) => {
-      if !typeArguments.isEmpty() {
-        return unsupportedSlot(lowering, builder, destination, "a generic operator", at)
-      }
-      (found, given)
-    }
+  const (symbol, typeArguments, dispatch) = match resolution {
+    .Callable(found, given, how) => (found, given, how)
     _ => {
       return unsupportedSlot(lowering, builder, destination, "an operator the back end does not lower yet", at)
     }
   }
-  const resolved = match resolveMember(lowering, symbol, dispatch, at) {
+  const receiver = operandTypeOf(lowering, dispatch)
+  const dispatched = match dispatchedMember(lowering, symbol, typeArguments, dispatch, receiver, at) {
     Some(found) => found
     .None => {
       return abandonedSlot(lowering, builder, destination)
     }
   }
-  const identifier = signatureOf(lowering.checker, resolved.member)
+  const member = dispatched.member
+  const identifier = signatureOf(lowering.checker, member)
   const signature = lowering.checker.signature(identifier)
   if needsReference(signature) {
     return unsupportedSlot(lowering, builder, destination, "an operator with a `var` receiver", at)
   }
-  if const Some(entry) = nativeEntryOf(lowering, resolved, signature) {
-    return lowerNativeOperator(lowering, builder, destination, at, operands, annotation, resolved, entry)
+  if dispatched.isDynamic {
+    const what = "an operator on a trait-typed value, which object safety forbids"
+    return unsupportedSlot(lowering, builder, destination, what, at)
   }
-  const function = match instanceOfSymbol(lowering, resolved.member) {
+  const owner = dispatched.owner
+  const name = memberNameOf(lowering, member)
+  if !signature.hasBody {
+    if const Some(entry) = nativeNamed(lowering, owner, name) {
+      return lowerNativeOperator(lowering, builder, destination, at, operands, annotation, dispatched, entry)
+    }
+    if const Some(generated) = generatedMemberFor(lowering, dispatched, at) {
+      return emitCall(lowering, builder, destination, generated, operands, annotation, at)
+    }
+    if !lowering.isSupported {
+      return abandonedSlot(lowering, builder, destination)
+    }
+  }
+  const mapping = dispatched.mapping
+  const function = match instanceFor(lowering, member, mapping) {
     Some(found) => found
     .None => {
-      const what = describeCallee(lowering, resolved.member, signature)
+      const what = describeCallee(lowering, member, signature)
       return unsupportedSlot(lowering, builder, destination, what, at)
     }
   }
   emitCall(lowering, builder, destination, function, operands, annotation, at)
+}
+
+/**
+ * What the left operand of an operator is, as a checker type. An operator has no callee expression, so the dispatch is
+ * what says it: an implementation names its own target, and everything else is a member of a concrete type already.
+ */
+fn operandTypeOf(var lowering: Lowering, dispatch: Dispatch): TypeId? {
+  if const .Implementation(implementation, _) = dispatch {
+    const found = lowering.checker.implementations.at(implementation)
+    return Some(found.target)
+  }
+  None
 }
 
 fn lowerNativeOperator(
@@ -948,13 +1022,15 @@ fn lowerNativeOperator(
   at: Span,
   operands: List<Slot>,
   annotation: IrTypeId,
-  resolved: ResolvedMember,
+  dispatched: Dispatched,
   entry: NativeEntry,
 ): Slot {
   if const .Planned(milestone) = entry.state {
     const what = "`{entry.name}`, which the runtime provides from milestone {milestone} on"
     return unsupportedSlot(lowering, builder, destination, what, at)
   }
+  const member = dispatched.member
+  const mapping = dispatched.mapping
   match entry.target {
     .Intrinsic(intrinsic) => {
       const target = valueSlot(lowering, builder, destination, annotation)
@@ -962,7 +1038,7 @@ fn lowerNativeOperator(
       target
     }
     .Runtime(function) => {
-      const identifier = match runtimeFunctionOf(lowering, resolved.member, function) {
+      const identifier = match runtimeFunctionUnder(lowering, member, function, mapping) {
         Some(found) => found
         .None => {
           return unsupportedSlot(lowering, builder, destination, "`{entry.name}`", at)
@@ -970,6 +1046,14 @@ fn lowerNativeOperator(
       }
       emitCall(lowering, builder, destination, identifier, operands, annotation, at)
     }
-    .Derived(_) => unsupportedSlot(lowering, builder, destination, "`{entry.name}`, a derived member", at)
+    .Derived(derived) => {
+      const generated = match generatedMemberOf(lowering, dispatched, derived, at) {
+        Some(found) => found
+        .None => {
+          return abandonedSlot(lowering, builder, destination)
+        }
+      }
+      emitCall(lowering, builder, destination, generated, operands, annotation, at)
+    }
   }
 }

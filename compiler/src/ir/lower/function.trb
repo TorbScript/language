@@ -1,6 +1,7 @@
 use Statement, Block, Binding, FunctionDeclaration, Declaration, ExtendDeclaration from "../../syntax/ast"
 use ModuleId from "../../semantics/module"
 use SymbolId from "../../semantics/symbols"
+use TypeId, ParameterId from "../../semantics/checker/type"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use extensionAt from "../../semantics/checker/implementation"
 use IrSignature, IrTypeId, Slot, BlockId, FunctionId, Instance, Terminator, borrowed from "../ir"
@@ -56,6 +57,9 @@ public fn lowerInstance(var lowering: Lowering, instance: Instance) {
   const name = stub.name
   const signature = stub.signature
   beginFunction(lowering, module)
+  // The type arguments this instance was reached with: every type the body mentions is substituted through them
+  const empty: Map<ParameterId, TypeId> = [:]
+  lowering.substitution = lowering.instanceMappings.get(key) ?? empty
   var builder = newFunction(name, Some(symbol), signature, "body")
   const location = locationOf(lowering, body.span)
   setBlockLocation(builder, BlockId(0), Some(location))
@@ -76,6 +80,7 @@ public fn beginFunction(var lowering: Lowering, module: ModuleId) {
   lowering.entryLocals = [:]
   lowering.hole = None
   lowering.inlinedThunks = [:]
+  lowering.substitution = [:]
   lowering.isSupported = true
   lowering.isDiverged = false
   lowering.breakTargets = []

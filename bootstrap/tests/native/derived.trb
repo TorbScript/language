@@ -1,0 +1,170 @@
+use Process from "std/process"
+
+/**
+ * The members the language generates, compiled to a native binary: `Show`, `Equals` and `Hash` of a record, of a variant
+ * type and of a nested one, plus the generated `compare` of the `native` types and the generated `copy`.
+ *
+ * A derived implementation is generated **where it is used**, and the way to use one is a bound - so `shown` and `hashOf`
+ * are generic functions over `Show` and `Hash`, which is also what makes them one instance per type argument.
+ *
+ * `print` is `print(...values: Show)`, a variadic list of trait-typed values, so it needs the element descriptors of 5.7
+ * and cannot be used here. The shown text is compared against what it has to be instead, and the program leaves with a
+ * code that names the one comparison that failed. Nothing about that weakens the test: a wrong `Show` changes the text.
+ */
+type Point {
+  x: Int
+  y: Int
+}
+
+type Line {
+  from: Point
+  to: Point
+  label: String
+}
+
+type Shape {
+  case Circle(radius: Int)
+  case Rectangle(width: Int, height: Int)
+  case Empty
+}
+
+/** A generic function over `Show`: one instance per type argument, and the derived body is generated for each. */
+fn shown<Value: Show>(value: Value): String {
+  value.show()
+}
+
+/** The same through a **trait-typed value**, so that the derived body is reached through a witness table as well. */
+fn shownDynamically(value: Show): String {
+  value.show()
+}
+
+fn hashOf<Value: Hash>(value: Value): Int {
+  value.hash()
+}
+
+/** `Show` of a nested value goes through `showNested`, so the `String` field comes out quoted. */
+fn shownLine(): String {
+  shown(Line(Point(1, 2), Point(3, 4), "top"))
+}
+
+fn shownShape(): String {
+  shown(Shape.Rectangle(2, 3))
+}
+
+fn shownEmpty(): String {
+  shownDynamically(Shape.Empty)
+}
+
+fn shownPoint(): String {
+  shownDynamically(Point(5, 6))
+}
+
+/** Structural equality: field by field for a record, tag first and then the group for a variant type. */
+fn equalPoints(): Bool {
+  Point(1, 2) == Point(1, 2)
+}
+
+fn differentPoints(): Bool {
+  Point(1, 2) == Point(1, 3)
+}
+
+fn equalShapes(): Bool {
+  Shape.Circle(2) == Shape.Circle(2)
+}
+
+fn differentCases(): Bool {
+  Shape.Circle(2) == Shape.Rectangle(2, 3)
+}
+
+fn equalLines(): Bool {
+  Line(Point(1, 2), Point(3, 4), "a") == Line(Point(1, 2), Point(3, 4), "a")
+}
+
+/** Equal values have equal hashes. What the value of a hash *is* is not part of the language. */
+fn sameHash(): Bool {
+  hashOf(Point(7, 8)) == hashOf(Point(7, 8))
+}
+
+fn shapeHashes(): Bool {
+  hashOf(Shape.Circle(1)) == hashOf(Shape.Circle(1)) && hashOf(Shape.Circle(1)) != hashOf(Shape.Empty)
+}
+
+/** The generated `compare` of the `native` types: two comparisons and an `Ordering`. */
+fn orderedIntegers(): Bool {
+  1.compare(2) == Ordering.Less && 2.compare(2) == Ordering.Equal && 3.compare(2) == Ordering.Greater
+}
+
+fn orderedCharacters(): Bool {
+  'a' < 'b' && 'b' >= 'b' && !('c' < 'a')
+}
+
+fn orderedText(): Bool {
+  "ab" < "b" && "b" >= "ab"
+}
+
+/** `absolute` is generated from `Negate`, so the smallest value of a type panics instead of wrapping. */
+fn absoluteValues(): Bool {
+  (0 - 7).absolute() == 7 && 7.absolute() == 7
+}
+
+/** The generated `copy`, which keeps every field the call does not write. */
+fn copiedPoint(): Bool {
+  const first = Point(1, 2)
+  const second = first.copy(y: 30)
+  second.x == 1 && second.y == 30 && first.y == 2
+}
+
+/** Which of the checks failed, or zero. The first failure wins, so the code names exactly one of them. */
+fn failure(): Int {
+  if shownLine() != "Line(from: Point(x: 1, y: 2), to: Point(x: 3, y: 4), label: \"top\")" {
+    return 1
+  }
+  if shownShape() != "Rectangle(width: 2, height: 3)" {
+    return 2
+  }
+  if shownEmpty() != "Empty" {
+    return 3
+  }
+  if shownPoint() != "Point(x: 5, y: 6)" {
+    return 4
+  }
+  if !equalPoints() {
+    return 5
+  }
+  if differentPoints() {
+    return 6
+  }
+  if !equalShapes() {
+    return 7
+  }
+  if differentCases() {
+    return 8
+  }
+  if !equalLines() {
+    return 9
+  }
+  if !sameHash() {
+    return 10
+  }
+  if !shapeHashes() {
+    return 11
+  }
+  if !orderedIntegers() {
+    return 12
+  }
+  if !orderedCharacters() {
+    return 13
+  }
+  if !orderedText() {
+    return 14
+  }
+  if !absoluteValues() {
+    return 15
+  }
+  if !copiedPoint() {
+    return 16
+  }
+  0
+}
+
+Process.exit(failure())

@@ -32,6 +32,12 @@ public type PrototypeMatch {
    * panic it may raise.
    */
   case WithLocation
+  /**
+   * `(int64_t)symbol(arguments...)`: the runtime answers an integer of the same width but the other signedness, which is
+   * the one difference between a declaration of `std/` and its runtime symbol that is a conversion and not a wrapper -
+   * `Hash.hash(self): Int` against `uint64_t torb_hash_i64(int64_t)`, where the bits are the hash either way.
+   */
+  case Converted(annotation: String, withLocation: Bool)
   case Mismatch(what: String)
 }
 
@@ -126,12 +132,16 @@ public fn matchPrototype(
   name: String,
 ): PrototypeMatch {
   const expectedResult = cTypeOf(program, signature.result)
+  var conversion = ""
   if expectedResult != prototype.result {
-    const shown = if expectedResult.isEmpty() { "a type the back end cannot spell" } else { expectedResult }
-    return PrototypeMatch.Mismatch(
-      "`{name}`: the runtime answers `{prototype.result}` where the lowering expects `{shown}`,"
-        + " so the wrapper of a later sub-milestone is still missing"
-    )
+    if !isSameWidthInteger(expectedResult, prototype.result) {
+      const shown = if expectedResult.isEmpty() { "a type the back end cannot spell" } else { expectedResult }
+      return PrototypeMatch.Mismatch(
+        "`{name}`: the runtime answers `{prototype.result}` where the lowering expects `{shown}`,"
+          + " so the wrapper of a later sub-milestone is still missing"
+      )
+    }
+    conversion = expectedResult
   }
   const declared = signature.parameters.length()
   const given = prototype.parameters.length()
@@ -152,13 +162,36 @@ public fn matchPrototype(
     }
   }
   if given == declared {
-    return PrototypeMatch.Direct
+    if conversion.isEmpty() {
+      return PrototypeMatch.Direct
+    }
+    return PrototypeMatch.Converted(conversion, false)
   }
   if prototype.parameters[declared] == "torb_location" {
-    return PrototypeMatch.WithLocation
+    if conversion.isEmpty() {
+      return PrototypeMatch.WithLocation
+    }
+    return PrototypeMatch.Converted(conversion, true)
   }
   PrototypeMatch.Mismatch(
     "`{name}`: the runtime takes one parameter more than the lowering passes,"
       + " and it is not the source location"
   )
+}
+
+/** `int64_t` against `uint64_t`: two integers of one width, which differ in nothing a call has to wrap. */
+fn isSameWidthInteger(expected: String, actual: String): Bool {
+  if expected.isEmpty() || actual.isEmpty() {
+    return false
+  }
+  const first = withoutSign(expected)
+  const second = withoutSign(actual)
+  first == second && first.startsWith("int") && first.endsWith("_t")
+}
+
+fn withoutSign(spelling: String): String {
+  if spelling.startsWith("u") {
+    return spelling[1..spelling.byteLength()]
+  }
+  spelling
 }

@@ -1,0 +1,239 @@
+use test, group from "std/test"
+use irOf, textOf, ownedIrOf, unsupportedIn, instanceCountsOf from "./lower-harness"
+
+/**
+ * Generics in the IR: which instance a call reaches, what a witness table holds, and where a dynamic call takes it from.
+ *
+ * The two questions these tests exist for are the ones milestone 5.6 decides and no back end may re-decide: **which
+ * calls are monomorphized** (every one whose type arguments the call site fixed) and **where an open witness comes
+ * from** (the trait-typed value it belongs to, never a parameter of its own - the note of 5.6 in docs/BACKEND.md).
+ *
+ * The instance counts are asserted, because an accidental explosion of the instance set is the one risk of
+ * monomorphization that a snapshot of one function cannot see (BACKEND section 7, "The instance count").
+ */
+
+const declarations = r"""
+trait Sized {
+  fn size(self): Int
+
+  fn doubled(self): Int {
+    size() * 2
+  }
+}
+
+type Small with Sized {
+  amount: Int
+
+  fn size(self): Int {
+    amount
+  }
+}
+
+fn sizeOf(value: Sized): Int {
+  value.size()
+}
+
+fn doubledOf(value: Sized): Int {
+  value.doubled()
+}
+
+fn twice<Value: Sized>(value: Value): Int {
+  value.size() + value.size()
+}
+
+fn used(): Int {
+  sizeOf(Small(1)) + doubledOf(Small(2)) + twice(Small(3))
+}
+"""
+
+group "Trait-typed values" {
+  test "a call on a trait-typed value is one member of the table the value carries" {
+    assert(
+      irOf(declarations, "t_acme_x2f_app_main_sizeOf") == r"""fn t_acme_x2f_app_main_sizeOf(value: Object(Sized) borrowed) -> Int64 {
+  slot %0 parameter value: Object(Sized)
+  slot %1 temporary: Int64
+b0: # acme/app/src/main.trb:17 body
+  %1 = callWitness value %0 bound 0 member 0()
+  return %1 borrowed
+}"""
+    )
+  }
+
+  /**
+   * A **default** member is in the table as well, which BACKEND 1.4 does not say: an implementation may override one, and
+   * which of the two a trait-typed value reaches is only known at run time.
+   */
+  test "a default member is a slot of the table, so an override wins at run time" {
+    assert(
+      irOf(declarations, "t_acme_x2f_app_main_doubledOf") == r"""fn t_acme_x2f_app_main_doubledOf(value: Object(Sized) borrowed) -> Int64 {
+  slot %0 parameter value: Object(Sized)
+  slot %1 temporary: Int64
+b0: # acme/app/src/main.trb:21 body
+  %1 = callWitness value %0 bound 0 member 1()
+  return %1 borrowed
+}"""
+    )
+  }
+
+  /** The table holds the required member and the default, in declaration order, and the payload gets a layout. */
+  test "the table of an implementation is static data, and the payload of the value is a layout" {
+    const text = textOf(declarations)
+    assert(
+      text.contains(
+        "witness w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small Sized for Record(T_acme_x2f_app_main_Small)"
+          + " members(t_acme_x2f_app_main_Small_size, t_acme_x2f_app_main_Sized_doubled__T_acme_x2f_app_main_Small)"
+          + " nested()"
+      )
+    )
+    assert(
+      text.contains(
+        "layout T_payload__T_acme_x2f_app_main_Small boxed size 8 align 8"
+          + " fields(value: Record(T_acme_x2f_app_main_Small))"
+      )
+    )
+  }
+
+  /** The coercion: the payload is boxed and one witness pointer per bound goes with it, and the box is owned. */
+  test "a value that becomes trait-typed is boxed with the table of its bound" {
+    const source = r"""
+trait Sized {
+  fn size(self): Int
+}
+
+type Small with Sized {
+  amount: Int
+
+  fn size(self): Int {
+    amount
+  }
+}
+
+fn boxed(): Int {
+  sizeOf(Small(1))
+}
+
+fn sizeOf(value: Sized): Int {
+  value.size()
+}
+"""
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_boxed") == r"""fn t_acme_x2f_app_main_boxed() -> Int64 {
+  slot %0 temporary: Int64
+  slot %1 temporary: Record(T_acme_x2f_app_main_Small)
+  slot %2 temporary: Object(Sized)
+  slot %3 temporary: Int64
+b0: # acme/app/src/main.trb:13 body
+  %0 = constant s_literal__Int64_1
+  %1 = construct T_acme_x2f_app_main_Small (%0 borrowed)
+  %2 = traitValue %1 borrowed tables(table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small)
+  %3 = call t_acme_x2f_app_main_sizeOf(%2 borrowed last) at acme/app/src/main.trb:14:3
+  release %2
+  return %3 borrowed
+}"""
+    )
+  }
+}
+
+group "Monomorphization" {
+  /** A call whose type arguments the call site fixed is an ordinary call of one instance, and the bound is gone. */
+  test "a generic function is one instance per type argument, and nothing is passed to it" {
+    assert(
+      irOf(declarations, "t_acme_x2f_app_main_twice__T_acme_x2f_app_main_Small")
+        == r"""fn t_acme_x2f_app_main_twice__T_acme_x2f_app_main_Small(value: Record(T_acme_x2f_app_main_Small) borrowed) -> Int64 {
+  slot %0 parameter value: Record(T_acme_x2f_app_main_Small)
+  slot %1 temporary: Int64
+  slot %2 temporary: Int64
+  slot %3 temporary: Int64
+b0: # acme/app/src/main.trb:25 body
+  %1 = call t_acme_x2f_app_main_Small_size(%0 borrowed) at acme/app/src/main.trb:26:3
+  %2 = call t_acme_x2f_app_main_Small_size(%0 borrowed) at acme/app/src/main.trb:26:18
+  %3 = intrinsic add.i64 %1, %2 at acme/app/src/main.trb:26:3
+  return %3 borrowed
+}"""
+    )
+  }
+
+  /** Two type arguments are two instances; two call sites with the same argument are one. */
+  test "two type arguments are two instances, and two calls with one argument are one instance" {
+    const source = r"""
+fn identity<Value>(value: Value): Value {
+  value
+}
+
+fn used(): Int {
+  const first = identity(1)
+  const second = identity(2)
+  const text = identity("a")
+  first + second + text.byteLength()
+}
+"""
+    var found = instanceCountsOf(source)
+    assert(found.get("t_acme_x2f_app_main_identity__Int64") == Some(1))
+    assert(found.get("t_acme_x2f_app_main_identity__String") == Some(1))
+    assert(found.length() == 3)
+  }
+
+  /**
+   * Per-bound sharing: a trait-typed argument reaches **one** instance whatever it holds, because the type argument is
+   * the trait type itself. Two implementations of the bound therefore cost one instance of the function and two tables.
+   */
+  test "a trait-typed argument is one instance per bound and not one per type" {
+    const source = r"""
+trait Sized {
+  fn size(self): Int
+}
+
+type Small with Sized {
+  amount: Int
+
+  fn size(self): Int {
+    amount
+  }
+}
+
+type Large with Sized {
+  amount: Int
+
+  fn size(self): Int {
+    amount + amount
+  }
+}
+
+fn sizeOf(value: Sized): Int {
+  value.size()
+}
+
+fn used(): Int {
+  sizeOf(Small(1)) + sizeOf(Large(2))
+}
+"""
+    var found = instanceCountsOf(source)
+    assert(found.get("t_acme_x2f_app_main_sizeOf") == Some(1))
+    assert(found.get("t_acme_x2f_app_main_Small_size") == Some(1))
+    assert(found.get("t_acme_x2f_app_main_Large_size") == Some(1))
+  }
+}
+
+group "What a generic call cannot reach yet" {
+  /**
+   * A member with generic parameters of its own is not in a table: its call would need the witnesses of those parameters
+   * appended, which nothing passes. The checker allows it on a trait-typed value (a generic method is object safe, 4.4),
+   * so this is the one shape of a dynamic call that the back end has to refuse cleanly.
+   */
+  test "a member with generic parameters of its own is not in a table" {
+    const source = r"""
+trait Store {
+  fn size(self): Int
+
+  fn pick<Value>(self, value: Value): Int
+}
+
+fn picked(value: Store): Int {
+  value.pick(1)
+}
+"""
+    const found = unsupportedIn(source)
+    assert(found.joined(separator: "; ")
+      == "not supported by the back end yet: `pick`, which is not in the witness table of a trait-typed value")
+  }
+}

@@ -8,6 +8,7 @@ use verifyProgram from "../verify"
 use printProgram from "../print"
 use Lowering, newLowering from "./context"
 use lowerEntryFunction, lowerInstance, seedModule from "./function"
+use lowerGenerated from "./derive"
 
 /**
  * From a checked program to the IR, in the order the worklist finds it.
@@ -80,11 +81,25 @@ fn stablePathOf(package: Package, path: String): String {
  * one pass over a list that only grows - which is what keeps the lowering near-linear in the size of the program.
  */
 public fn drainPending(var lowering: Lowering) {
-  while lowering.drained < lowering.program.pending.length() {
-    const index = lowering.drained
-    const instance = lowering.program.pending[index]
-    lowering.drained = index + 1
-    lowerInstance(lowering, instance)
+  var isChanged = true
+  while isChanged {
+    isChanged = false
+    while lowering.drained < lowering.program.pending.length() {
+      const index = lowering.drained
+      const instance = lowering.program.pending[index]
+      lowering.drained = index + 1
+      lowerInstance(lowering, instance)
+      isChanged = true
+    }
+    // A generated member may need an instance of the source, and a body of the source a generated member: two lists,
+    // one cursor each, and the outer loop until neither of them grew
+    while lowering.drainedGenerated < lowering.pendingGenerated.length() {
+      const index = lowering.drainedGenerated
+      const request = lowering.pendingGenerated[index]
+      lowering.drainedGenerated = index + 1
+      lowerGenerated(lowering, request)
+      isChanged = true
+    }
   }
 }
 

@@ -1,0 +1,434 @@
+use Span from "../../syntax/source"
+use SymbolId from "../../semantics/symbols"
+use TypeId, TypeForm, ParameterId, ImplementationId from "../../semantics/checker/type"
+use Dispatch from "../../semantics/checker/context"
+use signatureOf from "../../semantics/checker/signature"
+use traitArgumentsOf, witnessFor, matchTypePattern from "../../semantics/checker/implementation"
+use IrTypeId, IrType, Slot, TraitId, LayoutId, Instruction, WitnessSource, WitnessRoot, owned from "../ir"
+use LayoutKind, FieldLayout from "../layout"
+use FunctionBuilder, emit from "../build"
+use payloadLayoutName from "../mangle"
+use instantiateTrait from "../instantiate"
+use witnessTableOf, boundIndexOf, memberMappingOf, traitMemberNamed, ownerNameOf, isInTable from "../witness"
+use isClosedType from "../instances"
+use Lowering, reportUnsupported, substituted, irTypeOfClosed from "./context"
+
+/**
+ * Generics in the lowering: which instance a call reaches, and when a call goes through a witness table instead.
+ *
+ * The checker already decided which is which (TYPECHECKER 4.4) and nothing here re-decides it. What this file adds is
+ * the step the checker cannot take: **substituting the type arguments of the instance that is being lowered**. A
+ * `Dispatch.Forwarded` inside `fn describe<Value: Show>(value: Value)` is a call on a generic parameter; once `Value`
+ * stands for `Point` it is an ordinary call of `Point.show`, and once it stands for `Show` it is a call through the table
+ * the value carries. One file for both, because it is one question.
+ */
+
+/** How a call reaches its member, once the arguments of the caller's own instance are filled in. */
+public type Dispatched {
+  /** The member that really runs. */
+  member: SymbolId
+  /** The substitution its instance is built under: the generic parameters of the member and of its owner. */
+  mapping: Map<ParameterId, TypeId>
+  /** The trait the member satisfies, with its arguments. `Invalid` where the member belongs to no trait. */
+  capability: TypeId
+  /**
+   * The owner component of a manifest entry: `"Int64"`, `"String"`, `""` for a free function. It is the **target type**
+   * of the implementation and not the type that declares the member, because that is what the manifest is keyed by:
+   * `Float64.absolute` is an entry although `absolute` is written in `trait Signed`.
+   */
+  owner: String = ""
+  /** The implementation the checker named, for a member the language generates from the layout. */
+  implementation: ImplementationId? = None
+  /** The receiver is a trait-typed value, and the call goes through the table it carries. */
+  isDynamic: Bool = false
+  /** The bounds of that trait-typed value, in the order its witness pointers are in. */
+  bounds: List<TypeId> = []
+  /** The type the member is reached on, substituted. */
+  subject: TypeId? = None
+}
+
+/**
+ * Which member a call reaches. `typeArguments` are the ones the checker solved for the member's *own* generic
+ * parameters; the ones of its owner come out of the receiver's type, which is the only place they are written.
+ */
+public fn dispatchedMember(
+  var lowering: Lowering,
+  symbol: SymbolId,
+  typeArguments: List<TypeId>,
+  dispatch: Dispatch,
+  receiver: TypeId?,
+  at: Span,
+): Dispatched? {
+  // A receiver that is not a closed type is no receiver at all: the base of `Int.parse(text)` is a *type* and the checker
+  // records whatever it has for it, so the implementation's own target is what says which type the member is reached on
+  const subject = match receiver {
+    Some(found) => {
+      const applied = substituted(lowering, found)
+      closedReceiver(lowering, applied)
+    }
+    .None => None
+  }
+  match dispatch {
+    .Direct => {
+      const mapping = mappingOfCall(lowering, symbol, typeArguments, subject)
+      const empty: List<TypeId> = []
+      const owner = ownerNameOf(lowering, symbol)
+      Some(Dispatched(symbol, mapping, lowering.checker.invalidType, owner, None, false, empty, subject))
+    }
+    .Implementation(implementation, _) => {
+      staticDispatch(lowering, symbol, typeArguments, implementation, subject, at)
+    }
+    .Object(bound, _) => {
+      const applied = substituted(lowering, bound)
+      dynamicDispatch(lowering, symbol, typeArguments, applied, subject, at)
+    }
+    .Forwarded(parameter, bound, _) => {
+      const applied = substituted(lowering, bound)
+      // The receiver of a forwarded call is the generic parameter itself, which the instance's arguments decide
+      const own = lowering.checker.types.intern(parameterFormOf(parameter))
+      const found = substituted(lowering, own)
+      if isTraitValueType(lowering, found) {
+        return dynamicDispatch(lowering, symbol, typeArguments, applied, Some(found), at)
+      }
+      resolvedDispatch(lowering, symbol, typeArguments, found, applied, at)
+    }
+  }
+}
+
+fn parameterFormOf(parameter: ParameterId): TypeForm {
+  TypeForm.Parameter(parameter)
+}
+
+fn closedReceiver(var lowering: Lowering, found: TypeId): TypeId? {
+  if isClosedType(lowering, found) {
+    return Some(found)
+  }
+  None
+}
+
+/** The receiver is a value of a concrete type: which implementation provides the member is an ordinary question. */
+fn resolvedDispatch(
+  var lowering: Lowering,
+  symbol: SymbolId,
+  typeArguments: List<TypeId>,
+  subject: TypeId,
+  bound: TypeId,
+  at: Span,
+): Dispatched? {
+  const implementation = match witnessFor(lowering.checker, subject, bound) {
+    .Implementation(found, _, _) => found
+    _ => {
+      const shown = lowering.checker.describe(bound)
+      reportUnsupported(lowering, "a call through a witness for `{shown}` the checker did not resolve", at)
+      return None
+    }
+  }
+  memberOfImplementationDispatch(lowering, symbol, typeArguments, implementation, Some(subject), bound, at)
+}
+
+fn staticDispatch(
+  var lowering: Lowering,
+  symbol: SymbolId,
+  typeArguments: List<TypeId>,
+  implementation: ImplementationId,
+  subject: TypeId?,
+  at: Span,
+): Dispatched? {
+  // A **static** member has no receiver (`Int.parse(text)`), and then the target of the implementation is what the member
+  // is reached on: `extend Int64 with Parse<NumberParseError>` says both the type and the arguments of the trait
+  const target = match subject {
+    Some(found) => Some(found)
+    .None => targetOfImplementation(lowering, implementation)
+  }
+  const bound = boundOfImplementation(lowering, implementation, target)
+  memberOfImplementationDispatch(lowering, symbol, typeArguments, implementation, target, bound, at)
+}
+
+fn targetOfImplementation(var lowering: Lowering, implementation: ImplementationId): TypeId? {
+  const found = lowering.checker.implementations.at(implementation)
+  const target = found.target
+  if const .Nominal(_, _) = lowering.checker.types.form(target) {
+    return Some(target)
+  }
+  None
+}
+
+fn memberOfImplementationDispatch(
+  var lowering: Lowering,
+  symbol: SymbolId,
+  typeArguments: List<TypeId>,
+  implementation: ImplementationId,
+  subject: TypeId?,
+  bound: TypeId,
+  at: Span,
+): Dispatched? {
+  const found = lowering.checker.implementations.at(implementation)
+  if const .Delegated = found.origin {
+    reportUnsupported(lowering, "`by` delegation", at)
+    return None
+  }
+  const name = lowering.checker.symbolAt(symbol).name
+  const member = providerMember(lowering, implementation, name) ?? symbol
+  const target = match subject {
+    Some(inner) => inner
+    .None => {
+      reportUnsupported(lowering, "a call of a trait member without a receiver", at)
+      return None
+    }
+  }
+  var mapping = memberMappingOf(lowering, member, target, bound)
+  addOwnArguments(lowering, mapping, member, typeArguments)
+  const empty: List<TypeId> = []
+  const owner = ownerOfImplementation(lowering, found.target, target, member)
+  Some(Dispatched(member, mapping, bound, owner, Some(implementation), false, empty, Some(target)))
+}
+
+/**
+ * Which manifest entry a member of an implementation belongs to. The target of the implementation comes first: the
+ * manifest is keyed by the type the runtime provides the member *for*, and `Float64.absolute` is an entry although
+ * `absolute` is written in `trait Signed`.
+ */
+fn ownerOfImplementation(
+  var lowering: Lowering,
+  target: TypeId,
+  subject: TypeId,
+  member: SymbolId,
+): String {
+  if const Some(found) = headNameOfType(lowering, target) {
+    return found
+  }
+  if const Some(found) = headNameOfType(lowering, subject) {
+    return found
+  }
+  ownerNameOf(lowering, member)
+}
+
+fn headNameOfType(var lowering: Lowering, id: TypeId): String? {
+  if const .Nominal(symbol, _) = lowering.checker.types.form(id) {
+    return Some(lowering.checker.symbolAt(symbol).name)
+  }
+  None
+}
+
+/** The receiver is a trait-typed value: the member comes out of the table it carries, unless it is a default. */
+fn dynamicDispatch(
+  var lowering: Lowering,
+  symbol: SymbolId,
+  typeArguments: List<TypeId>,
+  bound: TypeId,
+  subject: TypeId?,
+  at: Span,
+): Dispatched? {
+  const target = match subject {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a call on a trait-typed value without a receiver", at)
+      return None
+    }
+  }
+  const bounds = boundsOfTraitValue(lowering, target)
+  if bounds.isEmpty() {
+    reportUnsupported(lowering, "a call on a trait-typed value the back end cannot read a table out of", at)
+    return None
+  }
+  const name = lowering.checker.symbolAt(symbol).name
+  const member = traitMemberNamed(lowering, bound, name) ?? symbol
+  var mapping = memberMappingOf(lowering, member, target, bound)
+  addOwnArguments(lowering, mapping, member, typeArguments)
+  // A member the table cannot hold is a default the value cannot override: an instance of the default body then, with
+  // `Self` bound to the trait-typed value's own type, which is what makes the body see the table inside its receiver
+  const isDynamic = isInTable(lowering, bounds, target, member)
+  if !isDynamic {
+    const identifier = signatureOf(lowering.checker, member)
+    if !lowering.checker.signature(identifier).hasBody {
+      const what = "`{name}`, which is not in the witness table of a trait-typed value"
+      reportUnsupported(lowering, what, at)
+      return None
+    }
+  }
+  Some(Dispatched(member, mapping, bound, "", None, isDynamic, bounds, Some(target)))
+}
+
+/** What the member of an implementation is called, without reporting anything about visibility. */
+fn providerMember(var lowering: Lowering, implementation: ImplementationId, name: String): SymbolId? {
+  const found = lowering.checker.implementations.at(implementation)
+  found.members.get(name)
+}
+
+/** The trait an implementation provides, with its arguments as they are for the type it was reached on. */
+fn boundOfImplementation(var lowering: Lowering, implementation: ImplementationId, subject: TypeId?): TypeId {
+  const found = lowering.checker.implementations.at(implementation)
+  const capability = match found.capability {
+    Some(inner) => inner
+    .None => {
+      return lowering.checker.invalidType
+    }
+  }
+  const symbol = match lowering.checker.types.form(capability) {
+    .Nominal(inner, _) => inner
+    _ => {
+      return capability
+    }
+  }
+  const target = match subject {
+    Some(inner) => inner
+    .None => {
+      return capability
+    }
+  }
+  const arguments = traitArgumentsOf(lowering.checker, target, symbol) ?? []
+  lowering.checker.nominal(symbol, arguments)
+}
+
+/** The substitution of a call that is not a trait member: the owner's parameters, then the member's own. */
+fn mappingOfCall(
+  var lowering: Lowering,
+  symbol: SymbolId,
+  typeArguments: List<TypeId>,
+  subject: TypeId?,
+): Map<ParameterId, TypeId> {
+  const identifier = signatureOf(lowering.checker, symbol)
+  const signature = lowering.checker.signature(identifier)
+  var mapping: Map<ParameterId, TypeId> = [:]
+  const owner = match signature.owner {
+    Some(found) => found
+    .None => {
+      addOwnArguments(lowering, mapping, symbol, typeArguments)
+      return mapping
+    }
+  }
+  const target = match subject {
+    Some(found) => found
+    .None => {
+      addOwnArguments(lowering, mapping, symbol, typeArguments)
+      return mapping
+    }
+  }
+  // A member of a *trait* reached on a concrete type - `Int.parse(text)` - has the trait's `Self` as its owner, and the
+  // one thing that says what `Self` and the trait's own arguments are is the type the member was reached on
+  if const .Parameter(_) = lowering.checker.types.form(owner) {
+    const unknown = lowering.checker.invalidType
+    var found = memberMappingOf(lowering, symbol, target, unknown)
+    addOwnArguments(lowering, found, symbol, typeArguments)
+    return found
+  }
+  const generics = signature.generics
+  const _ = matchTypePattern(lowering.checker, owner, target, generics, mapping)
+  addOwnArguments(lowering, mapping, symbol, typeArguments)
+  mapping
+}
+
+/**
+ * The type arguments the call site solved, in the positions of the member's *own* generic parameters - which are the
+ * last ones of `Signature.generics`, because the ones of the owner come first.
+ */
+fn addOwnArguments(
+  var lowering: Lowering,
+  var mapping: Map<ParameterId, TypeId>,
+  symbol: SymbolId,
+  typeArguments: List<TypeId>,
+) {
+  if typeArguments.isEmpty() {
+    return
+  }
+  const identifier = signatureOf(lowering.checker, symbol)
+  const signature = lowering.checker.signature(identifier)
+  const first = signature.generics.length() - typeArguments.length()
+  if first < 0 {
+    return
+  }
+  for index in 0..typeArguments.length() {
+    const applied = substituted(lowering, typeArguments[index])
+    mapping.set(signature.generics[first + index], applied)
+  }
+}
+
+// --- Trait-typed values ----------------------------------------------------------------------------------------------
+
+/** Whether a checker type is a trait-typed value, which is the one type a witness table can be read out of. */
+public fn isTraitValueType(var lowering: Lowering, id: TypeId): Bool {
+  match lowering.checker.types.form(id) {
+    .Traits(_) => true
+    _ => false
+  }
+}
+
+/** The bounds of a trait-typed value, in the order of its witness pointers. Empty for anything else. */
+public fn boundsOfTraitValue(var lowering: Lowering, id: TypeId): List<TypeId> {
+  match lowering.checker.types.form(id) {
+    .Traits(bounds) => bounds
+    _ => []
+  }
+}
+
+/**
+ * The layout of the box a trait-typed value keeps its payload in: one field, always a counted block. Built here, because
+ * the emitter needs a struct and the `R_`/`D_` pair for it and both fall out of an ordinary layout.
+ */
+public fn payloadLayoutOf(var lowering: Lowering, item: IrTypeId): LayoutId {
+  const name = payloadLayoutName(lowering.program, item)
+  const reserved = lowering.program.reserveLayout(name, LayoutKind.Payload)
+  if reserved.isFresh {
+    const layout = lowering.program.layoutAt(reserved.layout)
+    const fields = [FieldLayout("value", item, None)]
+    lowering.program.setLayout(reserved.layout, layout.copy(arguments: [item], fields: fields, isBuilt: true))
+  }
+  reserved.layout
+}
+
+/** The IR type of a trait-typed value with these bounds: the boxed payload plus one table pointer per bound. */
+public fn objectTypeOf(var lowering: Lowering, bounds: List<TypeId>): IrTypeId {
+  var traits: List<TraitId> = []
+  for bound in bounds {
+    traits.add(instantiateTrait(lowering.program, lowering.checker, lowering.instantiation, bound))
+  }
+  lowering.program.internType(IrType.Object(traits))
+}
+
+/**
+ * `Adaptation.ToTraitValue`: the value is boxed and one witness pointer per bound goes with it. Where the value is
+ * *already* trait typed - `Show & Hash` narrowed to `Show` - the tables come out of the value instead of the program.
+ */
+public fn lowerTraitValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  target: Slot,
+  value: Slot,
+  bounds: List<TypeId>,
+  source: TypeId,
+  at: Span,
+): Bool {
+  const subject = substituted(lowering, source)
+  const inner = boundsOfTraitValue(lowering, subject)
+  if inner.isEmpty() {
+    // The payload is boxed, so the box needs a layout - and it is needed whether or not every table could be built
+    const item = irTypeOfClosed(lowering, subject)
+    const _ = payloadLayoutOf(lowering, item)
+  }
+  var tables: List<WitnessSource> = []
+  for bound in bounds {
+    const applied = substituted(lowering, bound)
+    if !inner.isEmpty() {
+      // `Show & Hash` narrowed to `Show`: the table is already inside the value, and nothing is boxed twice
+      const found = boundIndexOf(lowering, inner, applied)
+      if found < 0 {
+        const shown = lowering.checker.describe(applied)
+        reportUnsupported(lowering, "a trait-typed value that has no table for `{shown}`", at)
+        return false
+      }
+      const empty: List<Int> = []
+      tables.add(WitnessSource(WitnessRoot.Value(value, found), empty))
+      continue
+    }
+    const built = match witnessTableOf(lowering, subject, applied, at) {
+      Some(one) => one
+      .None => {
+        return false
+      }
+    }
+    const empty: List<Int> = []
+    tables.add(WitnessSource(WitnessRoot.Table(built), empty))
+  }
+  emit(builder, Instruction.TraitValue(target, owned(value), tables))
+  true
+}

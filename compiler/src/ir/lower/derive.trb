@@ -1,0 +1,978 @@
+use Span from "../../syntax/source"
+use ModuleId from "../../semantics/module"
+use SymbolId from "../../semantics/symbols"
+use TypeId, ParameterId, LiteralValue from "../../semantics/checker/type"
+use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
+use substitute from "../../semantics/checker/unify"
+use IrTypeId, IrType, FunctionId, Slot, BlockId, LayoutId, WitnessSource from "../ir"
+use Instruction, Terminator, Reference, PathStep, Argument, borrowed from "../ir"
+use Intrinsic, IntrinsicOperation, NumericKind, StaticContents from "../ir"
+use Layout, FieldLayout from "../layout"
+use FunctionBuilder, newFunction, addTemporary, addBlock, emit, terminate, switchTo from "../build"
+use terminateBlock, finishFunction, setBlockLocation from "../build"
+use layoutOfType, numericKindOf from "../verify"
+use describeIrType from "../print"
+use functionName from "../mangle"
+use symbolPathOf from "../instantiate"
+use irSignatureUnder, runtimeFunctionUnder from "../instances"
+use memberOfType from "../witness"
+use Lowering, Generated, GeneratedRequest, reportUnsupported, locationOf from "./context"
+use irTypeOfClosed, internStatic, booleanTypeOf from "./context"
+
+/**
+ * The members no source declares, generated from the layout: what a **derived** implementation does, and the wrapper a
+ * witness table needs around an intrinsic.
+ *
+ * `Show`, `Equals` and `Hash` are structural - field by field, case by case - and the format of a generated `Show` is
+ * decided gap 23 of docs/TYPECHECKER.md: `Type(field: value, ...)`, a case as `Case(field: value)` or as its bare name,
+ * with everything nested going through `showNested`. `Compare` is generated only for the `native` types whose manifest
+ * entry says so and for the tuples the checker derives it for, because an order over a `type` is a decision and not a
+ * structure (TYPECHECKER 4.4).
+ *
+ * A generated body is built by the **worklist**, exactly like a body of the source: the stub is added where the member is
+ * first needed and filled in when the worklist reaches it, so that a derived `Show` of a recursive type terminates.
+ */
+
+/** A generated member, added to the worklist the first time it is needed. One body per member per target type. */
+public fn generatedFunctionOf(
+  var lowering: Lowering,
+  kind: Generated,
+  member: SymbolId,
+  subject: TypeId,
+  bound: TypeId,
+  mapping: Map<ParameterId, TypeId>,
+  at: Span,
+): FunctionId? {
+  const target = irTypeOfClosed(lowering, subject)
+  const path = symbolPathOf(lowering.checker, member)
+  const name = functionName(lowering.program, path, [target])
+  if const Some(found) = lowering.generatedInstances.get(name) {
+    return Some(found)
+  }
+  const identifier = signatureOf(lowering.checker, member)
+  const signature = lowering.checker.signature(identifier)
+  const built = irSignatureUnder(lowering, signature, mapping)
+  if built.parameters.isEmpty() {
+    reportUnsupported(lowering, "a generated member without a receiver", at)
+    return None
+  }
+  var builder = newFunction(name, Some(member), built, "generated")
+  const added = finishFunction(lowering.program, builder)
+  lowering.generatedInstances.set(name, added)
+  lowering.pendingGenerated.add(GeneratedRequest(added, kind, member, subject, bound, mapping))
+  Some(added)
+}
+
+/**
+ * One generated body. The function is already in the program as an `unreachable` stub, so a body that needs something
+ * this sub-milestone does not do keeps exactly that stub - as a body of the source does.
+ */
+public fn lowerGenerated(var lowering: Lowering, request: GeneratedRequest) {
+  const stub = lowering.program.functionAt(request.function)
+  const name = stub.name
+  const signature = stub.signature
+  const member = request.member
+  const module = match lowering.checker.siteOf(member) {
+    Some(site) => site.module
+    .None => lowering.module
+  }
+  const at = lowering.checker.symbolAt(member).span
+  resetForGenerated(lowering, module)
+  var builder = newFunction(name, Some(member), signature, "generated")
+  const location = locationOf(lowering, at)
+  setBlockLocation(builder, BlockId(0), Some(location))
+  lowerGeneratedBody(lowering, builder, request, at)
+  if !lowering.isSupported {
+    lowering.stubbed = lowering.stubbed + 1
+    return
+  }
+  lowering.program.functions.set(request.function.value, builder.function)
+  lowering.lowered = lowering.lowered + 1
+}
+
+/** What every generated body starts from. It has no bindings of the source at all, so there is nothing else to clear. */
+fn resetForGenerated(var lowering: Lowering, module: ModuleId) {
+  lowering.module = module
+  lowering.slots = [:]
+  lowering.entryLocals = [:]
+  lowering.hole = None
+  lowering.inlinedThunks = [:]
+  lowering.substitution = [:]
+  lowering.isSupported = true
+  lowering.isDiverged = false
+  lowering.breakTargets = []
+  lowering.continueTargets = []
+  lowering.loopBroke = []
+}
+
+fn lowerGeneratedBody(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  request: GeneratedRequest,
+  at: Span,
+) {
+  match request.kind {
+    .Operation(intrinsic) => operationBody(lowering, builder, intrinsic, at)
+    .RuntimeCall(symbol) => runtimeCallBody(lowering, builder, request, symbol, at)
+    .Identity => identityBody(lowering, builder, at)
+    .Absolute => absoluteBody(lowering, builder, at)
+    .Equals => equalsBody(lowering, builder, request.subject, at)
+    .Hash => hashBody(lowering, builder, request.subject, at)
+    .Compare => compareBody(lowering, builder, at)
+    .Show => showBody(lowering, builder, request.subject, at)
+    .ShowNested => showBody(lowering, builder, request.subject, at)
+    .Copy => reportUnsupported(lowering, "a generated `copy`", at)
+  }
+}
+
+// --- The small bodies -------------------------------------------------------------------------------------------------
+
+/** A wrapper around one intrinsic, so that a witness table has a function to point at. */
+fn operationBody(var lowering: Lowering, var builder: FunctionBuilder, intrinsic: Intrinsic, at: Span) {
+  var operands: List<Slot> = []
+  for index in 0..builder.function.signature.parameters.length() {
+    operands.add(Slot(index))
+  }
+  const result = builder.function.signature.result
+  const location = locationOf(lowering, at)
+  if isVoidLike(lowering, result) {
+    emit(builder, Instruction.Intrinsic(None, intrinsic, operands, location))
+    terminate(builder, Terminator.Return(None))
+    return
+  }
+  const target = addTemporary(builder, result)
+  emit(builder, Instruction.Intrinsic(Some(target), intrinsic, operands, location))
+  terminate(builder, Terminator.Return(Some(borrowed(target))))
+}
+
+/**
+ * A wrapper around a function of the runtime. A witness table holds function pointers, and a native of the runtime is
+ * called through the manifest's prototype - which needs the location of the call and sometimes an out parameter - so the
+ * table points at a function of the *program* that does the call, and the one place that knows the conventions stays the
+ * one place that knows them.
+ */
+fn runtimeCallBody(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  request: GeneratedRequest,
+  symbol: String,
+  at: Span,
+) {
+  const mapping = request.mapping
+  const member = request.member
+  const called = match runtimeFunctionUnder(lowering, member, symbol, mapping) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "`{symbol}`, whose declaration the back end cannot instantiate", at)
+      return
+    }
+  }
+  var given: List<Argument> = []
+  for index in 0..builder.function.signature.parameters.length() {
+    given.add(borrowed(Slot(index)))
+  }
+  const result = builder.function.signature.result
+  const location = locationOf(lowering, at)
+  const empty: List<WitnessSource> = []
+  if isVoidLike(lowering, result) {
+    emit(builder, Instruction.Call(None, called, given, empty, Some(location)))
+    terminate(builder, Terminator.Return(None))
+    return
+  }
+  const target = addTemporary(builder, result)
+  emit(builder, Instruction.Call(Some(target), called, given, empty, Some(location)))
+  terminate(builder, Terminator.Return(Some(borrowed(target))))
+}
+
+/** `String.show()` is the text itself; `Void.equals` is always true. Both are one answer and no work. */
+fn identityBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
+  const signature = builder.function.signature
+  const result = signature.result
+  if const Some(first) = signature.parameters.first() {
+    if first.annotation == result {
+      terminate(builder, Terminator.Return(Some(borrowed(Slot(0)))))
+      return
+    }
+  }
+  const boolean = booleanTypeOf(lowering)
+  if result == boolean {
+    answerBoolean(lowering, builder, true)
+    return
+  }
+  reportUnsupported(lowering, "a generated member that answers itself and is neither its own type nor a `Bool`", at)
+}
+
+/** `if self < 0 { -self } else { self }`: the overflow of the smallest value falls out of `Negate` for free. */
+fn absoluteBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
+  const annotation = builder.function.signature.result
+  const kind = match numericKindOf(lowering.program, annotation) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "`absolute` of a value that is not a number", at)
+      return
+    }
+  }
+  const zero = zeroSlot(lowering, builder, annotation)
+  const boolean = booleanTypeOf(lowering)
+  const isNegative = addTemporary(builder, boolean)
+  const location = locationOf(lowering, at)
+  const less = Intrinsic(IntrinsicOperation.Less, Some(kind))
+  emit(builder, Instruction.Intrinsic(Some(isNegative), less, [Slot(0), zero], location))
+  const negated = addBlock(builder, "negated", Some(location))
+  const same = addBlock(builder, "same", Some(location))
+  terminate(builder, Terminator.Branch(isNegative, negated, same))
+  switchTo(builder, negated)
+  const target = addTemporary(builder, annotation)
+  const negate = Intrinsic(IntrinsicOperation.Negate, Some(kind))
+  emit(builder, Instruction.Intrinsic(Some(target), negate, [Slot(0)], location))
+  terminate(builder, Terminator.Return(Some(borrowed(target))))
+  switchTo(builder, same)
+  terminate(builder, Terminator.Return(Some(borrowed(Slot(0)))))
+}
+
+/** A slot holding the zero of a numeric type, which is what a sign test and a running hash start from. */
+fn zeroSlot(var lowering: Lowering, var builder: FunctionBuilder, annotation: IrTypeId): Slot {
+  const target = addTemporary(builder, annotation)
+  const contents = zeroContents(lowering, annotation)
+  const value = internStatic(lowering, contents, annotation)
+  emit(builder, Instruction.Constant(target, value))
+  target
+}
+
+fn zeroContents(var lowering: Lowering, annotation: IrTypeId): StaticContents {
+  if const .Floating(_) = lowering.program.typeAt(annotation) {
+    return StaticContents.Floating(0.0)
+  }
+  StaticContents.Literal(LiteralValue.Integer(0))
+}
+
+fn answerBoolean(var lowering: Lowering, var builder: FunctionBuilder, value: Bool) {
+  const boolean = booleanTypeOf(lowering)
+  const target = addTemporary(builder, boolean)
+  const contents = StaticContents.Literal(LiteralValue.Boolean(value))
+  const found = internStatic(lowering, contents, boolean)
+  emit(builder, Instruction.Constant(target, found))
+  terminate(builder, Terminator.Return(Some(borrowed(target))))
+}
+
+// --- The fields a generated body walks --------------------------------------------------------------------------------
+
+/**
+ * One field of the target, as a generated body needs it: the layout's step to reach it, its IR type for the slot, and the
+ * **checker** type it came from - which is what a per-field call of `show`, `equals` or `hash` is resolved against.
+ */
+type DerivedField {
+  name: String
+  annotation: IrTypeId
+  subject: TypeId
+  step: PathStep
+}
+
+/**
+ * Every field of one group, in layout order. The layout is built from the type signature in exactly this order
+ * (`buildNominalLayout`), so the two lists line up position by position and no inverse of the type memo is needed.
+ */
+fn derivedFieldsOf(
+  var lowering: Lowering,
+  subject: TypeId,
+  layout: LayoutId,
+  variant: Int,
+): List<DerivedField>? {
+  const subjects = fieldTypesOf(lowering, subject)?
+  const shape = lowering.program.layoutAt(layout)
+  var found: List<DerivedField> = []
+  const first = if variant < 0 { 0 } else { shape.variants[variant].first }
+  const fields = if variant < 0 { commonOrAllFields(shape) } else { shape.fieldsOfVariant(variant) }
+  for index in 0..fields.length() {
+    const field = fields[index]
+    const position = first + index
+    if position >= subjects.length() {
+      return None
+    }
+    const step = if variant < 0 {
+      PathStep.Field(layout, position)
+    } else {
+      PathStep.Variant(layout, variant, index)
+    }
+    found.add(DerivedField(field.name, field.annotation, subjects[position], step))
+  }
+  Some(found)
+}
+
+fn commonOrAllFields(shape: Layout): List<FieldLayout> {
+  if shape.variants.isEmpty() {
+    return shape.fields
+  }
+  shape.commonFields()
+}
+
+/**
+ * The checker type of every field of a type, in the order the layout has them: the type's own fields first, then one
+ * group per case. A tuple has its positions instead.
+ */
+fn fieldTypesOf(var lowering: Lowering, subject: TypeId): List<TypeId>? {
+  match lowering.checker.types.form(subject) {
+    .Tuple(fields) => {
+      var found: List<TypeId> = []
+      for field in fields {
+        found.add(field.annotation)
+      }
+      Some(found)
+    }
+    .Nominal(symbol, arguments) => {
+      const identifier = typeSignatureOf(lowering.checker, symbol)
+      const shape = lowering.checker.typeSignature(identifier)
+      var mapping: Map<ParameterId, TypeId> = [:]
+      for index in 0..shape.generics.length().min(arguments.length()) {
+        mapping.set(shape.generics[index], arguments[index])
+      }
+      var found: List<TypeId> = []
+      for field in shape.fields {
+        found.add(substitute(lowering.checker.types, field.annotation, mapping))
+      }
+      for declared in shape.cases {
+        for field in declared.fields {
+          found.add(substitute(lowering.checker.types, field.annotation, mapping))
+        }
+      }
+      Some(found)
+    }
+    _ => None
+  }
+}
+
+// --- `Equals` ---------------------------------------------------------------------------------------------------------
+
+/**
+ * Structural equality: the fields of a record in order, and for a variant layout the tag first and then the group of the
+ * case the value really is. Every field that is not a primitive goes through that field type's own `equals`, which is
+ * what makes a nested record and a recursive one work.
+ */
+fn equalsBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
+  const annotation = builder.function.signature.parameters[0].annotation
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    .None => {
+      const shown = describeIrType(lowering.program, annotation)
+      reportUnsupported(lowering, "a generated `equals` of `{shown}`", at)
+      return
+    }
+  }
+  const location = locationOf(lowering, at)
+  const failed = addBlock(builder, "differs", Some(location))
+  const shape = lowering.program.layoutAt(layout)
+  const isVariant = !shape.variants.isEmpty()
+  var tag = Slot(0)
+  if isVariant {
+    tag = sameTagBlock(lowering, builder, failed, at)
+  }
+  const common = match derivedFieldsOf(lowering, subject, layout, -1) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a generated `equals` over fields the back end cannot line up", at)
+      return
+    }
+  }
+  if !compareFields(lowering, builder, common, failed, at) {
+    return
+  }
+  if !isVariant {
+    answerBoolean(lowering, builder, true)
+    switchTo(builder, failed)
+    answerBoolean(lowering, builder, false)
+    return
+  }
+  const equal = addBlock(builder, "equal", Some(location))
+  const head = builder.currentBlock()
+  var values: List<Int> = []
+  var targets: List<BlockId> = []
+  for index in 0..shape.variants.length() {
+    const fields = match derivedFieldsOf(lowering, subject, layout, index) {
+      Some(found) => found
+      .None => {
+        reportUnsupported(lowering, "a generated `equals` over a case the back end cannot line up", at)
+        return
+      }
+    }
+    if fields.isEmpty() {
+      continue
+    }
+    const arm = addBlock(builder, "case {index}", Some(location))
+    switchTo(builder, arm)
+    if !compareFields(lowering, builder, fields, failed, at) {
+      return
+    }
+    terminate(builder, Terminator.Jump(equal))
+    values.add(index)
+    targets.add(arm)
+  }
+  const chosen = Terminator.Switch(tag, values, targets, equal)
+  terminateBlock(builder, head, chosen)
+  switchTo(builder, equal)
+  answerBoolean(lowering, builder, true)
+  switchTo(builder, failed)
+  answerBoolean(lowering, builder, false)
+}
+
+/** The two tags, compared: a value of another case is never equal, whatever the fields say. Answers the tag of `self`. */
+fn sameTagBlock(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  failed: BlockId,
+  at: Span,
+): Slot {
+  const location = locationOf(lowering, at)
+  const integer = lowering.program.internType(IrType.Integer(64, true))
+  const left = addTemporary(builder, integer)
+  const right = addTemporary(builder, integer)
+  emit(builder, Instruction.Tag(left, Slot(0)))
+  emit(builder, Instruction.Tag(right, Slot(1)))
+  const boolean = booleanTypeOf(lowering)
+  const sameTag = addTemporary(builder, boolean)
+  const intrinsic = Intrinsic(IntrinsicOperation.Equal, Some(NumericKind.Signed(64)))
+  emit(builder, Instruction.Intrinsic(Some(sameTag), intrinsic, [left, right], location))
+  const chosen = addBlock(builder, "same case", Some(location))
+  terminate(builder, Terminator.Branch(sameTag, chosen, failed))
+  switchTo(builder, chosen)
+  left
+}
+
+/** Every field of a group, one `Branch` each. `false` where something in it is not supported. */
+fn compareFields(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  fields: List<DerivedField>,
+  failed: BlockId,
+  at: Span,
+): Bool {
+  const location = locationOf(lowering, at)
+  for field in fields {
+    const left = readField(lowering, builder, Slot(0), field.step, field.annotation)
+    const right = readField(lowering, builder, Slot(1), field.step, field.annotation)
+    const equal = fieldEquality(lowering, builder, field, left, right, at)
+    if !lowering.isSupported {
+      return false
+    }
+    const next = addBlock(builder, "equal", Some(location))
+    terminate(builder, Terminator.Branch(equal, next, failed))
+    switchTo(builder, next)
+  }
+  true
+}
+
+/** One field, compared: an intrinsic for a primitive, and the field type's own `equals` for everything else. */
+fn fieldEquality(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  field: DerivedField,
+  left: Slot,
+  right: Slot,
+  at: Span,
+): Slot {
+  const annotation = field.annotation
+  const boolean = booleanTypeOf(lowering)
+  const target = addTemporary(builder, boolean)
+  const location = locationOf(lowering, at)
+  if const Some(kind) = numericKindOf(lowering.program, annotation) {
+    const intrinsic = Intrinsic(IntrinsicOperation.Equal, Some(kind))
+    emit(builder, Instruction.Intrinsic(Some(target), intrinsic, [left, right], location))
+    return target
+  }
+  if isPlainEquality(lowering, annotation) {
+    const intrinsic = Intrinsic(IntrinsicOperation.Equal, None)
+    emit(builder, Instruction.Intrinsic(Some(target), intrinsic, [left, right], location))
+    return target
+  }
+  if isTextType(lowering, annotation) {
+    const intrinsic = Intrinsic(IntrinsicOperation.TextEqual, None)
+    emit(builder, Instruction.Intrinsic(Some(target), intrinsic, [left, right], location))
+    return target
+  }
+  const called = match traitMemberFunction(lowering, field.subject, "Equals", "equals", at) {
+    Some(found) => found
+    .None => {
+      return target
+    }
+  }
+  const arguments = [borrowed(left), borrowed(right)]
+  const empty: List<WitnessSource> = []
+  emit(builder, Instruction.Call(Some(target), called, arguments, empty, Some(location)))
+  target
+}
+
+// --- `Hash` -----------------------------------------------------------------------------------------------------------
+
+/**
+ * A running hash over the fields, order dependent: `accumulated = (accumulated ^ hash(field))`, mixed with one shift.
+ *
+ * It is written with the bit intrinsics and not with `combineHashes`, which the runtime provides from 5.7 on - and it
+ * does not have to agree with anything else, because a hash value is not part of the language: `Show` of a `Map` is
+ * insertion order (decided gap 6), so nothing a program can observe depends on one.
+ */
+fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
+  const integer = lowering.program.internType(IrType.Integer(64, true))
+  const annotation = builder.function.signature.parameters[0].annotation
+  const accumulated = zeroSlot(lowering, builder, integer)
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    .None => {
+      // `Void.hash`, and every value that carries nothing: one constant is a valid hash
+      terminate(builder, Terminator.Return(Some(borrowed(accumulated))))
+      return
+    }
+  }
+  const location = locationOf(lowering, at)
+  const shape = lowering.program.layoutAt(layout)
+  const isVariant = !shape.variants.isEmpty()
+  var tag = accumulated
+  if isVariant {
+    tag = addTemporary(builder, integer)
+    emit(builder, Instruction.Tag(tag, Slot(0)))
+    mixInto(lowering, builder, accumulated, tag, at)
+  }
+  const common = match derivedFieldsOf(lowering, subject, layout, -1) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a generated `hash` over fields the back end cannot line up", at)
+      return
+    }
+  }
+  hashFields(lowering, builder, common, accumulated, at)
+  if !lowering.isSupported {
+    return
+  }
+  if !isVariant {
+    terminate(builder, Terminator.Return(Some(borrowed(accumulated))))
+    return
+  }
+  const exit = addBlock(builder, "hashed", Some(location))
+  const head = builder.currentBlock()
+  var values: List<Int> = []
+  var targets: List<BlockId> = []
+  for index in 0..shape.variants.length() {
+    const fields = match derivedFieldsOf(lowering, subject, layout, index) {
+      Some(found) => found
+      .None => {
+        reportUnsupported(lowering, "a generated `hash` over a case the back end cannot line up", at)
+        return
+      }
+    }
+    if fields.isEmpty() {
+      continue
+    }
+    const arm = addBlock(builder, "case {index}", Some(location))
+    switchTo(builder, arm)
+    hashFields(lowering, builder, fields, accumulated, at)
+    if !lowering.isSupported {
+      return
+    }
+    terminate(builder, Terminator.Jump(exit))
+    values.add(index)
+    targets.add(arm)
+  }
+  terminateBlock(builder, head, Terminator.Switch(tag, values, targets, exit))
+  switchTo(builder, exit)
+  terminate(builder, Terminator.Return(Some(borrowed(accumulated))))
+}
+
+fn hashFields(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  fields: List<DerivedField>,
+  accumulated: Slot,
+  at: Span,
+) {
+  for field in fields {
+    const value = readField(lowering, builder, Slot(0), field.step, field.annotation)
+    const hashed = fieldHash(lowering, builder, field, value, at)
+    if !lowering.isSupported {
+      return
+    }
+    mixInto(lowering, builder, accumulated, hashed, at)
+  }
+}
+
+/** One field's hash: the field type's own `hash`, whatever shape that member has. */
+fn fieldHash(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  field: DerivedField,
+  value: Slot,
+  at: Span,
+): Slot {
+  const integer = lowering.program.internType(IrType.Integer(64, true))
+  const target = addTemporary(builder, integer)
+  const location = locationOf(lowering, at)
+  const called = match traitMemberFunction(lowering, field.subject, "Hash", "hash", at) {
+    Some(found) => found
+    .None => {
+      return target
+    }
+  }
+  const empty: List<WitnessSource> = []
+  emit(builder, Instruction.Call(Some(target), called, [borrowed(value)], empty, Some(location)))
+  target
+}
+
+/** `accumulated = (accumulated ^ value) ^ ((accumulated ^ value) << 17)`: three intrinsics, and nothing can overflow. */
+fn mixInto(var lowering: Lowering, var builder: FunctionBuilder, accumulated: Slot, value: Slot, at: Span) {
+  const integer = lowering.program.internType(IrType.Integer(64, true))
+  const kind = NumericKind.Signed(64)
+  const location = locationOf(lowering, at)
+  const combined = addTemporary(builder, integer)
+  const exclusive = Intrinsic(IntrinsicOperation.BitwiseExclusiveOr, Some(kind))
+  emit(builder, Instruction.Intrinsic(Some(combined), exclusive, [accumulated, value], location))
+  const amount = addTemporary(builder, integer)
+  const contents = StaticContents.Literal(LiteralValue.Integer(17))
+  const found = internStatic(lowering, contents, integer)
+  emit(builder, Instruction.Constant(amount, found))
+  const shifted = addTemporary(builder, integer)
+  const shift = Intrinsic(IntrinsicOperation.ShiftedLeft, Some(kind))
+  emit(builder, Instruction.Intrinsic(Some(shifted), shift, [combined, amount], location))
+  emit(builder, Instruction.Intrinsic(Some(accumulated), exclusive, [combined, shifted], location))
+}
+
+// --- `Compare` --------------------------------------------------------------------------------------------------------
+
+/**
+ * `Less`, `Greater` or `Equal`, from two comparisons. Only the `native` types whose manifest entry says `Compare` and the
+ * tuples the checker derives it for get here: an order over a `type` is a decision and not a structure (4.4).
+ */
+fn compareBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
+  const ordering = builder.function.signature.result
+  const layout = match layoutOfType(lowering.program, ordering) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "`compare` whose result is not an `Ordering`", at)
+      return
+    }
+  }
+  const annotation = builder.function.signature.parameters[0].annotation
+  const location = locationOf(lowering, at)
+  const boolean = booleanTypeOf(lowering)
+  const isLess = addTemporary(builder, boolean)
+  if !emitOrdering(lowering, builder, annotation, isLess, IntrinsicOperation.Less, at) {
+    return
+  }
+  const less = addBlock(builder, "less", Some(location))
+  const other = addBlock(builder, "not less", Some(location))
+  terminate(builder, Terminator.Branch(isLess, less, other))
+  switchTo(builder, less)
+  answerOrdering(lowering, builder, layout, "Less", at)
+  switchTo(builder, other)
+  const isGreater = addTemporary(builder, boolean)
+  if !emitOrdering(lowering, builder, annotation, isGreater, IntrinsicOperation.Greater, at) {
+    return
+  }
+  const greater = addBlock(builder, "greater", Some(location))
+  const equal = addBlock(builder, "equal", Some(location))
+  terminate(builder, Terminator.Branch(isGreater, greater, equal))
+  switchTo(builder, greater)
+  answerOrdering(lowering, builder, layout, "Greater", at)
+  switchTo(builder, equal)
+  answerOrdering(lowering, builder, layout, "Equal", at)
+}
+
+/** One of the two comparisons. A `String` is compared through the runtime's byte order against zero. */
+fn emitOrdering(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  annotation: IrTypeId,
+  target: Slot,
+  operation: IntrinsicOperation,
+  at: Span,
+): Bool {
+  const location = locationOf(lowering, at)
+  if const Some(kind) = numericKindOf(lowering.program, annotation) {
+    const intrinsic = Intrinsic(operation, Some(kind))
+    emit(builder, Instruction.Intrinsic(Some(target), intrinsic, [Slot(0), Slot(1)], location))
+    return true
+  }
+  if isTextType(lowering, annotation) {
+    const integer = lowering.program.internType(IrType.Integer(64, true))
+    const order = addTemporary(builder, integer)
+    const compared = Intrinsic(IntrinsicOperation.TextCompare, None)
+    emit(builder, Instruction.Intrinsic(Some(order), compared, [Slot(0), Slot(1)], location))
+    const zero = zeroSlot(lowering, builder, integer)
+    const intrinsic = Intrinsic(operation, Some(NumericKind.Signed(64)))
+    emit(builder, Instruction.Intrinsic(Some(target), intrinsic, [order, zero], location))
+    return true
+  }
+  if isCharacterType(lowering, annotation) {
+    // A `Char` is a code point, and the order of the code points is the order of the characters
+    const intrinsic = Intrinsic(operation, None)
+    emit(builder, Instruction.Intrinsic(Some(target), intrinsic, [Slot(0), Slot(1)], location))
+    return true
+  }
+  const shown = describeIrType(lowering.program, annotation)
+  reportUnsupported(lowering, "a generated `compare` of `{shown}` (milestone 5.10)", at)
+  false
+}
+
+fn answerOrdering(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  layout: LayoutId,
+  name: String,
+  at: Span,
+) {
+  const shape = lowering.program.layoutAt(layout)
+  var variant = -1
+  for index in 0..shape.variants.length() {
+    if shape.variants[index].name == name {
+      variant = index
+    }
+  }
+  if variant < 0 {
+    reportUnsupported(lowering, "an `Ordering` without a `{name}` case", at)
+    return
+  }
+  const annotation = builder.function.signature.result
+  const target = addTemporary(builder, annotation)
+  const empty: List<Argument> = []
+  emit(builder, Instruction.Construct(target, layout, variant, empty))
+  terminate(builder, Terminator.Return(Some(borrowed(target))))
+}
+
+// --- `Show` -----------------------------------------------------------------------------------------------------------
+
+/**
+ * `Type(field: value, ...)`, a case as `Case(field: value)` or as its bare name (gap 23). One `TextConcat` per shape, so
+ * that nothing is built up with repeated concatenations.
+ *
+ * `showNested` differs from `show` for `String` and `Char` alone, and both of those are `native` and in the manifest - so
+ * a *generated* `showNested` is the same body as `show`, and it is generated rather than inherited so that a table has a
+ * function to point at either way.
+ */
+fn showBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
+  const annotation = builder.function.signature.parameters[0].annotation
+  const text = lowering.program.internType(IrType.Text)
+  if builder.function.signature.result != text {
+    reportUnsupported(lowering, "a generated `show` whose result is not a `String`", at)
+    return
+  }
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    .None => {
+      const shown = describeIrType(lowering.program, annotation)
+      reportUnsupported(lowering, "a generated `show` of `{shown}`", at)
+      return
+    }
+  }
+  const shape = lowering.program.layoutAt(layout)
+  if !shape.variants.isEmpty() {
+    showVariantBody(lowering, builder, subject, layout, at)
+    return
+  }
+  const name = shownNameOf(lowering, shape)
+  if shape.fields.isEmpty() {
+    const only = textSlot(lowering, builder, "{name}()")
+    concatenateInto(lowering, builder, [only], at)
+    return
+  }
+  const fields = match derivedFieldsOf(lowering, subject, layout, -1) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a generated `show` over fields the back end cannot line up", at)
+      return
+    }
+  }
+  var parts: List<Slot> = []
+  addShownFields(lowering, builder, parts, fields, "{name}(", at)
+  if !lowering.isSupported {
+    return
+  }
+  concatenateInto(lowering, builder, parts, at)
+}
+
+/** A variant layout: one `TextConcat` per case, chosen by the tag. */
+fn showVariantBody(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: TypeId,
+  layout: LayoutId,
+  at: Span,
+) {
+  const location = locationOf(lowering, at)
+  const integer = lowering.program.internType(IrType.Integer(64, true))
+  const tag = addTemporary(builder, integer)
+  emit(builder, Instruction.Tag(tag, Slot(0)))
+  const shape = lowering.program.layoutAt(layout)
+  if shape.variants.isEmpty() {
+    reportUnsupported(lowering, "a generated `show` of a variant layout without cases", at)
+    return
+  }
+  const head = builder.currentBlock()
+  var values: List<Int> = []
+  var targets: List<BlockId> = []
+  var fallback = BlockId(0)
+  for index in 0..shape.variants.length() {
+    const group = shape.variants[index]
+    const arm = addBlock(builder, "case {index}", Some(location))
+    switchTo(builder, arm)
+    const fields = match derivedFieldsOf(lowering, subject, layout, index) {
+      Some(found) => found
+      .None => {
+        reportUnsupported(lowering, "a generated `show` over a case the back end cannot line up", at)
+        return
+      }
+    }
+    if fields.isEmpty() {
+      const only = textSlot(lowering, builder, group.name)
+      concatenateInto(lowering, builder, [only], at)
+    } else {
+      var parts: List<Slot> = []
+      addShownFields(lowering, builder, parts, fields, "{group.name}(", at)
+      if !lowering.isSupported {
+        return
+      }
+      concatenateInto(lowering, builder, parts, at)
+    }
+    if index == 0 {
+      fallback = arm
+      continue
+    }
+    values.add(index)
+    targets.add(arm)
+  }
+  terminateBlock(builder, head, Terminator.Switch(tag, values, targets, fallback))
+}
+
+/**
+ * The parts of one shape: the opening text with the first label in it, then one shown field and one separator each, then
+ * the closing bracket. Every field goes through `showNested`, which is what keeps `["a", "b"]` readable (gap 23).
+ */
+fn addShownFields(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  var parts: List<Slot>,
+  fields: List<DerivedField>,
+  opening: String,
+  at: Span,
+) {
+  for index in 0..fields.length() {
+    const field = fields[index]
+    const separator = if index == 0 { opening } else { ", " }
+    parts.add(textSlot(lowering, builder, "{separator}{field.name}: "))
+    const value = readField(lowering, builder, Slot(0), field.step, field.annotation)
+    const shown = fieldShown(lowering, builder, field, value, at)
+    if !lowering.isSupported {
+      return
+    }
+    parts.add(shown)
+  }
+  parts.add(textSlot(lowering, builder, ")"))
+}
+
+fn fieldShown(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  field: DerivedField,
+  value: Slot,
+  at: Span,
+): Slot {
+  const text = lowering.program.internType(IrType.Text)
+  const target = addTemporary(builder, text)
+  const location = locationOf(lowering, at)
+  const called = match traitMemberFunction(lowering, field.subject, "Show", "showNested", at) {
+    Some(found) => found
+    .None => {
+      return target
+    }
+  }
+  const empty: List<WitnessSource> = []
+  emit(builder, Instruction.Call(Some(target), called, [borrowed(value)], empty, Some(location)))
+  target
+}
+
+fn shownNameOf(var lowering: Lowering, shape: Layout): String {
+  match shape.origin {
+    Some(symbol) => lowering.checker.symbolAt(symbol).name
+    .None => "tuple"
+  }
+}
+
+fn textSlot(var lowering: Lowering, var builder: FunctionBuilder, value: String): Slot {
+  const text = lowering.program.internType(IrType.Text)
+  const target = addTemporary(builder, text)
+  const contents = StaticContents.Literal(LiteralValue.Text(value))
+  const found = internStatic(lowering, contents, text)
+  emit(builder, Instruction.Constant(target, found))
+  target
+}
+
+fn concatenateInto(var lowering: Lowering, var builder: FunctionBuilder, parts: List<Slot>, at: Span) {
+  const text = lowering.program.internType(IrType.Text)
+  const target = addTemporary(builder, text)
+  const location = locationOf(lowering, at)
+  const intrinsic = Intrinsic(IntrinsicOperation.TextConcat, None)
+  emit(builder, Instruction.Intrinsic(Some(target), intrinsic, parts, location))
+  terminate(builder, Terminator.Return(Some(borrowed(target))))
+}
+
+// --- The small questions every body asks ------------------------------------------------------------------------------
+
+/** One field of a value, read into a slot of its own. A generated body never needs a path of more than one step. */
+fn readField(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  base: Slot,
+  step: PathStep,
+  annotation: IrTypeId,
+): Slot {
+  const target = addTemporary(builder, annotation)
+  emit(builder, Instruction.Read(target, Reference(base, [step])))
+  target
+}
+
+/**
+ * The function that implements one member of one trait of the prelude for one concrete type. Every structural body needs
+ * it: a field of a record is shown, compared and hashed through its own type's member, whatever shape that member has.
+ */
+fn traitMemberFunction(
+  var lowering: Lowering,
+  subject: TypeId,
+  capability: String,
+  name: String,
+  at: Span,
+): FunctionId? {
+  const symbol = match lowering.checker.wellKnown.symbolNamed(capability) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a generated member without `{capability}` in the prelude", at)
+      return None
+    }
+  }
+  const empty: List<TypeId> = []
+  const bound = lowering.checker.nominal(symbol, empty)
+  memberOfType(lowering, subject, bound, name, at)
+}
+
+fn isVoidLike(var lowering: Lowering, annotation: IrTypeId): Bool {
+  match lowering.program.typeAt(annotation) {
+    .VoidType => true
+    .NeverType => true
+    _ => false
+  }
+}
+
+fn isPlainEquality(var lowering: Lowering, annotation: IrTypeId): Bool {
+  match lowering.program.typeAt(annotation) {
+    .Boolean | .Character | .VoidType => true
+    _ => false
+  }
+}
+
+fn isTextType(var lowering: Lowering, annotation: IrTypeId): Bool {
+  match lowering.program.typeAt(annotation) {
+    .Text => true
+    _ => false
+  }
+}
+
+fn isCharacterType(var lowering: Lowering, annotation: IrTypeId): Bool {
+  match lowering.program.typeAt(annotation) {
+    .Character => true
+    _ => false
+  }
+}

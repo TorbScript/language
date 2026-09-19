@@ -1151,6 +1151,30 @@ public fn mappingOfImplementation(
   mapping
 }
 
+/**
+ * One-directional matching, for the back end: every parameter of `generics` binds to what stands at its place and
+ * everything else has to be the same type. Milestone 5.6 builds the substitution of an instance with it - the owner of
+ * a member against the type the member was reached on - which is the same question trait resolution asks.
+ */
+public fn matchTypePattern(
+  var checker: Checker,
+  pattern: TypeId,
+  concrete: TypeId,
+  generics: List<ParameterId>,
+  var mapping: Map<ParameterId, TypeId>,
+): Bool {
+  matchPattern(checker, pattern, concrete, generics, mapping)
+}
+
+/**
+ * The member an implementation provides under one name: its own, the one the type declares, or the one another
+ * implementation of the same target declares - which is how a supertrait is satisfied. A witness table of milestone 5.6
+ * is built from exactly this, so that a table and the checker's own requirement check cannot disagree.
+ */
+public fn memberOfImplementation(var checker: Checker, implementation: ImplementationId, name: String): SymbolId? {
+  providerOf(checker, implementation.value, name)
+}
+
 // --- Coherence ------------------------------------------------------------------------------------------------------
 
 /**

@@ -36,6 +36,8 @@ public type CExpression {
   case Literal(text: String)
   /** `value.member` */
   case Member(value: CExpression, member: String)
+  /** `value[index]`: one entry of an array, which is what a member of a witness table is. */
+  case Index(value: CExpression, index: CExpression)
   /** `value->member` */
   case PointerMember(value: CExpression, member: String)
   case AddressOf(value: CExpression)
@@ -69,6 +71,7 @@ fn precedenceOf(expression: CExpression): Int {
     .Initializer(_) => 0
     .Designated(_) => 0
     .Member(_, _) => 1
+    .Index(_, _) => 1
     .PointerMember(_, _) => 1
     .Call(_, _) => 1
     .CompoundLiteral(_, _) => 1
@@ -138,6 +141,7 @@ fn spelled(expression: CExpression): String {
     .Name(name) => name
     .Literal(text) => text
     .Member(value, member) => "{rendered(value, 1)}.{member}"
+    .Index(value, index) => "{rendered(value, 1)}[{rendered(index, anyPrecedence)}]"
     .PointerMember(value, member) => "{rendered(value, 1)}->{member}"
     .AddressOf(value) => "&{rendered(value, 2)}"
     .Dereference(value) => "*{rendered(value, 2)}"

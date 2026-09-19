@@ -1,0 +1,83 @@
+use Process from "std/process"
+
+/**
+ * Traits, trait-typed values and generics with bounds, compiled to a native binary.
+ *
+ * What it pins: a witness table per implementation, a trait-typed value that carries the table of its bound, a **default**
+ * member (which is not in the table but an instance of the default body with `Self` bound to the value), a generic
+ * function with a bound instantiated once per type argument, and an intersection of two bounds.
+ */
+trait Shape {
+  fn area(self): Int
+
+  /** A default member: not in the table, so calling it is a call of this body with `Self` bound to the value's type. */
+  fn doubled(self): Int {
+    area() * 2
+  }
+}
+
+trait Named {
+  fn width(self): Int
+}
+
+type Square with Shape, Named {
+  size: Int
+
+  fn area(self): Int {
+    size * size
+  }
+
+  fn width(self): Int {
+    size
+  }
+}
+
+type Rectangle with Shape, Named {
+  horizontal: Int
+  vertical: Int
+
+  fn area(self): Int {
+    horizontal * vertical
+  }
+
+  fn width(self): Int {
+    horizontal
+  }
+}
+
+/** A trait-typed value: the payload is boxed and the witness table travels inside it. */
+fn areaOf(shape: Shape): Int {
+  shape.area()
+}
+
+/** The default member, reached on a trait-typed value. */
+fn doubledOf(shape: Shape): Int {
+  shape.doubled()
+}
+
+/** Two bounds: two witness pointers next to one payload, and either of them can be called. */
+fn measured(value: Shape & Named): Int {
+  value.area() + value.width()
+}
+
+/** One bound narrowed to one of the two: the table is already in the value, so nothing is boxed twice. */
+fn narrowed(value: Shape & Named): Int {
+  areaOf(value)
+}
+
+/** A generic function with a bound, instantiated once per type argument: no table is passed anywhere. */
+fn twice<Value: Shape>(value: Value): Int {
+  value.area() + value.area()
+}
+
+fn total(): Int {
+  const square = Square(3)
+  const rectangle = Rectangle(2, 5)
+  const first = areaOf(square) + areaOf(rectangle)
+  const second = doubledOf(square) + doubledOf(rectangle)
+  const third = measured(square) + measured(rectangle)
+  const fourth = narrowed(square) + twice(square) + twice(rectangle)
+  first + second + third + fourth
+}
+
+Process.exit(total())

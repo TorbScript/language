@@ -18,6 +18,15 @@ public type LayoutKind {
   case Tuple
   /** The captured values of one closure (milestone 5.8). */
   case Environment
+  /**
+   * The boxed payload of a trait-typed value: one field, always a counted block.
+   *
+   * A witness member takes the payload as an opaque pointer, so a trait-typed value always boxes what it holds
+   * (BACKEND 3.1). Making that box an ordinary layout is what gives it a C struct, a `Construct`, and the
+   * `R_`/`D_` pair the ownership pass already emits for every other counted block - a second mechanism beside
+   * the layouts would be a second place to get a retain wrong.
+   */
+  case Payload
 }
 
 public type Representation {
@@ -393,7 +402,10 @@ fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
   var size = packed.size
   var alignment = packed.alignment
   const niche = nicheOf(program, before)
-  if before.isRecursive {
+  // The payload of a trait-typed value is a block whatever it costs: a witness member takes a pointer to it
+  if isPayloadKind(before.kind) {
+    representation = Representation.Boxed
+  } else if before.isRecursive {
     representation = Representation.Boxed
   } else if const Some(found) = niche {
     representation = found
@@ -415,6 +427,13 @@ fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
   }
   program.setLayout(id, after)
   true
+}
+
+public fn isPayloadKind(kind: LayoutKind): Bool {
+  match kind {
+    .Payload => true
+    _ => false
+  }
 }
 
 fn fieldOfNiche(representation: Representation): Int {

@@ -1,15 +1,16 @@
 use LiteralValue from "../../semantics/checker/type"
 use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue from "../../ir/ir"
-use Slot, Instruction from "../../ir/ir"
+use Slot, Instruction, WitnessTable, WitnessTableId from "../../ir/ir"
 use Layout, FieldLayout, containsCountedType from "../../ir/layout"
 use typeOfReference from "../../ir/verify"
-use hexDigits from "../../ir/mangle"
+use hexDigits, objectTypeName, payloadLayoutName from "../../ir/mangle"
 use nativeEntries from "./natives"
-use CExpression, CStatement, CSwitchCase, CDeclaration from "./writer"
+use CExpression, CStatement, CSwitchCase, CDeclaration, declarationOf from "./writer"
 use Emission, write, reportUnsupported, emittedText from "./emission"
 use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf from "./type"
-use structDeclarationOf, layoutDefinitionOrder from "./type"
-use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression from "./body"
+use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf from "./type"
+use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
+use dropFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
 use retainStatement, releaseStatement, describeCounted from "./body"
 
@@ -34,9 +35,13 @@ public fn emitProgram(program: IrProgram, entry: String): Emission {
   checkProgramTypes(emission, program, functions, layouts)
   emitHeader(emission)
   emitTypeDefinitions(emission, program, layouts)
+  emitObjectTypes(emission, program, functions, layouts)
   emitCountedHelpers(emission, program, functions, layouts)
   emitStaticData(emission, program, functions)
-  emitFunctions(emission, program, functions, prototypes)
+  emitPrototypes(emission, program, functions)
+  // The tables come between the prototypes and the bodies: their initializers name the thunks, and a body names a table
+  emitWitnessTables(emission, program)
+  emitDefinitions(emission, program, functions, prototypes)
   emitMain(emission, entry)
   emission
 }
@@ -79,7 +84,258 @@ fn emitHeader(var emission: Emission) {
 
     #include "torb.h"
     #include "torb_natives.h"
+
+    /*
+     * A witness table: the drop function of the boxed payload of a trait-typed value, then one function pointer per
+     * member the ABI can reach, in the order the lowering decided (docs/BACKEND.md 1.4 and the note of 5.6).
+     *
+     * The members are an array of an erased function type and every one of them is a thunk with the erased signature,
+     * so a call through a table converts the pointer back to the type the function really has - which is what C allows
+     * and what makes a dynamic call need no `void *` cast of an argument anywhere.
+     */
+    typedef void (*torb_witness_member)(void);
+
+    typedef struct torb_witness_table {
+      void (*drop)(void *);
+      const torb_witness_member *members;
+    } torb_witness_table;
     """))
+}
+
+// --- Trait-typed values -----------------------------------------------------------------------------------------------
+
+/** The struct of every trait-typed value the program uses, sorted by name so that the file is a function of the set. */
+fn emitObjectTypes(
+  var emission: Emission,
+  program: IrProgram,
+  functions: List<IrFunction>,
+  layouts: List<Bool>,
+) {
+  const found = objectTypesOf(program, functions, layouts)
+  if found.isEmpty() {
+    return
+  }
+  write(emission, CDeclaration.Comment("The trait-typed values of the program: a boxed payload and its tables."))
+  for id in found {
+    const name = cTypeOf(program, id)
+    write(emission, CDeclaration.Typedef("struct {name}", name))
+  }
+  for id in found {
+    if const Some(declaration) = objectDeclarationOf(program, id) {
+      write(emission, declaration)
+    }
+  }
+}
+
+/** Every `Object` type the emitted functions and the layouts they reach mention, by its C name, sorted. */
+fn objectTypesOf(program: IrProgram, functions: List<IrFunction>, layouts: List<Bool>): List<IrTypeId> {
+  var names: List<String> = []
+  var byName: Map<String, Int> = [:]
+  for index in 0..layouts.length() {
+    if !layouts[index] {
+      continue
+    }
+    for field in program.layouts[index].fields {
+      collectObjectType(program, names, byName, field.annotation)
+    }
+  }
+  for function in functions {
+    collectObjectType(program, names, byName, function.signature.result)
+    for parameter in function.signature.parameters {
+      collectObjectType(program, names, byName, parameter.annotation)
+    }
+    for slot in function.slots {
+      collectObjectType(program, names, byName, slot.annotation)
+    }
+  }
+  var sorted = names
+  sorted.sort({ _ })
+  var order: List<IrTypeId> = []
+  for name in sorted {
+    if const Some(index) = byName.get(name) {
+      order.add(IrTypeId(index))
+    }
+  }
+  order
+}
+
+fn collectObjectType(
+  program: IrProgram,
+  var names: List<String>,
+  var byName: Map<String, Int>,
+  id: IrTypeId,
+) {
+  if !program.hasType(id) {
+    return
+  }
+  if const .Object(bounds) = program.typeAt(id) {
+    const name = objectTypeName(program, bounds)
+    if !byName.containsKey(name) {
+      byName.set(name, id.value)
+      names.add(name)
+    }
+  }
+}
+
+// --- Witness tables ---------------------------------------------------------------------------------------------------
+
+/**
+ * Every witness table of the program, sorted by name: one thunk per member, one array of them, and the table itself.
+ *
+ * A **thunk** is what makes a dynamic call well defined C rather than a cast between two function types that do not
+ * match: it takes the payload as `const void *`, unwraps it to the concrete type, and calls the real member. So the
+ * function the table points at really has the erased signature a call site converts its pointer back to.
+ */
+fn emitWitnessTables(var emission: Emission, program: IrProgram) {
+  const order = witnessTableOrder(program)
+  if order.isEmpty() {
+    return
+  }
+  write(emission, CDeclaration.Comment("The witness tables: what a trait-typed value and a dynamic call go through."))
+  for id in order {
+    const table = program.witnessTableAt(id)
+    for index in 0..table.members.length() {
+      if const Some(head) = thunkHeadOf(emission, program, table, index) {
+        write(emission, CDeclaration.Prototype(head))
+      }
+    }
+  }
+  for id in order {
+    emitThunks(emission, program, program.witnessTableAt(id))
+  }
+  for id in order {
+    emitWitnessTable(emission, program, program.witnessTableAt(id))
+  }
+}
+
+/** The tables sorted by their mangled name, so that neither the C nor the thunk order depends on the lowering. */
+fn witnessTableOrder(program: IrProgram): List<WitnessTableId> {
+  var names: List<String> = []
+  var byName: Map<String, Int> = [:]
+  for index in 0..program.witnessTableCount() {
+    const name = program.witnessTables[index].name
+    if !byName.containsKey(name) {
+      byName.set(name, index)
+      names.add(name)
+    }
+  }
+  var sorted = names
+  sorted.sort({ _ })
+  var order: List<WitnessTableId> = []
+  for name in sorted {
+    if const Some(index) = byName.get(name) {
+      order.add(WitnessTableId(index))
+    }
+  }
+  order
+}
+
+/** `W_..._0`: the thunk of one member of one table. `W` is no prefix of the mangling, so nothing can collide with it. */
+fn thunkNameOf(table: WitnessTable, index: Int): String {
+  "W{table.name[1..table.name.byteLength()]}_{index}"
+}
+
+/** The head of one thunk, or `None` where the member it wraps is not a function of the program. */
+fn thunkHeadOf(var emission: Emission, program: IrProgram, table: WitnessTable, index: Int): String? {
+  const member = table.members[index]
+  if !program.hasFunction(member) {
+    reportUnsupported(emission, "a witness table member that is not a function of the program")
+    return None
+  }
+  const function = program.functionAt(member)
+  const signature = function.signature
+  if signature.parameters.isEmpty() {
+    reportUnsupported(emission, "a witness table member without a receiver")
+    return None
+  }
+  var parameters = ["const void *self"]
+  for position in 1..signature.parameters.length() {
+    const spelling = valueTypeOf(program, signature.parameters[position].annotation)
+    parameters.add(declarationOf(spelling, "a{position}"))
+  }
+  const result = resultTypeOf(program, signature.result)
+  const written = parameters.joined(separator: ", ")
+  Some("static {declarationOf(result, "{thunkNameOf(table, index)}({written})")}")
+}
+
+fn emitThunks(var emission: Emission, program: IrProgram, table: WitnessTable) {
+  for index in 0..table.members.length() {
+    const head = match thunkHeadOf(emission, program, table, index) {
+      Some(found) => found
+      .None => {
+        continue
+      }
+    }
+    const member = table.members[index]
+    const function = program.functionAt(member)
+    const payload = payloadLayoutOfTable(program, table)
+    const spelling = match payload {
+      Some(found) => "const {program.layoutAt(found).name} *"
+      .None => "const void *"
+    }
+    const unwrapped = match payload {
+      Some(found) => payloadFieldOf(program, found)
+      .None => CExpression.Name("box")
+    }
+    var given = [unwrapped]
+    for position in 1..function.signature.parameters.length() {
+      given.add(CExpression.Name("a{position}"))
+    }
+    const called = CExpression.Call(CExpression.Name(function.name), given)
+    var body: List<CStatement> = []
+    const cast = CExpression.Cast(spelling, CExpression.Name("self"))
+    body.add(CStatement.Declaration(spelling, "box", Some(cast)))
+    if isVoidResultOf(program, function.signature.result) {
+      body.add(CStatement.Evaluate(called))
+      body.add(CStatement.Return())
+    } else {
+      body.add(CStatement.Return(Some(called)))
+    }
+    write(emission, CDeclaration.Definition("", head, body))
+  }
+}
+
+/** `box->f_value`: the payload the thunk unwraps out of the block a trait-typed value points at. */
+fn payloadFieldOf(program: IrProgram, layout: LayoutId): CExpression {
+  const shape = program.layoutAt(layout)
+  if shape.fields.isEmpty() {
+    return CExpression.Name("box")
+  }
+  CExpression.PointerMember(CExpression.Name("box"), memberNameOf(shape.fields[0]))
+}
+
+/** The layout of the box the target of a table is kept in, which the lowering built where the value was boxed. */
+fn payloadLayoutOfTable(program: IrProgram, table: WitnessTable): LayoutId? {
+  program.layoutNamed(payloadLayoutName(program, table.target))
+}
+
+fn isVoidResultOf(program: IrProgram, id: IrTypeId): Bool {
+  resultTypeOf(program, id) == "void"
+}
+
+fn emitWitnessTable(var emission: Emission, program: IrProgram, table: WitnessTable) {
+  var members: List<CExpression> = []
+  for index in 0..table.members.length() {
+    const name = thunkNameOf(table, index)
+    members.add(CExpression.Cast("torb_witness_member", CExpression.Name(name)))
+  }
+  const arrayName = "{table.name}_members"
+  if !members.isEmpty() {
+    const annotation = "static const torb_witness_member"
+    const array = "{arrayName}[{members.length()}]"
+    write(emission, CDeclaration.StaticData(annotation, array, CExpression.Initializer(members)))
+  }
+  const drop = match payloadLayoutOfTable(program, table) {
+    Some(found) => dropFunctionOf(program, found)
+    .None => CExpression.Literal("NULL")
+  }
+  const array = if members.isEmpty() {
+    CExpression.Literal("NULL")
+  } else {
+    CExpression.Name(arrayName)
+  }
+  const initializer = CExpression.Initializer([drop, array])
+  write(emission, CDeclaration.StaticData("static const torb_witness_table", table.name, initializer))
 }
 
 // --- Are all the types there? ---------------------------------------------------------------------------------------
@@ -113,9 +369,6 @@ fn checkProgramTypes(var emission: Emission, program: IrProgram, functions: List
   }
   if !program.elements.isEmpty() {
     reportUnsupported(emission, "an element descriptor of a runtime container (milestone 5.7)")
-  }
-  if !program.witnessTables.isEmpty() {
-    reportUnsupported(emission, "a witness table (milestone 5.6)")
   }
 }
 
@@ -155,8 +408,16 @@ fn usedLayoutsOf(program: IrProgram, functions: List<IrFunction>): List<Bool> {
         if const .Construct(_, layout, _, _) = instruction {
           markLayout(program, used, pending, layout)
         }
+        // The payload of a trait-typed value is boxed in a layout of its own, which the box and its drop helper need
+        if const .TraitValue(_, value, _) = instruction {
+          markPayloadLayout(program, used, pending, typeOfSlotOf(function, value.slot))
+        }
       }
     }
+  }
+  // A table names the drop function of the box its target is kept in, whether or not this program boxes one itself
+  for table in program.witnessTables {
+    markPayloadLayout(program, used, pending, table.target)
   }
   while !pending.isEmpty() {
     const last = pending.length() - 1
@@ -187,6 +448,15 @@ fn markLayoutOfType(program: IrProgram, var used: List<Bool>, var pending: List<
       }
     }
     _ => {}
+  }
+}
+
+fn markPayloadLayout(program: IrProgram, var used: List<Bool>, var pending: List<Int>, item: IrTypeId) {
+  if !program.hasType(item) {
+    return
+  }
+  if const Some(found) = program.layoutNamed(payloadLayoutName(program, item)) {
+    markLayout(program, used, pending, found)
   }
 }
 
@@ -378,6 +648,12 @@ fn helperDemandOf(program: IrProgram, functions: List<IrFunction>, layouts: List
       for instruction in block.instructions {
         collectHelperDemand(program, function, instruction, retains, drops)
       }
+    }
+  }
+  // A witness table names the drop function of the box its target is kept in, so that a release of an erased value works
+  for table in program.witnessTables {
+    if const Some(found) = program.layoutNamed(payloadLayoutName(program, table.target)) {
+      markLayoutFlag(program, drops, found)
     }
   }
   closeHelperDemand(program, retains, drops)
@@ -779,12 +1055,7 @@ fn aggregateOf(
 
 // --- Functions and `main` -------------------------------------------------------------------------------------------
 
-fn emitFunctions(
-  var emission: Emission,
-  program: IrProgram,
-  functions: List<IrFunction>,
-  prototypes: Map<String, String>,
-) {
+fn emitPrototypes(var emission: Emission, program: IrProgram, functions: List<IrFunction>) {
   if functions.isEmpty() {
     return
   }
@@ -792,6 +1063,14 @@ fn emitFunctions(
   for function in functions {
     write(emission, CDeclaration.Prototype(signatureHeadOf(program, function)))
   }
+}
+
+fn emitDefinitions(
+  var emission: Emission,
+  program: IrProgram,
+  functions: List<IrFunction>,
+  prototypes: Map<String, String>,
+) {
   for function in functions {
     const body = bodyOf(program, function, prototypes)
     const statements = bodyStatements(emission, program, body)

@@ -1,0 +1,81 @@
+use Process from "std/process"
+
+/**
+ * Generics, compiled to a native binary: a generic type with methods, a generic function with a bound, an `extend ... with`
+ * implementation, a default member that an implementation overrides, and a trait-typed value whose payload owns a count.
+ *
+ * The last one is the leak gate of this sub-milestone: the payload of a trait-typed value is a counted block, and the
+ * drop function of that block comes out of the table the value carries - so a value that holds a `String` is released
+ * through an erased pointer and the live block count at exit still has to be zero.
+ */
+type Holder<Item> {
+  item: Item
+
+  fn value(self): Item {
+    item
+  }
+
+  /** A method of a generic type: one instance per type argument, and the argument comes out of the receiver. */
+  fn repeated(self, times: Int): Int {
+    times + 1
+  }
+}
+
+/** A trait with a default member, overridden by one of the two implementations. */
+trait Sized {
+  fn size(self): Int
+
+  fn doubledSize(self): Int {
+    size() * 2
+  }
+}
+
+type Small {
+  amount: Int
+}
+
+/** A counted field, so that the box a trait-typed value keeps it in owns a count of its own. */
+type Tagged {
+  label: String
+}
+
+extend Small with Sized {
+  fn size(self): Int {
+    amount
+  }
+}
+
+extend Tagged with Sized {
+  fn size(self): Int {
+    label.byteLength()
+  }
+
+  /** An override of the default: the table points at this one, and the default body is never reached for a `Tagged`. */
+  fn doubledSize(self): Int {
+    size() * 3
+  }
+}
+
+/** Per-bound sharing: one instance of this function for every trait-typed argument, whatever the payload is. */
+fn sizeOf(value: Sized): Int {
+  value.size() + value.doubledSize()
+}
+
+/** Monomorphized: one instance per type argument. */
+fn sizedTwice<Value: Sized>(value: Value): Int {
+  value.size() + value.size()
+}
+
+fn holders(): Int {
+  const numbers = Holder(7)
+  const texts = Holder("abcd")
+  numbers.value() + texts.value().byteLength() + numbers.repeated(1) + texts.repeated(2)
+}
+
+fn total(): Int {
+  const small = Small(5)
+  const tagged = Tagged("hello")
+  holders() + sizeOf(small) + sizeOf(tagged) + sizedTwice(small) + sizedTwice(tagged)
+}
+
+Process.exit(total())

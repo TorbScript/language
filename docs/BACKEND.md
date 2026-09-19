@@ -832,7 +832,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.3** | **Done.** The C emitter, minimum path. Types, functions, blocks and gotos, `#line`, slot declarations, static data, `main`, the driver's minimum (`torb build`, compiler discovery, `--emit-c`). **Gate: a program of monomorphic functions becomes a native binary and behaves like it does on stage 0** (`print` needs the witness tables of 5.6) | `backend/c/type.trb`, `emission.trb`, `prototype.trb`, `body.trb`, `emit.trb`, `cli/build.trb` | `compiler/tests/emit-c.test.trb` (20); `bootstrap/tests/native/*` compiled, run and compared with stage 0 by `bootstrap/crates/torb-cli/tests/native.rs`; `--emit-c` twice is byte identical | 5.2, 5.R1 |
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
 | **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `bootstrap/tests/native/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
-| **5.6** | Generics: instance keys, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`copy`. **Gate: `bootstrap/tests/scripts/basics.trb` produces its `.expected` natively** | `ir/lower/generic.trb`, `ir/witness.trb`, `ir/lower/derive.trb` | basics.trb; instance counts are asserted so an accidental explosion fails a test | 5.5 |
+| **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `bootstrap/tests/native/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
 | **5.7** | Collections: the list and the ordered hash table in C, element descriptors, the natives of `List`/`Map`/`Set`/`String`, `Iterable` pipelines (ordinary TorbScript once closures work). **Gate: `language.trb` passes** | `runtime/list.c`, `runtime/map.c`, `runtime/text.c`, manifest entries | language.trb, `07-collections.trb` | 5.3, 5.6, 5.8 |
 | **5.8** | Closures: closure conversion, environments, escaping or not, `Box`es for captured `var` bindings, `lazy` cells, receiver closures, property commands. **Gate: `examples/config-dsl` runs** | `ir/lower/closure.trb`, `ir/capture.trb` | config-dsl, `09-dsl.trb`, `02-functions.trb` | 5.6 |
 | **5.9a** | **Done.** `var` parameters and `var self` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
@@ -1274,6 +1274,111 @@ accepts, the code won and this is the list. Everything else is as written.
   and a worklist that seeds an instance per argument list. None of that is small, so nothing of it was done here - what
   5.5 needs of `Option` and `Result` is their *layout*, which 5.1 already builds, and the constructors and patterns over
   it, which are here.
+
+### What 5.6 does differently
+
+Sections 1.4 and 3.1 are the plan; where they did not fit what the language allows, what the checker records or what
+portable C can express, the code won and this is the list. Everything else is as written.
+
+- **Three files plus the emitter.** `ir/witness.trb` (what is in a table, where a member of one sits, and which function
+  each slot points at), `ir/lower/generic.trb` (which instance a call reaches, once the type arguments of the *enclosing*
+  instance are substituted, and the coercion to a trait-typed value), `ir/lower/derive.trb` (the bodies the language
+  generates). `ir/instances.trb` gained the arguments, and `backend/c/{type,emit,body}.trb` the C.
+- **Nothing is ever passed as a witness parameter, because a trait-typed value carries its own tables.** Section 1.4 says
+  a generic function that is shared per bound is reached "with a `.Forwarded` witness that bottoms out in an `.Object`"
+  and that the table is appended after the declared parameters. It does not have to be: after substituting the
+  instance's arguments, the receiver of such a call *is* the trait-typed value, and `WitnessRoot.Value(slot, bound)` reads
+  the table out of it. Every open bound of the language belongs to a value that is in hand - the receiver of the call, the
+  argument that is interpolated - so `IrSignature.witnesses` stays empty, `Instruction.Call` never carries a witness, and
+  `WitnessRoot.Parameter` is never built. A bound whose table belongs to no value in hand is a static member of a
+  trait-typed type, which object safety forbids anyway, and it is a clean finding.
+- **The type arguments are what an instance *is*, and they are re-derived rather than read.** An instance is a declaration
+  plus one type argument per generic parameter in scope, with the `Self` of a trait in front where the owner is one; the
+  key and the mangled name are made of exactly that list. The witnesses the checker recorded at a call site
+  (`Tables.witnesses`) are **not** read at all: they are in terms of the *caller's* parameters, and after substituting
+  the caller's own arguments every type is closed, so asking `witnessFor` again is both simpler and always right. The
+  same substitution is what `irTypeOf` applies to every type a body mentions, which is why nothing inside a lowered body
+  knows that it is generic.
+- **The members of the supertraits are flattened into the table, and `WitnessTable.nested` stays empty.** A call through a
+  table has to spell the member's C function type, and the only trait a back end can name at a `CallWitness` is the bound
+  the value carries - so a path through nested tables could not be spelled at all. The order is: the members of the trait
+  in declaration order, then the same of every supertrait in declaration order, deduplicated by name.
+- **A default member is a slot of the table.** Section 1.4 says a default is not in one. But an implementation may
+  *override* a default (`Show.showNested` for a `String`, and any `extend X with T { fn aDefault(self) ... }`), and which
+  of the two a trait-typed value reaches is only known at run time. So every object-safe member is in the table, with the
+  override where there is one and an instance of the default body for the target type otherwise. Gap 14 still falls out:
+  a delegated implementation declares no override, so `by` forwards the required members only.
+- **Three kinds of member are left out of a table**, and every one of them is a member object safety already forbids on a
+  trait-typed value: one that mentions `Self` anywhere but as its receiver (`equals`, `compare`, `min`), a static one,
+  and one with generic parameters or a `where` clause of its own, whose call would need witnesses appended. A `var self`
+  member is left out as well until 5.9 (`List.add`). Calling one on a trait-typed value is the finding "`add`, which is
+  not in the witness table of a trait-typed value".
+- **A table is `{ drop, members }` and every member is a thunk.** Section 3.1 writes `Object(bounds)` as
+  `struct { torb_object *data; const w_A *a; ... }`, which needs one C struct per applied trait and a function-pointer
+  cast at every call. Instead the emitter writes one fixed `torb_witness_table` into the translation unit - the drop
+  function of the boxed payload, and a pointer to an array of `void (*)(void)` - and one **thunk** per member, whose
+  signature is the erased one (`const void *self` plus the declared parameters) and whose body unwraps the payload and
+  calls the real member. A call site converts the member's pointer back to exactly that signature, which is what C
+  allows; casting to a signature the function does not have, which the design's shape would need, is not.
+  `drop` is in the table because the payload is erased: the drop function is a property of the *target* type, and a table
+  is per target type, so `torb_release(value.data, value.w0->drop)` is the release of a trait-typed value.
+- **The boxed payload is an ordinary layout.** `T_payload__T_main_Point` is a `LayoutKind.Payload` with one field, pinned
+  to `Boxed`, so it gets a C struct, a `Construct`, and the `R_`/`D_` pair the ownership pass already emits for every
+  other counted block. A second mechanism beside the layouts would have been a second place to get a retain wrong.
+  `TraitValue` of a value that is *already* trait typed (`Show & Hash` narrowed to `Show`) boxes nothing: it copies the
+  payload pointer and picks the tables.
+- **A generated body is built by the worklist, like a body of the source.** `Lowering.pendingGenerated` is a second list
+  with a cursor of its own, drained in the same loop, because a generated member may need an instance of the source and a
+  body of the source a generated member. So a derived `Show` of a recursive type terminates for the same reason a
+  recursive function does.
+- **`Show`, `Equals` and `Hash` are structural; `compare` is not generated for a `type`.** The format is decided gap 23
+  (`Type(field: value, ...)`, a case as `Case(field: value)` or as its bare name, everything nested through
+  `showNested`). A field that is a primitive is compared with an intrinsic and shown through its own member; everything
+  else goes through the field type's own member, which is what makes a nested and a recursive type work. `Hash` mixes
+  with the bit intrinsics rather than with `combineHashes`, which the runtime provides from 5.7 on - and it does not have
+  to agree with anything, because a hash value is not part of the language (`Show` of a `Map` is insertion order, so
+  nothing observable depends on one). `Encode` and `Decode` are still a finding that names 5.10.
+- **A member the manifest maps to an intrinsic or to a runtime function gets a generated wrapper.** A table holds
+  function pointers, so `Int64.equals` needs a function even where a call of it is one instruction, and a runtime native
+  is called through the manifest's prototype - which may need the source location or an out parameter. Both become an
+  ordinary generated body whose one statement is the intrinsic or the call, so the one place that knows the runtime's
+  conventions stays the one place that knows them.
+- **`a < b` on a type is `compare` plus one test of the tag.** The checker resolves `<`, `<=`, `>` and `>=` to
+  `Compare.compare`, whose result is an `Ordering` - so the operator is the call plus `tag == Less` or `tag != Greater`,
+  exactly what the defaults of `Compare` say. Before 5.6 this path was unreachable and would have put an `Ordering` in a
+  `Bool` slot.
+- **Every comparison intrinsic may name no numeric type.** 5.2 made that true for `Equal` and `NotEqual`; `Char.compare`
+  needs it for `Less` and `Greater` as well, because a `Char` is a code point and not a number. Where the kind is absent
+  the verifier demands that both operands have the same type, as it already did for equality.
+- **A runtime native that answers the other signedness of the same width is converted, not refused.**
+  `Hash.hash(self): Int` against `uint64_t torb_hash_i64(int64_t)` is the one difference between a declaration of `std/`
+  and its runtime symbol that is a cast and not a wrapper, because the bits are the hash either way
+  (`PrototypeMatch.Converted`).
+- **`torb build` and `torb ir` ask the checker for every body, not only for the requested modules.** A lowering may reach
+  the body of any module - a default member of a trait of `std/prelude`, a generic function of another package - and a
+  body whose tables were never filled cannot be lowered at all. `check` gained `checksEveryBody`; what is *reported*
+  stays what was asked for, because the file list is filtered by the request and not by this.
+- **`matchTypePattern` and `memberOfImplementation` are now public in the checker.** The substitution of an instance is
+  the owner of a member matched against the type it was reached on, and which member an implementation provides under a
+  name is what `checkRequirements` already decides - asking the checker twice would have been a second place to be wrong.
+- **A narrowing coercion to a *supertrait* of a trait-typed value is a finding.** `List<Item>` narrowed to
+  `Iterable<Item>` would need the table of `(the payload's type, Iterable<Item>)`, and the payload's type is exactly what
+  a trait-typed value has erased - so it can only come out of a `nested` list in the table, which this sub-milestone does
+  not build. Coercing a *concrete* value to any of its traits is unaffected, and so is calling an inherited member on a
+  trait-typed value (that is what the flattening above is for). 5.7 needs the nested tables for `Iterable` and will add
+  them; there are two occurrences in the repository today.
+- **`torb ir --statistics` over the repository: 578 of 2441 declarations lowered before 5.6, 852 of 2648 after** (23% to
+  32%). "A call on a trait-typed value" (512), "a generic call", "a generic function or a member of a generic type", "a
+  derived `Equals` member", "a call that passes a witness table" and "a value used as a trait-typed value" are all gone;
+  the new top blockers are a list literal (469, 5.7), string interpolation (264, 5.10), `a[key]` (236, 5.7) and `for` over
+  a collection (212, 5.7).
+- **The gate is not `basics.trb`.** It cannot be: `print shapes.map({ _.area() })` does not type-check at all
+  (`Iterable<Float64>` does not implement `Show`, because `map` answers an `Iterable` and only a named collection is
+  `Show`), so the file is a stage-0 script and not a checked program. What is left of it after that is blocked by 5.7
+  (list and map literals, `a[key]`, `for` over a collection, the variadic list of `print`), 5.8 (closures), 5.9
+  (`var self`, `var` parameters, assignment to a place) and 5.10 (string interpolation). The gate of this sub-milestone is
+  therefore `bootstrap/tests/native/traits.trb`, `generics.trb` and `derived.trb`, each compiled, run, compared with
+  stage 0 and asserted to leave zero live blocks.
 
 ### What 5.9a does differently
 

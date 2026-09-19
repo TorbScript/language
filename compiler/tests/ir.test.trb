@@ -504,6 +504,10 @@ group "The verifier" {
     )
   }
 
+  /**
+   * A comparison may name no numeric type - `Bool.equals` is `equal` and the order of two `Char`s is `less` over two
+   * code points - and then both sides have to be the same thing. What it always has to produce is a `Bool`.
+   */
   test "an intrinsic says which numeric type it works on, and produces what it promises" {
     var program = IrProgram()
     const int64 = integerType(program, 64)
@@ -512,7 +516,7 @@ group "The verifier" {
     var builder = newFunction(
       "t_main_compare",
       None,
-      IrSignature([IrParameter("a", int64), IrParameter("b", int64)], boolean),
+      IrSignature([IrParameter("a", int64), IrParameter("b", boolean)], boolean),
       "body",
     )
     const wrong = addTemporary(builder, int64)
@@ -524,7 +528,7 @@ group "The verifier" {
     assert(
       verifyFunction(program, program.functionAt(identifier))
         == [
-          "t_main_compare b0: `less` needs to say which numeric type it works on",
+          "t_main_compare b0: `less` compares `Int64` with `Bool`",
           "t_main_compare b0: the result of `less` is a `Bool`, and %2 is `Int64`",
           "t_main_compare b0: the function returns `Bool` and `return` carries `Int64`",
         ]

@@ -2,7 +2,7 @@ use Span from "../../syntax/source"
 use Expression, Argument, TextSegment, Condition, Block from "../../syntax/ast"
 use PrefixOperator, InfixOperator from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
-use LiteralValue from "../../semantics/checker/type"
+use TypeId, LiteralValue from "../../semantics/checker/type"
 use Adaptation from "../../semantics/checker/context"
 use IrTypeId, IrType, Slot, BlockId, LocationId, Instruction, Terminator, Reference, PathStep from "../ir"
 use Intrinsic, IntrinsicOperation, NumericKind, StaticContents, LayoutId from "../ir"
@@ -11,8 +11,9 @@ use numericKindOf, layoutOfType from "../verify"
 use describeIrType from "../print"
 use evaluateConstant, staticOfConstant from "../constant"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
-use internStatic, isNeverType, finishBlock, continueIn from "./context"
+use internStatic, isNeverType, finishBlock, continueIn, irTypeOfClosed from "./context"
 use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue from "./call"
+use objectTypeOf, lowerTraitValue from "./generic"
 use lowerBlockInto from "./statement"
 use lowerMatch, lowerIfBinding, lowerTry, lowerCoalesce from "./match"
 
@@ -46,6 +47,25 @@ public fn lowerExpression(
   if !canReplayAdaptations(lowering, expression) {
     return abandonedSlot(lowering, builder, destination)
   }
+  // `Adaptation.ToTraitValue`: the value is computed first and then boxed with one witness pointer per bound
+  const bounds = traitValueBoundsOf(lowering, expression)
+  if !bounds.isEmpty() {
+    return lowerCoercedValue(lowering, builder, destination, expression, annotation, bounds)
+  }
+  lowerInnerExpression(lowering, builder, expression, destination, annotation)
+}
+
+/**
+ * The value an expression produces before anything the checker recorded around it applies. Split out so that a coercion
+ * has somewhere to put the value it wraps, and so that nothing has to be lowered twice.
+ */
+fn lowerInnerExpression(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  expression: Expression,
+  destination: Slot?,
+  annotation: IrTypeId,
+): Slot {
   // Every literal, including a negated one, is static data: the checker already decided which type it adapted to
   if isLiteralExpression(expression) {
     return lowerLiteral(lowering, builder, destination, expression)
@@ -84,6 +104,50 @@ public fn lowerExpression(
 /** The value of an expression that nothing has a slot for yet. */
 public fn lowerValue(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
   lowerExpression(lowering, builder, expression, None)
+}
+
+/** The bounds `Adaptation.ToTraitValue` recorded at an expression, or an empty list where it recorded none. */
+fn traitValueBoundsOf(var lowering: Lowering, expression: Expression): List<TypeId> {
+  const module = lowering.module
+  const adaptations = lowering.checker.adaptationsAt(module, expression.span)
+  for adaptation in adaptations {
+    if const .ToTraitValue(bounds, _) = adaptation {
+      return bounds
+    }
+  }
+  []
+}
+
+/**
+ * A value that becomes a trait-typed value: the payload is boxed and one witness pointer per bound goes with it. The
+ * tables are static data of the program, unless the value is already trait typed - `Show & Hash` narrowed to `Show` -
+ * in which case they are the ones it already carries.
+ */
+fn lowerCoercedValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  annotation: IrTypeId,
+  bounds: List<TypeId>,
+): Slot {
+  const inner = lowerInnerExpression(lowering, builder, expression, None, annotation)
+  if !lowering.isSupported {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  const object = objectTypeOf(lowering, bounds)
+  const source = match lowering.checker.expressionType(lowering.module, expression.span) {
+    Some(found) => found
+    .None => {
+      const what = "a value used as a trait-typed value without a type"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
+  }
+  const target = valueSlot(lowering, builder, destination, object)
+  if !lowerTraitValue(lowering, builder, target, inner, bounds, source, expression.span) {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  target
 }
 
 // --- Slots ----------------------------------------------------------------------------------------------------------
@@ -158,11 +222,11 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
   const inlinesThunk = lowering.inlinedThunks.containsKey(at)
   for adaptation in adaptations {
     const blocked = match adaptation {
-      .ToTraitValue(_, _) => "a value used as a trait-typed value"
       .Convert(_, _) => if convertsItself { "" } else { "a conversion through `From`" }
       .ShowValue(_) => "string interpolation"
       .Delegate(_) => "`by` delegation"
       .Lazy => if inlinesThunk { "" } else { "a `lazy` argument" }
+      .Quote(_) => "a quoted expression (milestone 5.11)"
       .Spread => "`...` in an argument list"
       .Variadic(_, _) => "a variadic argument list"
       .ImplicitParameter(_) => "an implicit closure parameter"
@@ -606,7 +670,92 @@ fn lowerComparison(
   if isTextType(lowering, operands) {
     return lowerTextComparison(lowering, builder, destination, operation, first, second, annotation, at)
   }
+  if !isEqualityOperation(operation) {
+    return lowerOrderComparison(lowering, builder, destination, operation, first, second, annotation, at)
+  }
   lowerOperator(lowering, builder, destination, at, [first, second], annotation)
+}
+
+/**
+ * `<`, `<=`, `>` and `>=` on a type whose order is `Compare.compare`: the member answers an `Ordering`, and the operator
+ * is one test of its tag - which is exactly what the defaults of `Compare` say (`lessThan` is `compare(other) == .Less`).
+ */
+fn lowerOrderComparison(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  operation: IntrinsicOperation,
+  first: Slot,
+  second: Slot,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const ordering = match orderingTypeOf(lowering) {
+    Some(found) => found
+    .None => {
+      const what = "an order over a type, without an `Ordering` in the prelude"
+      return unsupportedSlot(lowering, builder, destination, what, at)
+    }
+  }
+  const order = lowerOperator(lowering, builder, None, at, [first, second], ordering)
+  if !lowering.isSupported {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  const layout = match layoutOfType(lowering.program, ordering) {
+    Some(found) => found
+    .None => {
+      return unsupportedSlot(lowering, builder, destination, "an `Ordering` without a layout", at)
+    }
+  }
+  const wanted = if isLessTest(operation) { "Less" } else { "Greater" }
+  const index = variantNamed(lowering, layout, wanted)
+  if index < 0 {
+    return unsupportedSlot(lowering, builder, destination, "an `Ordering` without a `{wanted}` case", at)
+  }
+  const integer = lowering.program.internType(IrType.Integer(64, true))
+  const tag = addTemporary(builder, integer)
+  emit(builder, Instruction.Tag(tag, order))
+  const value = integerSlot(lowering, builder, index, integer)
+  const test = if isStrictTest(operation) {
+    IntrinsicOperation.Equal
+  } else {
+    IntrinsicOperation.NotEqual
+  }
+  const kind = NumericKind.Signed(64)
+  intrinsicSlot(lowering, builder, destination, test, Some(kind), [tag, value], annotation, at)
+}
+
+/** `a < b` and `a >= b` both test against `.Less`; `a > b` and `a <= b` against `.Greater`. */
+fn isLessTest(operation: IntrinsicOperation): Bool {
+  match operation {
+    .Less | .GreaterOrEqual => true
+    _ => false
+  }
+}
+
+/** A strict comparison asks for that case, the other two ask for anything but it. */
+fn isStrictTest(operation: IntrinsicOperation): Bool {
+  match operation {
+    .Less | .Greater => true
+    _ => false
+  }
+}
+
+fn orderingTypeOf(var lowering: Lowering): IrTypeId? {
+  const symbol = lowering.checker.wellKnown.symbolNamed("Ordering")?
+  const empty: List<TypeId> = []
+  const named = lowering.checker.nominal(symbol, empty)
+  Some(irTypeOfClosed(lowering, named))
+}
+
+fn variantNamed(var lowering: Lowering, layout: LayoutId, name: String): Int {
+  const shape = lowering.program.layoutAt(layout)
+  for index in 0..shape.variants.length() {
+    if shape.variants[index].name == name {
+      return index
+    }
+  }
+  -1
 }
 
 fn comparisonOperation(operator: InfixOperator): IntrinsicOperation {

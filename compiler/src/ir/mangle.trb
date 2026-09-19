@@ -278,6 +278,26 @@ public fn tupleLayoutName(program: IrProgram, fields: List<IrTypeId>): String {
   mangledName("T", ["tuple"], canonicalTypes(program, fields))
 }
 
+/**
+ * `T_payload__T_main_Point`: the layout of the boxed payload of a trait-typed value that holds a `Point`.
+ *
+ * A trait-typed value always boxes what it holds, because a witness member takes an opaque pointer (BACKEND 3.1). That
+ * box is an ordinary layout with one field, so it gets a C struct and the `R_`/`D_` pair every other counted block gets;
+ * its one component is the word `payload`, the way a tuple's is the word `tuple`.
+ */
+public fn payloadLayoutName(program: IrProgram, item: IrTypeId): String {
+  mangledName("T", ["payload"], canonicalType(program, item))
+}
+
+/** `T_object__std_x2f_prelude_convert_Show`: the C struct of a trait-typed value with these bounds, in bound order. */
+public fn objectTypeName(program: IrProgram, bounds: List<TraitId>): String {
+  var parts: List<String> = []
+  for bound in bounds {
+    parts.add(canonicalTrait(program, bound))
+  }
+  mangledName("T", ["object"], parts.joined(separator: "_"))
+}
+
 /** `s_main_greeting`. */
 public fn staticName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
   mangledName("s", path.components(), canonicalTypes(program, arguments))

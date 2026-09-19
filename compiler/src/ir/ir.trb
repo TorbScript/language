@@ -578,6 +578,8 @@ public type IrProgram {
   private var layoutIdentifiers: Map<String, LayoutId> = [:]
   var functions: List<IrFunction> = []
   var witnessTables: List<WitnessTable> = []
+  /** The mangled name of a witness table to its id: one table per applied trait and target type. */
+  private var witnessTableIdentifiers: Map<String, WitnessTableId> = [:]
   var elements: List<ElementDescriptor> = []
   var statics: List<StaticValue> = []
   var locations: List<Location> = []
@@ -682,6 +684,11 @@ public type IrProgram {
     layouts[id.value]
   }
 
+  /** The layout with this name, if the lowering built one. A name is the whole identity of a layout. */
+  fn layoutNamed(self, name: String): LayoutId? {
+    layoutIdentifiers.get(name)
+  }
+
   fn setLayout(var self, id: LayoutId, layout: Layout) {
     layouts.set(id.value, layout)
   }
@@ -741,11 +748,30 @@ public type IrProgram {
 
   fn addWitnessTable(var self, table: WitnessTable): WitnessTableId {
     witnessTables.add(table)
+    witnessTableIdentifiers.set(table.name, WitnessTableId(witnessTables.length() - 1))
     WitnessTableId(witnessTables.length() - 1)
+  }
+
+  /** The table with this name, if it is there already. A name is the whole identity of a table, as it is of a layout. */
+  fn witnessTableNamed(self, name: String): WitnessTableId? {
+    witnessTableIdentifiers.get(name)
   }
 
   fn witnessTableAt(self, id: WitnessTableId): WitnessTable {
     witnessTables[id.value]
+  }
+
+  /**
+   * Fills a table in after it was added. A table is added empty and filled afterwards, because one of its members may
+   * need the very same table - `extend<Item: Show> List<Item> with Show` reaches itself through its own item - and a
+   * table that is not there yet would be built a second time.
+   */
+  fn setWitnessTable(var self, id: WitnessTableId, table: WitnessTable) {
+    witnessTables.set(id.value, table)
+  }
+
+  fn witnessTableCount(self): Int {
+    witnessTables.length()
   }
 
   fn hasWitnessTable(self, id: WitnessTableId): Bool {

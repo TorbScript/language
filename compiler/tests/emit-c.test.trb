@@ -106,6 +106,21 @@ const _ = double(21)
 #include "torb.h"
 #include "torb_natives.h"
 
+/*
+ * A witness table: the drop function of the boxed payload of a trait-typed value, then one function pointer per
+ * member the ABI can reach, in the order the lowering decided (docs/BACKEND.md 1.4 and the note of 5.6).
+ *
+ * The members are an array of an erased function type and every one of them is a thunk with the erased signature,
+ * so a call through a table converts the pointer back to the type the function really has - which is what C allows
+ * and what makes a dynamic call need no `void *` cast of an argument anywhere.
+ */
+typedef void (*torb_witness_member)(void);
+
+typedef struct torb_witness_table {
+  void (*drop)(void *);
+  const torb_witness_member *members;
+} torb_witness_table;
+
 /* The compile-time constants of the program. */
 static const int64_t s_literal__Int64_2 = 2;
 static const int64_t s_literal__Int64_21 = 21;
@@ -652,16 +667,135 @@ const _ = size(Bundle("ab", "cd", 2))
   }
 }
 
+/**
+ * The shapes of milestone 5.6 in C: the struct of a trait-typed value, the box its payload lives in, one thunk per member
+ * of a table, the table as static data, and a dynamic call that converts the member's pointer back to its real type.
+ */
+group "Trait-typed values" {
+  const source = r"""
+trait Sized {
+  fn size(self): Int
+}
+
+type Small with Sized {
+  amount: Int
+
+  fn size(self): Int {
+    amount
+  }
+}
+
+fn sizeOf(value: Sized): Int {
+  value.size()
+}
+
+const _ = sizeOf(Small(1))
+"""
+
+  test "a trait-typed value is the boxed payload and one table pointer per bound" {
+    const text = cOf(source)
+    assert(
+      text.contains(r"""struct T_object__acme_x2f_app_main_Sized {
+  torb_object *data;
+  const torb_witness_table *w0;
+};""")
+    )
+    assert(
+      text.contains(r"""struct T_payload__T_acme_x2f_app_main_Small {
+  torb_header header;
+  T_acme_x2f_app_main_Small f_value;
+};""")
+    )
+  }
+
+  /** The thunk is what makes the call well defined C: the table really holds a function of the erased signature. */
+  test "every member of a table is a thunk that unwraps the payload" {
+    const text = cOf(source)
+    assert(
+      text.contains(r"""static int64_t W_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_0(const void *self) {
+  const T_payload__T_acme_x2f_app_main_Small *box = (const T_payload__T_acme_x2f_app_main_Small *)self;
+  return t_acme_x2f_app_main_Small_size(box->f_value);
+}""")
+    )
+    assert(
+      text.contains(
+        "static const torb_witness_member w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_members[1] ="
+          + " \{ (torb_witness_member)W_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_0 \};"
+      )
+    )
+    assert(
+      text.contains(
+        "static const torb_witness_table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small ="
+          + " \{ NULL, w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_members \};"
+      )
+    )
+  }
+
+  test "a dynamic call reads the member out of the table and the payload out of the same slot" {
+    const text = cOf(source)
+    assert(text.contains("s1 = ((int64_t (*)(const void *))s0_value.w0->members[0])(s0_value.data);"))
+  }
+
+  /** The coercion: one allocation of the box, the payload into it, then the data pointer and the table. */
+  test "a value that becomes trait-typed is boxed where it is coerced" {
+    const text = cOf(source)
+    assert(
+      text.contains(
+        "T_payload__T_acme_x2f_app_main_Small *box = (T_payload__T_acme_x2f_app_main_Small *)"
+          + "torb_allocate(sizeof(T_payload__T_acme_x2f_app_main_Small), TORB_BLOCK_OBJECT);"
+      )
+    )
+    assert(text.contains("box->f_value = s1;"))
+    assert(text.contains("s2.data = (torb_object *)box;"))
+    assert(text.contains("s2.w0 = &w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small;"))
+  }
+
+  /**
+   * The payload of a trait-typed value is erased, so the drop function of its box comes out of the table the value
+   * carries - which is a function of the *target* type, and a table is per target type.
+   */
+  test "a trait-typed value is released through the drop function of its own table" {
+    const counted = r"""
+trait Sized {
+  fn size(self): Int
+}
+
+type Tagged with Sized {
+  label: String
+
+  fn size(self): Int {
+    label.byteLength()
+  }
+}
+
+fn sizeOf(value: Sized): Int {
+  value.size()
+}
+
+const _ = sizeOf(Tagged("ab"))
+"""
+    const text = ownedCOf(counted)
+    assert(text.contains("torb_release(s2.data, s2.w0->drop);"))
+    assert(
+      text.contains(
+        "static const torb_witness_table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Tagged = \{"
+          + " D_T_payload__T_acme_x2f_app_main_Tagged,"
+          + " w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Tagged_members \};"
+      )
+    )
+  }
+}
+
 group "What the C back end does not emit yet" {
   test "a type the back end has no C spelling for is a finding that names its milestone" {
     const source = r"""
-fn describeIt(value: Show): String {
-  value.show()
+fn apply(action: () => Int): Int {
+  0
 }
 
-const _ = describeIt(1)
+const _ = apply({ 1 })
 """
-    assert(findingsOf(source) == ["a trait-typed value (milestone 5.6)"])
+    assert(findingsOf(source) == ["a closure value (milestone 5.8)"])
   }
 
   /**
@@ -681,6 +815,7 @@ const _ = describeIt(1)
     const shown = match matchPrototype(program, signature, prototype, "torb_text_index_of") {
       .Direct => "direct"
       .WithLocation => "with the location"
+      .Converted(annotation, _) => "converted to `{annotation}`"
       .Mismatch(what) => what
     }
     assert(shown == "`torb_text_index_of`: the runtime answers `bool` where the lowering expects `int64_t`,"
@@ -697,9 +832,28 @@ const _ = describeIt(1)
     const shown = match matchPrototype(program, signature, prototype, "torb_text_repeat") {
       .Direct => "direct"
       .WithLocation => "with the location"
+      .Converted(annotation, _) => "converted to `{annotation}`"
       .Mismatch(what) => what
     }
     assert(shown == "with the location")
+  }
+
+  /**
+   * `Hash.hash(self): Int` against `uint64_t torb_hash_i64(int64_t)`: the one difference between a declaration of `std/`
+   * and its runtime symbol that is a conversion and not a wrapper, because the bits are the hash either way.
+   */
+  test "a native that answers the other signedness of the same width is converted where it arrives" {
+    const prototype = readPrototype("uint64_t torb_hash_i64(int64_t value);").expect("a prototype")
+    var program = IrProgram()
+    const found = program.internType(IrType.Integer(64, true))
+    const signature = IrSignature([IrParameter("value", found)], found)
+    const shown = match matchPrototype(program, signature, prototype, "torb_hash_i64") {
+      .Direct => "direct"
+      .WithLocation => "with the location"
+      .Converted(annotation, _) => "converted to `{annotation}`"
+      .Mismatch(what) => what
+    }
+    assert(shown == "converted to `int64_t`")
   }
 
   test "a program the back end can emit completely has no findings at all" {

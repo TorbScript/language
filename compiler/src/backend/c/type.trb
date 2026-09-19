@@ -1,6 +1,6 @@
 use IrProgram, IrTypeId, IrType, LayoutId, RuntimeKind from "../../ir/ir"
 use Layout, LayoutKind, Representation, FieldLayout from "../../ir/layout"
-use escapedComponent from "../../ir/mangle"
+use escapedComponent, objectTypeName from "../../ir/mangle"
 use CMember, CDeclaration from "./writer"
 
 /**
@@ -43,8 +43,35 @@ public fn cTypeOf(program: IrProgram, id: IrTypeId): String {
       "{program.layoutAt(layout).name} *"
     }
     .Runtime(kind, _) => cTypeOfRuntime(kind)
+    // The boxed payload plus one table pointer per bound: a value, so it is passed and returned like a record
+    .Object(bounds) => objectTypeName(program, bounds)
     _ => ""
   }
+}
+
+/**
+ * The struct of one trait-typed value: the boxed payload and one witness table pointer per bound, in bound order
+ * (BACKEND 3.1). It is not a `Layout`, because it has no fields of the program in it - only the erased pointers of the
+ * ABI - so it is written here and nowhere else.
+ */
+public fn objectDeclarationOf(program: IrProgram, id: IrTypeId): CDeclaration? {
+  const bounds = match program.typeAt(id) {
+    .Object(found) => found
+    _ => {
+      return None
+    }
+  }
+  var members: List<CMember> = []
+  members.add(CMember.Field("torb_object *", "data"))
+  for index in 0..bounds.length() {
+    members.add(CMember.Field("const torb_witness_table *", witnessMemberNameOf(index)))
+  }
+  Some(CDeclaration.Struct(objectTypeName(program, bounds), members))
+}
+
+/** `w0`, `w1`: the witness pointer of one bound of a trait-typed value, in the order the bounds are in. */
+public fn witnessMemberNameOf(bound: Int): String {
+  "w{bound}"
 }
 
 /** Which milestone brings the C type of this type. One sentence, in the words of the sub-milestone table. */
@@ -55,7 +82,7 @@ public fn whyNoCType(program: IrProgram, id: IrTypeId): String {
   match program.typeAt(id) {
     .FixedArray(_, _) => "an `Array<Item, Size>` value (milestone 5.9)"
     .Closure(_) => "a closure value (milestone 5.8)"
-    .Object(_) => "a trait-typed value (milestone 5.6)"
+    .Object(_) => "a trait-typed value without bounds"
     .Box(_) => "a captured `var` binding (milestone 5.8)"
     .Lazy(_) => "a `lazy` parameter (milestone 5.8)"
     .Runtime(kind, _) => whyNoRuntimeCType(kind)
