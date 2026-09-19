@@ -339,9 +339,10 @@ const emptyMap: Map<String, Int> = [:]
   `(Int, Int)` are one type, and a labeled tuple may be used where an unlabeled one is expected and back. A label at
   a position where the expected type has a different one is an error, so a swap cannot happen silently.
 - `Void` is the type with exactly one value, `Never` the type of expressions that do not return (`panic`, `return`).
-  **`Void` is the one name that is both a type and its only value** (as `Unit` is in Kotlin): a function without a
-  result type returns `Void`, a block that ends in a statement has the value `Void`, and `Ok(Void)` passes it on.
-  `Never` has no value at all and converts to every type, which is why `panic "..."` fits into any expression.
+  **The one value of `Void` is the keyword literal `void`,** as `true` and `false` are the values of `Bool`: a function
+  without a result type returns `Void`, a block that ends in a statement has the value `void`, and `Ok(void)` passes it
+  on. `Void` in an expression is an error that says so. `Never` has no value at all and converts to every type, which is
+  why `panic "..."` fits into any expression.
 - `Void`, `Never` and `Range<Value>` are declared in the prelude like every other type. `0..10` is
   `Range(start: Some(0), end: Some(10))`, `0..=10` sets `isInclusive`, and `0..` and `..10` leave one end `None`.
   `list[from..to]` is a `Range` passed to `Slice.slice`.
@@ -1376,7 +1377,7 @@ Types and values are strictly separate worlds:
 
 - A type never flows as a value. There is no `Type` type, no `typeof`, no `value is Value` on generic `Value`, no
   `Class.forName`. Types appear only in type positions (after `:`, in `<>`, after `with`/`where`, right of `type X =`).
-  `Void` is the one name that is both a type and a value, and it is no bridge: it carries nothing to look at.
+  The values of the built-in types are lowercase literals (`true`, `false`, `void`), never their type name.
 - The only bridges are syntactic: `Point(...)` (constructor), `Point.origin` / `Point.parse(...)` (static members),
   `Shape.Circle` (variants), `Point.area` (method reference).
 - So there is **no runtime reflection**. It could not be implemented identically in all back ends (monomorphized vs.
@@ -1467,12 +1468,12 @@ const name = findUser(1)?.name ?? "anonymous"            // Optional chaining, d
 fn start(): Result<Void, AppError> {
   const config = loadConfig("app.trb")?                  // Early return on Fail. IoError -> AppError through `From`
   ...
-  Ok(Void)
+  Ok(void)
 }
 
 fn main(): Result<Void, Error> {                         // Any error, handed up: `Error` is a trait
   start()?                                               // AppError -> Error, because `AppError` carries the trait
-  Ok(Void)
+  Ok(void)
 }
 
 panic "unreachable"                                      // Bugs. Not catchable, aborts the program.
@@ -2222,10 +2223,12 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Only the innermost receiver is implicit (instead of an annotation like `@DslMarker`)
 - `await()` is a postfix method (composes with `?` and chaining)
 - No AST macros, no annotations (for now)
-- `Void` is the one name that is both a type and its only value (as `Unit` in Kotlin), and `Void`, `Never` and
-  `Range<Value>` are ordinary declarations of the prelude. Rejected: a zero-field constructor call `Void()` - it
-  would make the only value of the language the one that has to be called into existence, and `Ok(Void)` reads
-  like what it is. `Void` carries nothing, so it is no bridge from types to values.
+- **The one value of `Void` is the keyword literal `void`** (`Ok(void)`, `return void`), and `Void`, `Never` and
+  `Range<Value>` are ordinary declarations of the standard library. A built-in type says its values in lowercase, as
+  `Bool` says `true` and `false`; an uppercase name is a type or a case, without exception. Rejected: `Void` as its own
+  value (it was the one name in the language that was both, and an exception costs more than a keyword), and a
+  zero-field constructor call `Void()` (it would make the only value of the language the one that has to be called into
+  existence).
 - A temporary is a valid _argument_ for a `var` parameter and still not a valid _base of a path_.
   `using File.open(path)? { ... }` is not an exception to "no dead changes": the callee is the only owner, so there
   is nowhere the change could have to be written back to.

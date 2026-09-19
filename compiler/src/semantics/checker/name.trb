@@ -205,10 +205,14 @@ public fn symbolTarget(
   expected: TypeId? = None,
   explicit: List<TypeId> = [],
 ): Target {
-  // `Void` is the one name that is both a type and its only value (gap 1), whether it is the name of the language or
-  // the `native type Void` of the prelude - so `Ok(Void)` needs no call site of its own
+  // The values of a built-in type are lowercase literals, so `Void` in an expression teaches the spelling of its one
+  // value - whether it is the name of the language or the `native type Void` of the prelude
   if checker.wellKnown.isVoid(symbol) {
-    return Target(Resolution.VoidValue, checker.voidType, name: text)
+    checker.reportHere(
+      Diagnostic.error("`Void` is a type, not a value: its one value is written `void`", at)
+        .withNote("`void` is to `Void` what `true` and `false` are to `Bool`")
+    )
+    return Target(Resolution.Deferred, checker.invalidType, name: text)
   }
   match checker.symbolAt(symbol).kind {
     .Function => callableTarget(checker, symbol, text, explicit)
@@ -235,13 +239,8 @@ public fn symbolTarget(
     // `Target.from(self)`, `Item.from(0)`: a generic parameter is a namespace for the members of its bounds
     .GenericParameter => parameterNamespaceTarget(checker, symbol, text)
     .Field(_) => deferredTarget(checker)
-    // `Void` is the one name that is both a type and its only value (gap 1)
-    .Builtin => {
-      if checker.wellKnown.isVoid(symbol) {
-        return Target(Resolution.VoidValue, checker.voidType, name: text)
-      }
-      deferredTarget(checker)
-    }
+    // `Never` has no value at all, and `Void` was answered above
+    .Builtin => deferredTarget(checker)
   }
 }
 

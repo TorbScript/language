@@ -42,8 +42,8 @@ fn problemsOf(var program: IrProgram, identifier: FunctionId): List<String> {
 /** A callee with one parameter of the given mode and no body worth reading: only its signature is ever asked about. */
 fn calleeTaking(var program: IrProgram, name: String, ownership: Ownership): FunctionId {
   const text = textType(program)
-  const void = program.internType(IrType.VoidType)
-  const signature = IrSignature([IrParameter("value", text, false, ownership)], void)
+  const voidType = program.internType(IrType.VoidType)
+  const signature = IrSignature([IrParameter("value", text, false, ownership)], voidType)
   var builder = newFunction(name, None, signature, "body")
   emit(builder, Instruction.Release(Slot(0)))
   terminate(builder, Terminator.Return(None))
@@ -54,8 +54,8 @@ group "A value that is released twice, or used after it is gone" {
   test "a second release of the same value is reported where it stands" {
     var program = IrProgram()
     const text = textType(program)
-    const void = program.internType(IrType.VoidType)
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], void)
+    const voidType = program.internType(IrType.VoidType)
+    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], voidType)
     var builder = newFunction("t_double", None, signature, "body")
     emit(builder, Instruction.Release(Slot(0)))
     emit(builder, Instruction.Release(Slot(0)))
@@ -101,8 +101,8 @@ group "A value that is never let go of" {
   test "a parameter the caller handed over and nothing consumed is a leak at the return" {
     var program = IrProgram()
     const text = textType(program)
-    const void = program.internType(IrType.VoidType)
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], void)
+    const voidType = program.internType(IrType.VoidType)
+    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], voidType)
     var builder = newFunction("t_leak", None, signature, "body")
     terminate(builder, Terminator.Return(None))
     const identifier = finishFunction(program, builder)
@@ -117,10 +117,10 @@ group "A value that is never let go of" {
     var program = IrProgram()
     const text = textType(program)
     const boolean = program.internType(IrType.Boolean)
-    const void = program.internType(IrType.VoidType)
+    const voidType = program.internType(IrType.VoidType)
     const signature = IrSignature(
       [IrParameter("flag", boolean), IrParameter("text", text, false, Ownership.Owned)],
-      void,
+      voidType,
     )
     var builder = newFunction("t_oneSide", None, signature, "body")
     const then = addBlock(builder, "then", None)
@@ -144,8 +144,8 @@ group "A parameter the caller keeps the count of" {
   test "a borrowed parameter is never released" {
     var program = IrProgram()
     const text = textType(program)
-    const void = program.internType(IrType.VoidType)
-    const signature = IrSignature([IrParameter("text", text)], void)
+    const voidType = program.internType(IrType.VoidType)
+    const signature = IrSignature([IrParameter("text", text)], voidType)
     var builder = newFunction("t_lent", None, signature, "body")
     emit(builder, Instruction.Release(Slot(0)))
     terminate(builder, Terminator.Return(None))
@@ -174,8 +174,8 @@ group "A parameter the caller keeps the count of" {
   test "nothing that is not counted is released: the type says so" {
     var program = IrProgram()
     const int64 = program.internType(IrType.Integer(64, true))
-    const void = program.internType(IrType.VoidType)
-    const signature = IrSignature([IrParameter("value", int64)], void)
+    const voidType = program.internType(IrType.VoidType)
+    const signature = IrSignature([IrParameter("value", int64)], voidType)
     var builder = newFunction("t_number", None, signature, "body")
     emit(builder, Instruction.Release(Slot(0)))
     terminate(builder, Terminator.Return(None))
@@ -207,10 +207,10 @@ group "A position that keeps a value says so" {
   test "an argument that disagrees with the callee's signature is reported either way round" {
     var program = IrProgram()
     const text = textType(program)
-    const void = program.internType(IrType.VoidType)
+    const voidType = program.internType(IrType.VoidType)
     const keeps = calleeTaking(program, "t_keeps", Ownership.Owned)
     const borrows = calleeTaking(program, "t_borrows", Ownership.Borrowed)
-    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], void)
+    const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], voidType)
     var builder = newFunction("t_disagrees", None, signature, "body")
     emit(builder, Instruction.Call(None, keeps, [borrowed(Slot(0))], []))
     emit(builder, Instruction.Call(None, borrows, [Argument(Slot(0), Ownership.Owned, true)], []))

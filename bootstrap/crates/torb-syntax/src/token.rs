@@ -104,6 +104,8 @@ pub enum Keyword {
     Return,
     True,
     False,
+    /// The one value of `Void`, like `true` and `false` are the values of `Bool`
+    Void,
     SelfValue,
     SelfType,
     With,
@@ -139,6 +141,7 @@ impl Keyword {
             "return" => Keyword::Return,
             "true" => Keyword::True,
             "false" => Keyword::False,
+            "void" => Keyword::Void,
             "self" => Keyword::SelfValue,
             "Self" => Keyword::SelfType,
             "with" => Keyword::With,

@@ -449,8 +449,7 @@ In order, first hit wins:
 3. **The innermost receiver**: members of `self` - fields, constants, methods, extension members visible in this file,
    trait members (section 4.1). A method body and a receiver closure are the same thing here.
 4. **File scope**: own top-level declarations of the file, imported names, namespace aliases.
-5. **Prelude**. `Void` resolves here to the one value of its type: it is the only name that is both a type and a
-   value (gap 1), and in an expression position it is the value.
+5. **Prelude**.
 6. Error.
 
 **Only one receiver is implicit.** Outer receivers and the `self` of an enclosing method are _not_ searched; to reach
@@ -1703,10 +1702,16 @@ _Proposal:_ the prelude declares `public native type Void`, `public native type 
 at all - "calls without arguments always need `()`" already covers it - and it keeps types out of expression
 positions.
 
-_Decision:_ accepted, with one change: the unit value stays written `Void`, not `Void()`. **`Void` is the one name
-that is both a type and its only value** (as `Unit` is in Kotlin), so no call site changes. A function without a
-result type returns `Void`, and a block that ends in a statement has the value `Void`. `Void`, `Never` and
-`Range<Value>` are declared in the prelude as proposed (`std/prelude/src/void.trb`, `range.trb`).
+_Decision:_ accepted, with one change: **the one value of `Void` is the keyword literal `void`**, not `Void()` and
+not `Void`. The values of a built-in type are lowercase literals, exactly as `true` and `false` are the values of
+`Bool`, and an uppercase name is a type or a case - there is no exception. `Ok(void)`, `return void`,
+`const nothing = void`; `Void` in an expression is an error that teaches the spelling ("`Void` is a type, not a value:
+its one value is written `void`"). A function without a result type returns `Void`, and a block that ends in a
+statement has the value `void`. `Void`, `Never` and `Range<Value>` are declared in the standard library as proposed
+(`std/core/src/void.trb`, `range.trb`).
+
+(An earlier decision made `Void` both the type and its value, as `Unit` is in Kotlin. It was the one name in the
+language that was both, and that exception is what this replaces.)
 
 **2. `using` passes a temporary to a `var` parameter.**
 "`var` Paths": "A temporary is not a `var` path: `iterator().next()` is a compile error." But

@@ -110,6 +110,9 @@ fn declarations() {
         "extend<Source, Target> Source with Into<Target> where Target: From<Source> {\n  fn into(self): Target { Target.from(self) }\n}",
     );
     parse_ok("use * as http from \"std/net/http\"\npublic use Stack, ArrayStack from \"./collections/stack\"");
+    // `void` is the one value of `Void` and therefore a keyword, in an expression and in a pattern
+    parse_ok("const nothing = void\nconst isNothing = match nothing { void => 1 }");
+    assert!(first_error("fn void() {}").contains("keyword"));
     assert!(first_error("fn record(type: String) {}").contains("keyword"));
 
     // Any name of a `use` list may get a local name of its own, and a case is imported by its path

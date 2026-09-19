@@ -50,6 +50,7 @@ public fn evaluateConstant(var lowering: Lowering, expression: Expression): Cons
     .IntegerLiteral(text) => integerConstant(lowering, text, false, annotation, expression.span)
     .FloatLiteral(text) => floatConstant(lowering, text, false, annotation, expression.span)
     .BoolLiteral(value) => Some(ConstantValue(StaticContents.Literal(LiteralValue.Boolean(value)), annotation))
+    .VoidLiteral => Some(ConstantValue(StaticContents.VoidValue, annotation))
     .CharLiteral(value) => Some(ConstantValue(StaticContents.Literal(LiteralValue.Character(value)), annotation))
     .TextLiteral(segments) => textConstant(lowering, segments, annotation, expression.span)
     .Name(_) | .Member(_, _, _) => namedConstant(lowering, expression, annotation)
@@ -410,12 +411,11 @@ fn shownConstant(value: ConstantValue): String? {
 
 // --- Names, tuples and constructors ---------------------------------------------------------------------------------
 
-/** A reference to another compile-time constant, and `Void`, which is the one name that is also a value (gap 1). */
+/** A reference to another compile-time constant. */
 fn namedConstant(var lowering: Lowering, expression: Expression, annotation: IrTypeId): ConstantValue? {
   const module = lowering.module
   const resolution = lowering.checker.resolutionAt(module, expression.span)?
   match resolution {
-    .VoidValue => Some(ConstantValue(StaticContents.VoidValue, annotation))
     .Constant(symbol, _) => {
       const identifier = staticOfConstant(lowering, symbol)?
       const value = lowering.program.staticAt(identifier)

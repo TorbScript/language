@@ -47,7 +47,7 @@ impl Parser<'_> {
             | TokenKind::Char(_)
             | TokenKind::Text(_)
             | TokenKind::Minus
-            | TokenKind::Keyword(Keyword::True | Keyword::False) => self.literal_pattern(),
+            | TokenKind::Keyword(Keyword::True | Keyword::False | Keyword::Void) => self.literal_pattern(),
             _ => {
                 self.error_here(format!("Expected a pattern, found {}", self.kind().describe()));
                 PatternKind::Error

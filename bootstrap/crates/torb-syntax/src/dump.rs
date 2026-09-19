@@ -252,6 +252,7 @@ fn expression(node: &Expression) -> String {
         ExpressionKind::Integer(value) => format!("IntegerLiteral(text: {})", text(value)),
         ExpressionKind::Float(value) => format!("FloatLiteral(text: {})", text(value)),
         ExpressionKind::Bool(value) => format!("BoolLiteral(value: {value})"),
+        ExpressionKind::VoidLiteral => "VoidLiteral".to_string(),
         ExpressionKind::Char(value) => format!("CharLiteral(value: '{value}')"),
         ExpressionKind::Text(segments) => format!(
             "TextLiteral(segments: {})",

@@ -15,7 +15,6 @@ pub fn global(name: &'static str) -> Option<Value> {
     Some(match name {
         "Some" | "Ok" | "Fail" => Value::Function(Rc::new(Function::Wrap(name))),
         "None" => Value::NONE,
-        "Void" => Value::Void,
         "print" | "printError" | "readLine" | "panic" | "test" | "group" | "do" | "describe" => {
             Value::Function(Rc::new(Function::Native { owner: "", name }))
         }

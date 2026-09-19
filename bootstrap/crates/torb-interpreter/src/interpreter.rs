@@ -387,6 +387,7 @@ impl Interpreter {
             ExpressionKind::Binary { operator, left, right } => self.binary(*operator, left, right, environment, span),
             ExpressionKind::Member { target, name, optional } => self.eval_member(target, name, *optional, environment, span),
             ExpressionKind::Bool(value) => Ok(Value::Bool(*value)),
+            ExpressionKind::VoidLiteral => Ok(Value::Void),
             ExpressionKind::Char(value) => Ok(Value::Char(*value)),
             ExpressionKind::Integer(text) => self.eval_integer(text, environment, span),
             ExpressionKind::Index { target, index } => {
@@ -2087,6 +2088,7 @@ fn expression_kind(kind: &ExpressionKind) -> &'static str {
         ExpressionKind::Integer(_) => "eval.Integer",
         ExpressionKind::Float(_) => "eval.Float",
         ExpressionKind::Bool(_) => "eval.Bool",
+        ExpressionKind::VoidLiteral => "eval.Void",
         ExpressionKind::Char(_) => "eval.Char",
         ExpressionKind::Text(_) => "eval.Text",
         ExpressionKind::Name(_) => "eval.Name",

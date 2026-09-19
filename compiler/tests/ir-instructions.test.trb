@@ -59,7 +59,7 @@ group "A function that uses every instruction" {
     const int32 = program.internType(IrType.Integer(32, true))
     const float64 = program.internType(IrType.Floating(64))
     const boolean = program.internType(IrType.Boolean)
-    const void = program.internType(IrType.VoidType)
+    const voidType = program.internType(IrType.VoidType)
     const strings = program.internType(IrType.Text)
     const listOfInteger = program.internType(IrType.Runtime(RuntimeKind.ListStorage, [int64]))
     const mapping = program.internType(IrType.Runtime(RuntimeKind.MapStorage, [strings, int64]))
@@ -73,7 +73,7 @@ group "A function that uses every instruction" {
     const pairType = program.internType(IrType.Tuple(pairLayout))
     const show = program.internTrait(IrTrait(SymbolId(1), SymbolPath("std/prelude", "convert", [], "Show"), []))
     const objectType = program.internType(IrType.Object([show]))
-    const closureShape = program.internSignature(IrSignature([IrParameter("value", int64)], void))
+    const closureShape = program.internSignature(IrSignature([IrParameter("value", int64)], voidType))
     const closureType = program.internType(IrType.Closure(closureShape))
     const at = program.internLocation(Location("src/all.trb", 12, 5))
 
@@ -85,7 +85,7 @@ group "A function that uses every instruction" {
     )
     terminate(doubleBuilder, Terminator.Return(Some(owned(Slot(0)))))
     const double = finishFunction(program, doubleBuilder)
-    var innerBuilder = newFunction("t_main_inner", None, IrSignature([IrParameter("value", int64)], void), "body")
+    var innerBuilder = newFunction("t_main_inner", None, IrSignature([IrParameter("value", int64)], voidType), "body")
     terminate(innerBuilder, Terminator.Return(None))
     const inner = finishFunction(program, innerBuilder)
     const showTable = program.addWitnessTable(WitnessTable("w_show__Int64", show, int64, [double], []))
@@ -97,7 +97,7 @@ group "A function that uses every instruction" {
       StaticValue("s_main_number", int64, StaticContents.Literal(LiteralValue.Integer(7)))
     )
     const ratio = program.addStatic(StaticValue("s_main_ratio", float64, StaticContents.Floating(0.5)))
-    const nothing = program.addStatic(StaticValue("s_main_nothing", void, StaticContents.VoidValue))
+    const nothing = program.addStatic(StaticValue("s_main_nothing", voidType, StaticContents.VoidValue))
     const origin = program.addStatic(
       StaticValue("s_main_origin", pairType, StaticContents.Aggregate(pairLayout, 0, [number, greeting]))
     )
@@ -113,7 +113,7 @@ group "A function that uses every instruction" {
         IrParameter("value", int64),
         IrParameter("flag", boolean),
       ],
-      void,
+      voidType,
       [show],
     )
     var builder = newFunction("t_main_everything", Some(SymbolId(9)), signature, "body")
@@ -252,8 +252,8 @@ group "A function that uses every instruction" {
   test "a task body says that it is one, and only it suspends" {
     var program = IrProgram()
     const int64 = program.internType(IrType.Integer(64, true))
-    const void = program.internType(IrType.VoidType)
-    var builder = newFunction("t_main_wait", None, IrSignature([IrParameter("state", int64)], void), "entry")
+    const voidType = program.internType(IrType.VoidType)
+    var builder = newFunction("t_main_wait", None, IrSignature([IrParameter("state", int64)], voidType), "entry")
     setFunctionKind(builder, FunctionKind.TaskResume)
     const resumed = openBlock(builder, "resumed", None)
     terminateBlock(builder, BlockId(0), Terminator.Jump(resumed))

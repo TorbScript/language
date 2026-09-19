@@ -45,6 +45,27 @@ fn useItems(text: String): List<UseItem> {
   }
 }
 
+group "Literals" {
+  test "`void` is a literal, in an expression and in a pattern" {
+    match expression("void") {
+      .VoidLiteral => {}
+      other => panic "Unexpected tree: {other}"
+    }
+    match bound("const text = match nothing \{ void => 1 \}") {
+      .Match(_, arms) => match arms[0].pattern.kind {
+        .Literal(value) => match value.kind {
+          .VoidLiteral => {}
+          other => panic "Unexpected literal: {other}"
+        }
+        other => panic "Unexpected pattern: {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+    // A keyword cannot be a name, so nothing can be called `void` anymore
+    assert(messages("fn void() \{\}") == ["`void` is a keyword and cannot be used as a name here"])
+  }
+}
+
 /** Source text of the node, to say what a tree looks like without spelling out spans. */
 fn source(text: String, expression: Expression): String {
   text[expression.span.start..expression.span.end]

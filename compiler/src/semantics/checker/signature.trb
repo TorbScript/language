@@ -472,8 +472,8 @@ fn functionSignature(
   }
   // Without a body there is nothing to infer from, so the result is `Void`
   if !hasBody {
-    const void = checker.voidType
-    return Signature(symbol, generics, FunctionForm(parameters, void), bounds, owner, takesSelf, isVarSelf, false)
+    const voidType = checker.voidType
+    return Signature(symbol, generics, FunctionForm(parameters, voidType), bounds, owner, takesSelf, isVarSelf, false)
   }
   inferredSignature(checker, symbol, module, function, generics, parameters, bounds, owner, takesSelf, isVarSelf, rule)
 }
@@ -499,11 +499,11 @@ fn inferredSignature(
   isVarSelf: Bool,
   rule: ResultRule,
 ): Signature {
-  const void = checker.voidType
+  const voidType = checker.voidType
   const provisional = Signature(
     symbol,
     generics,
-    FunctionForm(parameters, void),
+    FunctionForm(parameters, voidType),
     bounds,
     owner,
     takesSelf,
@@ -523,7 +523,7 @@ fn inferredSignature(
     parameters,
     takesSelf,
     isVarSelf,
-    void,
+    voidType,
     true,
     rule,
   )
@@ -534,7 +534,7 @@ fn inferredSignature(
     return provisional
   }
   // The recursion assumed `Void`, and the body produces something else: only an annotation can settle that
-  if namedItself && result != void && result != checker.neverType {
+  if namedItself && result != voidType && result != checker.neverType {
     reportCycle(checker, symbol)
   }
   const found = provisional.copy(form: FunctionForm(parameters, result))

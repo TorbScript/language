@@ -92,10 +92,13 @@ group "Literals" {
     assert(found.typeOf("0..10") == "Range<Int64>")
   }
 
-  test "`Void` is the one name that is both a type and its only value" {
-    const found = probe(inBody("  const nothing: Void = (Void)"))
-    assert(found.typeOf("(Void)") == "Void")
-    assert(found.resolutionOf("(Void)") == "void")
+  test "`void` is the one value of `Void`, and `Void` in an expression teaches that" {
+    const found = probe(inBody("  const nothing: Void = (void)"))
+    assert(found.typeOf("(void)") == "Void")
+    assert(problems(inBody("  const nothing: Void = (void)")).isEmpty())
+    const wrong = inBody("  const nothing: Void = Void")
+    assert(problems(wrong) == ["`Void` is a type, not a value: its one value is written `void`"])
+    assert(notes(wrong) == ["`void` is to `Void` what `true` and `false` are to `Bool`"])
   }
 }
 

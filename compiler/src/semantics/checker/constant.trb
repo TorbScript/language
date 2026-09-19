@@ -93,6 +93,7 @@ public fn evaluateConstant(
     .IntegerLiteral(text) => integerConstant(text, false, expression.span)
     .FloatLiteral(text) => floatConstant(text, false, expression.span)
     .BoolLiteral(value) => ConstantResult.Value(ConstantValue.Boolean(value))
+    .VoidLiteral => ConstantResult.Value(ConstantValue.Composite)
     .CharLiteral(value) => ConstantResult.Value(ConstantValue.Character(value))
     .TextLiteral(segments) => textConstant(checker, module, segments, depth)
     .Unary(operator, operand) => unaryConstant(checker, module, operator, operand, depth, expression.span)
@@ -254,7 +255,7 @@ fn namedConstant(var checker: Checker, module: ModuleId, expression: Expression,
   }
   match resolution {
     .Constant(symbol, _) => constantOfSymbol(checker, symbol, expression.span, depth)
-    .CaseOf(_, _) | .VoidValue => ConstantResult.Value(ConstantValue.Composite)
+    .CaseOf(_, _) => ConstantResult.Value(ConstantValue.Composite)
     .Deferred => ConstantResult.Value(ConstantValue.Composite)
     _ => ConstantResult.NotConstant(expression.span)
   }

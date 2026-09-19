@@ -77,9 +77,9 @@ impl Parser<'_> {
         match self.kind() {
             TokenKind::Identifier => !matches!(self.text(self.span()), "as" | "by" | "from") || *self.kind_at(1) == TokenKind::Colon,
             TokenKind::Integer | TokenKind::Float | TokenKind::Char(_) | TokenKind::Text(_) => true,
-            TokenKind::Keyword(Keyword::True | Keyword::False | Keyword::SelfValue | Keyword::SelfType | Keyword::If | Keyword::Match) => {
-                true
-            }
+            TokenKind::Keyword(
+                Keyword::True | Keyword::False | Keyword::Void | Keyword::SelfValue | Keyword::SelfType | Keyword::If | Keyword::Match,
+            ) => true,
             // A label that is a keyword: `move from: a, to: b`
             TokenKind::Keyword(_) => *self.kind_at(1) == TokenKind::Colon,
             _ => false,
@@ -325,6 +325,10 @@ impl Parser<'_> {
             TokenKind::Keyword(Keyword::False) => {
                 self.bump();
                 ExpressionKind::Bool(false)
+            }
+            TokenKind::Keyword(Keyword::Void) => {
+                self.bump();
+                ExpressionKind::VoidLiteral
             }
             TokenKind::Identifier | TokenKind::Keyword(Keyword::SelfValue | Keyword::SelfType) => {
                 self.bump();

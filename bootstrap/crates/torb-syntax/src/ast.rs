@@ -325,6 +325,8 @@ pub enum ExpressionKind {
     Integer(String),
     Float(String),
     Bool(bool),
+    /// `void`: the one value of `Void`
+    VoidLiteral,
     Char(char),
     Text(Vec<TextSegment>),
     /// A name, including `_`, `_2`, `self` and `Self`

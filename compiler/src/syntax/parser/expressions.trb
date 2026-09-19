@@ -92,7 +92,7 @@ fn startsCommandArgument(parser: Parser): Bool {
   match parser.kind() {
     .Identifier => !["as", "by", "from"].contains(parser.text(parser.span())) || isLabel
     .IntegerLiteral | .FloatLiteral | .CharLiteral(_) | .TextLiteral(_) => true
-    .Reserved(.True | .False | .SelfValue | .SelfType | .If | .Match) => true
+    .Reserved(.True | .False | .Void | .SelfValue | .SelfType | .If | .Match) => true
     // A label that is a keyword: `move from: a, to: b`
     .Reserved(_) => isLabel
     _ => false
@@ -343,6 +343,10 @@ public fn parsePrimaryExpression(var parser: Parser): Expression {
     .Reserved(.False) => {
       parser.bump()
       ExpressionKind.BoolLiteral(false)
+    }
+    .Reserved(.Void) => {
+      parser.bump()
+      ExpressionKind.VoidLiteral
     }
     .Identifier | .Reserved(.SelfValue | .SelfType) => {
       parser.bump()
