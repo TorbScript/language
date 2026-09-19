@@ -389,6 +389,8 @@ fn connect(host: String, transport: "tcp" | "udp" = "tcp") { ... }   // They wor
   **only literals can be combined with `|`**. There are no unions of types (`Int | String`): use a type with cases,
   or accept `<Value: Into<Width>>`.
 - `match` on a literal type is exhaustive without `_`. Back to the base type: interpolation or `status.into()`.
+- The generated implementation is `Parse<LiteralParseError>`: `LiteralParseError { text, expected }` names the text
+  that did not match and the members it could have been, and shows as `'away' is not one of "online", "offline"`.
 - Two literal types are the same type if they have the same members. A subset is not assignable (no subtyping).
   That identity is structural, so a literal type has no owner and **cannot be extended**: `extend "tcp" | "udp"` is
   an error, with or without a trait. Only the generated members exist. For behavior, declare a type with cases.
