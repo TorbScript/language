@@ -774,3 +774,58 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Entschieden:** Nein. `match _` steht im Repo 0-mal, ein Closure, das sofort seinen Parameter matcht, 2-mal; zwei
     erlaubte Schreibweisen wären wieder "was ist besser?"; ein subjektloses `when`/`switch` heißt in Kotlin und Go
     "Kette von Bedingungen". `_` macht sichtbar, was gematcht wird. Nachrüstbar, weil `match {` heute ein Syntaxfehler ist.
+
+- (Chat, 2026-09-19) Der HTTP-Body soll ein Stream sein; ein sinnvolles Streaming-Protokoll (wie in Rust, aber
+  ergonomisch, stabil, in die Sprache integriert); JSON und alle anderen Encoder/Decoder müssen Streams nativ können.
+  - **Entschieden (Design, ich) - wird gelöst:**
+    1. **Ein Protokoll, pull-basiert:** `trait Stream<Item> { fn next(self): Task<Item?> }` - das asynchrone
+       Gegenstück zu `Iterator` (`next(var self): Item?`). Implementierer sind `shared type`s (ein Stream hat
+       Identität und wird verbraucht; `var self` über ein `await` hinweg wäre ein offener Exklusiv-Zugriff).
+       `Channel<Item>` IST ein Stream (`receive` = `next`) und die Brücke für Produzenten, die schieben. Kein
+       `Sink`/`AsyncWrite`: geschrieben wird, indem man einen Stream übergibt (Request-Body, `File.write(stream)`) -
+       Backpressure ergibt sich aus dem Ziehen. Kein `Pin`, kein `poll`, keine Sync/Async-Dopplung von Read/Write.
+    2. **In der Sprache:** `for chunk in stream { … }` geht in Funktionen, die `await()` dürfen (dieselbe Regel wie
+       für `await()`); kein neues Schlüsselwort. Stufen wie bei `Iterable` als Default-Methoden des Traits (`map`,
+       `filter`, `take`, `collect(collector)` - `Channel.collect` gibt es schon), `Stream.from(iterable)`.
+    3. **Fehler:** Elemente sind `Result` (`Stream<Result<List<UInt8>, HttpError>>`), wie in Rust; `chunk?` im Rumpf.
+    4. **HTTP:** `Response.body: Body`, `shared type Body with Stream<…>, Close`; `body.bytes(limit:)`, `.text()`,
+       `.json<Value>()` (alle `Task`, mit Größenlimit - wichtig für Server), `.items<Item>(format)`;
+       `Body.from(text|bytes|stream)`, `Body.json(value)`, `Body.empty()`. `response.json<User>()` wird `Task`.
+    5. **Encode/Decode bleiben synchron und unverändert** (abgeleiteter Code, keine "gefärbten" Decoder - das ist die
+       Stabilität). Streaming passiert auf der Ebene, auf der es in der Praxis vorkommt - dem **Element**: jedes Format
+       implementiert `trait Format` mit (a) ganzem Wert aus Bytes, (b) `decodeItems<Item>(source): Stream<Result<Item, …>>`
+       und `encodeItems<Item>(items): Stream<List<UInt8>>` (JSON-Array, NDJSON, MessagePack-Folgen, CSV-Zeilen, SSE):
+       ein wiederaufnehmbarer *Framer* des Formats findet die Elementgrenze im Puffer, zieht bei Bedarf asynchron nach,
+       das Element selbst wird synchron dekodiert - Speicher = ein Element. (c) später Ereignis-Ebene
+       (`Json.events`, SAX-artig) für beliebig große Einzeldokumente. Ein einzelner Riesenwert in ein `struct` zu
+       streamen spart nur den Textpuffer (der Wert liegt ohnehin im Speicher) und würde jeden Decoder färben: nein.
+    6. **Wenig Natives:** nativ sind nur die Quellen (Socket, Datei-Chunks); Trait, Stufen, Framer, `Body`-Helfer
+       sind TorbScript.
+  - **Ablauf:** Spezifikation (CONCEPT "Streams", `docs/`) + Deklarationen in `std/task`, `std/encoding`, `std/json`,
+    `std/http`, `std/fs` + Checker-Regel für `for` über einen Stream, sobald Syntax-Runde und Canon-Anwendung
+    gemergt sind (beide fassen `std/` an). Laufzeit (Tasks, Sockets) kommt mit Meilenstein 7 bzw. 10.
+  - **Nachtrag (Nutzer: "auch FS und io sollen das Protokoll sauber nutzen"):** Ja, ein Protokoll für alle Quellen.
+    `std/fs`: `file.chunks(size:)`, `file.lines()` als `Stream<Result<…, IoError>>` (heute liefert `File.lines` ein
+    `Iterable<String>` und verschluckt Lesefehler mitten in der Datei), `File.write(path, stream)`/`file.write(stream)`;
+    die Ganz-Datei-Helfer (`readText`, `writeText`) bleiben als Kurzform. `std/io`: Standard-Eingabe als Stream
+    (`input.lines()`, `input.chunks()`), Standard-Ausgabe/-Fehler nehmen einen Stream; `readLine()` bleibt als Kurzform.
+    `std/process`: Ein-/Ausgabe eines Kindprozesses sind dieselben Streams. Text über Bytes: eine Stufe
+    `lines()`/`text()` auf `Stream<…List<UInt8>…>`, die UTF-8 über Chunk-Grenzen hinweg richtig zusammensetzt.
+  - **Nachtrag (Nutzer: "Was ist mit Writable Streams?") - Korrektur von Punkt 1:** "Kein Sink" war zu knapp
+    geschnitten. Einen Stream zu übergeben deckt das *Übertragen* ab (Upload, Kopieren), aber nicht den imperativen
+    Produzenten (Log, SSE, Report: schreiben - rechnen - schreiben) und nicht generischen Code, der "in irgendetwas"
+    schreibt; dafür jedes Mal `Channel` + `spawn` wäre umständlich. Also die zweite Hälfte, in der Form, die `Channel`
+    schon hat:
+    `trait Sink<Item, Failure> { fn send(self, item: Item): Task<Result<Void, Failure>>; fn close(self): Task<Result<Void, Failure>> }`.
+    - **Backpressure = das `await` auf `send`** (fertig, wenn das Ziel das Element angenommen hat) - wie `Channel` mit
+      Kapazität. Kein `poll_ready`/`start_send`/`poll_flush` wie bei Rusts `Sink`. Puffern ist ein ausdrücklicher
+      Wrapper (`Buffered`) mit eigenem `flush()`; `close()` leert ihn.
+    - **`Failure` als zweiter Typparameter** (keine assoziierten Typen in der Sprache); ein Ziel, das nicht scheitern
+      kann, ist `Sink<Item, Never>`. Beim Lesen bleibt der Fehler im Element (`Stream<Result<…>>`), weil es viele
+      Streams ohne Fehler gibt (Channel, `Stream.from(iterable)`).
+    - **`Channel<Item>` ist beides:** `Stream<Item>` und `Sink<Item, ChannelClosed>` - zwei verbundene Enden.
+    - **Verbinden:** `sink.sendAll(stream, close: true)` zieht den Stream leer. Bequemlichkeit auf Byte-Zielen als
+      Erweiterung: `sendText(text)`, `sendLine(text)`.
+    - **Wer es ist:** `File` (`Sink<List<UInt8>, IoError>`), Standard-Ausgabe/-Fehler, die Eingabe eines Kindprozesses,
+      Socket, später der Antwort-Body im HTTP-Server. Formate brauchen nichts Neues: `sink.send(Json.encode(value))`
+      bzw. `sink.sendAll(Json.encodeItems(items))`.
