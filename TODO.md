@@ -1023,3 +1023,17 @@ Wenn nicht, was bedeutet, bewirkt es?
     Stream liest, jetzt oder später, braucht die Berechtigung; Pipelines bleiben ein Ausdruck; eine `const`-Quelle lässt
     sich nicht mehr verbrauchen; die Regel wird an allen vier Stellen durchgesetzt. `var writable = view()` bleibt
     legal (ein Aufrufergebnis ist kein Pfad; die Nur-Lese-Sicht ist ein Pfad-Versprechen, kein Typ).
+  - **Erledigt (Phase 1, gemergt `539f3c1`):** `docs/`-Baum (42 Seiten, 15 Ordner, 80 geprüfte Snippets), generierte
+    Indexe, Frontmatter-Schema (`title`, `summary`, `kind`, `status` Pflicht), Fence-Marker (`trb`, `trb check`,
+    `trb fragment`, `trb error` mit `// error:`-Kommentar, `trb skip <Grund>`), `torb docs check|index|skill|bundle`
+    in TorbScript (64 Tests, Gates), Skill-Pipeline (`SKILL.md` 323 Zeilen + `reference/`), Recherche mit Quellen in
+    `docs/contributing/research.md`, Inventar: ~170 Seiten in 13 Paketen.
+  - **Meine Entscheidungen zu den offenen Punkten:** strenges YAML-Quoting bleibt; Snippets werden geprüft statt
+    inkludiert; neun `kind`-Werte bleiben; der generierte Skill wird nach Phase 2 nach `.claude/skills/torbscript/`
+    committet (mit Gate "ist aktuell"), damit ihn auch die Agents in diesem Repo benutzen.
+  - **Phase 2 läuft:** Welle 1 = vier Sonnet-Schreiber (Pakete 2-5: Syntax/Werte, Funktionen, Typen, Traits/Generics),
+    jeder im eigenen Worktree, Gates `docs check` + `docs index --check`.
+  - **Zwei Compiler-Funde der Doku-Arbeit:** (1) der Dead-Change-Fehler feuert nicht bei `var first = counters[0]`
+    + `first.increment()` (Konzept: Compile-Fehler) → geht an den Checker. (2) `default => …` in einem `match` bindet
+    still und macht es vollständig. **Frage an dich:** soll eine nie benutzte Bindung in einem Catch-all-Arm ein
+    Fehler sein ("write `_`")? Passt zur Dead-Change-Philosophie; ich bin dafür.
