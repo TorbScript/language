@@ -829,3 +829,28 @@ Wenn nicht, was bedeutet, bewirkt es?
     - **Wer es ist:** `File` (`Sink<List<UInt8>, IoError>`), Standard-Ausgabe/-Fehler, die Eingabe eines Kindprozesses,
       Socket, später der Antwort-Body im HTTP-Server. Formate brauchen nichts Neues: `sink.send(Json.encode(value))`
       bzw. `sink.sendAll(Json.encodeItems(items))`.
+  - **Konzept v2 (nach dem Vergleich Rust/C#/Swift/Scala/Java/Node/Web/Bun; ersetzt Punkt 1-3 und den Sink-Nachtrag):**
+    "Stream" ist das Wort für den einseitig gerichteten Fluss (Kapitel, Paket `std/stream`), kein Typ. Ein Stream hat
+    zwei Enden, und die heißen als Paar: **`Source<Item, Failure>`** (`next(self): Task<Result<Item?, Failure>>`) und
+    **`Sink<Item, Failure>`** (`add(self, item): Task<Result<Void, Failure>>`, `finish(self): Task<Result<Void, Failure>>`).
+    Das sind die asynchronen Geschwister von `Iterator` (`next`) und `Accumulator` (`add`, `finish`) - dieselben Verben.
+    - Fehler beendet den Stream (wie überall außer Rust) und steht im Typ, symmetrisch auf beiden Enden; `Never` für
+      Enden, die nicht scheitern. Backpressure: Ziehen an der Quelle, `await` auf `add` am Ziel.
+    - `Channel<Item>` ist ein Stream im Speicher, von dem man beide Enden hält: `channel.source`, `channel.sink`
+      (getrennt weitergebbar). Alles Bidirektionale (Socket, Kindprozess, WebSocket) ist ein Typ mit `source` und `sink`.
+    - **Verzahnung mit `Iterable`:** (1) dieselben Verben und Stufennamen (`map`, `filter`, `take`, …);
+      (2) `Collector` wird geteilt: `source.collect(collector)`, `toList()`, `fold`, `joined` - Endoperationen einmal
+      geschrieben; (3) **`Stage<Input, Output, Failure>`** - synchrone, wiederaufnehmbare Mittelstufe (`add(var self,
+      input): Result<List<Output>, Failure>`, `finish`) für Framing und Codecs (UTF-8-Zeilen, `Json.items<User>()`,
+      gzip), anwendbar auf Quelle UND Iterable per `through(stage)`; das Wort "stage" benutzt `std/iteration` schon;
+      (4) Brücken `Source.from(iterable)` und `source.toList()`.
+    - **Produzieren ohne Generatoren:** `Source.from(iterable)`, `Source.from { … }` (Closure = `next`),
+      `Source.produce { sink => … }` (Task + Übergabe-Channel, Kapazität 0 = Generator-Gleichschritt). `yield` bleibt
+      offene Frage für später (dieselbe Zustandsmaschine wie `Task`).
+    - **Schleife:** `while const Some(line) = lines.next().await()? { … }` - geht heute, `await` und `?` sichtbar.
+      Bewusst kein `for` über eine Quelle in v1: es gäbe keinen Platz für das `?` (Swift braucht dafür `for try await`).
+    - `Bytes` = Alias für `List<UInt8>`, Chunks gehören dem Produzenten (kein Aufrufer-Puffer über ein `await`).
+    - HTTP, fs, io, process, Formate wie oben, nur mit `Source<Bytes, …>`/`Sink<Bytes, …>`; `Format.items<Item>()` und
+      `Format.encoded<Item>()` liefern `Stage`s. Bequemlichkeit zuerst (Bun): `body.text()`, `body.json<User>()`,
+      `File.write(path, source)`; der Stream ist die Ebene darunter.
+    - Offen beim Nutzer: die Namen `Source`/`Sink` (Alternative `Producer`/`Consumer`).
