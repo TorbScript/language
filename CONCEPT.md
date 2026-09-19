@@ -1058,6 +1058,12 @@ account.balance = 1_000_000              // Compile error: only Account can writ
 - **There are no getters, setters or properties.** A field is storage, a method computes, and the `()` tells which one
   it is (`list.length()` may cost something, `point.x` never does). No `get` prefixes; predicates are called
   `isEmpty()`/`hasX()`, mutators are verbs with `var self`.
+- **A field is a promise about data, so replacing one by a method is a breaking change** - and a property would not
+  save it: a field is also a parameter of the generated constructor, a position in patterns, a parameter of `copy`,
+  a part of the generated `Encode`/`Decode` and a step of `var` paths. A property would cover reading and nothing
+  else. What might be computed, cached or validated one day is a method from the start; the move from `.x` to `.x()`
+  is mechanical, the compiler finds every place, and the tools do it for a whole workspace (see `deprecated` in the
+  Open Questions).
 - There are no validating setters, because a setter cannot fail properly in a language without exceptions.
   Validation lives in types and factories (`Email.parse`, `Port.tryFrom(8080)`) or in a method that returns a `Result`
   (`account.withdraw(amount)`).
@@ -2208,7 +2214,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   binding and run during a `var` access, paths through `[]`) here, and decide with a compiler at hand:
   - (none yet)
 - `deprecated` (and `since`): not documentation but something the compiler has to read. A modifier? Decide when the
-  first API needs it.
+  first API needs it. The use case that settles its shape: a field that becomes a method. The field stays for one
+  version next to the new method, marked `deprecated` with its replacement, and `torb lint --fix` rewrites the callers
+  (`.x` to `.x()`); the language server offers the same as a quick fix.
 - Registry protocol and the exact format of `project.lock.trb`
 - REPL: every input is a nested scope of the previous one (so redefining a name is ordinary shadowing). A type that
   is defined again shadows the old one, values of the old type keep it and show up as `Point#1`.

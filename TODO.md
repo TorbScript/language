@@ -626,3 +626,10 @@ Wenn nicht, was bedeutet, bewirkt es?
     Typinformation braucht ("hier wird genau dieser Typ erwartet"), also eine **Lint-Regel mit Autofix** im
     Checker - kommt mit `torb lint` (Meilenstein 8) und wird dann einmal über das ganze Repo angewandt. In die
     CONTRIBUTING-Stilregeln nehme ich es jetzt schon auf, damit neuer Code die kurze Form nimmt, wo Stage 0 sie kann.
+
+- (Chat, 2026-09-19) Eine Property lässt sich beim Refactoring nicht durch einen Getter ersetzen?
+  - **Antwort / entschieden:** Richtig, und es bleibt so: keine Getter/Properties. Ein Feld ist Teil der öffentlichen
+    Form eines Typs an fünf Stellen (Konstruktor, Patterns, `copy`, `Encode`/`Decode`, `var`-Pfade) - eine Property
+    würde nur das Lesen abfangen. Faustregel: was später berechnet werden könnte, ist von Anfang an eine Methode.
+    Für den Umbau `.x` → `.x()`: `deprecated` am Feld + Auto-Fix in `torb lint --fix` und als Quick-Fix im LSP
+    (Meilenstein 8). Steht im Konzept unter "Visibility and Encapsulation" und bei den Open Questions (`deprecated`).
