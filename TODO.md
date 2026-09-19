@@ -934,3 +934,18 @@ Wenn nicht, was bedeutet, bewirkt es?
     Werte mit Copy-on-Write, `f(...someList)` teilt den Speicher in O(1), `List.of` gibt `items` ohne Kopie zurück.
     Dass eine Argumentliste aus Literalen, die den Aufruf nicht überlebt, gar keinen Heap braucht, ist eine
     unsichtbare Back-End-Optimierung (Kandidat für 5.14), keine Frage des Typs.
+
+- (Chat, 2026-09-20) `ArrayList` hat 29 `native fn` - sollte sie nicht auf `Array` aufbauen? Müssen alle Collections nativ sein?
+  - **Antwort / entschieden:** Nein, müssen sie nicht, und sie bleiben es nicht. `Array<Item, Size>` taugt nicht als
+    Basis (`Size` ist eine Compile-Zeit-Konstante, eine wachsende Liste braucht Speicher mit Laufzeitgröße). Der
+    richtige Kern ist EIN nativer Typ `Buffer<Item>`: zusammenhängender Speicher mit Kapazität und einem
+    initialisierten Präfix (`withCapacity`, `capacity`, `length`, `get`, `set`, `append`, `removeLast`, `swap`,
+    `truncate`, `grown`) - so sieht TorbScript nie uninitialisierten Speicher, und Retain/Release der Elemente
+    bleibt an einer Stelle. Darauf in TorbScript: `ArrayList` (`insert`, `removeAt`, `replace`, `reverse`, `sort`,
+    `slice`, `iterator`, `from`, …), `HashMap`/`HashSet` (offene Adressierung über Buffers), die `Trie*`-Typen
+    (Knoten als ADT). `ArrayQueue` und `ArrayStack` sind heute schon TorbScript. Heute: 7 native Typen, ~66 `native fn`.
+  - **Zeitpunkt: nach dem Fixpunkt**, als Teil des zugesagten Schritts "Manifest-Audit → Kernel". Vorher nicht: die
+    C-Runtime-Versionen (`list.c`, `map.c`) sind geschrieben und getestet, und der Compiler soll sich nicht zum ersten
+    Mal mit unerprobten Collections selbst übersetzen. `iterator` wandert schon jetzt (5.7) nach TorbScript.
+  - **Für JS/PHP:** genau dafür ist `native fn` mit TorbScript-Rumpf als Rückfall gedacht - portabel läuft der
+    TorbScript-Rumpf über `Buffer`, ein Back-End darf `ArrayList` auf das JS-Array und `HashMap` auf `Map` abbilden.
