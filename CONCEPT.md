@@ -1849,6 +1849,18 @@ const channel = Channel<Int>()
 - **A `native` declaration the runtime does not implement yet is marked as planned, and using one is a compile error
   that names the milestone** - never a link error with a mangled name in it. The manifest of natives is therefore also
   the list of what does not exist yet (`Decimal`, `Float32` arithmetic and `std/http` today).
+- **Natives stay few**, because every back end has to provide every one of them (C, the VM, later JavaScript and
+  PHP). What can be written in TorbScript on top of the natives that exist is written in TorbScript; a back end may
+  still replace an ordinary function of the standard library by something faster, which is its private business and
+  not visible in the source.
+- _Planned, after the compiler compiles itself:_ **the body of a `native fn` is IR**
+  (`native fn add(self, other: Int64): Int64 { ... }`), and `native { ... }` is a block of IR inside of an ordinary
+  function. Then the standard library itself says which operation `Int64.add` is, instead of a table of names in
+  the compiler, and the kernel every back end must provide is a short list of IR intrinsics. A `native fn` without a
+  body stays what the platform provides (files, clock, processes). `native` is to TorbScript what `unsafe` is to
+  Rust - the one place where the guarantees do not come from the type checker (the IR verifier checks form, slot
+  types and ownership, not meaning) - which is why it stays reserved for `std/` until the IR format is versioned, and
+  becomes a capability like `foreign` afterwards: visible in `project.trb`, shown by `torb add`, kept in the lock file.
 - `foreign` declares functions of a C library. It is available to every package:
 
 ```trb
@@ -1983,6 +1995,11 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   `Data` tree (was: `ToData`/`FromData` over a closed `Data` ADT). The tree had a parallel vocabulary
   (`Boolean`/`Integer`/`Text`/`Sequence`), built every document twice, lost precision, and was a dynamically typed
   island. Document trees are library types now (`JsonValue`).
+- No uniform function call syntax. `value.f(x)` never means `f(value, x)`: it would turn every function name into a
+  possible member, against "one namespace of members" and against the visibility rule of extensions, and it would be
+  a second way next to `extend`. Who wants `parser.expression()` writes `extend Parser { fn expression(var self) ... }`.
+- `native` bodies will be IR and stay reserved for `std/` until the IR format is stable, then become a capability like
+  `foreign` (no second keyword for "unstable"). Natives stay few: a fast path of a back end is not a `native`.
 - One generic `Encode`/`Decode` instead of a pair per format (`JsonEncode`, `TomlEncode`, ...): a pair per format is
   N × M implementations and a new format could not be retrofitted onto foreign types (coherence). Document formats
   (XML, HTML) get their own traits in addition, because their model does not fit into values, sequences, maps and records.

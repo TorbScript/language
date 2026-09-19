@@ -285,3 +285,7 @@ fmt sollte das enforcieren auch eventuell
     Funktionen und alle Aufrufer, und erst der native Compiler prüft so einen Umbau in Sekunden statt in einer
     Stunde. Reine Helfer ohne Empfänger (`editDistance(a, b)`, `normalizePath(path)`) bleiben Funktionen. Wenn du
     bei "Funktionen zuerst" bleiben willst, ist das auch konsistent - sag, was dir lieber ist.
+  - **Entschieden (Chat, 2026-09-19: "Ja mach das alles so"):** kein UFCS (steht im Decision Log); `native` wie oben
+    (Body = IR, `std/*` vorbehalten bis das IR-Format stabil ist, danach Capability; steht im Konzept unter "Foreign
+    Functions"); nach dem Fixpunkt stelle ich den Compiler auf `extend Parser { ... }`/`extend Checker { ... }` um,
+    wo der erste Parameter der Empfänger ist. Eingeplant direkt nach Meilenstein 6.
