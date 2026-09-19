@@ -152,6 +152,11 @@ group "Types and patterns" {
     assert(messages("const value: Int | String = 1").length() == 1)
   }
 
+  test "`true` and `false` are literal types, a float never is" {
+    assert(messages("type Toggle<const Flag: Bool> \{\n  var enabled: Toggle<true>\n  var disabled: Toggle<false>\n\}").isEmpty())
+    assert(messages("const rate: 1.5 = 1.5")[0] == "A float cannot be a literal type")
+  }
+
   test "rest patterns know their position" {
     match bound("const first = match items \{ [head, ...tail] => head \}") {
       .Match(_, arms) => match arms[0].pattern.kind {

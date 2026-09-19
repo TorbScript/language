@@ -43,7 +43,12 @@ impl Parser<'_> {
         let start = self.span();
         let kind = match self.kind() {
             TokenKind::ParenOpen => self.tuple_or_function_type(),
-            TokenKind::Text(_) | TokenKind::Integer | TokenKind::Char(_) | TokenKind::Minus => self.literal_type(),
+            TokenKind::Float => {
+                self.error_here("A float cannot be a literal type");
+                self.bump();
+                TypeKind::Error
+            }
+            kind if Self::starts_literal(kind) => self.literal_type(),
             TokenKind::Identifier | TokenKind::Keyword(Keyword::SelfType) => {
                 let mut path = vec![self.name_or_keyword()];
                 while self.at(TokenKind::Dot) && *self.kind_at(1) == TokenKind::Identifier {
@@ -66,14 +71,30 @@ impl Parser<'_> {
     fn literal_type(&mut self) -> TypeKind {
         let mut literals = vec![self.type_literal()];
         while self.eat(TokenKind::Pipe) {
-            if matches!(self.kind(), TokenKind::Text(_) | TokenKind::Integer | TokenKind::Char(_) | TokenKind::Minus) {
+            if Self::starts_literal(self.kind()) {
                 literals.push(self.type_literal());
+            } else if matches!(self.kind(), TokenKind::Float) {
+                self.error_here("A float cannot be a literal type");
+                self.bump();
             } else {
                 self.error_here("Only literals can be combined with `|`. There are no unions of types: declare a type with cases");
                 self.primary_type();
             }
         }
         TypeKind::Literals(literals)
+    }
+
+    /// A text, integer, character or boolean literal, or `-` in front of one: what may stand where a type stands.
+    /// A float is deliberately excluded (rejected explicitly, with its own message) and never reaches here.
+    fn starts_literal(kind: &TokenKind) -> bool {
+        matches!(
+            kind,
+            TokenKind::Text(_)
+                | TokenKind::Integer
+                | TokenKind::Char(_)
+                | TokenKind::Minus
+                | TokenKind::Keyword(Keyword::True | Keyword::False)
+        )
     }
 
     fn type_literal(&mut self) -> Expression {

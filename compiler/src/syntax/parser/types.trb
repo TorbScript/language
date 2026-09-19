@@ -40,9 +40,12 @@ public fn parseSingleType(var parser: Parser): TypeReference {
   result
 }
 
+/** A text, integer, character or boolean literal, or `-` in front of one: what may stand where a type stands. A
+ * float is deliberately excluded (rejected explicitly, with its own message) and never reaches here. */
 fn startsLiteral(kind: TokenKind): Bool {
   match kind {
     .TextLiteral(_) | .IntegerLiteral | .CharLiteral(_) | .Minus => true
+    .Reserved(.True) | .Reserved(.False) => true
     _ => false
   }
 }
@@ -51,6 +54,11 @@ fn parsePrimaryType(var parser: Parser): TypeReference {
   const start = parser.span()
   const kind = match parser.kind() {
     .ParenOpen => parseTupleOrFunctionType(parser)
+    .FloatLiteral => {
+      parser.errorHere("A float cannot be a literal type")
+      parser.bump()
+      TypeKind.Invalid
+    }
     .Identifier | .Reserved(.SelfType) => parseNamedType(parser)
     other if startsLiteral(other) => parseLiteralType(parser)
     other => {
@@ -78,6 +86,9 @@ fn parseLiteralType(var parser: Parser): TypeKind {
   while parser.eat(TokenKind.Pipe) {
     if startsLiteral(parser.kind()) {
       literals.add(parseTypeLiteral(parser))
+    } else if parser.isAt(TokenKind.FloatLiteral) {
+      parser.errorHere("A float cannot be a literal type")
+      parser.bump()
     } else {
       parser.errorHere("Only literals can be combined with `|`. There are no unions of types: declare a type with cases")
       const _ = parsePrimaryType(parser)

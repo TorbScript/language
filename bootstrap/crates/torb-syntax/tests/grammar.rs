@@ -179,6 +179,12 @@ fn literal_types_const_parameters_tuples_and_intersections() {
     assert!(first_error("fn width(value: Int | String) {}").contains("Only literals"));
     assert!(first_error("fn width(value: \"auto\" | Int) {}").contains("Only literals"));
 
+    // `true`/`false` are literals in a type position, too: what a const generic parameter of type `Bool` accepts.
+    parse_ok("type Toggle<const Flag: Bool> {\n  var enabled: Toggle<true>\n  var disabled: Toggle<false>\n}");
+    // A float is never a literal type, in or outside of a `const` generic argument.
+    assert!(first_error("type Broken<const Size: Float> {\n  var value: Broken<1.5>\n}").contains("A float cannot be a literal type"));
+    assert!(first_error("const rate: 1.5 = 1.5").contains("A float cannot be a literal type"));
+
     let file = parse_ok("type Matrix<const Rows: Int, const Columns: Int> {\n  var cells: Array<Array<Float, Columns>, Rows>\n}");
     let StatementKind::Declaration(Declaration { kind: DeclarationKind::Type(matrix), .. }) = &file.statements[0].kind else { panic!() };
     assert!(matrix.generics.iter().all(|parameter| parameter.is_const));
