@@ -2,6 +2,8 @@ use Compare, Hash from "std/core"
 use From, Show from "std/core"
 use Add from "std/core"
 use Collector, groupingBy from "./collectors"
+use Stage from "./stage"
+use Staged from "./staged"
 use Mapped, Filtered, FilterMapped, MappedWhile, FlatMapped, Taken, Skipped, TakenWhile, Zipped, Sorted from "./stages"
 
 /** A cursor over a sequence. Iterators are stateful values: whoever pulls from one holds it in a `var`. */
@@ -85,13 +87,32 @@ public trait Iterable<Item> {
     Sorted self, by
   }
 
+  /**
+   * Puts a `Stage` in front of the values: the one stage that is written once and works on a `Source` of `std/stream`
+   * just as well (`body.through(Json.items<User>())`). Everything above is the same stage with a name of its own.
+   */
+  fn through<Output>(self, stage: Stage<Item, Output>): Iterable<Output> {
+    Staged self, stage
+  }
+
   // --- Terminal operations ------------------------------------------------------------------------
 
-  /** The general terminal operation. See `std/collectors`. */
+  /**
+   * The general terminal operation. See `std/collectors`.
+   *
+   * `isDone()` is asked before the first value and after every `add`, so a collector that has seen enough (`taking`,
+   * `first`) stops the pull instead of reading a source to its end.
+   */
   fn collect<Output>(self, collector: Collector<Item, Output>): Output {
     var accumulator = collector.start()
+    if accumulator.isDone() {
+      return accumulator.finish()
+    }
     for value in self {
       accumulator.add value
+      if accumulator.isDone() {
+        break
+      }
     }
     accumulator.finish()
   }

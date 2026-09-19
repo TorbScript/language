@@ -38,6 +38,13 @@ the checker is a bug of the checker.
 - Small values plus free functions that take a `var` parameter (`var parser: Parser`, `var checker: Checker`,
   `var program: IrProgram`). Values have no identity, so program-wide data lives in lists and is addressed by
   integer ids (`ModuleId`, `SymbolId`, `TypeId`, ...).
+- **A `Bool` is an adjective, a question is a method.** A `Bool` field, parameter or binding is an adjective or a
+  participle (`inclusive`, `discarded`, `exported`); a question that is computed is a method with `is`/`has`
+  (`isEmpty()`, `hasGuard()`). The public standard library follows it (`Range.inclusive`). **The compiler's own
+  `is...` fields stay as they are for now:** about 60 of them at 135 places are named after keywords (`isVar`,
+  `isStatic`, `isPublic`, `isNative`, `isShared`, `isConst` - `var: Bool` is not a name), so each one needs its own
+  decision (another word, or better a type instead of a flag: `Visibility` exists). That runs after the fixpoint,
+  with the method conversion and a checked rename instead of a text replacement.
 - Cases: `.Case` in patterns, `Type.Case` in expressions unless stage 0 can see the expected type (the table in
   `bootstrap/README.md`). An **imported** case needs nothing in front of it, in an expression and in a pattern
   (`Some(found) =>`, `None =>`); a pattern name that starts with a lowercase letter binds, an uppercase one never does.

@@ -16,6 +16,18 @@ use Add from "std/core"
 public trait Accumulator<Item, Output> {
   fn add(var self, value: Item)
   fn finish(self): Output
+
+  /**
+   * Whether more values would change the result. A driver asks before it pulls the first value and after every `add`,
+   * and stops as soon as the answer is `true` - which is what lets `taking`, `first` and `find` end a pipeline over an
+   * infinite or expensive source instead of reading to the end and throwing the rest away.
+   *
+   * The default is `false`: an accumulator that sums, counts or collects is never done. A wrapper (`std/iteration`'s
+   * stages) answers what the accumulator below it answers, plus whatever it knows itself.
+   */
+  fn isDone(self): Bool {
+    false
+  }
 }
 
 public trait Collector<Item, Output> {

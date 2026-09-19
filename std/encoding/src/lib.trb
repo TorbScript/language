@@ -33,9 +33,50 @@
 use Hash from "std/core"
 use Show from "std/core"
 use Error from "std/core"
+use Stage from "std/iteration"
+use Bytes from "std/stream"
 
 public trait Encode {
   fn encode(self, var encoder: Encoder)
+}
+
+/**
+ * What a whole format is, once: bytes in both directions, and the two `Stage`s that make it work on a stream.
+ *
+ * `Encode`/`Decode` and `Encoder`/`Decoder` stay exactly as they are - **synchronous**, and that is the point. A
+ * decoder that could wait would have to be written differently for every source, every derived implementation would
+ * have to change with it, and the whole standard library would be coloured by it. Streaming happens one level up, at
+ * the level it happens in practice: the **element**.
+ *
+ *     body.through(Json.items<User>()).checked()          // bytes in, one `User` at a time out, memory = one user
+ *     Source.from(users).through(Json.encoded<User>())    // and back
+ *
+ * `items` is a resumable **framer**: it finds where one element ends in whatever bytes have arrived - across chunk
+ * borders - and decodes that element synchronously, through the ordinary `Decode`. So the memory a stream of a million
+ * records needs is one record, and no decoder had to learn anything new.
+ *
+ * A single huge *value* is deliberately not streamed into a type. It would colour every decoder (see above) and buy
+ * almost nothing: the value itself is in memory either way, so all that is saved is the text it came from. What that
+ * case needs is an **event level** (`Json.events`, SAX-like), and it is named in `docs/STREAMS.md` as later work.
+ *
+ * `Failure` is the second type parameter because the language has no associated types: `Json` is a
+ * `Format<JsonError>`, and a function that works for any format says `fn load<Chosen: Format<Problem>, Problem>(...)`.
+ */
+public trait Format<Failure> {
+  /** The whole value, as the bytes that go into a file or onto a wire. */
+  fn encodeAll(value: Encode): Bytes
+
+  /** One whole value out of all of its bytes. */
+  fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, Failure>
+
+  /**
+   * Bytes to items. Fallible, so the items are `Result`s - a `Stage` is synchronous and knows nothing about the
+   * failure of the stream around it; `source.checked()` is where they become one.
+   */
+  fn items<Item: Decode>(): Stage<Bytes, Result<Item, Failure>>
+
+  /** Items to bytes: the other direction, and the one that never fails. */
+  fn encoded<Item: Encode>(): Stage<Item, Bytes>
 }
 
 public trait Decode {

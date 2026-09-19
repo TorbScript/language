@@ -1,0 +1,372 @@
+use Shared from "std/core"
+use Stage, Collector, Queueing, collector, counting, listing from "std/iteration"
+use mapping, filtering, filterMapping, mappingWhile, taking, takingWhile, skipping, indexing, chunking from "std/iteration"
+use ChannelClosed from "std/task"
+use Sink from "./sink"
+
+/**
+ * The reading end of a stream: the asynchronous sibling of `Iterator`, with the same verb.
+ *
+ *     while const Some(line) = lines.next().await()? {
+ *       print line
+ *     }
+ *
+ * A source has an identity and is consumed once, so it is a `shared type` - and `next` takes `self` and not
+ * `var self`, because an exclusive access to a value cannot stay open across an `await`.
+ *
+ * - **A failure ends the stream.** After `Fail(problem)` a source answers nothing useful any more; it may keep
+ *   answering the same failure, and it never goes back to delivering items.
+ * - **`None` ends the stream too,** and it is final: after `Ok(None)` every further `next()` answers `Ok(None)`.
+ * - **One puller at a time.** `next()` must not be called again before the task it answered has finished; two
+ *   overlapping pulls are a bug, not a race the source has to defend against. A source may be pulled by a task other
+ *   than the one that made it only if it was made by that task - shared objects are confined to their task
+ *   (CONCEPT, "Concurrency"), which is why nothing here spawns.
+ * - **Backpressure is the pull.** Nothing is read before somebody asks for it.
+ * - **`close()` releases what is above.** A reader that stops early (`take`, an abandoned loop, a failure it handles)
+ *   closes the source, and every source built here closes the one it reads from. `using` is the form that does not
+ *   forget it: `using File.open(path)? { file => ... }`. `close()` is synchronous, cannot fail and may be called
+ *   after the stream ended; `finish()` on the other end is the graceful counterpart that can.
+ */
+public shared trait Source<Item, Failure> with Close {
+  /** `Ok(Some(item))` for the next item, `Ok(None)` at the end, `Fail(problem)` for a failure that ends the stream. */
+  fn next(self): Task<Result<Item?, Failure>>
+
+  // --- Stages ---------------------------------------------------------------------------------------------------
+
+  /**
+   * The one place where a stage meets a stream. Everything below is this call with a name, and `Json.items<User>()`
+   * or `lines()` are the same stage values an `Iterable` takes.
+   */
+  fn through<Output>(self, stage: Stage<Item, Output>): Source<Output, Failure> {
+    Staged.of self, stage
+  }
+
+  fn map<Output>(self, transform: (value: Item) => Output): Source<Output, Failure> {
+    through mapping(transform)
+  }
+
+  fn filter(self, predicate: (value: Item) => Bool): Source<Item, Failure> {
+    through filtering(predicate)
+  }
+
+  fn filterMap<Output>(self, transform: (value: Item) => Output?): Source<Output, Failure> {
+    through filterMapping(transform)
+  }
+
+  fn mapWhile<Output>(self, transform: (value: Item) => Output?): Source<Output, Failure> {
+    through mappingWhile(transform)
+  }
+
+  fn take(self, amount: Int): Source<Item, Failure> {
+    through taking(amount)
+  }
+
+  fn takeWhile(self, predicate: (value: Item) => Bool): Source<Item, Failure> {
+    through takingWhile(predicate)
+  }
+
+  fn skip(self, amount: Int): Source<Item, Failure> {
+    through skipping(amount)
+  }
+
+  /** `(0, first), (1, second), ...` */
+  fn indexed(self): Source<(Int, Item), Failure> {
+    through indexing()
+  }
+
+  /** Groups items into lists of at most `size`; the last group is what is left. */
+  fn chunked(self, size: Int): Source<List<Item>, Failure> {
+    through chunking(size)
+  }
+
+  /**
+   * The only asynchronous stage there is: a step that has to wait for each item (a lookup, a request, a write). A
+   * `Stage` cannot do this - it computes and never waits - so this is a method and not a stage value.
+   */
+  fn then<Output>(self, step: (value: Item) => Task<Result<Output, Failure>>): Source<Output, Failure> {
+    const upstream = self
+    const pull: () => Task<Result<Output?, Failure>> = {
+      const item = upstream.next().await()?
+      match item {
+        Some(value) => Ok Some(step(value).await()?)
+        None => Ok None
+      }
+    }
+    Pulling.of pull, above: Some(self)
+  }
+
+  /** A stream of the same items with a failure of another type: what `mapError` is on a `Result`. */
+  fn mapFailure<Other>(self, transform: (failure: Failure) => Other): Source<Item, Other> {
+    const upstream = self
+    const pull: () => Task<Result<Item?, Other>> = { Ok(upstream.next().await().mapError(transform)?) }
+    Pulling.of pull, above: Some(self)
+  }
+
+  // --- Terminal operations --------------------------------------------------------------------------------------
+
+  /**
+   * The same `Collector`s the pull side uses, so every terminal operation is written once. The values are pushed into
+   * the accumulator as they arrive, and `isDone()` ends the pull as soon as the collector has seen enough.
+   */
+  fn collect<Output>(self, collector: Collector<Item, Output>): Task<Result<Output, Failure>> {
+    var accumulator = collector.start()
+    if accumulator.isDone() {
+      return Ok accumulator.finish()
+    }
+    while const Some(item) = next().await()? {
+      accumulator.add item
+      if accumulator.isDone() {
+        break
+      }
+    }
+    Ok accumulator.finish()
+  }
+
+  fn toList(self): Task<Result<List<Item>, Failure>> {
+    collect listing()
+  }
+
+  fn count(self): Task<Result<Int, Failure>> {
+    collect counting()
+  }
+
+  fn fold<State>(self, initial: State, combine: (State, Item) => State): Task<Result<State, Failure>> {
+    collect(collector(initial, finish: { _ }, step: combine))
+  }
+
+  fn forEach(self, action: (value: Item) => Void): Task<Result<Void, Failure>> {
+    while const Some(item) = next().await()? {
+      action item
+    }
+    Ok void
+  }
+
+  /** Stops at the first item that matches, which leaves the rest of the stream unread. */
+  fn find(self, predicate: (value: Item) => Bool): Task<Result<Item?, Failure>> {
+    while const Some(item) = next().await()? {
+      if predicate(item) {
+        return Ok Some(item)
+      }
+    }
+    Ok None
+  }
+
+  /**
+   * Hands everything to `sink` and finishes it. Both ends carry the same `Failure` on purpose: a pump that silently
+   * converted one into the other would hide which end broke. Use `mapFailure` on either side to say it.
+   */
+  fn into(self, sink: Sink<Item, Failure>): Task<Result<Void, Failure>> {
+    while const Some(item) = next().await()? {
+      sink.add(item).await()?
+    }
+    sink.finish().await()
+  }
+
+  // --- Making one -----------------------------------------------------------------------------------------------
+
+  /**
+   * Everything an `Iterable` has, as a stream that never waits. `Failure` is whatever the caller needs: a source over
+   * a list cannot fail, and saying so as `Never` would make it unusable where a failing stream is expected.
+   */
+  fn from(items: Iterable<Item>): Source<Item, Failure> {
+    var cursor = items.iterator()
+    const pull: () => Task<Result<Item?, Failure>> = { Ok cursor.next() }
+    Pulling.of pull
+  }
+
+  /** The closure *is* `next`: the shortest way to a source, for anything that already knows how to answer one item. */
+  fn pulling(step: () => Task<Result<Item?, Failure>>): Source<Item, Failure> {
+    Pulling.of step
+  }
+
+  /**
+   * A producer that pushes instead of being pulled, without generators: `body` runs as a task of its own and writes
+   * into `sink`, and the items travel through a channel of `capacity`. The default `0` hands every item over directly,
+   * so the producer runs in lock-step with the consumer - which is what a generator does.
+   *
+   *     Source.produce { sink =>
+   *       for row in query.rows() {
+   *         sink.add(Report.of(row)).await()?
+   *       }
+   *       Ok void
+   *     }
+   *
+   * `Failure: From<ChannelClosed>` because a consumer that stops pulling ends the producer, and that end needs a name
+   * in the producer's own failure type.
+   */
+  fn produce(
+    capacity: Int = 0,
+    body: (sink: Sink<Item, Failure>) => Result<Void, Failure>,
+  ): Source<Item, Failure> where Failure: From<ChannelClosed> {
+    const relay = Channel<Item>(capacity: capacity)
+    Produced.of(relay, spawn({ body relay.sink().mapFailure(Failure.from) }))
+  }
+
+  fn empty(): Source<Item, Failure> {
+    const pull: () => Task<Result<Item?, Failure>> = { Ok None }
+    Pulling.of pull
+  }
+}
+
+// --- One type for every source that is built out of another ----------------------------------------------------------
+
+/**
+ * Every source `std/stream` derives from another one is this type: a closure that answers the next item, and the
+ * thing above it that has to be released.
+ *
+ * The state of such a source lives in the `var` bindings its closure captured, not in fields, because a `shared type`
+ * cannot change itself from a method that takes `self` - and an asynchronous method has to take `self`. A captured
+ * `var` binding is the one place the language shares a variable (CONCEPT, "`var` Paths"), so it is exactly the right
+ * place (see `docs/STREAMS.md`, open point "the state of a shared object").
+ */
+public shared type Pulling<Item, Failure> with Source<Item, Failure> {
+  private step: () => Task<Result<Item?, Failure>>
+  private var above: Close? = None
+
+  fn of(step: () => Task<Result<Item?, Failure>>, above: Close? = None): Pulling<Item, Failure> {
+    Pulling step, above
+  }
+
+  fn next(self): Task<Result<Item?, Failure>> {
+    step().await()
+  }
+
+  fn close(var self) {
+    if var Some(upstream) = above {
+      upstream.close()
+    }
+  }
+}
+
+// --- A stage in front of a source --------------------------------------------------------------------------------
+
+/**
+ * `source.through(stage)`. Two paths, like the synchronous `Staged` of `std/iteration`:
+ *
+ * - `collect` is **fused**: the stage wraps the collector's accumulator, no queue, one push per item.
+ * - `next()` needs a queue, because one item pushed in can become none or many coming out while the caller asks for
+ *   exactly one. It holds what one item produced and is emptied before the next item is pulled.
+ *
+ * `through` on a staged source composes instead of stacking, so `source.through(a).through(b)` is one driver over
+ * `a.then(b)` and stays fused all the way down.
+ */
+public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
+  private var upstream: Source<Input, Failure>
+  private stage: Stage<Input, Item>
+  private queued: () => Task<Result<Item?, Failure>>
+
+  fn of(upstream: Source<Input, Failure>, stage: Stage<Input, Item>): Staged<Input, Item, Failure> {
+    const source = upstream
+    var box: Shared<List<Item>> = Shared([])
+    var pushing = stage.onto Queueing(box)
+    var finished = false
+    const queued: () => Task<Result<Item?, Failure>> = {
+      while true {
+        var waiting = box.value
+        if !waiting.isEmpty() {
+          const ready = waiting.removeAt 0
+          box.value = waiting
+          return Ok ready
+        }
+        if finished {
+          return Ok None
+        }
+        // `finish()` of the last stage may still push values (the short last group of `chunking`), so the queue is
+        // looked at once more before `None` is the answer
+        if pushing.isDone() {
+          pushing.finish()
+          finished = true
+          continue
+        }
+        match source.next().await()? {
+          Some(value) => pushing.add value
+          None => {
+            pushing.finish()
+            finished = true
+          }
+        }
+      }
+    }
+    Staged upstream, stage, queued
+  }
+
+  fn next(self): Task<Result<Item?, Failure>> {
+    queued().await()
+  }
+
+  fn through<Output>(self, other: Stage<Item, Output>): Source<Output, Failure> {
+    upstream.through stage.then(other)
+  }
+
+  /** Fused: no queue, and `isDone()` from the collector reaches the source through the stage. */
+  fn collect<Output>(self, collector: Collector<Item, Output>): Task<Result<Output, Failure>> {
+    var accumulator = stage.onto collector.start()
+    if accumulator.isDone() {
+      return Ok accumulator.finish()
+    }
+    while const Some(value) = upstream.next().await()? {
+      accumulator.add value
+      if accumulator.isDone() {
+        break
+      }
+    }
+    Ok accumulator.finish()
+  }
+
+  fn close(var self) {
+    upstream.close()
+  }
+}
+
+// --- A produced source ------------------------------------------------------------------------------------------
+
+/** What `Source.produce` answers: the receiving end of the channel, plus the task that fills it. */
+shared type Produced<Item, Failure> with Source<Item, Failure> {
+  private relay: Channel<Item>
+  private var writing: Sink<Item, ChannelClosed>
+  private producer: Task<Result<Void, Failure>>
+
+  fn of(relay: Channel<Item>, producer: Task<Result<Void, Failure>>): Produced<Item, Failure> {
+    Produced relay, relay.sink(), producer
+  }
+
+  /**
+   * The channel ends before the producer does, so the producer's own failure is delivered after the last item - which
+   * is what makes a failing producer a failing stream and not a stream that simply stopped.
+   */
+  fn next(self): Task<Result<Item?, Failure>> {
+    if const Ok(Some(item)) = relay.source().next().await() {
+      return Ok Some(item)
+    }
+    producer.await()?
+    Ok None
+  }
+
+  /** Closing the channel makes the producer's next `add` fail with `ChannelClosed`, which ends its body. */
+  fn close(var self) {
+    writing.close()
+  }
+}
+
+// --- Fallible stages --------------------------------------------------------------------------------------------
+
+/**
+ * A stage that can fail answers `Result` items (`Json.items<User>()`, `lines()`), because a `Stage` is synchronous and
+ * knows nothing about the stream's failure. `checked()` is where those items become the stream's failure and end it -
+ * the streaming counterpart of collecting an `Iterable<Result<...>>` into a `Result<List<...>, ...>`.
+ *
+ *     const users = body.through(Json.items<User>()).checked().toList().await()?
+ */
+extend<Item, Problem, Failure: From<Problem>> Source<Result<Item, Problem>, Failure> {
+  fn checked(self): Source<Item, Failure> {
+    const upstream = self
+    const pull: () => Task<Result<Item?, Failure>> = {
+      const item = upstream.next().await()?
+      match item {
+        Some(inner) => Ok Some(inner?)
+        None => Ok None
+      }
+    }
+    Pulling.of pull, above: Some(self)
+  }
+}

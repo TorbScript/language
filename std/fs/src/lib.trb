@@ -1,3 +1,10 @@
+/**
+ * Files. Whole-file helpers for what fits in memory, and streams for everything else (`docs/STREAMS.md`).
+ */
+
+use Source, Sink, Bytes, Utf8Error from "std/stream"
+use lines as streamLines from "std/stream"
+
 /** What went wrong with which path. */
 public type IoError with Show, Error {
   path: String
@@ -8,24 +15,71 @@ public type IoError with Show, Error {
   }
 }
 
+/** Bytes off a disk are not always UTF-8, and a `String` always is - so decoding is one of the ways reading fails. */
+extend IoError with From<Utf8Error> {
+  fn from(value: Utf8Error): IoError {
+    IoError "", value.show()
+  }
+}
+
 /**
  * A file that is open. It has an identity (the handle of the operating system), so it is a `shared type`:
  *
  *     const text = using File.open(path)? { file => file.readAll() }
  *
- * Most code does not need one: the functions without `self` read and write whole files.
+ *     var file = File.create(path)?
+ *     using file { target =>
+ *       target.fill(response.body.mapFailure(IoError.from)).await()
+ *     }
+ *
+ * An open file is both ends of a stream: `chunks()`/`lines()` read it, and the file *is* a `Sink<Bytes, IoError>` for
+ * writing, so everything that writes into a sink writes into a file. Most code needs neither: the functions without
+ * `self` read and write whole files.
  */
-public native shared type File with Close {
+public native shared type File with Close, Sink<Bytes, IoError> {
+  /** Opens an existing file for reading. */
   native fn open(path: String): Result<File, IoError>
+
+  /** Creates the file, or empties it if it is there. The counterpart of `open`, for the writing side. */
+  native fn create(path: String): Result<File, IoError>
+
   native fn readAll(var self): Result<String, IoError>
   native fn close(var self)
+
+  /**
+   * The file as a stream of byte chunks of at most `size`. The one native of the reading side: everything above it
+   * (`lines`, framing, decoding) is a `Stage` and therefore ordinary TorbScript.
+   */
+  native fn chunks(self, size: Int = 65536): Source<Bytes, IoError>
+
+  /**
+   * The lines of the file, as a stream. Unlike the old `File.lines(path)` this cannot swallow a read failure halfway
+   * through: a failure ends the stream and the reader sees it, because it is in the type.
+   */
+  fn lines(self): Source<String, IoError> {
+    chunks().through(streamLines()).checked()
+  }
+
+  /** The writing end. A `File` is a `Sink<Bytes, IoError>`, so `addText`, `addLine` and `fill` are all there. */
+  native fn add(self, item: Bytes): Task<Result<Void, IoError>>
+
+  /** Flushes to the operating system and reports what a buffered write could only report now. */
+  native fn finish(self): Task<Result<Void, IoError>>
 
   /** A `String` is always valid UTF-8, so bytes that are not are an `IoError` and never a replacement character. */
   native fn readText(path: String): Result<String, IoError>
   native fn writeText(path: String, text: String): Result<Void, IoError>
 
-  /** Line by line. The file is never in memory as a whole. */
-  native fn lines(path: String): Result<Iterable<String>, IoError>
+  /**
+   * Creates `path` and writes everything `source` delivers into it, of any size and without holding it in memory:
+   * `File.write(path, response.body.mapFailure(IoError.from)).await()?`
+   */
+  fn write(path: String, source: Source<Bytes, IoError>): Task<Result<Void, IoError>> {
+    var target = File.create(path)?
+    const outcome = target.fill(source).await()
+    target.close()
+    outcome
+  }
 
   /**
    * The path as an absolute path, with `.` and `..` resolved against the working directory. The file does not have

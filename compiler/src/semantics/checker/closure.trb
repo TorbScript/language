@@ -6,7 +6,7 @@ use Checker, Expectation, Resolution, Adaptation, LocalBinding, BindingId from "
 use ClosureFrame, ReceiverClosure from "./context"
 use Target, formOf, noteCapture from "./name"
 use resolveType, hasVariable, unify from "./unify"
-use checkBlock, bodyExpectation, inferredResult, scopeHere from "./statement"
+use checkBlock, bodyExpectation, inferredResult, scopeHere, taskValueOf from "./statement"
 use checkPattern from "./pattern"
 use requireIrrefutable from "./exhaustive"
 use typeFromReference from "./lowering"
@@ -63,6 +63,14 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
     return wanted
   }
   checker.functionType FunctionForm(parameters, result)
+}
+
+/** `Task<Value>`: what a closure whose body produced the `Value` of a task is, as a type again. */
+fn taskOf(var checker: Checker, value: TypeId): TypeId {
+  match checker.wellKnown.task {
+    Some(task) => checker.nominal task, [value]
+    None => value
+  }
 }
 
 /** The parameter names resolve against, or `-1`: the first one of the expected function type that is a receiver. */
@@ -182,15 +190,21 @@ fn checkClosureBody(
   // closure has to produce, and that is a coercion and not a unification
   var isInferred = true
   var declared = checker.voidType
+  var produced = checker.voidType
+  var isTask = false
   var inner = Expectation.None
   if const Some(found) = expectedResult {
     if !checker.absorbs(found) {
       declared = found
-      isInferred = hasVariable checker, found
-      inner = bodyExpectation checker, found, false
+      // `{ Ok value }` where a `Task<Result<...>>` is expected: the body produces the `Value` of the `Task`, exactly as
+      // the body of a `fn` that answers one does (CONCEPT, "Concurrency"), so `await()` and `?` stay visible inside it
+      produced = taskValueOf(checker, found) ?? found
+      isTask = produced != found
+      isInferred = hasVariable checker, produced
+      inner = bodyExpectation checker, produced, false
     }
   }
-  checker.resultType = declared
+  checker.resultType = produced
   checker.isResultInferred = isInferred
   checker.returnTypes = []
   checker.loopDepth = 0
@@ -221,7 +235,9 @@ fn checkClosureBody(
   const outcome = checkBlock checker, closure.body, inner
   var result = declared
   if isInferred {
-    result = inferredResult checker, outcome
+    const value = inferredResult checker, outcome
+    // What the closure *is* stays the function type that was asked for: the body produced the value inside the `Task`
+    result = if isTask { taskOf checker, value } else { value }
   }
   const last = checker.closureFrames.length() - 1
   const captures = checker.closureFrames[last].captures

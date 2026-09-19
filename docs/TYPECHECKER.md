@@ -1698,7 +1698,7 @@ Neither is in `std/prelude`, and `Range` is used in signatures (`operators.trb`,
 `0..10` without existing anywhere. `Ok(Void)` (in `compiler/src/main.trb`, `cli/files.trb`,
 `examples/tour/src/06-errors.trb`) uses `Void` as a _value_, which contradicts "A type never flows as a value".
 _Proposal:_ the prelude declares `public native type Void`, `public native type Never` and
-`public type Range<Value> { start: Value?, end: Value?, isInclusive: Bool }` with
+`public type Range<Value> { start: Value?, end: Value?, inclusive: Bool }` with
 `extend Range<Int> with Iterable<Int>` (only when `start` is present) and `Slice` support; the unit value is written
 `Void()`, an ordinary zero-field constructor call, and the five call sites are changed. _Reason:_ it needs no new rule
 at all - "calls without arguments always need `()`" already covers it - and it keeps types out of expression
@@ -2131,3 +2131,58 @@ _Decision:_ accepted. Such a function infers `Void`, the back end finding stays 
 unreachable for this shape. What a valued `return` that disagrees with the last expression of the body does is
 unchanged, and still says nothing: `inferredResult` unifies the two and drops the answer where they do not fit, for a
 bare `return` exactly as for a valued one. That is its own gap, not this one.
+
+**45. A `Bool` field that is named like a question.**
+"Naming" knows "verbs change, participles return" and nothing about `Bool`s, while `std/core`'s `Range` had
+`isInclusive: Bool` next to methods like `isEmpty()` - so at a use site the reader could not tell data from work
+without looking for parentheses.
+_Proposal:_ a `Bool` field, parameter or binding is an adjective or a participle (`inclusive`, `discarded`, `signed`);
+a question that is *computed* is a method whose name starts with `is` or `has` (`isEmpty()`, `hasGuard()`).
+_Reason:_ it is the same rule as "what could later be computed is a method from the start" read from the other side,
+and it makes the shape of a name say which of the two it is.
+
+_Decision:_ accepted. `Range.isInclusive` is `Range.inclusive` (CONCEPT, "Lexical Structure"; `compiler/CONTRIBUTING.md`).
+The compiler's own `is...` fields are **not** renamed with it: about 60 of them are named after keywords (`isVar`,
+`isStatic`, `isPublic`, `isNative`, `isShared`, `isConst`), and `var: Bool` is not a name - each one needs its own
+decision, either another word or a type instead of a flag, which runs after the fixpoint with the method conversion.
+
+**46. Which case does a bare uppercase pattern name mean when the matched type has one of the same name?**
+Since an imported case may be written bare in a pattern (`None =>`, `Fail(problem) =>`), the name is resolved through
+the scope. `checkPattern` only used that resolution to decide that the name *is* a case and then matched it **by name**
+against the subject - so `Fail =>` against `compiler/src/ir/decision.trb`'s `DecisionNode`, which has a case `Fail` of
+its own, type checked as `DecisionNode.Fail` while stage 0 and both back ends resolve the name to `Result.Fail` and no
+arm ever matches. Dropping a dot broke 11 tests exactly this way.
+_Proposal:_ a bare uppercase pattern name is resolved through the scope, and the case it names has to belong to the
+matched type; anything else is written with its dot. Where the matched type has no case of that name at all, the
+existing message ("`Node` has no case `Fail`") stays, because it names the real mistake.
+_Reason:_ one resolution, used for one thing. A name resolves where it is written, and the subject decides nothing
+about which declaration it means - which is the whole reason the dot exists for everything that is not imported.
+
+_Decision:_ accepted. The message is `` `Fail` is the case `Result.Fail`, and the value matched is a `Node` `` with the
+note "Write `.Fail` for the case of `Node`" (`pattern.trb`, tests in `compiler/tests/statements.test.trb`).
+
+**47. Does the body of a *closure* that answers a `Task` produce the `Value`?**
+"Concurrency" says a function that returns `Task<Value>` has a body that produces the `Value`, and `checkFunctionBody`
+implements it. Nothing said it for a closure, and `checkClosureBody` checked the body against the `Task` itself - so
+`const pull: () => Task<Result<Item?, Failure>> = { Ok None }` reported "Cannot infer `Failure` of `Ok`", and every
+source of `std/stream` that is built from a closure was unwritable.
+_Proposal:_ a closure whose expected result is a `Task<Value>` has a body that produces the `Value`, exactly as a
+declaration does; what the closure *is* stays the function type that was asked for.
+_Reason:_ a closure is a function value, and the rule is about functions. Two answers for the same question would mean
+that moving a body from a `fn` into a closure changes what it has to produce.
+
+_Decision:_ accepted (`closure.trb`: `taskValueOf` for the expectation, `taskOf` to wrap an inferred body back up).
+Where the expected result is still an inference variable nothing changes, because `taskValueOf` only answers for a
+`Task` that is already known. Where `await()` is allowed stays milestone 7's rule and is unaffected.
+
+**48. Does the dead-change rule apply to a binding that holds a shared object?**
+Rule 5.3 reports a change no read follows, on the grounds that "with value semantics a change nobody reads is always a
+mistake". A `shared type` has no value semantics: `var end = channel.sink()` followed by `end.close()` and nothing else
+was reported as a dead change, with a note that calls the binding a copy - while it is the one object everybody holds.
+_Proposal:_ the rule says nothing about a binding whose type has an identity (a `shared type`, or a value of a
+`shared trait` - the predicate of gap 20). Such bindings get no entry at all.
+_Reason:_ the justification of the rule is the copy. Where there is no copy, the change is visible to every other
+holder and "nobody reads it here" is not evidence of anything.
+
+_Decision:_ accepted (`mutation.trb`, `isCounted`). A value that merely *contains* a shared object keeps the rule:
+changing the value is still a change of a copy, and only the object inside it is shared.

@@ -1,4 +1,5 @@
 use IoError from "std/fs"
+use Source, Sink, Bytes from "std/stream"
 
 /** What a program that was run to its end left behind. */
 public type ProcessOutput {
@@ -10,6 +11,33 @@ public type ProcessOutput {
   fn isSuccess(self): Bool {
     exitCode == 0
   }
+}
+
+/**
+ * A child process that is still running. Its three pipes are the same `Source` and `Sink` a file or a socket has, so
+ * a pipeline between two programs is `first.output().into(second.input())`.
+ *
+ *     var child = Process.start("sort", ["-u"])?
+ *     using child { running =>
+ *       running.input().fill(Source.from(words)).await()?
+ *       const sorted = running.output().lines().toList().await()?
+ *       running.wait().await()
+ *     }
+ *
+ * `close()` releases the pipes and stops waiting for the child; it does not kill it, because ending somebody else's
+ * program is a decision and not a cleanup.
+ */
+public native shared type Child with Close {
+  /** What the child reads. `finish()` closes its standard input, which is how most filters learn that they are done. */
+  native fn input(self): Sink<Bytes, IoError>
+
+  native fn output(self): Source<Bytes, IoError>
+  native fn errors(self): Source<Bytes, IoError>
+
+  /** The exit code, once the program has ended. */
+  native fn wait(self): Task<Result<Int, IoError>>
+
+  native fn close(var self)
 }
 
 /** The running program. */
@@ -28,4 +56,10 @@ public native type Process {
    * is why `torb build` can tell "there is no C compiler" from "the C compiler said no".
    */
   native fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError>
+
+  /**
+   * Starts a program and hands back its pipes, for output that is too big to collect or that has to be read while it
+   * arrives. `run` is the short form for everything else.
+   */
+  native fn start(command: String, arguments: List<String>): Result<Child, IoError>
 }

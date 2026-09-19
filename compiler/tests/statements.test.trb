@@ -88,6 +88,23 @@ group "Bindings" {
     assert(notes(shapes) == [rule, "Did you mean `.Circle`?"])
   }
 
+  test "a bare case has to be a case of the matched type, not just of the same name" {
+    const source = "type Node \{\n  case Leaf\n  case Fail\n\}\n\n"
+      + "fn probe(node: Node): Int \{\n  match node \{\n    Fail => 1\n    _ => 0\n  \}\n\}"
+    assert(problems(source) == ["`Fail` is the case `Result.Fail`, and the value matched is a `Node`"])
+    assert(notes(source) == ["Write `.Fail` for the case of `Node`"])
+    // With the dot it is the case of `Node` and there is nothing to report
+    const dotted = "type Node \{\n  case Leaf\n  case Fail\n\}\n\n"
+      + "fn probe(node: Node): Int \{\n  match node \{\n    .Fail => 1\n    _ => 0\n  \}\n\}"
+    assert problems(dotted).isEmpty()
+  }
+
+  test "a bare case of another type that the matched type does not have at all keeps the older message" {
+    const source = "type Node \{\n  case Leaf\n\}\n\n"
+      + "fn probe(node: Node): Int \{\n  match node \{\n    Fail => 1\n    _ => 0\n  \}\n\}"
+    assert(problems(source) == ["`Node` has no case `Fail`"])
+  }
+
   test "a binding starts with a lowercase letter, and an underscore keeps its own rule" {
     assert problems(inBody("  const text = match 1 \{\n    found => \"one\"\n  \}")).isEmpty()
     assert problems(inBody("  const text = match 1 \{\n    _found => \"one\"\n  \}")).isEmpty()

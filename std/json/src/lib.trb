@@ -4,7 +4,14 @@
  *
  *     const text = Json.encode(user)
  *     const user = Json.decode<User>(text)?
+ *
+ * `Json` is also a `Format<JsonError>` (`std/encoding`), which is what makes it work on a stream: `Json.items<User>()`
+ * is a `Stage` that turns byte chunks into `User`s one at a time, over a top-level array as well as over concatenated
+ * or newline-separated values.
  */
+
+use Stage, Accumulator, mapping from "std/iteration"
+use Bytes, Utf8Error, textOf from "std/stream"
 
 /**
  * A JSON document without a fixed shape. `Encoder`/`Decoder` are driven by the type that is being read or written,
@@ -60,11 +67,16 @@ public type JsonError with Show, Error {
     Self kind: .Decode(cause)
   }
 
+  /** JSON is text, and the bytes that arrived are not UTF-8 - so there was no text to parse in the first place. */
+  fn invalidText(cause: Utf8Error): JsonError {
+    Self kind: .Text(cause)
+  }
+
   /** `true` for malformed JSON text, as opposed to well-formed JSON that did not fit the target type. */
   fn isSyntaxError(self): Bool {
     match kind {
       .Syntax(_, _) => true
-      .Decode(_) => false
+      _ => false
     }
   }
 
@@ -72,6 +84,7 @@ public type JsonError with Show, Error {
     match kind {
       .Syntax(line, message) => "line {line}: {message}"
       .Decode(cause) => "{cause}"
+      .Text(cause) => "{cause}"
     }
   }
 
@@ -80,13 +93,22 @@ public type JsonError with Show, Error {
     match kind {
       .Syntax(_, _) => None
       .Decode(problem) => Some problem
+      .Text(problem) => Some problem
     }
+  }
+}
+
+/** What `checked()` needs to lift a broken byte sequence into the failure of a JSON stream. */
+extend JsonError with From<Utf8Error> {
+  fn from(value: Utf8Error): JsonError {
+    JsonError.invalidText value
   }
 }
 
 type JsonErrorKind {
   case Syntax(line: Int, message: String)
   case Decode(cause: DecodeError)
+  case Text(cause: Utf8Error)
 }
 
 /** JSON reading and writing. A format is an implementation of `Encoder`/`Decoder` and never sees a type. */
@@ -110,3 +132,204 @@ public native type Json {
   /** Any `Encode` value as a `JsonValue` tree, e.g. to diff two versions of it structurally. */
   native fn value<Value: Encode>(value: Value): JsonValue
 }
+
+// --- JSON as a `Format`: the streaming side -------------------------------------------------------------------------
+
+/**
+ * Everything a stream needs, written in TorbScript on top of the natives above: a framer that finds where one element
+ * ends, and the ordinary `Decode` for the element itself. Nothing here is native - tracking depth, strings and escapes
+ * is ordinary code, and a native would have to be rebuilt by every back end (CONTRIBUTING, "Natives stay few").
+ */
+extend Json with Format<JsonError> {
+  fn encodeAll(value: Encode): Bytes {
+    Json.encode(value).bytes().toList()
+  }
+
+  fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, JsonError> {
+    const text = textOf(bytes).mapError(JsonError.invalidText)?
+    Json.decode<Value>(text)
+  }
+
+  /**
+   * Byte chunks to items. The first byte that is not whitespace decides what the stream is: a `[` opens **one
+   * top-level array** and its elements are the items; anything else makes it a sequence of values written one after
+   * another, which covers newline-separated JSON (NDJSON) without a rule of its own.
+   *
+   * Memory is one element - what has arrived of the one being read, and nothing else.
+   */
+  fn items<Item: Decode>(): Stage<Bytes, Result<Item, JsonError>> {
+    JsonItems<Item>()
+  }
+
+  /**
+   * Items to bytes, one value per line (NDJSON). Not an array: a stream has no end at which a closing bracket could be
+   * written, and a reader would have to hold the whole thing to find one.
+   */
+  fn encoded<Item: Encode>(): Stage<Item, Bytes> {
+    mapping { "{Json.encode(_)}\n".bytes().toList() }
+  }
+}
+
+type JsonItems<Item: Decode> with Stage<Bytes, Result<Item, JsonError>> {
+  fn onto<Final>(
+    self,
+    downstream: Accumulator<Result<Item, JsonError>, Final>,
+  ): Accumulator<Bytes, Final> {
+    JsonFramer downstream
+  }
+}
+
+/**
+ * The framer: one pass over the bytes as they arrive, with exactly the state a JSON scanner needs - how deep the
+ * brackets go, whether we are inside a string, and whether the last byte was a backslash. An element is complete when
+ * the depth comes back to zero, and for a number, `true`, `false` or `null` at the first byte that cannot belong to it
+ * any anymore.
+ */
+type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
+  var downstream: Accumulator<Result<Item, JsonError>, Final>
+  /** The bytes of the element that is being read; empty between two elements. */
+  var element: Bytes = []
+  var started: Bool = false
+  var depth: Int = 0
+  var inString: Bool = false
+  var escaped: Bool = false
+  /** Whether the first `[` of the stream was taken as the opening bracket of a top-level array. */
+  var opened: Bool = false
+  var atStart: Bool = true
+
+  fn add(var self, value: Bytes) {
+    for byte in value {
+      if downstream.isDone() {
+        return
+      }
+      step byte
+    }
+  }
+
+  /** What is left at the end is one last element without a separator behind it: NDJSON without a final newline. */
+  fn finish(self): Final {
+    var tail = self
+    if tail.started && tail.depth == 0 {
+      tail.emit()
+    }
+    var below = tail.downstream
+    below.finish()
+  }
+
+  fn isDone(self): Bool {
+    downstream.isDone()
+  }
+
+  private fn step(var self, byte: UInt8) {
+    if !started {
+      begin byte
+      return
+    }
+    element.add byte
+    if inString {
+      stepInString byte
+      return
+    }
+    if byte == quoteByte {
+      inString = true
+      return
+    }
+    if byte == openBracket || byte == openBrace {
+      depth = depth + 1
+      return
+    }
+    if byte == closeBracket || byte == closeBrace {
+      depth = depth - 1
+      if depth <= 0 {
+        emit()
+      }
+      return
+    }
+    // A number, `true`, `false` or `null` has no closing byte of its own: it ends where something else begins, and
+    // that byte still has to be read as a separator
+    if depth == 0 && isSeparator(byte) {
+      const scalar = element[0..(element.length() - 1)]
+      element = scalar
+      emit()
+      begin byte
+    }
+  }
+
+  private fn stepInString(var self, byte: UInt8) {
+    if escaped {
+      escaped = false
+      return
+    }
+    if byte == backslashByte {
+      escaped = true
+      return
+    }
+    if byte == quoteByte {
+      inString = false
+      if depth == 0 {
+        emit()
+      }
+    }
+  }
+
+  /** Between elements: whitespace and commas are nothing, and the very first `[` of the stream is the array itself. */
+  private fn begin(var self, byte: UInt8) {
+    if isWhitespaceByte(byte) || byte == commaByte {
+      return
+    }
+    if byte == closeBracket && opened {
+      opened = false
+      atStart = false
+      return
+    }
+    if byte == openBracket && atStart && !opened {
+      opened = true
+      atStart = false
+      return
+    }
+    atStart = false
+    started = true
+    element = [byte]
+    depth = 0
+    inString = false
+    escaped = false
+    if byte == quoteByte {
+      inString = true
+      return
+    }
+    if byte == openBracket || byte == openBrace {
+      depth = 1
+    }
+  }
+
+  private fn emit(var self) {
+    const text = textOf(element).mapError(JsonError.invalidText)
+    const decoded = text.flatMap { Json.decode<Item>(_) }
+    element = []
+    started = false
+    depth = 0
+    inString = false
+    escaped = false
+    downstream.add decoded
+  }
+}
+
+fn isSeparator(byte: UInt8): Bool {
+  isWhitespaceByte(byte) || byte == commaByte || byte == closeBracket || byte == closeBrace
+}
+
+fn isWhitespaceByte(byte: UInt8): Bool {
+  byte == spaceByte || byte == tabByte || byte == newlineByte || byte == returnByte
+}
+
+const tabByte: UInt8 = 9
+const newlineByte: UInt8 = 10
+const returnByte: UInt8 = 13
+const spaceByte: UInt8 = 32
+const quoteByte: UInt8 = 34
+const commaByte: UInt8 = 44
+const openBracket: UInt8 = 91
+const backslashByte: UInt8 = 92
+const closeBracket: UInt8 = 93
+const openBrace: UInt8 = 123
+const closeBrace: UInt8 = 125

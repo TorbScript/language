@@ -203,6 +203,12 @@ Simple to use like npm, strict like Maven. The rules exist so that adding a depe
   `put`, `cut`, `reset` as mutators, and `set` has the counterpart `updated`. Nouns never change
   anything (`union`, `intersection`). Tooling does not offer verbs on a const path, and the compiler error names the
   participle ("`add` needs a `var`. Did you mean `added`?").
+- **A `Bool` is an adjective, a question is a method.** A `Bool` field, parameter or binding is an adjective or a
+  participle (`inclusive`, `discarded`, `signed`, `retryable`); a question that is *computed* is a method whose name
+  starts with `is` or `has` (`isEmpty()`, `hasGuard()`, `isRetryable()`). So `range.inclusive` is data and
+  `list.isEmpty()` is work, and a reader sees which is which without guessing where the parentheses are. It follows
+  from the same rule as the verbs: a field is a promise about data, and what could ever be computed is a method from
+  the start (see [Visibility and Encapsulation](#visibility-and-encapsulation)).
 - Generics vs. comparison (`load<Config>(path)` vs. `a < b`) is decided purely syntactically, without knowing what
   the names mean (the C#/Kotlin/TypeScript approach): after a name, `<` starts a type argument list if the tokens up
   to the matching `>` form valid types **and** the token after `>` is one of `(` `.` `{` `)` `]` `,` `:` or the end
@@ -344,7 +350,7 @@ const emptyMap: Map<String, Int> = [:]
   on. `Void` in an expression is an error that says so. `Never` has no value at all and converts to every type, which is
   why `panic "..."` fits into any expression.
 - `Void`, `Never` and `Range<Value>` are declared in the prelude like every other type. `0..10` is
-  `Range(start: Some(0), end: Some(10))`, `0..=10` sets `isInclusive`, and `0..` and `..10` leave one end `None`.
+  `Range(start: Some(0), end: Some(10))`, `0..=10` sets `inclusive`, and `0..` and `..10` leave one end `None`.
   `list[from..to]` is a `Range` passed to `Slice.slice`.
 - **`Range<Int>` is `Iterable<Int>` and `Length`, and the open ends are checked at runtime,** because "has a start" is
   a property of a field and not of the type: `iterator()` panics for a range without a start ("a range without a start
@@ -1708,7 +1714,7 @@ trait Accumulator<Item, Output> {           // The state of one run, held in a `
 - A collector is written either as a fold with a final step (`collector(initial, finish: { ... }) { state, value => ... }`),
   or, if it needs more, as a type with `var` fields that is an `Accumulator`. Every `Collection` is one out of the box.
 - Accumulators are _push-based_. The same collectors therefore work for everything that produces values over time,
-  not only for iterables: `channel.collect(counting())`, event streams, async sources.
+  not only for iterables: `channel.source().collect(counting())`, a `Source` of [Streams](#streams), event streams.
 - The catch of laziness: a stage with side effects does nothing until it is pulled.
   `chunks.map { spawn { ... } }` spawns nothing, `chunks.map { spawn { ... } }.toList()` spawns everything.
 
@@ -1752,6 +1758,131 @@ What higher-kinded types are typically used for is covered by things that alread
 
 Both "all or nothing" targets are ordinary `From<Iterable<...>>` implementations in the standard library - no new
 language feature was needed for them.
+
+## Streams
+
+A stream is one flow in one direction. It has two ends, and what a signature names is one of them - never "the
+stream", because at any point in a program you hold one end and not both. The two ends are the asynchronous siblings of
+`Iterator` and `Accumulator` and carry the same verbs, so nothing new has to be learned:
+
+```trb
+shared trait Source<Item, Failure> with Close {          // reading: `next`, like an Iterator
+  fn next(self): Task<Result<Item?, Failure>>
+}
+
+shared trait Sink<Item, Failure> with Close {            // writing: `add`/`finish`, like an Accumulator
+  fn add(self, item: Item): Task<Result<Void, Failure>>
+  fn finish(self): Task<Result<Void, Failure>>
+}
+```
+
+```trb
+use File from "std/fs"
+use * as http from "std/http"
+
+fn importUsers(url: String, path: String): Task<Result<Int, ImportError>> {
+  const response = http.get(url).await()?
+  const users = response.body
+    .mapFailure(ImportError.requestFailed)
+    .through(Json.items<User>())               // a resumable framer: memory is one `User`
+    .checked()                                 // `Result` items become the stream's failure
+  const active = users.filter { _.active }
+  File.write(path, active.through(Json.encoded<User>()).mapFailure(...)).await()?
+  active.count().await()
+}
+
+// The loop. `await()` and `?` are both visible, which is why there is no `for` over a source.
+while const Some(line) = file.lines().next().await()? {
+  print line
+}
+```
+
+- **A stream has an identity and is consumed once,** so both ends are `shared type`s. That is also why `next` and `add`
+  take `self` and not `var self`: an exclusive access to a value cannot stay open across an `await`
+  ([`var` Paths](#var-paths-and-var-parameters)). A consequence worth knowing: a source belongs to the task that made
+  it, because shared objects do not cross task boundaries.
+- **A failure ends the stream and stands in the type,** on both ends. An end that cannot fail is
+  `Source<Item, Never>`. After a failure a source never delivers again, and after `Ok(None)` the end is final.
+- **Backpressure is the shape of the protocol.** At the reading end it is the pull - nothing is read until somebody
+  asks. At the writing end it is the `await` on `add`, which finishes when the target has taken the item. There is no
+  credit protocol, no high-water mark, no `poll_ready`.
+- **Buffering is always a wrapper.** `sink.buffered(capacity:)` answers a `Buffered` with its own `flush()`;
+  `finish()` flushes and `close()` does not. "When was it actually written" has to be answerable.
+- **`close()` releases what is above or below,** synchronously and without failing, which is what `Close` and `using`
+  need. Every derived end closes the one it came from, so a reader that stops early (`take(5)`, a `find` that found it,
+  an abandoned loop) never leaves a file handle open. `finish()` is the graceful counterpart and can fail; `close()` is
+  the abrupt one and cannot. A sink that is closed without being finished may have written less than it was given.
+
+### The middle is written once: `Stage`
+
+A stage does not hang on the source, it hangs on the target:
+
+```trb
+trait Stage<Input, Output> {
+  fn onto<Final>(self, downstream: Accumulator<Output, Final>): Accumulator<Input, Final>
+  fn then<Final>(self, other: Stage<Output, Final>): Stage<Input, Final>
+}
+```
+
+It turns an accumulator into an accumulator - a transducer. Because it never asks where its values come from, **every
+stage exists exactly once**, synchronously, and a pipeline is an ordinary value that can be named, stored and applied
+more than once:
+
+```trb
+const activeNames: Stage<User, String> = filtering<User>({ _.active }).then(mapping { _.name })
+
+const fromList = users.through(activeNames).toList()                   // a list
+const fromBody = body.through(activeNames).toList().await()?           // an HTTP body
+```
+
+- `Accumulator` has `fn isDone(self): Bool { false }` for it. A driver asks before the first value and after every
+  `add`, so `taking(10)`, `first()` and `find(...)` end a pipeline over an infinite or expensive source without pulling
+  one value they will not deliver.
+- **The difference between the two worlds shrinks to two drivers:** `Iterable.through(stage)` (a loop) and
+  `Source.through(stage)` (a loop with `await`). `collect` runs *fused* - the stage wraps the collector's accumulator,
+  no queue - and `next()`/`iterator()` runs through a small queue, because one value pushed in can become many coming
+  out while the caller asks for one. `map`, `filter`, `take`, ... on both traits are one-liners over `through`.
+- **`Collector` is shared,** so every terminal operation is written once: `source.collect(collector)`, `toList`,
+  `count`, `fold`, `find`, `forEach`.
+- **What exists:** `mapping`, `filtering`, `filterMapping`, `mappingWhile`, `flatMapping`, `taking`, `takingWhile`,
+  `skipping`, `indexing`, `chunking` in `std/iteration`; `lines`, `decodedText`, `encodedText` in `std/stream`; and
+  whatever a format provides. `zip` reads two sources and is therefore a driver, not a stage; `sorted` collects and
+  then delivers.
+- **A stage that can fail answers `Result` items,** because it is synchronous and knows nothing about the stream around
+  it. `source.checked()` lifts them into the stream's failure and ends it there (`where Failure: From<Problem>`); on an
+  `Iterable` the existing `to<Result<List<Item>, Failure>>()` does the same job.
+- **Only what must wait is asynchronous:** `Source`, `Sink`, `source.then { ... }` (a step whose function answers a
+  `Task`) and `source.into(sink)`.
+
+### Producing, and what it is made of
+
+```trb
+Source.from(items)                              // everything an Iterable has
+Source.pulling { ... }                          // the closure *is* `next`
+Source.produce { sink => ... }                  // a task of its own plus a channel; capacity 0 is lock-step
+```
+
+There are no generators and no `yield` (an [open question](#open-questions)); `produce` covers what they are used for,
+and `capacity: 0` hands every item over directly, which is exactly a generator's behaviour. Closing the source makes
+the producer's next `add` fail with `ChannelClosed`, which ends its body - that is the whole cancellation story.
+
+- **`Channel<Item>` is a stream in memory of which one holder has both ends:** `channel.source()` is a
+  `Source<Item, Never>`, `channel.sink()` a `Sink<Item, ChannelClosed>`, and the two can be handed out separately.
+  Everything bidirectional - a socket, a child process, a WebSocket - is a type with a `source` and a `sink`.
+- **`Bytes` is `List<UInt8>`**, an alias and not a type of its own. A chunk is a value, so whoever receives one may keep
+  it: there is no borrowed buffer that has to be copied before the next `await`.
+- **Chunk borders are nobody's choice,** so the stages that turn bytes into text (`lines`, `decodedText`) are resumable
+  and put a character or a line back together across two chunks.
+- **`Encode`/`Decode` and `Encoder`/`Decoder` stay synchronous and unchanged.** Streaming happens at the level at which
+  it happens in practice - the element: `trait Format<Failure>` gives every format `items<Item>()` and
+  `encoded<Item>()` as `Stage`s, and a resumable framer finds where one element ends while the element itself is decoded
+  synchronously. Memory is one element. A decoder that could wait would have to be written differently for every source
+  and would colour the whole standard library, and streaming a single huge value into a type saves only the text it came
+  from - what that case needs is an event level (`Json.events`), which is later work.
+
+The whole specification - the contracts of both ends, the table of what is synchronous, the drivers, and what was taken
+from Rust, C#, Swift, Scala, Java, Node, Web Streams and Bun and what was not - is in
+[docs/STREAMS.md](docs/STREAMS.md).
 
 ## Modules and Packages
 
@@ -1949,7 +2080,7 @@ of a macro: it reads code _after_ it was resolved and type checked, and it canno
 ```trb
 fn fetchUser(id: Int): Task<Result<User, HttpError>> {
   const response = http.get("/users/{id}").await()?
-  response.json<User>()
+  response.json<User>().await()                  // the body is a stream, so reading it is a Task too
 }
 
 const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()
@@ -1957,7 +2088,7 @@ const (user, posts) = all(fetchUser(1), fetchPosts(1)).await()
 const task = spawn { expensiveComputation() }    // Task<Int>, runs in parallel
 const result = task.await()
 
-const channel = Channel<Int>()
+const channel = Channel<Int>(capacity: 8)        // a stream in memory: `channel.source()`, `channel.sink()`
 ```
 
 - **Asynchrony lives in the type system, not in a keyword.** There is no `async`. A function that returns `Task<Value>`
@@ -1970,6 +2101,8 @@ const channel = Channel<Int>()
 - Values are passed freely between tasks: a task gets copies, so there is nothing to race for. `shared type` objects
   (and values that contain one) are confined to the task that created them; `Channel` and `Task` are the exceptions
   that connect tasks. Closures passed to `spawn` cannot capture `var` bindings. Data races are impossible by construction.
+- **A `Channel` is one end of each of the two ends of a stream:** `channel.source()` and `channel.sink()` are ordinary
+  `Source`/`Sink` values, so everything of [Streams](#streams) works between two tasks without a second vocabulary.
 
 ## Foreign Functions (Draft)
 
@@ -2125,6 +2258,35 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   Option is deliberately not an `Iterable`: its `map` is eager, the trait promises a lazy one.
 - No `Collectable`/`FromIterator` trait: a collection target is simply `From<Iterable<Item>>`, `to<Target>()` is a typed `into()`.
 - Collectors are push-based (`Accumulator.add`), so they are not tied to `Iterable` and work for channels and streams.
+- **A stream is a word, not a type: what a signature names is one of its two ends,** `Source<Item, Failure>` or
+  `Sink<Item, Failure>`. They are the asynchronous siblings of `Iterator` and `Accumulator` and carry the same verbs
+  (`next`, `add`, `finish`), and both are `shared trait`s with `Close`, because a stream has an identity and is consumed
+  once. `next` and `add` take `self` and not `var self`: an exclusive access cannot stay open across an `await`.
+- **A failure ends a stream and stands in the type, on both ends** (`Never` for an end that cannot fail), instead of in
+  the item as in Rust. There, "what happens after an `Err`" has to be answered per implementation and every combinator
+  exists twice.
+- **Backpressure is the shape of the protocol,** not a mechanism: pulling at the source, the `await` on `add` at the
+  sink. No `poll_ready`/`start_send`/`poll_flush`, no `request(n)`, no high-water mark. Buffering is an explicit wrapper
+  (`sink.buffered(capacity:)`) with its own `flush()`, because "when was it actually written" has to be answerable.
+- **`Stage<Input, Output>` is the middle piece, written once for both worlds.** It turns an `Accumulator<Output, Final>`
+  into an `Accumulator<Input, Final>` (a transducer), so it never asks where its values come from: `map`, `filter`,
+  `take`, framing and codecs exist exactly once, a pipeline is a value that fits a list as well as an HTTP body, and the
+  difference between synchronous and asynchronous shrinks to two drivers. `Accumulator` has `isDone()` for early exit.
+  It lives in `std/iteration`, because it is synchronous and because what it turns into what is that package's
+  vocabulary. The stage factories are free functions with gerund names (`mapping`, `taking`) like the collectors,
+  because a member of a trait used as a namespace cannot fix the trait's own type arguments for a stage whose answer
+  says nothing about `Output`.
+- **Making everything asynchronous was rejected** (fs2, Web Streams): it would make `list.map(...).toList()` answer a
+  task. So was effect polymorphism over both worlds - that is Rust's unsolved "keyword generics", and the language has
+  no higher-kinded types on purpose. `Stage` shares the logic without sharing the names.
+- **`Encode`/`Decode` stay synchronous.** Streaming happens at the element, through a resumable framer
+  (`Format.items<Item>()`); a decoder that could wait would colour every derived implementation in the language, and
+  streaming one huge value into a type saves only the text it came from.
+- **`Channel` hands out its two ends** (`source()`, `sink()`) instead of having `send`/`receive`/`close`/`collect`. Two
+  natives instead of four, a producer never sees the reading end, and everything bidirectional is a type with a `source`
+  and a `sink`.
+- **No `for` over a source in v1:** a `for` head has no place for the `?` that the pull needs, and
+  `while const Some(item) = source.next().await()? { ... }` keeps both `await` and `?` where they happen.
 - `const` instead of `val` as it is clearer (reading many `val` with `var` in between lets you easily miss some)
 - `.trb` instead of `.scr` (`.scr` is an executable screensaver on Windows and blocked by mail filters/AV)
 - `//`, `/* */`, `/** */` for docs. Block comments do not nest (they did at first: a `/*` inside of a doc comment, as
@@ -2379,6 +2541,18 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   first API needs it. The use case that settles its shape: a field that becomes a method. The field stays for one
   version next to the new method, marked `deprecated` with its replacement, and `torb lint --fix` rewrites the callers
   (`.x` to `.x()`); the language server offers the same as a quick fix.
+- `yield`: a function that answers a `Source` and produces items with `yield` would be the same state machine `Task`
+  already is, so it costs little. Not in v1, because `Source.produce { sink => ... }` covers the cases (and with
+  `capacity: 0` it *is* lock-step generation), and a second way to write a producer is worth less than one obvious way.
+  Decide when a real generator is awkward to write with `produce`.
+- `for` over a `Source`: there is no place in a `for` head for the `?` the pull needs, so v1 has
+  `while const Some(item) = source.next().await()? { ... }`. Swift needs `for try await` for exactly this. Reconsider if
+  a spelling turns up that keeps `await` and `?` visible without a keyword combination.
+- Whether a `shared type`'s own methods may change its `var` fields through `self`. Today they cannot (mutation needs a
+  `var` path), and an asynchronous method has to take `self`, so every stateful end in `std/stream` keeps its state in
+  the `var` bindings its closures captured. There is no copy being thrown away, and `var self` would stay the form a
+  `const` path can withhold - `Channel.send(self, ...)` already relies on this and gets away with it by being native.
+  See `docs/STREAMS.md`, open point 1.
 - Registry protocol and the exact format of `project.lock.trb`
 - REPL: every input is a nested scope of the previous one (so redefining a name is ordinary shadowing). A type that
   is defined again shadows the old one, values of the old type keep it and show up as `Point#1`.

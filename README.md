@@ -5,7 +5,7 @@ native executables, and it is its own configuration format.
 
 - [CONCEPT.md](CONCEPT.md) - the language
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - how it is implemented, and the state of it
-- [examples/tour](examples/tour) - the language in twelve files
+- [examples/tour](examples/tour) - the language in thirteen files
 
 | Directory    | Contains                                                                      |
 |--------------|-------------------------------------------------------------------------------|

@@ -5,31 +5,132 @@
  *
  *     fn fetchUser(id: Int): Task<Result<User, HttpError>> {
  *       const response = http.get("https://example.test/users/{id}").await()?
- *       response.json<User>()
+ *       response.json<User>().await()
  *     }
+ *
+ * A body is a **stream** (`docs/STREAMS.md`): `Body` is a `Source<Bytes, HttpError>`, so a response of any size can be
+ * piped into a file or read item by item, and the convenience that covers nine cases out of ten sits on top of it
+ * (`body.text()`, `body.json<User>()`, all with a size limit).
  *
  * Needs the network capability inside a sandboxed script.
  */
 
 use Json, JsonError from "std/json"
+use Source, Bytes, Utf8Error, textOf from "std/stream"
+use lines as streamLines from "std/stream"
 
 /** One HTTP request, for `request()`. `get` and `post` build one of these for the common cases. */
 public type Request {
   method: String
   url: String
   headers: Map<String, String> = [:]
-  body: String = ""
+  body: Body = Body.empty()
 }
 
-/** What came back. The body is text: binary responses are outside the scope of this client. */
+/** What came back. */
 public type Response {
   status: Int
   headers: Map<String, String> = [:]
-  body: String = ""
+  body: Body
 
-  /** Decodes the body as JSON. A malformed or mismatched body becomes an `HttpError`, like every other failure. */
-  fn json<Value: Decode>(self): Result<Value, HttpError> {
-    Json.decode<Value>(body).mapError(HttpError.decodeFailed)
+  /**
+   * Decodes the body as JSON. A `Task` since the body arrives over the network: what used to be a plain `Result` was
+   * only a `Result` because the whole response was read before anybody looked at it.
+   */
+  fn json<Value: Decode>(self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
+    body.json<Value>(limit: limit).await()
+  }
+}
+
+/**
+ * The bytes of a request or a response, as a stream that is read once.
+ *
+ *     const users = response.body.through(Json.items<User>()).checked().toList().await()?   // one at a time
+ *     const text = response.body.text().await()?                                            // or all of it
+ *     File.write(path, response.body).await()?                                               // or straight to disk
+ *
+ * The convenience methods come first on purpose - that is the lesson of `fetch` and Bun, where `await response.json()`
+ * is what almost every program wants - and every one of them takes a `limit`, because a server that decides how much
+ * memory a client allocates is a denial of service.
+ */
+public shared type Body with Source<Bytes, HttpError> {
+  /**
+   * 16 MiB: large enough for any document a program means to hold in one piece, small enough that a response nobody
+   * expected is refused instead of filling the machine. Streaming is the way past it, not a bigger number.
+   */
+  const defaultLimit: Int = 16777216
+
+  private var reading: Source<Bytes, HttpError>
+
+  fn next(self): Task<Result<Bytes?, HttpError>> {
+    reading.next().await()
+  }
+
+  fn close(var self) {
+    reading.close()
+  }
+
+  /** The whole body. More than `limit` bytes is an `HttpError` and the rest is not read. */
+  fn bytes(self, limit: Int = Body.defaultLimit): Task<Result<Bytes, HttpError>> {
+    var collected: Bytes = []
+    while const Some(chunk) = next().await()? {
+      if collected.length() + chunk.length() > limit {
+        return Fail HttpError.tooLarge(limit)
+      }
+      collected.addAll chunk
+    }
+    Ok collected
+  }
+
+  /** The whole body as text. Bytes that are not UTF-8 are an `HttpError`, never a replacement character. */
+  fn text(self, limit: Int = Body.defaultLimit): Task<Result<String, HttpError>> {
+    const raw = bytes(limit: limit).await()?
+    textOf(raw).mapError(HttpError.invalidText)
+  }
+
+  /** The whole body, decoded as JSON: `response.body.json<User>().await()?` */
+  fn json<Value: Decode>(self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
+    const document = text(limit: limit).await()?
+    Json.decode<Value>(document).mapError(HttpError.decodeFailed)
+  }
+
+  /** Lines of text, as a stream: a log, an event stream, a CSV of any size. */
+  fn lines(self): Source<String, HttpError> {
+    through(streamLines()).checked()
+  }
+
+  fn empty(): Body {
+    const nothing: List<Bytes> = []
+    Body Source.from(nothing)
+  }
+
+  /**
+   * An `Encode` value as a JSON body. Not `Body.json(value)`: a type has one namespace for its members, and `json` is
+   * taken by the reading side, where it matters more (`body.json<User>()`).
+   */
+  fn jsonOf(value: Encode): Body {
+    Body.from Json.encode(value)
+  }
+}
+
+/** `Body.from("hello")` - the text as UTF-8. */
+extend Body with From<String> {
+  fn from(value: String): Body {
+    Body.from value.bytes().toList()
+  }
+}
+
+/** `Body.from(bytes)` - one chunk, already in memory. */
+extend Body with From<Bytes> {
+  fn from(value: Bytes): Body {
+    Body Source.from([value])
+  }
+}
+
+/** `Body.from(source)` - a body of any size, which is what an upload or a proxy hands on. */
+extend Body with From<Source<Bytes, HttpError>> {
+  fn from(value: Source<Bytes, HttpError>): Body {
+    Body value
   }
 }
 
@@ -64,6 +165,16 @@ public type HttpError with Show, Error {
     Self kind: .Decode(cause)
   }
 
+  /** A body that was read in one piece was longer than the limit that was given. */
+  fn tooLarge(limit: Int): HttpError {
+    Self kind: .TooLarge(limit)
+  }
+
+  /** The bytes of the body are not UTF-8, so they are not a `String`. */
+  fn invalidText(cause: Utf8Error): HttpError {
+    Self kind: .InvalidText(cause)
+  }
+
   fn isTimeout(self): Bool {
     match kind {
       .Timeout => true
@@ -96,6 +207,17 @@ public type HttpError with Show, Error {
       .Status(code, message) => "{code}: {message}"
       .InvalidUrl(message) => "invalid URL: {message}"
       .Decode(cause) => "{cause}"
+      .TooLarge(limit) => "the body is longer than {limit} bytes"
+      .InvalidText(cause) => "{cause}"
+    }
+  }
+
+  /** The failure a rejected body carries, so a report can unwind the chain down to the field or the byte. */
+  fn cause(self): Error? {
+    match kind {
+      .Decode(problem) => Some problem
+      .InvalidText(problem) => Some problem
+      _ => None
     }
   }
 }
@@ -106,15 +228,31 @@ type HttpErrorKind {
   case Status(code: Int, message: String)
   case InvalidUrl(message: String)
   case Decode(cause: JsonError)
+  case TooLarge(limit: Int)
+  case InvalidText(cause: Utf8Error)
+}
+
+/** What makes `body.lines()` work: a stage over bytes, so it needs nothing of HTTP. */
+extend HttpError with From<Utf8Error> {
+  fn from(value: Utf8Error): HttpError {
+    HttpError.invalidText value
+  }
+}
+
+/** ...and what makes `body.through(Json.items<User>()).checked()` work without naming a second failure type. */
+extend HttpError with From<JsonError> {
+  fn from(value: JsonError): HttpError {
+    HttpError.decodeFailed value
+  }
 }
 
 /** `http.get(url).await()?` */
 public native fn get(url: String, headers: Map<String, String> = [:]): Task<Result<Response, HttpError>>
 
-/** `http.post(url, body).await()?` */
+/** `http.post(url, Body.from(text)).await()?` - the body may be a stream, so an upload is not held in memory. */
 public native fn post(
   url: String,
-  body: String,
+  body: Body,
   headers: Map<String, String> = [:],
 ): Task<Result<Response, HttpError>>
 

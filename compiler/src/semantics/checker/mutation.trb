@@ -2,6 +2,7 @@ use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Argument from "../../syntax/ast"
 use Checker, Place, BindingId, BindingUse, Capture, ClosureKind from "./context"
+use isSharedType from "./declaration"
 
 /**
  * The two rules that need the whole body instead of one expression: a change nobody reads, and whether a closure may
@@ -34,9 +35,14 @@ public fn noteRead(var checker: Checker, binding: BindingId, at: Span) {
 }
 
 /** Whether the dead-change rule has anything to say about this binding at all. */
-fn isCounted(checker: Checker, binding: BindingId): Bool {
+fn isCounted(var checker: Checker, binding: BindingId): Bool {
   const found = checker.binding binding
-  found.isVar && !found.isParameter && !found.isReceiver
+  if !found.isVar || found.isParameter || found.isReceiver {
+    return false
+  }
+  // A shared object is not a copy: what is changed through this binding is what everybody else holds as well, so
+  // "no read follows it here" says nothing about it (CONCEPT, "Identity")
+  !isSharedType(checker, found.annotation)
 }
 
 /**

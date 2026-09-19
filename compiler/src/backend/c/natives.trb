@@ -689,12 +689,19 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error);",
   ))
   entries.add runtimeOf("File.close", "torb_file_close", "void torb_file_close(torb_file *self);")
-  // `lines` answers `Result<Iterable<String>, IoError>`; `Iterable` is a trait-typed value over an iterator type,
-  // which is the ABI of 5.7 (see `String.chars` above) - reading the whole file now to fake it would invent that
-  // ABI early instead of waiting for the real one.
-  entries.add plannedRuntimeOf("File.lines", "torb_file_lines", "5.7")
+  // The stream side of a file (docs/STREAMS.md). `chunks` answers a `Source<Bytes, IoError>` and `add`/`finish` are the
+  // `Sink` a `File` is, so all three are shared objects the runtime owns; `file.lines()` is TorbScript over `chunks`
+  // and needs no native of its own.
+  entries.add plannedRuntimeOf("File.create", "torb_file_create", "7.3")
+  entries.add plannedRuntimeOf("File.chunks", "torb_file_chunks", "7.3")
+  entries.add plannedRuntimeOf("File.add", "torb_file_add", "7.3")
+  entries.add plannedRuntimeOf("File.finish", "torb_file_finish", "7.3")
 
   entries.add optionalRuntimeOf("readLine", "torb_read_line", "bool torb_read_line(torb_text *out);")
+  // The three streams a process is started with, as `Source`/`Sink` objects
+  entries.add plannedRuntimeOf("standardInput", "torb_standard_input", "7.3")
+  entries.add plannedRuntimeOf("standardOutput", "torb_standard_output", "7.3")
+  entries.add plannedRuntimeOf("standardError", "torb_standard_error", "7.3")
 
   // `mkdir -p` as a native: `torb build` has to create the directory it writes the C and the binary into. The runtime
   // has the whole platform layer for it (`runtime/platform.c`) and only the two functions on top are missing, which is
@@ -711,6 +718,13 @@ fn fileEntries(var entries: List<NativeEntry>) {
   // a function that answers `bool` plus out parameters and the wrapper the lowering builds around it - both of which
   // arrive with the full driver.
   entries.add plannedRuntimeOf("Process.run", "torb_process_run", "5.13")
+  // A child process whose pipes are read and written while it runs: the same `Source`/`Sink` objects a file has
+  entries.add plannedRuntimeOf("Process.start", "torb_process_start", "7.3")
+  entries.add plannedRuntimeOf("Child.input", "torb_child_input", "7.3")
+  entries.add plannedRuntimeOf("Child.output", "torb_child_output", "7.3")
+  entries.add plannedRuntimeOf("Child.errors", "torb_child_errors", "7.3")
+  entries.add plannedRuntimeOf("Child.wait", "torb_child_wait", "7.3")
+  entries.add plannedRuntimeOf("Child.close", "torb_child_close", "7.3")
 }
 
 /** `std/math`: everything is a thin wrapper over `<math.h>` in `number.c`, so there is one entry per function. */
@@ -799,10 +813,10 @@ fn plannedPackageEntries(var entries: List<NativeEntry>) {
   entries.add plannedRuntimeOf("Task.all", "torb_task_all", "7.3")
   entries.add plannedRuntimeOf("spawn", "torb_spawn", "7.3")
   entries.add plannedRuntimeOf("all", "torb_task_all_pair", "7.3")
-  entries.add plannedRuntimeOf("Channel.send", "torb_channel_send", "7.3")
-  entries.add plannedRuntimeOf("Channel.receive", "torb_channel_receive", "7.3")
-  entries.add plannedRuntimeOf("Channel.close", "torb_channel_close", "7.3")
-  entries.add plannedRuntimeOf("Channel.collect", "torb_channel_collect", "7.3")
+  // A `Channel` hands out its two ends as `Source`/`Sink` objects: two natives instead of `send`/`receive`/`close`/
+  // `collect`, because everything else a stream can do is TorbScript on top of them (docs/STREAMS.md)
+  entries.add plannedRuntimeOf("Channel.source", "torb_channel_source", "7.3")
+  entries.add plannedRuntimeOf("Channel.sink", "torb_channel_sink", "7.3")
 
   entries.add plannedRuntimeOf("Expression.value", "torb_expression_value", "5.11")
   entries.add plannedRuntimeOf("Expression.captures", "torb_expression_captures", "5.11")

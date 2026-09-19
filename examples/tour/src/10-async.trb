@@ -17,12 +17,12 @@ type Post {
 // `await()` is a method on Task and composes with `?`.
 fn fetchUser(id: Int): Task<Result<User, HttpError>> {
   const response = http.get("https://example.test/users/{id}").await()?
-  response.json<User>()
+  response.json<User>().await()
 }
 
 fn fetchPosts(userId: Int): Task<Result<List<Post>, HttpError>> {
   const response = http.get("https://example.test/users/{userId}/posts").await()?
-  response.json<List<Post>>()
+  response.json<List<Post>>().await()
 }
 
 // Sequential
@@ -48,24 +48,25 @@ const chunks = [numbers[0..500_000], numbers[500_000..]]
 const tasks = chunks.map { chunk => spawn { chunk.sum() } }.toList()   // List<Task<Int>>, all running
 
 // Channels connect tasks. A `Channel` is a `shared type`; other shared objects never cross task boundaries.
+// It is a stream in memory, and one holder has both of its ends (see docs/STREAMS.md).
 const channel = Channel<Int>(capacity: 10)
 
 const producer = spawn {
+  const writing = channel.sink()
   for i in 0..5 {
-    channel.send(i).await()
+    writing.add(i).await()?
     sleep(0.1).await()
   }
-  channel.close()
+  writing.finish().await()
 }
 
-// Collectors are push-based, so they work for values that arrive over time, too
-const consumer = spawn {
-  channel.collect(summing { _ }).await()
-}
+// Collectors are push-based and shared between `Iterable` and `Source`, so the same `summing` works for values
+// that arrive over time
+const consumer = spawn { channel.source().collect(summing { _ }).await() }
 
 // Top-level `await()` is allowed in entry files and scripts
 const total = tasks.map { _.await() }.sum()
-print "sum: {total}, consumed: {consumer.await()}"
+print "sum: {total}, consumed: {consumer.await().orElse(0)}, sent: {producer.await().isOk()}"
 
 match loadProfile(1).await() {
   Ok(profile) => print profile

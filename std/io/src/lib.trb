@@ -1,6 +1,34 @@
 /**
- * Standard input. (Standard output and standard error are `print` and `printError` of the prelude.)
+ * The three streams every process is started with. They are ordinary `Source` and `Sink` values (`docs/STREAMS.md`),
+ * so everything that reads a file reads standard input, and everything that writes a file writes to the screen:
+ *
+ *     const total = lines().count().await()?
+ *     standardOutput().addLine("{total} lines").await()?
+ *
+ * `print`/`printError` of the prelude and `readLine()` here stay as the short form for the common case: a program that
+ * prints a line does not want to think about a stream.
  */
+
+use IoError from "std/fs"
+use Source, Sink, Bytes from "std/stream"
+use lines as lineStage from "std/stream"
 
 /** The next line of standard input without its line break, `None` at the end of the input. */
 public native fn readLine(): String?
+
+/** Standard input as a stream of byte chunks. */
+public native fn standardInput(): Source<Bytes, IoError>
+
+/**
+ * Standard output. Not buffered: every `add` goes out. `standardOutput().buffered(capacity: 4096)` is the form a
+ * program that writes a lot of small pieces wants, and it says where the flush is.
+ */
+public native fn standardOutput(): Sink<Bytes, IoError>
+
+/** Standard error, unbuffered for the reason it is everywhere: a diagnostic that is lost is worse than a slow one. */
+public native fn standardError(): Sink<Bytes, IoError>
+
+/** The lines of standard input, as a stream: the same stage `File.lines` uses, over the same kind of source. */
+public fn lines(): Source<String, IoError> {
+  standardInput().through(lineStage()).checked()
+}

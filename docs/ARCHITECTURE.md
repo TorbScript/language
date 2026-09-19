@@ -224,5 +224,7 @@ regardless.)
    runtime ([`runtime/`](../runtime)) with counts, `String`, one list, one ordered hash table, panics and the minimum
    of file IO, and the manifest of natives that is the contract between it and the lowering.
 6. The compiler compiles itself, stage 1 and stage 2 agree. `bootstrap/` is frozen.
-7. Bytecode and VM, tasks, channels, the sandbox (`Sandbox.load`, receiver scripts, `project.trb`).
+7. Bytecode and VM, tasks, channels, the sandbox (`Sandbox.load`, receiver scripts, `project.trb`). The runtime half
+   of streams comes with it: the specification and the declarations are in [docs/STREAMS.md](STREAMS.md) and
+   `std/stream`, and section 14 there lists what 7 and 10 have to build.
 8. Formatter, language server, package manager.

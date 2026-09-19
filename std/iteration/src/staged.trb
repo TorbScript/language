@@ -1,0 +1,114 @@
+/**
+ * The synchronous driver of a `Stage`: what `Iterable.through(stage)` answers.
+ *
+ * A stage pushes, an `Iterable` is pulled, so the driver has two halves and they are not the same code:
+ *
+ * - **`collect` is fused.** The stage wraps the collector's accumulator and the values go straight through, one push
+ *   per value, nothing in between. This is the path every terminal operation of `Iterable` ends in.
+ * - **`iterator()` needs a queue,** because one value pushed in can become none or many coming out while the caller
+ *   asks for exactly one. The queue holds what one input produced and is drained before the next input is pulled, so
+ *   it stays as small as the widest stage of the pipeline (Clojure's `sequence` works the same way).
+ */
+
+use Shared from "std/core"
+use Iterable, Iterator from "./iteration"
+use Accumulator, Collector from "./collectors"
+use Stage from "./stage"
+
+/**
+ * `items.through(stage)` - an `Iterable` again, so a staged pipeline is a source for the next one and can be
+ * iterated more than once (every iteration builds a fresh accumulator chain, exactly as `Mapped` builds a fresh
+ * iterator).
+ */
+public type Staged<Input, Item> with Iterable<Item> {
+  source: Iterable<Input>
+  stage: Stage<Input, Item>
+
+  /**
+   * The fused path: no queue, no intermediate collection. The driver asks `isDone()` before it pulls the first value
+   * and after every push, so a pipeline that ends in `taking(10)` reads eleven values from the source at most - and
+   * an infinite source works.
+   */
+  fn collect<Final>(self, collector: Collector<Item, Final>): Final {
+    var accumulator = stage.onto collector.start()
+    if accumulator.isDone() {
+      return accumulator.finish()
+    }
+    for value in source {
+      accumulator.add value
+      if accumulator.isDone() {
+        break
+      }
+    }
+    accumulator.finish()
+  }
+
+  /** Composes instead of stacking, so a chain of `through` calls stays one driver over one stage and stays fused. */
+  fn through<Output>(self, other: Stage<Item, Output>): Iterable<Output> {
+    source.through stage.then(other)
+  }
+
+  fn iterator(self): Iterator<Item> {
+    var queue: Shared<List<Item>> = Shared([])
+    StagedIterator source.iterator(), stage.onto(Queueing(queue)), queue
+  }
+}
+
+/**
+ * The tail of a pipeline that somebody pulls from: every value the stage pushes lands in a list the driver also
+ * holds. The list is in a `Shared` box because an accumulator is a value - handing it over would hand over a copy,
+ * and the driver would never see what arrived.
+ */
+public type Queueing<Item> with Accumulator<Item, Void> {
+  var box: Shared<List<Item>>
+
+  fn add(var self, value: Item) {
+    box.update { _.added value }
+  }
+
+  fn finish(self) {}
+}
+
+type StagedIterator<Input, Item> with Iterator<Item> {
+  var source: Iterator<Input>
+  var pushing: Accumulator<Input, Void>
+  var queue: Shared<List<Item>>
+  var finished: Bool = false
+
+  /** Deliver what is queued; when nothing is queued, push one more value in and look again. */
+  fn next(var self): Item? {
+    while true {
+      if const Some(ready) = dequeue() {
+        return Some ready
+      }
+      if finished {
+        return None
+      }
+      // `finish()` of the last stage may still produce values (the short last group of `chunking`), so it happens
+      // before the queue is looked at again and never after the answer `None`
+      if pushing.isDone() {
+        stop()
+        continue
+      }
+      match source.next() {
+        Some(value) => pushing.add value
+        None => stop()
+      }
+    }
+  }
+
+  fn dequeue(var self): Item? {
+    var waiting = queue.value
+    if waiting.isEmpty() {
+      return None
+    }
+    const first = waiting.removeAt 0
+    queue.value = waiting
+    first
+  }
+
+  fn stop(var self) {
+    pushing.finish()
+    finished = true
+  }
+}

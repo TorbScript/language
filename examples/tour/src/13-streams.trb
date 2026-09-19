@@ -1,0 +1,179 @@
+// Streams: one flow in one direction, with two ends - `Source` to read from, `Sink` to write into.
+// Everything in between is a `Stage`, which is the very same value a synchronous `Iterable` takes.
+// See docs/STREAMS.md for the model and CONCEPT.md, "Streams".
+
+use * as http from "std/http"
+use Body, HttpError from "std/http"
+use File, IoError from "std/fs"
+use Utf8Error from "std/stream"
+
+type User {
+  id: Int
+  name: String
+  active: Bool
+}
+
+// One error type for the whole program: `?` and `checked()` convert into it through `From`, so no signature has to
+// name three failures at once.
+type ImportError with Show, Error {
+  private kind: ImportErrorKind
+
+  fn requestFailed(cause: HttpError): ImportError {
+    Self kind: .Request(cause)
+  }
+
+  fn fileFailed(cause: IoError): ImportError {
+    Self kind: .File(cause)
+  }
+
+  fn documentFailed(cause: JsonError): ImportError {
+    Self kind: .Document(cause)
+  }
+
+  fn producerStopped(cause: ChannelClosed): ImportError {
+    Self kind: .Stopped(cause)
+  }
+
+  fn show(self): String {
+    match kind {
+      .Request(cause) => "the download failed: {cause}"
+      .File(cause) => "the file failed: {cause}"
+      .Document(cause) => "the document failed: {cause}"
+      .Stopped(cause) => "{cause}"
+    }
+  }
+
+  fn cause(self): Error? {
+    match kind {
+      .Request(problem) => Some problem
+      .File(problem) => Some problem
+      .Document(problem) => Some problem
+      .Stopped(problem) => Some problem
+    }
+  }
+}
+
+type ImportErrorKind {
+  case Request(cause: HttpError)
+  case File(cause: IoError)
+  case Document(cause: JsonError)
+  case Stopped(cause: ChannelClosed)
+}
+
+extend ImportError with From<HttpError> {
+  fn from(value: HttpError): ImportError {
+    ImportError.requestFailed value
+  }
+}
+
+extend ImportError with From<IoError> {
+  fn from(value: IoError): ImportError {
+    ImportError.fileFailed value
+  }
+}
+
+extend ImportError with From<JsonError> {
+  fn from(value: JsonError): ImportError {
+    ImportError.documentFailed value
+  }
+}
+
+extend ImportError with From<ChannelClosed> {
+  fn from(value: ChannelClosed): ImportError {
+    ImportError.producerStopped value
+  }
+}
+
+// --- 1. Download straight into a file ------------------------------------------------------------
+// Nothing of the response is ever in memory: the body is pulled chunk by chunk and the file takes each chunk as it
+// arrives. `mapFailure` is where the two failure types meet, and it is written down instead of guessed.
+
+fn download(url: String, path: String): Task<Result<Void, ImportError>> {
+  const response = http.get(url).await()?
+  var file = File.create(path)?
+  const outcome = response.body
+    .mapFailure(ImportError.requestFailed)
+    .into(file.mapFailure(ImportError.fileFailed))
+    .await()
+  file.close()
+  outcome
+}
+
+// --- 2. Importing newline-separated JSON ----------------------------------------------------------
+// `Json.items<User>()` is a resumable framer: it finds where one value ends in whatever bytes arrived - across chunk
+// borders - and decodes that one value synchronously. Memory is one `User`, whatever the file weighs.
+
+fn countActiveUsers(path: String): Task<Result<Int, ImportError>> {
+  var file = File.open(path)?
+  const users = file.chunks()
+    .mapFailure(ImportError.fileFailed)
+    .through(Json.items<User>())
+    .checked()
+  const total = users.filter({ _.active }).count().await()?
+  file.close()
+  Ok total
+}
+
+// --- 3. A produced source -------------------------------------------------------------------------
+// A producer that pushes instead of being pulled, and no generators in the language: the body runs as a task of its
+// own and writes into a `Sink`. The default capacity `0` hands every item over directly, which is generator lock-step.
+
+fn reports(names: List<String>): Source<String, ImportError> {
+  Source.produce { sink =>
+    for name in names {
+      sink.add("report for {name}").await()?
+    }
+    Ok void
+  }
+}
+
+// The loop over a source. Deliberately not a `for`: `await()` and `?` are both visible, and there would be no place
+// for the `?` in a `for` head.
+fn printReports(names: List<String>): Task<Result<Int, ImportError>> {
+  const source = reports names
+  var written = 0
+  while const Some(line) = source.next().await()? {
+    print line
+    written = written + 1
+  }
+  Ok written
+}
+
+// --- 4. A pipeline is a value ---------------------------------------------------------------------
+// The same `Stage` over a list in a test and over an HTTP body in production. This is what "the stages exist once"
+// buys: one definition, two drivers.
+
+const activeNames: Stage<User, String> = filtering<User>({ _.active }).then(mapping { _.name })
+
+fn namesOf(users: List<User>): List<String> {
+  users.through(activeNames).toList()
+}
+
+fn namesFrom(body: Body): Task<Result<List<String>, ImportError>> {
+  body
+    .mapFailure(ImportError.requestFailed)
+    .through(Json.items<User>())
+    .checked()
+    .through(activeNames)
+    .toList()
+    .await()
+}
+
+// --- 5. Text on a byte sink, and buffering that says where it flushes ------------------------------
+
+fn writeReport(path: String, lines: Iterable<String>): Task<Result<Void, IoError>> {
+  var file = File.create(path)?
+  var out = file.buffered capacity: 4096
+  for line in lines {
+    out.addLine(line).await()?
+  }
+  const outcome = out.finish().await()
+  file.close()
+  outcome
+}
+
+// What the whole file is about, in four lines
+const sample = [User(1, "Ada", true), User(2, "Bob", false)]
+print namesOf(sample).joined(separator: ", ")
+print "lines of a text body: {Body.from("a\nb\n").lines().count().await().isOk()}"
+print "reports: {printReports(["north", "south"]).await().orElse(0)}"

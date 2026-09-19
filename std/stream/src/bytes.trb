@@ -1,0 +1,268 @@
+/**
+ * Bytes, and the two stages between bytes and text.
+ *
+ * Everything that comes off a file, a socket or a pipe arrives in chunks whose borders nobody chose: a line, a JSON
+ * value or even a single character can be split across two of them. So the stages here are resumable - they keep what
+ * is incomplete and hand it on when the rest arrives - and that is also why they are `Stage`s and not methods: the
+ * very same value works on an `Iterable<Bytes>` in a test.
+ */
+
+use Stage, Accumulator, mapping from "std/iteration"
+use Sink from "./sink"
+
+/**
+ * A chunk of bytes. An alias, not a type of its own: it is a `List<UInt8>` and every list operation works on it. The
+ * name exists because "bytes" is what the signatures mean, and `List<UInt8>` in twenty places reads like arithmetic.
+ *
+ * **A chunk belongs to whoever produced it.** A source hands one out and does not keep it, so a reader may hold on to
+ * it - there is no borrowed buffer that has to be copied before the next `await`, because a list is a value.
+ */
+public type Bytes = List<UInt8>
+
+/** Bytes that are not UTF-8, with the offset of the byte that broke it. A `String` is never anything else. */
+public type Utf8Error with Show, Error {
+  /** Counted from the start of the chunk that was being decoded. */
+  offset: Int
+
+  fn show(self): String {
+    "invalid UTF-8 at byte {offset}"
+  }
+}
+
+/**
+ * Bytes to lines, split at `\n`, with a `\r` before it dropped so that CRLF files read the same as LF files. The line
+ * break itself is not part of the line, and a last line without one is still a line.
+ *
+ * Fallible, so the items are `Result`s; `source.through(lines()).checked()` turns them into the stream's own failure.
+ */
+public fn lines(): Stage<Bytes, Result<String, Utf8Error>> {
+  Lines()
+}
+
+/**
+ * Bytes to text, one chunk at a time and cut at character borders: what arrives is whatever was complete, and a
+ * character split across two chunks is held back until the rest is there.
+ */
+public fn decodedText(): Stage<Bytes, Result<String, Utf8Error>> {
+  DecodedText()
+}
+
+/**
+ * A whole chunk of bytes as text - the short form for everything that has all of its bytes already (a file that was
+ * read in one piece, a body below its limit). Bytes that are not UTF-8 are a failure, never a replacement character.
+ */
+public fn textOf(bytes: Bytes): Result<String, Utf8Error> {
+  const (text, used) = decodeUtf8(bytes)?
+  if used < bytes.length() {
+    return Fail Utf8Error(used)
+  }
+  Ok text
+}
+
+/** Text to bytes. UTF-8 needs no decision here: a `String` already is UTF-8. */
+public fn encodedText(): Stage<String, Bytes> {
+  mapping { _.bytes().toList() }
+}
+
+// --- Text on a byte sink ---------------------------------------------------------------------------------------------
+
+/**
+ * Writing text into a sink of bytes. An extension of the *instantiated* trait, so it is there for every byte sink -
+ * a file, standard output, a socket, the input of a child process - and nowhere else.
+ */
+extend<Failure> Sink<Bytes, Failure> {
+  fn addText(self, text: String): Task<Result<Void, Failure>> {
+    add(text.bytes().toList()).await()
+  }
+
+  /** `\n`, not the line break of the platform: a stream is bytes on a wire, not a text file of an operating system. */
+  fn addLine(self, text: String = ""): Task<Result<Void, Failure>> {
+    addText("{text}\n").await()
+  }
+}
+
+// --- lines -----------------------------------------------------------------------------------------------------------
+
+type Lines with Stage<Bytes, Result<String, Utf8Error>> {
+  fn onto<Final>(
+    self,
+    downstream: Accumulator<Result<String, Utf8Error>, Final>,
+  ): Accumulator<Bytes, Final> {
+    LinesAccumulator downstream
+  }
+}
+
+type LinesAccumulator<Final> with Accumulator<Bytes, Final> {
+  var downstream: Accumulator<Result<String, Utf8Error>, Final>
+  var pending: Bytes = []
+
+  fn add(var self, value: Bytes) {
+    pending.addAll value
+    while const Some(at) = indexOfNewline(pending) {
+      const line = pending[0..at]
+      const rest = pending[(at + 1)..]
+      pending = rest
+      downstream.add decodeLine(line)
+    }
+  }
+
+  /** What is left without a line break is the last line - dropping it would lose data nobody asked to lose. */
+  fn finish(self): Final {
+    var tail = downstream
+    if !pending.isEmpty() {
+      tail.add decodeLine(pending)
+    }
+    tail.finish()
+  }
+
+  fn isDone(self): Bool {
+    downstream.isDone()
+  }
+}
+
+fn indexOfNewline(bytes: Bytes): Int? {
+  for (at, byte) in bytes.indexed() {
+    if byte == newline {
+      return Some at
+    }
+  }
+  None
+}
+
+fn decodeLine(bytes: Bytes): Result<String, Utf8Error> {
+  const withoutReturn = if bytes.isNotEmpty() && bytes[bytes.length() - 1] == carriageReturn {
+    bytes[0..(bytes.length() - 1)]
+  } else {
+    bytes
+  }
+  textOf withoutReturn
+}
+
+const newline: UInt8 = 10
+const carriageReturn: UInt8 = 13
+
+// --- decodedText -----------------------------------------------------------------------------------------------------
+
+type DecodedText with Stage<Bytes, Result<String, Utf8Error>> {
+  fn onto<Final>(
+    self,
+    downstream: Accumulator<Result<String, Utf8Error>, Final>,
+  ): Accumulator<Bytes, Final> {
+    DecodedTextAccumulator downstream
+  }
+}
+
+type DecodedTextAccumulator<Final> with Accumulator<Bytes, Final> {
+  var downstream: Accumulator<Result<String, Utf8Error>, Final>
+  var pending: Bytes = []
+
+  fn add(var self, value: Bytes) {
+    pending.addAll value
+    match decodeUtf8(pending) {
+      Ok((text, used)) => {
+        const rest = pending[used..]
+        pending = rest
+        if !text.isEmpty() {
+          downstream.add Ok(text)
+        }
+      }
+      Fail(problem) => {
+        pending = []
+        downstream.add Fail(problem)
+      }
+    }
+  }
+
+  /** Bytes that are still incomplete at the end of the stream are broken UTF-8, not something to wait for. */
+  fn finish(self): Final {
+    var tail = downstream
+    if !pending.isEmpty() {
+      tail.add Fail(Utf8Error(0))
+    }
+    tail.finish()
+  }
+
+  fn isDone(self): Bool {
+    downstream.isDone()
+  }
+}
+
+// --- UTF-8, in TorbScript -------------------------------------------------------------------------------------------
+
+/**
+ * Decodes every complete sequence at the front of `bytes`, and answers the text together with how many bytes it used.
+ * What is left over is an incomplete sequence at the very end and waits for the next chunk.
+ *
+ * Written here and not asked of the runtime: the language has the bit operations (`Bits`) and `Char.tryFrom` already
+ * rejects surrogates and everything above `0x10FFFF`, so the only thing left is the overlong check - which is a
+ * comparison. One native fewer for every back end (CONTRIBUTING, "Natives stay few").
+ */
+fn decodeUtf8(bytes: Bytes): Result<(String, Int), Utf8Error> {
+  var characters: List<Char> = []
+  var at = 0
+  while at < bytes.length() {
+    const lead = Int.from bytes[at]
+    const width = sequenceLength lead
+    if width == 0 {
+      return Fail Utf8Error(at)
+    }
+    if at + width > bytes.length() {
+      break
+    }
+    var point = if width == 1 { lead } else { lead.bitwiseAnd leadMask(width) }
+    for index in 1..width {
+      const continuation = Int.from bytes[at + index]
+      if continuation < 0x80 || continuation >= 0xC0 {
+        return Fail Utf8Error(at + index)
+      }
+      point = point.shiftedLeft(6).bitwiseOr(continuation.bitwiseAnd(0x3F))
+    }
+    // The same character written with more bytes than it needs is not the same character: it is the classic way past
+    // a filter that looked at the shortest form only
+    if point < shortestFor(width) {
+      return Fail Utf8Error(at)
+    }
+    match Char.tryFrom(point) {
+      Ok(character) => characters.add character
+      Fail(_) => {
+        return Fail Utf8Error(at)
+      }
+    }
+    at = at + width
+  }
+  Ok((String.from(characters), at))
+}
+
+/** How many bytes the sequence with this lead byte has, or `0` for a byte that cannot start one. */
+fn sequenceLength(lead: Int): Int {
+  if lead < 0x80 {
+    return 1
+  }
+  if lead >= 0xC2 && lead < 0xE0 {
+    return 2
+  }
+  if lead >= 0xE0 && lead < 0xF0 {
+    return 3
+  }
+  if lead >= 0xF0 && lead < 0xF5 {
+    return 4
+  }
+  0
+}
+
+fn leadMask(width: Int): Int {
+  match width {
+    2 => 0x1F
+    3 => 0x0F
+    _ => 0x07
+  }
+}
+
+fn shortestFor(width: Int): Int {
+  match width {
+    1 => 0
+    2 => 0x80
+    3 => 0x800
+    _ => 0x1_0000
+  }
+}

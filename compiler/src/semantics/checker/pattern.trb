@@ -53,9 +53,15 @@ public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, 
     .Variant(path, fields) => {
       const name = path[path.length() - 1]
       // `None`: a bare uppercase name is resolved through the scope, so a misspelled case is not a catch-all
-      if path.length() == 1 && fields.isEmpty() && !isNameInScope(checker, name.text) {
-        reportUnknownCase checker, name, subject
-        return
+      if path.length() == 1 && fields.isEmpty() {
+        if !isNameInScope(checker, name.text) {
+          reportUnknownCase checker, name, subject
+          return
+        }
+        // ...and the case the scope found has to belong to the type that is being matched
+        if !isCaseOfSubject(checker, name, subject) {
+          return
+        }
       }
       variantPattern checker, name, fields, subject, pattern.span, isVar
     }
@@ -240,6 +246,59 @@ fn isNameInScope(var checker: Checker, text: String): Bool {
     Some(symbol) => namesACase checker, symbol
     None => false
   }
+}
+
+/**
+ * `Fail =>` against a `DecisionNode` that happens to have a case of that name too: the scope says `Result.Fail`, the
+ * matched type says `DecisionNode.Fail`, and matching by name would make the checker agree with an arm that no value
+ * can ever reach - stage 0 and both back ends resolve the name, not the name plus the subject. So a bare name has to
+ * name a case **of the matched type**, and everything else is written `.Fail`.
+ */
+fn isCaseOfSubject(var checker: Checker, name: Name, subject: TypeId): Bool {
+  if checker.absorbs(subject) {
+    return true
+  }
+  const found = match symbolInScope(checker, name.text) {
+    Some(symbol) => symbol
+    None => {
+      return true
+    }
+  }
+  // Only a case can belong to the wrong type: a type read backwards (`Point(x, y)`) is checked by `variantPattern`
+  const owner = match checker.symbolAt(found).kind {
+    .Case(declaring) => declaring
+    _ => {
+      return true
+    }
+  }
+  if const .Nominal(head, _) = checker.types.form(subject) {
+    if head == owner {
+      return true
+    }
+  }
+  // The matched type has no case of that name at all: "`X` has no case `Fail`" is the clearer message, and
+  // `variantPattern` reports it
+  if caseNamed(checker, subject, name.text).isNone() {
+    return true
+  }
+  const ownerName = checker.symbolAt(owner).name
+  const shown = checker.describe subject
+  checker.reportHere(
+    Diagnostic.error("`{name.text}` is the case `{ownerName}.{name.text}`, and the value matched is a `{shown}`", name.span)
+      .withNote("Write `.{name.text}` for the case of `{shown}`")
+  )
+  false
+}
+
+/** The declaration a bare uppercase pattern name stands for: a local import first, then the module's scope. */
+fn symbolInScope(var checker: Checker, text: String): SymbolId? {
+  if const Some(local) = checker.findLocal(text) {
+    if const .Declared(symbol) = local {
+      return Some symbol
+    }
+    return None
+  }
+  checker.program.lookUp checker.module, text
 }
 
 /** A case, or a type whose one constructor a pattern reads backwards. A function or a constant is neither. */

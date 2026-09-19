@@ -1,4 +1,4 @@
-use Collector from "std/iteration"
+use Source, Sink from "std/stream"
 
 /**
  * A computation that finishes later. Asynchrony lives in the type: a function that returns `Task<Value>` may call
@@ -28,17 +28,37 @@ public native fn spawn<Value>(body: () => Value): Task<Value>
 public native fn all<First, Second>(first: Task<First>, second: Task<Second>): Task<(First, Second)>
 
 /**
- * A queue between tasks. `send` waits while the channel is full, `receive` waits while it is empty.
- * After `close()` the remaining items can still be received, then `receive` answers `None`.
+ * A stream in memory, of which one holder has both ends: a queue between two tasks.
+ *
+ *     const channel = Channel<Report>(capacity: 8)
+ *     const writer = spawn { channel.sink().fill(reports).await() }
+ *     const total = channel.source().count().await()
+ *
+ * `channel.source()` and `channel.sink()` are ordinary `Source` and `Sink` values and can be handed out separately, so
+ * a producer never sees the reading end and a consumer never sees the writing one. They are methods and not fields
+ * because they are computed, and because a field would have to be passed to the constructor.
+ *
+ * The reading end cannot fail (`Never`): a closed channel is the end of the stream, not a failure. The writing end
+ * fails with `ChannelClosed` once the reader is gone, which is how a producer learns that nobody wants its items any
+ * more - the cancellation signal of `Source.produce`.
  */
 public native shared type Channel<Item> {
-  /** `0` hands every item over directly: `send` waits until somebody receives. */
+  /** `0` hands every item over directly: `add` waits until somebody pulls. */
   capacity: Int = 0
 
-  native fn send(self, item: Item): Task<Void>
-  native fn receive(self): Task<Item?>
-  native fn close(self)
+  /** Pulls items in the order they were added, and ends when the writing end is finished or closed. */
+  native fn source(self): Source<Item, Never>
 
-  /** Feeds everything that arrives until the channel is closed into the collector. */
-  native fn collect<Output>(self, collector: Collector<Item, Output>): Task<Output>
+  /** `add` waits while the channel is full, `finish()` tells the reading end that the stream ended. */
+  native fn sink(self): Sink<Item, ChannelClosed>
+}
+
+/**
+ * Nobody is reading any more: the reading end of the channel was closed. The only way a `Channel`'s writing end fails,
+ * and a value rather than a panic because a producer that is no longer needed should stop, not crash.
+ */
+public type ChannelClosed with Show, Error {
+  fn show(self): String {
+    "the channel is closed"
+  }
 }

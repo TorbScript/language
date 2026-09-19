@@ -669,6 +669,11 @@ Wenn nicht, was bedeutet, bewirkt es?
     scope" mit der Regel als Note und dem nächstliegenden Case des gematchten Typs; Stage 0 sucht den Namen zur
     Laufzeit und scheitert laut. Der Bestand (`.None =>`) ist absichtlich nicht umgestellt: das macht `torb canon` mit
     der Regel `imported-case-patterns`, die jetzt eingeschaltet werden kann.
+  - **Erledigt (Nachtrag):** ein nackter Case muss jetzt auch ein Case des gematchten Typs sein - `Fail =>` gegen
+    `DecisionNode` (das selbst einen Case `Fail` hat) ging vorher durch, weil der Checker nach dem Scope-Lookup nur noch
+    über den Namen verglich, während Stage 0 `Result.Fail` auflöst und kein Arm passt (genau das hat 11 Tests
+    zerbrochen). Meldung, Note und Tests in `compiler/src/semantics/checker/pattern.trb` bzw.
+    `compiler/tests/statements.test.trb`, Entscheidung als Lücke 46 in `docs/TYPECHECKER.md`.
 
 - (Chat, 2026-09-19) Cases importieren: `use Option.* from "…"`, `use Option.Some, Option.None from "…"`,
   `use Option.{Some, None} from "…"`?
@@ -737,6 +742,10 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Wird gelöst in zwei Schritten:** (1) öffentliche std-API jetzt - das ist genau eine Stelle, `Range.inclusive`
     (+ Stage 0, Runtime, 4 Stellen im Compiler), in der nächsten ruhigen Runde zusammen mit der Canon-Anwendung.
     (2) Compiler-interne Namen nach dem Fixpunkt mit dem Methoden-Umbau, dann mit geprüftem Rename statt Textersetzung.
+  - **Erledigt:** `Range.inclusive` in `std/core`, `compiler/tests/harness.trb`, CONCEPT und `docs/TYPECHECKER.md`; die
+    Namensregel steht in CONCEPT ("Lexical Structure") und in `compiler/CONTRIBUTING.md`, wo auch steht, warum die
+    compiler-internen `is...`-Felder bis nach dem Fixpunkt bleiben. Stage 0 und `runtime/` waren nicht betroffen: der
+    Interpreter normalisiert `0..=10` beim Auswerten und kennt kein Feld dieses Namens.
 
 - (Chat, 2026-09-19) Case-Syntax: ADT als "closed trait + Typen", `type Point(Int, Int)`, `type Point3(x: Int, …)`,
   Methoden pro Case (`case Circle(…) { fn area(self) … }`), eigenes Keyword für ADTs?
@@ -875,6 +884,14 @@ Wenn nicht, was bedeutet, bewirkt es?
     - Folge: `std/iteration/stages.trb` wird auf `Stage`-Werte umgebaut (Stage 0 lädt `std/` nicht, Risiko klein).
   - **Entschieden (Nutzer):** v3 gilt erst mal so. Spezifikation + std-Deklarationen + Umbau von `std/iteration` starten
     nach dem 5.6-Merge und der Canon-Anwendung.
+  - **Erledigt:** `docs/STREAMS.md` ist die Spezifikation, CONCEPT hat das Kapitel "Streams" plus Decision Log und offene
+    Fragen, und `std/stream` (`Source`, `Sink`, `Pulling`, `Pushing`, `Buffered`, `Staged`, `Bytes`, `lines`) steht
+    zusammen mit `Stage` + `Accumulator.isDone` + `Iterable.through` in `std/iteration`, `Channel.source()`/`sink()` in
+    `std/task`, `trait Format<Failure>` in `std/encoding` mit einem in TorbScript geschriebenen JSON-Framer, `Body` als
+    `Source<Bytes, HttpError>` in `std/http`, `File` als `Sink<Bytes, IoError>` mit `chunks()`/`lines()`/`create`/`write`
+    in `std/fs`, den drei Standardströmen in `std/io`, `Process.start`/`Child` in `std/process`, Prelude-Re-Exports und
+    `examples/tour/src/13-streams.trb`; der Umbau von `std/iteration/stages.trb` auf `Stage`-Werte wartet bewusst auf das
+    Backend (STREAMS.md Abschnitt 14, Punkt 6).
 
 - (Chat, 2026-09-20) Eine saubere Dokumentationsform für Menschen und Agents: Markdown mit Frontmatter (`title`,
   `summary`, …), Index-Dateien pro Ordner und Index der Indexe, daraus am Ende ein Agent Skill; Best Practices recherchieren.

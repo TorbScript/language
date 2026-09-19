@@ -868,8 +868,9 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 - **Hello world is native at 5.3. The tour runs at 5.12. The fixpoint gate is 6.2.**
 - **5.12's runtime half is done**: `runtime/file.c` (open handles), `clock.c`, `environment.c` and the math functions
   in `number.c` all exist and are `.Ready` in the manifest, with `runtime/tests` for each (see `runtime/README.md`
-  for the representations chosen - nanosecond `Instant`/`Duration`, the `torb_file` `shared type`). `File.lines`
-  stays `.Planned`, but for 5.7 rather than 5.12: it answers an `Iterable`, whose ABI is 5.7's. The tour itself still
+  for the representations chosen - nanosecond `Instant`/`Duration`, the `torb_file` `shared type`). The stream side of
+  a file (`File.create`/`chunks`/`add`/`finish`) stays `.Planned` for 7.3 with the rest of `std/stream`
+  (`docs/STREAMS.md` section 14), and `file.lines()` needs no native of its own any more. The tour itself still
   cannot run natively until the lowering this milestone does not touch (5.3's emitter, and whichever of 5.4-5.11 a
   module's constructs need) exists to call these symbols.
 

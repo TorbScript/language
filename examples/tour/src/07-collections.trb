@@ -193,10 +193,15 @@ const firstBigSquare = (1..)             // An infinite source
   .filter { _ % 7 == 0 }
   .find { _ > 1000 }                     // Some(1764) - computed 42 squares, stored none
 
-const errors = File.lines("server.log")? // Reads line by line, the file is never in memory as a whole
+// A stream is the same idea over values that have to be waited for (docs/STREAMS.md): the stages are the same
+// `Stage` values, `Collector` is shared, and only `await()` and `?` are added
+var log = File.open("server.log")?
+const errors = log
+  .lines()                               // A `Source<String, IoError>`: the file is never in memory as a whole
   .filter { _.contains "ERROR" }
   .take(5)                               // Stops reading after the fifth match
   .toList()
+  .await()?
 
 // --- Stack and queue ------------------------------------------------------------------------
 
