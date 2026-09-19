@@ -6,6 +6,7 @@ use Checker, Expectation, LocalBinding from "./context"
 use caseNamed, fieldsOf, hasCases, typeNameOf from "./member"
 use traitArgumentsOf from "./implementation"
 use checkExpression from "./expression"
+use requireVisibleFields from "./declaration"
 
 /**
  * Patterns, as far as the names they bind. A bare name always binds - a case is written `.Circle` or `Shape.Circle` -
@@ -147,6 +148,14 @@ public fn declareName(var checker: Checker, name: String, annotation: TypeId, at
     checker.reportHere(Diagnostic.error("`{name}` is already declared in this scope", at))
     return
   }
+  // The parameters of a function and the top level of its body are one scope (milestone 4.9)
+  if checker.shadowsParameter(name) {
+    checker.reportHere(
+      Diagnostic.error("`{name}` is already a parameter of this function", at)
+        .withNote("The parameters and the top level of the body are one scope, so nothing there can shadow a parameter")
+    )
+    return
+  }
   const _ = checker.declareBinding(LocalBinding(name, annotation, isVar, at))
 }
 
@@ -218,12 +227,15 @@ fn variantPattern(
   isVar: Bool,
 ) {
   if const Some(variant) = caseNamed(checker, subject, name.text) {
+    // A private field cannot be read from outside the type, in a pattern as anywhere else (4.9)
+    requireVisibleFields(checker, subject, name.text, variant.fields, at)
     checkFieldPatterns(checker, name.text, fields, variant.fields, at, isVar)
     return
   }
   // `Point(x, y)` and `Self(value)`: the one constructor of the type, read backwards
   if name.text == "Self" || typeNameOf(checker, subject) == Some(name.text) {
     const declared = fieldsOf(checker, subject)
+    requireVisibleFields(checker, subject, name.text, declared, at)
     checkFieldPatterns(checker, name.text, fields, declared, at, isVar)
     return
   }

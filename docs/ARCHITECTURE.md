@@ -206,9 +206,12 @@ regardless.)
    done** too: receiver closures, the innermost-receiver rule, property commands, and receiver scripts - `torb check`
    checks every `project.trb` of the repository against the `Project` of `std/project`, and
    `examples/config-dsl/config.trb` against the type its `Sandbox.load` names. **4.8 is done**: an `Expression<Value>`
-   parameter or binding quotes what arrives at it, so every one of the repository's 1200 `assert`s records the tree
+   parameter or binding quotes what arrives at it, so every one of the repository's 1600 `assert`s records the tree
    milestone 5 has to build, the captures it hands on and their `Encode` witness, and `examples/query-provider`
-   translates `filter { _.age >= minAge }` to SQL. What is left is the generated members of a literal type (4.10),
+   translates `filter { _.age >= minAge }` to SQL. **4.9 is done** too: `private` and `private(var)`, what a `public`
+   declaration promises, which files may contain top-level code, top-level constants that are evaluated at compile time,
+   and the rules of `native`, `shared type`, `isSame`, `extend` and `foreign`. What is left is the generated members of a
+   literal type (4.10),
    recorded as "not checked yet" and counted by `torb check --statistics`.
    `std/` and `compiler/` are at 100%. The first thing it found by checking the compiler itself was that
    `compiler/src/ir/mangle.trb` mixed the `UInt8` of a byte with `Int64` arithmetic; checking the generic code found

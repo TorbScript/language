@@ -13,7 +13,8 @@ const counter = "type Counter \{\n  var count: Int = 0\n  step: Int = 1\n\n"
   + "  fn increment(var self) \{\n    count = count + step\n  \}\n\n"
   + "  fn incremented(self): Counter \{\n    copy(count: count + 1)\n  \}\n\}\n\n"
 
-const account = "type Account \{\n  private(var) balance: Int = 0\n  private var history: List<String> = []\n\n"
+const account = "type Account \{\n  private(var) balance: Int = 0\n  private var history: List<String> = []\n"
+  + "  private(var) audits: List<String> = []\n\n"
   + "  fn deposit(var self, amount: Int) \{\n    balance = balance + amount\n  \}\n\}\n\n"
 
 group "The root of a path" {
@@ -72,14 +73,17 @@ group "Fields" {
     const source = "{account}fn probe(var target: Account) \{\n  target.balance = 10\n\}"
     assert(problems(source) == ["`balance` can only be written by `Account`"])
     assert(
-      notes(source)
-        == [
-          "`private(var)` hands out a const path, and const is deep: it reads and iterates, it does not change",
-        ]
+      notes(source) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"]
     )
   }
 
   test "const is deep, so a verb on a `private(var)` collection is an error too" {
+    const source = "{account}fn probe(var target: Account) \{\n  target.audits.add(\"audit\")\n\}"
+    assert(problems(source) == ["`audits` can only be written by `Account`"])
+  }
+
+  /** A field nothing outside may even name is 4.9's message, and one root cause gets one message. */
+  test "a wholly `private` field says that it is private, and not a second time that it is const" {
     const source = "{account}fn probe(var target: Account) \{\n  target.history.add(\"audit\")\n\}"
     assert(problems(source) == ["`history` is private to `Account`"])
   }

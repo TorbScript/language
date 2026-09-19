@@ -265,9 +265,12 @@ public native type ArrayList<Item> with List<Item>, From<Iterable<Item>> {
 
 public type Array<Item, const Size: Int> {}
 
-public native fn print(...values: Show)
+public native fn print(...values: Show): Void
 
 public native fn panic(message: String): Never
+
+/** Only a `shared type` has an identity, so this is callable on one and on nothing else (BACKEND gap 15). */
+public native fn isSame<Object>(first: Object, second: Object): Bool
 
 /** Resources have an identity, so `using` takes a `var` and a temporary is a valid argument for one (gap 2). */
 public shared trait Close {
@@ -307,6 +310,7 @@ public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./
 public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
 public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
 public use print, panic, using, do, assert, nameOf, Expression from "./types"
+public use isSame from "./types"
 public use Some, None from Option
 public use Ok, Error from Result
 """,
@@ -660,6 +664,17 @@ public fn probe(source: String): Probed {
   Probed(source, checked.checker, module)
 }
 
+/**
+ * One file of `app` that is not its entry file. `app/src/main.trb` is the build input of the package, so everything
+ * about a *module* - top-level code, a compile-time constant, what `public` promises - needs a second file that the
+ * entry file imports.
+ */
+public fn probeModule(files: Map<String, String>, path: String): Probed {
+  const checked = check(workspaceWith(files), ["app"])
+  const module = checked.program.graph.moduleAt(path).expect("the module of the file")
+  Probed(files.get(path) ?? "", checked.checker, module)
+}
+
 /** Everything that is wrong in `app`, in the order the compiler reports it. */
 public fn problems(source: String): List<String> {
   var found: List<String> = []
@@ -669,6 +684,38 @@ public fn problems(source: String): List<String> {
     }
   }
   found
+}
+
+/** Everything that is wrong in `app`, for a workspace of more than one file. */
+public fn problemsOf(files: Map<String, String>): List<String> {
+  var found: List<String> = []
+  for file in check(workspaceWith(files), ["app"]).files {
+    for diagnostic in file.diagnostics {
+      found.add(diagnostic.message)
+    }
+  }
+  found
+}
+
+/** Everything that is wrong in the given paths: for a rule that is about a package of the standard library. */
+public fn problemsAt(files: Map<String, String>, paths: List<String>): List<String> {
+  var found: List<String> = []
+  for file in check(workspaceWith(files), paths).files {
+    for diagnostic in file.diagnostics {
+      found.add(diagnostic.message)
+    }
+  }
+  found
+}
+
+/** The notes of the first problem of such a workspace. */
+public fn notesOf(files: Map<String, String>): List<String> {
+  for file in check(workspaceWith(files), ["app"]).files {
+    if const Some(first) = file.diagnostics.first() {
+      return first.notes
+    }
+  }
+  []
 }
 
 /** The notes of the first problem of `app`. */

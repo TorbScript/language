@@ -15,17 +15,22 @@ use lowerChecked, loweredText from "../src/ir/lower/lower"
  * that matches and a body that is malformed would otherwise pass together, which is exactly the bug a lowering makes on
  * an untyped interpreter.
  */
-public fn lowered(source: String): Lowering {
-  loweredWith(source, [])
+public fn lowered(source: String, extra: Map<String, String> = [:]): Lowering {
+  loweredWith(source, [], extra)
 }
 
 /**
  * The same for a program the checker has something to say about: `expected` are its messages, in the order it gives
  * them. A test needs this where the construct under test *is* a mistake the checker reports - a constant in terms of
  * itself, say - and the question is what the lowering then does with it.
+ *
+ * `extra` are further files of the workspace, for a program that needs a declaration `acme/app` may not write itself:
+ * only the standard library may claim a `native` (gap 22), so a test about lowering one puts it in `std/prelude`.
  */
-public fn loweredWith(source: String, expected: List<String>): Lowering {
-  const tree = workspaceWith(["app/src/main.trb": source])
+public fn loweredWith(source: String, expected: List<String>, extra: Map<String, String> = [:]): Lowering {
+  var files = extra
+  files.set("app/src/main.trb", source)
+  const tree = workspaceWith(files)
   const checked = check(tree, ["app"])
   var found: List<String> = []
   for file in checked.files {
@@ -42,8 +47,8 @@ public fn loweredWith(source: String, expected: List<String>): Lowering {
 }
 
 /** One function of the program, with the verifier's findings in its place if it has any. */
-public fn irOf(source: String, name: String): String {
-  var found = lowered(source)
+public fn irOf(source: String, name: String, extra: Map<String, String> = [:]): String {
+  var found = lowered(source, extra)
   const problems = verifyProgram(found.program)
   if !problems.isEmpty() {
     return String.join(problems, separator: "\n")
@@ -66,8 +71,8 @@ public fn textOf(source: String): String {
 }
 
 /** Which constructs blocked a function, in the order they were first seen. */
-public fn unsupportedIn(source: String): List<String> {
-  var found = lowered(source)
+public fn unsupportedIn(source: String, extra: Map<String, String> = [:]): List<String> {
+  var found = lowered(source, extra)
   var shown: List<String> = []
   for entry in found.unsupported {
     shown.add(entry.what)

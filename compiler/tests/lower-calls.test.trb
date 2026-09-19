@@ -1,5 +1,6 @@
 use test, group from "std/test"
 use irOf, textOf, countsOf, unsupportedIn from "./lower-harness"
+use preludeSource from "./harness"
 
 /**
  * Calls: which function a call reaches, in which order its arguments are evaluated, and where the instance it reaches
@@ -207,6 +208,18 @@ fn caller(value: Int?): Int {
   }
 }
 
+/**
+ * A `native` belongs to a package of the standard library (gap 22), so a test about lowering one puts the declaration
+ * in the test prelude instead of in `acme/app`.
+ */
+const withTrim = [
+  "std/prelude/src/types.trb": "{preludeSource}\nextend String \{\n  native fn trim(self): String\n\}\n",
+]
+
+const withChars = [
+  "std/prelude/src/types.trb": "{preludeSource}\nextend String \{\n  native fn chars(self): Int\n\}\n",
+]
+
 group "Operators and natives" {
   test "an operator of a type of the program is an ordinary call of the member the implementation provides" {
     const source = r"""
@@ -258,16 +271,12 @@ fn empty(text: String): Bool {
 
   test "a chained call finds its target although the checker records the inner one as deferred" {
     const source = r"""
-extend String {
-  native fn trim(self): String
-}
-
 fn sizes(text: String): Int {
   text.trim().byteLength()
 }
 """
-    const text = irOf(source, "t_acme_x2f_app_main_sizes")
-    assert(text.contains("call t_acme_x2f_app_main_String_trim(%0 borrowed)"))
+    const text = irOf(source, "t_acme_x2f_app_main_sizes", withTrim)
+    assert(text.contains("call t_std_x2f_prelude_types_String_trim(%0 borrowed)"))
     assert(text.contains("intrinsic textByteLength %1 at"))
   }
 }
@@ -286,16 +295,12 @@ group "What a call cannot reach yet" {
 
   test "a native the runtime does not have yet names the milestone instead of failing to link" {
     const source = r"""
-extend String {
-  native fn chars(self): Int
-}
-
 fn parts(text: String): Int {
   text.chars()
 }
 """
     assert(
-      unsupportedIn(source)
+      unsupportedIn(source, withChars)
         == ["not supported by the back end yet: `String.chars`, which the runtime provides from milestone 5.7 on"]
     )
   }

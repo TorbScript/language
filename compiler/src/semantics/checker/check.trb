@@ -15,6 +15,7 @@ use deferBlock from "./expression"
 use settleChanges from "./mutation"
 use buildImplementations, checkCoherence, checkImplementations, extensionAt from "./implementation"
 use scriptReceiverOf, checkReceiverScript from "./receiver"
+use checkShape from "./declaration"
 
 /**
  * Checks the declarations of the given modules: every type position becomes a type, every declaration a signature, and
@@ -67,6 +68,8 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   settleChanges(checker)
   checker.closeScope()
   checker.leaveBody(saved)
+  // Visibility and the shape of the declarations (4.9), last: folding a top-level `const` reads what its names meant
+  checkShape(checker, module)
 }
 
 /** How much of a module the checker already understands, for `torb check --statistics`. */

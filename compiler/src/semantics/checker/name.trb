@@ -72,8 +72,16 @@ public fn resolveName(
         const annotation = checker.binding(receiver).annotation
         return Target(Resolution.Local(receiver), annotation, name: "self")
       }
+      // A field default, a parameter default and a static function have no receiver (gap 26, milestone 4.9)
       .None => {
-        return deferredTarget(checker)
+        checker.reportHere(
+          Diagnostic.error("There is no `self` here", at)
+            .withNote(
+              "`self` exists in a method and in a receiver closure. A default is evaluated without one, so that the"
+                + " order of the fields is not observable"
+            )
+        )
+        return Target(Resolution.Deferred, checker.invalidType, name: text)
       }
     }
   }

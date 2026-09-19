@@ -9,6 +9,7 @@ use signatureOf, typeSignatureOf from "./signature"
 use substitute, substituteFunction, substituteBounds, sameType, hasVariable from "./unify"
 use resolveTrait, traitsOf, traitArgumentsOf from "./implementation"
 use inherentExtensionsOf, mappingOfImplementation, buildImplementations from "./implementation"
+use requireVisibleMember from "./declaration"
 
 /**
  * What `a.b` and `Type.b` mean. The order is the one of the design, for a receiver of type `T` and a name `n`:
@@ -119,7 +120,19 @@ public fn lookupStaticMember(var checker: Checker, owner: TypeId, name: String, 
   lookupMemberAt(checker, owner, name, true, at)
 }
 
+/**
+ * Whether this code may *name* the member it found is milestone 4.9's question, and it is asked outside of the
+ * memoization: the answer below depends on the module, visibility depends on the declaration the use stands in.
+ */
 fn lookupMemberAt(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool, at: Span?): Candidate? {
+  const found = findMember(checker, receiver, name, isStatic, at)
+  if const Some(candidate) = found {
+    requireVisibleMember(checker, candidate, name, at)
+  }
+  found
+}
+
+fn findMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool, at: Span?): Candidate? {
   if checker.absorbs(receiver) {
     return None
   }

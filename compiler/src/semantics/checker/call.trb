@@ -13,6 +13,7 @@ use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads from "./place"
 use noteArgumentClosures from "./mutation"
 use isQuotation, openThunk, closeThunk from "./quote"
+use checkConstruction, checkSharedIdentity from "./declaration"
 
 /**
  * Calls: which parameter every written argument fills, what the generic parameters of the callee turn out to be, and
@@ -85,6 +86,8 @@ public fn checkCall(
   if const Some(annotation) = wanted {
     matchResult(checker, inner.result, annotation)
   }
+  // A private field cannot be passed from outside the type, which is what makes a constructor usable or not (4.9)
+  checkConstruction(checker, target, arguments, expression.span)
   // Places and the mutation rules (milestone 4.6). The receiver of a `var self` call stays an open access while the
   // arguments are evaluated and while a closure argument runs, which is what makes the DSL rule work; every `var`
   // argument joins it as it is checked; and at the end everything the call *reads* is held against all of them
@@ -102,6 +105,8 @@ public fn checkCall(
   closeAccessesTo(checker, openAccesses)
   const witnesses = checkBounds(checker, instantiation.bounds, target.name, expression.span)
   const solved = resolveTypes(checker, instantiation.arguments)
+  // `isSame` compares identity, and only a `shared type` has one (BACKEND gap 15)
+  checkSharedIdentity(checker, target, solved, expression.span)
   if !solved.isEmpty() {
     checker.recordTypeArguments(expression.span, solved)
   }

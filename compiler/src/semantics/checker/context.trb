@@ -516,6 +516,26 @@ public type Expectation {
 }
 
 /**
+ * Whether the declaration whose body is being checked *infers* its result. A `public` function and a trait method do
+ * not: an omitted result type is `Void` there, and a body that produces a value has to say which one (milestone 4.9).
+ * Everything else is `Ordinary`, whether its result was written down or is the body's answer.
+ */
+public type ResultRule {
+  case Ordinary
+  case PublicFunction
+  case TraitMethod
+
+  /** How a message names the declaration that will not infer, `None` where inference is allowed. */
+  fn describe(self): String? {
+    match self {
+      .PublicFunction => Some("A `public` function")
+      .TraitMethod => Some("A trait method")
+      .Ordinary => None
+    }
+  }
+}
+
+/**
  * Everything the walk over one body holds. A body may start in the middle of another one - asking for the result type
  * of a function that does not declare one checks its body right there - so the outer state is put aside and restored.
  */
@@ -538,6 +558,7 @@ public type BodyState {
   /** The mutation rules are per body: an open access and the uses of a binding never reach out of one (4.6). */
   accesses: List<Access>
   bindingUses: List<BindingUse>
+  resultRule: ResultRule
 }
 
 /** How much of a module the checker already understands. `torb check --statistics` prints these. */
@@ -625,6 +646,8 @@ public type Checker {
   var resultType: TypeId
   /** Without a declared result, `return` and the last expression *are* the result, so nothing is checked against it. */
   var isResultInferred: Bool = false
+  /** Whether the declaration may infer its result at all: a `public fn` and a trait method may not (milestone 4.9). */
+  var resultRule: ResultRule = ResultRule.Ordinary
   /** What every `return` of the body produced, for the result of a function that does not declare one. */
   var returnTypes: List<TypeId> = []
   /** `break` and `continue` need an enclosing `for` or `while` of the same function. */
@@ -720,6 +743,15 @@ public type Checker {
   var memberMissing: Map<String, Bool> = [:]
   /** The inherent extensions of one type that one module may use, by module and type. */
   var visibleExtensions: Map<String, List<Int>> = [:]
+
+  // --- Visibility and program shape (milestone 4.9) -------------------------------------------------------------------
+
+  /**
+   * Which modules of the workspace some module imports, by `ModuleId.value`. Top-level code is only forbidden where it
+   * could create an initialization order, which is exactly a module somebody imports (gap 28).
+   */
+  var importedModules: Map<Int, Bool> = [:]
+  var hasImportedModules: Bool = false
 
   fn symbolAt(self, id: SymbolId): Symbol {
     symbols.at(id)
@@ -1156,7 +1188,14 @@ public type Checker {
   // --- One body at a time --------------------------------------------------------------------------------------------
 
   /** Starts a body from scratch and gives back what was there, so that a nested one can put it back. */
-  fn enterBody(var self, inside: ModuleId, result: TypeId, isInferred: Bool, own: TypeId?): BodyState {
+  fn enterBody(
+    var self,
+    inside: ModuleId,
+    result: TypeId,
+    isInferred: Bool,
+    own: TypeId?,
+    rule: ResultRule = ResultRule.Ordinary,
+  ): BodyState {
     const saved = BodyState(
       module,
       locals,
@@ -1174,12 +1213,14 @@ public type Checker {
       hasVariables,
       accesses,
       bindingUses,
+      resultRule,
     )
     module = inside
     locals = []
     scopeStarts = []
     resultType = result
     isResultInferred = isInferred
+    resultRule = rule
     returnTypes = []
     loopDepth = 0
     receiverType = None
@@ -1200,6 +1241,7 @@ public type Checker {
     scopeStarts = saved.scopeStarts
     resultType = saved.resultType
     isResultInferred = saved.isResultInferred
+    resultRule = saved.resultRule
     returnTypes = saved.returnTypes
     loopDepth = saved.loopDepth
     receiverType = saved.receiverType
@@ -1217,6 +1259,25 @@ public type Checker {
   fn setReceiver(var self, binding: BindingId) {
     receiverBinding = Some(binding)
     receiverType = Some(bindings[binding.value].annotation)
+  }
+
+  /**
+   * Whether the name is a parameter of the function whose body is being checked, and this is the top level of that
+   * body. `enterBody` clears the scopes, so the parameters are always the first scope of a body and its top level the
+   * second: the two are one scope, and a `const` there may not shadow a parameter (milestone 4.9).
+   */
+  fn shadowsParameter(self, name: String): Bool {
+    if scopeStarts.length() != 2 {
+      return false
+    }
+    var index = scopeStarts[1] - 1
+    while index >= scopeStarts[0] {
+      if locals[index].name == name {
+        return true
+      }
+      index = index - 1
+    }
+    false
   }
 
   /** Whether the *innermost* scope already has this name, which is the only redeclaration that is an error. */

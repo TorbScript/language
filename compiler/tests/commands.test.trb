@@ -112,7 +112,8 @@ group "Property commands" {
   }
 
   test "a command through a target instead of the receiver" {
-    const source = "fn probe() \{\n  var made = Options()\n  made.port 9000\n\}\n{options}"
+    // `made` is read afterwards: a command is a change, and a change nobody reads is a mistake of its own (design 5.3)
+    const source = "fn probe() \{\n  var made = Options()\n  made.port 9000\n  print made.port\n\}\n{options}"
     assert(problems(source).isEmpty())
     const probed = probe(source)
     assert(probed.resolutionOf("made.port 9000") == "assign Options.port")
@@ -172,6 +173,42 @@ group "What a property command is not" {
       notes(source)
         == ["A binding is changed with `=`: `count = value`. A command writes a field of a receiver"]
     )
+  }
+}
+
+/**
+ * A command writes a field, so it asks `place.trb` the very same question an assignment does (milestone 4.6): the path
+ * has to be one a change may go through, the place is recorded for milestone 5, and the change counts for the
+ * dead-change rule. Only the message says which of the two the author wrote.
+ */
+group "A property command is a place that is written" {
+  const account = "\ntype Account \{\n  private(var) balance: Int = 0\n\n"
+    + "  fn deposit(var self, amount: Int) \{\n    balance balance + amount\n  \}\n\}\n"
+
+  test "the place the command writes is recorded under the span of the field" {
+    const source = "fn probe() \{\n  var made = Options()\n  made.port 9000\n  print made.port\n\}\n{options}"
+    assert(problems(source).isEmpty())
+    const probed = probe(source)
+    assert(probed.placeOf("made.port") == "local made.port")
+  }
+
+  test "a command through a `const` binding changes nothing" {
+    const source = "fn probe() \{\n  const made = Options()\n  made.port 9000\n  print made.port\n\}\n{options}"
+    assert(problems(source) == ["`made` is a `const`. Only a `var` binding can be changed"])
+  }
+
+  test "a `private(var)` field is written by a command of its own type and by nobody else" {
+    assert(problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty())
+    const outside = "{account}fn probe(var held: Account) \{\n  held.balance 10\n\}"
+    assert(problems(outside) == ["`balance` can only be written by `Account`"])
+    assert(
+      notes(outside) == ["`private(var)` hands out a read-only path: the field is public, its mutability is not"]
+    )
+  }
+
+  test "a command nothing reads afterwards is a dead change like any other" {
+    const source = "fn probe() \{\n  var made = Options()\n  made.port 9000\n\}\n{options}"
+    assert(problems(source) == ["This change has no effect: `made` is never read again"])
   }
 }
 

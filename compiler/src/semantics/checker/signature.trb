@@ -8,7 +8,7 @@ use TypeId, TypeForm, FunctionForm, ParameterForm, ParameterMode from "./type"
 use ParameterId, ParameterDeclaration from "./type"
 use Bound, Signature, SignatureId, SignatureState, FieldSignature, CaseSignature from "./type"
 use TypeSignature, TypeSignatureId from "./type"
-use Checker, TypeScope, DeclarationSite, DeclarationSiteKind from "./context"
+use Checker, TypeScope, DeclarationSite, DeclarationSiteKind, ResultRule from "./context"
 use typeFromReference, traitsFromReference from "./lowering"
 use substituteFunction from "./unify"
 use checkFunctionBody, checkInitializer from "./statement"
@@ -350,7 +350,14 @@ fn buildSignature(var checker: Checker, symbol: SymbolId, site: DeclarationSite)
   match site.kind {
     .Declared(declaration) => {
       match declaration.kind {
-        .Function(function) => functionSignature(checker, symbol, site.module, function, None)
+        .Function(function) => {
+          const rule = if declaration.modifiers.visibility == Visibility.Public {
+            ResultRule.PublicFunction
+          } else {
+            ResultRule.Ordinary
+          }
+          functionSignature(checker, symbol, site.module, function, None, rule)
+        }
         .Constant(binding) => constantSignature(checker, symbol, site.module, binding, None)
         // A `type`, a `trait` and an alias are not values: `typeSignatureOf` answers for them
         _ => brokenSignatureOf(checker, symbol)
@@ -358,7 +365,10 @@ fn buildSignature(var checker: Checker, symbol: SymbolId, site: DeclarationSite)
     }
     .Owned(owner, _, member) => {
       match member.kind {
-        .Function(function) => functionSignature(checker, symbol, site.module, function, owner)
+        .Function(function) => {
+          const rule = memberResultRule(checker, member, owner)
+          functionSignature(checker, symbol, site.module, function, owner, rule)
+        }
         .Field(field) => {
           const scope = TypeScope(site.module, selfType: owner)
           const annotation = typeFromReference(checker, field.annotation, scope.forType())
@@ -371,6 +381,35 @@ fn buildSignature(var checker: Checker, symbol: SymbolId, site: DeclarationSite)
     }
     .Constant(binding) => constantSignature(checker, symbol, site.module, binding, None)
   }
+}
+
+/**
+ * Which declarations do not infer their result (milestone 4.9). A member of a `type` still does - members are public
+ * unless marked `private`, so the rule is about the `public` *modifier* - and a member of a trait never does, because
+ * it is what an implementor writes against.
+ */
+fn memberResultRule(checker: Checker, member: Member, owner: TypeId?): ResultRule {
+  if isTraitOwner(checker, owner) {
+    return ResultRule.TraitMethod
+  }
+  if member.modifiers.visibility == Visibility.Public {
+    return ResultRule.PublicFunction
+  }
+  ResultRule.Ordinary
+}
+
+/** Inside a trait, `Self` is the parameter `selfTypeOf` declared for it: the one with no position of its own. */
+fn isTraitOwner(checker: Checker, owner: TypeId?): Bool {
+  const annotation = match owner {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  if const .Parameter(parameter) = checker.types.form(annotation) {
+    return checker.types.parameter(parameter).index == -1
+  }
+  false
 }
 
 fn brokenSignatureOf(checker: Checker, symbol: SymbolId): Signature {
@@ -410,6 +449,7 @@ fn functionSignature(
   module: ModuleId,
   function: FunctionDeclaration,
   owner: TypeId?,
+  rule: ResultRule,
 ): Signature {
   const generics = genericsOf(checker, symbol)
   const scope = TypeScope(module, selfType: owner)
@@ -435,13 +475,16 @@ fn functionSignature(
     const void = checker.voidType
     return Signature(symbol, generics, FunctionForm(parameters, void), bounds, owner, takesSelf, isVarSelf, false)
   }
-  inferredSignature(checker, symbol, module, function, generics, parameters, bounds, owner, takesSelf, isVarSelf)
+  inferredSignature(checker, symbol, module, function, generics, parameters, bounds, owner, takesSelf, isVarSelf, rule)
 }
 
 /**
  * A `fn` with a body and no result type: the body is the answer, so it is checked right here. The signature is
  * registered *before* that with an `Invalid` result, so that a call inside of the body still sees the parameters it
  * takes - and asking for that signature while it is being built is the recursion `reportCycle` names.
+ *
+ * A `public` function and a trait method do not infer (milestone 4.9): their result stays the `Void` the signature was
+ * registered with, and a body that produces a value is reported where the value stands.
  */
 fn inferredSignature(
   var checker: Checker,
@@ -454,6 +497,7 @@ fn inferredSignature(
   owner: TypeId?,
   takesSelf: Bool,
   isVarSelf: Bool,
+  rule: ResultRule,
 ): Signature {
   const void = checker.voidType
   const provisional = Signature(
@@ -481,9 +525,14 @@ fn inferredSignature(
     isVarSelf,
     void,
     true,
+    rule,
   )
   const namedItself = checker.inferringResults.get(symbol) ?? false
   const _ = checker.inferringResults.remove(symbol)
+  // A declaration that does not infer keeps the `Void` it was registered with, whatever its body produced
+  if const Some(_) = rule.describe() {
+    return provisional
+  }
   // The recursion assumed `Void`, and the body produces something else: only an annotation can settle that
   if namedItself && result != void && result != checker.neverType {
     reportCycle(checker, symbol)
@@ -811,11 +860,13 @@ fn fieldSignature(
   scope: TypeScope,
 ): FieldSignature {
   const annotation = typeFromReference(checker, field.annotation, scope.forType())
+  // `private(var) balance: Int = 0` *is* the `var`: the field is writable, and only its type may write it (4.9)
+  const isPrivateVar = member.modifiers.visibility == Visibility.PrivateVar
   FieldSignature(
     symbol,
     field.name.text,
     annotation,
-    field.isVar,
+    field.isVar || isPrivateVar,
     field.default.isSome(),
     member.modifiers.visibility,
   )

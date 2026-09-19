@@ -996,8 +996,8 @@ files that have to check cleanly afterwards.
 | **4.5** | **Done.** Exhaustiveness and redundancy. The pattern matrix over ADTs, literals, ranges, tuples, lists with rest, literal unions, `Option`/`Result`; witnesses; `MatchPlan`; `if const`/`if var`/`while const`, and every pattern that has to match. | `exhaustive.trb`, `usefulness.trb`, `pattern.trb` | 4.4 |
 | **4.6** | **Done.** Places and the mutation rules. `const`/`var`, valid paths, `var` parameters and temporaries, `private(var)`, exclusivity, dead changes, `break`/`continue`. | `place.trb`, `mutation.trb`, `statement.trb` | 4.4 |
 | **4.7** | **Done.** Receivers and the DSL. Receiver closures, the innermost-receiver rule, command calls, property commands (`.Assign`, `.AssignClosure`, `.Configure`), receiver scripts (`project.trb` against the `Project` of the new `std/project`, and every file a `Sandbox.load<Value>` names with a literal path). | `closure.trb`, `command.trb`, `receiver.trb`, `scripts.trb`, `name.trb` | 4.4 |
-| **4.8** | **Done.** `Expression<Value>` and `lazy`. What is quotable, building the tree after resolution, captures and their `Encode` bound, `Quotation` in the tables, `lazy` parameters. **Gate: `compiler/tests/*.test.trb` check cleanly** (they are full of `assert`): 1207 quotation sites, every one with a recorded `Quotation`. | `quote.trb`, `call.trb` | 4.4, 4.7 |
-| **4.9** | Visibility and program shape. `private`/`private(var)`/`public`, top-level code, compile-time constants, field defaults, `native`, `shared type`/`shared trait`, `foreign`, entry files vs. modules. | `declaration.trb` | 4.2 |
+| **4.8** | **Done.** `Expression<Value>` and `lazy`. What is quotable, building the tree after resolution, captures and their `Encode` bound, `Quotation` in the tables, `lazy` parameters. **Gate: `compiler/tests/*.test.trb` check cleanly** (they are full of `assert`): 1606 quotation sites, every one with a recorded `Quotation`. | `quote.trb`, `call.trb` | 4.4, 4.7 |
+| **4.9** | **Done.** Visibility and program shape. `private`/`private(var)`/`public`, top-level code, compile-time constants with folding, field and parameter defaults, `native`, `shared type`/`shared trait`, `isSame`, `foreign`, entry files vs. modules. | `declaration.trb`, `constant.trb` | 4.2 |
 | **4.10** | The conformance suite. `torb check std`, `torb check examples`, `torb check compiler` clean; the spec gaps of section 9 resolved in the sources; diagnostics polished against real output; performance (the whole workspace well under a minute on stage 0; a timing test in the suite). | all | 4.1 - 4.9 |
 
 Parallelism:
@@ -1343,7 +1343,9 @@ list. Everything else is as written.
   tree plus two map lookups per node. That is what keeps it off the hot path - and it is why `placeOf` takes
   `var checker` although it decides nothing: the memoized member lookups behind `traitArgumentsOf` do.
 - **`private(var)` carries its `var` in the modifier.** `private(var) balance: Int = 0` parses to
-  `Visibility.PrivateVar` with `Field.isVar == false`, so "is this a `var` field" is the two of them together.
+  `Visibility.PrivateVar` with `Field.isVar == false`, so "is this a `var` field" was the two of them together - until
+  4.9 made the signature say it (`FieldSignature.isVar`), which is where it belongs: the place only asks *who* may write
+  the field, never whether anybody may.
 - **`private` is checked as gap 29 states it, not per package.** A private field is writable inside the body of its
   type and inside every `extend` of it in the same package - both are "`Self` is this type here" - and the *head* of
   the type is compared and not the whole type, so a member of `Holder<Item>` may write a field of a `Holder<Int>`.
@@ -1424,8 +1426,10 @@ list. Everything else is as written.
   `(var self: FieldType) => Void`, which is only meaningful for a `type` that is written down: a `native` type has no
   fields anybody could set, and a type with cases is chosen and not filled in, so both get "`port` is a `Int64`, which
   has no configuration a block could fill" instead of a message about whatever the block contains.
-- **A property command checks that the field is a `var`** and leaves the path it is written through to 4.6:
-  `requireMutable` is `place.trb`'s, and the receiver of a property command is `self` or an explicit target either way.
+- **A property command leaves the path it is written through to 4.6**, and since that slice is in it goes through it:
+  `checkPropertyWrite` is `place.trb`'s `checkAssignment` with another message, so `port 8080` asks about a `var` field,
+  a `private(var)` one, a `const` root and a temporary exactly as `=` does, records its `Place` for milestone 5, and
+  counts as a change for the dead-change rule.
 - **A call of a local binding that is not a function is reported here**, because section 3.3's "a local binding is
   written with `=`" has no other home: `count 1` reads "`count` is a `Int64`, and only a function can be called".
 - **A method *is* a constant that holds a receiver closure**, so `member.trb` treats one that was written that way
@@ -1516,6 +1520,85 @@ list. Everything else is as written.
   alive, wherever the callee evaluates it) and a capture of it (which makes that binding a shared box the dead-change
   rule leaves alone). A quoted expression is never run at the call site, but it holds no `var` access open either: it
   contains no statement and no assignment, because the quotable walk rejects both.
+
+### What 4.9 does differently from sections 1 to 7
+
+- **Top-level code is forbidden in a module that somebody *imports*, not in every file that is not an entry file.**
+  The rule exists for one reason - "an imported module consists of declarations only, so there is no initialization
+  order and a cyclic import is harmless" - and the design's own message says so (``. `./syntax/lexer.trb` is
+  imported``). A file that nothing imports cannot create an initialization order, so it is a script: that is what the
+  twelve files of `examples/tour` are, and there is no `src/main.trb` they could be the entry of. The `src/lib.trb` of a
+  named package is always a module, because it is what other packages import. `Checker.importedModules` is one walk over
+  every `use` of the workspace, kept.
+- **`private(var)` *is* the `var`.** The concept writes `private(var) balance: Int = 0` without a second `var` and then
+  writes the field from inside, so the modifier is what makes the field mutable - privately. `FieldSignature.isVar` is
+  therefore true for a `private(var)` field, and `private(var)` on a field is never an error by itself. What it *is* an
+  error on is everything that is not a field (gap 30) - and a second `var` next to it ("`private(var)` already says
+  `var`").
+- **Who may write a field is decided in one place, `place.trb`.** 4.9 asked it of the target of an assignment and of a
+  property command, 4.6 asks it of every step of every path, and both gave the same message - so the walk over the path
+  owns it and `isInsideType` is what it asks. A field that this code may not even *name* is 4.9's message alone: a
+  wholly `private` one was already reported where it was named, so the place says nothing a second time, and
+  `private(var)` - public to read, private to write - is the one visibility a place decides about.
+- **Visibility is decided outside the memoized member lookup.** `lookupMember` keeps its answer per module, receiver and
+  name; whether the code may *name* the member depends on the declaration the use stands in, so `findMember` answers and
+  `requireVisibleMember` judges, once per use.
+- **"Inside the type" is `Self` plus the package.** A private member is reachable where the `Self` of the enclosing
+  declaration has the same head symbol *and* the current package declares it - which is exactly "the body of the type
+  and every `extend` of it in the same package" (gap 29) without a separate table.
+- **"The result type is mandatory" means "it is never inferred", not "write `: Void`".** CONCEPT.md's own `trait
+  Collection<Item>` writes `fn add(var self, value: Item)` without one, so the rule cannot be that every signature
+  spells `Void` out: for a `public` function and for a trait method an **omitted result type is `Void`**, and nothing is
+  taken from the body. `public fn emit(var builder: Builder) { ... }` therefore stays exactly as it is written, and the
+  error is at the value such a body produces: "A `public` function does not infer its result: declare it (`: Int64`)" (a
+  trait method accordingly), with the ordinary `Expected `Void`` suppressed because the body is walked without an
+  expectation. `ResultRule` in `context.trb` carries which of the three it is through `BodyState`, `signature.trb`
+  decides it from the modifiers (and from `Self` being the owner, for a trait), and `inferredSignature` keeps the `Void`
+  it registered instead of the body's answer. Applied to the repository the rule found **nothing**: all 74 declarations
+  that omit a result type produce `Void` already.
+- **The rule is about the `public` *modifier*, not about every non-private member.** Members are public unless marked
+  `private`, so the literal reading would ask it of every method of every type. Design 2.7 says "`public fn` without a
+  return type", and that is what is implemented; whether a member of a `public type` should be included is an open
+  question of 4.10.
+- **A `public` declaration may not name a type that is private to its file.** CONCEPT.md is silent; without the rule a
+  `public fn` hands out values of a type its caller has no name for, which is the one thing "top-level declarations are
+  private to their file unless `public`" is there to prevent. Parameters, results, fields, case fields, the members of a
+  `public trait` and the type of a `public const` are the surface that is checked. It found three: `Query` in
+  `examples/query-provider`, `HttpError` in `std/http` and `JsonError` in `std/json`, all of which named a private
+  `...Kind` type in a field.
+- **The evaluator of a compile-time constant is `constant.trb`, and it folds with checked arithmetic.** Stage 0 panics on
+  integer overflow, so a checker that computed `9223372036854775807 + 1` would take the whole compiler with it instead of
+  reporting the line: every result is tested *before* it is built (by division for the product, against `Int.maximum` and
+  `Int.minimum` for the sum). Floating point overflow to an infinity is not reported, only a division by zero - a literal
+  `Float` expression cannot reach an infinity otherwise.
+- **The shape pass runs *after* the bodies of a module.** Whether `Point(0, 0)` is a constructor call or a function call
+  is a question only the resolution answers, so `checkShape` is the last thing `checkModule` does. Diagnostics are sorted
+  by span per file, so the order they are found in is not observable.
+- **A construct that is not checked yet counts as constant.** A resolution of `Deferred` in an initializer means "a later
+  sub-milestone decides", and reporting "this is not a constant" about it would be a message about the checker.
+- **`isSame` is found by name.** `WellKnown.symbolNamed("isSame")` is enough; the special case is one comparison at a call
+  site and needs no entry of its own in `wellknown.trb`.
+- **The parameters of a function and the top level of its body are one scope.** 4.2 made the body a scope of its own,
+  which let a `const` shadow a parameter silently; the concept is silent, and "no silent shadowing" is the rule everywhere
+  else in the language. `Checker.shadowsParameter` is the whole implementation: `enterBody` clears the scopes, so the
+  parameters are always the first scope of a body and its top level the second. A nested block and a closure keep their
+  own scope.
+- **`self` without a receiver is reported.** It was silently `Deferred`, which made `height: Int = self.width` a field
+  default that nobody objected to. A static function gets the same message.
+- **Gap 22 was already recorded.** `Implementation.isNative` exists since 4.3 and `checkOneImplementation` skips a native
+  implementation, so "a required trait member without a body in a `native type` is a requirement on the runtime" needed
+  nothing but the test. What 4.9 adds is that only a package of the standard library may write `native` at all.
+- **What is left off, and why:**
+  - **Where `await()` is allowed** stays milestone 7's, as section 5.6 says. Everything that is checkable without data
+    flow (the enclosing result type is a `Task`, an entry file, a closure passed to `spawn`) needs the `spawn` of
+    `std/prelude` to mean something first.
+  - **A closure passed to `spawn` may not capture a `var` binding**, and **a shared object does not cross a task
+    boundary**: the captures are 4.4's table and the rule is milestone 7's.
+  - **Gap 20** (a `var` binding may not be initialized from a `const` path to a shared object) is a rule about a *place*
+    and belongs to 4.6. `isSharedType` is public for it.
+  - **The types a `foreign` signature may name** (`Pointer<Value>`, `CString`, the sized numbers, a `foreign type`
+    struct): none of those exist in the AST or in `std/` yet. What is checked is the shape of a `foreign` block - only
+    function declarations, without bodies, with result types.
 
 ---
 

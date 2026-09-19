@@ -5,7 +5,7 @@ use FunctionDeclaration, Parameter, Declaration, Name from "../../syntax/ast"
 use ModuleId from "../module"
 use SymbolId from "../symbols"
 use TypeId, TypeForm, ParameterForm, ParameterId from "./type"
-use Checker, Expectation, LocalBinding, TypeScope from "./context"
+use Checker, Expectation, LocalBinding, TypeScope, ResultRule from "./context"
 use checkExpression, inferExpression, checkCondition from "./expression"
 use expectationOf, isNested from "./expression"
 use isFullyKnown from "./name"
@@ -19,6 +19,7 @@ use signatureOf, functionOfSite, declareSites from "./signature"
 use typeFromReference from "./lowering"
 use isQuotation from "./quote"
 use checkDeclaration from "./check"
+use requireDeclaredResult from "./declaration"
 
 /**
  * Statements, blocks and the bodies of declarations: what a block is worth, whether it returns for certain, and the
@@ -280,6 +281,8 @@ fn checkReturn(var checker: Checker, value: Expression?, at: Span) {
   if checker.isResultInferred {
     const found = inferExpression(checker, expression)
     checker.returnTypes.add(found)
+    // A `public` function and a trait method do not infer: `return e` has to say what `e` is (milestone 4.9)
+    requireDeclaredResult(checker, found, expression.span)
     return
   }
   const wanted = checker.resultType
@@ -520,6 +523,7 @@ public fn checkFunctionBody(
   isVarSelf: Bool,
   result: TypeId,
   isInferred: Bool,
+  rule: ResultRule = ResultRule.Ordinary,
 ): TypeId {
   const body = match function.body {
     Some(found) => found
@@ -528,9 +532,9 @@ public fn checkFunctionBody(
     }
   }
   // `fn fetch(): Task<User>`: its body produces the `User`, exactly as the body of a `Result` function produces the
-  // value and `?` returns the error (concept, Concurrency). Where `await()` is allowed is milestone 4.9's rule
+  // value and `?` returns the error (concept, Concurrency). Where `await()` is allowed is milestone 7's rule
   const produced = taskValueOf(checker, result) ?? result
-  const saved = checker.enterBody(module, produced, isInferred, owner)
+  const saved = checker.enterBody(module, produced, isInferred, owner, rule)
   checker.openScope()
   declareGenerics(checker, generics)
   declareBindingsFor(checker, function.parameters, parameters, takesSelf, isVarSelf, owner)
@@ -539,6 +543,8 @@ public fn checkFunctionBody(
   var found = outcome.annotation
   if isInferred {
     found = inferredResult(checker, outcome)
+    // A `public` function and a trait method do not infer: the value the body ends in has to be declared (4.9)
+    requireDeclaredEnding(checker, body, outcome)
   } else {
     requireResult(checker, outcome, produced, body.span)
   }
@@ -547,6 +553,26 @@ public fn checkFunctionBody(
   checker.closeScope()
   checker.leaveBody(saved)
   found
+}
+
+/**
+ * The value a body ends in, where the declaration does not infer its result. The message points at that value and not
+ * at the declaration, because that is where the type it has to declare is written.
+ */
+fn requireDeclaredEnding(var checker: Checker, body: Block, outcome: BlockResult) {
+  if !outcome.endsWithValue {
+    return
+  }
+  const last = match body.statements.last() {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  if const .Evaluate(expression) = last.kind {
+    const found = outcome.annotation
+    requireDeclaredResult(checker, found, expression.span)
+  }
 }
 
 /** The `Value` of a `Task<Value>`, which is what the body of such a function produces. */

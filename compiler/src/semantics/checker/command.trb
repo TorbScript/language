@@ -5,10 +5,10 @@ use TypeId, FunctionForm, ParameterForm, ParameterMode from "./type"
 use Checker, Resolution, PropertyWriteKind from "./context"
 use Target from "./name"
 use checkExpression, inferExpression, expectationOf from "./expression"
-use fieldsOf from "./member"
 use typeSignatureOf from "./signature"
 use resolveType from "./unify"
 use trailingClosureAt from "./call"
+use checkPropertyWrite, noteAssignment from "./place"
 
 /**
  * Property commands. A command call of a *function* is an ordinary call and needs nothing here; a call of a member that
@@ -84,7 +84,9 @@ fn writeField(
     reportNotCallable(checker, target.name, holdsFunction, expression)
     return inferRest(checker, arguments)
   }
-  requireVariable(checker, owner, field, target.name, expression)
+  // A command writes a field, so the path it is written through is a place like the target of an `=` (milestone 4.6)
+  const named = target.name
+  const place = checkPropertyWrite(checker, callee, named)
   const inner = match kind {
     .Configure => configurationOf(checker, annotation, target.name, expression)
     _ => Some(annotation)
@@ -98,6 +100,8 @@ fn writeField(
   }
   const inside = expectationOf(checker, wanted)
   const _ = checkExpression(checker, arguments[0].value, inside)
+  // The change counts once its value has been read, so that `port port + 1` does not read itself dead (design 5.3)
+  noteAssignment(checker, place)
   checker.resolved(expression.span, Resolution.PropertyWrite(owner, field, kind))
   checker.voidType
 }
@@ -151,22 +155,6 @@ fn isConfigurable(var checker: Checker, annotation: TypeId): Bool {
   const identifier = typeSignatureOf(checker, symbol)
   const shape = checker.typeSignature(identifier)
   !shape.isNative && shape.cases.isEmpty()
-}
-
-/** Both forms need a `var` path to the field, and the place the path starts at is milestone 4.6's question. */
-fn requireVariable(var checker: Checker, owner: TypeId, field: SymbolId, name: String, expression: Expression) {
-  for declared in fieldsOf(checker, owner) {
-    if declared.symbol != field {
-      continue
-    }
-    if !declared.isVar {
-      checker.reportHere(
-        Diagnostic.error("`{name}` never changes after construction", expression.span)
-          .withNote("`{name} value` writes the field, and only a `var` field can be written")
-      )
-    }
-    return
-  }
 }
 
 /** A write that could not be made still gives every argument a type: one message, and nothing is left unrecorded. */

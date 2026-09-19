@@ -8,6 +8,7 @@ use isFullyKnown from "./name"
 use typeSignatureOf from "./signature"
 use traitArgumentsOf from "./implementation"
 use noteChange, dropRead from "./mutation"
+use isInsideType from "./declaration"
 
 /**
  * What a valid place is, whether a change may go through it, and what may run while one is running.
@@ -29,6 +30,8 @@ use noteChange, dropRead from "./mutation"
 public type Mutation {
   /** `place = value` */
   case Write
+  /** `port 8080`, `database { ... }`: a property command writes the field it names (gap 15). */
+  case Command(member: String)
   /** `list.add(1)`: the member that declares `var self`. */
   case Receiver(member: String)
   /** A `var` parameter: which one, and of what. */
@@ -45,7 +48,7 @@ type MutationProblem {
   case ConstantRoot(name: String)
   case TemporaryRoot
   case ConstantField(field: SymbolId)
-  case PrivateField(owner: TypeId, field: SymbolId, isWholePrivate: Bool)
+  case PrivateField(owner: TypeId, field: SymbolId)
   case NotIndexable(base: TypeId)
   case NotSliceable(base: TypeId)
 }
@@ -319,19 +322,25 @@ fn problemOfField(var checker: Checker, owner: TypeId, field: SymbolId): Mutatio
       return MutationProblem.Unknown
     }
   }
-  // `private(var) balance: Int` carries its `var` in the modifier, so the visibility is the second half of the answer
+  // `private` reaches as far as the type does: its body, and every `extend` of it in the same package (gap 29)
+  const isInside = isInsideType(checker, owner)
+  // A field this code may not even *name* was reported where it was named (4.9): one root cause, one message
+  if const .Private = signature.visibility {
+    if !isInside {
+      return MutationProblem.Unknown
+    }
+  }
   if !isVarField(signature) {
     return MutationProblem.ConstantField(field)
   }
-  // `private` reaches as far as the type does: its body, and every `extend` of it in the same package (gap 29)
-  if isInsideOwner(checker, owner, field) {
+  if isInside {
     return MutationProblem.Writable
   }
-  match signature.visibility {
-    .PrivateVar => MutationProblem.PrivateField(owner, field, false)
-    .Private => MutationProblem.PrivateField(owner, field, true)
-    _ => MutationProblem.Writable
+  // `private(var)` is public to read and private to write, so this is the one visibility a place decides about
+  if const .PrivateVar = signature.visibility {
+    return MutationProblem.PrivateField(owner, field)
   }
+  MutationProblem.Writable
 }
 
 /** The field of `owner` with this id, with its `var` and its visibility. Nothing here needs the field's type. */
@@ -359,49 +368,6 @@ fn fieldSignatureOf(var checker: Checker, owner: TypeId, field: SymbolId): Field
   None
 }
 
-/**
- * Whether a private field may be written from here: inside the body of its type, and inside every `extend` of that type
- * in the same package (gap 29). Both are the same question - `Self` is the type there and nowhere else - and the *head*
- * is compared and not the whole type, so a member of `Holder<Item>` may write a field of a `Holder<Int>` as well.
- */
-fn isInsideOwner(var checker: Checker, owner: TypeId, field: SymbolId): Bool {
-  if !isOwnPackage(checker, field) {
-    return false
-  }
-  const own = match checker.selfType {
-    Some(found) => found
-    .None => {
-      return false
-    }
-  }
-  const here = headOf(checker, own)
-  const wanted = headOf(checker, owner)
-  if here.isNone() || wanted.isNone() {
-    return false
-  }
-  here == wanted
-}
-
-fn headOf(checker: Checker, annotation: TypeId): SymbolId? {
-  if const .Nominal(symbol, _) = checker.types.form(annotation) {
-    return Some(symbol)
-  }
-  None
-}
-
-/** Whether the file that is being checked belongs to the package that declares this symbol (gap 29). */
-fn isOwnPackage(checker: Checker, symbol: SymbolId): Bool {
-  const declared = match checker.symbolAt(symbol).module {
-    Some(found) => found
-    // A name the language provides itself belongs to no file, so nothing is hidden from anybody
-    .None => {
-      return true
-    }
-  }
-  const graph = checker.program.graph
-  graph.at(declared).package == graph.at(checker.module).package
-}
-
 /** A type that is not known well enough to answer counts as implementing it: the message belongs elsewhere. */
 fn hasTrait(var checker: Checker, base: TypeId, capability: SymbolId?): Bool {
   const wanted = match capability {
@@ -427,12 +393,15 @@ fn reportProblem(var checker: Checker, problem: MutationProblem, at: Span, cause
     .TemporaryRoot => reportTemporary(checker, at, cause)
     .ConstantField(field) => {
       const name = checker.symbolAt(field).name
-      checker.reportHere(
-        Diagnostic.error("`{name}` never changes after construction", at)
-          .withNote("A field is `const` unless it is declared `var`, and a value is its data")
-      )
+      // A command is the one way of writing a field that reads like a declaration, so the fix names the syntax
+      const note = if const .Command(_) = cause {
+        "`{name} value` writes the field, and only a `var` field can be written"
+      } else {
+        "A field is `const` unless it is declared `var`, and a value is its data"
+      }
+      checker.reportHere(Diagnostic.error("`{name}` never changes after construction", at).withNote(note))
     }
-    .PrivateField(owner, field, isWholePrivate) => reportPrivateField(checker, owner, field, isWholePrivate, at)
+    .PrivateField(owner, field) => reportPrivateField(checker, owner, field, at)
     .NotIndexable(base) => reportMissingTrait(checker, base, "MutableIndexed", "a[key]", at)
     .NotSliceable(base) => reportMissingTrait(checker, base, "MutableSlice", "a[from..to]", at)
     _ => {}
@@ -477,6 +446,7 @@ fn reportTemporary(var checker: Checker, at: Span, cause: Mutation) {
     .Argument(parameter, callee) => "`{callee}` changes `{parameter}`"
     .Subject => "`if var` binds paths into its subject"
     .Write => "an assignment writes it"
+    .Command(member) => "a command writes its field `{member}`"
   }
   checker.reportHere(
     Diagnostic.error("This is a temporary, and {what}: the change would be thrown away", at)
@@ -484,22 +454,13 @@ fn reportTemporary(var checker: Checker, at: Span, cause: Mutation) {
   )
 }
 
-fn reportPrivateField(
-  var checker: Checker,
-  owner: TypeId,
-  field: SymbolId,
-  isWholePrivate: Bool,
-  at: Span,
-) {
+/** `private(var)`: the field reads from everywhere and is written by its own type alone (gap 29). */
+fn reportPrivateField(var checker: Checker, owner: TypeId, field: SymbolId, at: Span) {
   const name = checker.symbolAt(field).name
   const shown = checker.describe(owner)
-  if isWholePrivate {
-    checker.reportHere(Diagnostic.error("`{name}` is private to `{shown}`", at))
-    return
-  }
   checker.reportHere(
     Diagnostic.error("`{name}` can only be written by `{shown}`", at)
-      .withNote("`private(var)` hands out a const path, and const is deep: it reads and iterates, it does not change")
+      .withNote("`private(var)` hands out a read-only path: the field is public, its mutability is not")
   )
 }
 
@@ -547,6 +508,24 @@ public fn checkAssignment(var checker: Checker, target: Expression): Place {
 /** The change an assignment makes, once its value has been read (design 5.3). */
 public fn noteAssignment(var checker: Checker, place: Place) {
   noteChange(checker, place, "")
+}
+
+/**
+ * `port 8080`, `database { ... }`: a property command writes a field, so it is an assignment written another way and
+ * asks the very same question - is the path to the field one a change may go through, `private(var)` and a `const` root
+ * included. Only the message says which of the two the author wrote. The change itself is noted by `noteAssignment`
+ * once the value has been read, exactly as for `=`.
+ */
+public fn checkPropertyWrite(var checker: Checker, callee: Expression, member: String): Place {
+  const place = placeOf(checker, callee)
+  const at = callee.span
+  const _ = checkAccess(checker, place, at)
+  if isMutable(checker, place) {
+    checker.recordPlace(at, place)
+  } else {
+    const _ = requireMutable(checker, place, at, Mutation.Command(member))
+  }
+  place
 }
 
 /**
@@ -944,13 +923,10 @@ public fn leavesClosure(checker: Checker): Bool {
   checker.closureFrames[last].enclosingLoopDepth > 0
 }
 
-/** A field that may be written: `var`, or `private(var)` - which is a `var` whose mutability is private. */
+/**
+ * A field that may be written at all. `private(var) balance: Int` *is* a `var` - the modifier carries it, and
+ * `signature.isVar` says so since 4.9 - so the visibility only decides *who* may write it, never whether anybody may.
+ */
 fn isVarField(signature: FieldSignature): Bool {
-  if signature.isVar {
-    return true
-  }
-  if const .PrivateVar = signature.visibility {
-    return true
-  }
-  false
+  signature.isVar
 }

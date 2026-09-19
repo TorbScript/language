@@ -1,5 +1,5 @@
 use test, group from "std/test"
-use probe, problems, notes, workspaceWith from "./harness"
+use probe, problems, notes, problemsAt, workspaceWith from "./harness"
 use check from "../src/semantics/check"
 
 /**
@@ -72,8 +72,12 @@ group "What an implementation has to provide" {
   }
 
   test "a `native` type provides the members of its traits through the runtime (gap 22)" {
-    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\npublic native type Pixel with Shape \{\}"
-    assert(problems(source).isEmpty())
+    // Only a package of the standard library may declare `native` (gap 22, milestone 4.9), so `Pixel` lives in one
+    const files = [
+      "std/graphics/project.trb": "name \"std/graphics\"\n",
+      "std/graphics/src/lib.trb": "trait Shape \{\n  fn area(self): Int\n\}\n\npublic native type Pixel with Shape \{\}\n",
+    ]
+    assert(problemsAt(files, ["std/graphics"]).isEmpty())
   }
 
   test "a trait as the target of an implementation asks nothing of the trait itself" {

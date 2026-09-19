@@ -1,0 +1,627 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Expression, Argument, TextSegment, InfixOperator, PrefixOperator from "../../syntax/ast"
+use ModuleId from "../module"
+use SymbolId from "../symbols"
+use Checker from "./context"
+use integerLiteral from "./lowering"
+use bindingOfSite, resultOf from "./signature"
+
+/**
+ * What "compile-time evaluable" means for the initializer of a top-level `const` of a module (gap 27), and the folding
+ * that comes with it: the arithmetic, comparison and logical operators of the built-in number types and of `Bool` are
+ * part of the set, so the checker evaluates them - and a constant whose evaluation overflows or divides by zero is a
+ * compile error at that expression (BACKEND gap 11).
+ *
+ * This evaluator is deliberately self-contained and small. The back end has one of its own (milestone 5.2) that has to
+ * agree with it; what they share is the rule, not the code.
+ */
+
+/**
+ * What a compile-time constant is worth. Only the scalars fold - an aggregate is evaluable exactly when its parts are,
+ * and nothing in the language reads one at compile time.
+ */
+public type ConstantValue {
+  case Integer(value: Int)
+  case Floating(value: Float)
+  case Text(value: String)
+  case Character(value: Char)
+  case Boolean(value: Bool)
+  /** A tuple, a list, a map, a range, a constructor or a case: evaluable, and nothing folds it. */
+  case Composite
+}
+
+/** What evaluating an initializer produced. */
+public type ConstantResult {
+  case Value(value: ConstantValue)
+  /** The innermost expression that is not compile-time evaluable, which is where the message points. */
+  case NotConstant(at: Span)
+  /** Overflow or a division by zero, reported at the expression that did it: nothing follows from it. */
+  case Broken
+}
+
+/** A constant that names a constant that names a constant: a cycle is reported elsewhere, here it is a limit. */
+const constantDepthLimit = 32
+
+/**
+ * The initializer of a top-level `const` of a module. It has to be known at compile time, which is what removes module
+ * initialization order and makes a cyclic import harmless; in an entry file, a script or a test file a top-level
+ * `const` is ordinary code and this is never asked.
+ */
+public fn checkConstantInitializer(var checker: Checker, module: ModuleId, value: Expression) {
+  const found = evaluateConstant(checker, module, value, 0)
+  if const .NotConstant(at) = found {
+    checker.report(
+      module,
+      Diagnostic.error("The initializer of a top-level `const` has to be known at compile time", at)
+        .withNote(
+          "A module has no initialization order: literals, the operators of the number types and of `Bool`,"
+            + " interpolation, tuple, list and map literals, constructor calls of such, and other compile-time"
+            + " constants. `Point(0, 0)` is one, `Point.origin()` is a call and is not"
+        )
+    )
+  }
+}
+
+/** Whether an initializer is compile-time evaluable, without saying anything about it. */
+public fn isCompileTimeConstant(var checker: Checker, module: ModuleId, value: Expression): Bool {
+  isValue(evaluateConstant(checker, module, value, 0))
+}
+
+fn isValue(result: ConstantResult): Bool {
+  match result {
+    .Value(_) => true
+    _ => false
+  }
+}
+
+/**
+ * One expression, folded as far as the operators of gap 27 go. Everything the checker already resolved is read out of
+ * the tables, which is why this runs after the body of a module was walked: whether `Point(0, 0)` is a constructor call
+ * or a function call is a question only the resolution answers.
+ */
+public fn evaluateConstant(
+  var checker: Checker,
+  module: ModuleId,
+  expression: Expression,
+  depth: Int,
+): ConstantResult {
+  if depth > constantDepthLimit {
+    return ConstantResult.NotConstant(expression.span)
+  }
+  match expression.kind {
+    .IntegerLiteral(text) => integerConstant(text, false, expression.span)
+    .FloatLiteral(text) => floatConstant(text, false, expression.span)
+    .BoolLiteral(value) => ConstantResult.Value(ConstantValue.Boolean(value))
+    .CharLiteral(value) => ConstantResult.Value(ConstantValue.Character(value))
+    .TextLiteral(segments) => textConstant(checker, module, segments, depth)
+    .Unary(operator, operand) => unaryConstant(checker, module, operator, operand, depth, expression.span)
+    .Binary(operator, left, right) => binaryConstant(checker, module, operator, left, right, depth, expression.span)
+    .TupleLiteral(items) => argumentsConstant(checker, module, items, depth)
+    .ListLiteral(items) => argumentsConstant(checker, module, items, depth)
+    .MapLiteral(entries) => entriesConstant(checker, module, entries, depth)
+    .RangeLiteral(start, end, _) => rangeConstant(checker, module, start, end, depth)
+    .Call(_, arguments, _) => callConstant(checker, module, expression, arguments, depth)
+    // A name, a member path and `.Case` are all "what did this resolve to"
+    .Name(_) | .ImplicitMember(_) => namedConstant(checker, module, expression, depth)
+    .Member(_, _, isOptional) => {
+      if isOptional {
+        return ConstantResult.NotConstant(expression.span)
+      }
+      namedConstant(checker, module, expression, depth)
+    }
+    // `List<Int>` in front of a call; alone it names a type, and a type never flows as a value
+    .Generic(target, _) => evaluateConstant(checker, module, target, depth + 1)
+    _ => ConstantResult.NotConstant(expression.span)
+  }
+}
+
+/** A literal the lexer kept the base of. One that does not parse at all was reported where it was written (gap 38). */
+fn integerConstant(text: String, isNegative: Bool, at: Span): ConstantResult {
+  match integerLiteral(text, isNegative) {
+    Some(.Integer(value)) => ConstantResult.Value(ConstantValue.Integer(value))
+    _ => ConstantResult.Broken
+  }
+}
+
+fn floatConstant(text: String, isNegative: Bool, at: Span): ConstantResult {
+  match Float.parse(text).ok() {
+    Some(value) => ConstantResult.Value(ConstantValue.Floating(if isNegative { 0.0 - value } else { value }))
+    .None => ConstantResult.Broken
+  }
+}
+
+/**
+ * Interpolation is not a function call (gap 27), so a text of compile-time parts is one. A plain literal keeps its
+ * value, because that is the only text anything else could read; an interpolated one is an aggregate like any other.
+ */
+fn textConstant(
+  var checker: Checker,
+  module: ModuleId,
+  segments: List<TextSegment>,
+  depth: Int,
+): ConstantResult {
+  var text = ""
+  var isPlain = true
+  for segment in segments {
+    match segment {
+      .Literal(part) => {
+        text = text + part
+      }
+      .Interpolated(inner) => {
+        isPlain = false
+        const found = evaluateConstant(checker, module, inner, depth + 1)
+        if !isValue(found) {
+          return found
+        }
+      }
+    }
+  }
+  if isPlain {
+    return ConstantResult.Value(ConstantValue.Text(text))
+  }
+  ConstantResult.Value(ConstantValue.Composite)
+}
+
+fn argumentsConstant(
+  var checker: Checker,
+  module: ModuleId,
+  arguments: List<Argument>,
+  depth: Int,
+): ConstantResult {
+  for argument in arguments {
+    const found = evaluateConstant(checker, module, argument.value, depth + 1)
+    if !isValue(found) {
+      return found
+    }
+  }
+  ConstantResult.Value(ConstantValue.Composite)
+}
+
+fn entriesConstant(
+  var checker: Checker,
+  module: ModuleId,
+  entries: List<(Expression, Expression)>,
+  depth: Int,
+): ConstantResult {
+  for (key, value) in entries {
+    const found = evaluateConstant(checker, module, key, depth + 1)
+    if !isValue(found) {
+      return found
+    }
+    const inner = evaluateConstant(checker, module, value, depth + 1)
+    if !isValue(inner) {
+      return inner
+    }
+  }
+  ConstantResult.Value(ConstantValue.Composite)
+}
+
+fn rangeConstant(
+  var checker: Checker,
+  module: ModuleId,
+  start: Expression?,
+  end: Expression?,
+  depth: Int,
+): ConstantResult {
+  if const Some(first) = start {
+    const found = evaluateConstant(checker, module, first, depth + 1)
+    if !isValue(found) {
+      return found
+    }
+  }
+  if const Some(last) = end {
+    const found = evaluateConstant(checker, module, last, depth + 1)
+    if !isValue(found) {
+      return found
+    }
+  }
+  ConstantResult.Value(ConstantValue.Composite)
+}
+
+/**
+ * A call is compile-time evaluable exactly when it builds a value out of its arguments: the generated constructor of a
+ * type, or a case constructor. Every other call is code, `native` calls included - and `+` on `String` is one of them.
+ */
+fn callConstant(
+  var checker: Checker,
+  module: ModuleId,
+  expression: Expression,
+  arguments: List<Argument>,
+  depth: Int,
+): ConstantResult {
+  const resolution = match checker.resolutionAt(module, expression.span) {
+    Some(found) => found
+    .None => {
+      return ConstantResult.NotConstant(expression.span)
+    }
+  }
+  match resolution {
+    .Construct(_) | .CaseOf(_, _) => argumentsConstant(checker, module, arguments, depth)
+    // A construct a later sub-milestone resolves: nothing is said about what is not understood yet
+    .Deferred => ConstantResult.Value(ConstantValue.Composite)
+    _ => ConstantResult.NotConstant(expression.span)
+  }
+}
+
+/** A name that stands for a value: another compile-time constant, a case without fields, or `Void`. */
+fn namedConstant(var checker: Checker, module: ModuleId, expression: Expression, depth: Int): ConstantResult {
+  const resolution = match checker.resolutionAt(module, expression.span) {
+    Some(found) => found
+    .None => {
+      return ConstantResult.NotConstant(expression.span)
+    }
+  }
+  match resolution {
+    .Constant(symbol, _) => constantOfSymbol(checker, symbol, expression.span, depth)
+    .CaseOf(_, _) | .VoidValue => ConstantResult.Value(ConstantValue.Composite)
+    .Deferred => ConstantResult.Value(ConstantValue.Composite)
+    _ => ConstantResult.NotConstant(expression.span)
+  }
+}
+
+/**
+ * Another constant, wherever it is declared: its own initializer is the answer. A `const` that is not compile-time
+ * evaluable is reported where *it* is written, so a constant that names one only says "this is not a constant".
+ */
+fn constantOfSymbol(var checker: Checker, symbol: SymbolId, at: Span, depth: Int): ConstantResult {
+  // Asking for the type of a `const` is what checks its initializer, and the resolutions it needs come from that
+  const _ = resultOf(checker, symbol)
+  const site = match checker.siteOf(symbol) {
+    Some(found) => found
+    .None => {
+      return ConstantResult.NotConstant(at)
+    }
+  }
+  const binding = match bindingOfSite(site) {
+    Some(found) => found
+    .None => {
+      return ConstantResult.NotConstant(at)
+    }
+  }
+  const found = evaluateConstant(checker, site.module, binding.value, depth + 1)
+  if const .NotConstant(_) = found {
+    return ConstantResult.NotConstant(at)
+  }
+  found
+}
+
+// --- The operators --------------------------------------------------------------------------------------------------
+
+fn unaryConstant(
+  var checker: Checker,
+  module: ModuleId,
+  operator: PrefixOperator,
+  operand: Expression,
+  depth: Int,
+  at: Span,
+): ConstantResult {
+  // `-9223372036854775808` only exists as a literal with its sign: the positive half does not fit any integer type
+  if const .Negate = operator {
+    if const .IntegerLiteral(text) = operand.kind {
+      return integerConstant(text, true, operand.span)
+    }
+    if const .FloatLiteral(text) = operand.kind {
+      return floatConstant(text, true, operand.span)
+    }
+  }
+  const inner = evaluateConstant(checker, module, operand, depth + 1)
+  const value = match inner {
+    .Value(found) => found
+    _ => {
+      return inner
+    }
+  }
+  match operator {
+    .Negate => {
+      match value {
+        .Integer(number) => {
+          if number == Int.minimum {
+            return reportOverflow(checker, module, at)
+          }
+          ConstantResult.Value(ConstantValue.Integer(0 - number))
+        }
+        .Floating(number) => ConstantResult.Value(ConstantValue.Floating(0.0 - number))
+        _ => ConstantResult.NotConstant(at)
+      }
+    }
+    .Not => {
+      match value {
+        .Boolean(flag) => ConstantResult.Value(ConstantValue.Boolean(!flag))
+        _ => ConstantResult.NotConstant(at)
+      }
+    }
+  }
+}
+
+fn binaryConstant(
+  var checker: Checker,
+  module: ModuleId,
+  operator: InfixOperator,
+  left: Expression,
+  right: Expression,
+  depth: Int,
+  at: Span,
+): ConstantResult {
+  const first = evaluateConstant(checker, module, left, depth + 1)
+  const a = match first {
+    .Value(found) => found
+    _ => {
+      return first
+    }
+  }
+  const second = evaluateConstant(checker, module, right, depth + 1)
+  const b = match second {
+    .Value(found) => found
+    _ => {
+      return second
+    }
+  }
+  match operator {
+    .Add | .Subtract | .Multiply | .Divide | .Remainder => arithmeticConstant(checker, module, operator, a, b, at)
+    .Equal | .NotEqual => equalityConstant(operator, a, b, at)
+    .Less | .LessOrEqual | .Greater | .GreaterOrEqual => orderConstant(operator, a, b, at)
+    .And | .Or => logicalConstant(operator, a, b, at)
+    // `a ?? b` is `orElse`, which is a call like any other
+    .Coalesce => ConstantResult.NotConstant(at)
+  }
+}
+
+/**
+ * The arithmetic of the built-in number types. `+` on a `String` is `Add.add` and therefore a call (gap 27), so only
+ * the numbers fold here - and every result is checked before it is built, because a checker that overflows would take
+ * the whole compiler with it instead of reporting the line.
+ */
+fn arithmeticConstant(
+  var checker: Checker,
+  module: ModuleId,
+  operator: InfixOperator,
+  a: ConstantValue,
+  b: ConstantValue,
+  at: Span,
+): ConstantResult {
+  if const .Integer(left) = a {
+    if const .Integer(right) = b {
+      return integerArithmetic(checker, module, operator, left, right, at)
+    }
+  }
+  if const .Floating(left) = a {
+    if const .Floating(right) = b {
+      return floatArithmetic(checker, module, operator, left, right, at)
+    }
+  }
+  ConstantResult.NotConstant(at)
+}
+
+fn integerArithmetic(
+  var checker: Checker,
+  module: ModuleId,
+  operator: InfixOperator,
+  left: Int,
+  right: Int,
+  at: Span,
+): ConstantResult {
+  const folded = match operator {
+    .Add => addedIntegers(left, right)
+    .Subtract => subtractedIntegers(left, right)
+    .Multiply => multipliedIntegers(left, right)
+    .Divide => {
+      if right == 0 {
+        return reportDivisionByZero(checker, module, at)
+      }
+      // `Int.minimum / -1` is the one division whose result does not fit
+      if left == Int.minimum && right == -1 {
+        return reportOverflow(checker, module, at)
+      }
+      Some(left / right)
+    }
+    .Remainder => {
+      if right == 0 {
+        return reportDivisionByZero(checker, module, at)
+      }
+      // `Int.minimum % -1` is zero, and the division it is defined through would overflow on the way
+      if left == Int.minimum && right == -1 {
+        Some(0)
+      } else {
+        Some(left % right)
+      }
+    }
+    _ => None
+  }
+  match folded {
+    Some(value) => ConstantResult.Value(ConstantValue.Integer(value))
+    .None => reportOverflow(checker, module, at)
+  }
+}
+
+fn floatArithmetic(
+  var checker: Checker,
+  module: ModuleId,
+  operator: InfixOperator,
+  left: Float,
+  right: Float,
+  at: Span,
+): ConstantResult {
+  const folded = match operator {
+    .Add => left + right
+    .Subtract => left - right
+    .Multiply => left * right
+    .Divide => {
+      if right == 0.0 {
+        return reportDivisionByZero(checker, module, at)
+      }
+      left / right
+    }
+    .Remainder => {
+      if right == 0.0 {
+        return reportDivisionByZero(checker, module, at)
+      }
+      left % right
+    }
+    _ => {
+      return ConstantResult.NotConstant(at)
+    }
+  }
+  ConstantResult.Value(ConstantValue.Floating(folded))
+}
+
+/** `Int.maximum - right` is safe for a positive `right`, and `Int.minimum - right` for a negative one. */
+fn addedIntegers(left: Int, right: Int): Int? {
+  if right > 0 && left > Int.maximum - right {
+    return None
+  }
+  if right < 0 && left < Int.minimum - right {
+    return None
+  }
+  Some(left + right)
+}
+
+fn subtractedIntegers(left: Int, right: Int): Int? {
+  if right < 0 && left > Int.maximum + right {
+    return None
+  }
+  if right > 0 && left < Int.minimum + right {
+    return None
+  }
+  Some(left - right)
+}
+
+/**
+ * The product, tested by division so that nothing is ever computed that does not fit. `0` and `1` are separate because
+ * `Int.minimum` has no positive counterpart, which is what makes `-1` the only interesting factor.
+ */
+fn multipliedIntegers(left: Int, right: Int): Int? {
+  if left == 0 || right == 0 {
+    return Some(0)
+  }
+  if left == 1 {
+    return Some(right)
+  }
+  if right == 1 {
+    return Some(left)
+  }
+  if left == -1 {
+    if right == Int.minimum {
+      return None
+    }
+    return Some(0 - right)
+  }
+  if right == -1 {
+    if left == Int.minimum {
+      return None
+    }
+    return Some(0 - left)
+  }
+  const fits = if left > 0 && right > 0 {
+    left <= Int.maximum / right
+  } else if left < 0 && right < 0 {
+    left >= Int.maximum / right
+  } else if left > 0 {
+    right >= Int.minimum / left
+  } else {
+    left >= Int.minimum / right
+  }
+  if !fits {
+    return None
+  }
+  Some(left * right)
+}
+
+/** `==` and `!=` on the number types and on `Bool`. Everything else is `Equals.equals` and therefore a call. */
+fn equalityConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at: Span): ConstantResult {
+  var isEqual = false
+  var isKnown = false
+  if const .Integer(left) = a {
+    if const .Integer(right) = b {
+      isEqual = left == right
+      isKnown = true
+    }
+  }
+  if const .Floating(left) = a {
+    if const .Floating(right) = b {
+      isEqual = left == right
+      isKnown = true
+    }
+  }
+  if const .Boolean(left) = a {
+    if const .Boolean(right) = b {
+      isEqual = left == right
+      isKnown = true
+    }
+  }
+  if !isKnown {
+    return ConstantResult.NotConstant(at)
+  }
+  const isNotEqual = match operator {
+    .NotEqual => true
+    _ => false
+  }
+  ConstantResult.Value(ConstantValue.Boolean(if isNotEqual { !isEqual } else { isEqual }))
+}
+
+/** `<`, `<=`, `>`, `>=` on the number types: `Compare.compare` is a call for everything else. */
+fn orderConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at: Span): ConstantResult {
+  var order = 0
+  var isKnown = false
+  if const .Integer(left) = a {
+    if const .Integer(right) = b {
+      order = if left < right { -1 } else if left > right { 1 } else { 0 }
+      isKnown = true
+    }
+  }
+  if const .Floating(left) = a {
+    if const .Floating(right) = b {
+      order = if left < right { -1 } else if left > right { 1 } else { 0 }
+      isKnown = true
+    }
+  }
+  if !isKnown {
+    return ConstantResult.NotConstant(at)
+  }
+  const found = match operator {
+    .Less => order < 0
+    .LessOrEqual => order <= 0
+    .Greater => order > 0
+    .GreaterOrEqual => order >= 0
+    _ => false
+  }
+  ConstantResult.Value(ConstantValue.Boolean(found))
+}
+
+fn logicalConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at: Span): ConstantResult {
+  const left = match a {
+    .Boolean(found) => found
+    _ => {
+      return ConstantResult.NotConstant(at)
+    }
+  }
+  const right = match b {
+    .Boolean(found) => found
+    _ => {
+      return ConstantResult.NotConstant(at)
+    }
+  }
+  const isAnd = match operator {
+    .And => true
+    _ => false
+  }
+  ConstantResult.Value(ConstantValue.Boolean(if isAnd { left && right } else { left || right }))
+}
+
+fn reportOverflow(var checker: Checker, module: ModuleId, at: Span): ConstantResult {
+  checker.report(
+    module,
+    Diagnostic.error("This does not fit into an `Int64`", at)
+      .withNote("A compile-time constant is evaluated while the program is compiled, so an overflow it is written with is caught here")
+  )
+  ConstantResult.Broken
+}
+
+fn reportDivisionByZero(var checker: Checker, module: ModuleId, at: Span): ConstantResult {
+  checker.report(
+    module,
+    Diagnostic.error("This divides by zero", at)
+      .withNote("A compile-time constant is evaluated while the program is compiled, so a program that cannot start does not compile")
+  )
+  ConstantResult.Broken
+}

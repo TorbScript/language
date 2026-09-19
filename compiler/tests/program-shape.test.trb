@@ -1,0 +1,557 @@
+use test, group from "std/test"
+use problems, notes, problemsOf, notesOf from "./harness"
+
+/**
+ * The shape of a program: which files may contain code, what a declaration has to say about itself, and the rules of
+ * `extend`, `native`, `shared` and `foreign`.
+ *
+ * The rule behind most of it is the same one: whatever leaves a file has to be readable without the body behind it. A
+ * `public` function declares its result type, an imported module consists of declarations only, and an `extend` adds
+ * nothing a `match` or a constructor would have to know about.
+ *
+ * `app/src/main.trb` is the build input of the package, so it is an *entry file*: everything about a module needs a
+ * second file that something imports.
+ */
+
+const importsHelper = r"""
+use value from "./helper"
+
+fn probe(): Int {
+  value
+}
+"""
+
+fn withHelper(helper: String): Map<String, String> {
+  ["app/src/helper.trb": helper, "app/src/main.trb": importsHelper]
+}
+
+group "Top-level code (gap 28)" {
+  test "an entry file is ordinary code" {
+    const source = r"""
+const greeting = "hello"
+
+print greeting
+"""
+    assert(problems(source).isEmpty())
+  }
+
+  test "a module that something imports consists of declarations only" {
+    const files = withHelper(r"""
+public const value = 1
+
+print value
+""")
+    assert(
+      problemsOf(files) == ["Top-level code is only allowed in entry files. `app/src/helper.trb` is imported"]
+    )
+    assert(
+      notesOf(files)
+        == [
+          "An imported module consists of declarations only, so a module has no initialization order and a cyclic"
+            + " import is harmless",
+        ]
+    )
+  }
+
+  test "a file nothing imports is a script, whatever else is in the package" {
+    const files = [
+      "app/src/loose.trb": r"""
+const answer = 42
+
+print answer
+""",
+      "app/src/main.trb": r"""
+fn probe(): Int {
+  1
+}
+""",
+    ]
+    assert(problemsOf(files).isEmpty())
+  }
+
+  test "`src/lib.trb` is what other packages import, so it is always a module" {
+    const files = [
+      "app/src/lib.trb": r"""
+public const answer = 42
+
+print answer
+""",
+      "app/src/main.trb": r"""
+fn probe(): Int {
+  1
+}
+""",
+    ]
+    assert(problemsOf(files) == ["Top-level code is only allowed in entry files. `app/src/lib.trb` is imported"])
+  }
+
+  test "a module has no mutable state, so it has no top-level `var`" {
+    const files = withHelper(r"""
+public const value = 1
+
+var counter = 0
+""")
+    assert(problemsOf(files) == ["A module has no mutable state, so it has no top-level `var`"])
+    assert(notesOf(files) == ["A module exports constants. State belongs to a value that somebody owns"])
+  }
+}
+
+group "A `public fn` and a trait method never infer their result" {
+  test "an omitted result type is `Void`, and a body that produces nothing is legal" {
+    const source = r"""
+public fn reset(var counter: Counter) {
+  counter.value = 0
+}
+
+public type Counter {
+  var value: Int = 0
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+
+  test "and it really is `Void`: nothing is inferred from the body" {
+    const source = r"""
+public fn probe(): Int {
+  answer()
+}
+
+public fn answer() {
+  42
+}
+"""
+    assert(
+      problems(source)
+        == [
+          "Expected `Int64`, found `Void`",
+          "A `public` function does not infer its result: declare it (`: Int64`)",
+        ]
+    )
+  }
+
+  test "the value the body ends in is where the message points" {
+    const source = r"""
+public fn answer() {
+  42
+}
+"""
+    assert(problems(source) == ["A `public` function does not infer its result: declare it (`: Int64`)"])
+    assert(
+      notes(source)
+        == ["Without a result type it produces `Void`, and whoever calls it must not have to read the body"]
+    )
+  }
+
+  test "and so is the value a `return` produces" {
+    const source = r"""
+public fn answer(flag: Bool) {
+  if flag {
+    return "yes"
+  }
+}
+"""
+    assert(problems(source) == ["A `public` function does not infer its result: declare it (`: String`)"])
+  }
+
+  test "declaring it settles it" {
+    const source = r"""
+public fn answer(): Int {
+  42
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+
+  test "a function that is not `public` infers it as before" {
+    const source = r"""
+fn answer() {
+  42
+}
+
+fn probe(): Int {
+  answer()
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+
+  test "a trait requirement without a result type produces `Void`, as the concept writes it" {
+    const source = r"""
+trait Sink {
+  fn write(var self, text: String)
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+
+  test "a default member of a trait does not infer either" {
+    const source = r"""
+trait Sink {
+  fn write(var self, text: String)
+
+  fn writeTwice(var self, text: String) {
+    write(text)
+    text.byteLength()
+  }
+}
+"""
+    assert(problems(source) == ["A trait method does not infer its result: declare it (`: Int64`)"])
+    assert(
+      notes(source)
+        == ["Without a result type it produces `Void`, and whoever calls it must not have to read the body"]
+    )
+  }
+
+  test "a member of a `type` still infers it" {
+    const source = r"""
+type Counter {
+  var value: Int = 0
+
+  fn step(var self) {
+    value = value + 1
+  }
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+
+  test "a function without a body is a requirement of a trait or a `native` declaration" {
+    const source = r"""
+type Counter {
+  fn step(var self): Void
+}
+"""
+    assert(problems(source) == ["`step` has no body"])
+    assert(notes(source) == ["Only a requirement of a trait and a `native` declaration have none"])
+  }
+}
+
+group "An `extend` adds constants and functions (gap 39)" {
+  test "a field in an `extend` belongs to the declaration of the type" {
+    const source = r"""
+extend Counter {
+  var extra: Int = 0
+}
+
+type Counter {
+  var value: Int = 0
+}
+"""
+    assert(problems(source) == ["An `extend` cannot add a field"])
+    assert(
+      notes(source)
+        == ["Fields and cases belong to the declaration of the type: an `extend` adds constants and functions"]
+    )
+  }
+
+  test "and so does a case" {
+    const source = r"""
+extend Shape {
+  case Triangle(side: Int)
+}
+
+type Shape {
+  case Empty
+}
+"""
+    assert(problems(source) == ["An `extend` cannot add a case"])
+    assert(
+      notes(source)
+        == ["Fields and cases belong to the declaration of the type, so that a `match` over it is decidable"]
+    )
+  }
+
+  test "a constant and a function are what it is for" {
+    const source = r"""
+extend Counter {
+  const start: Int = 0
+
+  fn doubled(self): Int {
+    value * 2
+  }
+}
+
+type Counter {
+  var value: Int = 0
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+}
+
+group "`native` belongs to the standard library (gap 22)" {
+  test "a `native` function of an ordinary package" {
+    const source = r"""
+native fn clock(): Int
+"""
+    assert(problems(source) == ["`native` is only allowed in a package of the standard library"])
+    assert(
+      notes(source)
+        == [
+          "A `native` declaration is implemented by the compiler and its runtime. Everything else is written in"
+            + " TorbScript, on top of `foreign` declarations",
+        ]
+    )
+  }
+
+  test "a `native` type of an ordinary package" {
+    const source = r"""
+public native type Handle {}
+"""
+    assert(problems(source) == ["`native` is only allowed in a package of the standard library"])
+  }
+
+  test "a `native` member of an ordinary package" {
+    const source = r"""
+type Handle {
+  native fn close(var self): Void
+}
+"""
+    assert(problems(source) == ["`native` is only allowed in a package of the standard library"])
+  }
+}
+
+group "`shared type` and `shared trait`" {
+  test "a `shared type` may only implement a `shared trait`" {
+    const source = r"""
+shared type Connection with Show {
+  url: String
+
+  fn show(self): String {
+    url
+  }
+}
+"""
+    assert(problems(source) == ["`Connection` is a `shared type`, so it can only implement a `shared trait`"])
+    assert(
+      notes(source)
+        == ["`Show` is not one: write `shared trait Show`, or make `Connection` an ordinary `type`"]
+    )
+  }
+
+  test "a `shared trait` is what it may implement" {
+    const source = r"""
+shared type Connection with Close {
+  var url: String
+
+  fn close(var self): Void {
+    url = ""
+  }
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+
+  test "an ordinary `type` may implement a `shared trait`: `Show` is one in the real prelude" {
+    const source = r"""
+type Handle with Close {
+  fn close(var self): Void {}
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+}
+
+group "`isSame` compares identity (BACKEND gap 15)" {
+  test "on a value it has no meaning" {
+    const source = r"""
+fn probe(first: Point, second: Point): Bool {
+  isSame(first, second)
+}
+
+type Point {
+  x: Int
+  y: Int
+}
+"""
+    assert(problems(source) == ["`isSame` compares identity, and a `Point` is a value"])
+    assert(
+      notes(source)
+        == ["Use `==`: two values are the same when their content is. Only a `shared type` has an identity"]
+    )
+  }
+
+  test "on a `shared type` it is the whole point" {
+    const source = r"""
+fn probe(first: Connection, second: Connection): Bool {
+  isSame(first, second)
+}
+
+shared type Connection {
+  url: String
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+}
+
+group "`private(var)` is a modifier of a field (gap 30)" {
+  test "not of a top-level declaration" {
+    const source = r"""
+private(var) fn probe(): Int {
+  1
+}
+"""
+    assert(problems(source) == ["`private(var)` is only a modifier of a field"])
+    assert(
+      notes(source)
+        == [
+          "It says that the field is readable and its `var` is not. Write `private` to hide the declaration",
+        ]
+    )
+  }
+
+  test "not of a constant of a type" {
+    const source = r"""
+type Counter {
+  private(var) const start: Int = 0
+}
+"""
+    assert(problems(source) == ["`private(var)` is only a modifier of a field"])
+  }
+
+  test "and it already says `var`, so a second one is a mistake" {
+    const source = r"""
+type Account {
+  private(var) var balance: Int = 0
+}
+"""
+    assert(problems(source) == ["`private(var)` already says `var`"])
+    assert(
+      notes(source)
+        == [
+          "`private(var) balance: ...` is the whole spelling: the field is readable, its `var` is not",
+        ]
+    )
+  }
+}
+
+group "Defaults are evaluated without a receiver (gap 26)" {
+  test "a field default cannot read `self`" {
+    const source = r"""
+type Box {
+  width: Int = 1
+  height: Int = self.width
+}
+"""
+    assert(problems(source) == ["There is no `self` here"])
+    assert(
+      notes(source)
+        == [
+          "`self` exists in a method and in a receiver closure. A default is evaluated without one, so that the"
+            + " order of the fields is not observable",
+        ]
+    )
+  }
+
+  test "a field default cannot read another field" {
+    const source = r"""
+type Box {
+  width: Int = 1
+  height: Int = width
+}
+"""
+    assert(problems(source) == ["Cannot find `width` here"])
+  }
+
+  test "a parameter default cannot read another parameter" {
+    const source = r"""
+fn connect(host: String, port: Int = host.byteLength()): String {
+  host
+}
+"""
+    assert(problems(source) == ["Cannot find `host` here"])
+  }
+
+  test "a default of a literal, of a constructor call and of a constant of the file is fine" {
+    const source = r"""
+const standardPort = 5432
+
+fn connect(host: String = "localhost", port: Int = standardPort, limits: Limits = Limits()): String {
+  host
+}
+
+type Limits {
+  var maximum: Int = 10
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+}
+
+group "The parameters and the top level of a body are one scope" {
+  test "a `const` of the body cannot shadow a parameter" {
+    const source = r"""
+fn probe(value: Int): Int {
+  const value = value + 1
+  value
+}
+"""
+    assert(problems(source) == ["`value` is already a parameter of this function"])
+    assert(
+      notes(source)
+        == [
+          "The parameters and the top level of the body are one scope, so nothing there can shadow a parameter",
+        ]
+    )
+  }
+
+  test "a nested block may shadow, as everywhere else" {
+    const source = r"""
+fn probe(value: Int): Int {
+  if value > 0 {
+    const value = 2
+    print value
+  }
+  value
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+
+  test "a closure has parameters of its own" {
+    const source = r"""
+fn probe(value: Int): Int {
+  const step: (Int) => Int = { value => value + 1 }
+  step(value)
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+}
+
+group "`foreign` declares functions of a C library" {
+  test "with their result types, because the C ABI is the contract" {
+    const source = r"""
+foreign "sqlite3" {
+  fn sqlite3_close(database: Int)
+}
+"""
+    assert(problems(source) == ["A `foreign` function has to declare its result type"])
+    assert(notes(source) == ["The C ABI is the contract, so nothing about a `foreign` signature is inferred"])
+  }
+
+  test "and without bodies: the library is the implementation" {
+    const source = r"""
+foreign "sqlite3" {
+  fn sqlite3_close(database: Int): Int32 {
+    0
+  }
+}
+"""
+    assert(problems(source) == ["A `foreign` function has no body"])
+    assert(
+      notes(source)
+        == ["The C library is its implementation. `foreign` declares the signature the ABI promises"]
+    )
+  }
+
+  test "a declaration of a signature is all a block holds" {
+    const source = r"""
+foreign "sqlite3" {
+  fn sqlite3_close(database: Int): Int32
+}
+"""
+    assert(problems(source).isEmpty())
+  }
+}

@@ -1,0 +1,888 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Name, Modifiers, Visibility, Declaration, Member, Binding, Argument, Expression from "../../syntax/ast"
+use FunctionDeclaration, TypeDeclaration, TraitDeclaration, ExtendDeclaration from "../../syntax/ast"
+use ForeignDeclaration, TypeReference from "../../syntax/ast"
+use joinPath from "../../project/path"
+use ModuleId from "../module"
+use SymbolId from "../symbols"
+use resolveImport from "../graph"
+use TypeId, FunctionForm, FieldSignature from "./type"
+use Checker, Candidate from "./context"
+use Target from "./name"
+use signatureOf, typeSignatureOf, aliasTargetOf, resultOf from "./signature"
+use fieldsOf from "./member"
+use checkConstantInitializer from "./constant"
+
+/**
+ * Visibility and the shape of a program: who may name what, which files may contain code, and what a declaration is
+ * allowed to look like. This is the part of the checker that reads declarations and not expressions.
+ *
+ * Two questions, and they are separate:
+ *
+ * 1. **Visibility.** `private` reaches exactly as far as its type does - the body of the type and every `extend` of it
+ *    in the same package (gap 29) - and `private(var)` hands out a read-only path instead of hiding the field.
+ *    Whether the *path* that leads to a member may be written is milestone 4.6's question; whether this code may name
+ *    the member at all is this one.
+ * 2. **Program shape.** A `public` function declares its result type, top-level code lives in entry files and scripts,
+ *    a top-level `const` of a module is compile-time evaluable, an `extend` adds constants and functions, `native`
+ *    belongs to the standard library, and a `shared type` only implements `shared trait`s.
+ *
+ * The shape pass runs *after* the bodies of a module were checked, because a constant is folded from what the names in
+ * it resolved to.
+ */
+
+// --- Visibility of a member -----------------------------------------------------------------------------------------
+
+/**
+ * Whether this code may name the member it just found. Called from the member lookup, and deliberately *not* part of
+ * the answer that is memoized there: the lookup depends on the module, this depends on the declaration the use stands
+ * in.
+ */
+public fn requireVisibleMember(var checker: Checker, candidate: Candidate, name: String, at: Span?) {
+  const member = match memberSymbolOf(candidate) {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  if checker.symbolAt(member).isPublic {
+    return
+  }
+  const owner = ownerOfCandidate(candidate)
+  const declaring = match declaringTypeOf(checker, member, owner) {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  if isInsideDeclaration(checker, declaring) {
+    return
+  }
+  const span = match at {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  const shown = checker.symbolAt(declaring).name
+  checker.reportHere(
+    Diagnostic.error("`{name}` is private to `{shown}`", span)
+      .withNote(
+        "A private member is visible in the body of its type and in every `extend` of that type in the same package,"
+          + " and nowhere else"
+      )
+  )
+}
+
+fn memberSymbolOf(candidate: Candidate): SymbolId? {
+  match candidate.kind {
+    .Field(_, field) => Some(field)
+    .Constant(_, symbol) => Some(symbol)
+    .Method(_, symbol) => Some(symbol)
+    _ => None
+  }
+}
+
+fn ownerOfCandidate(candidate: Candidate): TypeId {
+  match candidate.kind {
+    .Field(owner, _) => owner
+    .Constant(owner, _) => owner
+    .Method(owner, _) => owner
+    .CaseConstructor(owner, _) => owner
+    .Construct(owner) => owner
+    .Copy(owner) => owner
+    .TupleField(owner, _) => owner
+  }
+}
+
+/**
+ * The type a member belongs to. A field knows it (`SymbolKind.Field` carries its owner, and the owner of a field of a
+ * case is that case), and everything else is reached through the type it was found on.
+ */
+fn declaringTypeOf(checker: Checker, member: SymbolId, owner: TypeId): SymbolId? {
+  if const .Field(declaring) = checker.symbolAt(member).kind {
+    if const .Case(inner) = checker.symbolAt(declaring).kind {
+      return Some(inner)
+    }
+    return Some(declaring)
+  }
+  headSymbolOf(checker, owner)
+}
+
+/**
+ * `private` reaches as far as the type does (gap 29): the body of the declaration, and every `extend` of it in the
+ * package that declares it - an `extend` without a trait *is* part of the type, and the package is already the unit of
+ * coherence.
+ */
+public fn isInsideDeclaration(var checker: Checker, declaring: SymbolId): Bool {
+  const declared = checker.symbolAt(declaring)
+  const there = match declared.module {
+    // A name the language provides is declared in no file, and nothing about it is private
+    Some(found) => found
+    .None => {
+      return true
+    }
+  }
+  const here = checker.module
+  const mine = checker.program.graph.at(here).package
+  const theirs = checker.program.graph.at(there).package
+  if mine != theirs {
+    return false
+  }
+  const own = match checker.selfType {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  if const Some(head) = headSymbolOf(checker, own) {
+    return head == declaring
+  }
+  false
+}
+
+/** Whether the code that is being checked stands inside the type `owner`, or inside an `extend` of it. */
+public fn isInsideType(var checker: Checker, owner: TypeId): Bool {
+  const declaring = match headSymbolOf(checker, owner) {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  isInsideDeclaration(checker, declaring)
+}
+
+fn headSymbolOf(checker: Checker, annotation: TypeId): SymbolId? {
+  if const .Nominal(symbol, _) = checker.types.form(annotation) {
+    return Some(symbol)
+  }
+  None
+}
+
+fn isPublicField(field: FieldSignature): Bool {
+  field.visibility != Visibility.Private
+}
+
+// --- The constructor, `copy`, and patterns --------------------------------------------------------------------------
+
+/**
+ * Outside of the type a `private` field cannot be passed, so the generated constructor is usable from outside exactly
+ * when every private field has a default (CONCEPT.md, "Construction"). The generated `copy` follows the same rule with
+ * every field optional (gap 24), so only the passing is checked for it.
+ */
+public fn checkConstruction(var checker: Checker, target: Target, arguments: List<Argument>, at: Span) {
+  const (owner, isCopy) = match target.resolution {
+    .Construct(found) => (found, false)
+    .CopyOf(found) => (found, true)
+    _ => {
+      return
+    }
+  }
+  const fields = fieldsOf(checker, owner)
+  if fields.isEmpty() {
+    return
+  }
+  if isInsideType(checker, owner) {
+    return
+  }
+  const shown = checker.describe(owner)
+  if !isCopy {
+    for field in fields {
+      if isPublicField(field) || field.hasDefault {
+        continue
+      }
+      checker.reportHere(
+        Diagnostic.error("`{shown}` cannot be constructed here: `{field.name}` is private and has no default", at)
+          .withNote(
+            "Only `{shown}` itself can pass a private field. What a caller gets is a factory of the type"
+              + " (`{shown}.parse(...)`)"
+          )
+      )
+      return
+    }
+  }
+  reportPrivateArguments(checker, fields, arguments, shown)
+}
+
+/** A private field with a default is still not passable from outside, positionally or by name. */
+fn reportPrivateArguments(
+  var checker: Checker,
+  fields: List<FieldSignature>,
+  arguments: List<Argument>,
+  shown: String,
+) {
+  var position = 0
+  for argument in arguments {
+    if const Some(label) = argument.label {
+      for field in fields {
+        if field.name == label.text && !isPublicField(field) {
+          reportPrivateField(checker, shown, field.name, label.span)
+        }
+      }
+      continue
+    }
+    if argument.isSpread {
+      continue
+    }
+    if const Some(field) = fields.get(position) {
+      if !isPublicField(field) {
+        reportPrivateField(checker, shown, field.name, argument.value.span)
+      }
+    }
+    position = position + 1
+  }
+}
+
+fn reportPrivateField(var checker: Checker, shown: String, name: String, at: Span) {
+  checker.reportHere(
+    Diagnostic.error("`{name}` is private to `{shown}`, so it cannot be passed from here", at)
+      .withNote("A private field is set by the type itself: `Self({name}: ...)` inside of `{shown}`")
+  )
+}
+
+/**
+ * `Point(x, y)` and `.Circle(radius)` as a pattern read every field by position, so a private field cannot be
+ * destructured from outside either.
+ */
+public fn requireVisibleFields(
+  var checker: Checker,
+  owner: TypeId,
+  name: String,
+  fields: List<FieldSignature>,
+  at: Span,
+) {
+  if fields.isEmpty() {
+    return
+  }
+  if isInsideType(checker, owner) {
+    return
+  }
+  for field in fields {
+    if isPublicField(field) {
+      continue
+    }
+    checker.reportHere(
+      Diagnostic.error("`{field.name}` is private to `{name}`, so this pattern cannot read it", at)
+        .withNote("A pattern reads the fields of a value: a type with a private field is taken apart by its own members")
+    )
+    return
+  }
+}
+
+// --- The shape of a module ------------------------------------------------------------------------------------------
+
+/**
+ * Every rule about the declarations of one module. It runs after its bodies were checked, so that folding a constant
+ * can read what the names in it resolved to.
+ */
+public fn checkShape(var checker: Checker, module: ModuleId) {
+  const isCode = allowsTopLevelCode(checker, module)
+  const statements = checker.program.graph.at(module).file.statements
+  for statement in statements {
+    match statement.kind {
+      .Declare(declaration) => checkTopLevelDeclaration(checker, module, declaration, isCode)
+      .Bind(binding) => {
+        if !isCode {
+          checkModuleBinding(checker, module, binding)
+        }
+      }
+      _ => {
+        if !isCode {
+          reportTopLevelCode(checker, module, statement.span)
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Where top-level code is allowed (gap 28): an entry file (`src/main.trb`), a script, a receiver script and a
+ * `tests/*.test.trb` file - and every file that nothing imports, because that is what the rule is *for*: an imported
+ * module consists of declarations only, so there is no initialization order and a cyclic import is harmless. The
+ * `src/lib.trb` of a named package is always a module, because it is what other packages import.
+ */
+fn allowsTopLevelCode(var checker: Checker, module: ModuleId): Bool {
+  if checker.program.graph.at(module).isEntry {
+    return true
+  }
+  if isLibraryModule(checker, module) {
+    return false
+  }
+  !isImported(checker, module)
+}
+
+fn isLibraryModule(var checker: Checker, module: ModuleId): Bool {
+  const found = checker.program.graph.at(module)
+  const package = checker.program.workspace.packages[found.package]
+  !package.name.isEmpty() && found.path == joinPath(package.directory, "src/lib.trb")
+}
+
+fn isImported(var checker: Checker, module: ModuleId): Bool {
+  buildImportedModules(checker)
+  checker.importedModules.containsKey(module.value)
+}
+
+/** Which modules of the workspace some module imports. One walk over every `use`, and the answer is kept. */
+fn buildImportedModules(var checker: Checker) {
+  if checker.hasImportedModules {
+    return
+  }
+  checker.hasImportedModules = true
+  const graph = checker.program.graph
+  const workspace = checker.program.workspace
+  for source in graph.modules {
+    for statement in source.file.statements {
+      if const .Declare(declaration) = statement.kind {
+        if const .Use(usage) = declaration.kind {
+          if const .Module(path) = usage.source {
+            if const .Found(target) = resolveImport(graph, workspace, source.id, path) {
+              checker.importedModules.set(target.value, true)
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fn reportTopLevelCode(var checker: Checker, module: ModuleId, at: Span) {
+  const path = checker.program.graph.at(module).path
+  checker.report(
+    module,
+    Diagnostic.error("Top-level code is only allowed in entry files. `{path}` is imported", at)
+      .withNote(
+        "An imported module consists of declarations only, so a module has no initialization order and a cyclic"
+          + " import is harmless"
+      )
+  )
+}
+
+/**
+ * A top-level `const` of a module has to be compile-time evaluable (gap 27), and a module has no top-level `var` at
+ * all: a module exports constants, it has no mutable state (gap 41).
+ */
+fn checkModuleBinding(var checker: Checker, module: ModuleId, binding: Binding) {
+  if binding.isVar {
+    checker.report(
+      module,
+      Diagnostic.error("A module has no mutable state, so it has no top-level `var`", binding.pattern.span)
+        .withNote("A module exports constants. State belongs to a value that somebody owns")
+    )
+    return
+  }
+  checkConstantInitializer(checker, module, binding.value)
+}
+
+// --- One declaration ------------------------------------------------------------------------------------------------
+
+fn checkTopLevelDeclaration(var checker: Checker, module: ModuleId, declaration: Declaration, isCode: Bool) {
+  const isPublic = declaration.modifiers.visibility == Visibility.Public
+  requireFieldOnlyModifiers(checker, module, declaration.modifiers, declaration.span)
+  requireStandardLibrary(checker, module, declaration.modifiers, declaration.span)
+  match declaration.kind {
+    .Function(function) => {
+      checkFunctionShape(checker, module, declaration.modifiers, function, false, false)
+      if isPublic {
+        checkExposedFunction(checker, module, function)
+      }
+    }
+    .Type(typeDeclaration) => checkTypeShape(checker, module, declaration, typeDeclaration, isPublic)
+    .Trait(traitDeclaration) => checkTraitShape(checker, module, declaration, traitDeclaration, isPublic)
+    .Extend(extension) => checkExtendShape(checker, module, extension)
+    .Foreign(library) => checkForeignShape(checker, module, library)
+    .Alias(alias) => {
+      if isPublic {
+        const symbol = symbolAt(checker, module, alias.name.span)
+        const target = aliasTargetOf(checker, symbol)
+        checkExposure(checker, module, alias.name, [target], "type alias")
+      }
+    }
+    .Constant(binding) => {
+      if !isCode {
+        checkModuleBinding(checker, module, binding)
+      }
+      if isPublic {
+        checkExposedConstant(checker, module, binding)
+      }
+    }
+    .Use(_) => {}
+  }
+}
+
+/** `private(var)` is a modifier of a field and of nothing else: on a member that has no `var` it has nothing to say. */
+fn requireFieldOnlyModifiers(var checker: Checker, module: ModuleId, modifiers: Modifiers, at: Span) {
+  if modifiers.visibility != Visibility.PrivateVar {
+    return
+  }
+  checker.report(
+    module,
+    Diagnostic.error("`private(var)` is only a modifier of a field", at)
+      .withNote("It says that the field is readable and its `var` is not. Write `private` to hide the declaration")
+  )
+}
+
+/**
+ * `native` marks what the compiler and its runtime implement instead of TorbScript code, so only the standard library
+ * can use it (gap 22, CONCEPT.md "Foreign Functions").
+ */
+fn requireStandardLibrary(var checker: Checker, module: ModuleId, modifiers: Modifiers, at: Span) {
+  if !modifiers.isNative {
+    return
+  }
+  const package = packageNameOf(checker, module)
+  if package.startsWith("std/") {
+    return
+  }
+  checker.report(
+    module,
+    Diagnostic.error("`native` is only allowed in a package of the standard library", at)
+      .withNote(
+        "A `native` declaration is implemented by the compiler and its runtime. Everything else is written in"
+          + " TorbScript, on top of `foreign` declarations"
+      )
+  )
+}
+
+fn packageNameOf(checker: Checker, module: ModuleId): String {
+  const found = checker.program.graph.at(module)
+  checker.program.workspace.packages[found.package].name
+}
+
+/**
+ * The result type of a `public fn` and of a trait method is never **inferred** (CONCEPT.md, "Functions"): an omitted one
+ * is `Void`, so `public fn report(...) { ... }` stays legal and the error is at the value a body produces without
+ * saying what it is. That check is in the body (`requireDeclaredResult`); what is checked here is that a function has a
+ * body at all, unless a trait only requires it or the runtime provides it.
+ */
+fn checkFunctionShape(
+  var checker: Checker,
+  module: ModuleId,
+  modifiers: Modifiers,
+  function: FunctionDeclaration,
+  isTraitMember: Bool,
+  ownerIsNative: Bool,
+) {
+  if function.body.isSome() || function.name.text.isEmpty() {
+    return
+  }
+  if modifiers.isNative || isTraitMember || ownerIsNative {
+    return
+  }
+  checker.report(
+    module,
+    Diagnostic.error("`{function.name.text}` has no body", function.name.span)
+      .withNote("Only a requirement of a trait and a `native` declaration have none")
+  )
+}
+
+/**
+ * A `public` function and a trait method do not infer their result: without a result type they produce `Void`, so a body
+ * that produces a value has to declare which one. The message points at the value, because that is where the type it
+ * has to declare is written, and the ordinary "Expected `Void`" is not given for it - one root cause, one message.
+ */
+public fn requireDeclaredResult(var checker: Checker, found: TypeId, at: Span) {
+  const what = match checker.resultRule.describe() {
+    Some(name) => name
+    .None => {
+      return
+    }
+  }
+  // `return` inside a closure returns from the closure, whose result is its own business
+  if !checker.closureFrames.isEmpty() {
+    return
+  }
+  if checker.absorbs(found) || found == checker.voidType {
+    return
+  }
+  const shown = checker.describe(found)
+  checker.reportHere(
+    Diagnostic.error("{what} does not infer its result: declare it (`: {shown}`)", at)
+      .withNote("Without a result type it produces `Void`, and whoever calls it must not have to read the body")
+  )
+}
+
+fn checkTypeShape(
+  var checker: Checker,
+  module: ModuleId,
+  declaration: Declaration,
+  typeDeclaration: TypeDeclaration,
+  isPublic: Bool,
+) {
+  const isNative = declaration.modifiers.isNative
+  for member in typeDeclaration.members {
+    checkMemberShape(checker, module, member, false, isNative)
+  }
+  if declaration.modifiers.isShared {
+    requireSharedTraits(checker, module, typeDeclaration.name, typeDeclaration.traits)
+  }
+  if isPublic {
+    checkExposedType(checker, module, typeDeclaration)
+  }
+}
+
+fn checkTraitShape(
+  var checker: Checker,
+  module: ModuleId,
+  declaration: Declaration,
+  traitDeclaration: TraitDeclaration,
+  isPublic: Bool,
+) {
+  const isNative = declaration.modifiers.isNative
+  for member in traitDeclaration.members {
+    checkMemberShape(checker, module, member, true, isNative)
+  }
+  if isPublic {
+    checkExposedTrait(checker, module, traitDeclaration)
+  }
+}
+
+/**
+ * One member of a `type`, a `trait` or an `extend`. A field is where `private(var)` belongs and nowhere else, and the
+ * result type of a trait method is mandatory.
+ */
+fn checkMemberShape(
+  var checker: Checker,
+  module: ModuleId,
+  member: Member,
+  isTraitMember: Bool,
+  ownerIsNative: Bool,
+) {
+  requireStandardLibrary(checker, module, member.modifiers, member.span)
+  match member.kind {
+    // `private(var) balance: Int = 0` is the whole spelling: the modifier *is* the `var`, and it is private
+    .Field(field) => {
+      if member.modifiers.visibility == Visibility.PrivateVar && field.isVar {
+        checker.report(
+          module,
+          Diagnostic.error("`private(var)` already says `var`", field.name.span)
+            .withNote("`private(var) {field.name.text}: ...` is the whole spelling: the field is readable, its `var` is not")
+        )
+      }
+    }
+    .Function(function) => {
+      checkFunctionShape(checker, module, member.modifiers, function, isTraitMember, ownerIsNative)
+    }
+    .Constant(_) => requireFieldOnlyModifiers(checker, module, member.modifiers, member.span)
+    .Case(_) => requireFieldOnlyModifiers(checker, module, member.modifiers, member.span)
+  }
+}
+
+/**
+ * A `shared type` may only implement a `shared trait` (CONCEPT.md, "Traits"), which is what keeps every value of a
+ * non-shared trait type a value: nobody changes it while you hold it, and it can be passed to another task.
+ */
+fn requireSharedTraits(var checker: Checker, module: ModuleId, name: Name, traits: List<TypeReference>) {
+  for reference in traits {
+    const symbol = match traitSymbolOf(checker, module, reference) {
+      Some(found) => found
+      .None => {
+        continue
+      }
+    }
+    if isSharedTrait(checker, symbol) {
+      continue
+    }
+    const shown = checker.symbolAt(symbol).name
+    checker.report(
+      module,
+      Diagnostic.error("`{name.text}` is a `shared type`, so it can only implement a `shared trait`", reference.span)
+        .withNote("`{shown}` is not one: write `shared trait {shown}`, or make `{name.text}` an ordinary `type`")
+    )
+  }
+}
+
+fn traitSymbolOf(checker: Checker, module: ModuleId, reference: TypeReference): SymbolId? {
+  if const .Named(path, _) = reference.kind {
+    if const Some(last) = path.last() {
+      return checker.resolvedName(module, last.span)
+    }
+  }
+  None
+}
+
+fn isSharedTrait(var checker: Checker, symbol: SymbolId): Bool {
+  if const .Trait = checker.symbolAt(symbol).kind {
+    const identifier = typeSignatureOf(checker, symbol)
+    return checker.typeSignature(identifier).isShared
+  }
+  // A supertrait that is not a trait was reported where the name stands; nothing follows from it here
+  true
+}
+
+/**
+ * An `extend` adds constants and functions, nothing else (gap 39): exhaustiveness and the generated constructor have to
+ * be decidable from the declaration of a type alone.
+ */
+fn checkExtendShape(var checker: Checker, module: ModuleId, extension: ExtendDeclaration) {
+  const isNative = false
+  for member in extension.members {
+    match member.kind {
+      .Field(field) => {
+        checker.report(
+          module,
+          Diagnostic.error("An `extend` cannot add a field", field.name.span)
+            .withNote("Fields and cases belong to the declaration of the type: an `extend` adds constants and functions")
+        )
+      }
+      .Case(caseDeclaration) => {
+        checker.report(
+          module,
+          Diagnostic.error("An `extend` cannot add a case", caseDeclaration.name.span)
+            .withNote("Fields and cases belong to the declaration of the type, so that a `match` over it is decidable")
+        )
+      }
+      _ => checkMemberShape(checker, module, member, false, isNative)
+    }
+  }
+}
+
+/**
+ * `foreign "sqlite3" { fn ... }` declares functions of a C library. The block holds declarations of functions and
+ * nothing else, and they have no bodies: the library is the implementation.
+ */
+fn checkForeignShape(var checker: Checker, module: ModuleId, library: ForeignDeclaration) {
+  for member in library.members {
+    match member.kind {
+      .Function(function) => {
+        if function.body.isSome() {
+          checker.report(
+            module,
+            Diagnostic.error("A `foreign` function has no body", function.name.span)
+              .withNote("The C library is its implementation. `foreign` declares the signature the ABI promises")
+          )
+        }
+        if function.returnType.isNone() && !function.name.text.isEmpty() {
+          checker.report(
+            module,
+            Diagnostic.error("A `foreign` function has to declare its result type", function.name.span)
+              .withNote("The C ABI is the contract, so nothing about a `foreign` signature is inferred")
+          )
+        }
+      }
+      _ => {
+        checker.report(
+          module,
+          Diagnostic.error("A `foreign` block declares functions and nothing else", member.span)
+            .withNote("Foreign types are `Pointer<Value>`, `CString`, the sized numbers and a `foreign type` struct")
+        )
+      }
+    }
+  }
+}
+
+// --- What `public` promises -----------------------------------------------------------------------------------------
+
+/**
+ * A `public` declaration is a promise, and a type that is private to the file cannot be part of one: a caller that
+ * cannot name the type cannot hold the value either.
+ *
+ * CONCEPT.md is silent here. Without the rule a `public fn` hands out values of a type its caller has no name for,
+ * which is the one thing "top-level declarations are private to their file unless marked `public`" is supposed to make
+ * impossible.
+ */
+fn checkExposure(var checker: Checker, module: ModuleId, name: Name, types: List<TypeId>, what: String) {
+  for annotation in types {
+    const leaked = match privateTypeIn(checker, module, annotation, 0) {
+      Some(found) => found
+      .None => {
+        continue
+      }
+    }
+    const shown = checker.symbolAt(leaked).name
+    checker.report(
+      module,
+      Diagnostic.error("`{name.text}` is `public` and names `{shown}`, which is private to this file", name.span)
+        .withNote("Whoever can use a `public` {what} has to be able to name its types: mark `{shown}` as `public` too")
+    )
+    return
+  }
+}
+
+fn checkExposedFunction(var checker: Checker, module: ModuleId, function: FunctionDeclaration) {
+  const symbol = symbolAt(checker, module, function.name.span)
+  const identifier = signatureOf(checker, symbol)
+  const form = checker.signature(identifier).form
+  checkExposure(checker, module, function.name, typesOfForm(form), "function")
+}
+
+fn checkExposedConstant(var checker: Checker, module: ModuleId, binding: Binding) {
+  if const .Binding(_) = binding.pattern.kind {
+    const symbol = symbolAt(checker, module, binding.pattern.span)
+    const annotation = resultOf(checker, symbol)
+    const name = Name(checker.symbolAt(symbol).name, binding.pattern.span)
+    checkExposure(checker, module, name, [annotation], "constant")
+  }
+}
+
+fn checkExposedType(var checker: Checker, module: ModuleId, typeDeclaration: TypeDeclaration) {
+  const symbol = symbolAt(checker, module, typeDeclaration.name.span)
+  const identifier = typeSignatureOf(checker, symbol)
+  const shape = checker.typeSignature(identifier)
+  var types: List<TypeId> = []
+  // A `private` field is not part of the surface: nobody outside can read it, so its type is nobody's business there
+  for field in shape.fields {
+    if isPublicField(field) {
+      types.add(field.annotation)
+    }
+  }
+  for variant in shape.cases {
+    for field in variant.fields {
+      if isPublicField(field) {
+        types.add(field.annotation)
+      }
+    }
+  }
+  checkExposure(checker, module, typeDeclaration.name, types, "type")
+}
+
+fn checkExposedTrait(var checker: Checker, module: ModuleId, traitDeclaration: TraitDeclaration) {
+  const symbol = symbolAt(checker, module, traitDeclaration.name.span)
+  const identifier = typeSignatureOf(checker, symbol)
+  const shape = checker.typeSignature(identifier)
+  var types: List<TypeId> = []
+  for (_, member) in shape.members {
+    if !checker.symbolAt(member).isPublic {
+      continue
+    }
+    const inner = signatureOf(checker, member)
+    const form = checker.signature(inner).form
+    types.addAll(typesOfForm(form))
+  }
+  checkExposure(checker, module, traitDeclaration.name, types, "trait")
+}
+
+fn typesOfForm(form: FunctionForm): List<TypeId> {
+  var types: List<TypeId> = []
+  for parameter in form.parameters {
+    types.add(parameter.annotation)
+  }
+  types.add(form.result)
+  types
+}
+
+/** The first type of the file that is private and stands in a `public` signature, if there is one. */
+fn privateTypeIn(var checker: Checker, module: ModuleId, annotation: TypeId, depth: Int): SymbolId? {
+  if depth > 16 {
+    return None
+  }
+  match checker.types.form(annotation) {
+    .Nominal(symbol, arguments) => {
+      if isPrivateType(checker, module, symbol) {
+        return Some(symbol)
+      }
+      privateTypeInAll(checker, module, arguments, depth)
+    }
+    .Traits(bounds) => privateTypeInAll(checker, module, bounds, depth)
+    .Tuple(fields) => {
+      var inner: List<TypeId> = []
+      for field in fields {
+        inner.add(field.annotation)
+      }
+      privateTypeInAll(checker, module, inner, depth)
+    }
+    .Function(form) => privateTypeInAll(checker, module, typesOfForm(form), depth)
+    _ => None
+  }
+}
+
+fn privateTypeInAll(var checker: Checker, module: ModuleId, types: List<TypeId>, depth: Int): SymbolId? {
+  for annotation in types {
+    if const Some(found) = privateTypeIn(checker, module, annotation, depth + 1) {
+      return Some(found)
+    }
+  }
+  None
+}
+
+fn isPrivateType(checker: Checker, module: ModuleId, symbol: SymbolId): Bool {
+  const declared = checker.symbolAt(symbol)
+  if declared.isPublic {
+    return false
+  }
+  const isNamedType = match declared.kind {
+    .Type | .Trait | .Alias => true
+    _ => false
+  }
+  if !isNamedType {
+    return false
+  }
+  match declared.module {
+    Some(found) => found == module
+    .None => false
+  }
+}
+
+/** The symbol of a declaration of this module, by the span of its name. Index 0 is never one, so it is a safe fallback. */
+fn symbolAt(checker: Checker, module: ModuleId, at: Span): SymbolId {
+  checker.resolvedName(module, at) ?? SymbolId(0)
+}
+
+// --- `isSame` -------------------------------------------------------------------------------------------------------
+
+/**
+ * `isSame` compares identity, and only a `shared type` has one: on a value the answer would expose whether the
+ * implementation shares storage (BACKEND gap 15). The language has no bound that says "shared", so this is a named
+ * special case next to object safety.
+ */
+public fn checkSharedIdentity(var checker: Checker, target: Target, arguments: List<TypeId>, at: Span) {
+  const wanted = match checker.wellKnown.symbolNamed("isSame") {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  const called = match target.resolution {
+    .Callable(symbol, _, _) => symbol
+    _ => {
+      return
+    }
+  }
+  if called != wanted {
+    return
+  }
+  const annotation = match arguments.first() {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  if checker.absorbs(annotation) || isSharedType(checker, annotation) {
+    return
+  }
+  const shown = checker.describe(annotation)
+  checker.reportHere(
+    Diagnostic.error("`isSame` compares identity, and a `{shown}` is a value", at)
+      .withNote("Use `==`: two values are the same when their content is. Only a `shared type` has an identity")
+  )
+}
+
+/**
+ * Whether a type has an identity: a `shared type`, or a value of a `shared trait`. Gap 20 - a `var` binding, field or
+ * argument may not be initialized from a `const` path to a shared object - is the same question about a *place*, which
+ * is milestone 4.6's, and this is the predicate it asks.
+ */
+public fn isSharedType(var checker: Checker, annotation: TypeId): Bool {
+  if const .Traits(bounds) = checker.types.form(annotation) {
+    for bound in bounds {
+      if const Some(symbol) = headSymbolOf(checker, bound) {
+        if !isSharedTrait(checker, symbol) {
+          return false
+        }
+      }
+    }
+    return true
+  }
+  const symbol = match headSymbolOf(checker, annotation) {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  // A generic parameter or a tuple has no declaration that could say `shared`, and nothing is claimed about it
+  if const .Type = checker.symbolAt(symbol).kind {
+    const identifier = typeSignatureOf(checker, symbol)
+    return checker.typeSignature(identifier).isShared
+  }
+  true
+}

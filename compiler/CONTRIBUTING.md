@@ -32,8 +32,10 @@ the checker is a bug of the checker.
   `bootstrap/README.md`). A bare name in a pattern always binds. Positional arguments come before named ones.
 - A case name must not shadow a prelude type (`TupleType`, `Floating`, `VoidType`, not `Tuple`, `Float`, `Void`).
 - `type`, `trait`, `where`, `shared` are keywords and cannot be names (`annotation`, `capability`, ...).
-- Public functions declare their result type. A `fn` inside of a block is not a closure: it sees its parameters and
-  the file, not the bindings around it.
+- **A `public` function and a trait method never infer their result.** Without a result type they produce `Void`, which
+  is why `public fn emit(var builder: Builder) { ... }` needs no annotation; a body that ends in a value or returns one
+  has to declare which type that is. Everything that is not `public` infers as usual. A `fn` inside of a block is not a
+  closure: it sees its parameters and the file, not the bindings around it.
 - Diagnostics are data (`Diagnostic(message, span, notes)`), in the tone of the ones that exist: one root cause, one
   message, the error type absorbs what follows.
 - Tests are in-memory programs (`compiler/tests/harness.trb`). Every diagnostic has a test with its exact message,
