@@ -645,11 +645,67 @@ Rules:
   reads like a built-in statement, and its `{` is its body. (`a b { }` cannot be decided by looking at it:
   `unless done { ... }` and `print numbers.map { ... }` have the same shape. One rule, the error message names the
   fix, and the formatter applies it.)
-- **Formatter canon:** a call is written as a command if it is a statement, or if it ends with a trailing closure
-  (`const result = retry 3 { ... }`), and if its arguments fit on one line. Everything else gets parentheses: calls
-  whose value is used without a closure (`const email = Email.parse("a@b.c")`), calls without arguments, and calls
-  whose first argument starts with `(`, `[`, `-`, `!` or `.`.
 - Calls without arguments always need `()`. A bare name is always a reference.
+
+### Formatter Canon
+
+Both forms parse, so which one to write is a question of style - and it is decided, not left open. `torb format`
+enforces this, and there is no option to turn it around.
+
+**A call is written as a command wherever the grammar allows it.** All of this has to hold:
+
+1. it stands in command position (start of a statement, right of `=` in a binding or an assignment, after `return`,
+   after `=>`),
+2. the callee is a name or a member path (`Ok`, `Email.parse`, `roles.map`),
+3. it has at least one argument, and the first one does not start with `(`, `[`, `-`, `!` or `.`,
+4. no argument has an operator at its top level,
+5. the arguments are on one line - a trailing closure may go over several.
+
+Everything else has parentheses. That is every nested call, because only command position allows a command:
+
+```trb
+const role = Role name
+const email = Email.parse text
+names.map Role
+builder.add CStatement.Break
+print "Hello"
+test "adds two numbers" {
+  assert(sum(1, 2) == 3)
+}
+
+fn checked(value: Int): Result<Int, Problem> {
+  if value < 0 {
+    return Fail Problem.Negative
+  }
+  Ok value
+}
+```
+
+```trb
+Ok Some(x)                  // A command does not nest: the argument is an ordinary expression
+list.length()               // No arguments, so parentheses
+assert(sum == 3)            // An operator at the top level of an argument: `assert sum == 3` reads as `(assert sum) == 3`
+print(count + 1)
+if ready(now) { }           // The head of an `if`, `for`, `while` or `match` is not command position
+port 8080                   // A command on a field writes it - that is what it means, not how it is written
+onStart(event)              // ...so calling a function held in a field always needs parentheses
+```
+
+**A multi-line `"""` or `r"""` string is indented.** The opening quotes stay where they are, the content is two
+spaces deeper than the line the statement starts on, and a closing `"""` that stands alone is aligned with the
+content. Because the first content line is the reference that is subtracted from every line (Text and Strings), the
+**value** does not depend on any of this - moving a whole block left or right changes nothing about what it says:
+
+```trb
+fn generated(): String {
+  const header = """
+    #include <stdint.h>
+
+    static int64_t counted(void)
+    """
+  header
+}
+```
 
 ### Parameter Modes
 
@@ -1139,8 +1195,10 @@ Both forms need a `var` path to the field. Calling a function in a field always 
 `onClick(event)`); `onClick { ... }` sets it.
 
 **A call of a non-callable member writes it, with or without parentheses.** `tls true` and `tls(true)` are the same
-line. The parenthesized form is not optional style: the formatter's canon demands parentheses as soon as the first
-argument starts with `(`, so `tls(port == 8443)` is the only way to write that value at all.
+line. The parenthesized form is not optional style: an operator at the top level of an argument takes parentheses
+(Formatter Canon), so `tls(port == 8443)` is the only way to write that value at all. And because the parentheses
+decide what a command on a **field** means and not just how it looks, the canon leaves such a call exactly as it is
+written - it is the one call whose form is meaning.
 
 ## Algebraic Data Types and Pattern Matching
 

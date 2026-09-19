@@ -186,7 +186,14 @@ fn closureOperands(
   borrowedOperands(slotsOfArguments(arguments))
 }
 
-/** Which arguments of a call take the count: exactly the parameters the callee's signature calls `Owned`. */
+/**
+ * Which arguments of a call take the count: exactly the parameters the callee's signature calls `Owned`.
+ *
+ * A `var` parameter is never one of them: its argument is a place, the base of which is the slot the argument names, and
+ * a place carries no count at all - so the position borrows the base and the caller keeps it live across the call. One
+ * operand per argument is what `withOperands` writes the answers back through; an index *into* a place would be a second
+ * operand of the same position, which is why an index path waits for 5.9b.
+ */
 fn signatureOperands(signature: IrSignature, arguments: List<Argument>): List<Operand> {
   var found: List<Operand> = []
   for index in 0..arguments.length() {
@@ -350,10 +357,15 @@ fn movedOrCopied(target: Slot, source: Argument): Instruction {
   Instruction.Copy(target, source.slot)
 }
 
+/**
+ * The arguments of a call with the decided modes. A **place** is carried over unchanged: which storage a `var` parameter
+ * works on is a property of the position the lowering formed, and this pass decides modes and never paths.
+ */
 fn takenArguments(arguments: List<Argument>, decided: List<Argument>, first: Int): List<Argument> {
   var taken: List<Argument> = []
   for index in 0..arguments.length() {
-    taken.add(decidedAt(decided, first + index))
+    const answer = decidedAt(decided, first + index)
+    taken.add(answer.copy(place: arguments[index].place))
   }
   taken
 }

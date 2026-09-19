@@ -835,7 +835,8 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.6** | Generics: instance keys, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`copy`. **Gate: `bootstrap/tests/scripts/basics.trb` produces its `.expected` natively** | `ir/lower/generic.trb`, `ir/witness.trb`, `ir/lower/derive.trb` | basics.trb; instance counts are asserted so an accidental explosion fails a test | 5.5 |
 | **5.7** | Collections: the list and the ordered hash table in C, element descriptors, the natives of `List`/`Map`/`Set`/`String`, `Iterable` pipelines (ordinary TorbScript once closures work). **Gate: `language.trb` passes** | `runtime/list.c`, `runtime/map.c`, `runtime/text.c`, manifest entries | language.trb, `07-collections.trb` | 5.3, 5.6, 5.8 |
 | **5.8** | Closures: closure conversion, environments, escaping or not, `Box`es for captured `var` bindings, `lazy` cells, receiver closures, property commands. **Gate: `examples/config-dsl` runs** | `ir/lower/closure.trb`, `ir/capture.trb` | config-dsl, `09-dsl.trb`, `02-functions.trb` | 5.6 |
-| **5.9** | `var` paths: `var` parameters, interior projections, `TakeOut`/`PutBack`, slices as windows, `shared type` objects with their headers and trace functions, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.4, 5.7 |
+| **5.9a** | **Done.** `var` parameters and `var self` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
+| **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
 | **5.10** | Text and data: interpolation, `Show` for every shape in the format of gap 23, float formatting, `describe`, derived `Encode`/`Decode`, `std/json` | `runtime/text.c` (float), `ir/lower/derive.trb`, `std/json` natives | `11-data.trb`, the `Show` format is pinned by a table-driven test | 5.6, 5.7 |
 | **5.11** | `Expression<Value>`: static trees, captures, `assert`, `test`/`group` and `torb test` natively. **Gate: `compiler/tests/*.test.trb` run from the native binary** | `ir/lower/quote.trb`, `runtime/`, `cli/test.trb` | The compiler's own tests | 5.10 |
 | **5.12** | **Runtime half done.** The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
@@ -853,7 +854,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **7.7** | Threads and the cycle collector: workers, per-task heaps, channel transfer, trial deletion, the leak counter at zero for a program that builds a cycle | `runtime/collect.c`, `runtime/task.c` | Cycle and parallelism tests | 7.3 |
 
 ```text
-5.1 ─► 5.2 ─► 5.3 ─┬─► 5.4 ─► 5.5 ─► 5.6 ─┬─► 5.7 ─┬─► 5.9 ─┐
+5.1 ─► 5.2 ─► 5.3 ─┬─► 5.4 ─► 5.5 ─► 5.6 ─┬─► 5.7 ─┬─► 5.9b ┐
 5.R1 ──────────────┘                      ├─► 5.8 ─┘        ├─► 5.14 ─► 6.1 ─► 6.2 ─► 6.3 ─► 7.1 ─► 7.2 ─┬─► 7.3 ─► 7.7
                    └─► 5.13 ──────────────┤   5.10 ─► 5.11 ─┤                                            ├─► 7.4 ─┬─► 7.5
                        5.12 ──────────────┴─────────────────┘                                            │        └─► 7.6
@@ -861,7 +862,9 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 
 - **5.R1 and 5.12 are the parallel track**: the runtime in C, against the manifest, by an agent who never touches the
   lowering. 5.1 defines the manifest's shape, so 5.R1 can start immediately after it.
-- 5.7, 5.8 and 5.12 are independent of each other; 5.9 and 5.10 are independent; 5.13 only needs 5.3.
+- 5.7, 5.8 and 5.12 are independent of each other; 5.9 and 5.10 are independent; 5.13 only needs 5.3. **5.9a needs
+  only 5.4** - a `var` parameter is a pointer and no container - so it was pulled in front of 5.6 and 5.7; 5.9b is what
+  is left of the row and waits for the containers.
 - **Hello world is native at 5.3. The tour runs at 5.12. The fixpoint gate is 6.2.**
 - **5.12's runtime half is done**: `runtime/file.c` (open handles), `clock.c`, `environment.c` and the math functions
   in `number.c` all exist and are `.Ready` in the manifest, with `runtime/tests` for each (see `runtime/README.md`
@@ -1086,7 +1089,7 @@ can run, the code won and this is the list. Everything else is as written.
   result pointer of a `.ByPointer` signature, which no mangled name can collide with.
 - **`resultMode` is always `.ByValue` in practice**, so the `.ByPointer` path is written but unexercised: a layout above
   32 bytes is `Boxed` and therefore a pointer, and nothing else can be bigger than the 64 byte limit yet. A
-  `FixedArray` will be the first one (5.9).
+  `FixedArray` will be the first one (5.9b).
 - **One profile, no cache, no output path from `project.trb`.** `torb build [path] [--emit-c] [--output <file>]` writes
   `<project>/build/release/program.c` and the binary next to it. `--profile`, the content-hash cache, `torb run` as
   build-and-execute, `torb test` and `buildOutput`/`buildTarget` in the manifest reader are 5.13's, as the table says.
@@ -1233,7 +1236,7 @@ accepts, the code won and this is the list. Everything else is as written.
 - **A path is read again per block rather than once.** A slot has to be defined on every path that reads it, so sharing
   one temporary across blocks would be wrong; and a `Read` of a counted field hands the frame a count, which dies at its
   last use anyway. A nested pattern therefore costs one `Read` per step per block, and the C compiler flattens it.
-- **`if var` and `while var` wait for 5.9.** The row of the table names `if var`, but the name it binds is a *path into
+- **`if var` and `while var` wait for 5.9b.** The row of the table names `if var`, but the name it binds is a *path into
   its subject* (the checker's own note, gap 3), and a path is a `Reference` - which is milestone 5.9's. Binding it by
   value would compile and silently drop a write, so it is a clean finding instead.
 - **`??` inlines the thunk the checker asked for.** The checker records `a ?? b` as `orElse` with a `lazy` argument
@@ -1264,13 +1267,73 @@ accepts, the code won and this is the list. Everything else is as written.
   panic format.
 - **The gate programs still end in `Process.exit`.** `File.writeText` would give a real output comparison, but its
   manifest prototype answers `bool` and writes through an out parameter, so the wrapper is still missing (5.3's list) -
-  and `File` itself is a `native type` the runtime represents from 5.9 on.
+  and `File` itself is a `native type` the runtime represents from 5.9b on.
 - **`isSome`, `orElse` and every other member of `Option` and `Result` stay blocked.** They are methods of a *generic
   type*, and an instance of one needs three things 5.6 brings: a type-argument list in the instance key and in the
   mangled name, a substitution threaded through `irTypeOf` while the body is lowered (it passes an empty mapping today),
   and a worklist that seeds an instance per argument list. None of that is small, so nothing of it was done here - what
   5.5 needs of `Option` and `Result` is their *layout*, which 5.1 already builds, and the constructors and patterns over
   it, which are here.
+
+### What 5.9a does differently
+
+Sections 1 to 3 are the plan; where they did not fit what the checker records, what 5.1 to 5.5 built or what stage 0 can
+run, the code won and this is the list. Everything else is as written. 5.9a is the first half of the row: `var`
+parameters and `var self` receivers, which need nothing of 5.6 and 5.7 at all.
+
+- **One file, and the place comes from the checker.** `ir/lower/place.trb` is the whole sub-milestone. It reads
+  `Tables.places` - the `Place` 4.6 recorded under the span of every argument, receiver, assignment target and `if var`
+  subject (TYPECHECKER 5.1) - and translates a root into a slot and a step into a `PathStep`. So the lowering never walks
+  an expression a second time, and a path it forms is by construction the path exclusivity was checked for. The
+  alternative was a second walk over the syntax tree in the back end, which would have been a second place to disagree
+  with the checker about what a place is.
+- **`Argument` gained `place: Reference?`, and `slot` is the base of it.** Section 3.2 says "a `Reference` with steps is
+  formed at the call site - never passed as a base plus a path", and section 1.6 says the VM gets a (frame, slot, path)
+  triple: so the *IR* carries the path and each back end renders it its own way. Putting it on the argument rather than
+  adding an instruction that materializes a pointer keeps `IrType` free of a pointer case - references are not values
+  (section 2.3) - and `slot` being the base is what makes every pass right without a rule of its own: liveness keeps the
+  base live across the call, `operandsOf` borrows it because a place carries no count, and the C emitter takes its
+  address. `referenced(place)` is the constructor, and the text format prints `&%0.from.x borrowed`.
+- **The `MakeUnique`s of a `var` argument are the *proper prefixes* of its path, and the place itself is the callee's
+  business.** `rename(holder.bundle, name)` makes `holder.bundle` unique only if something above it is counted; the
+  callee's own write is what makes the block it received unique, and because it holds a pointer into the caller's frame
+  the new block is written back through it. That is one rule fewer than it looks: `uniqueOwnersOf` already walked the
+  proper prefixes for a `Write`, and a `var` argument is now one more entry in `writtenPlacesOf`.
+- **A `var` argument marks its base as mutated for the summary pass.** `fn f(text: String) { var local = text  g(local) }`
+  with a `var` parameter on `g` receives `text` **owned**: the copy into `local` reaches storage that is written, and the
+  count of written storage has to be the frame's. Without it the write would release a count the caller still holds.
+- **An assignment is a `Write` wherever the target is a path, and that now includes a `var` parameter itself.**
+  `target = value` through a `var` parameter may not compute into the parameter's slot: the slot holds a pointer, and a
+  plain store would leak what the caller had there. A write releases first, which is the contract 5.4 wrote down.
+- **A call may not produce into the base of a place it writes through.** `counter = grown(counter)` where `grown` takes
+  `counter` by `var` would overwrite - and therefore leak - what the callee has just put there. The lowering produces
+  into a slot of its own and stores the result with a `Write`, which releases first; the prepass of 5.4 that saves a slot
+  an instruction reads and writes is switched off for such an instruction, because saving the old value into a copy
+  would leave the write pointing at the copy.
+- **A temporary is a legal argument and is lowered in its position.** `grow(Counter(5))` builds the value into a
+  temporary and hands over its address (gap 2): the callee is its only owner, so "copy in, copy out" is exact. A
+  temporary is still never the *base* of a path, which is what the checker already rejected.
+- **`Resolution.PropertyWrite(.Assign)` is lowered here, because it *is* an assignment.** `port 8080` writes a field
+  (gap 15) and the checker recorded the path to that field under the span of the callee - the very same place an `=`
+  gets. `.AssignClosure` and `.Configure` need a closure and name milestone 5.8.
+- **A `native fn` with a `var` receiver stays a finding.** Every one of them is a member of a container (`ArrayList.add`,
+  `Map.set`, `File.close`), the runtime's convention for one is a pointer plus its own out-parameter shapes (5.R1's
+  list), and the wrapper belongs with the containers - so the message names milestone 5.7.
+- **`if var` and `while var` are still a finding, and 5.9b's.** They do *not* fall out of this mechanism: a place here is
+  formed at a call site and dies with the call, while a pattern binds a name that lives for a whole block - which needs
+  the lowering to key a *binding* to a `Reference` instead of to a slot, and every read, every write and every argument
+  of such a name to go through it. That is a second mechanism, not this one.
+- **A body whose result the checker inferred as `Never` and that does `return` is a finding.** `Parser.recoverToLineEnd`
+  is `while true { ... return ... }`: the checker infers `Never` from a body that never *ends*, although the bare
+  `return`s inside the loop do leave the function. The IR would then carry a `Return` out of a `_Noreturn` function,
+  which the verifier rejects - so it is one clean finding (exactly one function in the repository). Closing it is a rule
+  of the checker's inference: a bare `return` should make an inferred result `Void`.
+- **The C of a `var` parameter is what section 3.2 promises, plus one spelling rule.** `T *`, and `T **` where the value
+  is itself a pointer (a counted block), which `pointerTo` decides - `T * *` is the same type spelled worse. A place that
+  *is* a `var` parameter of the current frame is handed on as the pointer it already is and never as `&*p`.
+- **`torb ir --statistics` over the repository: 341 of 2432 declarations lowered before, 578 of 2441 after** (14% to
+  23%). The 501 that were blocked by "a `var` receiver or a `var` argument" are gone, and the new top blockers are a
+  call on a trait-typed value (512, 5.6), a list literal (395, 5.7) and string interpolation (222, 5.10).
 
 ### How the C emitter is written
 

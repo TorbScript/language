@@ -152,14 +152,14 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
         Some(found) => " at {printLocation(program, found)}"
         .None => ""
       }
-      "{head}({printArguments(arguments)}){printWitnesses(program, witnesses)}{site}"
+      "{head}({printArguments(program, arguments)}){printWitnesses(program, witnesses)}{site}"
     }
     .CallClosure(target, callee, arguments) => {
-      "{printOptionalTarget(target)}callClosure %{callee.value}({printArguments(arguments)})"
+      "{printOptionalTarget(target)}callClosure %{callee.value}({printArguments(program, arguments)})"
     }
     .CallWitness(target, witness, member, arguments) => {
       const source = printWitnessSource(program, witness)
-      "{printOptionalTarget(target)}callWitness {source} member {member}({printArguments(arguments)})"
+      "{printOptionalTarget(target)}callWitness {source} member {member}({printArguments(program, arguments)})"
     }
     .Intrinsic(target, intrinsic, arguments, at) => {
       var parts: List<String> = []
@@ -171,10 +171,10 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
       "{head} {operands} at {printLocation(program, at)}"
     }
     .Construct(target, layout, variant, fields) => {
-      "{printTarget(target)}construct {printConstructed(program, layout, variant)} ({printArguments(fields)})"
+      "{printTarget(target)}construct {printConstructed(program, layout, variant)} ({printArguments(program, fields)})"
     }
     .Read(target, reference) => "{printTarget(target)}read {printReference(program, reference)}"
-    .Write(reference, value) => "write {printReference(program, reference)} = {printArgument(value)}"
+    .Write(reference, value) => "write {printReference(program, reference)} = {printArgument(program, value)}"
     .Tag(target, source) => "{printTarget(target)}tag %{source.value}"
     .Closure(target, callee, captures, isEscaping) => {
       const escaping = if isEscaping { "escaping" } else { "local" }
@@ -185,13 +185,13 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
       const taken = parts.joined(separator: ", ")
       "{printTarget(target)}closure {program.functionAt(callee).name} captures({taken}) {escaping}"
     }
-    .BoxNew(target, value) => "{printTarget(target)}boxNew {printArgument(value)}"
+    .BoxNew(target, value) => "{printTarget(target)}boxNew {printArgument(program, value)}"
     .TraitValue(target, value, tables) => {
       var parts: List<String> = []
       for table in tables {
         parts.add(printWitnessSource(program, table))
       }
-      "{printTarget(target)}traitValue {printArgument(value)} tables({parts.joined(separator: ", ")})"
+      "{printTarget(target)}traitValue {printArgument(program, value)} tables({parts.joined(separator: ", ")})"
     }
     .TakeOut(target, container, key, kind) => {
       const place = printReference(program, container)
@@ -201,7 +201,7 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
       const place = printReference(program, container)
       "putBack {place}[%{key.value}] = %{value.value} {describeRuntimeKind(kind)}"
     }
-    .Panic(message, at) => "panic {printArgument(message)} at {printLocation(program, at)}"
+    .Panic(message, at) => "panic {printArgument(program, message)} at {printLocation(program, at)}"
     .Suspend(state, awaited) => "suspend state {state} %{awaited.value}"
   }
 }
@@ -220,7 +220,7 @@ public fn printTerminator(program: IrProgram, function: IrFunction, terminator: 
     }
     .Return(value) => {
       match value {
-        Some(argument) => "return {printArgument(argument)}"
+        Some(argument) => "return {printArgument(program, argument)}"
         .None => "return"
       }
     }
@@ -239,17 +239,25 @@ fn printOptionalTarget(target: Slot?): String {
   }
 }
 
-fn printArguments(arguments: List<Argument>): String {
+fn printArguments(program: IrProgram, arguments: List<Argument>): String {
   var parts: List<String> = []
   for argument in arguments {
-    parts.add(printArgument(argument))
+    parts.add(printArgument(program, argument))
   }
   parts.joined(separator: ", ")
 }
 
-fn printArgument(argument: Argument): String {
+/**
+ * `%3 owned last`, and `&%0.x borrowed` for the argument of a `var` parameter: the `&` is what says that the position
+ * takes the caller's storage and not a value, which is the one thing a reader of a call has to see at a glance.
+ */
+fn printArgument(program: IrProgram, argument: Argument): String {
   const last = if argument.isLastUse { " last" } else { "" }
-  "%{argument.slot.value} {printOwnership(argument.ownership)}{last}"
+  const operand = match argument.place {
+    Some(place) => "&{printReference(program, place)}"
+    .None => "%{argument.slot.value}"
+  }
+  "{operand} {printOwnership(argument.ownership)}{last}"
 }
 
 fn printOwnership(ownership: Ownership): String {

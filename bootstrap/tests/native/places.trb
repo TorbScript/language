@@ -1,0 +1,148 @@
+use Process from "std/process"
+
+/**
+ * `var` parameters and `var self` receivers, compiled to a native binary (milestone 5.9a): the callee works on the
+ * caller's value, and every path to it is a pointer the call site forms.
+ *
+ * What this program is about is that **values do not alias**. Every function here changes what it was handed and
+ * nothing else, and the totals prove it: a copy taken before a `var` call keeps the contents it had, and two places of
+ * the same value are two places.
+ */
+type Counter {
+  var hits: Int
+
+  /** A `var self` receiver: a pointer to the caller's counter, and `hits` is a field of it. */
+  fn increment(var self) {
+    hits = hits + 1
+  }
+
+  fn addTo(var self, amount: Int) {
+    hits = hits + amount
+  }
+}
+
+type Point {
+  var x: Int
+  var y: Int
+}
+
+/** A record inside a record: `line.from.x` is one path of two steps, changed in place. */
+type Line {
+  var from: Point
+  var to: Point
+}
+
+/** A `var` parameter of a number: the whole point of "copy in, copy out". */
+fn grow(var total: Int, by: Int) {
+  total = total + by
+}
+
+/** A `var` parameter handed on to another `var` parameter: the pointer travels, the value never moves. */
+fn growTwice(var total: Int, by: Int) {
+  grow(total, by)
+  grow(total, by)
+}
+
+/** And one level deeper, through a third call. */
+fn growFourTimes(var total: Int, by: Int) {
+  growTwice(total, by)
+  growTwice(total, by)
+}
+
+/** A `var` parameter of a record, changed through its fields. */
+fn move(var point: Point, deltaX: Int, deltaY: Int) {
+  point.x = point.x + deltaX
+  point.y = point.y + deltaY
+}
+
+/** An interior projection: two field steps from the parameter to the number. */
+fn stretch(var line: Line, by: Int) {
+  line.to.x = line.to.x + by
+  line.from.y = line.from.y - by
+}
+
+/** A field of a `var` parameter handed to a `var` parameter of its own. */
+fn moveEnds(var line: Line, by: Int) {
+  move(line.from, by, by)
+  move(line.to, by, by)
+}
+
+/** A `var self` method called on a field of a `var` parameter. */
+fn countEnds(var line: Line, var counter: Counter) {
+  counter.increment()
+  move(line.from, 1, 1)
+  counter.increment()
+}
+
+/** Two `var` parameters of two different values: the checker allows it, and they really are two places. */
+fn swapInto(var first: Counter, var second: Counter) {
+  const kept = first.hits
+  first.hits = second.hits
+  second.hits = kept
+}
+
+/** A temporary as the argument of a `var` parameter: the callee is its only owner (gap 2). */
+fn ofTemporary(): Int {
+  var total = 0
+  grow(total, 7)
+  total
+}
+
+fn numbers(): Int {
+  var total = 1
+  grow(total, 2)
+  growTwice(total, 10)
+  growFourTimes(total, 100)
+  total
+}
+
+fn records(): Int {
+  var point = Point(1, 2)
+  move(point, 10, 20)
+  // A copy taken *before* the call keeps what it had: two bindings never alias
+  const kept = point
+  move(point, 100, 200)
+  point.x + point.y - kept.x - kept.y
+}
+
+fn nested(): Int {
+  var line = Line(Point(1, 2), Point(3, 4))
+  stretch(line, 5)
+  moveEnds(line, 1)
+  line.from.x + line.from.y + line.to.x + line.to.y
+}
+
+fn receivers(): Int {
+  var counter = Counter(0)
+  counter.increment()
+  counter.addTo(10)
+  var line = Line(Point(0, 0), Point(0, 0))
+  countEnds(line, counter)
+  counter.hits + line.from.x
+}
+
+fn aliasing(): Int {
+  var first = Counter(3)
+  var second = Counter(8)
+  swapInto(first, second)
+  first.hits * 10 + second.hits
+}
+
+/** A whole value written through a `var` parameter, and the field of a copy that does not follow it. */
+fn replaced(var point: Point) {
+  point = Point(9, 9)
+}
+
+fn wholeValues(): Int {
+  var point = Point(1, 1)
+  const kept = point
+  replaced(point)
+  point.x + point.y + kept.x + kept.y
+}
+
+fn exitCode(): Int {
+  const total = ofTemporary() + numbers() + records() + nested() + receivers() + aliasing() + wholeValues()
+  total % 251
+}
+
+Process.exit(exitCode())

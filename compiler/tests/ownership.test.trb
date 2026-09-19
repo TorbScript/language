@@ -7,7 +7,7 @@ use lowerChecked from "../src/ir/lower/lower"
 use printProgram from "../src/ir/print"
 use IrProgram, IrType, IrSignature, IrParameter, RuntimeKind from "../src/ir/ir"
 use IrFunction, FunctionKind, FunctionId, Slot, SlotRole, SlotDeclaration from "../src/ir/ir"
-use Instruction, Terminator, borrowed from "../src/ir/ir"
+use Instruction, Terminator, Reference, borrowed, referenced from "../src/ir/ir"
 use finishProgram from "../src/ir/layout"
 use newFunction, emit, terminate, finishFunction from "../src/ir/build"
 use printFunction from "../src/ir/print"
@@ -176,7 +176,8 @@ fn wrapped(text: String, depth: Int): String {
     const callee = program.addFunction(runtime)
     const signature = IrSignature([IrParameter("items", list, true), IrParameter("value", text)], voidType)
     var builder = newFunction("t_use", None, signature, "body")
-    emit(builder, Instruction.Call(None, callee, [borrowed(Slot(0)), borrowed(Slot(1))], []))
+    // The receiver of `torb_list_add` is a `var self`, so its argument is the place and not a value
+    emit(builder, Instruction.Call(None, callee, [referenced(Reference(Slot(0))), borrowed(Slot(1))], []))
     terminate(builder, Terminator.Return(None))
     const identifier = finishFunction(program, builder)
     const owned = ownedProgram(program)
@@ -191,7 +192,7 @@ fn wrapped(text: String, depth: Int): String {
   slot %0 parameter items: List(String)
   slot %1 parameter value: String
 b0: # body
-  call t_list_add(%0 borrowed, %1 owned last)
+  call t_list_add(&%0 borrowed, %1 owned last)
   return
 }"""
     )

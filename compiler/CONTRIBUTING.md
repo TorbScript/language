@@ -16,6 +16,8 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --release                                    # Everything, including the differential tests (minutes)
 sh ../runtime/build.sh                                  # The C runtime and its tests (gcc or clang)
+cargo run --release -q -- canon --check ..              # Is the whole repository in the formatter canon?
+cargo run --release -q -- canon ../std ../compiler ../examples ../bootstrap/tests    # ...write it (a minute)
 ```
 
 A change is done when all of them are green and the repository still checks with "no problems". A false positive of
@@ -25,6 +27,12 @@ the checker is a bug of the checker.
 
 - Idiomatic TorbScript, in the style of the code that is there. Full words, no abbreviations (`declaration`, not
   `decl`). No semicolons, never several statements on one line.
+- **The formatter canon** (CONCEPT, "Formatter Canon"): a call is a command wherever the grammar allows it -
+  `Ok value`, `return Fail problem`, `const role = Role name`, `names.map Role` - and has parentheses everywhere
+  else: nested (`Ok Some(x)`), without arguments (`list.length()`), with an operator at the top level of an argument
+  (`assert(sum == 3)`), over several lines, and in the head of an `if`, `for`, `while` or `match`. A multi-line `"""`
+  is indented two spaces deeper than the line it starts on, closing quotes aligned with the content. `torb canon`
+  (above) writes both, over the syntax tree; milestone 8's `torb format` takes over from it.
 - `/** */` doc comments on public declarations that say **why**, not what. Block comments do not nest: never write a
   slash-star or a star-slash inside of a comment (not even in a glob).
 - Small values plus free functions that take a `var` parameter (`var parser: Parser`, `var checker: Checker`,

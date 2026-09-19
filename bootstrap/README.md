@@ -13,8 +13,20 @@ cargo run --release -- test ../compiler/tests --jobs 1        # ...one after ano
 cargo run --release -- parse ..                               # Check the syntax of every .trb file
 cargo run --release -- tokens file.trb                        # Tokens, in the format of compiler/src/syntax/dump.trb
 cargo run --release -- ast file.trb                           # Syntax tree, as the generated Show of compiler/src/syntax/ast.trb
+cargo run --release -- canon --check ..                        # Is every file in the formatter canon? (see below)
 cargo test                                                    # Includes the differential tests against compiler/
 ```
+
+`torb canon [--check] [--rule calls|strings|imported-case-patterns]... <path>...` writes TorbScript sources in the
+canon of the formatter (CONCEPT, "Formatter Canon"), over the syntax tree and never with a regular expression: `calls`
+puts a call in command form wherever the grammar allows it and in parentheses everywhere else, `strings` indents a
+multi-line `"""`. Both run by default; `imported-case-patterns` (`.None` becomes `None`) waits for a parser change and
+has to be asked for. It is listed in `torb help` like every other command - stage 0 has no hidden ones - and it is
+temporary: milestone 8's `torb format`, written in TorbScript, enforces the same canon, and this goes away with the rest
+of stage 0. Every edit is applied on its own and the file is parsed again; it only stays if the syntax tree is the one
+from before with every span and every `CallStyle` erased, so a run cannot change what a program means. A file that does
+not parse is skipped, `tests/parser-cases/` and `tests/lexer-cases/` are not even read, and a second run over the same
+tree changes nothing.
 
 | Crate              | Contains                                              |
 |--------------------|-------------------------------------------------------|

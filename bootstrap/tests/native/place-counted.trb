@@ -1,0 +1,129 @@
+use Process from "std/process"
+
+/**
+ * `var` paths through **counted** storage (milestone 5.9a): copy on write, and the leak gate over every one of them.
+ *
+ * This is where values stop being free and stay values anyway. A record of five fields is a counted block, so two
+ * bindings share one block until somebody writes through one of them - and then `MakeUnique` copies it, which is what
+ * `keptContents` proves: the copy taken before the `var` call still has the string it had.
+ *
+ * With `TORB_REPORT_LEAKS=1` the binary has to report zero live blocks at exit, which `native.rs` asserts for every
+ * program here that does not panic.
+ */
+
+/** Forty bytes: above the inline limit, so this one is a counted block with three counted fields. */
+type Bundle {
+  var first: String
+  var second: String
+  var third: String
+  var weight: Int
+  var extra: Int
+
+  /** A `var self` receiver of a counted block: the write makes the block unique through the caller's pointer. */
+  fn rename(var self, name: String) {
+    first = name
+  }
+}
+
+/** A counted block inside an inline record: the path has one counted owner, and it is not the base. */
+type Holder {
+  var bundle: Bundle
+  var count: Int
+}
+
+/** A payload in counted storage: the case carries three strings, so the variant layout is a block. */
+type Message {
+  case Text(body: String, sender: String, subject: String)
+  case Empty
+}
+
+fn size(text: String): Int {
+  text.byteLength()
+}
+
+/** A write through a `var` parameter, which releases what the field held before it. */
+fn rename(var bundle: Bundle, name: String) {
+  bundle.second = name
+}
+
+/** A path of two steps whose first step is the counted owner: it is made unique before the write. */
+fn renameInside(var holder: Holder, name: String) {
+  holder.bundle.third = name
+  holder.count = holder.count + 1
+}
+
+/** A `var` parameter handed on, and a `var self` method on a field of it. */
+fn renameTwice(var holder: Holder, name: String) {
+  rename(holder.bundle, name)
+  holder.bundle.rename(name + "!")
+}
+
+/** A whole counted value written through a `var` parameter: the old block is released, the new one stored. */
+fn replace(var message: Message, body: String) {
+  message = Message.Text(body, "nobody", "none")
+}
+
+fn bundled(): Bundle {
+  Bundle("a", "bb", "ccc", 1, 2)
+}
+
+/** The copy-on-write proof: `kept` is taken before the call and keeps the contents it had. */
+fn keptContents(): Int {
+  var bundle = bundled()
+  const kept = bundle
+  rename(bundle, "wwwwww")
+  size(bundle.second) * 10 + size(kept.second)
+}
+
+/** A path of two steps, a copy taken in the middle, and the same path again. */
+fn throughFields(): Int {
+  var holder = Holder(bundled(), 0)
+  renameInside(holder, "yyyy")
+  const kept = holder
+  renameTwice(holder, "zzz")
+  size(holder.bundle.first) + size(holder.bundle.second) + holder.count + size(kept.bundle.third)
+}
+
+fn receivers(): Int {
+  var bundle = bundled()
+  bundle.rename("dddd")
+  const kept = bundle
+  bundle.rename("eeeee")
+  size(bundle.first) * 10 + size(kept.first)
+}
+
+fn payloads(): Int {
+  var message = Message.Text("body", "me", "hello")
+  const kept = message
+  replace(message, "a longer body")
+  sizeOfMessage(message) * 100 + sizeOfMessage(kept)
+}
+
+fn sizeOfMessage(message: Message): Int {
+  match message {
+    .Text(body, sender, subject) => size(body) + size(sender) + size(subject)
+    .Empty => 0
+  }
+}
+
+/** A string grown in a loop and then written through a place: the loop releases what it replaces. */
+fn grown(var bundle: Bundle, times: Int) {
+  var total = ""
+  for _ in 0..times {
+    total = total + "ab"
+  }
+  bundle.third = total
+}
+
+fn loops(): Int {
+  var bundle = bundled()
+  grown(bundle, 4)
+  size(bundle.third)
+}
+
+fn exitCode(): Int {
+  const total = keptContents() + throughFields() + receivers() + payloads() + loops()
+  total % 251
+}
+
+Process.exit(exitCode())

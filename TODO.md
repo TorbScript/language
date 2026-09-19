@@ -684,3 +684,67 @@ Wenn nicht, was bedeutet, bewirkt es?
     (`trait Error with Show`), bisher nur bei der Koerzion, nicht als Bound-Witness
     (`extend<Value: Show, Failure: Show> Result<…> with Show`). Geht mit der Syntax-Runde (Case-Import per Pfad,
     importierter Case nackt im Pattern) an denselben Agent.
+
+- (Chat, 2026-09-19) Wieso `Void` → `Void`, aber `Bool` → `true`/`false`? Wäre `void` nicht besser (`Ok void`)?
+  - **Entschieden - wird gelöst:** Ja. Der Wert von `Void` ist das Literal `void`, so wie `true`/`false` die Werte
+    von `Bool` sind: `Ok void`, `return void`. Die bisherige Form kam von Kotlins `Unit` (Typ und Singleton-Objekt
+    gleichen Namens) - dort trägt das `object`-Konzept sie, TorbScript hat keine Singletons, also war es die eine
+    Ausnahme von "ein großgeschriebener Name ist ein Typ oder ein Case". Mit der neuen Regel "Bindungen klein, im
+    Pattern ist Großes nie eine Bindung" wäre sie noch schiefer geworden. `Void` an Wertposition wird ein Fehler, der
+    die neue Schreibweise nennt. Kosten: ein Schlüsselwort, ~16 Stellen + Doku; läuft in der Syntax-Runde mit
+    (Case-Import per Pfad, importierter Case nackt im Pattern, Bound-Lücke bei Trait-Werten).
+
+- (Chat, 2026-09-19) `*` oder `?` statt `_` als Wildcard im Pattern, weil `_` schon der implizite Closure-Parameter ist?
+  - **Entschieden (Nutzer):** `_` bleibt für beides. `?` hat schon drei Bedeutungen, `*` liest sich als Glob/Operator,
+    `_` ist als Wildcard überall Konvention (~1300 Stellen). `it` für den Closure-Parameter wurde erwogen und verworfen.
+    Die Positionen überlappen nie; `match _ { … }` kommt im Repo nicht vor.
+
+- (Chat, 2026-09-19) `inclusive` statt `isInclusive` - "isser" sind Methoden.
+  - **Entschieden:** Ja, und es passt zur Feld/Methode-Trennung ("ein Feld ist ein Versprechen über Daten"): ein
+    `Bool`-Feld (auch Parameter, Bindung) ist ein Adjektiv oder Partizip (`inclusive`, `discarded`, `signed`), eine
+    Frage, die berechnet wird, ist eine Methode mit `is`/`has` (`isEmpty()`, `hasGuard()`). Am Aufruf sieht man dann
+    ohne Klammern-Raten, was Daten sind. Kommt als Namensregel ins Konzept und in CONTRIBUTING.
+  - **Haken:** im Compiler heißen viele Flags nach Schlüsselwörtern (`isVar` 20-mal, `isStatic`, `isPublic`, `isNative`,
+    `isShared`, `isConst`) - `var: Bool` geht nicht. Dort wird pro Name entschieden: ein anderes Wort (`mutable`,
+    `exported`) oder besser gleich ein Typ statt eines Flags (`Visibility` gibt es schon). Das sind ~60 Namen an 135
+    Stellen, keine mechanische Umbenennung.
+  - **Wird gelöst in zwei Schritten:** (1) öffentliche std-API jetzt - das ist genau eine Stelle, `Range.inclusive`
+    (+ Stage 0, Runtime, 4 Stellen im Compiler), in der nächsten ruhigen Runde zusammen mit der Canon-Anwendung.
+    (2) Compiler-interne Namen nach dem Fixpunkt mit dem Methoden-Umbau, dann mit geprüftem Rename statt Textersetzung.
+
+- (Chat, 2026-09-19) Case-Syntax: ADT als "closed trait + Typen", `type Point(Int, Int)`, `type Point3(x: Int, …)`,
+  Methoden pro Case (`case Circle(…) { fn area(self) … }`), eigenes Keyword für ADTs?
+  - **Antwort (Empfehlung, Entscheidung beim Nutzer):**
+    1. *Cases als Typen:* als Erklärmodell richtig, als Semantik nein. `closed` löst die Geschlossenheit, die
+       Trait-Koerzion das Subtyping - was bleibt, ist die **Inferenz**: sobald `Circle(1.0)` den Typ `Circle` hat,
+       brauchen `shape = Rect(…)` nach `var shape = Circle(1.0)`, `[Circle(…), Rect(…)]`, `if … { Circle } else { Rect }`
+       und `Some(1)`/`None` einen Join (kleinster gemeinsamer Obertyp) - genau das Subtyping in der Inferenz, das die
+       Sprache nicht hat (Scalas `Some[Int]`-Problem, Rusts liegengebliebener RFC zu Variant Types). Dazu: `None`
+       müsste `Option<Value>` für jedes `Value` sein, und Cases würden Modul-Namen (`Transform` Case vs. Typ).
+    2. *Methoden pro Case:* nein - zweite Schreibweise für `match self`, gleiche Exhaustiveness, braucht eine neue
+       Regel für nackte Feldnamen. Wer Glieder mit eigener Identität und eigenen Methoden will, will eigentlich
+       **`closed trait`** (nur im eigenen Paket implementierbar → `match` über Typ-Patterns ist vollständig). Das wäre
+       das ehrliche Feature, additiv, ohne `case` anzufassen - als offene Frage für nach dem Fixpunkt notiert.
+    3. *`type Point3(x: Int, y: Int, z: Int)`:* ja. Spiegelt `case Circle(radius: Float)` und den Konstruktoraufruf.
+       Regel: Felder stehen im Kopf ODER im Block, nie beides; der Block hinter dem Kopf hält nur Methoden. Die
+       Blockform bleibt für lange/dokumentierte Records. Reiner Parser-Zucker, nach dem Fixpunkt (dann nur ein Parser).
+    4. *`type Point(Int, Int)` mit `.0`/`.1`:* nein. Ein benannter Typ ist für Namen da, für Positionen gibt es Tupel;
+       `self.0 * self.0` widerspricht "Namen ausgeschrieben", und `_`, `_2` als erfundene Parameternamen gäben `_` eine
+       dritte Bedeutung. Der Newtype-Fall ist mit 3. kurz genug: `type Meters(value: Float) with Add & Subtract by value`.
+    5. *Keyword:* `type` bleibt - ein Typ mit Cases.
+  - **Entschieden (Nutzer):** Kopf-Form und `closed trait` kommen beide erst mal NICHT. `Point(x: Int, y: Int)` und
+    `Point { x: Int, y: Int }` sind sich zu ähnlich - der Nutzer fragt sich dann immer, was besser ist. Es bleibt bei
+    der Blockform als einziger Schreibweise; der ganze Punkt ist damit zurückgezogen.
+
+- (Chat, 2026-09-19) `const list: List<Void> = [void, void, void, void]` - ist das ein Schlupfloch?
+  - **Antwort:** Nein, das ist die Folge davon, dass `Void` ein gewöhnlicher Typ mit genau einem Wert ist - und das
+    ist gewollt. Geht heute (Stage 0: Länge 4, `[Void, Void, Void, Void]`), geht in Rust genauso
+    (`vec![(); 4]`, ein Typ der Größe null; `HashSet<T>` IST dort `HashMap<T, ()>`). Das echte Schlupfloch haben die
+    Sprachen, in denen `void` KEIN Typ ist: Javas `Void`/`null`, C#s doppelte `Action`/`Func`, keine
+    `Result<void, E>`. TorbScript braucht `Result<Void, Error>`, `Task<Void>`, `Channel<Void>` (Signal) - also muss
+    auch `List<Void>` gehen. Sinnlos, aber harmlos; ein Lint-Hinweis wäre möglich, ein Verbot wäre eine Sonderregel.
+
+- (Chat, 2026-09-19) `match { … }` ohne Subjekt als Kurzform für `match _ { … }` im Closure?
+  - **Entschieden:** Nein. `match _` steht im Repo 0-mal, ein Closure, das sofort seinen Parameter matcht, 2-mal; zwei
+    erlaubte Schreibweisen wären wieder "was ist besser?"; ein subjektloses `when`/`switch` heißt in Kotlin und Go
+    "Kette von Bedingungen". `_` macht sichtbar, was gematcht wird. Nachrüstbar, weil `match {` heute ein Syntaxfehler ist.

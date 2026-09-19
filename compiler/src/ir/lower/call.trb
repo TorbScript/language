@@ -7,6 +7,9 @@ use signatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
 use NativeEntry from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
+use CallOperands, PlacePath from "./place"
+use referenceParametersOf, parameterTypeAt, receiverReference, argumentReference from "./place"
+use collidesWithPlace, writtenResult, lowerPropertyWrite from "./place"
 use FunctionBuilder, emit from "../build"
 use layoutOfType from "../verify"
 use describeIrType from "../print"
@@ -70,6 +73,17 @@ public fn lowerCall(
     .Constant(_, _) => {
       unsupportedSlot(lowering, builder, destination, "a call of a `const` that holds a closure", expression.span)
     }
+    // `port 8080`: a call of a member that is not callable writes it, which is an assignment written another way
+    .PropertyWrite(_, _, kind) => {
+      const written = match arguments.first() {
+        Some(found) => found.value
+        .None => {
+          const what = "a property command without a value"
+          return unsupportedSlot(lowering, builder, destination, what, expression.span)
+        }
+      }
+      lowerPropertyWrite(lowering, builder, destination, callee, written, kind)
+    }
     .TypeOf(_) => unsupportedSlot(lowering, builder, destination, "a call of a type", expression.span)
     _ => unsupportedSlot(lowering, builder, destination, "a call the checker left open", expression.span)
   }
@@ -118,25 +132,45 @@ fn lowerCallable(
   }
   const identifier = signatureOf(lowering.checker, resolved.member)
   const signature = lowering.checker.signature(identifier)
+  // A `native fn` whose receiver or argument is a place needs a wrapper around the runtime's own pointer convention, and
+  // every native that declares one is a member of a container - so the wrapper belongs to 5.7, with them
   if needsReference(signature) {
-    return unsupportedSlot(lowering, builder, destination, "a `var` receiver or a `var` argument", expression.span)
+    if nativeEntryOf(lowering, resolved, signature).isSome() {
+      const what = "a `var` receiver of a `native fn` (milestone 5.7)"
+      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    }
   }
   // The receiver comes first, because evaluation order is source order and the receiver is written first
   var operands: List<Slot> = []
+  var places: List<Reference?> = []
   if signature.takesSelf {
-    const receiver = match receiverSlot(lowering, builder, callee) {
-      Some(found) => found
-      .None => {
-        return unsupportedSlot(lowering, builder, destination, "a receiver the back end cannot reach", expression.span)
+    if signature.isVarSelf {
+      const path = match receiverReference(lowering, builder, callee, "a `var` receiver") {
+        Some(found) => found
+        .None => {
+          return abandonedSlot(lowering, builder, destination)
+        }
       }
+      operands.add(path.reference.base)
+      places.add(Some(path.reference))
+    } else {
+      const receiver = match receiverSlot(lowering, builder, callee) {
+        Some(found) => found
+        .None => {
+          const what = "a receiver the back end cannot reach"
+          return unsupportedSlot(lowering, builder, destination, what, expression.span)
+        }
+      }
+      operands.add(receiver)
+      places.add(None)
     }
-    operands.add(receiver)
   }
   const written = lowerArgumentSlots(lowering, builder, expression, arguments, signature)
   if !lowering.isSupported {
     return abandonedSlot(lowering, builder, destination)
   }
-  operands.addAll(written)
+  operands.addAll(written.slots)
+  places.addAll(written.places)
   // `native fn panic(message): Never` is the one native with an instruction of its own
   if resolved.key == "panic" {
     return lowerPanic(lowering, builder, destination, operands, expression.span)
@@ -151,7 +185,7 @@ fn lowerCallable(
       return unsupportedSlot(lowering, builder, destination, what, expression.span)
     }
   }
-  emitCall(lowering, builder, destination, function, operands, annotation, expression.span)
+  emitCall(lowering, builder, destination, function, operands, annotation, expression.span, places)
 }
 
 /** Which member a call reaches, and the name the natives manifest would know it under. */
@@ -336,7 +370,8 @@ fn lowerPanic(
 
 /**
  * One `Call`. Every operand is `Borrowed` here: which positions take the count is what the ownership pass of 5.4
- * decides, out of the body this one writes.
+ * decides, out of the body this one writes. `places` says which positions are `var` parameters and therefore carry the
+ * whole path the callee writes through instead of a value.
  */
 public fn emitCall(
   var lowering: Lowering,
@@ -346,8 +381,9 @@ public fn emitCall(
   operands: List<Slot>,
   annotation: IrTypeId,
   at: Span,
+  places: List<Reference?> = [],
 ): Slot {
-  const given = borrowedArguments(operands)
+  const given = borrowedArguments(operands, places)
   // Where the call is written: a runtime function that can panic takes it, and a panic message is observable
   const location = locationOf(lowering, at)
   if !producesValue(lowering, annotation) {
@@ -364,6 +400,17 @@ public fn emitCall(
         return abandonedSlot(lowering, builder, destination)
       }
     }
+  }
+  // `x = f(x)` where `f` takes `x` by `var`: the result may not land in the base of a place the call writes through, or
+  // it would overwrite - and therefore leak - what the callee has just put there
+  if collidesWithPlace(destination, places) {
+    const inner = valueSlot(lowering, builder, None, annotation)
+    emit(builder, Instruction.Call(Some(inner), function, given, [], Some(location)))
+    if const Some(slot) = destination {
+      writtenResult(builder, slot, inner)
+      return slot
+    }
+    return inner
   }
   const target = valueSlot(lowering, builder, destination, annotation)
   emit(builder, Instruction.Call(Some(target), function, given, [], Some(location)))
@@ -383,33 +430,65 @@ public fn lowerArgumentSlots(
   expression: Expression,
   arguments: List<Argument>,
   signature: Signature,
-): List<Slot> {
+): CallOperands {
   const module = lowering.module
   const count = signature.form.parameters.length()
   const targets = match lowering.checker.argumentTargetsAt(module, expression.span) {
     Some(found) => found
     .None => {
       reportUnsupported(lowering, "a call without an argument plan", expression.span)
-      return []
+      return CallOperands([], [])
     }
   }
+  const references = referenceParametersOf(signature)
   var filled: List<Slot?> = []
+  var places: List<Reference?> = []
   for _ in 0..count {
     filled.add(None)
+    places.add(None)
   }
   for index in 0..arguments.length() {
     const position = targets.get(index) ?? -1
     if position < 0 || position >= count {
       reportUnsupported(lowering, "an argument that fills no parameter", arguments[index].value.span)
-      return []
+      return CallOperands([], [])
+    }
+    if references.get(position) ?? false {
+      const path = match referenceArgumentAt(lowering, builder, arguments[index].value, signature, position) {
+        Some(found) => found
+        .None => {
+          return CallOperands([], [])
+        }
+      }
+      filled.set(position, Some(path.reference.base))
+      places.set(position, Some(path.reference))
+      continue
     }
     const slot = lowerValue(lowering, builder, arguments[index].value)
     if !lowering.isSupported {
-      return []
+      return CallOperands([], [])
     }
     filled.set(position, Some(slot))
   }
-  lowerDefaults(lowering, builder, expression, signature, filled)
+  lowerDefaults(lowering, builder, expression, signature, filled, places, references)
+}
+
+/** One argument of a `var` parameter, whose place has to end in exactly the type the parameter declares. */
+fn referenceArgumentAt(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  value: Expression,
+  signature: Signature,
+  position: Int,
+): PlacePath? {
+  const annotation = match parameterTypeAt(lowering, signature, position) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "a `var` parameter without a type", value.span)
+      return None
+    }
+  }
+  argumentReference(lowering, builder, value, annotation, "a `var` argument")
 }
 
 /**
@@ -422,24 +501,31 @@ fn lowerDefaults(
   expression: Expression,
   signature: Signature,
   filled: List<Slot?>,
-): List<Slot> {
+  places: List<Reference?>,
+  references: List<Bool>,
+): CallOperands {
   var found = filled
   const defaults = declaredDefaults(lowering, signature.symbol)
   for index in 0..found.length() {
     if found[index].isSome() {
       continue
     }
+    // A default is a value, so a `var` parameter nobody wrote an argument for has no place the callee could work on
+    if references.get(index) ?? false {
+      reportUnsupported(lowering, "a `var` parameter that takes its default", expression.span)
+      return CallOperands([], [])
+    }
     const written = defaults.get(index) ?? None
     const value = match written {
       Some(inner) => inner
       .None => {
         reportUnsupported(lowering, "a parameter without an argument and without a default", expression.span)
-        return []
+        return CallOperands([], [])
       }
     }
     const slot = lowerForeignExpression(lowering, builder, signature.symbol, value)
     if !lowering.isSupported {
-      return []
+      return CallOperands([], [])
     }
     found.set(index, Some(slot))
   }
@@ -449,11 +535,11 @@ fn lowerDefaults(
       Some(slot) => ordered.add(slot)
       .None => {
         reportUnsupported(lowering, "an argument list the back end could not complete", expression.span)
-        return []
+        return CallOperands([], [])
       }
     }
   }
-  ordered
+  CallOperands(ordered, places)
 }
 
 /**
@@ -726,11 +812,12 @@ fn lowerCaseCall(
 ): Slot {
   const identifier = signatureOf(lowering.checker, variant)
   const signature = lowering.checker.signature(identifier)
-  const slots = lowerArgumentSlots(lowering, builder, expression, arguments, signature)
+  // A case is a function from its own fields, and a field is a value: no position of one is ever a place
+  const written = lowerArgumentSlots(lowering, builder, expression, arguments, signature)
   if !lowering.isSupported {
     return abandonedSlot(lowering, builder, destination)
   }
-  constructedCase(lowering, builder, destination, expression, annotation, variant, slots)
+  constructedCase(lowering, builder, destination, expression, annotation, variant, written.slots)
 }
 
 /** `Shape.Empty`, `None`: a case without fields, written as a value. */

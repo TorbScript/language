@@ -100,6 +100,13 @@ public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: 
     if !lowering.isDiverged {
       // A function that does not return has to leave through a panic or a call of another such function
       reportUnsupported(lowering, "a body of a function that returns `Never` and does return", body.span)
+      return
+    }
+    // The checker infers `Never` from a body that never *ends* (`while true` without a `break`), and a bare `return`
+    // inside such a loop does leave the function - so the body contradicts its own signature. One clean finding rather
+    // than IR the verifier rejects; closing it is a rule of the checker's inference, not of the back end
+    if returnsAnywhere(builder) {
+      reportUnsupported(lowering, "a `return` in a function whose result was inferred as `Never`", body.span)
     }
     return
   }
@@ -112,6 +119,16 @@ public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: 
     // A body that produces nothing and does not diverge is what the checker reports, so nothing is said here
     .None => reportUnsupported(lowering, "a body that produces no value", body.span)
   }
+}
+
+/** Whether any block of the body leaves the function through a `return`, which a `Never` result may not. */
+fn returnsAnywhere(builder: FunctionBuilder): Bool {
+  for block in builder.function.blocks {
+    if const .Return(_) = block.terminator {
+      return true
+    }
+  }
+  false
 }
 
 /**

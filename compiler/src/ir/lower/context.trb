@@ -6,7 +6,7 @@ use TypeId, ParameterId from "../../semantics/checker/type"
 use Checker from "../../semantics/checker/context"
 use NativeEntry, nativeEntries from "../../backend/c/natives"
 use IrProgram, IrTypeId, IrType, Slot, BlockId, StaticId, StaticValue, StaticContents from "../ir"
-use Location, LocationId, Terminator, Argument, borrowed from "../ir"
+use Location, LocationId, Terminator, Argument, Reference, borrowed, referenced from "../ir"
 use Instantiation, newInstantiation, instantiateType from "../instantiate"
 use canonicalType, canonicalLiteral, escapedComponent, mangledName from "../mangle"
 use FunctionBuilder, terminate, switchTo from "../build"
@@ -278,11 +278,24 @@ fn spellingOfContents(lowering: Lowering, contents: StaticContents): String {
 /**
  * Every operand of a call and every field of a `Construct`, as `Borrowed`. Which position takes the count is what the
  * ownership pass of 5.4 decides out of the body this sub-milestone writes, so phase one writes one thing everywhere.
+ *
+ * `places` names the positions that are `var` parameters: such an argument is the path itself and not a value, and it
+ * stays borrowed whatever the ownership pass decides, because a reference carries no count (BACKEND 2.3). A list that is
+ * not as long as `slots` means the callee has no `var` parameter at all.
  */
-public fn borrowedArguments(slots: List<Slot>): List<Argument> {
+public fn borrowedArguments(slots: List<Slot>, places: List<Reference?> = []): List<Argument> {
   var given: List<Argument> = []
-  for slot in slots {
-    given.add(borrowed(slot))
+  if places.length() != slots.length() {
+    for slot in slots {
+      given.add(borrowed(slot))
+    }
+    return given
+  }
+  for index in 0..slots.length() {
+    match places[index] {
+      Some(place) => given.add(referenced(place))
+      .None => given.add(borrowed(slots[index]))
+    }
   }
   given
 }

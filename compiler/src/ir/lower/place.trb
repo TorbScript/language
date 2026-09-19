@@ -1,0 +1,398 @@
+use Span from "../../syntax/source"
+use Expression from "../../syntax/ast"
+use Signature from "../../semantics/checker/type"
+use Place, PlaceRoot, PlaceStep, PropertyWriteKind from "../../semantics/checker/context"
+use IrTypeId, Slot, LayoutId, Reference, PathStep, Instruction, borrowed from "../ir"
+use FunctionBuilder, addTemporary, emit from "../build"
+use layoutOfType from "../verify"
+use describeIrType from "../print"
+use isReferenceParameter from "../instances"
+use Lowering, reportUnsupported, irTypeOf from "./context"
+use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf from "./expression"
+
+/**
+ * `var` paths: how the path the checker wrote down becomes a `Reference` of the IR, and what a call, an assignment and a
+ * property command do with one (milestone 5.9a).
+ *
+ * **The checker already walked the expression.** 4.6 decided that the path leads somewhere, that a change may go through
+ * every step of it, and that no second access to it is open, and recorded the answer as a `Place` under the span of the
+ * argument, the receiver or the target (TYPECHECKER 5.1). So nothing here reads the syntax tree a second time: a root
+ * becomes a slot, a step becomes a `PathStep`, and the type of every step comes out of the layout the IR already has.
+ * That is also what keeps the two halves honest - a path this file forms is exactly the path exclusivity was checked for.
+ *
+ * A place is **never counted and never escapes** (BACKEND 2.3): the caller holds the base live across the call, and
+ * `MakeUnique` in front of the call - one per counted owner of the path, which the ownership pass inserts - is what makes
+ * the storage safe to write through. So a `var` parameter costs a pointer and nothing else.
+ *
+ * What is not here: an index path into a `List` or a `Map` (`TakeOut`/`PutBack`, milestone 5.9b), a slice as a window, a
+ * `shared type` object and a `FixedArray`. Each of them is a clean finding that names its milestone.
+ */
+
+/** A place of the IR: the path, and the type it ends in - which is what a write through it has to produce. */
+public type PlacePath {
+  reference: Reference
+  annotation: IrTypeId
+}
+
+/**
+ * The operands of one call: one slot per position, and the place of every position that is a `var` parameter.
+ *
+ * `places` is either empty - no position of the callee takes a place at all - or exactly as long as `slots`, so a reader
+ * of a position never has to ask which of the two lists is authoritative.
+ */
+public type CallOperands {
+  slots: List<Slot> = []
+  places: List<Reference?> = []
+}
+
+/** Which positions of a signature are `var` parameters, in the order of the signature. `self` is not one of them. */
+public fn referenceParametersOf(signature: Signature): List<Bool> {
+  var found: List<Bool> = []
+  for parameter in signature.form.parameters {
+    found.add(isReferenceParameter(parameter.mode))
+  }
+  found
+}
+
+/** The IR type of one parameter of a declaration, which is the type the place of a `var` argument has to end in. */
+public fn parameterTypeAt(var lowering: Lowering, signature: Signature, position: Int): IrTypeId? {
+  const parameter = signature.form.parameters.get(position)?
+  const annotation = parameter.annotation
+  if lowering.checker.isBroken(annotation) {
+    return None
+  }
+  Some(irTypeOf(lowering, annotation))
+}
+
+// --- From the checker's place to a reference -------------------------------------------------------------------------
+
+/**
+ * The place the checker recorded at this span, as a `Reference`. `what` names the construct in every message, so that a
+ * finding says whether it was an assignment, a receiver or an argument that could not form its path.
+ */
+public fn referenceAt(var lowering: Lowering, var builder: FunctionBuilder, at: Span, what: String): PlacePath? {
+  const place = match placeRecordedAt(lowering, at) {
+    Some(found) => found
+    .None => {
+      reportUnsupported(lowering, "{what} the checker recorded no path for", at)
+      return None
+    }
+  }
+  pathOfPlace(lowering, builder, place, what, at)
+}
+
+/** The path the checker wrote down under a span, or `None` where it wrote none. */
+public fn placeRecordedAt(var lowering: Lowering, at: Span): Place? {
+  const module = lowering.module
+  lowering.checker.placeAt(module, at)
+}
+
+/** Whether the path under a span is a temporary: a valid *argument* of a `var` parameter and nothing else (gap 2). */
+fn isTemporaryPlace(var lowering: Lowering, at: Span): Bool {
+  match placeRecordedAt(lowering, at) {
+    Some(place) => {
+      if const .Temporary = place.root {
+        return true
+      }
+      false
+    }
+    .None => false
+  }
+}
+
+fn pathOfPlace(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  place: Place,
+  what: String,
+  at: Span,
+): PlacePath? {
+  const base = match rootSlotOf(lowering, place.root, what, at) {
+    Some(found) => found
+    .None => {
+      return None
+    }
+  }
+  var steps: List<PathStep> = []
+  var annotation = builder.typeOfSlot(base)
+  for step in place.steps {
+    const next = match steppedPath(lowering, annotation, step, what, at) {
+      Some(found) => found
+      .None => {
+        return None
+      }
+    }
+    steps.add(next.step)
+    annotation = next.annotation
+  }
+  Some(PlacePath(Reference(base, steps), annotation))
+}
+
+/** One step of a path, and the type it leads to. */
+type SteppedPath {
+  step: PathStep
+  annotation: IrTypeId
+}
+
+/**
+ * Where a path starts. A local is the slot the lowering gave its binding - `self` is one of those, so a `var self`
+ * receiver needs no case of its own - and a top-level binding of an entry file is a local of its entry function.
+ */
+fn rootSlotOf(var lowering: Lowering, root: PlaceRoot, what: String, at: Span): Slot? {
+  match root {
+    .Local(binding) => {
+      const declared = lowering.checker.binding(binding).at
+      match lowering.slots.get(declared) {
+        Some(found) => Some(found)
+        .None => {
+          reportUnsupported(lowering, "{what} through a captured binding (milestone 5.8)", at)
+          None
+        }
+      }
+    }
+    .Declared(symbol) => {
+      match lowering.entryLocals.get(symbol.value) {
+        Some(found) => Some(found)
+        .None => {
+          reportUnsupported(lowering, "{what} through a top-level `var` read from a function", at)
+          None
+        }
+      }
+    }
+    // A temporary is a valid argument of a `var` parameter and never the base of a path, so it is handled one level up
+    .Temporary => {
+      reportUnsupported(lowering, "{what} through a temporary", at)
+      None
+    }
+    .Unknown => {
+      reportUnsupported(lowering, "{what} whose path the checker left open", at)
+      None
+    }
+  }
+}
+
+/**
+ * One step from a value to one of its fields. A field of a tuple is a `TupleField` step, because a tuple layout names its
+ * positions and not its fields; an index and a slice need the containers of 5.7, so each of them is a finding.
+ */
+fn steppedPath(
+  var lowering: Lowering,
+  annotation: IrTypeId,
+  step: PlaceStep,
+  what: String,
+  at: Span,
+): SteppedPath? {
+  match step {
+    .Field(_, field) => {
+      const layout = match layoutOfType(lowering.program, annotation) {
+        Some(found) => found
+        .None => {
+          const shown = describeIrType(lowering.program, annotation)
+          reportUnsupported(lowering, "{what} through a field of `{shown}`", at)
+          return None
+        }
+      }
+      const index = fieldIndexOf(lowering, layout, field)
+      if index < 0 {
+        reportUnsupported(lowering, "{what} through a field of a variant type", at)
+        return None
+      }
+      Some(SteppedPath(PathStep.Field(layout, index), fieldTypeOf(lowering, layout, index)))
+    }
+    .TupleField(_, index) => {
+      const layout = match layoutOfType(lowering.program, annotation) {
+        Some(found) => found
+        .None => {
+          reportUnsupported(lowering, "{what} through a tuple position of a value without a layout", at)
+          return None
+        }
+      }
+      if index < 0 || index >= lowering.program.layoutAt(layout).fields.length() {
+        reportUnsupported(lowering, "{what} through a tuple position the layout does not have", at)
+        return None
+      }
+      Some(SteppedPath(PathStep.TupleField(layout, index), fieldTypeOf(lowering, layout, index)))
+    }
+    .Index(_, _, _) => {
+      reportUnsupported(lowering, "{what} through `a[key]` (milestone 5.7/5.9b)", at)
+      None
+    }
+    .Range(_, _) => {
+      reportUnsupported(lowering, "{what} through a slice, which is a window (milestone 5.9b)", at)
+      None
+    }
+  }
+}
+
+fn fieldTypeOf(var lowering: Lowering, layout: LayoutId, index: Int): IrTypeId {
+  lowering.program.layoutAt(layout).fields[index].annotation
+}
+
+/** Whether a slot is a `var` parameter of this frame: it holds a pointer into the caller's frame and not a value. */
+public fn isReferenceSlot(builder: FunctionBuilder, slot: Slot): Bool {
+  if !builder.function.hasSlot(slot) {
+    return false
+  }
+  if const .Parameter(index) = builder.function.slots[slot.value].role {
+    if const Some(parameter) = builder.function.signature.parameters.get(index) {
+      return parameter.isReference
+    }
+  }
+  false
+}
+
+// --- What a call does with a place -----------------------------------------------------------------------------------
+
+/**
+ * The place a `var self` call changes. The checker recorded it under the span of what stands in front of the dot, and
+ * under the span of the callee where the member was written bare - the same two spans `openReceiverAccess` opened its
+ * access at, which is why this is not read off the syntax tree again.
+ */
+public fn receiverReference(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  callee: Expression,
+  what: String,
+): PlacePath? {
+  const at = receiverPlaceSpanOf(callee)
+  referenceAt(lowering, builder, at, what)
+}
+
+fn receiverPlaceSpanOf(expression: Expression): Span {
+  match expression.kind {
+    .Member(base, _, _) => base.span
+    .Generic(inner, _) => receiverPlaceSpanOf(inner)
+    _ => expression.span
+  }
+}
+
+/**
+ * One argument that fills a `var` parameter. A **temporary** is one of them: the callee is its only owner, so "copy in,
+ * copy out" is exact and nothing is written back anywhere (gap 2) - it is lowered into a slot of its own, in the position
+ * it was written, and the callee gets the address of that slot.
+ */
+public fn argumentReference(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  value: Expression,
+  annotation: IrTypeId,
+  what: String,
+): PlacePath? {
+  if isTemporaryPlace(lowering, value.span) {
+    const slot = addTemporary(builder, annotation)
+    const _ = lowerExpression(lowering, builder, value, Some(slot))
+    if !lowering.isSupported {
+      return None
+    }
+    return Some(PlacePath(Reference(slot, []), annotation))
+  }
+  referenceAt(lowering, builder, value.span, what)
+}
+
+/**
+ * Whether the result of a call would land in the base of a place the same call writes through (`x = f(x)` where `f` takes
+ * `x` by `var`). The lowering then produces into a slot of its own and writes the result through the destination, because
+ * an assignment into the base would overwrite - and therefore leak - what the callee has just put there.
+ */
+public fn collidesWithPlace(destination: Slot?, places: List<Reference?>): Bool {
+  const slot = match destination {
+    Some(found) => found
+    .None => {
+      return false
+    }
+  }
+  for place in places {
+    if const Some(found) = place {
+      if found.base == slot {
+        return true
+      }
+    }
+  }
+  false
+}
+
+// --- Writing through a place -----------------------------------------------------------------------------------------
+
+/**
+ * `p.x = 1`, `target.count = target.count + 1`, and an assignment through a `var` parameter: a `Write` through the path
+ * the checker recorded. The write **releases what was there** before it stores the new value, which is the contract the
+ * value operand of a write carries (BACKEND 5.4) and the reason an assignment through a `var` parameter may not simply
+ * compute into its slot.
+ */
+public fn lowerPlaceAssignment(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  target: Expression,
+  value: Expression,
+) {
+  const path = match referenceAt(lowering, builder, target.span, "an assignment") {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  writtenPlace(lowering, builder, path, value)
+}
+
+/**
+ * The value of a write, evaluated after the place - which for a path without an index is no order at all. It is lowered
+ * into whatever slot it is already in, exactly as the field of a `Construct` is, so that `p.name = name` hands the count
+ * of the binding over instead of copying it into a temporary first.
+ */
+fn writtenPlace(var lowering: Lowering, var builder: FunctionBuilder, path: PlacePath, value: Expression) {
+  const slot = lowerValue(lowering, builder, value)
+  if !lowering.isSupported {
+    return
+  }
+  emit(builder, Instruction.Write(path.reference, borrowed(slot)))
+}
+
+/**
+ * `port 8080`: a property command writes the field it names (gap 15), so it is an assignment written another way and the
+ * checker recorded the very same place for it - the path to the *field*, under the span of the callee.
+ *
+ * The other two kinds need a closure: `onStart { ... }` stores one in the field and `database { ... }` applies a receiver
+ * closure to the field in place, and both are milestone 5.8's.
+ */
+public fn lowerPropertyWrite(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  callee: Expression,
+  value: Expression,
+  kind: PropertyWriteKind,
+): Slot {
+  if const .AssignClosure = kind {
+    const what = "a property command that stores a closure in a field (milestone 5.8)"
+    reportUnsupported(lowering, what, callee.span)
+    return abandonedSlot(lowering, builder, destination)
+  }
+  if const .Configure = kind {
+    const what = "a property command that configures a field through a receiver closure (milestone 5.8)"
+    reportUnsupported(lowering, what, callee.span)
+    return abandonedSlot(lowering, builder, destination)
+  }
+  const path = match referenceAt(lowering, builder, callee.span, "a property command") {
+    Some(found) => found
+    .None => {
+      return abandonedSlot(lowering, builder, destination)
+    }
+  }
+  writtenPlace(lowering, builder, path, value)
+  if !lowering.isSupported {
+    return abandonedSlot(lowering, builder, destination)
+  }
+  // A command is a statement and produces `Void`, which somebody may still be taking as the value of a block
+  match destination {
+    Some(_) => voidSlot(lowering, builder, destination)
+    .None => abandonedSlot(lowering, builder, destination)
+  }
+}
+
+/**
+ * The result of a call that would otherwise overwrite the base of its own place: it is produced into a slot of its own
+ * and stored through the destination, so that what the destination held is released before the new value lands in it.
+ */
+public fn writtenResult(var builder: FunctionBuilder, destination: Slot, source: Slot) {
+  emit(builder, Instruction.Write(Reference(destination, []), borrowed(source)))
+}

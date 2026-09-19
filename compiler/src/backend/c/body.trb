@@ -67,9 +67,13 @@ fn markRead(var reads: List<Bool>, slot: Slot) {
   }
 }
 
+/** An argument of a `var` parameter reads the whole path it names, base and index alike, and not only its base. */
 fn markArguments(var reads: List<Bool>, arguments: List<Argument>) {
   for argument in arguments {
     markRead(reads, argument.slot)
+    if const Some(place) = argument.place {
+      markReference(reads, place)
+    }
   }
 }
 
@@ -179,14 +183,14 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
   var parameters: List<String> = []
   if isByPointerResult(function) {
     const spelling = resultTypeOf(program, signature.result)
-    parameters.add(declarationOf("{spelling} *", resultPointerName))
+    parameters.add(declarationOf(pointerTo(spelling), resultPointerName))
   }
   for index in 0..signature.parameters.length() {
     const parameter = signature.parameters[index]
     const spelling = valueTypeOf(program, parameter.annotation)
     const name = slotNameOf(function, Slot(index))
     if parameter.isReference {
-      parameters.add(declarationOf("{spelling} *", name))
+      parameters.add(declarationOf(pointerTo(spelling), name))
       continue
     }
     parameters.add(declarationOf(spelling, name))
@@ -194,6 +198,17 @@ public fn signatureHeadOf(program: IrProgram, function: IrFunction): String {
   const written = if parameters.isEmpty() { "void" } else { parameters.joined(separator: ", ") }
   const result = returnTypeOf(program, function)
   "{qualifiersOf(program, function)}{declarationOf(result, "{function.name}({written})")}"
+}
+
+/**
+ * A pointer to a value of this type: `T *`, and `T **` where the value is itself a pointer - a `var` parameter of a
+ * counted block is one of those, and `T * *` would be the same type spelled worse.
+ */
+public fn pointerTo(spelling: String): String {
+  if spelling.endsWith("*") {
+    return "{spelling}*"
+  }
+  "{spelling} *"
 }
 
 /** A function that never returns is `_Noreturn`, which is what keeps a C compiler from asking for a return. */
@@ -395,8 +410,8 @@ fn instructionStatements(
     .Closure(_, _, _, _) => reported(emission, "a closure (milestone 5.8)")
     .BoxNew(_, _) => reported(emission, "a captured `var` binding (milestone 5.8)")
     .TraitValue(_, _, _) => reported(emission, "a trait-typed value (milestone 5.6)")
-    .TakeOut(_, _, _, _) => reported(emission, "a `var` path through a map (milestone 5.9)")
-    .PutBack(_, _, _, _) => reported(emission, "a `var` path through a map (milestone 5.9)")
+    .TakeOut(_, _, _, _) => reported(emission, "a `var` path through a map (milestone 5.9b)")
+    .PutBack(_, _, _, _) => reported(emission, "a `var` path through a map (milestone 5.9b)")
     .Suspend(_, _) => reported(emission, "a task that suspends (milestone 7.3)")
   }
 }
@@ -603,12 +618,12 @@ fn releaseStatements(var emission: Emission, program: IrProgram, id: IrTypeId, p
 
 public fn describeCounted(program: IrProgram, id: IrTypeId): String {
   match program.typeAt(countedFormOf(program, id)) {
-    .SharedObject(_) => "a `shared type` object (milestone 5.9)"
+    .SharedObject(_) => "a `shared type` object (milestone 5.9b)"
     .Box(_) => "a captured `var` binding (milestone 5.8)"
     .Lazy(_) => "a `lazy` cell (milestone 5.8)"
     .Object(_) => "a trait-typed value (milestone 5.6)"
     .Closure(_) => "a closure (milestone 5.8)"
-    .FixedArray(_, _) => "an `Array<Item, Size>` (milestone 5.9)"
+    .FixedArray(_, _) => "an `Array<Item, Size>` (milestone 5.9b)"
     _ => "a counted value the back end does not know (milestone 5.6)"
   }
 }
@@ -679,7 +694,7 @@ fn makeUniqueStatements(
   if !isManagedType(program, annotation) {
     return []
   }
-  reported(emission, "making a value of this type unique (milestone 5.9)")
+  reported(emission, "making a value of this type unique (milestone 5.9b)")
 }
 
 fn sizeOf(name: String): CExpression {
@@ -723,7 +738,7 @@ fn callStatements(
   if const .TaskResume = function.kind {
     return reported(emission, "a call of a task (milestone 7.3)")
   }
-  const written = argumentsOf(body, function.signature, arguments)
+  const written = argumentsOf(emission, program, body, function.signature, arguments)
   callStatementOf(emission, body, target, function, function.name, written)
 }
 
@@ -758,8 +773,14 @@ fn callStatementOf(
   }
 }
 
-/** Every argument in declaration order. A `var` parameter takes the address of the slot, which is what a place is. */
-fn argumentsOf(body: Body, signature: IrSignature, arguments: List<Argument>): List<CExpression> {
+/** Every argument in declaration order. A `var` parameter takes the address of the place the argument names. */
+fn argumentsOf(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  signature: IrSignature,
+  arguments: List<Argument>,
+): List<CExpression> {
   var written: List<CExpression> = []
   for index in 0..arguments.length() {
     const parameter = signature.parameters.get(index)
@@ -768,13 +789,37 @@ fn argumentsOf(body: Body, signature: IrSignature, arguments: List<Argument>): L
       .None => false
     }
     if isReference {
-      const name = slotNameOf(body.function, arguments[index].slot)
-      written.add(CExpression.AddressOf(CExpression.Name(name)))
+      written.add(referenceExpression(emission, program, body, arguments[index]))
       continue
     }
     written.add(slotExpression(body, arguments[index].slot))
   }
   written
+}
+
+/**
+ * The pointer a `var` parameter takes: the address of the place its argument names.
+ *
+ * A place that is a `var` parameter of *this* frame already is that pointer, so nothing is taken of it - `&*p` only
+ * spells `p` the long way, and the generated C is read by people.
+ */
+fn referenceExpression(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  argument: Argument,
+): CExpression {
+  const place = match argument.place {
+    Some(found) => found
+    .None => {
+      reportUnsupported(emission, "a `var` parameter whose argument is a value and not a place")
+      return CExpression.AddressOf(CExpression.Name(slotNameOf(body.function, argument.slot)))
+    }
+  }
+  if place.steps.isEmpty() && isReferenceSlot(body, place.base) {
+    return CExpression.Name(slotNameOf(body.function, place.base))
+  }
+  CExpression.AddressOf(placeExpression(emission, program, body, place))
 }
 
 /**
@@ -805,7 +850,7 @@ fn runtimeCallStatements(
   const matched = matchPrototype(program, function.signature, prototype, symbol)
   match matched {
     .Direct => {
-      const written = argumentsOf(body, function.signature, arguments)
+      const written = argumentsOf(emission, program, body, function.signature, arguments)
       callStatementOf(emission, body, target, function, symbol, written)
     }
     .WithLocation => {
@@ -815,7 +860,7 @@ fn runtimeCallStatements(
           return reported(emission, "`{symbol}` takes the source location of the call, and the call carries none")
         }
       }
-      var written = argumentsOf(body, function.signature, arguments)
+      var written = argumentsOf(emission, program, body, function.signature, arguments)
       written.add(locationExpression(program, site))
       callStatementOf(emission, body, target, function, symbol, written)
     }

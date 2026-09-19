@@ -1,5 +1,7 @@
 //! The `torb` command line tool.
 
+mod canon;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -17,6 +19,7 @@ Usage:
   torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)
   torb tokens <file>     Print the tokens of a file
   torb ast <file>        Print the syntax tree of a file
+  torb canon <path>...   Write sources in the canon of the formatter (`torb canon --help`)
   torb help              Show this text
 ";
 
@@ -37,6 +40,11 @@ fn dispatch() -> ExitCode {
         Some((command, paths)) if command == "parse" && !paths.is_empty() => parse(paths),
         Some((command, paths)) if command == "tokens" && paths.len() == 1 => tokens(&paths[0]),
         Some((command, paths)) if command == "ast" && paths.len() == 1 => ast(&paths[0]),
+        Some((command, rest)) if command == "canon" && matches!(rest.first().map(String::as_str), Some("--help" | "help")) => {
+            print!("{}", canon::USAGE);
+            ExitCode::SUCCESS
+        }
+        Some((command, rest)) if command == "canon" => canon::canon(rest),
         Some((command, _)) if command == "help" || command == "--help" => {
             print!("{USAGE}");
             ExitCode::SUCCESS

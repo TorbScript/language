@@ -272,13 +272,24 @@ fn escapingSlots(program: IrProgram, function: IrFunction): List<Bool> {
   escapes
 }
 
-/** A slot whose storage is written through: the owner of a place, which is what `MakeUnique` needs a count of one for. */
+/**
+ * A slot whose storage is written through: the owner of a place, which is what `MakeUnique` needs a count of one for.
+ *
+ * A slot handed to a `var` parameter is one of them, because the callee writes through it. That is what makes
+ * `fn f(text: String) \{ var local = text  g(local) \}` receive `text` owned: the copy into `local` reaches storage that
+ * is written, so the count has to be the frame's.
+ */
 fn markMutated(var mutated: List<Bool>, instruction: Instruction) {
   match instruction {
     .Write(reference, _) => setFlag(mutated, reference.base)
     .MakeUnique(reference) => setFlag(mutated, reference.base)
     .TakeOut(_, container, _, _) => setFlag(mutated, container.base)
     .PutBack(container, _, _, _) => setFlag(mutated, container.base)
+    .Call(_, _, arguments, _, _) => {
+      for place in placesOfArguments(arguments) {
+        setFlag(mutated, place.base)
+      }
+    }
     _ => {}
   }
 }
@@ -405,13 +416,10 @@ fn uniqueOwnersOf(
   instructions: List<Instruction>,
   at: Int,
 ): List<Instruction> {
-  const reference = writtenPlaceOf(instructions[at])
   var needed: List<Instruction> = []
-  const found = match reference {
-    Some(place) => place
-    .None => {
-      return needed
-    }
+  const places = writtenPlacesOf(instructions[at])
+  if places.isEmpty() {
+    return needed
   }
   if at > 0 {
     if const .MakeUnique(_) = instructions[at - 1] {
@@ -419,12 +427,15 @@ fn uniqueOwnersOf(
     }
   }
   var ignored: List<String> = []
-  for count in 0..found.steps.length() {
-    const prefix = Reference(found.base, found.steps[0..count])
-    const annotation = typeOfReference(program, function, ignored, "", prefix)
-    if const Some(inner) = annotation {
-      if isManagedType(program, inner) {
-        needed.add(Instruction.MakeUnique(prefix))
+  for found in places {
+    for count in 0..found.steps.length() {
+      const prefix = Reference(found.base, found.steps[0..count])
+      const annotation = typeOfReference(program, function, ignored, "", prefix)
+      if const Some(inner) = annotation {
+        // Two `var` arguments of one call may share a prefix, and making the same storage unique twice is only noise
+        if isManagedType(program, inner) && !needed.contains(Instruction.MakeUnique(prefix)) {
+          needed.add(Instruction.MakeUnique(prefix))
+        }
       }
     }
   }
@@ -432,19 +443,42 @@ fn uniqueOwnersOf(
 }
 
 /**
- * The place an instruction writes through, if it writes through one. `PutBack` is not one: the container it puts a value
- * back into is the one a `TakeOut` formed the path to, and that is where it was made unique.
+ * The places an instruction writes through. `PutBack` is not one: the container it puts a value back into is the one a
+ * `TakeOut` formed the path to, and that is where it was made unique.
+ *
+ * A **`var` argument** is one, and it is why this answers a list: the callee writes through the place, and the `var`
+ * access of a call begins once every argument has been evaluated (BACKEND 2.3) - which is exactly in front of the call.
  */
-fn writtenPlaceOf(instruction: Instruction): Reference? {
+fn writtenPlacesOf(instruction: Instruction): List<Reference> {
   match instruction {
-    .Write(reference, _) => Some(reference)
-    .TakeOut(_, container, _, _) => Some(container)
-    _ => None
+    .Write(reference, _) => [reference]
+    .TakeOut(_, container, _, _) => [container]
+    .Call(_, _, arguments, _, _) => placesOfArguments(arguments)
+    _ => []
   }
 }
 
-/** The slot an instruction both reads and writes, when the frame counts it. */
+fn placesOfArguments(arguments: List<Argument>): List<Reference> {
+  var places: List<Reference> = []
+  for argument in arguments {
+    if const Some(place) = argument.place {
+      places.add(place)
+    }
+  }
+  places
+}
+
+/**
+ * The slot an instruction both reads and writes, when the frame counts it.
+ *
+ * An instruction that writes through a **place** is never one: saving the old value into a slot of its own and reading
+ * the copy would leave the write pointing at the copy. The lowering keeps the result of such a call out of the base of
+ * its own place for exactly that reason (`ir/lower/place.trb`), so there is nothing left to save here.
+ */
 fn conflictingSlot(instruction: Instruction, counted: Counted): Slot? {
+  if !writtenPlacesOf(instruction).isEmpty() {
+    return None
+  }
   const target = definedSlot(instruction)?
   if !counted.counts(target) {
     return None

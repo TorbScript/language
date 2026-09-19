@@ -375,6 +375,15 @@ public type Argument {
   slot: Slot
   ownership: Ownership = Ownership.Borrowed
   isLastUse: Bool = false
+  /**
+   * The place an argument of a `var` parameter refers to: the whole path, formed at the call site (BACKEND 3.2), so
+   * that a C back end can take its address and the VM can carry a (frame, slot, path) triple.
+   *
+   * `slot` is the **base** of that path, which is what makes every pass right without a rule of its own: liveness keeps
+   * the base live across the call, the ownership pass borrows it because a reference is never counted, and the verifier
+   * reads the type of the place through the same path the callee will write through.
+   */
+  place: Reference? = None
 }
 
 /** A borrowed operand: what phase 1 of the lowering emits everywhere. */
@@ -385,6 +394,14 @@ public fn borrowed(slot: Slot): Argument {
 /** An operand position that takes the count: `Construct`, `BoxNew`, `TraitValue`, `Return`, a stored parameter. */
 public fn owned(slot: Slot): Argument {
   Argument(slot, Ownership.Owned, false)
+}
+
+/**
+ * An argument that fills a `var` parameter: the place itself, borrowed, because a reference carries no count at all -
+ * the caller holds the base live for the whole call and exclusivity keeps a second path to the same storage out.
+ */
+public fn referenced(place: Reference): Argument {
+  Argument(place.base, Ownership.Borrowed, false, Some(place))
 }
 
 // --- Witnesses at a call site ---------------------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, FunctionKind, RuntimeKind from "./ir"
+use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, FunctionKind, RuntimeKind, Ownership from "./ir"
 use Block, BlockId, Slot, SlotRole, Instruction, Terminator, Argument, Reference, PathStep from "./ir"
 use Intrinsic, IntrinsicOperation, NumericKind, WitnessSource, WitnessRoot, Capture, LayoutId from "./ir"
 use isManagedType, containsCountedType from "./layout"
@@ -467,7 +467,11 @@ public fn usedByTerminator(terminator: Terminator): List<Slot> {
 fn slotsOfArguments(arguments: List<Argument>): List<Slot> {
   var used: List<Slot> = []
   for argument in arguments {
-    used.add(argument.slot)
+    // The base of a place is the slot the argument names, and an index into it is read at the call site as well
+    match argument.place {
+      Some(place) => used.addAll(slotsOfReference(place))
+      .None => used.add(argument.slot)
+    }
   }
   used
 }
@@ -715,8 +719,16 @@ fn verifyCall(
     found.add("{at}: {callee} takes {signature.parameters.length()} arguments and {arguments.length()} were given")
   } else {
     for index in 0..arguments.length() {
-      const wanted = signature.parameters[index].annotation
-      expectType(program, function, found, at, arguments[index].slot, wanted, "argument {index}")
+      const parameter = signature.parameters[index]
+      if parameter.isReference {
+        checkPlaceArgument(program, function, found, at, arguments[index], parameter.annotation, index, callee)
+        continue
+      }
+      if arguments[index].place.isSome() {
+        found.add("{at}: parameter {index} of {callee} takes a value, so argument {index} carries no place")
+        continue
+      }
+      expectType(program, function, found, at, arguments[index].slot, parameter.annotation, "argument {index}")
     }
   }
   if witnesses.length() != signature.witnesses.length() {
@@ -740,6 +752,48 @@ fn verifyCall(
       expectType(program, function, found, at, slot, signature.result, "the result")
     }
   }
+}
+
+/**
+ * The argument of a `var` parameter is a **place** and not a value: it carries the whole path the callee writes through,
+ * the path has to end in the type the parameter declares, and `slot` has to be the base of it - everything that walks an
+ * argument reads `slot`, so a base that disagreed with the path would keep the wrong value alive.
+ */
+fn checkPlaceArgument(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  argument: Argument,
+  wanted: IrTypeId,
+  index: Int,
+  callee: String,
+) {
+  const place = match argument.place {
+    Some(inner) => inner
+    .None => {
+      found.add("{at}: parameter {index} of {callee} is a `var` parameter, so argument {index} has to be a place")
+      return
+    }
+  }
+  if place.base != argument.slot {
+    found.add("{at}: argument {index} of {callee} names %{argument.slot.value} and its place starts at %{place.base.value}")
+    return
+  }
+  if argument.ownership != Ownership.Borrowed || argument.isLastUse {
+    found.add("{at}: argument {index} of {callee} is a place, which carries no count and is therefore borrowed")
+  }
+  const annotation = match typeOfReference(program, function, found, at, place) {
+    Some(inner) => inner
+    .None => {
+      return
+    }
+  }
+  if annotation == wanted {
+    return
+  }
+  const shown = describeIrType(program, wanted)
+  found.add("{at}: parameter {index} of {callee} is `{shown}` and its place is `{describeIrType(program, annotation)}`")
 }
 
 fn verifyWitness(program: IrProgram, function: IrFunction, var found: List<String>, at: String, witness: WitnessSource) {
