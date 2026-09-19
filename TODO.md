@@ -466,6 +466,21 @@ Falls wir das hier _nicht_ automatisch deriven, sollten wir vielleicht ein impli
       dieselbe Konstruktion wechselt die Form mit der Position (`Ok Some(x)` außen, `Some(x)` innen), und
       `const role = Role name` liest sich nicht mehr als Wert.
     Ich empfehle K1. Das Werkzeug, das die Codebase umstellt, wartet auf deine Antwort.
+  - **Entschieden (Chat, 2026-09-19): K2.** Die Canon, wie sie ins Konzept kommt und wie `torb format` sie später
+    durchsetzt - ein Aufruf ist ein **Kommando**, wenn alles davon gilt:
+    1. er steht in Kommandoposition (Anfang eines Statements, rechts von `=`, nach `return`, nach `=>`),
+    2. der Aufgerufene ist ein Name oder Member-Pfad (`Ok`, `Email.parse`, `roles.map`),
+    3. er hat mindestens ein Argument, und das erste beginnt nicht mit `(`, `[`, `-`, `!` oder `.`,
+    4. kein Argument hat einen Operator auf oberster Ebene (`assert(a == b)`, `print(count + 1)` behalten Klammern),
+    5. die Argumente passen auf eine Zeile (eine Trailing Closure darf über mehrere gehen).
+    Sonst stehen Klammern - also immer innerhalb von Argumenten, Klammern, Operatoren und Listen
+    (`Ok Some(x)`, nie `Ok Some x`), bei Aufrufen ohne Argumente (`list.length()`), und in den Köpfen von `if`,
+    `for`, `while`, `match`. Beispiele: `Ok value`, `return Error problem`, `const role = Role name`,
+    `const email = Email.parse text`, `names.map Role`, `print "Hello"`, aber `assert(sum == 3)`,
+    `items.add(Item(name, 2))` → `items.add Item(name, 2)`.
+  - **Wird gelöst:** Konzept-Absatz "Formatter canon" + Umstellung der ganzen Codebase per Werkzeug über den
+    Syntaxbaum (zusammen mit dem Umformatieren der mehrzeiligen Strings), sobald die drei laufenden Zweige
+    (Emitter, Prelude, `by`) gemergt sind - vorher würde es mit jedem davon kollidieren.
 
 - In
 
@@ -594,7 +609,8 @@ Wenn nicht, was bedeutet, bewirkt es?
     - **Interop:** nach außen ist es genau die Zahl (`bits()`), im C-Backend ein `uint64_t` ohne Hülle, in JS ein
       `number` (bis 32 Flags verlustfrei mit den JS-Bitoperatoren, darüber zwei Hälften), in PHP ein `int`; in
       `Encode` wahlweise die Zahl oder die Liste der Case-Namen (Option des Formats).
-    - **Deine Entscheidung:** so? Dann plane ich (1) als Sprachfeature nach dem Fixpunkt ein (Parser, Checker,
+    - **Entschieden (Chat, 2026-09-19): so wird es gemacht** - Cases mit festem Wert + `Flags<Case>`.
+    - ~~Deine Entscheidung:~~ so? Dann plane ich (1) als Sprachfeature nach dem Fixpunkt ein (Parser, Checker,
       beide Backends) und (2) direkt danach in `std/collections`.
 
 -   addNode(graph, DecisionNode.SwitchCase(path, owner, edges, otherwise)) könnte auch   addNode(graph, .SwitchCase(path, owner, edges, otherwise)) sein
