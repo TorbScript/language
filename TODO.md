@@ -911,3 +911,14 @@ Wenn nicht, was bedeutet, bewirkt es?
   - Phase 2: mehrere günstigere Schreib-Agents füllen die Ordner nach Vorlage und Inventar; danach der Skill
     (`SKILL.md` mit Denkmodell, Syntax-Spickzettel, den typischen Fehlgriffen von Rust-/Swift-/Kotlin-geprägten
     Modellen, Prüfkommandos, Navigation in die Referenz).
+
+- (Fund der Streams-Runde, 2026-09-20) Ein in TorbScript geschriebener `shared type` kann sich aus einer Methode mit
+  `self` nicht ändern; asynchrone Methoden hatten `self`, also musste jeder Zustand in Closures mit gefangenen
+  `var`-Bindungen versteckt werden (`Pulling`, `Staged`, `Buffered`).
+  - **Entschieden (ich, Veto möglich) - wird gelöst:** "Ein `var self` kann nicht über ein `await` offen bleiben" gilt
+    nur für Werte (exklusiver Zugriff, endet mit dem Aufruf). Bei einem Shared-Objekt ist `var` eine Berechtigung,
+    keine Exklusivität - das Konzept-Beispiel hat heute schon zwei `var`-Pfade auf dasselbe Objekt. Also: eine
+    `var self`-Methode darf einen `Task` liefern, wenn der Typ/Trait `shared` ist (bei Werten ein Fehler mit eigener
+    Meldung). `Source.next(var self)`, `Sink.add(var self, item)`, `finish(var self)` - spiegelt `Iterator.next(var
+    self)`; eine Quelle, aus der gelesen wird, steht in einer `var`-Bindung, `const` ist die Nur-Lese-Sicht wie bei
+    jedem Shared-Objekt. Die Closure-Kisten werden gewöhnliche Shared-Typen mit `var`-Feldern.
