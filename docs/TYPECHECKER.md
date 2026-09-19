@@ -1719,12 +1719,15 @@ nothing told a back end how such a literal is built.
   solves it - which is what makes `fn total<const Size: Int>(values: Array<Int, Size>)` callable as `total([1, 2, 3])`.
   A `Size` that is a const *parameter* (`Array<Float, Columns>` inside a generic type) says nothing: what `Columns` is,
   the caller decides. A `...` contributes its own size where its operand is an `Array` of a known size, and is otherwise
-  ``  `List<Int64>` does not say how many items it has, so `...` cannot fill an `Array` ``.
+  `` `List<Int64>` does not say how many items it has, so `...` cannot fill an `Array` ``.
 - **Every other target goes through `From<Iterable<Item>>`**, the one collection protocol the language has, and `Item` is
   what the target itself iterates (`Iterable<Item>`), or - for a target that is not iterable at all - the
   `Iterable<Item>` its own `From` takes. So a literal accepts exactly the targets `.to<Target>()` accepts, trait types
   included: `Set<String>` and `Queue<Int>` are `From<Iterable<Item>>` through an `extend` whose target is the trait, and
-  the `Witness` that is recorded is that implementation with its inner witnesses (`String: Hash`).
+  the `Witness` that is recorded is that implementation with its inner witnesses (`String: Hash`). The fallback over the
+  target's own `From` only answers where that `From` is unambiguous, which gap 50's blanket `From<Never>` now prevents
+  for a target that is not iterable at all - `String` is the one in the repository, so `const text: String = ['a', 'b']`
+  is refused and `String.from(['a', 'b'])` is how it is written. Nothing in the repository did either.
 - **A type that is none of these is an error** instead of a silent acceptance:
   `` A list literal cannot become a `Point`: `Point` is not `From<Iterable<Item>>` ``, and for a map literal
   `` ... is not `From<Iterable<(Key, Value)>>` ``. A trait type the collection merely *coerces* to is deliberately not
