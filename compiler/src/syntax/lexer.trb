@@ -22,7 +22,7 @@ public fn lexRange(source: SourceText, range: Span): Lexed {
   Lexed(removeInsignificantNewlines(lexer.tokens), lexer.docs, lexer.diagnostics)
 }
 
-/** Longest first. The last three are not part of the language, but they get a better message than "unexpected character". */
+/** Longest first. The last two are not part of the language, but they get a better message than "unexpected character". */
 const punctuationTable: List<(String, TokenKind)> = [
   ("...", TokenKind.Ellipsis),
   ("..=", TokenKind.DotDotEqual),
@@ -55,9 +55,9 @@ const punctuationTable: List<(String, TokenKind)> = [
   ("]", TokenKind.BracketClose),
   ("\{", TokenKind.BraceOpen),
   ("\}", TokenKind.BraceClose),
+  ("&", TokenKind.Ampersand),
   ("|", TokenKind.Pipe),
   (";", TokenKind.Newline),
-  ("&", TokenKind.AndAnd),
   ("^", TokenKind.Star),
 ]
 
@@ -551,7 +551,7 @@ type Lexer {
     position = position + text.byteLength()
     match text {
       ";" => error("There are no semicolons. A statement ends at the end of its line", start)
-      "&" | "^" => error("There is no `{text}` operator", start)
+      "^" => error("There is no `{text}` operator", start)
       _ => push(kind, start)
     }
   }

@@ -57,6 +57,8 @@ pub enum TokenKind {
     OrOr,
     /// Only in patterns: `1 | 2 | 3`
     Pipe,
+    /// An intersection of traits: `Compare & Show`. There are no bit operators, so this is free.
+    Ampersand,
     Plus,
     Minus,
     Star,
@@ -167,6 +169,7 @@ impl TokenKind {
                 | OrOr
                 | QuestionQuestion
                 | Plus
+                | Ampersand
                 | Minus
                 | Star
                 | Slash
@@ -186,6 +189,7 @@ impl TokenKind {
                 | OrOr
                 | QuestionQuestion
                 | Plus
+                | Ampersand
                 | Star
                 | Slash
                 | Percent
@@ -235,6 +239,7 @@ impl TokenKind {
             AndAnd => "`&&`",
             OrOr => "`||`",
             Pipe => "`|`",
+            Ampersand => "`&`",
             Plus => "`+`",
             Minus => "`-`",
             Star => "`*`",

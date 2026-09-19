@@ -33,7 +33,7 @@ public type VariableId {
 public type TypeForm {
   /** `Point`, `List<Int>`, `Option<User>`. Aliases are expanded, so `symbol` is never an alias. */
   case Nominal(symbol: SymbolId, arguments: List<TypeId>)
-  /** A value of one or more traits: `Shape`, `Show + Encode`. Every bound is a `Nominal` of a trait, sorted. */
+  /** A value of one or more traits: `Shape`, `Show & Encode`. Every bound is a `Nominal` of a trait, sorted. */
   case Traits(bounds: List<TypeId>)
   /** `Item`, `Key`, `Self` inside of a trait, `const Size`. The parameter table says which. */
   case Parameter(parameter: ParameterId)
@@ -273,7 +273,7 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
       for bound in bounds {
         parts.add(describeType(types, symbols, bound))
       }
-      parts.joined(separator: " + ")
+      parts.joined(separator: " & ")
     }
     .Parameter(parameter) => types.parameter(parameter).name
     // A variable stands for "whatever fits here", as in "expected `Matrix<4, _>`"
@@ -381,7 +381,7 @@ public type TypeSignatureId {
   value: Int
 }
 
-/** One requirement: `<Item: Hash>`, `where Item: Hash + Equals`, `with Show`. The spellings are one thing. */
+/** One requirement: `<Item: Hash>`, `where Item: Hash & Equals`, `with Show`. The spellings are one thing. */
 public type Bound {
   subject: TypeId
   /** One `Nominal` of a trait per trait. */

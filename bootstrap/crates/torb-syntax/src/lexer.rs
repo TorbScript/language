@@ -437,10 +437,10 @@ impl Lexer<'_> {
             ("]", BracketClose),
             ("{", BraceOpen),
             ("}", BraceClose),
-            // Not part of the language, but they get a better message than "unexpected character"
+            ("&", Ampersand),
+            // Not part of the language, but it gets a better message than "unexpected character"
             (";", Newline),
             ("|", Pipe),
-            ("&", AndAnd),
             ("^", Star),
         ];
         let Some((text, kind)) = table.iter().find(|(text, _)| self.rest().starts_with(text)) else {
@@ -450,7 +450,7 @@ impl Lexer<'_> {
         self.position += text.len();
         match *text {
             ";" => self.error("There are no semicolons. A statement ends at the end of its line", start),
-            "&" | "^" => self.error(format!("There is no `{text}` operator"), start),
+            "^" => self.error(format!("There is no `{text}` operator"), start),
             _ => self.push(kind.clone(), start),
         }
     }
@@ -531,6 +531,14 @@ mod tests {
     }
 
     #[test]
+    fn ampersand_is_its_own_token_and_double_ampersand_still_lexes_as_one() {
+        use TokenKind::*;
+        assert_eq!(kinds("&"), [Ampersand, EndOfFile]);
+        assert_eq!(kinds("&&"), [AndAnd, EndOfFile]);
+        assert_eq!(kinds("A & B"), [Identifier, Ampersand, Identifier, EndOfFile]);
+    }
+
+    #[test]
     fn interpolation_may_contain_strings() {
         let tokens = kinds(r#""a: {map["a"]} \{literal}""#);
         let TokenKind::Text(parts) = &tokens[0] else { panic!() };
@@ -544,6 +552,7 @@ mod tests {
         use TokenKind::*;
         assert_eq!(kinds("a\nb"), [Identifier, Newline, Identifier, EndOfFile]);
         assert_eq!(kinds("a +\nb"), [Identifier, Plus, Identifier, EndOfFile]);
+        assert_eq!(kinds("a &\nb"), [Identifier, Ampersand, Identifier, EndOfFile]);
         assert_eq!(kinds("a\n  .b"), [Identifier, Dot, Identifier, EndOfFile]);
         assert_eq!(kinds("f(\na,\nb\n)"), [Identifier, ParenOpen, Identifier, Comma, Identifier, ParenClose, EndOfFile]);
         assert_eq!(kinds("/* a /* not nested */ x // y"), [Identifier, EndOfFile]);

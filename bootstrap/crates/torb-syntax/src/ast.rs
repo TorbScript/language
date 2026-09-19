@@ -213,7 +213,7 @@ pub enum TypeKind {
     Tuple(Vec<TupleTypeField>),
     /// `"online" | "offline"`. A single literal is also a const argument: `Array<Float, 16>`
     Literals(Vec<Expression>),
-    /// `Show + Encode`: a value that implements all of these traits
+    /// `Show & Encode`: a value that implements all of these traits
     Intersection(Vec<TypeReference>),
     Function {
         parameters: Vec<FunctionTypeParameter>,

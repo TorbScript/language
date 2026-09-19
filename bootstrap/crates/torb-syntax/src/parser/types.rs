@@ -3,21 +3,23 @@ use crate::ast::*;
 use crate::token::{Keyword, TokenKind};
 
 impl Parser<'_> {
-    /// A type, including `Show + Encode` (a value that implements several traits).
+    /// A type, including `Show & Encode` (a value that implements several traits).
     pub(super) fn type_reference(&mut self) -> TypeReference {
         let start = self.span();
         let first = self.single_type();
-        if !self.at(TokenKind::Plus) {
+        if self.at(TokenKind::Plus) {
+            self.error_here("Traits are combined with `&`: `Compare & Show`");
+        } else if !self.at(TokenKind::Ampersand) {
             return first;
         }
         let mut members = vec![first];
-        while self.eat(TokenKind::Plus) {
+        while self.eat(TokenKind::Ampersand) || self.eat(TokenKind::Plus) {
             members.push(self.single_type());
         }
         TypeReference { kind: TypeKind::Intersection(members), span: start.to(self.previous_span()) }
     }
 
-    /// A type without `+`. This is what the items of a bound list are (`where Item: Hash + Equals`).
+    /// A type without `&`. This is what the items of a bound list are (`where Item: Hash & Equals`).
     pub(super) fn single_type(&mut self) -> TypeReference {
         let start = self.span();
         if self.eat_keyword(Keyword::Lazy) {

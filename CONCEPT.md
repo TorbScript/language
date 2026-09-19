@@ -1002,13 +1002,13 @@ The `?` operator uses `From` to convert error types.
 
 **Every type has `From<Self>`**, and that conversion is the value itself. It is not written down anywhere and could not
 be: a blanket `extend<Value> Value with From<Value>` would overlap with every other implementation of `From`. It is what
-lets `fn sum(self): Item where Item: Add + From<Int>` be called with a list of `Int`.
+lets `fn sum(self): Item where Item: Add & From<Int>` be called with a list of `Int`.
 
 The language has exactly **four coercions**, and all of them only apply where a type is expected - never to decide what
 an expression means on its own, and never to solve an inference variable:
 
 - a value where a trait type is expected (`Square` into a `Shape`),
-- a trait value where fewer bounds or a supertrait are expected (`Show + Hash` into a `Show`),
+- a trait value where fewer bounds or a supertrait are expected (`Show & Hash` into a `Show`),
 - `Never` where anything is expected,
 - a literal where a literal type is expected (`"online"` into a `Status`).
 
@@ -1288,7 +1288,7 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   that method: `Hash` (`hash`), `Equals`, `Compare`, `Show`, `Add`, `From`, `Length`, `Close`. `type Money with Equals,
   Hash, Compare` reads as what it is. No `-able`/`-ible` adjectives. Traits that are mainly used _as types_ are nouns:
   `Iterable`, `Iterator`, `Collection`, `List`, `Map`, `Collector`, `Accumulator`.
-- `with` is the only keyword for "implements" and for supertraits. Bounds use `where Item: Hash + Equals` or inline `<Item: Hash>`.
+- `with` is the only keyword for "implements" and for supertraits. Bounds use `where Item: Hash & Equals` or inline `<Item: Hash>`.
 - **Type parameters of a `type` and of a `trait` can have defaults** (`trait Add<Other = Self, Output = Self>`), so
   `with Add` means `Add<Self, Self>` and nobody writes it out. A default may name earlier parameters and `Self`, and
   it is filled in, never inferred. `fn` has no defaults: its type arguments come from the call.
@@ -1318,8 +1318,9 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
 - Traits are implemented by values. A `shared type` can only implement a `shared trait` (`shared trait Close`), and a
   value of such a trait type counts as shared. So a `List<Item>` or an `Iterable<Item>` is always a value: nobody
   changes it while you hold it, and it can be passed to another task.
-- Several traits can be one type: `fn audit(entry: Show + Encode)`, `List<Show + Hash>`. It is the `+` of bounds in
-  type position, and only traits can be combined (two different types have no values in common).
+- Several traits can be one type: `fn audit(entry: Show & Encode)`, `List<Show & Hash>`. It is the `&` of bounds in
+  type position, and only traits can be combined (two different types have no values in common) - `&` is to traits
+  what `|` is to literals.
 - A trait can be used as a type (`fn draw(shape: Shape)`). Whether this is dispatched statically or dynamically is
   up to the implementation and not observable.
 - **A trait type is the one place where the language has subtyping,** and it has exactly four coercions: a value to
@@ -1330,8 +1331,8 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
 - **A generic member can be called on a trait-typed value.** Every trait-typed value carries a witness table per
   bound, and a generic call passes one witness per bound; where no trait-typed value is involved, a back end
   monomorphizes as before. **Object safety is checked per call, not per type:** a member that mentions `Self` in a
-  parameter or in its result, or that has no `self`, cannot be called on a trait-typed value. So `List<Show + Hash>`
-  and `fn audit(entry: Show + Encode)` stay legal, and only calls that have no meaning are rejected.
+  parameter or in its result, or that has no `self`, cannot be called on a trait-typed value. So `List<Show & Hash>`
+  and `fn audit(entry: Show & Encode)` stay legal, and only calls that have no meaning are rejected.
 - Functions without `self` in a trait: without a body they are a requirement for the implementing types
   (`From.from`, `Parse.parse`). With a body they are functions of the trait itself - the place for factories that pick
   a default implementation (`List.of(1, 2)`, `Set.of("a")`).
@@ -1846,6 +1847,10 @@ const channel = Channel<Int>()
   implementation: `public native type Int64 with Signed, Hash {}` asks the runtime for `compare`, `hash` and the
   arithmetic. The checker records what was asked for, so a back end reports a missing intrinsic instead of losing
   it silently.
+- **`native type` versus `native fn`:** a `native type` says that the representation comes from the runtime - the
+  type declares no fields and has no generated constructor, and the traits after `with` come with it. `native fn`
+  says that this one function does. A native type can have ordinary members written in TorbScript on top of the
+  native ones, and that is the direction: natives stay few.
 - **A `native` declaration the runtime does not implement yet is marked as planned, and using one is a compile error
   that names the milestone** - never a link error with a mangled name in it. The manifest of natives is therefore also
   the list of what does not exist yet (`Decimal`, `Float32` arithmetic and `std/http` today).
@@ -2059,7 +2064,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   (a type per literal, widening, subtyping). No unions of types: they would have to be told apart by type at runtime.
 - Const parameters without arithmetic, from the start, because `Array` has its size in the type (inline, no heap).
   Growing storage is `List`/`ArrayList`; there is no public raw buffer type, native collections manage their own.
-- `TraitA + TraitB` as a type; named tuples; `From` is generated for cases that wrap one value of a unique type
+- `TraitA & TraitB` as a type; named tuples; `From` is generated for cases that wrap one value of a unique type
 - The parser (milestone 1 of the implementation, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)) checks every
   example. What it found the first time: `print [a, b].map(...)` (indexing by the rules of command calls),
   `print list.filter { ... }.collect(...)` (the `{` belongs to `print`), a parameter named `type`, and two rules the
@@ -2131,7 +2136,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   type can satisfy together - so two blanket implementations of one trait always collide. Conservative keeps
   resolution decidable and the error messages readable.
 - Generic members on a trait-typed value work through witness tables, one per bound, and object safety is checked
-  per call, not per type. So `List<Show + Hash>` stays a type and only the calls that have no meaning are rejected.
+  per call, not per type. So `List<Show & Hash>` stays a type and only the calls that have no meaning are rejected.
 - Coercion to a trait type is the only subtyping in the language: four coercions, never solving an inference
   variable, and no variance (`List<Square>` is not a `List<Shape>`). Written down because it is where inference and
   error messages would otherwise become unpredictable.
@@ -2195,6 +2200,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `String.join(parts, separator:)` became `Iterable.joined(separator:)`, now that a member can carry its own `where`
   clause (`where Item: Show`). One way to join instead of two, and it reads left to right with the rest of a
   pipeline; the collector `joining` stays for a prefix, a suffix, or a step inside `collect`.
+- `&` instead of `+` for an intersection of traits (was: `+`, from Rust).
 
 ## Open Questions
 

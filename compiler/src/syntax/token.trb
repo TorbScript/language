@@ -60,6 +60,8 @@ public type TokenKind {
   case OrOr
   /** Only in patterns and literal types: `1 | 2 | 3` */
   case Pipe
+  /** An intersection of traits: `Compare & Show`. There are no bit operators, so this is free. */
+  case Ampersand
   case Plus
   case Minus
   case Star
@@ -74,7 +76,7 @@ public type TokenKind {
   fn continuesLineAfter(self): Bool {
     match self {
       .Comma | .Colon | .Dot | .QuestionDot | .Arrow | .Equal | .EqualEqual | .BangEqual | .Less | .LessEqual | .GreaterEqual => true
-      .AndAnd | .OrOr | .QuestionQuestion | .Plus | .Minus | .Star | .Slash | .Percent | .ParenOpen | .BracketOpen => true
+      .AndAnd | .OrOr | .QuestionQuestion | .Plus | .Ampersand | .Minus | .Star | .Slash | .Percent | .ParenOpen | .BracketOpen => true
       _ => false
     }
   }
@@ -82,7 +84,7 @@ public type TokenKind {
   /** A line that starts with one of these continues the previous line. */
   fn continuesLineBefore(self): Bool {
     match self {
-      .Dot | .QuestionDot | .AndAnd | .OrOr | .QuestionQuestion | .Plus | .Star | .Slash | .Percent => true
+      .Dot | .QuestionDot | .AndAnd | .OrOr | .QuestionQuestion | .Plus | .Ampersand | .Star | .Slash | .Percent => true
       .EqualEqual | .BangEqual | .LessEqual | .GreaterEqual | .Equal => true
       .Reserved(Keyword.With) | .Reserved(Keyword.Where) | .Reserved(Keyword.Else) => true
       _ => false
@@ -124,6 +126,7 @@ public type TokenKind {
       .AndAnd => "`&&`"
       .OrOr => "`||`"
       .Pipe => "`|`"
+      .Ampersand => "`&`"
       .Plus => "`+`"
       .Minus => "`-`"
       .Star => "`*`"

@@ -250,7 +250,7 @@ no `.Forwarded` that reaches an `.Object` can be monomorphized. The lowering fol
 - **Code is shared where a witness is passed.** A generic function that is reached with a `.Forwarded` witness that
   bottoms out in an `.Object` is instantiated **per bound, not per type**: the type argument is `Object([Show])`, so
   `fn describe<Value: Show>(value: Value)` has one instance for every trait-typed argument. That is the whole
-  dictionary-passing path, and it is what keeps `List<Show + Hash>` from exploding the instance count.
+  dictionary-passing path, and it is what keeps `List<Show & Hash>` from exploding the instance count.
 - **Witness tables** are static data: one table per `(ImplementationId, typeArguments)`, holding a function pointer
   per required member of the trait **in declaration order**, then the supertraits' tables in declaration order, then
   the witnesses of the trait's own generic parameters. Default members are *not* in the table: a call of a default

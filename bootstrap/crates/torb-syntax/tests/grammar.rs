@@ -196,12 +196,22 @@ fn literal_types_const_parameters_tuples_and_intersections() {
     assert_eq!(items[1].label.as_ref().map(|label| label.text.as_str()), Some("highest"));
     assert!(matches!(expression("const grouped = (1 + 2)"), ExpressionKind::Binary { .. }));
 
-    let file = parse_ok("fn audit(entry: Show + Encode, entries: List<Show + Hash>) where Item: Hash + Equals {}");
+    let file = parse_ok("fn audit(entry: Show & Encode, entries: List<Show & Hash>) where Item: Hash & Equals {}");
     let StatementKind::Declaration(Declaration { kind: DeclarationKind::Function(function), .. }) = &file.statements[0].kind else {
         panic!()
     };
     assert!(matches!(function.parameters[0].annotation.as_ref().unwrap().kind, TypeKind::Intersection(_)));
     assert_eq!(function.where_clauses[0].bounds.len(), 2);
+
+    // `+` in a type position recovers as `&`, with one diagnostic and no follow-up errors
+    let parsed = torb_syntax::parse("fn audit(entry: Show + Encode + Hash) {}");
+    assert_eq!(parsed.diagnostics.len(), 1);
+    assert_eq!(parsed.diagnostics[0].message, "Traits are combined with `&`: `Compare & Show`");
+    let StatementKind::Declaration(Declaration { kind: DeclarationKind::Function(recovered), .. }) = &parsed.file.statements[0].kind else {
+        panic!()
+    };
+    let TypeKind::Intersection(members) = &recovered.parameters[0].annotation.as_ref().unwrap().kind else { panic!() };
+    assert_eq!(members.len(), 3);
 
     // Still a comparison
     parse_ok("const small = count < 16\nconst between = 0 < index && index < 16");

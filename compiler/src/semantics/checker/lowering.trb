@@ -33,7 +33,7 @@ public fn typeFromReference(var checker: Checker, reference: TypeReference, scop
 }
 
 /**
- * `with Show`, `where Item: Hash + Equals`: a bound is a list of traits, and nothing but a trait may stand there.
+ * `with Show`, `where Item: Hash & Equals`: a bound is a list of traits, and nothing but a trait may stand there.
  * `of` is what the bound is asked of, which is what fills in the defaults of the trait's own parameters: `with Add`
  * on `Meters` means `Add<Meters, Meters>`.
  */
@@ -545,7 +545,7 @@ public fn integerLiteral(text: String, isNegative: Bool): LiteralValue? {
   }
 }
 
-/** `Show + Encode`: a value that implements all of these. Only traits can be combined. */
+/** `Show & Encode`: a value that implements all of these. Only traits can be combined. */
 fn intersectionType(
   var checker: Checker,
   reference: TypeReference,
@@ -569,7 +569,7 @@ fn intersectionType(
         checker.report(
           scope.module,
           Diagnostic.error("`{shown}` is a type, not a trait", member.span)
-            .withNote("Only traits can be combined with `+`: two types have no values in common")
+            .withNote("Only traits can be combined with `&`: two types have no values in common")
         )
       }
     }
@@ -581,7 +581,7 @@ fn intersectionType(
   checker.types.intern(TypeForm.Traits(sorted))
 }
 
-/** `Show + Encode` and `Encode + Show` are one type, so the bounds are sorted by the trait they name. */
+/** `Show & Encode` and `Encode & Show` are one type, so the bounds are sorted by the trait they name. */
 fn sortedBounds(checker: Checker, bounds: List<TypeId>): List<TypeId> {
   var sorted = bounds
   sorted.sort({ (headOfBound(checker, _), _.value) })

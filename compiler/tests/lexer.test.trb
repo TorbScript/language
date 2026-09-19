@@ -45,9 +45,16 @@ group "Lexer" {
   test "line breaks that do not end a statement are removed" {
     assert(kinds("a\nb").length() == 4)
     assert(kinds("a +\nb").length() == 4)
+    assert(kinds("a &\nb").length() == 4)
     assert(kinds("a\n  .b").length() == 4)
     assert(kinds("f(\na,\nb\n)").length() == 7)
     assert(kinds("/* a /* not nested */ x // y") == [.Identifier, .EndOfFile])
+  }
+
+  test "`&` is its own token, `&&` still lexes as one" {
+    assert(kinds("&") == [.Ampersand, .EndOfFile])
+    assert(kinds("&&") == [.AndAnd, .EndOfFile])
+    assert(kinds("A & B") == [.Identifier, .Ampersand, .Identifier, .EndOfFile])
   }
 
   test "a part of a file keeps the offsets of the file" {

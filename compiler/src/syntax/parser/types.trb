@@ -4,21 +4,23 @@ use Expression, ExpressionKind, TextSegment, PrefixOperator, Name from "../ast"
 use Parser from "./parser"
 use parsePrimaryExpression from "./expressions"
 
-/** A type, including `Show + Encode` (a value that implements several traits). */
+/** A type, including `Show & Encode` (a value that implements several traits). */
 public fn parseType(var parser: Parser): TypeReference {
   const start = parser.span()
   const first = parseSingleType(parser)
-  if !parser.isAt(TokenKind.Plus) {
+  if parser.isAt(TokenKind.Plus) {
+    parser.errorHere("Traits are combined with `&`: `Compare & Show`")
+  } else if !parser.isAt(TokenKind.Ampersand) {
     return first
   }
   var members = [first]
-  while parser.eat(TokenKind.Plus) {
+  while parser.eat(TokenKind.Ampersand) || parser.eat(TokenKind.Plus) {
     members.add(parseSingleType(parser))
   }
   TypeReference(TypeKind.Intersection(members), start.to(parser.previousSpan()))
 }
 
-/** A type without `+`. This is what the items of a bound list are (`where Item: Hash + Equals`). */
+/** A type without `&`. This is what the items of a bound list are (`where Item: Hash & Equals`). */
 public fn parseSingleType(var parser: Parser): TypeReference {
   const start = parser.span()
   if parser.eatKeyword(Keyword.Lazy) {

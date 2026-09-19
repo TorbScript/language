@@ -140,7 +140,7 @@ impl Parser<'_> {
         Parameter { doc, name, is_var, is_variadic, annotation, default }
     }
 
-    /// `<Key: Hash + Equals, Value = Self>`
+    /// `<Key: Hash & Equals, Value = Self>`
     pub(super) fn generic_parameters(&mut self) -> Vec<GenericParameter> {
         if !self.eat(TokenKind::Less) {
             return Vec::new();
@@ -157,10 +157,13 @@ impl Parser<'_> {
         })
     }
 
-    /// `Hash + Equals`
+    /// `Hash & Equals`
     fn bounds(&mut self) -> Vec<TypeReference> {
         let mut bounds = vec![self.single_type()];
-        while self.eat(TokenKind::Plus) {
+        if self.at(TokenKind::Plus) {
+            self.error_here("Traits are combined with `&`: `Compare & Show`");
+        }
+        while self.eat(TokenKind::Ampersand) || self.eat(TokenKind::Plus) {
             bounds.push(self.single_type());
         }
         bounds

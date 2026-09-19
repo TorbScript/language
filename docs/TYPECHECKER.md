@@ -45,7 +45,7 @@ Constraints that shape every decision below:
 public type TypeForm {
   /** `Point`, `List<Int>`, `Option<User>`. Aliases are expanded, so `symbol` is never an Alias. */
   case Nominal(symbol: SymbolId, arguments: List<TypeId>)
-  /** A value of one or more traits: `Shape`, `Show + Encode`, `Iterable<Item>`. Bounds are `Nominal` of a trait. */
+  /** A value of one or more traits: `Shape`, `Show & Encode`, `Iterable<Item>`. Bounds are `Nominal` of a trait. */
   case Traits(bounds: List<TypeId>)
   /** `Item`, `Key`, `Self` in a trait, `const Size`. The parameter table says which. */
   case Parameter(parameter: ParameterId)
@@ -109,8 +109,8 @@ Notes on the forms:
 
 - **`Option<T>` is nominal.** `Item?` is sugar the checker expands while building a type; there is no optional form,
   no nullability, and `?.`/`??`/`?` are ordinary calls on `Option` (section 4.7).
-- **Trait-typed values and intersections are one form.** `Shape` is `Traits([Shape])`, `Show + Encode` is
-  `Traits([Show, Encode])`. Bounds are sorted by symbol id so that `Show + Encode` and `Encode + Show` intern to the
+- **Trait-typed values and intersections are one form.** `Shape` is `Traits([Shape])`, `Show & Encode` is
+  `Traits([Show, Encode])`. Bounds are sorted by symbol id so that `Show & Encode` and `Encode & Show` intern to the
   same id. A `Nominal` whose symbol is a trait appears only inside `Traits` and inside `Bound.traits`.
 - **`Self` is an ordinary parameter.** Inside a `trait` body, `Self` is a `Parameter` whose single bound is the trait
   itself. Inside a `type` body or an `extend`, `Self` is bound to the concrete target type, so
@@ -607,7 +607,7 @@ with escapes, `Option` as `Some(x)` / `None`.
 
 ### 4.3 Bounds, `where`, and type parameters as namespaces
 
-- `<Item: Hash + Equals>` and `where Item: Hash` are the same thing and both land in `Signature.bounds`.
+- `<Item: Hash & Equals>` and `where Item: Hash` are the same thing and both land in `Signature.bounds`.
 - A bound's subject may be any type mentioning the generic parameters (`where Target: From<Iterable<Item>>`,
   `where Item: Compare`), which is what the prelude needs.
 - A **member's** `where` clause makes that member conditionally available (`fn contains(self, value: Item) where Item:
@@ -632,7 +632,7 @@ This resolves the open question in CONCEPT.md ("generic methods on a trait-typed
 - **Object safety is checked per call, not per type.** A trait may always be used as a type. What cannot be called on
   a trait-typed value is a member that mentions `Self` in a parameter or in the result, and a static member (no
   `self`): the concrete type is not known, so `equals`, `compare`, `added` and `Type.from` have no meaning there. The
-  message names the member and the value's type. This keeps `List<Show + Hash>` and `fn audit(entry: Show + Encode)`
+  message names the member and the value's type. This keeps `List<Show & Hash>` and `fn audit(entry: Show & Encode)`
   legal - those only hash and render the individual values - while rejecting `a == b` on two of them.
   `fn field<Value: Decode>(var self, name: String)` on a `RecordDecoder` is fine: a generic method is object-safe
   because its witnesses are passed.
@@ -878,7 +878,7 @@ The catalogue (the ~40 that matter):
 | Orphan | ``` `extend String with Show`: neither `String` nor `Show` belongs to this package ``` |
 | Overlap | ``` `String` already implements `Show` (in `std/prelude/src/convert`) ``` |
 | Not delegated | ``` `Meters` has no `multiply`: `Multiply` was not forwarded by `with Add, Subtract, Compare by value` ``` |
-| Not object-safe here | ``` `equals` cannot be called on a `Show + Hash` value: it needs two values of the same type ``` |
+| Not object-safe here | ``` `equals` cannot be called on a `Show & Hash` value: it needs two values of the same type ``` |
 | List `+` | ``` `List<Encode>` has no `+`: lists have no `Add`. Use `addedAll` ``` |
 | `?` conversion | ``` `IoError` does not convert into `AppError`. Add a case that wraps it, or `extend AppError with From<IoError>` ``` |
 | `?` in the wrong function | ``` `?` needs a function that returns an `Option` or a `Result` ``` |
@@ -1235,7 +1235,7 @@ list. Everything else is as written.
 - **`Compare` is derived for a tuple, and `From<Self>` for every type.** An order is a decision and not a structure, so
   no `type` gets a derived `Compare` - but a tuple has no declaration anybody could write one in, and
   `diagnostics.sort { (_.span.start, _.span.end) }` is the idiom of the language. And `fn sum(self): Item where Item:
-  Add + From<Int>` asks `Int64` for `From<Int64>`: every type converts from itself, and a reflexive `From` cannot be
+  Add & From<Int>` asks `Int64` for `From<Int64>`: every type converts from itself, and a reflexive `From` cannot be
   written as a blanket implementation because it would overlap with every other one.
 - **A supertrait requirement is satisfied by any implementation of the same target.**
   `extend<Item: Hash> List<Item> with Hash` leans on `extend<Item: Equals> List<Item> with Equals` for the `equals` that
@@ -1765,8 +1765,8 @@ ends."
 _Proposal:_ as in 4.4 - every trait-typed value carries a witness table per bound; a generic call passes one witness
 per bound; the checker records the witness tree, so a back end monomorphizes when it contains no `.Object` and passes
 tables otherwise. **Object safety is checked per call, not per type:** a member that mentions `Self` in a parameter or
-result, or that has no `self`, cannot be called on a trait-typed value. _Reason:_ it keeps `List<Show + Hash>` and
-`fn audit(entry: Show + Encode)` (both in `examples/tour/src/12-type-system.trb`) legal while rejecting only the
+result, or that has no `self`, cannot be called on a trait-typed value. _Reason:_ it keeps `List<Show & Hash>` and
+`fn audit(entry: Show & Encode)` (both in `examples/tour/src/12-type-system.trb`) legal while rejecting only the
 calls that have no meaning, and it needs no new syntax.
 
 _Decision:_ accepted.

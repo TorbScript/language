@@ -151,7 +151,7 @@ fn describeSignature(checker: Checker, signature: Signature): String {
     for one in bound.traits {
       traits.add(checker.describe(one))
     }
-    parts.add("where {checker.describe(bound.subject)}: {traits.joined(separator: " + ")}")
+    parts.add("where {checker.describe(bound.subject)}: {traits.joined(separator: " & ")}")
   }
   parts.joined(separator: ", ")
 }
@@ -216,13 +216,13 @@ group "Forms of a type" {
 
   test "a trait as a type, and an intersection of traits" {
     assert(typeOf("Show") == "Show")
-    assert(typeOf("Show + Hash") == "Show + Hash")
+    assert(typeOf("Show & Hash") == "Show & Hash")
   }
 
-  test "`Show + Hash` and `Hash + Show` are the same type" {
-    var found = probe("type Probe \{\n  first: Show + Hash\n  second: Hash + Show\n\}")
-    assert(found.at("Show + Hash") == found.at("Hash + Show"))
-    assert(found.show(found.at("Hash + Show")) == "Show + Hash")
+  test "`Show & Hash` and `Hash & Show` are the same type" {
+    var found = probe("type Probe \{\n  first: Show & Hash\n  second: Hash & Show\n\}")
+    assert(found.at("Show & Hash") == found.at("Hash & Show"))
+    assert(found.show(found.at("Hash & Show")) == "Show & Hash")
   }
 
   test "a literal type, sorted so that the order it is written in does not matter" {
@@ -311,8 +311,8 @@ group "Signatures" {
   }
 
   test "the bounds of a declaration, inline and in a `where` clause, are one thing" {
-    const inline = "fn sorted<Key: Compare + Hash>(key: Key): Key \{\n  key\n\}"
-    assert(signatureIn(inline, "sorted") == "(key: Key) => Key, where Key: Compare + Hash")
+    const inline = "fn sorted<Key: Compare & Hash>(key: Key): Key \{\n  key\n\}"
+    assert(signatureIn(inline, "sorted") == "(key: Key) => Key, where Key: Compare & Hash")
     const clause = "fn grouped<Key>(key: Key): Key where Key: Hash \{\n  key\n\}"
     assert(signatureIn(clause, "grouped") == "(key: Key) => Key, where Key: Hash")
   }
@@ -433,7 +433,7 @@ group "Diagnostics" {
 
   test "a type where a trait is asked for" {
     assert(problems("type Probe with Int \{\n  field: Int\n\}") == ["`Int64` is a type, not a trait"])
-    assert(problems("type Probe \{\n  field: Show + Int\n\}") == ["`Int64` is a type, not a trait"])
+    assert(problems("type Probe \{\n  field: Show & Int\n\}") == ["`Int64` is a type, not a trait"])
     assert(problems("fn sorted<Key: Int>(key: Key): Key \{\n  key\n\}") == ["`Int64` is a type, not a trait"])
   }
 

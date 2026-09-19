@@ -157,6 +157,28 @@ group "Types and patterns" {
     assert(messages("const rate: 1.5 = 1.5")[0] == "A float cannot be a literal type")
   }
 
+  test "several traits are one type, combined with `&`" {
+    match statements("fn audit(entry: Show & Encode) \{\}")[0].kind {
+      .Declare(declaration) => match declaration.kind {
+        .Function(function) => match function.parameters[0].annotation {
+          Some(reference) => match reference.kind {
+            .Intersection(members) => assert(members.length() == 2)
+            other => panic "Unexpected annotation: {other}"
+          }
+          .None => panic "Expected an annotation"
+        }
+        other => panic "Unexpected declaration: {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "`+` in a type position recovers as `&`, with one diagnostic" {
+    assert(messages("fn audit(entry: Show + Encode + Hash) \{\}") == ["Traits are combined with `&`: `Compare & Show`"])
+    assert(messages("fn sorted<Item: Compare + Show>(item: Item): Item \{ item \}")
+      == ["Traits are combined with `&`: `Compare & Show`"])
+  }
+
   test "rest patterns know their position" {
     match bound("const first = match items \{ [head, ...tail] => head \}") {
       .Match(_, arms) => match arms[0].pattern.kind {

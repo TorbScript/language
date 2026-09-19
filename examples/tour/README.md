@@ -15,4 +15,4 @@ Every file is a standalone script and walks through one part of the syntax: `tor
 | `09-dsl.trb`                  | receiver closures, builders, property commands, nested receivers                   |
 | `10-async.trb`                | `async`, `Task`, `spawn`, channels                                                 |
 | `11-data.trb`                 | `Encode`/`Decode` instead of reflection, JSON, invariants, generic code over data |
-| `12-type-system.trb`          | Literal types, const parameters and `Array`, named tuples, `Show + Encode`       |
+| `12-type-system.trb`          | Literal types, const parameters and `Array`, named tuples, `Show & Encode`       |

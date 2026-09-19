@@ -156,7 +156,7 @@ fn parseParameter(var parser: Parser): Parameter {
   Parameter(doc, name, isVar, isVariadic, annotation, default)
 }
 
-/** `<Key: Hash + Equals, Value = Self>`, `<const Size: Int>` */
+/** `<Key: Hash & Equals, Value = Self>`, `<const Size: Int>` */
 fn parseGenericParameters(var parser: Parser): List<GenericParameter> {
   if !parser.eat(TokenKind.Less) {
     return []
@@ -175,10 +175,13 @@ fn parseGenericParameter(var parser: Parser): GenericParameter {
   GenericParameter(isConst, name, bounds, default)
 }
 
-/** `Hash + Equals` */
+/** `Hash & Equals` */
 fn parseBounds(var parser: Parser): List<TypeReference> {
   var bounds = [parseSingleType(parser)]
-  while parser.eat(TokenKind.Plus) {
+  if parser.isAt(TokenKind.Plus) {
+    parser.errorHere("Traits are combined with `&`: `Compare & Show`")
+  }
+  while parser.eat(TokenKind.Ampersand) || parser.eat(TokenKind.Plus) {
     bounds.add(parseSingleType(parser))
   }
   bounds
