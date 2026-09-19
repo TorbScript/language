@@ -1,5 +1,5 @@
 use File, IoError from "std/fs"
-use normalizePath, parentPath, joinPath, pathDepth from "./path"
+use normalizePath, parentPath, joinPath, pathDepth, pathName from "./path"
 use SourceTree from "./source-tree"
 
 /**
@@ -49,6 +49,11 @@ fn readProjectsAbove(var files: Map<String, String>, directory: String): Result<
       files.set(manifest, File.readText(manifest)?)
       outermost = Some(current)
     }
+    // Nothing above a skipped directory can have this one as a member, because members are never looked for
+    // inside of one. A checkout below `.claude/worktrees` is a workspace of its own, not a part of the one above.
+    if isSkippedDirectory(pathName(current)) {
+      break
+    }
     const parent = parentPath(current)
     // Stop at the root: one step further and the path would stop being absolute and be read relative to the
     // working directory, which is a different place entirely
@@ -58,6 +63,10 @@ fn readProjectsAbove(var files: Map<String, String>, directory: String): Result<
     current = parent
   }
   Ok(outermost)
+}
+
+fn isSkippedDirectory(name: String): Bool {
+  name.startsWith(".") || name == "target" || name == "node_modules"
 }
 
 /** Every `.trb` file below the path. Hidden directories, `target` and `node_modules` are skipped, as in `torb parse`. */
@@ -71,8 +80,7 @@ fn readBelow(var files: Map<String, String>, path: String): Result<Void, IoError
   for entry in File.list(path)? {
     const child = joinPath(path, entry)
     if File.isDirectory(child) {
-      const isSkipped = entry.startsWith(".") || entry == "target" || entry == "node_modules"
-      if !isSkipped {
+      if !isSkippedDirectory(entry) {
         readBelow(files, child)?
       }
     } else if entry.endsWith(".trb") && !files.containsKey(child) {
