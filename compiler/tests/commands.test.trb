@@ -29,35 +29,35 @@ fn inServe(body: String): String {
 
 group "A command call of a function" {
   test "a method of the receiver is called, with the receiver put back" {
-    const source = inServe("    route \"/health\", to: \"health\"")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inServe "    route \"/health\", to: \"health\""
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.resolutionOf("route \"/health\", to: \"health\"") == "call route")
     assert(probed.adaptationsOf("route") == ["self self"])
     assert(probed.typeOf("route \"/health\", to: \"health\"") == "Void")
   }
 
   test "a variadic method collects the arguments of the command: `authors \"a\", \"b\"`" {
-    const source = inServe("    tags \"one\", \"two\"")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inServe "    tags \"one\", \"two\""
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.resolutionOf("tags \"one\", \"two\"") == "call tags")
     assert(probed.adaptationsOf("tags \"one\", \"two\"") == ["variadic String from 0"])
   }
 
   test "a function in a field is called with parentheses and assigned with a block" {
-    const source = inServe("    onStart()")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inServe "    onStart()"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("onStart()") == "Void")
   }
 }
 
 group "Property commands" {
   test "`port 8080` writes the field" {
-    const source = inServe("    port 9000")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inServe "    port 9000"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.resolutionOf("port 9000") == "assign Options.port")
     assert(probed.resolutionOf("port") == "field Options.port")
     assert(probed.typeOf("9000") == "Int64")
@@ -73,24 +73,24 @@ group "Property commands" {
   }
 
   test "parentheses write the field as well, which is the only way to pass some values (gap 15)" {
-    const source = inServe("    tls(port == 8443)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inServe "    tls(port == 8443)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.resolutionOf("tls(port == 8443)") == "assign Options.tls")
     assert(probed.typeOf("port == 8443") == "Bool")
   }
 
   test "a field is readable where it is written" {
-    const source = inServe("    host \"\{port\}\"")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inServe "    host \"\{port\}\""
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.resolutionOf("port") == "field Options.port")
   }
 
   test "a block on a field whose type is a function assigns the closure" {
-    const source = inServe("    onStart \{ \}")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inServe "    onStart \{ \}"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.resolutionOf("onStart \{ \}") == "assign closure Options.onStart")
     assert(probed.typeOf("\{ \}") == "() => Void")
   }
@@ -103,9 +103,9 @@ group "Property commands" {
   }
 
   test "a block on a field whose type is a type configures it in place" {
-    const source = inServe("    limits \{\n      maxConnections 500\n    \}")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inServe "    limits \{\n      maxConnections 500\n    \}"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.resolutionOf("limits \{\n      maxConnections 500\n    \}") == "configure Options.limits")
     assert(probed.typeOf("\{\n      maxConnections 500\n    \}") == "(var self: Limits) => Void")
     assert(probed.resolutionOf("maxConnections 500") == "assign Limits.maxConnections")
@@ -114,8 +114,8 @@ group "Property commands" {
   test "a command through a target instead of the receiver" {
     // `made` is read afterwards: a command is a change, and a change nobody reads is a mistake of its own (design 5.3)
     const source = "fn probe() \{\n  var made = Options()\n  made.port 9000\n  print made.port\n\}\n{options}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.resolutionOf("made.port 9000") == "assign Options.port")
     assert(probed.adaptationsOf("port") == [])
   }
@@ -187,8 +187,8 @@ group "A property command is a place that is written" {
 
   test "the place the command writes is recorded under the span of the field" {
     const source = "fn probe() \{\n  var made = Options()\n  made.port 9000\n  print made.port\n\}\n{options}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.placeOf("made.port") == "local made.port")
   }
 
@@ -198,7 +198,7 @@ group "A property command is a place that is written" {
   }
 
   test "a `private(var)` field is written by a command of its own type and by nobody else" {
-    assert(problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty())
+    assert problems("{account}fn probe() \{\n  var held = Account()\n  held.deposit(1)\n  print held.balance\n\}").isEmpty()
     const outside = "{account}fn probe(var held: Account) \{\n  held.balance 10\n\}"
     assert(problems(outside) == ["`balance` can only be written by `Account`"])
     assert(
@@ -214,7 +214,7 @@ group "A property command is a place that is written" {
 
 group "The first argument of a command" {
   test "a case keeps its dot, and `.` is not the start of a command argument (gap 42)" {
-    const source = inServe("    level .Debug")
+    const source = inServe "    level .Debug"
     assert(problems(source) == ["`Level` has no member `Debug`"])
     assert(
       notes(source)
@@ -226,17 +226,17 @@ group "The first argument of a command" {
   }
 
   test "with parentheses the case is what it looks like" {
-    const source = inServe("    level(.Debug)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inServe "    level(.Debug)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.resolutionOf("level(.Debug)") == "assign Options.level")
     assert(probed.typeOf(".Debug") == "Level")
   }
 
   test "an `if` may start a command argument, so a setting can be computed" {
-    const source = inServe("    port if tls \{ 8443 \} else \{ 8080 \}")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inServe "    port if tls \{ 8443 \} else \{ 8080 \}"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.resolutionOf("port if tls \{ 8443 \} else \{ 8080 \}") == "assign Options.port")
   }
 }

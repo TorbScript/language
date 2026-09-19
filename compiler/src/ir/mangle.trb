@@ -32,8 +32,8 @@ public type SymbolPath {
   /** The components of the mangled name, in order. Empty ones are dropped by `mangledName`. */
   fn components(self): List<String> {
     var parts = [package, module]
-    parts.addAll(owners)
-    parts.add(name)
+    parts.addAll owners
+    parts.add name
     parts
   }
 }
@@ -98,7 +98,7 @@ public fn nameHash(text: String): String {
   var low = 305419896
   for byte in text.bytes() {
     // A byte of a `String` is a `UInt8`, and there are no implicit numeric conversions
-    const value = Int.from(byte)
+    const value = Int.from byte
     high = (high * 16777619 + value) % 2147483647
     low = (low * 31 + value + 7) % 2147483629
   }
@@ -156,7 +156,7 @@ public fn canonicalType(program: IrProgram, id: IrTypeId): String {
     .Tuple(layout) => program.layoutAt(layout).name
     .SharedObject(layout) => program.layoutAt(layout).name
     .FixedArray(item, size) => "Array_{canonicalType(program, item)}_{size}"
-    .Closure(signature) => canonicalSignature(program, signature)
+    .Closure(signature) => canonicalSignature program, signature
     .Object(bounds) => {
       var name = "Object"
       for bound in bounds {
@@ -167,13 +167,13 @@ public fn canonicalType(program: IrProgram, id: IrTypeId): String {
     .Box(item) => "Box_{canonicalType(program, item)}"
     .Lazy(item) => "Lazy_{canonicalType(program, item)}"
     .Runtime(kind, arguments) => {
-      const head = canonicalRuntime(kind)
+      const head = canonicalRuntime kind
       if arguments.isEmpty() {
         return head
       }
       "{head}_{canonicalTypes(program, arguments)}"
     }
-    .ConstantValue(value, _) => canonicalLiteral(value)
+    .ConstantValue(value, _) => canonicalLiteral value
   }
 }
 
@@ -181,9 +181,9 @@ public fn canonicalType(program: IrProgram, id: IrTypeId): String {
 public fn canonicalTypes(program: IrProgram, arguments: List<IrTypeId>): String {
   var parts: List<String> = []
   for argument in arguments {
-    parts.add(canonicalType(program, argument))
+    parts.add canonicalType(program, argument)
   }
-  parts.joined(separator: "_")
+  parts.joined separator: "_"
 }
 
 fn canonicalRuntime(kind: RuntimeKind): String {
@@ -204,7 +204,7 @@ fn canonicalRuntime(kind: RuntimeKind): String {
  * name.
  */
 public fn canonicalSignature(program: IrProgram, id: IrSignatureId): String {
-  const signature = program.signatureAt(id)
+  const signature = program.signatureAt id
   var name = "Function"
   for parameter in signature.parameters {
     if parameter.isReference {
@@ -223,7 +223,7 @@ public fn canonicalSignature(program: IrProgram, id: IrSignatureId): String {
 
 /** `std_x2f_core_convert_Show`, with the trait's own arguments behind it. */
 public fn canonicalTrait(program: IrProgram, id: TraitId): String {
-  const applied = program.traitAt(id)
+  const applied = program.traitAt id
   const path = applied.path
   var name = ""
   for component in path.components() {
@@ -231,7 +231,7 @@ public fn canonicalTrait(program: IrProgram, id: TraitId): String {
       continue
     }
     if name.isEmpty() {
-      name = escapedComponent(component)
+      name = escapedComponent component
       continue
     }
     name = name + "_{escapedComponent(component)}"
@@ -251,8 +251,8 @@ public fn canonicalLiteral(value: LiteralValue): String {
       }
       "{inner}"
     }
-    .Text(inner) => escapedComponent(inner)
-    .Character(inner) => escapedComponent("{inner}")
+    .Text(inner) => escapedComponent inner
+    .Character(inner) => escapedComponent "{inner}"
     .Boolean(inner) => if inner { "true" } else { "false" }
   }
 }
@@ -261,12 +261,12 @@ public fn canonicalLiteral(value: LiteralValue): String {
 
 /** `t_main_translated`, `t_std_x2f_collections_list_ArrayList_add__Int64`. */
 public fn functionName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
-  mangledName("t", path.components(), canonicalTypes(program, arguments))
+  mangledName "t", path.components(), canonicalTypes(program, arguments)
 }
 
 /** `T_main_Point`, `T_std_x2f_core_option_Option__Int64`. */
 public fn layoutName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
-  mangledName("T", path.components(), canonicalTypes(program, arguments))
+  mangledName "T", path.components(), canonicalTypes(program, arguments)
 }
 
 /**
@@ -275,7 +275,7 @@ public fn layoutName(program: IrProgram, path: SymbolPath, arguments: List<IrTyp
  * highest: Int)` and `(Int, Int)` are one layout and one name.
  */
 public fn tupleLayoutName(program: IrProgram, fields: List<IrTypeId>): String {
-  mangledName("T", ["tuple"], canonicalTypes(program, fields))
+  mangledName "T", ["tuple"], canonicalTypes(program, fields)
 }
 
 /**
@@ -286,21 +286,21 @@ public fn tupleLayoutName(program: IrProgram, fields: List<IrTypeId>): String {
  * its one component is the word `payload`, the way a tuple's is the word `tuple`.
  */
 public fn payloadLayoutName(program: IrProgram, item: IrTypeId): String {
-  mangledName("T", ["payload"], canonicalType(program, item))
+  mangledName "T", ["payload"], canonicalType(program, item)
 }
 
 /** `T_object__std_x2f_prelude_convert_Show`: the C struct of a trait-typed value with these bounds, in bound order. */
 public fn objectTypeName(program: IrProgram, bounds: List<TraitId>): String {
   var parts: List<String> = []
   for bound in bounds {
-    parts.add(canonicalTrait(program, bound))
+    parts.add canonicalTrait(program, bound)
   }
-  mangledName("T", ["object"], parts.joined(separator: "_"))
+  mangledName "T", ["object"], parts.joined(separator: "_")
 }
 
 /** `s_main_greeting`. */
 public fn staticName(program: IrProgram, path: SymbolPath, arguments: List<IrTypeId>): String {
-  mangledName("s", path.components(), canonicalTypes(program, arguments))
+  mangledName "s", path.components(), canonicalTypes(program, arguments)
 }
 
 /** `d_Int64`, `d_T_main_Point`: one element descriptor per element type, whatever container asks for it. */
@@ -310,12 +310,12 @@ public fn elementName(program: IrProgram, item: IrTypeId): String {
 
 /** `w_std_x2f_core_convert_Show__T_main_Point`: one table per applied trait and target type. */
 public fn witnessTableName(program: IrProgram, applied: TraitId, target: IrTypeId): String {
-  const declared = program.traitAt(applied)
-  var instance = canonicalType(program, target)
+  const declared = program.traitAt applied
+  var instance = canonicalType program, target
   if !declared.arguments.isEmpty() {
     instance = "{instance}_{canonicalTypes(program, declared.arguments)}"
   }
-  mangledName("w", declared.path.components(), instance)
+  mangledName "w", declared.path.components(), instance
 }
 
 /**

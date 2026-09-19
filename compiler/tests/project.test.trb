@@ -7,15 +7,15 @@ use SourceText from "../src/syntax/source"
 use parse from "../src/syntax/parser/parser"
 
 fn manifestOf(text: String): Manifest {
-  readManifest(parse(SourceText.of(text)).file)
+  readManifest parse(SourceText.of(text)).file
 }
 
 /** The name and the files of every package of the workspace a path belongs to, in the order the toolchain sees them. */
 fn packagesOf(files: Map<String, String>, path: String): List<String> {
   var described: List<String> = []
   for package in findWorkspace(SourceTree.of(files), path).packages {
-    const paths = package.files.joined(separator: ", ")
-    described.add("{package.name}: {paths}")
+    const paths = package.files.joined separator: ", "
+    described.add "{package.name}: {paths}"
   }
   described
 }
@@ -38,10 +38,10 @@ group "Paths" {
   }
 
   test "everything is inside of the working directory" {
-    assert(isInside("app/src/main.trb", "app"))
-    assert(isInside("app", "app"))
+    assert isInside("app/src/main.trb", "app")
+    assert isInside("app", "app")
     assert(!isInside("application", "app"))
-    assert(isInside("app/src", "."))
+    assert isInside("app/src", ".")
   }
 
   test "depth orders a directory before what is inside it" {
@@ -76,12 +76,12 @@ group "Manifest" {
     assert(manifest.developmentDependencies == ["acme/mock-server"])
     assert(manifest.buildInput == "src/api.trb")
     assert(manifest.testInput == "spec")
-    assert(manifest.dependsOn("acme/http"))
+    assert manifest.dependsOn("acme/http")
     assert(!manifest.dependsOn("acme/other"))
   }
 
   test "the defaults are the layout of a project" {
-    const manifest = manifestOf("name \"acme/app\"")
+    const manifest = manifestOf "name \"acme/app\""
     assert(manifest.prelude == "std/prelude")
     assert(manifest.buildInput == "src/main.trb")
     assert(manifest.testInput == "tests")
@@ -91,11 +91,11 @@ group "Manifest" {
   test "everything the toolchain does not know is ignored silently" {
     const manifest = manifestOf(
       r"""
-name "acme/app"
-const binary = name.substringAfter("/") ?? name
-authors "Someone"
-registry "acme", url: "https://x.test"
-"""
+        name "acme/app"
+        const binary = name.substringAfter("/") ?? name
+        authors "Someone"
+        registry "acme", url: "https://x.test"
+        """
     )
     assert(manifest.name == "acme/app")
   }

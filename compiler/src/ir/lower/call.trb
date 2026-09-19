@@ -48,41 +48,41 @@ public fn lowerCall(
 ): Slot {
   const resolution = match callResolutionOf(lowering, expression, callee) {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "a call the checker did not resolve", expression.span)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a call the checker did not resolve", expression.span
     }
   }
   match resolution {
     .Callable(symbol, typeArguments, dispatch) => {
-      const given = if typeArguments.isEmpty() { writtenTypeArguments(lowering, expression.span) } else { typeArguments }
-      lowerCallable(lowering, builder, destination, expression, callee, arguments, annotation, symbol, given, dispatch)
+      const given = if typeArguments.isEmpty() { writtenTypeArguments lowering, expression.span } else { typeArguments }
+      lowerCallable lowering, builder, destination, expression, callee, arguments, annotation, symbol, given, dispatch
     }
     .Construct(owner) => {
-      lowerConstructorCall(lowering, builder, destination, expression, arguments, annotation, owner)
+      lowerConstructorCall lowering, builder, destination, expression, arguments, annotation, owner
     }
-    .CopyOf(owner) => lowerCopyCall(lowering, builder, destination, expression, callee, arguments, annotation, owner)
+    .CopyOf(owner) => lowerCopyCall lowering, builder, destination, expression, callee, arguments, annotation, owner
     .CaseOf(_, variant) => {
-      lowerCaseCall(lowering, builder, destination, expression, arguments, annotation, variant)
+      lowerCaseCall lowering, builder, destination, expression, arguments, annotation, variant
     }
     .Local(_) | .Field(_, _) => {
-      unsupportedSlot(lowering, builder, destination, "a call of a closure value", expression.span)
+      unsupportedSlot lowering, builder, destination, "a call of a closure value", expression.span
     }
     .Constant(_, _) => {
-      unsupportedSlot(lowering, builder, destination, "a call of a `const` that holds a closure", expression.span)
+      unsupportedSlot lowering, builder, destination, "a call of a `const` that holds a closure", expression.span
     }
     // `port 8080`: a call of a member that is not callable writes it, which is an assignment written another way
     .PropertyWrite(_, _, kind) => {
       const written = match arguments.first() {
         Some(found) => found.value
-        .None => {
+        None => {
           const what = "a property command without a value"
-          return unsupportedSlot(lowering, builder, destination, what, expression.span)
+          return unsupportedSlot lowering, builder, destination, what, expression.span
         }
       }
-      lowerPropertyWrite(lowering, builder, destination, callee, written, kind)
+      lowerPropertyWrite lowering, builder, destination, callee, written, kind
     }
-    .TypeOf(_) => unsupportedSlot(lowering, builder, destination, "a call of a type", expression.span)
-    _ => unsupportedSlot(lowering, builder, destination, "a call the checker left open", expression.span)
+    .TypeOf(_) => unsupportedSlot lowering, builder, destination, "a call of a type", expression.span
+    _ => unsupportedSlot lowering, builder, destination, "a call the checker left open", expression.span
   }
 }
 
@@ -95,10 +95,10 @@ public fn lowerCall(
  */
 fn callResolutionOf(var lowering: Lowering, expression: Expression, callee: Expression): Resolution? {
   const module = lowering.module
-  const found = lowering.checker.resolutionAt(module, expression.span)
+  const found = lowering.checker.resolutionAt module, expression.span
   match found {
-    Some(.Deferred) => lowering.checker.resolutionAt(module, callee.span)
-    .None => lowering.checker.resolutionAt(module, callee.span)
+    Some(.Deferred) => lowering.checker.resolutionAt module, callee.span
+    None => lowering.checker.resolutionAt module, callee.span
     _ => found
   }
 }
@@ -126,26 +126,26 @@ fn lowerCallable(
   typeArguments: List<TypeId>,
   dispatch: Dispatch,
 ): Slot {
-  const receiver = receiverTypeOf(lowering, callee)
+  const receiver = receiverTypeOf lowering, callee
   const at = expression.span
   const dispatched = match dispatchedMember(lowering, symbol, typeArguments, dispatch, receiver, at) {
     Some(found) => found
-    .None => {
-      return abandonedSlot(lowering, builder, destination)
+    None => {
+      return abandonedSlot lowering, builder, destination
     }
   }
   const member = dispatched.member
-  const identifier = signatureOf(lowering.checker, member)
-  const signature = lowering.checker.signature(identifier)
+  const identifier = signatureOf lowering.checker, member
+  const signature = lowering.checker.signature identifier
   const owner = dispatched.owner
-  const name = memberNameOf(lowering, member)
+  const name = memberNameOf lowering, member
   // A `native fn` whose receiver or argument is a place needs a wrapper around the runtime's own pointer convention, and
   // every native that declares one is a member of a container - so the wrapper belongs to 5.7, with them
   if needsReference(signature) {
     if !signature.hasBody {
       if nativeNamed(lowering, owner, name).isSome() {
         const what = "a `var` receiver of a `native fn` (milestone 5.7)"
-        return unsupportedSlot(lowering, builder, destination, what, expression.span)
+        return unsupportedSlot lowering, builder, destination, what, expression.span
       }
     }
   }
@@ -156,58 +156,58 @@ fn lowerCallable(
     if signature.isVarSelf {
       const path = match receiverReference(lowering, builder, callee, "a `var` receiver") {
         Some(found) => found
-        .None => {
-          return abandonedSlot(lowering, builder, destination)
+        None => {
+          return abandonedSlot lowering, builder, destination
         }
       }
-      operands.add(path.reference.base)
-      places.add(Some(path.reference))
+      operands.add path.reference.base
+      places.add Some(path.reference)
     } else {
       const receiver = match receiverSlot(lowering, builder, callee) {
         Some(found) => found
-        .None => {
+        None => {
           const what = "a receiver the back end cannot reach"
-          return unsupportedSlot(lowering, builder, destination, what, expression.span)
+          return unsupportedSlot lowering, builder, destination, what, expression.span
         }
       }
-      operands.add(receiver)
-      places.add(None)
+      operands.add receiver
+      places.add None
     }
   }
-  const written = lowerArgumentSlots(lowering, builder, expression, arguments, signature)
+  const written = lowerArgumentSlots lowering, builder, expression, arguments, signature
   if !lowering.isSupported {
-    return abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
-  operands.addAll(written.slots)
-  places.addAll(written.places)
+  operands.addAll written.slots
+  places.addAll written.places
   // `native fn panic(message): Never` is the one native with an instruction of its own
   if owner.isEmpty() && name == "panic" {
-    return lowerPanic(lowering, builder, destination, operands, expression.span)
+    return lowerPanic lowering, builder, destination, operands, expression.span
   }
   if dispatched.isDynamic {
-    return lowerWitnessCall(lowering, builder, destination, expression, dispatched, operands, annotation)
+    return lowerWitnessCall lowering, builder, destination, expression, dispatched, operands, annotation
   }
   if !signature.hasBody {
     if const Some(entry) = nativeNamed(lowering, owner, name) {
-      return lowerNativeCall(lowering, builder, destination, expression, operands, annotation, dispatched, entry)
+      return lowerNativeCall lowering, builder, destination, expression, operands, annotation, dispatched, entry
     }
     // No body and no manifest entry: a member of a **derived** implementation, generated from the layout
     if const Some(generated) = generatedMemberFor(lowering, dispatched, expression.span) {
-      return emitCall(lowering, builder, destination, generated, operands, annotation, expression.span)
+      return emitCall lowering, builder, destination, generated, operands, annotation, expression.span
     }
     if !lowering.isSupported {
-      return abandonedSlot(lowering, builder, destination)
+      return abandonedSlot lowering, builder, destination
     }
   }
   const mapping = dispatched.mapping
   const function = match instanceFor(lowering, member, mapping) {
     Some(found) => found
-    .None => {
-      const what = describeCallee(lowering, member, signature)
-      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    None => {
+      const what = describeCallee lowering, member, signature
+      return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
-  emitCall(lowering, builder, destination, function, operands, annotation, expression.span, places)
+  emitCall lowering, builder, destination, function, operands, annotation, expression.span, places
 }
 
 /**
@@ -217,12 +217,12 @@ fn lowerCallable(
 public fn receiverTypeOf(var lowering: Lowering, callee: Expression): TypeId? {
   const module = lowering.module
   if const .Member(base, _, _) = callee.kind {
-    return lowering.checker.expressionType(module, base.span)
+    return lowering.checker.expressionType module, base.span
   }
-  const adaptations = lowering.checker.adaptationsAt(module, callee.span)
+  const adaptations = lowering.checker.adaptationsAt module, callee.span
   for adaptation in adaptations {
     if const .ImplicitSelf(receiver) = adaptation {
-      return Some(lowering.checker.binding(receiver).annotation)
+      return Some lowering.checker.binding(receiver).annotation
     }
   }
   None
@@ -262,50 +262,50 @@ fn lowerWitnessCall(
 ): Slot {
   const receiver = match operands.first() {
     Some(found) => found
-    .None => {
+    None => {
       const what = "a call on a trait-typed value without a receiver"
-      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+      return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
   const subject = match dispatched.subject {
     Some(found) => found
-    .None => {
+    None => {
       const what = "a call on a trait-typed value of an unknown type"
-      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+      return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
   const bounds = dispatched.bounds
   const member = dispatched.member
   const found = match memberInValue(lowering, bounds, subject, receiver, member) {
     Some(inner) => inner
-    .None => {
-      const name = memberNameOf(lowering, member)
+    None => {
+      const name = memberNameOf lowering, member
       const what = "`{name}`, which is not in the witness table of a trait-typed value"
-      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+      return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
   var rest: List<Slot> = []
   for index in 1..operands.length() {
-    rest.add(operands[index])
+    rest.add operands[index]
   }
-  const given = borrowedArguments(rest)
+  const given = borrowedArguments rest
   if !producesValue(lowering, annotation) {
-    emit(builder, Instruction.CallWitness(None, found.source, found.member, given))
+    emit builder, Instruction.CallWitness(None, found.source, found.member, given)
     if isNeverType(lowering, annotation) {
-      finishBlock(lowering, builder, Terminator.Unreachable)
-      return abandonedSlot(lowering, builder, destination)
+      finishBlock lowering, builder, Terminator.Unreachable
+      return abandonedSlot lowering, builder, destination
     }
     match destination {
       Some(_) => {
-        return voidSlot(lowering, builder, destination)
+        return voidSlot lowering, builder, destination
       }
-      .None => {
-        return abandonedSlot(lowering, builder, destination)
+      None => {
+        return abandonedSlot lowering, builder, destination
       }
     }
   }
-  const target = valueSlot(lowering, builder, destination, annotation)
-  emit(builder, Instruction.CallWitness(Some(target), found.source, found.member, given))
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.CallWitness(Some(target), found.source, found.member, given)
   target
 }
 
@@ -323,7 +323,7 @@ fn lowerNativeCall(
 ): Slot {
   if const .Planned(milestone) = entry.state {
     const what = "`{entry.name}`, which the runtime provides from milestone {milestone} on"
-    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    return unsupportedSlot lowering, builder, destination, what, expression.span
   }
   const member = dispatched.member
   const mapping = dispatched.mapping
@@ -331,31 +331,31 @@ fn lowerNativeCall(
     .Intrinsic(intrinsic) => {
       if !producesValue(lowering, annotation) {
         const what = "`{entry.name}`, an intrinsic that produces no value"
-        return unsupportedSlot(lowering, builder, destination, what, expression.span)
+        return unsupportedSlot lowering, builder, destination, what, expression.span
       }
-      const target = valueSlot(lowering, builder, destination, annotation)
-      emitIntrinsic(lowering, builder, Some(target), intrinsic.operation, intrinsic.kind, operands, expression.span)
+      const target = valueSlot lowering, builder, destination, annotation
+      emitIntrinsic lowering, builder, Some(target), intrinsic.operation, intrinsic.kind, operands, expression.span
       target
     }
     .Runtime(function) => {
       const identifier = match runtimeFunctionUnder(lowering, member, function, mapping) {
         Some(found) => found
-        .None => {
+        None => {
           const what = "`{entry.name}`, whose declaration is not monomorphic"
-          return unsupportedSlot(lowering, builder, destination, what, expression.span)
+          return unsupportedSlot lowering, builder, destination, what, expression.span
         }
       }
-      emitCall(lowering, builder, destination, identifier, operands, annotation, expression.span)
+      emitCall lowering, builder, destination, identifier, operands, annotation, expression.span
     }
     // A member the language generates has no source anywhere: the body is built from the layout and called like any other
     .Derived(derived) => {
       const generated = match generatedMemberOf(lowering, dispatched, derived, expression.span) {
         Some(found) => found
-        .None => {
-          return abandonedSlot(lowering, builder, destination)
+        None => {
+          return abandonedSlot lowering, builder, destination
         }
       }
-      emitCall(lowering, builder, destination, generated, operands, annotation, expression.span)
+      emitCall lowering, builder, destination, generated, operands, annotation, expression.span
     }
   }
 }
@@ -372,7 +372,7 @@ fn generatedMemberFor(var lowering: Lowering, dispatched: Dispatched, at: Span):
   const kind = generatedKindOf(lowering, member, owner, implementation, at)?
   const bound = dispatched.capability
   const mapping = dispatched.mapping
-  generatedFunctionOf(lowering, kind, member, subject, bound, mapping, at)
+  generatedFunctionOf lowering, kind, member, subject, bound, mapping, at
 }
 
 /** The generated body of a member the manifest marks `.Derived`: `Int64.compare`, `String.show`, `Range.hash`. */
@@ -384,8 +384,8 @@ fn generatedMemberOf(
 ): FunctionId? {
   const subject = match dispatched.subject {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "a generated member without a receiver", at)
+    None => {
+      reportUnsupported lowering, "a generated member without a receiver", at
       return None
     }
   }
@@ -393,7 +393,7 @@ fn generatedMemberOf(
   const member = dispatched.member
   const bound = dispatched.capability
   const mapping = dispatched.mapping
-  generatedFunctionOf(lowering, kind, member, subject, bound, mapping, at)
+  generatedFunctionOf lowering, kind, member, subject, bound, mapping, at
 }
 
 /** `panic "unreachable"`: an instruction of its own, and nothing after it in the block is reachable (gap 9). */
@@ -406,14 +406,14 @@ fn lowerPanic(
 ): Slot {
   const message = match operands.first() {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "`panic` without a message", at)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "`panic` without a message", at
     }
   }
-  const location = locationOf(lowering, at)
-  emit(builder, Instruction.Panic(borrowed(message), location))
-  finishBlock(lowering, builder, Terminator.Unreachable)
-  abandonedSlot(lowering, builder, destination)
+  const location = locationOf lowering, at
+  emit builder, Instruction.Panic(borrowed(message), location)
+  finishBlock lowering, builder, Terminator.Unreachable
+  abandonedSlot lowering, builder, destination
 }
 
 // --- Emitting a call ------------------------------------------------------------------------------------------------
@@ -433,37 +433,37 @@ public fn emitCall(
   at: Span,
   places: List<Reference?> = [],
 ): Slot {
-  const given = borrowedArguments(operands, places)
+  const given = borrowedArguments operands, places
   // Where the call is written: a runtime function that can panic takes it, and a panic message is observable
-  const location = locationOf(lowering, at)
+  const location = locationOf lowering, at
   if !producesValue(lowering, annotation) {
-    emit(builder, Instruction.Call(None, function, given, [], Some(location)))
+    emit builder, Instruction.Call(None, function, given, [], Some(location))
     if isNeverType(lowering, annotation) {
-      finishBlock(lowering, builder, Terminator.Unreachable)
-      return abandonedSlot(lowering, builder, destination)
+      finishBlock lowering, builder, Terminator.Unreachable
+      return abandonedSlot lowering, builder, destination
     }
     match destination {
       Some(_) => {
-        return voidSlot(lowering, builder, destination)
+        return voidSlot lowering, builder, destination
       }
-      .None => {
-        return abandonedSlot(lowering, builder, destination)
+      None => {
+        return abandonedSlot lowering, builder, destination
       }
     }
   }
   // `x = f(x)` where `f` takes `x` by `var`: the result may not land in the base of a place the call writes through, or
   // it would overwrite - and therefore leak - what the callee has just put there
   if collidesWithPlace(destination, places) {
-    const inner = valueSlot(lowering, builder, None, annotation)
-    emit(builder, Instruction.Call(Some(inner), function, given, [], Some(location)))
+    const inner = valueSlot lowering, builder, None, annotation
+    emit builder, Instruction.Call(Some(inner), function, given, [], Some(location))
     if const Some(slot) = destination {
-      writtenResult(builder, slot, inner)
+      writtenResult builder, slot, inner
       return slot
     }
     return inner
   }
-  const target = valueSlot(lowering, builder, destination, annotation)
-  emit(builder, Instruction.Call(Some(target), function, given, [], Some(location)))
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.Call(Some(target), function, given, [], Some(location))
   target
 }
 
@@ -485,42 +485,42 @@ public fn lowerArgumentSlots(
   const count = signature.form.parameters.length()
   const targets = match lowering.checker.argumentTargetsAt(module, expression.span) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "a call without an argument plan", expression.span)
+    None => {
+      reportUnsupported lowering, "a call without an argument plan", expression.span
       return CallOperands([], [])
     }
   }
-  const references = referenceParametersOf(signature)
+  const references = referenceParametersOf signature
   var filled: List<Slot?> = []
   var places: List<Reference?> = []
   for _ in 0..count {
-    filled.add(None)
-    places.add(None)
+    filled.add None
+    places.add None
   }
   for index in 0..arguments.length() {
     const position = targets.get(index) ?? -1
     if position < 0 || position >= count {
-      reportUnsupported(lowering, "an argument that fills no parameter", arguments[index].value.span)
+      reportUnsupported lowering, "an argument that fills no parameter", arguments[index].value.span
       return CallOperands([], [])
     }
     if references.get(position) ?? false {
       const path = match referenceArgumentAt(lowering, builder, arguments[index].value, signature, position) {
         Some(found) => found
-        .None => {
+        None => {
           return CallOperands([], [])
         }
       }
-      filled.set(position, Some(path.reference.base))
-      places.set(position, Some(path.reference))
+      filled.set position, Some(path.reference.base)
+      places.set position, Some(path.reference)
       continue
     }
-    const slot = lowerValue(lowering, builder, arguments[index].value)
+    const slot = lowerValue lowering, builder, arguments[index].value
     if !lowering.isSupported {
       return CallOperands([], [])
     }
-    filled.set(position, Some(slot))
+    filled.set position, Some(slot)
   }
-  lowerDefaults(lowering, builder, expression, signature, filled, places, references)
+  lowerDefaults lowering, builder, expression, signature, filled, places, references
 }
 
 /** One argument of a `var` parameter, whose place has to end in exactly the type the parameter declares. */
@@ -533,12 +533,12 @@ fn referenceArgumentAt(
 ): PlacePath? {
   const annotation = match parameterTypeAt(lowering, signature, position) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "a `var` parameter without a type", value.span)
+    None => {
+      reportUnsupported lowering, "a `var` parameter without a type", value.span
       return None
     }
   }
-  argumentReference(lowering, builder, value, annotation, "a `var` argument")
+  argumentReference lowering, builder, value, annotation, "a `var` argument"
 }
 
 /**
@@ -555,41 +555,41 @@ fn lowerDefaults(
   references: List<Bool>,
 ): CallOperands {
   var found = filled
-  const defaults = declaredDefaults(lowering, signature.symbol)
+  const defaults = declaredDefaults lowering, signature.symbol
   for index in 0..found.length() {
     if found[index].isSome() {
       continue
     }
     // A default is a value, so a `var` parameter nobody wrote an argument for has no place the callee could work on
     if references.get(index) ?? false {
-      reportUnsupported(lowering, "a `var` parameter that takes its default", expression.span)
+      reportUnsupported lowering, "a `var` parameter that takes its default", expression.span
       return CallOperands([], [])
     }
     const written = defaults.get(index) ?? None
     const value = match written {
       Some(inner) => inner
-      .None => {
-        reportUnsupported(lowering, "a parameter without an argument and without a default", expression.span)
+      None => {
+        reportUnsupported lowering, "a parameter without an argument and without a default", expression.span
         return CallOperands([], [])
       }
     }
-    const slot = lowerForeignExpression(lowering, builder, signature.symbol, value)
+    const slot = lowerForeignExpression lowering, builder, signature.symbol, value
     if !lowering.isSupported {
       return CallOperands([], [])
     }
-    found.set(index, Some(slot))
+    found.set index, Some(slot)
   }
   var ordered: List<Slot> = []
   for entry in found {
     match entry {
-      Some(slot) => ordered.add(slot)
-      .None => {
-        reportUnsupported(lowering, "an argument list the back end could not complete", expression.span)
+      Some(slot) => ordered.add slot
+      None => {
+        reportUnsupported lowering, "an argument list the back end could not complete", expression.span
         return CallOperands([], [])
       }
     }
   }
-  CallOperands(ordered, places)
+  CallOperands ordered, places
 }
 
 /**
@@ -600,7 +600,7 @@ fn declaredDefaults(var lowering: Lowering, symbol: SymbolId): List<Expression?>
   var defaults: List<Expression?> = []
   const declared = match functionOfDeclarationSite(lowering, symbol) {
     Some(found) => found.parameters
-    .None => {
+    None => {
       return defaults
     }
   }
@@ -608,7 +608,7 @@ fn declaredDefaults(var lowering: Lowering, symbol: SymbolId): List<Expression?>
     if parameter.name.text == "self" && parameter.annotation.isNone() {
       continue
     }
-    defaults.add(parameter.default)
+    defaults.add parameter.default
   }
   defaults
 }
@@ -618,13 +618,13 @@ fn functionOfDeclarationSite(var lowering: Lowering, symbol: SymbolId): Function
   match site.kind {
     .Declared(declaration) => {
       if const .Function(function) = declaration.kind {
-        return Some(function)
+        return Some function
       }
       None
     }
     .Owned(_, _, member) => {
       if const .Function(function) = member.kind {
-        return Some(function)
+        return Some function
       }
       None
     }
@@ -646,7 +646,7 @@ public fn lowerForeignExpression(
   if const Some(site) = lowering.checker.siteOf(symbol) {
     lowering.module = site.module
   }
-  const slot = lowerValue(lowering, builder, value)
+  const slot = lowerValue lowering, builder, value
   lowering.module = outer
   slot
 }
@@ -665,21 +665,21 @@ fn lowerConstructorCall(
 ): Slot {
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
-    .None => {
-      const shown = describeIrType(lowering.program, annotation)
-      return unsupportedSlot(lowering, builder, destination, "a constructor of `{shown}`", expression.span)
+    None => {
+      const shown = describeIrType lowering.program, annotation
+      return unsupportedSlot lowering, builder, destination, "a constructor of `{shown}`", expression.span
     }
   }
-  const shape = lowering.program.layoutAt(layout)
+  const shape = lowering.program.layoutAt layout
   if !shape.variants.isEmpty() {
-    return unsupportedSlot(lowering, builder, destination, "a constructor of a variant type", expression.span)
+    return unsupportedSlot lowering, builder, destination, "a constructor of a variant type", expression.span
   }
-  const slots = lowerFieldArguments(lowering, builder, expression, arguments, owner, None)
+  const slots = lowerFieldArguments lowering, builder, expression, arguments, owner, None
   if !lowering.isSupported {
-    return abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
-  const target = valueSlot(lowering, builder, destination, annotation)
-  lowerConstruct(lowering, builder, target, layout, 0, slots)
+  const target = valueSlot lowering, builder, destination, annotation
+  lowerConstruct lowering, builder, target, layout, 0, slots
   target
 }
 
@@ -700,23 +700,23 @@ fn lowerCopyCall(
 ): Slot {
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "`copy` of a value without a layout", expression.span)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "`copy` of a value without a layout", expression.span
     }
   }
   const receiver = match receiverSlot(lowering, builder, callee) {
     Some(found) => found
-    .None => {
+    None => {
       const what = "`copy` of a receiver the back end cannot reach"
-      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+      return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
-  const slots = lowerFieldArguments(lowering, builder, expression, arguments, owner, Some(receiver))
+  const slots = lowerFieldArguments lowering, builder, expression, arguments, owner, Some(receiver)
   if !lowering.isSupported {
-    return abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
-  const target = valueSlot(lowering, builder, destination, annotation)
-  lowerConstruct(lowering, builder, target, layout, 0, slots)
+  const target = valueSlot lowering, builder, destination, annotation
+  lowerConstruct lowering, builder, target, layout, 0, slots
   target
 }
 
@@ -733,32 +733,32 @@ fn lowerFieldArguments(
   receiver: Slot?,
 ): List<Slot> {
   const module = lowering.module
-  const fields = fieldsOf(lowering.checker, owner)
+  const fields = fieldsOf lowering.checker, owner
   const count = fields.length()
   const targets = match lowering.checker.argumentTargetsAt(module, expression.span) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "a construction without an argument plan", expression.span)
+    None => {
+      reportUnsupported lowering, "a construction without an argument plan", expression.span
       return []
     }
   }
   var filled: List<Slot?> = []
   for _ in 0..count {
-    filled.add(None)
+    filled.add None
   }
   for index in 0..arguments.length() {
     const position = targets.get(index) ?? -1
     if position < 0 || position >= count {
-      reportUnsupported(lowering, "an argument that fills no field", arguments[index].value.span)
+      reportUnsupported lowering, "an argument that fills no field", arguments[index].value.span
       return []
     }
-    const slot = lowerValue(lowering, builder, arguments[index].value)
+    const slot = lowerValue lowering, builder, arguments[index].value
     if !lowering.isSupported {
       return []
     }
-    filled.set(position, Some(slot))
+    filled.set position, Some(slot)
   }
-  completeFields(lowering, builder, expression, fields, filled, receiver)
+  completeFields lowering, builder, expression, fields, filled, receiver
 }
 
 fn completeFields(
@@ -776,32 +776,32 @@ fn completeFields(
     }
     const field = fields[index]
     if const Some(base) = receiver {
-      const slot = readFieldOf(lowering, builder, base, index, expression.span)
+      const slot = readFieldOf lowering, builder, base, index, expression.span
       if !lowering.isSupported {
         return []
       }
-      found.set(index, Some(slot))
+      found.set index, Some(slot)
       continue
     }
     const value = match fieldDefaultOf(lowering, field.symbol) {
       Some(inner) => inner
-      .None => {
-        reportUnsupported(lowering, "a field without an argument and without a default", expression.span)
+      None => {
+        reportUnsupported lowering, "a field without an argument and without a default", expression.span
         return []
       }
     }
-    const slot = lowerForeignExpression(lowering, builder, field.symbol, value)
+    const slot = lowerForeignExpression lowering, builder, field.symbol, value
     if !lowering.isSupported {
       return []
     }
-    found.set(index, Some(slot))
+    found.set index, Some(slot)
   }
   var ordered: List<Slot> = []
   for entry in found {
     match entry {
-      Some(slot) => ordered.add(slot)
-      .None => {
-        reportUnsupported(lowering, "a construction the back end could not complete", expression.span)
+      Some(slot) => ordered.add slot
+      None => {
+        reportUnsupported lowering, "a construction the back end could not complete", expression.span
         return []
       }
     }
@@ -811,18 +811,18 @@ fn completeFields(
 
 /** One field of the receiver of a `copy`. */
 fn readFieldOf(var lowering: Lowering, var builder: FunctionBuilder, base: Slot, index: Int, at: Span): Slot {
-  const owner = builder.typeOfSlot(base)
+  const owner = builder.typeOfSlot base
   const layout = match layoutOfType(lowering.program, owner) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "`copy` of a value without a layout", at)
-      return abandonedSlot(lowering, builder, None)
+    None => {
+      reportUnsupported lowering, "`copy` of a value without a layout", at
+      return abandonedSlot lowering, builder, None
     }
   }
-  const shape = lowering.program.layoutAt(layout)
+  const shape = lowering.program.layoutAt layout
   const annotation = shape.fields[index].annotation
-  const target = valueSlot(lowering, builder, None, annotation)
-  emit(builder, Instruction.Read(target, Reference(base, [PathStep.Field(layout, index)])))
+  const target = valueSlot lowering, builder, None, annotation
+  emit builder, Instruction.Read(target, Reference(base, [PathStep.Field(layout, index)]))
   target
 }
 
@@ -860,14 +860,14 @@ fn lowerCaseCall(
   annotation: IrTypeId,
   variant: SymbolId,
 ): Slot {
-  const identifier = signatureOf(lowering.checker, variant)
-  const signature = lowering.checker.signature(identifier)
+  const identifier = signatureOf lowering.checker, variant
+  const signature = lowering.checker.signature identifier
   // A case is a function from its own fields, and a field is a value: no position of one is ever a place
-  const written = lowerArgumentSlots(lowering, builder, expression, arguments, signature)
+  const written = lowerArgumentSlots lowering, builder, expression, arguments, signature
   if !lowering.isSupported {
-    return abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
-  constructedCase(lowering, builder, destination, expression, annotation, variant, written.slots)
+  constructedCase lowering, builder, destination, expression, annotation, variant, written.slots
 }
 
 /** `Shape.Empty`, `None`: a case without fields, written as a value. */
@@ -884,9 +884,9 @@ public fn lowerCaseValue(
   if layoutOfType(lowering.program, annotation).isNone() {
     const name = lowering.checker.symbolAt(variant).name
     const what = "`{name}` used as a function value (milestone 5.8)"
-    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    return unsupportedSlot lowering, builder, destination, what, expression.span
   }
-  constructedCase(lowering, builder, destination, expression, annotation, variant, [])
+  constructedCase lowering, builder, destination, expression, annotation, variant, []
 }
 
 fn constructedCase(
@@ -900,25 +900,25 @@ fn constructedCase(
 ): Slot {
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
-    .None => {
-      const shown = describeIrType(lowering.program, annotation)
-      return unsupportedSlot(lowering, builder, destination, "a case of `{shown}`", expression.span)
+    None => {
+      const shown = describeIrType lowering.program, annotation
+      return unsupportedSlot lowering, builder, destination, "a case of `{shown}`", expression.span
     }
   }
-  const index = variantIndexOf(lowering, layout, variant)
+  const index = variantIndexOf lowering, layout, variant
   if index < 0 {
     const name = lowering.checker.symbolAt(variant).name
     const what = "`{name}`, which the layout of its type does not have as a case"
-    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    return unsupportedSlot lowering, builder, destination, what, expression.span
   }
-  const shape = lowering.program.layoutAt(layout)
+  const shape = lowering.program.layoutAt layout
   if shape.fieldsOfConstruction(index).length() != slots.length() {
     const name = lowering.checker.symbolAt(variant).name
     const what = "`{name}` of a type that carries fields of its own next to its cases"
-    return unsupportedSlot(lowering, builder, destination, what, expression.span)
+    return unsupportedSlot lowering, builder, destination, what, expression.span
   }
-  const target = valueSlot(lowering, builder, destination, annotation)
-  lowerConstruct(lowering, builder, target, layout, index, slots)
+  const target = valueSlot lowering, builder, destination, annotation
+  lowerConstruct lowering, builder, target, layout, index, slots
   target
 }
 
@@ -931,8 +931,8 @@ public fn lowerConstruct(
   variant: Int,
   slots: List<Slot>,
 ) {
-  const given = borrowedArguments(slots)
-  emit(builder, Instruction.Construct(target, layout, variant, given))
+  const given = borrowedArguments slots
+  emit builder, Instruction.Construct(target, layout, variant, given)
 }
 
 // --- Operators that are not intrinsics ------------------------------------------------------------------------------
@@ -952,55 +952,55 @@ public fn lowerOperator(
   const module = lowering.module
   const resolution = match lowering.checker.resolutionAt(module, at) {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "an operator the checker did not resolve", at)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "an operator the checker did not resolve", at
     }
   }
   const (symbol, typeArguments, dispatch) = match resolution {
     .Callable(found, given, how) => (found, given, how)
     _ => {
-      return unsupportedSlot(lowering, builder, destination, "an operator the back end does not lower yet", at)
+      return unsupportedSlot lowering, builder, destination, "an operator the back end does not lower yet", at
     }
   }
-  const receiver = operandTypeOf(lowering, dispatch)
+  const receiver = operandTypeOf lowering, dispatch
   const dispatched = match dispatchedMember(lowering, symbol, typeArguments, dispatch, receiver, at) {
     Some(found) => found
-    .None => {
-      return abandonedSlot(lowering, builder, destination)
+    None => {
+      return abandonedSlot lowering, builder, destination
     }
   }
   const member = dispatched.member
-  const identifier = signatureOf(lowering.checker, member)
-  const signature = lowering.checker.signature(identifier)
+  const identifier = signatureOf lowering.checker, member
+  const signature = lowering.checker.signature identifier
   if needsReference(signature) {
-    return unsupportedSlot(lowering, builder, destination, "an operator with a `var` receiver", at)
+    return unsupportedSlot lowering, builder, destination, "an operator with a `var` receiver", at
   }
   if dispatched.isDynamic {
     const what = "an operator on a trait-typed value, which object safety forbids"
-    return unsupportedSlot(lowering, builder, destination, what, at)
+    return unsupportedSlot lowering, builder, destination, what, at
   }
   const owner = dispatched.owner
-  const name = memberNameOf(lowering, member)
+  const name = memberNameOf lowering, member
   if !signature.hasBody {
     if const Some(entry) = nativeNamed(lowering, owner, name) {
-      return lowerNativeOperator(lowering, builder, destination, at, operands, annotation, dispatched, entry)
+      return lowerNativeOperator lowering, builder, destination, at, operands, annotation, dispatched, entry
     }
     if const Some(generated) = generatedMemberFor(lowering, dispatched, at) {
-      return emitCall(lowering, builder, destination, generated, operands, annotation, at)
+      return emitCall lowering, builder, destination, generated, operands, annotation, at
     }
     if !lowering.isSupported {
-      return abandonedSlot(lowering, builder, destination)
+      return abandonedSlot lowering, builder, destination
     }
   }
   const mapping = dispatched.mapping
   const function = match instanceFor(lowering, member, mapping) {
     Some(found) => found
-    .None => {
-      const what = describeCallee(lowering, member, signature)
-      return unsupportedSlot(lowering, builder, destination, what, at)
+    None => {
+      const what = describeCallee lowering, member, signature
+      return unsupportedSlot lowering, builder, destination, what, at
     }
   }
-  emitCall(lowering, builder, destination, function, operands, annotation, at)
+  emitCall lowering, builder, destination, function, operands, annotation, at
 }
 
 /**
@@ -1009,8 +1009,8 @@ public fn lowerOperator(
  */
 fn operandTypeOf(var lowering: Lowering, dispatch: Dispatch): TypeId? {
   if const .Implementation(implementation, _) = dispatch {
-    const found = lowering.checker.implementations.at(implementation)
-    return Some(found.target)
+    const found = lowering.checker.implementations.at implementation
+    return Some found.target
   }
   None
 }
@@ -1027,33 +1027,33 @@ fn lowerNativeOperator(
 ): Slot {
   if const .Planned(milestone) = entry.state {
     const what = "`{entry.name}`, which the runtime provides from milestone {milestone} on"
-    return unsupportedSlot(lowering, builder, destination, what, at)
+    return unsupportedSlot lowering, builder, destination, what, at
   }
   const member = dispatched.member
   const mapping = dispatched.mapping
   match entry.target {
     .Intrinsic(intrinsic) => {
-      const target = valueSlot(lowering, builder, destination, annotation)
-      emitIntrinsic(lowering, builder, Some(target), intrinsic.operation, intrinsic.kind, operands, at)
+      const target = valueSlot lowering, builder, destination, annotation
+      emitIntrinsic lowering, builder, Some(target), intrinsic.operation, intrinsic.kind, operands, at
       target
     }
     .Runtime(function) => {
       const identifier = match runtimeFunctionUnder(lowering, member, function, mapping) {
         Some(found) => found
-        .None => {
-          return unsupportedSlot(lowering, builder, destination, "`{entry.name}`", at)
+        None => {
+          return unsupportedSlot lowering, builder, destination, "`{entry.name}`", at
         }
       }
-      emitCall(lowering, builder, destination, identifier, operands, annotation, at)
+      emitCall lowering, builder, destination, identifier, operands, annotation, at
     }
     .Derived(derived) => {
       const generated = match generatedMemberOf(lowering, dispatched, derived, at) {
         Some(found) => found
-        .None => {
-          return abandonedSlot(lowering, builder, destination)
+        None => {
+          return abandonedSlot lowering, builder, destination
         }
       }
-      emitCall(lowering, builder, destination, generated, operands, annotation, at)
+      emitCall lowering, builder, destination, generated, operands, annotation, at
     }
   }
 }

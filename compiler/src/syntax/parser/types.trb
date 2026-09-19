@@ -7,36 +7,36 @@ use parsePrimaryExpression from "./expressions"
 /** A type, including `Show & Encode` (a value that implements several traits). */
 public fn parseType(var parser: Parser): TypeReference {
   const start = parser.span()
-  const first = parseSingleType(parser)
+  const first = parseSingleType parser
   if parser.isAt(TokenKind.Plus) {
-    parser.errorHere("Traits are combined with `&`: `Compare & Show`")
+    parser.errorHere "Traits are combined with `&`: `Compare & Show`"
   } else if !parser.isAt(TokenKind.Ampersand) {
     return first
   }
   var members = [first]
   while parser.eat(TokenKind.Ampersand) || parser.eat(TokenKind.Plus) {
-    members.add(parseSingleType(parser))
+    members.add parseSingleType(parser)
   }
-  TypeReference(TypeKind.Intersection(members), start.to(parser.previousSpan()))
+  TypeReference TypeKind.Intersection(members), start.to(parser.previousSpan())
 }
 
 /** A type without `&`. This is what the items of a bound list are (`where Item: Hash & Equals`). */
 public fn parseSingleType(var parser: Parser): TypeReference {
   const start = parser.span()
   if parser.eatKeyword(Keyword.Lazy) {
-    const inner = parseType(parser)
-    return TypeReference(TypeKind.Lazy(inner), start.to(parser.previousSpan()))
+    const inner = parseType parser
+    return TypeReference TypeKind.Lazy(inner), start.to(parser.previousSpan())
   }
-  var result = parsePrimaryType(parser)
+  var result = parsePrimaryType parser
   while parser.eat(TokenKind.Question) {
-    result = TypeReference(TypeKind.Optional(result), start.to(parser.previousSpan()))
+    result = TypeReference TypeKind.Optional(result), start.to(parser.previousSpan())
   }
   if parser.isAt(TokenKind.Pipe) {
     parser.errorHere(
       "Only literals can be combined with `|` (`\"online\" | \"offline\"`). There are no unions of types: declare a type with cases"
     )
     while parser.eat(TokenKind.Pipe) {
-      const _ = parsePrimaryType(parser)
+      const _ = parsePrimaryType parser
     }
   }
   result
@@ -55,20 +55,20 @@ fn startsLiteral(kind: TokenKind): Bool {
 fn parsePrimaryType(var parser: Parser): TypeReference {
   const start = parser.span()
   const kind = match parser.kind() {
-    .ParenOpen => parseTupleOrFunctionType(parser)
+    .ParenOpen => parseTupleOrFunctionType parser
     .FloatLiteral => {
-      parser.errorHere("A float cannot be a literal type")
+      parser.errorHere "A float cannot be a literal type"
       parser.bump()
       TypeKind.Invalid
     }
-    .Identifier | .Reserved(.SelfType) => parseNamedType(parser)
-    other if startsLiteral(other) => parseLiteralType(parser)
+    .Identifier | .Reserved(.SelfType) => parseNamedType parser
+    other if startsLiteral(other) => parseLiteralType parser
     other => {
-      parser.errorHere("Expected a type, found {other.describe()}")
+      parser.errorHere "Expected a type, found {other.describe()}"
       TypeKind.Invalid
     }
   }
-  TypeReference(kind, start.to(parser.previousSpan()))
+  TypeReference kind, start.to(parser.previousSpan())
 }
 
 /** `List<Item>`, `http.Response`, `Self` */
@@ -76,10 +76,10 @@ fn parseNamedType(var parser: Parser): TypeKind {
   var path = [parser.nameOrKeyword()]
   while parser.isAt(TokenKind.Dot) && parser.kindAt(1) == TokenKind.Identifier {
     parser.bump()
-    path.add(parser.name())
+    path.add parser.name()
   }
-  const arguments = if parser.eat(TokenKind.Less) { parser.commaSeparated(TokenKind.Greater, parseType) } else { [] }
-  TypeKind.Named(path, arguments)
+  const arguments = if parser.eat(TokenKind.Less) { parser.commaSeparated TokenKind.Greater, parseType } else { [] }
+  TypeKind.Named path, arguments
 }
 
 /** `"online" | "offline"`, `1 | 2 | 3`. A single literal is also what a const argument looks like: `Array<Float, 16>`. */
@@ -87,28 +87,28 @@ fn parseLiteralType(var parser: Parser): TypeKind {
   var literals = [parseTypeLiteral(parser)]
   while parser.eat(TokenKind.Pipe) {
     if startsLiteral(parser.kind()) {
-      literals.add(parseTypeLiteral(parser))
+      literals.add parseTypeLiteral(parser)
     } else if parser.isAt(TokenKind.FloatLiteral) {
-      parser.errorHere("A float cannot be a literal type")
+      parser.errorHere "A float cannot be a literal type"
       parser.bump()
     } else {
-      parser.errorHere("Only literals can be combined with `|`. There are no unions of types: declare a type with cases")
-      const _ = parsePrimaryType(parser)
+      parser.errorHere "Only literals can be combined with `|`. There are no unions of types: declare a type with cases"
+      const _ = parsePrimaryType parser
     }
   }
-  TypeKind.Literals(literals)
+  TypeKind.Literals literals
 }
 
 fn parseTypeLiteral(var parser: Parser): Expression {
   const start = parser.span()
   if parser.eat(TokenKind.Minus) {
-    const operand = parsePrimaryExpression(parser)
-    return Expression(ExpressionKind.Unary(PrefixOperator.Negate, operand), start.to(parser.previousSpan()))
+    const operand = parsePrimaryExpression parser
+    return Expression ExpressionKind.Unary(PrefixOperator.Negate, operand), start.to(parser.previousSpan())
   }
-  const literal = parsePrimaryExpression(parser)
+  const literal = parsePrimaryExpression parser
   if const .TextLiteral(segments) = literal.kind {
     if segments.any(isInterpolated) {
-      parser.error("A literal type cannot contain `\{...\}`", literal.span)
+      parser.error "A literal type cannot contain `\{...\}`", literal.span
     }
   }
   literal
@@ -124,28 +124,28 @@ fn isInterpolated(segment: TextSegment): Bool {
 /** `(Int, String)` and `(lowest: Int, highest: Int)` are tuples, `(value: Int, String) => Bool` is a function. */
 fn parseTupleOrFunctionType(var parser: Parser): TypeKind {
   parser.bump()
-  const parameters = parser.commaSeparated(TokenKind.ParenClose, parseFunctionTypeParameter)
+  const parameters = parser.commaSeparated TokenKind.ParenClose, parseFunctionTypeParameter
   if parser.eat(TokenKind.Arrow) {
-    return TypeKind.FunctionType(parameters, parseType(parser))
+    return TypeKind.FunctionType parameters, parseType(parser)
   }
   if const Some(parameter) = parameters.find({ _.isVar }) {
-    parser.error("`var` only makes sense in a function type. Is a `=> Result` missing?", parameter.annotation.span)
+    parser.error "`var` only makes sense in a function type. Is a `=> Result` missing?", parameter.annotation.span
   }
   if parameters.length() == 1 && parameters[0].name.isNone() {
     return parameters[0].annotation.kind
   }
-  TypeKind.TupleType(parameters.map({ TupleTypeField(_.name, _.annotation) }).toList())
+  TypeKind.TupleType(parameters.map({ TupleTypeField _.name, _.annotation }).toList())
 }
 
 fn parseFunctionTypeParameter(var parser: Parser): FunctionTypeParameter {
-  const isVar = parser.eatKeyword(Keyword.Var)
+  const isVar = parser.eatKeyword Keyword.Var
   const isNamed = isNameOrKeyword(parser.kind()) && parser.kindAt(1) == TokenKind.Colon
   var name: Name? = None
   if isNamed {
-    name = Some(parser.nameOrKeyword())
+    name = Some parser.nameOrKeyword()
     parser.bump()
   }
-  FunctionTypeParameter(name, isVar, parseType(parser))
+  FunctionTypeParameter name, isVar, parseType(parser)
 }
 
 public fn isNameOrKeyword(kind: TokenKind): Bool {

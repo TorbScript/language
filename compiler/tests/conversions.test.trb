@@ -18,16 +18,16 @@ group "`?` on a `Result`" {
   test "the same error type needs no conversion" {
     const source = "fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\n"
       + "fn probe(): Result<Int, String> \{\n  const value = read()?\n  Ok(value)\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("read()?") == "Int64")
     assert(found.adaptationsOf("read()?") == [])
   }
 
   test "a different error type is converted through `From`, and the generated one of a wrapper case is enough" {
-    const source = inFunction("Result<Int, AppError>", "  const value = read()?\n  Ok(value)")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    const source = inFunction "Result<Int, AppError>", "  const value = read()?\n  Ok(value)"
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("read()?") == "Int64")
     assert(found.adaptationsOf("read()?") == ["convert from through AppError: From<IoError>"])
   }
@@ -51,8 +51,8 @@ group "`?` on a `Result`" {
 
   test "a trait-typed failure takes a concrete error through the trait-value coercion" {
     const source = withTrait + "fn probe(): Result<Int, Problem> \{\n  const value = read()?\n  Ok(value)\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("read()?") == "Int64")
     assert(found.adaptationsOf("read()?") == ["trait value Problem"])
   }
@@ -68,8 +68,8 @@ group "`?` on a `Result`" {
   test "a failure that is already the trait value needs no adaptation" {
     const source = withTrait + "fn hand(): Result<Int, Problem> \{\n  Ok(1)\n\}\n\n"
       + "fn probe(): Result<Int, Problem> \{\n  const value = hand()?\n  Ok(value)\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.adaptationsOf("hand()?") == [])
   }
 
@@ -78,8 +78,8 @@ group "`?` on a `Result`" {
       + "extend AppError with From<IoError> \{\n  fn from(value: IoError): AppError \{\n    AppError(value.path)\n  \}\n\}\n\n"
       + "fn read(): Result<Int, IoError> \{\n  Ok(1)\n\}\n\n"
       + "fn probe(): Result<Int, AppError> \{\n  const value = read()?\n  Ok(value)\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.adaptationsOf("read()?") == ["convert from through AppError: From<IoError>"])
   }
 }
@@ -87,8 +87,8 @@ group "`?` on a `Result`" {
 group "`?` on an `Option`" {
   test "an `Option` in a function that returns one unwraps without a conversion" {
     const source = "fn find(): Int? \{\n  Some(1)\n\}\n\nfn probe(): Int? \{\n  const value = find()?\n  Some(value)\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("find()?") == "Int64")
   }
 
@@ -111,8 +111,8 @@ group "`?` on an `Option`" {
 group "`??`" {
   test "the fallback is checked against the `Value`, and it is `lazy` (gap 13)" {
     const source = "fn find(): Int? \{\n  Some(1)\n\}\n\nfn probe() \{\n  const value = find() ?? 0\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("find() ?? 0") == "Int64")
     assert(found.adaptationsOf("0") == ["lazy", "literal Int64"])
     assert(found.resolutionOf("find() ?? 0") == "call orElse")
@@ -120,8 +120,8 @@ group "`??`" {
 
   test "it works on a `Result` as well" {
     const source = "fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\nfn probe() \{\n  const value = read() ?? 0\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("read() ?? 0") == "Int64")
   }
 
@@ -141,24 +141,24 @@ group "`?.`" {
   test "a member that gives back an ordinary value becomes an `Option` of it: `map`" {
     const source = "type User \{\n  name: String\n\n  fn label(self): String \{\n    name\n  \}\n\}\n\n"
       + "fn find(): User? \{\n  None\n\}\n\nfn probe() \{\n  const shown = find()?.label()\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("find()?.label()") == "Option<String>")
   }
 
   test "a member that gives back an `Option` is flattened, never nested (gap 12)" {
     const source = "type User \{\n  name: String\n\n  fn nickname(self): String? \{\n    Some(name)\n  \}\n\}\n\n"
       + "fn find(): User? \{\n  None\n\}\n\nfn probe() \{\n  const shown = find()?.nickname()\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("find()?.nickname()") == "Option<String>")
   }
 
   test "a field behind `?.` becomes optional, too" {
     const source = "type User \{\n  name: String\n\}\n\nfn find(): User? \{\n  None\n\}\n\n"
       + "fn probe() \{\n  const shown = find()?.name\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("find()?.name") == "Option<String>")
   }
 
@@ -185,8 +185,8 @@ group "`into()` and `From`" {
       + "extend Celsius with From<Fahrenheit> \{\n"
       + "  fn from(value: Fahrenheit): Celsius \{\n    Celsius(value.degrees)\n  \}\n\}\n\n"
       + "fn probe() \{\n  const warm: Celsius = Fahrenheit(100.0).into()\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("Fahrenheit(100.0).into()") == "Celsius")
     assert(found.adaptationsOf("Fahrenheit(100.0).into()") == ["convert from through Celsius: From<Fahrenheit>"])
     assert(found.resolutionOf("Fahrenheit(100.0).into()") == "call from")
@@ -207,8 +207,8 @@ group "`into()` and `From`" {
       + "extend Celsius with From<Fahrenheit> \{\n"
       + "  fn from(value: Fahrenheit): Celsius \{\n    Celsius(value.degrees)\n  \}\n\}\n\n"
       + "fn probe() \{\n  const warm = Celsius.from(Fahrenheit(100.0))\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("Celsius.from(Fahrenheit(100.0))") == "Celsius")
   }
 
@@ -217,8 +217,8 @@ group "`into()` and `From`" {
       + "extend Port with TryFrom<Int, String> \{\n"
       + "  fn tryFrom(value: Int): Result<Port, String> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
       + "fn probe() \{\n  const port = Port.tryFrom(8080)\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("Port.tryFrom(8080)") == "Result<Port, String>")
   }
 
@@ -230,6 +230,6 @@ group "`into()` and `From`" {
 
   test "`Some` is what wraps it, and `None` takes its type from what is expected" {
     const source = "fn probe() \{\n  const maybe: Int? = Some(1)\n  const empty: Int? = None\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 }

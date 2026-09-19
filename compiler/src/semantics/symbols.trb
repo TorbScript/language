@@ -55,7 +55,7 @@ public type Symbols {
   var all: List<Symbol> = []
 
   fn add(var self, symbol: Symbol): SymbolId {
-    all.add(symbol)
+    all.add symbol
     SymbolId(all.length() - 1)
   }
 
@@ -66,7 +66,7 @@ public type Symbols {
   /** The cases of a type are only known after the type itself has an id, because they point back at it. */
   fn setCases(var self, id: SymbolId, cases: List<SymbolId>) {
     const owner = all[id.value].copy(cases: cases)
-    all.set(id.value, owner)
+    all.set id.value, owner
   }
 
   fn caseNamed(self, owner: SymbolId, name: String): SymbolId? {
@@ -75,7 +75,7 @@ public type Symbols {
 
   /** How a symbol appears in a message: "the function `parse`". */
   fn describe(self, id: SymbolId): String {
-    const symbol = at(id)
+    const symbol = at id
     match symbol.kind {
       .Function => "the function `{symbol.name}`"
       .Type => "the type `{symbol.name}`"
@@ -99,12 +99,12 @@ public fn declareModule(var symbols: Symbols, module: Module): List<Definition> 
   var definitions: List<Definition> = []
   for statement in module.file.statements {
     match statement.kind {
-      .Declare(declaration) => declareOne(symbols, definitions, module.id, declaration)
+      .Declare(declaration) => declareOne symbols, definitions, module.id, declaration
       // A plain top-level `const`/`var` without modifiers is always private to its file: `public const` parses as
       // a `Declaration` with `DeclarationKind.Constant` instead, and is handled in `declareOne`.
       .Bind(binding) => {
         if const .Binding(name) = binding.pattern.kind {
-          define(symbols, definitions, module.id, Name(name, binding.pattern.span), SymbolKind.Constant, false)
+          define symbols, definitions, module.id, Name(name, binding.pattern.span), SymbolKind.Constant, false
         }
       }
       _ => {}
@@ -117,32 +117,32 @@ fn declareOne(var symbols: Symbols, var definitions: List<Definition>, module: M
   const isPublic = declaration.modifiers.visibility == Visibility.Public
   match declaration.kind {
     .Function(function) => {
-      define(symbols, definitions, module, function.name, SymbolKind.Function, isPublic)
+      define symbols, definitions, module, function.name, SymbolKind.Function, isPublic
     }
     .Type(typeDeclaration) => {
-      const owner = define(symbols, definitions, module, typeDeclaration.name, SymbolKind.Type, isPublic)
+      const owner = define symbols, definitions, module, typeDeclaration.name, SymbolKind.Type, isPublic
       var cases: List<SymbolId> = []
       for member in typeDeclaration.members {
         if const .Case(caseDeclaration) = member.kind {
           const name = caseDeclaration.name
           if !name.text.isEmpty() {
-            cases.add(symbols.add(Symbol(name.text, SymbolKind.Case(owner), isPublic, Some(module), name.span)))
+            cases.add symbols.add(Symbol(name.text, SymbolKind.Case(owner), isPublic, Some(module), name.span))
           }
         }
       }
-      symbols.setCases(owner, cases)
+      symbols.setCases owner, cases
     }
     .Alias(alias) => {
-      define(symbols, definitions, module, alias.name, SymbolKind.Alias, isPublic)
+      define symbols, definitions, module, alias.name, SymbolKind.Alias, isPublic
     }
     .Trait(traitDeclaration) => {
-      define(symbols, definitions, module, traitDeclaration.name, SymbolKind.Trait, isPublic)
+      define symbols, definitions, module, traitDeclaration.name, SymbolKind.Trait, isPublic
     }
     // The functions of a `foreign` block are functions of the module, like any other
     .Foreign(library) => {
       for member in library.members {
         if const .Function(function) = member.kind {
-          define(symbols, definitions, module, function.name, SymbolKind.Function, isPublic)
+          define symbols, definitions, module, function.name, SymbolKind.Function, isPublic
         }
       }
     }
@@ -151,7 +151,7 @@ fn declareOne(var symbols: Symbols, var definitions: List<Definition>, module: M
     .Use(_) => {}
     .Constant(binding) => {
       if const .Binding(name) = binding.pattern.kind {
-        define(symbols, definitions, module, Name(name, binding.pattern.span), SymbolKind.Constant, isPublic)
+        define symbols, definitions, module, Name(name, binding.pattern.span), SymbolKind.Constant, isPublic
       }
     }
   }
@@ -166,9 +166,9 @@ fn define(
   kind: SymbolKind,
   isPublic: Bool,
 ): SymbolId {
-  const id = symbols.add(Symbol(name.text, kind, isPublic, Some(module), name.span))
+  const id = symbols.add Symbol(name.text, kind, isPublic, Some(module), name.span)
   if !name.text.isEmpty() {
-    definitions.add(Definition(name.text, name.span, id))
+    definitions.add Definition(name.text, name.span, id)
   }
   id
 }

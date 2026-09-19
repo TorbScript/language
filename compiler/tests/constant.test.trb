@@ -14,10 +14,10 @@ use lowered, loweredWith from "./lower-harness"
 
 /** The value of the top-level `const` called `answer`, as the text format writes it. */
 fn valueOf(initializer: String): String {
-  var found = lowered("const answer = {initializer}\n")
+  var found = lowered "const answer = {initializer}\n"
   for value in found.program.statics {
     if value.name == "s_acme_x2f_app_main_answer" {
-      return printStatic(found.program, value)
+      return printStatic found.program, value
     }
   }
   "there is no constant `answer`"
@@ -25,10 +25,10 @@ fn valueOf(initializer: String): String {
 
 /** The same, with a declared type: the annotation is what the literals inside the initializer adapt to. */
 fn typedValueOf(annotation: String, initializer: String): String {
-  var found = lowered("const answer: {annotation} = {initializer}\n")
+  var found = lowered "const answer: {annotation} = {initializer}\n"
   for value in found.program.statics {
     if value.name == "s_acme_x2f_app_main_answer" {
-      return printStatic(found.program, value)
+      return printStatic found.program, value
     }
   }
   "there is no constant `answer`"
@@ -36,20 +36,20 @@ fn typedValueOf(annotation: String, initializer: String): String {
 
 /** The errors of the program the evaluator found, in the order it found them. */
 fn errorsOf(source: String): List<String> {
-  var found = lowered(source)
+  var found = lowered source
   var shown: List<String> = []
   for problem in found.problems {
-    shown.add(problem.diagnostic.message)
+    shown.add problem.diagnostic.message
   }
   shown
 }
 
 fn errorsOfValue(initializer: String): List<String> {
-  errorsOf("const answer = {initializer}\n")
+  errorsOf "const answer = {initializer}\n"
 }
 
 fn errorsOfTyped(annotation: String, initializer: String): List<String> {
-  errorsOf("const answer: {annotation} = {initializer}\n")
+  errorsOf "const answer: {annotation} = {initializer}\n"
 }
 
 group "Literals" {
@@ -87,7 +87,7 @@ group "Every operator" {
     assert(valueOf("1.5 + 2.0") == "static s_acme_x2f_app_main_answer: Float64 = 3.5")
     assert(valueOf("1.5 - 2.0") == "static s_acme_x2f_app_main_answer: Float64 = -0.5")
     assert(valueOf("1.5 * 2.0") == "static s_acme_x2f_app_main_answer: Float64 = 3.0")
-    assert(valueOf("1.0 / 60.0").startsWith("static s_acme_x2f_app_main_answer: Float64 = 0.0166"))
+    assert valueOf("1.0 / 60.0").startsWith("static s_acme_x2f_app_main_answer: Float64 = 0.0166")
   }
 
   test "every comparison, on the numbers, on `Bool`, on `Char` and on `String`" {
@@ -148,13 +148,13 @@ group "Overflow, division by zero and `nan`" {
 
   test "an error stops the constant and nothing else is said about it" {
     const source = r"""
-const broken = 1 / 0
+      const broken = 1 / 0
 
-fn use1(): Int {
-  broken
-}
-"""
-    var found = lowered(source)
+      fn use1(): Int {
+        broken
+      }
+      """
+    var found = lowered source
     assert(found.problems.length() == 1)
     assert(!loweredText(found).contains("s_acme_x2f_app_main_broken"))
   }
@@ -163,69 +163,69 @@ fn use1(): Int {
 group "What a constant may name" {
   test "a constant may name another constant, and the value is inlined into the static" {
     const source = r"""
-const base = 10
-const doubled = base * 2
-"""
-    var found = lowered(source)
-    const text = loweredText(found)
-    assert(text.contains("static s_acme_x2f_app_main_base: Int64 = 10"))
-    assert(text.contains("static s_acme_x2f_app_main_doubled: Int64 = 20"))
+      const base = 10
+      const doubled = base * 2
+      """
+    var found = lowered source
+    const text = loweredText found
+    assert text.contains("static s_acme_x2f_app_main_base: Int64 = 10")
+    assert text.contains("static s_acme_x2f_app_main_doubled: Int64 = 20")
   }
 
   test "a constant of a type of the program is an aggregate of static fields" {
     const source = r"""
-type Point {
-  x: Int
-  y: Int
-}
+      type Point {
+        x: Int
+        y: Int
+      }
 
-const origin = Point(1, 2)
-"""
-    const text = loweredText(lowered(source))
+      const origin = Point(1, 2)
+      """
+    const text = loweredText lowered(source)
     assert(
       text.contains("static s_acme_x2f_app_main_origin: Record(T_acme_x2f_app_main_Point) = T_acme_x2f_app_main_Point(")
     )
-    assert(text.contains("s_literal__Int64_1, s_literal__Int64_2)"))
+    assert text.contains("s_literal__Int64_1, s_literal__Int64_2)")
   }
 
   test "a tuple of constants is an aggregate too" {
-    const text = loweredText(lowered("const pair = (1, true)\n"))
-    assert(text.contains("static s_acme_x2f_app_main_pair: Tuple(T_tuple__Int64_Bool) = T_tuple__Int64_Bool("))
+    const text = loweredText lowered("const pair = (1, true)\n")
+    assert text.contains("static s_acme_x2f_app_main_pair: Tuple(T_tuple__Int64_Bool) = T_tuple__Int64_Bool(")
   }
 
   test "a constant in terms of itself is a cycle and stays unevaluated" {
     // The checker reports the cycle, annotated or not, and the evaluator has to survive what it hands over anyway
     const source = r"""
-const first: Int = second
-const second: Int = first
-"""
-    var found = loweredWith(source, ["`first` is a cycle: it names itself"])
-    const text = loweredText(found)
+      const first: Int = second
+      const second: Int = first
+      """
+    var found = loweredWith source, ["`first` is a cycle: it names itself"]
+    const text = loweredText found
     assert(!text.contains("s_acme_x2f_app_main_first"))
     assert(!text.contains("s_acme_x2f_app_main_second"))
   }
 
   test "a function call is not a compile-time constant, and the lowering counts it" {
     const source = r"""
-fn twice(value: Int): Int {
-  value + value
-}
+      fn twice(value: Int): Int {
+        value + value
+      }
 
-const answer = twice(21)
-"""
-    var found = lowered(source)
+      const answer = twice(21)
+      """
+    var found = lowered source
     var shown: List<String> = []
     for entry in found.unsupported {
-      shown.add(entry.what)
+      shown.add entry.what
     }
     assert(shown == ["not supported by the back end yet: a `const` that is not compile-time evaluable"])
   }
 
   test "a list literal is not one either: a collection is built at runtime" {
-    var found = lowered("const items = [1, 2, 3]\n")
+    var found = lowered "const items = [1, 2, 3]\n"
     var shown: List<String> = []
     for entry in found.unsupported {
-      shown.add(entry.what)
+      shown.add entry.what
     }
     assert(shown == ["not supported by the back end yet: a `const` that is not compile-time evaluable"])
   }

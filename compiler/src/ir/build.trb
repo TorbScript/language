@@ -14,7 +14,7 @@ use Block, BlockId, Slot, SlotDeclaration, SlotRole, Instruction, Terminator, Lo
 public type FunctionBuilder {
   var function: IrFunction
   /** The block `emit` appends to. */
-  var current: BlockId = BlockId(0)
+  var current: BlockId = BlockId 0
 
   fn currentBlock(self): BlockId {
     current
@@ -29,7 +29,7 @@ public type FunctionBuilder {
   }
 
   fn typeOfSlot(self, slot: Slot): IrTypeId {
-    function.typeOfSlot(slot)
+    function.typeOfSlot slot
   }
 }
 
@@ -38,29 +38,29 @@ public type FunctionBuilder {
  * parameter of a method, so nothing here has to know about receivers.
  */
 public fn newFunction(name: String, origin: SymbolId?, signature: IrSignature, label: String): FunctionBuilder {
-  var function = IrFunction(name, origin, signature)
+  var function = IrFunction name, origin, signature
   for index in 0..signature.parameters.length() {
     const parameter = signature.parameters[index]
-    function.slots.add(SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name))
+    function.slots.add SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name)
   }
-  function.blocks.add(Block([], Terminator.Unreachable, label, None))
-  FunctionBuilder(function, BlockId(0))
+  function.blocks.add Block([], Terminator.Unreachable, label, None)
+  FunctionBuilder function, BlockId(0)
 }
 
 /** A slot of any role. The lowering usually asks for `addLocal` or `addTemporary` instead. */
 public fn addSlot(var builder: FunctionBuilder, annotation: IrTypeId, role: SlotRole, name: String): Slot {
-  builder.function.slots.add(SlotDeclaration(annotation, role, name))
+  builder.function.slots.add SlotDeclaration(annotation, role, name)
   Slot(builder.function.slots.length() - 1)
 }
 
 /** A binding of the source. Its name is kept, so the C identifier and `torb ir` read like the program. */
 public fn addLocal(var builder: FunctionBuilder, annotation: IrTypeId, name: String): Slot {
-  addSlot(builder, annotation, SlotRole.Local, name)
+  addSlot builder, annotation, SlotRole.Local, name
 }
 
 /** A value the source does not name: the result of a subexpression. */
 public fn addTemporary(var builder: FunctionBuilder, annotation: IrTypeId): Slot {
-  addSlot(builder, annotation, SlotRole.Temporary, "")
+  addSlot builder, annotation, SlotRole.Temporary, ""
 }
 
 /**
@@ -68,7 +68,7 @@ public fn addTemporary(var builder: FunctionBuilder, annotation: IrTypeId): Slot
  * anyway - and what the verifier rejects when anything can reach it.
  */
 public fn addBlock(var builder: FunctionBuilder, label: String, at: LocationId?): BlockId {
-  builder.function.blocks.add(Block([], Terminator.Unreachable, label, at))
+  builder.function.blocks.add Block([], Terminator.Unreachable, label, at)
   BlockId(builder.function.blocks.length() - 1)
 }
 
@@ -79,7 +79,7 @@ public fn switchTo(var builder: FunctionBuilder, block: BlockId) {
 
 /** One block, opened and switched to in one step: what a lowering does at almost every branch. */
 public fn openBlock(var builder: FunctionBuilder, label: String, at: LocationId?): BlockId {
-  const opened = addBlock(builder, label, at)
+  const opened = addBlock builder, label, at
   builder.current = opened
   opened
 }
@@ -107,10 +107,10 @@ public fn setBlockLocation(var builder: FunctionBuilder, block: BlockId, at: Loc
 
 /** A body is a state machine over `Task<Value>`: only the task lowering of 7.3 sets this. */
 public fn setFunctionKind(var builder: FunctionBuilder, kind: FunctionKind) {
-  builder.function = builder.function.copy(kind: kind)
+  builder.function = builder.function.copy kind: kind
 }
 
 /** The function the builder built, added to the program. */
 public fn finishFunction(var program: IrProgram, builder: FunctionBuilder): FunctionId {
-  program.addFunction(builder.function)
+  program.addFunction builder.function
 }

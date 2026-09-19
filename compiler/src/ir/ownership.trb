@@ -46,9 +46,9 @@ use NativeTarget, nativeEntries from "../backend/c/natives"
  * inserted itself as ordinary uses.
  */
 public fn insertOwnership(var program: IrProgram) {
-  summarizeParameters(program)
+  summarizeParameters program
   for index in 0..program.functions.length() {
-    rewriteFunction(program, index)
+    rewriteFunction program, index
   }
 }
 
@@ -67,18 +67,18 @@ public fn summarizeParameters(var program: IrProgram) {
   if count == 0 {
     return
   }
-  applyManifest(program)
-  const callers = callersOf(program)
+  applyManifest program
+  const callers = callersOf program
   var queue: List<Int> = []
-  var isQueued = filledFlags(count, true)
+  var isQueued = filledFlags count, true
   for index in 0..count {
-    queue.add(index)
+    queue.add index
   }
   var cursor = 0
   while cursor < queue.length() {
     const index = queue[cursor]
     cursor = cursor + 1
-    isQueued.set(index, false)
+    isQueued.set index, false
     if !promoteParameters(program, index) {
       continue
     }
@@ -86,8 +86,8 @@ public fn summarizeParameters(var program: IrProgram) {
       if isQueued[caller] {
         continue
       }
-      isQueued.set(caller, true)
-      queue.add(caller)
+      isQueued.set caller, true
+      queue.add caller
     }
   }
 }
@@ -104,7 +104,7 @@ fn applyManifest(var program: IrProgram) {
     const kind = program.functions[index].kind
     if const .Runtime(symbol) = kind {
       if const Some(positions) = owned.get(symbol) {
-        applyOwnedParameters(program, index, positions)
+        applyOwnedParameters program, index, positions
       }
     }
   }
@@ -117,7 +117,7 @@ fn ownedParametersBySymbol(): Map<String, List<Int>> {
       continue
     }
     if const .Runtime(symbol) = entry.target {
-      found.set(symbol, entry.ownedParameters)
+      found.set symbol, entry.ownedParameters
     }
   }
   found
@@ -139,16 +139,16 @@ fn applyOwnedParameters(var program: IrProgram, index: Int, positions: List<Int>
     if !containsCountedType(program, parameter.annotation) {
       continue
     }
-    const promoted = parameter.copy(ownership: Ownership.Owned)
-    parameters.set(position, promoted)
+    const promoted = parameter.copy ownership: Ownership.Owned
+    parameters.set position, promoted
     isChanged = true
   }
   if !isChanged {
     return
   }
-  const signature = function.signature.copy(parameters: parameters)
-  const updated = function.copy(signature: signature)
-  program.functions.set(index, updated)
+  const signature = function.signature.copy parameters: parameters
+  const updated = function.copy signature: signature
+  program.functions.set index, updated
 }
 
 /** Which function calls which, so that a summary that grew only wakes the call sites it can change. */
@@ -183,7 +183,7 @@ fn promoteParameters(var program: IrProgram, index: Int): Bool {
   if const .Runtime(_) = function.kind {
     return false
   }
-  const escaping = escapingSlots(program, function)
+  const escaping = escapingSlots program, function
   var parameters = function.signature.parameters
   var isChanged = false
   for position in 0..parameters.length() {
@@ -197,16 +197,16 @@ fn promoteParameters(var program: IrProgram, index: Int): Bool {
     if position >= function.slots.length() || !escaping[position] {
       continue
     }
-    const promoted = parameter.copy(ownership: Ownership.Owned)
-    parameters.set(position, promoted)
+    const promoted = parameter.copy ownership: Ownership.Owned
+    parameters.set position, promoted
     isChanged = true
   }
   if !isChanged {
     return false
   }
-  const signature = function.signature.copy(parameters: parameters)
-  const updated = function.copy(signature: signature)
-  program.functions.set(index, updated)
+  const signature = function.signature.copy parameters: parameters
+  const updated = function.copy signature: signature
+  program.functions.set index, updated
   true
 }
 
@@ -222,27 +222,27 @@ fn promoteParameters(var program: IrProgram, index: Int): Bool {
  */
 fn escapingSlots(program: IrProgram, function: IrFunction): List<Bool> {
   const slotCount = function.slots.length()
-  var escapes = filledFlags(slotCount, false)
-  var mutated = filledFlags(slotCount, false)
-  const facts = slotFactsOf(program, function)
+  var escapes = filledFlags slotCount, false
+  var mutated = filledFlags slotCount, false
+  const facts = slotFactsOf program, function
   for block in function.blocks {
     for instruction in block.instructions {
       for operand in operandsOf(program, facts, instruction) {
         if operand.takesCount {
-          setFlag(escapes, operand.slot)
+          setFlag escapes, operand.slot
         }
       }
-      markMutated(mutated, instruction)
+      markMutated mutated, instruction
     }
     if const .Return(value) = block.terminator {
       if const Some(argument) = value {
-        setFlag(escapes, argument.slot)
+        setFlag escapes, argument.slot
       }
     }
   }
   for index in 0..slotCount {
     if mutated[index] {
-      escapes.set(index, true)
+      escapes.set index, true
     }
   }
   var rounds = 0
@@ -263,7 +263,7 @@ fn escapingSlots(program: IrProgram, function: IrFunction): List<Bool> {
           if isFlagged(escapes, source) {
             continue
           }
-          setFlag(escapes, source)
+          setFlag escapes, source
           isChanged = true
         }
       }
@@ -281,13 +281,13 @@ fn escapingSlots(program: IrProgram, function: IrFunction): List<Bool> {
  */
 fn markMutated(var mutated: List<Bool>, instruction: Instruction) {
   match instruction {
-    .Write(reference, _) => setFlag(mutated, reference.base)
-    .MakeUnique(reference) => setFlag(mutated, reference.base)
-    .TakeOut(_, container, _, _) => setFlag(mutated, container.base)
-    .PutBack(container, _, _, _) => setFlag(mutated, container.base)
+    .Write(reference, _) => setFlag mutated, reference.base
+    .MakeUnique(reference) => setFlag mutated, reference.base
+    .TakeOut(_, container, _, _) => setFlag mutated, container.base
+    .PutBack(container, _, _, _) => setFlag mutated, container.base
     .Call(_, _, arguments, _, _) => {
       for place in placesOfArguments(arguments) {
-        setFlag(mutated, place.base)
+        setFlag mutated, place.base
       }
     }
     _ => {}
@@ -305,7 +305,7 @@ fn copyEdgeOf(instruction: Instruction): (Slot, Slot)? {
 
 fn setFlag(var flags: List<Bool>, slot: Slot) {
   if slot.value >= 0 && slot.value < flags.length() {
-    flags.set(slot.value, true)
+    flags.set slot.value, true
   }
 }
 
@@ -335,16 +335,16 @@ fn rewriteFunction(var program: IrProgram, index: Int) {
   if original.blocks.isEmpty() {
     return
   }
-  const before = countedSlotsOf(program, original)
+  const before = countedSlotsOf program, original
   // Not one counted slot: the function is left exactly as the lowering wrote it, down to the bytes of its text
   if before.isEmpty() {
     return
   }
-  var function = prepared(program, original, before)
-  const facts = slotFactsOf(program, function)
-  const counted = countedSlotsOf(program, function)
-  const live = livenessOf(program, function, counted)
-  const reachable = reachableBlocks(function)
+  var function = prepared program, original, before
+  const facts = slotFactsOf program, function
+  const counted = countedSlotsOf program, function
+  const live = livenessOf program, function, counted
+  const reachable = reachableBlocks function
   const blockCount = function.blocks.length()
   var endDrops: List<List<Slot>> = []
   for block in 0..blockCount {
@@ -352,13 +352,13 @@ fn rewriteFunction(var program: IrProgram, index: Int) {
       endDrops.add([])
       continue
     }
-    const rewritten = rewriteBlock(program, facts, counted, live, function.blocks[block], block)
+    const rewritten = rewriteBlock program, facts, counted, live, function.blocks[block], block
     function.blocks[block].instructions = rewritten.instructions
     function.blocks[block].terminator = rewritten.terminator
-    endDrops.add(rewritten.endDrops)
+    endDrops.add rewritten.endDrops
   }
-  splitEdges(function, counted, live, endDrops, blockCount)
-  program.functions.set(index, function)
+  splitEdges function, counted, live, endDrops, blockCount
+  program.functions.set index, function
 }
 
 /**
@@ -372,28 +372,28 @@ fn rewriteFunction(var program: IrProgram, index: Int) {
  */
 fn prepared(program: IrProgram, function: IrFunction, counted: Counted): IrFunction {
   var built = function
-  const facts = slotFactsOf(program, function)
+  const facts = slotFactsOf program, function
   for block in 0..function.blocks.length() {
     const instructions = function.blocks[block].instructions
     var written: List<Instruction> = []
     var isChanged = false
     for at in 0..instructions.length() {
       const instruction = instructions[at]
-      const owners = uniqueOwnersOf(program, function, instructions, at)
+      const owners = uniqueOwnersOf program, function, instructions, at
       if !owners.isEmpty() {
-        written.addAll(owners)
+        written.addAll owners
         isChanged = true
       }
       if const Some(slot) = conflictingSlot(instruction, counted) {
-        const annotation = function.typeOfSlot(slot)
-        built.slots.add(SlotDeclaration(annotation, SlotRole.Temporary, ""))
+        const annotation = function.typeOfSlot slot
+        built.slots.add SlotDeclaration(annotation, SlotRole.Temporary, "")
         const saved = Slot(built.slots.length() - 1)
-        written.add(Instruction.Move(saved, slot))
-        written.add(renamedUse(program, facts, instruction, slot, saved))
+        written.add Instruction.Move(saved, slot)
+        written.add renamedUse(program, facts, instruction, slot, saved)
         isChanged = true
         continue
       }
-      written.add(instruction)
+      written.add instruction
     }
     if isChanged {
       built.blocks[block].instructions = written
@@ -417,7 +417,7 @@ fn uniqueOwnersOf(
   at: Int,
 ): List<Instruction> {
   var needed: List<Instruction> = []
-  const places = writtenPlacesOf(instructions[at])
+  const places = writtenPlacesOf instructions[at]
   if places.isEmpty() {
     return needed
   }
@@ -429,12 +429,12 @@ fn uniqueOwnersOf(
   var ignored: List<String> = []
   for found in places {
     for count in 0..found.steps.length() {
-      const prefix = Reference(found.base, found.steps[0..count])
-      const annotation = typeOfReference(program, function, ignored, "", prefix)
+      const prefix = Reference found.base, found.steps[0..count]
+      const annotation = typeOfReference program, function, ignored, "", prefix
       if const Some(inner) = annotation {
         // Two `var` arguments of one call may share a prefix, and making the same storage unique twice is only noise
         if isManagedType(program, inner) && !needed.contains(Instruction.MakeUnique(prefix)) {
-          needed.add(Instruction.MakeUnique(prefix))
+          needed.add Instruction.MakeUnique(prefix)
         }
       }
     }
@@ -453,7 +453,7 @@ fn writtenPlacesOf(instruction: Instruction): List<Reference> {
   match instruction {
     .Write(reference, _) => [reference]
     .TakeOut(_, container, _, _) => [container]
-    .Call(_, _, arguments, _, _) => placesOfArguments(arguments)
+    .Call(_, _, arguments, _, _) => placesOfArguments arguments
     _ => []
   }
 }
@@ -462,7 +462,7 @@ fn placesOfArguments(arguments: List<Argument>): List<Reference> {
   var places: List<Reference> = []
   for argument in arguments {
     if const Some(place) = argument.place {
-      places.add(place)
+      places.add place
     }
   }
   places
@@ -485,7 +485,7 @@ fn conflictingSlot(instruction: Instruction, counted: Counted): Slot? {
   }
   for slot in usedSlots(instruction) {
     if slot == target {
-      return Some(target)
+      return Some target
     }
   }
   None
@@ -502,12 +502,12 @@ fn renamedUse(
   var decided: List<Argument> = []
   for operand in operandsOf(program, facts, instruction) {
     if operand.slot == slot {
-      decided.add(Argument(saved, Ownership.Borrowed, false))
+      decided.add Argument(saved, Ownership.Borrowed, false)
       continue
     }
-    decided.add(Argument(operand.slot, Ownership.Borrowed, false))
+    decided.add Argument(operand.slot, Ownership.Borrowed, false)
   }
-  withOperands(instruction, decided)
+  withOperands instruction, decided
 }
 
 // --- Phase 3: one block ---------------------------------------------------------------------------------------------
@@ -528,7 +528,7 @@ fn rewriteBlock(
   var alive = live.liveOut[index]
   var endDrops: List<Slot> = []
   var tail: List<Instruction> = []
-  const terminator = rewriteTerminator(program, facts, counted, alive, endDrops, tail, block.terminator)
+  const terminator = rewriteTerminator program, facts, counted, alive, endDrops, tail, block.terminator
   const count = block.instructions.length()
   var before: List<List<Instruction>> = []
   var after: List<List<Instruction>> = []
@@ -536,27 +536,27 @@ fn rewriteBlock(
   for position in 0..count {
     before.add([])
     after.add([])
-    updated.add(block.instructions[position])
+    updated.add block.instructions[position]
   }
   var at = count - 1
   while at >= 0 {
     var retains: List<Instruction> = []
     var releases: List<Instruction> = []
     const instruction = block.instructions[at]
-    const rewritten = rewriteInstruction(program, facts, counted, alive, retains, releases, instruction)
-    updated.set(at, rewritten)
-    before.set(at, retains)
-    after.set(at, releases)
+    const rewritten = rewriteInstruction program, facts, counted, alive, retains, releases, instruction
+    updated.set at, rewritten
+    before.set at, retains
+    after.set at, releases
     at = at - 1
   }
-  var instructions = entryReleases(facts, counted, alive, index)
+  var instructions = entryReleases facts, counted, alive, index
   for position in 0..count {
-    instructions.addAll(before[position])
-    instructions.add(updated[position])
-    instructions.addAll(after[position])
+    instructions.addAll before[position]
+    instructions.add updated[position]
+    instructions.addAll after[position]
   }
-  instructions.addAll(tail)
-  RewrittenBlock(instructions, terminator, endDrops)
+  instructions.addAll tail
+  RewrittenBlock instructions, terminator, endDrops
 }
 
 /**
@@ -576,7 +576,7 @@ fn entryReleases(facts: SlotFacts, counted: Counted, arriving: List<Bool>, index
     if !facts.isParameter[slot.value] {
       continue
     }
-    released.add(Instruction.Release(slot))
+    released.add Instruction.Release(slot)
   }
   released
 }
@@ -594,26 +594,26 @@ fn rewriteTerminator(
     .Return(value) => {
       const argument = match value {
         Some(found) => found
-        .None => {
+        None => {
           return terminator
         }
       }
       var retains: List<Instruction> = []
       var releases: List<Instruction> = []
-      const operand = Operand(argument.slot, true, true, false)
-      const answer = decideOperand(program, facts, counted, alive, retains, releases, operand)
+      const operand = Operand argument.slot, true, true, false
+      const answer = decideOperand program, facts, counted, alive, retains, releases, operand
       // Nothing can follow a `return`, and a value that is returned is never released: only a retain can land here
-      tail.addAll(retains)
-      markAlive(alive, counted, argument.slot)
-      Terminator.Return(Some(answer))
+      tail.addAll retains
+      markAlive alive, counted, argument.slot
+      Terminator.Return Some(answer)
     }
     // A condition and a scrutinee are read and nothing else, so their last use is the end of the block
     .Branch(condition, _, _) => {
-      dropAtEnd(counted, alive, endDrops, condition)
+      dropAtEnd counted, alive, endDrops, condition
       terminator
     }
     .Switch(scrutinee, _, _, _) => {
-      dropAtEnd(counted, alive, endDrops, scrutinee)
+      dropAtEnd counted, alive, endDrops, scrutinee
       terminator
     }
     _ => terminator
@@ -621,14 +621,14 @@ fn rewriteTerminator(
 }
 
 fn dropAtEnd(counted: Counted, var alive: List<Bool>, var endDrops: List<Slot>, slot: Slot) {
-  const position = counted.positionOf(slot)
+  const position = counted.positionOf slot
   if position < 0 {
     return
   }
   if !alive[position] {
-    endDrops.add(slot)
+    endDrops.add slot
   }
-  alive.set(position, true)
+  alive.set position, true
 }
 
 /**
@@ -645,46 +645,46 @@ fn rewriteInstruction(
   var releases: List<Instruction>,
   instruction: Instruction,
 ): Instruction {
-  const operands = operandsOf(program, facts, instruction)
+  const operands = operandsOf program, facts, instruction
   // A panic runs nothing at all: no retain, no release, and what it read is left behind (decided gap 9)
   if const .Panic(_, _) = instruction {
     for operand in operands {
-      markAlive(alive, counted, operand.slot)
+      markAlive alive, counted, operand.slot
     }
     return instruction
   }
-  const defined = definedSlot(instruction)
+  const defined = definedSlot instruction
   var isDeadDefinition = false
   if const Some(target) = defined {
-    const position = counted.positionOf(target)
+    const position = counted.positionOf target
     if position >= 0 {
       isDeadDefinition = !alive[position]
-      alive.set(position, false)
+      alive.set position, false
     }
   }
   var decided: List<Argument> = []
   for operand in operands {
-    decided.add(Argument(operand.slot, Ownership.Borrowed, false))
+    decided.add Argument(operand.slot, Ownership.Borrowed, false)
   }
   var taken: List<Instruction> = []
   var dropped: List<Instruction> = []
   var at = operands.length() - 1
   while at >= 0 {
     const operand = operands[at]
-    const answer = decideOperand(program, facts, counted, alive, taken, dropped, operand)
-    decided.set(at, answer)
-    markAlive(alive, counted, operand.slot)
+    const answer = decideOperand program, facts, counted, alive, taken, dropped, operand
+    decided.set at, answer
+    markAlive alive, counted, operand.slot
     at = at - 1
   }
-  retains.addAll(reversedInstructions(taken))
-  releases.addAll(reversedInstructions(dropped))
+  retains.addAll reversedInstructions(taken)
+  releases.addAll reversedInstructions(dropped)
   // `const _ = text.trimmed()`: a value nobody takes is dead where it is made
   if isDeadDefinition {
     if const Some(target) = defined {
-      releases.add(Instruction.Release(target))
+      releases.add Instruction.Release(target)
     }
   }
-  withOperands(instruction, decided)
+  withOperands instruction, decided
 }
 
 /**
@@ -711,32 +711,32 @@ fn decideOperand(
 ): Argument {
   const slot = operand.slot
   if !facts.isCountedSlot(slot) {
-    return Argument(slot, Ownership.Borrowed, false)
+    return Argument slot, Ownership.Borrowed, false
   }
-  const position = counted.positionOf(slot)
+  const position = counted.positionOf slot
   const isLast = position >= 0 && !alive[position]
   if !operand.takesCount {
     if isLast {
-      releases.add(Instruction.Release(slot))
+      releases.add Instruction.Release(slot)
     }
-    return Argument(slot, Ownership.Borrowed, isLast)
+    return Argument slot, Ownership.Borrowed, isLast
   }
   if isLast && operand.canMove {
-    return Argument(slot, Ownership.Owned, true)
+    return Argument slot, Ownership.Owned, true
   }
   if !operand.retainsItself {
-    retains.add(Instruction.Retain(slot))
+    retains.add Instruction.Retain(slot)
   }
   if isLast {
-    releases.add(Instruction.Release(slot))
+    releases.add Instruction.Release(slot)
   }
-  Argument(slot, Ownership.Owned, false)
+  Argument slot, Ownership.Owned, false
 }
 
 fn markAlive(var alive: List<Bool>, counted: Counted, slot: Slot) {
-  const position = counted.positionOf(slot)
+  const position = counted.positionOf slot
   if position >= 0 {
-    alive.set(position, true)
+    alive.set position, true
   }
 }
 
@@ -744,7 +744,7 @@ fn reversedInstructions(instructions: List<Instruction>): List<Instruction> {
   var reversed: List<Instruction> = []
   var at = instructions.length() - 1
   while at >= 0 {
-    reversed.add(instructions[at])
+    reversed.add instructions[at]
     at = at - 1
   }
   reversed
@@ -770,32 +770,32 @@ fn splitEdges(
   blockCount: Int,
 ) {
   for block in 0..blockCount {
-    const targets = successorsOf(function.blocks[block])
+    const targets = successorsOf function.blocks[block]
     if targets.isEmpty() {
       continue
     }
     if targets.length() == 1 {
       // A `jump` reads nothing, so a release at the end of the block is on the edge
-      const drops = dropsOnEdge(counted, live, endDrops, block, targets[0])
+      const drops = dropsOnEdge counted, live, endDrops, block, targets[0]
       for slot in drops {
         function.blocks[block].instructions.add(Instruction.Release(slot))
       }
       continue
     }
     for position in 0..targets.length() {
-      const drops = dropsOnEdge(counted, live, endDrops, block, targets[position])
+      const drops = dropsOnEdge counted, live, endDrops, block, targets[position]
       if drops.isEmpty() {
         continue
       }
       var instructions: List<Instruction> = []
       for slot in drops {
-        instructions.add(Instruction.Release(slot))
+        instructions.add Instruction.Release(slot)
       }
       const at = function.blocks[block].at
-      const jump = Terminator.Jump(BlockId(targets[position]))
-      function.blocks.add(Block(instructions, jump, "drop", at))
+      const jump = Terminator.Jump BlockId(targets[position])
+      function.blocks.add Block(instructions, jump, "drop", at)
       const added = BlockId(function.blocks.length() - 1)
-      const replaced = withEdge(function.blocks[block].terminator, position, added)
+      const replaced = withEdge function.blocks[block].terminator, position, added
       function.blocks[block].terminator = replaced
     }
   }
@@ -814,31 +814,31 @@ fn dropsOnEdge(
     const arriving = live.liveIn[target]
     for position in 0..counted.width() {
       if leaving[position] && !arriving[position] {
-        drops.add(counted.slots[position])
+        drops.add counted.slots[position]
       }
     }
   }
-  drops.addAll(endDrops[block])
+  drops.addAll endDrops[block]
   drops
 }
 
 /** One edge of a terminator, in the order `successorsOf` writes them: a switch's targets first, `otherwise` last. */
 fn withEdge(terminator: Terminator, position: Int, block: BlockId): Terminator {
   match terminator {
-    .Jump(_) => Terminator.Jump(block)
+    .Jump(_) => Terminator.Jump block
     .Branch(condition, then, otherwise) => {
       if position == 0 {
-        return Terminator.Branch(condition, block, otherwise)
+        return Terminator.Branch condition, block, otherwise
       }
-      Terminator.Branch(condition, then, block)
+      Terminator.Branch condition, then, block
     }
     .Switch(scrutinee, values, targets, otherwise) => {
       if position >= targets.length() {
-        return Terminator.Switch(scrutinee, values, targets, block)
+        return Terminator.Switch scrutinee, values, targets, block
       }
       var replaced = targets
-      replaced.set(position, block)
-      Terminator.Switch(scrutinee, values, replaced, otherwise)
+      replaced.set position, block
+      Terminator.Switch scrutinee, values, replaced, otherwise
     }
     _ => terminator
   }

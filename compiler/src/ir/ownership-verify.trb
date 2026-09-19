@@ -39,20 +39,20 @@ const conflictState = 3
 
 /** Everything `verifyProgram` finds, plus the ownership invariants. This is what `torb ir` runs over the final IR. */
 public fn verifyOwnedProgram(program: IrProgram): List<String> {
-  var found = verifyProgram(program)
+  var found = verifyProgram program
   for function in program.functions {
-    found.addAll(verifyOwnership(program, function))
+    found.addAll verifyOwnership(program, function)
   }
   found
 }
 
 /** One function, after `verifyFunction` has said that its shape and its types are right. */
 public fn verifyOwnedFunction(program: IrProgram, function: IrFunction): List<String> {
-  var found = verifyFunction(program, function)
+  var found = verifyFunction program, function
   if !found.isEmpty() {
     return found
   }
-  verifyOwnership(program, function)
+  verifyOwnership program, function
 }
 
 /**
@@ -67,13 +67,13 @@ public fn verifyOwnership(program: IrProgram, function: IrFunction): List<String
   if function.blocks.isEmpty() {
     return found
   }
-  const facts = slotFactsOf(program, function)
-  const counted = countedSlotsOf(program, function)
-  verifyModes(program, function, facts, found)
+  const facts = slotFactsOf program, function
+  const counted = countedSlotsOf program, function
+  verifyModes program, function, facts, found
   if !found.isEmpty() {
     return found
   }
-  verifyFlow(program, function, facts, counted, found)
+  verifyFlow program, function, facts, counted, found
   found
 }
 
@@ -84,11 +84,11 @@ fn verifyModes(program: IrProgram, function: IrFunction, facts: SlotFacts, var f
     const at = "{function.name} b{index}"
     const block = function.blocks[index]
     for instruction in block.instructions {
-      verifyInstructionModes(program, function, facts, at, instruction, found)
+      verifyInstructionModes program, function, facts, at, instruction, found
     }
     if const .Return(value) = block.terminator {
       if const Some(argument) = value {
-        checkKeptOperand(function, facts, at, argument, "`return`", found)
+        checkKeptOperand function, facts, at, argument, "`return`", found
       }
     }
   }
@@ -105,34 +105,34 @@ fn verifyInstructionModes(
   match instruction {
     .Construct(_, _, _, fields) => {
       for field in fields {
-        checkKeptOperand(function, facts, at, field, "`construct`", found)
+        checkKeptOperand function, facts, at, field, "`construct`", found
       }
     }
-    .BoxNew(_, value) => checkKeptOperand(function, facts, at, value, "`boxNew`", found)
-    .TraitValue(_, value, _) => checkKeptOperand(function, facts, at, value, "`traitValue`", found)
-    .Write(_, value) => checkKeptOperand(function, facts, at, value, "a write", found)
+    .BoxNew(_, value) => checkKeptOperand function, facts, at, value, "`boxNew`", found
+    .TraitValue(_, value, _) => checkKeptOperand function, facts, at, value, "`traitValue`", found
+    .Write(_, value) => checkKeptOperand function, facts, at, value, "a write", found
     .Call(_, callee, arguments, _, _) => {
       if program.hasFunction(callee) {
         const signature = program.functionAt(callee).signature
         const name = program.functionAt(callee).name
-        checkArgumentModes(function, facts, at, signature, arguments, "`{name}`", found)
+        checkArgumentModes function, facts, at, signature, arguments, "`{name}`", found
       }
     }
     .CallClosure(_, callee, arguments) => {
       if const .Closure(identifier) = program.typeAt(facts.typeOfSlot(callee)) {
-        const signature = program.signatureAt(identifier)
+        const signature = program.signatureAt identifier
         const name = "the closure in %{callee.value}"
-        checkArgumentModes(function, facts, at, signature, arguments, name, found)
+        checkArgumentModes function, facts, at, signature, arguments, name, found
       }
     }
     .Move(_, source) => {
       if isLentParameter(function, source) {
-        found.add("{at}: %{source.value} is a parameter the caller keeps the count of, so it cannot be moved out of")
+        found.add "{at}: %{source.value} is a parameter the caller keeps the count of, so it cannot be moved out of"
       }
     }
     .Release(slot) => {
       if isLentParameter(function, slot) {
-        found.add("{at}: %{slot.value} is a parameter the caller keeps the count of, so it is never released")
+        found.add "{at}: %{slot.value} is a parameter the caller keeps the count of, so it is never released"
       }
     }
     _ => {}
@@ -152,10 +152,10 @@ fn checkKeptOperand(
     return
   }
   if argument.ownership != Ownership.Owned {
-    found.add("{at}: {what} keeps %{argument.slot.value}, so the operand has to be `owned`")
+    found.add "{at}: {what} keeps %{argument.slot.value}, so the operand has to be `owned`"
     return
   }
-  checkMovedOperand(function, at, argument, found)
+  checkMovedOperand function, at, argument, found
 }
 
 fn checkMovedOperand(function: IrFunction, at: String, argument: Argument, var found: List<String>) {
@@ -165,7 +165,7 @@ fn checkMovedOperand(function: IrFunction, at: String, argument: Argument, var f
   if !isLentParameter(function, argument.slot) {
     return
   }
-  found.add("{at}: %{argument.slot.value} is a parameter the caller keeps the count of, so it cannot be moved out of")
+  found.add "{at}: %{argument.slot.value} is a parameter the caller keeps the count of, so it cannot be moved out of"
 }
 
 /** Every argument of a call carries exactly the mode the callee's signature asks for - it is one contract, not two. */
@@ -188,14 +188,14 @@ fn checkArgumentModes(
     }
     const wanted = signature.parameters[index].ownership
     if argument.ownership == wanted {
-      checkMovedOperand(function, at, argument, found)
+      checkMovedOperand function, at, argument, found
       continue
     }
     if wanted == Ownership.Owned {
-      found.add("{at}: {callee} keeps argument {index}, so %{argument.slot.value} has to be `owned`")
+      found.add "{at}: {callee} keeps argument {index}, so %{argument.slot.value} has to be `owned`"
       continue
     }
-    found.add("{at}: {callee} borrows argument {index}, so %{argument.slot.value} cannot be `owned`")
+    found.add "{at}: {callee} borrows argument {index}, so %{argument.slot.value} cannot be `owned`"
   }
 }
 
@@ -229,12 +229,12 @@ fn verifyFlow(
     return
   }
   const blockCount = function.blocks.length()
-  const order = reverseOf(postorderOf(function))
+  const order = reverseOf postorderOf(function)
   var entry: List<List<Int>> = []
   for _ in 0..blockCount {
-    entry.add(filledStates(width, unknownState))
+    entry.add filledStates(width, unknownState)
   }
-  entry.set(0, initialState(function, counted, width))
+  entry.set 0, initialState(function, counted, width)
   var ignored: List<String> = []
   var rounds = 0
   var isChanged = true
@@ -242,20 +242,20 @@ fn verifyFlow(
     isChanged = false
     rounds = rounds + 1
     if rounds > blockCount + 2 {
-      found.add("{function.name}: the ownership of the slots did not settle")
+      found.add "{function.name}: the ownership of the slots did not settle"
       return
     }
     for block in order {
       var state = entry[block]
-      runBlock(program, function, facts, counted, block, state, ignored, false)
+      runBlock program, function, facts, counted, block, state, ignored, false
       for target in successorsOf(function.blocks[block]) {
         if target < 0 || target >= blockCount {
           continue
         }
         var merged = entry[target]
-        mergeStates(merged, state)
+        mergeStates merged, state
         if merged != entry[target] {
-          entry.set(target, merged)
+          entry.set target, merged
           isChanged = true
         }
       }
@@ -263,17 +263,17 @@ fn verifyFlow(
   }
   for block in order {
     var state = entry[block]
-    runBlock(program, function, facts, counted, block, state, found, true)
+    runBlock program, function, facts, counted, block, state, found, true
   }
 }
 
 /** Where a body starts: the parameters the caller handed over own a value, and every other slot holds nothing. */
 fn initialState(function: IrFunction, counted: Counted, width: Int): List<Int> {
-  var state = filledStates(width, emptyState)
+  var state = filledStates width, emptyState
   for position in 0..width {
     const slot = counted.slots[position]
     if const .Parameter(_) = function.slots[slot.value].role {
-      state.set(position, owningState)
+      state.set position, owningState
     }
   }
   state
@@ -282,7 +282,7 @@ fn initialState(function: IrFunction, counted: Counted, width: Int): List<Int> {
 fn filledStates(count: Int, value: Int): List<Int> {
   var filled: List<Int> = []
   for _ in 0..count {
-    filled.add(value)
+    filled.add value
   }
   filled
 }
@@ -291,7 +291,7 @@ fn reverseOf(order: List<Int>): List<Int> {
   var reversed: List<Int> = []
   var at = order.length() - 1
   while at >= 0 {
-    reversed.add(order[at])
+    reversed.add order[at]
     at = at - 1
   }
   reversed
@@ -306,10 +306,10 @@ fn mergeStates(var target: List<Int>, other: List<Int>) {
       continue
     }
     if known == unknownState {
-      target.set(position, arriving)
+      target.set position, arriving
       continue
     }
-    target.set(position, conflictState)
+    target.set position, conflictState
   }
 }
 
@@ -326,10 +326,10 @@ fn runBlock(
   const at = "{function.name} b{block}"
   const instructions = function.blocks[block].instructions
   for instruction in instructions {
-    runInstruction(counted, at, instruction, state, found, reports)
+    runInstruction counted, at, instruction, state, found, reports
   }
   const terminator = function.blocks[block].terminator
-  runTerminator(counted, at, terminator, state, found, reports)
+  runTerminator counted, at, terminator, state, found, reports
 }
 
 fn runInstruction(
@@ -345,38 +345,38 @@ fn runInstruction(
     return
   }
   if const .Release(slot) = instruction {
-    const position = counted.positionOf(slot)
+    const position = counted.positionOf slot
     if position < 0 {
       return
     }
     if reports {
-      reportRelease(at, slot, state[position], found)
+      reportRelease at, slot, state[position], found
     }
-    state.set(position, emptyState)
+    state.set position, emptyState
     return
   }
   for slot in usedSlots(instruction) {
-    const position = counted.positionOf(slot)
+    const position = counted.positionOf slot
     if position < 0 || !reports {
       continue
     }
-    reportUse(at, slot, state[position], found)
+    reportUse at, slot, state[position], found
   }
   for slot in consumedSlotsOf(instruction) {
-    const position = counted.positionOf(slot)
+    const position = counted.positionOf slot
     if position >= 0 {
-      state.set(position, emptyState)
+      state.set position, emptyState
     }
   }
   if const Some(target) = definedSlot(instruction) {
-    const position = counted.positionOf(target)
+    const position = counted.positionOf target
     if position < 0 {
       return
     }
     if reports && state[position] == owningState {
-      found.add("{at}: %{target.value} is overwritten while it still owns a value")
+      found.add "{at}: %{target.value} is overwritten while it still owns a value"
     }
-    state.set(position, owningState)
+    state.set position, owningState
   }
 }
 
@@ -393,9 +393,9 @@ fn runTerminator(
     return
   }
   for slot in usedByTerminator(terminator) {
-    const position = counted.positionOf(slot)
+    const position = counted.positionOf slot
     if position >= 0 && reports {
-      reportUse(at, slot, state[position], found)
+      reportUse at, slot, state[position], found
     }
   }
   const value = match terminator {
@@ -405,9 +405,9 @@ fn runTerminator(
     }
   }
   if const Some(argument) = value {
-    const position = counted.positionOf(argument.slot)
+    const position = counted.positionOf argument.slot
     if position >= 0 && argument.ownership == Ownership.Owned && argument.isLastUse {
-      state.set(position, emptyState)
+      state.set position, emptyState
     }
   }
   if !reports {
@@ -416,11 +416,11 @@ fn runTerminator(
   for position in 0..counted.width() {
     const slot = counted.slots[position]
     if state[position] == owningState {
-      found.add("{at}: %{slot.value} still owns a value where the function returns")
+      found.add "{at}: %{slot.value} still owns a value where the function returns"
       continue
     }
     if state[position] == conflictState {
-      found.add("{at}: %{slot.value} owns a value on one path to this `return` and not on another")
+      found.add "{at}: %{slot.value} owns a value on one path to this `return` and not on another"
     }
   }
 }
@@ -434,20 +434,20 @@ fn isUnreachable(terminator: Terminator): Bool {
 
 fn reportUse(at: String, slot: Slot, state: Int, var found: List<String>) {
   if state == emptyState {
-    found.add("{at}: %{slot.value} is used after it was moved out of or released")
+    found.add "{at}: %{slot.value} is used after it was moved out of or released"
     return
   }
   if state == conflictState {
-    found.add("{at}: %{slot.value} owns a value on one path here and not on another")
+    found.add "{at}: %{slot.value} owns a value on one path here and not on another"
   }
 }
 
 fn reportRelease(at: String, slot: Slot, state: Int, var found: List<String>) {
   if state == emptyState {
-    found.add("{at}: %{slot.value} is released twice")
+    found.add "{at}: %{slot.value} is released twice"
     return
   }
   if state == conflictState {
-    found.add("{at}: %{slot.value} is released on a path where it holds no value")
+    found.add "{at}: %{slot.value} is released on a path where it holds no value"
   }
 }

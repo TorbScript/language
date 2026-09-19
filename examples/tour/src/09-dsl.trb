@@ -13,21 +13,21 @@ type Element {
   }
 
   fn text(var self, content: String) {
-    children.add(Node.Text(content))
+    children.add Node.Text(content)
   }
 
   // One generic child function...
   fn element(var self, tag: String, build: (var self: Element) => Void) {
-    var child = Element(tag)
-    build(child)                         // The receiver is passed as the first argument and changed in place
-    children.add(Node.Child(child))
+    var child = Element tag
+    build child                         // The receiver is passed as the first argument and changed in place
+    children.add Node.Child(child)
   }
 
   // ...and some vocabulary on top of it
-  fn div(var self, build: (var self: Element) => Void) { element("div", build) }
-  fn ul(var self, build: (var self: Element) => Void) { element("ul", build) }
-  fn li(var self, build: (var self: Element) => Void) { element("li", build) }
-  fn h1(var self, content: String) { element("h1") { text content } }
+  fn div(var self, build: (var self: Element) => Void) { element "div", build }
+  fn ul(var self, build: (var self: Element) => Void) { element "ul", build }
+  fn li(var self, build: (var self: Element) => Void) { element "li", build }
+  fn h1(var self, content: String) { element "h1" { text content } }
 
   fn render(self, indent: String = ""): String {
     const attributeText = attributes.map { entry => " {entry.0}=\"{entry.1}\"" }.joined()
@@ -43,14 +43,14 @@ type Node {
   fn render(self, indent: String): String {
     match self {
       .Text(content) => "{indent}{content}"
-      .Child(element) => element.render(indent)
+      .Child(element) => element.render indent
     }
   }
 }
 
 fn html(build: (var self: Element) => Void): Element {
-  var root = Element("html")
-  build(root)
+  var root = Element "html"
+  build root
   root
 }
 
@@ -89,7 +89,7 @@ type ServerOptions {
 
 fn serve(configure: (var self: ServerOptions) => Void): ServerOptions {
   var options = ServerOptions()
-  configure(options)
+  configure options
   options
 }
 

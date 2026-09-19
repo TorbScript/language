@@ -26,9 +26,9 @@ use settleChanges from "./mutation"
 public fn scriptReceiverOf(var checker: Checker, module: ModuleId): TypeId? {
   const script = checker.program.graph.at(module).receiver?
   match script {
-    .ProjectFile => projectType(checker)
+    .ProjectFile => projectType checker
     // The type argument of the `Sandbox.load` that names the file, in a type position of the module that loads it
-    .Loaded(from, annotation) => Some(typeFromReference(checker, annotation, TypeScope(from)))
+    .Loaded(from, annotation) => Some typeFromReference(checker, annotation, TypeScope(from))
   }
 }
 
@@ -38,10 +38,10 @@ public fn scriptReceiverOf(var checker: Checker, module: ModuleId): TypeId? {
  */
 fn projectType(var checker: Checker): TypeId? {
   const package = checker.program.workspace.packageNamed("std/project")?
-  const path = joinPath(package.directory, "src/lib.trb")
+  const path = joinPath package.directory, "src/lib.trb"
   const module = checker.program.graph.moduleAt(path)?
   const symbol = checker.program.scopes[module.value].exported.get("Project")?
-  Some(checker.nominal(symbol, []))
+  Some checker.nominal(symbol, [])
 }
 
 /**
@@ -52,24 +52,24 @@ fn projectType(var checker: Checker): TypeId? {
 public fn checkReceiverScript(var checker: Checker, module: ModuleId, receiver: TypeId) {
   const statements = checker.program.graph.at(module).file.statements
   const nothing = checker.voidType
-  const saved = checker.enterBody(module, nothing, true, None)
+  const saved = checker.enterBody module, nothing, true, None
   checker.openScope()
   const binding = checker.declareBinding(
     LocalBinding("self", receiver, true, Span(0, 0), isReceiver: true)
   )
-  checker.setReceiver(binding)
+  checker.setReceiver binding
   // The file *is* the closure, so its receiver is recorded where a closure would record its own: at its own span
-  checker.recordReceiver(Span(0, 0), ReceiverClosure(binding, receiver, true, true))
+  checker.recordReceiver Span(0, 0), ReceiverClosure(binding, receiver, true, true)
   // Every statement is an ordinary one, not a top-level declaration of a module: a `const` of a script is a *local* of
   // the closure, so it may read the receiver (`const binary = name.substringAfter("/") ?? name`) and what came before it
   for statement in statements {
-    reportImport(checker, statement)
-    const _ = checkStatement(checker, statement)
+    reportImport checker, statement
+    const _ = checkStatement checker, statement
   }
   // The file is a body like any other, so a change in it that nothing reads afterwards is one too (design 5.3)
-  settleChanges(checker)
+  settleChanges checker
   checker.closeScope()
-  checker.leaveBody(saved)
+  checker.leaveBody saved
 }
 
 /** Everything beyond the prelude is granted at the call site of `Sandbox.load`, never by the script itself (gap 34). */

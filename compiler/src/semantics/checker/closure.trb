@@ -30,22 +30,22 @@ use markReferenceBindings, noteClosureKind from "./mutation"
 /** `{ x => x + 1 }`, `{ _ * 2 }`, `{ value: Int => ... }`: the closure, checked against what is expected of it. */
 public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expected: TypeId?): TypeId {
   const wanted = match expected {
-    Some(found) => resolveType(checker, found)
-    .None => checker.deferredType
+    Some(found) => resolveType checker, found
+    None => checker.deferredType
   }
-  const form = formOf(checker, wanted)
+  const form = formOf checker, wanted
   const hasParameters = !closure.parameters.isEmpty()
-  const written = parameterFormsOf(checker, closure, form, at)
+  const written = parameterFormsOf checker, closure, form, at
   const parameters = written.forms
   // `(var self: Element) => Void`: the receiver is a parameter, and everything after it is an ordinary one
-  const receiver = receiverIndexOf(parameters)
+  const receiver = receiverIndexOf parameters
   var implicit: List<String?> = []
   var types: List<TypeId> = []
   var used: List<Int> = []
   if !hasParameters {
     for index in (receiver + 1)..parameters.length() {
-      implicit.add(parameters[index].name)
-      types.add(parameters[index].annotation)
+      implicit.add parameters[index].name
+      types.add parameters[index].annotation
       used.add(-1)
     }
   }
@@ -54,15 +54,15 @@ public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expecte
   var expectedResult: TypeId? = None
   if const Some(found) = form {
     if !written.isBroken {
-      expectedResult = Some(found.result)
+      expectedResult = Some found.result
     }
   }
   const frame = ClosureFrame(at, 0, implicit, types, used, [], hasParameters, receiver + 1)
-  const result = checkClosureBody(checker, closure, at, parameters, frame, receiver, expectedResult)
+  const result = checkClosureBody checker, closure, at, parameters, frame, receiver, expectedResult
   if written.isBroken {
     return wanted
   }
-  checker.functionType(FunctionForm(parameters, result))
+  checker.functionType FunctionForm(parameters, result)
 }
 
 /** The parameter names resolve against, or `-1`: the first one of the expected function type that is a receiver. */
@@ -93,16 +93,16 @@ fn parameterFormsOf(
 ): ClosureParameters {
   const wanted = match form {
     Some(found) => found.parameters
-    .None => []
+    None => []
   }
   if closure.parameters.isEmpty() {
-    return ClosureParameters(wanted, false)
+    return ClosureParameters wanted, false
   }
-  const scope = scopeHere(checker)
+  const scope = scopeHere checker
   var parameters: List<ParameterForm> = []
   var isBroken = false
   if form.isSome() && closure.parameters.length() != wanted.length() {
-    reportArity(checker, closure.parameters.length(), wanted.length(), at)
+    reportArity checker, closure.parameters.length(), wanted.length(), at
     isBroken = true
   }
   for index in 0..closure.parameters.length() {
@@ -116,27 +116,27 @@ fn parameterFormsOf(
     var annotation = checker.deferredType
     match parameter.annotation {
       Some(reference) => {
-        annotation = typeFromReference(checker, reference, scope.forType())
+        annotation = typeFromReference checker, reference, scope.forType()
         // An annotation that disagrees with the expected function type is a mistake in the closure, and the closure
         // keeps the type it was asked for: one root cause gets one message
         if index < wanted.length() {
           if !unify(checker, annotation, wanted[index].annotation) {
-            reportParameterMismatch(checker, annotation, wanted[index].annotation, reference.span)
+            reportParameterMismatch checker, annotation, wanted[index].annotation, reference.span
             isBroken = true
           }
         }
       }
-      .None => {
+      None => {
         if index < wanted.length() {
           annotation = wanted[index].annotation
         } else if form.isNone() {
-          reportMissingParameterTypes(checker, parameter.pattern.span)
+          reportMissingParameterTypes checker, parameter.pattern.span
         }
       }
     }
-    parameters.add(ParameterForm(nameOfParameter(parameter), mode, annotation))
+    parameters.add ParameterForm(nameOfParameter(parameter), mode, annotation)
   }
-  ClosureParameters(parameters, isBroken)
+  ClosureParameters parameters, isBroken
 }
 
 /** A `var` parameter binds a mutable path into the caller's place, exactly as a `var` parameter of a `fn` does. */
@@ -151,7 +151,7 @@ fn isVarMode(mode: ParameterMode): Bool {
 /** The name a written closure parameter is known under, where its pattern is a plain name. */
 fn nameOfParameter(parameter: ClosureParameter): String? {
   if const .Binding(name) = parameter.pattern.kind {
-    return Some(name)
+    return Some name
   }
   None
 }
@@ -186,8 +186,8 @@ fn checkClosureBody(
   if const Some(found) = expectedResult {
     if !checker.absorbs(found) {
       declared = found
-      isInferred = hasVariable(checker, found)
-      inner = bodyExpectation(checker, found, false)
+      isInferred = hasVariable checker, found
+      inner = bodyExpectation checker, found, false
     }
   }
   checker.resultType = declared
@@ -199,9 +199,9 @@ fn checkClosureBody(
   // still holds a call responsible for once its arguments have been evaluated (4.10)
   checker.runningClosures = checker.runningClosures + 1
   const start = checker.bindings.length()
-  checker.closureFrames.add(frame.copy(bindings: start, enclosingLoopDepth: savedDepth))
+  checker.closureFrames.add frame.copy(bindings: start, enclosingLoopDepth: savedDepth)
   if receiver >= 0 {
-    declareReceiver(checker, closure, at, parameters, receiver, hasParameters)
+    declareReceiver checker, closure, at, parameters, receiver, hasParameters
   }
   if hasParameters {
     for index in 0..closure.parameters.length() {
@@ -209,23 +209,23 @@ fn checkClosureBody(
         continue
       }
       const form = parameters.get(index) ?? ParameterForm(None, ParameterMode.Value, checker.deferredType)
-      const isVar = isVarMode(form.mode)
+      const isVar = isVarMode form.mode
       const own = closure.parameters[index].pattern
-      checkPattern(checker, own, form.annotation, isVar)
-      requireIrrefutable(checker, own, form.annotation, "The parameter of a closure", "value")
+      checkPattern checker, own, form.annotation, isVar
+      requireIrrefutable checker, own, form.annotation, "The parameter of a closure", "value"
     }
   }
   // A `var` parameter of a closure and a `var self` receiver are references like any other, so a nested closure may not
   // carry them off (gap 14)
-  markReferenceBindings(checker, start)
-  const outcome = checkBlock(checker, closure.body, inner)
+  markReferenceBindings checker, start
+  const outcome = checkBlock checker, closure.body, inner
   var result = declared
   if isInferred {
-    result = inferredResult(checker, outcome)
+    result = inferredResult checker, outcome
   }
   const last = checker.closureFrames.length() - 1
   const captures = checker.closureFrames[last].captures
-  const _ = checker.closureFrames.removeAt(last)
+  const _ = checker.closureFrames.removeAt last
   checker.runningClosures = checker.runningClosures - 1
   checker.closeScope()
   checker.resultType = savedResult
@@ -234,12 +234,12 @@ fn checkClosureBody(
   checker.loopDepth = savedDepth
   checker.receiverType = savedReceiverType
   checker.receiverBinding = savedReceiverBinding
-  checker.recordCaptures(at, captures)
+  checker.recordCaptures at, captures
   // Whether the closure may outlive the call it stands in, and whether it may hold a reference (BACKEND gap 14)
-  noteClosureKind(checker, at, captures)
+  noteClosureKind checker, at, captures
   if const Some(found) = expectedResult {
     if isInferred {
-      const _ = unify(checker, result, found)
+      const _ = unify checker, result, found
     }
   }
   result
@@ -264,22 +264,22 @@ fn declareReceiver(
   hasParameters: Bool,
 ) {
   const form = parameters[index]
-  const isVar = isVarMode(form.mode)
+  const isVar = isVarMode form.mode
   // A closure that wrote fewer parameters than the expected type has said so already, and its receiver stays implicit
   if !hasParameters || index >= closure.parameters.length() {
     const binding = checker.declareBinding(
       LocalBinding("self", form.annotation, isVar, at, isReceiver: true)
     )
-    checker.setReceiver(binding)
-    checker.recordReceiver(at, ReceiverClosure(binding, form.annotation, isVar, true))
+    checker.setReceiver binding
+    checker.recordReceiver at, ReceiverClosure(binding, form.annotation, isVar, true)
     return
   }
   const before = checker.bindings.length()
-  checkPattern(checker, closure.parameters[index].pattern, form.annotation, isVar)
+  checkPattern checker, closure.parameters[index].pattern, form.annotation, isVar
   checker.receiverType = None
   checker.receiverBinding = None
   if checker.bindings.length() > before {
-    checker.recordReceiver(at, ReceiverClosure(BindingId(before), form.annotation, isVar, false))
+    checker.recordReceiver at, ReceiverClosure(BindingId(before), form.annotation, isVar, false)
   }
 }
 
@@ -310,7 +310,7 @@ fn implicitIndexOf(text: String): Int {
  * `_` always means the innermost such closure; a name reaches outward, and reading one from further out captures it.
  */
 public fn implicitParameterTarget(var checker: Checker, text: String, at: Span): Target? {
-  const isPositional = isImplicitName(text)
+  const isPositional = isImplicitName text
   var frame = checker.closureFrames.length() - 1
   while frame >= 0 {
     if checker.closureFrames[frame].hasParameters {
@@ -318,12 +318,12 @@ public fn implicitParameterTarget(var checker: Checker, text: String, at: Span):
       continue
     }
     const index = if isPositional {
-      implicitIndexOf(text)
+      implicitIndexOf text
     } else {
-      nameIndexOf(checker.closureFrames[frame].implicit, text)
+      nameIndexOf checker.closureFrames[frame].implicit, text
     }
     if index >= 0 && index < checker.closureFrames[frame].types.length() {
-      return Some(parameterBindingOf(checker, frame, index, text, at))
+      return Some parameterBindingOf(checker, frame, index, text, at)
     }
     // `_` belongs to the innermost closure without a parameter list and never reaches an outer one
     if isPositional {
@@ -346,22 +346,22 @@ fn nameIndexOf(implicit: List<String?>, text: String): Int {
 /** The binding of one implicit parameter, made the first time it is used so that the unused ones cost nothing. */
 fn parameterBindingOf(var checker: Checker, frame: Int, index: Int, text: String, at: Span): Target {
   const known = checker.closureFrames[frame].used[index]
-  var identifier = BindingId(known)
+  var identifier = BindingId known
   if known < 0 {
     const annotation = checker.closureFrames[frame].types[index]
     const span = checker.closureFrames[frame].at
     // The name stays out of the scope chain: an implicit parameter is reached through the frame and nowhere else
-    identifier = checker.declareBinding(LocalBinding("_", annotation, false, span))
+    identifier = checker.declareBinding LocalBinding("_", annotation, false, span)
     var used = checker.closureFrames[frame].used
-    used.set(index, identifier.value)
+    used.set index, identifier.value
     const updated = checker.closureFrames[frame].copy(used: used)
-    checker.closureFrames.set(frame, updated)
+    checker.closureFrames.set frame, updated
   }
   const position = checker.closureFrames[frame].implicitFrom + index
-  checker.adapted(at, Adaptation.ImplicitParameter(position))
-  noteCapture(checker, identifier)
+  checker.adapted at, Adaptation.ImplicitParameter(position)
+  noteCapture checker, identifier
   const annotation = checker.binding(identifier).annotation
-  Target(Resolution.Local(identifier), annotation, form: formOf(checker, annotation), name: text)
+  Target Resolution.Local(identifier), annotation, form: formOf(checker, annotation), name: text
 }
 
 // --- Messages -------------------------------------------------------------------------------------------------------
@@ -369,13 +369,13 @@ fn parameterBindingOf(var checker: Checker, frame: Int, index: Int, text: String
 fn reportArity(var checker: Checker, given: Int, wanted: Int, at: Span) {
   const takes = if wanted == 1 { "1 parameter" } else { "{wanted} parameters" }
   const was = if given == 1 { "1 was written" } else { "{given} were written" }
-  checker.reportHere(Diagnostic.error("This closure takes {takes}, {was}", at))
+  checker.reportHere Diagnostic.error("This closure takes {takes}, {was}", at)
 }
 
 fn reportParameterMismatch(var checker: Checker, given: TypeId, wanted: TypeId, at: Span) {
-  const shown = checker.describe(wanted)
-  const found = checker.describe(given)
-  checker.reportHere(Diagnostic.error("This parameter is a `{shown}`, not a `{found}`", at))
+  const shown = checker.describe wanted
+  const found = checker.describe given
+  checker.reportHere Diagnostic.error("This parameter is a `{shown}`, not a `{found}`", at)
 }
 
 fn reportMissingParameterTypes(var checker: Checker, at: Span) {

@@ -18,7 +18,7 @@ use lowerChecked, loweredText from "../src/ir/lower/lower"
  * an untyped interpreter.
  */
 public fn lowered(source: String, extra: Map<String, String> = [:]): Lowering {
-  loweredWith(source, [], extra)
+  loweredWith source, [], extra
 }
 
 /**
@@ -31,9 +31,9 @@ public fn lowered(source: String, extra: Map<String, String> = [:]): Lowering {
  */
 public fn loweredWith(source: String, expected: List<String>, extra: Map<String, String> = [:]): Lowering {
   var files = extra
-  files.set("app/src/main.trb", source)
-  const tree = workspaceWith(files)
-  const checked = check(tree, ["app"], false, true)
+  files.set "app/src/main.trb", source
+  const tree = workspaceWith files
+  const checked = check tree, ["app"], false, true
   var found: List<String> = []
   for file in checked.files {
     for diagnostic in file.diagnostics {
@@ -41,26 +41,26 @@ public fn loweredWith(source: String, expected: List<String>, extra: Map<String,
       if !expected.contains(diagnostic.message) {
         assert(diagnostic.message == file.path)
       }
-      found.add(diagnostic.message)
+      found.add diagnostic.message
     }
   }
   assert(found == expected)
-  lowerChecked(checked)
+  lowerChecked checked
 }
 
 /** One function of the program, with the verifier's findings in its place if it has any. */
 public fn irOf(source: String, name: String, extra: Map<String, String> = [:]): String {
-  var found = lowered(source, extra)
-  const problems = verifyProgram(found.program)
+  var found = lowered source, extra
+  const problems = verifyProgram found.program
   if !problems.isEmpty() {
-    return problems.joined(separator: "\n")
+    return problems.joined separator: "\n"
   }
   if !found.program.problems.isEmpty() {
-    return found.program.problems.joined(separator: "\n")
+    return found.program.problems.joined separator: "\n"
   }
   for function in found.program.functions {
     if function.name == name {
-      return printFunction(found.program, function)
+      return printFunction found.program, function
     }
   }
   "there is no function `{name}`"
@@ -68,8 +68,8 @@ public fn irOf(source: String, name: String, extra: Map<String, String> = [:]): 
 
 /** The whole program: the layouts and the static values as well as the functions. */
 public fn textOf(source: String): String {
-  var found = lowered(source)
-  loweredText(found)
+  var found = lowered source
+  loweredText found
 }
 
 /**
@@ -78,18 +78,18 @@ public fn textOf(source: String): String {
  * is the whole reason these snapshots are worth writing down.
  */
 public fn ownedIrOf(source: String, name: String): String {
-  var found = lowered(source)
-  insertOwnership(found.program)
-  const problems = verifyOwnedProgram(found.program)
+  var found = lowered source
+  insertOwnership found.program
+  const problems = verifyOwnedProgram found.program
   if !problems.isEmpty() {
-    return problems.joined(separator: "\n")
+    return problems.joined separator: "\n"
   }
   if !found.program.problems.isEmpty() {
-    return found.program.problems.joined(separator: "\n")
+    return found.program.problems.joined separator: "\n"
   }
   for function in found.program.functions {
     if function.name == name {
-      return printFunction(found.program, function)
+      return printFunction found.program, function
     }
   }
   "there is no function `{name}`"
@@ -97,17 +97,17 @@ public fn ownedIrOf(source: String, name: String): String {
 
 /** Which constructs blocked a function, in the order they were first seen. */
 public fn unsupportedIn(source: String, extra: Map<String, String> = [:]): List<String> {
-  var found = lowered(source, extra)
+  var found = lowered source, extra
   var shown: List<String> = []
   for entry in found.unsupported {
-    shown.add(entry.what)
+    shown.add entry.what
   }
   shown
 }
 
 /** How many functions of the program got a body, and how many stayed an `unreachable` stub. */
 public fn countsOf(source: String): (Int, Int) {
-  var found = lowered(source)
+  var found = lowered source
   (found.lowered, found.stubbed)
 }
 
@@ -119,7 +119,7 @@ public fn countsOf(source: String): (Int, Int) {
  * once per *bound* is the sharing of BACKEND 1.4 gone wrong - so both are asked about by name.
  */
 public fn instanceCountsOf(source: String): Map<String, Int> {
-  var found = lowered(source)
+  var found = lowered source
   var counts: Map<String, Int> = [:]
   for function in found.program.functions {
     counts.set(function.name, (counts.get(function.name) ?? 0) + 1)

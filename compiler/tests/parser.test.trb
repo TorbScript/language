@@ -6,8 +6,8 @@ use Visibility, UseItem from "../src/syntax/ast"
 use parse from "../src/syntax/parser/parser"
 
 fn statements(text: String): List<Statement> {
-  const parsed = parse(SourceText.of(text))
-  assert(parsed.diagnostics.isEmpty())
+  const parsed = parse SourceText.of(text)
+  assert parsed.diagnostics.isEmpty()
   parsed.file.statements
 }
 
@@ -140,12 +140,12 @@ group "Command calls" {
 
   test "the closure belongs to the command, not to its argument" {
     assert(messages("print numbers.map \{ _ * 2 \}.toList()").length() == 1)
-    assert(messages("print(numbers.map \{ _ * 2 \}.toList())").isEmpty())
+    assert messages("print(numbers.map \{ _ * 2 \}.toList())").isEmpty()
   }
 
   test "positional arguments come first" {
     assert(messages("connect(host: \"a\", 5432)").length() == 1)
-    assert(messages("connect(\"a\", port: 5432)").isEmpty())
+    assert messages("connect(\"a\", port: 5432)").isEmpty()
   }
 }
 
@@ -156,7 +156,7 @@ group "Closures" {
       other => panic "Unexpected tree: {other}"
     }
     match bound("const double = \{ _ * 2 \}") {
-      .Closure(closure) => assert(closure.parameters.isEmpty())
+      .Closure(closure) => assert closure.parameters.isEmpty()
       other => panic "Unexpected tree: {other}"
     }
   }
@@ -184,12 +184,12 @@ group "Strings" {
 
 group "Types and patterns" {
   test "literal types, but no unions of types" {
-    assert(messages("const status: \"online\" | \"offline\" = \"online\"").isEmpty())
+    assert messages("const status: \"online\" | \"offline\" = \"online\"").isEmpty()
     assert(messages("const value: Int | String = 1").length() == 1)
   }
 
   test "`true` and `false` are literal types, a float never is" {
-    assert(messages("type Toggle<const Flag: Bool> \{\n  var enabled: Toggle<true>\n  var disabled: Toggle<false>\n\}").isEmpty())
+    assert messages("type Toggle<const Flag: Bool> \{\n  var enabled: Toggle<true>\n  var disabled: Toggle<false>\n\}").isEmpty()
     assert(messages("const rate: 1.5 = 1.5")[0] == "A float cannot be a literal type")
   }
 
@@ -201,7 +201,7 @@ group "Types and patterns" {
             .Intersection(members) => assert(members.length() == 2)
             other => panic "Unexpected annotation: {other}"
           }
-          .None => panic "Expected an annotation"
+          None => panic "Expected an annotation"
         }
         other => panic "Unexpected declaration: {other}"
       }
@@ -231,7 +231,7 @@ group "Types and patterns" {
 
 group "Recovery" {
   test "a broken statement does not take the next one with it" {
-    const parsed = parse(SourceText.of("const a = )\nconst b = 2"))
+    const parsed = parse SourceText.of("const a = )\nconst b = 2")
     assert(parsed.diagnostics.length() == 1)
     assert(parsed.file.statements.length() == 2)
   }
@@ -263,8 +263,8 @@ group "Cases" {
       .Call(_, _, _) => {}
       other => panic "Unexpected tree: {other}"
     }
-    assert(messages("const x = match y \{\n  .A => list\n    .first()\n  .B => 2\n\}").isNotEmpty())
-    assert(messages("const x = match y \{\n  .A => \{\n    list\n      .first()\n  \}\n  .B => 2\n\}").isEmpty())
+    assert messages("const x = match y \{\n  .A => list\n    .first()\n  .B => 2\n\}").isNotEmpty()
+    assert messages("const x = match y \{\n  .A => \{\n    list\n      .first()\n  \}\n  .B => 2\n\}").isEmpty()
   }
 
   test "in expressions, where the type is known" {
@@ -275,8 +275,8 @@ group "Cases" {
   }
 
   test "cases are imported by their path" {
-    assert(messages("use Option, Option.Some, Option.None from \"./option\"\nuse \"./text-extensions\"").isEmpty())
-    const items = useItems("use Option, Option.Some from \"./option\"")
+    assert messages("use Option, Option.Some, Option.None from \"./option\"\nuse \"./text-extensions\"").isEmpty()
+    const items = useItems "use Option, Option.Some from \"./option\""
     assert(items[0].path.map({ _.text }).toList() == ["Option"])
     assert(items[1].path.map({ _.text }).toList() == ["Option", "Some"])
     // The name that is imported is the last segment, and it is what binds unless an alias says otherwise
@@ -285,7 +285,7 @@ group "Cases" {
   }
 
   test "without `from` the path is resolved in the file's own scope" {
-    assert(messages("use Shape.Circle, Shape.Empty").isEmpty())
+    assert messages("use Shape.Circle, Shape.Empty").isEmpty()
     match statements("use Shape.Circle")[0].kind {
       .Declare(declaration) => match declaration.kind {
         .Use(usage) => match usage.source {
@@ -311,16 +311,16 @@ group "Cases" {
   }
 
   test "any name of a use list may get a local name of its own" {
-    const items = useItems("public use IoError as FileProblem, File from \"std/fs\"")
+    const items = useItems "public use IoError as FileProblem, File from \"std/fs\""
     assert(items[0].name().text == "IoError")
     assert(items[0].alias.map({ _.text }) == Some("FileProblem"))
     assert(items[1].name().text == "File")
-    assert(items[1].alias.isNone())
+    assert items[1].alias.isNone()
     // The spans of both names are kept: a message about the export points at it, one about the local name at the alias
     assert(items[0].name().span.start == 11)
     assert(items[0].alias.map({ _.span.start }) == Some(22))
     // A case is aliased the same way
-    const cases = useItems("use Option.None as Nothing from \"./option\"")
+    const cases = useItems "use Option.None as Nothing from \"./option\""
     assert(cases[0].alias.map({ _.text }) == Some("Nothing"))
     assert(cases[0].localName().text == "Nothing")
   }
@@ -330,7 +330,7 @@ group "Cases" {
       .Match(_, arms) => match arms[0].pattern.kind {
         .Variant(path, fields) => {
           assert(path.map({ _.text }).toList() == ["None"])
-          assert(fields.isEmpty())
+          assert fields.isEmpty()
         }
         other => panic "Expected a variant, found {other}"
       }
@@ -370,7 +370,7 @@ group "Cases" {
       .Match(_, arms) => match arms[0].pattern.kind {
         .ImplicitVariant(_, fields) => {
           assert(fields.length() == 1)
-          assert(fields[0].label.isNone())
+          assert fields[0].label.isNone()
         }
         other => panic "Unexpected pattern: {other}"
       }
@@ -398,7 +398,7 @@ group "Constants at top level" {
   }
 
   test "`private const` is accepted, it is the default anyway" {
-    assert(messages("private const secret = 1").isEmpty())
+    assert messages("private const secret = 1").isEmpty()
   }
 
   test "`public var` at top level is an error: a module has no mutable state" {
@@ -439,7 +439,7 @@ group "Doc comments" {
   }
 
   test "an ordinary comment in between is fine, code is not" {
-    const parsed = statements("/** Lost */\nconst between = 1\nfn later() \{ \}")
+    const parsed = statements "/** Lost */\nconst between = 1\nfn later() \{ \}"
     match parsed[1].kind {
       .Declare(declaration) => assert(declaration.doc == None)
       other => panic "Unexpected tree: {other}"
@@ -460,7 +460,7 @@ group "Trait lists" {
   }
 
   test "`by` binds to the one element of the `with` list directly in front of it" {
-    const traits = traitsOf("type Seconds with Show, Add & Subtract by value, Compare by value \{\n  value: Int\n\}")
+    const traits = traitsOf "type Seconds with Show, Add & Subtract by value, Compare by value \{\n  value: Int\n\}"
     assert(traits.length() == 3)
     assert(traits[0].delegate == None)
     assert(traits[1].delegate.map({ _.text }) == Some("value"))

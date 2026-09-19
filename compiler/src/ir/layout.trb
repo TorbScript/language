@@ -107,7 +107,7 @@ public type Layout {
       return fields
     }
     var taken = commonFields()
-    taken.addAll(fieldsOfVariant(variant))
+    taken.addAll fieldsOfVariant(variant)
     taken
   }
 
@@ -138,9 +138,9 @@ public fn sizeOfType(program: IrProgram, id: IrTypeId): Int {
     .NeverType => 0
     // The storage pointer, a byte offset and a byte length
     .Text => pointerSize + 8
-    .Record(layout) => sizeOfLayoutAsField(program, layout)
-    .Variant(layout) => sizeOfLayoutAsField(program, layout)
-    .Tuple(layout) => sizeOfLayoutAsField(program, layout)
+    .Record(layout) => sizeOfLayoutAsField program, layout
+    .Variant(layout) => sizeOfLayoutAsField program, layout
+    .Tuple(layout) => sizeOfLayoutAsField program, layout
     .FixedArray(item, size) => sizeOfType(program, item) * size
     // The code pointer and the environment pointer
     .Closure(_) => pointerSize * 2
@@ -148,7 +148,7 @@ public fn sizeOfType(program: IrProgram, id: IrTypeId): Int {
     .SharedObject(_) => pointerSize
     .Box(_) => pointerSize
     .Lazy(_) => pointerSize
-    .Runtime(kind, _) => sizeOfRuntime(kind)
+    .Runtime(kind, _) => sizeOfRuntime kind
     // A const argument is never stored anywhere
     .ConstantValue(_, _) => 0
   }
@@ -169,7 +169,7 @@ fn sizeOfRuntime(kind: RuntimeKind): Int {
 }
 
 fn sizeOfLayoutAsField(program: IrProgram, id: LayoutId): Int {
-  const layout = program.layoutAt(id)
+  const layout = program.layoutAt id
   match layout.representation {
     .Boxed => pointerSize
     _ => layout.size
@@ -185,10 +185,10 @@ public fn alignmentOfType(program: IrProgram, id: IrTypeId): Int {
     .VoidType => 1
     .NeverType => 1
     .Text => pointerSize
-    .Record(layout) => alignmentOfLayoutAsField(program, layout)
-    .Variant(layout) => alignmentOfLayoutAsField(program, layout)
-    .Tuple(layout) => alignmentOfLayoutAsField(program, layout)
-    .FixedArray(item, _) => alignmentOfType(program, item)
+    .Record(layout) => alignmentOfLayoutAsField program, layout
+    .Variant(layout) => alignmentOfLayoutAsField program, layout
+    .Tuple(layout) => alignmentOfLayoutAsField program, layout
+    .FixedArray(item, _) => alignmentOfType program, item
     .Closure(_) => pointerSize
     .Object(_) => pointerSize
     .SharedObject(_) => pointerSize
@@ -200,7 +200,7 @@ public fn alignmentOfType(program: IrProgram, id: IrTypeId): Int {
 }
 
 fn alignmentOfLayoutAsField(program: IrProgram, id: LayoutId): Int {
-  const layout = program.layoutAt(id)
+  const layout = program.layoutAt id
   match layout.representation {
     .Boxed => pointerSize
     _ => layout.alignment
@@ -235,9 +235,9 @@ public fn isManagedType(program: IrProgram, id: IrTypeId): Bool {
     .SharedObject(_) => true
     .Box(_) => true
     .Lazy(_) => true
-    .Record(layout) => isBoxedLayout(program, layout)
-    .Variant(layout) => isBoxedLayout(program, layout)
-    .Tuple(layout) => isBoxedLayout(program, layout)
+    .Record(layout) => isBoxedLayout program, layout
+    .Variant(layout) => isBoxedLayout program, layout
+    .Tuple(layout) => isBoxedLayout program, layout
     _ => false
   }
 }
@@ -280,8 +280,8 @@ public fn containsSharedType(program: IrProgram, id: IrTypeId): Bool {
     .Variant(layout) => program.layoutAt(layout).containsShared
     .Tuple(layout) => program.layoutAt(layout).containsShared
     .FixedArray(item, size) => size > 0 && containsSharedType(program, item)
-    .Lazy(item) => containsSharedType(program, item)
-    .Runtime(_, arguments) => arguments.any({ containsSharedType(program, _) })
+    .Lazy(item) => containsSharedType program, item
+    .Runtime(_, arguments) => arguments.any({ containsSharedType program, _ })
     _ => false
   }
 }
@@ -302,9 +302,9 @@ public fn isNichePayload(program: IrProgram, id: IrTypeId): Bool {
     .SharedObject(_) => true
     .Box(_) => true
     .Lazy(_) => true
-    .Record(layout) => isBoxedLayout(program, layout)
-    .Variant(layout) => isBoxedLayout(program, layout)
-    .Tuple(layout) => isBoxedLayout(program, layout)
+    .Record(layout) => isBoxedLayout program, layout
+    .Variant(layout) => isBoxedLayout program, layout
+    .Tuple(layout) => isBoxedLayout program, layout
     _ => false
   }
 }
@@ -319,9 +319,9 @@ public fn isNichePayload(program: IrProgram, id: IrTypeId): Bool {
  * emitted. Nothing before it may ask for a size, because a size is only final when every layout is.
  */
 public fn finishProgram(var program: IrProgram) {
-  finishLayouts(program)
-  finishSignatures(program)
-  finishElements(program)
+  finishLayouts program
+  finishSignatures program
+  finishElements program
 }
 
 /** A result larger than the model's limit is written through a pointer the caller passes first (BACKEND 3.2). */
@@ -334,33 +334,33 @@ public fn resultModeOf(program: IrProgram, result: IrTypeId): ResultMode {
 
 fn finishSignatures(var program: IrProgram) {
   for index in 0..program.signatureCount() {
-    const identifier = IrSignatureId(index)
-    const signature = program.signatureAt(identifier)
-    const mode = resultModeOf(program, signature.result)
+    const identifier = IrSignatureId index
+    const signature = program.signatureAt identifier
+    const mode = resultModeOf program, signature.result
     if mode != signature.resultMode {
-      program.setSignature(identifier, signature.copy(resultMode: mode))
+      program.setSignature identifier, signature.copy(resultMode: mode)
     }
   }
   // A function carries its signature as a value, not as an id: two functions of the same shape are still two functions
   for index in 0..program.functions.length() {
     const function = program.functions[index]
-    const mode = resultModeOf(program, function.signature.result)
+    const mode = resultModeOf program, function.signature.result
     if mode == function.signature.resultMode {
       continue
     }
-    const updated = function.copy(signature: function.signature.copy(resultMode: mode))
-    program.functions.set(index, updated)
+    const updated = function.copy signature: function.signature.copy(resultMode: mode)
+    program.functions.set index, updated
   }
 }
 
 fn finishElements(var program: IrProgram) {
   for index in 0..program.elements.length() {
-    const identifier = ElementId(index)
-    const descriptor = program.elementAt(identifier)
-    const size = sizeOfType(program, descriptor.item)
-    const alignment = alignmentOfType(program, descriptor.item)
+    const identifier = ElementId index
+    const descriptor = program.elementAt identifier
+    const size = sizeOfType program, descriptor.item
+    const alignment = alignmentOfType program, descriptor.item
     if size != descriptor.size || alignment != descriptor.alignment {
-      program.setElement(identifier, descriptor.copy(size: size, alignment: alignment))
+      program.setElement identifier, descriptor.copy(size: size, alignment: alignment)
     }
   }
 }
@@ -374,7 +374,7 @@ fn finishElements(var program: IrProgram) {
  * converges in as many rounds as the field graph is deep.
  */
 public fn finishLayouts(var program: IrProgram) {
-  markRecursiveLayouts(program)
+  markRecursiveLayouts program
   const limit = program.layouts.length() + 8
   var rounds = 0
   var isChanged = true
@@ -382,11 +382,11 @@ public fn finishLayouts(var program: IrProgram) {
     isChanged = false
     rounds = rounds + 1
     if rounds > limit {
-      program.reportProblem("The layouts of the program did not settle after {limit} rounds")
+      program.reportProblem "The layouts of the program did not settle after {limit} rounds"
       return
     }
     for index in 0..program.layouts.length() {
-      const identifier = LayoutId(index)
+      const identifier = LayoutId index
       if updateLayout(program, identifier) {
         isChanged = true
       }
@@ -396,12 +396,12 @@ public fn finishLayouts(var program: IrProgram) {
 
 /** One layout, recomputed from its fields. `true` when something about it changed. */
 fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
-  const before = program.layoutAt(id)
-  const packed = packedSize(program, before)
+  const before = program.layoutAt id
+  const packed = packedSize program, before
   var representation = Representation.Inline
   var size = packed.size
   var alignment = packed.alignment
-  const niche = nicheOf(program, before)
+  const niche = nicheOf program, before
   // The payload of a trait-typed value is a block whatever it costs: a witness member takes a pointer to it
   if isPayloadKind(before.kind) {
     representation = Representation.Boxed
@@ -410,8 +410,8 @@ fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
   } else if const Some(found) = niche {
     representation = found
     const payload = before.fields[fieldOfNiche(found)]
-    size = sizeOfType(program, payload.annotation)
-    alignment = alignmentOfType(program, payload.annotation)
+    size = sizeOfType program, payload.annotation
+    alignment = alignmentOfType program, payload.annotation
   } else if packed.size > inlineSizeLimit {
     representation = Representation.Boxed
   }
@@ -425,7 +425,7 @@ fn updateLayout(var program: IrProgram, id: LayoutId): Bool {
   if after == before {
     return false
   }
-  program.setLayout(id, after)
+  program.setLayout id, after
   true
 }
 
@@ -446,30 +446,30 @@ fn fieldOfNiche(representation: Representation): Int {
 /** The size and the alignment of the contents, with C-like padding. A variant layout carries a 32 bit tag in front. */
 fn packedSize(program: IrProgram, layout: Layout): PackedSize {
   if layout.variants.isEmpty() {
-    return packedGroup(program, layout.fields)
+    return packedGroup program, layout.fields
   }
-  const common = packedGroup(program, layout.commonFields())
+  const common = packedGroup program, layout.commonFields()
   var payload = 0
-  var alignment = common.alignment.max(4)
+  var alignment = common.alignment.max 4
   for variant in layout.variants {
-    const group = packedGroup(program, layout.fields[variant.first..variant.first + variant.count])
-    payload = payload.max(group.size)
-    alignment = alignment.max(group.alignment)
+    const group = packedGroup program, layout.fields[variant.first..variant.first + variant.count]
+    payload = payload.max group.size
+    alignment = alignment.max group.alignment
   }
   // The common fields, then the tag, then the widest variant
   const tag = alignedOffset(common.size, 4) + 4
-  PackedSize(alignedOffset(alignedOffset(tag, alignment) + payload, alignment), alignment)
+  PackedSize alignedOffset(alignedOffset(tag, alignment) + payload, alignment), alignment
 }
 
 fn packedGroup(program: IrProgram, fields: List<FieldLayout>): PackedSize {
   var offset = 0
   var alignment = 1
   for field in fields {
-    const own = alignmentOfType(program, field.annotation)
-    alignment = alignment.max(own)
+    const own = alignmentOfType program, field.annotation
+    alignment = alignment.max own
     offset = alignedOffset(offset, own) + sizeOfType(program, field.annotation)
   }
-  PackedSize(alignedOffset(offset, alignment), alignment)
+  PackedSize alignedOffset(offset, alignment), alignment
 }
 
 type PackedSize {
@@ -499,15 +499,15 @@ fn nicheOf(program: IrProgram, layout: Layout): Representation? {
   if !isNichePayload(program, layout.fields[field].annotation) {
     return None
   }
-  Some(Representation.Niche(payload, field))
+  Some Representation.Niche(payload, field)
 }
 
 fn anyFieldIsCounted(program: IrProgram, layout: Layout): Bool {
-  layout.fields.any({ containsCountedType(program, _.annotation) })
+  layout.fields.any({ containsCountedType program, _.annotation })
 }
 
 fn anyFieldIsShared(program: IrProgram, layout: Layout): Bool {
-  layout.fields.any({ containsSharedType(program, _.annotation) })
+  layout.fields.any({ containsSharedType program, _.annotation })
 }
 
 /**
@@ -516,14 +516,14 @@ fn anyFieldIsShared(program: IrProgram, layout: Layout): Bool {
  * node per tree node is exactly what "recursive ADTs are reference counted nodes" means.
  */
 fn markRecursiveLayouts(var program: IrProgram) {
-  const edges = valueEdges(program)
+  const edges = valueEdges program
   for index in 0..program.layouts.length() {
     if !reachesItself(edges, index) {
       continue
     }
     const layout = program.layouts[index]
     if !layout.isRecursive {
-      program.setLayout(LayoutId(index), layout.copy(isRecursive: true))
+      program.setLayout LayoutId(index), layout.copy(isRecursive: true)
     }
   }
 }
@@ -536,11 +536,11 @@ fn valueEdges(program: IrProgram): List<List<Int>> {
     for field in layout.fields {
       for target in inlineLayoutsOf(program, field.annotation) {
         if !targets.contains(target) {
-          targets.add(target)
+          targets.add target
         }
       }
     }
-    edges.add(targets)
+    edges.add targets
   }
   edges
 }
@@ -552,10 +552,10 @@ fn valueEdges(program: IrProgram): List<List<Int>> {
  */
 fn inlineLayoutsOf(program: IrProgram, id: IrTypeId): List<Int> {
   match program.typeAt(id) {
-    .Record(layout) => inlineLayout(program, layout)
-    .Variant(layout) => inlineLayout(program, layout)
-    .Tuple(layout) => inlineLayout(program, layout)
-    .FixedArray(item, size) => if size > 0 { inlineLayoutsOf(program, item) } else { [] }
+    .Record(layout) => inlineLayout program, layout
+    .Variant(layout) => inlineLayout program, layout
+    .Tuple(layout) => inlineLayout program, layout
+    .FixedArray(item, size) => if size > 0 { inlineLayoutsOf program, item } else { [] }
     _ => []
   }
 }
@@ -571,21 +571,21 @@ fn inlineLayout(program: IrProgram, id: LayoutId): List<Int> {
 fn reachesItself(edges: List<List<Int>>, start: Int): Bool {
   var seen: List<Bool> = []
   for _ in 0..edges.length() {
-    seen.add(false)
+    seen.add false
   }
   var pending = edges[start]
   while !pending.isEmpty() {
     const last = pending.length() - 1
     const current = pending[last]
-    pending.removeAt(last)
+    pending.removeAt last
     if current == start {
       return true
     }
     if seen[current] {
       continue
     }
-    seen.set(current, true)
-    pending.addAll(edges[current])
+    seen.set current, true
+    pending.addAll edges[current]
   }
   false
 }

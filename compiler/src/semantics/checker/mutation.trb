@@ -30,12 +30,12 @@ public fn noteRead(var checker: Checker, binding: BindingId, at: Span) {
   if !isCounted(checker, binding) {
     return
   }
-  checker.bindingUses.add(BindingUse(binding, false, at))
+  checker.bindingUses.add BindingUse(binding, false, at)
 }
 
 /** Whether the dead-change rule has anything to say about this binding at all. */
 fn isCounted(checker: Checker, binding: BindingId): Bool {
-  const found = checker.binding(binding)
+  const found = checker.binding binding
   found.isVar && !found.isParameter && !found.isReceiver
 }
 
@@ -53,7 +53,7 @@ public fn noteChange(var checker: Checker, place: Place, changedBy: String) {
   if !isCounted(checker, binding) {
     return
   }
-  checker.bindingUses.add(BindingUse(binding, true, place.at, changedBy: changedBy))
+  checker.bindingUses.add BindingUse(binding, true, place.at, changedBy: changedBy)
 }
 
 /**
@@ -72,7 +72,7 @@ public fn dropRead(var checker: Checker, place: Place) {
   while index >= 0 {
     const entry = checker.bindingUses[index]
     if !entry.isChange && entry.binding == binding && entry.at == place.at {
-      const _ = checker.bindingUses.removeAt(index)
+      const _ = checker.bindingUses.removeAt index
       return
     }
     index = index - 1
@@ -90,7 +90,7 @@ public fn settleLoop(var checker: Checker, from: Int) {
   while index < checker.bindingUses.length() {
     const entry = checker.bindingUses[index]
     if !entry.isChange {
-      readers.set(entry.binding.value, true)
+      readers.set entry.binding.value, true
     }
     index = index + 1
   }
@@ -102,8 +102,8 @@ public fn settleLoop(var checker: Checker, from: Int) {
     const entry = checker.bindingUses[index]
     if entry.isChange && !entry.isLive {
       if readers.containsKey(entry.binding.value) {
-        const alive = entry.copy(isLive: true)
-        checker.bindingUses.set(index, alive)
+        const alive = entry.copy isLive: true
+        checker.bindingUses.set index, alive
       }
     }
     index = index + 1
@@ -121,10 +121,10 @@ public fn settleChanges(var checker: Checker) {
     const entry = checker.bindingUses[index]
     if entry.isChange {
       if !entry.isLive && !readAfter.containsKey(entry.binding.value) {
-        reportDeadChange(checker, entry)
+        reportDeadChange checker, entry
       }
     } else {
-      readAfter.set(entry.binding.value, true)
+      readAfter.set entry.binding.value, true
     }
     index = index - 1
   }
@@ -132,19 +132,19 @@ public fn settleChanges(var checker: Checker) {
 }
 
 fn reportDeadChange(var checker: Checker, entry: BindingUse) {
-  const binding = checker.binding(entry.binding)
+  const binding = checker.binding entry.binding
   // A captured `var` binding is a shared box, not a copy: the read can be anywhere the closure is run (gap 19)
   if checker.capturedBindings.containsKey(entry.binding.value) {
     return
   }
   const name = binding.name
-  var problem = Diagnostic.error("This change has no effect: `{name}` is never read again", entry.at)
+  var problem = Diagnostic.error "This change has no effect: `{name}` is never read again", entry.at
   if const Some(member) = participleHint(entry.changedBy) {
-    problem = problem.withNote("`{name}` is a copy. Did you mean the path it came from (`items[0].{member}()`)?")
+    problem = problem.withNote "`{name}` is a copy. Did you mean the path it came from (`items[0].{member}()`)?"
   } else {
-    problem = problem.withNote("With value semantics a change nobody reads is always a mistake")
+    problem = problem.withNote "With value semantics a change nobody reads is always a mistake"
   }
-  checker.reportHere(problem)
+  checker.reportHere problem
 }
 
 /** The member that made the change, where there was one: an assignment has none and reads better without a note. */
@@ -152,7 +152,7 @@ fn participleHint(changedBy: String): String? {
   if changedBy.isEmpty() {
     return None
   }
-  Some(changedBy)
+  Some changedBy
 }
 
 // --- Closures -------------------------------------------------------------------------------------------------------
@@ -161,14 +161,14 @@ fn participleHint(changedBy: String): String? {
 public fn noteArgumentClosures(var checker: Checker, arguments: List<Argument>) {
   for argument in arguments {
     if const .Closure(_) = argument.value.kind {
-      checker.argumentClosures.set(argument.value.span, true)
+      checker.argumentClosures.set argument.value.span, true
     }
   }
 }
 
 /** A binding a closure reads is marked, because a captured `var` binding is a shared box and never dead (gap 19). */
 public fn noteCapturedBinding(var checker: Checker, binding: BindingId) {
-  checker.capturedBindings.set(binding.value, true)
+  checker.capturedBindings.set binding.value, true
 }
 
 /**
@@ -181,8 +181,8 @@ public fn markReferenceBindings(var checker: Checker, from: Int) {
   while index < checker.bindings.length() {
     const found = checker.bindings[index]
     if !found.isParameter {
-      const marked = found.copy(isParameter: true)
-      checker.bindings.set(index, marked)
+      const marked = found.copy isParameter: true
+      checker.bindings.set index, marked
     }
     index = index + 1
   }
@@ -197,14 +197,14 @@ public fn markReferenceBindings(var checker: Checker, from: Int) {
  * second-class (BACKEND gap 14). Everything else it captures is a value or the shared box of a `var` binding.
  */
 public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture>) {
-  const isLocal = checker.argumentClosures.containsKey(at)
+  const isLocal = checker.argumentClosures.containsKey at
   if isLocal {
-    checker.recordClosureKind(at, ClosureKind.Local)
+    checker.recordClosureKind at, ClosureKind.Local
     return
   }
-  checker.recordClosureKind(at, ClosureKind.Escaping)
+  checker.recordClosureKind at, ClosureKind.Escaping
   for capture in captures {
-    const binding = checker.binding(capture.binding)
+    const binding = checker.binding capture.binding
     if !binding.isParameter || !binding.isVar {
       continue
     }

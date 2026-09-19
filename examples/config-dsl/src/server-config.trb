@@ -31,7 +31,7 @@ public type LoggingConfig {
 
   fn redact(var self, ...keys: String) {
     for key in keys {
-      redacted.add(key)
+      redacted.add key
     }
   }
 
@@ -48,11 +48,11 @@ public type ServerConfig {
 
   /** The host application decides which secrets a config script can see. */
   fn withSecrets(secrets: Map<String, String>): ServerConfig {
-    Self(secrets: secrets)
+    Self secrets: secrets
   }
 
   fn route(var self, path: String, to: String) {
-    routes.add(Route(path, handler: to))
+    routes.add Route(path, handler: to)
   }
 
   fn secret(self, key: String): String {
@@ -62,12 +62,12 @@ public type ServerConfig {
 
   fn validate(self): Result<ServerConfig, ConfigError> {
     if database.url.isBlank() {
-      return Fail(ConfigError("database.url is required"))
+      return Fail ConfigError("database.url is required")
     }
     if tls && port == 80 {
-      return Fail(ConfigError("tls on port 80 is not supported"))
+      return Fail ConfigError("tls on port 80 is not supported")
     }
-    Ok(self)
+    Ok self
   }
 }
 

@@ -16,24 +16,24 @@ public fn readSourceTree(paths: List<String>): Result<SourceTree, IoError> {
   for path in paths {
     const absolute = normalizePath(File.absolutePath(path)?)
     if !File.exists(absolute) {
-      return Fail(IoError(path, "The file does not exist"))
+      return Fail IoError(path, "The file does not exist")
     }
-    const directory = if File.isDirectory(absolute) { absolute } else { parentPath(absolute) }
+    const directory = if File.isDirectory(absolute) { absolute } else { parentPath absolute }
     roots.add(readProjectsAbove(files, directory)? ?? absolute)
   }
   for root in roots {
     readBelow(files, root)?
   }
-  Ok(SourceTree.of(files, normalizePath(File.absolutePath(".")?)))
+  Ok SourceTree.of(files, normalizePath(File.absolutePath(".")?))
 }
 
 /** The paths of the command line the way the `SourceTree` spells them: absolute and normalized. */
 public fn absolutePaths(paths: List<String>): Result<List<String>, IoError> {
   var absolute: List<String> = []
   for path in paths {
-    absolute.add(normalizePath(File.absolutePath(path)?))
+    absolute.add normalizePath(File.absolutePath(path)?)
   }
-  Ok(absolute)
+  Ok absolute
 }
 
 /**
@@ -44,17 +44,17 @@ fn readProjectsAbove(var files: Map<String, String>, directory: String): Result<
   var outermost: String? = None
   var current = directory
   while true {
-    const manifest = joinPath(current, "project.trb")
+    const manifest = joinPath current, "project.trb"
     if File.exists(manifest) {
       files.set(manifest, File.readText(manifest)?)
-      outermost = Some(current)
+      outermost = Some current
     }
     // Nothing above a skipped directory can have this one as a member, because members are never looked for
     // inside of one. A checkout below `.claude/worktrees` is a workspace of its own, not a part of the one above.
     if isSkippedDirectory(pathName(current)) {
       break
     }
-    const parent = parentPath(current)
+    const parent = parentPath current
     // Stop at the root: one step further and the path would stop being absolute and be read relative to the
     // working directory, which is a different place entirely
     if parent == current || pathDepth(parent) < 1 {
@@ -62,7 +62,7 @@ fn readProjectsAbove(var files: Map<String, String>, directory: String): Result<
     }
     current = parent
   }
-  Ok(outermost)
+  Ok outermost
 }
 
 fn isSkippedDirectory(name: String): Bool {
@@ -78,7 +78,7 @@ fn readBelow(var files: Map<String, String>, path: String): Result<Void, IoError
     return Ok(void)
   }
   for entry in File.list(path)? {
-    const child = joinPath(path, entry)
+    const child = joinPath path, entry
     if File.isDirectory(child) {
       if !isSkippedDirectory(entry) {
         readBelow(files, child)?

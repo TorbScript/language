@@ -39,14 +39,14 @@ fn grow(var total: Int, by: Int) {
 
 /** A `var` parameter handed on to another `var` parameter: the pointer travels, the value never moves. */
 fn growTwice(var total: Int, by: Int) {
-  grow(total, by)
-  grow(total, by)
+  grow total, by
+  grow total, by
 }
 
 /** And one level deeper, through a third call. */
 fn growFourTimes(var total: Int, by: Int) {
-  growTwice(total, by)
-  growTwice(total, by)
+  growTwice total, by
+  growTwice total, by
 }
 
 /** A `var` parameter of a record, changed through its fields. */
@@ -63,14 +63,14 @@ fn stretch(var line: Line, by: Int) {
 
 /** A field of a `var` parameter handed to a `var` parameter of its own. */
 fn moveEnds(var line: Line, by: Int) {
-  move(line.from, by, by)
-  move(line.to, by, by)
+  move line.from, by, by
+  move line.to, by, by
 }
 
 /** A `var self` method called on a field of a `var` parameter. */
 fn countEnds(var line: Line, var counter: Counter) {
   counter.increment()
-  move(line.from, 1, 1)
+  move line.from, 1, 1
   counter.increment()
 }
 
@@ -84,59 +84,59 @@ fn swapInto(var first: Counter, var second: Counter) {
 /** A temporary as the argument of a `var` parameter: the callee is its only owner (gap 2). */
 fn ofTemporary(): Int {
   var total = 0
-  grow(total, 7)
+  grow total, 7
   total
 }
 
 fn numbers(): Int {
   var total = 1
-  grow(total, 2)
-  growTwice(total, 10)
-  growFourTimes(total, 100)
+  grow total, 2
+  growTwice total, 10
+  growFourTimes total, 100
   total
 }
 
 fn records(): Int {
-  var point = Point(1, 2)
-  move(point, 10, 20)
+  var point = Point 1, 2
+  move point, 10, 20
   // A copy taken *before* the call keeps what it had: two bindings never alias
   const kept = point
-  move(point, 100, 200)
+  move point, 100, 200
   point.x + point.y - kept.x - kept.y
 }
 
 fn nested(): Int {
-  var line = Line(Point(1, 2), Point(3, 4))
-  stretch(line, 5)
-  moveEnds(line, 1)
+  var line = Line Point(1, 2), Point(3, 4)
+  stretch line, 5
+  moveEnds line, 1
   line.from.x + line.from.y + line.to.x + line.to.y
 }
 
 fn receivers(): Int {
-  var counter = Counter(0)
+  var counter = Counter 0
   counter.increment()
-  counter.addTo(10)
-  var line = Line(Point(0, 0), Point(0, 0))
-  countEnds(line, counter)
+  counter.addTo 10
+  var line = Line Point(0, 0), Point(0, 0)
+  countEnds line, counter
   counter.hits + line.from.x
 }
 
 fn aliasing(): Int {
-  var first = Counter(3)
-  var second = Counter(8)
-  swapInto(first, second)
+  var first = Counter 3
+  var second = Counter 8
+  swapInto first, second
   first.hits * 10 + second.hits
 }
 
 /** A whole value written through a `var` parameter, and the field of a copy that does not follow it. */
 fn replaced(var point: Point) {
-  point = Point(9, 9)
+  point = Point 9, 9
 }
 
 fn wholeValues(): Int {
-  var point = Point(1, 1)
+  var point = Point 1, 1
   const kept = point
-  replaced(point)
+  replaced point
   point.x + point.y + kept.x + kept.y
 }
 
@@ -145,4 +145,4 @@ fn exitCode(): Int {
   total % 251
 }
 
-Process.exit(exitCode())
+Process.exit exitCode()

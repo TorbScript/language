@@ -49,7 +49,7 @@ public type CallOperands {
 public fn referenceParametersOf(signature: Signature): List<Bool> {
   var found: List<Bool> = []
   for parameter in signature.form.parameters {
-    found.add(isReferenceParameter(parameter.mode))
+    found.add isReferenceParameter(parameter.mode)
   }
   found
 }
@@ -61,7 +61,7 @@ public fn parameterTypeAt(var lowering: Lowering, signature: Signature, position
   if lowering.checker.isBroken(annotation) {
     return None
   }
-  Some(irTypeOf(lowering, annotation))
+  Some irTypeOf(lowering, annotation)
 }
 
 // --- From the checker's place to a reference -------------------------------------------------------------------------
@@ -73,18 +73,18 @@ public fn parameterTypeAt(var lowering: Lowering, signature: Signature, position
 public fn referenceAt(var lowering: Lowering, var builder: FunctionBuilder, at: Span, what: String): PlacePath? {
   const place = match placeRecordedAt(lowering, at) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "{what} the checker recorded no path for", at)
+    None => {
+      reportUnsupported lowering, "{what} the checker recorded no path for", at
       return None
     }
   }
-  pathOfPlace(lowering, builder, place, what, at)
+  pathOfPlace lowering, builder, place, what, at
 }
 
 /** The path the checker wrote down under a span, or `None` where it wrote none. */
 public fn placeRecordedAt(var lowering: Lowering, at: Span): Place? {
   const module = lowering.module
-  lowering.checker.placeAt(module, at)
+  lowering.checker.placeAt module, at
 }
 
 /** Whether the path under a span is a temporary: a valid *argument* of a `var` parameter and nothing else (gap 2). */
@@ -96,7 +96,7 @@ fn isTemporaryPlace(var lowering: Lowering, at: Span): Bool {
       }
       false
     }
-    .None => false
+    None => false
   }
 }
 
@@ -109,23 +109,23 @@ fn pathOfPlace(
 ): PlacePath? {
   const base = match rootSlotOf(lowering, place.root, what, at) {
     Some(found) => found
-    .None => {
+    None => {
       return None
     }
   }
   var steps: List<PathStep> = []
-  var annotation = builder.typeOfSlot(base)
+  var annotation = builder.typeOfSlot base
   for step in place.steps {
     const next = match steppedPath(lowering, annotation, step, what, at) {
       Some(found) => found
-      .None => {
+      None => {
         return None
       }
     }
-    steps.add(next.step)
+    steps.add next.step
     annotation = next.annotation
   }
-  Some(PlacePath(Reference(base, steps), annotation))
+  Some PlacePath(Reference(base, steps), annotation)
 }
 
 /** One step of a path, and the type it leads to. */
@@ -143,29 +143,29 @@ fn rootSlotOf(var lowering: Lowering, root: PlaceRoot, what: String, at: Span): 
     .Local(binding) => {
       const declared = lowering.checker.binding(binding).at
       match lowering.slots.get(declared) {
-        Some(found) => Some(found)
-        .None => {
-          reportUnsupported(lowering, "{what} through a captured binding (milestone 5.8)", at)
+        Some(found) => Some found
+        None => {
+          reportUnsupported lowering, "{what} through a captured binding (milestone 5.8)", at
           None
         }
       }
     }
     .Declared(symbol) => {
       match lowering.entryLocals.get(symbol.value) {
-        Some(found) => Some(found)
-        .None => {
-          reportUnsupported(lowering, "{what} through a top-level `var` read from a function", at)
+        Some(found) => Some found
+        None => {
+          reportUnsupported lowering, "{what} through a top-level `var` read from a function", at
           None
         }
       }
     }
     // A temporary is a valid argument of a `var` parameter and never the base of a path, so it is handled one level up
     .Temporary => {
-      reportUnsupported(lowering, "{what} through a temporary", at)
+      reportUnsupported lowering, "{what} through a temporary", at
       None
     }
     .Unknown => {
-      reportUnsupported(lowering, "{what} whose path the checker left open", at)
+      reportUnsupported lowering, "{what} whose path the checker left open", at
       None
     }
   }
@@ -186,39 +186,39 @@ fn steppedPath(
     .Field(_, field) => {
       const layout = match layoutOfType(lowering.program, annotation) {
         Some(found) => found
-        .None => {
-          const shown = describeIrType(lowering.program, annotation)
-          reportUnsupported(lowering, "{what} through a field of `{shown}`", at)
+        None => {
+          const shown = describeIrType lowering.program, annotation
+          reportUnsupported lowering, "{what} through a field of `{shown}`", at
           return None
         }
       }
-      const index = fieldIndexOf(lowering, layout, field)
+      const index = fieldIndexOf lowering, layout, field
       if index < 0 {
-        reportUnsupported(lowering, "{what} through a field of a variant type", at)
+        reportUnsupported lowering, "{what} through a field of a variant type", at
         return None
       }
-      Some(SteppedPath(PathStep.Field(layout, index), fieldTypeOf(lowering, layout, index)))
+      Some SteppedPath(PathStep.Field(layout, index), fieldTypeOf(lowering, layout, index))
     }
     .TupleField(_, index) => {
       const layout = match layoutOfType(lowering.program, annotation) {
         Some(found) => found
-        .None => {
-          reportUnsupported(lowering, "{what} through a tuple position of a value without a layout", at)
+        None => {
+          reportUnsupported lowering, "{what} through a tuple position of a value without a layout", at
           return None
         }
       }
       if index < 0 || index >= lowering.program.layoutAt(layout).fields.length() {
-        reportUnsupported(lowering, "{what} through a tuple position the layout does not have", at)
+        reportUnsupported lowering, "{what} through a tuple position the layout does not have", at
         return None
       }
-      Some(SteppedPath(PathStep.TupleField(layout, index), fieldTypeOf(lowering, layout, index)))
+      Some SteppedPath(PathStep.TupleField(layout, index), fieldTypeOf(lowering, layout, index))
     }
     .Index(_, _, _) => {
-      reportUnsupported(lowering, "{what} through `a[key]` (milestone 5.7/5.9b)", at)
+      reportUnsupported lowering, "{what} through `a[key]` (milestone 5.7/5.9b)", at
       None
     }
     .Range(_, _) => {
-      reportUnsupported(lowering, "{what} through a slice, which is a window (milestone 5.9b)", at)
+      reportUnsupported lowering, "{what} through a slice, which is a window (milestone 5.9b)", at
       None
     }
   }
@@ -254,14 +254,14 @@ public fn receiverReference(
   callee: Expression,
   what: String,
 ): PlacePath? {
-  const at = receiverPlaceSpanOf(callee)
-  referenceAt(lowering, builder, at, what)
+  const at = receiverPlaceSpanOf callee
+  referenceAt lowering, builder, at, what
 }
 
 fn receiverPlaceSpanOf(expression: Expression): Span {
   match expression.kind {
     .Member(base, _, _) => base.span
-    .Generic(inner, _) => receiverPlaceSpanOf(inner)
+    .Generic(inner, _) => receiverPlaceSpanOf inner
     _ => expression.span
   }
 }
@@ -279,14 +279,14 @@ public fn argumentReference(
   what: String,
 ): PlacePath? {
   if isTemporaryPlace(lowering, value.span) {
-    const slot = addTemporary(builder, annotation)
-    const _ = lowerExpression(lowering, builder, value, Some(slot))
+    const slot = addTemporary builder, annotation
+    const _ = lowerExpression lowering, builder, value, Some(slot)
     if !lowering.isSupported {
       return None
     }
-    return Some(PlacePath(Reference(slot, []), annotation))
+    return Some PlacePath(Reference(slot, []), annotation)
   }
-  referenceAt(lowering, builder, value.span, what)
+  referenceAt lowering, builder, value.span, what
 }
 
 /**
@@ -297,7 +297,7 @@ public fn argumentReference(
 public fn collidesWithPlace(destination: Slot?, places: List<Reference?>): Bool {
   const slot = match destination {
     Some(found) => found
-    .None => {
+    None => {
       return false
     }
   }
@@ -327,11 +327,11 @@ public fn lowerPlaceAssignment(
 ) {
   const path = match referenceAt(lowering, builder, target.span, "an assignment") {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
-  writtenPlace(lowering, builder, path, value)
+  writtenPlace lowering, builder, path, value
 }
 
 /**
@@ -340,11 +340,11 @@ public fn lowerPlaceAssignment(
  * of the binding over instead of copying it into a temporary first.
  */
 fn writtenPlace(var lowering: Lowering, var builder: FunctionBuilder, path: PlacePath, value: Expression) {
-  const slot = lowerValue(lowering, builder, value)
+  const slot = lowerValue lowering, builder, value
   if !lowering.isSupported {
     return
   }
-  emit(builder, Instruction.Write(path.reference, borrowed(slot)))
+  emit builder, Instruction.Write(path.reference, borrowed(slot))
 }
 
 /**
@@ -364,28 +364,28 @@ public fn lowerPropertyWrite(
 ): Slot {
   if const .AssignClosure = kind {
     const what = "a property command that stores a closure in a field (milestone 5.8)"
-    reportUnsupported(lowering, what, callee.span)
-    return abandonedSlot(lowering, builder, destination)
+    reportUnsupported lowering, what, callee.span
+    return abandonedSlot lowering, builder, destination
   }
   if const .Configure = kind {
     const what = "a property command that configures a field through a receiver closure (milestone 5.8)"
-    reportUnsupported(lowering, what, callee.span)
-    return abandonedSlot(lowering, builder, destination)
+    reportUnsupported lowering, what, callee.span
+    return abandonedSlot lowering, builder, destination
   }
   const path = match referenceAt(lowering, builder, callee.span, "a property command") {
     Some(found) => found
-    .None => {
-      return abandonedSlot(lowering, builder, destination)
+    None => {
+      return abandonedSlot lowering, builder, destination
     }
   }
-  writtenPlace(lowering, builder, path, value)
+  writtenPlace lowering, builder, path, value
   if !lowering.isSupported {
-    return abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
   // A command is a statement and produces `Void`, which somebody may still be taking as the value of a block
   match destination {
-    Some(_) => voidSlot(lowering, builder, destination)
-    .None => abandonedSlot(lowering, builder, destination)
+    Some(_) => voidSlot lowering, builder, destination
+    None => abandonedSlot lowering, builder, destination
   }
 }
 
@@ -394,5 +394,5 @@ public fn lowerPropertyWrite(
  * and stored through the destination, so that what the destination held is released before the new value lands in it.
  */
 public fn writtenResult(var builder: FunctionBuilder, destination: Slot, source: Slot) {
-  emit(builder, Instruction.Write(Reference(destination, []), borrowed(source)))
+  emit builder, Instruction.Write(Reference(destination, []), borrowed(source))
 }

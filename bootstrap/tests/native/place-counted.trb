@@ -54,48 +54,48 @@ fn renameInside(var holder: Holder, name: String) {
 
 /** A `var` parameter handed on, and a `var self` method on a field of it. */
 fn renameTwice(var holder: Holder, name: String) {
-  rename(holder.bundle, name)
+  rename holder.bundle, name
   holder.bundle.rename(name + "!")
 }
 
 /** A whole counted value written through a `var` parameter: the old block is released, the new one stored. */
 fn replace(var message: Message, body: String) {
-  message = Message.Text(body, "nobody", "none")
+  message = Message.Text body, "nobody", "none"
 }
 
 fn bundled(): Bundle {
-  Bundle("a", "bb", "ccc", 1, 2)
+  Bundle "a", "bb", "ccc", 1, 2
 }
 
 /** The copy-on-write proof: `kept` is taken before the call and keeps the contents it had. */
 fn keptContents(): Int {
   var bundle = bundled()
   const kept = bundle
-  rename(bundle, "wwwwww")
+  rename bundle, "wwwwww"
   size(bundle.second) * 10 + size(kept.second)
 }
 
 /** A path of two steps, a copy taken in the middle, and the same path again. */
 fn throughFields(): Int {
-  var holder = Holder(bundled(), 0)
-  renameInside(holder, "yyyy")
+  var holder = Holder bundled(), 0
+  renameInside holder, "yyyy"
   const kept = holder
-  renameTwice(holder, "zzz")
+  renameTwice holder, "zzz"
   size(holder.bundle.first) + size(holder.bundle.second) + holder.count + size(kept.bundle.third)
 }
 
 fn receivers(): Int {
   var bundle = bundled()
-  bundle.rename("dddd")
+  bundle.rename "dddd"
   const kept = bundle
-  bundle.rename("eeeee")
+  bundle.rename "eeeee"
   size(bundle.first) * 10 + size(kept.first)
 }
 
 fn payloads(): Int {
-  var message = Message.Text("body", "me", "hello")
+  var message = Message.Text "body", "me", "hello"
   const kept = message
-  replace(message, "a longer body")
+  replace message, "a longer body"
   sizeOfMessage(message) * 100 + sizeOfMessage(kept)
 }
 
@@ -117,8 +117,8 @@ fn grown(var bundle: Bundle, times: Int) {
 
 fn loops(): Int {
   var bundle = bundled()
-  grown(bundle, 4)
-  size(bundle.third)
+  grown bundle, 4
+  size bundle.third
 }
 
 fn exitCode(): Int {
@@ -126,4 +126,4 @@ fn exitCode(): Int {
   total % 251
 }
 
-Process.exit(exitCode())
+Process.exit exitCode()

@@ -26,7 +26,7 @@ public fn sameType(types: TypeTable, left: TypeId, right: TypeId): Bool {
     }
     .Traits(bounds) => {
       if const .Traits(otherBounds) = types.form(right) {
-        return sameTypes(types, bounds, otherBounds)
+        return sameTypes types, bounds, otherBounds
       }
       false
     }
@@ -46,7 +46,7 @@ public fn sameType(types: TypeTable, left: TypeId, right: TypeId): Bool {
     }
     .Function(form) => {
       if const .Function(otherForm) = types.form(right) {
-        return sameFunction(types, form, otherForm)
+        return sameFunction types, form, otherForm
       }
       false
     }
@@ -114,7 +114,7 @@ public fn sameFunction(types: TypeTable, left: FunctionForm, right: FunctionForm
       return false
     }
   }
-  sameType(types, left.result, right.result)
+  sameType types, left.result, right.result
 }
 
 /**
@@ -128,38 +128,38 @@ public fn substitute(var types: TypeTable, id: TypeId, mapping: Map<ParameterId,
   match types.form(id) {
     .Parameter(parameter) => mapping.get(parameter) ?? id
     .Nominal(symbol, arguments) => {
-      const replaced = substituteAll(types, arguments, mapping)
+      const replaced = substituteAll types, arguments, mapping
       if replaced == arguments {
         return id
       }
-      types.intern(TypeForm.Nominal(symbol, replaced))
+      types.intern TypeForm.Nominal(symbol, replaced)
     }
     .Traits(bounds) => {
-      const replaced = substituteAll(types, bounds, mapping)
+      const replaced = substituteAll types, bounds, mapping
       if replaced == bounds {
         return id
       }
-      types.intern(TypeForm.Traits(replaced))
+      types.intern TypeForm.Traits(replaced)
     }
     .Tuple(fields) => {
       var replaced: List<TupleField> = []
       var isChanged = false
       for field in fields {
-        const inner = substitute(types, field.annotation, mapping)
+        const inner = substitute types, field.annotation, mapping
         isChanged = isChanged || inner != field.annotation
-        replaced.add(TupleField(field.label, inner))
+        replaced.add TupleField(field.label, inner)
       }
       if !isChanged {
         return id
       }
-      types.intern(TypeForm.Tuple(replaced))
+      types.intern TypeForm.Tuple(replaced)
     }
     .Function(form) => {
-      const replaced = substituteFunction(types, form, mapping)
+      const replaced = substituteFunction types, form, mapping
       if replaced == form {
         return id
       }
-      types.intern(TypeForm.Function(replaced))
+      types.intern TypeForm.Function(replaced)
     }
     // A literal type, a const value, `Void`, `Never`, `Invalid` and a variable mention no parameter
     _ => id
@@ -169,7 +169,7 @@ public fn substitute(var types: TypeTable, id: TypeId, mapping: Map<ParameterId,
 public fn substituteAll(var types: TypeTable, arguments: List<TypeId>, mapping: Map<ParameterId, TypeId>): List<TypeId> {
   var replaced: List<TypeId> = []
   for argument in arguments {
-    replaced.add(substitute(types, argument, mapping))
+    replaced.add substitute(types, argument, mapping)
   }
   replaced
 }
@@ -177,15 +177,15 @@ public fn substituteAll(var types: TypeTable, arguments: List<TypeId>, mapping: 
 public fn substituteFunction(var types: TypeTable, form: FunctionForm, mapping: Map<ParameterId, TypeId>): FunctionForm {
   var parameters: List<ParameterForm> = []
   for parameter in form.parameters {
-    parameters.add(parameter.copy(annotation: substitute(types, parameter.annotation, mapping)))
+    parameters.add parameter.copy(annotation: substitute(types, parameter.annotation, mapping))
   }
-  FunctionForm(parameters, substitute(types, form.result, mapping))
+  FunctionForm parameters, substitute(types, form.result, mapping)
 }
 
 public fn substituteBounds(var types: TypeTable, bounds: List<Bound>, mapping: Map<ParameterId, TypeId>): List<Bound> {
   var replaced: List<Bound> = []
   for bound in bounds {
-    replaced.add(Bound(substitute(types, bound.subject, mapping), substituteAll(types, bound.traits, mapping)))
+    replaced.add Bound(substitute(types, bound.subject, mapping), substituteAll(types, bound.traits, mapping))
   }
   replaced
 }
@@ -207,7 +207,7 @@ public fn openInference(var checker: Checker) {
     checker.hasVariables = false
   }
   const start = checker.variables.length()
-  checker.contextStarts.add(start)
+  checker.contextStarts.add start
 }
 
 public fn closeInference(var checker: Checker) {
@@ -222,11 +222,11 @@ public fn closeInference(var checker: Checker) {
   if !checker.contextStarts.isEmpty() {
     return
   }
-  settleVariables(checker, start)
+  settleVariables checker, start
   if checker.hasVariables {
     const pending = checker.pendingSpans
     for at in pending {
-      pruneAt(checker, at)
+      pruneAt checker, at
     }
   }
   checker.pendingSpans = []
@@ -239,8 +239,8 @@ fn settleVariables(var checker: Checker, start: Int) {
   while index < checker.variables.length() {
     const state = checker.variables[index]
     if state.solution.isNone() && !state.isReported {
-      checker.markReported(VariableId(index))
-      reportUnsolved(checker, state.name, state.owner, state.at)
+      checker.markReported VariableId(index)
+      reportUnsolved checker, state.name, state.owner, state.at
     }
     index = index + 1
   }
@@ -266,7 +266,7 @@ fn reportUnsolved(var checker: Checker, name: String, owner: String, at: Span) {
  * variable comes back as the very same id and costs nothing.
  */
 public fn resolveType(var checker: Checker, id: TypeId): TypeId {
-  resolveDeep(checker, id, 0)
+  resolveDeep checker, id, 0
 }
 
 fn resolveDeep(var checker: Checker, id: TypeId, depth: Int): TypeId {
@@ -277,22 +277,22 @@ fn resolveDeep(var checker: Checker, id: TypeId, depth: Int): TypeId {
     .Variable(variable) => {
       match checker.solutionOf(variable) {
         Some(found) => resolveDeep(checker, found, depth + 1)
-        .None => id
+        None => id
       }
     }
     .Nominal(symbol, arguments) => {
-      const replaced = resolveList(checker, arguments, depth)
+      const replaced = resolveList checker, arguments, depth
       if replaced == arguments {
         return id
       }
-      checker.types.intern(TypeForm.Nominal(symbol, replaced))
+      checker.types.intern TypeForm.Nominal(symbol, replaced)
     }
     .Traits(bounds) => {
-      const replaced = resolveList(checker, bounds, depth)
+      const replaced = resolveList checker, bounds, depth
       if replaced == bounds {
         return id
       }
-      checker.types.intern(TypeForm.Traits(replaced))
+      checker.types.intern TypeForm.Traits(replaced)
     }
     .Tuple(fields) => {
       var replaced: List<TupleField> = []
@@ -300,19 +300,19 @@ fn resolveDeep(var checker: Checker, id: TypeId, depth: Int): TypeId {
       for field in fields {
         const inner = resolveDeep(checker, field.annotation, depth + 1)
         isChanged = isChanged || inner != field.annotation
-        replaced.add(TupleField(field.label, inner))
+        replaced.add TupleField(field.label, inner)
       }
       if !isChanged {
         return id
       }
-      checker.types.intern(TypeForm.Tuple(replaced))
+      checker.types.intern TypeForm.Tuple(replaced)
     }
     .Function(form) => {
-      const replaced = resolveFunction(checker, form, depth)
+      const replaced = resolveFunction checker, form, depth
       if replaced == form {
         return id
       }
-      checker.types.intern(TypeForm.Function(replaced))
+      checker.types.intern TypeForm.Function(replaced)
     }
     _ => id
   }
@@ -321,7 +321,7 @@ fn resolveDeep(var checker: Checker, id: TypeId, depth: Int): TypeId {
 fn resolveList(var checker: Checker, arguments: List<TypeId>, depth: Int): List<TypeId> {
   var replaced: List<TypeId> = []
   for argument in arguments {
-    replaced.add(resolveDeep(checker, argument, depth + 1))
+    replaced.add resolveDeep(checker, argument, depth + 1)
   }
   replaced
 }
@@ -329,13 +329,13 @@ fn resolveList(var checker: Checker, arguments: List<TypeId>, depth: Int): List<
 fn resolveFunction(var checker: Checker, form: FunctionForm, depth: Int): FunctionForm {
   var parameters: List<ParameterForm> = []
   for parameter in form.parameters {
-    parameters.add(parameter.copy(annotation: resolveDeep(checker, parameter.annotation, depth + 1)))
+    parameters.add parameter.copy(annotation: resolveDeep(checker, parameter.annotation, depth + 1))
   }
-  FunctionForm(parameters, resolveDeep(checker, form.result, depth + 1))
+  FunctionForm parameters, resolveDeep(checker, form.result, depth + 1)
 }
 
 public fn resolveTypes(var checker: Checker, arguments: List<TypeId>): List<TypeId> {
-  resolveList(checker, arguments, 0)
+  resolveList checker, arguments, 0
 }
 
 /** Whether a type still mentions an unsolved variable, which is what "not inferred yet" means. */
@@ -343,12 +343,12 @@ public fn hasVariable(var checker: Checker, id: TypeId): Bool {
   match checker.types.form(id) {
     .Variable(variable) => {
       match checker.solutionOf(variable) {
-        Some(found) => hasVariable(checker, found)
-        .None => true
+        Some(found) => hasVariable checker, found
+        None => true
       }
     }
-    .Nominal(_, arguments) => anyVariable(checker, arguments)
-    .Traits(bounds) => anyVariable(checker, bounds)
+    .Nominal(_, arguments) => anyVariable checker, arguments
+    .Traits(bounds) => anyVariable checker, bounds
     .Tuple(fields) => {
       for field in fields {
         if hasVariable(checker, field.annotation) {
@@ -363,7 +363,7 @@ public fn hasVariable(var checker: Checker, id: TypeId): Bool {
           return true
         }
       }
-      hasVariable(checker, form.result)
+      hasVariable checker, form.result
     }
     _ => false
   }
@@ -387,22 +387,22 @@ public fn suppressVariables(var checker: Checker, id: TypeId) {
   match checker.types.form(id) {
     .Variable(variable) => {
       match checker.solutionOf(variable) {
-        Some(found) => suppressVariables(checker, found)
-        .None => checker.markReported(variable)
+        Some(found) => suppressVariables checker, found
+        None => checker.markReported variable
       }
     }
-    .Nominal(_, arguments) => suppressAll(checker, arguments)
-    .Traits(bounds) => suppressAll(checker, bounds)
+    .Nominal(_, arguments) => suppressAll checker, arguments
+    .Traits(bounds) => suppressAll checker, bounds
     .Tuple(fields) => {
       for field in fields {
-        suppressVariables(checker, field.annotation)
+        suppressVariables checker, field.annotation
       }
     }
     .Function(form) => {
       for parameter in form.parameters {
-        suppressVariables(checker, parameter.annotation)
+        suppressVariables checker, parameter.annotation
       }
-      suppressVariables(checker, form.result)
+      suppressVariables checker, form.result
     }
     _ => {}
   }
@@ -410,7 +410,7 @@ public fn suppressVariables(var checker: Checker, id: TypeId) {
 
 fn suppressAll(var checker: Checker, arguments: List<TypeId>) {
   for argument in arguments {
-    suppressVariables(checker, argument)
+    suppressVariables checker, argument
   }
 }
 
@@ -419,10 +419,10 @@ public fn openVariableOf(var checker: Checker, id: TypeId): VariableId? {
   if const .Variable(variable) = checker.types.form(id) {
     match checker.solutionOf(variable) {
       Some(found) => {
-        return openVariableOf(checker, found)
+        return openVariableOf checker, found
       }
-      .None => {
-        return Some(variable)
+      None => {
+        return Some variable
       }
     }
   }
@@ -440,15 +440,15 @@ public fn openVariableOf(var checker: Checker, id: TypeId): VariableId? {
  * absorbs, exactly as it does everywhere else in the checker.
  */
 public fn unify(var checker: Checker, left: TypeId, right: TypeId): Bool {
-  unifyDeep(checker, left, right, 0)
+  unifyDeep checker, left, right, 0
 }
 
 fn unifyDeep(var checker: Checker, left: TypeId, right: TypeId, depth: Int): Bool {
   if left == right || depth > 24 {
     return true
   }
-  const one = resolveShallow(checker, left)
-  const other = resolveShallow(checker, right)
+  const one = resolveShallow checker, left
+  const other = resolveShallow checker, right
   if one == other {
     return true
   }
@@ -456,10 +456,10 @@ fn unifyDeep(var checker: Checker, left: TypeId, right: TypeId, depth: Int): Boo
     return true
   }
   if const Some(variable) = openVariableOf(checker, one) {
-    return bindVariable(checker, variable, other)
+    return bindVariable checker, variable, other
   }
   if const Some(variable) = openVariableOf(checker, other) {
-    return bindVariable(checker, variable, one)
+    return bindVariable checker, variable, one
   }
   match checker.types.form(one) {
     .Nominal(symbol, arguments) => {
@@ -470,7 +470,7 @@ fn unifyDeep(var checker: Checker, left: TypeId, right: TypeId, depth: Int): Boo
     }
     .Traits(bounds) => {
       if const .Traits(otherBounds) = checker.types.form(other) {
-        return unifyAll(checker, bounds, otherBounds, depth)
+        return unifyAll checker, bounds, otherBounds, depth
       }
       false
     }
@@ -490,7 +490,7 @@ fn unifyDeep(var checker: Checker, left: TypeId, right: TypeId, depth: Int): Boo
     }
     .Function(form) => {
       if const .Function(otherForm) = checker.types.form(other) {
-        return unifyFunction(checker, form, otherForm, depth)
+        return unifyFunction checker, form, otherForm, depth
       }
       false
     }
@@ -503,21 +503,21 @@ fn unifyDeep(var checker: Checker, left: TypeId, right: TypeId, depth: Int): Boo
 fn resolveShallow(var checker: Checker, id: TypeId): TypeId {
   if const .Variable(variable) = checker.types.form(id) {
     if const Some(found) = checker.solutionOf(variable) {
-      return resolveShallow(checker, found)
+      return resolveShallow checker, found
     }
   }
   id
 }
 
 fn bindVariable(var checker: Checker, variable: VariableId, id: TypeId): Bool {
-  const own = checker.types.intern(TypeForm.Variable(variable))
+  const own = checker.types.intern TypeForm.Variable(variable)
   if own == id {
     return true
   }
   if occursIn(checker, variable, id) {
     return false
   }
-  checker.solveVariable(variable, id)
+  checker.solveVariable variable, id
   true
 }
 
@@ -529,12 +529,12 @@ fn occursIn(var checker: Checker, variable: VariableId, id: TypeId): Bool {
         return true
       }
       match checker.solutionOf(other) {
-        Some(found) => occursIn(checker, variable, found)
-        .None => false
+        Some(found) => occursIn checker, variable, found
+        None => false
       }
     }
-    .Nominal(_, arguments) => occursInAny(checker, variable, arguments)
-    .Traits(bounds) => occursInAny(checker, variable, bounds)
+    .Nominal(_, arguments) => occursInAny checker, variable, arguments
+    .Traits(bounds) => occursInAny checker, variable, bounds
     .Tuple(fields) => {
       for field in fields {
         if occursIn(checker, variable, field.annotation) {
@@ -549,7 +549,7 @@ fn occursIn(var checker: Checker, variable: VariableId, id: TypeId): Bool {
           return true
         }
       }
-      occursIn(checker, variable, form.result)
+      occursIn checker, variable, form.result
     }
     _ => false
   }
@@ -602,86 +602,86 @@ fn unifyFunction(var checker: Checker, left: FunctionForm, right: FunctionForm, 
  */
 fn pruneAt(var checker: Checker, at: Span) {
   if const Some(found) = checker.expressionTypeHere(at) {
-    const solved = resolveType(checker, found)
+    const solved = resolveType checker, found
     if solved != found {
-      checker.setExpressionType(at, solved)
+      checker.setExpressionType at, solved
     }
   }
   if const Some(found) = checker.patternTypeHere(at) {
-    const solved = resolveType(checker, found)
+    const solved = resolveType checker, found
     if solved != found {
-      checker.setPatternType(at, solved)
+      checker.setPatternType at, solved
     }
   }
-  const adaptations = checker.adaptationsHere(at)
+  const adaptations = checker.adaptationsHere at
   if !adaptations.isEmpty() {
     var replaced: List<Adaptation> = []
     var isChanged = false
     for adaptation in adaptations {
-      const solved = pruneAdaptation(checker, adaptation)
+      const solved = pruneAdaptation checker, adaptation
       isChanged = isChanged || solved != adaptation
-      replaced.add(solved)
+      replaced.add solved
     }
     if isChanged {
-      checker.setAdaptations(at, replaced)
+      checker.setAdaptations at, replaced
     }
   }
   if const Some(found) = checker.resolutionHere(at) {
-    const solved = pruneResolution(checker, found)
+    const solved = pruneResolution checker, found
     if solved != found {
-      checker.setResolution(at, solved)
+      checker.setResolution at, solved
     }
   }
   if const Some(found) = checker.typeArgumentsAt(checker.module, at) {
-    const solved = resolveTypes(checker, found)
+    const solved = resolveTypes checker, found
     if solved != found {
-      checker.setTypeArguments(at, solved)
+      checker.setTypeArguments at, solved
     }
   }
   if const Some(found) = checker.witnessesAt(checker.module, at) {
-    const solved = pruneWitnesses(checker, found)
+    const solved = pruneWitnesses checker, found
     if solved != found {
-      checker.setWitnesses(at, solved)
+      checker.setWitnesses at, solved
     }
   }
   // A quotation holds the types of the quoted expression, of its captures and of the parameters of its closures, and
   // `nameOf(limit)` learns its `Value` from the argument - so they are solved here like everything else (4.8)
   if const Some(found) = checker.quotationAt(checker.module, at) {
-    const solved = pruneQuotation(checker, found)
-    checker.recordQuotation(at, solved)
+    const solved = pruneQuotation checker, found
+    checker.recordQuotation at, solved
   }
 }
 
 fn pruneQuotation(var checker: Checker, quotation: Quotation): Quotation {
   var captures: List<QuotationCapture> = []
   for capture in quotation.captures {
-    const annotation = resolveType(checker, capture.annotation)
-    const witness = pruneWitness(checker, capture.witness)
-    captures.add(QuotationCapture(capture.binding, capture.name, annotation, witness))
+    const annotation = resolveType checker, capture.annotation
+    const witness = pruneWitness checker, capture.witness
+    captures.add QuotationCapture(capture.binding, capture.name, annotation, witness)
   }
   var lambdas: Map<Span, List<QuotationParameter>> = [:]
   for (span, parameters) in quotation.lambdas {
     var solved: List<QuotationParameter> = []
     for parameter in parameters {
-      const annotation = resolveType(checker, parameter.annotation)
-      solved.add(QuotationParameter(parameter.name, annotation))
+      const annotation = resolveType checker, parameter.annotation
+      solved.add QuotationParameter(parameter.name, annotation)
     }
-    lambdas.set(span, solved)
+    lambdas.set span, solved
   }
-  const annotation = resolveType(checker, quotation.annotation)
-  Quotation(annotation, captures, quotation.names, lambdas)
+  const annotation = resolveType checker, quotation.annotation
+  Quotation annotation, captures, quotation.names, lambdas
 }
 
 fn pruneAdaptation(var checker: Checker, adaptation: Adaptation): Adaptation {
   match adaptation {
-    .Literal(annotation) => Adaptation.Literal(resolveType(checker, annotation))
-    .Variadic(element, from) => Adaptation.Variadic(resolveType(checker, element), from)
+    .Literal(annotation) => Adaptation.Literal resolveType(checker, annotation)
+    .Variadic(element, from) => Adaptation.Variadic resolveType(checker, element), from
     .ToTraitValue(bounds, witnesses) => Adaptation.ToTraitValue(
       resolveTypes(checker, bounds),
       pruneWitnesses(checker, witnesses),
     )
-    .Convert(witness, method) => Adaptation.Convert(pruneWitness(checker, witness), method)
-    .ShowValue(witness) => Adaptation.ShowValue(pruneWitness(checker, witness))
+    .Convert(witness, method) => Adaptation.Convert pruneWitness(checker, witness), method
+    .ShowValue(witness) => Adaptation.ShowValue pruneWitness(checker, witness)
     _ => adaptation
   }
 }
@@ -693,16 +693,16 @@ fn pruneResolution(var checker: Checker, resolution: Resolution): Resolution {
       resolveTypes(checker, arguments),
       pruneDispatch(checker, dispatch),
     )
-    .Field(owner, field) => Resolution.Field(resolveType(checker, owner), field)
-    .Construct(owner) => Resolution.Construct(resolveType(checker, owner))
-    .CopyOf(owner) => Resolution.CopyOf(resolveType(checker, owner))
-    .CaseOf(owner, variant) => Resolution.CaseOf(resolveType(checker, owner), variant)
-    .TupleField(owner, index) => Resolution.TupleField(resolveType(checker, owner), index)
-    .TypeOf(owner) => Resolution.TypeOf(resolveType(checker, owner))
+    .Field(owner, field) => Resolution.Field resolveType(checker, owner), field
+    .Construct(owner) => Resolution.Construct resolveType(checker, owner)
+    .CopyOf(owner) => Resolution.CopyOf resolveType(checker, owner)
+    .CaseOf(owner, variant) => Resolution.CaseOf resolveType(checker, owner), variant
+    .TupleField(owner, index) => Resolution.TupleField resolveType(checker, owner), index
+    .TypeOf(owner) => Resolution.TypeOf resolveType(checker, owner)
     .Constant(symbol, owner) => {
       match owner {
-        Some(found) => Resolution.Constant(symbol, Some(resolveType(checker, found)))
-        .None => resolution
+        Some(found) => Resolution.Constant symbol, Some(resolveType(checker, found))
+        None => resolution
       }
     }
     _ => resolution
@@ -715,7 +715,7 @@ fn pruneDispatch(var checker: Checker, dispatch: Dispatch): Dispatch {
       implementation,
       pruneWitnesses(checker, witnesses),
     )
-    .Object(bound, witnesses) => Dispatch.Object(resolveType(checker, bound), pruneWitnesses(checker, witnesses))
+    .Object(bound, witnesses) => Dispatch.Object resolveType(checker, bound), pruneWitnesses(checker, witnesses)
     .Forwarded(parameter, bound, witnesses) => Dispatch.Forwarded(
       parameter,
       resolveType(checker, bound),
@@ -728,7 +728,7 @@ fn pruneDispatch(var checker: Checker, dispatch: Dispatch): Dispatch {
 public fn pruneWitnesses(var checker: Checker, witnesses: List<Witness>): List<Witness> {
   var replaced: List<Witness> = []
   for witness in witnesses {
-    replaced.add(pruneWitness(checker, witness))
+    replaced.add pruneWitness(checker, witness)
   }
   replaced
 }
@@ -740,8 +740,8 @@ fn pruneWitness(var checker: Checker, witness: Witness): Witness {
       resolveTypes(checker, arguments),
       pruneWitnesses(checker, inner),
     )
-    .Object(annotation, bound) => Witness.Object(resolveType(checker, annotation), resolveType(checker, bound))
-    .Forwarded(parameter, bound) => Witness.Forwarded(parameter, resolveType(checker, bound))
+    .Object(annotation, bound) => Witness.Object resolveType(checker, annotation), resolveType(checker, bound)
+    .Forwarded(parameter, bound) => Witness.Forwarded parameter, resolveType(checker, bound)
     _ => witness
   }
 }

@@ -48,7 +48,7 @@ fn printTokens(path: String): Result<Void, IoError> {
 /** The generated `Show` of the tree. The bootstrap toolchain prints the same format (`torb ast`). */
 fn printTree(path: String): Result<Void, IoError> {
   const text = File.readText(path)?
-  const parsed = parse(SourceText.of(text))
+  const parsed = parse SourceText.of(text)
   print parsed.file
   for diagnostic in parsed.diagnostics {
     print "error {diagnostic.span.start}..{diagnostic.span.end} {diagnostic.message}"
@@ -63,13 +63,13 @@ fn checkSyntax(paths: List<String>): Result<Int, IoError> {
   var filesWithProblems = 0
   for path in files {
     const text = File.readText(path)?
-    const parsed = parse(SourceText.of(text))
+    const parsed = parse SourceText.of(text)
     if parsed.diagnostics.isEmpty() {
       continue
     }
     filesWithProblems = filesWithProblems + 1
     problems = problems + parsed.diagnostics.length()
-    const lines = LineIndex.of(text)
+    const lines = LineIndex.of text
     for diagnostic in parsed.diagnostics {
       printError renderDiagnostic(path, lines, diagnostic)
       printError ""
@@ -80,7 +80,7 @@ fn checkSyntax(paths: List<String>): Result<Int, IoError> {
   } else {
     printError "{problems} problems in {filesWithProblems} of {files.length()} files"
   }
-  Ok(problems)
+  Ok problems
 }
 
 /**
@@ -91,10 +91,10 @@ fn checkProjects(paths: List<String>, withStatistics: Bool, withTimings: Bool): 
   const tree = readSourceTree(paths)?
   const checked = check(tree, absolutePaths(paths)?, withTimings)
   if withTimings {
-    printTimings(checked)
+    printTimings checked
   }
   if withStatistics {
-    printStatistics(checked, tree)
+    printStatistics checked, tree
   }
   var problems = checked.problems.length()
   var filesWithProblems = 0
@@ -107,7 +107,7 @@ fn checkProjects(paths: List<String>, withStatistics: Bool, withTimings: Bool): 
     }
     filesWithProblems = filesWithProblems + 1
     problems = problems + file.diagnostics.length()
-    const lines = LineIndex.of(file.text)
+    const lines = LineIndex.of file.text
     for diagnostic in file.diagnostics {
       printError renderDiagnostic(file.path, lines, diagnostic)
       printError ""
@@ -118,7 +118,7 @@ fn checkProjects(paths: List<String>, withStatistics: Bool, withTimings: Bool): 
   } else {
     printError "{problems} problems in {filesWithProblems} of {checked.files.length()} files"
   }
-  Ok(problems)
+  Ok problems
 }
 
 /**
@@ -130,10 +130,10 @@ fn printStatistics(checked: Checked, tree: SourceTree) {
   var typed = 0
   var deferred = 0
   for module in checked.requested {
-    const statistics = checked.checker.statisticsOf(module)
+    const statistics = checked.checker.statisticsOf module
     typed = typed + statistics.typed
     deferred = deferred + statistics.deferred
-    const path = tree.display(checked.program.graph.at(module).path)
+    const path = tree.display checked.program.graph.at(module).path
     print "{path}: {statistics.typed} typed, {statistics.deferred} deferred"
   }
   const total = typed + deferred
@@ -167,7 +167,7 @@ fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool): Resu
   }
   for file in checked.files {
     problems = problems + file.diagnostics.length()
-    const lines = LineIndex.of(file.text)
+    const lines = LineIndex.of file.text
     for diagnostic in file.diagnostics {
       printError renderDiagnostic(file.path, lines, diagnostic)
       printError ""
@@ -175,25 +175,25 @@ fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool): Resu
   }
   // Nothing is lowered from a program that does not check: every table the lowering reads would be half filled
   if problems > 0 {
-    return Ok(problems)
+    return Ok problems
   }
-  var lowering = lowerChecked(checked)
+  var lowering = lowerChecked checked
   // Phase one plus ownership is the IR both back ends read; `--no-ownership` shows what the lowering alone writes
   if withOwnership {
-    insertOwnership(lowering.program)
+    insertOwnership lowering.program
   }
   if !onlyStatistics {
-    const text = loweredText(lowering)
+    const text = loweredText lowering
     if !text.isEmpty() {
       print text
       print ""
     }
   }
-  const found = reportLoweredProblems(checked, tree, lowering)
+  const found = reportLoweredProblems checked, tree, lowering
   for line in statisticsLines(lowering) {
     print line
   }
-  const broken = irProblems(lowering, withOwnership)
+  const broken = irProblems lowering, withOwnership
   for line in broken {
     printError "internal error: {line}"
   }
@@ -203,11 +203,11 @@ fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool): Resu
 /** The verifier that fits what was built: the ownership invariants are only checkable once the pass has run. */
 fn irProblems(lowering: Lowering, withOwnership: Bool): List<String> {
   if !withOwnership {
-    return loweredProblems(lowering)
+    return loweredProblems lowering
   }
-  var found = verifyOwnedProgram(lowering.program)
+  var found = verifyOwnedProgram lowering.program
   for problem in lowering.program.problems {
-    found.add(problem)
+    found.add problem
   }
   found
 }
@@ -235,17 +235,17 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions {
       wantsOutput = true
       continue
     }
-    paths.add(argument)
+    paths.add argument
   }
   const given = if paths.isEmpty() { ["."] } else { paths }
-  BuildOptions(given, onlyC, output)
+  BuildOptions given, onlyC, output
 }
 
 /** The errors of the program the lowering found: an overflow or a division by zero in a compile-time constant. */
 fn reportLoweredProblems(checked: Checked, tree: SourceTree, lowering: Lowering): Int {
   for problem in lowering.problems {
-    const module = checked.program.graph.at(problem.module)
-    const lines = LineIndex.of(module.source.text)
+    const module = checked.program.graph.at problem.module
+    const lines = LineIndex.of module.source.text
     printError renderDiagnostic(tree.display(module.path), lines, problem.diagnostic)
     printError ""
   }
@@ -254,38 +254,38 @@ fn reportLoweredProblems(checked: Checked, tree: SourceTree, lowering: Lowering)
 
 match Process.arguments() {
   ["check", ...more] => {
-    const withStatistics = more.contains("--statistics")
-    const withTimings = more.contains("--timings")
+    const withStatistics = more.contains "--statistics"
+    const withTimings = more.contains "--timings"
     const given = more.filter({ _ != "--statistics" && _ != "--timings" }).toList()
     const paths = if given.isEmpty() { ["."] } else { given }
     if checkProjects(paths, withStatistics, withTimings)? > 0 {
-      Process.exit(1)
+      Process.exit 1
     }
   }
   ["build", ...more] => {
     const code = build(buildOptionsOf(more))?
     if code != 0 {
-      Process.exit(code)
+      Process.exit code
     }
   }
   ["ir", ...more] => {
-    const onlyStatistics = more.contains("--statistics")
+    const onlyStatistics = more.contains "--statistics"
     const withOwnership = !more.contains("--no-ownership")
     const given = more.filter({ _ != "--statistics" && _ != "--no-ownership" }).toList()
     const paths = if given.isEmpty() { ["."] } else { given }
     if printIr(paths, onlyStatistics, withOwnership)? > 0 {
-      Process.exit(1)
+      Process.exit 1
     }
   }
   ["parse", first, ...more] => {
     if checkSyntax([first, ...more])? > 0 {
-      Process.exit(1)
+      Process.exit 1
     }
   }
   ["tokens", path] => printTokens(path)?
   ["ast", path] => printTree(path)?
   _ => {
     printUsage()
-    Process.exit(2)
+    Process.exit 2
   }
 }

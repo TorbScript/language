@@ -15,7 +15,7 @@ public type Mapped<Item, Output> with Iterable<Output> {
   transform: (value: Item) => Output
 
   fn iterator(self): Iterator<Output> {
-    MappedIterator(source.iterator(), transform)
+    MappedIterator source.iterator(), transform
   }
 }
 
@@ -35,7 +35,7 @@ public type Filtered<Item> with Iterable<Item> {
   predicate: (value: Item) => Bool
 
   fn iterator(self): Iterator<Item> {
-    FilteredIterator(source.iterator(), predicate)
+    FilteredIterator source.iterator(), predicate
   }
 }
 
@@ -46,7 +46,7 @@ type FilteredIterator<Item> with Iterator<Item> {
   fn next(var self): Item? {
     while const Some(value) = source.next() {
       if predicate(value) {
-        return Some(value)
+        return Some value
       }
     }
     None
@@ -60,7 +60,7 @@ public type FilterMapped<Item, Output> with Iterable<Output> {
   transform: (value: Item) => Output?
 
   fn iterator(self): Iterator<Output> {
-    FilterMappedIterator(source.iterator(), transform)
+    FilterMappedIterator source.iterator(), transform
   }
 }
 
@@ -71,7 +71,7 @@ type FilterMappedIterator<Item, Output> with Iterator<Output> {
   fn next(var self): Output? {
     while const Some(value) = source.next() {
       if const Some(result) = transform(value) {
-        return Some(result)
+        return Some result
       }
     }
     None
@@ -83,7 +83,7 @@ public type MappedWhile<Item, Output> with Iterable<Output> {
   transform: (value: Item) => Output?
 
   fn iterator(self): Iterator<Output> {
-    MappedWhileIterator(source.iterator(), transform)
+    MappedWhileIterator source.iterator(), transform
   }
 }
 
@@ -109,7 +109,7 @@ public type FlatMapped<Item, Output> with Iterable<Output> {
   transform: (value: Item) => Iterable<Output>
 
   fn iterator(self): Iterator<Output> {
-    FlatMappedIterator(source.iterator(), transform)
+    FlatMappedIterator source.iterator(), transform
   }
 }
 
@@ -122,11 +122,11 @@ type FlatMappedIterator<Item, Output> with Iterator<Output> {
     while true {
       if var Some(inner) = current {
         if const Some(value) = inner.next() {
-          return Some(value)
+          return Some value
         }
       }
       // `?` on an Option: the source is exhausted, so are we
-      current = Some(transform(source.next()?).iterator())
+      current = Some transform(source.next()?).iterator()
     }
   }
 }
@@ -138,7 +138,7 @@ public type Taken<Item> with Iterable<Item> {
   amount: Int
 
   fn iterator(self): Iterator<Item> {
-    TakenIterator(source.iterator(), remaining: amount)
+    TakenIterator source.iterator(), remaining: amount
   }
 }
 
@@ -173,7 +173,7 @@ public type TakenWhile<Item> with Iterable<Item> {
   predicate: (value: Item) => Bool
 
   fn iterator(self): Iterator<Item> {
-    TakenWhileIterator(source.iterator(), predicate)
+    TakenWhileIterator source.iterator(), predicate
   }
 }
 
@@ -188,7 +188,7 @@ type TakenWhileIterator<Item> with Iterator<Item> {
     }
     const value = source.next()?
     if predicate(value) {
-      return Some(value)
+      return Some value
     }
     done = true
     None
@@ -202,7 +202,7 @@ public type Zipped<Item, Output> with Iterable<(Item, Output)> {
   right: Iterable<Output>
 
   fn iterator(self): Iterator<(Item, Output)> {
-    ZippedIterator(left.iterator(), right.iterator())
+    ZippedIterator left.iterator(), right.iterator()
   }
 }
 
@@ -224,7 +224,7 @@ public type Sorted<Item, Key: Compare> with Iterable<Item> {
   /** Sorting needs all values: the buffer is filled when the iteration starts, not when the stage is created. */
   fn iterator(self): Iterator<Item> {
     var buffer = source.toList()
-    buffer.sort(by: key)
+    buffer.sort by: key
     buffer.iterator()
   }
 }

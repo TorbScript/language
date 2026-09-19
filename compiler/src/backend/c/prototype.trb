@@ -47,20 +47,20 @@ public fn readPrototype(text: String): Prototype? {
   const body = text.substringAfter("(")?
   const inside = body.substringBefore(")")?
   const result = resultTypeOf(head)?
-  Some(Prototype(result, parameterTypesOf(inside)))
+  Some Prototype(result, parameterTypesOf(inside))
 }
 
 /** Everything of the head but the symbol, which is its last word. */
 fn resultTypeOf(head: String): String? {
-  const words = wordsOf(head)
+  const words = wordsOf head
   if words.length() < 2 {
     return None
   }
   var parts: List<String> = []
   for index in 0..words.length() - 1 {
-    parts.add(words[index])
+    parts.add words[index]
   }
-  Some(parts.joined(separator: " "))
+  Some parts.joined(separator: " ")
 }
 
 fn parameterTypesOf(inside: String): List<String> {
@@ -70,7 +70,7 @@ fn parameterTypesOf(inside: String): List<String> {
     if written.isEmpty() || written == "void" {
       continue
     }
-    types.add(parameterTypeOf(written))
+    types.add parameterTypeOf(written)
   }
   types
 }
@@ -80,7 +80,7 @@ fn parameterTypesOf(inside: String): List<String> {
  * `const torb_element *element` is a `const torb_element *`.
  */
 fn parameterTypeOf(written: String): String {
-  const words = wordsOf(written)
+  const words = wordsOf written
   if words.isEmpty() {
     return ""
   }
@@ -97,9 +97,9 @@ fn parameterTypeOf(written: String): String {
   }
   var parts: List<String> = []
   for index in 0..last {
-    parts.add(words[index])
+    parts.add words[index]
   }
-  const named = parts.joined(separator: " ")
+  const named = parts.joined separator: " "
   if stars.isEmpty() {
     return named
   }
@@ -111,7 +111,7 @@ fn wordsOf(text: String): List<String> {
   for part in text.trim().split(" ") {
     const word = part.trim()
     if !word.isEmpty() {
-      words.add(word)
+      words.add word
     }
   }
   words
@@ -131,7 +131,7 @@ public fn matchPrototype(
   prototype: Prototype,
   name: String,
 ): PrototypeMatch {
-  const expectedResult = cTypeOf(program, signature.result)
+  const expectedResult = cTypeOf program, signature.result
   var conversion = ""
   if expectedResult != prototype.result {
     if !isSameWidthInteger(expectedResult, prototype.result) {
@@ -151,7 +151,7 @@ public fn matchPrototype(
     )
   }
   for index in 0..declared {
-    const expected = cTypeOf(program, signature.parameters[index].annotation)
+    const expected = cTypeOf program, signature.parameters[index].annotation
     const isReference = signature.parameters[index].isReference
     const wanted = if isReference { "{expected} *" } else { expected }
     if wanted != prototype.parameters[index] {
@@ -165,13 +165,13 @@ public fn matchPrototype(
     if conversion.isEmpty() {
       return PrototypeMatch.Direct
     }
-    return PrototypeMatch.Converted(conversion, false)
+    return PrototypeMatch.Converted conversion, false
   }
   if prototype.parameters[declared] == "torb_location" {
     if conversion.isEmpty() {
       return PrototypeMatch.WithLocation
     }
-    return PrototypeMatch.Converted(conversion, true)
+    return PrototypeMatch.Converted conversion, true
   }
   PrototypeMatch.Mismatch(
     "`{name}`: the runtime takes one parameter more than the lowering passes,"
@@ -184,8 +184,8 @@ fn isSameWidthInteger(expected: String, actual: String): Bool {
   if expected.isEmpty() || actual.isEmpty() {
     return false
   }
-  const first = withoutSign(expected)
-  const second = withoutSign(actual)
+  const first = withoutSign expected
+  const second = withoutSign actual
   first == second && first.startsWith("int") && first.endsWith("_t")
 }
 

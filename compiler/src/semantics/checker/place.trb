@@ -61,13 +61,13 @@ type MutationProblem {
  */
 public fn placeOf(var checker: Checker, expression: Expression): Place {
   match expression.kind {
-    .Name(_) => namePlace(checker, expression.span)
-    .Member(base, _, isOptional) => memberPlace(checker, base, expression.span, isOptional)
-    .Index(target, index) => indexPlace(checker, target, index)
+    .Name(_) => namePlace checker, expression.span
+    .Member(base, _, isOptional) => memberPlace checker, base, expression.span, isOptional
+    .Index(target, index) => indexPlace checker, target, index
     // `items.at<Int>(0)`: the type arguments say nothing about the path
-    .Generic(inner, _) => placeOf(checker, inner)
-    .Invalid => Place(PlaceRoot.Unknown, [], expression.span)
-    _ => Place(PlaceRoot.Temporary, [], expression.span)
+    .Generic(inner, _) => placeOf checker, inner
+    .Invalid => Place PlaceRoot.Unknown, [], expression.span
+    _ => Place PlaceRoot.Temporary, [], expression.span
   }
 }
 
@@ -75,28 +75,28 @@ public fn placeOf(var checker: Checker, expression: Expression): Place {
 fn namePlace(var checker: Checker, at: Span): Place {
   const resolution = match checker.resolutionHere(at) {
     Some(found) => found
-    .None => {
-      return Place(PlaceRoot.Unknown, [], at)
+    None => {
+      return Place PlaceRoot.Unknown, [], at
     }
   }
   match resolution {
-    .Local(binding) => Place(PlaceRoot.Local(binding), [], at)
+    .Local(binding) => Place PlaceRoot.Local(binding), [], at
     // A top-level `var` of a script is a symbol of its module and not a local, so it is a root of its own
     .Constant(symbol, owner) => {
       if owner.isSome() {
-        return Place(PlaceRoot.Temporary, [], at)
+        return Place PlaceRoot.Temporary, [], at
       }
-      Place(PlaceRoot.Declared(symbol), [], at)
+      Place PlaceRoot.Declared(symbol), [], at
     }
     // `value = value + 1` in a method of `Point`: a field of `self`, one step from the receiver
     .Field(owner, field) => {
       match checker.receiverBinding {
-        Some(receiver) => Place(PlaceRoot.Local(receiver), [PlaceStep.Field(owner, field)], at)
-        .None => Place(PlaceRoot.Unknown, [], at)
+        Some(receiver) => Place PlaceRoot.Local(receiver), [PlaceStep.Field(owner, field)], at
+        None => Place PlaceRoot.Unknown, [], at
       }
     }
-    .Deferred => Place(PlaceRoot.Unknown, [], at)
-    _ => Place(PlaceRoot.Temporary, [], at)
+    .Deferred => Place PlaceRoot.Unknown, [], at
+    _ => Place PlaceRoot.Temporary, [], at
   }
 }
 
@@ -104,19 +104,19 @@ fn namePlace(var checker: Checker, at: Span): Place {
 fn memberPlace(var checker: Checker, base: Expression, at: Span, isOptional: Bool): Place {
   // `a?.b` is `Option.map`, and what comes out is a new `Option` and no path into `a`
   if isOptional {
-    return Place(PlaceRoot.Temporary, [], at)
+    return Place PlaceRoot.Temporary, [], at
   }
   const resolution = match checker.resolutionHere(at) {
     Some(found) => found
-    .None => {
-      return Place(PlaceRoot.Unknown, [], at)
+    None => {
+      return Place PlaceRoot.Unknown, [], at
     }
   }
   match resolution {
-    .Field(owner, field) => stepped(checker, base, PlaceStep.Field(owner, field))
-    .TupleField(owner, index) => stepped(checker, base, PlaceStep.TupleField(owner, index))
-    .Deferred => Place(PlaceRoot.Unknown, [], at)
-    _ => Place(PlaceRoot.Temporary, [], at)
+    .Field(owner, field) => stepped checker, base, PlaceStep.Field(owner, field)
+    .TupleField(owner, index) => stepped checker, base, PlaceStep.TupleField(owner, index)
+    .Deferred => Place PlaceRoot.Unknown, [], at
+    _ => Place PlaceRoot.Temporary, [], at
   }
 }
 
@@ -125,19 +125,19 @@ fn indexPlace(var checker: Checker, target: Expression, index: Expression): Plac
   const base = checker.expressionTypeHere(target.span) ?? checker.deferredType
   const key = checker.expressionTypeHere(index.span) ?? checker.deferredType
   if isRangeType(checker, key) {
-    return stepped(checker, target, PlaceStep.Range(base, index.span))
+    return stepped checker, target, PlaceStep.Range(base, index.span)
   }
-  const written = literalKeyOf(index)
-  stepped(checker, target, PlaceStep.Index(base, index.span, written))
+  const written = literalKeyOf index
+  stepped checker, target, PlaceStep.Index(base, index.span, written)
 }
 
 /** One more step on the path of the base. A base nothing is known about stays unknown, steps and all. */
 fn stepped(var checker: Checker, base: Expression, step: PlaceStep): Place {
-  const inner = placeOf(checker, base)
+  const inner = placeOf checker, base
   if const .Unknown = inner.root {
     return inner
   }
-  Place(inner.root, inner.steps.added(step), inner.at)
+  Place inner.root, inner.steps.added(step), inner.at
 }
 
 fn isRangeType(checker: Checker, annotation: TypeId): Bool {
@@ -217,7 +217,7 @@ public fn isMutable(var checker: Checker, place: Place): Bool {
  * root cause gets one message and that one was given where the path stopped being understood.
  */
 public fn requireMutable(var checker: Checker, place: Place, at: Span, cause: Mutation): Bool {
-  const problem = problemOf(checker, place)
+  const problem = problemOf checker, place
   if const .Writable = problem {
     return true
   }
@@ -233,15 +233,15 @@ public fn requireMutable(var checker: Checker, place: Place, at: Span, cause: Mu
       }
     }
   }
-  reportProblem(checker, problem, at, cause)
+  reportProblem checker, problem, at, cause
   false
 }
 
 /** The first reason the path cannot be written through, from the root outwards. */
 fn problemOf(var checker: Checker, place: Place): MutationProblem {
-  const found = problemOfRoot(checker, place.root)
+  const found = problemOfRoot checker, place.root
   if const .Writable = found {
-    return problemOfSteps(checker, place)
+    return problemOfSteps checker, place
   }
   found
 }
@@ -249,11 +249,11 @@ fn problemOf(var checker: Checker, place: Place): MutationProblem {
 fn problemOfRoot(var checker: Checker, root: PlaceRoot): MutationProblem {
   match root {
     .Local(binding) => {
-      const found = checker.binding(binding)
+      const found = checker.binding binding
       if found.isVar {
         return MutationProblem.Writable
       }
-      MutationProblem.ConstantRoot(found.name)
+      MutationProblem.ConstantRoot found.name
     }
     // A top-level `var` of a script is written like any other root; a top-level `const` of a module never is
     .Declared(symbol) => {
@@ -261,7 +261,7 @@ fn problemOfRoot(var checker: Checker, root: PlaceRoot): MutationProblem {
         return MutationProblem.Writable
       }
       const name = checker.symbolAt(symbol).name
-      MutationProblem.ConstantRoot(name)
+      MutationProblem.ConstantRoot name
     }
     .Temporary => MutationProblem.TemporaryRoot
     .Unknown => MutationProblem.Unknown
@@ -280,7 +280,7 @@ fn isDeclaredVar(checker: Checker, symbol: SymbolId): Bool {
 
 fn problemOfSteps(var checker: Checker, place: Place): MutationProblem {
   for step in place.steps {
-    const found = problemOfStep(checker, step)
+    const found = problemOfStep checker, step
     if const .Writable = found {
       continue
     }
@@ -291,20 +291,20 @@ fn problemOfSteps(var checker: Checker, place: Place): MutationProblem {
 
 fn problemOfStep(var checker: Checker, step: PlaceStep): MutationProblem {
   match step {
-    .Field(owner, field) => problemOfField(checker, owner, field)
+    .Field(owner, field) => problemOfField checker, owner, field
     .Index(base, _, _) => {
       const capability = checker.wellKnown.mutableIndexed
       if hasTrait(checker, base, capability) {
         return MutationProblem.Writable
       }
-      MutationProblem.NotIndexable(base)
+      MutationProblem.NotIndexable base
     }
     .Range(base, _) => {
       const capability = checker.wellKnown.mutableSlice
       if hasTrait(checker, base, capability) {
         return MutationProblem.Writable
       }
-      MutationProblem.NotSliceable(base)
+      MutationProblem.NotSliceable base
     }
     // A tuple has no `const` positions: every one of them is as writable as the binding that holds the tuple
     .TupleField(_, _) => MutationProblem.Writable
@@ -319,12 +319,12 @@ fn problemOfField(var checker: Checker, owner: TypeId, field: SymbolId): Mutatio
   const signature = match fieldSignatureOf(checker, owner, field) {
     Some(found) => found
     // A field of a type whose shape could not be built: the message belongs where the type was named
-    .None => {
+    None => {
       return MutationProblem.Unknown
     }
   }
   // `private` reaches as far as the type does: its body, and every `extend` of it in the same package (gap 29)
-  const isInside = isInsideType(checker, owner)
+  const isInside = isInsideType checker, owner
   // A field this code may not even *name* was reported where it was named (4.9): one root cause, one message
   if const .Private = signature.visibility {
     if !isInside {
@@ -332,14 +332,14 @@ fn problemOfField(var checker: Checker, owner: TypeId, field: SymbolId): Mutatio
     }
   }
   if !isVarField(signature) {
-    return MutationProblem.ConstantField(field)
+    return MutationProblem.ConstantField field
   }
   if isInside {
     return MutationProblem.Writable
   }
   // `private(var)` is public to read and private to write, so this is the one visibility a place decides about
   if const .PrivateVar = signature.visibility {
-    return MutationProblem.PrivateField(owner, field)
+    return MutationProblem.PrivateField owner, field
   }
   MutationProblem.Writable
 }
@@ -352,17 +352,17 @@ fn fieldSignatureOf(var checker: Checker, owner: TypeId, field: SymbolId): Field
       return None
     }
   }
-  const identifier = typeSignatureOf(checker, symbol)
-  const shape = checker.typeSignature(identifier)
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
   for declared in shape.fields {
     if declared.symbol == field {
-      return Some(declared)
+      return Some declared
     }
   }
   for variant in shape.cases {
     for declared in variant.fields {
       if declared.symbol == field {
-        return Some(declared)
+        return Some declared
       }
     }
   }
@@ -373,7 +373,7 @@ fn fieldSignatureOf(var checker: Checker, owner: TypeId, field: SymbolId): Field
 fn hasTrait(var checker: Checker, base: TypeId, capability: SymbolId?): Bool {
   const wanted = match capability {
     Some(found) => found
-    .None => {
+    None => {
       return true
     }
   }
@@ -390,8 +390,8 @@ fn hasTrait(var checker: Checker, base: TypeId, capability: SymbolId?): Bool {
 
 fn reportProblem(var checker: Checker, problem: MutationProblem, at: Span, cause: Mutation) {
   match problem {
-    .ConstantRoot(name) => reportConstantRoot(checker, name, at, cause)
-    .TemporaryRoot => reportTemporary(checker, at, cause)
+    .ConstantRoot(name) => reportConstantRoot checker, name, at, cause
+    .TemporaryRoot => reportTemporary checker, at, cause
     .ConstantField(field) => {
       const name = checker.symbolAt(field).name
       // A command is the one way of writing a field that reads like a declaration, so the fix names the syntax
@@ -400,11 +400,11 @@ fn reportProblem(var checker: Checker, problem: MutationProblem, at: Span, cause
       } else {
         "A field is `const` unless it is declared `var`, and a value is its data"
       }
-      checker.reportHere(Diagnostic.error("`{name}` never changes after construction", at).withNote(note))
+      checker.reportHere Diagnostic.error("`{name}` never changes after construction", at).withNote(note)
     }
-    .PrivateField(owner, field) => reportPrivateField(checker, owner, field, at)
-    .NotIndexable(base) => reportMissingTrait(checker, base, "MutableIndexed", "a[key]", at)
-    .NotSliceable(base) => reportMissingTrait(checker, base, "MutableSlice", "a[from..to]", at)
+    .PrivateField(owner, field) => reportPrivateField checker, owner, field, at
+    .NotIndexable(base) => reportMissingTrait checker, base, "MutableIndexed", "a[key]", at
+    .NotSliceable(base) => reportMissingTrait checker, base, "MutableSlice", "a[from..to]", at
     _ => {}
   }
 }
@@ -415,16 +415,16 @@ fn reportProblem(var checker: Checker, problem: MutationProblem, at: Span, cause
  */
 fn reportConstantRoot(var checker: Checker, name: String, at: Span, cause: Mutation) {
   if const .Receiver(member) = cause {
-    var problem = Diagnostic.error("`{member}` needs a `var`", at)
+    var problem = Diagnostic.error "`{member}` needs a `var`", at
     match participleOf(member) {
       Some(participle) => {
-        problem = problem.withNote("Did you mean `{participle}`? `{name}` is a `const`, so nothing changes through it")
+        problem = problem.withNote "Did you mean `{participle}`? `{name}` is a `const`, so nothing changes through it"
       }
-      .None => {
-        problem = problem.withNote("`{name}` is a `const`. Only a `var` binding can be changed")
+      None => {
+        problem = problem.withNote "`{name}` is a `const`. Only a `var` binding can be changed"
       }
     }
-    checker.reportHere(problem)
+    checker.reportHere problem
     return
   }
   if const .Argument(parameter, callee) = cause {
@@ -458,7 +458,7 @@ fn reportTemporary(var checker: Checker, at: Span, cause: Mutation) {
 /** `private(var)`: the field reads from everywhere and is written by its own type alone (gap 29). */
 fn reportPrivateField(var checker: Checker, owner: TypeId, field: SymbolId, at: Span) {
   const name = checker.symbolAt(field).name
-  const shown = checker.describe(owner)
+  const shown = checker.describe owner
   checker.reportHere(
     Diagnostic.error("`{name}` can only be written by `{shown}`", at)
       .withNote("`private(var)` hands out a read-only path: the field is public, its mutability is not")
@@ -466,7 +466,7 @@ fn reportPrivateField(var checker: Checker, owner: TypeId, field: SymbolId, at: 
 }
 
 fn reportMissingTrait(var checker: Checker, base: TypeId, capability: String, written: String, at: Span) {
-  const shown = checker.describe(base)
+  const shown = checker.describe base
   checker.reportHere(
     Diagnostic.error("`{shown}` does not implement `{capability}`, so `{written}` is no `var` path", at)
       .withNote("A path through `a[key]` takes the value out, changes it and puts it back, which needs the trait")
@@ -479,9 +479,9 @@ fn participleOf(name: String): String? {
     return None
   }
   if name.endsWith("e") {
-    return Some("{name}d")
+    return Some "{name}d"
   }
-  Some("{name}ed")
+  Some "{name}ed"
 }
 
 // --- The places one statement or one call names ----------------------------------------------------------------------
@@ -492,23 +492,23 @@ fn participleOf(name: String): String? {
  * here is that naming the target of an overwrite stops counting as a read of it.
  */
 public fn checkAssignment(var checker: Checker, target: Expression): Place {
-  const place = placeOf(checker, target)
+  const place = placeOf checker, target
   const at = target.span
-  const _ = checkAccess(checker, place, at)
+  const _ = checkAccess checker, place, at
   if isMutable(checker, place) {
-    checker.recordPlace(at, place)
+    checker.recordPlace at, place
   } else {
-    const _ = requireMutable(checker, place, at, Mutation.Write)
+    const _ = requireMutable checker, place, at, Mutation.Write
   }
   if place.steps.isEmpty() {
-    dropRead(checker, place)
+    dropRead checker, place
   }
   place
 }
 
 /** The change an assignment makes, once its value has been read (design 5.3). */
 public fn noteAssignment(var checker: Checker, place: Place) {
-  noteChange(checker, place, "")
+  noteChange checker, place, ""
 }
 
 /**
@@ -518,13 +518,13 @@ public fn noteAssignment(var checker: Checker, place: Place) {
  * once the value has been read, exactly as for `=`.
  */
 public fn checkPropertyWrite(var checker: Checker, callee: Expression, member: String): Place {
-  const place = placeOf(checker, callee)
+  const place = placeOf checker, callee
   const at = callee.span
-  const _ = checkAccess(checker, place, at)
+  const _ = checkAccess checker, place, at
   if isMutable(checker, place) {
-    checker.recordPlace(at, place)
+    checker.recordPlace at, place
   } else {
-    const _ = requireMutable(checker, place, at, Mutation.Command(member))
+    const _ = requireMutable checker, place, at, Mutation.Command(member)
   }
   place
 }
@@ -535,13 +535,13 @@ public fn checkPropertyWrite(var checker: Checker, callee: Expression, member: S
  * of the pattern are references into it and not copies.
  */
 public fn checkSubject(var checker: Checker, value: Expression) {
-  const place = placeOf(checker, value)
+  const place = placeOf checker, value
   const at = value.span
-  const _ = checkAccess(checker, place, at)
+  const _ = checkAccess checker, place, at
   if isMutable(checker, place) {
-    checker.recordPlace(at, place)
+    checker.recordPlace at, place
   } else {
-    const _ = requireMutable(checker, place, at, Mutation.Subject)
+    const _ = requireMutable checker, place, at, Mutation.Subject
   }
 }
 
@@ -561,22 +561,22 @@ public fn openReceiverAccess(
   if !isVarSelf {
     return
   }
-  const place = receiverPlaceOf(checker, callee)
-  const at = receiverSpanOf(callee)
-  const _ = checkNewAccess(checker, place, at, call)
+  const place = receiverPlaceOf checker, callee
+  const at = receiverSpanOf callee
+  const _ = checkNewAccess checker, place, at, call
   // The reason a place cannot be written is only built where there is one: the message costs a value and a string, and
   // almost every receiver of a `var self` call is a plain `var` binding
   if isMutable(checker, place) {
-    checker.recordPlace(at, place)
+    checker.recordPlace at, place
   } else {
-    const _ = requireMutable(checker, place, at, Mutation.Receiver(member))
+    const _ = requireMutable checker, place, at, Mutation.Receiver(member)
   }
   // Only a call whose result goes nowhere is a change and nothing else: `cursor.next()` hands its value on, so the
   // change to `cursor` is not the point of the statement and the dead-change rule has nothing to say about it
   if isDiscarded {
-    noteChange(checker, place, member)
+    noteChange checker, place, member
   }
-  openAccess(checker, place, member, at, call)
+  openAccess checker, place, member, at, call
 }
 
 /** What a `var self` call changes: the base of the member path, or `self` where the member was written bare. */
@@ -584,26 +584,26 @@ fn receiverPlaceOf(var checker: Checker, callee: Expression): Place {
   match callee.kind {
     .Member(base, _, isOptional) => {
       if isOptional {
-        return Place(PlaceRoot.Temporary, [], base.span)
+        return Place PlaceRoot.Temporary, [], base.span
       }
-      placeOf(checker, base)
+      placeOf checker, base
     }
-    .Generic(inner, _) => receiverPlaceOf(checker, inner)
+    .Generic(inner, _) => receiverPlaceOf checker, inner
     // `add(value)` inside a method: the innermost receiver is the place, and `Adaptation.ImplicitSelf` recorded it
     .Name(_) => {
       match checker.receiverBinding {
-        Some(receiver) => Place(PlaceRoot.Local(receiver), [], callee.span)
-        .None => Place(PlaceRoot.Unknown, [], callee.span)
+        Some(receiver) => Place PlaceRoot.Local(receiver), [], callee.span
+        None => Place PlaceRoot.Unknown, [], callee.span
       }
     }
-    _ => Place(PlaceRoot.Unknown, [], callee.span)
+    _ => Place PlaceRoot.Unknown, [], callee.span
   }
 }
 
 fn receiverSpanOf(callee: Expression): Span {
   match callee.kind {
     .Member(base, _, _) => base.span
-    .Generic(inner, _) => receiverSpanOf(inner)
+    .Generic(inner, _) => receiverSpanOf inner
     _ => callee.span
   }
 }
@@ -621,22 +621,22 @@ public fn openArgumentAccess(
   isDiscarded: Bool,
   call: Int = 0,
 ) {
-  const place = placeOf(checker, value)
+  const place = placeOf checker, value
   const at = value.span
-  const _ = checkNewAccess(checker, place, at, call)
+  const _ = checkNewAccess checker, place, at, call
   if isMutable(checker, place) {
-    checker.recordPlace(at, place)
+    checker.recordPlace at, place
   } else {
     const named = if parameter.isEmpty() { "its argument" } else { parameter }
     // A temporary is a valid argument, and milestone 5 has to know that this one is owned by the callee (gap 2)
     if requireMutable(checker, place, at, Mutation.Argument(named, callee)) {
-      checker.recordPlace(at, place)
+      checker.recordPlace at, place
     }
   }
   if isDiscarded {
-    noteChange(checker, place, callee)
+    noteChange checker, place, callee
   }
-  openAccess(checker, place, callee, at, call)
+  openAccess checker, place, callee, at, call
 }
 
 // --- Exclusivity ----------------------------------------------------------------------------------------------------
@@ -645,7 +645,7 @@ public fn openAccess(var checker: Checker, place: Place, changedBy: String, at: 
   // A path that leads nowhere cannot be reached a second time either, so it is not worth a place on the stack
   if rootKey(place.root) != -1 {
     const depth = checker.runningClosures
-    checker.accesses.add(Access(place, changedBy, at, call, depth))
+    checker.accesses.add Access(place, changedBy, at, call, depth)
   }
 }
 
@@ -653,7 +653,7 @@ public fn openAccess(var checker: Checker, place: Place, changedBy: String, at: 
 public fn closeAccessesTo(var checker: Checker, depth: Int) {
   while checker.accesses.length() > depth {
     const last = checker.accesses.length() - 1
-    const _ = checker.accesses.removeAt(last)
+    const _ = checker.accesses.removeAt last
   }
 }
 
@@ -673,7 +673,7 @@ public fn checkNewAccess(var checker: Checker, place: Place, at: Span, call: Int
   while index >= 0 {
     const access = checker.accesses[index]
     if (access.call == call || access.closureDepth < depth) && overlaps(access.place, place) {
-      reportConflict(checker, place, access, at)
+      reportConflict checker, place, access, at
       return false
     }
     index = index - 1
@@ -695,7 +695,7 @@ public fn checkAccess(var checker: Checker, place: Place, at: Span): Bool {
   while index >= 0 {
     const access = checker.accesses[index]
     if access.closureDepth < depth && overlaps(access.place, place) {
-      reportConflict(checker, place, access, at)
+      reportConflict checker, place, access, at
       return false
     }
     index = index - 1
@@ -709,7 +709,7 @@ public fn checkAccess(var checker: Checker, place: Place, at: Span): Bool {
  * window overlaps everything of its base (design 5.2).
  */
 fn overlaps(first: Place, second: Place): Bool {
-  const root = rootKey(first.root)
+  const root = rootKey first.root
   if root < 0 || root != rootKey(second.root) {
     return false
   }
@@ -758,19 +758,19 @@ fn areDisjoint(first: PlaceStep, second: PlaceStep): Bool {
 }
 
 fn reportConflict(var checker: Checker, place: Place, access: Access, at: Span) {
-  const name = describePlace(checker, access.place)
+  const name = describePlace checker, access.place
   const changedBy = access.changedBy
   var problem = if changedBy.isEmpty() {
-    Diagnostic.error("`{name}` is being changed right now", at)
+    Diagnostic.error "`{name}` is being changed right now", at
   } else {
-    Diagnostic.error("`{name}` is being changed by `{changedBy}` right now", at)
+    Diagnostic.error "`{name}` is being changed by `{changedBy}` right now", at
   }
   if hasIndex(place) && hasIndex(access.place) {
-    problem = problem.withNote("`items[i]` and `items[j]` cannot be told apart. Use `items.swapAt(i, j)`")
+    problem = problem.withNote "`items[i]` and `items[j]` cannot be told apart. Use `items.swapAt(i, j)`"
   } else {
-    problem = problem.withNote("While a `var` access runs, the same path cannot be reached a second time")
+    problem = problem.withNote "While a `var` access runs, the same path cannot be reached a second time"
   }
-  checker.reportHere(problem)
+  checker.reportHere problem
 }
 
 fn hasIndex(place: Place): Bool {
@@ -806,13 +806,13 @@ public fn checkCallReads(
   }
   // The receiver of a `var self` call *is* the access, so reading it again is not a second one
   if !isVarReceiver {
-    checkReads(checker, callee)
+    checkReads checker, callee
   }
   for index in 0..arguments.length() {
     if isVarParameter(targets, parameters, index) {
       continue
     }
-    checkReads(checker, arguments[index].value)
+    checkReads checker, arguments[index].value
   }
 }
 
@@ -835,56 +835,56 @@ fn isVarParameter(targets: List<Int>, parameters: List<ParameterForm>, index: In
 fn checkReads(var checker: Checker, expression: Expression) {
   match expression.kind {
     .Name(_) | .Member(_, _, _) | .Index(_, _) => {
-      const place = placeOf(checker, expression)
+      const place = placeOf checker, expression
       if rootKey(place.root) != -1 {
-        const _ = checkAccess(checker, place, expression.span)
+        const _ = checkAccess checker, place, expression.span
         // The key of an index is an expression of its own and reads whatever it reads
         if const .Index(_, index) = expression.kind {
-          checkReads(checker, index)
+          checkReads checker, index
         }
         return
       }
-      checkReadsInParts(checker, expression)
+      checkReadsInParts checker, expression
     }
-    _ => checkReadsInParts(checker, expression)
+    _ => checkReadsInParts checker, expression
   }
 }
 
 fn checkReadsInParts(var checker: Checker, expression: Expression) {
   match expression.kind {
     .Call(callee, arguments, _) => {
-      checkReads(checker, callee)
+      checkReads checker, callee
       for argument in arguments {
-        checkReads(checker, argument.value)
+        checkReads checker, argument.value
       }
     }
-    .Member(target, _, _) => checkReads(checker, target)
+    .Member(target, _, _) => checkReads checker, target
     .Index(target, index) => {
-      checkReads(checker, target)
-      checkReads(checker, index)
+      checkReads checker, target
+      checkReads checker, index
     }
-    .Generic(inner, _) => checkReads(checker, inner)
-    .Unary(_, operand) => checkReads(checker, operand)
+    .Generic(inner, _) => checkReads checker, inner
+    .Unary(_, operand) => checkReads checker, operand
     .Binary(_, left, right) => {
-      checkReads(checker, left)
-      checkReads(checker, right)
+      checkReads checker, left
+      checkReads checker, right
     }
-    .Try(inner) => checkReads(checker, inner)
-    .TupleLiteral(items) => checkReadsInItems(checker, items)
-    .ListLiteral(items) => checkReadsInItems(checker, items)
+    .Try(inner) => checkReads checker, inner
+    .TupleLiteral(items) => checkReadsInItems checker, items
+    .ListLiteral(items) => checkReadsInItems checker, items
     .MapLiteral(entries) => {
       for (key, value) in entries {
-        checkReads(checker, key)
-        checkReads(checker, value)
+        checkReads checker, key
+        checkReads checker, value
       }
     }
-    .TextLiteral(segments) => checkReadsInText(checker, segments)
+    .TextLiteral(segments) => checkReadsInText checker, segments
     .RangeLiteral(start, end, _) => {
       if const Some(found) = start {
-        checkReads(checker, found)
+        checkReads checker, found
       }
       if const Some(found) = end {
-        checkReads(checker, found)
+        checkReads checker, found
       }
     }
     _ => {}
@@ -893,14 +893,14 @@ fn checkReadsInParts(var checker: Checker, expression: Expression) {
 
 fn checkReadsInItems(var checker: Checker, items: List<Argument>) {
   for item in items {
-    checkReads(checker, item.value)
+    checkReads checker, item.value
   }
 }
 
 fn checkReadsInText(var checker: Checker, segments: List<TextSegment>) {
   for segment in segments {
     if const .Interpolated(inner) = segment {
-      checkReads(checker, inner)
+      checkReads checker, inner
     }
   }
 }
@@ -916,13 +916,13 @@ public fn requireSharedSource(var checker: Checker, value: Expression, annotatio
   if !isSharedType(checker, annotation) {
     return
   }
-  const place = placeOf(checker, value)
+  const place = placeOf checker, value
   if rootKey(place.root) != -1 {
     if isMutable(checker, place) {
       return
     }
-    const name = describePlace(checker, place)
-    const shown = checker.describe(annotation)
+    const name = describePlace checker, place
+    const shown = checker.describe annotation
     checker.reportHere(
       Diagnostic.error("`{name}` is a read-only view of a shared `{shown}`, so no `var` comes out of it", value.span)
         .withNote("A shared object is never copied, so a `var` here would hand out what the `const` withheld")
@@ -937,7 +937,7 @@ fn isSharedType(var checker: Checker, annotation: TypeId): Bool {
       return false
     }
   }
-  const identifier = typeSignatureOf(checker, symbol)
+  const identifier = typeSignatureOf checker, symbol
   checker.typeSignature(identifier).isShared
 }
 

@@ -26,17 +26,17 @@ extend JsonValue with Encode {
   fn encode(self, var encoder: Encoder) {
     match self {
       .Null => encoder.nothing()
-      .Bool(value) => encoder.bool(value)
-      .Number(value) => encoder.float(value)
-      .String(value) => encoder.string(value)
-      .Array(items) => encoder.sequence(Some(items.length())) { sequence =>
+      .Bool(value) => encoder.bool value
+      .Number(value) => encoder.float value
+      .String(value) => encoder.string value
+      .Array(items) => encoder.sequence Some(items.length()) { sequence =>
         for item in items {
-          sequence.item(item)
+          sequence.item item
         }
       }
-      .Object(entries) => encoder.map(Some(entries.length())) { map =>
+      .Object(entries) => encoder.map Some(entries.length()) { map =>
         for (key, value) in entries {
-          map.entry(key, value)
+          map.entry key, value
         }
       }
     }
@@ -52,12 +52,12 @@ public type JsonError with Show, Error {
 
   /** The text was not well-formed JSON. */
   fn syntax(line: Int, message: String): JsonError {
-    Self(kind: .Syntax(line, message))
+    Self kind: .Syntax(line, message)
   }
 
   /** The text was well-formed JSON, but `Decode` rejected it. */
   fn decodeFailed(cause: DecodeError): JsonError {
-    Self(kind: .Decode(cause))
+    Self kind: .Decode(cause)
   }
 
   /** `true` for malformed JSON text, as opposed to well-formed JSON that did not fit the target type. */
@@ -79,7 +79,7 @@ public type JsonError with Show, Error {
   fn cause(self): Error? {
     match kind {
       .Syntax(_, _) => None
-      .Decode(problem) => Some(problem)
+      .Decode(problem) => Some problem
     }
   }
 }

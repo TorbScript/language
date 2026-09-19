@@ -23,7 +23,7 @@ public type ScriptLoad {
 
 public fn scriptLoadsOf(file: SourceFile): List<ScriptLoad> {
   var found: List<ScriptLoad> = []
-  walkStatements(file.statements, found)
+  walkStatements file.statements, found
   found
 }
 
@@ -65,14 +65,14 @@ fn loadOf(expression: Expression): ScriptLoad? {
   }
   const first = arguments.first()?
   const path = literalTextOf(first.value)?
-  Some(ScriptLoad(path, annotation))
+  Some ScriptLoad(path, annotation)
 }
 
 /** A text literal without interpolation. Anything else is a path only the sandbox can know. */
 fn literalTextOf(expression: Expression): String? {
   if const .TextLiteral(segments) = expression.kind {
     if const [.Literal(text)] = segments {
-      return Some(text)
+      return Some text
     }
   }
   None
@@ -82,32 +82,32 @@ fn literalTextOf(expression: Expression): String? {
 
 fn walkStatements(statements: List<Statement>, var found: List<ScriptLoad>) {
   for statement in statements {
-    walkStatement(statement, found)
+    walkStatement statement, found
   }
 }
 
 fn walkStatement(statement: Statement, var found: List<ScriptLoad>) {
   match statement.kind {
-    .Declare(declaration) => walkDeclaration(declaration, found)
-    .Bind(binding) => walkExpression(binding.value, found)
+    .Declare(declaration) => walkDeclaration declaration, found
+    .Bind(binding) => walkExpression binding.value, found
     .Assign(target, value) => {
-      walkExpression(target, found)
-      walkExpression(value, found)
+      walkExpression target, found
+      walkExpression value, found
     }
     .For(_, iterable, body) => {
-      walkExpression(iterable, found)
-      walkBlock(body, found)
+      walkExpression iterable, found
+      walkBlock body, found
     }
     .While(condition, body) => {
-      walkCondition(condition, found)
-      walkBlock(body, found)
+      walkCondition condition, found
+      walkBlock body, found
     }
     .Return(value) => {
       if const Some(expression) = value {
-        walkExpression(expression, found)
+        walkExpression expression, found
       }
     }
-    .Evaluate(expression) => walkExpression(expression, found)
+    .Evaluate(expression) => walkExpression expression, found
     _ => {}
   }
 }
@@ -117,18 +117,18 @@ fn walkDeclaration(declaration: Declaration, var found: List<ScriptLoad>) {
     .Function(function) => {
       for parameter in function.parameters {
         if const Some(default) = parameter.default {
-          walkExpression(default, found)
+          walkExpression default, found
         }
       }
       if const Some(body) = function.body {
-        walkBlock(body, found)
+        walkBlock body, found
       }
     }
-    .Type(declared) => walkMembers(declared.members, found)
-    .Trait(declared) => walkMembers(declared.members, found)
-    .Extend(extension) => walkMembers(extension.members, found)
-    .Foreign(library) => walkMembers(library.members, found)
-    .Constant(binding) => walkExpression(binding.value, found)
+    .Type(declared) => walkMembers declared.members, found
+    .Trait(declared) => walkMembers declared.members, found
+    .Extend(extension) => walkMembers extension.members, found
+    .Foreign(library) => walkMembers library.members, found
+    .Constant(binding) => walkExpression binding.value, found
     _ => {}
   }
 }
@@ -138,19 +138,19 @@ fn walkMembers(members: List<Member>, var found: List<ScriptLoad>) {
     match member.kind {
       .Field(field) => {
         if const Some(default) = field.default {
-          walkExpression(default, found)
+          walkExpression default, found
         }
       }
-      .Constant(binding) => walkExpression(binding.value, found)
+      .Constant(binding) => walkExpression binding.value, found
       .Function(function) => {
         if const Some(body) = function.body {
-          walkBlock(body, found)
+          walkBlock body, found
         }
       }
       .Case(declared) => {
         for field in declared.fields {
           if const Some(default) = field.default {
-            walkExpression(default, found)
+            walkExpression default, found
           }
         }
       }
@@ -159,82 +159,82 @@ fn walkMembers(members: List<Member>, var found: List<ScriptLoad>) {
 }
 
 fn walkBlock(block: Block, var found: List<ScriptLoad>) {
-  walkStatements(block.statements, found)
+  walkStatements block.statements, found
 }
 
 fn walkCondition(condition: Condition, var found: List<ScriptLoad>) {
   match condition {
-    .Test(expression) => walkExpression(expression, found)
-    .Bind(_, _, value) => walkExpression(value, found)
+    .Test(expression) => walkExpression expression, found
+    .Bind(_, _, value) => walkExpression value, found
   }
 }
 
 fn walkClosure(closure: Closure, var found: List<ScriptLoad>) {
-  walkBlock(closure.body, found)
+  walkBlock closure.body, found
 }
 
 fn walkArguments(arguments: List<Argument>, var found: List<ScriptLoad>) {
   for argument in arguments {
-    walkExpression(argument.value, found)
+    walkExpression argument.value, found
   }
 }
 
 fn walkExpression(expression: Expression, var found: List<ScriptLoad>) {
   if const Some(load) = loadOf(expression) {
-    found.add(load)
+    found.add load
   }
   match expression.kind {
-    .Generic(target, _) => walkExpression(target, found)
-    .Closure(closure) => walkClosure(closure, found)
+    .Generic(target, _) => walkExpression target, found
+    .Closure(closure) => walkClosure closure, found
     .If(condition, then, otherwise) => {
-      walkCondition(condition, found)
-      walkBlock(then, found)
+      walkCondition condition, found
+      walkBlock then, found
       if const Some(alternative) = otherwise {
-        walkExpression(alternative, found)
+        walkExpression alternative, found
       }
     }
     .Match(subject, arms) => {
-      walkExpression(subject, found)
+      walkExpression subject, found
       for arm in arms {
         if const Some(guard) = arm.guard {
-          walkExpression(guard, found)
+          walkExpression guard, found
         }
-        walkExpression(arm.body, found)
+        walkExpression arm.body, found
       }
     }
-    .Block(block) => walkBlock(block, found)
-    .TextLiteral(segments) => walkSegments(segments, found)
-    .TupleLiteral(items) => walkArguments(items, found)
-    .ListLiteral(items) => walkArguments(items, found)
+    .Block(block) => walkBlock block, found
+    .TextLiteral(segments) => walkSegments segments, found
+    .TupleLiteral(items) => walkArguments items, found
+    .ListLiteral(items) => walkArguments items, found
     .MapLiteral(entries) => {
       for (key, value) in entries {
-        walkExpression(key, found)
-        walkExpression(value, found)
+        walkExpression key, found
+        walkExpression value, found
       }
     }
-    .Member(target, _, _) => walkExpression(target, found)
+    .Member(target, _, _) => walkExpression target, found
     .Index(target, index) => {
-      walkExpression(target, found)
-      walkExpression(index, found)
+      walkExpression target, found
+      walkExpression index, found
     }
     .Call(callee, arguments, _) => {
-      walkExpression(callee, found)
-      walkArguments(arguments, found)
+      walkExpression callee, found
+      walkArguments arguments, found
     }
-    .Unary(_, operand) => walkExpression(operand, found)
+    .Unary(_, operand) => walkExpression operand, found
     .Binary(_, left, right) => {
-      walkExpression(left, found)
-      walkExpression(right, found)
+      walkExpression left, found
+      walkExpression right, found
     }
     .RangeLiteral(start, end, _) => {
       if const Some(from) = start {
         walkExpression(from, found)
       }
       if const Some(to) = end {
-        walkExpression(to, found)
+        walkExpression to, found
       }
     }
-    .Try(inner) => walkExpression(inner, found)
+    .Try(inner) => walkExpression inner, found
     _ => {}
   }
 }
@@ -242,7 +242,7 @@ fn walkExpression(expression: Expression, var found: List<ScriptLoad>) {
 fn walkSegments(segments: List<TextSegment>, var found: List<ScriptLoad>) {
   for segment in segments {
     if const .Interpolated(inner) = segment {
-      walkExpression(inner, found)
+      walkExpression inner, found
     }
   }
 }

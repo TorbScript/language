@@ -23,38 +23,38 @@ fn inBody(body: String): String {
 
 group "A `lazy` argument is a thunk" {
   test "the argument is recorded as a thunk and keeps the bindings it reads" {
-    const source = inBody("  const base = 2\n  const found = orDefault(None, base + 1)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const base = 2\n  const found = orDefault(None, base + 1)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("base + 1") == "Int64")
     assert(probed.adaptationsOf("base + 1") == ["lazy"])
     assert(probed.capturesOf("base + 1") == ["base"])
   }
 
   test "a thunk that reads nothing captures nothing" {
-    const source = inBody("  const found = orDefault(None, 7)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const found = orDefault(None, 7)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.adaptationsOf("7") == ["lazy", "literal Int64"])
     assert(probed.capturesOf("7") == [])
   }
 
   test "a captured `var` binding stays a shared box in a thunk, too (gap 19)" {
-    const source = inBody("  var total = 1\n  const found = orDefault(None, total + 0)\n  total = 2")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  var total = 1\n  const found = orDefault(None, total + 0)\n  total = 2"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.capturesOf("total + 0") == ["var total"])
   }
 
   test "the argument is checked against the inner type, and a mismatch says so" {
-    const source = inBody("  const found = orDefault(None, \"text\")")
+    const source = inBody "  const found = orDefault(None, \"text\")"
     assert(problems(source) == ["Expected `Int64`, found `String`"])
   }
 
   test "`??` is `orElse(fallback: lazy Value)`, so its right side is a thunk as well" {
-    const source = inBody("  const base = 2\n  const value: Int? = None\n  const found = value ?? base + 1")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const base = 2\n  const value: Int? = None\n  const found = value ?? base + 1"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.adaptationsOf("base + 1") == ["lazy"])
     assert(probed.capturesOf("base + 1") == ["base"])
   }
@@ -62,16 +62,16 @@ group "A `lazy` argument is a thunk" {
   test "a thunk is not a quotation: nothing is quoted and nothing has to be `Encode`" {
     const source = "fn probe() \{\n  const opaque = Opaque(true, \{ true \})\n  const found = orDefault(None, size(opaque))\n\}\n\n"
       + "fn size(value: Opaque): Int \{\n  1\n\}\n\ntype Opaque \{\n  flag: Bool\n  read: () => Bool\n\}\n{helpers}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.adaptationsOf("size(opaque)") == ["lazy"])
     assert(probed.capturesOf("size(opaque)") == ["opaque"])
   }
 
   test "a `lazy String` takes an interpolated text, which is what a log line is" {
-    const source = inBody("  const name = \"ada\"\n  debug(false, \"hello \{name\}\")")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const name = \"ada\"\n  debug(false, \"hello \{name\}\")"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.adaptationsOf("\"hello \{name\}\"") == ["lazy", "literal String"])
     assert(probed.capturesOf("\"hello \{name\}\"") == ["name"])
   }
@@ -79,17 +79,17 @@ group "A `lazy` argument is a thunk" {
 
 group "Reading a `lazy` parameter forces it" {
   test "every read of the parameter records the force" {
-    const probed = probe(inBody("  const found = orDefault(None, 1)"))
+    const probed = probe inBody("  const found = orDefault(None, 1)")
     assert(probed.lastAdaptationsOf("fallback") == ["force"])
   }
 
   test "a parameter that is not `lazy` is read without forcing anything" {
-    const probed = probe(inBody("  const found = orDefault(None, 1)"))
+    const probed = probe inBody("  const found = orDefault(None, 1)")
     assert(probed.lastAdaptationsOf("enabled") == [])
   }
 
   test "the parameter holds the inner type, so it is used like an ordinary value" {
-    const probed = probe(inBody("  const found = orDefault(None, 1)"))
+    const probed = probe inBody("  const found = orDefault(None, 1)")
     assert(probed.typeOf("print message") == "Void")
   }
 }
@@ -110,6 +110,6 @@ group "`lazy` is the type of a parameter and of nothing else" {
   }
 
   test "a parameter of a function *type* may be `lazy`: that is the type of `orElse` itself" {
-    assert(problems("fn probe(action: (lazy Int) => Void) \{\n  action(1)\n\}").isEmpty())
+    assert problems("fn probe(action: (lazy Int) => Void) \{\n  action(1)\n\}").isEmpty()
   }
 }

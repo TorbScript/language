@@ -13,146 +13,149 @@ use irOf, ownedIrOf, unsupportedIn from "./lower-harness"
 
 const shapes = r"""
 
-type Shape {
-  case Circle(radius: Int)
-  case Rectangle(width: Int, height: Int)
-  case Empty
-}
-"""
+  type Shape {
+    case Circle(radius: Int)
+    case Rectangle(width: Int, height: Int)
+    case Empty
+  }
+  """
 
 group "`match`" {
   test "one switch over the tag, one block per arm, and one join" {
     const source = r"""
-fn area(shape: Shape): Int {
-  match shape {
-    .Circle(radius) => radius
-    .Rectangle(width, height) => width * height
-    .Empty => 0
-  }
-}
-""" + shapes
+      fn area(shape: Shape): Int {
+        match shape {
+          .Circle(radius) => radius
+          .Rectangle(width, height) => width * height
+          .Empty => 0
+        }
+      }
+      """ + shapes
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_area") == r"""fn t_acme_x2f_app_main_area(shape: Variant(T_acme_x2f_app_main_Shape) borrowed) -> Int64 {
-  slot %0 parameter shape: Variant(T_acme_x2f_app_main_Shape)
-  slot %1 temporary: Int64
-  slot %2 local radius: Int64
-  slot %3 local width: Int64
-  slot %4 local height: Int64
-  slot %5 temporary: Int64
-b0: # acme/app/src/main.trb:1 body
-  jump b9
-b1: # acme/app/src/main.trb:2 arm
-  %1 = copy %2
-  jump b4
-b2: # acme/app/src/main.trb:2 arm
-  %1 = intrinsic multiply.i64 %3, %4 at acme/app/src/main.trb:4:34
-  jump b4
-b3: # acme/app/src/main.trb:2 arm
-  %1 = constant s_literal__Int64_0
-  jump b4
-b4: # acme/app/src/main.trb:2 join
-  return %1 borrowed
-b5: # acme/app/src/main.trb:2 bind
-  %2 = read %0.Circle.radius
-  jump b1
-b6: # acme/app/src/main.trb:2 bind
-  %3 = read %0.Rectangle.width
-  %4 = read %0.Rectangle.height
-  jump b2
-b7: # acme/app/src/main.trb:2 bind
-  jump b3
-b8: # acme/app/src/main.trb:2 no match
-  unreachable
-b9: # acme/app/src/main.trb:2 case
-  %5 = tag %0
-  switch %5 case 0 b5, case 1 b6, case 2 b7, otherwise b8
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_area") == r"""
+        fn t_acme_x2f_app_main_area(shape: Variant(T_acme_x2f_app_main_Shape) borrowed) -> Int64 {
+          slot %0 parameter shape: Variant(T_acme_x2f_app_main_Shape)
+          slot %1 temporary: Int64
+          slot %2 local radius: Int64
+          slot %3 local width: Int64
+          slot %4 local height: Int64
+          slot %5 temporary: Int64
+        b0: # acme/app/src/main.trb:1 body
+          jump b9
+        b1: # acme/app/src/main.trb:2 arm
+          %1 = copy %2
+          jump b4
+        b2: # acme/app/src/main.trb:2 arm
+          %1 = intrinsic multiply.i64 %3, %4 at acme/app/src/main.trb:4:34
+          jump b4
+        b3: # acme/app/src/main.trb:2 arm
+          %1 = constant s_literal__Int64_0
+          jump b4
+        b4: # acme/app/src/main.trb:2 join
+          return %1 borrowed
+        b5: # acme/app/src/main.trb:2 bind
+          %2 = read %0.Circle.radius
+          jump b1
+        b6: # acme/app/src/main.trb:2 bind
+          %3 = read %0.Rectangle.width
+          %4 = read %0.Rectangle.height
+          jump b2
+        b7: # acme/app/src/main.trb:2 bind
+          jump b3
+        b8: # acme/app/src/main.trb:2 no match
+          unreachable
+        b9: # acme/app/src/main.trb:2 case
+          %5 = tag %0
+          switch %5 case 0 b5, case 1 b6, case 2 b7, otherwise b8
+        }"""
     )
   }
 
   test "a guard is a branch that falls back to the block of the next arm" {
     const source = r"""
-fn sized(value: Int): Int {
-  match value {
-    found if found > 10 => 1
-    _ => 2
-  }
-}
-"""
+      fn sized(value: Int): Int {
+        match value {
+          found if found > 10 => 1
+          _ => 2
+        }
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_sized") == r"""fn t_acme_x2f_app_main_sized(value: Int64 borrowed) -> Int64 {
-  slot %0 parameter value: Int64
-  slot %1 temporary: Int64
-  slot %2 local found: Int64
-  slot %3 temporary: Int64
-  slot %4 temporary: Bool
-b0: # acme/app/src/main.trb:1 body
-  jump b5
-b1: # acme/app/src/main.trb:2 arm
-  %1 = constant s_literal__Int64_1
-  jump b3
-b2: # acme/app/src/main.trb:2 arm
-  %1 = constant s_literal__Int64_2
-  jump b3
-b3: # acme/app/src/main.trb:2 join
-  return %1 borrowed
-b4: # acme/app/src/main.trb:2 bind
-  jump b2
-b5: # acme/app/src/main.trb:2 guard
-  %2 = copy %0
-  %3 = constant s_literal__Int64_10
-  %4 = intrinsic greater.i64 %2, %3 at acme/app/src/main.trb:3:14
-  branch %4 then b1 else b4
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_sized") == r"""
+        fn t_acme_x2f_app_main_sized(value: Int64 borrowed) -> Int64 {
+          slot %0 parameter value: Int64
+          slot %1 temporary: Int64
+          slot %2 local found: Int64
+          slot %3 temporary: Int64
+          slot %4 temporary: Bool
+        b0: # acme/app/src/main.trb:1 body
+          jump b5
+        b1: # acme/app/src/main.trb:2 arm
+          %1 = constant s_literal__Int64_1
+          jump b3
+        b2: # acme/app/src/main.trb:2 arm
+          %1 = constant s_literal__Int64_2
+          jump b3
+        b3: # acme/app/src/main.trb:2 join
+          return %1 borrowed
+        b4: # acme/app/src/main.trb:2 bind
+          jump b2
+        b5: # acme/app/src/main.trb:2 guard
+          %2 = copy %0
+          %3 = constant s_literal__Int64_10
+          %4 = intrinsic greater.i64 %2, %3 at acme/app/src/main.trb:3:14
+          branch %4 then b1 else b4
+        }"""
     )
   }
 
   test "a counted name a guard binds is released on the edge where the guard did not hold" {
     const source = r"""
-type Label {
-  case Named(text: String)
-  case Anonymous
-}
+      type Label {
+        case Named(text: String)
+        case Anonymous
+      }
 
-fn sizeOf(label: Label): Int {
-  match label {
-    .Named(text) if text.byteLength() > 2 => 1
-    _ => 0
-  }
-}
-"""
+      fn sizeOf(label: Label): Int {
+        match label {
+          .Named(text) if text.byteLength() > 2 => 1
+          _ => 0
+        }
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_sizeOf") == r"""fn t_acme_x2f_app_main_sizeOf(label: Variant(T_acme_x2f_app_main_Label) borrowed) -> Int64 {
-  slot %0 parameter label: Variant(T_acme_x2f_app_main_Label)
-  slot %1 temporary: Int64
-  slot %2 local text: String
-  slot %3 temporary: Int64
-  slot %4 temporary: Int64
-  slot %5 temporary: Bool
-  slot %6 temporary: Int64
-b0: # acme/app/src/main.trb:6 body
-  jump b6
-b1: # acme/app/src/main.trb:7 arm
-  %1 = constant s_literal__Int64_1
-  jump b3
-b2: # acme/app/src/main.trb:7 arm
-  %1 = constant s_literal__Int64_0
-  jump b3
-b3: # acme/app/src/main.trb:7 join
-  return %1 borrowed
-b4: # acme/app/src/main.trb:7 bind
-  jump b2
-b5: # acme/app/src/main.trb:7 guard
-  %2 = read %0.Named.text
-  %3 = intrinsic textByteLength %2 at acme/app/src/main.trb:8:21
-  release %2
-  %4 = constant s_literal__Int64_2
-  %5 = intrinsic greater.i64 %3, %4 at acme/app/src/main.trb:8:21
-  branch %5 then b1 else b4
-b6: # acme/app/src/main.trb:7 case
-  %6 = tag %0
-  switch %6 case 0 b5, otherwise b4
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_sizeOf") == r"""
+        fn t_acme_x2f_app_main_sizeOf(label: Variant(T_acme_x2f_app_main_Label) borrowed) -> Int64 {
+          slot %0 parameter label: Variant(T_acme_x2f_app_main_Label)
+          slot %1 temporary: Int64
+          slot %2 local text: String
+          slot %3 temporary: Int64
+          slot %4 temporary: Int64
+          slot %5 temporary: Bool
+          slot %6 temporary: Int64
+        b0: # acme/app/src/main.trb:6 body
+          jump b6
+        b1: # acme/app/src/main.trb:7 arm
+          %1 = constant s_literal__Int64_1
+          jump b3
+        b2: # acme/app/src/main.trb:7 arm
+          %1 = constant s_literal__Int64_0
+          jump b3
+        b3: # acme/app/src/main.trb:7 join
+          return %1 borrowed
+        b4: # acme/app/src/main.trb:7 bind
+          jump b2
+        b5: # acme/app/src/main.trb:7 guard
+          %2 = read %0.Named.text
+          %3 = intrinsic textByteLength %2 at acme/app/src/main.trb:8:21
+          release %2
+          %4 = constant s_literal__Int64_2
+          %5 = intrinsic greater.i64 %3, %4 at acme/app/src/main.trb:8:21
+          branch %5 then b1 else b4
+        b6: # acme/app/src/main.trb:7 case
+          %6 = tag %0
+          switch %6 case 0 b5, otherwise b4
+        }"""
     )
   }
 }
@@ -160,109 +163,112 @@ b6: # acme/app/src/main.trb:7 case
 group "`?` and `??`" {
   test "`?` on a `Result` whose error converts through the generated `From` of a wrapper case" {
     const source = r"""
-fn doubled(value: Int): Result<Int, AppError> {
-  const found = checked(value)?
-  Ok(found + 1)
-}
+      fn doubled(value: Int): Result<Int, AppError> {
+        const found = checked(value)?
+        Ok(found + 1)
+      }
 
-fn checked(value: Int): Result<Int, ParseError> {
-  Ok(value)
-}
+      fn checked(value: Int): Result<Int, ParseError> {
+        Ok(value)
+      }
 
-type ParseError {
-  case Empty
-}
+      type ParseError {
+        case Empty
+      }
 
-type AppError {
-  case Parsing(error: ParseError)
-}
-"""
+      type AppError {
+        case Parsing(error: ParseError)
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_doubled") == r"""fn t_acme_x2f_app_main_doubled(value: Int64 borrowed) -> Variant(T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError) {
-  slot %0 parameter value: Int64
-  slot %1 local found: Int64
-  slot %2 temporary: Variant(T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_ParseError)
-  slot %3 temporary: Int64
-  slot %4 temporary: Variant(T_acme_x2f_app_main_ParseError)
-  slot %5 temporary: Variant(T_acme_x2f_app_main_AppError)
-  slot %6 temporary: Variant(T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError)
-  slot %7 temporary: Int64
-  slot %8 temporary: Int64
-  slot %9 temporary: Variant(T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError)
-b0: # acme/app/src/main.trb:1 body
-  %2 = call t_acme_x2f_app_main_checked(%0 borrowed) at acme/app/src/main.trb:2:17
-  %3 = tag %2
-  switch %3 case 0 b1, otherwise b2
-b1: # acme/app/src/main.trb:2 value
-  %1 = read %2.Ok.value
-  %7 = constant s_literal__Int64_1
-  %8 = intrinsic add.i64 %1, %7 at acme/app/src/main.trb:3:6
-  %9 = construct T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError.Ok (%8 borrowed)
-  return %9 borrowed
-b2: # acme/app/src/main.trb:2 failed
-  %4 = read %2.Fail.error
-  %5 = construct T_acme_x2f_app_main_AppError.Parsing (%4 borrowed)
-  %6 = construct T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError.Fail (%5 borrowed)
-  return %6 borrowed
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_doubled") == r"""
+        fn t_acme_x2f_app_main_doubled(value: Int64 borrowed) -> Variant(T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError) {
+          slot %0 parameter value: Int64
+          slot %1 local found: Int64
+          slot %2 temporary: Variant(T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_ParseError)
+          slot %3 temporary: Int64
+          slot %4 temporary: Variant(T_acme_x2f_app_main_ParseError)
+          slot %5 temporary: Variant(T_acme_x2f_app_main_AppError)
+          slot %6 temporary: Variant(T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError)
+          slot %7 temporary: Int64
+          slot %8 temporary: Int64
+          slot %9 temporary: Variant(T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError)
+        b0: # acme/app/src/main.trb:1 body
+          %2 = call t_acme_x2f_app_main_checked(%0 borrowed) at acme/app/src/main.trb:2:17
+          %3 = tag %2
+          switch %3 case 0 b1, otherwise b2
+        b1: # acme/app/src/main.trb:2 value
+          %1 = read %2.Ok.value
+          %7 = constant s_literal__Int64_1
+          %8 = intrinsic add.i64 %1, %7 at acme/app/src/main.trb:3:6
+          %9 = construct T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError.Ok (%8 borrowed)
+          return %9 borrowed
+        b2: # acme/app/src/main.trb:2 failed
+          %4 = read %2.Fail.error
+          %5 = construct T_acme_x2f_app_main_AppError.Parsing (%4 borrowed)
+          %6 = construct T_std_x2f_prelude_types_Result__Int64_T_acme_x2f_app_main_AppError.Fail (%5 borrowed)
+          return %6 borrowed
+        }"""
     )
   }
 
   test "`?` on an `Option` builds the empty case of the enclosing one and returns it" {
     const source = r"""
-fn addedOne(value: Int?): Int? {
-  const found = value?
-  Some(found + 1)
-}
-"""
+      fn addedOne(value: Int?): Int? {
+        const found = value?
+        Some(found + 1)
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_addedOne") == r"""fn t_acme_x2f_app_main_addedOne(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Variant(T_std_x2f_prelude_types_Option__Int64) {
-  slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
-  slot %1 local found: Int64
-  slot %2 temporary: Int64
-  slot %3 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
-  slot %4 temporary: Int64
-  slot %5 temporary: Int64
-  slot %6 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
-b0: # acme/app/src/main.trb:1 body
-  %2 = tag %0
-  switch %2 case 0 b1, otherwise b2
-b1: # acme/app/src/main.trb:2 value
-  %1 = read %0.Some.value
-  %4 = constant s_literal__Int64_1
-  %5 = intrinsic add.i64 %1, %4 at acme/app/src/main.trb:3:8
-  %6 = construct T_std_x2f_prelude_types_Option__Int64.Some (%5 borrowed)
-  return %6 borrowed
-b2: # acme/app/src/main.trb:2 failed
-  %3 = construct T_std_x2f_prelude_types_Option__Int64.None ()
-  return %3 borrowed
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_addedOne") == r"""
+        fn t_acme_x2f_app_main_addedOne(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Variant(T_std_x2f_prelude_types_Option__Int64) {
+          slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %1 local found: Int64
+          slot %2 temporary: Int64
+          slot %3 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %4 temporary: Int64
+          slot %5 temporary: Int64
+          slot %6 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+        b0: # acme/app/src/main.trb:1 body
+          %2 = tag %0
+          switch %2 case 0 b1, otherwise b2
+        b1: # acme/app/src/main.trb:2 value
+          %1 = read %0.Some.value
+          %4 = constant s_literal__Int64_1
+          %5 = intrinsic add.i64 %1, %4 at acme/app/src/main.trb:3:8
+          %6 = construct T_std_x2f_prelude_types_Option__Int64.Some (%5 borrowed)
+          return %6 borrowed
+        b2: # acme/app/src/main.trb:2 failed
+          %3 = construct T_std_x2f_prelude_types_Option__Int64.None ()
+          return %3 borrowed
+        }"""
     )
   }
 
   test "`??` inlines the thunk of its fallback: the right side runs only where there is no value" {
     const source = r"""
-fn orZero(value: Int?): Int {
-  value ?? 0
-}
-"""
+      fn orZero(value: Int?): Int {
+        value ?? 0
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_orZero") == r"""fn t_acme_x2f_app_main_orZero(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Int64 {
-  slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
-  slot %1 temporary: Int64
-  slot %2 temporary: Int64
-b0: # acme/app/src/main.trb:1 body
-  %2 = tag %0
-  switch %2 case 0 b1, otherwise b2
-b1: # acme/app/src/main.trb:2 value
-  %1 = read %0.Some.value
-  jump b3
-b2: # acme/app/src/main.trb:2 fallback
-  %1 = constant s_literal__Int64_0
-  jump b3
-b3: # acme/app/src/main.trb:2 join
-  return %1 borrowed
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_orZero") == r"""
+        fn t_acme_x2f_app_main_orZero(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Int64 {
+          slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %1 temporary: Int64
+          slot %2 temporary: Int64
+        b0: # acme/app/src/main.trb:1 body
+          %2 = tag %0
+          switch %2 case 0 b1, otherwise b2
+        b1: # acme/app/src/main.trb:2 value
+          %1 = read %0.Some.value
+          jump b3
+        b2: # acme/app/src/main.trb:2 fallback
+          %1 = constant s_literal__Int64_0
+          jump b3
+        b3: # acme/app/src/main.trb:2 join
+          return %1 borrowed
+        }"""
     )
   }
 }
@@ -270,82 +276,84 @@ b3: # acme/app/src/main.trb:2 join
 group "`if const` and `while const`" {
   test "`if const` is the decision tree with the `else` as the block a value that does not match goes to" {
     const source = r"""
-fn unwrapped(value: Int?): Int {
-  if const Some(found) = value {
-    found
-  } else {
-    0
-  }
-}
-"""
+      fn unwrapped(value: Int?): Int {
+        if const Some(found) = value {
+          found
+        } else {
+          0
+        }
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_unwrapped") == r"""fn t_acme_x2f_app_main_unwrapped(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Int64 {
-  slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
-  slot %1 temporary: Int64
-  slot %2 local found: Int64
-  slot %3 temporary: Int64
-b0: # acme/app/src/main.trb:1 body
-  jump b6
-b1: # acme/app/src/main.trb:2 then
-  %1 = copy %2
-  jump b3
-b2: # acme/app/src/main.trb:2 else
-  %1 = constant s_literal__Int64_0
-  jump b3
-b3: # acme/app/src/main.trb:2 join
-  return %1 borrowed
-b4: # acme/app/src/main.trb:2 bind
-  %2 = read %0.Some.value
-  jump b1
-b5: # acme/app/src/main.trb:2 no match
-  jump b2
-b6: # acme/app/src/main.trb:2 case
-  %3 = tag %0
-  switch %3 case 0 b4, otherwise b5
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_unwrapped") == r"""
+        fn t_acme_x2f_app_main_unwrapped(value: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Int64 {
+          slot %0 parameter value: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %1 temporary: Int64
+          slot %2 local found: Int64
+          slot %3 temporary: Int64
+        b0: # acme/app/src/main.trb:1 body
+          jump b6
+        b1: # acme/app/src/main.trb:2 then
+          %1 = copy %2
+          jump b3
+        b2: # acme/app/src/main.trb:2 else
+          %1 = constant s_literal__Int64_0
+          jump b3
+        b3: # acme/app/src/main.trb:2 join
+          return %1 borrowed
+        b4: # acme/app/src/main.trb:2 bind
+          %2 = read %0.Some.value
+          jump b1
+        b5: # acme/app/src/main.trb:2 no match
+          jump b2
+        b6: # acme/app/src/main.trb:2 case
+          %3 = tag %0
+          switch %3 case 0 b4, otherwise b5
+        }"""
     )
   }
 
   test "`while const` matches the pattern again at the head of every round" {
     const source = r"""
-fn total(first: Int?): Int {
-  var current = first
-  var sum = 0
-  while const Some(value) = current {
-    sum = sum + value
-    current = None
-  }
-  sum
-}
-"""
+      fn total(first: Int?): Int {
+        var current = first
+        var sum = 0
+        while const Some(value) = current {
+          sum = sum + value
+          current = None
+        }
+        sum
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_total") == r"""fn t_acme_x2f_app_main_total(first: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Int64 {
-  slot %0 parameter first: Variant(T_std_x2f_prelude_types_Option__Int64)
-  slot %1 local current: Variant(T_std_x2f_prelude_types_Option__Int64)
-  slot %2 local sum: Int64
-  slot %3 local value: Int64
-  slot %4 temporary: Int64
-b0: # acme/app/src/main.trb:1 body
-  %1 = copy %0
-  %2 = constant s_literal__Int64_0
-  jump b1
-b1: # acme/app/src/main.trb:4 while
-  jump b6
-b2: # acme/app/src/main.trb:4 body
-  %2 = intrinsic add.i64 %2, %3 at acme/app/src/main.trb:5:11
-  %1 = construct T_std_x2f_prelude_types_Option__Int64.None ()
-  jump b1
-b3: # acme/app/src/main.trb:4 done
-  return %2 borrowed
-b4: # acme/app/src/main.trb:4 bind
-  %3 = read %1.Some.value
-  jump b2
-b5: # acme/app/src/main.trb:4 no match
-  jump b3
-b6: # acme/app/src/main.trb:4 case
-  %4 = tag %1
-  switch %4 case 0 b4, otherwise b5
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_total") == r"""
+        fn t_acme_x2f_app_main_total(first: Variant(T_std_x2f_prelude_types_Option__Int64) borrowed) -> Int64 {
+          slot %0 parameter first: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %1 local current: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %2 local sum: Int64
+          slot %3 local value: Int64
+          slot %4 temporary: Int64
+        b0: # acme/app/src/main.trb:1 body
+          %1 = copy %0
+          %2 = constant s_literal__Int64_0
+          jump b1
+        b1: # acme/app/src/main.trb:4 while
+          jump b6
+        b2: # acme/app/src/main.trb:4 body
+          %2 = intrinsic add.i64 %2, %3 at acme/app/src/main.trb:5:11
+          %1 = construct T_std_x2f_prelude_types_Option__Int64.None ()
+          jump b1
+        b3: # acme/app/src/main.trb:4 done
+          return %2 borrowed
+        b4: # acme/app/src/main.trb:4 bind
+          %3 = read %1.Some.value
+          jump b2
+        b5: # acme/app/src/main.trb:4 no match
+          jump b3
+        b6: # acme/app/src/main.trb:4 case
+          %4 = tag %1
+          switch %4 case 0 b4, otherwise b5
+        }"""
     )
   }
 }
@@ -353,28 +361,29 @@ b6: # acme/app/src/main.trb:4 case
 group "A destructuring binding" {
   test "a record pattern is one `read` per name, along the paths of the plan" {
     const source = r"""
-type Point {
-  x: Int
-  y: Int
-}
+      type Point {
+        x: Int
+        y: Int
+      }
 
-fn sum(point: Point): Int {
-  const Point(x, y) = point
-  x + y
-}
-"""
+      fn sum(point: Point): Int {
+        const Point(x, y) = point
+        x + y
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_sum") == r"""fn t_acme_x2f_app_main_sum(point: Record(T_acme_x2f_app_main_Point) borrowed) -> Int64 {
-  slot %0 parameter point: Record(T_acme_x2f_app_main_Point)
-  slot %1 local x: Int64
-  slot %2 local y: Int64
-  slot %3 temporary: Int64
-b0: # acme/app/src/main.trb:6 body
-  %1 = read %0.x
-  %2 = read %0.y
-  %3 = intrinsic add.i64 %1, %2 at acme/app/src/main.trb:8:3
-  return %3 borrowed
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_sum") == r"""
+        fn t_acme_x2f_app_main_sum(point: Record(T_acme_x2f_app_main_Point) borrowed) -> Int64 {
+          slot %0 parameter point: Record(T_acme_x2f_app_main_Point)
+          slot %1 local x: Int64
+          slot %2 local y: Int64
+          slot %3 temporary: Int64
+        b0: # acme/app/src/main.trb:6 body
+          %1 = read %0.x
+          %2 = read %0.y
+          %3 = intrinsic add.i64 %1, %2 at acme/app/src/main.trb:8:3
+          return %3 borrowed
+        }"""
     )
   }
 }
@@ -382,23 +391,23 @@ b0: # acme/app/src/main.trb:6 body
 group "What a pattern cannot reach yet" {
   test "a list pattern waits for the collections of 5.7, and `if var` for the places of 5.9b" {
     const source = r"""
-fn firstOf(items: ArrayList<Int>): Int {
-  match items {
-    [first, ...rest] => first
-    [] => 0
-  }
-}
-"""
+      fn firstOf(items: ArrayList<Int>): Int {
+        match items {
+          [first, ...rest] => first
+          [] => 0
+        }
+      }
+      """
     assert(unsupportedIn(source) == ["not supported by the back end yet: a list pattern (milestone 5.7)"])
     const other = r"""
-fn taken(value: Int?): Int {
-  var current = value
-  if var Some(inner) = current {
-    return inner
-  }
-  0
-}
-"""
+      fn taken(value: Int?): Int {
+        var current = value
+        if var Some(inner) = current {
+          return inner
+        }
+        0
+      }
+      """
     assert(
       unsupportedIn(other)
         == [

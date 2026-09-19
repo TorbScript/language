@@ -49,11 +49,11 @@ type IntoAccumulator<Item, Target: From<Iterable<Item>>> with Accumulator<Item, 
   private var items: List<Item> = []
 
   fn add(var self, value: Item) {
-    items.add(value)
+    items.add value
   }
 
   fn finish(self): Target {
-    Target.from(items)
+    Target.from items
   }
 }
 
@@ -71,7 +71,7 @@ public fn collector<Item, State, Output>(
   finish: (State) => Output,
   step: (State, Item) => State,
 ): Collector<Item, Output> {
-  FoldCollector(initial, step, finish)
+  FoldCollector initial, step, finish
 }
 
 type FoldCollector<Item, State, Output> with Collector<Item, Output> {
@@ -80,7 +80,7 @@ type FoldCollector<Item, State, Output> with Collector<Item, Output> {
   complete: (State) => Output
 
   fn start(self): Accumulator<Item, Output> {
-    FoldAccumulator(initial, step, complete)
+    FoldAccumulator initial, step, complete
   }
 }
 
@@ -120,7 +120,7 @@ public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, 
   collector(initial, finish: { _ }) { best, item =>
     match best {
       Some(current) if key(current) <= key(item) => best
-      _ => Some(item)
+      _ => Some item
     }
   }
 }
@@ -130,7 +130,7 @@ public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, 
   collector(initial, finish: { _ }) { best, item =>
     match best {
       Some(current) if key(current) >= key(item) => best
-      _ => Some(item)
+      _ => Some item
     }
   }
 }
@@ -140,7 +140,7 @@ public fn joining(separator: String = "", prefix: String = "", suffix: String = 
   collector(initial, finish: { text => prefix + (text ?? "") + suffix }) { text, part =>
     match text {
       Some(existing) => Some(existing + separator + part)
-      .None => Some(part)
+      None => Some part
     }
   }
 }
@@ -161,7 +161,7 @@ public fn partitioningBy<Item>(predicate: (value: Item) => Bool): Collector<Item
  *     groupingBy { _.department }.then(maxBy { _.salary }) // Map<String, Employee?>
  */
 public fn groupingBy<Item, Key: Hash>(key: (value: Item) => Key): Grouping<Item, Key> {
-  Grouping(key)
+  Grouping key
 }
 
 public type Grouping<Item, Key: Hash> with Collector<Item, Map<Key, List<Item>>> {
@@ -172,7 +172,7 @@ public type Grouping<Item, Key: Hash> with Collector<Item, Map<Key, List<Item>>>
   }
 
   fn then<Output>(self, downstream: Collector<Item, Output>): Collector<Item, Map<Key, Output>> {
-    GroupingInto(key, downstream)
+    GroupingInto key, downstream
   }
 }
 
@@ -181,7 +181,7 @@ type GroupingInto<Item, Key: Hash, Output> with Collector<Item, Map<Key, Output>
   downstream: Collector<Item, Output>
 
   fn start(self): Accumulator<Item, Map<Key, Output>> {
-    GroupingAccumulator(key, downstream)
+    GroupingAccumulator key, downstream
   }
 }
 

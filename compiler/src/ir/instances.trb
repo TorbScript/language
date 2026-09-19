@@ -28,7 +28,7 @@ use newFunction, finishFunction from "./build"
 /** What a monomorphic declaration is as a function of the IR, or `None` where nothing can be built from it. */
 public fn instanceOfSymbol(var lowering: Lowering, symbol: SymbolId): FunctionId? {
   const empty: Map<ParameterId, TypeId> = [:]
-  instanceFor(lowering, symbol, empty)
+  instanceFor lowering, symbol, empty
 }
 
 /**
@@ -43,31 +43,31 @@ public fn instanceFor(
 ): FunctionId? {
   const arguments = match instanceArgumentsOf(lowering, symbol, mapping) {
     Some(found) => found
-    .None => {
+    None => {
       return None
     }
   }
-  const instance = Instance(symbol, arguments, [])
-  const key = instanceKeyOf(instance)
+  const instance = Instance symbol, arguments, []
+  const key = instanceKeyOf instance
   if const Some(found) = lowering.program.instances.get(key) {
-    return Some(found)
+    return Some found
   }
-  const identifier = signatureOf(lowering.checker, symbol)
-  const signature = lowering.checker.signature(identifier)
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
   if !signature.hasBody {
     return None
   }
   if functionDeclarationOf(lowering, symbol).isNone() {
     return None
   }
-  const built = irSignatureUnder(lowering, signature, mapping)
-  const name = nameOfInstance(lowering, symbol, arguments)
-  var builder = newFunction(name, Some(symbol), built, "not supported yet")
-  const added = finishFunction(lowering.program, builder)
-  lowering.program.instances.set(key, added)
-  lowering.instanceMappings.set(key, mapping)
-  lowering.program.pending.add(instance)
-  Some(added)
+  const built = irSignatureUnder lowering, signature, mapping
+  const name = nameOfInstance lowering, symbol, arguments
+  var builder = newFunction name, Some(symbol), built, "not supported yet"
+  const added = finishFunction lowering.program, builder
+  lowering.program.instances.set key, added
+  lowering.instanceMappings.set key, mapping
+  lowering.program.pending.add instance
+  Some added
 }
 
 /**
@@ -77,7 +77,7 @@ public fn instanceFor(
  */
 public fn runtimeFunctionOf(var lowering: Lowering, symbol: SymbolId, runtime: String): FunctionId? {
   const empty: Map<ParameterId, TypeId> = [:]
-  runtimeFunctionUnder(lowering, symbol, runtime, empty)
+  runtimeFunctionUnder lowering, symbol, runtime, empty
 }
 
 /** The same for a native of a generic owner, whose parameters the caller has filled in. */
@@ -89,33 +89,33 @@ public fn runtimeFunctionUnder(
 ): FunctionId? {
   const arguments = match instanceArgumentsOf(lowering, symbol, mapping) {
     Some(found) => found
-    .None => {
+    None => {
       return None
     }
   }
-  const instance = Instance(symbol, arguments, [])
-  const key = instanceKeyOf(instance)
+  const instance = Instance symbol, arguments, []
+  const key = instanceKeyOf instance
   if const Some(found) = lowering.program.instances.get(key) {
-    return Some(found)
+    return Some found
   }
-  const identifier = signatureOf(lowering.checker, symbol)
-  const signature = lowering.checker.signature(identifier)
-  const built = irSignatureUnder(lowering, signature, mapping)
-  const name = nameOfInstance(lowering, symbol, arguments)
-  var function = IrFunction(name, Some(symbol), built, [], [], FunctionKind.Runtime(runtime))
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
+  const built = irSignatureUnder lowering, signature, mapping
+  const name = nameOfInstance lowering, symbol, arguments
+  var function = IrFunction name, Some(symbol), built, [], [], FunctionKind.Runtime(runtime)
   for index in 0..built.parameters.length() {
     const parameter = built.parameters[index]
-    function.slots.add(SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name))
+    function.slots.add SlotDeclaration(parameter.annotation, SlotRole.Parameter(index), parameter.name)
   }
-  const added = lowering.program.addFunction(function)
-  lowering.program.instances.set(key, added)
-  Some(added)
+  const added = lowering.program.addFunction function
+  lowering.program.instances.set key, added
+  Some added
 }
 
 /** The mangled name of an instance: a pure function of where the declaration is written and of its arguments. */
 public fn nameOfInstance(var lowering: Lowering, symbol: SymbolId, arguments: List<IrTypeId>): String {
-  const path = symbolPathOf(lowering.checker, symbol)
-  functionName(lowering.program, path, arguments)
+  const path = symbolPathOf lowering.checker, symbol
+  functionName lowering.program, path, arguments
 }
 
 /**
@@ -146,32 +146,32 @@ public fn instanceArgumentsOf(
   symbol: SymbolId,
   mapping: Map<ParameterId, TypeId>,
 ): List<IrTypeId>? {
-  const identifier = signatureOf(lowering.checker, symbol)
-  const signature = lowering.checker.signature(identifier)
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
   var arguments: List<IrTypeId> = []
   if const Some(own) = selfParameterOf(lowering, signature) {
     const found = closedArgument(lowering, mapping, own)?
-    arguments.add(found)
+    arguments.add found
   }
   for parameter in signature.generics {
     const found = closedArgument(lowering, mapping, parameter)?
-    arguments.add(found)
+    arguments.add found
   }
   // An owner that is neither concrete nor covered by the arguments cannot be laid out at all
   if const Some(owner) = signature.owner {
-    const applied = substitute(lowering.checker.types, owner, mapping)
+    const applied = substitute lowering.checker.types, owner, mapping
     if !isClosedType(lowering, applied) {
       return None
     }
   }
-  Some(arguments)
+  Some arguments
 }
 
 /** The `Self` of a trait, which is a generic parameter that is not in `Signature.generics`. */
 fn selfParameterOf(var lowering: Lowering, signature: Signature): ParameterId? {
   const owner = signature.owner?
   if const .Parameter(parameter) = lowering.checker.types.form(owner) {
-    return Some(parameter)
+    return Some parameter
   }
   None
 }
@@ -185,7 +185,7 @@ fn closedArgument(
   if !isClosedType(lowering, given) {
     return None
   }
-  Some(irTypeOfClosed(lowering, given))
+  Some irTypeOfClosed(lowering, given)
 }
 
 /**
@@ -198,10 +198,10 @@ public fn isClosedType(var lowering: Lowering, id: TypeId): Bool {
     .Variable(_) => false
     .Deferred => false
     .Invalid => false
-    .Nominal(_, arguments) => everyClosed(lowering, arguments)
-    .Traits(bounds) => everyClosed(lowering, bounds)
-    .Literals(base, _) => isClosedType(lowering, base)
-    .Constant(_, of) => isClosedType(lowering, of)
+    .Nominal(_, arguments) => everyClosed lowering, arguments
+    .Traits(bounds) => everyClosed lowering, bounds
+    .Literals(base, _) => isClosedType lowering, base
+    .Constant(_, of) => isClosedType lowering, of
     .Tuple(fields) => {
       for field in fields {
         if !isClosedType(lowering, field.annotation) {
@@ -216,7 +216,7 @@ public fn isClosedType(var lowering: Lowering, id: TypeId): Bool {
           return false
         }
       }
-      isClosedType(lowering, form.result)
+      isClosedType lowering, form.result
     }
     _ => true
   }
@@ -236,14 +236,14 @@ fn everyClosed(var lowering: Lowering, arguments: List<TypeId>): Bool {
  * declaration around it, and an owner that is a concrete type rather than the `Self` of a trait.
  */
 public fn isMonomorphic(var lowering: Lowering, symbol: SymbolId): Bool {
-  const identifier = signatureOf(lowering.checker, symbol)
-  const signature = lowering.checker.signature(identifier)
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
   if !signature.generics.isEmpty() {
     return false
   }
   match signature.owner {
-    .None => true
-    Some(owner) => isConcreteOwner(lowering, owner)
+    None => true
+    Some(owner) => isConcreteOwner lowering, owner
   }
 }
 
@@ -257,7 +257,7 @@ fn isConcreteOwner(var lowering: Lowering, owner: TypeId): Bool {
 /** The `fn` a symbol was declared by, so that a body can be lowered from it. */
 public fn functionDeclarationOf(var lowering: Lowering, symbol: SymbolId): FunctionDeclaration? {
   const site = lowering.checker.siteOf(symbol)?
-  functionOfSite(site)
+  functionOfSite site
 }
 
 // --- Signatures -----------------------------------------------------------------------------------------------------
@@ -269,7 +269,7 @@ public fn functionDeclarationOf(var lowering: Lowering, symbol: SymbolId): Funct
  */
 public fn irSignatureOf(var lowering: Lowering, signature: Signature): IrSignature {
   const empty: Map<ParameterId, TypeId> = [:]
-  irSignatureUnder(lowering, signature, empty)
+  irSignatureUnder lowering, signature, empty
 }
 
 /**
@@ -285,20 +285,20 @@ public fn irSignatureUnder(
   var parameters: List<IrParameter> = []
   if signature.takesSelf {
     if const Some(owner) = signature.owner {
-      const applied = substitute(lowering.checker.types, owner, mapping)
-      const annotation = irTypeOfClosed(lowering, applied)
-      parameters.add(IrParameter("self", annotation, signature.isVarSelf, Ownership.Borrowed))
+      const applied = substitute lowering.checker.types, owner, mapping
+      const annotation = irTypeOfClosed lowering, applied
+      parameters.add IrParameter("self", annotation, signature.isVarSelf, Ownership.Borrowed)
     }
   }
   for parameter in signature.form.parameters {
-    const annotation = parameterTypeOf(lowering, parameter, mapping)
+    const annotation = parameterTypeOf lowering, parameter, mapping
     const name = parameter.name ?? ""
-    const isReference = isReferenceParameter(parameter.mode)
-    parameters.add(IrParameter(name, annotation, isReference, Ownership.Borrowed))
+    const isReference = isReferenceParameter parameter.mode
+    parameters.add IrParameter(name, annotation, isReference, Ownership.Borrowed)
   }
-  const applied = substitute(lowering.checker.types, signature.form.result, mapping)
-  const result = irTypeOfClosed(lowering, applied)
-  IrSignature(parameters, result)
+  const applied = substitute lowering.checker.types, signature.form.result, mapping
+  const result = irTypeOfClosed lowering, applied
+  IrSignature parameters, result
 }
 
 /** `lazy Value` is a one-shot memo cell and a variadic parameter holds the list the call site builds (BACKEND 1.6). */
@@ -307,11 +307,11 @@ fn parameterTypeOf(
   parameter: ParameterForm,
   mapping: Map<ParameterId, TypeId>,
 ): IrTypeId {
-  const applied = substitute(lowering.checker.types, parameter.annotation, mapping)
-  const annotation = irTypeOfClosed(lowering, applied)
+  const applied = substitute lowering.checker.types, parameter.annotation, mapping
+  const annotation = irTypeOfClosed lowering, applied
   match parameter.mode {
-    .Lazy => lowering.program.internType(IrType.Lazy(annotation))
-    .Variadic => lowering.program.internType(IrType.Runtime(RuntimeKind.ListStorage, [annotation]))
+    .Lazy => lowering.program.internType IrType.Lazy(annotation)
+    .Variadic => lowering.program.internType IrType.Runtime(RuntimeKind.ListStorage, [annotation])
     _ => annotation
   }
 }
@@ -329,5 +329,5 @@ public fn needsReference(signature: Signature): Bool {
   if signature.isVarSelf {
     return true
   }
-  signature.form.parameters.any({ isReferenceParameter(_.mode) })
+  signature.form.parameters.any({ isReferenceParameter _.mode })
 }

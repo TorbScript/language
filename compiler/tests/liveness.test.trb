@@ -16,13 +16,13 @@ use Counted, LiveSets, countedSlotsOf, livenessOf, postorderOf, filledFlags from
  */
 
 fn textType(var program: IrProgram): IrTypeId {
-  program.internType(IrType.Text)
+  program.internType IrType.Text
 }
 
 fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
-  const reserved = program.reserveLayout(name, LayoutKind.Record)
-  const layout = program.layoutAt(reserved.layout)
-  program.setLayout(reserved.layout, layout.copy(fields: fields, isBuilt: true))
+  const reserved = program.reserveLayout name, LayoutKind.Record
+  const layout = program.layoutAt reserved.layout
+  program.setLayout reserved.layout, layout.copy(fields: fields, isBuilt: true)
   reserved.layout
 }
 
@@ -30,12 +30,12 @@ fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>)
 fn shownSlots(counted: Counted): String {
   var parts: List<String> = []
   for slot in counted.slots {
-    parts.add("%{slot.value}")
+    parts.add "%{slot.value}"
   }
   if parts.isEmpty() {
     return "-"
   }
-  parts.joined(separator: " ")
+  parts.joined separator: " "
 }
 
 /** One live set, in the same spelling. */
@@ -43,29 +43,29 @@ fn shownSet(counted: Counted, flags: List<Bool>): String {
   var parts: List<String> = []
   for position in 0..counted.width() {
     if flags[position] {
-      parts.add("%{counted.slots[position].value}")
+      parts.add "%{counted.slots[position].value}"
     }
   }
   if parts.isEmpty() {
     return "-"
   }
-  parts.joined(separator: " ")
+  parts.joined separator: " "
 }
 
 fn textByteLength(): Intrinsic {
-  Intrinsic(IntrinsicOperation.TextByteLength, None)
+  Intrinsic IntrinsicOperation.TextByteLength, None
 }
 
 fn someLocation(var program: IrProgram): LocationId {
-  program.internLocation(Location("live.trb", 1, 1))
+  program.internLocation Location("live.trb", 1, 1)
 }
 
 fn shownOrder(order: List<Int>): String {
   var parts: List<String> = []
   for block in order {
-    parts.add("b{block}")
+    parts.add "b{block}"
   }
-  parts.joined(separator: " ")
+  parts.joined separator: " "
 }
 
 group "Which slots a frame counts" {
@@ -76,10 +76,10 @@ group "Which slots a frame counts" {
    */
   test "a counted slot is one whose value owns a count and whose count is this frame's" {
     var program = IrProgram()
-    const text = textType(program)
-    const int64 = program.internType(IrType.Integer(64, true))
-    const small = recordLayout(program, "T_Small", [FieldLayout("name", text), FieldLayout("size", int64)])
-    const smallType = program.internType(IrType.Record(small))
+    const text = textType program
+    const int64 = program.internType IrType.Integer(64, true)
+    const small = recordLayout program, "T_Small", [FieldLayout("name", text), FieldLayout("size", int64)]
+    const smallType = program.internType IrType.Record(small)
     const signature = IrSignature(
       [
         IrParameter("owned", text, false, Ownership.Owned),
@@ -89,11 +89,11 @@ group "Which slots a frame counts" {
       ],
       text,
     )
-    var builder = newFunction("t_counts", None, signature, "body")
-    const local = addLocal(builder, text, "local")
-    const record = addLocal(builder, smallType, "record")
-    const number = addTemporary(builder, int64)
-    finishProgram(program)
+    var builder = newFunction "t_counts", None, signature, "body"
+    const local = addLocal builder, text, "local"
+    const record = addLocal builder, smallType, "record"
+    const number = addTemporary builder, int64
+    finishProgram program
     assert(shownSlots(countedSlotsOf(program, builder.function)) == "%0 %4 %5")
     assert(local == Slot(4))
     assert(record == Slot(5))
@@ -102,14 +102,14 @@ group "Which slots a frame counts" {
 
   test "a function over numbers counts nothing, which is what makes the pass free for one" {
     var program = IrProgram()
-    const int64 = program.internType(IrType.Integer(64, true))
-    const boolean = program.internType(IrType.Boolean)
+    const int64 = program.internType IrType.Integer(64, true)
+    const boolean = program.internType IrType.Boolean
     const signature = IrSignature([IrParameter("first", int64), IrParameter("second", boolean)], int64)
-    var builder = newFunction("t_plain", None, signature, "body")
-    const _ = addTemporary(builder, int64)
-    finishProgram(program)
-    const counted = countedSlotsOf(program, builder.function)
-    assert(counted.isEmpty())
+    var builder = newFunction "t_plain", None, signature, "body"
+    const _ = addTemporary builder, int64
+    finishProgram program
+    const counted = countedSlotsOf program, builder.function
+    assert counted.isEmpty()
     assert(counted.width() == 0)
     assert(shownSlots(counted) == "-")
   }
@@ -122,27 +122,27 @@ group "The order the blocks are walked in" {
    */
   test "postorder takes the successors in the order they are written, and never twice" {
     var program = IrProgram()
-    const boolean = program.internType(IrType.Boolean)
-    const voidType = program.internType(IrType.VoidType)
+    const boolean = program.internType IrType.Boolean
+    const voidType = program.internType IrType.VoidType
     const signature = IrSignature([IrParameter("flag", boolean)], voidType)
-    var builder = newFunction("t_diamond", None, signature, "body")
-    const then = addBlock(builder, "then", None)
-    const otherwise = addBlock(builder, "else", None)
-    const join = addBlock(builder, "join", None)
-    terminate(builder, Terminator.Branch(Slot(0), then, otherwise))
-    terminateBlock(builder, then, Terminator.Jump(join))
-    terminateBlock(builder, otherwise, Terminator.Jump(join))
-    terminateBlock(builder, join, Terminator.Return(None))
+    var builder = newFunction "t_diamond", None, signature, "body"
+    const then = addBlock builder, "then", None
+    const otherwise = addBlock builder, "else", None
+    const join = addBlock builder, "join", None
+    terminate builder, Terminator.Branch(Slot(0), then, otherwise)
+    terminateBlock builder, then, Terminator.Jump(join)
+    terminateBlock builder, otherwise, Terminator.Jump(join)
+    terminateBlock builder, join, Terminator.Return(None)
     assert(shownOrder(postorderOf(builder.function)) == "b3 b1 b2 b0")
   }
 
   test "a block nothing reaches is in no order at all, so nothing is rewritten in it" {
     var program = IrProgram()
-    const voidType = program.internType(IrType.VoidType)
-    var builder = newFunction("t_dead", None, IrSignature([], voidType), "body")
-    const lost = addBlock(builder, "lost", None)
-    terminate(builder, Terminator.Return(None))
-    terminateBlock(builder, lost, Terminator.Unreachable)
+    const voidType = program.internType IrType.VoidType
+    var builder = newFunction "t_dead", None, IrSignature([], voidType), "body"
+    const lost = addBlock builder, "lost", None
+    terminate builder, Terminator.Return(None)
+    terminateBlock builder, lost, Terminator.Unreachable
     assert(shownOrder(postorderOf(builder.function)) == "b0")
   }
 }
@@ -150,15 +150,15 @@ group "The order the blocks are walked in" {
 group "What is live where" {
   test "a straight line: a value is live from where it is made to its last use" {
     var program = IrProgram()
-    const text = textType(program)
+    const text = textType program
     const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], text)
-    var builder = newFunction("t_straight", None, signature, "body")
-    const local = addLocal(builder, text, "copied")
-    emit(builder, Instruction.Copy(local, Slot(0)))
-    terminate(builder, Terminator.Return(Some(borrowed(local))))
-    finishProgram(program)
-    const counted = countedSlotsOf(program, builder.function)
-    const live = livenessOf(program, builder.function, counted)
+    var builder = newFunction "t_straight", None, signature, "body"
+    const local = addLocal builder, text, "copied"
+    emit builder, Instruction.Copy(local, Slot(0))
+    terminate builder, Terminator.Return(Some(borrowed(local)))
+    finishProgram program
+    const counted = countedSlotsOf program, builder.function
+    const live = livenessOf program, builder.function, counted
     assert(shownSlots(counted) == "%0 %1")
     assert(shownSet(counted, live.liveIn[0]) == "%0")
     assert(shownSet(counted, live.liveOut[0]) == "-")
@@ -173,8 +173,8 @@ group "What is live where" {
    */
   test "a branch: what leaves a block is the union of what its successors need" {
     var program = IrProgram()
-    const text = textType(program)
-    const boolean = program.internType(IrType.Boolean)
+    const text = textType program
+    const boolean = program.internType IrType.Boolean
     const signature = IrSignature(
       [
         IrParameter("flag", boolean),
@@ -183,15 +183,15 @@ group "What is live where" {
       ],
       text,
     )
-    var builder = newFunction("t_branch", None, signature, "body")
-    const then = addBlock(builder, "then", None)
-    const otherwise = addBlock(builder, "else", None)
-    terminate(builder, Terminator.Branch(Slot(0), then, otherwise))
-    terminateBlock(builder, then, Terminator.Return(Some(borrowed(Slot(1)))))
-    terminateBlock(builder, otherwise, Terminator.Return(Some(borrowed(Slot(2)))))
-    finishProgram(program)
-    const counted = countedSlotsOf(program, builder.function)
-    const live = livenessOf(program, builder.function, counted)
+    var builder = newFunction "t_branch", None, signature, "body"
+    const then = addBlock builder, "then", None
+    const otherwise = addBlock builder, "else", None
+    terminate builder, Terminator.Branch(Slot(0), then, otherwise)
+    terminateBlock builder, then, Terminator.Return(Some(borrowed(Slot(1))))
+    terminateBlock builder, otherwise, Terminator.Return(Some(borrowed(Slot(2))))
+    finishProgram program
+    const counted = countedSlotsOf program, builder.function
+    const live = livenessOf program, builder.function, counted
     assert(shownSlots(counted) == "%1 %2")
     assert(shownSet(counted, live.liveIn[0]) == "%1 %2")
     assert(shownSet(counted, live.liveOut[0]) == "%1 %2")
@@ -206,27 +206,27 @@ group "What is live where" {
    */
   test "a loop: the back edge keeps a value the body uses live at the head" {
     var program = IrProgram()
-    const text = textType(program)
-    const int64 = program.internType(IrType.Integer(64, true))
-    const boolean = program.internType(IrType.Boolean)
+    const text = textType program
+    const int64 = program.internType IrType.Integer(64, true)
+    const boolean = program.internType IrType.Boolean
     const signature = IrSignature([IrParameter("text", text, false, Ownership.Owned)], int64)
-    var builder = newFunction("t_loop", None, signature, "body")
-    const total = addLocal(builder, int64, "total")
-    const condition = addTemporary(builder, boolean)
-    const length = addTemporary(builder, int64)
-    const head = addBlock(builder, "while", None)
-    const body = addBlock(builder, "body", None)
-    const done = addBlock(builder, "done", None)
-    terminate(builder, Terminator.Jump(head))
-    terminateBlock(builder, head, Terminator.Branch(condition, body, done))
-    switchTo(builder, body)
-    const at = someLocation(program)
-    emit(builder, Instruction.Intrinsic(Some(length), textByteLength(), [Slot(0)], at))
-    terminate(builder, Terminator.Jump(head))
-    terminateBlock(builder, done, Terminator.Return(Some(borrowed(total))))
-    finishProgram(program)
-    const counted = countedSlotsOf(program, builder.function)
-    const live = livenessOf(program, builder.function, counted)
+    var builder = newFunction "t_loop", None, signature, "body"
+    const total = addLocal builder, int64, "total"
+    const condition = addTemporary builder, boolean
+    const length = addTemporary builder, int64
+    const head = addBlock builder, "while", None
+    const body = addBlock builder, "body", None
+    const done = addBlock builder, "done", None
+    terminate builder, Terminator.Jump(head)
+    terminateBlock builder, head, Terminator.Branch(condition, body, done)
+    switchTo builder, body
+    const at = someLocation program
+    emit builder, Instruction.Intrinsic(Some(length), textByteLength(), [Slot(0)], at)
+    terminate builder, Terminator.Jump(head)
+    terminateBlock builder, done, Terminator.Return(Some(borrowed(total)))
+    finishProgram program
+    const counted = countedSlotsOf program, builder.function
+    const live = livenessOf program, builder.function, counted
     assert(shownSlots(counted) == "%0")
     assert(shownSet(counted, live.liveIn[1]) == "%0")
     assert(shownSet(counted, live.liveOut[1]) == "%0")
@@ -239,15 +239,15 @@ group "What is live where" {
 
   test "a value that is defined before it is used in the same block is not live above it" {
     var program = IrProgram()
-    const text = textType(program)
+    const text = textType program
     const signature = IrSignature([IrParameter("text", text, false, Ownership.Borrowed)], text)
-    var builder = newFunction("t_made", None, signature, "body")
-    const made = addTemporary(builder, text)
-    emit(builder, Instruction.Copy(made, Slot(0)))
-    terminate(builder, Terminator.Return(Some(borrowed(made))))
-    finishProgram(program)
-    const counted = countedSlotsOf(program, builder.function)
-    const live = livenessOf(program, builder.function, counted)
+    var builder = newFunction "t_made", None, signature, "body"
+    const made = addTemporary builder, text
+    emit builder, Instruction.Copy(made, Slot(0))
+    terminate builder, Terminator.Return(Some(borrowed(made)))
+    finishProgram program
+    const counted = countedSlotsOf program, builder.function
+    const live = livenessOf program, builder.function, counted
     // The parameter is borrowed, so the frame counts only what it made itself
     assert(shownSlots(counted) == "%1")
     assert(shownSet(counted, live.liveIn[0]) == "-")

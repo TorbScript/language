@@ -25,51 +25,51 @@ use staticOfConstant from "../constant"
 /** The body of one instance. The stub is replaced only where everything in it could be lowered. */
 public fn lowerInstance(var lowering: Lowering, instance: Instance) {
   const symbol = instance.symbol
-  const key = instanceKeyOf(instance)
+  const key = instanceKeyOf instance
   const identifier = match lowering.program.instances.get(key) {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
   const declaration = match functionDeclarationOf(lowering, symbol) {
     Some(found) => found
-    .None => {
+    None => {
       lowering.stubbed = lowering.stubbed + 1
       return
     }
   }
   const body = match declaration.body {
     Some(found) => found
-    .None => {
+    None => {
       lowering.stubbed = lowering.stubbed + 1
       return
     }
   }
   const module = match lowering.checker.siteOf(symbol) {
     Some(site) => site.module
-    .None => {
+    None => {
       lowering.stubbed = lowering.stubbed + 1
       return
     }
   }
-  const stub = lowering.program.functionAt(identifier)
+  const stub = lowering.program.functionAt identifier
   const name = stub.name
   const signature = stub.signature
-  beginFunction(lowering, module)
+  beginFunction lowering, module
   // The type arguments this instance was reached with: every type the body mentions is substituted through them
   const empty: Map<ParameterId, TypeId> = [:]
   lowering.substitution = lowering.instanceMappings.get(key) ?? empty
-  var builder = newFunction(name, Some(symbol), signature, "body")
-  const location = locationOf(lowering, body.span)
-  setBlockLocation(builder, BlockId(0), Some(location))
-  declareParameterSlots(lowering, symbol, declaration)
-  lowerBody(lowering, builder, body, signature.result)
+  var builder = newFunction name, Some(symbol), signature, "body"
+  const location = locationOf lowering, body.span
+  setBlockLocation builder, BlockId(0), Some(location)
+  declareParameterSlots lowering, symbol, declaration
+  lowerBody lowering, builder, body, signature.result
   if !lowering.isSupported {
     lowering.stubbed = lowering.stubbed + 1
     return
   }
-  lowering.program.functions.set(identifier.value, builder.function)
+  lowering.program.functions.set identifier.value, builder.function
   lowering.lowered = lowering.lowered + 1
 }
 
@@ -94,35 +94,35 @@ public fn beginFunction(var lowering: Lowering, module: ModuleId) {
  */
 public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: Block, result: IrTypeId) {
   if isVoidType(lowering, result) {
-    lowerBlockInto(lowering, builder, body, None)
+    lowerBlockInto lowering, builder, body, None
     if !lowering.isDiverged {
-      finishBlock(lowering, builder, Terminator.Return(None))
+      finishBlock lowering, builder, Terminator.Return(None)
     }
     return
   }
   if isNeverType(lowering, result) {
-    lowerBlockInto(lowering, builder, body, None)
+    lowerBlockInto lowering, builder, body, None
     if !lowering.isDiverged {
       // A function that does not return has to leave through a panic or a call of another such function
-      reportUnsupported(lowering, "a body of a function that returns `Never` and does return", body.span)
+      reportUnsupported lowering, "a body of a function that returns `Never` and does return", body.span
       return
     }
     // The checker infers `Never` from a body that never *ends* (`while true` without a `break`), and a bare `return`
     // inside such a loop does leave the function - so the body contradicts its own signature. One clean finding rather
     // than IR the verifier rejects; closing it is a rule of the checker's inference, not of the back end
     if returnsAnywhere(builder) {
-      reportUnsupported(lowering, "a `return` in a function whose result was inferred as `Never`", body.span)
+      reportUnsupported lowering, "a `return` in a function whose result was inferred as `Never`", body.span
     }
     return
   }
-  const found = lowerBlockValue(lowering, builder, body)
+  const found = lowerBlockValue lowering, builder, body
   if lowering.isDiverged {
     return
   }
   match found {
-    Some(target) => finishBlock(lowering, builder, Terminator.Return(Some(borrowed(target))))
+    Some(target) => finishBlock lowering, builder, Terminator.Return(Some(borrowed(target)))
     // A body that produces nothing and does not diverge is what the checker reports, so nothing is said here
-    .None => reportUnsupported(lowering, "a body that produces no value", body.span)
+    None => reportUnsupported lowering, "a body that produces no value", body.span
   }
 }
 
@@ -141,18 +141,18 @@ fn returnsAnywhere(builder: FunctionBuilder): Bool {
  * checker's `LocalBinding` carries, so a name in the body finds its slot without the lowering keeping a scope chain.
  */
 fn declareParameterSlots(var lowering: Lowering, symbol: SymbolId, declaration: FunctionDeclaration) {
-  const identifier = signatureOf(lowering.checker, symbol)
-  const signature = lowering.checker.signature(identifier)
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
   var next = 0
   for parameter in declaration.parameters {
     if parameter.name.text == "self" && parameter.annotation.isNone() {
       if signature.takesSelf {
-        lowering.slots.set(parameter.name.span, Slot(next))
+        lowering.slots.set parameter.name.span, Slot(next)
         next = next + 1
       }
       continue
     }
-    lowering.slots.set(parameter.name.span, Slot(next))
+    lowering.slots.set parameter.name.span, Slot(next)
     next = next + 1
   }
 }
@@ -172,15 +172,15 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
   if !isEntryModule(lowering, module, statements) {
     return None
   }
-  const name = entryNameOf(lowering, module)
-  const voidType = voidTypeOf(lowering)
+  const name = entryNameOf lowering, module
+  const voidType = voidTypeOf lowering
   const signature = IrSignature([], voidType)
-  beginFunction(lowering, module)
-  var builder = newFunction(name, None, signature, "entry")
+  beginFunction lowering, module
+  var builder = newFunction name, None, signature, "entry"
   for statement in statements {
     if isEntryStatement(statement) {
-      const location = locationOf(lowering, statement.span)
-      setBlockLocation(builder, BlockId(0), Some(location))
+      const location = locationOf lowering, statement.span
+      setBlockLocation builder, BlockId(0), Some(location)
       break
     }
   }
@@ -188,18 +188,18 @@ public fn lowerEntryFunction(var lowering: Lowering, module: ModuleId): Function
     if lowering.isDiverged || !lowering.isSupported {
       break
     }
-    lowerTopLevel(lowering, builder, statement)
+    lowerTopLevel lowering, builder, statement
   }
   if !lowering.isDiverged {
-    finishBlock(lowering, builder, Terminator.Return(None))
+    finishBlock lowering, builder, Terminator.Return(None)
   }
   if !lowering.isSupported {
     lowering.stubbed = lowering.stubbed + 1
-    var stub = newFunction(name, None, signature, "not supported yet")
-    return Some(finishFunction(lowering.program, stub))
+    var stub = newFunction name, None, signature, "not supported yet"
+    return Some finishFunction(lowering.program, stub)
   }
   lowering.lowered = lowering.lowered + 1
-  Some(finishFunction(lowering.program, builder))
+  Some finishFunction(lowering.program, builder)
 }
 
 /**
@@ -248,9 +248,9 @@ fn lowerTopLevel(var lowering: Lowering, var builder: FunctionBuilder, statement
     // Declarations are reached through the worklist, never emitted here
     return
   }
-  lowerStatement(lowering, builder, statement)
+  lowerStatement lowering, builder, statement
   if const .Bind(binding) = statement.kind {
-    rememberEntryLocal(lowering, binding)
+    rememberEntryLocal lowering, binding
   }
 }
 
@@ -258,21 +258,21 @@ fn rememberEntryLocal(var lowering: Lowering, binding: Binding) {
   const module = lowering.module
   const symbol = match lowering.checker.resolvedName(module, binding.pattern.span) {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
   if const Some(slot) = lowering.slots.get(binding.pattern.span) {
-    lowering.entryLocals.set(symbol.value, slot)
+    lowering.entryLocals.set symbol.value, slot
   }
 }
 
 /** `t_main`, `t_acme_x2f_app_main`: the entry function is named after the file and has no member component. */
 public fn entryNameOf(var lowering: Lowering, module: ModuleId): String {
-  const inside = lowering.checker.program.graph.at(module)
+  const inside = lowering.checker.program.graph.at module
   const package = lowering.checker.program.workspace.packages[inside.package]
-  const component = moduleComponentOf(package.directory, inside.path)
-  mangledName("t", [package.name, component], "")
+  const component = moduleComponentOf package.directory, inside.path
+  mangledName "t", [package.name, component], ""
 }
 
 // --- Seeding the worklist -------------------------------------------------------------------------------------------
@@ -285,16 +285,16 @@ public fn entryNameOf(var lowering: Lowering, module: ModuleId): String {
 public fn seedModule(var lowering: Lowering, module: ModuleId) {
   const statements = lowering.checker.program.graph.at(module).file.statements
   // The top-level bindings of an entry file are locals of its entry function, so seeding them would count them twice
-  const isEntry = isEntryModule(lowering, module, statements)
+  const isEntry = isEntryModule lowering, module, statements
   for statement in statements {
     match statement.kind {
-      .Declare(declaration) => seedDeclaration(lowering, module, declaration)
+      .Declare(declaration) => seedDeclaration lowering, module, declaration
       // A plain top-level `const` of a module that runs nothing is static data; `public const` is a declaration
       .Bind(binding) => {
         if !isEntry {
           if const .Binding(_) = binding.pattern.kind {
             if const Some(symbol) = lowering.checker.resolvedName(module, binding.pattern.span) {
-              seedSymbol(lowering, symbol)
+              seedSymbol lowering, symbol
             }
           }
         }
@@ -308,30 +308,30 @@ fn seedDeclaration(var lowering: Lowering, module: ModuleId, declaration: Declar
   match declaration.kind {
     .Function(function) => {
       if const Some(symbol) = lowering.checker.resolvedName(module, function.name.span) {
-        seedSymbol(lowering, symbol)
+        seedSymbol lowering, symbol
       }
     }
     .Type(declared) => {
       if const Some(symbol) = lowering.checker.resolvedName(module, declared.name.span) {
-        seedMembersOf(lowering, symbol)
+        seedMembersOf lowering, symbol
       }
     }
-    .Extend(extension) => seedExtension(lowering, module, extension)
+    .Extend(extension) => seedExtension lowering, module, extension
     _ => {}
   }
 }
 
 fn seedMembersOf(var lowering: Lowering, symbol: SymbolId) {
-  const identifier = typeSignatureOf(lowering.checker, symbol)
-  const shape = lowering.checker.typeSignature(identifier)
+  const identifier = typeSignatureOf lowering.checker, symbol
+  const shape = lowering.checker.typeSignature identifier
   var names: List<String> = []
   for (name, _) in shape.members {
-    names.add(name)
+    names.add name
   }
   names.sort({ _ })
   for name in names {
     if const Some(member) = shape.members.get(name) {
-      seedSymbol(lowering, member)
+      seedSymbol lowering, member
     }
   }
 }
@@ -339,30 +339,30 @@ fn seedMembersOf(var lowering: Lowering, symbol: SymbolId) {
 fn seedExtension(var lowering: Lowering, module: ModuleId, extension: ExtendDeclaration) {
   const found = match extensionAt(lowering.checker, module, extension.target.span) {
     Some(inner) => inner
-    .None => {
+    None => {
       return
     }
   }
   var names: List<String> = []
   for (name, _) in found.members {
-    names.add(name)
+    names.add name
   }
   names.sort({ _ })
   for name in names {
     if const Some(member) = found.members.get(name) {
-      seedSymbol(lowering, member)
+      seedSymbol lowering, member
     }
   }
 }
 
 /** One declaration, if anything monomorphic can be built from it. A `const` becomes a static value instead. */
 fn seedSymbol(var lowering: Lowering, symbol: SymbolId) {
-  const declared = lowering.checker.symbolAt(symbol)
+  const declared = lowering.checker.symbolAt symbol
   match declared.kind {
     .Function => {
       // A `native fn` is a callee and not a function of the program: it becomes one where it is called, or not at all
       if hasBody(lowering, symbol) && instanceOfSymbol(lowering, symbol).isNone() {
-        countUnbuildable(lowering, symbol, "a declaration the back end cannot build an instance of")
+        countUnbuildable lowering, symbol, "a declaration the back end cannot build an instance of"
       }
     }
     .Constant => {
@@ -374,7 +374,7 @@ fn seedSymbol(var lowering: Lowering, symbol: SymbolId) {
           lowering.stubbed = lowering.stubbed + 1
           return
         }
-        countUnbuildable(lowering, symbol, "a `const` that is not compile-time evaluable")
+        countUnbuildable lowering, symbol, "a `const` that is not compile-time evaluable"
       }
     }
     _ => {}
@@ -382,18 +382,18 @@ fn seedSymbol(var lowering: Lowering, symbol: SymbolId) {
 }
 
 fn hasBody(var lowering: Lowering, symbol: SymbolId): Bool {
-  const identifier = signatureOf(lowering.checker, symbol)
+  const identifier = signatureOf lowering.checker, symbol
   lowering.checker.signature(identifier).hasBody
 }
 
 /** A declaration that never even became an instance still counts: the statistics are about declarations, not calls. */
 fn countUnbuildable(var lowering: Lowering, symbol: SymbolId, what: String) {
-  const declared = lowering.checker.symbolAt(symbol)
+  const declared = lowering.checker.symbolAt symbol
   if const Some(module) = declared.module {
     lowering.module = module
   }
   lowering.isSupported = true
-  reportUnsupported(lowering, what, declared.span)
+  reportUnsupported lowering, what, declared.span
   lowering.isSupported = true
   lowering.stubbed = lowering.stubbed + 1
 }

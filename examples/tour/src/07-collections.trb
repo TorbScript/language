@@ -4,7 +4,7 @@ use File from "std/fs"
 
 const numbers = [1, 2, 3]                // List<Int>
 var buffer = numbers                     // A copy. (The storage is shared until one of them is written to.)
-buffer.add(4)
+buffer.add 4
 buffer[0] = 10
 print numbers                            // [1, 2, 3]
 print buffer                             // [10, 2, 3, 4]
@@ -15,20 +15,20 @@ const more = numbers.added(4).added(5).removed(2)      // [1, 3, 4, 5]
 
 var ages = ["Ada": 36, "Grace": 45]      // Map<String, Int>
 ages["Linus"] = 28
-ages.remove("Ada")
-const younger = ages.updated("Grace", 44)              // The participle of `set` is `set`, so: `updated`
+ages.remove "Ada"
+const younger = ages.updated "Grace", 44              // The participle of `set` is `set`, so: `updated`
 
 // Set operations are nouns. They never change anything.
-const primes = Set.of(2, 3, 5, 7)
-const evenPrimes = primes.intersection(Set.of(2, 4, 6))
+const primes = Set.of 2, 3, 5, 7
+const evenPrimes = primes.intersection Set.of(2, 4, 6)
 
 var cache: Map<Int, String> = [:]
-const label = cache.getOrSet(42) { "computed once" }
+const label = cache.getOrSet 42 { "computed once" }
 
 // Creation
-const a = List.of(1, 2, 3)
+const a = List.of 1, 2, 3
 const b = List.of(...primes)             // Spread any Iterable
-const c = List.from(primes)
+const c = List.from primes
 const d = primes.toList()
 const nested = List.of([1, 2], [3])      // List<List<Int>>: variadics never unpack implicitly
 
@@ -59,10 +59,10 @@ fn fillWithSquares(var target: Collection<Int>, upTo: Int) {
   target.addAll((1..=upTo).map { _ * _ })
 }
 
-var squares = Set.of(1)
-fillWithSquares(squares, upTo: 3)        // A set...
+var squares = Set.of 1
+fillWithSquares squares, upTo: 3        // A set...
 var pile = Stack<Int>.of()
-fillWithSquares(pile, upTo: 3)           // ...or a stack: `add` is `push`
+fillWithSquares pile, upTo: 3           // ...or a stack: `add` is `push`
 
 // --- Slices -------------------------------------------------------------------------------------
 
@@ -80,7 +80,7 @@ fn fillWithZeros(var target: List<Int>) {
   }
 }
 
-fillWithZeros(samples[0..2])             // Works on this part of the caller's list
+fillWithZeros samples[0..2]             // Works on this part of the caller's list
 
 // --- Iteration ----------------------------------------------------------------------
 
@@ -113,7 +113,7 @@ type Countdown with Iterable<Int> {
   start: Int
 
   fn iterator(self): Iterator<Int> {
-    CountdownIterator(start)
+    CountdownIterator start
   }
 }
 
@@ -152,13 +152,13 @@ print seniorEngineers.collect(joining(", ", prefix: "Seniors: "))
 
 const best = employees.sorted { -_.salary }.take(2).map { _.name }.toList()
 const anyoneYoung = employees.any { _.age < 30 }         // Stops at the first match
-const total = employees.fold(0) { sum, employee => sum + employee.salary }
+const total = employees.fold 0 { sum, employee => sum + employee.salary }
 
 // --- Collectors: reusable descriptions of "what to do with the values" ----------------------
 
-const headcount = employees.collect(counting())
+const headcount = employees.collect counting()
 const payroll = employees.collect(summing { _.salary })
-const averageAge = employees.collect(averaging { Float.from(_.age) })          // Float?
+const averageAge = employees.collect(averaging { Float.from _.age })          // Float?
 const oldest = employees.collect(maxBy { _.age })                          // Employee?
 const (veterans, others) = employees.collect(partitioningBy { _.age >= 40 })
 
@@ -171,14 +171,14 @@ const teams = employees.collect(groupingBy { employee: Employee => employee.depa
 print salaryByDepartment                 // ["Engineering": 250, "Operations": 90, "Research": 140]
 
 // Collectors are values: name them, pass them around, combine them
-const salaryStatistics = groupingBy { employee: Employee => employee.department }.then(averaging { Float.from(_.salary) })
+const salaryStatistics = groupingBy { employee: Employee => employee.department }.then(averaging { Float.from _.salary })
 print employees.collect(salaryStatistics)
 print(employees.filter { _.age < 50 }.collect(salaryStatistics))
 
 // Your own collector: a fold with a final step...
 fn median<Item>(value: (value: Item) => Int): Collector<Item, Int?> {
   collector([], finish: { values: List<Int> => values.sorted { _ }.skip(values.length() / 2).first() }) {
-    values, item => values.added(value(item))
+    values, item => values.added value(item)
   }
 }
 
@@ -194,13 +194,13 @@ const firstBigSquare = (1..)             // An infinite source
   .find { _ > 1000 }                     // Some(1764) - computed 42 squares, stored none
 
 const errors = File.lines("server.log")? // Reads line by line, the file is never in memory as a whole
-  .filter { _.contains("ERROR") }
+  .filter { _.contains "ERROR" }
   .take(5)                               // Stops reading after the fifth match
   .toList()
 
 // --- Stack and queue ------------------------------------------------------------------------
 
-var pending = Queue.of(1)
+var pending = Queue.of 1
 while const Some(number) = pending.dequeue() {
   if number < 100 {
     pending.enqueue(number * 3)
@@ -208,7 +208,7 @@ while const Some(number) = pending.dequeue() {
 }
 
 var brackets = Stack<Char>.of()
-brackets.push('(')
+brackets.push '('
 print brackets.pop()                     // Some('(')
 
 // The participles keep the old version: history, undo, backtracking

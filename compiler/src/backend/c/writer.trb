@@ -79,7 +79,7 @@ fn precedenceOf(expression: CExpression): Int {
     .Dereference(_) => 2
     .Unary(_, _) => 2
     .Cast(_, _) => 2
-    .Binary(_, operator, _) => precedenceOfOperator(operator)
+    .Binary(_, operator, _) => precedenceOfOperator operator
     .Conditional(_, _, _) => 13
   }
 }
@@ -121,7 +121,7 @@ fn precedenceOfOperator(operator: String): Int {
 
 /** The C of one expression, as it stands on its own. */
 public fn renderExpression(expression: CExpression): String {
-  rendered(expression, anyPrecedence)
+  rendered expression, anyPrecedence
 }
 
 /**
@@ -129,7 +129,7 @@ public fn renderExpression(expression: CExpression): String {
  * a parenthesis**: a node that binds looser than its place allows gets one, and nothing else ever does.
  */
 fn rendered(expression: CExpression, limit: Int): String {
-  const text = spelled(expression)
+  const text = spelled expression
   if precedenceOf(expression) > limit {
     return "({text})"
   }
@@ -149,7 +149,7 @@ fn spelled(expression: CExpression): String {
     .Cast(annotation, value) => "({annotation}){rendered(value, 2)}"
     .Call(callee, arguments) => "{rendered(callee, 1)}({renderedList(arguments)})"
     .Binary(left, operator, right) => {
-      const own = precedenceOfOperator(operator)
+      const own = precedenceOfOperator operator
       // Every binary operator of C associates to the left, so the right side of two of equal rank needs a bracket
       "{rendered(left, own)} {operator} {rendered(right, own - 1)}"
     }
@@ -167,7 +167,7 @@ fn spelled(expression: CExpression): String {
     .Designated(parts) => {
       var written: List<String> = []
       for part in parts {
-        written.add(".{part.name} = {rendered(part.value, anyPrecedence)}")
+        written.add ".{part.name} = {rendered(part.value, anyPrecedence)}"
       }
       "\{ {written.joined(separator: ", ")} \}"
     }
@@ -178,9 +178,9 @@ fn spelled(expression: CExpression): String {
 fn renderedList(expressions: List<CExpression>): String {
   var written: List<String> = []
   for expression in expressions {
-    written.add(rendered(expression, anyPrecedence))
+    written.add rendered(expression, anyPrecedence)
   }
-  written.joined(separator: ", ")
+  written.joined separator: ", "
 }
 
 // --- Statements -----------------------------------------------------------------------------------------------------
@@ -229,10 +229,10 @@ public type CStatement {
 fn textOf(statement: CStatement): String {
   match statement {
     .Declaration(annotation, name, value, count) => {
-      const declared = declarationOf(annotation, declaratorOf(name, count))
+      const declared = declarationOf annotation, declaratorOf(name, count)
       match value {
         Some(found) => "{declared} = {renderExpression(found)};"
-        .None => "{declared};"
+        None => "{declared};"
       }
     }
     // The target of an assignment is a unary expression in C, which is what keeps `*p = v` from needing a bracket
@@ -242,7 +242,7 @@ fn textOf(statement: CStatement): String {
     .Return(value) => {
       match value {
         Some(found) => "return {renderExpression(found)};"
-        .None => "return;"
+        None => "return;"
       }
     }
     .Break => "break;"
@@ -258,13 +258,13 @@ fn textOf(statement: CStatement): String {
       if then.length() != 1 {
         return ""
       }
-      const inner = textOf(then[0])
+      const inner = textOf then[0]
       if inner.isEmpty() {
         return ""
       }
       "if ({renderExpression(condition)}) \{ {inner} \}"
     }
-    .Joined(statements) => joinedTextOf(statements)
+    .Joined(statements) => joinedTextOf statements
     .Switch(_, _, _) => ""
     .Block(_) => ""
   }
@@ -277,13 +277,13 @@ fn joinedTextOf(statements: List<CStatement>): String {
   }
   var written: List<String> = []
   for statement in statements {
-    const text = textOf(statement)
+    const text = textOf statement
     if text.isEmpty() {
       return ""
     }
-    written.add(text)
+    written.add text
   }
-  written.joined(separator: " ")
+  written.joined separator: " "
 }
 
 /** A label and a `#line` are read by a C compiler and a debugger, and both belong at the left margin. */
@@ -356,38 +356,38 @@ public type CWriter {
 /** Every line of one declaration. The only entry point: a declaration is written whole or not at all. */
 public fn declarationLines(declaration: CDeclaration): List<String> {
   var writer = CWriter()
-  writeDeclaration(writer, declaration)
+  writeDeclaration writer, declaration
   writer.lines
 }
 
 fn writeDeclaration(var writer: CWriter, declaration: CDeclaration) {
   match declaration {
-    .Typedef(target, name) => writeLine(writer, "typedef {target} {name};")
-    .Prototype(head) => writeLine(writer, "{head};")
-    .Comment(text) => writeLine(writer, "/* {text} */")
-    .Fixed(text) => writeFixed(writer, text)
+    .Typedef(target, name) => writeLine writer, "typedef {target} {name};"
+    .Prototype(head) => writeLine writer, "{head};"
+    .Comment(text) => writeLine writer, "/* {text} */"
+    .Fixed(text) => writeFixed writer, text
     .Struct(name, members) => {
-      writeLine(writer, "struct {name} \{")
-      writeMembers(writer, members)
-      writeLine(writer, "\};")
+      writeLine writer, "struct {name} \{"
+      writeMembers writer, members
+      writeLine writer, "\};"
     }
     .Definition(comment, head, body) => {
       if !comment.isEmpty() {
-        writeLine(writer, "/* {comment} */")
+        writeLine writer, "/* {comment} */"
       }
-      writeLine(writer, "{head} \{")
-      writeStatements(writer, body)
-      writeLine(writer, "\}")
+      writeLine writer, "{head} \{"
+      writeStatements writer, body
+      writeLine writer, "\}"
     }
     .StaticData(annotation, name, value, isWrapped) => {
-      const initializer = renderExpression(value)
+      const initializer = renderExpression value
       if isWrapped {
-        writer.lines.add(annotation)
+        writer.lines.add annotation
         const continued = "  {name} = {initializer};"
-        writer.lines.add(continued)
+        writer.lines.add continued
         return
       }
-      writeLine(writer, "{declarationOf(annotation, name)} = {initializer};")
+      writeLine writer, "{declarationOf(annotation, name)} = {initializer};"
     }
   }
 }
@@ -400,30 +400,30 @@ fn writeFixed(var writer: CWriter, text: String) {
     if index == last && lines[index].isEmpty() {
       continue
     }
-    writer.lines.add(lines[index])
+    writer.lines.add lines[index]
   }
 }
 
 fn writeMembers(var writer: CWriter, members: List<CMember>) {
   writer.depth = writer.depth + 1
   for member in members {
-    writeMember(writer, member)
+    writeMember writer, member
   }
   writer.depth = writer.depth - 1
 }
 
 fn writeMember(var writer: CWriter, member: CMember) {
   match member {
-    .Field(annotation, name) => writeLine(writer, "{declarationOf(annotation, name)};")
+    .Field(annotation, name) => writeLine writer, "{declarationOf(annotation, name)};"
     .Group(name, members) => {
-      writeLine(writer, "struct \{")
-      writeMembers(writer, members)
-      writeLine(writer, "\} {name};")
+      writeLine writer, "struct \{"
+      writeMembers writer, members
+      writeLine writer, "\} {name};"
     }
     .Union(name, members) => {
-      writeLine(writer, "union \{")
-      writeMembers(writer, members)
-      writeLine(writer, "\} {name};")
+      writeLine writer, "union \{"
+      writeMembers writer, members
+      writeLine writer, "\} {name};"
     }
   }
 }
@@ -432,32 +432,32 @@ fn writeMember(var writer: CWriter, member: CMember) {
 fn writeStatements(var writer: CWriter, body: List<CStatement>) {
   writer.depth = writer.depth + 1
   for statement in body {
-    writeStatement(writer, statement)
+    writeStatement writer, statement
   }
   writer.depth = writer.depth - 1
 }
 
 fn writeStatement(var writer: CWriter, statement: CStatement) {
-  const text = textOf(statement)
+  const text = textOf statement
   if !text.isEmpty() {
     if isAtMargin(statement) {
-      writer.lines.add(text)
+      writer.lines.add text
       return
     }
-    writeLine(writer, text)
+    writeLine writer, text
     return
   }
   match statement {
-    .Switch(scrutinee, cases, otherwise) => writeSwitch(writer, scrutinee, cases, otherwise)
+    .Switch(scrutinee, cases, otherwise) => writeSwitch writer, scrutinee, cases, otherwise
     .Block(body) => {
-      writeLine(writer, "\{")
-      writeStatements(writer, body)
-      writeLine(writer, "\}")
+      writeLine writer, "\{"
+      writeStatements writer, body
+      writeLine writer, "\}"
     }
     .If(condition, then) => {
-      writeLine(writer, "if ({renderExpression(condition)}) \{")
-      writeStatements(writer, then)
-      writeLine(writer, "\}")
+      writeLine writer, "if ({renderExpression(condition)}) \{"
+      writeStatements writer, then
+      writeLine writer, "\}"
     }
     _ => {}
   }
@@ -469,34 +469,34 @@ fn writeSwitch(
   cases: List<CSwitchCase>,
   otherwise: List<CStatement>,
 ) {
-  writeLine(writer, "switch ({renderExpression(scrutinee)}) \{")
+  writeLine writer, "switch ({renderExpression(scrutinee)}) \{"
   writer.depth = writer.depth + 1
   for found in cases {
-    writeCase(writer, "case {found.value}:", found.body)
+    writeCase writer, "case {found.value}:", found.body
   }
   if !otherwise.isEmpty() {
-    writeCase(writer, "default:", otherwise)
+    writeCase writer, "default:", otherwise
   }
   writer.depth = writer.depth - 1
-  writeLine(writer, "\}")
+  writeLine writer, "\}"
 }
 
 /** An arm whose body is one line shares the label's line, which is what keeps a jump table readable. */
 fn writeCase(var writer: CWriter, label: String, body: List<CStatement>) {
   if body.length() == 1 {
-    const text = textOf(body[0])
+    const text = textOf body[0]
     if !text.isEmpty() {
-      writeLine(writer, "{label} {text}")
+      writeLine writer, "{label} {text}"
       return
     }
   }
-  writeLine(writer, label)
-  writeStatements(writer, body)
+  writeLine writer, label
+  writeStatements writer, body
 }
 
 fn writeLine(var writer: CWriter, text: String) {
   const line = "{indentationOf(writer.depth)}{text}"
-  writer.lines.add(line)
+  writer.lines.add line
 }
 
 fn indentationOf(depth: Int): String {

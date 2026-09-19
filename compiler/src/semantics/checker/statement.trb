@@ -46,8 +46,8 @@ public fn checkBlock(var checker: Checker, block: Block, expected: Expectation):
   checker.openScope()
   // A declaration is visible in the whole block it is written in, so all of them are known before any is checked
   const inside = checker.module
-  declareSites(checker, inside, block.statements)
-  hoistDeclarations(checker, block.statements)
+  declareSites checker, inside, block.statements
+  hoistDeclarations checker, block.statements
   var annotation = checker.voidType
   var diverges = false
   var endsWithValue = false
@@ -56,10 +56,10 @@ public fn checkBlock(var checker: Checker, block: Block, expected: Expectation):
     const statement = block.statements[index]
     if index == last {
       if const .Evaluate(expression) = statement.kind {
-        openInference(checker)
-        annotation = checkExpression(checker, expression, expected)
-        closeInference(checker)
-        annotation = resolveType(checker, annotation)
+        openInference checker
+        annotation = checkExpression checker, expression, expected
+        closeInference checker
+        annotation = resolveType checker, annotation
         diverges = diverges || annotation == checker.neverType
         endsWithValue = true
         continue
@@ -70,9 +70,9 @@ public fn checkBlock(var checker: Checker, block: Block, expected: Expectation):
   checker.closeScope()
   // A block that ends in `return` or `panic` produces no value at all, and `Never` fits wherever one is wanted
   if diverges && annotation == checker.voidType {
-    return BlockResult(checker.neverType, true, endsWithValue)
+    return BlockResult checker.neverType, true, endsWithValue
   }
-  BlockResult(annotation, diverges, endsWithValue)
+  BlockResult annotation, diverges, endsWithValue
 }
 
 /** A `fn`, `type`, `trait` or alias of a block is a name of that block and of nothing else. */
@@ -81,7 +81,7 @@ fn hoistDeclarations(var checker: Checker, statements: List<Statement>) {
     if const .Declare(declaration) = statement.kind {
       if const Some(name) = declaredName(declaration) {
         if const Some(symbol) = checker.resolvedName(checker.module, name.span) {
-          checker.declareLocalSymbol(name.text, symbol)
+          checker.declareLocalSymbol name.text, symbol
         }
       }
     }
@@ -90,10 +90,10 @@ fn hoistDeclarations(var checker: Checker, statements: List<Statement>) {
 
 fn declaredName(declaration: Declaration): Name? {
   match declaration.kind {
-    .Function(function) => Some(function.name)
-    .Type(typeDeclaration) => Some(typeDeclaration.name)
-    .Alias(alias) => Some(alias.name)
-    .Trait(traitDeclaration) => Some(traitDeclaration.name)
+    .Function(function) => Some function.name
+    .Type(typeDeclaration) => Some typeDeclaration.name
+    .Alias(alias) => Some alias.name
+    .Trait(traitDeclaration) => Some traitDeclaration.name
     _ => None
   }
 }
@@ -105,36 +105,36 @@ fn declaredName(declaration: Declaration): Name? {
  * closing it reports the ones that are left and writes the solutions into the tables of this statement (design 2.2).
  */
 public fn checkStatement(var checker: Checker, statement: Statement): Bool {
-  openInference(checker)
-  const diverges = checkStatementIn(checker, statement)
-  closeInference(checker)
+  openInference checker
+  const diverges = checkStatementIn checker, statement
+  closeInference checker
   diverges
 }
 
 fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
   match statement.kind {
     .Declare(declaration) => {
-      const scope = scopeHere(checker)
-      checkDeclaration(checker, scope, declaration)
+      const scope = scopeHere checker
+      checkDeclaration checker, scope, declaration
       false
     }
     .Bind(binding) => {
-      checkBinding(checker, binding)
+      checkBinding checker, binding
       false
     }
     // The target has to be a valid place, and the change is noted before the value is read so that the read the target
     // itself produced is the one that becomes the change (milestone 4.6)
     .Assign(target, value) => {
-      const annotation = inferExpression(checker, target)
-      const place = checkAssignment(checker, target)
-      const inner = expectationOf(checker, annotation)
-      const _ = checkExpression(checker, value, inner)
-      requireSharedSource(checker, value, annotation)
-      noteAssignment(checker, place)
+      const annotation = inferExpression checker, target
+      const place = checkAssignment checker, target
+      const inner = expectationOf checker, annotation
+      const _ = checkExpression checker, value, inner
+      requireSharedSource checker, value, annotation
+      noteAssignment checker, place
       false
     }
     .For(pattern, iterable, body) => {
-      checkLoop(checker, pattern, iterable, body)
+      checkLoop checker, pattern, iterable, body
       false
     }
     .While(condition, body) => {
@@ -143,29 +143,29 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
       // The condition runs again after every round, so its reads belong to the loop: `while isChanged` is what keeps
       // the `isChanged = false` at the top of the body alive
       const uses = checker.bindingUses.length()
-      checkCondition(checker, condition, true)
+      checkCondition checker, condition, true
       checker.loopDepth = checker.loopDepth + 1
-      const _ = checkBlock(checker, body, Expectation.Statement)
+      const _ = checkBlock checker, body, Expectation.Statement
       checker.loopDepth = checker.loopDepth - 1
       // A change the next round reads again is alive, whatever stands after the loop (design 5.3)
-      settleLoop(checker, uses)
+      settleLoop checker, uses
       checker.closeScope()
-      neverEnds(condition, body)
+      neverEnds condition, body
     }
     .Return(value) => {
-      checkReturn(checker, value, statement.span)
+      checkReturn checker, value, statement.span
       true
     }
     .Break => {
-      requireLoop(checker, "break", statement.span)
+      requireLoop checker, "break", statement.span
       true
     }
     .Continue => {
-      requireLoop(checker, "continue", statement.span)
+      requireLoop checker, "continue", statement.span
       true
     }
     .Evaluate(expression) => {
-      const annotation = checkExpression(checker, expression, Expectation.Statement)
+      const annotation = checkExpression checker, expression, Expectation.Statement
       annotation == checker.neverType
     }
   }
@@ -173,37 +173,37 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
 
 /** `const x: Int = 1`, `var (a, b) = pair`: the annotation decides, and without one the initializer does. */
 fn checkBinding(var checker: Checker, binding: Binding) {
-  const scope = scopeHere(checker)
+  const scope = scopeHere checker
   var annotation: TypeId? = None
   if const Some(reference) = binding.annotation {
-    annotation = Some(typeFromReference(checker, reference, scope.forType()))
+    annotation = Some typeFromReference(checker, reference, scope.forType())
   }
   const found = match annotation {
     Some(wanted) => {
-      const inner = expectationOf(checker, wanted)
+      const inner = expectationOf checker, wanted
       // `const condition: Expression<Bool> = age > 1` quotes its initializer exactly as a parameter does (gap 37), and
       // the message about a capture that is not `Encode` names the binding as the reason
       if isQuotation(checker, wanted) {
-        checker.quotingOwner = nameOfPattern(binding.pattern)
+        checker.quotingOwner = nameOfPattern binding.pattern
         checker.quotingParameter = ""
       }
-      checkExpression(checker, binding.value, inner)
+      checkExpression checker, binding.value, inner
     }
-    .None => inferExpression(checker, binding.value)
+    None => inferExpression checker, binding.value
   }
   var bound = annotation ?? found
   // A `var` binding may not be taken from a `const` path to a shared object: there is no copy that would make it a
   // different one, so it would hand out exactly what the `const` withheld (gap 20)
   if binding.isVar {
-    requireSharedSource(checker, binding.value, bound)
+    requireSharedSource checker, binding.value, bound
   }
   // Nothing is known about a value the checker could not type, so neither is anything about the name it is bound to
   if checker.absorbs(bound) {
     bound = checker.deferredType
   }
-  checkPattern(checker, binding.pattern, bound, binding.isVar)
+  checkPattern checker, binding.pattern, bound, binding.isVar
   // `const Point(x, y) = p` has no second way to go, so the pattern has to match every value
-  requireIrrefutable(checker, binding.pattern, bound, "The pattern of a binding", "value")
+  requireIrrefutable checker, binding.pattern, bound, "The pattern of a binding", "value"
 }
 
 /** The name a binding is known under, where its pattern is a plain name: what a message about it calls it. */
@@ -220,16 +220,16 @@ fn nameOfPattern(pattern: Pattern): String {
  * (`extend Range<Int> with Iterable<Int>`) or through a supertrait, which is one and the same question.
  */
 fn checkLoop(var checker: Checker, pattern: Pattern, iterable: Expression, body: Block) {
-  const subject = inferExpression(checker, iterable)
-  const element = iterationItemOf(checker, subject, iterable.span)
+  const subject = inferExpression checker, iterable
+  const element = iterationItemOf checker, subject, iterable.span
   checker.openScope()
-  checkPattern(checker, pattern, element, false)
-  requireIrrefutable(checker, pattern, element, "The pattern of a `for`", "item")
+  checkPattern checker, pattern, element, false
+  requireIrrefutable checker, pattern, element, "The pattern of a `for`", "item"
   const uses = checker.bindingUses.length()
   checker.loopDepth = checker.loopDepth + 1
-  const _ = checkBlock(checker, body, Expectation.Statement)
+  const _ = checkBlock checker, body, Expectation.Statement
   checker.loopDepth = checker.loopDepth - 1
-  settleLoop(checker, uses)
+  settleLoop checker, uses
   checker.closeScope()
 }
 
@@ -239,14 +239,14 @@ fn iterationItemOf(var checker: Checker, subject: TypeId, at: Span): TypeId {
   }
   const iterable = match checker.wellKnown.iterable {
     Some(found) => found
-    .None => {
+    None => {
       return checker.deferredType
     }
   }
   match traitArgumentsOf(checker, subject, iterable) {
     Some(arguments) => arguments.get(0) ?? checker.deferredType
-    .None => {
-      reportNotIterable(checker, subject, at)
+    None => {
+      reportNotIterable checker, subject, at
       checker.deferredType
     }
   }
@@ -257,7 +257,7 @@ fn reportNotIterable(var checker: Checker, subject: TypeId, at: Span) {
   if !isFullyKnown(checker, subject) {
     return
   }
-  const shown = checker.describe(subject)
+  const shown = checker.describe subject
   checker.reportHere(
     Diagnostic.error("`{shown}` is not `Iterable`, so `for` cannot walk it", at)
       .withNote("`for x in xs` needs an `Iterable<Item>`: a collection, a range, a pipeline, or a type that implements it")
@@ -268,33 +268,33 @@ fn reportNotIterable(var checker: Checker, subject: TypeId, at: Span) {
 fn checkReturn(var checker: Checker, value: Expression?, at: Span) {
   const expression = match value {
     Some(found) => found
-    .None => {
+    None => {
       // A bare `return` says the function produces nothing, so an inferred result hears `Void` from it:
       // `while true { ... return ... }` would otherwise infer `Never` from the loop that never ends
       if checker.isResultInferred {
         const nothing = checker.voidType
-        checker.returnTypes.add(nothing)
+        checker.returnTypes.add nothing
         return
       }
       if checker.resultType != checker.voidType {
         if !checker.absorbs(checker.resultType) {
-          const wanted = checker.describe(checker.resultType)
-          checker.reportHere(Diagnostic.error("This function has to return a `{wanted}`", at))
+          const wanted = checker.describe checker.resultType
+          checker.reportHere Diagnostic.error("This function has to return a `{wanted}`", at)
         }
       }
       return
     }
   }
   if checker.isResultInferred {
-    const found = inferExpression(checker, expression)
-    checker.returnTypes.add(found)
+    const found = inferExpression checker, expression
+    checker.returnTypes.add found
     // A `public` function and a trait method do not infer: `return e` has to say what `e` is (milestone 4.9)
-    requireDeclaredResult(checker, found, expression.span)
+    requireDeclaredResult checker, found, expression.span
     return
   }
   const wanted = checker.resultType
-  const inner = expectationOf(checker, wanted)
-  const _ = checkExpression(checker, expression, inner)
+  const inner = expectationOf checker, wanted
+  const _ = checkExpression checker, expression, inner
 }
 
 /**
@@ -331,14 +331,14 @@ fn hasBreak(statements: List<Statement>): Bool {
 /** `break` is a statement, so only what holds blocks can hold one: an `if`, a `match` and a block. */
 fn hasBreakIn(expression: Expression): Bool {
   match expression.kind {
-    .Block(block) => hasBreak(block.statements)
+    .Block(block) => hasBreak block.statements
     .If(_, then, otherwise) => {
       if hasBreak(then.statements) {
         return true
       }
       match otherwise {
-        Some(alternative) => hasBreakIn(alternative)
-        .None => false
+        Some(alternative) => hasBreakIn alternative
+        None => false
       }
     }
     .Match(_, arms) => {
@@ -386,18 +386,18 @@ public fn checkDiscarded(var checker: Checker, expression: Expression, found: Ty
   if hasEffect(checker, expression) {
     return
   }
-  const name = calledName(checker, expression)
+  const name = calledName checker, expression
   var problem = if name.isEmpty() {
-    Diagnostic.error("This value is not used", expression.span)
+    Diagnostic.error "This value is not used", expression.span
   } else {
-    Diagnostic.error("The result of `{name}` is not used", expression.span)
+    Diagnostic.error "The result of `{name}` is not used", expression.span
   }
   if const Some(verb) = verbOf(name) {
-    problem = problem.withNote("Did you mean `{verb}`? Discard it on purpose with `const _ = ...`")
+    problem = problem.withNote "Did you mean `{verb}`? Discard it on purpose with `const _ = ...`"
   } else {
-    problem = problem.withNote("Discard it on purpose with `const _ = ...`")
+    problem = problem.withNote "Discard it on purpose with `const _ = ...`"
   }
-  checker.reportHere(problem)
+  checker.reportHere problem
 }
 
 /** Whether the call changes something: a `var` receiver or a `var` parameter is what makes a result droppable. */
@@ -408,14 +408,14 @@ fn hasEffect(var checker: Checker, expression: Expression): Bool {
   }
   const resolution = match checker.resolutionHere(expression.span) {
     Some(found) => found
-    .None => {
+    None => {
       return true
     }
   }
   match resolution {
     .Callable(symbol, _, _) => {
-      const identifier = signatureOf(checker, symbol)
-      const signature = checker.signature(identifier)
+      const identifier = signatureOf checker, symbol
+      const signature = checker.signature identifier
       if signature.isVarSelf {
         return true
       }
@@ -460,10 +460,10 @@ fn calledName(checker: Checker, expression: Expression): String {
 /** `added` was probably meant as `add`: the participles of the language are the verb plus `ed` or `d`. */
 fn verbOf(name: String): String? {
   if name.endsWith("ed") && name.byteLength() > 3 {
-    return Some(name[0..(name.byteLength() - 2)])
+    return Some name[0..(name.byteLength() - 2)]
   }
   if name.endsWith("d") && name.byteLength() > 2 {
-    return Some(name[0..(name.byteLength() - 1)])
+    return Some name[0..(name.byteLength() - 1)]
   }
   None
 }
@@ -471,7 +471,7 @@ fn verbOf(name: String): String? {
 // --- Bodies ---------------------------------------------------------------------------------------------------------
 
 public fn scopeHere(checker: Checker): TypeScope {
-  TypeScope(checker.module, selfType: checker.selfType)
+  TypeScope checker.module, selfType: checker.selfType
 }
 
 /**
@@ -482,25 +482,25 @@ public fn checkBodyOf(var checker: Checker, symbol: SymbolId) {
   if checker.checkedBodies.containsKey(symbol) {
     return
   }
-  const identifier = signatureOf(checker, symbol)
+  const identifier = signatureOf checker, symbol
   // Building the signature may have checked the body already: that is how an inferred result is found
   if checker.checkedBodies.containsKey(symbol) {
     return
   }
   const site = match checker.siteOf(symbol) {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
   const function = match functionOfSite(site) {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
-  const signature = checker.signature(identifier)
-  checker.checkedBodies.set(symbol, true)
+  const signature = checker.signature identifier
+  checker.checkedBodies.set symbol, true
   const _ = checkFunctionBody(
     checker,
     site.module,
@@ -534,31 +534,31 @@ public fn checkFunctionBody(
 ): TypeId {
   const body = match function.body {
     Some(found) => found
-    .None => {
+    None => {
       return checker.voidType
     }
   }
   // `fn fetch(): Task<User>`: its body produces the `User`, exactly as the body of a `Result` function produces the
   // value and `?` returns the error (concept, Concurrency). Where `await()` is allowed is milestone 7's rule
   const produced = taskValueOf(checker, result) ?? result
-  const saved = checker.enterBody(module, produced, isInferred, owner, rule)
+  const saved = checker.enterBody module, produced, isInferred, owner, rule
   checker.openScope()
-  declareGenerics(checker, generics)
-  declareBindingsFor(checker, function.parameters, parameters, takesSelf, isVarSelf, owner)
-  const inner = bodyExpectation(checker, produced, isInferred)
-  const outcome = checkBlock(checker, body, inner)
+  declareGenerics checker, generics
+  declareBindingsFor checker, function.parameters, parameters, takesSelf, isVarSelf, owner
+  const inner = bodyExpectation checker, produced, isInferred
+  const outcome = checkBlock checker, body, inner
   var found = outcome.annotation
   if isInferred {
-    found = inferredResult(checker, outcome)
+    found = inferredResult checker, outcome
     // A `public` function and a trait method do not infer: the value the body ends in has to be declared (4.9)
-    requireDeclaredEnding(checker, body, outcome)
+    requireDeclaredEnding checker, body, outcome
   } else {
-    requireResult(checker, outcome, produced, body.span)
+    requireResult checker, outcome, produced, body.span
   }
   // Every change of this body that no read follows (design 5.3): the uses are per body and gone with it
-  settleChanges(checker)
+  settleChanges checker
   checker.closeScope()
-  checker.leaveBody(saved)
+  checker.leaveBody saved
   found
 }
 
@@ -572,13 +572,13 @@ fn requireDeclaredEnding(var checker: Checker, body: Block, outcome: BlockResult
   }
   const last = match body.statements.last() {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
   if const .Evaluate(expression) = last.kind {
     const found = outcome.annotation
-    requireDeclaredResult(checker, found, expression.span)
+    requireDeclaredResult checker, found, expression.span
   }
 }
 
@@ -587,7 +587,7 @@ public fn taskValueOf(checker: Checker, result: TypeId): TypeId? {
   const task = checker.wellKnown.task?
   if const .Nominal(symbol, arguments) = checker.types.form(result) {
     if symbol == task && arguments.length() == 1 {
-      return Some(arguments[0])
+      return Some arguments[0]
     }
   }
   None
@@ -602,21 +602,21 @@ public fn checkInitializer(
   annotation: TypeId?,
 ): TypeId {
   const voidType = checker.voidType
-  const saved = checker.enterBody(module, voidType, true, owner)
+  const saved = checker.enterBody module, voidType, true, owner
   checker.openScope()
-  openInference(checker)
+  openInference checker
   var found = match annotation {
     Some(wanted) => {
-      const inner = expectationOf(checker, wanted)
-      checkExpression(checker, value, inner)
+      const inner = expectationOf checker, wanted
+      checkExpression checker, value, inner
     }
-    .None => inferExpression(checker, value)
+    None => inferExpression checker, value
   }
-  closeInference(checker)
-  found = resolveType(checker, found)
-  settleChanges(checker)
+  closeInference checker
+  found = resolveType checker, found
+  settleChanges checker
   checker.closeScope()
-  checker.leaveBody(saved)
+  checker.leaveBody saved
   annotation ?? found
 }
 
@@ -627,7 +627,7 @@ public fn bodyExpectation(checker: Checker, result: TypeId, isInferred: Bool): E
   if result == checker.voidType {
     return Expectation.Statement
   }
-  expectationOf(checker, result)
+  expectationOf checker, result
 }
 
 /**
@@ -648,10 +648,10 @@ public fn inferredResult(var checker: Checker, outcome: BlockResult): TypeId {
   }
   for candidate in returns {
     if candidate != checker.neverType && !checker.isBroken(candidate) {
-      const _ = unify(checker, found, candidate)
+      const _ = unify checker, found, candidate
     }
   }
-  resolveType(checker, found)
+  resolveType checker, found
 }
 
 /**
@@ -665,16 +665,16 @@ fn requireResult(var checker: Checker, outcome: BlockResult, result: TypeId, at:
   if outcome.endsWithValue || outcome.annotation != checker.voidType {
     return
   }
-  const wanted = checker.describe(result)
-  checker.reportHere(Diagnostic.error("This function has to return a `{wanted}`", Span(at.end - 1, at.end)))
+  const wanted = checker.describe result
+  checker.reportHere Diagnostic.error("This function has to return a `{wanted}`", Span(at.end - 1, at.end))
 }
 
 /** The generic parameters of a declaration are names of its body, as a namespace for the members of their bounds. */
 fn declareGenerics(var checker: Checker, generics: List<ParameterId>) {
   for parameter in generics {
-    const declaration = checker.types.parameter(parameter)
+    const declaration = checker.types.parameter parameter
     if const Some(symbol) = declaration.symbol {
-      checker.declareLocalSymbol(declaration.name, symbol)
+      checker.declareLocalSymbol declaration.name, symbol
     }
   }
 }
@@ -706,18 +706,18 @@ fn declareBindingsFor(
             isParameter: true,
           )
         )
-        checker.setReceiver(binding)
+        checker.setReceiver binding
       }
       continue
     }
     const form = match forms.get(index) {
       Some(found) => found
-      .None => {
+      None => {
         continue
       }
     }
     index = index + 1
-    const annotation = bindingTypeOf(checker, form)
+    const annotation = bindingTypeOf checker, form
     const isLazy = match form.mode {
       .Lazy => true
       _ => false
@@ -740,10 +740,10 @@ fn bindingTypeOf(var checker: Checker, form: ParameterForm): TypeId {
   if const .Variadic = form.mode {
     match checker.wellKnown.list {
       Some(list) => {
-        const bound = checker.nominal(list, [form.annotation])
-        return checker.types.intern(TypeForm.Traits([bound]))
+        const bound = checker.nominal list, [form.annotation]
+        return checker.types.intern TypeForm.Traits([bound])
       }
-      .None => {
+      None => {
         return checker.deferredType
       }
     }

@@ -6,7 +6,7 @@ type Quoted {
   captures: List<Encode>
 
   fn of<Row>(expression: Expression<Row>): Quoted {
-    Quoted(expression.tree, expression.captures())
+    Quoted expression.tree, expression.captures()
   }
 
   /** `{ _.age >= 18 }` arrives as a `Lambda` node, the translator wants its body. */
@@ -18,7 +18,7 @@ type Quoted {
   }
 
   fn toSql(self): Result<Fragment, QueryError> {
-    translate(body(), captures)
+    translate body(), captures
   }
 }
 
@@ -33,19 +33,19 @@ public type Query<Row> {
   private limit: Int? = None
 
   fn filter(self, predicate: Expression<(row: Row) => Bool>): Query<Row> {
-    copy(conditions: conditions.added(Quoted.of(predicate)))
+    copy conditions: conditions.added(Quoted.of(predicate))
   }
 
   fn sorted<Key: Compare>(self, by: Expression<(row: Row) => Key>): Query<Row> {
-    copy(ordering: ordering.added(Quoted.of(by)))
+    copy ordering: ordering.added(Quoted.of(by))
   }
 
   fn take(self, amount: Int): Query<Row> {
-    copy(limit: Some(amount))
+    copy limit: Some(amount)
   }
 
   fn toSql(self): Result<Fragment, QueryError> {
-    var statement = Fragment.raw("SELECT * FROM {table}")
+    var statement = Fragment.raw "SELECT * FROM {table}"
 
     var keyword = " WHERE "
     for condition in conditions {
@@ -62,8 +62,8 @@ public type Query<Row> {
     }
 
     if const Some(amount) = limit {
-      statement = statement.wrap("", " LIMIT {amount}")
+      statement = statement.wrap "", " LIMIT {amount}"
     }
-    Ok(statement)
+    Ok statement
   }
 }

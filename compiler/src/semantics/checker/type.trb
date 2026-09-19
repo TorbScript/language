@@ -137,13 +137,13 @@ public type TypeTable {
    * already - so this is O(size of the form), never O(size of the type).
    */
   fn intern(var self, form: TypeForm): TypeId {
-    const key = formKey(form)
+    const key = formKey form
     if const Some(existing) = identifiers.get(key) {
       return existing
     }
-    const identifier = TypeId(forms.length())
-    forms.add(form)
-    identifiers.set(key, identifier)
+    const identifier = TypeId forms.length()
+    forms.add form
+    identifiers.set key, identifier
     identifier
   }
 
@@ -162,10 +162,10 @@ public type TypeTable {
         return existing
       }
     }
-    declarations.add(declaration)
+    declarations.add declaration
     const identifier = ParameterId(declarations.length() - 1)
     if const Some(symbol) = declaration.symbol {
-      bySymbol.set(symbol.value, identifier)
+      bySymbol.set symbol.value, identifier
     }
     identifier
   }
@@ -175,7 +175,7 @@ public type TypeTable {
   }
 
   fn parameterOf(self, symbol: SymbolId): ParameterId? {
-    bySymbol.get(symbol.value)
+    bySymbol.get symbol.value
   }
 }
 
@@ -196,7 +196,7 @@ public fn formKey(form: TypeForm): String {
       }
       key
     }
-    .Function(inner) => keyOfFunction(inner)
+    .Function(inner) => keyOfFunction inner
     .Literals(base, values) => {
       var key = "L{base.value}"
       for value in values {
@@ -271,9 +271,9 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
     .Traits(bounds) => {
       var parts: List<String> = []
       for bound in bounds {
-        parts.add(describeType(types, symbols, bound))
+        parts.add describeType(types, symbols, bound)
       }
-      parts.joined(separator: " & ")
+      parts.joined separator: " & "
     }
     .Parameter(parameter) => types.parameter(parameter).name
     // A variable stands for "whatever fits here", as in "expected `Matrix<4, _>`"
@@ -281,23 +281,23 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
     .Tuple(fields) => {
       var parts: List<String> = []
       for field in fields {
-        const shown = describeType(types, symbols, field.annotation)
+        const shown = describeType types, symbols, field.annotation
         parts.add(match field.label {
           Some(label) => "{label}: {shown}"
-          .None => shown
+          None => shown
         })
       }
       "({parts.joined(separator: ", ")})"
     }
-    .Function(form) => describeFunction(types, symbols, form)
+    .Function(form) => describeFunction types, symbols, form
     .Literals(_, values) => {
       var parts: List<String> = []
       for value in values {
-        parts.add(describeLiteral(value))
+        parts.add describeLiteral(value)
       }
-      parts.joined(separator: " | ")
+      parts.joined separator: " | "
     }
-    .Constant(value, _) => describeLiteral(value)
+    .Constant(value, _) => describeLiteral value
     .VoidType => "Void"
     .NeverType => "Never"
     // Nothing is ever said about a type that is already broken, so this only shows up in a test
@@ -310,16 +310,16 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
 public fn describeFunction(types: TypeTable, symbols: Symbols, form: FunctionForm): String {
   var parts: List<String> = []
   for parameter in form.parameters {
-    parts.add(describeParameter(types, symbols, parameter))
+    parts.add describeParameter(types, symbols, parameter)
   }
   "({parts.joined(separator: ", ")}) => {describeType(types, symbols, form.result)}"
 }
 
 fn describeParameter(types: TypeTable, symbols: Symbols, parameter: ParameterForm): String {
-  const shown = describeType(types, symbols, parameter.annotation)
+  const shown = describeType types, symbols, parameter.annotation
   const named = match parameter.name {
     Some(name) => "{name}: {shown}"
-    .None => shown
+    None => shown
   }
   match parameter.mode {
     .Value => named
@@ -333,9 +333,9 @@ fn describeParameter(types: TypeTable, symbols: Symbols, parameter: ParameterFor
 fn describeTypes(types: TypeTable, symbols: Symbols, arguments: List<TypeId>): String {
   var parts: List<String> = []
   for argument in arguments {
-    parts.add(describeType(types, symbols, argument))
+    parts.add describeType(types, symbols, argument)
   }
-  parts.joined(separator: ", ")
+  parts.joined separator: ", "
 }
 
 /** `"online"`, `'a'`, `16`, `true`: a literal the way it is written in the source. */
@@ -550,8 +550,8 @@ public type Resolved {
   /** The arguments of the trait as they are for the type that was asked about. */
   fn argumentsOf(self): List<TypeId>? {
     match self {
-      .Found(_, arguments) => Some(arguments)
-      .Bounded(arguments) => Some(arguments)
+      .Found(_, arguments) => Some arguments
+      .Bounded(arguments) => Some arguments
       _ => None
     }
   }
@@ -612,21 +612,21 @@ public type ImplementationTable {
    * method reads a place that has already been taken out, which stage 0 cannot see and cannot report.
    */
   fn add(var self, implementation: Implementation, shape: TargetShape, capability: SymbolId?): ImplementationId {
-    all.add(implementation)
+    all.add implementation
     const index = all.length() - 1
     if const .Concrete(head) = shape {
       var known = byHead.get(head.value) ?? []
-      known.add(index)
-      byHead.set(head.value, known)
+      known.add index
+      byHead.set head.value, known
       if const Some(symbol) = capability {
         const key = (symbol.value, head.value)
         var candidates = byTraitAndHead.get(key) ?? []
-        candidates.add(index)
-        byTraitAndHead.set(key, candidates)
+        candidates.add index
+        byTraitAndHead.set key, candidates
       } else {
         var extensions = inherent.get(head.value) ?? []
-        extensions.add(index)
-        inherent.set(head.value, extensions)
+        extensions.add index
+        inherent.set head.value, extensions
       }
     }
     const isOpen = match shape {
@@ -634,29 +634,29 @@ public type ImplementationTable {
       _ => false
     }
     if isOpen {
-      open.add(index)
+      open.add index
       match capability {
         Some(symbol) => {
           var candidates = byTraitOpen.get(symbol.value) ?? []
-          candidates.add(index)
-          byTraitOpen.set(symbol.value, candidates)
+          candidates.add index
+          byTraitOpen.set symbol.value, candidates
         }
-        .None => inherentOpen.add(index)
+        None => inherentOpen.add index
       }
     }
-    ImplementationId(index)
+    ImplementationId index
   }
 
   fn candidatesOf(self, capability: SymbolId, head: SymbolId?): List<Int> {
     var found: List<Int> = []
     if const Some(symbol) = head {
       for index in byTraitAndHead.get((capability.value, symbol.value)) ?? [] {
-        found.add(index)
+        found.add index
       }
     }
     for index in byTraitOpen.get(capability.value) ?? [] {
       if !found.contains(index) {
-        found.add(index)
+        found.add index
       }
     }
     found
@@ -671,7 +671,7 @@ public type ImplementationTable {
     var found: List<Int> = []
     if const Some(symbol) = head {
       for index in byHead.get(symbol.value) ?? [] {
-        found.add(index)
+        found.add index
       }
     }
     found
@@ -681,11 +681,11 @@ public type ImplementationTable {
     var found: List<Int> = []
     if const Some(symbol) = head {
       for index in inherent.get(symbol.value) ?? [] {
-        found.add(index)
+        found.add index
       }
     }
     for index in inherentOpen {
-      found.add(index)
+      found.add index
     }
     found
   }

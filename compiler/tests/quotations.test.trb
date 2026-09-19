@@ -23,9 +23,9 @@ fn inBody(body: String): String {
 
 group "What a quotation records" {
   test "`assert` quotes its condition: the value stays a `Bool` and the tree is recorded at its span" {
-    const source = inBody("  const limit = 2\n  assert(limit > 1)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const limit = 2\n  assert(limit > 1)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("limit > 1") == "Bool")
     assert(probed.adaptationsOf("limit > 1") == ["quote"])
     assert(probed.quotationOf("limit > 1") == [
@@ -36,16 +36,16 @@ group "What a quotation records" {
   }
 
   test "a quotation without captures has none, and the tree is still recorded" {
-    const source = inBody("  assert(1 < 2)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  assert(1 < 2)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.quotationOf("1 < 2") == ["value Bool"])
   }
 
   test "captures are numbered in the order `captures()` returns them" {
-    const source = inBody("  const first = 1\n  const second = 2\n  assert(second > first)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const first = 1\n  const second = 2\n  assert(second > first)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.quotationOf("second > first") == [
       "value Bool",
       "capture 0 second: Int64 through Int64: Encode",
@@ -56,9 +56,9 @@ group "What a quotation records" {
   }
 
   test "a binding that is read twice is one capture and two names" {
-    const source = inBody("  const size = 1\n  assert(size == size)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const size = 1\n  assert(size == size)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.quotationOf("size == size") == [
       "value Bool",
       "capture 0 size: Int64 through Int64: Encode",
@@ -68,9 +68,9 @@ group "What a quotation records" {
   }
 
   test "a quoted closure records its `Lambda` and the parameter every implicit `_` means" {
-    const source = inBody("  const limit = 18\n  const found = select \{ _.age >= limit \}")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const limit = 18\n  const found = select \{ _.age >= limit \}"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("\{ _.age >= limit \}") == "(row: Row) => Bool")
     assert(probed.quotationOf("\{ _.age >= limit \}") == [
       "value (row: Row) => Bool",
@@ -82,9 +82,9 @@ group "What a quotation records" {
   }
 
   test "a closure that writes its parameter down is the same tree under that name" {
-    const source = inBody("  const found = select \{ item => item.age >= 1 \}")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const found = select \{ item => item.age >= 1 \}"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.quotationOf("\{ item => item.age >= 1 \}") == [
       "value (item: Row) => Bool",
       "lambda `\{ item => item.age >= 1 \}` (item: Row)",
@@ -95,8 +95,8 @@ group "What a quotation records" {
   test "a nested closure is a `Lambda` of its own" {
     const source = inBody("  const names = [\"a\"]\n  const found = select \{ anyOf(names, \{ part => part == _.name \}) \}")
       + "\nfn anyOf(values: List<String>, check: (value: String) => Bool): Bool \{\n  true\n\}\n"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.quotationOf("\{ anyOf(names, \{ part => part == _.name \}) \}") == [
       "value (row: Row) => Bool",
       "capture 0 names: List<String> through List<Item>: Encode [String: Encode]",
@@ -109,9 +109,9 @@ group "What a quotation records" {
   }
 
   test "a binding of type `Expression<Value>` quotes its initializer, exactly as a parameter does (gap 37)" {
-    const source = inBody("  const limit = 1\n  const condition: Expression<Bool> = limit > 0")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const limit = 1\n  const condition: Expression<Bool> = limit > 0"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.adaptationsOf("limit > 0") == ["quote"])
     assert(probed.quotationOf("limit > 0") == [
       "value Bool",
@@ -122,8 +122,8 @@ group "What a quotation records" {
 
   test "a name that already holds a quotation is passed on, not quoted a second time" {
     const source = "fn probe(given: Expression<(row: Row) => Bool>) \{\n  const found = select(given)\n\}\n{provider}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("select(given)") == "String")
     assert(probed.lastAdaptationsOf("given") == [])
   }
@@ -131,15 +131,15 @@ group "What a quotation records" {
   test "the same holds where the `Value` of the parameter is still open, as in `Quoted.of(predicate)`" {
     const source = "fn probe(given: Expression<Bool>) \{\n  const found = hold(given)\n\}\n\n"
       + "fn hold<Value>(expression: Expression<Value>): String \{\n  expression.source\n\}\n{provider}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.lastAdaptationsOf("given") == [])
   }
 
   test "`nameOf` is an ordinary function over a quotation, so its argument is quoted like any other" {
-    const source = inBody("  const limit = 1\n  const found = nameOf(limit)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const limit = 1\n  const found = nameOf(limit)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("nameOf(limit)") == "String")
     assert(probed.lastAdaptationsOf("limit") == ["quote"])
   }
@@ -147,35 +147,35 @@ group "What a quotation records" {
 
 group "What is quotable" {
   test "literals, operators, member access, calls and interpolation" {
-    const source = inBody("  const limit = 1\n  assert(\"\{limit\}\".isEmpty() == !true)")
-    assert(problems(source).isEmpty())
+    const source = inBody "  const limit = 1\n  assert(\"\{limit\}\".isEmpty() == !true)"
+    assert problems(source).isEmpty()
   }
 
   test "`if`/`else`, a list literal, an index and a nested closure" {
-    const source = inBody("  const sizes = [1, 2]\n  assert(if true \{ sizes[0] \} else \{ 2 \} == 1)")
-    assert(problems(source).isEmpty())
+    const source = inBody "  const sizes = [1, 2]\n  assert(if true \{ sizes[0] \} else \{ 2 \} == 1)"
+    assert problems(source).isEmpty()
   }
 
   test "a constructor and a case" {
-    const source = inBody("  assert(Row(1, \"a\").nickname == None)")
-    assert(problems(source).isEmpty())
+    const source = inBody "  assert(Row(1, \"a\").nickname == None)"
+    assert problems(source).isEmpty()
   }
 
   test "`?.` and `??` are calls on `Option`, so they need no node of their own" {
-    const source = inBody("  const row = Row(1, \"a\")\n  assert((row.nickname ?? \"x\").isEmpty() == false)")
-    assert(problems(source).isEmpty())
+    const source = inBody "  const row = Row(1, \"a\")\n  assert((row.nickname ?? \"x\").isEmpty() == false)"
+    assert problems(source).isEmpty()
   }
 
   test "a tuple, a map literal and a range are constructions, which the concept lists as quotable" {
     const pairs = "  const pairs = [\"a\": 1]\n"
-    const source = inBody("{pairs}  assert((1, 2) == (1, 2))\n  assert(pairs.isEmpty())\n  assert(\"abc\".slice(0..2) == \"ab\")")
-    assert(problems(source).isEmpty())
+    const source = inBody "{pairs}  assert((1, 2) == (1, 2))\n  assert(pairs.isEmpty())\n  assert(\"abc\".slice(0..2) == \"ab\")"
+    assert problems(source).isEmpty()
   }
 }
 
 group "What is not quotable" {
   test "a `const` in a quoted closure" {
-    const source = inBody("  const found = select \{ const limit = 1\n    _.age >= limit \}")
+    const source = inBody "  const found = select \{ const limit = 1\n    _.age >= limit \}"
     assert(problems(source) == [
       "A `const` cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression",
     ])
@@ -185,7 +185,7 @@ group "What is not quotable" {
   }
 
   test "a `var`, an assignment and a second statement" {
-    const withVar = inBody("  const found = select \{ var limit = 1\n    _.age >= limit \}")
+    const withVar = inBody "  const found = select \{ var limit = 1\n    _.age >= limit \}"
     assert(problems(withVar) == [
       "A `var` cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression",
     ])
@@ -193,22 +193,22 @@ group "What is not quotable" {
     assert(problems(assignment).contains(
       "An assignment cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression"
     ))
-    const twice = inBody("  const found = select \{ _.age >= 1\n    _.age >= 2 \}")
+    const twice = inBody "  const found = select \{ _.age >= 1\n    _.age >= 2 \}"
     assert(problems(twice).contains(
       "A second statement cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression"
     ))
   }
 
   test "a loop, a `return` and a declaration" {
-    const loop = inBody("  const found = select \{ for part in [1] \{ print part \}\n    _.age >= 1 \}")
+    const loop = inBody "  const found = select \{ for part in [1] \{ print part \}\n    _.age >= 1 \}"
     assert(problems(loop) == [
       "A `for` loop cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression",
     ])
-    const returned = inBody("  const found = select \{ return _.age >= 1 \}")
+    const returned = inBody "  const found = select \{ return _.age >= 1 \}"
     assert(problems(returned) == [
       "A `return` cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression",
     ])
-    const declared = inBody("  const found = select \{ fn inner() \{\}\n    _.age >= 1 \}")
+    const declared = inBody "  const found = select \{ fn inner() \{\}\n    _.age >= 1 \}"
     assert(problems(declared) == [
       "A declaration cannot appear in a quotation: `Expression<(row: Row) => Bool>` holds a single expression",
     ])
@@ -222,7 +222,7 @@ group "What is not quotable" {
   }
 
   test "`match`, which would double the set of nodes" {
-    const source = inBody("  assert(match 1 \{\n    1 => true\n    _ => false\n  \})")
+    const source = inBody "  assert(match 1 \{\n    1 => true\n    _ => false\n  \})"
     assert(problems(source) == ["`match` cannot be quoted yet"])
     assert(notes(source) == [
       "Patterns would double the set of nodes an `ExpressionNode` has, so the language leaves them out",
@@ -230,19 +230,19 @@ group "What is not quotable" {
   }
 
   test "an `if` without an `else` has no value" {
-    const source = inBody("  const found = select \{ if _.age > 1 \{ true \} \}")
-    assert(problems(source).contains("An `if` without an `else` has no value, so it cannot be quoted"))
+    const source = inBody "  const found = select \{ if _.age > 1 \{ true \} \}"
+    assert problems(source).contains("An `if` without an `else` has no value, so it cannot be quoted")
   }
 
   test "a pattern in an `if` binds a name, which a `Conditional` node cannot" {
-    const source = inBody("  const held: Bool? = None\n  const found = quoted(if const Some(flag) = held \{ flag \} else \{ false \})")
+    const source = inBody "  const held: Bool? = None\n  const found = quoted(if const Some(flag) = held \{ flag \} else \{ false \})"
     assert(problems(source).contains(
       "A pattern in an `if` cannot appear in a quotation: `Expression<Bool>` holds a single expression"
     ))
   }
 
   test "a spread and a parameter that destructures have no node in an expression tree" {
-    const spread = inBody("  const sizes = [1]\n  assert(count(...sizes) == 1)\n\}\n\nfn count(...values: Int): Int \{\n  1")
+    const spread = inBody "  const sizes = [1]\n  assert(count(...sizes) == 1)\n\}\n\nfn count(...values: Int): Int \{\n  1"
     assert(problems(spread) == [
       "A spread has no node in an expression tree, so `Expression<Bool>` cannot hold it",
     ])
@@ -272,7 +272,7 @@ group "Captured variables must be `Encode` (gap 36)" {
     const source = "fn probe() \{\n  const opaque = Opaque(true, \{ true \})\n  const condition: Expression<Bool> = opaque.flag\n\}\n\n"
       + "type Opaque \{\n  flag: Bool\n  read: () => Bool\n\}\n{provider}"
     assert(problems(source) == ["`opaque` is captured here and `Opaque` is not `Encode`"])
-    assert(notes(source).contains("The type of `condition` quotes its value, so `opaque` has to be `Encode`"))
+    assert notes(source).contains("The type of `condition` quotes its value, so `opaque` has to be `Encode`")
   }
 
   test "the message points at the first read of the capture" {
@@ -284,13 +284,13 @@ group "Captured variables must be `Encode` (gap 36)" {
   test "a capture whose type is a generic parameter is decided where the enclosing function is called" {
     const source = "fn probe<Value>(value: Value, other: Value) \{\n  assert(same(value, other))\n\}\n\n"
       + "fn same<Value>(first: Value, second: Value): Bool \{\n  true\n\}\n{provider}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a parameter of the quoted closure is not a capture, so it needs no `Encode`" {
     const source = "fn probe() \{\n  const found = onOpaque \{ _.flag \}\n\}\n\n"
       + "fn onOpaque(check: Expression<(value: Opaque) => Bool>): String \{\n  check.source\n\}\n\n"
       + "type Opaque \{\n  flag: Bool\n  read: () => Bool\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 }

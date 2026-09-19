@@ -41,14 +41,14 @@ public fn propertyWrite(
     .Field(found, symbol) => (found, symbol)
     // A property command reaches a field, through the innermost receiver or through a target. A local is not one
     .Local(_) => {
-      return reportLocal(checker, target, arguments, expression)
+      return reportLocal checker, target, arguments, expression
     }
     _ => {
       return None
     }
   }
-  const annotation = resolveType(checker, target.annotation)
-  const trailing = trailingClosureAt(arguments, expression.span)
+  const annotation = resolveType checker, target.annotation
+  const trailing = trailingClosureAt arguments, expression.span
   const isOnlyClosure = trailing == 0 && arguments.length() == 1
   const holdsFunction = functionFormOf(checker, annotation).isSome()
   // "Calling a function in a field always needs parentheses": `onStart()` and `onStart(event)` call, `onStart { }` sets
@@ -62,7 +62,7 @@ public fn propertyWrite(
   } else {
     PropertyWriteKind.Assign
   }
-  Some(writeField(checker, expression, callee, target, arguments, owner, field, annotation, kind, holdsFunction))
+  Some writeField(checker, expression, callee, target, arguments, owner, field, annotation, kind, holdsFunction)
 }
 
 fn writeField(
@@ -77,32 +77,32 @@ fn writeField(
   kind: PropertyWriteKind,
   holdsFunction: Bool,
 ): TypeId {
-  checker.resolved(callee.span, target.resolution)
-  const _ = checker.typed(callee.span, annotation)
+  checker.resolved callee.span, target.resolution
+  const _ = checker.typed callee.span, annotation
   // Anything but exactly one value is not a write, and a field is not callable: one root cause, one message
   if arguments.length() != 1 {
-    reportNotCallable(checker, target.name, holdsFunction, expression)
-    return inferRest(checker, arguments)
+    reportNotCallable checker, target.name, holdsFunction, expression
+    return inferRest checker, arguments
   }
   // A command writes a field, so the path it is written through is a place like the target of an `=` (milestone 4.6)
   const named = target.name
-  const place = checkPropertyWrite(checker, callee, named)
+  const place = checkPropertyWrite checker, callee, named
   const inner = match kind {
-    .Configure => configurationOf(checker, annotation, target.name, expression)
-    _ => Some(annotation)
+    .Configure => configurationOf checker, annotation, target.name, expression
+    _ => Some annotation
   }
   const wanted = match inner {
     Some(found) => found
     // A field whose value has no configuration: `port { ... }` is not a section
-    .None => {
-      return inferRest(checker, arguments)
+    None => {
+      return inferRest checker, arguments
     }
   }
-  const inside = expectationOf(checker, wanted)
-  const _ = checkExpression(checker, arguments[0].value, inside)
+  const inside = expectationOf checker, wanted
+  const _ = checkExpression checker, arguments[0].value, inside
   // The change counts once its value has been read, so that `port port + 1` does not read itself dead (design 5.3)
-  noteAssignment(checker, place)
-  checker.resolved(expression.span, Resolution.PropertyWrite(owner, field, kind))
+  noteAssignment checker, place
+  checker.resolved expression.span, Resolution.PropertyWrite(owner, field, kind)
   checker.voidType
 }
 
@@ -111,25 +111,25 @@ fn writeField(
  * assignment. `None` where the binding does hold a function, which is an ordinary call.
  */
 fn reportLocal(var checker: Checker, target: Target, arguments: List<Argument>, expression: Expression): TypeId? {
-  const annotation = resolveType(checker, target.annotation)
+  const annotation = resolveType checker, target.annotation
   if checker.absorbs(annotation) || functionFormOf(checker, annotation).isSome() {
     return None
   }
-  const shown = checker.describe(annotation)
+  const shown = checker.describe annotation
   checker.reportHere(
     Diagnostic.error("`{target.name}` is a `{shown}`, and only a function can be called", expression.span)
       .withNote("A binding is changed with `=`: `{target.name} = value`. A command writes a field of a receiver")
   )
-  Some(inferRest(checker, arguments))
+  Some inferRest(checker, arguments)
 }
 
 /** `database { url "..." }`: the block is the body of `(var self: DatabaseConfig) => Void`, applied to the field. */
 fn configurationOf(var checker: Checker, annotation: TypeId, name: String, expression: Expression): TypeId? {
   if checker.absorbs(annotation) {
-    return Some(annotation)
+    return Some annotation
   }
   if !isConfigurable(checker, annotation) {
-    const shown = checker.describe(annotation)
+    const shown = checker.describe annotation
     checker.reportHere(
       Diagnostic.error("`{name}` is a `{shown}`, which has no configuration a block could fill", expression.span)
         .withNote("A block on a field applies a receiver closure to its value. Write `{name} value` to set it")
@@ -138,7 +138,7 @@ fn configurationOf(var checker: Checker, annotation: TypeId, name: String, expre
   }
   const parameters = [ParameterForm(Some("self"), ParameterMode.Receiver(true), annotation)]
   const nothing = checker.voidType
-  Some(checker.functionType(FunctionForm(parameters, nothing)))
+  Some checker.functionType(FunctionForm(parameters, nothing))
 }
 
 /**
@@ -152,22 +152,22 @@ fn isConfigurable(var checker: Checker, annotation: TypeId): Bool {
       return false
     }
   }
-  const identifier = typeSignatureOf(checker, symbol)
-  const shape = checker.typeSignature(identifier)
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
   !shape.isNative && shape.cases.isEmpty()
 }
 
 /** A write that could not be made still gives every argument a type: one message, and nothing is left unrecorded. */
 fn inferRest(var checker: Checker, arguments: List<Argument>): TypeId {
   for argument in arguments {
-    const _ = inferExpression(checker, argument.value)
+    const _ = inferExpression checker, argument.value
   }
   checker.invalidType
 }
 
 fn functionFormOf(checker: Checker, annotation: TypeId): FunctionForm? {
   if const .Function(form) = checker.types.form(annotation) {
-    return Some(form)
+    return Some form
   }
   None
 }

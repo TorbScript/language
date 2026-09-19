@@ -131,8 +131,8 @@ public fn checkExhaustive(
 ): MatchPlan {
   // Nothing is said about a subject the checker could not type, and nothing about a pattern that was already reported
   if checker.absorbs(subject) {
-    const plan = MatchPlan(subject, plans, true, [])
-    checker.recordMatch(at, plan)
+    const plan = MatchPlan subject, plans, true, []
+    checker.recordMatch at, plan
     return plan
   }
   var rows: List<List<Normal>> = []
@@ -141,7 +141,7 @@ public fn checkExhaustive(
   for index in 0..arms.length() {
     const arm = arms[index]
     var state = Normalizing()
-    const own = normalizedRows(checker, state, arm.pattern, subject)
+    const own = normalizedRows checker, state, arm.pattern, subject
     if state.isBroken {
       isBroken = true
     }
@@ -150,24 +150,24 @@ public fn checkExhaustive(
       continue
     }
     if !isBroken && !isAnyUseful(checker, Matrix([subject], rows), own) {
-      const shown = coveringPattern(checker, subject, rows, own)
-      reportUnreachable(checker, arm.pattern.span, shown)
-      reachable.set(index, plans[index].copy(isReachable: false))
+      const shown = coveringPattern checker, subject, rows, own
+      reportUnreachable checker, arm.pattern.span, shown
+      reachable.set index, plans[index].copy(isReachable: false)
     }
     for row in own {
-      rows.add(row)
+      rows.add row
     }
   }
   const matrix = Matrix([subject], rows)
   var witnesses: List<String> = []
   if !isBroken {
-    witnesses = shownWitnesses(checker, matrix)
+    witnesses = shownWitnesses checker, matrix
     if !witnesses.isEmpty() {
-      reportMissing(checker, witnesses, at)
+      reportMissing checker, witnesses, at
     }
   }
-  const plan = MatchPlan(subject, reachable, witnesses.isEmpty(), witnesses)
-  checker.recordMatch(at, plan)
+  const plan = MatchPlan subject, reachable, witnesses.isEmpty(), witnesses
+  checker.recordMatch at, plan
   plan
 }
 
@@ -213,30 +213,30 @@ fn reportUnreachable(var checker: Checker, at: Span, shown: String) {
   } else {
     "`{shown}` above already matches it"
   }
-  checker.reportHere(Diagnostic.error("This arm is never reached", at).withNote(note))
+  checker.reportHere Diagnostic.error("This arm is never reached", at).withNote(note)
 }
 
 /** Up to sixteen witnesses, so that the message can say how many more there are without enumerating a type. */
 fn shownWitnesses(var checker: Checker, matrix: Matrix): List<String> {
   var shown: List<String> = []
   for witness in missingValues(checker, matrix, 16) {
-    shown.add(describeNormal(witness.get(0) ?? Normal.Anything))
+    shown.add describeNormal(witness.get(0) ?? Normal.Anything)
   }
   shown
 }
 
 fn reportMissing(var checker: Checker, witnesses: List<String>, at: Span) {
-  checker.reportHere(Diagnostic.error("`match` does not handle {listOfWitnesses(witnesses)}", at))
+  checker.reportHere Diagnostic.error("`match` does not handle {listOfWitnesses(witnesses)}", at)
 }
 
 /** One, two or three witnesses by name, and a count behind them where there are more (design 5.5). */
 fn listOfWitnesses(witnesses: List<String>): String {
   var quoted: List<String> = []
   for index in 0..witnesses.length().min(3) {
-    quoted.add("`{witnesses[index]}`")
+    quoted.add "`{witnesses[index]}`"
   }
   if witnesses.length() > 3 {
-    const listed = quoted.joined(separator: ", ")
+    const listed = quoted.joined separator: ", "
     if witnesses.length() >= 16 {
       return "{listed} and more"
     }
@@ -247,7 +247,7 @@ fn listOfWitnesses(witnesses: List<String>): String {
   }
   const end = quoted.length() - 1
   const last = quoted.removeAt(end) ?? ""
-  const listed = quoted.joined(separator: ", ")
+  const listed = quoted.joined separator: ", "
   "{listed} and {last}"
 }
 
@@ -258,8 +258,8 @@ fn listOfWitnesses(witnesses: List<String>): String {
  * matches is a `const` binding written in the wrong place, and in a `while` it is a loop that never ends.
  */
 public fn checkConditionPattern(var checker: Checker, pattern: Pattern, subject: TypeId, isLoop: Bool) {
-  const plan = onePatternPlan(checker, pattern, subject)
-  checker.recordMatch(pattern.span, plan)
+  const plan = onePatternPlan checker, pattern, subject
+  checker.recordMatch pattern.span, plan
   if checker.absorbs(subject) || !plan.isExhaustive {
     return
   }
@@ -268,7 +268,7 @@ public fn checkConditionPattern(var checker: Checker, pattern: Pattern, subject:
   } else {
     "This pattern always matches. Use `const`"
   }
-  checker.reportHere(Diagnostic.error(message, pattern.span))
+  checker.reportHere Diagnostic.error(message, pattern.span)
 }
 
 /**
@@ -276,15 +276,15 @@ public fn checkConditionPattern(var checker: Checker, pattern: Pattern, subject:
  * a `match` with one arm, so they are recorded in the same shape and under the span of their pattern.
  */
 fn onePatternPlan(var checker: Checker, pattern: Pattern, subject: TypeId): MatchPlan {
-  const arm = MatchArmPlan(pattern.span, branchesOf(checker, pattern, subject, []), false)
+  const arm = MatchArmPlan pattern.span, branchesOf(checker, pattern, subject, []), false
   if checker.absorbs(subject) {
-    return MatchPlan(subject, [arm], false, [])
+    return MatchPlan subject, [arm], false, []
   }
   if alwaysMatches(pattern) {
-    return MatchPlan(subject, [arm], true, [])
+    return MatchPlan subject, [arm], true, []
   }
-  const witnesses = irrefutableWitnesses(checker, pattern, subject, 3)
-  MatchPlan(subject, [arm], witnesses.isEmpty(), witnesses)
+  const witnesses = irrefutableWitnesses checker, pattern, subject, 3
+  MatchPlan subject, [arm], witnesses.isEmpty(), witnesses
 }
 
 /**
@@ -303,14 +303,14 @@ public fn requireIrrefutable(
   if alwaysMatches(pattern) {
     return
   }
-  const plan = onePatternPlan(checker, pattern, subject)
-  checker.recordMatch(pattern.span, plan)
+  const plan = onePatternPlan checker, pattern, subject
+  checker.recordMatch pattern.span, plan
   if checker.absorbs(subject) {
     return
   }
   const witness = match plan.witnesses.first() {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
@@ -334,13 +334,13 @@ fn alwaysMatches(pattern: Pattern): Bool {
 /** The values one pattern alone does not match. Empty means it is irrefutable. */
 fn irrefutableWitnesses(var checker: Checker, pattern: Pattern, subject: TypeId, limit: Int): List<String> {
   var state = Normalizing()
-  const rows = normalizedRows(checker, state, pattern, subject)
+  const rows = normalizedRows checker, state, pattern, subject
   if state.isBroken {
     return []
   }
   var shown: List<String> = []
   for witness in missingValues(checker, Matrix([subject], rows), limit) {
-    shown.add(describeNormal(witness.get(0) ?? Normal.Anything))
+    shown.add describeNormal(witness.get(0) ?? Normal.Anything)
   }
   shown
 }
@@ -382,37 +382,37 @@ fn normalizedPatterns(
     .RangePattern(start, end, isInclusive) => {
       [applied(rangeConstructor(checker, start, end, isInclusive, subject, pattern.span), [])]
     }
-    .TuplePattern(items) => normalizedTuple(checker, state, items, subject)
+    .TuplePattern(items) => normalizedTuple checker, state, items, subject
     .ListPattern(items, rest) => {
       const position = match rest {
         Some(found) => found.position
-        .None => items.length()
+        None => items.length()
       }
       // `[..., last]`: an item behind the rest sits at a position that depends on the length, which the matrix has no
       // constructor for - so the pattern stands for itself and decides nothing
       if position < items.length() {
         return [applied(Constructor.Opaque(pattern.span.start), [])]
       }
-      const element = itemOfSubject(checker, subject)
+      const element = itemOfSubject checker, subject
       var columns: List<List<Normal>> = []
       for item in items {
-        columns.add(normalizedPatterns(checker, state, item, element))
+        columns.add normalizedPatterns(checker, state, item, element)
       }
-      const constructor = Constructor.ListOf(items.length(), rest.isSome())
-      productOf(constructor, columns)
+      const constructor = Constructor.ListOf items.length(), rest.isSome()
+      productOf constructor, columns
     }
     .Variant(path, fields) => {
       const name = path[path.length() - 1]
-      normalizedVariant(checker, state, name.text, fields, subject, pattern.span)
+      normalizedVariant checker, state, name.text, fields, subject, pattern.span
     }
     .ImplicitVariant(name, fields) => {
-      normalizedVariant(checker, state, name.text, fields, subject, pattern.span)
+      normalizedVariant checker, state, name.text, fields, subject, pattern.span
     }
     .Alternatives(patterns) => {
       var found: List<Normal> = []
       for alternative in patterns {
         for one in normalizedPatterns(checker, state, alternative, subject) {
-          found.add(one)
+          found.add one
         }
       }
       found
@@ -425,7 +425,7 @@ fn normalizedPatterns(
 }
 
 fn applied(constructor: Constructor, arguments: List<Normal>): Normal {
-  Normal.Applied(constructor, arguments)
+  Normal.Applied constructor, arguments
 }
 
 fn normalizedTuple(
@@ -437,7 +437,7 @@ fn normalizedTuple(
   var types: List<TypeId> = []
   if const .Tuple(fields) = checker.types.form(subject) {
     for field in fields {
-      types.add(field.annotation)
+      types.add field.annotation
     }
   }
   if types.length() != items.length() {
@@ -446,9 +446,9 @@ fn normalizedTuple(
   }
   var columns: List<List<Normal>> = []
   for index in 0..items.length() {
-    columns.add(normalizedPatterns(checker, state, items[index], types[index]))
+    columns.add normalizedPatterns(checker, state, items[index], types[index])
   }
-  productOf(Constructor.Named("", "", items.length()), columns)
+  productOf Constructor.Named("", "", items.length()), columns
 }
 
 fn normalizedVariant(
@@ -460,18 +460,18 @@ fn normalizedVariant(
   at: Span,
 ): List<Normal> {
   var types: List<TypeId> = []
-  var constructor = Constructor.Opaque(at.start)
+  var constructor = Constructor.Opaque at.start
   if const Some(variant) = caseNamed(checker, subject, name) {
     for field in variant.fields {
-      types.add(field.annotation)
+      types.add field.annotation
     }
-    constructor = Constructor.Named(name, ".{name}", types.length())
+    constructor = Constructor.Named name, ".{name}", types.length()
   } else if name == "Self" || typeNameOf(checker, subject) == Some(name) {
     for field in fieldsOf(checker, subject) {
-      types.add(field.annotation)
+      types.add field.annotation
     }
     const shown = typeNameOf(checker, subject) ?? name
-    constructor = Constructor.Named(shown, shown, types.length())
+    constructor = Constructor.Named shown, shown, types.length()
   } else {
     // The message about a case that does not exist was given while the pattern was checked
     state.isBroken = true
@@ -483,9 +483,9 @@ fn normalizedVariant(
   }
   var columns: List<List<Normal>> = []
   for index in 0..fields.length() {
-    columns.add(normalizedPatterns(checker, state, fields[index].pattern, types[index]))
+    columns.add normalizedPatterns(checker, state, fields[index].pattern, types[index])
   }
-  productOf(constructor, columns)
+  productOf constructor, columns
 }
 
 /** Every combination of the alternatives of the arguments: `(a | b, c | d)` is four patterns of one constructor. */
@@ -495,14 +495,14 @@ fn productOf(constructor: Constructor, columns: List<List<Normal>>): List<Normal
     var grown: List<List<Normal>> = []
     for known in combinations {
       for one in column {
-        grown.add(known.added(one))
+        grown.add known.added(one)
       }
     }
     combinations = grown
   }
   var found: List<Normal> = []
   for arguments in combinations {
-    found.add(Normal.Applied(constructor, arguments))
+    found.add Normal.Applied(constructor, arguments)
   }
   found
 }
@@ -516,29 +516,29 @@ fn productOf(constructor: Constructor, columns: List<List<Normal>>): List<Normal
  */
 fn literalConstructor(var checker: Checker, value: Expression, subject: TypeId): Constructor {
   if const Some(text) = decimalTextOf(value) {
-    return Constructor.Literal("f{text}", text)
+    return Constructor.Literal "f{text}", text
   }
   const literal = match literalOf(value) {
     Some(found) => found
-    .None => {
-      return Constructor.Opaque(value.span.start)
+    None => {
+      return Constructor.Opaque value.span.start
     }
   }
   if const .Literals(_, _) = checker.types.form(subject) {
-    return Constructor.Literal(literalKey(literal), describeLiteral(literal))
+    return Constructor.Literal literalKey(literal), describeLiteral(literal)
   }
   match literal {
     .Boolean(inner) => {
       const shown = if inner { "true" } else { "false" }
-      Constructor.Named(shown, shown, 0)
+      Constructor.Named shown, shown, 0
     }
     .Integer(inner) => {
       if isIntegerType(checker, subject) {
-        return Constructor.Interval(inner, inner)
+        return Constructor.Interval inner, inner
       }
-      Constructor.Literal(literalKey(literal), describeLiteral(literal))
+      Constructor.Literal literalKey(literal), describeLiteral(literal)
     }
-    _ => Constructor.Literal(literalKey(literal), describeLiteral(literal))
+    _ => Constructor.Literal literalKey(literal), describeLiteral(literal)
   }
 }
 
@@ -552,25 +552,25 @@ fn rangeConstructor(
   at: Span,
 ): Constructor {
   if !isIntegerType(checker, subject) {
-    return Constructor.Opaque(at.start)
+    return Constructor.Opaque at.start
   }
-  const low = integerValueOf(start)
-  const high = integerValueOf(end)
+  const low = integerValueOf start
+  const high = integerValueOf end
   match (low, high) {
     (Some(from), Some(to)) => {
       const last = if isInclusive { to } else { to - 1 }
       if last < from {
-        return Constructor.Opaque(at.start)
+        return Constructor.Opaque at.start
       }
       Constructor.Interval(from, last)
     }
-    _ => Constructor.Opaque(at.start)
+    _ => Constructor.Opaque at.start
   }
 }
 
 fn integerValueOf(value: Expression): Int? {
   if const Some(.Integer(inner)) = literalOf(value) {
-    return Some(inner)
+    return Some inner
   }
   None
 }
@@ -588,11 +588,11 @@ fn isIntegerType(var checker: Checker, subject: TypeId): Bool {
 /** `1.5` and `-1.5`: the text of a decimal literal, which is how two of them are told apart. */
 fn decimalTextOf(value: Expression): String? {
   match value.kind {
-    .FloatLiteral(text) => Some(text)
+    .FloatLiteral(text) => Some text
     .Unary(operator, operand) => {
       if const .Negate = operator {
         if const .FloatLiteral(text) = operand.kind {
-          return Some("-{text}")
+          return Some "-{text}"
         }
       }
       None
@@ -608,8 +608,8 @@ fn decimalTextOf(value: Expression): String? {
  * only reachable there. Whether the arm is reachable is decided afterwards, by the matrix.
  */
 public fn armPlanOf(var checker: Checker, arm: MatchArm, subject: TypeId): MatchArmPlan {
-  const branches = branchesOf(checker, arm.pattern, subject, [])
-  MatchArmPlan(arm.pattern.span, branches, arm.guard.isSome())
+  const branches = branchesOf checker, arm.pattern, subject, []
+  MatchArmPlan arm.pattern.span, branches, arm.guard.isSome()
 }
 
 /** One branch per alternative: what has to hold for it, and what it binds where it does. */
@@ -624,29 +624,29 @@ fn branchesOf(
     .Binding(name) => {
       match bindingOf(checker, name, path) {
         Some(bound) => [PatternBranch([], [bound])]
-        .None => [PatternBranch([], [])]
+        None => [PatternBranch([], [])]
       }
     }
     .Literal(value) => {
-      const check = PatternCheck.IsLiteral(patternLiteral(value))
+      const check = PatternCheck.IsLiteral patternLiteral(value)
       [PatternBranch([PatternTest(path, check)], [])]
     }
     .RangePattern(start, end, isInclusive) => {
-      const check = PatternCheck.IsInRange(patternLiteral(start), patternLiteral(end), isInclusive)
+      const check = PatternCheck.IsInRange patternLiteral(start), patternLiteral(end), isInclusive
       [PatternBranch([PatternTest(path, check)], [])]
     }
-    .TuplePattern(items) => tupleBranches(checker, items, subject, path)
-    .ListPattern(items, rest) => listBranches(checker, items, rest, subject, path)
+    .TuplePattern(items) => tupleBranches checker, items, subject, path
+    .ListPattern(items, rest) => listBranches checker, items, rest, subject, path
     .Variant(qualified, fields) => {
       const name = qualified[qualified.length() - 1]
-      variantBranches(checker, name.text, fields, subject, path)
+      variantBranches checker, name.text, fields, subject, path
     }
-    .ImplicitVariant(name, fields) => variantBranches(checker, name.text, fields, subject, path)
+    .ImplicitVariant(name, fields) => variantBranches checker, name.text, fields, subject, path
     .Alternatives(patterns) => {
       var found: List<PatternBranch> = []
       for alternative in patterns {
         for branch in branchesOf(checker, alternative, subject, path) {
-          found.add(branch)
+          found.add branch
         }
       }
       found
@@ -657,7 +657,7 @@ fn branchesOf(
 
 /** The literal a pattern compares against: where it is written, and what it is worth where that is one value. */
 fn patternLiteral(value: Expression): PatternLiteral {
-  PatternLiteral(value.span, literalOf(value))
+  PatternLiteral value.span, literalOf(value)
 }
 
 /**
@@ -674,8 +674,8 @@ fn bindingOf(var checker: Checker, name: String, path: List<PatternStep>): Patte
       return None
     }
   }
-  const local = checker.binding(found)
-  Some(PatternBinding(name, found, path, local.annotation, local.isVar))
+  const local = checker.binding found
+  Some PatternBinding(name, found, path, local.annotation, local.isVar)
 }
 
 fn tupleBranches(
@@ -687,15 +687,15 @@ fn tupleBranches(
   var types: List<TypeId> = []
   if const .Tuple(fields) = checker.types.form(subject) {
     for field in fields {
-      types.add(field.annotation)
+      types.add field.annotation
     }
   }
   var branches: List<PatternBranch> = [PatternBranch([], [])]
   for index in 0..items.length() {
     const inner = types.get(index) ?? checker.deferredType
-    const step = PatternStep.TupleField(subject, index)
-    const grown = branchesOf(checker, items[index], inner, path.added(step))
-    branches = combined(branches, grown)
+    const step = PatternStep.TupleField subject, index
+    const grown = branchesOf checker, items[index], inner, path.added(step)
+    branches = combined branches, grown
   }
   branches
 }
@@ -707,32 +707,32 @@ fn listBranches(
   subject: TypeId,
   path: List<PatternStep>,
 ): List<PatternBranch> {
-  const element = itemOfSubject(checker, subject)
+  const element = itemOfSubject checker, subject
   const position = match rest {
     Some(found) => found.position
-    .None => items.length()
+    None => items.length()
   }
   const check = if rest.isSome() {
-    PatternCheck.HasAtLeast(items.length())
+    PatternCheck.HasAtLeast items.length()
   } else {
-    PatternCheck.HasLength(items.length())
+    PatternCheck.HasLength items.length()
   }
   var branches: List<PatternBranch> = [PatternBranch([PatternTest(path, check)], [])]
   for index in 0..items.length() {
     // An item in front of the `...` is counted from the front, one behind it from the back
     const step = if index < position {
-      PatternStep.Item(index)
+      PatternStep.Item index
     } else {
       PatternStep.ItemFromEnd(items.length() - 1 - index)
     }
-    const grown = branchesOf(checker, items[index], element, path.added(step))
-    branches = combined(branches, grown)
+    const grown = branchesOf checker, items[index], element, path.added(step)
+    branches = combined branches, grown
   }
   if const Some(more) = rest {
     if const Some(name) = more.name {
-      const step = PatternStep.Rest(position)
+      const step = PatternStep.Rest position
       if const Some(bound) = bindingOf(checker, name.text, path.added(step)) {
-        branches = withBinding(branches, bound)
+        branches = withBinding branches, bound
       }
     }
   }
@@ -748,38 +748,38 @@ fn variantBranches(
 ): List<PatternBranch> {
   var branches: List<PatternBranch> = [PatternBranch([], [])]
   if const Some(variant) = caseNamed(checker, subject, name) {
-    const check = PatternCheck.IsCase(subject, variant.symbol)
+    const check = PatternCheck.IsCase subject, variant.symbol
     branches = [PatternBranch([PatternTest(path, check)], [])]
     for index in 0..fields.length() {
-      const field = variant.fields.get(index)
+      const field = variant.fields.get index
       const inner = match field {
         Some(found) => found.annotation
-        .None => checker.deferredType
+        None => checker.deferredType
       }
       const symbol = match field {
         Some(found) => found.symbol
-        .None => variant.symbol
+        None => variant.symbol
       }
-      const step = PatternStep.CaseField(subject, variant.symbol, index, symbol)
-      const grown = branchesOf(checker, fields[index].pattern, inner, path.added(step))
-      branches = combined(branches, grown)
+      const step = PatternStep.CaseField subject, variant.symbol, index, symbol
+      const grown = branchesOf checker, fields[index].pattern, inner, path.added(step)
+      branches = combined branches, grown
     }
     return branches
   }
   // `Point(x, y)` and `Self(value)`: the one constructor of the type, which needs no test
-  const declared = fieldsOf(checker, subject)
+  const declared = fieldsOf checker, subject
   for index in 0..fields.length() {
-    const field = declared.get(index)
+    const field = declared.get index
     const inner = match field {
       Some(found) => found.annotation
-      .None => checker.deferredType
+      None => checker.deferredType
     }
     const step = match field {
-      Some(found) => PatternStep.Field(subject, index, found.symbol)
-      .None => PatternStep.TupleField(subject, index)
+      Some(found) => PatternStep.Field subject, index, found.symbol
+      None => PatternStep.TupleField subject, index
     }
-    const grown = branchesOf(checker, fields[index].pattern, inner, path.added(step))
-    branches = combined(branches, grown)
+    const grown = branchesOf checker, fields[index].pattern, inner, path.added(step)
+    branches = combined branches, grown
   }
   branches
 }
@@ -789,7 +789,7 @@ fn combined(left: List<PatternBranch>, right: List<PatternBranch>): List<Pattern
   var found: List<PatternBranch> = []
   for one in left {
     for other in right {
-      found.add(PatternBranch(one.tests.addedAll(other.tests), one.bindings.addedAll(other.bindings)))
+      found.add PatternBranch(one.tests.addedAll(other.tests), one.bindings.addedAll(other.bindings))
     }
   }
   found
@@ -798,7 +798,7 @@ fn combined(left: List<PatternBranch>, right: List<PatternBranch>): List<Pattern
 fn withBinding(branches: List<PatternBranch>, bound: PatternBinding): List<PatternBranch> {
   var found: List<PatternBranch> = []
   for branch in branches {
-    found.add(branch.copy(bindings: branch.bindings.added(bound)))
+    found.add branch.copy(bindings: branch.bindings.added(bound))
   }
   found
 }

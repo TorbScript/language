@@ -2,7 +2,7 @@ use Vector2 from "./math/vector2"
 use Component, ComponentKind, Entity from "./ecs/component"
 use World, System from "./ecs/world"
 
-const gravity = Vector2(0.0, 9.81)
+const gravity = Vector2 0.0, 9.81
 
 public fn movement(world: World, deltaTime: Float): World {
   world.mapEntities([ComponentKind.Transform, ComponentKind.Velocity]) {
@@ -21,14 +21,14 @@ public fn falling(world: World, deltaTime: Float): World {
 }
 
 public fn collisions(world: World, deltaTime: Float): World {
-  const bodies = world.query(ComponentKind.Transform, ComponentKind.Collider, ComponentKind.Health)
+  const bodies = world.query ComponentKind.Transform, ComponentKind.Collider, ComponentKind.Health
 
-  bodies.fold(world) { current, body =>
+  bodies.fold world { current, body =>
     const hits = bodies.filter { other => other.id != body.id && touches(body, other) }.count()
     if hits == 0 {
       return current                     // Returns from the closure, not from `collisions`
     }
-    current.updated(body.id) { damage(entity, amount: hits * 10) }
+    current.updated body.id { damage(entity, amount: hits * 10) }
   }
 }
 
@@ -36,7 +36,7 @@ public fn collisions(world: World, deltaTime: Float): World {
 public fn cleanup(world: World, deltaTime: Float): World {
   world.query(ComponentKind.Health)
     .filter { (_.health() ?? 0) <= 0 }
-    .fold(world) { current, entity => current.despawned(entity.id) }
+    .fold(world) { current, entity => current.despawned entity.id }
 }
 
 /** Systems are values: build new ones out of existing ones. */
@@ -44,7 +44,7 @@ public fn onlyEvery(seconds: Float, system: System): System {
   { world, deltaTime =>
     const before = (world.time / seconds).floor()
     const after = ((world.time + deltaTime) / seconds).floor()
-    if after > before { system(world, seconds) } else { world }
+    if after > before { system world, seconds } else { world }
   }
 }
 
@@ -57,7 +57,7 @@ fn touches(a: Entity, b: Entity): Bool {
 
 fn radius(entity: Entity): Float? {
   match entity.components.get(ComponentKind.Collider) {
-    Some(.Collider(radius)) => Some(radius)
+    Some(.Collider(radius)) => Some radius
     _ => None
   }
 }

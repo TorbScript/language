@@ -16,21 +16,21 @@ public type World {
   // --- In place: building a world -------------------------------------------------------------------
 
   fn spawn(var self, ...components: Component) {
-    var entity = Entity(nextId)
+    var entity = Entity nextId
     for component in components {
-      entity.attach(component)
+      entity.attach component
     }
     entities[entity.id] = entity
     nextId = nextId + 1
   }
 
   fn despawn(var self, id: EntityId) {
-    entities.remove(id)
+    entities.remove id
   }
 
   fn update(var self, id: EntityId, change: (entity: Entity) => Entity) {
     if const Some(entity) = entities.get(id) {
-      entities[id] = change(entity)
+      entities[id] = change entity
     }
   }
 
@@ -38,28 +38,28 @@ public type World {
 
   fn despawned(self, id: EntityId): World {
     var result = self
-    result.despawn(id)
+    result.despawn id
     result
   }
 
   fn updated(self, id: EntityId, change: (entity: Entity) => Entity): World {
     var result = self
-    result.update(id, change)
+    result.update id, change
     result
   }
 
   /** All entities that have all of the given components. Lazy: systems decide what to do with them. */
   fn query(self, ...kinds: ComponentKind): Iterable<Entity> {
-    entities.values().filter { entity => kinds.all { entity.has(_) } }
+    entities.values().filter { entity => kinds.all { entity.has _ } }
   }
 
   /** Applies `change` to every entity that has all of the given components. */
   fn mapEntities(self, kinds: List<ComponentKind>, change: (entity: Entity) => Entity): World {
-    query(...kinds).fold(self) { world, entity => world.updated(entity.id, change) }
+    query(...kinds).fold(self) { world, entity => world.updated entity.id, change }
   }
 
   fn stepped(self, systems: List<System>, deltaTime: Float): World {
-    var next = systems.fold(self) { world, system => system(world, deltaTime) }
+    var next = systems.fold self { world, system => system world, deltaTime }
     next.time = time + deltaTime
     next
   }

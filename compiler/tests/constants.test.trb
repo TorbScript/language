@@ -14,12 +14,12 @@ use problemsOf, notesOf from "./harness"
  */
 
 const importsHelper = r"""
-use value from "./helper"
+  use value from "./helper"
 
-fn probe(): Int {
-  1
-}
-"""
+  fn probe(): Int {
+    1
+  }
+  """
 
 fn withHelper(helper: String): Map<String, String> {
   ["app/src/helper.trb": "public const value = 1\n{helper}", "app/src/main.trb": importsHelper]
@@ -28,87 +28,87 @@ fn withHelper(helper: String): Map<String, String> {
 group "What is compile-time evaluable" {
   test "literals of every kind" {
     const files = withHelper(r"""
-const answer = 42
-const hex = 0xFF
-const ratio = 1.5
-const negative = -7
-const letter = 'A'
-const flag = true
-const name = "world"
-""")
-    assert(problemsOf(files).isEmpty())
+      const answer = 42
+      const hex = 0xFF
+      const ratio = 1.5
+      const negative = -7
+      const letter = 'A'
+      const flag = true
+      const name = "world"
+      """)
+    assert problemsOf(files).isEmpty()
   }
 
   test "the arithmetic, comparison and logical operators of the number types and of `Bool`" {
     const files = withHelper(r"""
-const frameTime = 1.0 / 60.0
-const half = 10 / 2
-const rest = 10 % 3
-const total = 2 * 3 + 1
-const isLarge = total > 6
-const both = isLarge && true
-const other = !both
-""")
-    assert(problemsOf(files).isEmpty())
+      const frameTime = 1.0 / 60.0
+      const half = 10 / 2
+      const rest = 10 % 3
+      const total = 2 * 3 + 1
+      const isLarge = total > 6
+      const both = isLarge && true
+      const other = !both
+      """)
+    assert problemsOf(files).isEmpty()
   }
 
   test "interpolation, because it is not a function call" {
     const files = withHelper(r"""
-const version = 1
-const tag = "v{version}"
-""")
-    assert(problemsOf(files).isEmpty())
+      const version = 1
+      const tag = "v{version}"
+      """)
+    assert problemsOf(files).isEmpty()
   }
 
   test "tuple, list and map literals of such" {
     const files = withHelper(r"""
-const pair = (1, "one")
-const items = [1, 2, 3]
-const table = ["a": 1, "b": 2]
-const nested = [(1, "one")]
-""")
-    assert(problemsOf(files).isEmpty())
+      const pair = (1, "one")
+      const items = [1, 2, 3]
+      const table = ["a": 1, "b": 2]
+      const nested = [(1, "one")]
+      """)
+    assert problemsOf(files).isEmpty()
   }
 
   test "a constructor call and a case constructor call" {
     const files = withHelper(r"""
-const origin = Point(0, 0)
-const nothing: Int? = None
-const some = Some(1)
+      const origin = Point(0, 0)
+      const nothing: Int? = None
+      const some = Some(1)
 
-type Point {
-  x: Int
-  y: Int
-}
-""")
-    assert(problemsOf(files).isEmpty())
+      type Point {
+        x: Int
+        y: Int
+      }
+      """)
+    assert problemsOf(files).isEmpty()
   }
 
   test "another compile-time constant, of this module or of another one" {
     const files = [
       "app/src/first.trb": r"""
-public const base = 10
-""",
+        public const base = 10
+        """,
       "app/src/helper.trb": r"""
-use base from "./first"
+        use base from "./first"
 
-public const value = base * 2
-""",
+        public const value = base * 2
+        """,
       "app/src/main.trb": importsHelper,
     ]
-    assert(problemsOf(files).isEmpty())
+    assert problemsOf(files).isEmpty()
   }
 }
 
 group "What is not" {
   test "a function call" {
     const files = withHelper(r"""
-const answer = twice(21)
+      const answer = twice(21)
 
-fn twice(number: Int): Int {
-  number * 2
-}
-""")
+      fn twice(number: Int): Int {
+        number * 2
+      }
+      """)
     assert(problemsOf(files) == ["The initializer of a top-level `const` has to be known at compile time"])
     assert(
       notesOf(files)
@@ -122,36 +122,36 @@ fn twice(number: Int): Int {
 
   test "a `native` call, which `+` on a `String` is one of" {
     const files = withHelper(r"""
-const greeting = "hello" + " world"
-""")
+      const greeting = "hello" + " world"
+      """)
     assert(problemsOf(files) == ["The initializer of a top-level `const` has to be known at compile time"])
   }
 
   test "a static function of a type" {
     const files = withHelper(r"""
-const origin = Point.zero()
+      const origin = Point.zero()
 
-type Point {
-  x: Int
-  y: Int
+      type Point {
+        x: Int
+        y: Int
 
-  fn zero(): Point {
-    Point(0, 0)
-  }
-}
-""")
+        fn zero(): Point {
+          Point(0, 0)
+        }
+      }
+      """)
     assert(problemsOf(files) == ["The initializer of a top-level `const` has to be known at compile time"])
   }
 
   test "a constant that is defined through a call" {
     const files = withHelper(r"""
-const answer = twice(21)
-const doubled = answer
+      const answer = twice(21)
+      const doubled = answer
 
-fn twice(number: Int): Int {
-  number * 2
-}
-""")
+      fn twice(number: Int): Int {
+        number * 2
+      }
+      """)
     assert(
       problemsOf(files)
         == [
@@ -163,38 +163,38 @@ fn twice(number: Int): Int {
 
   test "a `copy` of a constant, which is a call like any other" {
     const files = withHelper(r"""
-const origin = Point(0, 0)
-const moved = origin.copy(x: 1)
+      const origin = Point(0, 0)
+      const moved = origin.copy(x: 1)
 
-type Point {
-  x: Int
-  y: Int
-}
-""")
+      type Point {
+        x: Int
+        y: Int
+      }
+      """)
     assert(problemsOf(files) == ["The initializer of a top-level `const` has to be known at compile time"])
   }
 
   test "an entry file is ordinary code, and asks none of this" {
     const files = [
       "app/src/main.trb": r"""
-const answer = twice(21)
+        const answer = twice(21)
 
-fn twice(number: Int): Int {
-  number * 2
-}
+        fn twice(number: Int): Int {
+          number * 2
+        }
 
-print answer
-""",
+        print answer
+        """,
     ]
-    assert(problemsOf(files).isEmpty())
+    assert problemsOf(files).isEmpty()
   }
 }
 
 group "Overflow and a division by zero are caught where they are written (BACKEND gap 11)" {
   test "an addition that leaves `Int64`" {
     const files = withHelper(r"""
-const tooLarge = 9223372036854775807 + 1
-""")
+      const tooLarge = 9223372036854775807 + 1
+      """)
     assert(problemsOf(files) == ["This does not fit into an `Int64`"])
     assert(
       notesOf(files)
@@ -207,39 +207,39 @@ const tooLarge = 9223372036854775807 + 1
 
   test "a subtraction that leaves it at the other end" {
     const files = withHelper(r"""
-const tooSmall = -9223372036854775807 - 2
-""")
+      const tooSmall = -9223372036854775807 - 2
+      """)
     assert(problemsOf(files) == ["This does not fit into an `Int64`"])
   }
 
   test "a multiplication that leaves it" {
     const files = withHelper(r"""
-const tooLarge = 4294967296 * 4294967296
-""")
+      const tooLarge = 4294967296 * 4294967296
+      """)
     assert(problemsOf(files) == ["This does not fit into an `Int64`"])
   }
 
   test "the negation of the smallest `Int64`" {
     const files = withHelper(r"""
-const smallest = -9223372036854775807 - 1
-const flipped = 0 - smallest
-""")
+      const smallest = -9223372036854775807 - 1
+      const flipped = 0 - smallest
+      """)
     assert(problemsOf(files) == ["This does not fit into an `Int64`"])
   }
 
   test "the smallest `Int64` itself is fine, and so is the largest" {
     const files = withHelper(r"""
-const smallest = -9223372036854775807 - 1
-const largest = 9223372036854775807
-const sum = smallest + largest
-""")
-    assert(problemsOf(files).isEmpty())
+      const smallest = -9223372036854775807 - 1
+      const largest = 9223372036854775807
+      const sum = smallest + largest
+      """)
+    assert problemsOf(files).isEmpty()
   }
 
   test "an integer division by zero" {
     const files = withHelper(r"""
-const broken = 1 / 0
-""")
+      const broken = 1 / 0
+      """)
     assert(problemsOf(files) == ["This divides by zero"])
     assert(
       notesOf(files)
@@ -252,23 +252,23 @@ const broken = 1 / 0
 
   test "a remainder by zero" {
     const files = withHelper(r"""
-const broken = 1 % 0
-""")
+      const broken = 1 % 0
+      """)
     assert(problemsOf(files) == ["This divides by zero"])
   }
 
   test "a floating point division by zero, which would be an infinity" {
     const files = withHelper(r"""
-const broken = 1.0 / 0.0
-""")
+      const broken = 1.0 / 0.0
+      """)
     assert(problemsOf(files) == ["This divides by zero"])
   }
 
   test "the division that is written through a constant is caught too" {
     const files = withHelper(r"""
-const zero = 3 - 3
-const broken = 60 / zero
-""")
+      const zero = 3 - 3
+      const broken = 60 / zero
+      """)
     assert(problemsOf(files) == ["This divides by zero"])
   }
 }

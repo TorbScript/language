@@ -14,20 +14,20 @@ type Email {
 
   fn parse(text: String): Result<Email, ParseError> {
     if !text.contains("@") {
-      return Fail(ParseError("'{text}' is not an email address"))
+      return Fail ParseError("'{text}' is not an email address")
     }
-    Ok(Self(text.toLowerCase()))
+    Ok Self(text.toLowerCase())
   }
 }
 
 extend Email with Encode, Decode {
   fn encode(self, var encoder: Encoder) {
-    encoder.string(value)                // An Email is a string on the wire, not a record with one field
+    encoder.string value                // An Email is a string on the wire, not a record with one field
   }
 
   fn decode(var decoder: Decoder): Result<Email, DecodeError> {
     const text = decoder.string()?
-    Email.parse(text).mapError { DecodeError(_.message) }
+    Email.parse(text).mapError { DecodeError _.message }
   }
 }
 
@@ -48,7 +48,7 @@ const user = User("Ada", Email.parse("ada@example.test")?, tags: ["math"])
 
 // --- Formats are ordinary libraries: implementations of `Encoder` and `Decoder` ------------------------
 
-const text = Json.encode(user)
+const text = Json.encode user
 print text    // {"name":"Ada","email":"ada@example.test","role":{"Member":{"since":2026}},"tags":["math"]}
 
 // Raw strings (`r"..."`) do not interpolate, so braces need no escaping
@@ -88,9 +88,9 @@ type LegacyUser {
 
 extend LegacyUser with Decode {
   fn decode(var decoder: Decoder): Result<LegacyUser, DecodeError> {
-    decoder.record("LegacyUser") { fields =>
+    decoder.record "LegacyUser" { fields =>
       const contact: LegacyContact = fields.field("contact")?
-      Ok(LegacyUser(name: fields.field("user_name")?, mail: contact.mail))
+      Ok LegacyUser(name: fields.field("user_name")?, mail: contact.mail)
     }
   }
 }
@@ -101,8 +101,8 @@ type LegacyContact {
 
 extend LegacyContact with Decode {
   fn decode(var decoder: Decoder): Result<LegacyContact, DecodeError> {
-    decoder.record("LegacyContact") { fields =>
-      Ok(LegacyContact(mail: fields.field("e_mail")?))
+    decoder.record "LegacyContact" { fields =>
+      Ok LegacyContact(mail: fields.field("e_mail")?)
     }
   }
 }
@@ -123,7 +123,7 @@ fn diff(before: JsonValue, after: JsonValue, path: String = ""): List<String> {
   }
 }
 
-const renamed = user.copy(name: "Ada Lovelace", tags: ["math", "engines"])
+const renamed = user.copy name: "Ada Lovelace", tags: ["math", "engines"]
 for change in diff(Json.value(user), Json.value(renamed)) {
   print change
 }

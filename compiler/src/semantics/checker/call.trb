@@ -56,9 +56,9 @@ public fn checkCall(
 ): TypeId {
   // The expected type of the whole call reaches the callee, which is what makes `Some(keyword)` an `Option<Keyword>`
   const wanted = expected.annotationOf()
-  var target = resolveTarget(checker, callee, wanted)
+  var target = resolveTarget checker, callee, wanted
   if !target.overloads.isEmpty() {
-    target = chooseOverload(checker, target, arguments, expression.span)
+    target = chooseOverload checker, target, arguments, expression.span
   }
   // `port 8080`, `onStart { ... }`, `database { ... }`: a call of a member that is not callable writes it (gap 15)
   if const Some(written) = propertyWrite(checker, expression, callee, target, arguments, style) {
@@ -67,27 +67,27 @@ public fn checkCall(
   const form = match target.form {
     Some(found) => found
     // A call of something that is not a function, which nothing here can resolve
-    .None => {
-      checker.resolved(callee.span, target.resolution)
-      const _ = checker.typed(callee.span, target.annotation)
-      deferArguments(checker, arguments)
-      checker.resolved(expression.span, Resolution.Deferred)
+    None => {
+      checker.resolved callee.span, target.resolution
+      const _ = checker.typed callee.span, target.annotation
+      deferArguments checker, arguments
+      checker.resolved expression.span, Resolution.Deferred
       return checker.deferredType
     }
   }
-  const instantiation = instantiateTarget(checker, target, form, expression.span)
+  const instantiation = instantiateTarget checker, target, form, expression.span
   const inner = instantiation.form
-  checker.resolved(callee.span, target.resolution)
-  const shown = checker.functionType(inner)
-  const _ = checker.typed(callee.span, shown)
+  checker.resolved callee.span, target.resolution
+  const shown = checker.functionType inner
+  const _ = checker.typed callee.span, shown
   // What the whole call has to produce is known before its arguments are: `employees.collect(maxBy { _.age })` learns
   // the `Item` of `maxBy` from the parameter of `collect` and only then reads the closure. Nothing is reported here -
   // the real check happens where the value arrives - and a variable is only ever solved by an exact type
   if const Some(annotation) = wanted {
-    matchResult(checker, inner.result, annotation)
+    matchResult checker, inner.result, annotation
   }
   // A private field cannot be passed from outside the type, which is what makes a constructor usable or not (4.9)
-  checkConstruction(checker, target, arguments, expression.span)
+  checkConstruction checker, target, arguments, expression.span
   // Places and the mutation rules (milestone 4.6). The receiver of a `var self` call stays an open access while the
   // arguments are evaluated and while a closure argument runs, which is what makes the DSL rule work; every `var`
   // argument joins it as it is checked; and at the end everything the call *reads* is held against all of them
@@ -99,26 +99,26 @@ public fn checkCall(
   // else - the only case the dead-change rule has anything to say about (design 5.3). `cursor.next()` hands its value on
   // and is therefore never one, wherever it stands
   const isDiscarded = expected.isStatement() || isEffectOnly(checker, inner.result)
-  openReceiverAccess(checker, callee, isVarReceiver, target.name, isDiscarded, call)
-  const plan = matchArguments(checker, target, inner, arguments, expression.span)
+  openReceiverAccess checker, callee, isVarReceiver, target.name, isDiscarded, call
+  const plan = matchArguments checker, target, inner, arguments, expression.span
   const calleeName = target.name
-  checkArguments(checker, inner, arguments, plan, calleeName, isDiscarded, call)
-  checkCallReads(checker, callee, arguments, plan.targets, inner.parameters, isVarReceiver)
-  closeAccessesTo(checker, openAccesses)
-  const witnesses = checkBounds(checker, instantiation.bounds, target.name, expression.span)
-  const solved = resolveTypes(checker, instantiation.arguments)
+  checkArguments checker, inner, arguments, plan, calleeName, isDiscarded, call
+  checkCallReads checker, callee, arguments, plan.targets, inner.parameters, isVarReceiver
+  closeAccessesTo checker, openAccesses
+  const witnesses = checkBounds checker, instantiation.bounds, target.name, expression.span
+  const solved = resolveTypes checker, instantiation.arguments
   // `isSame` compares identity, and only a `shared type` has one (BACKEND gap 15)
-  checkSharedIdentity(checker, target, solved, expression.span)
+  checkSharedIdentity checker, target, solved, expression.span
   if !solved.isEmpty() {
-    checker.recordTypeArguments(expression.span, solved)
+    checker.recordTypeArguments expression.span, solved
   }
   if !witnesses.isEmpty() {
-    checker.recordWitnesses(expression.span, witnesses)
+    checker.recordWitnesses expression.span, witnesses
   }
-  const resolution = withInstantiation(target.resolution, solved, witnesses)
-  checker.resolved(expression.span, resolution)
-  recordPlan(checker, expression.span, inner, plan)
-  resolveType(checker, inner.result)
+  const resolution = withInstantiation target.resolution, solved, witnesses
+  checker.resolved expression.span, resolution
+  recordPlan checker, expression.span, inner, plan
+  resolveType checker, inner.result
 }
 
 /** A call that produces nothing was written for its effect, whatever position it stands in. */
@@ -138,12 +138,12 @@ public fn instantiateTarget(
 ): Instantiation {
   if target.generics.isEmpty() {
     if !target.arguments.isEmpty() {
-      reportTypeArity(checker, target.name, 0, target.arguments.length(), at)
+      reportTypeArity checker, target.name, 0, target.arguments.length(), at
     }
-    return Instantiation(form, [], target.bounds)
+    return Instantiation form, [], target.bounds
   }
   if target.arguments.length() > target.generics.length() {
-    reportTypeArity(checker, target.name, target.generics.length(), target.arguments.length(), at)
+    reportTypeArity checker, target.name, target.generics.length(), target.arguments.length(), at
   }
   var mapping: Map<ParameterId, TypeId> = [:]
   var solved: List<TypeId> = []
@@ -154,14 +154,14 @@ public fn instantiateTarget(
       argument = target.arguments[index]
     } else {
       const name = checker.types.parameter(parameter).name
-      argument = checker.newVariable(name, target.name, at)
+      argument = checker.newVariable name, target.name, at
     }
-    mapping.set(parameter, argument)
-    solved.add(argument)
+    mapping.set parameter, argument
+    solved.add argument
   }
-  const instantiated = substituteFunction(checker.types, form, mapping)
-  const bounds = substituteBounds(checker.types, target.bounds, mapping)
-  Instantiation(instantiated, solved, bounds)
+  const instantiated = substituteFunction checker.types, form, mapping
+  const bounds = substituteBounds checker.types, target.bounds, mapping
+  Instantiation instantiated, solved, bounds
 }
 
 /**
@@ -176,7 +176,7 @@ fn matchResult(var checker: Checker, result: TypeId, expected: TypeId) {
   const bounds = match checker.types.form(expected) {
     .Traits(found) => found
     _ => {
-      const _ = unify(checker, result, expected)
+      const _ = unify checker, result, expected
       return
     }
   }
@@ -197,7 +197,7 @@ fn matchResult(var checker: Checker, result: TypeId, expected: TypeId) {
     }
     const actual = match traitArgumentsOf(checker, result, capability) {
       Some(found) => found
-      .None => {
+      None => {
         continue
       }
     }
@@ -205,7 +205,7 @@ fn matchResult(var checker: Checker, result: TypeId, expected: TypeId) {
       continue
     }
     for index in 0..arguments.length() {
-      const _ = unify(checker, arguments[index], actual[index])
+      const _ = unify checker, arguments[index], actual[index]
     }
   }
 }
@@ -223,7 +223,7 @@ fn chooseOverload(var checker: Checker, target: Target, arguments: List<Argument
   if first.isSpread || isClosureArgument(first) {
     return target
   }
-  const given = inferExpression(checker, first.value)
+  const given = inferExpression checker, first.value
   if checker.absorbs(given) {
     return target
   }
@@ -231,15 +231,15 @@ fn chooseOverload(var checker: Checker, target: Target, arguments: List<Argument
     if const Some(form) = candidate.form {
       if form.parameters.length() == 1 {
         if sameType(checker.types, form.parameters[0].annotation, given) {
-          return targetOfCandidate(checker, candidate, target.name)
+          return targetOfCandidate checker, candidate, target.name
         }
       }
     }
   }
-  reportNoOverload(checker, target, given, at)
+  reportNoOverload checker, target, given, at
   // One root cause, one message: the argument is checked against nothing after this, and the call is `Invalid`
   const broken = checker.invalidType
-  target.copy(form: Some(FunctionForm([ParameterForm(None, ParameterMode.Value, broken)], broken)))
+  target.copy form: Some(FunctionForm([ParameterForm(None, ParameterMode.Value, broken)], broken))
 }
 
 fn reportNoOverload(var checker: Checker, target: Target, given: TypeId, at: Span) {
@@ -247,11 +247,11 @@ fn reportNoOverload(var checker: Checker, target: Target, given: TypeId, at: Spa
   for candidate in target.overloads {
     if const Some(form) = candidate.form {
       if const Some(parameter) = form.parameters.first() {
-        offered.add(checker.describe(parameter.annotation))
+        offered.add checker.describe(parameter.annotation)
       }
     }
   }
-  const shown = checker.describe(given)
+  const shown = checker.describe given
   checker.reportHere(
     Diagnostic.error("`{target.name}` takes none of these from a `{shown}`", at)
       .withNote("`{target.name}` exists for {offered.joined(separator: ", ")}")
@@ -270,11 +270,11 @@ fn matchArguments(
   at: Span,
 ): ArgumentPlan {
   const parameters = form.parameters
-  const trailing = trailingClosureAt(arguments, at)
+  const trailing = trailingClosureAt arguments, at
   var targets: List<Int> = []
   var filled: List<Bool> = []
   for _ in parameters {
-    filled.add(false)
+    filled.add false
   }
   var variadic = -1
   var variadicFrom = -1
@@ -287,24 +287,24 @@ fn matchArguments(
       continue
     }
     if const Some(label) = argument.label {
-      const position = indexOfParameter(parameters, label.text)
+      const position = indexOfParameter parameters, label.text
       if position < 0 {
-        reportUnknownLabel(checker, target.name, parameters, label.text, label.span)
+        reportUnknownLabel checker, target.name, parameters, label.text, label.span
         targets.add(-1)
         continue
       }
       if filled[position] {
-        checker.reportHere(Diagnostic.error("`{label.text}` already has an argument", label.span))
+        checker.reportHere Diagnostic.error("`{label.text}` already has an argument", label.span)
         targets.add(-1)
         continue
       }
-      filled.set(position, true)
-      targets.add(position)
+      filled.set position, true
+      targets.add position
       continue
     }
     // A variadic parameter is last and collects every positional argument from here on
     if variadic >= 0 {
-      targets.add(variadic)
+      targets.add variadic
       continue
     }
     while next < parameters.length() && filled[next] {
@@ -318,17 +318,17 @@ fn matchArguments(
     if const .Variadic = parameters[next].mode {
       variadic = next
       variadicFrom = index
-      filled.set(next, true)
-      targets.add(next)
+      filled.set next, true
+      targets.add next
       continue
     }
-    filled.set(next, true)
-    targets.add(next)
+    filled.set next, true
+    targets.add next
     next = next + 1
   }
   if trailing >= 0 {
     const closure = arguments[trailing].value.span
-    placeTrailingClosure(checker, target, parameters, filled, targets, trailing, closure)
+    placeTrailingClosure checker, target, parameters, filled, targets, trailing, closure
   }
   var defaults: List<Int> = []
   var isMissing = false
@@ -337,7 +337,7 @@ fn matchArguments(
       continue
     }
     if parameters[position].hasDefault {
-      defaults.add(position)
+      defaults.add position
       continue
     }
     // A variadic parameter that collects nothing is an empty list, not a missing argument
@@ -347,9 +347,9 @@ fn matchArguments(
     isMissing = true
   }
   if hasSurplus || isMissing {
-    reportArity(checker, target.name, parameters, arguments.length(), at)
+    reportArity checker, target.name, parameters, arguments.length(), at
   }
-  ArgumentPlan(targets, defaults, variadic, variadicFrom)
+  ArgumentPlan targets, defaults, variadic, variadicFrom
 }
 
 /** The trailing closure fills the last parameter, which is what makes `fold(0) { ... }` and `html { ... }` work. */
@@ -374,9 +374,9 @@ fn placeTrailingClosure(
     )
     return
   }
-  filled.set(last, true)
-  targets.set(trailing, last)
-  checker.adapted(at, Adaptation.TrailingClosure(last))
+  filled.set last, true
+  targets.set trailing, last
+  checker.adapted at, Adaptation.TrailingClosure(last)
 }
 
 /**
@@ -425,11 +425,11 @@ fn checkArguments(
   call: Int,
 ) {
   // A closure written straight as an argument cannot outlive the call, which is what lets it hold a reference (gap 14)
-  noteArgumentClosures(checker, arguments)
+  noteArgumentClosures checker, arguments
   // The ordinary arguments first, then the closures: every `var` access of the call is open by the time a closure of it
   // runs, and every read of an ordinary argument has ended before the accesses begin (the Swift model, 4.10)
-  checkArgumentPass(checker, form, arguments, plan, false, callee, isDiscarded, call)
-  checkArgumentPass(checker, form, arguments, plan, true, callee, isDiscarded, call)
+  checkArgumentPass checker, form, arguments, plan, false, callee, isDiscarded, call
+  checkArgumentPass checker, form, arguments, plan, true, callee, isDiscarded, call
 }
 
 fn checkArgumentPass(
@@ -451,24 +451,24 @@ fn checkArgumentPass(
     }
     const position = plan.targets.get(index) ?? -1
     if position < 0 || position >= parameters.length() {
-      const _ = inferExpression(checker, argument.value)
+      const _ = inferExpression checker, argument.value
       continue
     }
     const parameter = parameters[position]
     if argument.isSpread {
-      checkSpread(checker, argument, parameter)
+      checkSpread checker, argument, parameter
       continue
     }
     // What the parameter is may have been learned from an argument to its left, so it is resolved here and not before
-    const annotation = resolveType(checker, parameter.annotation)
-    const inner = expectationOf(checker, annotation)
+    const annotation = resolveType checker, parameter.annotation
+    const inner = expectationOf checker, annotation
     const at = argument.value.span
     // `lazy Value`: the argument is a thunk the callee evaluates at most once, so it becomes a closure of its own
     if const .Lazy = parameter.mode {
-      checker.adapted(at, Adaptation.Lazy)
-      openThunk(checker, at)
-      const _ = checkExpression(checker, argument.value, inner)
-      closeThunk(checker, at)
+      checker.adapted at, Adaptation.Lazy
+      openThunk checker, at
+      const _ = checkExpression checker, argument.value, inner
+      closeThunk checker, at
       continue
     }
     // `assert(x > 1)`: the message about a capture that is not `Encode` names what quotes it (gap 36)
@@ -476,11 +476,11 @@ fn checkArgumentPass(
       checker.quotingOwner = callee
       checker.quotingParameter = parameter.name ?? ""
     }
-    const _ = checkExpression(checker, argument.value, inner)
+    const _ = checkExpression checker, argument.value, inner
     // A `var` argument is a path into the caller's value, and it owns that path for the rest of the call (4.6)
     if const .Var = parameter.mode {
       const named = parameter.name ?? ""
-      openArgumentAccess(checker, argument.value, named, callee, isDiscarded, call)
+      openArgumentAccess checker, argument.value, named, callee, isDiscarded, call
     }
   }
 }
@@ -494,26 +494,26 @@ fn isClosureArgument(argument: Argument): Bool {
 
 /** `...expression` spreads any `Iterable<Item>` into a variadic parameter; a collection is never spread implicitly. */
 fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterForm) {
-  const given = inferExpression(checker, argument.value)
-  checker.adapted(argument.value.span, Adaptation.Spread)
+  const given = inferExpression checker, argument.value
+  checker.adapted argument.value.span, Adaptation.Spread
   if checker.absorbs(given) {
     return
   }
   const iterable = match checker.wellKnown.iterable {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
   match traitArgumentsOf(checker, given, iterable) {
     Some(found) => {
       if const Some(item) = found.first() {
-        const _ = unify(checker, item, parameter.annotation)
+        const _ = unify checker, item, parameter.annotation
       }
     }
-    .None => {
+    None => {
       if isConcrete(checker, given) {
-        const shown = checker.describe(given)
+        const shown = checker.describe given
         checker.reportHere(
           Diagnostic.error("`{shown}` is not `Iterable`, so `...` cannot spread it", argument.value.span)
         )
@@ -532,14 +532,14 @@ fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterFor
 public fn checkBounds(var checker: Checker, bounds: List<Bound>, owner: String, at: Span): List<Witness> {
   var witnesses: List<Witness> = []
   for bound in bounds {
-    const subject = resolveType(checker, bound.subject)
+    const subject = resolveType checker, bound.subject
     for capability in bound.traits {
-      const wanted = resolveType(checker, capability)
-      const found = witnessFor(checker, subject, wanted)
+      const wanted = resolveType checker, capability
+      const found = witnessFor checker, subject, wanted
       if const .Unresolved = found {
-        reportUnmetBound(checker, subject, wanted, owner, at)
+        reportUnmetBound checker, subject, wanted, owner, at
       }
-      witnesses.add(found)
+      witnesses.add found
     }
   }
   witnesses
@@ -554,9 +554,9 @@ fn reportUnmetBound(var checker: Checker, subject: TypeId, wanted: TypeId, owner
   if !isConcrete(checker, wanted) {
     return
   }
-  const shown = checker.describe(wanted)
+  const shown = checker.describe wanted
   if const .Parameter(_) = checker.types.form(subject) {
-    const name = checker.describe(subject)
+    const name = checker.describe subject
     checker.reportHere(
       Diagnostic.error("`{name}` is not `{shown}`", at)
         .withNote("Add the bound to the declaration: `where {name}: {shown}`")
@@ -566,12 +566,12 @@ fn reportUnmetBound(var checker: Checker, subject: TypeId, wanted: TypeId, owner
   if !isConcrete(checker, subject) {
     return
   }
-  const given = checker.describe(subject)
-  var problem = Diagnostic.error("`{given}` does not implement `{shown}`", at)
+  const given = checker.describe subject
+  var problem = Diagnostic.error "`{given}` does not implement `{shown}`", at
   if !owner.isEmpty() {
-    problem = problem.withNote("`{owner}` asks for it")
+    problem = problem.withNote "`{owner}` asks for it"
   }
-  checker.reportHere(problem)
+  checker.reportHere problem
 }
 
 /** The resolution of a call, with everything the call site learned: the type arguments and the witnesses. */
@@ -581,32 +581,32 @@ public fn withInstantiation(
   witnesses: List<Witness>,
 ): Resolution {
   if const .Callable(symbol, _, dispatch) = resolution {
-    return Resolution.Callable(symbol, arguments, withWitnesses(dispatch, witnesses))
+    return Resolution.Callable symbol, arguments, withWitnesses(dispatch, witnesses)
   }
   resolution
 }
 
 fn withWitnesses(dispatch: Dispatch, witnesses: List<Witness>): Dispatch {
   match dispatch {
-    .Implementation(implementation, _) => Dispatch.Implementation(implementation, witnesses)
-    .Object(bound, _) => Dispatch.Object(bound, witnesses)
-    .Forwarded(parameter, bound, _) => Dispatch.Forwarded(parameter, bound, witnesses)
+    .Implementation(implementation, _) => Dispatch.Implementation implementation, witnesses
+    .Object(bound, _) => Dispatch.Object bound, witnesses
+    .Forwarded(parameter, bound, _) => Dispatch.Forwarded parameter, bound, witnesses
     _ => dispatch
   }
 }
 
 /** What the source does not spell out, in the order the lowering has to replay it in. */
 fn recordPlan(var checker: Checker, at: Span, form: FunctionForm, plan: ArgumentPlan) {
-  checker.recordArguments(at, plan.targets)
+  checker.recordArguments at, plan.targets
   if isReordered(plan.targets) {
-    checker.adapted(at, Adaptation.Reorder(plan.targets))
+    checker.adapted at, Adaptation.Reorder(plan.targets)
   }
   if plan.variadic >= 0 {
-    const element = resolveType(checker, form.parameters[plan.variadic].annotation)
-    checker.adapted(at, Adaptation.Variadic(element, plan.variadicFrom))
+    const element = resolveType checker, form.parameters[plan.variadic].annotation
+    checker.adapted at, Adaptation.Variadic(element, plan.variadicFrom)
   }
   for position in plan.defaults {
-    checker.adapted(at, Adaptation.DefaultArgument(position))
+    checker.adapted at, Adaptation.DefaultArgument(position)
   }
 }
 
@@ -643,7 +643,7 @@ fn reportArity(var checker: Checker, name: String, parameters: List<ParameterFor
   } else {
     "{given} were given"
   }
-  checker.reportHere(Diagnostic.error("`{name}` takes {takes}, {was}", at))
+  checker.reportHere Diagnostic.error("`{name}` takes {takes}, {was}", at)
 }
 
 fn reportTypeArity(var checker: Checker, name: String, expected: Int, given: Int, at: Span) {
@@ -654,7 +654,7 @@ fn reportTypeArity(var checker: Checker, name: String, expected: Int, given: Int
   } else {
     "{expected} type arguments"
   }
-  checker.reportHere(Diagnostic.error("`{name}` takes {wanted}, {given} were given", at))
+  checker.reportHere Diagnostic.error("`{name}` takes {wanted}, {given} were given", at)
 }
 
 fn isVariadic(parameter: ParameterForm): Bool {
@@ -671,11 +671,11 @@ fn reportUnknownLabel(
   label: String,
   at: Span,
 ) {
-  var problem = Diagnostic.error("`{name}` has no parameter `{label}`", at)
+  var problem = Diagnostic.error "`{name}` has no parameter `{label}`", at
   if const Some(similar) = nearestParameter(parameters, label) {
-    problem = problem.withNote("Did you mean `{similar}`?")
+    problem = problem.withNote "Did you mean `{similar}`?"
   }
-  checker.reportHere(problem)
+  checker.reportHere problem
 }
 
 fn nearestParameter(parameters: List<ParameterForm>, label: String): String? {
@@ -689,7 +689,7 @@ fn nearestParameter(parameters: List<ParameterForm>, label: String): String? {
     const found = editDistance(name, label, distance - 1)
     if found < distance {
       distance = found
-      best = Some(name)
+      best = Some name
     }
   }
   best

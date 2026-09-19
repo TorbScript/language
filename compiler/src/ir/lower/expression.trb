@@ -36,23 +36,23 @@ public fn lowerExpression(
   destination: Slot?,
 ): Slot {
   if !lowering.isSupported {
-    return abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
   const annotation = match typeAtSpan(lowering, expression.span) {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "an expression without a type", expression.span)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "an expression without a type", expression.span
     }
   }
   if !canReplayAdaptations(lowering, expression) {
-    return abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
   // `Adaptation.ToTraitValue`: the value is computed first and then boxed with one witness pointer per bound
-  const bounds = traitValueBoundsOf(lowering, expression)
+  const bounds = traitValueBoundsOf lowering, expression
   if !bounds.isEmpty() {
-    return lowerCoercedValue(lowering, builder, destination, expression, annotation, bounds)
+    return lowerCoercedValue lowering, builder, destination, expression, annotation, bounds
   }
-  lowerInnerExpression(lowering, builder, expression, destination, annotation)
+  lowerInnerExpression lowering, builder, expression, destination, annotation
 }
 
 /**
@@ -68,48 +68,48 @@ fn lowerInnerExpression(
 ): Slot {
   // Every literal, including a negated one, is static data: the checker already decided which type it adapted to
   if isLiteralExpression(expression) {
-    return lowerLiteral(lowering, builder, destination, expression)
+    return lowerLiteral lowering, builder, destination, expression
   }
   match expression.kind {
     .Name(_) | .Member(_, _, _) | .ImplicitMember(_) => {
-      lowerReference(lowering, builder, destination, expression, annotation)
+      lowerReference lowering, builder, destination, expression, annotation
     }
-    .Call(callee, arguments, _) => lowerCall(lowering, builder, destination, expression, callee, arguments, annotation)
-    .Unary(operator, operand) => lowerUnary(lowering, builder, destination, expression, operator, operand, annotation)
+    .Call(callee, arguments, _) => lowerCall lowering, builder, destination, expression, callee, arguments, annotation
+    .Unary(operator, operand) => lowerUnary lowering, builder, destination, expression, operator, operand, annotation
     .Binary(operator, left, right) => {
-      lowerBinary(lowering, builder, destination, expression, operator, left, right, annotation)
+      lowerBinary lowering, builder, destination, expression, operator, left, right, annotation
     }
     .If(condition, then, otherwise) => {
-      lowerIf(lowering, builder, destination, expression, condition, then, otherwise, annotation)
+      lowerIf lowering, builder, destination, expression, condition, then, otherwise, annotation
     }
     .Block(block) => {
-      const target = valueSlot(lowering, builder, destination, annotation)
-      lowerBlockInto(lowering, builder, block, Some(target))
+      const target = valueSlot lowering, builder, destination, annotation
+      lowerBlockInto lowering, builder, block, Some(target)
       target
     }
-    .TupleLiteral(items) => lowerTuple(lowering, builder, destination, items, annotation, expression.span)
-    .Index(_, _) => unsupportedSlot(lowering, builder, destination, "`a[key]`", expression.span)
-    .ListLiteral(_) => unsupportedSlot(lowering, builder, destination, "a list literal", expression.span)
-    .MapLiteral(_) => unsupportedSlot(lowering, builder, destination, "a map literal", expression.span)
-    .RangeLiteral(_, _, _) => unsupportedSlot(lowering, builder, destination, "a range as a value", expression.span)
-    .Try(inner) => lowerTry(lowering, builder, destination, expression, inner, annotation)
-    .Closure(_) => unsupportedSlot(lowering, builder, destination, "a closure", expression.span)
-    .Match(subject, arms) => lowerMatch(lowering, builder, destination, expression, subject, arms, annotation)
-    .Generic(_, _) => unsupportedSlot(lowering, builder, destination, "a generic call", expression.span)
-    .TextLiteral(_) => unsupportedSlot(lowering, builder, destination, "string interpolation", expression.span)
-    _ => unsupportedSlot(lowering, builder, destination, "an expression the front end rejected", expression.span)
+    .TupleLiteral(items) => lowerTuple lowering, builder, destination, items, annotation, expression.span
+    .Index(_, _) => unsupportedSlot lowering, builder, destination, "`a[key]`", expression.span
+    .ListLiteral(_) => unsupportedSlot lowering, builder, destination, "a list literal", expression.span
+    .MapLiteral(_) => unsupportedSlot lowering, builder, destination, "a map literal", expression.span
+    .RangeLiteral(_, _, _) => unsupportedSlot lowering, builder, destination, "a range as a value", expression.span
+    .Try(inner) => lowerTry lowering, builder, destination, expression, inner, annotation
+    .Closure(_) => unsupportedSlot lowering, builder, destination, "a closure", expression.span
+    .Match(subject, arms) => lowerMatch lowering, builder, destination, expression, subject, arms, annotation
+    .Generic(_, _) => unsupportedSlot lowering, builder, destination, "a generic call", expression.span
+    .TextLiteral(_) => unsupportedSlot lowering, builder, destination, "string interpolation", expression.span
+    _ => unsupportedSlot lowering, builder, destination, "an expression the front end rejected", expression.span
   }
 }
 
 /** The value of an expression that nothing has a slot for yet. */
 public fn lowerValue(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
-  lowerExpression(lowering, builder, expression, None)
+  lowerExpression lowering, builder, expression, None
 }
 
 /** The bounds `Adaptation.ToTraitValue` recorded at an expression, or an empty list where it recorded none. */
 fn traitValueBoundsOf(var lowering: Lowering, expression: Expression): List<TypeId> {
   const module = lowering.module
-  const adaptations = lowering.checker.adaptationsAt(module, expression.span)
+  const adaptations = lowering.checker.adaptationsAt module, expression.span
   for adaptation in adaptations {
     if const .ToTraitValue(bounds, _) = adaptation {
       return bounds
@@ -131,21 +131,21 @@ fn lowerCoercedValue(
   annotation: IrTypeId,
   bounds: List<TypeId>,
 ): Slot {
-  const inner = lowerInnerExpression(lowering, builder, expression, None, annotation)
+  const inner = lowerInnerExpression lowering, builder, expression, None, annotation
   if !lowering.isSupported {
-    return abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
-  const object = objectTypeOf(lowering, bounds)
+  const object = objectTypeOf lowering, bounds
   const source = match lowering.checker.expressionType(lowering.module, expression.span) {
     Some(found) => found
-    .None => {
+    None => {
       const what = "a value used as a trait-typed value without a type"
-      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+      return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
-  const target = valueSlot(lowering, builder, destination, object)
+  const target = valueSlot lowering, builder, destination, object
   if !lowerTraitValue(lowering, builder, target, inner, bounds, source, expression.span) {
-    return abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
   target
 }
@@ -163,15 +163,15 @@ public fn valueSlot(
     return slot
   }
   // `Never` has no values, so a slot may not have that type: the expression diverges and nothing reads this one
-  const inner = if isNeverType(lowering, annotation) { voidTypeOf(lowering) } else { annotation }
-  addTemporary(builder, inner)
+  const inner = if isNeverType(lowering, annotation) { voidTypeOf lowering } else { annotation }
+  addTemporary builder, inner
 }
 
 /** A value that is already in a slot, moved into the destination where the caller asked for one. */
 public fn copiedInto(var builder: FunctionBuilder, destination: Slot?, source: Slot): Slot {
   if const Some(slot) = destination {
     if slot != source {
-      emit(builder, Instruction.Copy(slot, source))
+      emit builder, Instruction.Copy(slot, source)
     }
     return slot
   }
@@ -186,8 +186,8 @@ public fn unsupportedSlot(
   what: String,
   at: Span,
 ): Slot {
-  reportUnsupported(lowering, what, at)
-  abandonedSlot(lowering, builder, destination)
+  reportUnsupported lowering, what, at
+  abandonedSlot lowering, builder, destination
 }
 
 /**
@@ -201,9 +201,9 @@ public fn abandonedSlot(var lowering: Lowering, var builder: FunctionBuilder, de
   if const Some(known) = lowering.hole {
     return known
   }
-  const annotation = voidTypeOf(lowering)
-  const made = addTemporary(builder, annotation)
-  lowering.hole = Some(made)
+  const annotation = voidTypeOf lowering
+  const made = addTemporary builder, annotation
+  lowering.hole = Some made
   made
 }
 
@@ -216,10 +216,10 @@ public fn abandonedSlot(var lowering: Lowering, var builder: FunctionBuilder, de
 fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
   const at = expression.span
   const module = lowering.module
-  const adaptations = lowering.checker.adaptationsAt(module, at)
+  const adaptations = lowering.checker.adaptationsAt module, at
   // `?` converts the error out of the very adaptation this would refuse, and a `??` inlines the thunk of its fallback
-  const convertsItself = isTryExpression(expression)
-  const inlinesThunk = lowering.inlinedThunks.containsKey(at)
+  const convertsItself = isTryExpression expression
+  const inlinesThunk = lowering.inlinedThunks.containsKey at
   for adaptation in adaptations {
     const blocked = match adaptation {
       .Convert(_, _) => if convertsItself { "" } else { "a conversion through `From`" }
@@ -233,7 +233,7 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
       _ => ""
     }
     if !blocked.isEmpty() {
-      reportUnsupported(lowering, blocked, at)
+      reportUnsupported lowering, blocked, at
       return false
     }
   }
@@ -253,10 +253,10 @@ fn isTryExpression(expression: Expression): Bool {
 public fn isLiteralExpression(expression: Expression): Bool {
   match expression.kind {
     .IntegerLiteral(_) | .FloatLiteral(_) | .BoolLiteral(_) | .CharLiteral(_) | .VoidLiteral => true
-    .TextLiteral(segments) => isPlainText(segments)
+    .TextLiteral(segments) => isPlainText segments
     .Unary(operator, operand) => {
       if const .Negate = operator {
-        return isNumberLiteral(operand)
+        return isNumberLiteral operand
       }
       false
     }
@@ -288,11 +288,11 @@ fn lowerLiteral(
 ): Slot {
   const value = match evaluateConstant(lowering, expression) {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "a literal the back end cannot read", expression.span)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a literal the back end cannot read", expression.span
     }
   }
-  constantSlot(lowering, builder, destination, value.contents, value.annotation)
+  constantSlot lowering, builder, destination, value.contents, value.annotation
 }
 
 /** A slot that holds one static value. Two literals of the same value are one static, whatever they are written in. */
@@ -303,9 +303,9 @@ public fn constantSlot(
   contents: StaticContents,
   annotation: IrTypeId,
 ): Slot {
-  const identifier = internStatic(lowering, contents, annotation)
-  const target = valueSlot(lowering, builder, destination, annotation)
-  emit(builder, Instruction.Constant(target, identifier))
+  const identifier = internStatic lowering, contents, annotation
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.Constant(target, identifier)
   target
 }
 
@@ -316,8 +316,8 @@ public fn integerSlot(
   value: Int,
   annotation: IrTypeId,
 ): Slot {
-  const contents = StaticContents.Literal(LiteralValue.Integer(value))
-  constantSlot(lowering, builder, None, contents, annotation)
+  const contents = StaticContents.Literal LiteralValue.Integer(value)
+  constantSlot lowering, builder, None, contents, annotation
 }
 
 /**
@@ -325,8 +325,8 @@ public fn integerSlot(
  * later read of the slot would be a read of nothing - and the verifier says so.
  */
 public fn voidSlot(var lowering: Lowering, var builder: FunctionBuilder, destination: Slot?): Slot {
-  const annotation = voidTypeOf(lowering)
-  constantSlot(lowering, builder, destination, StaticContents.VoidValue, annotation)
+  const annotation = voidTypeOf lowering
+  constantSlot lowering, builder, destination, StaticContents.VoidValue, annotation
 }
 
 // --- Names, fields and tuple positions ------------------------------------------------------------------------------
@@ -342,26 +342,26 @@ fn lowerReference(
   const module = lowering.module
   const resolution = match lowering.checker.resolutionAt(module, expression.span) {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "a name the checker did not resolve", expression.span)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a name the checker did not resolve", expression.span
     }
   }
   match resolution {
     .Local(binding) => {
       const at = lowering.checker.binding(binding).at
       match lowering.slots.get(at) {
-        Some(found) => copiedInto(builder, destination, found)
-        .None => unsupportedSlot(lowering, builder, destination, "a captured binding", expression.span)
+        Some(found) => copiedInto builder, destination, found
+        None => unsupportedSlot lowering, builder, destination, "a captured binding", expression.span
       }
     }
-    .Constant(symbol, _) => lowerConstantReference(lowering, builder, destination, symbol, expression.span)
-    .Field(_, field) => lowerFieldRead(lowering, builder, destination, expression, field, annotation)
-    .TupleField(_, index) => lowerTupleRead(lowering, builder, destination, expression, index, annotation)
+    .Constant(symbol, _) => lowerConstantReference lowering, builder, destination, symbol, expression.span
+    .Field(_, field) => lowerFieldRead lowering, builder, destination, expression, field, annotation
+    .TupleField(_, index) => lowerTupleRead lowering, builder, destination, expression, index, annotation
     .Callable(_, _, _) => {
-      unsupportedSlot(lowering, builder, destination, "a function used as a value", expression.span)
+      unsupportedSlot lowering, builder, destination, "a function used as a value", expression.span
     }
-    .CaseOf(owner, variant) => lowerCaseValue(lowering, builder, destination, expression, owner, variant, annotation)
-    _ => unsupportedSlot(lowering, builder, destination, "a name the back end does not lower yet", expression.span)
+    .CaseOf(owner, variant) => lowerCaseValue lowering, builder, destination, expression, owner, variant, annotation
+    _ => unsupportedSlot lowering, builder, destination, "a name the back end does not lower yet", expression.span
   }
 }
 
@@ -374,21 +374,21 @@ fn lowerConstantReference(
 ): Slot {
   // A top-level binding of the entry file is a local of the entry function, not a static value
   if const Some(slot) = lowering.entryLocals.get(symbol.value) {
-    return copiedInto(builder, destination, slot)
+    return copiedInto builder, destination, slot
   }
   if isVarBinding(lowering, symbol) {
     const what = "a top-level `var` read from a function"
-    return unsupportedSlot(lowering, builder, destination, what, at)
+    return unsupportedSlot lowering, builder, destination, what, at
   }
   const identifier = match staticOfConstant(lowering, symbol) {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "a constant that is not compile-time evaluable", at)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a constant that is not compile-time evaluable", at
     }
   }
   const annotation = lowering.program.staticAt(identifier).annotation
-  const target = valueSlot(lowering, builder, destination, annotation)
-  emit(builder, Instruction.Constant(target, identifier))
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.Constant(target, identifier)
   target
 }
 
@@ -399,7 +399,7 @@ fn lowerConstantReference(
 public fn isVarBinding(var lowering: Lowering, symbol: SymbolId): Bool {
   const site = match lowering.checker.siteOf(symbol) {
     Some(found) => found
-    .None => {
+    None => {
       return false
     }
   }
@@ -423,30 +423,30 @@ fn lowerFieldRead(
 ): Slot {
   const base = match receiverSlot(lowering, builder, expression) {
     Some(found) => found
-    .None => {
+    None => {
       const what = "a field of something the back end cannot reach"
-      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+      return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
-  const owner = builder.typeOfSlot(base)
+  const owner = builder.typeOfSlot base
   const layout = match layoutOfType(lowering.program, owner) {
     Some(found) => found
-    .None => {
-      const shown = describeIrType(lowering.program, owner)
-      return unsupportedSlot(lowering, builder, destination, "a field of `{shown}`", expression.span)
+    None => {
+      const shown = describeIrType lowering.program, owner
+      return unsupportedSlot lowering, builder, destination, "a field of `{shown}`", expression.span
     }
   }
-  const index = fieldIndexOf(lowering, layout, field)
+  const index = fieldIndexOf lowering, layout, field
   if index < 0 {
-    return unsupportedSlot(lowering, builder, destination, "a field of a variant type", expression.span)
+    return unsupportedSlot lowering, builder, destination, "a field of a variant type", expression.span
   }
   const step = if isTupleLayout(lowering, owner) {
-    PathStep.TupleField(layout, index)
+    PathStep.TupleField layout, index
   } else {
-    PathStep.Field(layout, index)
+    PathStep.Field layout, index
   }
-  const target = valueSlot(lowering, builder, destination, annotation)
-  emit(builder, Instruction.Read(target, Reference(base, [step])))
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.Read(target, Reference(base, [step]))
   target
 }
 
@@ -460,26 +460,26 @@ fn lowerTupleRead(
 ): Slot {
   const base = match receiverSlot(lowering, builder, expression) {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "a tuple position of something unreachable", expression.span)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a tuple position of something unreachable", expression.span
     }
   }
-  const owner = builder.typeOfSlot(base)
+  const owner = builder.typeOfSlot base
   const layout = match layoutOfType(lowering.program, owner) {
     Some(found) => found
-    .None => {
+    None => {
       const what = "a tuple position of a value without a layout"
-      return unsupportedSlot(lowering, builder, destination, what, expression.span)
+      return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
-  const target = valueSlot(lowering, builder, destination, annotation)
-  emit(builder, Instruction.Read(target, Reference(base, [PathStep.TupleField(layout, index)])))
+  const target = valueSlot lowering, builder, destination, annotation
+  emit builder, Instruction.Read(target, Reference(base, [PathStep.TupleField(layout, index)]))
   target
 }
 
 /** Which field of a layout a symbol is. Only the common fields of a variant layout are reachable without a `match`. */
 public fn fieldIndexOf(var lowering: Lowering, layout: LayoutId, field: SymbolId): Int {
-  const shape = lowering.program.layoutAt(layout)
+  const shape = lowering.program.layoutAt layout
   const reachable = if shape.variants.isEmpty() { shape.fields.length() } else { shape.commonFieldCount }
   for index in 0..reachable {
     if shape.fields[index].symbol == Some(field) {
@@ -504,23 +504,23 @@ public fn receiverSlot(var lowering: Lowering, var builder: FunctionBuilder, exp
   if const .Member(base, _, isOptional) = expression.kind {
     if isOptional {
       // The checker resolves `a?.m` to `Option.map`/`flatMap`, whose argument is a closure (gap 12)
-      reportUnsupported(lowering, "`?.`, which is `Option.map` over a closure (milestone 5.8)", expression.span)
+      reportUnsupported lowering, "`?.`, which is `Option.map` over a closure (milestone 5.8)", expression.span
       return None
     }
-    const slot = lowerValue(lowering, builder, base)
-    return Some(slot)
+    const slot = lowerValue lowering, builder, base
+    return Some slot
   }
-  implicitReceiver(lowering, expression.span)
+  implicitReceiver lowering, expression.span
 }
 
 /** The binding `Adaptation.ImplicitSelf` names: the lowering puts the receiver back that the source left out. */
 public fn implicitReceiver(var lowering: Lowering, at: Span): Slot? {
   const module = lowering.module
-  const adaptations = lowering.checker.adaptationsAt(module, at)
+  const adaptations = lowering.checker.adaptationsAt module, at
   for adaptation in adaptations {
     if const .ImplicitSelf(receiver) = adaptation {
       const declared = lowering.checker.binding(receiver).at
-      return lowering.slots.get(declared)
+      return lowering.slots.get declared
     }
   }
   None
@@ -538,16 +538,16 @@ fn lowerTuple(
 ): Slot {
   const layout = match layoutOfType(lowering.program, annotation) {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "a tuple without a layout", at)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a tuple without a layout", at
     }
   }
   var slots: List<Slot> = []
   for item in items {
-    slots.add(lowerValue(lowering, builder, item.value))
+    slots.add lowerValue(lowering, builder, item.value)
   }
-  const target = valueSlot(lowering, builder, destination, annotation)
-  lowerConstruct(lowering, builder, target, layout, 0, slots)
+  const target = valueSlot lowering, builder, destination, annotation
+  lowerConstruct lowering, builder, target, layout, 0, slots
   target
 }
 
@@ -562,17 +562,17 @@ fn lowerUnary(
   operand: Expression,
   annotation: IrTypeId,
 ): Slot {
-  const slot = lowerValue(lowering, builder, operand)
+  const slot = lowerValue lowering, builder, operand
   if const .Not = operator {
     const at = expression.span
-    return intrinsicSlot(lowering, builder, destination, IntrinsicOperation.BooleanNot, None, [slot], annotation, at)
+    return intrinsicSlot lowering, builder, destination, IntrinsicOperation.BooleanNot, None, [slot], annotation, at
   }
-  const inner = builder.typeOfSlot(slot)
+  const inner = builder.typeOfSlot slot
   if const Some(kind) = numericKindOf(lowering.program, inner) {
     const at = expression.span
-    return intrinsicSlot(lowering, builder, destination, IntrinsicOperation.Negate, Some(kind), [slot], annotation, at)
+    return intrinsicSlot lowering, builder, destination, IntrinsicOperation.Negate, Some(kind), [slot], annotation, at
   }
-  lowerOperator(lowering, builder, destination, expression.span, [slot], annotation)
+  lowerOperator lowering, builder, destination, expression.span, [slot], annotation
 }
 
 fn lowerBinary(
@@ -586,15 +586,15 @@ fn lowerBinary(
   annotation: IrTypeId,
 ): Slot {
   match operator {
-    .And | .Or => shortCircuit(lowering, builder, destination, operator, left, right, annotation, expression.span)
-    .Coalesce => lowerCoalesce(lowering, builder, destination, expression, left, right, annotation)
+    .And | .Or => shortCircuit lowering, builder, destination, operator, left, right, annotation, expression.span
+    .Coalesce => lowerCoalesce lowering, builder, destination, expression, left, right, annotation
     _ => {
-      const first = lowerValue(lowering, builder, left)
-      const second = lowerValue(lowering, builder, right)
+      const first = lowerValue lowering, builder, left
+      const second = lowerValue lowering, builder, right
       if isComparison(operator) {
-        return lowerComparison(lowering, builder, destination, operator, first, second, annotation, expression.span)
+        return lowerComparison lowering, builder, destination, operator, first, second, annotation, expression.span
       }
-      lowerArithmetic(lowering, builder, destination, operator, first, second, annotation, expression.span)
+      lowerArithmetic lowering, builder, destination, operator, first, second, annotation, expression.span
     }
   }
 }
@@ -620,27 +620,27 @@ fn shortCircuit(
   annotation: IrTypeId,
   at: Span,
 ): Slot {
-  const target = valueSlot(lowering, builder, destination, annotation)
-  const _ = lowerExpression(lowering, builder, left, Some(target))
-  const location = locationOf(lowering, at)
-  const other = addBlock(builder, "right", Some(location))
-  const join = addBlock(builder, "join", Some(location))
+  const target = valueSlot lowering, builder, destination, annotation
+  const _ = lowerExpression lowering, builder, left, Some(target)
+  const location = locationOf lowering, at
+  const other = addBlock builder, "right", Some(location)
+  const join = addBlock builder, "join", Some(location)
   const isAnd = match operator {
     .And => true
     _ => false
   }
   const terminator = if isAnd {
-    Terminator.Branch(target, other, join)
+    Terminator.Branch target, other, join
   } else {
-    Terminator.Branch(target, join, other)
+    Terminator.Branch target, join, other
   }
-  finishBlock(lowering, builder, terminator)
-  continueIn(lowering, builder, other)
-  const _ = lowerExpression(lowering, builder, right, Some(target))
+  finishBlock lowering, builder, terminator
+  continueIn lowering, builder, other
+  const _ = lowerExpression lowering, builder, right, Some(target)
   if !lowering.isDiverged {
-    finishBlock(lowering, builder, Terminator.Jump(join))
+    finishBlock lowering, builder, Terminator.Jump(join)
   }
-  continueIn(lowering, builder, join)
+  continueIn lowering, builder, join
   target
 }
 
@@ -659,21 +659,21 @@ fn lowerComparison(
   annotation: IrTypeId,
   at: Span,
 ): Slot {
-  const operands = builder.typeOfSlot(first)
-  const operation = comparisonOperation(operator)
+  const operands = builder.typeOfSlot first
+  const operation = comparisonOperation operator
   if const Some(kind) = numericKindOf(lowering.program, operands) {
-    return intrinsicSlot(lowering, builder, destination, operation, Some(kind), [first, second], annotation, at)
+    return intrinsicSlot lowering, builder, destination, operation, Some(kind), [first, second], annotation, at
   }
   if isEqualityOperation(operation) && isPlainEquality(lowering, operands) {
-    return intrinsicSlot(lowering, builder, destination, operation, None, [first, second], annotation, at)
+    return intrinsicSlot lowering, builder, destination, operation, None, [first, second], annotation, at
   }
   if isTextType(lowering, operands) {
-    return lowerTextComparison(lowering, builder, destination, operation, first, second, annotation, at)
+    return lowerTextComparison lowering, builder, destination, operation, first, second, annotation, at
   }
   if !isEqualityOperation(operation) {
-    return lowerOrderComparison(lowering, builder, destination, operation, first, second, annotation, at)
+    return lowerOrderComparison lowering, builder, destination, operation, first, second, annotation, at
   }
-  lowerOperator(lowering, builder, destination, at, [first, second], annotation)
+  lowerOperator lowering, builder, destination, at, [first, second], annotation
 }
 
 /**
@@ -692,37 +692,37 @@ fn lowerOrderComparison(
 ): Slot {
   const ordering = match orderingTypeOf(lowering) {
     Some(found) => found
-    .None => {
+    None => {
       const what = "an order over a type, without an `Ordering` in the prelude"
-      return unsupportedSlot(lowering, builder, destination, what, at)
+      return unsupportedSlot lowering, builder, destination, what, at
     }
   }
-  const order = lowerOperator(lowering, builder, None, at, [first, second], ordering)
+  const order = lowerOperator lowering, builder, None, at, [first, second], ordering
   if !lowering.isSupported {
-    return abandonedSlot(lowering, builder, destination)
+    return abandonedSlot lowering, builder, destination
   }
   const layout = match layoutOfType(lowering.program, ordering) {
     Some(found) => found
-    .None => {
-      return unsupportedSlot(lowering, builder, destination, "an `Ordering` without a layout", at)
+    None => {
+      return unsupportedSlot lowering, builder, destination, "an `Ordering` without a layout", at
     }
   }
   const wanted = if isLessTest(operation) { "Less" } else { "Greater" }
-  const index = variantNamed(lowering, layout, wanted)
+  const index = variantNamed lowering, layout, wanted
   if index < 0 {
-    return unsupportedSlot(lowering, builder, destination, "an `Ordering` without a `{wanted}` case", at)
+    return unsupportedSlot lowering, builder, destination, "an `Ordering` without a `{wanted}` case", at
   }
-  const integer = lowering.program.internType(IrType.Integer(64, true))
-  const tag = addTemporary(builder, integer)
-  emit(builder, Instruction.Tag(tag, order))
-  const value = integerSlot(lowering, builder, index, integer)
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const tag = addTemporary builder, integer
+  emit builder, Instruction.Tag(tag, order)
+  const value = integerSlot lowering, builder, index, integer
   const test = if isStrictTest(operation) {
     IntrinsicOperation.Equal
   } else {
     IntrinsicOperation.NotEqual
   }
-  const kind = NumericKind.Signed(64)
-  intrinsicSlot(lowering, builder, destination, test, Some(kind), [tag, value], annotation, at)
+  const kind = NumericKind.Signed 64
+  intrinsicSlot lowering, builder, destination, test, Some(kind), [tag, value], annotation, at
 }
 
 /** `a < b` and `a >= b` both test against `.Less`; `a > b` and `a <= b` against `.Greater`. */
@@ -744,12 +744,12 @@ fn isStrictTest(operation: IntrinsicOperation): Bool {
 fn orderingTypeOf(var lowering: Lowering): IrTypeId? {
   const symbol = lowering.checker.wellKnown.symbolNamed("Ordering")?
   const empty: List<TypeId> = []
-  const named = lowering.checker.nominal(symbol, empty)
-  Some(irTypeOfClosed(lowering, named))
+  const named = lowering.checker.nominal symbol, empty
+  Some irTypeOfClosed(lowering, named)
 }
 
 fn variantNamed(var lowering: Lowering, layout: LayoutId, name: String): Int {
-  const shape = lowering.program.layoutAt(layout)
+  const shape = lowering.program.layoutAt layout
   for index in 0..shape.variants.length() {
     if shape.variants[index].name == name {
       return index
@@ -807,19 +807,19 @@ fn lowerTextComparison(
 ): Slot {
   if const .Equal = operation {
     const equals = IntrinsicOperation.TextEqual
-    return intrinsicSlot(lowering, builder, destination, equals, None, [first, second], annotation, at)
+    return intrinsicSlot lowering, builder, destination, equals, None, [first, second], annotation, at
   }
   if const .NotEqual = operation {
     const equals = IntrinsicOperation.TextEqual
-    const equal = intrinsicSlot(lowering, builder, None, equals, None, [first, second], annotation, at)
-    return intrinsicSlot(lowering, builder, destination, IntrinsicOperation.BooleanNot, None, [equal], annotation, at)
+    const equal = intrinsicSlot lowering, builder, None, equals, None, [first, second], annotation, at
+    return intrinsicSlot lowering, builder, destination, IntrinsicOperation.BooleanNot, None, [equal], annotation, at
   }
-  const integer = lowering.program.internType(IrType.Integer(64, true))
-  const order = addTemporary(builder, integer)
-  emitIntrinsic(lowering, builder, Some(order), IntrinsicOperation.TextCompare, None, [first, second], at)
-  const zero = integerSlot(lowering, builder, 0, integer)
-  const kind = NumericKind.Signed(64)
-  intrinsicSlot(lowering, builder, destination, operation, Some(kind), [order, zero], annotation, at)
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const order = addTemporary builder, integer
+  emitIntrinsic lowering, builder, Some(order), IntrinsicOperation.TextCompare, None, [first, second], at
+  const zero = integerSlot lowering, builder, 0, integer
+  const kind = NumericKind.Signed 64
+  intrinsicSlot lowering, builder, destination, operation, Some(kind), [order, zero], annotation, at
 }
 
 /** `+`, `-`, `*`, `/`, `%` on the built-in numbers, and `+` on two strings. Everything else is a call of `Add.add`. */
@@ -833,18 +833,18 @@ fn lowerArithmetic(
   annotation: IrTypeId,
   at: Span,
 ): Slot {
-  const operands = builder.typeOfSlot(first)
+  const operands = builder.typeOfSlot first
   if const Some(kind) = numericKindOf(lowering.program, operands) {
-    const operation = arithmeticOperation(operator)
-    return intrinsicSlot(lowering, builder, destination, operation, Some(kind), [first, second], annotation, at)
+    const operation = arithmeticOperation operator
+    return intrinsicSlot lowering, builder, destination, operation, Some(kind), [first, second], annotation, at
   }
   if isTextType(lowering, operands) {
     if const .Add = operator {
       const concat = IntrinsicOperation.TextConcat
-      return intrinsicSlot(lowering, builder, destination, concat, None, [first, second], annotation, at)
+      return intrinsicSlot lowering, builder, destination, concat, None, [first, second], annotation, at
     }
   }
-  lowerOperator(lowering, builder, destination, at, [first, second], annotation)
+  lowerOperator lowering, builder, destination, at, [first, second], annotation
 }
 
 fn arithmeticOperation(operator: InfixOperator): IntrinsicOperation {
@@ -868,8 +868,8 @@ public fn intrinsicSlot(
   annotation: IrTypeId,
   at: Span,
 ): Slot {
-  const target = valueSlot(lowering, builder, destination, annotation)
-  emitIntrinsic(lowering, builder, Some(target), operation, kind, operands, at)
+  const target = valueSlot lowering, builder, destination, annotation
+  emitIntrinsic lowering, builder, Some(target), operation, kind, operands, at
   target
 }
 
@@ -882,8 +882,8 @@ public fn emitIntrinsic(
   operands: List<Slot>,
   at: Span,
 ) {
-  const location = locationOf(lowering, at)
-  emit(builder, Instruction.Intrinsic(target, Intrinsic(operation, kind), operands, location))
+  const location = locationOf lowering, at
+  emit builder, Instruction.Intrinsic(target, Intrinsic(operation, kind), operands, location)
 }
 
 // --- `if` -----------------------------------------------------------------------------------------------------------
@@ -921,32 +921,32 @@ public fn lowerIf(
       return found
     }
   }
-  const scrutinee = lowerValue(lowering, builder, test)
-  const location = locationOf(lowering, expression.span)
-  const thenBlock = addBlock(builder, "then", Some(location))
+  const scrutinee = lowerValue lowering, builder, test
+  const location = locationOf lowering, expression.span
+  const thenBlock = addBlock builder, "then", Some(location)
   const alternative = match otherwise {
     Some(found) => found
-    .None => {
-      return lowerIfStatement(lowering, builder, destination, scrutinee, thenBlock, then, location)
+    None => {
+      return lowerIfStatement lowering, builder, destination, scrutinee, thenBlock, then, location
     }
   }
-  const elseBlock = addBlock(builder, "else", Some(location))
-  const join = addBlock(builder, "join", Some(location))
-  const target = valueSlot(lowering, builder, destination, annotation)
-  finishBlock(lowering, builder, Terminator.Branch(scrutinee, thenBlock, elseBlock))
-  continueIn(lowering, builder, thenBlock)
-  lowerBlockInto(lowering, builder, then, Some(target))
+  const elseBlock = addBlock builder, "else", Some(location)
+  const join = addBlock builder, "join", Some(location)
+  const target = valueSlot lowering, builder, destination, annotation
+  finishBlock lowering, builder, Terminator.Branch(scrutinee, thenBlock, elseBlock)
+  continueIn lowering, builder, thenBlock
+  lowerBlockInto lowering, builder, then, Some(target)
   const thenDiverged = lowering.isDiverged
   if !thenDiverged {
-    finishBlock(lowering, builder, Terminator.Jump(join))
+    finishBlock lowering, builder, Terminator.Jump(join)
   }
-  continueIn(lowering, builder, elseBlock)
-  const _ = lowerExpression(lowering, builder, alternative, Some(target))
+  continueIn lowering, builder, elseBlock
+  const _ = lowerExpression lowering, builder, alternative, Some(target)
   const elseDiverged = lowering.isDiverged
   if !elseDiverged {
-    finishBlock(lowering, builder, Terminator.Jump(join))
+    finishBlock lowering, builder, Terminator.Jump(join)
   }
-  continueIn(lowering, builder, join)
+  continueIn lowering, builder, join
   // Nothing reaches the join block when both arms left the function, and an empty `unreachable` marker is what it is
   lowering.isDiverged = thenDiverged && elseDiverged
   target
@@ -961,19 +961,19 @@ fn lowerIfStatement(
   then: Block,
   location: LocationId,
 ): Slot {
-  const join = addBlock(builder, "join", Some(location))
+  const join = addBlock builder, "join", Some(location)
   // An `if` without an `else` produces `Void`. Where somebody takes that value it is defined *before* the branch, so
   // that it is defined on both paths; where nobody does, no instruction is written at all
   const target = match destination {
-    Some(_) => voidSlot(lowering, builder, destination)
-    .None => abandonedSlot(lowering, builder, destination)
+    Some(_) => voidSlot lowering, builder, destination
+    None => abandonedSlot lowering, builder, destination
   }
-  finishBlock(lowering, builder, Terminator.Branch(scrutinee, thenBlock, join))
-  continueIn(lowering, builder, thenBlock)
-  lowerBlockInto(lowering, builder, then, None)
+  finishBlock lowering, builder, Terminator.Branch(scrutinee, thenBlock, join)
+  continueIn lowering, builder, thenBlock
+  lowerBlockInto lowering, builder, then, None
   if !lowering.isDiverged {
-    finishBlock(lowering, builder, Terminator.Jump(join))
+    finishBlock lowering, builder, Terminator.Jump(join)
   }
-  continueIn(lowering, builder, join)
+  continueIn lowering, builder, join
   target
 }

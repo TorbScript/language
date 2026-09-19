@@ -14,20 +14,20 @@ fn inBody(body: String): String {
 
 group "Literals" {
   test "an integer is `Int64` and a decimal is `Float64` without an expectation" {
-    const found = probe(inBody("  const number = 42\n  const fraction = 1.5"))
+    const found = probe inBody("  const number = 42\n  const fraction = 1.5")
     assert(found.typeOf("42") == "Int64")
     assert(found.typeOf("1.5") == "Float64")
   }
 
   test "a literal adapts to the type that is expected of it" {
-    const found = probe(inBody("  const small: Int8 = 7\n  const exact: Float32 = 9\n  const wide: Float64 = 1.5"))
+    const found = probe inBody("  const small: Int8 = 7\n  const exact: Float32 = 9\n  const wide: Float64 = 1.5")
     assert(found.typeOf("7") == "Int8")
     assert(found.typeOf("9") == "Float32")
     assert(found.typeOf("1.5") == "Float64")
   }
 
   test "every literal records what it became, because a back end must not decide what `1` is" {
-    const found = probe(inBody("  const small: Int8 = 7"))
+    const found = probe inBody("  const small: Int8 = 7")
     assert(found.adaptationsOf("7") == ["literal Int8"])
   }
 
@@ -42,34 +42,34 @@ group "Literals" {
   }
 
   test "`true`, `'a'` and a text are their own types" {
-    const found = probe(inBody("  const yes = true\n  const letter = 'a'\n  const text = \"hello\""))
+    const found = probe inBody("  const yes = true\n  const letter = 'a'\n  const text = \"hello\"")
     assert(found.typeOf("true") == "Bool")
     assert(found.typeOf("'a'") == "Char")
     assert(found.typeOf("\"hello\"") == "String")
   }
 
   test "a literal adapts to a literal type that contains it, and not to one that does not" {
-    const source = inBody("  const state: \"on\" | \"off\" = (\"on\")")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    const source = inBody "  const state: \"on\" | \"off\" = (\"on\")"
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("(\"on\")") == "\"off\" | \"on\"")
     assert(problems(inBody("  const state: \"on\" | \"off\" = \"idle\"")) == ["Expected `\"off\" | \"on\"`, found `String`"])
   }
 
   test "an interpolated text is a `String`, and every part of it is looked at" {
-    const found = probe(inBody("  const greeting = \"hello \{(1 + 2)\}\""))
+    const found = probe inBody("  const greeting = \"hello \{(1 + 2)\}\"")
     assert(found.typeOf("\"hello \{(1 + 2)\}\"") == "String")
     assert(found.typeOf("(1 + 2)") == "Int64")
   }
 
   test "a tuple is the types of its parts, with the labels that were written" {
-    const found = probe(inBody("  const pair = (1, \"one\")\n  const bounds = (lowest: 1, highest: 9)"))
+    const found = probe inBody("  const pair = (1, \"one\")\n  const bounds = (lowest: 1, highest: 9)")
     assert(found.typeOf("(1, \"one\")") == "(Int64, String)")
     assert(found.typeOf("(lowest: 1, highest: 9)") == "(lowest: Int64, highest: Int64)")
   }
 
   test "a label at a position that has another name is an error, so a swap cannot happen silently" {
-    const source = inBody("  const bounds: (lowest: Int, highest: Int) = (highest: 1, lowest: 9)")
+    const source = inBody "  const bounds: (lowest: Int, highest: Int) = (highest: 1, lowest: 9)"
     assert(
       problems(source) == ["This position is `lowest`, not `highest`", "This position is `highest`, not `lowest`"]
     )
@@ -79,7 +79,7 @@ group "Literals" {
   }
 
   test "a list literal is a `List<Item>`, and the first item decides what `Item` is" {
-    const found = probe(inBody("  const numbers = [1, 2, 3]"))
+    const found = probe inBody("  const numbers = [1, 2, 3]")
     assert(found.typeOf("[1, 2, 3]") == "List<Int64>")
   }
 
@@ -88,15 +88,15 @@ group "Literals" {
   }
 
   test "`0..10` is a `Range<Int64>`" {
-    const found = probe(inBody("  const range = 0..10"))
+    const found = probe inBody("  const range = 0..10")
     assert(found.typeOf("0..10") == "Range<Int64>")
   }
 
   test "`void` is the one value of `Void`, and `Void` in an expression teaches that" {
-    const found = probe(inBody("  const nothing: Void = (void)"))
+    const found = probe inBody("  const nothing: Void = (void)")
     assert(found.typeOf("(void)") == "Void")
-    assert(problems(inBody("  const nothing: Void = (void)")).isEmpty())
-    const wrong = inBody("  const nothing: Void = Void")
+    assert problems(inBody("  const nothing: Void = (void)")).isEmpty()
+    const wrong = inBody "  const nothing: Void = Void"
     assert(problems(wrong) == ["`Void` is a type, not a value: its one value is written `void`"])
     assert(notes(wrong) == ["`void` is to `Void` what `true` and `false` are to `Bool`"])
   }
@@ -104,7 +104,7 @@ group "Literals" {
 
 group "Names" {
   test "a local wins over everything, and what it resolved to is recorded" {
-    const found = probe(inBody("  const value = 1\n  const other = (value)"))
+    const found = probe inBody("  const value = 1\n  const other = (value)")
     assert(found.typeOf("(value)") == "Int64")
     assert(found.resolutionOf("(value)") == "local value")
   }
@@ -114,7 +114,7 @@ group "Names" {
   }
 
   test "a top-level `const` without an annotation takes the type of its initializer" {
-    const found = probe("const size = 8\n\nfn probe(): Int \{\n  (size)\n\}")
+    const found = probe "const size = 8\n\nfn probe(): Int \{\n  (size)\n\}"
     assert(found.typeOf("(size)") == "Int64")
     assert(found.resolutionOf("(size)") == "constant size")
   }
@@ -127,7 +127,7 @@ group "Names" {
   }
 
   test "a function without a declared result takes the type of its body" {
-    const found = probe("fn eight() \{\n  8\n\}\n\nfn probe(): Int \{\n  (eight())\n\}")
+    const found = probe "fn eight() \{\n  8\n\}\n\nfn probe(): Int \{\n  (eight())\n\}"
     assert(found.typeOf("(eight())") == "Int64")
   }
 
@@ -137,7 +137,7 @@ group "Names" {
   }
 
   test "a recursive function that returns nothing needs no annotation" {
-    assert(problems("fn walk(value: Int) \{\n  if value > 0 \{\n    walk(value - 1)\n  \}\n\}").isEmpty())
+    assert problems("fn walk(value: Int) \{\n  if value > 0 \{\n    walk(value - 1)\n  \}\n\}").isEmpty()
   }
 }
 
@@ -145,23 +145,23 @@ group "Members" {
   const point = "type Point \{\n  x: Int\n  var y: Int\n\n  fn area(self): Int \{\n    (x) * y\n  \}\n\}\n\n"
 
   test "a field of a value, and what the access resolved to" {
-    const found = probe("{point}fn probe(place: Point): Int \{\n  place.x\n\}")
+    const found = probe "{point}fn probe(place: Point): Int \{\n  place.x\n\}"
     assert(found.typeOf("place.x") == "Int64")
     assert(found.resolutionOf("place.x") == "field Point.x")
   }
 
   test "a method read without a call is the member bound to its receiver" {
-    const found = probe("{point}fn probe(place: Point) \{\n  const size = place.area\n\}")
+    const found = probe "{point}fn probe(place: Point) \{\n  const size = place.area\n\}"
     assert(found.typeOf("place.area") == "() => Int64")
   }
 
   test "a method read through its type is the member itself" {
-    const found = probe("{point}fn probe() \{\n  const size = Point.area\n\}")
+    const found = probe "{point}fn probe() \{\n  const size = Point.area\n\}"
     assert(found.typeOf("Point.area") == "(self: Point) => Int64")
   }
 
   test "a field of `self` is reachable by its bare name, and the receiver is recorded" {
-    const found = probe(point)
+    const found = probe point
     assert(found.typeOf("(x) * y") == "Int64")
     assert(found.typeOf("(x)") == "Int64")
     assert(found.resolutionOf("(x)") == "field Point.x")
@@ -175,7 +175,7 @@ group "Members" {
   }
 
   test "the positions and the labels of a tuple" {
-    const found = probe(inBody("  const bounds = (lowest: 1, highest: 9)\n  const low = bounds.lowest\n  const first = bounds.0"))
+    const found = probe inBody("  const bounds = (lowest: 1, highest: 9)\n  const low = bounds.lowest\n  const first = bounds.0")
     assert(found.typeOf("bounds.lowest") == "Int64")
     assert(found.typeOf("bounds.0") == "Int64")
     assert(found.resolutionOf("bounds.0") == "tuple 0")
@@ -183,16 +183,16 @@ group "Members" {
 
   test "a case of a type, through the type" {
     const source = "type Shape \{\n  case Circle(radius: Int)\n  case Empty\n\}\n\nfn probe(): Shape \{\n  Shape.Empty\n\}"
-    const found = probe(source)
+    const found = probe source
     assert(found.typeOf("Shape.Empty") == "Shape")
     assert(found.resolutionOf("Shape.Empty") == "case Shape.Empty")
   }
 
   test "a case of the type that is expected here, written with a leading dot" {
     const source = "type Shape \{\n  case Circle(radius: Int)\n  case Empty\n\}\n\nfn probe(): Shape \{\n  .Empty\n\}"
-    const found = probe(source)
+    const found = probe source
     assert(found.typeOf(".Empty") == "Shape")
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a case that is written bare, where the expected type has one of that name" {
@@ -206,24 +206,24 @@ group "Members" {
 
 group "Operators" {
   test "the arithmetic of a numeric type takes `Other` and `Output` from the trait it declares" {
-    const found = probe(inBody("  const sum = 1 + 2\n  const quotient = 1.0 / 60.0"))
+    const found = probe inBody("  const sum = 1 + 2\n  const quotient = 1.0 / 60.0")
     assert(found.typeOf("1 + 2") == "Int64")
     assert(found.typeOf("1.0 / 60.0") == "Float64")
   }
 
   test "there are no implicit conversions between the numeric types" {
-    const source = inBody("  const value: Float64 = 2.0\n  const sum = 1 + value")
+    const source = inBody "  const value: Float64 = 2.0\n  const sum = 1 + value"
     assert(problems(source) == ["Expected `Int64`, found `Float64`"])
     assert(notes(source) == ["There are no implicit conversions: `Int64.tryFrom(value)?`"])
   }
 
   test "`+` on `String` is the `Add` the type declares" {
-    const found = probe(inBody("  const joined = \"a\" + \"b\""))
+    const found = probe inBody("  const joined = \"a\" + \"b\"")
     assert(found.typeOf("\"a\" + \"b\"") == "String")
   }
 
   test "a comparison always produces a `Bool`, whatever implements it" {
-    const found = probe(inBody("  const smaller = 1 < 2\n  const same = \"a\" == \"b\""))
+    const found = probe inBody("  const smaller = 1 < 2\n  const same = \"a\" == \"b\"")
     assert(found.typeOf("1 < 2") == "Bool")
     assert(found.typeOf("\"a\" == \"b\"") == "Bool")
   }
@@ -233,19 +233,19 @@ group "Operators" {
   }
 
   test "`&&`, `||` and `!` are built in on `Bool` and ask for one" {
-    const found = probe(inBody("  const both = true && false\n  const negated = !true"))
+    const found = probe inBody("  const both = true && false\n  const negated = !true")
     assert(found.typeOf("true && false") == "Bool")
     assert(found.typeOf("!true") == "Bool")
     assert(problems(inBody("  const wrong = 1 && true")) == ["Expected `Bool`, found `Int64`"])
   }
 
   test "`-a` gives back the type of its operand" {
-    const found = probe(inBody("  const negated = -3"))
+    const found = probe inBody("  const negated = -3")
     assert(found.typeOf("-3") == "Int64")
   }
 
   test "an expected numeric type flows through the arithmetic into the literals in it" {
-    const found = probe(inBody("  const size: Int8 = 3 + 4\n  const scaled: Float32 = 1 / 2 * 3"))
+    const found = probe inBody("  const size: Int8 = 3 + 4\n  const scaled: Float32 = 1 / 2 * 3")
     assert(found.typeOf("3 + 4") == "Int8")
     assert(found.typeOf("3") == "Int8")
     assert(found.typeOf("4") == "Int8")
@@ -259,29 +259,29 @@ group "Operators" {
   }
 
   test "only a literal adapts: a name keeps the type it has, so the mistake stays where it is" {
-    const source = inBody("  const value: Float64 = 2.0\n  const sum: Int8 = value + 1")
+    const source = inBody "  const value: Float64 = 2.0\n  const sum: Int8 = value + 1"
     assert(problems(source) == ["Expected `Int8`, found `Float64`"])
   }
 
   test "`a[key]` is the `Value` of the `Indexed` the type declares" {
-    const found = probe(inBody("  const numbers: List<Int> = [1, 2]\n  const first = numbers[0]"))
+    const found = probe inBody("  const numbers: List<Int> = [1, 2]\n  const first = numbers[0]")
     assert(found.typeOf("numbers[0]") == "Int64")
   }
 
   test "`a[from..to]` gives back a value of the same type" {
-    const found = probe(inBody("  const text = \"hello\"\n  const part = text[0..2]"))
+    const found = probe inBody("  const text = \"hello\"\n  const part = text[0..2]")
     assert(found.typeOf("text[0..2]") == "String")
   }
 }
 
 group "`if`, `match` and blocks" {
   test "an `if` with an `else` is an expression, and its arms decide its type" {
-    const found = probe(inBody("  const value = if true \{ 1 \} else \{ 2 \}"))
+    const found = probe inBody("  const value = if true \{ 1 \} else \{ 2 \}")
     assert(found.typeOf("if true \{ 1 \} else \{ 2 \}") == "Int64")
   }
 
   test "an `if` without an `else` has the type `Void`" {
-    const found = probe(inBody("  const nothing = if true \{ print \"yes\" \}"))
+    const found = probe inBody("  const nothing = if true \{ print \"yes\" \}")
     assert(found.typeOf("if true \{ print \"yes\" \}") == "Void")
   }
 
@@ -297,20 +297,20 @@ group "`if`, `match` and blocks" {
   }
 
   test "a branch that diverges fits into every type" {
-    assert(problems(inBody("  const value: Int = if true \{ 1 \} else \{ panic \"no\" \}")).isEmpty())
+    assert problems(inBody("  const value: Int = if true \{ 1 \} else \{ panic \"no\" \}")).isEmpty()
   }
 
   test "a `match` binds the names of its patterns and its arms decide its type" {
     const source = "type Shape \{\n  case Circle(radius: Int)\n  case Empty\n\}\n\n"
       + "fn probe(shape: Shape): Int \{\n  match shape \{\n    .Circle(radius) => radius + 0\n    .Empty => 0\n  \}\n\}"
-    const found = probe(source)
+    const found = probe source
     assert(found.typeOf("radius + 0") == "Int64")
     assert(found.patternTypeOf(".Circle(radius)") == "Shape")
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a block is an expression and the last statement of it is its value" {
-    const found = probe(inBody("  const value = if true \{\n    const inner = 2\n    inner + 1\n  \} else \{ 0 \}"))
+    const found = probe inBody("  const value = if true \{\n    const inner = 2\n    inner + 1\n  \} else \{ 0 \}")
     assert(found.typeOf("inner + 1") == "Int64")
   }
 }
@@ -319,15 +319,15 @@ group "What waits for a later sub-milestone" {
   test "a trait member of a known type and a generic call both have a type" {
     const source = "fn wrap<Value>(value: Value): Value \{\n  value\n\}\n\n"
       + inBody("  const numbers: List<Int> = [1, 2]\n  print numbers.length()\n  print wrap(1)")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     // `length` comes from the `List` trait (milestone 4.3), `wrap` is instantiated at the call (4.4)
     assert(found.typeOf("numbers.length()") == "Int64")
     assert(found.typeOf("wrap(1)") == "Int64")
   }
 
   test "the statistics count what is typed and what waits" {
-    const found = probe(inBody("  const number = 42"))
+    const found = probe inBody("  const number = 42")
     const statistics = found.statistics()
     assert(statistics.typed > 0)
     assert(statistics.total() == statistics.typed + statistics.deferred)

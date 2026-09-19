@@ -25,7 +25,7 @@ public fn derivableMembers(
   capability: SymbolId,
   wanted: TypeId?,
 ): List<String>? {
-  const name = derivedTraitName(checker, capability)
+  const name = derivedTraitName checker, capability
   if name.isEmpty() {
     return None
   }
@@ -34,28 +34,28 @@ public fn derivableMembers(
     return None
   }
   if const Some(known) = checker.derivations.get(key) {
-    return Some(known)
+    return Some known
   }
-  const members = membersOf(name)
+  const members = membersOf name
   if members.isEmpty() {
-    checker.derivationsMissing.set(key, true)
+    checker.derivationsMissing.set key, true
     return None
   }
   // Assumed while it is being answered: a recursive type is structurally comparable, it just recurses as the value does
-  checker.derivations.set(key, members)
-  const isDerivable = canDerive(checker, target, name, capability, wanted)
+  checker.derivations.set key, members
+  const isDerivable = canDerive checker, target, name, capability, wanted
   if !isDerivable {
-    const _ = checker.derivations.remove(key)
-    checker.derivationsMissing.set(key, true)
+    const _ = checker.derivations.remove key
+    checker.derivationsMissing.set key, true
     return None
   }
-  Some(members)
+  Some members
 }
 
 fn wantedKey(wanted: TypeId?): Int {
   match wanted {
     Some(bound) => bound.value
-    .None => -1
+    None => -1
   }
 }
 
@@ -107,10 +107,10 @@ fn canDerive(
 ): Bool {
   // `From` is generated for a case that wraps exactly one value of a type no other case wraps (design 4.6)
   if name == "From" {
-    return wrapsExactlyOnce(checker, target, wanted)
+    return wrapsExactlyOnce checker, target, wanted
   }
   if name == "Into" {
-    return isIntoBase(checker, target, wanted)
+    return isIntoBase checker, target, wanted
   }
   /*
    * `Compare` is generated for a **tuple** and for nothing else. An order is a decision and not a structure, so no
@@ -120,7 +120,7 @@ fn canDerive(
    */
   if name == "Compare" {
     if const .Tuple(_) = checker.types.form(target) {
-      return everyFieldImplements(checker, target, capability, wanted)
+      return everyFieldImplements checker, target, capability, wanted
     }
     return false
   }
@@ -128,13 +128,13 @@ fn canDerive(
     // A literal type has exactly what the concept's "Literal Types" names - `Parse<LiteralParseError>`, `Show`,
     // `Equals`, `Hash`, `Encode`, `Decode`, and the `Into` of its base above - and nothing else (gap 32). `Compare` is
     // not among them: an order over three strings is a decision, exactly as it is for a `type`
-    .Literals(_, _) => isLiteralTrait(checker, name, wanted)
+    .Literals(_, _) => isLiteralTrait checker, name, wanted
     // Tuples and function types cannot be declared, so what a `type` gets generated they get generated too (gap 35)
-    .Tuple(_) => everyFieldImplements(checker, target, capability, wanted)
+    .Tuple(_) => everyFieldImplements checker, target, capability, wanted
     .Function(_) => name == "Show"
     .Nominal(symbol, _) => {
-      const identifier = typeSignatureOf(checker, symbol)
-      const shape = checker.typeSignature(identifier)
+      const identifier = typeSignatureOf checker, symbol
+      const shape = checker.typeSignature identifier
       // A `native` type is what the runtime provides, and a trait it does not declare it does not have
       if shape.isNative {
         return false
@@ -150,7 +150,7 @@ fn canDerive(
       if name == "Decode" && !isConstructible(checker, shape.fields) {
         return false
       }
-      everyFieldImplements(checker, target, capability, wanted)
+      everyFieldImplements checker, target, capability, wanted
     }
     _ => false
   }
@@ -164,13 +164,13 @@ fn isLiteralTrait(var checker: Checker, name: String, wanted: TypeId?): Bool {
   if name == "Parse" {
     const generated = match literalParseBound(checker) {
       Some(found) => found
-      .None => {
+      None => {
         return false
       }
     }
     match wanted {
-      Some(asked) => sameType(checker.types, asked, generated)
-      .None => true
+      Some(asked) => sameType checker.types, asked, generated
+      None => true
     }
   } else {
     name == "Show" || name == "Equals" || name == "Hash" || name == "Encode" || name == "Decode"
@@ -199,7 +199,7 @@ fn isConstructible(checker: Checker, fields: List<FieldSignature>): Bool {
 fn everyFieldImplements(var checker: Checker, target: TypeId, capability: SymbolId, wanted: TypeId?): Bool {
   const bound = match wanted {
     Some(found) => found
-    .None => checker.nominal(capability, [])
+    None => checker.nominal capability, []
   }
   match checker.types.form(target) {
     .Tuple(fields) => {
@@ -211,21 +211,21 @@ fn everyFieldImplements(var checker: Checker, target: TypeId, capability: Symbol
       true
     }
     .Nominal(symbol, arguments) => {
-      const identifier = typeSignatureOf(checker, symbol)
-      const shape = checker.typeSignature(identifier)
+      const identifier = typeSignatureOf checker, symbol
+      const shape = checker.typeSignature identifier
       var mapping: Map<ParameterId, TypeId> = [:]
       for position in 0..shape.generics.length().min(arguments.length()) {
-        mapping.set(shape.generics[position], arguments[position])
+        mapping.set shape.generics[position], arguments[position]
       }
       for field in shape.fields {
-        const annotation = substitute(checker.types, field.annotation, mapping)
+        const annotation = substitute checker.types, field.annotation, mapping
         if !fieldImplements(checker, annotation, target, bound) {
           return false
         }
       }
       for variant in shape.cases {
         for field in variant.fields {
-          const annotation = substitute(checker.types, field.annotation, mapping)
+          const annotation = substitute checker.types, field.annotation, mapping
           if !fieldImplements(checker, annotation, target, bound) {
             return false
           }
@@ -242,7 +242,7 @@ fn fieldImplements(var checker: Checker, annotation: TypeId, target: TypeId, bou
   if sameType(checker.types, annotation, target) {
     return true
   }
-  implementsBound(checker, annotation, bound)
+  implementsBound checker, annotation, bound
 }
 
 /**
@@ -252,7 +252,7 @@ fn fieldImplements(var checker: Checker, annotation: TypeId, target: TypeId, bou
 fn wrapsExactlyOnce(var checker: Checker, target: TypeId, wanted: TypeId?): Bool {
   const bound = match wanted {
     Some(found) => found
-    .None => {
+    None => {
       return false
     }
   }
@@ -279,21 +279,21 @@ fn wrapsExactlyOnce(var checker: Checker, target: TypeId, wanted: TypeId?): Bool
       return false
     }
   }
-  const identifier = typeSignatureOf(checker, symbol)
-  const shape = checker.typeSignature(identifier)
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
   if shape.cases.isEmpty() {
     return false
   }
   var mapping: Map<ParameterId, TypeId> = [:]
   for position in 0..shape.generics.length().min(arguments.length()) {
-    mapping.set(shape.generics[position], arguments[position])
+    mapping.set shape.generics[position], arguments[position]
   }
   var matches = 0
   for variant in shape.cases {
     if variant.fields.length() != 1 {
       continue
     }
-    const annotation = substitute(checker.types, variant.fields[0].annotation, mapping)
+    const annotation = substitute checker.types, variant.fields[0].annotation, mapping
     if sameType(checker.types, annotation, source) {
       matches = matches + 1
     }
@@ -305,7 +305,7 @@ fn wrapsExactlyOnce(var checker: Checker, target: TypeId, wanted: TypeId?): Bool
 fn isIntoBase(var checker: Checker, target: TypeId, wanted: TypeId?): Bool {
   const bound = match wanted {
     Some(found) => found
-    .None => {
+    None => {
       return false
     }
   }
@@ -321,7 +321,7 @@ fn isIntoBase(var checker: Checker, target: TypeId, wanted: TypeId?): Bool {
     }
   }
   if const .Literals(base, _) = checker.types.form(target) {
-    return sameType(checker.types, base, into)
+    return sameType checker.types, base, into
   }
   false
 }

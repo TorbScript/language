@@ -44,7 +44,7 @@ public fn isQuotation(checker: Checker, annotation: TypeId): Bool {
 public fn quotationValueOf(checker: Checker, annotation: TypeId): TypeId? {
   if const .Nominal(symbol, arguments) = checker.types.form(annotation) {
     if checker.wellKnown.expression == Some(symbol) && arguments.length() == 1 {
-      return Some(arguments[0])
+      return Some arguments[0]
     }
   }
   None
@@ -68,19 +68,19 @@ public fn isQuotationValue(var checker: Checker, expression: Expression): Bool {
   }
   if const Some(.Bound(binding)) = checker.findLocal(text) {
     const annotation = checker.binding(binding).annotation
-    return isQuotation(checker, annotation)
+    return isQuotation checker, annotation
   }
   // A top-level `const` of a module is a declaration and not a local: `const isAdult: Expression<...> = { ... }`
   const module = checker.module
   const symbol = match checker.program.lookUp(module, text) {
     Some(found) => found
-    .None => {
+    None => {
       return false
     }
   }
   if const .Constant = checker.symbolAt(symbol).kind {
-    const annotation = resultOf(checker, symbol)
-    return isQuotation(checker, annotation)
+    const annotation = resultOf checker, symbol
+    return isQuotation checker, annotation
   }
   false
 }
@@ -96,7 +96,7 @@ public fn checkQuotation(var checker: Checker, expression: Expression, wanted: T
   const parameter = checker.quotingParameter
   checker.quotingOwner = ""
   checker.quotingParameter = ""
-  const value = quotationValueOf(checker, wanted)
+  const value = quotationValueOf checker, wanted
   const inner = match value {
     // `Expression<Expression<Bool>>` quotes nothing: one of the two is a mistake, and the type says which
     Some(found) => {
@@ -106,28 +106,28 @@ public fn checkQuotation(var checker: Checker, expression: Expression, wanted: T
         found
       }
     }
-    .None => checker.deferredType
+    None => checker.deferredType
   }
   const at = expression.span
   const start = checker.bindings.length()
   // The quotation is a closure as far as the scope chain is concerned: a name from around it is a capture, and there is
   // nothing implicit to take from it, so the frame declares its parameters (there are none) as written
-  checker.closureFrames.add(ClosureFrame(at, start, [], [], [], [], true, 0))
-  const expectation = expectationOf(checker, inner)
-  const found = checkExpression(checker, expression, expectation)
+  checker.closureFrames.add ClosureFrame(at, start, [], [], [], [], true, 0)
+  const expectation = expectationOf checker, inner
+  const found = checkExpression checker, expression, expectation
   const last = checker.closureFrames.length() - 1
   const captured = checker.closureFrames[last].captures
-  const _ = checker.closureFrames.removeAt(last)
-  var state = QuotationWalk(start, wanted, captured, [:], [:], [:], [], false)
-  quoteExpression(checker, state, expression)
+  const _ = checker.closureFrames.removeAt last
+  var state = QuotationWalk start, wanted, captured, [:], [:], [:], [], false
+  quoteExpression checker, state, expression
   if state.isBroken {
     return wanted
   }
-  const captures = encodedCaptures(checker, state, owner, parameter)
-  const annotation = if checker.absorbs(found) { inner } else { resolveType(checker, found) }
-  const quotation = Quotation(annotation, captures, state.names, state.lambdas)
-  checker.recordQuotation(at, quotation)
-  checker.adapted(at, Adaptation.Quote(at))
+  const captures = encodedCaptures checker, state, owner, parameter
+  const annotation = if checker.absorbs(found) { inner } else { resolveType checker, found }
+  const quotation = Quotation annotation, captures, state.names, state.lambdas
+  checker.recordQuotation at, quotation
+  checker.adapted at, Adaptation.Quote(at)
   wanted
 }
 
@@ -141,7 +141,7 @@ public fn checkQuotation(var checker: Checker, expression: Expression, wanted: T
  */
 public fn openThunk(var checker: Checker, at: Span) {
   const start = checker.bindings.length()
-  checker.closureFrames.add(ClosureFrame(at, start, [], [], [], [], true, 0))
+  checker.closureFrames.add ClosureFrame(at, start, [], [], [], [], true, 0)
 }
 
 public fn closeThunk(var checker: Checker, at: Span) {
@@ -150,13 +150,13 @@ public fn closeThunk(var checker: Checker, at: Span) {
     return
   }
   const captures = checker.closureFrames[last].captures
-  const _ = checker.closureFrames.removeAt(last)
+  const _ = checker.closureFrames.removeAt last
   // A closure that is itself the argument of a `lazy` parameter already recorded its own captures at this very span
   const module = checker.module
   if checker.capturesAt(module, at).isSome() {
     return
   }
-  checker.recordCaptures(at, captures)
+  checker.recordCaptures at, captures
 }
 
 // --- What is quotable, and what every name in the tree becomes -------------------------------------------------------
@@ -192,34 +192,34 @@ fn quoteExpression(var checker: Checker, var state: QuotationWalk, expression: E
     .IntegerLiteral(_) | .FloatLiteral(_) | .BoolLiteral(_) | .CharLiteral(_) | .VoidLiteral => {}
     // Something that was already reported: nothing here is about the quotation
     .Invalid => {}
-    .Name(_) => quoteName(checker, state, at)
+    .Name(_) => quoteName checker, state, at
     // `.Circle(1.0)`: a case, which is a `Construct` or a `Call` node like any other constructor
     .ImplicitMember(_) => {}
-    .Generic(target, _) => quoteExpression(checker, state, target)
+    .Generic(target, _) => quoteExpression checker, state, target
     .TextLiteral(segments) => {
       for segment in segments {
         if const .Interpolated(inner) = segment {
-          quoteExpression(checker, state, inner)
+          quoteExpression checker, state, inner
         }
       }
     }
-    .Member(target, _, _) => quoteExpression(checker, state, target)
+    .Member(target, _, _) => quoteExpression checker, state, target
     // `a[key]` is `Indexed.at(key)`, which is a `Call` node
     .Index(target, index) => {
-      quoteExpression(checker, state, target)
-      quoteExpression(checker, state, index)
+      quoteExpression checker, state, target
+      quoteExpression checker, state, index
     }
-    .Unary(_, operand) => quoteExpression(checker, state, operand)
+    .Unary(_, operand) => quoteExpression checker, state, operand
     .Binary(_, left, right) => {
-      quoteExpression(checker, state, left)
-      quoteExpression(checker, state, right)
+      quoteExpression checker, state, left
+      quoteExpression checker, state, right
     }
-    .ListLiteral(items) => quoteArguments(checker, state, items)
-    .Call(callee, arguments, _) => quoteCall(checker, state, callee, arguments, at)
-    .Closure(closure) => quoteClosure(checker, state, closure, at)
-    .If(condition, then, otherwise) => quoteConditional(checker, state, condition, then, otherwise, at)
+    .ListLiteral(items) => quoteArguments checker, state, items
+    .Call(callee, arguments, _) => quoteCall checker, state, callee, arguments, at
+    .Closure(closure) => quoteClosure checker, state, closure, at
+    .If(condition, then, otherwise) => quoteConditional checker, state, condition, then, otherwise, at
     // `{ ... }` as the `else` of an `if` or as the body of an arm: the same single expression as a closure body
-    .Block(block) => quoteBlock(checker, state, block)
+    .Block(block) => quoteBlock checker, state, block
     .Match(_, _) => {
       state.isBroken = true
       checker.reportHere(
@@ -227,22 +227,22 @@ fn quoteExpression(var checker: Checker, var state: QuotationWalk, expression: E
           .withNote("Patterns would double the set of nodes an `ExpressionNode` has, so the language leaves them out")
       )
     }
-    .Try(_) => reportNotOneExpression(checker, state, "`?`", at)
+    .Try(_) => reportNotOneExpression checker, state, "`?`", at
     // A tuple, a map and a range are *constructions*, which the concept lists as quotable: they have no node of their
     // own, and they need none - a tuple and a range are a `Construct`, a map literal is the `Map.of` it means
-    .TupleLiteral(items) => quoteArguments(checker, state, items)
+    .TupleLiteral(items) => quoteArguments checker, state, items
     .MapLiteral(entries) => {
       for (key, value) in entries {
-        quoteExpression(checker, state, key)
-        quoteExpression(checker, state, value)
+        quoteExpression checker, state, key
+        quoteExpression checker, state, value
       }
     }
     .RangeLiteral(start, end, _) => {
       if const Some(from) = start {
-        quoteExpression(checker, state, from)
+        quoteExpression checker, state, from
       }
       if const Some(to) = end {
-        quoteExpression(checker, state, to)
+        quoteExpression checker, state, to
       }
     }
   }
@@ -251,10 +251,10 @@ fn quoteExpression(var checker: Checker, var state: QuotationWalk, expression: E
 fn quoteArguments(var checker: Checker, var state: QuotationWalk, arguments: List<Argument>) {
   for argument in arguments {
     if argument.isSpread {
-      reportHasNoNode(checker, state, "A spread", argument.value.span)
+      reportHasNoNode checker, state, "A spread", argument.value.span
       return
     }
-    quoteExpression(checker, state, argument.value)
+    quoteExpression checker, state, argument.value
   }
 }
 
@@ -272,11 +272,11 @@ fn quoteCall(
 ) {
   const module = checker.module
   if const Some(.PropertyWrite(_, _, _)) = checker.resolutionAt(module, at) {
-    reportNotOneExpression(checker, state, "A property command", at)
+    reportNotOneExpression checker, state, "A property command", at
     return
   }
-  quoteCallee(checker, state, callee)
-  quoteArguments(checker, state, arguments)
+  quoteCallee checker, state, callee
+  quoteArguments checker, state, arguments
 }
 
 /**
@@ -286,10 +286,10 @@ fn quoteCall(
  */
 fn quoteCallee(var checker: Checker, var state: QuotationWalk, callee: Expression) {
   match callee.kind {
-    .Member(target, _, _) => quoteExpression(checker, state, target)
-    .Generic(inner, _) => quoteCallee(checker, state, inner)
+    .Member(target, _, _) => quoteExpression checker, state, target
+    .Generic(inner, _) => quoteCallee checker, state, inner
     .Name(_) | .ImplicitMember(_) => {}
-    _ => quoteExpression(checker, state, callee)
+    _ => quoteExpression checker, state, callee
   }
 }
 
@@ -300,16 +300,16 @@ fn quoteClosure(var checker: Checker, var state: QuotationWalk, closure: Closure
     if const .Binding(_) = parameter.pattern.kind {
       continue
     }
-    reportHasNoNode(checker, state, "A parameter that destructures", parameter.pattern.span)
+    reportHasNoNode checker, state, "A parameter that destructures", parameter.pattern.span
     return
   }
-  const parameters = lambdaParametersOf(checker, closure, at)
-  state.lambdas.set(at, parameters)
-  state.open.add(parameters)
-  quoteBlock(checker, state, closure.body)
+  const parameters = lambdaParametersOf checker, closure, at
+  state.lambdas.set at, parameters
+  state.open.add parameters
+  quoteBlock checker, state, closure.body
   const last = state.open.length() - 1
   if last >= 0 {
-    const _ = state.open.removeAt(last)
+    const _ = state.open.removeAt last
   }
 }
 
@@ -320,10 +320,10 @@ fn quoteClosure(var checker: Checker, var state: QuotationWalk, closure: Closure
  */
 fn lambdaParametersOf(var checker: Checker, closure: Closure, at: Span): List<QuotationParameter> {
   const annotation = checker.expressionTypeHere(at) ?? checker.deferredType
-  const form = formOf(checker, annotation)
+  const form = formOf checker, annotation
   const forms = match form {
     Some(found) => found.parameters
-    .None => []
+    None => []
   }
   var parameters: List<QuotationParameter> = []
   for index in 0..forms.length() {
@@ -334,7 +334,7 @@ fn lambdaParametersOf(var checker: Checker, closure: Closure, at: Span): List<Qu
         name = written
       }
     }
-    parameters.add(QuotationParameter(name, resolveType(checker, shape.annotation)))
+    parameters.add QuotationParameter(name, resolveType(checker, shape.annotation))
   }
   parameters
 }
@@ -349,16 +349,16 @@ fn quoteConditional(
   at: Span,
 ) {
   match condition {
-    .Test(inner) => quoteExpression(checker, state, inner)
+    .Test(inner) => quoteExpression checker, state, inner
     .Bind(_, _, _) => {
-      reportNotOneExpression(checker, state, "A pattern in an `if`", at)
+      reportNotOneExpression checker, state, "A pattern in an `if`", at
       return
     }
   }
-  quoteBlock(checker, state, then)
+  quoteBlock checker, state, then
   match otherwise {
-    Some(alternative) => quoteExpression(checker, state, alternative)
-    .None => {
+    Some(alternative) => quoteExpression checker, state, alternative
+    None => {
       checker.reportHere(
         Diagnostic.error("An `if` without an `else` has no value, so it cannot be quoted", at)
           .withNote("A `Conditional` node has all three parts: write the `else`")
@@ -374,7 +374,7 @@ fn quoteBlock(var checker: Checker, var state: QuotationWalk, block: Block) {
     return
   }
   if block.statements.isEmpty() {
-    reportNotOneExpression(checker, state, "An empty block", block.span)
+    reportNotOneExpression checker, state, "An empty block", block.span
     return
   }
   for index in 0..block.statements.length() {
@@ -382,15 +382,15 @@ fn quoteBlock(var checker: Checker, var state: QuotationWalk, block: Block) {
     const inner = match statement.kind {
       .Evaluate(expression) => expression
       _ => {
-        reportNotOneExpression(checker, state, statementNameOf(statement), statement.span)
+        reportNotOneExpression checker, state, statementNameOf(statement), statement.span
         return
       }
     }
     if index > 0 {
-      reportNotOneExpression(checker, state, "A second statement", statement.span)
+      reportNotOneExpression checker, state, "A second statement", statement.span
       return
     }
-    quoteExpression(checker, state, inner)
+    quoteExpression checker, state, inner
   }
 }
 
@@ -419,7 +419,7 @@ fn statementNameOf(statement: Statement): String {
 fn quoteName(var checker: Checker, var state: QuotationWalk, at: Span) {
   // `_`, `_2` and a name the expected function type gives: 4.4 recorded which parameter it is
   if const Some(index) = implicitParameterIndexOf(checker, at) {
-    state.names.set(at, QuotationName.Parameter(index))
+    state.names.set at, QuotationName.Parameter(index)
     return
   }
   const module = checker.module
@@ -432,17 +432,17 @@ fn quoteName(var checker: Checker, var state: QuotationWalk, at: Span) {
   if binding.value >= state.watermark {
     // A parameter the closure wrote down itself: which one it is follows from the name, innermost closure first
     if const Some(index) = writtenParameterIndexOf(checker, state, binding) {
-      state.names.set(at, QuotationName.Parameter(index))
+      state.names.set at, QuotationName.Parameter(index)
     }
     return
   }
-  const index = captureIndexOf(state, binding)
+  const index = captureIndexOf state, binding
   if index < 0 {
     return
   }
-  state.names.set(at, QuotationName.Captured(index))
+  state.names.set at, QuotationName.Captured(index)
   if !state.firstReads.containsKey(index) {
-    state.firstReads.set(index, at)
+    state.firstReads.set index, at
   }
 }
 
@@ -450,7 +450,7 @@ fn implicitParameterIndexOf(checker: Checker, at: Span): Int? {
   const module = checker.module
   for adaptation in checker.adaptationsAt(module, at) {
     if const .ImplicitParameter(index) = adaptation {
-      return Some(index)
+      return Some index
     }
   }
   None
@@ -464,7 +464,7 @@ fn writtenParameterIndexOf(checker: Checker, state: QuotationWalk, binding: Bind
     const parameters = state.open[frame]
     for index in 0..parameters.length() {
       if parameters[index].name == name {
-        return Some(index)
+        return Some index
       }
     }
     frame = frame - 1
@@ -495,23 +495,23 @@ fn encodedCaptures(
   parameter: String,
 ): List<QuotationCapture> {
   const bound = match checker.wellKnown.encode {
-    Some(symbol) => checker.nominal(symbol, [])
+    Some(symbol) => checker.nominal symbol, []
     // A workspace without a prelude has no `Encode`, and what is missing was reported where the name did not resolve
-    .None => {
-      return plainCaptures(checker, state)
+    None => {
+      return plainCaptures checker, state
     }
   }
   var found: List<QuotationCapture> = []
   for index in 0..state.captures.length() {
     const binding = state.captures[index].binding
-    const local = checker.binding(binding)
-    const annotation = resolveType(checker, local.annotation)
-    const witness = witnessFor(checker, annotation, bound)
+    const local = checker.binding binding
+    const annotation = resolveType checker, local.annotation
+    const witness = witnessFor checker, annotation, bound
     if const .Unresolved = witness {
       const at = state.firstReads.get(index) ?? local.at
-      reportNotEncodable(checker, local.name, annotation, bound, owner, parameter, at)
+      reportNotEncodable checker, local.name, annotation, bound, owner, parameter, at
     }
-    found.add(QuotationCapture(binding, local.name, annotation, witness))
+    found.add QuotationCapture(binding, local.name, annotation, witness)
   }
   found
 }
@@ -520,9 +520,9 @@ fn encodedCaptures(
 fn plainCaptures(var checker: Checker, state: QuotationWalk): List<QuotationCapture> {
   var found: List<QuotationCapture> = []
   for capture in state.captures {
-    const local = checker.binding(capture.binding)
-    const annotation = resolveType(checker, local.annotation)
-    found.add(QuotationCapture(capture.binding, local.name, annotation, Witness.Unresolved))
+    const local = checker.binding capture.binding
+    const annotation = resolveType checker, local.annotation
+    found.add QuotationCapture(capture.binding, local.name, annotation, Witness.Unresolved)
   }
   found
 }
@@ -532,7 +532,7 @@ fn plainCaptures(var checker: Checker, state: QuotationWalk): List<QuotationCapt
 /** A construct that is not one expression: a statement, an early `?`, an `if` without an `else`. */
 fn reportNotOneExpression(var checker: Checker, var state: QuotationWalk, what: String, at: Span) {
   const wanted = state.wanted
-  const shown = checker.describe(wanted)
+  const shown = checker.describe wanted
   state.isBroken = true
   checker.reportHere(
     Diagnostic.error("{what} cannot appear in a quotation: `{shown}` holds a single expression", at)
@@ -543,7 +543,7 @@ fn reportNotOneExpression(var checker: Checker, var state: QuotationWalk, what: 
 /** A construct that *is* one expression but has no node an `ExpressionNode` could be: a tuple, a map, a range. */
 fn reportHasNoNode(var checker: Checker, var state: QuotationWalk, what: String, at: Span) {
   const wanted = state.wanted
-  const shown = checker.describe(wanted)
+  const shown = checker.describe wanted
   state.isBroken = true
   checker.reportHere(
     Diagnostic.error("{what} has no node in an expression tree, so `{shown}` cannot hold it", at)
@@ -567,12 +567,12 @@ fn reportNotEncodable(
   if implementsBound(checker, annotation, bound) {
     return
   }
-  const shown = checker.describe(annotation)
-  var problem = Diagnostic.error("`{name}` is captured here and `{shown}` is not `Encode`", at)
+  const shown = checker.describe annotation
+  var problem = Diagnostic.error "`{name}` is captured here and `{shown}` is not `Encode`", at
   if !owner.isEmpty() && !parameter.isEmpty() {
-    problem = problem.withNote("`{owner}` quotes its `{parameter}`, so `{name}` has to be `Encode`")
+    problem = problem.withNote "`{owner}` quotes its `{parameter}`, so `{name}` has to be `Encode`"
   } else if !owner.isEmpty() {
-    problem = problem.withNote("The type of `{owner}` quotes its value, so `{name}` has to be `Encode`")
+    problem = problem.withNote "The type of `{owner}` quotes its value, so `{name}` has to be `Encode`"
   }
   checker.reportHere(
     problem.withNote("A quotation hands the captured values on, so what cannot be `Encode` is compared in a `match`")

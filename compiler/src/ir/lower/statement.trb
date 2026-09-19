@@ -25,12 +25,12 @@ use lowerPlaceAssignment, isReferenceSlot from "./place"
  * statement that diverges: the instructions would land in a block nothing reaches, which the verifier rejects.
  */
 public fn lowerBlockInto(var lowering: Lowering, var builder: FunctionBuilder, block: Block, destination: Slot?) {
-  const found = lowerStatements(lowering, builder, block, destination)
+  const found = lowerStatements lowering, builder, block, destination
   // A block that does not end in an expression is worth `Void`, and somebody may still be taking that value
   if found.isSome() || lowering.isDiverged || destination.isNone() {
     return
   }
-  const _ = voidSlot(lowering, builder, destination)
+  const _ = voidSlot lowering, builder, destination
 }
 
 /**
@@ -39,7 +39,7 @@ public fn lowerBlockInto(var lowering: Lowering, var builder: FunctionBuilder, b
  * instead of a copy of it.
  */
 public fn lowerBlockValue(var lowering: Lowering, var builder: FunctionBuilder, block: Block): Slot? {
-  lowerStatements(lowering, builder, block, None)
+  lowerStatements lowering, builder, block, None
 }
 
 fn lowerStatements(
@@ -56,10 +56,10 @@ fn lowerStatements(
     const statement = block.statements[index]
     if index == last {
       if const .Evaluate(expression) = statement.kind {
-        return Some(lowerExpression(lowering, builder, expression, destination))
+        return Some lowerExpression(lowering, builder, expression, destination)
       }
     }
-    lowerStatement(lowering, builder, statement)
+    lowerStatement lowering, builder, statement
   }
   None
 }
@@ -71,15 +71,15 @@ public fn lowerStatement(var lowering: Lowering, var builder: FunctionBuilder, s
   match statement.kind {
     // A `fn`, a `type` or a `trait` inside a block is reached through a call of it, so nothing is emitted here
     .Declare(_) => {}
-    .Bind(binding) => lowerBinding(lowering, builder, binding, statement.span)
-    .Assign(target, value) => lowerAssignment(lowering, builder, target, value, statement.span)
-    .While(condition, body) => lowerWhile(lowering, builder, condition, body, statement.span)
-    .For(pattern, iterable, body) => lowerFor(lowering, builder, pattern, iterable, body, statement.span)
-    .Return(value) => lowerReturn(lowering, builder, value, statement.span)
-    .Break => lowerBreak(lowering, builder, statement.span)
-    .Continue => lowerContinue(lowering, builder, statement.span)
+    .Bind(binding) => lowerBinding lowering, builder, binding, statement.span
+    .Assign(target, value) => lowerAssignment lowering, builder, target, value, statement.span
+    .While(condition, body) => lowerWhile lowering, builder, condition, body, statement.span
+    .For(pattern, iterable, body) => lowerFor lowering, builder, pattern, iterable, body, statement.span
+    .Return(value) => lowerReturn lowering, builder, value, statement.span
+    .Break => lowerBreak lowering, builder, statement.span
+    .Continue => lowerContinue lowering, builder, statement.span
     .Evaluate(expression) => {
-      const _ = lowerExpression(lowering, builder, expression, None)
+      const _ = lowerExpression lowering, builder, expression, None
     }
   }
 }
@@ -90,32 +90,32 @@ public fn lowerStatement(var lowering: Lowering, var builder: FunctionBuilder, s
 fn lowerBinding(var lowering: Lowering, var builder: FunctionBuilder, binding: Binding, at: Span) {
   const pattern = binding.pattern
   if isWildcardPattern(pattern) {
-    const _ = lowerValue(lowering, builder, binding.value)
+    const _ = lowerValue lowering, builder, binding.value
     return
   }
   // `const (line, column) = pair`, `const Point(x, y) = point`: one `Read` per name, along the paths of the plan
   const name = match bindingNameOf(pattern) {
     Some(found) => found
-    .None => {
-      const source = lowerValue(lowering, builder, binding.value)
+    None => {
+      const source = lowerValue lowering, builder, binding.value
       if !lowering.isSupported {
         return
       }
-      lowerPatternBinding(lowering, builder, pattern, source, pattern.span)
+      lowerPatternBinding lowering, builder, pattern, source, pattern.span
       return
     }
   }
   const declared = pattern.span
   const annotation = match bindingTypeOf(lowering, declared) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "a binding without a type", declared)
+    None => {
+      reportUnsupported lowering, "a binding without a type", declared
       return
     }
   }
-  const slot = addLocal(builder, annotation, name)
-  const _ = lowerExpression(lowering, builder, binding.value, Some(slot))
-  lowering.slots.set(declared, slot)
+  const slot = addLocal builder, annotation, name
+  const _ = lowerExpression lowering, builder, binding.value, Some(slot)
+  lowering.slots.set declared, slot
 }
 
 fn bindingNameOf(pattern: Pattern): String? {
@@ -123,7 +123,7 @@ fn bindingNameOf(pattern: Pattern): String? {
     if name == "_" {
       return None
     }
-    return Some(name)
+    return Some name
   }
   None
 }
@@ -143,15 +143,15 @@ fn isWildcardPattern(pattern: Pattern): Bool {
  */
 fn bindingTypeOf(var lowering: Lowering, at: Span): IrTypeId? {
   if const Some(found) = patternTypeOf(lowering, at) {
-    return Some(found)
+    return Some found
   }
   const module = lowering.module
   const symbol = lowering.checker.resolvedName(module, at)?
-  const declared = resultOf(lowering.checker, symbol)
+  const declared = resultOf lowering.checker, symbol
   if lowering.checker.isBroken(declared) {
     return None
   }
-  Some(irTypeOf(lowering, declared))
+  Some irTypeOf(lowering, declared)
 }
 
 fn patternTypeOf(var lowering: Lowering, at: Span): IrTypeId? {
@@ -160,7 +160,7 @@ fn patternTypeOf(var lowering: Lowering, at: Span): IrTypeId? {
   if lowering.checker.isBroken(found) {
     return None
   }
-  Some(irTypeOf(lowering, found))
+  Some irTypeOf(lowering, found)
 }
 
 /**
@@ -179,8 +179,8 @@ fn lowerAssignment(
   const module = lowering.module
   const resolution = match lowering.checker.resolutionAt(module, target.span) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "an assignment the checker did not resolve", at)
+    None => {
+      reportUnsupported lowering, "an assignment the checker did not resolve", at
       return
     }
   }
@@ -190,33 +190,33 @@ fn lowerAssignment(
     .Constant(symbol, _) => {
       const found = match lowering.entryLocals.get(symbol.value) {
         Some(slot) => slot
-        .None => {
-          reportUnsupported(lowering, "an assignment to a top-level `var` from a function", at)
+        None => {
+          reportUnsupported lowering, "an assignment to a top-level `var` from a function", at
           return
         }
       }
-      const _ = lowerExpression(lowering, builder, value, Some(found))
+      const _ = lowerExpression lowering, builder, value, Some(found)
       return
     }
     _ => {
-      lowerPlaceAssignment(lowering, builder, target, value)
+      lowerPlaceAssignment lowering, builder, target, value
       return
     }
   }
   const declared = lowering.checker.binding(binding).at
   const slot = match lowering.slots.get(declared) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "an assignment to a captured binding", at)
+    None => {
+      reportUnsupported lowering, "an assignment to a captured binding", at
       return
     }
   }
   // A `var` parameter holds a pointer into the caller's frame: assigning through one has to release what the caller had
   if isReferenceSlot(builder, slot) {
-    lowerPlaceAssignment(lowering, builder, target, value)
+    lowerPlaceAssignment lowering, builder, target, value
     return
   }
-  const _ = lowerExpression(lowering, builder, value, Some(slot))
+  const _ = lowerExpression lowering, builder, value, Some(slot)
 }
 
 // --- `return`, `break`, `continue` ----------------------------------------------------------------------------------
@@ -225,45 +225,45 @@ fn lowerReturn(var lowering: Lowering, var builder: FunctionBuilder, value: Expr
   const result = builder.function.signature.result
   const expression = match value {
     Some(found) => found
-    .None => {
-      finishBlock(lowering, builder, Terminator.Return(None))
+    None => {
+      finishBlock lowering, builder, Terminator.Return(None)
       return
     }
   }
   if isVoidType(lowering, result) {
     // `return Void` in a function that produces nothing: the value is evaluated and thrown away
-    const _ = lowerValue(lowering, builder, expression)
-    finishBlock(lowering, builder, Terminator.Return(None))
+    const _ = lowerValue lowering, builder, expression
+    finishBlock lowering, builder, Terminator.Return(None)
     return
   }
-  const slot = lowerValue(lowering, builder, expression)
+  const slot = lowerValue lowering, builder, expression
   if !lowering.isSupported {
     return
   }
-  finishBlock(lowering, builder, Terminator.Return(Some(borrowed(slot))))
+  finishBlock lowering, builder, Terminator.Return(Some(borrowed(slot)))
 }
 
 fn lowerBreak(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
   const target = match breakTarget(lowering) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "`break` outside of a loop", at)
+    None => {
+      reportUnsupported lowering, "`break` outside of a loop", at
       return
     }
   }
-  markBreak(lowering)
-  finishBlock(lowering, builder, Terminator.Jump(target))
+  markBreak lowering
+  finishBlock lowering, builder, Terminator.Jump(target)
 }
 
 fn lowerContinue(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
   const target = match continueTarget(lowering) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "`continue` outside of a loop", at)
+    None => {
+      reportUnsupported lowering, "`continue` outside of a loop", at
       return
     }
   }
-  finishBlock(lowering, builder, Terminator.Jump(target))
+  finishBlock lowering, builder, Terminator.Jump(target)
 }
 
 // --- `while` --------------------------------------------------------------------------------------------------------
@@ -276,29 +276,29 @@ fn lowerWhile(var lowering: Lowering, var builder: FunctionBuilder, condition: C
   const test = match condition {
     .Test(inner) => inner
     .Bind(isVar, pattern, value) => {
-      lowerWhileBinding(lowering, builder, isVar, pattern, value, body, at)
+      lowerWhileBinding lowering, builder, isVar, pattern, value, body, at
       return
     }
   }
-  const location = locationOf(lowering, at)
-  const check = addBlock(builder, "while", Some(location))
-  const inner = addBlock(builder, "body", Some(location))
-  const done = addBlock(builder, "done", Some(location))
-  finishBlock(lowering, builder, Terminator.Jump(check))
-  continueIn(lowering, builder, check)
-  const scrutinee = lowerValue(lowering, builder, test)
+  const location = locationOf lowering, at
+  const check = addBlock builder, "while", Some(location)
+  const inner = addBlock builder, "body", Some(location)
+  const done = addBlock builder, "done", Some(location)
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, check
+  const scrutinee = lowerValue lowering, builder, test
   if !lowering.isSupported {
     return
   }
-  finishBlock(lowering, builder, Terminator.Branch(scrutinee, inner, done))
-  continueIn(lowering, builder, inner)
-  enterLoop(lowering, done, check)
-  lowerBlockInto(lowering, builder, body, None)
-  const broke = leaveLoop(lowering)
+  finishBlock lowering, builder, Terminator.Branch(scrutinee, inner, done)
+  continueIn lowering, builder, inner
+  enterLoop lowering, done, check
+  lowerBlockInto lowering, builder, body, None
+  const broke = leaveLoop lowering
   if !lowering.isDiverged {
-    finishBlock(lowering, builder, Terminator.Jump(check))
+    finishBlock lowering, builder, Terminator.Jump(check)
   }
-  continueIn(lowering, builder, done)
+  continueIn lowering, builder, done
   if neverEnds(test) && !broke {
     lowering.isDiverged = true
   }
@@ -327,25 +327,25 @@ fn rangeEndsOf(var lowering: Lowering, iterable: Expression, at: Span): (Express
   const (from, to, isInclusive) = match iterable.kind {
     .RangeLiteral(first, second, inclusive) => (first, second, inclusive)
     _ => {
-      reportUnsupported(lowering, "`for` over anything but a range of integers", at)
+      reportUnsupported lowering, "`for` over anything but a range of integers", at
       return None
     }
   }
   if isInclusive {
-    reportUnsupported(lowering, "`for` over an inclusive range", at)
+    reportUnsupported lowering, "`for` over an inclusive range", at
     return None
   }
   const start = match from {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "`for` over a range without both ends", at)
+    None => {
+      reportUnsupported lowering, "`for` over a range without both ends", at
       return None
     }
   }
   const end = match to {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "`for` over a range without both ends", at)
+    None => {
+      reportUnsupported lowering, "`for` over a range without both ends", at
       return None
     }
   }
@@ -362,61 +362,61 @@ fn lowerFor(
 ) {
   const (start, end) = match rangeEndsOf(lowering, iterable, at) {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
   const item = match patternTypeOf(lowering, pattern.span) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "`for` over a range without an item type", at)
+    None => {
+      reportUnsupported lowering, "`for` over a range without an item type", at
       return
     }
   }
   const kind = match numericKindOf(lowering.program, item) {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "`for` over a range of something that is not a number", at)
+    None => {
+      reportUnsupported lowering, "`for` over a range of something that is not a number", at
       return
     }
   }
   const name = bindingNameOf(pattern) ?? ""
   // A pattern that takes the item apart binds in the body, through the plan the checker recorded for it
   const takesApart = !isWildcardPattern(pattern) && name.isEmpty()
-  const counter = addLocal(builder, item, name)
-  const _ = lowerExpression(lowering, builder, start, Some(counter))
-  const limit = addTemporary(builder, item)
-  const _ = lowerExpression(lowering, builder, end, Some(limit))
+  const counter = addLocal builder, item, name
+  const _ = lowerExpression lowering, builder, start, Some(counter)
+  const limit = addTemporary builder, item
+  const _ = lowerExpression lowering, builder, end, Some(limit)
   if !lowering.isSupported {
     return
   }
   if !name.isEmpty() {
-    lowering.slots.set(pattern.span, counter)
+    lowering.slots.set pattern.span, counter
   }
-  const location = locationOf(lowering, at)
-  const check = addBlock(builder, "for", Some(location))
-  const inner = addBlock(builder, "body", Some(location))
-  const step = addBlock(builder, "step", Some(location))
-  const done = addBlock(builder, "done", Some(location))
-  finishBlock(lowering, builder, Terminator.Jump(check))
-  continueIn(lowering, builder, check)
-  const boolean = booleanTypeOf(lowering)
-  const scrutinee = addTemporary(builder, boolean)
-  emitIntrinsic(lowering, builder, Some(scrutinee), IntrinsicOperation.Less, Some(kind), [counter, limit], at)
-  finishBlock(lowering, builder, Terminator.Branch(scrutinee, inner, done))
-  continueIn(lowering, builder, inner)
-  enterLoop(lowering, done, step)
+  const location = locationOf lowering, at
+  const check = addBlock builder, "for", Some(location)
+  const inner = addBlock builder, "body", Some(location)
+  const step = addBlock builder, "step", Some(location)
+  const done = addBlock builder, "done", Some(location)
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, check
+  const boolean = booleanTypeOf lowering
+  const scrutinee = addTemporary builder, boolean
+  emitIntrinsic lowering, builder, Some(scrutinee), IntrinsicOperation.Less, Some(kind), [counter, limit], at
+  finishBlock lowering, builder, Terminator.Branch(scrutinee, inner, done)
+  continueIn lowering, builder, inner
+  enterLoop lowering, done, step
   if takesApart {
-    lowerPatternBinding(lowering, builder, pattern, counter, pattern.span)
+    lowerPatternBinding lowering, builder, pattern, counter, pattern.span
   }
-  lowerBlockInto(lowering, builder, body, None)
-  const _ = leaveLoop(lowering)
+  lowerBlockInto lowering, builder, body, None
+  const _ = leaveLoop lowering
   if !lowering.isDiverged {
-    finishBlock(lowering, builder, Terminator.Jump(step))
+    finishBlock lowering, builder, Terminator.Jump(step)
   }
-  continueIn(lowering, builder, step)
-  const one = integerSlot(lowering, builder, 1, item)
-  emitIntrinsic(lowering, builder, Some(counter), IntrinsicOperation.Add, Some(kind), [counter, one], at)
-  finishBlock(lowering, builder, Terminator.Jump(check))
-  continueIn(lowering, builder, done)
+  continueIn lowering, builder, step
+  const one = integerSlot lowering, builder, 1, item
+  emitIntrinsic lowering, builder, Some(counter), IntrinsicOperation.Add, Some(kind), [counter, one], at
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, done
 }

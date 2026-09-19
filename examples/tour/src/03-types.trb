@@ -5,7 +5,7 @@ type Point {
   var y: Int
 
   // Static constant
-  const origin = Point(0, 0)
+  const origin = Point 0, 0
 
   // Method: declares `self`, accesses members implicitly
   fn area(self): Int {
@@ -25,26 +25,26 @@ type Point {
 
   // Static function: no `self`
   fn diagonal(size: Int): Point {
-    Self(size, size)
+    Self size, size
   }
 }
 
-var p = Point(x: 10, y: 20)          // The constructor is generated from the fields
-const q = Point(10, 20)              // Positional works too
+var p = Point x: 10, y: 20          // The constructor is generated from the fields
+const q = Point 10, 20              // Positional works too
 
 p.x = 15                             // `p` is a `var`
-p.translate(deltaY: 10)
+p.translate deltaY: 10
 // q.x = 20                          // Compile error: `q` is a `const`
 // q.translate(deltaX: 5)            // Compile error: `translate` needs a `var`. Did you mean `translated`?
-const r = q.translated(deltaX: 5)    // Participles work everywhere
-p = p.copy(y: 30)                    // `copy` is generated
+const r = q.translated deltaX: 5    // Participles work everywhere
+p = p.copy y: 30                    // `copy` is generated
 
 var other = p                        // Assigning is copying: two values, no aliasing
 other.x = 0
 print p.x                            // Still 15
 
 print "p = {p}, area = {p.area()}"   // `Show` is generated: Point(x: 15, y: 30)
-print p == Point(15, 30)             // `Equals` is generated and structural: true
+print(p == Point(15, 30))             // `Equals` is generated and structural: true
 print Point.area(q)                  // Methods are static functions taking `self` first
 print([p, q].map(Point.area).toList())    // Not `print [...]`: that would be indexing
 
@@ -63,7 +63,7 @@ type Counter {
   }
 }
 
-var counter = Counter(step: 2)       // Fields with defaults can be omitted
+var counter = Counter step: 2       // Fields with defaults can be omitted
 counter.increment()
 counter.count = 10
 // counter.step = 3                  // Compile error: `step` is not a `var` field
@@ -79,7 +79,7 @@ fn incrementTwice(var target: Counter) {
   target.increment()
 }
 
-incrementTwice(counter)
+incrementTwice counter
 print counter.count                  // 14
 // incrementTwice(frozen)            // Compile error: `frozen` is a `const`
 
@@ -91,7 +91,7 @@ var first = counters[0]              // A copy
 first.increment()                    // Changes the copy. The list still holds two zeros.
 
 counters[0].increment()              // Through the path: changes the element in place
-counters.update(1) { element =>
+counters.update 1 { element =>
   element.increment()
 }
 
@@ -112,9 +112,9 @@ shared type Connection {
   }
 }
 
-var connection = Connection("tcp://example.test")
+var connection = Connection "tcp://example.test"
 var sameConnection = connection      // The same object
-sameConnection.send("hello")
+sameConnection.send "hello"
 print connection.sent                // 1
 
 const readOnly = connection          // Same rule as everywhere: no `var` path, no mutation
@@ -132,9 +132,9 @@ type Email with Parse<ParseError> {
   fn parse(text: String): Result<Email, ParseError> {
     const trimmed = text.trim()
     if !trimmed.contains("@") {
-      return Fail(ParseError("'{text}' is not an email address"))
+      return Fail ParseError("'{text}' is not an email address")
     }
-    Ok(Self(trimmed.toLowerCase()))
+    Ok Self(trimmed.toLowerCase())
   }
 
   fn domain(self): String {
@@ -143,7 +143,7 @@ type Email with Parse<ParseError> {
 }
 
 // const invalid = Email("nope")     // Compile error: constructor is not accessible
-const email = Email.parse("Info@Example.test")
+const email = Email.parse "Info@Example.test"
 match email {
   Ok(address) => print "Domain: {address.domain()}"
   Fail(error) => print "Invalid: {error.message}"
@@ -163,7 +163,7 @@ extend Celsius with From<Fahrenheit> {
   }
 }
 
-const boiling = Celsius.from(Fahrenheit(212.0))
+const boiling = Celsius.from Fahrenheit(212.0)
 const freezing: Celsius = Fahrenheit(32.0).into()   // `Into` comes for free
 
 // Fallible conversion
@@ -172,9 +172,9 @@ type Percent with TryFrom<Int, ParseError> {
 
   fn tryFrom(value: Int): Result<Percent, ParseError> {
     if value < 0 || value > 100 {
-      return Fail(ParseError("{value} is not between 0 and 100"))
+      return Fail ParseError("{value} is not between 0 and 100")
     }
-    Ok(Self(value))
+    Ok Self(value)
   }
 }
 
@@ -187,16 +187,16 @@ type Account {
 
   fn deposit(var self, amount: Int) {
     balance = balance + amount
-    log("deposit {amount}")
+    log "deposit {amount}"
   }
 
   private fn log(var self, message: String) {
-    history.add("[{owner}] {message}")
+    history.add "[{owner}] {message}"
   }
 }
 
-var account = Account(owner: "Ada")  // The private fields have defaults, so the constructor is usable
-account.deposit(100)
+var account = Account owner: "Ada"  // The private fields have defaults, so the constructor is usable
+account.deposit 100
 print account.balance                // 100
 // account.balance = 1_000_000       // Compile error: only Account can write `balance`
 // account.history                   // Compile error: `history` is private
@@ -213,7 +213,7 @@ type Rectangle {
   const perimeter: (self: Rectangle) => Int = { 2 * (width + height) }
 }
 
-const rectangle = Rectangle(3, 4)
+const rectangle = Rectangle 3, 4
 print rectangle.area()               // 12
 print rectangle.perimeter()          // 14
 print Rectangle.area(rectangle)      // The constant itself: (self: Rectangle) => Int
@@ -226,7 +226,7 @@ type Button {
   var onClick: () => Void = {}
 }
 
-var button = Button("OK")
+var button = Button "OK"
 button.onClick = { print "clicked" }
 button.onClick()
 
@@ -260,7 +260,7 @@ type Seconds with Add & Subtract & Compare by value {
 }
 
 const distance = Meters(5.0) + Meters(2.5)       // Meters(7.5)
-const longer = distance.max(Meters(10.0))        // `Compare` is forwarded, too
+const longer = distance.max Meters(10.0)        // `Compare` is forwarded, too
 // const mixed = distance + Seconds(1.0)         // Compile error
 // const area = distance * distance              // Compile error: `Multiply` was not forwarded - that would be m²
 const raw: Float = distance.value                // Explicit way out

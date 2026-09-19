@@ -19,8 +19,8 @@ group "Members through traits" {
     const source = "type Amount with Equals \{\n  value: Int\n\n  fn equals(self, other: Amount): Bool \{\n"
       + "    value == other.value\n  \}\n\}\n\n"
       + inBody("  const a = Amount(1)\n  print a.equals(Amount(2))")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("a.equals(Amount(2))") == "Bool")
     assert(found.resolutionOf("a.equals") == "call equals")
   }
@@ -29,8 +29,8 @@ group "Members through traits" {
     const source = "trait Grow \{\n  fn step(self): Int\n\n  fn twice(self): Int \{\n    step() + step()\n  \}\n\}\n\n"
       + "type Amount with Grow \{\n  fn step(self): Int \{\n    1\n  \}\n\}\n\n"
       + inBody("  const a = Amount()\n  print a.twice()")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("a.twice()") == "Int64")
   }
 
@@ -39,8 +39,8 @@ group "Members through traits" {
       + "  fn compare(self, other: Amount): Int \{\n    0\n  \}\n\n"
       + "  fn equals(self, other: Amount): Bool \{\n    true\n  \}\n\}\n\n"
       + inBody("  const a = Amount(1)\n  print a.equals(Amount(2))")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("a.equals(Amount(2))") == "Bool")
   }
 
@@ -48,7 +48,7 @@ group "Members through traits" {
     const source = "trait Grow \{\n  fn step(self): Int\n\n  fn twice(self): Int \{\n    step() + step()\n  \}\n\}\n\n"
       + "type Amount with Grow \{\n  fn step(self): Int \{\n    1\n  \}\n\}\n\n"
       + inBody("  const a = Amount()\n  print a.twice()\n  print a.step()")
-    const found = probe(source)
+    const found = probe source
     assert(found.dispatchOf("a.twice") == "implementation Amount: Grow")
     // A member the type writes in its own body is an ordinary member and is reached directly
     assert(found.dispatchOf("a.step") == "direct")
@@ -57,8 +57,8 @@ group "Members through traits" {
   test "a member of a trait-typed value is taken from its witness table" {
     const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
       + inBody("  fn draw(shape: Shape): Int \{\n    shape.area()\n  \}")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("shape.area()") == "Int64")
     assert(found.dispatchOf("shape.area") == "object Shape")
   }
@@ -66,8 +66,8 @@ group "Members through traits" {
   test "a member of a generic parameter comes from its bounds, and the caller passes the witness" {
     const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
       + "fn total<Item: Shape>(value: Item): Int \{\n  value.area()\n\}"
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("value.area()") == "Int64")
     assert(found.dispatchOf("value.area") == "forwarded Shape")
   }
@@ -79,9 +79,9 @@ group "Members through traits" {
   }
 
   test "a member of a trait whose own parameters the receiver fills in" {
-    const source = inBody("  const texts: List<String> = [\"a\"]\n  print texts.length()")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    const source = inBody "  const texts: List<String> = [\"a\"]\n  print texts.length()"
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("texts.length()") == "Int64")
   }
 
@@ -92,8 +92,8 @@ group "Members through traits" {
 
   test "one name with several signatures is decided by the argument" {
     const source = overloaded + inBody("  const small: Int8 = 1\n  print Wide.from(small)")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("Wide.from(small)") == "Wide")
   }
 
@@ -108,8 +108,8 @@ group "Traits as a namespace" {
   test "`Trait.member` reads the trait's own members first" {
     const source = "trait Shape \{\n  fn area(self): Int\n\n  fn unit(): Int \{\n    1\n  \}\n\}\n\n"
       + inBody("  print Shape.unit()")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("Shape.unit()") == "Int64")
   }
 
@@ -118,8 +118,8 @@ group "Traits as a namespace" {
       + "type Square with Shape \{\n  fn area(self): Int \{\n    1\n  \}\n\}\n\n"
       + "extend Shape \{\n  fn unit(): Square \{\n    Square()\n  \}\n\}\n\n"
       + inBody("  print Shape.unit().area()")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("Shape.unit()") == "Square")
   }
 }
@@ -129,8 +129,8 @@ group "Operators through their traits" {
     const source = "type Meters with Add<Meters, Meters> \{\n  value: Float\n\n"
       + "  fn add(self, other: Meters): Meters \{\n    Meters(value + other.value)\n  \}\n\}\n\n"
       + inBody("  const sum = Meters(1.0) + Meters(2.0)")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("Meters(1.0) + Meters(2.0)") == "Meters")
     assert(found.dispatchOf("Meters(1.0) + Meters(2.0)") == "implementation Meters: Add<Meters, Meters>")
   }
@@ -149,13 +149,13 @@ group "Operators through their traits" {
   }
 
   test "the arithmetic of the built-in numbers goes through `Signed`, `Numeric` and `Add<Self, Self>`" {
-    const found = probe(inBody("  const sum = 1 + 2\n  const share = 1.0 / 60.0"))
+    const found = probe inBody("  const sum = 1 + 2\n  const share = 1.0 / 60.0")
     assert(found.typeOf("1 + 2") == "Int64")
     assert(found.typeOf("1.0 / 60.0") == "Float64")
   }
 
   test "`-a` is `Negate.negate`, and a type without it is told so" {
-    const found = probe(inBody("  const value = 1\n  const other = -value"))
+    const found = probe inBody("  const value = 1\n  const other = -value")
     assert(found.typeOf("-value") == "Int64")
     const source = "type Meters \{\n  value: Float\n\}\n\n"
       + inBody("  const distance = Meters(1.0)\n  const back = -distance")
@@ -167,24 +167,24 @@ group "Operators through their traits" {
       + "  fn compare(self, other: Amount): Int \{\n    0\n  \}\n\n"
       + "  fn equals(self, other: Amount): Bool \{\n    true\n  \}\n\}\n\n"
       + inBody("  const same = Amount(1) == Amount(2)\n  const order = Amount(1) < Amount(2)")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("Amount(1) == Amount(2)") == "Bool")
     assert(found.dispatchOf("Amount(1) == Amount(2)") == "implementation Amount: Equals")
     assert(found.dispatchOf("Amount(1) < Amount(2)") == "implementation Amount: Compare")
   }
 
   test "`&&`, `||` and `!` stay built in on `Bool` and are not traits (gap 21)" {
-    const found = probe(inBody("  const flag = true && !false\n  const other = flag || true"))
+    const found = probe inBody("  const flag = true && !false\n  const other = flag || true")
     assert(found.typeOf("true && !false") == "Bool")
     assert(found.typeOf("!false") == "Bool")
     assert(found.typeOf("flag || true") == "Bool")
   }
 
   test "`a[key]` is `Indexed.at` and `a[from..to]` is `Slice.slice`" {
-    const source = inBody("  const texts: List<String> = [\"a\"]\n  print texts[0]\n  print \"abc\"[0..2]")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    const source = inBody "  const texts: List<String> = [\"a\"]\n  print texts[0]\n  print \"abc\"[0..2]"
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("texts[0]") == "String")
     assert(found.typeOf("\"abc\"[0..2]") == "String")
   }
@@ -199,14 +199,14 @@ group "Interpolation and iteration" {
   test "every interpolated part records the `Show` implementation that renders it" {
     const source = "type Amount with Show \{\n  fn show(self): String \{\n    \"a\"\n  \}\n\}\n\n"
       + inBody("  const shown = \"value \{Amount()\}\"")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("\"value \{Amount()\}\"") == "String")
     assert(found.adaptationsOf("Amount()") == ["show through Amount: Show"])
   }
 
   test "a built-in number reaches `Show` through its supertraits, and the witness names the route" {
-    const found = probe(inBody("  const shown = \"value \{1 + 1\}\""))
+    const found = probe inBody("  const shown = \"value \{1 + 1\}\"")
     // `Int64 with Signed`, `Signed with Numeric`, `Numeric with Show`: the implementation that carries it is the one
     // the type wrote down, and the trait it satisfies is reached from there
     assert(found.adaptationsOf("1 + 1") == ["show through Int64: Signed"])
@@ -214,8 +214,8 @@ group "Interpolation and iteration" {
 
   test "a `Show` that is generated for a type of the file is recorded as the implementation that was derived" {
     const source = "type Amount \{\n  value: Int\n\}\n\n" + inBody("  const shown = \"value \{Amount(2)\}\"")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.adaptationsOf("Amount(2)") == ["show through Amount: Show"])
   }
 
@@ -224,8 +224,8 @@ group "Interpolation and iteration" {
       "  const texts: List<String> = [\"a\"]\n  for part in texts \{\n    print (part)\n  \}\n"
         + "  for index in 0..2 \{\n    print (index)\n  \}"
     )
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.patternTypeOf("part") == "String")
     assert(found.patternTypeOf("index") == "Int64")
   }
@@ -242,8 +242,8 @@ group "Coercion to a trait type" {
     const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
       + "type Square with Shape \{\n  fn area(self): Int \{\n    1\n  \}\n\}\n\n"
       + inBody("  const shape: Shape = Square()")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.adaptationsOf("Square()") == ["trait value Shape"])
   }
 
@@ -257,7 +257,7 @@ group "Coercion to a trait type" {
   test "a trait value coerces to fewer bounds and to a supertrait" {
     const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
       + "fn narrow(value: Shape & Show): Shape \{\n  value\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "there is no variance: a `List<Square>` is not a `List<Shape>`" {
@@ -270,7 +270,7 @@ group "Coercion to a trait type" {
   test "`Never` fits everywhere" {
     const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
       + "fn broken(): Shape \{\n  panic \"none\"\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 }
 
@@ -290,7 +290,7 @@ const witnessSource = "trait Problem with Show \{\n  fn code(self): Int\n\}\n\n"
 
 group "A bound a trait-typed value witnesses" {
   test "a value of a trait satisfies a bound on a trait its own trait requires" {
-    assert(problems(witnessSource).isEmpty())
+    assert problems(witnessSource).isEmpty()
     // The witness is the value's own table, which is what a back end reads at the call instead of a static one
     assert(probe(witnessSource).witnessesOf("render(problem)") == ["object Problem: Show"])
   }
@@ -314,7 +314,7 @@ group "A bound a trait-typed value witnesses" {
   test "`Void` implements what its declaration in the standard library says" {
     // A signature says `Void` as the type of the language, and the traits it comes with are declared on the
     // `native type Void` of `std/core`: resolution asks about that one, so `Void` is `Show` like every other type
-    const found = probe(witnessSource)
+    const found = probe witnessSource
     assert(found.witnessesOf("render(nothing)") == ["Void: Show"])
     assert(found.witnessesOf("render(done)") == ["Result<Value, Failure>: Show [Void: Show, object Problem: Show]"])
   }

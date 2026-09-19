@@ -7,8 +7,9 @@
 //! text-in, text-out tests.
 //!
 //! An import names a case by its path: `use Option.Some from "std/core"`, or `use Shape.Circle` without a module.
-//! `Some`, `None`, `Ok` and `Fail` come from the prelude and count as imported unless the file declares or imports
-//! something of that name itself.
+//! `None` comes from the prelude and counts as imported unless the file declares or imports something of that name
+//! itself. It is the only case of the prelude without a payload: a `.Fail` without fields is never `Result`'s, it is
+//! the case of some other type (`DecisionNode.Fail`), and a syntax tool cannot see which type a pattern matches.
 
 use std::collections::HashSet;
 
@@ -16,8 +17,8 @@ use torb_syntax::ast::*;
 
 use super::edit::{Edit, EditKind, Replacement};
 
-/// The cases the prelude puts into every file.
-const PRELUDE: [&str; 4] = ["Some", "None", "Ok", "Fail"];
+/// The payload-less cases the prelude puts into every file.
+const PRELUDE: [&str; 1] = ["None"];
 
 pub fn edits(source: &str, file: &File, patterns: &[&Pattern]) -> Vec<Edit> {
     let imported = imported_cases(file);

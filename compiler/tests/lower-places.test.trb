@@ -26,9 +26,9 @@ const entryName = "t_acme_x2f_app_main"
 
 /** The emitted C of one function, from its comment to its closing brace, after the ownership pass. */
 fn functionOf(source: String, name: String): String {
-  var found = lowered(source)
-  insertOwnership(found.program)
-  const text = emittedProgramText(found.program, entryName)
+  var found = lowered source
+  insertOwnership found.program
+  const text = emittedProgramText found.program, entryName
   var lines: List<String> = []
   var isInside = false
   for line in text.lines() {
@@ -39,298 +39,310 @@ fn functionOf(source: String, name: String): String {
     if !isInside {
       continue
     }
-    lines.add(line)
+    lines.add line
     if line == "\}" {
       break
     }
   }
-  lines.joined(separator: "\n")
+  lines.joined separator: "\n"
 }
 
 const counters = r"""
-type Counter {
-  var hits: Int
+  type Counter {
+    var hits: Int
 
-  fn increment(var self) {
-    hits = hits + 1
+    fn increment(var self) {
+      hits = hits + 1
+    }
   }
-}
 
-fn grow(var total: Int, by: Int) {
-  total = total + by
-}
+  fn grow(var total: Int, by: Int) {
+    total = total + by
+  }
 
-fn growTwice(var total: Int, by: Int) {
-  grow(total, by)
-  grow(total, by)
-}
+  fn growTwice(var total: Int, by: Int) {
+    grow(total, by)
+    grow(total, by)
+  }
 
-fn countTwice(var counter: Counter) {
-  counter.increment()
-  counter.increment()
-}
+  fn countTwice(var counter: Counter) {
+    counter.increment()
+    counter.increment()
+  }
 
-fn run(): Int {
-  var total = 1
-  growTwice(total, 2)
-  var counter = Counter(0)
-  countTwice(counter)
-  total + counter.hits
-}
-"""
+  fn run(): Int {
+    var total = 1
+    growTwice(total, 2)
+    var counter = Counter(0)
+    countTwice(counter)
+    total + counter.hits
+  }
+  """
 
 group "A `var` parameter" {
   test "is a reference in the signature, and an assignment through it is a write" {
     assert(
-      irOf(counters, "t_acme_x2f_app_main_grow") == r"""fn t_acme_x2f_app_main_grow(var total: Int64 borrowed, by: Int64 borrowed) -> Void {
-  slot %0 parameter total: Int64
-  slot %1 parameter by: Int64
-  slot %2 temporary: Int64
-b0: # acme/app/src/main.trb:9 body
-  %2 = intrinsic add.i64 %0, %1 at acme/app/src/main.trb:10:11
-  write %0 = %2 borrowed
-  return
-}"""
+      irOf(counters, "t_acme_x2f_app_main_grow") == r"""
+        fn t_acme_x2f_app_main_grow(var total: Int64 borrowed, by: Int64 borrowed) -> Void {
+          slot %0 parameter total: Int64
+          slot %1 parameter by: Int64
+          slot %2 temporary: Int64
+        b0: # acme/app/src/main.trb:9 body
+          %2 = intrinsic add.i64 %0, %1 at acme/app/src/main.trb:10:11
+          write %0 = %2 borrowed
+          return
+        }"""
     )
   }
 
   test "is handed on as the place it already is, and never as a copy of the value" {
     assert(
-      irOf(counters, "t_acme_x2f_app_main_growTwice") == r"""fn t_acme_x2f_app_main_growTwice(var total: Int64 borrowed, by: Int64 borrowed) -> Void {
-  slot %0 parameter total: Int64
-  slot %1 parameter by: Int64
-  slot %2 temporary: Void
-b0: # acme/app/src/main.trb:13 body
-  call t_acme_x2f_app_main_grow(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:14:3
-  call t_acme_x2f_app_main_grow(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:15:3
-  return
-}"""
+      irOf(counters, "t_acme_x2f_app_main_growTwice") == r"""
+        fn t_acme_x2f_app_main_growTwice(var total: Int64 borrowed, by: Int64 borrowed) -> Void {
+          slot %0 parameter total: Int64
+          slot %1 parameter by: Int64
+          slot %2 temporary: Void
+        b0: # acme/app/src/main.trb:13 body
+          call t_acme_x2f_app_main_grow(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:14:3
+          call t_acme_x2f_app_main_grow(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:15:3
+          return
+        }"""
     )
   }
 
   test "the call site passes the address of the local the value lives in" {
     assert(
-      irOf(counters, "t_acme_x2f_app_main_run") == r"""fn t_acme_x2f_app_main_run() -> Int64 {
-  slot %0 local total: Int64
-  slot %1 temporary: Int64
-  slot %2 temporary: Void
-  slot %3 local counter: Record(T_acme_x2f_app_main_Counter)
-  slot %4 temporary: Int64
-  slot %5 temporary: Int64
-  slot %6 temporary: Int64
-b0: # acme/app/src/main.trb:23 body
-  %0 = constant s_literal__Int64_1
-  %1 = constant s_literal__Int64_2
-  call t_acme_x2f_app_main_growTwice(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:25:3
-  %4 = constant s_literal__Int64_0
-  %3 = construct T_acme_x2f_app_main_Counter (%4 borrowed)
-  call t_acme_x2f_app_main_countTwice(&%3 borrowed) at acme/app/src/main.trb:27:3
-  %5 = read %3.hits
-  %6 = intrinsic add.i64 %0, %5 at acme/app/src/main.trb:28:3
-  return %6 borrowed
-}"""
+      irOf(counters, "t_acme_x2f_app_main_run") == r"""
+        fn t_acme_x2f_app_main_run() -> Int64 {
+          slot %0 local total: Int64
+          slot %1 temporary: Int64
+          slot %2 temporary: Void
+          slot %3 local counter: Record(T_acme_x2f_app_main_Counter)
+          slot %4 temporary: Int64
+          slot %5 temporary: Int64
+          slot %6 temporary: Int64
+        b0: # acme/app/src/main.trb:23 body
+          %0 = constant s_literal__Int64_1
+          %1 = constant s_literal__Int64_2
+          call t_acme_x2f_app_main_growTwice(&%0 borrowed, %1 borrowed) at acme/app/src/main.trb:25:3
+          %4 = constant s_literal__Int64_0
+          %3 = construct T_acme_x2f_app_main_Counter (%4 borrowed)
+          call t_acme_x2f_app_main_countTwice(&%3 borrowed) at acme/app/src/main.trb:27:3
+          %5 = read %3.hits
+          %6 = intrinsic add.i64 %0, %5 at acme/app/src/main.trb:28:3
+          return %6 borrowed
+        }"""
     )
   }
 
   test "a `var self` receiver is the first parameter, and a field of it is one step from it" {
     assert(
       irOf(counters, "t_acme_x2f_app_main_Counter_increment")
-        == r"""fn t_acme_x2f_app_main_Counter_increment(var self: Record(T_acme_x2f_app_main_Counter) borrowed) -> Void {
-  slot %0 parameter self: Record(T_acme_x2f_app_main_Counter)
-  slot %1 temporary: Int64
-  slot %2 temporary: Int64
-  slot %3 temporary: Int64
-b0: # acme/app/src/main.trb:4 body
-  %1 = read %0.hits
-  %2 = constant s_literal__Int64_1
-  %3 = intrinsic add.i64 %1, %2 at acme/app/src/main.trb:5:12
-  write %0.hits = %3 borrowed
-  return
-}"""
+        == r"""
+          fn t_acme_x2f_app_main_Counter_increment(var self: Record(T_acme_x2f_app_main_Counter) borrowed) -> Void {
+            slot %0 parameter self: Record(T_acme_x2f_app_main_Counter)
+            slot %1 temporary: Int64
+            slot %2 temporary: Int64
+            slot %3 temporary: Int64
+          b0: # acme/app/src/main.trb:4 body
+            %1 = read %0.hits
+            %2 = constant s_literal__Int64_1
+            %3 = intrinsic add.i64 %1, %2 at acme/app/src/main.trb:5:12
+            write %0.hits = %3 borrowed
+            return
+          }"""
     )
   }
 
   test "in C it is a pointer, and every read through it one dereference" {
     assert(
       functionOf(counters, "t_acme_x2f_app_main_Counter_increment")
-        == r"""static void t_acme_x2f_app_main_Counter_increment(T_acme_x2f_app_main_Counter *s0_self) {
-  int64_t s1 = { 0 };
-  int64_t s2 = { 0 };
-  int64_t s3 = { 0 };
-#line 4 "acme/app/src/main.trb"
-  /* body */
-  s1 = (*s0_self).f_hits;
-  s2 = s_literal__Int64_1;
-#line 5 "acme/app/src/main.trb"
-  s3 = torb_add_i64(s1, s2, TORB_LOCATION("acme/app/src/main.trb", 5, 12));
-  (*s0_self).f_hits = s3;
-  return;
-}"""
+        == r"""
+          static void t_acme_x2f_app_main_Counter_increment(T_acme_x2f_app_main_Counter *s0_self) {
+            int64_t s1 = { 0 };
+            int64_t s2 = { 0 };
+            int64_t s3 = { 0 };
+          #line 4 "acme/app/src/main.trb"
+            /* body */
+            s1 = (*s0_self).f_hits;
+            s2 = s_literal__Int64_1;
+          #line 5 "acme/app/src/main.trb"
+            s3 = torb_add_i64(s1, s2, TORB_LOCATION("acme/app/src/main.trb", 5, 12));
+            (*s0_self).f_hits = s3;
+            return;
+          }"""
     )
   }
 
   test "in C a place that is already a pointer is passed on as it is, never as `&*p`" {
     assert(
       functionOf(counters, "t_acme_x2f_app_main_growTwice")
-        == r"""static void t_acme_x2f_app_main_growTwice(int64_t *s0_total, int64_t s1_by) {
-  torb_void s2 = { 0 };
-  (void)s2;
-#line 13 "acme/app/src/main.trb"
-  /* body */
-  t_acme_x2f_app_main_grow(s0_total, s1_by);
-  t_acme_x2f_app_main_grow(s0_total, s1_by);
-  return;
-}"""
+        == r"""
+          static void t_acme_x2f_app_main_growTwice(int64_t *s0_total, int64_t s1_by) {
+            torb_void s2 = { 0 };
+            (void)s2;
+          #line 13 "acme/app/src/main.trb"
+            /* body */
+            t_acme_x2f_app_main_grow(s0_total, s1_by);
+            t_acme_x2f_app_main_grow(s0_total, s1_by);
+            return;
+          }"""
     )
   }
 }
 
 const lines = r"""
-type Point {
-  var x: Int
-  var y: Int
-}
+  type Point {
+    var x: Int
+    var y: Int
+  }
 
-type Line {
-  var from: Point
-  var to: Point
-}
+  type Line {
+    var from: Point
+    var to: Point
+  }
 
-fn move(var point: Point, by: Int) {
-  point.x = point.x + by
-}
+  fn move(var point: Point, by: Int) {
+    point.x = point.x + by
+  }
 
-fn stretch(var line: Line, by: Int) {
-  line.to.x = line.to.x + by
-  move(line.from, by)
-}
-"""
+  fn stretch(var line: Line, by: Int) {
+    line.to.x = line.to.x + by
+    move(line.from, by)
+  }
+  """
 
 group "An interior projection" {
   test "is one `Reference` of several steps, and not a read followed by a write" {
     assert(
-      irOf(lines, "t_acme_x2f_app_main_stretch") == r"""fn t_acme_x2f_app_main_stretch(var line: Record(T_acme_x2f_app_main_Line) borrowed, by: Int64 borrowed) -> Void {
-  slot %0 parameter line: Record(T_acme_x2f_app_main_Line)
-  slot %1 parameter by: Int64
-  slot %2 temporary: Record(T_acme_x2f_app_main_Point)
-  slot %3 temporary: Int64
-  slot %4 temporary: Int64
-  slot %5 temporary: Void
-b0: # acme/app/src/main.trb:15 body
-  %2 = read %0.to
-  %3 = read %2.x
-  %4 = intrinsic add.i64 %3, %1 at acme/app/src/main.trb:16:15
-  write %0.to.x = %4 borrowed
-  call t_acme_x2f_app_main_move(&%0.from borrowed, %1 borrowed) at acme/app/src/main.trb:17:3
-  return
-}"""
+      irOf(lines, "t_acme_x2f_app_main_stretch") == r"""
+        fn t_acme_x2f_app_main_stretch(var line: Record(T_acme_x2f_app_main_Line) borrowed, by: Int64 borrowed) -> Void {
+          slot %0 parameter line: Record(T_acme_x2f_app_main_Line)
+          slot %1 parameter by: Int64
+          slot %2 temporary: Record(T_acme_x2f_app_main_Point)
+          slot %3 temporary: Int64
+          slot %4 temporary: Int64
+          slot %5 temporary: Void
+        b0: # acme/app/src/main.trb:15 body
+          %2 = read %0.to
+          %3 = read %2.x
+          %4 = intrinsic add.i64 %3, %1 at acme/app/src/main.trb:16:15
+          write %0.to.x = %4 borrowed
+          call t_acme_x2f_app_main_move(&%0.from borrowed, %1 borrowed) at acme/app/src/main.trb:17:3
+          return
+        }"""
     )
   }
 
   test "in C it is a member path, and a field of it the address of that member" {
     assert(
       functionOf(lines, "t_acme_x2f_app_main_stretch")
-        == r"""static void t_acme_x2f_app_main_stretch(T_acme_x2f_app_main_Line *s0_line, int64_t s1_by) {
-  T_acme_x2f_app_main_Point s2 = { 0 };
-  int64_t s3 = { 0 };
-  int64_t s4 = { 0 };
-  torb_void s5 = { 0 };
-  (void)s5;
-#line 15 "acme/app/src/main.trb"
-  /* body */
-  s2 = (*s0_line).f_to;
-  s3 = s2.f_x;
-#line 16 "acme/app/src/main.trb"
-  s4 = torb_add_i64(s3, s1_by, TORB_LOCATION("acme/app/src/main.trb", 16, 15));
-  (*s0_line).f_to.f_x = s4;
-  t_acme_x2f_app_main_move(&(*s0_line).f_from, s1_by);
-  return;
-}"""
+        == r"""
+          static void t_acme_x2f_app_main_stretch(T_acme_x2f_app_main_Line *s0_line, int64_t s1_by) {
+            T_acme_x2f_app_main_Point s2 = { 0 };
+            int64_t s3 = { 0 };
+            int64_t s4 = { 0 };
+            torb_void s5 = { 0 };
+            (void)s5;
+          #line 15 "acme/app/src/main.trb"
+            /* body */
+            s2 = (*s0_line).f_to;
+            s3 = s2.f_x;
+          #line 16 "acme/app/src/main.trb"
+            s4 = torb_add_i64(s3, s1_by, TORB_LOCATION("acme/app/src/main.trb", 16, 15));
+            (*s0_line).f_to.f_x = s4;
+            t_acme_x2f_app_main_move(&(*s0_line).f_from, s1_by);
+            return;
+          }"""
     )
   }
 }
 
 const bundles = r"""
-type Bundle {
-  var first: String
-  var second: String
-  var third: String
-  var weight: Int
-  var extra: Int
-}
+  type Bundle {
+    var first: String
+    var second: String
+    var third: String
+    var weight: Int
+    var extra: Int
+  }
 
-type Holder {
-  var bundle: Bundle
-  var count: Int
-}
+  type Holder {
+    var bundle: Bundle
+    var count: Int
+  }
 
-fn rename(var bundle: Bundle, name: String) {
-  bundle.first = name
-}
+  fn rename(var bundle: Bundle, name: String) {
+    bundle.first = name
+  }
 
-fn renameInside(var holder: Holder, name: String) {
-  holder.bundle.second = name
-}
+  fn renameInside(var holder: Holder, name: String) {
+    holder.bundle.second = name
+  }
 
-fn renameOnce(var holder: Holder, name: String) {
-  rename(holder.bundle, name)
-}
-"""
+  fn renameOnce(var holder: Holder, name: String) {
+    rename(holder.bundle, name)
+  }
+  """
 
 group "Copy on write on the path" {
   test "a write through a counted owner makes it unique first, and releases what was there" {
     assert(
       ownedIrOf(bundles, "t_acme_x2f_app_main_rename")
-        == r"""fn t_acme_x2f_app_main_rename(var bundle: Record(T_acme_x2f_app_main_Bundle) borrowed, name: String owned) -> Void {
-  slot %0 parameter bundle: Record(T_acme_x2f_app_main_Bundle)
-  slot %1 parameter name: String
-b0: # acme/app/src/main.trb:14 body
-  makeUnique %0
-  write %0.first = %1 owned last
-  return
-}"""
+        == r"""
+          fn t_acme_x2f_app_main_rename(var bundle: Record(T_acme_x2f_app_main_Bundle) borrowed, name: String owned) -> Void {
+            slot %0 parameter bundle: Record(T_acme_x2f_app_main_Bundle)
+            slot %1 parameter name: String
+          b0: # acme/app/src/main.trb:14 body
+            makeUnique %0
+            write %0.first = %1 owned last
+            return
+          }"""
     )
   }
 
   test "the owner that is made unique is the counted one on the path, not the base" {
     assert(
       ownedIrOf(bundles, "t_acme_x2f_app_main_renameInside")
-        == r"""fn t_acme_x2f_app_main_renameInside(var holder: Record(T_acme_x2f_app_main_Holder) borrowed, name: String owned) -> Void {
-  slot %0 parameter holder: Record(T_acme_x2f_app_main_Holder)
-  slot %1 parameter name: String
-b0: # acme/app/src/main.trb:18 body
-  makeUnique %0.bundle
-  write %0.bundle.second = %1 owned last
-  return
-}"""
+        == r"""
+          fn t_acme_x2f_app_main_renameInside(var holder: Record(T_acme_x2f_app_main_Holder) borrowed, name: String owned) -> Void {
+            slot %0 parameter holder: Record(T_acme_x2f_app_main_Holder)
+            slot %1 parameter name: String
+          b0: # acme/app/src/main.trb:18 body
+            makeUnique %0.bundle
+            write %0.bundle.second = %1 owned last
+            return
+          }"""
     )
   }
 
   test "a place the callee writes through needs no `MakeUnique` here: the callee makes it unique itself" {
     assert(
       ownedIrOf(bundles, "t_acme_x2f_app_main_renameOnce")
-        == r"""fn t_acme_x2f_app_main_renameOnce(var holder: Record(T_acme_x2f_app_main_Holder) borrowed, name: String owned) -> Void {
-  slot %0 parameter holder: Record(T_acme_x2f_app_main_Holder)
-  slot %1 parameter name: String
-  slot %2 temporary: Void
-b0: # acme/app/src/main.trb:22 body
-  call t_acme_x2f_app_main_rename(&%0.bundle borrowed, %1 owned last) at acme/app/src/main.trb:23:3
-  return
-}"""
+        == r"""
+          fn t_acme_x2f_app_main_renameOnce(var holder: Record(T_acme_x2f_app_main_Holder) borrowed, name: String owned) -> Void {
+            slot %0 parameter holder: Record(T_acme_x2f_app_main_Holder)
+            slot %1 parameter name: String
+            slot %2 temporary: Void
+          b0: # acme/app/src/main.trb:22 body
+            call t_acme_x2f_app_main_rename(&%0.bundle borrowed, %1 owned last) at acme/app/src/main.trb:23:3
+            return
+          }"""
     )
   }
 
   test "in C make-unique writes the new block back through the caller's pointer" {
     assert(
       functionOf(bundles, "t_acme_x2f_app_main_renameInside")
-        == r"""static void t_acme_x2f_app_main_renameInside(T_acme_x2f_app_main_Holder *s0_holder, torb_text s1_name) {
-#line 18 "acme/app/src/main.trb"
-  /* body */
-  (*s0_holder).f_bundle = (T_acme_x2f_app_main_Bundle *)torb_make_unique((*s0_holder).f_bundle, sizeof(T_acme_x2f_app_main_Bundle), R_T_acme_x2f_app_main_Bundle, D_T_acme_x2f_app_main_Bundle);
-  torb_text_release((*s0_holder).f_bundle->f_second);
-  (*s0_holder).f_bundle->f_second = s1_name;
-  return;
-}"""
+        == r"""
+          static void t_acme_x2f_app_main_renameInside(T_acme_x2f_app_main_Holder *s0_holder, torb_text s1_name) {
+          #line 18 "acme/app/src/main.trb"
+            /* body */
+            (*s0_holder).f_bundle = (T_acme_x2f_app_main_Bundle *)torb_make_unique((*s0_holder).f_bundle, sizeof(T_acme_x2f_app_main_Bundle), R_T_acme_x2f_app_main_Bundle, D_T_acme_x2f_app_main_Bundle);
+            torb_text_release((*s0_holder).f_bundle->f_second);
+            (*s0_holder).f_bundle->f_second = s1_name;
+            return;
+          }"""
     )
   }
 }
@@ -338,90 +350,93 @@ b0: # acme/app/src/main.trb:22 body
 group "Places the source writes another way" {
   test "a temporary is a valid argument of a `var` parameter: the callee is its only owner" {
     const source = r"""
-type Counter {
-  var hits: Int
-}
+      type Counter {
+        var hits: Int
+      }
 
-fn grow(var counter: Counter) {
-  counter.hits = counter.hits + 1
-}
+      fn grow(var counter: Counter) {
+        counter.hits = counter.hits + 1
+      }
 
-fn run(): Int {
-  grow(Counter(1))
-  2
-}
-"""
+      fn run(): Int {
+        grow(Counter(1))
+        2
+      }
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main_run") == r"""fn t_acme_x2f_app_main_run() -> Int64 {
-  slot %0 temporary: Record(T_acme_x2f_app_main_Counter)
-  slot %1 temporary: Int64
-  slot %2 temporary: Void
-  slot %3 temporary: Int64
-b0: # acme/app/src/main.trb:9 body
-  %1 = constant s_literal__Int64_1
-  %0 = construct T_acme_x2f_app_main_Counter (%1 borrowed)
-  call t_acme_x2f_app_main_grow(&%0 borrowed) at acme/app/src/main.trb:10:3
-  %3 = constant s_literal__Int64_2
-  return %3 borrowed
-}"""
+      irOf(source, "t_acme_x2f_app_main_run") == r"""
+        fn t_acme_x2f_app_main_run() -> Int64 {
+          slot %0 temporary: Record(T_acme_x2f_app_main_Counter)
+          slot %1 temporary: Int64
+          slot %2 temporary: Void
+          slot %3 temporary: Int64
+        b0: # acme/app/src/main.trb:9 body
+          %1 = constant s_literal__Int64_1
+          %0 = construct T_acme_x2f_app_main_Counter (%1 borrowed)
+          call t_acme_x2f_app_main_grow(&%0 borrowed) at acme/app/src/main.trb:10:3
+          %3 = constant s_literal__Int64_2
+          return %3 borrowed
+        }"""
     )
   }
 
   test "a property command writes the field it names, through the place the checker recorded" {
     const source = r"""
-type Server {
-  var port: Int = 0
-}
+      type Server {
+        var port: Int = 0
+      }
 
-fn configure(var server: Server) {
-  server.port 8080
-}
-"""
+      fn configure(var server: Server) {
+        server.port 8080
+      }
+      """
     assert(
       irOf(source, "t_acme_x2f_app_main_configure")
-        == r"""fn t_acme_x2f_app_main_configure(var server: Record(T_acme_x2f_app_main_Server) borrowed) -> Void {
-  slot %0 parameter server: Record(T_acme_x2f_app_main_Server)
-  slot %1 temporary: Int64
-  slot %2 temporary: Void
-b0: # acme/app/src/main.trb:5 body
-  %1 = constant s_literal__Int64_8080
-  write %0.port = %1 borrowed
-  return
-}"""
+        == r"""
+          fn t_acme_x2f_app_main_configure(var server: Record(T_acme_x2f_app_main_Server) borrowed) -> Void {
+            slot %0 parameter server: Record(T_acme_x2f_app_main_Server)
+            slot %1 temporary: Int64
+            slot %2 temporary: Void
+          b0: # acme/app/src/main.trb:5 body
+            %1 = constant s_literal__Int64_8080
+            write %0.port = %1 borrowed
+            return
+          }"""
     )
   }
 
   test "a call whose result would land in the base of its own place writes the result instead" {
     const source = r"""
-type Counter {
-  var hits: Int
-}
+      type Counter {
+        var hits: Int
+      }
 
-fn grown(var counter: Counter): Counter {
-  counter.hits = counter.hits + 1
-  Counter(counter.hits)
-}
+      fn grown(var counter: Counter): Counter {
+        counter.hits = counter.hits + 1
+        Counter(counter.hits)
+      }
 
-fn run(): Int {
-  var counter = Counter(1)
-  counter = grown(counter)
-  counter.hits
-}
-"""
+      fn run(): Int {
+        var counter = Counter(1)
+        counter = grown(counter)
+        counter.hits
+      }
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main_run") == r"""fn t_acme_x2f_app_main_run() -> Int64 {
-  slot %0 local counter: Record(T_acme_x2f_app_main_Counter)
-  slot %1 temporary: Int64
-  slot %2 temporary: Record(T_acme_x2f_app_main_Counter)
-  slot %3 temporary: Int64
-b0: # acme/app/src/main.trb:10 body
-  %1 = constant s_literal__Int64_1
-  %0 = construct T_acme_x2f_app_main_Counter (%1 borrowed)
-  %2 = call t_acme_x2f_app_main_grown(&%0 borrowed) at acme/app/src/main.trb:12:13
-  write %0 = %2 borrowed
-  %3 = read %0.hits
-  return %3 borrowed
-}"""
+      irOf(source, "t_acme_x2f_app_main_run") == r"""
+        fn t_acme_x2f_app_main_run() -> Int64 {
+          slot %0 local counter: Record(T_acme_x2f_app_main_Counter)
+          slot %1 temporary: Int64
+          slot %2 temporary: Record(T_acme_x2f_app_main_Counter)
+          slot %3 temporary: Int64
+        b0: # acme/app/src/main.trb:10 body
+          %1 = constant s_literal__Int64_1
+          %0 = construct T_acme_x2f_app_main_Counter (%1 borrowed)
+          %2 = call t_acme_x2f_app_main_grown(&%0 borrowed) at acme/app/src/main.trb:12:13
+          write %0 = %2 borrowed
+          %3 = read %0.hits
+          return %3 borrowed
+        }"""
     )
   }
 }
@@ -462,17 +477,17 @@ group "What a place cannot be yet" {
 group "What the verifier demands of a place" {
   test "the argument of a `var` parameter is a place, and a value is not one" {
     var program = IrProgram()
-    const int64 = program.internType(IrType.Integer(64, true))
-    const voidType = program.internType(IrType.VoidType)
+    const int64 = program.internType IrType.Integer(64, true)
+    const voidType = program.internType IrType.VoidType
     const grow = IrSignature([IrParameter("total", int64, true)], voidType)
-    var calleeBuilder = newFunction("t_main_grow", None, grow, "")
-    terminate(calleeBuilder, Terminator.Return(None))
-    const callee = finishFunction(program, calleeBuilder)
-    var builder = newFunction("t_main_caller", None, IrSignature([IrParameter("value", int64)], voidType), "body")
-    emit(builder, Instruction.Call(None, callee, [borrowed(Slot(0))], []))
-    terminate(builder, Terminator.Return(None))
-    const identifier = finishFunction(program, builder)
-    finishProgram(program)
+    var calleeBuilder = newFunction "t_main_grow", None, grow, ""
+    terminate calleeBuilder, Terminator.Return(None)
+    const callee = finishFunction program, calleeBuilder
+    var builder = newFunction "t_main_caller", None, IrSignature([IrParameter("value", int64)], voidType), "body"
+    emit builder, Instruction.Call(None, callee, [borrowed(Slot(0))], [])
+    terminate builder, Terminator.Return(None)
+    const identifier = finishFunction program, builder
+    finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
         == ["t_main_caller b0: parameter 0 of `t_main_grow` is a `var` parameter, so argument 0 has to be a place"]
@@ -481,18 +496,18 @@ group "What the verifier demands of a place" {
 
   test "the place of a `var` parameter ends in the type the parameter declares" {
     var program = IrProgram()
-    const int64 = program.internType(IrType.Integer(64, true))
-    const boolean = program.internType(IrType.Boolean)
-    const voidType = program.internType(IrType.VoidType)
+    const int64 = program.internType IrType.Integer(64, true)
+    const boolean = program.internType IrType.Boolean
+    const voidType = program.internType IrType.VoidType
     const grow = IrSignature([IrParameter("total", int64, true)], voidType)
-    var calleeBuilder = newFunction("t_main_grow", None, grow, "")
-    terminate(calleeBuilder, Terminator.Return(None))
-    const callee = finishFunction(program, calleeBuilder)
-    var builder = newFunction("t_main_caller", None, IrSignature([IrParameter("flag", boolean)], voidType), "body")
-    emit(builder, Instruction.Call(None, callee, [referenced(Reference(Slot(0)))], []))
-    terminate(builder, Terminator.Return(None))
-    const identifier = finishFunction(program, builder)
-    finishProgram(program)
+    var calleeBuilder = newFunction "t_main_grow", None, grow, ""
+    terminate calleeBuilder, Terminator.Return(None)
+    const callee = finishFunction program, calleeBuilder
+    var builder = newFunction "t_main_caller", None, IrSignature([IrParameter("flag", boolean)], voidType), "body"
+    emit builder, Instruction.Call(None, callee, [referenced(Reference(Slot(0)))], [])
+    terminate builder, Terminator.Return(None)
+    const identifier = finishFunction program, builder
+    finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
         == ["t_main_caller b0: parameter 0 of `t_main_grow` is `Int64` and its place is `Bool`"]
@@ -501,18 +516,18 @@ group "What the verifier demands of a place" {
 
   test "a place carries no count, so its position is borrowed and never a last use" {
     var program = IrProgram()
-    const strings = program.internType(IrType.Text)
-    const voidType = program.internType(IrType.VoidType)
+    const strings = program.internType IrType.Text
+    const voidType = program.internType IrType.VoidType
     const rename = IrSignature([IrParameter("name", strings, true)], voidType)
-    var calleeBuilder = newFunction("t_main_rename", None, rename, "")
-    terminate(calleeBuilder, Terminator.Return(None))
-    const callee = finishFunction(program, calleeBuilder)
-    var builder = newFunction("t_main_caller", None, IrSignature([IrParameter("name", strings)], voidType), "body")
-    const given = Argument(Slot(0), Ownership.Owned, true, Some(Reference(Slot(0))))
-    emit(builder, Instruction.Call(None, callee, [given], []))
-    terminate(builder, Terminator.Return(None))
-    const identifier = finishFunction(program, builder)
-    finishProgram(program)
+    var calleeBuilder = newFunction "t_main_rename", None, rename, ""
+    terminate calleeBuilder, Terminator.Return(None)
+    const callee = finishFunction program, calleeBuilder
+    var builder = newFunction "t_main_caller", None, IrSignature([IrParameter("name", strings)], voidType), "body"
+    const given = Argument Slot(0), Ownership.Owned, true, Some(Reference(Slot(0)))
+    emit builder, Instruction.Call(None, callee, [given], [])
+    terminate builder, Terminator.Return(None)
+    const identifier = finishFunction program, builder
+    finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
         == [
@@ -523,16 +538,16 @@ group "What the verifier demands of a place" {
 
   test "a parameter that takes a value gets no place" {
     var program = IrProgram()
-    const int64 = program.internType(IrType.Integer(64, true))
-    const voidType = program.internType(IrType.VoidType)
-    var calleeBuilder = newFunction("t_main_note", None, IrSignature([IrParameter("value", int64)], voidType), "")
-    terminate(calleeBuilder, Terminator.Return(None))
-    const callee = finishFunction(program, calleeBuilder)
-    var builder = newFunction("t_main_caller", None, IrSignature([IrParameter("value", int64)], voidType), "body")
-    emit(builder, Instruction.Call(None, callee, [referenced(Reference(Slot(0)))], []))
-    terminate(builder, Terminator.Return(None))
-    const identifier = finishFunction(program, builder)
-    finishProgram(program)
+    const int64 = program.internType IrType.Integer(64, true)
+    const voidType = program.internType IrType.VoidType
+    var calleeBuilder = newFunction "t_main_note", None, IrSignature([IrParameter("value", int64)], voidType), ""
+    terminate calleeBuilder, Terminator.Return(None)
+    const callee = finishFunction program, calleeBuilder
+    var builder = newFunction "t_main_caller", None, IrSignature([IrParameter("value", int64)], voidType), "body"
+    emit builder, Instruction.Call(None, callee, [referenced(Reference(Slot(0)))], [])
+    terminate builder, Terminator.Return(None)
+    const identifier = finishFunction program, builder
+    finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
         == ["t_main_caller b0: parameter 0 of `t_main_note` takes a value, so argument 0 carries no place"]
@@ -541,19 +556,19 @@ group "What the verifier demands of a place" {
 
   test "the slot an argument names is the base of its place, because every pass reads that slot" {
     var program = IrProgram()
-    const int64 = program.internType(IrType.Integer(64, true))
-    const voidType = program.internType(IrType.VoidType)
+    const int64 = program.internType IrType.Integer(64, true)
+    const voidType = program.internType IrType.VoidType
     const grow = IrSignature([IrParameter("total", int64, true)], voidType)
-    var calleeBuilder = newFunction("t_main_grow", None, grow, "")
-    terminate(calleeBuilder, Terminator.Return(None))
-    const callee = finishFunction(program, calleeBuilder)
+    var calleeBuilder = newFunction "t_main_grow", None, grow, ""
+    terminate calleeBuilder, Terminator.Return(None)
+    const callee = finishFunction program, calleeBuilder
     const signature = IrSignature([IrParameter("first", int64), IrParameter("second", int64)], voidType)
-    var builder = newFunction("t_main_caller", None, signature, "body")
-    const given = Argument(Slot(1), Ownership.Borrowed, false, Some(Reference(Slot(0))))
-    emit(builder, Instruction.Call(None, callee, [given], []))
-    terminate(builder, Terminator.Return(None))
-    const identifier = finishFunction(program, builder)
-    finishProgram(program)
+    var builder = newFunction "t_main_caller", None, signature, "body"
+    const given = Argument Slot(1), Ownership.Borrowed, false, Some(Reference(Slot(0)))
+    emit builder, Instruction.Call(None, callee, [given], [])
+    terminate builder, Terminator.Return(None)
+    const identifier = finishFunction program, builder
+    finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
         == ["t_main_caller b0: argument 0 of `t_main_grow` names %1 and its place starts at %0"]

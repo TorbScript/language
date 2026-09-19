@@ -100,7 +100,7 @@ public type Lowering {
   /** The line index of a module, built the first time a location of it is needed and kept afterwards. */
   var lines: Map<Int, LineIndex> = [:]
   /** Whose tables are being read. A default argument is lowered at the call site but in the callee's module. */
-  var module: ModuleId = ModuleId(0)
+  var module: ModuleId = ModuleId 0
   /** One static value per distinct constant: the literals of a program repeat, and their names have to agree. */
   var staticKeys: Map<String, StaticId> = [:]
   /** The slot of every binding of the function that is being lowered, by the span of the name it was declared under. */
@@ -163,16 +163,16 @@ public type Lowering {
 
 /** A lowering for one checked program. `paths` holds one path per module, in the order of `program.graph.modules`. */
 public fn newLowering(checker: Checker, paths: List<String>): Lowering {
-  const instantiation = newInstantiation(checker)
+  const instantiation = newInstantiation checker
   const entries = nativeEntries()
   var index: Map<String, Int> = [:]
   for position in 0..entries.length() {
     const name = entries[position].name
     if !index.containsKey(name) {
-      index.set(name, position)
+      index.set name, position
     }
   }
-  Lowering(IrProgram(), checker, instantiation, entries, index, paths)
+  Lowering IrProgram(), checker, instantiation, entries, index, paths
 }
 
 // --- What the back end does not do yet ------------------------------------------------------------------------------
@@ -193,13 +193,13 @@ public fn reportUnsupported(var lowering: Lowering, what: String, at: Span) {
   const message = "not supported by the back end yet: {what}"
   if const Some(index) = lowering.unsupportedIndex.get(message) {
     const entry = lowering.unsupported[index]
-    lowering.unsupported.set(index, entry.copy(count: entry.count + 1))
+    lowering.unsupported.set index, entry.copy(count: entry.count + 1)
     return
   }
-  const place = describeSpan(lowering, at)
+  const place = describeSpan lowering, at
   const next = lowering.unsupported.length()
-  lowering.unsupportedIndex.set(message, next)
-  lowering.unsupported.add(Unsupported(message, place, 1))
+  lowering.unsupportedIndex.set message, next
+  lowering.unsupported.add Unsupported(message, place, 1)
 }
 
 /**
@@ -208,26 +208,26 @@ public fn reportUnsupported(var lowering: Lowering, what: String, at: Span) {
  */
 public fn reportProblem(var lowering: Lowering, message: String, at: Span) {
   const module = lowering.module
-  const problem = Diagnostic.error(message, at)
-  lowering.problems.add(LoweredProblem(module, problem))
+  const problem = Diagnostic.error message, at
+  lowering.problems.add LoweredProblem(module, problem)
 }
 
 /** `src/main.trb:12:5`, the way a location is written everywhere else. */
 public fn describeSpan(var lowering: Lowering, at: Span): String {
   const index = lowering.module.value
-  const path = pathOfModule(lowering, index)
-  const lines = lineIndexOf(lowering, index)
-  const (line, column) = lines.lineAndColumn(at.start)
+  const path = pathOfModule lowering, index
+  const lines = lineIndexOf lowering, index
+  const (line, column) = lines.lineAndColumn at.start
   "{path}:{line}:{column}"
 }
 
 /** The interned location of a span of the module that is being lowered. */
 public fn locationOf(var lowering: Lowering, at: Span): LocationId {
   const index = lowering.module.value
-  const path = pathOfModule(lowering, index)
-  const lines = lineIndexOf(lowering, index)
-  const (line, column) = lines.lineAndColumn(at.start)
-  lowering.program.internLocation(Location(path, line, column))
+  const path = pathOfModule lowering, index
+  const lines = lineIndexOf lowering, index
+  const (line, column) = lines.lineAndColumn at.start
+  lowering.program.internLocation Location(path, line, column)
 }
 
 fn pathOfModule(lowering: Lowering, index: Int): String {
@@ -241,8 +241,8 @@ fn lineIndexOf(var lowering: Lowering, index: Int): LineIndex {
   }
   const modules = lowering.checker.program.graph.modules
   const text = if index >= 0 && index < modules.length() { modules[index].source.text } else { "" }
-  const built = LineIndex.of(text)
-  lowering.lines.set(index, built)
+  const built = LineIndex.of text
+  lowering.lines.set index, built
   built
 }
 
@@ -254,7 +254,7 @@ fn lineIndexOf(var lowering: Lowering, index: Int): LineIndex {
  */
 public fn irTypeOf(var lowering: Lowering, id: TypeId): IrTypeId {
   const mapping = lowering.substitution
-  instantiateType(lowering.program, lowering.checker, lowering.instantiation, mapping, id)
+  instantiateType lowering.program, lowering.checker, lowering.instantiation, mapping, id
 }
 
 /**
@@ -263,7 +263,7 @@ public fn irTypeOf(var lowering: Lowering, id: TypeId): IrTypeId {
  */
 public fn irTypeOfClosed(var lowering: Lowering, id: TypeId): IrTypeId {
   const empty: Map<ParameterId, TypeId> = [:]
-  instantiateType(lowering.program, lowering.checker, lowering.instantiation, empty, id)
+  instantiateType lowering.program, lowering.checker, lowering.instantiation, empty, id
 }
 
 /** A checker type with the arguments of the instance that is being lowered filled in. Still a checker type. */
@@ -272,7 +272,7 @@ public fn substituted(var lowering: Lowering, id: TypeId): TypeId {
   if mapping.isEmpty() {
     return id
   }
-  substitute(lowering.checker.types, id, mapping)
+  substitute lowering.checker.types, id, mapping
 }
 
 /** The IR type of the expression at `at`, or `None` where the checker recorded nothing or something broken. */
@@ -282,15 +282,15 @@ public fn typeAtSpan(var lowering: Lowering, at: Span): IrTypeId? {
   if lowering.checker.isBroken(found) {
     return None
   }
-  Some(irTypeOf(lowering, found))
+  Some irTypeOf(lowering, found)
 }
 
 public fn voidTypeOf(var lowering: Lowering): IrTypeId {
-  lowering.program.internType(IrType.VoidType)
+  lowering.program.internType IrType.VoidType
 }
 
 public fn booleanTypeOf(var lowering: Lowering): IrTypeId {
-  lowering.program.internType(IrType.Boolean)
+  lowering.program.internType IrType.Boolean
 }
 
 public fn isVoidType(lowering: Lowering, id: IrTypeId): Bool {
@@ -319,42 +319,42 @@ public fn producesValue(lowering: Lowering, id: IrTypeId): Bool {
  * are the same value are one static and the text of the program does not depend on the order they were found in.
  */
 public fn internStatic(var lowering: Lowering, contents: StaticContents, annotation: IrTypeId): StaticId {
-  const spelling = spellingOfContents(lowering, contents)
+  const spelling = spellingOfContents lowering, contents
   const key = "{annotation.value};{spelling}"
   if const Some(found) = lowering.staticKeys.get(key) {
     return found
   }
   const instance = "{canonicalType(lowering.program, annotation)}_{spelling}"
-  const name = mangledName("s", ["literal"], instance)
-  const identifier = lowering.program.addStatic(StaticValue(name, annotation, contents))
-  lowering.staticKeys.set(key, identifier)
+  const name = mangledName "s", ["literal"], instance
+  const identifier = lowering.program.addStatic StaticValue(name, annotation, contents)
+  lowering.staticKeys.set key, identifier
   identifier
 }
 
 /** A static value that carries the name of the declaration it is the value of: a top-level `const` of a module. */
 public fn namedStatic(var lowering: Lowering, name: String, contents: StaticContents, annotation: IrTypeId): StaticId {
-  lowering.program.addStatic(StaticValue(name, annotation, contents))
+  lowering.program.addStatic StaticValue(name, annotation, contents)
 }
 
 /** How a constant is spelled inside a name. Injective, because every escape is, so two values never collide. */
 fn spellingOfContents(lowering: Lowering, contents: StaticContents): String {
   match contents {
-    .Literal(value) => canonicalLiteral(value)
+    .Literal(value) => canonicalLiteral value
     .VoidValue => "void"
-    .Floating(value) => escapedComponent("{value}")
+    .Floating(value) => escapedComponent "{value}"
     .Aggregate(layout, variant, fields) => {
       var parts = ["{lowering.program.layoutAt(layout).name}", "{variant}"]
       for field in fields {
-        parts.add(lowering.program.staticAt(field).name)
+        parts.add lowering.program.staticAt(field).name
       }
-      parts.joined(separator: "_")
+      parts.joined separator: "_"
     }
     .Items(item, items) => {
       var parts = ["items", canonicalType(lowering.program, item)]
       for one in items {
-        parts.add(lowering.program.staticAt(one).name)
+        parts.add lowering.program.staticAt(one).name
       }
-      parts.joined(separator: "_")
+      parts.joined separator: "_"
     }
   }
 }
@@ -371,14 +371,14 @@ public fn borrowedArguments(slots: List<Slot>, places: List<Reference?> = []): L
   var given: List<Argument> = []
   if places.length() != slots.length() {
     for slot in slots {
-      given.add(borrowed(slot))
+      given.add borrowed(slot)
     }
     return given
   }
   for index in 0..slots.length() {
     match places[index] {
-      Some(place) => given.add(referenced(place))
-      .None => given.add(borrowed(slots[index]))
+      Some(place) => given.add referenced(place)
+      None => given.add borrowed(slots[index])
     }
   }
   given
@@ -390,7 +390,7 @@ public fn borrowedArguments(slots: List<Slot>, places: List<Reference?> = []): L
 public fn nativeNamed(lowering: Lowering, owner: String, member: String): NativeEntry? {
   const key = if owner.isEmpty() { member } else { "{owner}.{member}" }
   const index = lowering.nativeIndex.get(key)?
-  lowering.natives.get(index)
+  lowering.natives.get index
 }
 
 // --- Blocks ---------------------------------------------------------------------------------------------------------
@@ -400,30 +400,30 @@ public fn nativeNamed(lowering: Lowering, owner: String, member: String): Native
  * says - a lowering that kept emitting there would build a block nothing reaches, and the verifier rejects one.
  */
 public fn finishBlock(var lowering: Lowering, var builder: FunctionBuilder, terminator: Terminator) {
-  terminate(builder, terminator)
+  terminate builder, terminator
   lowering.isDiverged = true
 }
 
 /** Where the next instructions go. Control reaches the beginning of a block that was just opened. */
 public fn continueIn(var lowering: Lowering, var builder: FunctionBuilder, block: BlockId) {
-  switchTo(builder, block)
+  switchTo builder, block
   lowering.isDiverged = false
 }
 
 // --- Loops ----------------------------------------------------------------------------------------------------------
 
 public fn enterLoop(var lowering: Lowering, exit: BlockId, step: BlockId) {
-  lowering.breakTargets.add(exit)
-  lowering.continueTargets.add(step)
-  lowering.loopBroke.add(false)
+  lowering.breakTargets.add exit
+  lowering.continueTargets.add step
+  lowering.loopBroke.add false
 }
 
 /** Answers whether anything in the loop wrote a `break`, which is what says `while true` can be left at all. */
 public fn leaveLoop(var lowering: Lowering): Bool {
   const last = lowering.breakTargets.length() - 1
-  const _ = lowering.breakTargets.removeAt(last)
+  const _ = lowering.breakTargets.removeAt last
   const other = lowering.continueTargets.length() - 1
-  const _ = lowering.continueTargets.removeAt(other)
+  const _ = lowering.continueTargets.removeAt other
   const index = lowering.loopBroke.length() - 1
   lowering.loopBroke.removeAt(index) ?? false
 }
@@ -432,7 +432,7 @@ public fn leaveLoop(var lowering: Lowering): Bool {
 public fn markBreak(var lowering: Lowering) {
   const index = lowering.loopBroke.length() - 1
   if index >= 0 {
-    lowering.loopBroke.set(index, true)
+    lowering.loopBroke.set index, true
   }
 }
 

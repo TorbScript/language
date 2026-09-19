@@ -49,50 +49,50 @@ public const internalErrorCode = 70
 public fn build(options: BuildOptions): Result<Int, IoError> {
   const tree = readSourceTree(options.paths)?
   const checked = check(tree, absolutePaths(options.paths)?, false, true)
-  const reported = reportChecked(checked)
+  const reported = reportChecked checked
   if reported > 0 {
     printError "{reported} problems, nothing was built"
-    return Ok(buildFailedCode)
+    return Ok buildFailedCode
   }
   const module = match entryModuleOf(checked) {
     Some(found) => found
-    .None => {
+    None => {
       printError "error: `torb build` needs one entry file. Name the file, or a project with a `build` input"
-      return Ok(buildFailedCode)
+      return Ok buildFailedCode
     }
   }
-  const paths = pathsOfModules(checked)
+  const paths = pathsOfModules checked
   const checker = checked.checker
   // Only what the entry file reaches: nothing unreachable is emitted
-  var lowering = lowerWorkspace(checker, paths, [module], false)
+  var lowering = lowerWorkspace checker, paths, [module], false
   // The IR both back ends read is phase one plus ownership: the `Retain`s, `Release`s and `Move`s of BACKEND 2 are what
   // makes the emitted C free what it allocates, so the pipeline is lower, own, verify, emit
-  insertOwnership(lowering.program)
-  const entry = entryNameOf(lowering, module)
-  const found = reportLowering(checked, tree, lowering, entry)
+  insertOwnership lowering.program
+  const entry = entryNameOf lowering, module
+  const found = reportLowering checked, tree, lowering, entry
   if found > 0 {
     printError "{found} problems the back end cannot compile yet, nothing was built"
-    return Ok(buildFailedCode)
+    return Ok buildFailedCode
   }
-  const emission = emitProgram(lowering.program, entry)
+  const emission = emitProgram lowering.program, entry
   if !emission.unsupported.isEmpty() {
     printError "error: the C back end does not support everything this program uses yet"
     for what in emission.unsupported {
       printError "  {what}"
     }
-    return Ok(buildFailedCode)
+    return Ok buildFailedCode
   }
-  const binary = outputPathOf(checked, module, options)
-  const directory = parentPath(binary)
+  const binary = outputPathOf checked, module, options
+  const directory = parentPath binary
   File.createDirectory(directory)?
-  const source = joinPath(directory, "program.c")
-  const text = emittedText(emission)
+  const source = joinPath directory, "program.c"
+  const text = emittedText emission
   File.writeText(source, text)?
   if options.onlyC {
     print "wrote {source}"
-    return Ok(0)
+    return Ok 0
   }
-  compile(source, binary)
+  compile source, binary
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------
@@ -108,7 +108,7 @@ fn reportChecked(checked: Checked): Int {
       continue
     }
     problems = problems + file.diagnostics.length()
-    const lines = LineIndex.of(file.text)
+    const lines = LineIndex.of file.text
     for diagnostic in file.diagnostics {
       printError renderDiagnostic(file.path, lines, diagnostic)
       printError ""
@@ -125,8 +125,8 @@ fn reportChecked(checked: Checked): Int {
 fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering, entry: String): Int {
   var found = 0
   for problem in lowering.problems {
-    const module = checked.program.graph.at(problem.module)
-    const lines = LineIndex.of(module.source.text)
+    const module = checked.program.graph.at problem.module
+    const lines = LineIndex.of module.source.text
     printError renderDiagnostic(tree.display(module.path), lines, problem.diagnostic)
     printError ""
     found = found + 1
@@ -171,13 +171,13 @@ fn hasEntryFunction(lowering: Lowering, entry: String): Bool {
  */
 fn entryModuleOf(checked: Checked): ModuleId? {
   if const [only] = checked.requested {
-    return Some(only)
+    return Some only
   }
   for module in checked.requested {
-    const inside = checked.program.graph.at(module)
+    const inside = checked.program.graph.at module
     const package = checked.program.workspace.packages[inside.package]
     if inside.path == joinPath(package.directory, package.manifest.buildInput) {
-      return Some(module)
+      return Some module
     }
   }
   None
@@ -189,18 +189,18 @@ fn entryModuleOf(checked: Checked): ModuleId? {
  */
 fn outputPathOf(checked: Checked, module: ModuleId, options: BuildOptions): String {
   if !options.output.isEmpty() {
-    return normalizePath(options.output)
+    return normalizePath options.output
   }
-  const inside = checked.program.graph.at(module)
+  const inside = checked.program.graph.at module
   const package = checked.program.workspace.packages[inside.package]
-  const name = binaryNameOf(inside.path)
-  const directory = if package.directory.isEmpty() { parentPath(inside.path) } else { package.directory }
-  joinPath(directory, "build/{buildTarget}/{name}")
+  const name = binaryNameOf inside.path
+  const directory = if package.directory.isEmpty() { parentPath inside.path } else { package.directory }
+  joinPath directory, "build/{buildTarget}/{name}"
 }
 
 /** The name of the binary: the entry file without its extension. */
 fn binaryNameOf(path: String): String {
-  const name = pathName(path)
+  const name = pathName path
   if name.endsWith(".trb") {
     return name[0..name.byteLength() - 4]
   }
@@ -224,22 +224,22 @@ type CCompiler {
 fn findCompiler(): CCompiler? {
   if const Some(given) = Environment.get("TORB_CC") {
     if !given.isEmpty() {
-      return Some(CCompiler(given, isMicrosoftName(given)))
+      return Some CCompiler(given, isMicrosoftName(given))
     }
   }
   for candidate in ["clang", "gcc", "cc"] {
     if canRun(candidate, ["--version"]) {
-      return Some(CCompiler(candidate, false))
+      return Some CCompiler(candidate, false)
     }
   }
   if canRun("cl", []) {
-    return Some(CCompiler("cl", true))
+    return Some CCompiler("cl", true)
   }
   None
 }
 
 fn isMicrosoftName(command: String): Bool {
-  const name = pathName(command)
+  const name = pathName command
   name == "cl" || name == "cl.exe"
 }
 
@@ -259,20 +259,20 @@ fn canRun(command: String, arguments: List<String>): Bool {
 fn findRuntime(): String? {
   if const Some(given) = Environment.get("TORB_RUNTIME") {
     if !given.isEmpty() {
-      return Some(normalizePath(given))
+      return Some normalizePath(given)
     }
   }
   const working = match File.absolutePath(".") {
     Ok(found) => found
     Fail(_) => "."
   }
-  var current = normalizePath(working)
+  var current = normalizePath working
   while pathDepth(current) >= 1 {
-    const candidate = joinPath(current, "runtime")
+    const candidate = joinPath current, "runtime"
     if File.exists(joinPath(candidate, "include/torb.h")) {
-      return Some(candidate)
+      return Some candidate
     }
-    const parent = parentPath(current)
+    const parent = parentPath current
     if parent == current {
       return None
     }
@@ -286,38 +286,38 @@ fn runtimeSourcesOf(directory: String): Result<List<String>, IoError> {
   var sources: List<String> = []
   for entry in File.list(directory)? {
     if entry.endsWith(".c") {
-      sources.add(joinPath(directory, entry))
+      sources.add joinPath(directory, entry)
     }
   }
-  Ok(sources)
+  Ok sources
 }
 
 fn compile(source: String, binary: String): Result<Int, IoError> {
   const compiler = match findCompiler() {
     Some(found) => found
-    .None => {
+    None => {
       printError "error: no C compiler found. `torb build` needs one until the native back end emits machine code."
       printError "  tried: $TORB_CC, clang, gcc, cc, cl"
       printError "  on Windows: winget install LLVM.LLVM, or open a \"x64 Native Tools\" prompt"
       printError "  `torb build --emit-c` writes the C without compiling it"
-      return Ok(noCompilerCode)
+      return Ok noCompilerCode
     }
   }
   const runtime = match findRuntime() {
     Some(found) => found
-    .None => {
+    None => {
       printError "error: the C runtime was not found. Set $TORB_RUNTIME to the `runtime` directory of the toolchain."
-      return Ok(noCompilerCode)
+      return Ok noCompilerCode
     }
   }
   const sources = runtimeSourcesOf(runtime)?
-  const arguments = compilerArguments(compiler, source, binary, runtime, sources)
+  const arguments = compilerArguments compiler, source, binary, runtime, sources
   const output = match Process.run(compiler.command, arguments) {
     Ok(found) => found
     // `$TORB_CC` is taken as it is given, so a name that is not a program at all ends up here
     Fail(problem) => {
       printError "error: the C compiler `{compiler.command}` could not be started: {problem.message}"
-      return Ok(noCompilerCode)
+      return Ok noCompilerCode
     }
   }
   if output.exitCode == 0 {
@@ -328,10 +328,10 @@ fn compile(source: String, binary: String): Result<Int, IoError> {
     } else {
       print "wrote {binary}.exe"
     }
-    return Ok(0)
+    return Ok 0
   }
-  reportInternalError(compiler, source, output.standardOutput, output.standardError)
-  Ok(internalErrorCode)
+  reportInternalError compiler, source, output.standardOutput, output.standardError
+  Ok internalErrorCode
 }
 
 /**
@@ -347,8 +347,8 @@ fn compilerArguments(
 ): List<String> {
   if compiler.isMicrosoft {
     var arguments = ["/std:c11", "/O2", "/W3", "/WX", "/nologo", "/I{joinPath(runtime, "include")}", "/Fe{binary}"]
-    arguments.add(source)
-    arguments.addAll(sources)
+    arguments.add source
+    arguments.addAll sources
     return arguments
   }
   var arguments = [
@@ -362,9 +362,9 @@ fn compilerArguments(
     "-o",
     binary,
   ]
-  arguments.add(source)
-  arguments.addAll(sources)
-  arguments.add("-lm")
+  arguments.add source
+  arguments.addAll sources
+  arguments.add "-lm"
   arguments
 }
 

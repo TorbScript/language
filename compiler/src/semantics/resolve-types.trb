@@ -24,12 +24,12 @@ public type Resolved {
  * on the type of the parameter that closure is passed to, so resolving them is part of type checking (milestone 4).
  */
 public fn resolveTypes(var symbols: Symbols, program: Program, id: ModuleId): Resolved {
-  var walk = Walk(program, id, symbols)
+  var walk = Walk program, id, symbols
   const statements = program.graph.at(id).file.statements
   // The top-level names of the file are in its scope already, so nothing is hoisted here
-  walkStatements(walk, Scope([]), statements, isBlock: false)
+  walkStatements walk, Scope([]), statements, isBlock: false
   symbols = walk.symbols
-  Resolved(walk.names, walk.diagnostics)
+  Resolved walk.names, walk.diagnostics
 }
 
 /** One name that is in scope because of a declaration around the position: a generic parameter or `Self`. */
@@ -46,7 +46,7 @@ type Scope {
   locals: List<Local>
 
   fn adding(self, name: String, symbol: SymbolId): Scope {
-    Scope(locals.added(Local(name, symbol)))
+    Scope locals.added(Local(name, symbol))
   }
 
   /** The innermost wins: a generic parameter of a method shadows one of its type. */
@@ -54,7 +54,7 @@ type Scope {
     var index = locals.length() - 1
     while index >= 0 {
       if locals[index].name == name {
-        return Some(locals[index].symbol)
+        return Some locals[index].symbol
       }
       index = index - 1
     }
@@ -75,17 +75,17 @@ type Walk {
   }
 
   fn define(var self, name: Name, kind: SymbolKind): SymbolId {
-    const symbol = symbols.add(Symbol(name.text, kind, false, Some(module), name.span))
-    names.set(name.span, symbol)
+    const symbol = symbols.add Symbol(name.text, kind, false, Some(module), name.span)
+    names.set name.span, symbol
     symbol
   }
 
   fn record(var self, at: Span, symbol: SymbolId) {
-    names.set(at, symbol)
+    names.set at, symbol
   }
 
   fn error(var self, problem: Diagnostic) {
-    diagnostics.add(problem)
+    diagnostics.add problem
   }
 }
 
@@ -98,92 +98,92 @@ fn walkStatements(var walk: Walk, scope: Scope, statements: List<Statement>, isB
     // A declaration is visible in the whole block it is written in: `fn` hoists, and so do local types
     for statement in statements {
       if const .Declare(declaration) = statement.kind {
-        inner = declareLocal(walk, inner, declaration)
+        inner = declareLocal walk, inner, declaration
       }
     }
   }
   for statement in statements {
-    walkStatement(walk, inner, statement)
+    walkStatement walk, inner, statement
   }
 }
 
 /** A `fn`, `type`, `trait` or `type X =` inside of a block is a name of that block and of nothing else. */
 fn declareLocal(var walk: Walk, scope: Scope, declaration: Declaration): Scope {
   match declaration.kind {
-    .Function(function) => scope.adding(function.name.text, walk.define(function.name, SymbolKind.Function))
-    .Type(typeDeclaration) => scope.adding(typeDeclaration.name.text, walk.define(typeDeclaration.name, SymbolKind.Type))
-    .Alias(alias) => scope.adding(alias.name.text, walk.define(alias.name, SymbolKind.Alias))
-    .Trait(traitDeclaration) => scope.adding(traitDeclaration.name.text, walk.define(traitDeclaration.name, SymbolKind.Trait))
+    .Function(function) => scope.adding function.name.text, walk.define(function.name, SymbolKind.Function)
+    .Type(typeDeclaration) => scope.adding typeDeclaration.name.text, walk.define(typeDeclaration.name, SymbolKind.Type)
+    .Alias(alias) => scope.adding alias.name.text, walk.define(alias.name, SymbolKind.Alias)
+    .Trait(traitDeclaration) => scope.adding traitDeclaration.name.text, walk.define(traitDeclaration.name, SymbolKind.Trait)
     _ => scope
   }
 }
 
 fn walkStatement(var walk: Walk, scope: Scope, statement: Statement) {
   match statement.kind {
-    .Declare(declaration) => walkDeclaration(walk, scope, declaration)
-    .Bind(binding) => walkBinding(walk, scope, binding)
+    .Declare(declaration) => walkDeclaration walk, scope, declaration
+    .Bind(binding) => walkBinding walk, scope, binding
     .Assign(target, value) => {
-      walkExpression(walk, scope, target)
-      walkExpression(walk, scope, value)
+      walkExpression walk, scope, target
+      walkExpression walk, scope, value
     }
     .For(_, iterable, body) => {
-      walkExpression(walk, scope, iterable)
-      walkBlock(walk, scope, body)
+      walkExpression walk, scope, iterable
+      walkBlock walk, scope, body
     }
     .While(condition, body) => {
-      walkCondition(walk, scope, condition)
-      walkBlock(walk, scope, body)
+      walkCondition walk, scope, condition
+      walkBlock walk, scope, body
     }
     .Return(value) => {
       if const Some(expression) = value {
-        walkExpression(walk, scope, expression)
+        walkExpression walk, scope, expression
       }
     }
     .Break => {}
     .Continue => {}
-    .Evaluate(expression) => walkExpression(walk, scope, expression)
+    .Evaluate(expression) => walkExpression walk, scope, expression
   }
 }
 
 fn walkBinding(var walk: Walk, scope: Scope, binding: Binding) {
   if const Some(annotation) = binding.annotation {
-    walkType(walk, scope, annotation)
+    walkType walk, scope, annotation
   }
-  walkExpression(walk, scope, binding.value)
+  walkExpression walk, scope, binding.value
 }
 
 fn walkDeclaration(var walk: Walk, scope: Scope, declaration: Declaration) {
   match declaration.kind {
-    .Function(function) => walkFunction(walk, scope, function)
+    .Function(function) => walkFunction walk, scope, function
     .Type(typeDeclaration) => {
-      const own = lookUp(walk, scope, typeDeclaration.name.text)
-      const inner = withGenerics(walk, withSelf(scope, own), typeDeclaration.generics)
-      walkTraitClauses(walk, inner, typeDeclaration.traits)
-      walkWhereClauses(walk, inner, typeDeclaration.whereClauses)
-      walkMembers(walk, inner, typeDeclaration.members)
+      const own = lookUp walk, scope, typeDeclaration.name.text
+      const inner = withGenerics walk, withSelf(scope, own), typeDeclaration.generics
+      walkTraitClauses walk, inner, typeDeclaration.traits
+      walkWhereClauses walk, inner, typeDeclaration.whereClauses
+      walkMembers walk, inner, typeDeclaration.members
     }
     .Alias(alias) => {
-      const inner = withGenerics(walk, scope, alias.generics)
-      walkType(walk, inner, alias.target)
+      const inner = withGenerics walk, scope, alias.generics
+      walkType walk, inner, alias.target
     }
     .Trait(traitDeclaration) => {
       // Inside of a trait, `Self` stands for the type that will implement it, so it points at the trait
-      const own = lookUp(walk, scope, traitDeclaration.name.text)
-      const inner = withGenerics(walk, withSelf(scope, own), traitDeclaration.generics)
-      walkTypes(walk, inner, traitDeclaration.supertraits)
-      walkMembers(walk, inner, traitDeclaration.members)
+      const own = lookUp walk, scope, traitDeclaration.name.text
+      const inner = withGenerics walk, withSelf(scope, own), traitDeclaration.generics
+      walkTypes walk, inner, traitDeclaration.supertraits
+      walkMembers walk, inner, traitDeclaration.members
     }
     .Extend(extension) => {
       // The target names no `Self` yet: it is what `Self` becomes for everything after it
-      const inner = withGenerics(walk, scope, extension.generics)
-      walkType(walk, inner, extension.target)
-      const body = withSelf(inner, namedSymbol(walk, extension.target))
-      walkTypes(walk, body, extension.traits)
-      walkWhereClauses(walk, body, extension.whereClauses)
-      walkMembers(walk, body, extension.members)
+      const inner = withGenerics walk, scope, extension.generics
+      walkType walk, inner, extension.target
+      const body = withSelf inner, namedSymbol(walk, extension.target)
+      walkTypes walk, body, extension.traits
+      walkWhereClauses walk, body, extension.whereClauses
+      walkMembers walk, body, extension.members
     }
-    .Foreign(library) => walkMembers(walk, scope, library.members)
-    .Constant(binding) => walkBinding(walk, scope, binding)
+    .Foreign(library) => walkMembers walk, scope, library.members
+    .Constant(binding) => walkBinding walk, scope, binding
     .Use(_) => {}
   }
 }
@@ -191,7 +191,7 @@ fn walkDeclaration(var walk: Walk, scope: Scope, declaration: Declaration) {
 /** `Self` inside of a type or an extension is the type itself. */
 fn withSelf(scope: Scope, symbol: SymbolId?): Scope {
   match symbol {
-    Some(found) => scope.adding("Self", found)
+    Some(found) => scope.adding "Self", found
     None => scope
   }
 }
@@ -203,40 +203,40 @@ fn namedSymbol(walk: Walk, reference: TypeReference): SymbolId? {
       if path.isEmpty() {
         return None
       }
-      walk.names.get(path[path.length() - 1].span)
+      walk.names.get path[path.length() - 1].span
     }
     _ => None
   }
 }
 
 fn walkFunction(var walk: Walk, scope: Scope, function: FunctionDeclaration) {
-  const inner = withGenerics(walk, scope, function.generics)
+  const inner = withGenerics walk, scope, function.generics
   for parameter in function.parameters {
     if const Some(annotation) = parameter.annotation {
-      walkType(walk, inner, annotation)
+      walkType walk, inner, annotation
     }
     if const Some(default) = parameter.default {
-      walkExpression(walk, inner, default)
+      walkExpression walk, inner, default
     }
   }
   if const Some(returnType) = function.returnType {
-    walkType(walk, inner, returnType)
+    walkType walk, inner, returnType
   }
-  walkWhereClauses(walk, inner, function.whereClauses)
+  walkWhereClauses walk, inner, function.whereClauses
   if const Some(body) = function.body {
-    walkBlock(walk, inner, body)
+    walkBlock walk, inner, body
   }
 }
 
 fn walkMembers(var walk: Walk, scope: Scope, members: List<Member>) {
   for member in members {
     match member.kind {
-      .Field(field) => walkField(walk, scope, field)
-      .Constant(binding) => walkBinding(walk, scope, binding)
-      .Function(function) => walkFunction(walk, scope, function)
+      .Field(field) => walkField walk, scope, field
+      .Constant(binding) => walkBinding walk, scope, binding
+      .Function(function) => walkFunction walk, scope, function
       .Case(caseDeclaration) => {
         for field in caseDeclaration.fields {
-          walkField(walk, scope, field)
+          walkField walk, scope, field
         }
       }
     }
@@ -244,9 +244,9 @@ fn walkMembers(var walk: Walk, scope: Scope, members: List<Member>) {
 }
 
 fn walkField(var walk: Walk, scope: Scope, field: Field) {
-  walkType(walk, scope, field.annotation)
+  walkType walk, scope, field.annotation
   if const Some(default) = field.default {
-    walkExpression(walk, scope, default)
+    walkExpression walk, scope, default
   }
 }
 
@@ -260,12 +260,12 @@ fn withGenerics(var walk: Walk, scope: Scope, generics: List<GenericParameter>):
     if parameter.name.text.isEmpty() {
       continue
     }
-    inner = inner.adding(parameter.name.text, walk.define(parameter.name, SymbolKind.GenericParameter))
+    inner = inner.adding parameter.name.text, walk.define(parameter.name, SymbolKind.GenericParameter)
   }
   for parameter in generics {
-    walkTypes(walk, inner, parameter.bounds)
+    walkTypes walk, inner, parameter.bounds
     if const Some(default) = parameter.default {
-      walkType(walk, inner, default)
+      walkType walk, inner, default
     }
   }
   inner
@@ -273,20 +273,20 @@ fn withGenerics(var walk: Walk, scope: Scope, generics: List<GenericParameter>):
 
 fn walkWhereClauses(var walk: Walk, scope: Scope, clauses: List<WhereClause>) {
   for clause in clauses {
-    walkType(walk, scope, clause.subject)
-    walkTypes(walk, scope, clause.bounds)
+    walkType walk, scope, clause.subject
+    walkTypes walk, scope, clause.bounds
   }
 }
 
 fn walkBlock(var walk: Walk, scope: Scope, block: Block) {
-  walkStatements(walk, scope, block.statements, isBlock: true)
+  walkStatements walk, scope, block.statements, isBlock: true
 }
 
 // --- Types ----------------------------------------------------------------------------------------------------------
 
 fn walkTypes(var walk: Walk, scope: Scope, references: List<TypeReference>) {
   for reference in references {
-    walkType(walk, scope, reference)
+    walkType walk, scope, reference
   }
 }
 
@@ -296,32 +296,32 @@ fn walkTypes(var walk: Walk, scope: Scope, references: List<TypeReference>) {
  */
 fn walkTraitClauses(var walk: Walk, scope: Scope, clauses: List<TraitClause>) {
   for clause in clauses {
-    walkType(walk, scope, clause.capability)
+    walkType walk, scope, clause.capability
   }
 }
 
 fn walkType(var walk: Walk, scope: Scope, reference: TypeReference) {
   match reference.kind {
     .Named(path, arguments) => {
-      walkPath(walk, scope, path)
-      walkTypes(walk, scope, arguments)
+      walkPath walk, scope, path
+      walkTypes walk, scope, arguments
     }
-    .Optional(inner) => walkType(walk, scope, inner)
+    .Optional(inner) => walkType walk, scope, inner
     .TupleType(fields) => {
       for field in fields {
-        walkType(walk, scope, field.annotation)
+        walkType walk, scope, field.annotation
       }
     }
     // The values of a literal type are literals by construction: there is no name in them
     .Literals(_) => {}
-    .Intersection(members) => walkTypes(walk, scope, members)
+    .Intersection(members) => walkTypes walk, scope, members
     .FunctionType(parameters, result) => {
       for parameter in parameters {
-        walkType(walk, scope, parameter.annotation)
+        walkType walk, scope, parameter.annotation
       }
-      walkType(walk, scope, result)
+      walkType walk, scope, result
     }
-    .Lazy(inner) => walkType(walk, scope, inner)
+    .Lazy(inner) => walkType walk, scope, inner
     .Invalid => {}
   }
 }
@@ -334,18 +334,18 @@ fn walkPath(var walk: Walk, scope: Scope, path: List<Name>) {
   const first = match lookUp(walk, scope, path[0].text) {
     Some(symbol) => symbol
     None => {
-      reportUnknown(walk, scope, path[0])
+      reportUnknown walk, scope, path[0]
       return
     }
   }
-  walk.record(path[0].span, first)
+  walk.record path[0].span, first
   var current = first
   for index in 1..path.length() {
     const step = path[index]
     const namespace = match walk.symbols.at(current).kind {
       .Namespace(module) => module
       _ => {
-        const owner = walk.symbols.describe(current)
+        const owner = walk.symbols.describe current
         walk.error(
           Diagnostic.error("{owner} has no member `{step.text}`", step.span)
             .withNote(
@@ -359,23 +359,23 @@ fn walkPath(var walk: Walk, scope: Scope, path: List<Name>) {
       Some(symbol) => symbol
       None => {
         const module = walk.symbols.at(current).name
-        walk.error(Diagnostic.error("`{step.text}` is not exported by the module `{module}`", step.span))
+        walk.error Diagnostic.error("`{step.text}` is not exported by the module `{module}`", step.span)
         return
       }
     }
-    walk.record(step.span, current)
+    walk.record step.span, current
   }
-  reportWrongKind(walk, current, path[path.length() - 1])
+  reportWrongKind walk, current, path[path.length() - 1]
 }
 
 fn lookUp(walk: Walk, scope: Scope, name: String): SymbolId? {
   if const Some(local) = scope.find(name) {
-    return Some(local)
+    return Some local
   }
   if const Some(own) = walk.fileNames().get(name) {
-    return Some(own)
+    return Some own
   }
-  walk.program.builtins.get(name)
+  walk.program.builtins.get name
 }
 
 /**
@@ -414,11 +414,11 @@ fn reportUnknown(var walk: Walk, scope: Scope, name: Name) {
     )
     return
   }
-  var problem = Diagnostic.error("Unknown type `{name.text}`", name.span)
+  var problem = Diagnostic.error "Unknown type `{name.text}`", name.span
   if const Some(similar) = suggestion(walk, scope, name.text) {
-    problem = problem.withNote("Did you mean `{similar}`?")
+    problem = problem.withNote "Did you mean `{similar}`?"
   }
-  walk.error(problem)
+  walk.error problem
 }
 
 /** A "did you mean" note: a name in scope that is at most two edits away. Only ever computed for an unknown name. */
@@ -426,13 +426,13 @@ fn suggestion(walk: Walk, scope: Scope, text: String): String? {
   var best: String? = None
   var distance = 3
   for local in scope.locals {
-    consider(best, distance, local.name, text)
+    consider best, distance, local.name, text
   }
   for (name, _) in walk.fileNames() {
-    consider(best, distance, name, text)
+    consider best, distance, name, text
   }
   for (name, _) in walk.program.builtins {
-    consider(best, distance, name, text)
+    consider best, distance, name, text
   }
   best
 }
@@ -444,7 +444,7 @@ fn consider(var best: String?, var distance: Int, candidate: String, text: Strin
   const found = editDistance(candidate, text, distance - 1)
   if found < distance {
     distance = found
-    best = Some(candidate)
+    best = Some candidate
   }
 }
 
@@ -461,7 +461,7 @@ public fn editDistance(left: String, right: String, limit: Int): Int {
   }
   var previous: List<Int> = []
   for index in 0..(b.length() + 1) {
-    previous.add(index)
+    previous.add index
   }
   for row in 0..a.length() {
     var current = [row + 1]
@@ -469,8 +469,8 @@ public fn editDistance(left: String, right: String, limit: Int): Int {
     for column in 0..b.length() {
       const cost = if a[row] == b[column] { 0 } else { 1 }
       const value = (previous[column] + cost).min(previous[column + 1] + 1).min(current[column] + 1)
-      current.add(value)
-      best = best.min(value)
+      current.add value
+      best = best.min value
     }
     if best > limit {
       return beyond
@@ -486,85 +486,85 @@ public fn editDistance(left: String, right: String, limit: Int): Int {
 fn walkExpression(var walk: Walk, scope: Scope, expression: Expression) {
   match expression.kind {
     .Generic(target, arguments) => {
-      walkExpression(walk, scope, target)
-      walkTypes(walk, scope, arguments)
+      walkExpression walk, scope, target
+      walkTypes walk, scope, arguments
     }
     .Closure(closure) => {
       for parameter in closure.parameters {
         if const Some(annotation) = parameter.annotation {
-          walkType(walk, scope, annotation)
+          walkType walk, scope, annotation
         }
       }
-      walkBlock(walk, scope, closure.body)
+      walkBlock walk, scope, closure.body
     }
     .If(condition, then, otherwise) => {
-      walkCondition(walk, scope, condition)
-      walkBlock(walk, scope, then)
+      walkCondition walk, scope, condition
+      walkBlock walk, scope, then
       if const Some(alternative) = otherwise {
-        walkExpression(walk, scope, alternative)
+        walkExpression walk, scope, alternative
       }
     }
     .Match(subject, arms) => {
-      walkExpression(walk, scope, subject)
+      walkExpression walk, scope, subject
       for arm in arms {
         if const Some(guard) = arm.guard {
-          walkExpression(walk, scope, guard)
+          walkExpression walk, scope, guard
         }
-        walkExpression(walk, scope, arm.body)
+        walkExpression walk, scope, arm.body
       }
     }
-    .Block(block) => walkBlock(walk, scope, block)
+    .Block(block) => walkBlock walk, scope, block
     .TextLiteral(segments) => {
       for segment in segments {
         if const .Interpolated(inner) = segment {
-          walkExpression(walk, scope, inner)
+          walkExpression walk, scope, inner
         }
       }
     }
-    .TupleLiteral(items) => walkArguments(walk, scope, items)
-    .ListLiteral(items) => walkArguments(walk, scope, items)
+    .TupleLiteral(items) => walkArguments walk, scope, items
+    .ListLiteral(items) => walkArguments walk, scope, items
     .MapLiteral(entries) => {
       for (key, value) in entries {
-        walkExpression(walk, scope, key)
-        walkExpression(walk, scope, value)
+        walkExpression walk, scope, key
+        walkExpression walk, scope, value
       }
     }
-    .Member(target, _, _) => walkExpression(walk, scope, target)
+    .Member(target, _, _) => walkExpression walk, scope, target
     .Index(target, index) => {
-      walkExpression(walk, scope, target)
-      walkExpression(walk, scope, index)
+      walkExpression walk, scope, target
+      walkExpression walk, scope, index
     }
     .Call(callee, arguments, _) => {
-      walkExpression(walk, scope, callee)
-      walkArguments(walk, scope, arguments)
+      walkExpression walk, scope, callee
+      walkArguments walk, scope, arguments
     }
-    .Unary(_, operand) => walkExpression(walk, scope, operand)
+    .Unary(_, operand) => walkExpression walk, scope, operand
     .Binary(_, left, right) => {
-      walkExpression(walk, scope, left)
-      walkExpression(walk, scope, right)
+      walkExpression walk, scope, left
+      walkExpression walk, scope, right
     }
     .RangeLiteral(start, end, _) => {
       if const Some(from) = start {
-        walkExpression(walk, scope, from)
+        walkExpression walk, scope, from
       }
       if const Some(to) = end {
-        walkExpression(walk, scope, to)
+        walkExpression walk, scope, to
       }
     }
-    .Try(inner) => walkExpression(walk, scope, inner)
+    .Try(inner) => walkExpression walk, scope, inner
     _ => {}
   }
 }
 
 fn walkArguments(var walk: Walk, scope: Scope, arguments: List<Argument>) {
   for argument in arguments {
-    walkExpression(walk, scope, argument.value)
+    walkExpression walk, scope, argument.value
   }
 }
 
 fn walkCondition(var walk: Walk, scope: Scope, condition: Condition) {
   match condition {
-    .Test(expression) => walkExpression(walk, scope, expression)
-    .Bind(_, _, value) => walkExpression(walk, scope, value)
+    .Test(expression) => walkExpression walk, scope, expression
+    .Bind(_, _, value) => walkExpression walk, scope, value
   }
 }

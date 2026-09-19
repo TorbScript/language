@@ -20,33 +20,33 @@ use requireVisibleFields from "./declaration"
  * algorithm over a pattern matrix, which needs nothing from here but the types.
  */
 public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, isVar: Bool) {
-  checker.typedPattern(pattern.span, subject)
+  checker.typedPattern pattern.span, subject
   match pattern.kind {
     .Wildcard => {}
     // A lowercase name always binds, and shadowing in a nested scope is allowed
-    .Binding(name) => declareName(checker, name, subject, pattern.span, isVar)
+    .Binding(name) => declareName checker, name, subject, pattern.span, isVar
     .Literal(value) => {
-      const inner = expectationFor(checker, subject)
-      const _ = checkExpression(checker, value, inner)
+      const inner = expectationFor checker, subject
+      const _ = checkExpression checker, value, inner
     }
     .RangePattern(start, end, _) => {
-      const inner = expectationFor(checker, subject)
-      const _ = checkExpression(checker, start, inner)
-      const other = expectationFor(checker, subject)
-      const _ = checkExpression(checker, end, other)
+      const inner = expectationFor checker, subject
+      const _ = checkExpression checker, start, inner
+      const other = expectationFor checker, subject
+      const _ = checkExpression checker, end, other
     }
-    .TuplePattern(items) => tuplePattern(checker, items, subject, pattern.span, isVar)
+    .TuplePattern(items) => tuplePattern checker, items, subject, pattern.span, isVar
     // `[first, ...rest]`: the item type is the `Item` of the `Iterable<Item>` the subject is, and a rest pattern
     // collects a list of the same items
     .ListPattern(items, rest) => {
-      const element = itemOfSubject(checker, subject)
+      const element = itemOfSubject checker, subject
       for item in items {
-        checkPattern(checker, item, element, isVar)
+        checkPattern checker, item, element, isVar
       }
       if const Some(more) = rest {
         if const Some(name) = more.name {
-          const collected = listOfItems(checker, element)
-          declareName(checker, name.text, collected, name.span, isVar)
+          const collected = listOfItems checker, element
+          declareName checker, name.text, collected, name.span, isVar
         }
       }
     }
@@ -54,14 +54,14 @@ public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, 
       const name = path[path.length() - 1]
       // `None`: a bare uppercase name is resolved through the scope, so a misspelled case is not a catch-all
       if path.length() == 1 && fields.isEmpty() && !isNameInScope(checker, name.text) {
-        reportUnknownCase(checker, name, subject)
+        reportUnknownCase checker, name, subject
         return
       }
-      variantPattern(checker, name, fields, subject, pattern.span, isVar)
+      variantPattern checker, name, fields, subject, pattern.span, isVar
     }
-    .ImplicitVariant(name, fields) => variantPattern(checker, name, fields, subject, pattern.span, isVar)
+    .ImplicitVariant(name, fields) => variantPattern checker, name, fields, subject, pattern.span, isVar
     // `1 | 2 | 3`: every alternative matches the same value, so every one of them is checked against its type
-    .Alternatives(patterns) => alternativePatterns(checker, patterns, subject, isVar)
+    .Alternatives(patterns) => alternativePatterns checker, patterns, subject, isVar
     .Invalid => {}
   }
 }
@@ -77,17 +77,17 @@ fn alternativePatterns(var checker: Checker, patterns: List<Pattern>, subject: T
   for index in 0..patterns.length() {
     checker.openScope()
     const start = checker.bindings.length()
-    checkPattern(checker, patterns[index], subject, isVar)
-    const bound = boundSince(checker, start)
+    checkPattern checker, patterns[index], subject, isVar
+    const bound = boundSince checker, start
     checker.closeScope()
     if index == 0 {
       first = bound
       continue
     }
-    compareAlternatives(checker, first, bound, patterns[index].span)
+    compareAlternatives checker, first, bound, patterns[index].span
   }
   for binding in first {
-    declareName(checker, binding.name, binding.annotation, binding.at, binding.isVar)
+    declareName checker, binding.name, binding.annotation, binding.at, binding.isVar
   }
 }
 
@@ -95,7 +95,7 @@ fn alternativePatterns(var checker: Checker, patterns: List<Pattern>, subject: T
 fn boundSince(checker: Checker, start: Int): List<LocalBinding> {
   var found: List<LocalBinding> = []
   for index in start..checker.bindings.length() {
-    found.add(checker.bindings[index])
+    found.add checker.bindings[index]
   }
   found
 }
@@ -113,14 +113,14 @@ fn compareAlternatives(
         if found.annotation == binding.annotation {
           continue
         }
-        const expected = checker.describe(binding.annotation)
-        const given = checker.describe(found.annotation)
+        const expected = checker.describe binding.annotation
+        const given = checker.describe found.annotation
         checker.reportHere(
           Diagnostic.error("`{binding.name}` is `{expected}` in the first alternative and `{given}` here", found.at)
             .withNote(note)
         )
       }
-      .None => {
+      None => {
         checker.reportHere(
           Diagnostic.error("`{binding.name}` is bound by the first alternative and not by this one", at)
             .withNote(note)
@@ -142,7 +142,7 @@ fn compareAlternatives(
 fn findBinding(bindings: List<LocalBinding>, name: String): LocalBinding? {
   for binding in bindings {
     if binding.name == name {
-      return Some(binding)
+      return Some binding
     }
   }
   None
@@ -154,7 +154,7 @@ public fn declareName(var checker: Checker, name: String, annotation: TypeId, at
     return
   }
   if checker.isDeclaredHere(name) {
-    checker.reportHere(Diagnostic.error("`{name}` is already declared in this scope", at))
+    checker.reportHere Diagnostic.error("`{name}` is already declared in this scope", at)
     return
   }
   // The parameters of a function and the top level of its body are one scope (milestone 4.9)
@@ -165,7 +165,7 @@ public fn declareName(var checker: Checker, name: String, annotation: TypeId, at
     )
     return
   }
-  const _ = checker.declareBinding(LocalBinding(name, annotation, isVar, at))
+  const _ = checker.declareBinding LocalBinding(name, annotation, isVar, at)
 }
 
 /** The `Item` of the `Iterable<Item>` a list pattern matches, which is also the type of every column it opens. */
@@ -175,50 +175,50 @@ public fn itemOfSubject(var checker: Checker, subject: TypeId): TypeId {
   }
   const iterable = match checker.wellKnown.iterable {
     Some(found) => found
-    .None => {
+    None => {
       return checker.deferredType
     }
   }
   match traitArgumentsOf(checker, subject, iterable) {
     Some(arguments) => arguments.get(0) ?? checker.deferredType
-    .None => checker.deferredType
+    None => checker.deferredType
   }
 }
 
 fn listOfItems(var checker: Checker, element: TypeId): TypeId {
   const list = match checker.wellKnown.list {
     Some(found) => found
-    .None => {
+    None => {
       return checker.deferredType
     }
   }
-  const bound = checker.nominal(list, [element])
-  checker.types.intern(TypeForm.Traits([bound]))
+  const bound = checker.nominal list, [element]
+  checker.types.intern TypeForm.Traits([bound])
 }
 
 fn expectationFor(checker: Checker, subject: TypeId): Expectation {
   if checker.absorbs(subject) {
     return Expectation.None
   }
-  Expectation.Type(subject)
+  Expectation.Type subject
 }
 
 fn tuplePattern(var checker: Checker, items: List<Pattern>, subject: TypeId, at: Span, isVar: Bool) {
   var fields: List<TypeId> = []
   if const .Tuple(found) = checker.types.form(subject) {
     for field in found {
-      fields.add(field.annotation)
+      fields.add field.annotation
     }
   }
   if !fields.isEmpty() && fields.length() != items.length() {
-    const shown = checker.describe(subject)
+    const shown = checker.describe subject
     checker.reportHere(
       Diagnostic.error("This pattern has {items.length()} positions, `{shown}` has {fields.length()}", at)
     )
   }
   for index in 0..items.length() {
     const inner = fields.get(index) ?? checker.deferredType
-    checkPattern(checker, items[index], inner, isVar)
+    checkPattern checker, items[index], inner, isVar
   }
 }
 
@@ -232,13 +232,13 @@ fn isNameInScope(var checker: Checker, text: String): Bool {
   }
   if const Some(found) = checker.findLocal(text) {
     if const .Declared(symbol) = found {
-      return namesACase(checker, symbol)
+      return namesACase checker, symbol
     }
     return false
   }
   match checker.program.lookUp(checker.module, text) {
-    Some(symbol) => namesACase(checker, symbol)
-    .None => false
+    Some(symbol) => namesACase checker, symbol
+    None => false
   }
 }
 
@@ -258,9 +258,9 @@ fn reportUnknownCase(var checker: Checker, name: Name, subject: TypeId) {
   var problem = Diagnostic.error("`{name.text}` is not a case in scope", name.span)
     .withNote("A name that starts with an uppercase letter is a case, never a binding: a binding starts lowercase")
   if const Some(similar) = nearestCase(checker, subject, name.text) {
-    problem = problem.withNote("Did you mean `.{similar}`?")
+    problem = problem.withNote "Did you mean `.{similar}`?"
   }
-  checker.reportHere(problem)
+  checker.reportHere problem
 }
 
 /** A case of the matched type that is at most two edits away from what was written. */
@@ -274,7 +274,7 @@ fn nearestCase(var checker: Checker, subject: TypeId, text: String): String? {
     const found = editDistance(name, text, distance - 1)
     if found < distance {
       distance = found
-      best = Some(name)
+      best = Some name
     }
   }
   best
@@ -295,24 +295,24 @@ fn variantPattern(
 ) {
   if const Some(variant) = caseNamed(checker, subject, name.text) {
     // A private field cannot be read from outside the type, in a pattern as anywhere else (4.9)
-    requireVisibleFields(checker, subject, name.text, variant.fields, at)
-    checkFieldPatterns(checker, name.text, fields, variant.fields, at, isVar)
+    requireVisibleFields checker, subject, name.text, variant.fields, at
+    checkFieldPatterns checker, name.text, fields, variant.fields, at, isVar
     return
   }
   // `Point(x, y)` and `Self(value)`: the one constructor of the type, read backwards
   if name.text == "Self" || typeNameOf(checker, subject) == Some(name.text) {
-    const declared = fieldsOf(checker, subject)
-    requireVisibleFields(checker, subject, name.text, declared, at)
-    checkFieldPatterns(checker, name.text, fields, declared, at, isVar)
+    const declared = fieldsOf checker, subject
+    requireVisibleFields checker, subject, name.text, declared, at
+    checkFieldPatterns checker, name.text, fields, declared, at, isVar
     return
   }
   if hasCases(checker, subject) {
-    const shown = checker.describe(subject)
-    checker.reportHere(Diagnostic.error("`{shown}` has no case `{name.text}`", name.span))
+    const shown = checker.describe subject
+    checker.reportHere Diagnostic.error("`{shown}` has no case `{name.text}`", name.span)
   }
   for field in fields {
     const inner = checker.deferredType
-    checkPattern(checker, field.pattern, inner, isVar)
+    checkPattern checker, field.pattern, inner, isVar
   }
 }
 
@@ -331,13 +331,13 @@ fn checkFieldPatterns(
   if written.length() != declared.length() {
     const has = if declared.length() == 1 { "1 field" } else { "{declared.length()} fields" }
     const given = if written.length() == 1 { "1 pattern" } else { "{written.length()} patterns" }
-    checker.reportHere(Diagnostic.error("`{name}` has {has}, {given} were given", at))
+    checker.reportHere Diagnostic.error("`{name}` has {has}, {given} were given", at)
   }
   for index in 0..written.length() {
     const field = written[index]
     if index >= declared.length() {
       const inner = checker.deferredType
-      checkPattern(checker, field.pattern, inner, isVar)
+      checkPattern checker, field.pattern, inner, isVar
       continue
     }
     if const Some(label) = field.label {
@@ -348,6 +348,6 @@ fn checkFieldPatterns(
         )
       }
     }
-    checkPattern(checker, field.pattern, declared[index].annotation, isVar)
+    checkPattern checker, field.pattern, declared[index].annotation, isVar
   }
 }

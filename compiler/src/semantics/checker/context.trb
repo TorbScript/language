@@ -39,22 +39,22 @@ public type TypeScope {
 
   /** An ordinary type position: a field, a result, a type argument. */
   fn forType(self): TypeScope {
-    copy(position: TypePosition.Type, subject: None)
+    copy position: TypePosition.Type, subject: None
   }
 
   /** `with Show`, `where Item: Hash`: the trait, plus what it is asked of. */
   fn forBound(self, of: TypeId): TypeScope {
-    copy(position: TypePosition.Type, subject: Some(of))
+    copy position: TypePosition.Type, subject: Some(of)
   }
 
   /** The argument of a `const` parameter. */
   fn forConstant(self): TypeScope {
-    copy(position: TypePosition.Constant, subject: None)
+    copy position: TypePosition.Constant, subject: None
   }
 
   /** The explicit type arguments of an expression, where the callee is not resolved yet. */
   fn forEither(self): TypeScope {
-    copy(position: TypePosition.Either, subject: None)
+    copy position: TypePosition.Either, subject: None
   }
 
   /** A const argument is one value. Where the checker does not know yet, a lone literal is taken as one. */
@@ -360,7 +360,7 @@ public type Place {
   /** From the root outwards: `counters[0].hits` is an `Index` and then a `Field`. */
   steps: List<PlaceStep> = []
   /** The span of the root, which is where a message about the binding points. */
-  at: Span = Span(0, 0)
+  at: Span = Span 0, 0
 }
 
 /** Whether a closure may outlive the call it is written in (BACKEND gap 14). */
@@ -511,7 +511,7 @@ public type Expectation {
   /** The type that is expected, if any. */
   fn annotationOf(self): TypeId? {
     match self {
-      .Type(annotation) => Some(annotation)
+      .Type(annotation) => Some annotation
       _ => None
     }
   }
@@ -537,8 +537,8 @@ public type ResultRule {
   /** How a message names the declaration that will not infer, `None` where inference is allowed. */
   fn describe(self): String? {
     match self {
-      .PublicFunction => Some("A `public` function")
-      .TraitMethod => Some("A trait method")
+      .PublicFunction => Some "A `public` function"
+      .TraitMethod => Some "A trait method"
       .Ordinary => None
     }
   }
@@ -661,7 +661,7 @@ public type Checker {
   // --- The state of the walk over one body ---------------------------------------------------------------------------
 
   /** The module whose body is being checked. Everything a message or a table needs to know goes through this one. */
-  var module: ModuleId = ModuleId(0)
+  var module: ModuleId = ModuleId 0
   /** Append-only, addressed by `BindingId`: every local of every body the checker has looked at. */
   var bindings: List<LocalBinding> = []
   /** The scope chain of the body that is being checked, innermost last. */
@@ -788,23 +788,23 @@ public type Checker {
   var hasImportedModules: Bool = false
 
   fn symbolAt(self, id: SymbolId): Symbol {
-    symbols.at(id)
+    symbols.at id
   }
 
   /** What a name in a type position, or the name of a declaration, resolved to. */
   fn resolvedName(self, module: ModuleId, at: Span): SymbolId? {
     if const Some(found) = resolutions[module.value].get(at) {
-      return Some(found)
+      return Some found
     }
     definitions[module.value].get(at)
   }
 
   fn describe(self, id: TypeId): String {
-    describeType(types, symbols, id)
+    describeType types, symbols, id
   }
 
   fn nominal(var self, symbol: SymbolId, arguments: List<TypeId>): TypeId {
-    types.intern(TypeForm.Nominal(symbol, arguments))
+    types.intern TypeForm.Nominal(symbol, arguments)
   }
 
   fn signature(self, id: SignatureId): Signature {
@@ -816,22 +816,22 @@ public type Checker {
   }
 
   fn addSignature(var self, signature: Signature): SignatureId {
-    signatures.add(signature)
+    signatures.add signature
     SignatureId(signatures.length() - 1)
   }
 
   fn addTypeSignature(var self, signature: TypeSignature): TypeSignatureId {
-    typeSignatures.add(signature)
+    typeSignatures.add signature
     TypeSignatureId(typeSignatures.length() - 1)
   }
 
   /** What every failed lookup returns: `Invalid` everywhere, so nothing after it says anything again. */
   fn brokenSignature(self): SignatureId {
-    SignatureId(0)
+    SignatureId 0
   }
 
   fn brokenTypeSignature(self): TypeSignatureId {
-    TypeSignatureId(0)
+    TypeSignatureId 0
   }
 
   /** One message per span, as in the parser: a second one at the same position is a consequence of the first. */
@@ -902,7 +902,7 @@ public type Checker {
         typed = typed + 1
       }
     }
-    Statistics(typed, deferred)
+    Statistics typed, deferred
   }
 
   /**
@@ -917,10 +917,10 @@ public type Checker {
       }
       const isEarlier = match found {
         Some(known) => at.start < known.start
-        .None => true
+        None => true
       }
       if isEarlier {
-        found = Some(at)
+        found = Some at
       }
     }
     found
@@ -944,7 +944,7 @@ public type Checker {
   fn typed(var self, at: Span, id: TypeId): TypeId {
     tables[module.value].expressionTypes.set(at, id)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add(at)
+      pendingSpans.add at
     }
     id
   }
@@ -952,14 +952,14 @@ public type Checker {
   fn typedPattern(var self, at: Span, id: TypeId) {
     tables[module.value].patternTypes.set(at, id)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add(at)
+      pendingSpans.add at
     }
   }
 
   fn resolved(var self, at: Span, resolution: Resolution) {
     tables[module.value].resolutions.set(at, resolution)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add(at)
+      pendingSpans.add at
     }
   }
 
@@ -967,7 +967,7 @@ public type Checker {
     const known = tables[module.value].adaptations.get(at) ?? []
     tables[module.value].adaptations.set(at, known.added(adaptation))
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add(at)
+      pendingSpans.add at
     }
   }
 
@@ -982,12 +982,12 @@ public type Checker {
       if const .Literal(_) = adaptation {
         continue
       }
-      kept.add(adaptation)
+      kept.add adaptation
     }
-    kept.add(Adaptation.Literal(annotation))
+    kept.add Adaptation.Literal(annotation)
     tables[module.value].adaptations.set(at, kept)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add(at)
+      pendingSpans.add at
     }
   }
 
@@ -999,7 +999,7 @@ public type Checker {
   fn recordTypeArguments(var self, at: Span, arguments: List<TypeId>) {
     tables[module.value].typeArguments.set(at, arguments)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add(at)
+      pendingSpans.add at
     }
   }
 
@@ -1011,7 +1011,7 @@ public type Checker {
   fn recordWitnesses(var self, at: Span, found: List<Witness>) {
     tables[module.value].witnesses.set(at, found)
     if hasVariables && pendingSpans.last() != Some(at) {
-      pendingSpans.add(at)
+      pendingSpans.add at
     }
   }
 
@@ -1114,10 +1114,10 @@ public type Checker {
 
   /** A fresh variable for one generic parameter of one call. Ids are never reused: an interned form names one. */
   fn newVariable(var self, name: String, owner: String, at: Span): TypeId {
-    variables.add(VariableState(name, owner, at))
+    variables.add VariableState(name, owner, at)
     const identifier = VariableId(variables.length() - 1)
     hasVariables = true
-    types.intern(TypeForm.Variable(identifier))
+    types.intern TypeForm.Variable(identifier)
   }
 
   fn variableState(self, variable: VariableId): VariableState {
@@ -1130,12 +1130,12 @@ public type Checker {
 
   fn solveVariable(var self, variable: VariableId, id: TypeId) {
     const solved = variables[variable.value].copy(solution: Some(id))
-    variables.set(variable.value, solved)
+    variables.set variable.value, solved
   }
 
   fn markReported(var self, variable: VariableId) {
     const reported = variables[variable.value].copy(isReported: true)
-    variables.set(variable.value, reported)
+    variables.set variable.value, reported
   }
 
   fn resolutionHere(self, at: Span): Resolution? {
@@ -1147,34 +1147,34 @@ public type Checker {
   /** A workspace without a prelude has no `Int64`; what is missing was reported where the name did not resolve. */
   fn nominalOrInvalid(var self, symbol: SymbolId?): TypeId {
     match symbol {
-      Some(found) => types.intern(TypeForm.Nominal(found, []))
-      .None => invalidType
+      Some(found) => types.intern TypeForm.Nominal(found, [])
+      None => invalidType
     }
   }
 
   fn integerType(var self): TypeId {
     const symbol = wellKnown.integer
-    nominalOrInvalid(symbol)
+    nominalOrInvalid symbol
   }
 
   fn floatType(var self): TypeId {
     const symbol = wellKnown.float
-    nominalOrInvalid(symbol)
+    nominalOrInvalid symbol
   }
 
   fn stringType(var self): TypeId {
     const symbol = wellKnown.string
-    nominalOrInvalid(symbol)
+    nominalOrInvalid symbol
   }
 
   fn booleanType(var self): TypeId {
     const symbol = wellKnown.boolean
-    nominalOrInvalid(symbol)
+    nominalOrInvalid symbol
   }
 
   fn charType(var self): TypeId {
     const symbol = wellKnown.character
-    nominalOrInvalid(symbol)
+    nominalOrInvalid symbol
   }
 
   // --- Types the checker builds over and over ------------------------------------------------------------------------
@@ -1189,13 +1189,13 @@ public type Checker {
   }
 
   fn functionType(var self, form: FunctionForm): TypeId {
-    types.intern(TypeForm.Function(form))
+    types.intern TypeForm.Function(form)
   }
 
   // --- Scopes --------------------------------------------------------------------------------------------------------
 
   fn openScope(var self) {
-    scopeStarts.add(locals.length())
+    scopeStarts.add locals.length()
   }
 
   fn closeScope(var self) {
@@ -1203,16 +1203,16 @@ public type Checker {
     const start = scopeStarts.removeAt(top) ?? 0
     while locals.length() > start {
       const last = locals.length() - 1
-      const _ = locals.removeAt(last)
+      const _ = locals.removeAt last
     }
   }
 
   /** A binding gets an id, and the name it is reachable under. */
   fn declareBinding(var self, binding: LocalBinding): BindingId {
-    bindings.add(binding)
+    bindings.add binding
     const identifier = BindingId(bindings.length() - 1)
     if !binding.name.isEmpty() && binding.name != "_" {
-      locals.add(Local(binding.name, LocalKind.Bound(identifier)))
+      locals.add Local(binding.name, LocalKind.Bound(identifier))
     }
     identifier
   }
@@ -1220,7 +1220,7 @@ public type Checker {
   /** A `fn`, `type` or `trait` of a block, and a generic parameter: a name of the scope that is not a value. */
   fn declareLocalSymbol(var self, name: String, symbol: SymbolId) {
     if !name.isEmpty() {
-      locals.add(Local(name, LocalKind.Declared(symbol)))
+      locals.add Local(name, LocalKind.Declared(symbol))
     }
   }
 
@@ -1233,7 +1233,7 @@ public type Checker {
     var index = locals.length() - 1
     while index >= 0 {
       if locals[index].name == name {
-        return Some(locals[index].kind)
+        return Some locals[index].kind
       }
       index = index - 1
     }
@@ -1315,8 +1315,8 @@ public type Checker {
 
   /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */
   fn setReceiver(var self, binding: BindingId) {
-    receiverBinding = Some(binding)
-    receiverType = Some(bindings[binding.value].annotation)
+    receiverBinding = Some binding
+    receiverType = Some bindings[binding.value].annotation
   }
 
   /**
@@ -1352,12 +1352,12 @@ public type Checker {
   }
 
   fn siteOf(self, symbol: SymbolId): DeclarationSite? {
-    sites.get(symbol)
+    sites.get symbol
   }
 
   fn addSite(var self, symbol: SymbolId, site: DeclarationSite) {
     if !sites.containsKey(symbol) {
-      sites.set(symbol, site)
+      sites.set symbol, site
     }
   }
 }
@@ -1365,10 +1365,10 @@ public type Checker {
 /** A checker for one workspace: the tables of milestone 3 plus what it resolved in every type position. */
 public fn newChecker(program: Program, resolutions: List<Map<Span, SymbolId>>): Checker {
   var types = TypeTable()
-  const voidType = types.intern(TypeForm.VoidType)
-  const never = types.intern(TypeForm.NeverType)
-  const invalid = types.intern(TypeForm.Invalid)
-  const deferred = types.intern(TypeForm.Deferred)
+  const voidType = types.intern TypeForm.VoidType
+  const never = types.intern TypeForm.NeverType
+  const invalid = types.intern TypeForm.Invalid
+  const deferred = types.intern TypeForm.Deferred
   var definitions: List<Map<Span, SymbolId>> = []
   var typePositions: List<Map<Span, TypeId>> = []
   var tables: List<Tables> = []
@@ -1376,15 +1376,15 @@ public fn newChecker(program: Program, resolutions: List<Map<Span, SymbolId>>): 
   for module in program.graph.modules {
     var bySpan: Map<Span, SymbolId> = [:]
     for definition in program.definitions[module.id.value] {
-      bySpan.set(definition.span, definition.symbol)
+      bySpan.set definition.span, definition.symbol
     }
-    definitions.add(bySpan)
+    definitions.add bySpan
     typePositions.add([:])
-    tables.add(Tables())
+    tables.add Tables()
     diagnostics.add([])
   }
-  const broken = Signature(SymbolId(0), [], FunctionForm([], invalid), [], None, false, false, false)
-  const brokenType = TypeSignature(SymbolId(0), [], invalid, [], [], [], [], [:], false, false)
+  const broken = Signature SymbolId(0), [], FunctionForm([], invalid), [], None, false, false, false
+  const brokenType = TypeSignature SymbolId(0), [], invalid, [], [], [], [], [:], false, false
   Checker(
     program,
     resolutions,

@@ -48,7 +48,7 @@ public fn buildImplementations(var checker: Checker) {
     const package = module.package
     for statement in module.file.statements {
       if const .Declare(declaration) = statement.kind {
-        collectDeclaration(checker, identifier, package, declaration)
+        collectDeclaration checker, identifier, package, declaration
       }
     }
   }
@@ -60,12 +60,12 @@ fn collectDeclaration(var checker: Checker, module: ModuleId, package: Int, decl
     .Type(typeDeclaration) => {
       const symbol = match checker.resolvedName(module, typeDeclaration.name.span) {
         Some(found) => found
-        .None => {
+        None => {
           return
         }
       }
-      const identifier = typeSignatureOf(checker, symbol)
-      const shape = checker.typeSignature(identifier)
+      const identifier = typeSignatureOf checker, symbol
+      const shape = checker.typeSignature identifier
       const own = shape.own
       const generics = shape.generics
       const bounds = shape.bounds
@@ -96,7 +96,7 @@ fn collectDeclaration(var checker: Checker, module: ModuleId, package: Int, decl
         )
       }
     }
-    .Extend(extension) => collectExtension(checker, module, package, extension)
+    .Extend(extension) => collectExtension checker, module, package, extension
     _ => {}
   }
 }
@@ -106,13 +106,13 @@ fn collectDeclaration(var checker: Checker, module: ModuleId, package: Int, decl
  * them twice would give the same source two sets of symbols, so `check.trb` reads them back out of the index.
  */
 fn collectExtension(var checker: Checker, module: ModuleId, package: Int, extension: ExtendDeclaration) {
-  const generics = declareParameters(checker, module, None, extension.generics)
-  const scope = TypeScope(module)
-  const target = typeFromReference(checker, extension.target, scope.forType())
-  const inner = scope.copy(selfType: Some(target))
-  const bounds = boundsOf(checker, generics, extension.generics, extension.whereClauses, inner)
-  const traits = traitList(checker, extension.traits, target, inner)
-  const members = extensionMembers(checker, module, target, generics, extension.members)
+  const generics = declareParameters checker, module, None, extension.generics
+  const scope = TypeScope module
+  const target = typeFromReference checker, extension.target, scope.forType()
+  const inner = scope.copy selfType: Some(target)
+  const bounds = boundsOf checker, generics, extension.generics, extension.whereClauses, inner
+  const traits = traitList checker, extension.traits, target, inner
+  const members = extensionMembers checker, module, target, generics, extension.members
   const at = extension.target.span
   const key = "{module.value}:{at.start}"
   if traits.isEmpty() {
@@ -131,7 +131,7 @@ fn collectExtension(var checker: Checker, module: ModuleId, package: Int, extens
         at,
       ),
     )
-    checker.implementations.bySpan.set(key, identifier.value)
+    checker.implementations.bySpan.set key, identifier.value
     return
   }
   var first = -1
@@ -156,33 +156,33 @@ fn collectExtension(var checker: Checker, module: ModuleId, package: Int, extens
     }
   }
   if first >= 0 {
-    checker.implementations.bySpan.set(key, first)
+    checker.implementations.bySpan.set key, first
   }
 }
 
 fn addOne(var checker: Checker, implementation: Implementation): ImplementationId {
-  const shape = targetShapeOf(checker, implementation.target)
-  const capability = capabilitySymbolOf(checker, implementation.capability)
-  checker.implementations.add(implementation, shape, capability)
+  const shape = targetShapeOf checker, implementation.target
+  const capability = capabilitySymbolOf checker, implementation.capability
+  checker.implementations.add implementation, shape, capability
 }
 
 /** What an `extend` produced, so that checking its members does not declare them a second time. */
 public fn extensionAt(checker: Checker, module: ModuleId, at: Span): Implementation? {
   const index = checker.implementations.bySpan.get("{module.value}:{at.start}")?
-  Some(checker.implementations.all[index])
+  Some checker.implementations.all[index]
 }
 
 /** What the target of an implementation covers: one head, every implementor of a trait, or every type at all. */
 public fn targetShapeOf(checker: Checker, target: TypeId): TargetShape {
   match checker.types.form(target) {
-    .Nominal(symbol, _) => TargetShape.Concrete(symbol)
+    .Nominal(symbol, _) => TargetShape.Concrete symbol
     .Parameter(_) => TargetShape.Blanket
     .Traits(bounds) => {
       if bounds.length() != 1 {
         return TargetShape.Other
       }
       match checker.types.form(bounds[0]) {
-        .Nominal(symbol, _) => TargetShape.Bounded(symbol)
+        .Nominal(symbol, _) => TargetShape.Bounded symbol
         _ => TargetShape.Other
       }
     }
@@ -194,7 +194,7 @@ public fn targetShapeOf(checker: Checker, target: TypeId): TargetShape {
 fn capabilitySymbolOf(checker: Checker, applied: TypeId?): SymbolId? {
   const bound = applied?
   match checker.types.form(bound) {
-    .Nominal(symbol, _) => Some(symbol)
+    .Nominal(symbol, _) => Some symbol
     _ => None
   }
 }
@@ -202,10 +202,10 @@ fn capabilitySymbolOf(checker: Checker, applied: TypeId?): SymbolId? {
 /** The head of a type, for the index: `List` of `List<Int>` and of the trait type `List<Int>` alike. */
 public fn headSymbolOf(checker: Checker, annotation: TypeId): SymbolId? {
   match checker.types.form(annotation) {
-    .Nominal(symbol, _) => Some(symbol)
+    .Nominal(symbol, _) => Some symbol
     .Traits(bounds) => {
       if bounds.length() == 1 {
-        return headSymbolOf(checker, bounds[0])
+        return headSymbolOf checker, bounds[0]
       }
       None
     }
@@ -220,7 +220,7 @@ public fn headSymbolOf(checker: Checker, annotation: TypeId): SymbolId? {
  * is asked for every expression that uses an operator, a `for` or an interpolation.
  */
 public fn resolveTrait(var checker: Checker, annotation: TypeId, capability: SymbolId): Resolved {
-  buildImplementations(checker)
+  buildImplementations checker
   const key = (annotation.value, capability.value, false)
   if const Some(known) = checker.traitAnswers.get(key) {
     return known
@@ -229,20 +229,20 @@ public fn resolveTrait(var checker: Checker, annotation: TypeId, capability: Sym
     return Resolved.Missing
   }
   checker.traitDepth = checker.traitDepth + 1
-  const found = resolveUncached(checker, annotation, capability, None)
+  const found = resolveUncached checker, annotation, capability, None
   checker.traitDepth = checker.traitDepth - 1
-  checker.traitAnswers.set(key, found)
+  checker.traitAnswers.set key, found
   found
 }
 
 /** `where Target: From<Source>`: the trait *and* its arguments are given, so the answer is yes or no. */
 public fn resolveBound(var checker: Checker, annotation: TypeId, bound: TypeId): Resolved {
-  buildImplementations(checker)
+  buildImplementations checker
   const capability = match checker.types.form(bound) {
     .Nominal(symbol, _) => symbol
     // `Show & Encode` as a bound: every part of it has to hold
     .Traits(bounds) => {
-      return resolveEveryBound(checker, annotation, bounds)
+      return resolveEveryBound checker, annotation, bounds
     }
     _ => {
       return Resolved.Missing
@@ -257,16 +257,16 @@ public fn resolveBound(var checker: Checker, annotation: TypeId, bound: TypeId):
     return Resolved.Missing
   }
   checker.traitDepth = checker.traitDepth + 1
-  const found = resolveUncached(checker, annotation, capability, Some(bound))
+  const found = resolveUncached checker, annotation, capability, Some(bound)
   checker.traitDepth = checker.traitDepth - 1
-  checker.traitAnswers.set(key, found)
+  checker.traitAnswers.set key, found
   found
 }
 
 fn resolveEveryBound(var checker: Checker, annotation: TypeId, bounds: List<TypeId>): Resolved {
   var last = Resolved.Missing
   for bound in bounds {
-    last = resolveBound(checker, annotation, bound)
+    last = resolveBound checker, annotation, bound
     if !last.isFound() {
       return Resolved.Missing
     }
@@ -298,8 +298,8 @@ public fn witnessFor(var checker: Checker, annotation: TypeId, bound: TypeId): W
   if const Some(known) = checker.witnessAnswers.get(key) {
     return known
   }
-  const found = witnessDeep(checker, annotation, bound, 0)
-  checker.witnessAnswers.set(key, found)
+  const found = witnessDeep checker, annotation, bound, 0
+  checker.witnessAnswers.set key, found
   found
 }
 
@@ -307,12 +307,12 @@ fn witnessDeep(var checker: Checker, annotation: TypeId, bound: TypeId, depth: I
   match resolveBound(checker, annotation, bound) {
     .Found(implementation, arguments) => {
       if depth > 6 {
-        return Witness.Implementation(implementation, arguments, [])
+        return Witness.Implementation implementation, arguments, []
       }
-      const inner = innerWitnesses(checker, implementation, annotation, bound, depth)
-      Witness.Implementation(implementation, arguments, inner)
+      const inner = innerWitnesses checker, implementation, annotation, bound, depth
+      Witness.Implementation implementation, arguments, inner
     }
-    .Bounded(_) => witnessOfBound(checker, annotation, bound)
+    .Bounded(_) => witnessOfBound checker, annotation, bound
     _ => Witness.Unresolved
   }
 }
@@ -325,21 +325,21 @@ fn innerWitnesses(
   bound: TypeId,
   depth: Int,
 ): List<Witness> {
-  const found = checker.implementations.at(implementation)
+  const found = checker.implementations.at implementation
   if found.bounds.isEmpty() {
     return []
   }
   var mapping: Map<ParameterId, TypeId> = [:]
-  const _ = matchTarget(checker, found, annotation, mapping)
+  const _ = matchTarget checker, found, annotation, mapping
   if const Some(applied) = found.capability {
-    const _ = matchPattern(checker, applied, bound, found.generics, mapping)
+    const _ = matchPattern checker, applied, bound, found.generics, mapping
   }
   var witnesses: List<Witness> = []
   for inner in found.bounds {
-    const subject = substitute(checker.types, inner.subject, mapping)
+    const subject = substitute checker.types, inner.subject, mapping
     for capability in inner.traits {
-      const wanted = substitute(checker.types, capability, mapping)
-      witnesses.add(witnessDeep(checker, subject, wanted, depth + 1))
+      const wanted = substitute checker.types, capability, mapping
+      witnesses.add witnessDeep(checker, subject, wanted, depth + 1)
     }
   }
   witnesses
@@ -347,9 +347,9 @@ fn innerWitnesses(
 
 fn witnessOfBound(checker: Checker, annotation: TypeId, bound: TypeId): Witness {
   if const .Parameter(parameter) = checker.types.form(annotation) {
-    return Witness.Forwarded(parameter, bound)
+    return Witness.Forwarded parameter, bound
   }
-  Witness.Object(annotation, bound)
+  Witness.Object annotation, bound
 }
 
 /** The arguments of a trait as they are for one type: the `Other` and `Output` of `Add`, the `Item` of `Iterable`. */
@@ -366,13 +366,13 @@ fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolI
   const subject = declaredVoidOf(checker, annotation) ?? annotation
   // A trait-typed value and a generic parameter carry their witness: what their bounds say is the answer
   if const Some(arguments) = boundArgumentsOf(checker, subject, capability, wanted) {
-    return Resolved.Bounded(arguments)
+    return Resolved.Bounded arguments
   }
   var first = -1
   var second = -1
   var arguments: List<TypeId> = []
-  const head = headSymbolOf(checker, subject)
-  const candidates = checker.implementations.candidatesOf(capability, head)
+  const head = headSymbolOf checker, subject
+  const candidates = checker.implementations.candidatesOf capability, head
   for index in candidates {
     if const Some(given) = applies(checker, index, subject, wanted) {
       if first < 0 {
@@ -386,17 +386,17 @@ fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolI
   // Two implementations that both answer are an overlap, which `checkCoherence` reports at the two declarations - so
   // nothing is said here: one root cause, one message
   if second >= 0 {
-    return Resolved.Ambiguous(ImplementationId(first), ImplementationId(second))
+    return Resolved.Ambiguous ImplementationId(first), ImplementationId(second)
   }
   if first >= 0 {
-    return Resolved.Found(ImplementationId(first), arguments)
+    return Resolved.Found ImplementationId(first), arguments
   }
   // `Int64 with Signed`, `Signed with Numeric`, `Numeric with Add<Self, Self>`
   if const Some(found) = throughSupertraits(checker, subject, capability, wanted) {
     return found
   }
   // `Show`, `Equals`, `Hash`, `Encode`, `Decode` and the `From` of a wrapper case are generated on first use
-  deriveFor(checker, subject, capability, wanted)
+  deriveFor checker, subject, capability, wanted
 }
 
 /**
@@ -406,7 +406,7 @@ fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolI
 fn declaredVoidOf(var checker: Checker, annotation: TypeId): TypeId? {
   if const .VoidType = checker.types.form(annotation) {
     const symbol = checker.wellKnown.declaredVoid?
-    return Some(checker.nominal(symbol, []))
+    return Some checker.nominal(symbol, [])
   }
   None
 }
@@ -429,7 +429,7 @@ fn boundArgumentsOf(
     return None
   }
   const found = searchTraits(checker, bounds, capability, annotation, wanted, 0)?
-  Some(found)
+  Some found
 }
 
 /**
@@ -458,9 +458,9 @@ fn applies(var checker: Checker, index: Int, annotation: TypeId, wanted: TypeId?
   if !boundsHold(checker, implementation, mapping) {
     return None
   }
-  const given = substitute(checker.types, applied, mapping)
+  const given = substitute checker.types, applied, mapping
   match checker.types.form(given) {
-    .Nominal(_, arguments) => Some(arguments)
+    .Nominal(_, arguments) => Some arguments
     _ => Some([])
   }
 }
@@ -490,7 +490,7 @@ fn matchTarget(
     }
     const actual = match traitArgumentsOf(checker, annotation, head) {
       Some(found) => found
-      .None => {
+      None => {
         return false
       }
     }
@@ -510,7 +510,7 @@ fn matchTarget(
     }
     return true
   }
-  matchPattern(checker, target, annotation, implementation.generics, mapping)
+  matchPattern checker, target, annotation, implementation.generics, mapping
 }
 
 /**
@@ -527,9 +527,9 @@ fn matchPattern(
   if const .Parameter(parameter) = checker.types.form(pattern) {
     if generics.contains(parameter) {
       if const Some(known) = mapping.get(parameter) {
-        return sameType(checker.types, known, concrete)
+        return sameType checker.types, known, concrete
       }
-      mapping.set(parameter, concrete)
+      mapping.set parameter, concrete
       return true
     }
   }
@@ -549,7 +549,7 @@ fn matchPattern(
           return false
         }
       }
-      matchAll(checker, arguments, other, generics, mapping)
+      matchAll checker, arguments, other, generics, mapping
     }
     .Traits(bounds) => {
       const other = match checker.types.form(concrete) {
@@ -558,7 +558,7 @@ fn matchPattern(
           return false
         }
       }
-      matchAll(checker, bounds, other, generics, mapping)
+      matchAll checker, bounds, other, generics, mapping
     }
     .Tuple(fields) => {
       const other = match checker.types.form(concrete) {
@@ -594,7 +594,7 @@ fn matchPattern(
           return false
         }
       }
-      matchPattern(checker, form.result, other.result, generics, mapping)
+      matchPattern checker, form.result, other.result, generics, mapping
     }
     _ => false
   }
@@ -621,9 +621,9 @@ fn matchAll(
 /** `extend<Item: Show> List<Item> with Show`: the condition of the implementation, with the match put in. */
 fn boundsHold(var checker: Checker, implementation: Implementation, mapping: Map<ParameterId, TypeId>): Bool {
   for bound in implementation.bounds {
-    const subject = substitute(checker.types, bound.subject, mapping)
+    const subject = substitute checker.types, bound.subject, mapping
     for capability in bound.traits {
-      const wanted = substitute(checker.types, capability, mapping)
+      const wanted = substitute checker.types, capability, mapping
       if !implementsBound(checker, subject, wanted) {
         return false
       }
@@ -642,13 +642,13 @@ fn throughSupertraits(
   capability: SymbolId,
   wanted: TypeId?,
 ): Resolved? {
-  const head = headSymbolOf(checker, annotation)
-  const candidates = checker.implementations.declaredFor(head)
+  const head = headSymbolOf checker, annotation
+  const candidates = checker.implementations.declaredFor head
   for index in candidates {
     const implementation = checker.implementations.all[index]
     const declared = match implementation.capability {
       Some(found) => found
-      .None => {
+      None => {
         continue
       }
     }
@@ -656,10 +656,10 @@ fn throughSupertraits(
     if !matchTarget(checker, implementation, annotation, mapping) {
       continue
     }
-    const applied = substitute(checker.types, declared, mapping)
-    const supertraits = supertraitsOfBound(checker, applied, annotation)
+    const applied = substitute checker.types, declared, mapping
+    const supertraits = supertraitsOfBound checker, applied, annotation
     if const Some(found) = searchTraits(checker, supertraits, capability, annotation, wanted, 0) {
-      return Some(Resolved.Found(ImplementationId(index), found))
+      return Some Resolved.Found(ImplementationId(index), found)
     }
   }
   None
@@ -683,17 +683,17 @@ fn searchTraits(
   for bound in traits {
     if const .Nominal(head, arguments) = checker.types.form(bound) {
       if head == capability && matchesWanted(checker, bound, wanted) {
-        return Some(arguments)
+        return Some arguments
       }
     }
   }
   for bound in traits {
-    const inner = supertraitsOfBound(checker, bound, own)
+    const inner = supertraitsOfBound checker, bound, own
     if inner.isEmpty() {
       continue
     }
     if const Some(found) = searchTraits(checker, inner, capability, own, wanted, depth + 1) {
-      return Some(found)
+      return Some found
     }
   }
   None
@@ -701,8 +701,8 @@ fn searchTraits(
 
 fn matchesWanted(checker: Checker, bound: TypeId, wanted: TypeId?): Bool {
   match wanted {
-    Some(asked) => sameType(checker.types, bound, asked)
-    .None => true
+    Some(asked) => sameType checker.types, bound, asked
+    None => true
   }
 }
 
@@ -714,40 +714,40 @@ public fn supertraitsOfBound(var checker: Checker, bound: TypeId, own: TypeId): 
       return []
     }
   }
-  const identifier = typeSignatureOf(checker, symbol)
-  const shape = checker.typeSignature(identifier)
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
   if shape.traits.isEmpty() {
     return []
   }
   var mapping: Map<ParameterId, TypeId> = [:]
   for position in 0..shape.generics.length().min(arguments.length()) {
-    mapping.set(shape.generics[position], arguments[position])
+    mapping.set shape.generics[position], arguments[position]
   }
   if const .Parameter(parameter) = checker.types.form(shape.own) {
-    mapping.set(parameter, own)
+    mapping.set parameter, own
   }
   var found: List<TypeId> = []
   for supertrait in shape.traits {
-    found.add(substitute(checker.types, supertrait.capability, mapping))
+    found.add substitute(checker.types, supertrait.capability, mapping)
   }
   found
 }
 
 /** Every trait a type implements, transitively over supertraits. What member lookup walks. */
 public fn traitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
-  buildImplementations(checker)
+  buildImplementations checker
   if const Some(known) = checker.traitClosures.get(annotation.value) {
     return known
   }
   // The answer is put in first, so that a trait that mentions itself through `Self` cannot loop
-  checker.traitClosures.set(annotation.value, [])
+  checker.traitClosures.set annotation.value, []
   var found: List<TypeId> = []
-  const declared = directTraitsOf(checker, annotation)
+  const declared = directTraitsOf checker, annotation
   for bound in declared {
-    addClosure(checker, found, bound, annotation, 0)
+    addClosure checker, found, bound, annotation, 0
   }
-  addImplementorTraits(checker, found, annotation)
-  checker.traitClosures.set(annotation.value, found)
+  addImplementorTraits checker, found, annotation
+  checker.traitClosures.set annotation.value, found
   found
 }
 
@@ -762,7 +762,7 @@ fn addImplementorTraits(var checker: Checker, var found: List<TypeId>, annotatio
     const implementation = checker.implementations.all[index]
     const declared = match implementation.capability {
       Some(inner) => inner
-      .None => {
+      None => {
         continue
       }
     }
@@ -790,16 +790,16 @@ fn addImplementorTraits(var checker: Checker, var found: List<TypeId>, annotatio
       if !hasHead(checker, bound, head) {
         continue
       }
-      const arguments = argumentsOfBound(checker, bound)
+      const arguments = argumentsOfBound checker, bound
       if !matchAll(checker, wanted, arguments, implementation.generics, mapping) {
         continue
       }
       if !boundsHold(checker, implementation, mapping) {
         continue
       }
-      const applied = substitute(checker.types, declared, mapping)
+      const applied = substitute checker.types, declared, mapping
       if !found.contains(applied) {
-        found.add(applied)
+        found.add applied
       }
       break
     }
@@ -817,8 +817,8 @@ fn addClosure(var checker: Checker, var found: List<TypeId>, bound: TypeId, own:
   if depth > 8 || found.contains(bound) {
     return
   }
-  found.add(bound)
-  const supertraits = supertraitsOfBound(checker, bound, own)
+  found.add bound
+  const supertraits = supertraitsOfBound checker, bound, own
   for supertrait in supertraits {
     addClosure(checker, found, supertrait, own, depth + 1)
   }
@@ -831,39 +831,39 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
     // `Void` carries what its declaration in the standard library says, so `nothing.show()` is a member like any other
     .VoidType => {
       match declaredVoidOf(checker, annotation) {
-        Some(declared) => directTraitsOf(checker, declared)
-        .None => []
+        Some(declared) => directTraitsOf checker, declared
+        None => []
       }
     }
     .Parameter(parameter) => checker.parameterBounds.get(parameter.value) ?? []
     // A literal type has the traits of its base plus the `Parse` the language generates for it, which replaces the
     // base's own: `Status.parse(text)` fails with a `LiteralParseError` and not with a `NumberParseError` (gap 32)
     .Literals(base, _) => {
-      const inherited = directTraitsOf(checker, base)
-      const parse = literalParseBound(checker)
+      const inherited = directTraitsOf checker, base
+      const parse = literalParseBound checker
       var found: List<TypeId> = []
       for bound in inherited {
         if parse.isSome() && isParseBound(checker, bound) {
           continue
         }
-        found.add(bound)
+        found.add bound
       }
       if const Some(generated) = parse {
         if !found.contains(generated) {
-          found.add(generated)
+          found.add generated
         }
       }
       found
     }
     _ => {
-      const head = headSymbolOf(checker, annotation)
-      const candidates = checker.implementations.declaredFor(head)
+      const head = headSymbolOf checker, annotation
+      const candidates = checker.implementations.declaredFor head
       var found: List<TypeId> = []
       for index in candidates {
         const implementation = checker.implementations.all[index]
         const declared = match implementation.capability {
           Some(inner) => inner
-          .None => {
+          None => {
             continue
           }
         }
@@ -874,9 +874,9 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
         if !boundsHold(checker, implementation, mapping) {
           continue
         }
-        const applied = substitute(checker.types, declared, mapping)
+        const applied = substitute checker.types, declared, mapping
         if !found.contains(applied) {
-          found.add(applied)
+          found.add applied
         }
       }
       found
@@ -891,8 +891,8 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
 public fn literalParseBound(var checker: Checker): TypeId? {
   const parse = checker.wellKnown.symbolNamed("Parse")?
   const failure = checker.wellKnown.symbolNamed("LiteralParseError")?
-  const argument = checker.nominal(failure, [])
-  Some(checker.nominal(parse, [argument]))
+  const argument = checker.nominal failure, []
+  Some checker.nominal(parse, [argument])
 }
 
 fn isParseBound(checker: Checker, bound: TypeId): Bool {
@@ -909,8 +909,8 @@ fn isParseBound(checker: Checker, bound: TypeId): Bool {
 public fn isConcrete(checker: Checker, annotation: TypeId): Bool {
   match checker.types.form(annotation) {
     .Parameter(_) | .Variable(_) | .Invalid | .Deferred => false
-    .Nominal(_, arguments) => everyConcrete(checker, arguments)
-    .Traits(bounds) => everyConcrete(checker, bounds)
+    .Nominal(_, arguments) => everyConcrete checker, arguments
+    .Traits(bounds) => everyConcrete checker, bounds
     .Tuple(fields) => {
       for field in fields {
         if !isConcrete(checker, field.annotation) {
@@ -925,7 +925,7 @@ public fn isConcrete(checker: Checker, annotation: TypeId): Bool {
           return false
         }
       }
-      isConcrete(checker, form.result)
+      isConcrete checker, form.result
     }
     _ => true
   }
@@ -952,19 +952,19 @@ fn deriveFor(var checker: Checker, annotation: TypeId, capability: SymbolId, wan
   // contains itself would recurse until the depth limit instead of finding the answer it is assuming
   const bound = match wanted {
     Some(found) => found
-    .None => checker.nominal(capability, [])
+    None => checker.nominal capability, []
   }
   const members = match derivableMembers(checker, annotation, capability, Some(bound)) {
     Some(found) => found
-    .None => {
+    None => {
       return Resolved.Missing
     }
   }
   const key = (annotation.value, bound.value)
   if const Some(known) = checker.derivedIndex.get(key) {
-    return Resolved.Found(ImplementationId(known), argumentsOfBound(checker, bound))
+    return Resolved.Found ImplementationId(known), argumentsOfBound(checker, bound)
   }
-  checker.derived.add(DerivedImplementation(annotation, bound, members))
+  checker.derived.add DerivedImplementation(annotation, bound, members)
   // A derived implementation is an ordinary one for everything that comes after: it answers, and it is indexed
   const module = checker.module
   const package = checker.program.graph.at(module).package
@@ -981,9 +981,9 @@ fn deriveFor(var checker: Checker, annotation: TypeId, capability: SymbolId, wan
     ImplementationOrigin.Derived,
     at,
   )
-  const identifier = addOne(checker, generated)
-  checker.derivedIndex.set(key, identifier.value)
-  Resolved.Found(identifier, argumentsOfBound(checker, bound))
+  const identifier = addOne checker, generated
+  checker.derivedIndex.set key, identifier.value
+  Resolved.Found identifier, argumentsOfBound(checker, bound)
 }
 
 fn argumentsOfBound(checker: Checker, bound: TypeId): List<TypeId> {
@@ -1015,8 +1015,8 @@ public fn isVisibleModule(var checker: Checker, module: ModuleId, declaring: Mod
   if module == declaring {
     return true
   }
-  const known = visibleModulesOf(checker, module)
-  known.containsKey(declaring.value)
+  const known = visibleModulesOf checker, module
+  known.containsKey declaring.value
 }
 
 fn visibleModulesOf(var checker: Checker, module: ModuleId): Map<Int, Bool> {
@@ -1024,10 +1024,10 @@ fn visibleModulesOf(var checker: Checker, module: ModuleId): Map<Int, Bool> {
     return known
   }
   var found: Map<Int, Bool> = [:]
-  found.set(module.value, true)
+  found.set module.value, true
   const package = checker.program.graph.at(module).package
   if const Some(prelude) = checker.program.preludeModules[package] {
-    addVisibleModule(checker, found, prelude, 0)
+    addVisibleModule checker, found, prelude, 0
   }
   const statements = checker.program.graph.at(module).file.statements
   for statement in statements {
@@ -1035,13 +1035,13 @@ fn visibleModulesOf(var checker: Checker, module: ModuleId): Map<Int, Bool> {
       if const .Use(usage) = declaration.kind {
         if const .Module(path) = usage.source {
           if const .Found(target) = resolveImport(checker.program.graph, checker.program.workspace, module, path) {
-            addVisibleModule(checker, found, target, 0)
+            addVisibleModule checker, found, target, 0
           }
         }
       }
     }
   }
-  checker.visibleModules.set(module.value, found)
+  checker.visibleModules.set module.value, found
   found
 }
 
@@ -1050,7 +1050,7 @@ fn addVisibleModule(var checker: Checker, var found: Map<Int, Bool>, module: Mod
   if depth > 8 || found.containsKey(module.value) {
     return
   }
-  found.set(module.value, true)
+  found.set module.value, true
   const statements = checker.program.graph.at(module).file.statements
   for statement in statements {
     if const .Declare(declaration) = statement.kind {
@@ -1071,15 +1071,15 @@ fn addVisibleModule(var checker: Checker, var found: Map<Int, Bool>, module: Mod
 /** The package a type was declared in, which decides whether an extension of it is part of the type everywhere. */
 public fn packageOfType(checker: Checker, annotation: TypeId): Int {
   match headSymbolOf(checker, annotation) {
-    Some(symbol) => packageOfSymbol(checker, symbol)
-    .None => -1
+    Some(symbol) => packageOfSymbol checker, symbol
+    None => -1
   }
 }
 
 public fn packageOfSymbol(checker: Checker, symbol: SymbolId): Int {
   match checker.symbolAt(symbol).module {
     Some(module) => checker.program.graph.at(module).package
-    .None => -1
+    None => -1
   }
 }
 
@@ -1088,14 +1088,14 @@ public fn packageOfSymbol(checker: Checker, symbol: SymbolId): Int {
  * `Int64` everywhere, one of another package only where its module is imported.
  */
 public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<Int> {
-  buildImplementations(checker)
+  buildImplementations checker
   const key = (checker.module.value, annotation.value)
   if const Some(known) = checker.visibleExtensions.get(key) {
     return known
   }
-  const head = headSymbolOf(checker, annotation)
-  const candidates = checker.implementations.inherentOf(head)
-  const owner = packageOfType(checker, annotation)
+  const head = headSymbolOf checker, annotation
+  const candidates = checker.implementations.inherentOf head
+  const owner = packageOfType checker, annotation
   const module = checker.module
   var found: List<Int> = []
   for index in candidates {
@@ -1110,18 +1110,18 @@ public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<I
     if implementation.package != owner && !isVisibleModule(checker, module, implementation.module) {
       continue
     }
-    found.add(index)
+    found.add index
   }
-  checker.visibleExtensions.set(key, found)
+  checker.visibleExtensions.set key, found
   found
 }
 
 /** The same, but without the import rule: what a "declared in a module this file does not import" note needs. */
 public fn hiddenExtensionOf(var checker: Checker, annotation: TypeId, name: String): ModuleId? {
-  buildImplementations(checker)
-  const head = headSymbolOf(checker, annotation)
-  const candidates = checker.implementations.inherentOf(head)
-  const owner = packageOfType(checker, annotation)
+  buildImplementations checker
+  const head = headSymbolOf checker, annotation
+  const candidates = checker.implementations.inherentOf head
+  const owner = packageOfType checker, annotation
   const module = checker.module
   for index in candidates {
     const implementation = checker.implementations.all[index]
@@ -1133,7 +1133,7 @@ public fn hiddenExtensionOf(var checker: Checker, annotation: TypeId, name: Stri
     }
     var mapping: Map<ParameterId, TypeId> = [:]
     if matchTarget(checker, implementation, annotation, mapping) {
-      return Some(implementation.module)
+      return Some implementation.module
     }
   }
   None
@@ -1147,7 +1147,7 @@ public fn mappingOfImplementation(
 ): Map<ParameterId, TypeId> {
   const implementation = checker.implementations.all[index]
   var mapping: Map<ParameterId, TypeId> = [:]
-  const _ = matchTarget(checker, implementation, annotation, mapping)
+  const _ = matchTarget checker, implementation, annotation, mapping
   mapping
 }
 
@@ -1163,7 +1163,7 @@ public fn matchTypePattern(
   generics: List<ParameterId>,
   var mapping: Map<ParameterId, TypeId>,
 ): Bool {
-  matchPattern(checker, pattern, concrete, generics, mapping)
+  matchPattern checker, pattern, concrete, generics, mapping
 }
 
 /**
@@ -1172,7 +1172,7 @@ public fn matchTypePattern(
  * is built from exactly this, so that a table and the checker's own requirement check cannot disagree.
  */
 public fn memberOfImplementation(var checker: Checker, implementation: ImplementationId, name: String): SymbolId? {
-  providerOf(checker, implementation.value, name)
+  providerOf checker, implementation.value, name
 }
 
 // --- Coherence ------------------------------------------------------------------------------------------------------
@@ -1182,12 +1182,12 @@ public fn memberOfImplementation(var checker: Checker, implementation: Implement
  * body is checked and cannot depend on the order the modules are walked in.
  */
 public fn checkCoherence(var checker: Checker) {
-  buildImplementations(checker)
+  buildImplementations checker
   const total = checker.implementations.all.length()
   for index in 0..total {
-    checkOrphan(checker, index)
+    checkOrphan checker, index
   }
-  checkOverlaps(checker)
+  checkOverlaps checker
 }
 
 /** `extend X with Trait` needs the current package to declare `X` or `Trait`. */
@@ -1198,13 +1198,13 @@ fn checkOrphan(var checker: Checker, index: Int) {
   }
   const declared = match implementation.capability {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
   const capability = match capabilitySymbolOf(checker, implementation.capability) {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
@@ -1213,30 +1213,30 @@ fn checkOrphan(var checker: Checker, index: Int) {
   }
   // A blanket implementation covers every type, so only owning the trait can make it coherent
   if const .Blanket = targetShapeOf(checker, implementation.target) {
-    reportOrphan(checker, implementation, declared)
+    reportOrphan checker, implementation, declared
     return
   }
   const head = match headSymbolOf(checker, implementation.target) {
     Some(found) => found
     // A tuple or a function type as the target: nothing owns it
-    .None => {
-      reportOrphan(checker, implementation, declared)
+    None => {
+      reportOrphan checker, implementation, declared
       return
     }
   }
   if packageOfSymbol(checker, head) == implementation.package {
     return
   }
-  reportOrphan(checker, implementation, declared)
+  reportOrphan checker, implementation, declared
 }
 
 fn reportOrphan(var checker: Checker, implementation: Implementation, applied: TypeId) {
-  const target = checker.describe(implementation.target)
-  const capability = checker.describe(applied)
+  const target = checker.describe implementation.target
+  const capability = checker.describe applied
   const message = "`extend {target} with {capability}`: neither `{target}` nor `{capability}` belongs to this package"
   const note = "An implementation belongs to the package of the type or to the package of the trait,"
     + " so that no two packages can write the same one"
-  checker.report(implementation.module, Diagnostic.error(message, implementation.at).withNote(note))
+  checker.report implementation.module, Diagnostic.error(message, implementation.at).withNote(note)
 }
 
 /** Two implementations of one trait may not overlap, and disjointness is only proved by different heads (gap 5). */
@@ -1250,14 +1250,14 @@ fn checkOverlaps(var checker: Checker) {
     }
     if const Some(capability) = capabilitySymbolOf(checker, implementation.capability) {
       var known = groups.get(capability.value) ?? []
-      known.add(index)
-      groups.set(capability.value, known)
+      known.add index
+      groups.set capability.value, known
     }
   }
   for (_, group) in groups {
     for outer in 0..group.length() {
       for inner in (outer + 1)..group.length() {
-        reportOverlap(checker, group[outer], group[inner])
+        reportOverlap checker, group[outer], group[inner]
       }
     }
   }
@@ -1274,8 +1274,8 @@ fn reportOverlap(var checker: Checker, first: Int, second: Int) {
   if !couldUnify(checker, leftTrait, rightTrait) {
     return
   }
-  const target = checker.describe(right.target)
-  const capability = checker.describe(rightTrait)
+  const target = checker.describe right.target
+  const capability = checker.describe rightTrait
   const other = checker.program.graph.at(left.module).path
   checker.report(
     right.module,
@@ -1301,7 +1301,7 @@ fn couldUnify(checker: Checker, left: TypeId, right: TypeId): Bool {
     }
     .Traits(bounds) => {
       if const .Traits(otherBounds) = checker.types.form(right) {
-        return couldUnifyAll(checker, bounds, otherBounds)
+        return couldUnifyAll checker, bounds, otherBounds
       }
       false
     }
@@ -1335,11 +1335,11 @@ fn isOpenType(checker: Checker, annotation: TypeId): Bool {
  * type is exempt: there the requirement is one on the runtime, not on any source (gap 22).
  */
 public fn checkImplementations(var checker: Checker, module: ModuleId) {
-  buildImplementations(checker)
+  buildImplementations checker
   const total = checker.implementations.all.length()
   for index in 0..total {
     if checker.implementations.all[index].module == module {
-      checkOneImplementation(checker, index)
+      checkOneImplementation checker, index
     }
   }
 }
@@ -1351,7 +1351,7 @@ fn checkOneImplementation(var checker: Checker, index: Int) {
   }
   const declared = match implementation.capability {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
@@ -1365,9 +1365,9 @@ fn checkOneImplementation(var checker: Checker, index: Int) {
     return
   }
   var closure: List<TypeId> = []
-  addClosure(checker, closure, declared, target, 0)
+  addClosure checker, closure, declared, target, 0
   for bound in closure {
-    checkRequirements(checker, index, declared, bound, closure)
+    checkRequirements checker, index, declared, bound, closure
   }
 }
 
@@ -1381,36 +1381,36 @@ fn checkRequirements(
   const implementation = checker.implementations.all[index]
   const capability = match headSymbolOf(checker, bound) {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
-  const identifier = typeSignatureOf(checker, capability)
-  const shape = checker.typeSignature(identifier)
+  const identifier = typeSignatureOf checker, capability
+  const shape = checker.typeSignature identifier
   const target = implementation.target
   var mapping: Map<ParameterId, TypeId> = [:]
-  const arguments = argumentsOfBound(checker, bound)
+  const arguments = argumentsOfBound checker, bound
   for position in 0..shape.generics.length().min(arguments.length()) {
-    mapping.set(shape.generics[position], arguments[position])
+    mapping.set shape.generics[position], arguments[position]
   }
   if const .Parameter(parameter) = checker.types.form(shape.own) {
-    mapping.set(parameter, target)
+    mapping.set parameter, target
   }
   for (name, member) in shape.members {
-    const identifier = signatureOf(checker, member)
-    const signature = checker.signature(identifier)
+    const identifier = signatureOf checker, member
+    const signature = checker.signature identifier
     if signature.hasBody || hasConditions(checker, member) {
       continue
     }
     match providerOf(checker, index, name) {
-      Some(provider) => compareSignatures(checker, index, bound, name, member, provider, mapping)
-      .None => {
+      Some(provider) => compareSignatures checker, index, bound, name, member, provider, mapping
+      None => {
         // `trait Queue<Item> with Collection<Item>` writes `add` itself: a default of any trait in the closure is the
         // implementation of the requirement, and nothing is asked of the type
         if hasDefaultInClosure(checker, closure, name) || isProvidedOtherwise(checker, index, bound) {
           continue
         }
-        reportMissingMember(checker, index, declared, bound, name, member, mapping)
+        reportMissingMember checker, index, declared, bound, name, member, mapping
       }
     }
   }
@@ -1421,18 +1421,18 @@ fn hasDefaultInClosure(var checker: Checker, closure: List<TypeId>, name: String
   for bound in closure {
     const capability = match headSymbolOf(checker, bound) {
       Some(found) => found
-      .None => {
+      None => {
         continue
       }
     }
-    const identifier = typeSignatureOf(checker, capability)
+    const identifier = typeSignatureOf checker, capability
     const member = match checker.typeSignature(identifier).members.get(name) {
       Some(found) => found
-      .None => {
+      None => {
         continue
       }
     }
-    const signature = signatureOf(checker, member)
+    const signature = signatureOf checker, member
     if checker.signature(signature).hasBody {
       return true
     }
@@ -1444,13 +1444,13 @@ fn hasDefaultInClosure(var checker: Checker, closure: List<TypeId>, name: String
 fn hasConditions(checker: Checker, member: SymbolId): Bool {
   const site = match checker.siteOf(member) {
     Some(found) => found
-    .None => {
+    None => {
       return false
     }
   }
   match functionOfSite(site) {
     Some(function) => !function.whereClauses.isEmpty()
-    .None => false
+    None => false
   }
 }
 
@@ -1462,15 +1462,15 @@ fn isProvidedOtherwise(var checker: Checker, index: Int, bound: TypeId): Bool {
   }
   const target = implementation.target
   if const .Nominal(symbol, _) = checker.types.form(target) {
-    const identifier = typeSignatureOf(checker, symbol)
-    const shape = checker.typeSignature(identifier)
+    const identifier = typeSignatureOf checker, symbol
+    const shape = checker.typeSignature identifier
     if shape.isNative {
       return true
     }
   }
   const capability = match headSymbolOf(checker, bound) {
     Some(found) => found
-    .None => {
+    None => {
       return true
     }
   }
@@ -1481,32 +1481,32 @@ fn isProvidedOtherwise(var checker: Checker, index: Int, bound: TypeId): Bool {
 fn providerOf(var checker: Checker, index: Int, name: String): SymbolId? {
   const implementation = checker.implementations.all[index]
   if const Some(symbol) = implementation.members.get(name) {
-    return Some(symbol)
+    return Some symbol
   }
   const target = implementation.target
   if const .Nominal(symbol, _) = checker.types.form(target) {
-    const identifier = typeSignatureOf(checker, symbol)
-    const shape = checker.typeSignature(identifier)
+    const identifier = typeSignatureOf checker, symbol
+    const shape = checker.typeSignature identifier
     if const Some(member) = shape.members.get(name) {
-      return Some(member)
+      return Some member
     }
     for field in shape.fields {
       if field.name == name {
-        return Some(field.symbol)
+        return Some field.symbol
       }
     }
   }
-  const head = headSymbolOf(checker, target)
-  const candidates = checker.implementations.declaredFor(head)
-  const extensions = checker.implementations.inherentOf(head)
+  const head = headSymbolOf checker, target
+  const candidates = checker.implementations.declaredFor head
+  const extensions = checker.implementations.inherentOf head
   for other in candidates {
     if const Some(member) = memberOfSameTarget(checker, other, target, name) {
-      return Some(member)
+      return Some member
     }
   }
   for other in extensions {
     if const Some(member) = memberOfSameTarget(checker, other, target, name) {
-      return Some(member)
+      return Some member
     }
   }
   // A supertrait is satisfied by *any* implementation of the same target, not only by members of the same `extend`
@@ -1515,13 +1515,13 @@ fn providerOf(var checker: Checker, index: Int, name: String): SymbolId? {
   const open = checker.implementations.open
   for other in open {
     if const Some(member) = memberOfSameTarget(checker, other, target, name) {
-      return Some(member)
+      return Some member
     }
   }
   const openExtensions = checker.implementations.inherentOpen
   for other in openExtensions {
     if const Some(member) = memberOfSameTarget(checker, other, target, name) {
-      return Some(member)
+      return Some member
     }
   }
   None
@@ -1536,7 +1536,7 @@ fn memberOfSameTarget(var checker: Checker, index: Int, target: TypeId, name: St
   const implementation = checker.implementations.all[index]
   const member = implementation.members.get(name)?
   if sameType(checker.types, implementation.target, target) {
-    return Some(member)
+    return Some member
   }
   var mapping: Map<ParameterId, TypeId> = [:]
   if !matchTarget(checker, implementation, target, mapping) {
@@ -1545,7 +1545,7 @@ fn memberOfSameTarget(var checker: Checker, index: Int, target: TypeId, name: St
   if !boundsHold(checker, implementation, mapping) {
     return None
   }
-  Some(member)
+  Some member
 }
 
 /**
@@ -1565,14 +1565,14 @@ fn compareSignatures(
   if member == provider {
     return
   }
-  const wantedSignature = signatureOf(checker, member)
-  const required = checker.signature(wantedSignature)
-  const givenSignature = signatureOf(checker, provider)
-  const given = checker.signature(givenSignature)
+  const wantedSignature = signatureOf checker, member
+  const required = checker.signature wantedSignature
+  const givenSignature = signatureOf checker, provider
+  const given = checker.signature givenSignature
   if !required.generics.isEmpty() || !given.generics.isEmpty() {
     return
   }
-  const wanted = substituteFunction(checker.types, required.form, mapping)
+  const wanted = substituteFunction checker.types, required.form, mapping
   if !isComparableForm(checker, wanted) || !isComparableForm(checker, given.form) {
     return
   }
@@ -1580,9 +1580,9 @@ fn compareSignatures(
     return
   }
   const implementation = checker.implementations.all[index]
-  const target = checker.describe(implementation.target)
-  const capability = checker.describe(bound)
-  const shown = describeRequirement(checker, name, required.takesSelf, required.isVarSelf, wanted)
+  const target = checker.describe implementation.target
+  const capability = checker.describe bound
+  const shown = describeRequirement checker, name, required.takesSelf, required.isVarSelf, wanted
   const at = checker.symbolAt(provider).span
   checker.report(
     implementation.module,
@@ -1597,7 +1597,7 @@ fn isComparableForm(checker: Checker, form: FunctionForm): Bool {
       return false
     }
   }
-  isWritten(checker, form.result)
+  isWritten checker, form.result
 }
 
 fn isWritten(checker: Checker, annotation: TypeId): Bool {
@@ -1629,7 +1629,7 @@ fn isWritten(checker: Checker, annotation: TypeId): Bool {
       }
       true
     }
-    .Function(form) => isComparableForm(checker, form)
+    .Function(form) => isComparableForm checker, form
     _ => true
   }
 }
@@ -1644,15 +1644,15 @@ fn reportMissingMember(
   mapping: Map<ParameterId, TypeId>,
 ) {
   const implementation = checker.implementations.all[index]
-  const wantedSignature = signatureOf(checker, member)
-  const required = checker.signature(wantedSignature)
-  const wanted = substituteFunction(checker.types, required.form, mapping)
-  const target = checker.describe(implementation.target)
-  const capability = checker.describe(bound)
-  const shown = describeRequirement(checker, name, required.takesSelf, required.isVarSelf, wanted)
+  const wantedSignature = signatureOf checker, member
+  const required = checker.signature wantedSignature
+  const wanted = substituteFunction checker.types, required.form, mapping
+  const target = checker.describe implementation.target
+  const capability = checker.describe bound
+  const shown = describeRequirement checker, name, required.takesSelf, required.isVarSelf, wanted
   // A supertrait is a requirement like any other, and the message says which trait asked for it
   if !sameType(checker.types, bound, declared) {
-    const written = checker.describe(declared)
+    const written = checker.describe declared
     checker.report(
       implementation.module,
       Diagnostic.error("`{written}` requires `{capability}`, and `{target}` has no `{name}`", implementation.at)
@@ -1680,10 +1680,10 @@ fn describeRequirement(
     parts.add(if isVarSelf { "var self" } else { "self" })
   }
   for parameter in form.parameters {
-    const shown = describeType(checker.types, checker.symbols, parameter.annotation)
+    const shown = describeType checker.types, checker.symbols, parameter.annotation
     const named = match parameter.name {
       Some(label) => "{label}: {shown}"
-      .None => shown
+      None => shown
     }
     parts.add(match parameter.mode {
       .Var => "var {named}"
@@ -1692,8 +1692,8 @@ fn describeRequirement(
       _ => named
     })
   }
-  const joined = parts.joined(separator: ", ")
-  const returns = describeType(checker.types, checker.symbols, form.result)
+  const joined = parts.joined separator: ", "
+  const returns = describeType checker.types, checker.symbols, form.result
   if returns == "Void" {
     return "fn {name}({joined})"
   }

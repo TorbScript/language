@@ -19,7 +19,7 @@ fn problemsIn(files: Map<String, String>): List<String> {
   var found: List<String> = []
   for file in check(workspaceWith(files), ["app"]).files {
     for diagnostic in file.diagnostics {
-      found.add(diagnostic.message)
+      found.add diagnostic.message
     }
   }
   found
@@ -36,13 +36,13 @@ group "What an implementation has to provide" {
     const source = "trait Shape \{\n  fn area(self): Int\n\n  fn describe(self): String \{\n    \"shape\"\n  \}\n\n"
       + "  fn sorted<Key: Compare>(self, by: Key): Int where Key: Show \{\n    0\n  \}\n\}\n\n"
       + "type Square with Shape \{\n  fn area(self): Int \{\n    1\n  \}\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a member an `extend` of the type provides counts, wherever it is written" {
     const source = "trait Shape \{\n  fn area(self): Int\n\}\n\ntype Square with Shape \{\n  side: Int\n\}\n\n"
       + "extend Square \{\n  fn area(self): Int \{\n    side * side\n  \}\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a signature that does not match the trait is a mistake" {
@@ -68,7 +68,7 @@ group "What an implementation has to provide" {
     const source = "trait Named \{\n  fn name(self): String\n\}\n\n"
       + "trait Shape with Named \{\n  fn area(self): Int\n\n  fn name(self): String \{\n    \"shape\"\n  \}\n\}\n\n"
       + "type Square with Shape \{\n  fn area(self): Int \{\n    1\n  \}\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a `native` type provides the members of its traits through the runtime (gap 22)" {
@@ -77,13 +77,13 @@ group "What an implementation has to provide" {
       "std/graphics/project.trb": "name \"std/graphics\"\n",
       "std/graphics/src/lib.trb": "trait Shape \{\n  fn area(self): Int\n\}\n\npublic native type Pixel with Shape \{\}\n",
     ]
-    assert(problemsAt(files, ["std/graphics"]).isEmpty())
+    assert problemsAt(files, ["std/graphics"]).isEmpty()
   }
 
   test "a trait as the target of an implementation asks nothing of the trait itself" {
     const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
       + "extend Shape with Show \{\n  fn show(self): String \{\n    \"shape\"\n  \}\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 }
 
@@ -103,14 +103,14 @@ group "Coherence" {
   test "owning either side is enough" {
     const own = "trait Loud \{\n  fn shout(self): String\n\}\n\n"
       + "extend String with Loud \{\n  fn shout(self): String \{\n    self\n  \}\n\}"
-    assert(problems(own).isEmpty())
+    assert problems(own).isEmpty()
     const other = "type Amount \{\n  value: Int\n\}\n\n"
       + "extend Amount with Show \{\n  fn show(self): String \{\n    \"amount\"\n  \}\n\}"
-    assert(problems(other).isEmpty())
+    assert problems(other).isEmpty()
   }
 
   test "an `extend` without a trait has no orphan rule: it only adds members" {
-    assert(problems("extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}").isEmpty())
+    assert problems("extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}").isEmpty()
   }
 
   test "two implementations of one trait for one type overlap" {
@@ -128,7 +128,7 @@ group "Coherence" {
     const source = "type Wide \{\n  value: Int\n\}\n\n"
       + "extend Wide with From<Int8> \{\n  fn from(value: Int8): Wide \{\n    Wide(1)\n  \}\n\}\n\n"
       + "extend Wide with From<UInt8> \{\n  fn from(value: UInt8): Wide \{\n    Wide(2)\n  \}\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a blanket implementation covers every type, so it needs the trait" {
@@ -141,8 +141,8 @@ group "Delegation with `by`" {
   test "`by field` forwards every required member, and the default members come from the trait (gap 14)" {
     const source = "type Meters with Add<Meters, Meters> & Compare by value \{\n  value: Float\n\}\n\n"
       + inBody("  const sum = Meters(1.0) + Meters(2.0)\n  const longer = Meters(1.0).max(Meters(2.0))")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("Meters(1.0) + Meters(2.0)") == "Meters")
     assert(found.typeOf("Meters(1.0).max(Meters(2.0))") == "Meters")
   }
@@ -150,14 +150,14 @@ group "Delegation with `by`" {
   test "a required member that is forwarded records the field it goes through" {
     const source = "type Meters with Add<Meters, Meters> by value \{\n  value: Float\n\}\n\n"
       + inBody("  const sum = Meters(1.0) + Meters(2.0)")
-    const found = probe(source)
+    const found = probe source
     assert(found.adaptationsOf("Meters(1.0) + Meters(2.0)") == ["delegate value"])
   }
 
   test "a default member is not forwarded: it comes from the trait, over the delegated ones" {
     const source = "type Meters with Compare by value \{\n  value: Float\n\}\n\n"
       + inBody("  const same = Meters(1.0).max(Meters(2.0))")
-    const found = probe(source)
+    const found = probe source
     assert(found.adaptationsOf("Meters(1.0).max") == [])
   }
 
@@ -177,8 +177,8 @@ group "Delegation with `by`" {
           + "  const longer = Seconds(1).max(Seconds(2))\n"
           + "  const named = Seconds(1).name()"
       )
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("Seconds(1) + Seconds(2)") == "Seconds")
     assert(found.typeOf("Seconds(3) - Seconds(1)") == "Seconds")
     assert(found.adaptationsOf("Seconds(1) + Seconds(2)") == ["delegate value"])
@@ -211,8 +211,8 @@ group "Derived implementations" {
   test "`Show` is generated for a type all of whose fields have it" {
     const source = "type Amount \{\n  value: Int\n  label: String\n\}\n\n"
       + inBody("  const shown = \"\{Amount(1, \"a\")\}\"")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.adaptationsOf("Amount(1, \"a\")") == ["show through Amount: Show"])
   }
 
@@ -221,14 +221,14 @@ group "Derived implementations" {
       + "fn describe(value: Show): String \{\n  value.show()\n\}\n\n"
       + inBody("  print describe(Holder(Opaque(1)))")
     // `Opaque` is `Show` itself by derivation, so `Holder` is too - a field without it is what would stop this
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a hand-written member wins over the derived one, per member" {
     const source = "type Amount with Show \{\n  value: Int\n\n"
       + "  fn show(self): String \{\n    \"amount\"\n  \}\n\}\n\n"
       + inBody("  const shown = \"\{Amount(1)\}\"")
-    const found = probe(source)
+    const found = probe source
     assert(found.adaptationsOf("Amount(1)") == ["show through Amount: Show"])
     assert(found.dispatchOf("Amount(1)") == "none")
   }
@@ -237,7 +237,7 @@ group "Derived implementations" {
     const source = "type Amount \{\n  value: Int\n\}\n\n"
       + "fn hashed(value: Hash): Int \{\n  value.hash()\n\}\n\n"
       + inBody("  print hashed(Amount(1))")
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
     const identity = "public shared type Counter \{\n  var value: Int = 0\n\}\n\n"
       + "fn hashed(value: Hash): Int \{\n  value.hash()\n\}\n\n"
       + inBody("  print hashed(Counter())")
@@ -248,7 +248,7 @@ group "Derived implementations" {
     const source = "type IoError \{\n  path: String\n\}\n\ntype AppError \{\n  case Io(error: IoError)\n"
       + "  case Other(message: String)\n\}\n\n"
       + "fn wrap(value: From<IoError>): Int \{\n  0\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 }
 
@@ -260,7 +260,7 @@ group "The visibility of an `extend`" {
         + "public type Amount \{\n  value: Int\n\}",
       "app/src/main.trb": "use Amount from \"./text\"\n\nfn probe() \{\n  print Amount(1).doubled()\n\}",
     ]
-    assert(problemsIn(files).isEmpty())
+    assert problemsIn(files).isEmpty()
   }
 
   test "an extension of a foreign type only reaches the files that import its module" {
@@ -275,7 +275,7 @@ group "The visibility of an `extend`" {
       "app/src/text.trb": "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
       "app/src/main.trb": "use \"./text\"\n\nfn probe() \{\n  print \"a\".shout()\n\}",
     ]
-    assert(problemsIn(imported).isEmpty())
+    assert problemsIn(imported).isEmpty()
   }
 
   test "two imported extensions that bring the same member for the same type are an ambiguity at the use" {

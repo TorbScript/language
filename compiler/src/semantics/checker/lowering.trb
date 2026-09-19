@@ -24,10 +24,10 @@ use substitute from "./unify"
  * milestone 5 reads instead of looking at a name a second time.
  */
 public fn typeFromReference(var checker: Checker, reference: TypeReference, scope: TypeScope): TypeId {
-  var built = buildType(checker, reference, scope)
-  built = checkValueOrType(checker, built, reference, scope)
+  var built = buildType checker, reference, scope
+  built = checkValueOrType checker, built, reference, scope
   if scope.records {
-    checker.recordType(scope.module, reference.span, built)
+    checker.recordType scope.module, reference.span, built
   }
   built
 }
@@ -38,13 +38,13 @@ public fn typeFromReference(var checker: Checker, reference: TypeReference, scop
  * on `Meters` means `Add<Meters, Meters>`.
  */
 public fn traitsFromReference(var checker: Checker, reference: TypeReference, of: TypeId, scope: TypeScope): List<TypeId> {
-  const built = typeFromReference(checker, reference, scope.forBound(of))
+  const built = typeFromReference checker, reference, scope.forBound(of)
   match checker.types.form(built) {
     .Traits(bounds) => bounds
     // Already reported where the name did not resolve
     .Invalid => []
     _ => {
-      const shown = checker.describe(built)
+      const shown = checker.describe built
       checker.report(
         scope.module,
         Diagnostic.error("`{shown}` is a type, not a trait", reference.span)
@@ -57,35 +57,35 @@ public fn traitsFromReference(var checker: Checker, reference: TypeReference, of
 
 fn buildType(var checker: Checker, reference: TypeReference, scope: TypeScope): TypeId {
   match reference.kind {
-    .Named(path, arguments) => namedType(checker, reference, path, arguments, scope)
+    .Named(path, arguments) => namedType checker, reference, path, arguments, scope
     .Optional(inner) => {
-      const value = typeFromReference(checker, inner, scope.forType())
+      const value = typeFromReference checker, inner, scope.forType()
       match checker.wellKnown.option {
-        Some(option) => checker.nominal(option, [value])
+        Some(option) => checker.nominal option, [value]
         // Without an `Option` in the standard library there is no `Item?`; the missing prelude was reported already
-        .None => checker.invalidType
+        None => checker.invalidType
       }
     }
     .TupleType(fields) => {
       var built: List<TupleField> = []
       for field in fields {
         const label = match field.label {
-          Some(name) => Some(name.text)
-          .None => None
+          Some(name) => Some name.text
+          None => None
         }
-        built.add(TupleField(label, typeFromReference(checker, field.annotation, scope.forType())))
+        built.add TupleField(label, typeFromReference(checker, field.annotation, scope.forType()))
       }
-      checker.types.intern(TypeForm.Tuple(built))
+      checker.types.intern TypeForm.Tuple(built)
     }
-    .Literals(values) => literalType(checker, reference, values, scope)
-    .Intersection(members) => intersectionType(checker, reference, members, scope)
+    .Literals(values) => literalType checker, reference, values, scope
+    .Intersection(members) => intersectionType checker, reference, members, scope
     .FunctionType(parameters, result) => {
       var built: List<ParameterForm> = []
       for parameter in parameters {
-        built.add(functionTypeParameter(checker, parameter, scope))
+        built.add functionTypeParameter(checker, parameter, scope)
       }
-      const returns = typeFromReference(checker, result, scope.forType())
-      checker.types.intern(TypeForm.Function(FunctionForm(built, returns)))
+      const returns = typeFromReference checker, result, scope.forType()
+      checker.types.intern TypeForm.Function(FunctionForm(built, returns))
     }
     .Lazy(inner) => {
       checker.report(
@@ -93,7 +93,7 @@ fn buildType(var checker: Checker, reference: TypeReference, scope: TypeScope): 
         Diagnostic.error("`lazy` is only the type of a parameter", reference.span)
           .withNote("A `lazy` argument is an expression the function evaluates at most once, so only a parameter asks for one")
       )
-      typeFromReference(checker, inner, scope.forType())
+      typeFromReference checker, inner, scope.forType()
     }
     // A broken type reference was reported by the parser
     .Invalid => checker.invalidType
@@ -116,51 +116,51 @@ fn namedType(
   if path.length() == 1 && last.text == "Self" {
     // "`Self` is only available inside of a type, a trait or an `extend`" was reported by milestone 3
     const own = scope.selfType ?? invalid
-    return withoutArguments(checker, own, arguments, scope)
+    return withoutArguments checker, own, arguments, scope
   }
   const symbol = match checker.resolvedName(scope.module, last.span) {
     Some(found) => found
     // The name itself did not resolve, which milestone 3 reported
-    .None => {
-      return withoutArguments(checker, invalid, arguments, scope)
+    None => {
+      return withoutArguments checker, invalid, arguments, scope
     }
   }
   if checker.wellKnown.isVoid(symbol) {
     const voidType = checker.voidType
-    return withoutArguments(checker, voidType, arguments, scope)
+    return withoutArguments checker, voidType, arguments, scope
   }
   if checker.wellKnown.isNever(symbol) {
     const never = checker.neverType
-    return withoutArguments(checker, never, arguments, scope)
+    return withoutArguments checker, never, arguments, scope
   }
   match checker.symbolAt(symbol).kind {
     .Type => {
-      const built = typeArguments(checker, symbol, arguments, reference.span, scope)
-      checker.nominal(symbol, built)
+      const built = typeArguments checker, symbol, arguments, reference.span, scope
+      checker.nominal symbol, built
     }
     .Trait => {
-      const built = typeArguments(checker, symbol, arguments, reference.span, scope)
-      const bound = checker.nominal(symbol, built)
-      checker.types.intern(TypeForm.Traits([bound]))
+      const built = typeArguments checker, symbol, arguments, reference.span, scope
+      const bound = checker.nominal symbol, built
+      checker.types.intern TypeForm.Traits([bound])
     }
-    .Alias => aliasType(checker, symbol, reference, arguments, scope)
-    .GenericParameter => parameterType(checker, symbol, reference, arguments, scope)
+    .Alias => aliasType checker, symbol, reference, arguments, scope
+    .GenericParameter => parameterType checker, symbol, reference, arguments, scope
     .Constant => {
-      const built = constantArgument(checker, symbol, reference, scope)
-      withoutArguments(checker, built, arguments, scope)
+      const built = constantArgument checker, symbol, reference, scope
+      withoutArguments checker, built, arguments, scope
     }
     // A case, a function, a module and a field: every one of them reported by milestone 3
-    _ => withoutArguments(checker, invalid, arguments, scope)
+    _ => withoutArguments checker, invalid, arguments, scope
   }
 }
 
 /** A type that takes no arguments. The arguments are still built, so what is wrong inside of them is found. */
 fn withoutArguments(var checker: Checker, built: TypeId, arguments: List<TypeReference>, scope: TypeScope): TypeId {
   for argument in arguments {
-    const _ = typeFromReference(checker, argument, scope.forType())
+    const _ = typeFromReference checker, argument, scope.forType()
   }
   if !arguments.isEmpty() && built != checker.invalidType {
-    const shown = checker.describe(built)
+    const shown = checker.describe built
     checker.report(
       scope.module,
       Diagnostic.error("`{shown}` takes no type arguments", arguments[0].span)
@@ -180,36 +180,36 @@ fn typeArguments(
   at: Span,
   scope: TypeScope,
 ): List<TypeId> {
-  const generics = genericsOf(checker, symbol)
+  const generics = genericsOf checker, symbol
   var built: List<TypeId> = []
   for index in 0..arguments.length() {
     const isConstant = index < generics.length() && checker.types.parameter(generics[index]).isConst
     const inner = if isConstant { scope.forConstant() } else { scope.forType() }
-    const lowered = typeFromReference(checker, arguments[index], inner)
+    const lowered = typeFromReference checker, arguments[index], inner
     if index < generics.length() {
-      built.add(lowered)
+      built.add lowered
     }
   }
   if arguments.length() > generics.length() {
-    reportArity(checker, symbol, generics.length(), arguments.length(), at, scope)
+    reportArity checker, symbol, generics.length(), arguments.length(), at, scope
     return built
   }
   var isMissing = false
   for index in arguments.length()..generics.length() {
-    const declaration = checker.types.parameter(generics[index])
+    const declaration = checker.types.parameter generics[index]
     match declaration.default {
       Some(default) => {
-        const filled = defaultArgument(checker, generics, built, default, declaration, at, scope)
-        built.add(filled)
+        const filled = defaultArgument checker, generics, built, default, declaration, at, scope
+        built.add filled
       }
-      .None => {
+      None => {
         isMissing = true
-        built.add(checker.invalidType)
+        built.add checker.invalidType
       }
     }
   }
   if isMissing {
-    reportArity(checker, symbol, generics.length(), arguments.length(), at, scope)
+    reportArity checker, symbol, generics.length(), arguments.length(), at, scope
   }
   built
 }
@@ -238,25 +238,25 @@ fn defaultArgument(
   var isOutside = false
   if own.isNone() {
     if const Some(owner) = declaration.owner {
-      own = Some(selfTypeOf(checker, owner))
+      own = Some selfTypeOf(checker, owner)
       isOutside = true
     }
   }
-  const inner = TypeScope(declaration.module, selfType: own, records: false)
-  const lowered = typeFromReference(checker, default, inner)
+  const inner = TypeScope declaration.module, selfType: own, records: false
+  const lowered = typeFromReference checker, default, inner
   if isOutside {
     if const Some(missing) = own {
       if mentionsParameter(checker, lowered, missing) {
-        reportMissingSelf(checker, declaration, at, scope)
+        reportMissingSelf checker, declaration, at, scope
         return checker.invalidType
       }
     }
   }
   var mapping: Map<ParameterId, TypeId> = [:]
   for index in 0..known.length() {
-    mapping.set(generics[index], known[index])
+    mapping.set generics[index], known[index]
   }
-  substitute(checker.types, lowered, mapping)
+  substitute checker.types, lowered, mapping
 }
 
 /** Whether a type mentions one particular parameter - here: the `Self` of the trait whose default this is. */
@@ -265,8 +265,8 @@ fn mentionsParameter(checker: Checker, annotation: TypeId, parameter: TypeId): B
     return true
   }
   match checker.types.form(annotation) {
-    .Nominal(_, arguments) => mentionsAny(checker, arguments, parameter)
-    .Traits(bounds) => mentionsAny(checker, bounds, parameter)
+    .Nominal(_, arguments) => mentionsAny checker, arguments, parameter
+    .Traits(bounds) => mentionsAny checker, bounds, parameter
     .Tuple(fields) => {
       for field in fields {
         if mentionsParameter(checker, field.annotation, parameter) {
@@ -281,7 +281,7 @@ fn mentionsParameter(checker: Checker, annotation: TypeId, parameter: TypeId): B
           return true
         }
       }
-      mentionsParameter(checker, form.result, parameter)
+      mentionsParameter checker, form.result, parameter
     }
     _ => false
   }
@@ -299,7 +299,7 @@ fn mentionsAny(checker: Checker, arguments: List<TypeId>, parameter: TypeId): Bo
 fn reportMissingSelf(var checker: Checker, declaration: ParameterDeclaration, at: Span, scope: TypeScope) {
   const owner = match declaration.owner {
     Some(symbol) => checker.symbolAt(symbol).name
-    .None => "This trait"
+    None => "This trait"
   }
   const position = if declaration.index == 0 {
     "first"
@@ -336,7 +336,7 @@ fn reportArity(var checker: Checker, symbol: SymbolId, expected: Int, given: Int
   } else {
     "{given} were given"
   }
-  checker.report(scope.module, Diagnostic.error("`{name}` takes {wanted}, {was}", at))
+  checker.report scope.module, Diagnostic.error("`{name}` takes {wanted}, {was}", at)
 }
 
 /** `Item`, `Key`, `const Size`: a name that stands for whatever the user of the declaration puts there. */
@@ -351,13 +351,13 @@ fn parameterType(
   const identifier = match checker.types.parameterOf(symbol) {
     Some(found) => found
     // A parameter of a declaration whose signature nobody has asked for yet: it is still that parameter
-    .None => checker.types.declareParameter(
+    None => checker.types.declareParameter(
       ParameterDeclaration(name, Some(symbol), None, false, 0, None, scope.module)
     )
   }
-  const built = checker.types.intern(TypeForm.Parameter(identifier))
+  const built = checker.types.intern TypeForm.Parameter(identifier)
   for argument in arguments {
-    const _ = typeFromReference(checker, argument, scope.forType())
+    const _ = typeFromReference checker, argument, scope.forType()
   }
   if !arguments.isEmpty() {
     checker.report(
@@ -382,10 +382,10 @@ fn constantArgument(var checker: Checker, symbol: SymbolId, reference: TypeRefer
   }
   match constantLiteral(checker, symbol) {
     Some(value) => {
-      const base = baseOfLiteral(checker, value)
-      checker.types.intern(TypeForm.Constant(value, base))
+      const base = baseOfLiteral checker, value
+      checker.types.intern TypeForm.Constant(value, base)
     }
-    .None => {
+    None => {
       checker.report(
         scope.module,
         Diagnostic.error("The const argument `{name}` has to be a literal", reference.span)
@@ -399,16 +399,16 @@ fn constantArgument(var checker: Checker, symbol: SymbolId, reference: TypeRefer
 fn constantLiteral(checker: Checker, symbol: SymbolId): LiteralValue? {
   const site = checker.siteOf(symbol)?
   match site.kind {
-    .Constant(binding) => literalOf(binding.value)
+    .Constant(binding) => literalOf binding.value
     .Declared(declaration) => {
       if const .Constant(binding) = declaration.kind {
-        return literalOf(binding.value)
+        return literalOf binding.value
       }
       None
     }
     .Owned(_, _, member) => {
       if const .Constant(binding) = member.kind {
-        return literalOf(binding.value)
+        return literalOf binding.value
       }
       None
     }
@@ -420,8 +420,8 @@ fn literalType(var checker: Checker, reference: TypeReference, values: List<Expr
   var literals: List<LiteralValue> = []
   for value in values {
     match literalOf(value) {
-      Some(literal) => literals.add(literal)
-      .None => {
+      Some(literal) => literals.add literal
+      None => {
         checker.report(
           scope.module,
           Diagnostic.error("A literal type is built from `String`, `Int` and `Char` literals", value.span)
@@ -431,17 +431,17 @@ fn literalType(var checker: Checker, reference: TypeReference, values: List<Expr
   }
   const first = match literals.first() {
     Some(found) => found
-    .None => {
+    None => {
       return checker.invalidType
     }
   }
-  const base = baseOfLiteral(checker, first)
+  const base = baseOfLiteral checker, first
   var members: List<LiteralValue> = []
   for literal in literals {
-    const other = baseOfLiteral(checker, literal)
+    const other = baseOfLiteral checker, literal
     if other != base {
-      const first = checker.describe(base)
-      const second = checker.describe(other)
+      const first = checker.describe base
+      const second = checker.describe other
       checker.report(
         scope.module,
         Diagnostic.error("The members of a literal type have to be literals of one type", reference.span)
@@ -449,16 +449,16 @@ fn literalType(var checker: Checker, reference: TypeReference, values: List<Expr
       )
       continue
     }
-    members.add(literal)
+    members.add literal
   }
   if scope.takesConstant() && members.length() == 1 {
-    return checker.types.intern(TypeForm.Constant(members[0], base))
+    return checker.types.intern TypeForm.Constant(members[0], base)
   }
   if scope.position == TypePosition.Constant {
-    checker.report(scope.module, Diagnostic.error("A const argument is one value, not a literal type", reference.span))
+    checker.report scope.module, Diagnostic.error("A const argument is one value, not a literal type", reference.span)
     return checker.invalidType
   }
-  checker.types.intern(TypeForm.Literals(base, sortedLiterals(members)))
+  checker.types.intern TypeForm.Literals(base, sortedLiterals(members))
 }
 
 /** The type a literal has on its own: that is the base of every literal type it can be a member of. */
@@ -470,8 +470,8 @@ fn baseOfLiteral(var checker: Checker, value: LiteralValue): TypeId {
     .Boolean(_) => checker.wellKnown.boolean
   }
   match symbol {
-    Some(found) => checker.nominal(found, [])
-    .None => checker.invalidType
+    Some(found) => checker.nominal found, []
+    None => checker.invalidType
   }
 }
 
@@ -480,7 +480,7 @@ fn sortedLiterals(values: List<LiteralValue>): List<LiteralValue> {
   var unique: List<LiteralValue> = []
   for value in values {
     if !unique.contains(value) {
-      unique.add(value)
+      unique.add value
     }
   }
   unique.sort({ (integerOfLiteral(_), textOfLiteral(_)) })
@@ -506,22 +506,22 @@ fn textOfLiteral(value: LiteralValue): String {
 /** What an expression in a type position or in a pattern is worth: a literal, or nothing at all. */
 public fn literalOf(expression: Expression): LiteralValue? {
   match expression.kind {
-    .IntegerLiteral(text) => integerLiteral(text, false)
-    .CharLiteral(value) => Some(LiteralValue.Character(value))
-    .BoolLiteral(value) => Some(LiteralValue.Boolean(value))
+    .IntegerLiteral(text) => integerLiteral text, false
+    .CharLiteral(value) => Some LiteralValue.Character(value)
+    .BoolLiteral(value) => Some LiteralValue.Boolean(value)
     .TextLiteral(segments) => {
       if segments.isEmpty() {
-        return Some(LiteralValue.Text(""))
+        return Some LiteralValue.Text("")
       }
       if const [.Literal(text)] = segments {
-        return Some(LiteralValue.Text(text))
+        return Some LiteralValue.Text(text)
       }
       None
     }
     .Unary(operator, operand) => {
       if const .Negate = operator {
         if const .IntegerLiteral(text) = operand.kind {
-          return integerLiteral(text, true)
+          return integerLiteral text, true
         }
       }
       None
@@ -533,15 +533,15 @@ public fn literalOf(expression: Expression): LiteralValue? {
 /** The lexer keeps `0x` and `0b` in the text and the parser removed the `_`, so this is the only place that reads it. */
 public fn integerLiteral(text: String, isNegative: Bool): LiteralValue? {
   const parsed = if text.startsWith("0x") {
-    Int.parseDigits(text[2..text.byteLength()], radix: 16)
+    Int.parseDigits text[2..text.byteLength()], radix: 16
   } else if text.startsWith("0b") {
-    Int.parseDigits(text[2..text.byteLength()], radix: 2)
+    Int.parseDigits text[2..text.byteLength()], radix: 2
   } else {
-    Int.parse(text)
+    Int.parse text
   }
   match parsed.ok() {
     Some(value) => Some(LiteralValue.Integer(if isNegative { 0 - value } else { value }))
-    .None => None
+    None => None
   }
 }
 
@@ -556,18 +556,18 @@ fn intersectionType(
   for member in members {
     // Keep `scope.subject`: an `&` group in a bound position (`with Add & Subtract`, gap 14) fills each member's
     // defaulted `Self` from the same subject the group itself was asked of, exactly as a lone trait would.
-    const built = typeFromReference(checker, member, scope.copy(position: TypePosition.Type))
+    const built = typeFromReference checker, member, scope.copy(position: TypePosition.Type)
     match checker.types.form(built) {
       .Traits(inner) => {
         for bound in inner {
           if !bounds.contains(bound) {
-            bounds.add(bound)
+            bounds.add bound
           }
         }
       }
       .Invalid => {}
       _ => {
-        const shown = checker.describe(built)
+        const shown = checker.describe built
         checker.report(
           scope.module,
           Diagnostic.error("`{shown}` is a type, not a trait", member.span)
@@ -579,8 +579,8 @@ fn intersectionType(
   if bounds.isEmpty() {
     return checker.invalidType
   }
-  const sorted = sortedBounds(checker, bounds)
-  checker.types.intern(TypeForm.Traits(sorted))
+  const sorted = sortedBounds checker, bounds
+  checker.types.intern TypeForm.Traits(sorted)
 }
 
 /** `Show & Encode` and `Encode & Show` are one type, so the bounds are sorted by the trait they name. */
@@ -615,7 +615,7 @@ fn checkValueOrType(var checker: Checker, built: TypeId, reference: TypeReferenc
     if scope.takesConstant() {
       return built
     }
-    const named = checker.describe(built)
+    const named = checker.describe built
     checker.report(
       scope.module,
       Diagnostic.error("`{named}` is a const parameter, and a type belongs here", reference.span)
@@ -626,7 +626,7 @@ fn checkValueOrType(var checker: Checker, built: TypeId, reference: TypeReferenc
   if scope.takesType() {
     return built
   }
-  const shown = checker.describe(built)
+  const shown = checker.describe built
   checker.report(
     scope.module,
     Diagnostic.error("`{shown}` is a type, and a value belongs here", reference.span)
@@ -643,32 +643,32 @@ fn aliasType(
   arguments: List<TypeReference>,
   scope: TypeScope,
 ): TypeId {
-  const built = typeArguments(checker, symbol, arguments, reference.span, scope)
-  const target = aliasTargetOf(checker, symbol)
-  const generics = genericsOf(checker, symbol)
+  const built = typeArguments checker, symbol, arguments, reference.span, scope
+  const target = aliasTargetOf checker, symbol
+  const generics = genericsOf checker, symbol
   var mapping: Map<ParameterId, TypeId> = [:]
   for index in 0..generics.length().min(built.length()) {
-    mapping.set(generics[index], built[index])
+    mapping.set generics[index], built[index]
   }
-  substitute(checker.types, target, mapping)
+  substitute checker.types, target, mapping
 }
 
 fn functionTypeParameter(var checker: Checker, parameter: FunctionTypeParameter, scope: TypeScope): ParameterForm {
   var name: String? = None
   if const Some(found) = parameter.name {
-    name = Some(found.text)
+    name = Some found.text
   }
   var mode = if parameter.isVar { ParameterMode.Var } else { ParameterMode.Value }
   if name == Some("self") {
-    mode = ParameterMode.Receiver(parameter.isVar)
+    mode = ParameterMode.Receiver parameter.isVar
   }
   var annotation = checker.invalidType
   if const .Lazy(inner) = parameter.annotation.kind {
     mode = ParameterMode.Lazy
-    annotation = typeFromReference(checker, inner, scope.forType())
-    checker.recordType(scope.module, parameter.annotation.span, annotation)
+    annotation = typeFromReference checker, inner, scope.forType()
+    checker.recordType scope.module, parameter.annotation.span, annotation
   } else {
-    annotation = typeFromReference(checker, parameter.annotation, scope.forType())
+    annotation = typeFromReference checker, parameter.annotation, scope.forType()
   }
-  ParameterForm(name, mode, annotation)
+  ParameterForm name, mode, annotation
 }

@@ -38,47 +38,47 @@ use generatedFunctionOf from "./lower/derive"
  */
 public fn witnessTableOf(var lowering: Lowering, subject: TypeId, bound: TypeId, at: Span): WitnessTableId? {
   if !isClosedType(lowering, subject) || !isClosedType(lowering, bound) {
-    reportUnsupported(lowering, "a witness table of a type the call site did not decide", at)
+    reportUnsupported lowering, "a witness table of a type the call site did not decide", at
     return None
   }
-  const applied = traitIdOf(lowering, bound)
-  const target = irTypeOfClosed(lowering, subject)
-  const name = witnessTableName(lowering.program, applied, target)
+  const applied = traitIdOf lowering, bound
+  const target = irTypeOfClosed lowering, subject
+  const name = witnessTableName lowering.program, applied, target
   if const Some(found) = lowering.program.witnessTableNamed(name) {
-    return Some(found)
+    return Some found
   }
   if lowering.buildingTables.containsKey(name) {
-    reportUnsupported(lowering, "a witness table that needs itself", at)
+    reportUnsupported lowering, "a witness table that needs itself", at
     return None
   }
   const implementation = match witnessFor(lowering.checker, subject, bound) {
     .Implementation(found, _, _) => found
     .Object(_, _) => {
-      reportUnsupported(lowering, "a static witness table of a trait-typed value", at)
+      reportUnsupported lowering, "a static witness table of a trait-typed value", at
       return None
     }
     _ => {
-      const shown = lowering.checker.describe(bound)
-      reportUnsupported(lowering, "a witness for `{shown}` the checker did not resolve", at)
+      const shown = lowering.checker.describe bound
+      reportUnsupported lowering, "a witness for `{shown}` the checker did not resolve", at
       return None
     }
   }
-  lowering.buildingTables.set(name, true)
-  const members = membersOfTable(lowering, subject, bound, implementation, at)
-  const _ = lowering.buildingTables.remove(name)
+  lowering.buildingTables.set name, true
+  const members = membersOfTable lowering, subject, bound, implementation, at
+  const _ = lowering.buildingTables.remove name
   const found = match members {
     Some(inner) => inner
-    .None => {
+    None => {
       return None
     }
   }
   const empty: List<WitnessTableId> = []
-  Some(lowering.program.addWitnessTable(WitnessTable(name, applied, target, found, empty)))
+  Some lowering.program.addWitnessTable(WitnessTable(name, applied, target, found, empty))
 }
 
 /** `Show`, `Iterable<Int64>`: one bound, interned, so that a name is a function of the trait and its arguments. */
 public fn traitIdOf(var lowering: Lowering, bound: TypeId): TraitId {
-  instantiateTrait(lowering.program, lowering.checker, lowering.instantiation, bound)
+  instantiateTrait lowering.program, lowering.checker, lowering.instantiation, bound
 }
 
 fn membersOfTable(
@@ -91,9 +91,9 @@ fn membersOfTable(
   var found: List<FunctionId> = []
   for member in tableMembersOf(lowering, bound, subject) {
     const built = memberFunctionOf(lowering, subject, member.bound, implementation, member.member, at)?
-    found.add(built)
+    found.add built
   }
-  Some(found)
+  Some found
 }
 
 /**
@@ -111,20 +111,20 @@ public fn memberFunctionOf(
 ): FunctionId? {
   const name = lowering.checker.symbolAt(member).name
   const provider = memberOfImplementation(lowering.checker, implementation, name) ?? member
-  const mapping = memberMappingOf(lowering, provider, subject, bound)
-  const identifier = signatureOf(lowering.checker, provider)
-  const signature = lowering.checker.signature(identifier)
+  const mapping = memberMappingOf lowering, provider, subject, bound
+  const identifier = signatureOf lowering.checker, provider
+  const signature = lowering.checker.signature identifier
   if signature.hasBody {
-    const built = instanceFor(lowering, provider, mapping)
+    const built = instanceFor lowering, provider, mapping
     if built.isNone() {
-      reportUnsupported(lowering, "`{name}`, a member the back end cannot build an instance of", at)
+      reportUnsupported lowering, "`{name}`, a member the back end cannot build an instance of", at
     }
     return built
   }
   // No body anywhere: the manifest says what the runtime provides, everything else is generated from the layout
-  const owner = manifestOwnerOf(lowering, subject, provider)
+  const owner = manifestOwnerOf lowering, subject, provider
   const kind = generatedKindOf(lowering, provider, owner, implementation, at)?
-  generatedFunctionOf(lowering, kind, provider, subject, bound, mapping, at)
+  generatedFunctionOf lowering, kind, provider, subject, bound, mapping, at
 }
 
 /**
@@ -136,7 +136,7 @@ public fn manifestOwnerOf(var lowering: Lowering, subject: TypeId, member: Symbo
   if const .Nominal(symbol, _) = lowering.checker.types.form(subject) {
     return lowering.checker.symbolAt(symbol).name
   }
-  ownerNameOf(lowering, member)
+  ownerNameOf lowering, member
 }
 
 /**
@@ -154,21 +154,21 @@ public fn memberOfType(
   const implementation = match witnessFor(lowering.checker, subject, bound) {
     .Implementation(found, _, _) => found
     _ => {
-      const given = lowering.checker.describe(subject)
-      const wanted = lowering.checker.describe(bound)
-      reportUnsupported(lowering, "`{given}` as a `{wanted}`, which the checker did not resolve", at)
+      const given = lowering.checker.describe subject
+      const wanted = lowering.checker.describe bound
+      reportUnsupported lowering, "`{given}` as a `{wanted}`, which the checker did not resolve", at
       return None
     }
   }
-  const declared = memberOfImplementation(lowering.checker, implementation, name)
+  const declared = memberOfImplementation lowering.checker, implementation, name
   const member = match declared {
     Some(found) => found
-    .None => {
+    None => {
       const found = traitMemberNamed(lowering, bound, name)?
       found
     }
   }
-  memberFunctionOf(lowering, subject, bound, implementation, member, at)
+  memberFunctionOf lowering, subject, bound, implementation, member, at
 }
 
 /**
@@ -185,66 +185,66 @@ public fn generatedKindOf(
   const name = lowering.checker.symbolAt(member).name
   if const Some(entry) = nativeNamed(lowering, owner, name) {
     if const .Planned(milestone) = entry.state {
-      reportUnsupported(lowering, "`{entry.name}`, which the runtime provides from milestone {milestone} on", at)
+      reportUnsupported lowering, "`{entry.name}`, which the runtime provides from milestone {milestone} on", at
       return None
     }
     match entry.target {
       .Intrinsic(intrinsic) => {
-        return Some(Generated.Operation(intrinsic))
+        return Some Generated.Operation(intrinsic)
       }
       .Runtime(symbol) => {
-        return Some(Generated.RuntimeCall(symbol))
+        return Some Generated.RuntimeCall(symbol)
       }
       .Derived(derived) => {
-        return derivedKindOf(lowering, derived, at)
+        return derivedKindOf lowering, derived, at
       }
     }
   }
-  const found = lowering.checker.implementations.at(implementation)
+  const found = lowering.checker.implementations.at implementation
   if const .Derived = found.origin {
-    return generatedForDerived(lowering, name, at)
+    return generatedForDerived lowering, name, at
   }
   if const .Delegated = found.origin {
-    reportUnsupported(lowering, "`by` delegation", at)
+    reportUnsupported lowering, "`by` delegation", at
     return None
   }
-  reportUnsupported(lowering, "`{name}`, which neither the source nor the natives manifest provides", at)
+  reportUnsupported lowering, "`{name}`, which neither the source nor the natives manifest provides", at
   None
 }
 
 /** The members the language generates for a derived implementation. `Encode` and `Decode` arrive with 5.10. */
 fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generated? {
   if name == "show" {
-    return Some(Generated.Show)
+    return Some Generated.Show
   }
   if name == "showNested" {
-    return Some(Generated.ShowNested)
+    return Some Generated.ShowNested
   }
   if name == "equals" {
-    return Some(Generated.Equals)
+    return Some Generated.Equals
   }
   if name == "hash" {
-    return Some(Generated.Hash)
+    return Some Generated.Hash
   }
   if name == "compare" {
-    return Some(Generated.Compare)
+    return Some Generated.Compare
   }
-  reportUnsupported(lowering, "a derived `{name}` (milestone 5.10)", at)
+  reportUnsupported lowering, "a derived `{name}` (milestone 5.10)", at
   None
 }
 
 /** What the manifest's `.Derived` entry means for the lowering: the same vocabulary, in the lowering's own words. */
 public fn derivedKindOf(var lowering: Lowering, derived: DerivedKind, at: Span): Generated? {
   match derived {
-    .Show => Some(Generated.Show)
-    .ShowNested => Some(Generated.ShowNested)
-    .Equals => Some(Generated.Equals)
-    .Compare => Some(Generated.Compare)
-    .Hash => Some(Generated.Hash)
-    .Absolute => Some(Generated.Absolute)
-    .Identity => Some(Generated.Identity)
+    .Show => Some Generated.Show
+    .ShowNested => Some Generated.ShowNested
+    .Equals => Some Generated.Equals
+    .Compare => Some Generated.Compare
+    .Hash => Some Generated.Hash
+    .Absolute => Some Generated.Absolute
+    .Identity => Some Generated.Identity
     .Copy => {
-      reportUnsupported(lowering, "a derived `copy` of a native type", at)
+      reportUnsupported lowering, "a derived `copy` of a native type", at
       None
     }
   }
@@ -254,14 +254,14 @@ public fn derivedKindOf(var lowering: Lowering, derived: DerivedKind, at: Span):
 public fn ownerNameOf(var lowering: Lowering, member: SymbolId): String {
   const site = match lowering.checker.siteOf(member) {
     Some(found) => found
-    .None => {
+    None => {
       return ""
     }
   }
   if const .Owned(owner, _, _) = site.kind {
     const found = match owner {
       Some(inner) => inner
-      .None => {
+      None => {
         return ""
       }
     }
@@ -282,12 +282,12 @@ public fn memberMappingOf(
   subject: TypeId,
   bound: TypeId,
 ): Map<ParameterId, TypeId> {
-  const identifier = signatureOf(lowering.checker, member)
-  const signature = lowering.checker.signature(identifier)
+  const identifier = signatureOf lowering.checker, member
+  const signature = lowering.checker.signature identifier
   var mapping: Map<ParameterId, TypeId> = [:]
   const owner = match signature.owner {
     Some(found) => found
-    .None => {
+    None => {
       return mapping
     }
   }
@@ -295,13 +295,13 @@ public fn memberMappingOf(
     // A member of the trait itself: `Self` is the target, and the trait's own arguments come out of the trait that
     // *declares* the member for that target - the bound a call resolved may be a subtrait, whose arguments say nothing
     // about this one (`Int64 with Signed` is what provides `Parse<NumberParseError>`)
-    mapping.set(parameter, subject)
-    const applied = appliedArgumentsOf(lowering, parameter, subject, bound)
-    addTraitArguments(lowering, mapping, signature.generics, applied)
+    mapping.set parameter, subject
+    const applied = appliedArgumentsOf lowering, parameter, subject, bound
+    addTraitArguments lowering, mapping, signature.generics, applied
     return mapping
   }
   const generics = signature.generics
-  const _ = matchTypePattern(lowering.checker, owner, subject, generics, mapping)
+  const _ = matchTypePattern lowering.checker, owner, subject, generics, mapping
   mapping
 }
 
@@ -334,7 +334,7 @@ fn addTraitArguments(
   arguments: List<TypeId>,
 ) {
   for index in 0..generics.length().min(arguments.length()) {
-    mapping.set(generics[index], arguments[index])
+    mapping.set generics[index], arguments[index]
   }
 }
 
@@ -362,7 +362,7 @@ public type TableMember {
  */
 public fn tableMembersOf(var lowering: Lowering, bound: TypeId, subject: TypeId): List<TableMember> {
   var found: List<TableMember> = []
-  addTableMembers(lowering, found, bound, subject, 0)
+  addTableMembers lowering, found, bound, subject, 0
   found
 }
 
@@ -392,8 +392,8 @@ fn addTableMembers(
       return
     }
   }
-  const identifier = typeSignatureOf(lowering.checker, symbol)
-  const shape = lowering.checker.typeSignature(identifier)
+  const identifier = typeSignatureOf lowering.checker, symbol
+  const shape = lowering.checker.typeSignature identifier
   // The generic parameters of the trait itself are in scope of every one of its members, so only the ones behind them
   // are the member's own - and a member with its own parameters would need witnesses appended
   const inherited = shape.generics.length()
@@ -404,7 +404,7 @@ fn addTableMembers(
     if !isTableMember(lowering, member, inherited) {
       continue
     }
-    found.add(TableMember(member, bound))
+    found.add TableMember(member, bound)
   }
   for supertrait in supertraitsOfBound(lowering.checker, bound, subject) {
     addTableMembers(lowering, found, supertrait, subject, depth + 1)
@@ -413,8 +413,8 @@ fn addTableMembers(
 
 fn isTableMember(var lowering: Lowering, member: SymbolId, inherited: Int): Bool {
   if const .Function = lowering.checker.symbolAt(member).kind {
-    const identifier = signatureOf(lowering.checker, member)
-    const signature = lowering.checker.signature(identifier)
+    const identifier = signatureOf lowering.checker, member
+    const signature = lowering.checker.signature identifier
     if !signature.takesSelf {
       return false
     }
@@ -427,7 +427,7 @@ fn isTableMember(var lowering: Lowering, member: SymbolId, inherited: Int): Bool
     }
     const owner = match signature.owner {
       Some(found) => found
-      .None => {
+      None => {
         return false
       }
     }
@@ -456,10 +456,10 @@ fn anyParameterMentions(var lowering: Lowering, signature: Signature, parameter:
 fn mentionsSelfElsewhere(var lowering: Lowering, id: TypeId, parameter: ParameterId): Bool {
   match lowering.checker.types.form(id) {
     .Parameter(found) => found == parameter
-    .Nominal(_, arguments) => anyMentions(lowering, arguments, parameter)
-    .Traits(bounds) => anyMentions(lowering, bounds, parameter)
-    .Literals(base, _) => mentionsSelfElsewhere(lowering, base, parameter)
-    .Constant(_, of) => mentionsSelfElsewhere(lowering, of, parameter)
+    .Nominal(_, arguments) => anyMentions lowering, arguments, parameter
+    .Traits(bounds) => anyMentions lowering, bounds, parameter
+    .Literals(base, _) => mentionsSelfElsewhere lowering, base, parameter
+    .Constant(_, of) => mentionsSelfElsewhere lowering, of, parameter
     .Tuple(fields) => {
       for field in fields {
         if mentionsSelfElsewhere(lowering, field.annotation, parameter) {
@@ -474,7 +474,7 @@ fn mentionsSelfElsewhere(var lowering: Lowering, id: TypeId, parameter: Paramete
           return true
         }
       }
-      mentionsSelfElsewhere(lowering, form.result, parameter)
+      mentionsSelfElsewhere lowering, form.result, parameter
     }
     _ => false
   }
@@ -497,9 +497,9 @@ public fn traitMemberNamed(var lowering: Lowering, bound: TypeId, name: String):
       return None
     }
   }
-  const identifier = typeSignatureOf(lowering.checker, symbol)
-  const shape = lowering.checker.typeSignature(identifier)
-  shape.members.get(name)
+  const identifier = typeSignatureOf lowering.checker, symbol
+  const shape = lowering.checker.typeSignature identifier
+  shape.members.get name
 }
 
 /** Where a member of a trait-typed value sits: the table one of its bounds carries, and the slot inside that table. */
@@ -522,11 +522,11 @@ public fn memberInValue(
 ): MemberInValue? {
   const name = lowering.checker.symbolAt(member).name
   for index in 0..bounds.length() {
-    const members = tableMembersOf(lowering, bounds[index], subject)
+    const members = tableMembersOf lowering, bounds[index], subject
     for position in 0..members.length() {
       if lowering.checker.symbolAt(members[position].member).name == name {
         const empty: List<Int> = []
-        return Some(MemberInValue(WitnessSource(WitnessRoot.Value(slot, index), empty), position))
+        return Some MemberInValue(WitnessSource(WitnessRoot.Value(slot, index), empty), position)
       }
     }
   }

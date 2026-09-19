@@ -24,7 +24,7 @@ public trait Map<Key, Value>
 {
   /** `Map.of(("a", 1), ("b", 2))` */
   fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash {
-    TrieMap.from(entries)
+    TrieMap.from entries
   }
 
   // --- In place ------------------------------------------------------------------------------------
@@ -32,11 +32,11 @@ public trait Map<Key, Value>
   fn remove(var self, key: Key): Value?
 
   fn add(var self, entry: (Key, Value)) {
-    set(entry.0, entry.1)
+    set entry.0, entry.1
   }
 
   fn merge(var self, other: Iterable<(Key, Value)>) {
-    addAll(other)
+    addAll other
   }
 
   /** `cache.getOrSet(key) { expensive(key) }` */
@@ -45,7 +45,7 @@ public trait Map<Key, Value>
       return existing
     }
     const value = create()
-    set(key, value)
+    set key, value
     value
   }
 
@@ -54,19 +54,19 @@ public trait Map<Key, Value>
   /** The participle of `set` is `set`, so this one is called `updated`. */
   fn updated(self, key: Key, value: Value): Self {
     var result = self
-    result.set(key, value)
+    result.set key, value
     result
   }
 
   fn removed(self, key: Key): Self {
     var result = self
-    result.remove(key)
+    result.remove key
     result
   }
 
   fn merged(self, other: Iterable<(Key, Value)>): Self {
     var result = self
-    result.merge(other)
+    result.merge other
     result
   }
 
@@ -91,7 +91,7 @@ public trait Map<Key, Value>
 
 extend<Key: Hash, Value> Map<Key, Value> with From<Iterable<(Key, Value)>> {
   fn from(entries: Iterable<(Key, Value)>): Map<Key, Value> {
-    TrieMap.from(entries)
+    TrieMap.from entries
   }
 }
 
@@ -112,7 +112,7 @@ extend<Key, Value: Equals> Map<Key, Value> with Equals {
     length() == other.length() && all { entry =>
       match other.get(entry.0) {
         Some(value) => value == entry.1
-        .None => false
+        None => false
       }
     }
   }
@@ -127,7 +127,7 @@ extend<Key, Value: Equals> Map<Key, Value> with Equals {
  */
 extend<Key: Hash, Value: Hash> Map<Key, Value> with Hash {
   fn hash(self): Int {
-    fold(0) { seed, entry => seed.bitwiseExclusiveOr(combineHashes(entry.0.hash(), entry.1.hash())) }
+    fold 0 { seed, entry => seed.bitwiseExclusiveOr combineHashes(entry.0.hash(), entry.1.hash()) }
   }
 }
 

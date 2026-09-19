@@ -48,28 +48,28 @@ public fn check(
   withTimings: Bool = false,
   checksEveryBody: Bool = false,
 ): Checked {
-  var clock = Stopwatch(withTimings)
+  var clock = Stopwatch withTimings
   clock.start()
   var before: List<Timing> = []
   const targets = paths.map(normalizePath).toList()
   var packages: List<Package> = []
   var problems: List<String> = []
   for path in targets {
-    const found = findWorkspace(tree, path)
-    problems.addAll(found.problems)
+    const found = findWorkspace tree, path
+    problems.addAll found.problems
     for package in found.packages {
       if !packages.any({ _.directory == package.directory }) {
-        packages.add(package)
+        packages.add package
       }
     }
   }
-  const workspace = Workspace(packages)
-  before.add(Timing("finding the workspace", clock.taken()))
-  const graph = buildGraph(tree, workspace)
-  before.add(Timing("lexing, parsing and the module graph", clock.taken()))
-  const program = resolveNames(graph, workspace)
-  problems.addAll(program.problems)
-  before.add(Timing("name resolution", clock.taken()))
+  const workspace = Workspace packages
+  before.add Timing("finding the workspace", clock.taken())
+  const graph = buildGraph tree, workspace
+  before.add Timing("lexing, parsing and the module graph", clock.taken())
+  const program = resolveNames graph, workspace
+  problems.addAll program.problems
+  before.add Timing("name resolution", clock.taken())
 
   // Every module, not only the requested ones: the type checker looks a name of an imported module up the same way
   var symbols = program.symbols
@@ -78,24 +78,24 @@ public fn check(
   var requested: List<ModuleId> = []
   var everything: List<ModuleId> = []
   for module in graph.modules {
-    const resolved = resolveTypes(symbols, program, module.id)
-    resolutions.add(resolved.names)
-    unresolved.add(resolved.diagnostics)
-    everything.add(module.id)
+    const resolved = resolveTypes symbols, program, module.id
+    resolutions.add resolved.names
+    unresolved.add resolved.diagnostics
+    everything.add module.id
     if isRequested(targets, module.path) {
-      requested.add(module.id)
+      requested.add module.id
     }
   }
-  before.add(Timing("names in type positions", clock.taken()))
-  const resolvedProgram = program.copy(symbols: symbols)
+  before.add Timing("names in type positions", clock.taken())
+  const resolvedProgram = program.copy symbols: symbols
   // A lowering may reach the body of any module - a default member of a trait of `std/prelude`, a generic function of
   // another package - and a body whose tables were never filled cannot be lowered at all. What is *reported* stays what
   // was asked for either way, because `files` below is filtered by the request and not by this
   const bodies = if checksEveryBody { everything } else { requested }
-  var checked = checkTypes(resolvedProgram, resolutions, bodies, withTimings)
+  var checked = checkTypes resolvedProgram, resolutions, bodies, withTimings
   // The passes before the checker existed cannot be recorded on it as they run, so they are put in front here
   if withTimings {
-    checked.timings = before.addedAll(checked.timings)
+    checked.timings = before.addedAll checked.timings
   }
 
   var files: List<CheckedFile> = []
@@ -104,27 +104,27 @@ public fn check(
       continue
     }
     var diagnostics = module.diagnostics
-    diagnostics.addAll(checkNames(resolvedProgram, module.id))
-    diagnostics.addAll(unresolved[module.id.value])
-    diagnostics.addAll(checked.diagnostics[module.id.value])
+    diagnostics.addAll checkNames(resolvedProgram, module.id)
+    diagnostics.addAll unresolved[module.id.value]
+    diagnostics.addAll checked.diagnostics[module.id.value]
     diagnostics.sort({ (_.span.start, _.span.end) })
-    files.add(CheckedFile(tree.display(module.path), module.source.text, diagnostics))
+    files.add CheckedFile(tree.display(module.path), module.source.text, diagnostics)
   }
   // A `project.trb` that is a receiver script is a module and was reported above; without `std/project` there is no
   // type to check it against, and then only what the parser found about it is reported
   for package in packages {
-    const manifest = joinPath(package.directory, "project.trb")
+    const manifest = joinPath package.directory, "project.trb"
     if isRequested(targets, manifest) && graph.moduleAt(manifest).isNone() {
       if const Some(text) = tree.text(manifest) {
-        files.add(CheckedFile(tree.display(manifest), text, parse(SourceText.of(text)).diagnostics))
+        files.add CheckedFile(tree.display(manifest), text, parse(SourceText.of(text)).diagnostics)
       }
     }
   }
   files.sort({ _.path })
-  Checked(resolvedProgram.copy(symbols: checked.symbols), files, problems, resolutions, requested, checked)
+  Checked resolvedProgram.copy(symbols: checked.symbols), files, problems, resolutions, requested, checked
 }
 
 /** Only what the command line pointed at is reported; the rest is loaded because the imports lead there. */
 fn isRequested(targets: List<String>, path: String): Bool {
-  targets.any({ isInside(path, _) })
+  targets.any({ isInside path, _ })
 }

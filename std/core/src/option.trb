@@ -15,7 +15,7 @@ public type Option<Value> {
   fn isSome(self): Bool {
     match self {
       Some(_) => true
-      .None => false
+      None => false
     }
   }
 
@@ -26,14 +26,14 @@ public type Option<Value> {
   fn map<Output>(self, transform: (value: Value) => Output): Output? {
     match self {
       Some(value) => .Some(transform(value))
-      .None => .None
+      None => .None
     }
   }
 
   fn flatMap<Output>(self, transform: (value: Value) => Output?): Output? {
     match self {
-      Some(value) => transform(value)
-      .None => .None
+      Some(value) => transform value
+      None => .None
     }
   }
 
@@ -46,7 +46,7 @@ public type Option<Value> {
 
   fn forEach(self, action: (value: Value) => Void) {
     if const Some(value) = self {
-      action(value)
+      action value
     }
   }
 
@@ -54,7 +54,7 @@ public type Option<Value> {
   fn toList(self): List<Value> {
     match self {
       Some(value) => [value]
-      .None => []
+      None => []
     }
   }
 
@@ -62,14 +62,14 @@ public type Option<Value> {
   fn orElse(self, fallback: lazy Value): Value {
     match self {
       Some(value) => value
-      .None => fallback
+      None => fallback
     }
   }
 
   fn okOr<Failure>(self, error: lazy Failure): Result<Value, Failure> {
     match self {
-      Some(value) => Ok(value)
-      .None => Fail(error)
+      Some(value) => Ok value
+      None => Fail error
     }
   }
 
@@ -77,7 +77,7 @@ public type Option<Value> {
   fn expect(self, message: String): Value {
     match self {
       Some(value) => value
-      .None => panic message
+      None => panic message
     }
   }
 }
@@ -87,7 +87,7 @@ extend<Value: Show> Option<Value> with Show {
   fn show(self): String {
     match self {
       Some(value) => "Some({value.showNested()})"
-      .None => "None"
+      None => "None"
     }
   }
 }
@@ -103,6 +103,6 @@ extend<Value, Target: From<Iterable<Value>>> Option<Target> with From<Iterable<V
       complete = item.isSome()           // The pipeline is lazy: this runs while `Target.from` pulls
       item
     })
-    if complete { Some(target) } else { None }
+    if complete { Some target } else { None }
   }
 }

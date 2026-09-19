@@ -63,45 +63,45 @@ public fn dispatchedMember(
   // records whatever it has for it, so the implementation's own target is what says which type the member is reached on
   const subject = match receiver {
     Some(found) => {
-      const applied = substituted(lowering, found)
-      closedReceiver(lowering, applied)
+      const applied = substituted lowering, found
+      closedReceiver lowering, applied
     }
-    .None => None
+    None => None
   }
   match dispatch {
     .Direct => {
-      const mapping = mappingOfCall(lowering, symbol, typeArguments, subject)
+      const mapping = mappingOfCall lowering, symbol, typeArguments, subject
       const empty: List<TypeId> = []
-      const owner = ownerNameOf(lowering, symbol)
-      Some(Dispatched(symbol, mapping, lowering.checker.invalidType, owner, None, false, empty, subject))
+      const owner = ownerNameOf lowering, symbol
+      Some Dispatched(symbol, mapping, lowering.checker.invalidType, owner, None, false, empty, subject)
     }
     .Implementation(implementation, _) => {
-      staticDispatch(lowering, symbol, typeArguments, implementation, subject, at)
+      staticDispatch lowering, symbol, typeArguments, implementation, subject, at
     }
     .Object(bound, _) => {
-      const applied = substituted(lowering, bound)
-      dynamicDispatch(lowering, symbol, typeArguments, applied, subject, at)
+      const applied = substituted lowering, bound
+      dynamicDispatch lowering, symbol, typeArguments, applied, subject, at
     }
     .Forwarded(parameter, bound, _) => {
-      const applied = substituted(lowering, bound)
+      const applied = substituted lowering, bound
       // The receiver of a forwarded call is the generic parameter itself, which the instance's arguments decide
-      const own = lowering.checker.types.intern(parameterFormOf(parameter))
-      const found = substituted(lowering, own)
+      const own = lowering.checker.types.intern parameterFormOf(parameter)
+      const found = substituted lowering, own
       if isTraitValueType(lowering, found) {
-        return dynamicDispatch(lowering, symbol, typeArguments, applied, Some(found), at)
+        return dynamicDispatch lowering, symbol, typeArguments, applied, Some(found), at
       }
-      resolvedDispatch(lowering, symbol, typeArguments, found, applied, at)
+      resolvedDispatch lowering, symbol, typeArguments, found, applied, at
     }
   }
 }
 
 fn parameterFormOf(parameter: ParameterId): TypeForm {
-  TypeForm.Parameter(parameter)
+  TypeForm.Parameter parameter
 }
 
 fn closedReceiver(var lowering: Lowering, found: TypeId): TypeId? {
   if isClosedType(lowering, found) {
-    return Some(found)
+    return Some found
   }
   None
 }
@@ -118,12 +118,12 @@ fn resolvedDispatch(
   const implementation = match witnessFor(lowering.checker, subject, bound) {
     .Implementation(found, _, _) => found
     _ => {
-      const shown = lowering.checker.describe(bound)
-      reportUnsupported(lowering, "a call through a witness for `{shown}` the checker did not resolve", at)
+      const shown = lowering.checker.describe bound
+      reportUnsupported lowering, "a call through a witness for `{shown}` the checker did not resolve", at
       return None
     }
   }
-  memberOfImplementationDispatch(lowering, symbol, typeArguments, implementation, Some(subject), bound, at)
+  memberOfImplementationDispatch lowering, symbol, typeArguments, implementation, Some(subject), bound, at
 }
 
 fn staticDispatch(
@@ -137,18 +137,18 @@ fn staticDispatch(
   // A **static** member has no receiver (`Int.parse(text)`), and then the target of the implementation is what the member
   // is reached on: `extend Int64 with Parse<NumberParseError>` says both the type and the arguments of the trait
   const target = match subject {
-    Some(found) => Some(found)
-    .None => targetOfImplementation(lowering, implementation)
+    Some(found) => Some found
+    None => targetOfImplementation lowering, implementation
   }
-  const bound = boundOfImplementation(lowering, implementation, target)
-  memberOfImplementationDispatch(lowering, symbol, typeArguments, implementation, target, bound, at)
+  const bound = boundOfImplementation lowering, implementation, target
+  memberOfImplementationDispatch lowering, symbol, typeArguments, implementation, target, bound, at
 }
 
 fn targetOfImplementation(var lowering: Lowering, implementation: ImplementationId): TypeId? {
-  const found = lowering.checker.implementations.at(implementation)
+  const found = lowering.checker.implementations.at implementation
   const target = found.target
   if const .Nominal(_, _) = lowering.checker.types.form(target) {
-    return Some(target)
+    return Some target
   }
   None
 }
@@ -162,25 +162,25 @@ fn memberOfImplementationDispatch(
   bound: TypeId,
   at: Span,
 ): Dispatched? {
-  const found = lowering.checker.implementations.at(implementation)
+  const found = lowering.checker.implementations.at implementation
   if const .Delegated = found.origin {
-    reportUnsupported(lowering, "`by` delegation", at)
+    reportUnsupported lowering, "`by` delegation", at
     return None
   }
   const name = lowering.checker.symbolAt(symbol).name
   const member = providerMember(lowering, implementation, name) ?? symbol
   const target = match subject {
     Some(inner) => inner
-    .None => {
-      reportUnsupported(lowering, "a call of a trait member without a receiver", at)
+    None => {
+      reportUnsupported lowering, "a call of a trait member without a receiver", at
       return None
     }
   }
-  var mapping = memberMappingOf(lowering, member, target, bound)
-  addOwnArguments(lowering, mapping, member, typeArguments)
+  var mapping = memberMappingOf lowering, member, target, bound
+  addOwnArguments lowering, mapping, member, typeArguments
   const empty: List<TypeId> = []
-  const owner = ownerOfImplementation(lowering, found.target, target, member)
-  Some(Dispatched(member, mapping, bound, owner, Some(implementation), false, empty, Some(target)))
+  const owner = ownerOfImplementation lowering, found.target, target, member
+  Some Dispatched(member, mapping, bound, owner, Some(implementation), false, empty, Some(target))
 }
 
 /**
@@ -200,12 +200,12 @@ fn ownerOfImplementation(
   if const Some(found) = headNameOfType(lowering, subject) {
     return found
   }
-  ownerNameOf(lowering, member)
+  ownerNameOf lowering, member
 }
 
 fn headNameOfType(var lowering: Lowering, id: TypeId): String? {
   if const .Nominal(symbol, _) = lowering.checker.types.form(id) {
-    return Some(lowering.checker.symbolAt(symbol).name)
+    return Some lowering.checker.symbolAt(symbol).name
   }
   None
 }
@@ -221,46 +221,46 @@ fn dynamicDispatch(
 ): Dispatched? {
   const target = match subject {
     Some(found) => found
-    .None => {
-      reportUnsupported(lowering, "a call on a trait-typed value without a receiver", at)
+    None => {
+      reportUnsupported lowering, "a call on a trait-typed value without a receiver", at
       return None
     }
   }
-  const bounds = boundsOfTraitValue(lowering, target)
+  const bounds = boundsOfTraitValue lowering, target
   if bounds.isEmpty() {
-    reportUnsupported(lowering, "a call on a trait-typed value the back end cannot read a table out of", at)
+    reportUnsupported lowering, "a call on a trait-typed value the back end cannot read a table out of", at
     return None
   }
   const name = lowering.checker.symbolAt(symbol).name
   const member = traitMemberNamed(lowering, bound, name) ?? symbol
-  var mapping = memberMappingOf(lowering, member, target, bound)
-  addOwnArguments(lowering, mapping, member, typeArguments)
+  var mapping = memberMappingOf lowering, member, target, bound
+  addOwnArguments lowering, mapping, member, typeArguments
   // A member the table cannot hold is a default the value cannot override: an instance of the default body then, with
   // `Self` bound to the trait-typed value's own type, which is what makes the body see the table inside its receiver
-  const isDynamic = isInTable(lowering, bounds, target, member)
+  const isDynamic = isInTable lowering, bounds, target, member
   if !isDynamic {
-    const identifier = signatureOf(lowering.checker, member)
+    const identifier = signatureOf lowering.checker, member
     if !lowering.checker.signature(identifier).hasBody {
       const what = "`{name}`, which is not in the witness table of a trait-typed value"
-      reportUnsupported(lowering, what, at)
+      reportUnsupported lowering, what, at
       return None
     }
   }
-  Some(Dispatched(member, mapping, bound, "", None, isDynamic, bounds, Some(target)))
+  Some Dispatched(member, mapping, bound, "", None, isDynamic, bounds, Some(target))
 }
 
 /** What the member of an implementation is called, without reporting anything about visibility. */
 fn providerMember(var lowering: Lowering, implementation: ImplementationId, name: String): SymbolId? {
-  const found = lowering.checker.implementations.at(implementation)
-  found.members.get(name)
+  const found = lowering.checker.implementations.at implementation
+  found.members.get name
 }
 
 /** The trait an implementation provides, with its arguments as they are for the type it was reached on. */
 fn boundOfImplementation(var lowering: Lowering, implementation: ImplementationId, subject: TypeId?): TypeId {
-  const found = lowering.checker.implementations.at(implementation)
+  const found = lowering.checker.implementations.at implementation
   const capability = match found.capability {
     Some(inner) => inner
-    .None => {
+    None => {
       return lowering.checker.invalidType
     }
   }
@@ -272,12 +272,12 @@ fn boundOfImplementation(var lowering: Lowering, implementation: ImplementationI
   }
   const target = match subject {
     Some(inner) => inner
-    .None => {
+    None => {
       return capability
     }
   }
   const arguments = traitArgumentsOf(lowering.checker, target, symbol) ?? []
-  lowering.checker.nominal(symbol, arguments)
+  lowering.checker.nominal symbol, arguments
 }
 
 /** The substitution of a call that is not a trait member: the owner's parameters, then the member's own. */
@@ -287,20 +287,20 @@ fn mappingOfCall(
   typeArguments: List<TypeId>,
   subject: TypeId?,
 ): Map<ParameterId, TypeId> {
-  const identifier = signatureOf(lowering.checker, symbol)
-  const signature = lowering.checker.signature(identifier)
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
   var mapping: Map<ParameterId, TypeId> = [:]
   const owner = match signature.owner {
     Some(found) => found
-    .None => {
-      addOwnArguments(lowering, mapping, symbol, typeArguments)
+    None => {
+      addOwnArguments lowering, mapping, symbol, typeArguments
       return mapping
     }
   }
   const target = match subject {
     Some(found) => found
-    .None => {
-      addOwnArguments(lowering, mapping, symbol, typeArguments)
+    None => {
+      addOwnArguments lowering, mapping, symbol, typeArguments
       return mapping
     }
   }
@@ -308,13 +308,13 @@ fn mappingOfCall(
   // one thing that says what `Self` and the trait's own arguments are is the type the member was reached on
   if const .Parameter(_) = lowering.checker.types.form(owner) {
     const unknown = lowering.checker.invalidType
-    var found = memberMappingOf(lowering, symbol, target, unknown)
-    addOwnArguments(lowering, found, symbol, typeArguments)
+    var found = memberMappingOf lowering, symbol, target, unknown
+    addOwnArguments lowering, found, symbol, typeArguments
     return found
   }
   const generics = signature.generics
-  const _ = matchTypePattern(lowering.checker, owner, target, generics, mapping)
-  addOwnArguments(lowering, mapping, symbol, typeArguments)
+  const _ = matchTypePattern lowering.checker, owner, target, generics, mapping
+  addOwnArguments lowering, mapping, symbol, typeArguments
   mapping
 }
 
@@ -331,15 +331,15 @@ fn addOwnArguments(
   if typeArguments.isEmpty() {
     return
   }
-  const identifier = signatureOf(lowering.checker, symbol)
-  const signature = lowering.checker.signature(identifier)
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
   const first = signature.generics.length() - typeArguments.length()
   if first < 0 {
     return
   }
   for index in 0..typeArguments.length() {
-    const applied = substituted(lowering, typeArguments[index])
-    mapping.set(signature.generics[first + index], applied)
+    const applied = substituted lowering, typeArguments[index]
+    mapping.set signature.generics[first + index], applied
   }
 }
 
@@ -366,12 +366,12 @@ public fn boundsOfTraitValue(var lowering: Lowering, id: TypeId): List<TypeId> {
  * the emitter needs a struct and the `R_`/`D_` pair for it and both fall out of an ordinary layout.
  */
 public fn payloadLayoutOf(var lowering: Lowering, item: IrTypeId): LayoutId {
-  const name = payloadLayoutName(lowering.program, item)
-  const reserved = lowering.program.reserveLayout(name, LayoutKind.Payload)
+  const name = payloadLayoutName lowering.program, item
+  const reserved = lowering.program.reserveLayout name, LayoutKind.Payload
   if reserved.isFresh {
-    const layout = lowering.program.layoutAt(reserved.layout)
+    const layout = lowering.program.layoutAt reserved.layout
     const fields = [FieldLayout("value", item, None)]
-    lowering.program.setLayout(reserved.layout, layout.copy(arguments: [item], fields: fields, isBuilt: true))
+    lowering.program.setLayout reserved.layout, layout.copy(arguments: [item], fields: fields, isBuilt: true)
   }
   reserved.layout
 }
@@ -380,9 +380,9 @@ public fn payloadLayoutOf(var lowering: Lowering, item: IrTypeId): LayoutId {
 public fn objectTypeOf(var lowering: Lowering, bounds: List<TypeId>): IrTypeId {
   var traits: List<TraitId> = []
   for bound in bounds {
-    traits.add(instantiateTrait(lowering.program, lowering.checker, lowering.instantiation, bound))
+    traits.add instantiateTrait(lowering.program, lowering.checker, lowering.instantiation, bound)
   }
-  lowering.program.internType(IrType.Object(traits))
+  lowering.program.internType IrType.Object(traits)
 }
 
 /**
@@ -398,37 +398,37 @@ public fn lowerTraitValue(
   source: TypeId,
   at: Span,
 ): Bool {
-  const subject = substituted(lowering, source)
-  const inner = boundsOfTraitValue(lowering, subject)
+  const subject = substituted lowering, source
+  const inner = boundsOfTraitValue lowering, subject
   if inner.isEmpty() {
     // The payload is boxed, so the box needs a layout - and it is needed whether or not every table could be built
-    const item = irTypeOfClosed(lowering, subject)
-    const _ = payloadLayoutOf(lowering, item)
+    const item = irTypeOfClosed lowering, subject
+    const _ = payloadLayoutOf lowering, item
   }
   var tables: List<WitnessSource> = []
   for bound in bounds {
-    const applied = substituted(lowering, bound)
+    const applied = substituted lowering, bound
     if !inner.isEmpty() {
       // `Show & Hash` narrowed to `Show`: the table is already inside the value, and nothing is boxed twice
-      const found = boundIndexOf(lowering, inner, applied)
+      const found = boundIndexOf lowering, inner, applied
       if found < 0 {
-        const shown = lowering.checker.describe(applied)
-        reportUnsupported(lowering, "a trait-typed value that has no table for `{shown}`", at)
+        const shown = lowering.checker.describe applied
+        reportUnsupported lowering, "a trait-typed value that has no table for `{shown}`", at
         return false
       }
       const empty: List<Int> = []
-      tables.add(WitnessSource(WitnessRoot.Value(value, found), empty))
+      tables.add WitnessSource(WitnessRoot.Value(value, found), empty)
       continue
     }
     const built = match witnessTableOf(lowering, subject, applied, at) {
       Some(one) => one
-      .None => {
+      None => {
         return false
       }
     }
     const empty: List<Int> = []
-    tables.add(WitnessSource(WitnessRoot.Table(built), empty))
+    tables.add WitnessSource(WitnessRoot.Table(built), empty)
   }
-  emit(builder, Instruction.TraitValue(target, owned(value), tables))
+  emit builder, Instruction.TraitValue(target, owned(value), tables)
   true
 }

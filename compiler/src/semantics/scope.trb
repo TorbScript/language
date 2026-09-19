@@ -43,9 +43,9 @@ public type Program {
 
   fn lookUp(self, id: ModuleId, name: String): SymbolId? {
     if const Some(symbol) = scopes[id.value].names.get(name) {
-      return Some(symbol)
+      return Some symbol
     }
-    builtins.get(name)
+    builtins.get name
   }
 }
 
@@ -62,23 +62,23 @@ public fn resolveNames(graph: Graph, workspace: Workspace): Program {
   // `Void` has exactly one value, `Never` is the type of what does not return. Everything else a program can name
   // is declared somewhere - `Int`, `String` and `List` are the prelude, not the language.
   for name in ["Void", "Never"] {
-    builtins.set(name, symbols.add(Symbol(name, SymbolKind.Builtin, true, None, Span(0, 0))))
+    builtins.set name, symbols.add(Symbol(name, SymbolKind.Builtin, true, None, Span(0, 0)))
   }
   var definitions: List<List<Definition>> = []
   var scopes: List<ModuleScope> = []
   for module in graph.modules {
-    const declared = declareModule(symbols, module)
+    const declared = declareModule symbols, module
     var scope = ModuleScope()
     for definition in declared {
       if !scope.names.containsKey(definition.name) {
-        scope.names.set(definition.name, definition.symbol)
+        scope.names.set definition.name, definition.symbol
         if symbols.at(definition.symbol).isPublic {
-          scope.exported.set(definition.name, definition.symbol)
+          scope.exported.set definition.name, definition.symbol
         }
       }
     }
-    definitions.add(declared)
-    scopes.add(scope)
+    definitions.add declared
+    scopes.add scope
   }
 
   var problems: List<String> = []
@@ -87,18 +87,18 @@ public fn resolveNames(graph: Graph, workspace: Workspace): Program {
     const name = package.manifest.prelude
     var found: ModuleId? = None
     if const Some(prelude) = workspace.packageNamed(name) {
-      found = graph.moduleAt(joinPath(prelude.directory, "src/lib.trb"))
+      found = graph.moduleAt joinPath(prelude.directory, "src/lib.trb")
     }
     if found.isNone() && !name.isEmpty() {
-      problems.add("The prelude package `{name}` of {package.directory} was not found")
+      problems.add "The prelude package `{name}` of {package.directory} was not found"
     }
-    preludeModules.add(found)
+    preludeModules.add found
   }
 
-  var binder = Binder(graph, workspace, preludeModules, symbols, scopes)
+  var binder = Binder graph, workspace, preludeModules, symbols, scopes
   binder.bindToFixpoint()
   binder.addPreludes()
-  Program(workspace, graph, binder.symbols, binder.scopes, definitions, preludeModules, builtins, problems)
+  Program workspace, graph, binder.symbols, binder.scopes, definitions, preludeModules, builtins, problems
 }
 
 /** Binds the imports of every module, over and over until nothing changes anymore. */
@@ -115,7 +115,7 @@ type Binder {
     while isChanged {
       isChanged = false
       for index in 0..scopes.length() {
-        bindImports(ModuleId(index))
+        bindImports ModuleId(index)
       }
     }
   }
@@ -126,14 +126,14 @@ type Binder {
    */
   fn addPreludes(var self) {
     for index in 0..scopes.length() {
-      const prelude = preludeNamesOf(ModuleId(index))
+      const prelude = preludeNamesOf ModuleId(index)
       var scope = scopes[index]
       for (name, symbol) in prelude {
         if !scope.names.containsKey(name) {
-          scope.names.set(name, symbol)
+          scope.names.set name, symbol
         }
       }
-      scopes.set(index, scope)
+      scopes.set index, scope
     }
   }
 
@@ -147,7 +147,7 @@ type Binder {
   /** The name as the module sees it while the imports are being bound: its own names, then those of its prelude. */
   fn visibleName(self, id: ModuleId, name: String): SymbolId? {
     if const Some(symbol) = scopes[id.value].names.get(name) {
-      return Some(symbol)
+      return Some symbol
     }
     preludeNamesOf(id).get(name)
   }
@@ -159,15 +159,15 @@ type Binder {
     var scope = scopes[id.value]
     var hasChanged = false
     if !scope.names.containsKey(name) {
-      scope.names.set(name, symbol)
+      scope.names.set name, symbol
       hasChanged = true
     }
     if isPublic && !scope.exported.containsKey(name) {
-      scope.exported.set(name, symbol)
+      scope.exported.set name, symbol
       hasChanged = true
     }
     if hasChanged {
-      scopes.set(id.value, scope)
+      scopes.set id.value, scope
       isChanged = true
     }
   }
@@ -191,14 +191,14 @@ type Binder {
               for item in items {
                 const start = scopes[target.value].exported.get(item.path[0].text)
                 if const Some(symbol) = walkPath(start, item.path) {
-                  bind(id, item.localName().text, symbol, isPublic)
+                  bind id, item.localName().text, symbol, isPublic
                 }
               }
             }
             .All(alias) => {
               if !scopes[id.value].names.containsKey(alias.text) && !alias.text.isEmpty() {
-                const symbol = symbols.add(Symbol(alias.text, SymbolKind.Namespace(target), isPublic, Some(id), alias.span))
-                bind(id, alias.text, symbol, isPublic)
+                const symbol = symbols.add Symbol(alias.text, SymbolKind.Namespace(target), isPublic, Some(id), alias.span)
+                bind id, alias.text, symbol, isPublic
               }
             }
             // `use "./text-extensions"`: only what the module adds to types with `extend`, so no name at all
@@ -210,9 +210,9 @@ type Binder {
       .Local => {
         if const .Names(items) = usage.items {
           for item in items {
-            const start = visibleName(id, item.path[0].text)
+            const start = visibleName id, item.path[0].text
             if const Some(symbol) = walkPath(start, item.path) {
-              bind(id, item.localName().text, symbol, isPublic)
+              bind id, item.localName().text, symbol, isPublic
             }
           }
         }
@@ -226,14 +226,14 @@ type Binder {
     for index in 1..path.length() {
       current = stepInto(current, path[index].text)?
     }
-    Some(current)
+    Some current
   }
 
   /** One step of a `use` path: a name a namespace exports, or a case of a type. Nothing else has names of its own. */
   fn stepInto(self, owner: SymbolId, name: String): SymbolId? {
     match symbols.at(owner).kind {
       .Namespace(module) => scopes[module.value].exported.get(name)
-      .Type => symbols.caseNamed(owner, name)
+      .Type => symbols.caseNamed owner, name
       _ => None
     }
   }
@@ -254,13 +254,13 @@ public fn checkNames(program: Program, id: ModuleId): List<Diagnostic> {
       )
       continue
     }
-    declared.add(definition.name)
+    declared.add definition.name
   }
   var imported: Set<String> = Set.of()
   for statement in program.graph.at(id).file.statements {
     if const .Declare(declaration) = statement.kind {
       if const .Use(usage) = declaration.kind {
-        checkImport(program, id, usage, declaration.span, declared, imported, diagnostics)
+        checkImport program, id, usage, declaration.span, declared, imported, diagnostics
       }
     }
   }
@@ -319,18 +319,18 @@ fn checkImport(
             // What is missing is the *export*, so this message names it and points at it even under an alias
             const first = item.path[0]
             if !program.scopes[target.value].exported.containsKey(first.text) {
-              var problem = Diagnostic.error("`{first.text}` is not exported by `{path}`", first.span)
+              var problem = Diagnostic.error "`{first.text}` is not exported by `{path}`", first.span
               if program.scopes[target.value].names.containsKey(first.text) {
-                problem = problem.withNote("It is declared there, but not `public`")
+                problem = problem.withNote "It is declared there, but not `public`"
               }
-              diagnostics.add(problem)
+              diagnostics.add problem
               continue
             }
             const start = program.scopes[target.value].exported.get(first.text)
-            checkItemPath(program, item, start, declared, imported, diagnostics)
+            checkItemPath program, item, start, declared, imported, diagnostics
           }
         }
-        .All(alias) => reportDuplicate(alias, declared, imported, diagnostics)
+        .All(alias) => reportDuplicate alias, declared, imported, diagnostics
         .OnlyExtensions => {}
       }
     }
@@ -339,12 +339,12 @@ fn checkImport(
       if const .Names(items) = usage.items {
         for item in items {
           const first = item.path[0]
-          const start = program.lookUp(id, first.text)
+          const start = program.lookUp id, first.text
           if start.isNone() {
-            diagnostics.add(Diagnostic.error("Unknown name `{first.text}`", first.span))
+            diagnostics.add Diagnostic.error("Unknown name `{first.text}`", first.span)
             continue
           }
-          checkItemPath(program, item, start, declared, imported, diagnostics)
+          checkItemPath program, item, start, declared, imported, diagnostics
         }
       }
     }
@@ -365,7 +365,7 @@ fn checkItemPath(
 ) {
   var current = match start {
     Some(symbol) => symbol
-    .None => {
+    None => {
       return
     }
   }
@@ -375,20 +375,20 @@ fn checkItemPath(
       Some(found) => {
         current = found
       }
-      .None => {
-        reportNoStep(program, current, step, diagnostics)
+      None => {
+        reportNoStep program, current, step, diagnostics
         return
       }
     }
   }
-  reportDuplicate(item.localName(), declared, imported, diagnostics)
+  reportDuplicate item.localName(), declared, imported, diagnostics
 }
 
 /** One step of a `use` path: a name a namespace exports, or a case of a type. Nothing else has names of its own. */
 fn stepOf(program: Program, owner: SymbolId, name: String): SymbolId? {
   match program.symbols.at(owner).kind {
     .Namespace(module) => program.scopes[module.value].exported.get(name)
-    .Type => program.symbols.caseNamed(owner, name)
+    .Type => program.symbols.caseNamed owner, name
     _ => None
   }
 }
@@ -405,9 +405,9 @@ fn reportNoStep(program: Program, owner: SymbolId, step: Name, var diagnostics: 
         )
         return
       }
-      diagnostics.add(Diagnostic.error("`{name}` has no case `{step.text}`", step.span))
+      diagnostics.add Diagnostic.error("`{name}` has no case `{step.text}`", step.span)
     }
-    .Namespace(_) => diagnostics.add(Diagnostic.error("`{step.text}` is not exported by `{name}`", step.span))
+    .Namespace(_) => diagnostics.add Diagnostic.error("`{step.text}` is not exported by `{name}`", step.span)
     _ => diagnostics.add(
       Diagnostic.error("{program.symbols.describe(owner)} has no cases", step.span)
         .withNote("A path in a `use` names a case of a type: `use Shape.Circle from \"./shape\"`")
@@ -421,13 +421,13 @@ fn reportNoStep(program: Program, owner: SymbolId, step: Name, var diagnostics: 
  * not what an `extend` adds to it.
  */
 fn memberKindOf(program: Program, owner: SymbolId, name: String): String? {
-  const symbol = program.symbols.at(owner)
+  const symbol = program.symbols.at owner
   const module = symbol.module?
   for statement in program.graph.at(module).file.statements {
     if const .Declare(declaration) = statement.kind {
       if const .Type(declared) = declaration.kind {
         if declared.name.span == symbol.span {
-          return memberKindIn(declared.members, name)
+          return memberKindIn declared.members, name
         }
       }
     }
@@ -440,19 +440,19 @@ fn memberKindIn(members: List<Member>, name: String): String? {
     match member.kind {
       .Function(function) => {
         if function.name.text == name {
-          return Some("method")
+          return Some "method"
         }
       }
       .Constant(binding) => {
         if const .Binding(bound) = binding.pattern.kind {
           if bound == name {
-            return Some("constant")
+            return Some "constant"
           }
         }
       }
       .Field(field) => {
         if field.name.text == name {
-          return Some("field")
+          return Some "field"
         }
       }
       .Case(_) => {}
@@ -473,8 +473,8 @@ fn reportDuplicate(name: Name, declared: Set<String>, var imported: Set<String>,
     return
   }
   if imported.contains(name.text) {
-    diagnostics.add(Diagnostic.error("`{name.text}` is already imported", name.span))
+    diagnostics.add Diagnostic.error("`{name.text}` is already imported", name.span)
     return
   }
-  imported.add(name.text)
+  imported.add name.text
 }

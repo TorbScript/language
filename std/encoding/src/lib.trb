@@ -48,14 +48,14 @@ public type DecodeError with Show, Error {
 
   /** `error.inside("email")`: errors collect the path on their way out. */
   fn inside(self, segment: String): DecodeError {
-    copy(path: path.inserted(0, segment))
+    copy path: path.inserted(0, segment)
   }
 
   fn show(self): String {
     if path.isEmpty() {
       return message
     }
-    const location = path.joined(separator: ".")
+    const location = path.joined separator: "."
     "{location}: {message}"
   }
 }
@@ -154,7 +154,7 @@ public native fn describe(value: Encode): String
 
 extend Bool with Encode, Decode {
   fn encode(self, var encoder: Encoder) {
-    encoder.bool(self)
+    encoder.bool self
   }
 
   fn decode(var decoder: Decoder): Result<Bool, DecodeError> {
@@ -164,7 +164,7 @@ extend Bool with Encode, Decode {
 
 extend Int64 with Encode, Decode {
   fn encode(self, var encoder: Encoder) {
-    encoder.int(self)
+    encoder.int self
   }
 
   fn decode(var decoder: Decoder): Result<Int64, DecodeError> {
@@ -175,12 +175,12 @@ extend Int64 with Encode, Decode {
 /** Narrow numbers travel as `Int64` and are checked on the way back. */
 extend Int8 with Encode, Decode {
   fn encode(self, var encoder: Encoder) {
-    encoder.int(Int64.from(self))
+    encoder.int Int64.from(self)
   }
 
   fn decode(var decoder: Decoder): Result<Int8, DecodeError> {
     const wide = decoder.int()?
-    Int8.tryFrom(wide).mapError { DecodeError("{wide} does not fit into Int8") }
+    Int8.tryFrom(wide).mapError { DecodeError "{wide} does not fit into Int8" }
   }
 }
 
@@ -192,68 +192,68 @@ extend Int8 with Encode, Decode {
  */
 extend Int16 with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.int(Int64.from(self))
+    encoder.int Int64.from(self)
   }
 }
 
 extend Int32 with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.int(Int64.from(self))
+    encoder.int Int64.from(self)
   }
 }
 
 extend UInt8 with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.int(Int64.from(self))
+    encoder.int Int64.from(self)
   }
 }
 
 extend UInt16 with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.int(Int64.from(self))
+    encoder.int Int64.from(self)
   }
 }
 
 extend UInt32 with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.int(Int64.from(self))
+    encoder.int Int64.from(self)
   }
 }
 
 extend UInt64 with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.unsigned(self)
+    encoder.unsigned self
   }
 }
 
 extend Float32 with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.float(Float64.from(self))
+    encoder.float Float64.from(self)
   }
 }
 
 extend Float64 with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.float(self)
+    encoder.float self
   }
 }
 
 extend Decimal with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.decimal(self)
+    encoder.decimal self
   }
 }
 
 /** A `Char` travels as a text of one character: the formats of the language have no character of their own. */
 extend Char with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.string(show())
+    encoder.string show()
   }
 }
 
 extend String with Encode, Decode {
   fn encode(self, var encoder: Encoder) {
-    encoder.string(self)
+    encoder.string self
   }
 
   fn decode(var decoder: Decoder): Result<String, DecodeError> {
@@ -264,8 +264,8 @@ extend String with Encode, Decode {
 extend<Value: Encode> Option<Value> with Encode {
   fn encode(self, var encoder: Encoder) {
     match self {
-      Some(value) => value.encode(encoder)
-      .None => encoder.nothing()
+      Some(value) => value.encode encoder
+      None => encoder.nothing()
     }
   }
 }
@@ -273,18 +273,18 @@ extend<Value: Encode> Option<Value> with Encode {
 extend<Value: Decode> Option<Value> with Decode {
   fn decode(var decoder: Decoder): Result<Value?, DecodeError> {
     if decoder.nothing() {
-      return Ok(None)
+      return Ok None
     }
-    Ok(Some(Value.decode(decoder)?))
+    Ok Some(Value.decode(decoder)?)
   }
 }
 
 /** Lists and sets are sequences. A `Set` stays a `Set`: the target type decides on the way back. */
 extend<Item: Encode> List<Item> with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.sequence(Some(length())) { items =>
+    encoder.sequence Some(length()) { items =>
       for value in self {
-        items.item(value)
+        items.item value
       }
     }
   }
@@ -298,9 +298,9 @@ extend<Item: Encode> Set<Item> with Encode {
 
 extend<Key: Encode, Value: Encode> Map<Key, Value> with Encode {
   fn encode(self, var encoder: Encoder) {
-    encoder.map(Some(length())) { entries =>
+    encoder.map Some(length()) { entries =>
       for (key, value) in self {
-        entries.entry(key, value)
+        entries.entry key, value
       }
     }
   }
@@ -311,9 +311,9 @@ extend<Item: Decode> List<Item> with Decode {
     decoder.sequence { items =>
       var result: List<Item> = []
       while const Some(value) = items.next()? {
-        result.add(value)
+        result.add value
       }
-      Ok(result)
+      Ok result
     }
   }
 }
@@ -331,7 +331,7 @@ extend<Key: Decode & Hash, Value: Decode> Map<Key, Value> with Decode {
       while const Some((key, value)) = entries.next()? {
         result[key] = value
       }
-      Ok(result)
+      Ok result
     }
   }
 }

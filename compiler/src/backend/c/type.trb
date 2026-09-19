@@ -33,18 +33,18 @@ public fn cTypeOf(program: IrProgram, id: IrTypeId): String {
     // Only ever the result of a function, which is what makes it `void` and not a value
     .NeverType => "void"
     .Text => "torb_text"
-    .Record(layout) => cTypeOfLayout(program, layout)
-    .Variant(layout) => cTypeOfLayout(program, layout)
-    .Tuple(layout) => cTypeOfLayout(program, layout)
+    .Record(layout) => cTypeOfLayout program, layout
+    .Variant(layout) => cTypeOfLayout program, layout
+    .Tuple(layout) => cTypeOfLayout program, layout
     .SharedObject(layout) => {
       if !program.hasLayout(layout) {
         return ""
       }
       "{program.layoutAt(layout).name} *"
     }
-    .Runtime(kind, _) => cTypeOfRuntime(kind)
+    .Runtime(kind, _) => cTypeOfRuntime kind
     // The boxed payload plus one table pointer per bound: a value, so it is passed and returned like a record
-    .Object(bounds) => objectTypeName(program, bounds)
+    .Object(bounds) => objectTypeName program, bounds
     _ => ""
   }
 }
@@ -62,11 +62,11 @@ public fn objectDeclarationOf(program: IrProgram, id: IrTypeId): CDeclaration? {
     }
   }
   var members: List<CMember> = []
-  members.add(CMember.Field("torb_object *", "data"))
+  members.add CMember.Field("torb_object *", "data")
   for index in 0..bounds.length() {
-    members.add(CMember.Field("const torb_witness_table *", witnessMemberNameOf(index)))
+    members.add CMember.Field("const torb_witness_table *", witnessMemberNameOf(index))
   }
-  Some(CDeclaration.Struct(objectTypeName(program, bounds), members))
+  Some CDeclaration.Struct(objectTypeName(program, bounds), members)
 }
 
 /** `w0`, `w1`: the witness pointer of one bound of a trait-typed value, in the order the bounds are in. */
@@ -85,7 +85,7 @@ public fn whyNoCType(program: IrProgram, id: IrTypeId): String {
     .Object(_) => "a trait-typed value without bounds"
     .Box(_) => "a captured `var` binding (milestone 5.8)"
     .Lazy(_) => "a `lazy` parameter (milestone 5.8)"
-    .Runtime(kind, _) => whyNoRuntimeCType(kind)
+    .Runtime(kind, _) => whyNoRuntimeCType kind
     .ConstantValue(_, _) => "a const generic argument as the type of a value"
     _ => "a layout the back end could not lay out"
   }
@@ -118,7 +118,7 @@ public fn cTypeOfLayout(program: IrProgram, id: LayoutId): String {
   if !program.hasLayout(id) {
     return ""
   }
-  const layout = program.layoutAt(id)
+  const layout = program.layoutAt id
   match layout.representation {
     .Inline => layout.name
     .Boxed => "{layout.name} *"
@@ -126,7 +126,7 @@ public fn cTypeOfLayout(program: IrProgram, id: LayoutId): String {
       if field < 0 || field >= layout.fields.length() {
         return ""
       }
-      cTypeOf(program, layout.fields[field].annotation)
+      cTypeOf program, layout.fields[field].annotation
     }
   }
 }
@@ -168,51 +168,51 @@ public fn variantMemberNameOf(variant: Int): String {
 public fn structDeclarationOf(program: IrProgram, layout: Layout): CDeclaration {
   var members: List<CMember> = []
   if isBoxed(layout) {
-    members.add(CMember.Field("torb_header", "header"))
+    members.add CMember.Field("torb_header", "header")
   }
   if layout.variants.isEmpty() {
     for field in layout.fields {
-      members.add(memberOf(program, field))
+      members.add memberOf(program, field)
     }
   } else {
     for field in layout.commonFields() {
-      members.add(memberOf(program, field))
+      members.add memberOf(program, field)
     }
-    members.add(CMember.Field("uint32_t", "tag"))
+    members.add CMember.Field("uint32_t", "tag")
     if const Some(payload) = unionMemberOf(program, layout) {
-      members.add(payload)
+      members.add payload
     }
   }
   if members.isEmpty() {
-    members.add(CMember.Field("unsigned char", "nothing"))
+    members.add CMember.Field("unsigned char", "nothing")
   }
-  CDeclaration.Struct(layout.name, members)
+  CDeclaration.Struct layout.name, members
 }
 
 fn memberOf(program: IrProgram, field: FieldLayout): CMember {
-  const spelling = cTypeOf(program, field.annotation)
+  const spelling = cTypeOf program, field.annotation
   const shown = if spelling.isEmpty() { "torb_void" } else { spelling }
-  CMember.Field(shown, memberNameOf(field))
+  CMember.Field shown, memberNameOf(field)
 }
 
 /** One group per variant that carries fields. A variant layout whose every case is empty needs no union at all. */
 fn unionMemberOf(program: IrProgram, layout: Layout): CMember? {
   var groups: List<CMember> = []
   for index in 0..layout.variants.length() {
-    const fields = layout.fieldsOfVariant(index)
+    const fields = layout.fieldsOfVariant index
     if fields.isEmpty() {
       continue
     }
     var inner: List<CMember> = []
     for field in fields {
-      inner.add(memberOf(program, field))
+      inner.add memberOf(program, field)
     }
-    groups.add(CMember.Group(variantMemberNameOf(index), inner))
+    groups.add CMember.Group(variantMemberNameOf(index), inner)
   }
   if groups.isEmpty() {
     return None
   }
-  Some(CMember.Union("payload", groups))
+  Some CMember.Union("payload", groups)
 }
 
 // --- The order the definitions have to come in ----------------------------------------------------------------------
@@ -229,25 +229,25 @@ fn unionMemberOf(program: IrProgram, layout: Layout): CMember? {
 public fn layoutDefinitionOrder(program: IrProgram): List<LayoutId> {
   var names: List<String> = []
   for layout in program.layouts {
-    names.add(layout.name)
+    names.add layout.name
   }
   var byName = names
   byName.sort({ _ })
   var indexOfName: Map<String, Int> = [:]
   for index in 0..names.length() {
     if !indexOfName.containsKey(names[index]) {
-      indexOfName.set(names[index], index)
+      indexOfName.set names[index], index
     }
   }
   var state: List<Int> = []
   for _ in 0..names.length() {
-    state.add(0)
+    state.add 0
   }
   var order: List<LayoutId> = []
   for name in byName {
     const index = indexOfName.get(name) ?? -1
     if index >= 0 {
-      visitLayout(program, state, order, index)
+      visitLayout program, state, order, index
     }
   }
   order
@@ -261,14 +261,14 @@ fn visitLayout(program: IrProgram, var state: List<Int>, var order: List<LayoutI
   if state[index] != 0 {
     return
   }
-  state.set(index, 1)
+  state.set index, 1
   for needed in inlineDependenciesOf(program, program.layouts[index]) {
     if needed != index {
-      visitLayout(program, state, order, needed)
+      visitLayout program, state, order, needed
     }
   }
-  state.set(index, 2)
-  order.add(LayoutId(index))
+  state.set index, 2
+  order.add LayoutId(index)
 }
 
 /** The layouts one definition needs complete: every field that is stored inline, in field order. */
@@ -277,7 +277,7 @@ fn inlineDependenciesOf(program: IrProgram, layout: Layout): List<Int> {
   for field in layout.fields {
     for found in inlineLayoutsOfType(program, field.annotation) {
       if !needed.contains(found) {
-        needed.add(found)
+        needed.add found
       }
     }
   }
@@ -289,10 +289,10 @@ fn inlineLayoutsOfType(program: IrProgram, id: IrTypeId): List<Int> {
     return []
   }
   match program.typeAt(id) {
-    .Record(layout) => inlineLayoutOf(program, layout)
-    .Variant(layout) => inlineLayoutOf(program, layout)
-    .Tuple(layout) => inlineLayoutOf(program, layout)
-    .FixedArray(item, _) => inlineLayoutsOfType(program, item)
+    .Record(layout) => inlineLayoutOf program, layout
+    .Variant(layout) => inlineLayoutOf program, layout
+    .Tuple(layout) => inlineLayoutOf program, layout
+    .FixedArray(item, _) => inlineLayoutsOfType program, item
     _ => []
   }
 }
@@ -302,7 +302,7 @@ fn inlineLayoutOf(program: IrProgram, id: LayoutId): List<Int> {
   if !program.hasLayout(id) {
     return []
   }
-  const layout = program.layoutAt(id)
+  const layout = program.layoutAt id
   match layout.representation {
     .Boxed => []
     .Inline => [id.value]
@@ -310,7 +310,7 @@ fn inlineLayoutOf(program: IrProgram, id: LayoutId): List<Int> {
       if field < 0 || field >= layout.fields.length() {
         return []
       }
-      inlineLayoutsOfType(program, layout.fields[field].annotation)
+      inlineLayoutsOfType program, layout.fields[field].annotation
     }
   }
 }

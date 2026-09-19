@@ -21,7 +21,7 @@ fn readyEntries(): List<NativeEntry> {
     if const .Planned(_) = entry.state {
       continue
     }
-    found.add(entry)
+    found.add entry
   }
   found
 }
@@ -48,24 +48,24 @@ fn symbolOf(name: String): String {
   ""
 }
 
-group("the manifest of natives") {
-  test("every name is in the table exactly once") {
+group "the manifest of natives" {
+  test "every name is in the table exactly once" {
     var seen: Map<String, Int> = [:]
     for entry in nativeEntries() {
       const known = (seen.get(entry.name) ?? 0) + 1
-      seen.set(entry.name, known)
+      seen.set entry.name, known
     }
     var repeated: List<String> = []
     for (name, count) in seen {
       if count > 1 {
-        repeated.add(name)
+        repeated.add name
       }
     }
     assert(repeated == [])
     assert(seen.length() == nativeEntries().length())
   }
 
-  test("a name that is not in the table is not found") {
+  test "a name that is not in the table is not found" {
     const entries = nativeEntries()
     assert(findNative(entries, "String.thereIsNoSuchMethod") == None)
     assert(findNative(entries, "String.trim") != None)
@@ -73,34 +73,34 @@ group("the manifest of natives") {
     assert(findNative(entries, "Decimal.add") != None)
   }
 
-  test("every runtime symbol is prefixed and every ready one carries its prototype") {
+  test "every runtime symbol is prefixed and every ready one carries its prototype" {
     for entry in nativeEntries() {
       if const .Runtime(function) = entry.target {
-        assert(function.startsWith("torb_"))
+        assert function.startsWith("torb_")
       }
     }
     for entry in readyEntries() {
       if const .Runtime(function) = entry.target {
         assert(!entry.prototype.isEmpty())
-        assert(entry.prototype.contains(function))
-        assert(entry.prototype.endsWith(";"))
+        assert entry.prototype.contains(function)
+        assert entry.prototype.endsWith(";")
       }
     }
   }
 
-  test("a planned entry names its milestone and carries no prototype") {
+  test "a planned entry names its milestone and carries no prototype" {
     var planned = 0
     for entry in nativeEntries() {
       if const .Planned(milestone) = entry.state {
         planned = planned + 1
         assert(!milestone.isEmpty())
-        assert(entry.prototype.isEmpty())
+        assert entry.prototype.isEmpty()
       }
     }
     assert(planned > 0)
   }
 
-  test("the parameters a native stores are recorded") {
+  test "the parameters a native stores are recorded" {
     assert(ownedOf("ArrayList.add") == [1])
     assert(ownedOf("HashMap.set") == [1, 2])
     assert(ownedOf("TrieMap.set") == [1, 2])
@@ -108,12 +108,12 @@ group("the manifest of natives") {
     assert(ownedOf("ArrayList.length") == [])
   }
 
-  test("the trie names are the array and hash implementations") {
+  test "the trie names are the array and hash implementations" {
     const entries = nativeEntries()
     assert(entries.length() > 0)
     for member in ["add", "get", "length", "removeAt", "slice"] {
       assert(symbolOf("ArrayList.{member}") == symbolOf("TrieList.{member}"))
-      assert(symbolOf("ArrayList.{member}").startsWith("torb_list_"))
+      assert symbolOf("ArrayList.{member}").startsWith("torb_list_")
     }
     for member in ["get", "set", "remove", "length"] {
       assert(symbolOf("HashMap.{member}") == symbolOf("TrieMap.{member}"))
@@ -121,7 +121,7 @@ group("the manifest of natives") {
     }
   }
 
-  test("every integer width has every member of Numeric, Signed, Bits and Hash") {
+  test "every integer width has every member of Numeric, Signed, Bits and Hash" {
     const entries = nativeEntries()
     const signedMembers = [
       "add", "subtract", "multiply", "divide", "remainder", "equals", "compare", "show", "parse", "negate",
@@ -144,8 +144,8 @@ group("the manifest of natives") {
     }
   }
 
-  test("the counts of the table") {
-    const counts = countNatives(nativeEntries())
+  test "the counts of the table" {
+    const counts = countNatives nativeEntries()
     assert(counts.ready == 284)
     assert(counts.planned == 82)
     assert(counts.symbols == 106)
@@ -153,19 +153,19 @@ group("the manifest of natives") {
   }
 }
 
-group("the generated header") {
-  test("it is a header with a guard and includes torb.h") {
+group "the generated header" {
+  test "it is a header with a guard and includes torb.h" {
     const lines = headerLines()
     assert(lines[0] == "/*")
-    assert(lines.contains("#ifndef TORB_NATIVES_H"))
-    assert(lines.contains("#define TORB_NATIVES_H"))
-    assert(lines.contains("#include \"torb.h\""))
+    assert lines.contains("#ifndef TORB_NATIVES_H")
+    assert lines.contains("#define TORB_NATIVES_H")
+    assert lines.contains("#include \"torb.h\"")
     assert(lines[lines.length() - 2] == "#endif /* TORB_NATIVES_H */")
   }
 
-  test("every ready runtime symbol is declared exactly once") {
-    const header = renderNativesHeader(nativeEntries())
-    const counts = countNatives(nativeEntries())
+  test "every ready runtime symbol is declared exactly once" {
+    const header = renderNativesHeader nativeEntries()
+    const counts = countNatives nativeEntries()
     var declared = 0
     for line in header.split("\n") {
       if line.endsWith(";") {
@@ -175,18 +175,18 @@ group("the generated header") {
     assert(declared == counts.symbols)
     for entry in readyEntries() {
       if const .Runtime(_) = entry.target {
-        assert(header.contains(entry.prototype))
+        assert header.contains(entry.prototype)
       }
     }
   }
 
-  test("the natives that share a symbol are listed above it, sorted") {
-    const header = renderNativesHeader(nativeEntries())
-    assert(header.contains("/* ArrayList.add, TrieList.add */\nvoid torb_list_add(torb_list *list, const void *value);"))
-    assert(header.contains("/* String.trim */\ntorb_text torb_text_trim(torb_text text);"))
+  test "the natives that share a symbol are listed above it, sorted" {
+    const header = renderNativesHeader nativeEntries()
+    assert header.contains("/* ArrayList.add, TrieList.add */\nvoid torb_list_add(torb_list *list, const void *value);")
+    assert header.contains("/* String.trim */\ntorb_text torb_text_trim(torb_text text);")
   }
 
-  test("it never depends on the order the entries were built in") {
+  test "it never depends on the order the entries were built in" {
     var flipped = nativeEntries()
     flipped.reverse()
     assert(renderNativesHeader(flipped) == renderNativesHeader(nativeEntries()))

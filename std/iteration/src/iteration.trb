@@ -38,41 +38,41 @@ public trait Iterable<Item> {
   // --- Lazy stages -----------------------------------------------------------------------------
 
   fn map<Output>(self, transform: (value: Item) => Output): Iterable<Output> {
-    Mapped(self, transform)
+    Mapped self, transform
   }
 
   fn filter(self, predicate: (value: Item) => Bool): Iterable<Item> {
-    Filtered(self, predicate)
+    Filtered self, predicate
   }
 
   fn flatMap<Output>(self, transform: (value: Item) => Iterable<Output>): Iterable<Output> {
-    FlatMapped(self, transform)
+    FlatMapped self, transform
   }
 
   /** `map` and `filter` in one: keeps the values of all `Some`. The bridge for functions that return an Option. */
   fn filterMap<Output>(self, transform: (value: Item) => Output?): Iterable<Output> {
-    FilterMapped(self, transform)
+    FilterMapped self, transform
   }
 
   /** Like `filterMap`, but ends the pipeline at the first `None`. */
   fn mapWhile<Output>(self, transform: (value: Item) => Output?): Iterable<Output> {
-    MappedWhile(self, transform)
+    MappedWhile self, transform
   }
 
   fn take(self, amount: Int): Iterable<Item> {
-    Taken(self, amount)
+    Taken self, amount
   }
 
   fn skip(self, amount: Int): Iterable<Item> {
-    Skipped(self, amount)
+    Skipped self, amount
   }
 
   fn takeWhile(self, predicate: (value: Item) => Bool): Iterable<Item> {
-    TakenWhile(self, predicate)
+    TakenWhile self, predicate
   }
 
   fn zip<Output>(self, other: Iterable<Output>): Iterable<(Item, Output)> {
-    Zipped(self, other)
+    Zipped self, other
   }
 
   /** `(0, first), (1, second), ...` */
@@ -82,7 +82,7 @@ public trait Iterable<Item> {
 
   /** Lazy as a stage, but has to buffer all values as soon as it is iterated. */
   fn sorted<Key: Compare>(self, by: (value: Item) => Key): Iterable<Item> {
-    Sorted(self, by)
+    Sorted self, by
   }
 
   // --- Terminal operations ------------------------------------------------------------------------
@@ -91,7 +91,7 @@ public trait Iterable<Item> {
   fn collect<Output>(self, collector: Collector<Item, Output>): Output {
     var accumulator = collector.start()
     for value in self {
-      accumulator.add(value)
+      accumulator.add value
     }
     accumulator.finish()
   }
@@ -101,7 +101,7 @@ public trait Iterable<Item> {
    * `const names: List<String> = pipeline.to()`. No special trait needed, this is plain `From<Iterable<Item>>`.
    */
   fn to<Target: From<Iterable<Item>>>(self): Target {
-    Target.from(self)
+    Target.from self
   }
 
   fn toList(self): List<Item> {
@@ -114,21 +114,21 @@ public trait Iterable<Item> {
 
   /** `["a", "b"].joined(separator: ", ")` is `"a, b"`. For `String` items, `show()` is the text itself. */
   fn joined(self, separator: String = ""): String where Item: Show {
-    fold("") { result, item =>
+    fold "" { result, item =>
       if result.isEmpty() { item.show() } else { result + separator + item.show() }
     }
   }
 
   fn forEach(self, action: (value: Item) => Void) {
     for value in self {
-      action(value)
+      action value
     }
   }
 
   fn fold<State>(self, initial: State, combine: (State, Item) => State): State {
     var state = initial
     for value in self {
-      state = combine(state, value)
+      state = combine state, value
     }
     state
   }
@@ -137,7 +137,7 @@ public trait Iterable<Item> {
   fn find(self, predicate: (value: Item) => Bool): Item? {
     for value in self {
       if predicate(value) {
-        return Some(value)
+        return Some value
       }
     }
     None
@@ -157,15 +157,15 @@ public trait Iterable<Item> {
   }
 
   fn count(self): Int {
-    fold(0) { total, _ => total + 1 }
+    fold 0 { total, _ => total + 1 }
   }
 
   fn sum(self): Item where Item: Add & From<Int> {
-    fold(Item.from(0)) { a, b => a + b }
+    fold Item.from(0) { a, b => a + b }
   }
 
   /** Shorthand for `collect(groupingBy(key))` */
   fn groupBy<Key: Hash>(self, key: (value: Item) => Key): Map<Key, List<Item>> {
-    collect(groupingBy(key))
+    collect groupingBy(key)
   }
 }

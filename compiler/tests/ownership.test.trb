@@ -33,76 +33,79 @@ use irOf, ownedIrOf from "./lower-harness"
  */
 fn ownedProgram(program: IrProgram): IrProgram {
   var built = program
-  finishProgram(built)
-  insertOwnership(built)
+  finishProgram built
+  insertOwnership built
   built
 }
 
 /** The final IR of one hand-built function, with the verifier's findings in its place if it has any. */
 fn ownedTextOfFunction(program: IrProgram, identifier: FunctionId): String {
-  const built = ownedProgram(program)
-  const problems = verifyOwnedProgram(built)
+  const built = ownedProgram program
+  const problems = verifyOwnedProgram built
   if !problems.isEmpty() {
-    return problems.joined(separator: "\n")
+    return problems.joined separator: "\n"
   }
-  printFunction(built, built.functionAt(identifier))
+  printFunction built, built.functionAt(identifier)
 }
 
 group "The summary: which parameters take the count" {
   test "a parameter that is only read stays borrowed, and nothing at all is inserted" {
     const source = r"""
-fn length(text: String): Int {
-  text.byteLength()
-}
-"""
+      fn length(text: String): Int {
+        text.byteLength()
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_length") == r"""fn t_acme_x2f_app_main_length(text: String borrowed) -> Int64 {
-  slot %0 parameter text: String
-  slot %1 temporary: Int64
-b0: # acme/app/src/main.trb:1 body
-  %1 = intrinsic textByteLength %0 at acme/app/src/main.trb:2:3
-  return %1 borrowed
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_length") == r"""
+        fn t_acme_x2f_app_main_length(text: String borrowed) -> Int64 {
+          slot %0 parameter text: String
+          slot %1 temporary: Int64
+        b0: # acme/app/src/main.trb:1 body
+          %1 = intrinsic textByteLength %0 at acme/app/src/main.trb:2:3
+          return %1 borrowed
+        }"""
     )
   }
 
   test "a parameter that is returned is owned, and forwarding it costs nothing" {
     const source = r"""
-fn same(text: String): String {
-  text
-}
-"""
+      fn same(text: String): String {
+        text
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_same") == r"""fn t_acme_x2f_app_main_same(text: String owned) -> String {
-  slot %0 parameter text: String
-b0: # acme/app/src/main.trb:1 body
-  return %0 owned last
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_same") == r"""
+        fn t_acme_x2f_app_main_same(text: String owned) -> String {
+          slot %0 parameter text: String
+        b0: # acme/app/src/main.trb:1 body
+          return %0 owned last
+        }"""
     )
   }
 
   test "a parameter that is built into something is owned" {
     const source = r"""
-type Holder {
-  name: String
-  note: String
+      type Holder {
+        name: String
+        note: String
 
-  fn renamed(self, other: String): Holder {
-    copy(name: other)
-  }
-}
-"""
+        fn renamed(self, other: String): Holder {
+          copy(name: other)
+        }
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_Holder_renamed") == r"""fn t_acme_x2f_app_main_Holder_renamed(self: Record(T_acme_x2f_app_main_Holder) borrowed, other: String owned) -> Record(T_acme_x2f_app_main_Holder) {
-  slot %0 parameter self: Record(T_acme_x2f_app_main_Holder)
-  slot %1 parameter other: String
-  slot %2 temporary: String
-  slot %3 temporary: Record(T_acme_x2f_app_main_Holder)
-b0: # acme/app/src/main.trb:5 body
-  %2 = read %0.note
-  %3 = construct T_acme_x2f_app_main_Holder (%1 owned last, %2 owned last)
-  return %3 owned last
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_Holder_renamed") == r"""
+        fn t_acme_x2f_app_main_Holder_renamed(self: Record(T_acme_x2f_app_main_Holder) borrowed, other: String owned) -> Record(T_acme_x2f_app_main_Holder) {
+          slot %0 parameter self: Record(T_acme_x2f_app_main_Holder)
+          slot %1 parameter other: String
+          slot %2 temporary: String
+          slot %3 temporary: Record(T_acme_x2f_app_main_Holder)
+        b0: # acme/app/src/main.trb:5 body
+          %2 = read %0.note
+          %3 = construct T_acme_x2f_app_main_Holder (%1 owned last, %2 owned last)
+          return %3 owned last
+        }"""
     )
   }
 
@@ -113,88 +116,91 @@ b0: # acme/app/src/main.trb:5 body
    */
   test "a parameter handed on to an owned position is moved, and to a borrowed one it is borrowed" {
     const source = r"""
-fn kept(value: String): String {
-  value
-}
+      fn kept(value: String): String {
+        value
+      }
 
-fn size(value: String): Int {
-  value.byteLength()
-}
+      fn size(value: String): Int {
+        value.byteLength()
+      }
 
-fn handedOn(text: String): String {
-  kept(text)
-}
+      fn handedOn(text: String): String {
+        kept(text)
+      }
 
-fn measured(text: String): Int {
-  size(text)
-}
-"""
+      fn measured(text: String): Int {
+        size(text)
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_handedOn") == r"""fn t_acme_x2f_app_main_handedOn(text: String owned) -> String {
-  slot %0 parameter text: String
-  slot %1 temporary: String
-b0: # acme/app/src/main.trb:9 body
-  %1 = call t_acme_x2f_app_main_kept(%0 owned last) at acme/app/src/main.trb:10:3
-  return %1 owned last
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_handedOn") == r"""
+        fn t_acme_x2f_app_main_handedOn(text: String owned) -> String {
+          slot %0 parameter text: String
+          slot %1 temporary: String
+        b0: # acme/app/src/main.trb:9 body
+          %1 = call t_acme_x2f_app_main_kept(%0 owned last) at acme/app/src/main.trb:10:3
+          return %1 owned last
+        }"""
     )
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_measured") == r"""fn t_acme_x2f_app_main_measured(text: String borrowed) -> Int64 {
-  slot %0 parameter text: String
-  slot %1 temporary: Int64
-b0: # acme/app/src/main.trb:13 body
-  %1 = call t_acme_x2f_app_main_size(%0 borrowed) at acme/app/src/main.trb:14:3
-  return %1 borrowed
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_measured") == r"""
+        fn t_acme_x2f_app_main_measured(text: String borrowed) -> Int64 {
+          slot %0 parameter text: String
+          slot %1 temporary: Int64
+        b0: # acme/app/src/main.trb:13 body
+          %1 = call t_acme_x2f_app_main_size(%0 borrowed) at acme/app/src/main.trb:14:3
+          return %1 borrowed
+        }"""
     )
   }
 
   test "a function that calls itself gets its summary as well: the fixpoint needs no special case" {
     const source = r"""
-fn wrapped(text: String, depth: Int): String {
-  if depth == 0 {
-    return text
-  }
-  wrapped(text, depth - 1)
-}
-"""
-    const shown = ownedIrOf(source, "t_acme_x2f_app_main_wrapped")
-    assert(shown.contains("fn t_acme_x2f_app_main_wrapped(text: String owned, depth: Int64 borrowed) -> String \{"))
-    assert(shown.contains("  return %0 owned last"))
-    assert(shown.contains("  %7 = call t_acme_x2f_app_main_wrapped(%0 owned last, %6 borrowed)"))
+      fn wrapped(text: String, depth: Int): String {
+        if depth == 0 {
+          return text
+        }
+        wrapped(text, depth - 1)
+      }
+      """
+    const shown = ownedIrOf source, "t_acme_x2f_app_main_wrapped"
+    assert shown.contains("fn t_acme_x2f_app_main_wrapped(text: String owned, depth: Int64 borrowed) -> String \{")
+    assert shown.contains("  return %0 owned last")
+    assert shown.contains("  %7 = call t_acme_x2f_app_main_wrapped(%0 owned last, %6 borrowed)")
   }
 
   test "a function of the runtime takes the modes of its parameters from the natives manifest" {
     var program = IrProgram()
-    const text = program.internType(IrType.Text)
-    const voidType = program.internType(IrType.VoidType)
-    const list = program.internType(IrType.Runtime(RuntimeKind.ListStorage, [text]))
+    const text = program.internType IrType.Text
+    const voidType = program.internType IrType.VoidType
+    const list = program.internType IrType.Runtime(RuntimeKind.ListStorage, [text])
     const added = IrSignature([IrParameter("self", list, true), IrParameter("value", text)], voidType)
-    var runtime = IrFunction("t_list_add", None, added, [], [], FunctionKind.Runtime("torb_list_add"))
-    runtime.slots.add(SlotDeclaration(list, SlotRole.Parameter(0), "self"))
-    runtime.slots.add(SlotDeclaration(text, SlotRole.Parameter(1), "value"))
-    const callee = program.addFunction(runtime)
+    var runtime = IrFunction "t_list_add", None, added, [], [], FunctionKind.Runtime("torb_list_add")
+    runtime.slots.add SlotDeclaration(list, SlotRole.Parameter(0), "self")
+    runtime.slots.add SlotDeclaration(text, SlotRole.Parameter(1), "value")
+    const callee = program.addFunction runtime
     const signature = IrSignature([IrParameter("items", list, true), IrParameter("value", text)], voidType)
-    var builder = newFunction("t_use", None, signature, "body")
+    var builder = newFunction "t_use", None, signature, "body"
     // The receiver of `torb_list_add` is a `var self`, so its argument is the place and not a value
-    emit(builder, Instruction.Call(None, callee, [referenced(Reference(Slot(0))), borrowed(Slot(1))], []))
-    terminate(builder, Terminator.Return(None))
-    const identifier = finishFunction(program, builder)
-    const owned = ownedProgram(program)
-    assert(verifyOwnedProgram(owned).isEmpty())
+    emit builder, Instruction.Call(None, callee, [referenced(Reference(Slot(0))), borrowed(Slot(1))], [])
+    terminate builder, Terminator.Return(None)
+    const identifier = finishFunction program, builder
+    const owned = ownedProgram program
+    assert verifyOwnedProgram(owned).isEmpty()
     // `torb_list_add` stores its second argument, so the call site hands its own count over
     assert(
       printFunction(owned, owned.functionAt(callee))
         == "runtime fn t_list_add(var self: List(String) borrowed, value: String owned) -> Void = torb_list_add"
     )
     assert(
-      printFunction(owned, owned.functionAt(identifier)) == r"""fn t_use(var items: List(String) borrowed, value: String owned) -> Void {
-  slot %0 parameter items: List(String)
-  slot %1 parameter value: String
-b0: # body
-  call t_list_add(&%0 borrowed, %1 owned last)
-  return
-}"""
+      printFunction(owned, owned.functionAt(identifier)) == r"""
+        fn t_use(var items: List(String) borrowed, value: String owned) -> Void {
+          slot %0 parameter items: List(String)
+          slot %1 parameter value: String
+        b0: # body
+          call t_list_add(&%0 borrowed, %1 owned last)
+          return
+        }"""
     )
   }
 }
@@ -202,19 +208,20 @@ b0: # body
 group "Last use is a move" {
   test "a value that is built and returned is moved out, and the operands of an intrinsic are borrowed" {
     const source = r"""
-fn joined(first: String, second: String): String {
-  first + second
-}
-"""
+      fn joined(first: String, second: String): String {
+        first + second
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_joined") == r"""fn t_acme_x2f_app_main_joined(first: String borrowed, second: String borrowed) -> String {
-  slot %0 parameter first: String
-  slot %1 parameter second: String
-  slot %2 temporary: String
-b0: # acme/app/src/main.trb:1 body
-  %2 = intrinsic textConcat %0, %1 at acme/app/src/main.trb:2:3
-  return %2 owned last
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_joined") == r"""
+        fn t_acme_x2f_app_main_joined(first: String borrowed, second: String borrowed) -> String {
+          slot %0 parameter first: String
+          slot %1 parameter second: String
+          slot %2 temporary: String
+        b0: # acme/app/src/main.trb:1 body
+          %2 = intrinsic textConcat %0, %1 at acme/app/src/main.trb:2:3
+          return %2 owned last
+        }"""
     )
   }
 
@@ -225,98 +232,102 @@ b0: # acme/app/src/main.trb:1 body
    */
   test "the participle pattern: the copy of a parameter into a local is a move" {
     const source = r"""
-fn shout(text: String, other: String): String {
-  var total = text
-  total = total + other
-  total
-}
-"""
+      fn shout(text: String, other: String): String {
+        var total = text
+        total = total + other
+        total
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_shout") == r"""fn t_acme_x2f_app_main_shout(text: String owned, other: String borrowed) -> String {
-  slot %0 parameter text: String
-  slot %1 parameter other: String
-  slot %2 local total: String
-  slot %3 temporary: String
-b0: # acme/app/src/main.trb:1 body
-  %2 = move %0
-  %3 = move %2
-  %2 = intrinsic textConcat %3, %1 at acme/app/src/main.trb:3:11
-  release %3
-  return %2 owned last
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_shout") == r"""
+        fn t_acme_x2f_app_main_shout(text: String owned, other: String borrowed) -> String {
+          slot %0 parameter text: String
+          slot %1 parameter other: String
+          slot %2 local total: String
+          slot %3 temporary: String
+        b0: # acme/app/src/main.trb:1 body
+          %2 = move %0
+          %3 = move %2
+          %2 = intrinsic textConcat %3, %1 at acme/app/src/main.trb:3:11
+          release %3
+          return %2 owned last
+        }"""
     )
   }
 
   test "a use that is not the last one is a retain, and only the last one is a move" {
     const source = r"""
-fn kept(value: String): String {
-  value
-}
+      fn kept(value: String): String {
+        value
+      }
 
-fn pair(text: String): String {
-  const first = kept(text)
-  const second = kept(text)
-  first + second
-}
-"""
+      fn pair(text: String): String {
+        const first = kept(text)
+        const second = kept(text)
+        first + second
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_pair") == r"""fn t_acme_x2f_app_main_pair(text: String owned) -> String {
-  slot %0 parameter text: String
-  slot %1 local first: String
-  slot %2 local second: String
-  slot %3 temporary: String
-b0: # acme/app/src/main.trb:5 body
-  retain %0
-  %1 = call t_acme_x2f_app_main_kept(%0 owned) at acme/app/src/main.trb:6:17
-  %2 = call t_acme_x2f_app_main_kept(%0 owned last) at acme/app/src/main.trb:7:18
-  %3 = intrinsic textConcat %1, %2 at acme/app/src/main.trb:8:3
-  release %1
-  release %2
-  return %3 owned last
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_pair") == r"""
+        fn t_acme_x2f_app_main_pair(text: String owned) -> String {
+          slot %0 parameter text: String
+          slot %1 local first: String
+          slot %2 local second: String
+          slot %3 temporary: String
+        b0: # acme/app/src/main.trb:5 body
+          retain %0
+          %1 = call t_acme_x2f_app_main_kept(%0 owned) at acme/app/src/main.trb:6:17
+          %2 = call t_acme_x2f_app_main_kept(%0 owned last) at acme/app/src/main.trb:7:18
+          %3 = intrinsic textConcat %1, %2 at acme/app/src/main.trb:8:3
+          release %1
+          release %2
+          return %3 owned last
+        }"""
     )
   }
 
   test "a value borrowed twice by one call is borrowed twice and never retained" {
     const source = r"""
-fn joined(first: String, second: String): String {
-  first + second
-}
+      fn joined(first: String, second: String): String {
+        first + second
+      }
 
-fn twice(text: String): String {
-  joined(text, text)
-}
-"""
+      fn twice(text: String): String {
+        joined(text, text)
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_twice") == r"""fn t_acme_x2f_app_main_twice(text: String borrowed) -> String {
-  slot %0 parameter text: String
-  slot %1 temporary: String
-b0: # acme/app/src/main.trb:5 body
-  %1 = call t_acme_x2f_app_main_joined(%0 borrowed, %0 borrowed) at acme/app/src/main.trb:6:3
-  return %1 owned last
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_twice") == r"""
+        fn t_acme_x2f_app_main_twice(text: String borrowed) -> String {
+          slot %0 parameter text: String
+          slot %1 temporary: String
+        b0: # acme/app/src/main.trb:5 body
+          %1 = call t_acme_x2f_app_main_joined(%0 borrowed, %0 borrowed) at acme/app/src/main.trb:6:3
+          return %1 owned last
+        }"""
     )
   }
 
   test "a field read hands the frame a count of the field, and returning it moves that count out" {
     const source = r"""
-type Holder {
-  name: String
-  note: String
-}
+      type Holder {
+        name: String
+        note: String
+      }
 
-fn nameOf(holder: Holder): String {
-  holder.name
-}
-"""
+      fn nameOf(holder: Holder): String {
+        holder.name
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_nameOf") == r"""fn t_acme_x2f_app_main_nameOf(holder: Record(T_acme_x2f_app_main_Holder) borrowed) -> String {
-  slot %0 parameter holder: Record(T_acme_x2f_app_main_Holder)
-  slot %1 temporary: String
-b0: # acme/app/src/main.trb:6 body
-  %1 = read %0.name
-  return %1 owned last
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_nameOf") == r"""
+        fn t_acme_x2f_app_main_nameOf(holder: Record(T_acme_x2f_app_main_Holder) borrowed) -> String {
+          slot %0 parameter holder: Record(T_acme_x2f_app_main_Holder)
+          slot %1 temporary: String
+        b0: # acme/app/src/main.trb:6 body
+          %1 = read %0.name
+          return %1 owned last
+        }"""
     )
   }
 }
@@ -324,23 +335,24 @@ b0: # acme/app/src/main.trb:6 body
 group "Where a value dies" {
   test "a value nobody takes is released where it is made" {
     const source = r"""
-fn ignored(text: String, other: String): Int {
-  const _ = text + other
-  1
-}
-"""
+      fn ignored(text: String, other: String): Int {
+        const _ = text + other
+        1
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_ignored") == r"""fn t_acme_x2f_app_main_ignored(text: String borrowed, other: String borrowed) -> Int64 {
-  slot %0 parameter text: String
-  slot %1 parameter other: String
-  slot %2 temporary: String
-  slot %3 temporary: Int64
-b0: # acme/app/src/main.trb:1 body
-  %2 = intrinsic textConcat %0, %1 at acme/app/src/main.trb:2:13
-  release %2
-  %3 = constant s_literal__Int64_1
-  return %3 borrowed
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_ignored") == r"""
+        fn t_acme_x2f_app_main_ignored(text: String borrowed, other: String borrowed) -> Int64 {
+          slot %0 parameter text: String
+          slot %1 parameter other: String
+          slot %2 temporary: String
+          slot %3 temporary: Int64
+        b0: # acme/app/src/main.trb:1 body
+          %2 = intrinsic textConcat %0, %1 at acme/app/src/main.trb:2:13
+          release %2
+          %3 = constant s_literal__Int64_1
+          return %3 borrowed
+        }"""
     )
   }
 
@@ -351,75 +363,77 @@ b0: # acme/app/src/main.trb:1 body
    */
   test "a value that is dead in one branch is released on that edge, in a block of its own" {
     const source = r"""
-fn pick(flag: Bool, first: String, second: String): String {
-  if flag {
-    return first
-  }
-  second
-}
-"""
+      fn pick(flag: Bool, first: String, second: String): String {
+        if flag {
+          return first
+        }
+        second
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_pick") == r"""fn t_acme_x2f_app_main_pick(flag: Bool borrowed, first: String owned, second: String owned) -> String {
-  slot %0 parameter flag: Bool
-  slot %1 parameter first: String
-  slot %2 parameter second: String
-  slot %3 temporary: Void
-b0: # acme/app/src/main.trb:1 body
-  branch %0 then b3 else b4
-b1: # acme/app/src/main.trb:2 then
-  return %1 owned last
-b2: # acme/app/src/main.trb:2 join
-  return %2 owned last
-b3: # acme/app/src/main.trb:1 drop
-  release %2
-  jump b1
-b4: # acme/app/src/main.trb:1 drop
-  release %1
-  jump b2
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_pick") == r"""
+        fn t_acme_x2f_app_main_pick(flag: Bool borrowed, first: String owned, second: String owned) -> String {
+          slot %0 parameter flag: Bool
+          slot %1 parameter first: String
+          slot %2 parameter second: String
+          slot %3 temporary: Void
+        b0: # acme/app/src/main.trb:1 body
+          branch %0 then b3 else b4
+        b1: # acme/app/src/main.trb:2 then
+          return %1 owned last
+        b2: # acme/app/src/main.trb:2 join
+          return %2 owned last
+        b3: # acme/app/src/main.trb:1 drop
+          release %2
+          jump b1
+        b4: # acme/app/src/main.trb:1 drop
+          release %1
+          jump b2
+        }"""
     )
   }
 
   test "an early return out of nested blocks releases what that path does not need" {
     const source = r"""
-fn early(flag: Bool, other: Bool, text: String): String {
-  const doubled = text + text
-  if flag {
-    if other {
-      return text
-    }
-  }
-  doubled
-}
-"""
+      fn early(flag: Bool, other: Bool, text: String): String {
+        const doubled = text + text
+        if flag {
+          if other {
+            return text
+          }
+        }
+        doubled
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_early") == r"""fn t_acme_x2f_app_main_early(flag: Bool borrowed, other: Bool borrowed, text: String owned) -> String {
-  slot %0 parameter flag: Bool
-  slot %1 parameter other: Bool
-  slot %2 parameter text: String
-  slot %3 local doubled: String
-  slot %4 temporary: Void
-b0: # acme/app/src/main.trb:1 body
-  %3 = intrinsic textConcat %2, %2 at acme/app/src/main.trb:2:19
-  branch %0 then b1 else b5
-b1: # acme/app/src/main.trb:3 then
-  branch %1 then b6 else b7
-b2: # acme/app/src/main.trb:3 join
-  return %3 owned last
-b3: # acme/app/src/main.trb:4 then
-  return %2 owned last
-b4: # acme/app/src/main.trb:4 join
-  jump b2
-b5: # acme/app/src/main.trb:1 drop
-  release %2
-  jump b2
-b6: # acme/app/src/main.trb:3 drop
-  release %3
-  jump b3
-b7: # acme/app/src/main.trb:3 drop
-  release %2
-  jump b4
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_early") == r"""
+        fn t_acme_x2f_app_main_early(flag: Bool borrowed, other: Bool borrowed, text: String owned) -> String {
+          slot %0 parameter flag: Bool
+          slot %1 parameter other: Bool
+          slot %2 parameter text: String
+          slot %3 local doubled: String
+          slot %4 temporary: Void
+        b0: # acme/app/src/main.trb:1 body
+          %3 = intrinsic textConcat %2, %2 at acme/app/src/main.trb:2:19
+          branch %0 then b1 else b5
+        b1: # acme/app/src/main.trb:3 then
+          branch %1 then b6 else b7
+        b2: # acme/app/src/main.trb:3 join
+          return %3 owned last
+        b3: # acme/app/src/main.trb:4 then
+          return %2 owned last
+        b4: # acme/app/src/main.trb:4 join
+          jump b2
+        b5: # acme/app/src/main.trb:1 drop
+          release %2
+          jump b2
+        b6: # acme/app/src/main.trb:3 drop
+          release %3
+          jump b3
+        b7: # acme/app/src/main.trb:3 drop
+          release %2
+          jump b4
+        }"""
     )
   }
 
@@ -430,40 +444,40 @@ b7: # acme/app/src/main.trb:3 drop
    */
   test "a value a loop uses in every iteration is released on the edge out of the loop" {
     const source = r"""
-fn repeated(text: String, count: Int): Int {
-  var total = 0
-  const doubled = text + text
-  for index in 0..count {
-    total = total + doubled.byteLength()
-  }
-  total
-}
-"""
-    const shown = ownedIrOf(source, "t_acme_x2f_app_main_repeated")
-    assert(shown.contains("fn t_acme_x2f_app_main_repeated(text: String borrowed, count: Int64 borrowed) -> Int64 \{"))
-    assert(shown.contains("  %3 = intrinsic textConcat %0, %0 at acme/app/src/main.trb:3:19\n"))
-    assert(shown.contains("b1: # acme/app/src/main.trb:4 for\n  %6 = intrinsic less.i64 %4, %5 at acme/app/src/main.trb:4:3\n  branch %6 then b2 else b5"))
-    assert(shown.contains("b2: # acme/app/src/main.trb:4 body\n  %7 = intrinsic textByteLength %3 at"))
-    assert(shown.contains("b5: # acme/app/src/main.trb:4 drop\n  release %3\n  jump b4"))
+      fn repeated(text: String, count: Int): Int {
+        var total = 0
+        const doubled = text + text
+        for index in 0..count {
+          total = total + doubled.byteLength()
+        }
+        total
+      }
+      """
+    const shown = ownedIrOf source, "t_acme_x2f_app_main_repeated"
+    assert shown.contains("fn t_acme_x2f_app_main_repeated(text: String borrowed, count: Int64 borrowed) -> Int64 \{")
+    assert shown.contains("  %3 = intrinsic textConcat %0, %0 at acme/app/src/main.trb:3:19\n")
+    assert shown.contains("b1: # acme/app/src/main.trb:4 for\n  %6 = intrinsic less.i64 %4, %5 at acme/app/src/main.trb:4:3\n  branch %6 then b2 else b5")
+    assert shown.contains("b2: # acme/app/src/main.trb:4 body\n  %7 = intrinsic textByteLength %3 at")
+    assert shown.contains("b5: # acme/app/src/main.trb:4 drop\n  release %3\n  jump b4")
   }
 
   test "a value a loop replaces every iteration is moved aside, released, and answered after the loop" {
     const source = r"""
-fn grown(text: String): String {
-  var current = text
-  while true {
-    if current.byteLength() < 3 {
-      break
-    }
-    current = current + "."
-  }
-  current
-}
-"""
-    const shown = ownedIrOf(source, "t_acme_x2f_app_main_grown")
-    assert(shown.contains("fn t_acme_x2f_app_main_grown(text: String owned) -> String \{"))
-    assert(shown.contains("b0: # acme/app/src/main.trb:1 body\n  %1 = move %0\n  jump b1"))
-    assert(shown.contains("b3: # acme/app/src/main.trb:3 done\n  return %1 owned last"))
+      fn grown(text: String): String {
+        var current = text
+        while true {
+          if current.byteLength() < 3 {
+            break
+          }
+          current = current + "."
+        }
+        current
+      }
+      """
+    const shown = ownedIrOf source, "t_acme_x2f_app_main_grown"
+    assert shown.contains("fn t_acme_x2f_app_main_grown(text: String owned) -> String \{")
+    assert shown.contains("b0: # acme/app/src/main.trb:1 body\n  %1 = move %0\n  jump b1")
+    assert shown.contains("b3: # acme/app/src/main.trb:3 done\n  return %1 owned last")
     assert(
       shown.contains(
         "  %8 = move %1\n  %1 = intrinsic textConcat %8, %7 at acme/app/src/main.trb:7:15\n  release %8\n  release %7\n  jump b1"
@@ -473,21 +487,22 @@ fn grown(text: String): String {
 
   test "a panic runs nothing at all: what it read is left behind" {
     const source = r"""
-fn refused(text: String): Int {
-  const doubled = text + text
-  panic doubled
-}
-"""
+      fn refused(text: String): Int {
+        const doubled = text + text
+        panic doubled
+      }
+      """
     assert(
-      ownedIrOf(source, "t_acme_x2f_app_main_refused") == r"""fn t_acme_x2f_app_main_refused(text: String borrowed) -> Int64 {
-  slot %0 parameter text: String
-  slot %1 local doubled: String
-  slot %2 temporary: Void
-b0: # acme/app/src/main.trb:1 body
-  %1 = intrinsic textConcat %0, %0 at acme/app/src/main.trb:2:19
-  panic %1 borrowed at acme/app/src/main.trb:3:3
-  unreachable
-}"""
+      ownedIrOf(source, "t_acme_x2f_app_main_refused") == r"""
+        fn t_acme_x2f_app_main_refused(text: String borrowed) -> Int64 {
+          slot %0 parameter text: String
+          slot %1 local doubled: String
+          slot %2 temporary: Void
+        b0: # acme/app/src/main.trb:1 body
+          %1 = intrinsic textConcat %0, %0 at acme/app/src/main.trb:2:19
+          panic %1 borrowed at acme/app/src/main.trb:3:3
+          unreachable
+        }"""
     )
   }
 }
@@ -495,19 +510,19 @@ b0: # acme/app/src/main.trb:1 body
 group "Nothing that is not counted is touched" {
   test "a function over numbers comes out of the pass byte for byte as it went in" {
     const source = r"""
-fn total(first: Int, second: Int): Int {
-  var sum = first
-  sum = sum + second
-  for index in 0..second {
-    if index == 3 {
-      continue
-    }
-    sum = sum + index
-  }
-  sum
-}
-"""
-    const before = irOf(source, "t_acme_x2f_app_main_total")
+      fn total(first: Int, second: Int): Int {
+        var sum = first
+        sum = sum + second
+        for index in 0..second {
+          if index == 3 {
+            continue
+          }
+          sum = sum + index
+        }
+        sum
+      }
+      """
+    const before = irOf source, "t_acme_x2f_app_main_total"
     assert(before == ownedIrOf(source, "t_acme_x2f_app_main_total"))
     // Not one operand says `owned`, and not one instruction was added: a number has no count to keep
     assert(!before.contains("owned"))
@@ -517,30 +532,30 @@ fn total(first: Int, second: Int): Int {
 
   test "a record of numbers is copied and never counted" {
     const source = r"""
-type Point {
-  x: Int
-  y: Int
+      type Point {
+        x: Int
+        y: Int
 
-  fn moved(self, deltaX: Int): Point {
-    copy(x: deltaX)
-  }
-}
-"""
-    const before = irOf(source, "t_acme_x2f_app_main_Point_moved")
+        fn moved(self, deltaX: Int): Point {
+          copy(x: deltaX)
+        }
+      }
+      """
+    const before = irOf source, "t_acme_x2f_app_main_Point_moved"
     assert(before == ownedIrOf(source, "t_acme_x2f_app_main_Point_moved"))
-    assert(before.contains("(self: Record(T_acme_x2f_app_main_Point) borrowed, deltaX: Int64 borrowed)"))
+    assert before.contains("(self: Record(T_acme_x2f_app_main_Point) borrowed, deltaX: Int64 borrowed)")
   }
 }
 
 group "Real code" {
   /** The root of the repository, found from wherever the test runner was started. */
   fn repositoryRoot(): String? {
-    var current = normalizePath(File.absolutePath(".").expect("the working directory"))
+    var current = normalizePath File.absolutePath(".").expect("the working directory")
     while pathDepth(current) >= 1 {
       if File.exists(joinPath(current, "compiler/project.trb")) {
-        return Some(current)
+        return Some current
       }
-      const parent = parentPath(current)
+      const parent = parentPath current
       if parent == current {
         return None
       }
@@ -558,24 +573,24 @@ group "Real code" {
   test "real code passes the extended verifier, and the pass answers the same thing twice" {
     const root = repositoryRoot().expect("the root of the repository above the working directory")
     const tree = readSourceTree([root]).expect("the sources of the repository")
-    const first = joinPath(root, "compiler/src/syntax/source.trb")
-    const second = joinPath(root, "compiler/src/syntax/diagnostic.trb")
-    const checked = check(tree, [first, second], false, true)
+    const first = joinPath root, "compiler/src/syntax/source.trb"
+    const second = joinPath root, "compiler/src/syntax/diagnostic.trb"
+    const checked = check tree, [first, second], false, true
     var reported: List<String> = []
     for file in checked.files {
       for diagnostic in file.diagnostics {
-        reported.add("{file.path}: {diagnostic.message}")
+        reported.add "{file.path}: {diagnostic.message}"
       }
     }
-    assert(reported.isEmpty())
-    var owned = lowerChecked(checked)
-    insertOwnership(owned.program)
-    assert(verifyOwnedProgram(owned.program).isEmpty())
-    assert(owned.program.problems.isEmpty())
+    assert reported.isEmpty()
+    var owned = lowerChecked checked
+    insertOwnership owned.program
+    assert verifyOwnedProgram(owned.program).isEmpty()
+    assert owned.program.problems.isEmpty()
     // The same declarations as before the pass: ownership changes bodies, never what is lowered
     assert(owned.lowered + owned.stubbed == 16)
-    var again = lowerChecked(checked)
-    insertOwnership(again.program)
+    var again = lowerChecked checked
+    insertOwnership again.program
     assert(printProgram(owned.program) == printProgram(again.program))
   }
 }

@@ -49,7 +49,7 @@ const constantDepthLimit = 32
  * `const` is ordinary code and this is never asked.
  */
 public fn checkConstantInitializer(var checker: Checker, module: ModuleId, value: Expression) {
-  const found = evaluateConstant(checker, module, value, 0)
+  const found = evaluateConstant checker, module, value, 0
   if const .NotConstant(at) = found {
     checker.report(
       module,
@@ -65,7 +65,7 @@ public fn checkConstantInitializer(var checker: Checker, module: ModuleId, value
 
 /** Whether an initializer is compile-time evaluable, without saying anything about it. */
 public fn isCompileTimeConstant(var checker: Checker, module: ModuleId, value: Expression): Bool {
-  isValue(evaluateConstant(checker, module, value, 0))
+  isValue evaluateConstant(checker, module, value, 0)
 }
 
 fn isValue(result: ConstantResult): Bool {
@@ -87,40 +87,40 @@ public fn evaluateConstant(
   depth: Int,
 ): ConstantResult {
   if depth > constantDepthLimit {
-    return ConstantResult.NotConstant(expression.span)
+    return ConstantResult.NotConstant expression.span
   }
   match expression.kind {
-    .IntegerLiteral(text) => integerConstant(text, false, expression.span)
-    .FloatLiteral(text) => floatConstant(text, false, expression.span)
-    .BoolLiteral(value) => ConstantResult.Value(ConstantValue.Boolean(value))
-    .VoidLiteral => ConstantResult.Value(ConstantValue.Composite)
-    .CharLiteral(value) => ConstantResult.Value(ConstantValue.Character(value))
-    .TextLiteral(segments) => textConstant(checker, module, segments, depth)
-    .Unary(operator, operand) => unaryConstant(checker, module, operator, operand, depth, expression.span)
-    .Binary(operator, left, right) => binaryConstant(checker, module, operator, left, right, depth, expression.span)
-    .TupleLiteral(items) => argumentsConstant(checker, module, items, depth)
-    .ListLiteral(items) => argumentsConstant(checker, module, items, depth)
-    .MapLiteral(entries) => entriesConstant(checker, module, entries, depth)
-    .RangeLiteral(start, end, _) => rangeConstant(checker, module, start, end, depth)
-    .Call(_, arguments, _) => callConstant(checker, module, expression, arguments, depth)
+    .IntegerLiteral(text) => integerConstant text, false, expression.span
+    .FloatLiteral(text) => floatConstant text, false, expression.span
+    .BoolLiteral(value) => ConstantResult.Value ConstantValue.Boolean(value)
+    .VoidLiteral => ConstantResult.Value ConstantValue.Composite
+    .CharLiteral(value) => ConstantResult.Value ConstantValue.Character(value)
+    .TextLiteral(segments) => textConstant checker, module, segments, depth
+    .Unary(operator, operand) => unaryConstant checker, module, operator, operand, depth, expression.span
+    .Binary(operator, left, right) => binaryConstant checker, module, operator, left, right, depth, expression.span
+    .TupleLiteral(items) => argumentsConstant checker, module, items, depth
+    .ListLiteral(items) => argumentsConstant checker, module, items, depth
+    .MapLiteral(entries) => entriesConstant checker, module, entries, depth
+    .RangeLiteral(start, end, _) => rangeConstant checker, module, start, end, depth
+    .Call(_, arguments, _) => callConstant checker, module, expression, arguments, depth
     // A name, a member path and `.Case` are all "what did this resolve to"
-    .Name(_) | .ImplicitMember(_) => namedConstant(checker, module, expression, depth)
+    .Name(_) | .ImplicitMember(_) => namedConstant checker, module, expression, depth
     .Member(_, _, isOptional) => {
       if isOptional {
-        return ConstantResult.NotConstant(expression.span)
+        return ConstantResult.NotConstant expression.span
       }
-      namedConstant(checker, module, expression, depth)
+      namedConstant checker, module, expression, depth
     }
     // `List<Int>` in front of a call; alone it names a type, and a type never flows as a value
     .Generic(target, _) => evaluateConstant(checker, module, target, depth + 1)
-    _ => ConstantResult.NotConstant(expression.span)
+    _ => ConstantResult.NotConstant expression.span
   }
 }
 
 /** A literal the lexer kept the base of. One that does not parse at all was reported where it was written (gap 38). */
 fn integerConstant(text: String, isNegative: Bool, at: Span): ConstantResult {
   match integerLiteral(text, isNegative) {
-    Some(.Integer(value)) => ConstantResult.Value(ConstantValue.Integer(value))
+    Some(.Integer(value)) => ConstantResult.Value ConstantValue.Integer(value)
     _ => ConstantResult.Broken
   }
 }
@@ -128,7 +128,7 @@ fn integerConstant(text: String, isNegative: Bool, at: Span): ConstantResult {
 fn floatConstant(text: String, isNegative: Bool, at: Span): ConstantResult {
   match Float.parse(text).ok() {
     Some(value) => ConstantResult.Value(ConstantValue.Floating(if isNegative { 0.0 - value } else { value }))
-    .None => ConstantResult.Broken
+    None => ConstantResult.Broken
   }
 }
 
@@ -159,9 +159,9 @@ fn textConstant(
     }
   }
   if isPlain {
-    return ConstantResult.Value(ConstantValue.Text(text))
+    return ConstantResult.Value ConstantValue.Text(text)
   }
-  ConstantResult.Value(ConstantValue.Composite)
+  ConstantResult.Value ConstantValue.Composite
 }
 
 fn argumentsConstant(
@@ -176,7 +176,7 @@ fn argumentsConstant(
       return found
     }
   }
-  ConstantResult.Value(ConstantValue.Composite)
+  ConstantResult.Value ConstantValue.Composite
 }
 
 fn entriesConstant(
@@ -195,7 +195,7 @@ fn entriesConstant(
       return inner
     }
   }
-  ConstantResult.Value(ConstantValue.Composite)
+  ConstantResult.Value ConstantValue.Composite
 }
 
 fn rangeConstant(
@@ -217,7 +217,7 @@ fn rangeConstant(
       return found
     }
   }
-  ConstantResult.Value(ConstantValue.Composite)
+  ConstantResult.Value ConstantValue.Composite
 }
 
 /**
@@ -233,15 +233,15 @@ fn callConstant(
 ): ConstantResult {
   const resolution = match checker.resolutionAt(module, expression.span) {
     Some(found) => found
-    .None => {
-      return ConstantResult.NotConstant(expression.span)
+    None => {
+      return ConstantResult.NotConstant expression.span
     }
   }
   match resolution {
-    .Construct(_) | .CaseOf(_, _) => argumentsConstant(checker, module, arguments, depth)
+    .Construct(_) | .CaseOf(_, _) => argumentsConstant checker, module, arguments, depth
     // A construct a later sub-milestone resolves: nothing is said about what is not understood yet
-    .Deferred => ConstantResult.Value(ConstantValue.Composite)
-    _ => ConstantResult.NotConstant(expression.span)
+    .Deferred => ConstantResult.Value ConstantValue.Composite
+    _ => ConstantResult.NotConstant expression.span
   }
 }
 
@@ -249,15 +249,15 @@ fn callConstant(
 fn namedConstant(var checker: Checker, module: ModuleId, expression: Expression, depth: Int): ConstantResult {
   const resolution = match checker.resolutionAt(module, expression.span) {
     Some(found) => found
-    .None => {
-      return ConstantResult.NotConstant(expression.span)
+    None => {
+      return ConstantResult.NotConstant expression.span
     }
   }
   match resolution {
-    .Constant(symbol, _) => constantOfSymbol(checker, symbol, expression.span, depth)
-    .CaseOf(_, _) => ConstantResult.Value(ConstantValue.Composite)
-    .Deferred => ConstantResult.Value(ConstantValue.Composite)
-    _ => ConstantResult.NotConstant(expression.span)
+    .Constant(symbol, _) => constantOfSymbol checker, symbol, expression.span, depth
+    .CaseOf(_, _) => ConstantResult.Value ConstantValue.Composite
+    .Deferred => ConstantResult.Value ConstantValue.Composite
+    _ => ConstantResult.NotConstant expression.span
   }
 }
 
@@ -267,22 +267,22 @@ fn namedConstant(var checker: Checker, module: ModuleId, expression: Expression,
  */
 fn constantOfSymbol(var checker: Checker, symbol: SymbolId, at: Span, depth: Int): ConstantResult {
   // Asking for the type of a `const` is what checks its initializer, and the resolutions it needs come from that
-  const _ = resultOf(checker, symbol)
+  const _ = resultOf checker, symbol
   const site = match checker.siteOf(symbol) {
     Some(found) => found
-    .None => {
-      return ConstantResult.NotConstant(at)
+    None => {
+      return ConstantResult.NotConstant at
     }
   }
   const binding = match bindingOfSite(site) {
     Some(found) => found
-    .None => {
-      return ConstantResult.NotConstant(at)
+    None => {
+      return ConstantResult.NotConstant at
     }
   }
   const found = evaluateConstant(checker, site.module, binding.value, depth + 1)
   if const .NotConstant(_) = found {
-    return ConstantResult.NotConstant(at)
+    return ConstantResult.NotConstant at
   }
   found
 }
@@ -300,10 +300,10 @@ fn unaryConstant(
   // `-9223372036854775808` only exists as a literal with its sign: the positive half does not fit any integer type
   if const .Negate = operator {
     if const .IntegerLiteral(text) = operand.kind {
-      return integerConstant(text, true, operand.span)
+      return integerConstant text, true, operand.span
     }
     if const .FloatLiteral(text) = operand.kind {
-      return floatConstant(text, true, operand.span)
+      return floatConstant text, true, operand.span
     }
   }
   const inner = evaluateConstant(checker, module, operand, depth + 1)
@@ -318,18 +318,18 @@ fn unaryConstant(
       match value {
         .Integer(number) => {
           if number == Int.minimum {
-            return reportOverflow(checker, module, at)
+            return reportOverflow checker, module, at
           }
-          ConstantResult.Value(ConstantValue.Integer(0 - number))
+          ConstantResult.Value ConstantValue.Integer(0 - number)
         }
-        .Floating(number) => ConstantResult.Value(ConstantValue.Floating(0.0 - number))
-        _ => ConstantResult.NotConstant(at)
+        .Floating(number) => ConstantResult.Value ConstantValue.Floating(0.0 - number)
+        _ => ConstantResult.NotConstant at
       }
     }
     .Not => {
       match value {
-        .Boolean(flag) => ConstantResult.Value(ConstantValue.Boolean(!flag))
-        _ => ConstantResult.NotConstant(at)
+        .Boolean(flag) => ConstantResult.Value ConstantValue.Boolean(!flag)
+        _ => ConstantResult.NotConstant at
       }
     }
   }
@@ -359,12 +359,12 @@ fn binaryConstant(
     }
   }
   match operator {
-    .Add | .Subtract | .Multiply | .Divide | .Remainder => arithmeticConstant(checker, module, operator, a, b, at)
-    .Equal | .NotEqual => equalityConstant(operator, a, b, at)
-    .Less | .LessOrEqual | .Greater | .GreaterOrEqual => orderConstant(operator, a, b, at)
-    .And | .Or => logicalConstant(operator, a, b, at)
+    .Add | .Subtract | .Multiply | .Divide | .Remainder => arithmeticConstant checker, module, operator, a, b, at
+    .Equal | .NotEqual => equalityConstant operator, a, b, at
+    .Less | .LessOrEqual | .Greater | .GreaterOrEqual => orderConstant operator, a, b, at
+    .And | .Or => logicalConstant operator, a, b, at
     // `a ?? b` is `orElse`, which is a call like any other
-    .Coalesce => ConstantResult.NotConstant(at)
+    .Coalesce => ConstantResult.NotConstant at
   }
 }
 
@@ -383,15 +383,15 @@ fn arithmeticConstant(
 ): ConstantResult {
   if const .Integer(left) = a {
     if const .Integer(right) = b {
-      return integerArithmetic(checker, module, operator, left, right, at)
+      return integerArithmetic checker, module, operator, left, right, at
     }
   }
   if const .Floating(left) = a {
     if const .Floating(right) = b {
-      return floatArithmetic(checker, module, operator, left, right, at)
+      return floatArithmetic checker, module, operator, left, right, at
     }
   }
-  ConstantResult.NotConstant(at)
+  ConstantResult.NotConstant at
 }
 
 fn integerArithmetic(
@@ -403,26 +403,26 @@ fn integerArithmetic(
   at: Span,
 ): ConstantResult {
   const folded = match operator {
-    .Add => addedIntegers(left, right)
-    .Subtract => subtractedIntegers(left, right)
-    .Multiply => multipliedIntegers(left, right)
+    .Add => addedIntegers left, right
+    .Subtract => subtractedIntegers left, right
+    .Multiply => multipliedIntegers left, right
     .Divide => {
       if right == 0 {
-        return reportDivisionByZero(checker, module, at)
+        return reportDivisionByZero checker, module, at
       }
       // `Int.minimum / -1` is the one division whose result does not fit
       if left == Int.minimum && right == -1 {
-        return reportOverflow(checker, module, at)
+        return reportOverflow checker, module, at
       }
       Some(left / right)
     }
     .Remainder => {
       if right == 0 {
-        return reportDivisionByZero(checker, module, at)
+        return reportDivisionByZero checker, module, at
       }
       // `Int.minimum % -1` is zero, and the division it is defined through would overflow on the way
       if left == Int.minimum && right == -1 {
-        Some(0)
+        Some 0
       } else {
         Some(left % right)
       }
@@ -430,8 +430,8 @@ fn integerArithmetic(
     _ => None
   }
   match folded {
-    Some(value) => ConstantResult.Value(ConstantValue.Integer(value))
-    .None => reportOverflow(checker, module, at)
+    Some(value) => ConstantResult.Value ConstantValue.Integer(value)
+    None => reportOverflow checker, module, at
   }
 }
 
@@ -449,21 +449,21 @@ fn floatArithmetic(
     .Multiply => left * right
     .Divide => {
       if right == 0.0 {
-        return reportDivisionByZero(checker, module, at)
+        return reportDivisionByZero checker, module, at
       }
       left / right
     }
     .Remainder => {
       if right == 0.0 {
-        return reportDivisionByZero(checker, module, at)
+        return reportDivisionByZero checker, module, at
       }
       left % right
     }
     _ => {
-      return ConstantResult.NotConstant(at)
+      return ConstantResult.NotConstant at
     }
   }
-  ConstantResult.Value(ConstantValue.Floating(folded))
+  ConstantResult.Value ConstantValue.Floating(folded)
 }
 
 /** `Int.maximum - right` is safe for a positive `right`, and `Int.minimum - right` for a negative one. */
@@ -493,13 +493,13 @@ fn subtractedIntegers(left: Int, right: Int): Int? {
  */
 fn multipliedIntegers(left: Int, right: Int): Int? {
   if left == 0 || right == 0 {
-    return Some(0)
+    return Some 0
   }
   if left == 1 {
-    return Some(right)
+    return Some right
   }
   if right == 1 {
-    return Some(left)
+    return Some left
   }
   if left == -1 {
     if right == Int.minimum {
@@ -551,7 +551,7 @@ fn equalityConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue,
     }
   }
   if !isKnown {
-    return ConstantResult.NotConstant(at)
+    return ConstantResult.NotConstant at
   }
   const isNotEqual = match operator {
     .NotEqual => true
@@ -577,7 +577,7 @@ fn orderConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at
     }
   }
   if !isKnown {
-    return ConstantResult.NotConstant(at)
+    return ConstantResult.NotConstant at
   }
   const found = match operator {
     .Less => order < 0
@@ -586,20 +586,20 @@ fn orderConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at
     .GreaterOrEqual => order >= 0
     _ => false
   }
-  ConstantResult.Value(ConstantValue.Boolean(found))
+  ConstantResult.Value ConstantValue.Boolean(found)
 }
 
 fn logicalConstant(operator: InfixOperator, a: ConstantValue, b: ConstantValue, at: Span): ConstantResult {
   const left = match a {
     .Boolean(found) => found
     _ => {
-      return ConstantResult.NotConstant(at)
+      return ConstantResult.NotConstant at
     }
   }
   const right = match b {
     .Boolean(found) => found
     _ => {
-      return ConstantResult.NotConstant(at)
+      return ConstantResult.NotConstant at
     }
   }
   const isAnd = match operator {

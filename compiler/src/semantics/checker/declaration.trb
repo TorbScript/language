@@ -42,17 +42,17 @@ use checkConstantInitializer from "./constant"
 public fn requireVisibleMember(var checker: Checker, candidate: Candidate, name: String, at: Span?) {
   const member = match memberSymbolOf(candidate) {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
   if checker.symbolAt(member).isPublic {
     return
   }
-  const owner = ownerOfCandidate(candidate)
+  const owner = ownerOfCandidate candidate
   const declaring = match declaringTypeOf(checker, member, owner) {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
@@ -61,7 +61,7 @@ public fn requireVisibleMember(var checker: Checker, candidate: Candidate, name:
   }
   const span = match at {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
@@ -77,9 +77,9 @@ public fn requireVisibleMember(var checker: Checker, candidate: Candidate, name:
 
 fn memberSymbolOf(candidate: Candidate): SymbolId? {
   match candidate.kind {
-    .Field(_, field) => Some(field)
-    .Constant(_, symbol) => Some(symbol)
-    .Method(_, symbol) => Some(symbol)
+    .Field(_, field) => Some field
+    .Constant(_, symbol) => Some symbol
+    .Method(_, symbol) => Some symbol
     _ => None
   }
 }
@@ -103,11 +103,11 @@ fn ownerOfCandidate(candidate: Candidate): TypeId {
 fn declaringTypeOf(checker: Checker, member: SymbolId, owner: TypeId): SymbolId? {
   if const .Field(declaring) = checker.symbolAt(member).kind {
     if const .Case(inner) = checker.symbolAt(declaring).kind {
-      return Some(inner)
+      return Some inner
     }
-    return Some(declaring)
+    return Some declaring
   }
-  headSymbolOf(checker, owner)
+  headSymbolOf checker, owner
 }
 
 /**
@@ -116,11 +116,11 @@ fn declaringTypeOf(checker: Checker, member: SymbolId, owner: TypeId): SymbolId?
  * coherence.
  */
 public fn isInsideDeclaration(var checker: Checker, declaring: SymbolId): Bool {
-  const declared = checker.symbolAt(declaring)
+  const declared = checker.symbolAt declaring
   const there = match declared.module {
     // A name the language provides is declared in no file, and nothing about it is private
     Some(found) => found
-    .None => {
+    None => {
       return true
     }
   }
@@ -132,7 +132,7 @@ public fn isInsideDeclaration(var checker: Checker, declaring: SymbolId): Bool {
   }
   const own = match checker.selfType {
     Some(found) => found
-    .None => {
+    None => {
       return false
     }
   }
@@ -146,16 +146,16 @@ public fn isInsideDeclaration(var checker: Checker, declaring: SymbolId): Bool {
 public fn isInsideType(var checker: Checker, owner: TypeId): Bool {
   const declaring = match headSymbolOf(checker, owner) {
     Some(found) => found
-    .None => {
+    None => {
       return false
     }
   }
-  isInsideDeclaration(checker, declaring)
+  isInsideDeclaration checker, declaring
 }
 
 fn headSymbolOf(checker: Checker, annotation: TypeId): SymbolId? {
   if const .Nominal(symbol, _) = checker.types.form(annotation) {
-    return Some(symbol)
+    return Some symbol
   }
   None
 }
@@ -179,14 +179,14 @@ public fn checkConstruction(var checker: Checker, target: Target, arguments: Lis
       return
     }
   }
-  const fields = fieldsOf(checker, owner)
+  const fields = fieldsOf checker, owner
   if fields.isEmpty() {
     return
   }
   if isInsideType(checker, owner) {
     return
   }
-  const shown = checker.describe(owner)
+  const shown = checker.describe owner
   if !isCopy {
     for field in fields {
       if isPublicField(field) || field.hasDefault {
@@ -202,7 +202,7 @@ public fn checkConstruction(var checker: Checker, target: Target, arguments: Lis
       return
     }
   }
-  reportPrivateArguments(checker, fields, arguments, shown)
+  reportPrivateArguments checker, fields, arguments, shown
 }
 
 /** A private field with a default is still not passable from outside, positionally or by name. */
@@ -217,7 +217,7 @@ fn reportPrivateArguments(
     if const Some(label) = argument.label {
       for field in fields {
         if field.name == label.text && !isPublicField(field) {
-          reportPrivateField(checker, shown, field.name, label.span)
+          reportPrivateField checker, shown, field.name, label.span
         }
       }
       continue
@@ -227,7 +227,7 @@ fn reportPrivateArguments(
     }
     if const Some(field) = fields.get(position) {
       if !isPublicField(field) {
-        reportPrivateField(checker, shown, field.name, argument.value.span)
+        reportPrivateField checker, shown, field.name, argument.value.span
       }
     }
     position = position + 1
@@ -277,19 +277,19 @@ public fn requireVisibleFields(
  * can read what the names in it resolved to.
  */
 public fn checkShape(var checker: Checker, module: ModuleId) {
-  const isCode = allowsTopLevelCode(checker, module)
+  const isCode = allowsTopLevelCode checker, module
   const statements = checker.program.graph.at(module).file.statements
   for statement in statements {
     match statement.kind {
-      .Declare(declaration) => checkTopLevelDeclaration(checker, module, declaration, isCode)
+      .Declare(declaration) => checkTopLevelDeclaration checker, module, declaration, isCode
       .Bind(binding) => {
         if !isCode {
-          checkModuleBinding(checker, module, binding)
+          checkModuleBinding checker, module, binding
         }
       }
       _ => {
         if !isCode {
-          reportTopLevelCode(checker, module, statement.span)
+          reportTopLevelCode checker, module, statement.span
         }
       }
     }
@@ -313,14 +313,14 @@ fn allowsTopLevelCode(var checker: Checker, module: ModuleId): Bool {
 }
 
 fn isLibraryModule(var checker: Checker, module: ModuleId): Bool {
-  const found = checker.program.graph.at(module)
+  const found = checker.program.graph.at module
   const package = checker.program.workspace.packages[found.package]
   !package.name.isEmpty() && found.path == joinPath(package.directory, "src/lib.trb")
 }
 
 fn isImported(var checker: Checker, module: ModuleId): Bool {
-  buildImportedModules(checker)
-  checker.importedModules.containsKey(module.value)
+  buildImportedModules checker
+  checker.importedModules.containsKey module.value
 }
 
 /** Which modules of the workspace some module imports. One walk over every `use`, and the answer is kept. */
@@ -337,7 +337,7 @@ fn buildImportedModules(var checker: Checker) {
         if const .Use(usage) = declaration.kind {
           if const .Module(path) = usage.source {
             if const .Found(target) = resolveImport(graph, workspace, source.id, path) {
-              checker.importedModules.set(target.value, true)
+              checker.importedModules.set target.value, true
             }
           }
         }
@@ -371,39 +371,39 @@ fn checkModuleBinding(var checker: Checker, module: ModuleId, binding: Binding) 
     )
     return
   }
-  checkConstantInitializer(checker, module, binding.value)
+  checkConstantInitializer checker, module, binding.value
 }
 
 // --- One declaration ------------------------------------------------------------------------------------------------
 
 fn checkTopLevelDeclaration(var checker: Checker, module: ModuleId, declaration: Declaration, isCode: Bool) {
   const isPublic = declaration.modifiers.visibility == Visibility.Public
-  requireFieldOnlyModifiers(checker, module, declaration.modifiers, declaration.span)
-  requireStandardLibrary(checker, module, declaration.modifiers, declaration.span)
+  requireFieldOnlyModifiers checker, module, declaration.modifiers, declaration.span
+  requireStandardLibrary checker, module, declaration.modifiers, declaration.span
   match declaration.kind {
     .Function(function) => {
-      checkFunctionShape(checker, module, declaration.modifiers, function, false, false)
+      checkFunctionShape checker, module, declaration.modifiers, function, false, false
       if isPublic {
-        checkExposedFunction(checker, module, function)
+        checkExposedFunction checker, module, function
       }
     }
-    .Type(typeDeclaration) => checkTypeShape(checker, module, declaration, typeDeclaration, isPublic)
-    .Trait(traitDeclaration) => checkTraitShape(checker, module, declaration, traitDeclaration, isPublic)
-    .Extend(extension) => checkExtendShape(checker, module, extension)
-    .Foreign(library) => checkForeignShape(checker, module, library)
+    .Type(typeDeclaration) => checkTypeShape checker, module, declaration, typeDeclaration, isPublic
+    .Trait(traitDeclaration) => checkTraitShape checker, module, declaration, traitDeclaration, isPublic
+    .Extend(extension) => checkExtendShape checker, module, extension
+    .Foreign(library) => checkForeignShape checker, module, library
     .Alias(alias) => {
       if isPublic {
-        const symbol = symbolAt(checker, module, alias.name.span)
-        const target = aliasTargetOf(checker, symbol)
-        checkExposure(checker, module, alias.name, [target], "type alias")
+        const symbol = symbolAt checker, module, alias.name.span
+        const target = aliasTargetOf checker, symbol
+        checkExposure checker, module, alias.name, [target], "type alias"
       }
     }
     .Constant(binding) => {
       if !isCode {
-        checkModuleBinding(checker, module, binding)
+        checkModuleBinding checker, module, binding
       }
       if isPublic {
-        checkExposedConstant(checker, module, binding)
+        checkExposedConstant checker, module, binding
       }
     }
     .Use(_) => {}
@@ -430,7 +430,7 @@ fn requireStandardLibrary(var checker: Checker, module: ModuleId, modifiers: Mod
   if !modifiers.isNative {
     return
   }
-  const package = packageNameOf(checker, module)
+  const package = packageNameOf checker, module
   if package.startsWith("std/") {
     return
   }
@@ -445,7 +445,7 @@ fn requireStandardLibrary(var checker: Checker, module: ModuleId, modifiers: Mod
 }
 
 fn packageNameOf(checker: Checker, module: ModuleId): String {
-  const found = checker.program.graph.at(module)
+  const found = checker.program.graph.at module
   checker.program.workspace.packages[found.package].name
 }
 
@@ -484,7 +484,7 @@ fn checkFunctionShape(
 public fn requireDeclaredResult(var checker: Checker, found: TypeId, at: Span) {
   const what = match checker.resultRule.describe() {
     Some(name) => name
-    .None => {
+    None => {
       return
     }
   }
@@ -495,7 +495,7 @@ public fn requireDeclaredResult(var checker: Checker, found: TypeId, at: Span) {
   if checker.absorbs(found) || found == checker.voidType {
     return
   }
-  const shown = checker.describe(found)
+  const shown = checker.describe found
   checker.reportHere(
     Diagnostic.error("{what} does not infer its result: declare it (`: {shown}`)", at)
       .withNote("Without a result type it produces `Void`, and whoever calls it must not have to read the body")
@@ -511,13 +511,13 @@ fn checkTypeShape(
 ) {
   const isNative = declaration.modifiers.isNative
   for member in typeDeclaration.members {
-    checkMemberShape(checker, module, member, false, isNative)
+    checkMemberShape checker, module, member, false, isNative
   }
   if declaration.modifiers.isShared {
-    requireSharedTraits(checker, module, typeDeclaration.name, typeDeclaration.traits)
+    requireSharedTraits checker, module, typeDeclaration.name, typeDeclaration.traits
   }
   if isPublic {
-    checkExposedType(checker, module, typeDeclaration)
+    checkExposedType checker, module, typeDeclaration
   }
 }
 
@@ -530,10 +530,10 @@ fn checkTraitShape(
 ) {
   const isNative = declaration.modifiers.isNative
   for member in traitDeclaration.members {
-    checkMemberShape(checker, module, member, true, isNative)
+    checkMemberShape checker, module, member, true, isNative
   }
   if isPublic {
-    checkExposedTrait(checker, module, traitDeclaration)
+    checkExposedTrait checker, module, traitDeclaration
   }
 }
 
@@ -548,7 +548,7 @@ fn checkMemberShape(
   isTraitMember: Bool,
   ownerIsNative: Bool,
 ) {
-  requireStandardLibrary(checker, module, member.modifiers, member.span)
+  requireStandardLibrary checker, module, member.modifiers, member.span
   match member.kind {
     // `private(var) balance: Int = 0` is the whole spelling: the modifier *is* the `var`, and it is private
     .Field(field) => {
@@ -561,10 +561,10 @@ fn checkMemberShape(
       }
     }
     .Function(function) => {
-      checkFunctionShape(checker, module, member.modifiers, function, isTraitMember, ownerIsNative)
+      checkFunctionShape checker, module, member.modifiers, function, isTraitMember, ownerIsNative
     }
-    .Constant(_) => requireFieldOnlyModifiers(checker, module, member.modifiers, member.span)
-    .Case(_) => requireFieldOnlyModifiers(checker, module, member.modifiers, member.span)
+    .Constant(_) => requireFieldOnlyModifiers checker, module, member.modifiers, member.span
+    .Case(_) => requireFieldOnlyModifiers checker, module, member.modifiers, member.span
   }
 }
 
@@ -577,7 +577,7 @@ fn requireSharedTraits(var checker: Checker, module: ModuleId, name: Name, trait
     const reference = clause.capability
     const symbol = match traitSymbolOf(checker, module, reference) {
       Some(found) => found
-      .None => {
+      None => {
         continue
       }
     }
@@ -596,7 +596,7 @@ fn requireSharedTraits(var checker: Checker, module: ModuleId, name: Name, trait
 fn traitSymbolOf(checker: Checker, module: ModuleId, reference: TypeReference): SymbolId? {
   if const .Named(path, _) = reference.kind {
     if const Some(last) = path.last() {
-      return checker.resolvedName(module, last.span)
+      return checker.resolvedName module, last.span
     }
   }
   None
@@ -604,7 +604,7 @@ fn traitSymbolOf(checker: Checker, module: ModuleId, reference: TypeReference): 
 
 fn isSharedTrait(var checker: Checker, symbol: SymbolId): Bool {
   if const .Trait = checker.symbolAt(symbol).kind {
-    const identifier = typeSignatureOf(checker, symbol)
+    const identifier = typeSignatureOf checker, symbol
     return checker.typeSignature(identifier).isShared
   }
   // A supertrait that is not a trait was reported where the name stands; nothing follows from it here
@@ -633,7 +633,7 @@ fn checkExtendShape(var checker: Checker, module: ModuleId, extension: ExtendDec
             .withNote("Fields and cases belong to the declaration of the type, so that a `match` over it is decidable")
         )
       }
-      _ => checkMemberShape(checker, module, member, false, isNative)
+      _ => checkMemberShape checker, module, member, false, isNative
     }
   }
 }
@@ -686,7 +686,7 @@ fn checkExposure(var checker: Checker, module: ModuleId, name: Name, types: List
   for annotation in types {
     const leaked = match privateTypeIn(checker, module, annotation, 0) {
       Some(found) => found
-      .None => {
+      None => {
         continue
       }
     }
@@ -701,64 +701,64 @@ fn checkExposure(var checker: Checker, module: ModuleId, name: Name, types: List
 }
 
 fn checkExposedFunction(var checker: Checker, module: ModuleId, function: FunctionDeclaration) {
-  const symbol = symbolAt(checker, module, function.name.span)
-  const identifier = signatureOf(checker, symbol)
+  const symbol = symbolAt checker, module, function.name.span
+  const identifier = signatureOf checker, symbol
   const form = checker.signature(identifier).form
-  checkExposure(checker, module, function.name, typesOfForm(form), "function")
+  checkExposure checker, module, function.name, typesOfForm(form), "function"
 }
 
 fn checkExposedConstant(var checker: Checker, module: ModuleId, binding: Binding) {
   if const .Binding(_) = binding.pattern.kind {
-    const symbol = symbolAt(checker, module, binding.pattern.span)
-    const annotation = resultOf(checker, symbol)
-    const name = Name(checker.symbolAt(symbol).name, binding.pattern.span)
-    checkExposure(checker, module, name, [annotation], "constant")
+    const symbol = symbolAt checker, module, binding.pattern.span
+    const annotation = resultOf checker, symbol
+    const name = Name checker.symbolAt(symbol).name, binding.pattern.span
+    checkExposure checker, module, name, [annotation], "constant"
   }
 }
 
 fn checkExposedType(var checker: Checker, module: ModuleId, typeDeclaration: TypeDeclaration) {
-  const symbol = symbolAt(checker, module, typeDeclaration.name.span)
-  const identifier = typeSignatureOf(checker, symbol)
-  const shape = checker.typeSignature(identifier)
+  const symbol = symbolAt checker, module, typeDeclaration.name.span
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
   var types: List<TypeId> = []
   // A `private` field is not part of the surface: nobody outside can read it, so its type is nobody's business there
   for field in shape.fields {
     if isPublicField(field) {
-      types.add(field.annotation)
+      types.add field.annotation
     }
   }
   for variant in shape.cases {
     for field in variant.fields {
       if isPublicField(field) {
-        types.add(field.annotation)
+        types.add field.annotation
       }
     }
   }
-  checkExposure(checker, module, typeDeclaration.name, types, "type")
+  checkExposure checker, module, typeDeclaration.name, types, "type"
 }
 
 fn checkExposedTrait(var checker: Checker, module: ModuleId, traitDeclaration: TraitDeclaration) {
-  const symbol = symbolAt(checker, module, traitDeclaration.name.span)
-  const identifier = typeSignatureOf(checker, symbol)
-  const shape = checker.typeSignature(identifier)
+  const symbol = symbolAt checker, module, traitDeclaration.name.span
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
   var types: List<TypeId> = []
   for (_, member) in shape.members {
     if !checker.symbolAt(member).isPublic {
       continue
     }
-    const inner = signatureOf(checker, member)
+    const inner = signatureOf checker, member
     const form = checker.signature(inner).form
-    types.addAll(typesOfForm(form))
+    types.addAll typesOfForm(form)
   }
-  checkExposure(checker, module, traitDeclaration.name, types, "trait")
+  checkExposure checker, module, traitDeclaration.name, types, "trait"
 }
 
 fn typesOfForm(form: FunctionForm): List<TypeId> {
   var types: List<TypeId> = []
   for parameter in form.parameters {
-    types.add(parameter.annotation)
+    types.add parameter.annotation
   }
-  types.add(form.result)
+  types.add form.result
   types
 }
 
@@ -770,19 +770,19 @@ fn privateTypeIn(var checker: Checker, module: ModuleId, annotation: TypeId, dep
   match checker.types.form(annotation) {
     .Nominal(symbol, arguments) => {
       if isPrivateType(checker, module, symbol) {
-        return Some(symbol)
+        return Some symbol
       }
-      privateTypeInAll(checker, module, arguments, depth)
+      privateTypeInAll checker, module, arguments, depth
     }
-    .Traits(bounds) => privateTypeInAll(checker, module, bounds, depth)
+    .Traits(bounds) => privateTypeInAll checker, module, bounds, depth
     .Tuple(fields) => {
       var inner: List<TypeId> = []
       for field in fields {
-        inner.add(field.annotation)
+        inner.add field.annotation
       }
-      privateTypeInAll(checker, module, inner, depth)
+      privateTypeInAll checker, module, inner, depth
     }
-    .Function(form) => privateTypeInAll(checker, module, typesOfForm(form), depth)
+    .Function(form) => privateTypeInAll checker, module, typesOfForm(form), depth
     _ => None
   }
 }
@@ -790,14 +790,14 @@ fn privateTypeIn(var checker: Checker, module: ModuleId, annotation: TypeId, dep
 fn privateTypeInAll(var checker: Checker, module: ModuleId, types: List<TypeId>, depth: Int): SymbolId? {
   for annotation in types {
     if const Some(found) = privateTypeIn(checker, module, annotation, depth + 1) {
-      return Some(found)
+      return Some found
     }
   }
   None
 }
 
 fn isPrivateType(checker: Checker, module: ModuleId, symbol: SymbolId): Bool {
-  const declared = checker.symbolAt(symbol)
+  const declared = checker.symbolAt symbol
   if declared.isPublic {
     return false
   }
@@ -810,7 +810,7 @@ fn isPrivateType(checker: Checker, module: ModuleId, symbol: SymbolId): Bool {
   }
   match declared.module {
     Some(found) => found == module
-    .None => false
+    None => false
   }
 }
 
@@ -829,7 +829,7 @@ fn symbolAt(checker: Checker, module: ModuleId, at: Span): SymbolId {
 public fn checkSharedIdentity(var checker: Checker, target: Target, arguments: List<TypeId>, at: Span) {
   const wanted = match checker.wellKnown.symbolNamed("isSame") {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
@@ -844,14 +844,14 @@ public fn checkSharedIdentity(var checker: Checker, target: Target, arguments: L
   }
   const annotation = match arguments.first() {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
   if checker.absorbs(annotation) || isSharedType(checker, annotation) {
     return
   }
-  const shown = checker.describe(annotation)
+  const shown = checker.describe annotation
   checker.reportHere(
     Diagnostic.error("`isSame` compares identity, and a `{shown}` is a value", at)
       .withNote("Use `==`: two values are the same when their content is. Only a `shared type` has an identity")
@@ -876,13 +876,13 @@ public fn isSharedType(var checker: Checker, annotation: TypeId): Bool {
   }
   const symbol = match headSymbolOf(checker, annotation) {
     Some(found) => found
-    .None => {
+    None => {
       return false
     }
   }
   // A generic parameter or a tuple has no declaration that could say `shared`, and nothing is claimed about it
   if const .Type = checker.symbolAt(symbol).kind {
-    const identifier = typeSignatureOf(checker, symbol)
+    const identifier = typeSignatureOf checker, symbol
     return checker.typeSignature(identifier).isShared
   }
   true

@@ -32,7 +32,7 @@ group "Two `var` accesses of one call" {
 
   test "two different bindings are two different places" {
     const source = "{report}{swap}fn probe(var first: Report, var second: Report) \{\n  swap(first, second)\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "the receiver of a `var self` call is one of the accesses" {
@@ -49,7 +49,7 @@ group "Two `var` accesses of one call" {
 
   test "two indexes that were written as different literals can" {
     const source = "{report}{swap}fn probe(var entries: List<Report>) \{\n  swap(entries[0], entries[1])\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "the same literal index twice cannot" {
@@ -66,7 +66,7 @@ group "Two `var` accesses of one call" {
   test "two different fields of one value are disjoint" {
     const source = "{report}fn both(var one: String, var other: String) \{\n  one = other\n\}\n\n"
       + "fn probe(var entry: Report) \{\n  both(entry.title, entry.subtitle)\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a field and the value it belongs to are not" {
@@ -84,34 +84,34 @@ group "Two `var` accesses of one call" {
 group "What the arguments read has ended before the access begins" {
   test "an argument that reads the place a `var` parameter will own" {
     const source = "{report}{rename}fn probe(var entry: Report) \{\n  rename(entry, entry.subtitle)\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a nested call that reads it is fine too" {
     const source = "{report}{rename}fn shout(text: String): String \{\n  text\n\}\n\n"
       + "fn probe(var entry: Report) \{\n  rename(entry, shout(entry.subtitle))\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "an argument that reads the receiver of a `var self` call" {
     const source = "{report}fn probe(var entry: Report) \{\n  entry.rename(entry.subtitle)\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "the classic pop, which the stricter rule used to reject" {
     const source = "fn probe(var pending: List<Int>) \{\n  pending.removeAt(pending.length() - 1)\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "an interpolated part is read before the access, like every other read" {
     const source = "{report}{rename}fn probe(var entry: Report) \{\n  rename(entry, \"a \{entry.subtitle\}\")\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "an index key is a read of its own and runs in source order" {
     const source = "fn probe(var entries: List<Int>, var value: Int) \{\n"
       + "  entries.set(entries.length() - 1, value)\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 }
 
@@ -124,7 +124,7 @@ group "An access stays open while a closure argument runs" {
   test "a disjoint field inside the block is fine" {
     const source = "{report}fn edit(var one: String, body: () => Void) \{\n  body()\n\}\n\n"
       + "fn probe(var entry: Report) \{\n  edit(entry.title) \{\n    print entry.subtitle\n  \}\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "the field the block reads is the one the call is changing" {
@@ -142,30 +142,30 @@ group "An access stays open while a closure argument runs" {
   test "a closure of a call with no `var` access is not held against anything" {
     const source = "{report}fn run(body: () => Void) \{\n  body()\n\}\n\n"
       + "fn probe(var entry: Report) \{\n  run \{\n    entry.rename(\"inside\")\n  \}\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 }
 
 group "What is not an access" {
   test "the subject of a `for` is evaluated once into a temporary (gap 40)" {
     const source = "fn probe(var items: List<Int>) \{\n  for value in items \{\n    items.add(value)\n  \}\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "a `const` path is never an access, so two reads of one value are fine" {
     const source = "{report}fn join(left: String, right: String): String \{\n  left + right\n\}\n\n"
       + "fn probe(entry: Report): String \{\n  join(entry.title, entry.subtitle)\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "two calls one after the other each have their own access" {
     const source = "{report}fn probe(var entry: Report) \{\n  entry.rename(\"one\")\n  entry.rename(\"two\")\n  print entry.title\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 
   test "the `var` argument of an inner call has ended when the outer access begins (trap 1 of stage 0)" {
     const source = "{report}{rename}fn pick(var target: Report): String \{\n  target.title\n\}\n\n"
       + "fn probe(var entry: Report) \{\n  rename(entry, pick(entry))\n\}"
-    assert(problems(source).isEmpty())
+    assert problems(source).isEmpty()
   }
 }

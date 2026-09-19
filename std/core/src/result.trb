@@ -34,21 +34,21 @@ public type Result<Value, Failure> {
 
   fn mapError<OtherFailure>(self, transform: (error: Failure) => OtherFailure): Result<Value, OtherFailure> {
     match self {
-      Ok(value) => Ok(value)
-      Fail(error) => Fail(transform(error))
+      Ok(value) => Ok value
+      Fail(error) => Fail transform(error)
     }
   }
 
   fn flatMap<Output>(self, transform: (value: Value) => Result<Output, Failure>): Result<Output, Failure> {
     match self {
-      Ok(value) => transform(value)
-      Fail(error) => Fail(error)
+      Ok(value) => transform value
+      Fail(error) => Fail error
     }
   }
 
   fn forEach(self, action: (value: Value) => Void) {
     if const Ok(value) = self {
-      action(value)
+      action value
     }
   }
 
@@ -58,7 +58,7 @@ public type Result<Value, Failure> {
 
   fn ok(self): Value? {
     match self {
-      Ok(value) => Some(value)
+      Ok(value) => Some value
       Fail(_) => None
     }
   }
@@ -97,16 +97,16 @@ extend<Value, Failure, Target: From<Iterable<Value>>> Result<Target, Failure> wi
     var failure: Failure? = None
     const target = Target.from(value.mapWhile { item =>
       match item {                       // The pipeline is lazy: this runs while `Target.from` pulls
-        Ok(success) => Some(success)
+        Ok(success) => Some success
         Fail(error) => {
-          failure = Some(error)
+          failure = Some error
           None
         }
       }
     })
     match failure {
-      Some(error) => Fail(error)
-      None => Ok(target)
+      Some(error) => Fail error
+      None => Ok target
     }
   }
 }

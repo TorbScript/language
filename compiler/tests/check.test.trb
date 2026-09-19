@@ -9,44 +9,44 @@ use check from "../src/semantics/check"
  */
 const workspace = [
   "project.trb": r"""
-name "acme/all"
-workspace { members "std/*", "app", "other" }
-""",
+    name "acme/all"
+    workspace { members "std/*", "app", "other" }
+    """,
   "std/prelude/project.trb": r"""
-name "std/prelude"
-""",
+    name "std/prelude"
+    """,
   "std/prelude/src/types.trb": r"""
-public type Int {}
-public type Text {}
-public type Bool {}
-public type List<Item> {}
-public trait Show {}
-public type Option<Value> {
-  case Some(value: Value)
-  case None
-}
-""",
+    public type Int {}
+    public type Text {}
+    public type Bool {}
+    public type List<Item> {}
+    public trait Show {}
+    public type Option<Value> {
+      case Some(value: Value)
+      case None
+    }
+    """,
   "std/prelude/src/lib.trb": r"""
-public use Int, Text, Bool, List, Show, Option from "./types"
-public use Option.Some, Option.None from "./types"
-""",
+    public use Int, Text, Bool, List, Show, Option from "./types"
+    public use Option.Some, Option.None from "./types"
+    """,
   "app/project.trb": r"""
-name "acme/app"
-""",
+    name "acme/app"
+    """,
   "other/project.trb": r"""
-name "acme/other"
-""",
+    name "acme/other"
+    """,
   "other/src/lib.trb": r"""
-public type Thing {}
-""",
+    public type Thing {}
+    """,
 ]
 
 fn workspaceWith(files: Map<String, String>): SourceTree {
   var all = workspace
   for (path, text) in files {
-    all.set(path, text)
+    all.set path, text
   }
-  SourceTree.of(all)
+  SourceTree.of all
 }
 
 /** Everything that is wrong in `app`, in the order the compiler reports it. */
@@ -54,7 +54,7 @@ fn messages(files: Map<String, String>): List<String> {
   var found: List<String> = []
   for file in check(workspaceWith(files), ["app"]).files {
     for diagnostic in file.diagnostics {
-      found.add(diagnostic.message)
+      found.add diagnostic.message
     }
   }
   found
@@ -80,18 +80,18 @@ group "Modules" {
     assert(
       messages([
         "app/src/helper.trb": r"""
-public type Helper {
-  value: Int
-}
-type Hidden {}
-""",
+          public type Helper {
+            value: Int
+          }
+          type Hidden {}
+          """,
         "app/src/main.trb": r"""
-use Helper from "./helper"
+          use Helper from "./helper"
 
-fn take(helper: Helper): Int {
-  helper.value
-}
-""",
+          fn take(helper: Helper): Int {
+            helper.value
+          }
+          """,
       ]).isEmpty()
     )
   }
@@ -114,20 +114,20 @@ fn take(helper: Helper): Int {
     assert(
       messages([
         "app/project.trb": r"""
-name "acme/app"
-dependencies { runtime "acme/other" }
-""",
+          name "acme/app"
+          dependencies { runtime "acme/other" }
+          """,
         "app/src/main.trb": r"""
-use Thing from "acme/other"
+          use Thing from "acme/other"
 
-fn take(thing: Thing) {}
-""",
+          fn take(thing: Thing) {}
+          """,
       ]).isEmpty()
     )
   }
 
   test "the standard library needs no entry in dependencies" {
-    assert(messages(["app/src/main.trb": "use Int from \"std/prelude\""]).isEmpty())
+    assert messages(["app/src/main.trb": "use Int from \"std/prelude\""]).isEmpty()
   }
 
   test "a module of a package is `src/<path>.trb` of it" {
@@ -150,19 +150,19 @@ fn take(thing: Thing) {}
     assert(
       messages([
         "app/src/first.trb": r"""
-use Second from "./second"
+          use Second from "./second"
 
-public type First {
-  next: Second
-}
-""",
+          public type First {
+            next: Second
+          }
+          """,
         "app/src/second.trb": r"""
-use First from "./first"
+          use First from "./first"
 
-public type Second {
-  previous: First?
-}
-""",
+          public type Second {
+            previous: First?
+          }
+          """,
       ]).isEmpty()
     )
   }
@@ -174,10 +174,10 @@ public type Second {
         "app/src/middle.trb": "public use Deep from \"./deep\"",
         "app/src/surface.trb": "public use Deep from \"./middle\"",
         "app/src/main.trb": r"""
-use Deep from "./surface"
+          use Deep from "./surface"
 
-fn take(value: Deep) {}
-""",
+          fn take(value: Deep) {}
+          """,
       ]).isEmpty()
     )
   }
@@ -187,10 +187,10 @@ fn take(value: Deep) {}
       messages([
         "app/src/shapes.trb": r"public type Circle {}",
         "app/src/main.trb": r"""
-use * as shapes from "./shapes"
+          use * as shapes from "./shapes"
 
-fn take(shape: shapes.Circle) {}
-""",
+          fn take(shape: shapes.Circle) {}
+          """,
       ]).isEmpty()
     )
   }
@@ -200,16 +200,16 @@ fn take(shape: shapes.Circle) {}
       messages([
         "app/src/shapes.trb": r"public type Circle {}",
         "app/src/main.trb": r"""
-use * as shapes from "./shapes"
+          use * as shapes from "./shapes"
 
-fn take(shape: shapes.Square) {}
-""",
+          fn take(shape: shapes.Square) {}
+          """,
       ]) == ["`Square` is not exported by the module `shapes`"]
     )
   }
 
   test "a module without names brings only its extensions" {
-    assert(messages(["app/src/extra.trb": r"extend Int {}", "app/src/main.trb": "use \"./extra\""]).isEmpty())
+    assert messages(["app/src/extra.trb": r"extend Int {}", "app/src/main.trb": "use \"./extra\""]).isEmpty()
   }
 }
 
@@ -218,20 +218,20 @@ group "Aliases of an import" {
     const files = [
       "app/src/helper.trb": r"public type Helper {}",
       "app/src/main.trb": r"""
-use Helper as Assistant from "./helper"
+        use Helper as Assistant from "./helper"
 
-fn take(value: Assistant) {}
-""",
+        fn take(value: Assistant) {}
+        """,
     ]
-    assert(messages(files).isEmpty())
+    assert messages(files).isEmpty()
     assert(
       messages([
         "app/src/helper.trb": r"public type Helper {}",
         "app/src/main.trb": r"""
-use Helper as Assistant from "./helper"
+          use Helper as Assistant from "./helper"
 
-fn take(value: Helper) {}
-""",
+          fn take(value: Helper) {}
+          """,
       ]) == ["Unknown type `Helper`"]
     )
   }
@@ -242,10 +242,10 @@ fn take(value: Helper) {}
         "app/src/helper.trb": r"public type Helper {}",
         "app/src/middle.trb": "public use Helper as Assistant from \"./helper\"",
         "app/src/main.trb": r"""
-use Assistant from "./middle"
+          use Assistant from "./middle"
 
-fn take(value: Assistant) {}
-""",
+          fn take(value: Assistant) {}
+          """,
       ]).isEmpty()
     )
   }
@@ -254,10 +254,10 @@ fn take(value: Assistant) {}
     assert(
       problems(
         r"""
-use Option.Some as Just, Option.None
+          use Option.Some as Just, Option.None
 
-fn take(value: Option<Int>) {}
-"""
+          fn take(value: Option<Int>) {}
+          """
       ).isEmpty()
     )
   }
@@ -283,9 +283,9 @@ fn take(value: Option<Int>) {}
     assert(
       messages([
         "app/src/helper.trb": r"""
-public type Helper {}
-public type Other {}
-""",
+          public type Helper {}
+          public type Other {}
+          """,
         "app/src/main.trb": "use Helper as Same from \"./helper\"\nuse Other as Same from \"./helper\"",
       ]) == ["`Same` is already imported"]
     )
@@ -302,20 +302,20 @@ public type Other {}
       messages([
         "app/src/helper.trb": r"public type Helper {}",
         "app/src/main.trb": r"""
-use Helper as Assistant from "./helper"
+          use Helper as Assistant from "./helper"
 
-fn take(value: Assistent) {}
-""",
+          fn take(value: Assistent) {}
+          """,
       ]) == ["Unknown type `Assistent`"]
     )
     assert(
       notes([
         "app/src/helper.trb": r"public type Helper {}",
         "app/src/main.trb": r"""
-use Helper as Assistant from "./helper"
+          use Helper as Assistant from "./helper"
 
-fn take(value: Assistent) {}
-""",
+          fn take(value: Assistent) {}
+          """,
       ]) == ["Did you mean `Assistant`?"]
     )
   }
@@ -326,16 +326,16 @@ group "Constants of a module" {
     assert(
       messages([
         "app/src/limits.trb": r"""
-public const highest = 100
-const secret = 1
-""",
+          public const highest = 100
+          const secret = 1
+          """,
         "app/src/main.trb": r"""
-use highest from "./limits"
+          use highest from "./limits"
 
-fn take(value: Int): Int {
-  value
-}
-""",
+          fn take(value: Int): Int {
+            value
+          }
+          """,
       ]).isEmpty()
     )
     const files = [
@@ -352,9 +352,9 @@ group "Names of a file" {
     assert(
       problems(
         r"""
-type Point {}
-fn Point() {}
-"""
+          type Point {}
+          fn Point() {}
+          """
       ) == ["`Point` is already declared in this file"]
     )
   }
@@ -373,9 +373,9 @@ fn Point() {}
       messages([
         "app/src/helper.trb": r"public type Helper {}",
         "app/src/main.trb": r"""
-type Helper {}
-use Helper from "./helper"
-""",
+          type Helper {}
+          use Helper from "./helper"
+          """,
       ]) == ["`Helper` is already declared in this file"]
     )
   }
@@ -384,12 +384,12 @@ use Helper from "./helper"
     assert(
       problems(
         r"""
-type Int {}
+          type Int {}
 
-fn take(value: Int): Int {
-  value
-}
-"""
+          fn take(value: Int): Int {
+            value
+          }
+          """
       ).isEmpty()
     )
   }
@@ -397,17 +397,17 @@ fn take(value: Int): Int {
   test "a file with a syntax error still contributes its symbols" {
     const found = messages([
       "app/src/helper.trb": r"""
-public type Helper {}
-fn broken( {
-""",
+        public type Helper {}
+        fn broken( {
+        """,
       "app/src/main.trb": r"""
-use Helper from "./helper"
+        use Helper from "./helper"
 
-fn take(value: Helper) {}
-""",
+        fn take(value: Helper) {}
+        """,
     ])
     assert(!found.contains("`Helper` is not exported by `./helper`"))
-    assert(found.isNotEmpty())
+    assert found.isNotEmpty()
   }
 }
 
@@ -416,16 +416,16 @@ group "Cases" {
     assert(
       messages([
         "app/src/shapes.trb": r"""
-public type Shape {
-  case Circle(radius: Int)
-  case Empty
-}
-""",
+          public type Shape {
+            case Circle(radius: Int)
+            case Empty
+          }
+          """,
         "app/src/main.trb": r"""
-use Shape, Shape.Circle, Shape.Empty from "./shapes"
+          use Shape, Shape.Circle, Shape.Empty from "./shapes"
 
-fn take(shape: Shape): Shape { Circle(1) }
-""",
+          fn take(shape: Shape): Shape { Circle(1) }
+          """,
       ]).isEmpty()
     )
   }
@@ -435,22 +435,22 @@ fn take(shape: Shape): Shape { Circle(1) }
     assert(
       problems(
         r"""
-use Option.Some, Option.None
+          use Option.Some, Option.None
 
-fn take(value: Option<Int>) {}
-"""
+          fn take(value: Option<Int>) {}
+          """
       ).isEmpty()
     )
     assert(
       problems(
         r"""
-type Shape {
-  case Circle(radius: Int)
-}
-use Shape.Circle
+          type Shape {
+            case Circle(radius: Int)
+          }
+          use Shape.Circle
 
-fn take(shape: Shape): Shape { Circle(1) }
-"""
+          fn take(shape: Shape): Shape { Circle(1) }
+          """
       ).isEmpty()
     )
     assert(problems("use Shapes.Circle") == ["Unknown name `Shapes`"])
@@ -463,43 +463,43 @@ fn take(shape: Shape): Shape { Circle(1) }
   test "only a case can be imported from a type" {
     var files = [
       "app/src/shapes.trb": r"""
-public type Shape {
-  case Circle(radius: Int)
+        public type Shape {
+          case Circle(radius: Int)
 
-  fn area(self): Int { 0 }
-}
-public type Point {
-  x: Int
-  const origin: Int = 0
-}
-""",
+          fn area(self): Int { 0 }
+        }
+        public type Point {
+          x: Int
+          const origin: Int = 0
+        }
+        """,
       "app/src/main.trb": "use Shape.area from \"./shapes\"",
     ]
     assert(messages(files) == ["Only a case can be imported from a type: `area` is a method of `Shape`"])
-    files.set("app/src/main.trb", "use Point.x from \"./shapes\"")
+    files.set "app/src/main.trb", "use Point.x from \"./shapes\""
     assert(messages(files) == ["Only a case can be imported from a type: `x` is a field of `Point`"])
-    files.set("app/src/main.trb", "use Point.origin from \"./shapes\"")
+    files.set "app/src/main.trb", "use Point.origin from \"./shapes\""
     assert(messages(files) == ["Only a case can be imported from a type: `origin` is a constant of `Point`"])
   }
 
   test "the type may be named through a namespace import" {
     var files = [
       "app/src/shapes.trb": r"""
-public type Shape {
-  case Circle(radius: Int)
-}
-""",
+        public type Shape {
+          case Circle(radius: Int)
+        }
+        """,
       "app/src/main.trb": r"""
-use * as shapes from "./shapes"
-use shapes.Shape.Circle
+        use * as shapes from "./shapes"
+        use shapes.Shape.Circle
 
-fn take(shape: shapes.Shape) {}
-""",
+        fn take(shape: shapes.Shape) {}
+        """,
     ]
-    assert(messages(files).isEmpty())
-    files.set("app/src/main.trb", "use * as shapes from \"./shapes\"\nuse shapes.Shape.Square")
+    assert messages(files).isEmpty()
+    files.set "app/src/main.trb", "use * as shapes from \"./shapes\"\nuse shapes.Shape.Square"
     assert(messages(files) == ["`Shape` has no case `Square`"])
-    files.set("app/src/main.trb", "use * as shapes from \"./shapes\"\nuse shapes.Missing.Circle")
+    files.set "app/src/main.trb", "use * as shapes from \"./shapes\"\nuse shapes.Missing.Circle"
     assert(messages(files) == ["`Missing` is not exported by `shapes`"])
   }
 
@@ -507,9 +507,9 @@ fn take(shape: shapes.Shape) {}
     assert(
       problems(
         r"""
-fn maker() {}
-use maker.Case
-"""
+          fn maker() {}
+          use maker.Case
+          """
       ) == ["the function `maker` has no cases"]
     )
     assert(
@@ -522,10 +522,10 @@ use maker.Case
     assert(
       problems(
         r"""
-use Option.Some
+          use Option.Some
 
-fn take(value: Some) {}
-"""
+          fn take(value: Some) {}
+          """
       ) == ["`Some` is a case of `Option`, not a type"]
     )
   }
@@ -541,10 +541,10 @@ group "Type positions" {
     assert(
       problems(
         r"""
-fn helper() {}
+          fn helper() {}
 
-fn take(value: helper) {}
-"""
+          fn take(value: helper) {}
+          """
       ) == ["`helper` is a function, not a type"]
     )
   }
@@ -554,10 +554,10 @@ fn take(value: helper) {}
       messages([
         "app/src/shapes.trb": r"public type Circle {}",
         "app/src/main.trb": r"""
-use * as shapes from "./shapes"
+          use * as shapes from "./shapes"
 
-fn take(value: shapes) {}
-""",
+          fn take(value: shapes) {}
+          """,
       ]) == ["`shapes` is a module, not a type"]
     )
   }
@@ -566,15 +566,15 @@ fn take(value: shapes) {}
     assert(
       problems(
         r"""
-type Pair<Key, Value = Key> {
-  key: Key
-  value: Value
+          type Pair<Key, Value = Key> {
+            key: Key
+            value: Value
 
-  fn mapped<Output>(self, transform: (value: Value) => Output): Pair<Key, Output> where Output: Show {
-    Pair(key, transform(value))
-  }
-}
-"""
+            fn mapped<Output>(self, transform: (value: Value) => Output): Pair<Key, Output> where Output: Show {
+              Pair(key, transform(value))
+            }
+          }
+          """
       ).isEmpty()
     )
   }
@@ -583,24 +583,24 @@ type Pair<Key, Value = Key> {
     assert(
       problems(
         r"""
-trait Combine {
-  fn combine(self, other: Self): Self
-}
+          trait Combine {
+            fn combine(self, other: Self): Self
+          }
 
-type Amount with Combine {
-  value: Int
+          type Amount with Combine {
+            value: Int
 
-  fn combine(self, other: Self): Self {
-    Amount(value)
-  }
-}
+            fn combine(self, other: Self): Self {
+              Amount(value)
+            }
+          }
 
-extend Int with Combine {
-  fn combine(self, other: Self): Self {
-    self
-  }
-}
-"""
+          extend Int with Combine {
+            fn combine(self, other: Self): Self {
+              self
+            }
+          }
+          """
       ).isEmpty()
     )
   }
@@ -615,14 +615,14 @@ extend Int with Combine {
     assert(
       problems(
         r"""
-fn take() {
-  const value: Missing1 = 0
-  const closure = { parameter: Missing2 => parameter }
-  const made = List<Missing3>()
-  type Local = Missing4
-  fn nested(value: Missing5) {}
-}
-"""
+          fn take() {
+            const value: Missing1 = 0
+            const closure = { parameter: Missing2 => parameter }
+            const made = List<Missing3>()
+            type Local = Missing4
+            fn nested(value: Missing5) {}
+          }
+          """
       )
         == [
           "Unknown type `Missing1`",
@@ -638,13 +638,13 @@ fn take() {
     assert(
       problems(
         r"""
-fn take() {
-  type Local {
-    value: Int
-  }
-  const made: Local = Local(1)
-}
-"""
+          fn take() {
+            type Local {
+              value: Int
+            }
+            const made: Local = Local(1)
+          }
+          """
       ).isEmpty()
     )
   }
@@ -653,12 +653,12 @@ fn take() {
     assert(
       problems(
         r"""
-fn take(): Void {}
+          fn take(): Void {}
 
-fn stop(): Never {
-  stop()
-}
-"""
+          fn stop(): Never {
+            stop()
+          }
+          """
       ).isEmpty()
     )
   }
@@ -667,13 +667,13 @@ fn stop(): Never {
     assert(
       problems(
         r"""
-type Shape with Missing1 {
-  case Circle(radius: Missing2)
-  field: Missing3 = 0
-}
+          type Shape with Missing1 {
+            case Circle(radius: Missing2)
+            field: Missing3 = 0
+          }
 
-type Alias<Item: Missing4> = List<Missing5>
-"""
+          type Alias<Item: Missing4> = List<Missing5>
+          """
       )
         == [
           "Unknown type `Missing1`",
@@ -690,40 +690,40 @@ group "Tables" {
   test "what a name in a type position resolved to is kept by module and span" {
     // `type First = Int` is 16 bytes, so the two `Int` are at 13..16 and 31..34
     const source = "type First = Int\ntype Second = Int"
-    const checked = check(workspaceWith(["app/src/main.trb": source]), ["app"])
+    const checked = check workspaceWith(["app/src/main.trb": source]), ["app"]
     const module = checked.program.graph.moduleAt("app/src/main.trb").expect("the module of the file")
     const resolved = checked.resolutions[module.value]
     const symbol = resolved.get(Span(13, 16)).expect("the symbol the first alias names")
     assert(checked.program.symbols.at(symbol).name == "Int")
     // The same declaration, however often it is named
     assert(resolved.get(Span(31, 34)) == Some(symbol))
-    assert(resolved.get(Span(0, 4)).isNone())
+    assert resolved.get(Span(0, 4)).isNone()
   }
 }
 
 /** A `fn` is not a closure, so the files it reads are a constant of the file and not one of the group. */
 const teaching = [
   "project.trb": r"""
-name "acme/all"
-workspace { members "std/*", "app", "other", "teaching" }
-""",
+    name "acme/all"
+    workspace { members "std/*", "app", "other", "teaching" }
+    """,
   "teaching/project.trb": "name \"acme/teaching\"",
   "teaching/src/lib.trb": r"public type Number {}",
   "app/project.trb": r"""
-name "acme/app"
-prelude "acme/teaching"
-""",
+    name "acme/app"
+    prelude "acme/teaching"
+    """,
 ]
 
 group "Preludes" {
   fn withTeaching(main: String): List<String> {
     var files = teaching
-    files.set("app/src/main.trb", main)
-    messages(files)
+    files.set "app/src/main.trb", main
+    messages files
   }
 
   test "a project can name another prelude" {
-    assert(withTeaching(r"fn take(value: Number) {}").isEmpty())
+    assert withTeaching(r"fn take(value: Number) {}").isEmpty()
   }
 
   test "with another prelude, the names of the default one are gone" {

@@ -49,7 +49,7 @@ public type Target {
 
 /** A target nothing is known about yet. Every operation on it yields `Deferred` again and says nothing. */
 public fn deferredTarget(checker: Checker): Target {
-  Target(Resolution.Deferred, checker.deferredType)
+  Target Resolution.Deferred, checker.deferredType
 }
 
 /**
@@ -68,12 +68,12 @@ public fn resolveName(
     match checker.receiverBinding {
       Some(receiver) => {
         // A closure that names the receiver captures it, which is what decides whether that closure may escape (gap 14)
-        noteCapture(checker, receiver)
+        noteCapture checker, receiver
         const annotation = checker.binding(receiver).annotation
-        return Target(Resolution.Local(receiver), annotation, name: "self")
+        return Target Resolution.Local(receiver), annotation, name: "self"
       }
       // A field default, a parameter default and a static function have no receiver (gap 26, milestone 4.9)
-      .None => {
+      None => {
         checker.reportHere(
           Diagnostic.error("There is no `self` here", at)
             .withNote(
@@ -81,22 +81,22 @@ public fn resolveName(
                 + " order of the fields is not observable"
             )
         )
-        return Target(Resolution.Deferred, checker.invalidType, name: text)
+        return Target Resolution.Deferred, checker.invalidType, name: text
       }
     }
   }
   if text == "Self" {
     match checker.selfType {
       Some(own) => {
-        return typeTarget(checker, own, "Self")
+        return typeTarget checker, own, "Self"
       }
-      .None => {
-        return deferredTarget(checker)
+      None => {
+        return deferredTarget checker
       }
     }
   }
   if const Some(found) = checker.findLocal(text) {
-    return localTarget(checker, found, text, at, expected, explicit)
+    return localTarget checker, found, text, at, expected, explicit
   }
   // `numbers.map { value * 2 }`, `{ _ * 3 }`: the parameters the expected function type names
   if const Some(found) = implicitParameterTarget(checker, text, at) {
@@ -105,14 +105,14 @@ public fn resolveName(
   // The innermost receiver, and only that one: `server { s => s.database { ... } }` names the outer one (gap 4)
   if const Some(receiver) = checker.receiverType {
     if const Some(candidate) = lookupMember(checker, receiver, text, Some(at)) {
-      return implicitTarget(checker, candidate, text, at)
+      return implicitTarget checker, candidate, text, at
     }
   }
   if const Some(symbol) = checker.program.lookUp(checker.module, text) {
-    return symbolTarget(checker, symbol, text, at, expected, explicit)
+    return symbolTarget checker, symbol, text, at, expected, explicit
   }
-  reportUnknownName(checker, text, at, expected)
-  Target(Resolution.Deferred, checker.invalidType, name: text)
+  reportUnknownName checker, text, at, expected
+  Target Resolution.Deferred, checker.invalidType, name: text
 }
 
 fn localTarget(
@@ -125,19 +125,19 @@ fn localTarget(
 ): Target {
   match found {
     .Bound(binding) => {
-      noteCapture(checker, binding)
+      noteCapture checker, binding
       // Every read of a local `var` binding, in source order: what the dead-change rule counts (design 5.3)
-      noteRead(checker, binding, at)
-      const local = checker.binding(binding)
+      noteRead checker, binding, at
+      const local = checker.binding binding
       // `fn orElse(self, fallback: lazy Value)`: reading the parameter forces the cell the caller filled in
       if local.isLazy {
-        checker.adapted(at, Adaptation.Force)
+        checker.adapted at, Adaptation.Force
       }
       const annotation = local.annotation
-      Target(Resolution.Local(binding), annotation, form: formOf(checker, annotation), name: text)
+      Target Resolution.Local(binding), annotation, form: formOf(checker, annotation), name: text
     }
     // A `fn`, `type` or `trait` of a block, and a generic parameter that is in scope
-    .Declared(symbol) => symbolTarget(checker, symbol, text, at, expected, explicit)
+    .Declared(symbol) => symbolTarget checker, symbol, text, at, expected, explicit
   }
 }
 
@@ -159,10 +159,10 @@ public fn noteCapture(var checker: Checker, binding: BindingId) {
     }
     var captures = frame.captures
     if !captures.any({ _.binding == binding }) {
-      captures.add(Capture(binding, isVar))
-      checker.closureFrames.set(index, frame.copy(captures: captures))
+      captures.add Capture(binding, isVar)
+      checker.closureFrames.set index, frame.copy(captures: captures)
       // A captured `var` binding is a shared box, not a copy, so it is exempt from the dead-change rule (gap 19)
-      noteCapturedBinding(checker, binding)
+      noteCapturedBinding checker, binding
     }
     index = index + 1
   }
@@ -174,10 +174,10 @@ public fn noteCapture(var checker: Checker, binding: BindingId) {
  */
 fn implicitTarget(var checker: Checker, candidate: Candidate, text: String, at: Span): Target {
   if const Some(receiver) = checker.receiverBinding {
-    checker.adapted(at, Adaptation.ImplicitSelf(receiver))
-    noteCapture(checker, receiver)
+    checker.adapted at, Adaptation.ImplicitSelf(receiver)
+    noteCapture checker, receiver
   }
-  targetOfCandidate(checker, candidate, text)
+  targetOfCandidate checker, candidate, text
 }
 
 /** A member that was found on a type: the same answer in the shape the rest of the checker works with. */
@@ -212,41 +212,41 @@ public fn symbolTarget(
       Diagnostic.error("`Void` is a type, not a value: its one value is written `void`", at)
         .withNote("`void` is to `Void` what `true` and `false` are to `Bool`")
     )
-    return Target(Resolution.Deferred, checker.invalidType, name: text)
+    return Target Resolution.Deferred, checker.invalidType, name: text
   }
   match checker.symbolAt(symbol).kind {
-    .Function => callableTarget(checker, symbol, text, explicit)
+    .Function => callableTarget checker, symbol, text, explicit
     .Constant => {
-      const annotation = resultOf(checker, symbol)
-      Target(Resolution.Constant(symbol, None), annotation, form: formOf(checker, annotation), name: text)
+      const annotation = resultOf checker, symbol
+      Target Resolution.Constant(symbol, None), annotation, form: formOf(checker, annotation), name: text
     }
-    .Type => namedTypeTarget(checker, symbol, text, at, expected, explicit)
+    .Type => namedTypeTarget checker, symbol, text, at, expected, explicit
     .Alias => {
-      const generics = genericsOf(checker, symbol)
-      const target = aliasTargetOf(checker, symbol)
+      const generics = genericsOf checker, symbol
+      const target = aliasTargetOf checker, symbol
       if generics.isEmpty() {
-        return typeTarget(checker, target, text)
+        return typeTarget checker, target, text
       }
       // `type Handles = Map<Int, Handle>` used as a callee: the arguments the alias takes have to be solved first
-      const arguments = argumentsFor(checker, generics, explicit, None, text, at)
-      const applied = substituteInto(checker, target, generics, arguments)
-      typeTarget(checker, applied, text)
+      const arguments = argumentsFor checker, generics, explicit, None, text, at
+      const applied = substituteInto checker, target, generics, arguments
+      typeTarget checker, applied, text
     }
     // A trait is a namespace for its own members and for the ones an implementation of it provides (gap 31)
-    .Trait => traitNamespaceTarget(checker, symbol, text, at, expected, explicit)
-    .Case(owner) => caseTarget(checker, owner, text, at, expected, explicit)
-    .Namespace(target) => Target(Resolution.Namespace(target), checker.voidType, name: text)
+    .Trait => traitNamespaceTarget checker, symbol, text, at, expected, explicit
+    .Case(owner) => caseTarget checker, owner, text, at, expected, explicit
+    .Namespace(target) => Target Resolution.Namespace(target), checker.voidType, name: text
     // `Target.from(self)`, `Item.from(0)`: a generic parameter is a namespace for the members of its bounds
-    .GenericParameter => parameterNamespaceTarget(checker, symbol, text)
-    .Field(_) => deferredTarget(checker)
+    .GenericParameter => parameterNamespaceTarget checker, symbol, text
+    .Field(_) => deferredTarget checker
     // `Never` has no value at all, and `Void` was answered above
-    .Builtin => deferredTarget(checker)
+    .Builtin => deferredTarget checker
   }
 }
 
 fn callableTarget(var checker: Checker, symbol: SymbolId, text: String, explicit: List<TypeId>): Target {
-  const identifier = signatureOf(checker, symbol)
-  const signature = checker.signature(identifier)
+  const identifier = signatureOf checker, symbol
+  const signature = checker.signature identifier
   Target(
     Resolution.Callable(symbol, [], Dispatch.Direct),
     checker.functionType(signature.form),
@@ -267,13 +267,13 @@ fn caseTarget(
   expected: TypeId?,
   explicit: List<TypeId>,
 ): Target {
-  const generics = genericsOf(checker, owner)
-  const wanted = headOf(checker, owner, expected)
-  const arguments = argumentsFor(checker, generics, explicit, wanted, text, at)
-  const own = checker.nominal(owner, arguments)
+  const generics = genericsOf checker, owner
+  const wanted = headOf checker, owner, expected
+  const arguments = argumentsFor checker, generics, explicit, wanted, text, at
+  const own = checker.nominal owner, arguments
   match lookupStaticMember(checker, own, text) {
-    Some(candidate) => targetOfCandidate(checker, candidate, text)
-    .None => deferredTarget(checker)
+    Some(candidate) => targetOfCandidate checker, candidate, text
+    None => deferredTarget checker
   }
 }
 
@@ -286,11 +286,11 @@ fn namedTypeTarget(
   expected: TypeId?,
   explicit: List<TypeId>,
 ): Target {
-  const generics = genericsOf(checker, symbol)
-  const wanted = headOf(checker, symbol, expected)
-  const arguments = argumentsFor(checker, generics, explicit, wanted, text, at)
-  const own = checker.nominal(symbol, arguments)
-  typeTarget(checker, own, text)
+  const generics = genericsOf checker, symbol
+  const wanted = headOf checker, symbol, expected
+  const arguments = argumentsFor checker, generics, explicit, wanted, text, at
+  const own = checker.nominal symbol, arguments
+  typeTarget checker, own, text
 }
 
 /** `List.of(1, 2)`, `Map.from(pairs)`: the trait is the namespace, and its own arguments are inferred like any others. */
@@ -302,24 +302,24 @@ fn traitNamespaceTarget(
   expected: TypeId?,
   explicit: List<TypeId>,
 ): Target {
-  const generics = genericsOf(checker, symbol)
-  const wanted = headOf(checker, symbol, expected)
-  const arguments = argumentsFor(checker, generics, explicit, wanted, text, at)
-  const bound = checker.nominal(symbol, arguments)
-  const own = checker.types.intern(TypeForm.Traits([bound]))
-  Target(Resolution.TypeOf(own), own, name: text, constructs: Some(own))
+  const generics = genericsOf checker, symbol
+  const wanted = headOf checker, symbol, expected
+  const arguments = argumentsFor checker, generics, explicit, wanted, text, at
+  const bound = checker.nominal symbol, arguments
+  const own = checker.types.intern TypeForm.Traits([bound])
+  Target Resolution.TypeOf(own), own, name: text, constructs: Some(own)
 }
 
 /** `Target.from(self)` inside a generic function: the members of the bounds, reached through the caller's witness. */
 fn parameterNamespaceTarget(var checker: Checker, symbol: SymbolId, text: String): Target {
   const identifier = match checker.types.parameterOf(symbol) {
     Some(found) => found
-    .None => {
-      return deferredTarget(checker)
+    None => {
+      return deferredTarget checker
     }
   }
-  const own = checker.types.intern(TypeForm.Parameter(identifier))
-  Target(Resolution.TypeOf(own), own, name: text, constructs: Some(own))
+  const own = checker.types.intern TypeForm.Parameter(identifier)
+  Target Resolution.TypeOf(own), own, name: text, constructs: Some(own)
 }
 
 /**
@@ -338,15 +338,15 @@ public fn argumentsFor(
   const known = wanted ?? []
   for index in 0..generics.length() {
     if index < explicit.length() {
-      arguments.add(explicit[index])
+      arguments.add explicit[index]
       continue
     }
     if index < known.length() {
-      arguments.add(known[index])
+      arguments.add known[index]
       continue
     }
     const name = checker.types.parameter(generics[index]).name
-    arguments.add(checker.newVariable(name, owner, at))
+    arguments.add checker.newVariable(name, owner, at)
   }
   arguments
 }
@@ -357,7 +357,7 @@ fn headOf(checker: Checker, symbol: SymbolId, expected: TypeId?): List<TypeId>? 
   match checker.types.form(annotation) {
     .Nominal(head, arguments) => {
       if head == symbol {
-        return Some(arguments)
+        return Some arguments
       }
       None
     }
@@ -365,7 +365,7 @@ fn headOf(checker: Checker, symbol: SymbolId, expected: TypeId?): List<TypeId>? 
       for bound in bounds {
         if const .Nominal(head, arguments) = checker.types.form(bound) {
           if head == symbol {
-            return Some(arguments)
+            return Some arguments
           }
         }
       }
@@ -378,9 +378,9 @@ fn headOf(checker: Checker, symbol: SymbolId, expected: TypeId?): List<TypeId>? 
 fn substituteInto(var checker: Checker, target: TypeId, generics: List<ParameterId>, arguments: List<TypeId>): TypeId {
   var mapping: Map<ParameterId, TypeId> = [:]
   for index in 0..generics.length().min(arguments.length()) {
-    mapping.set(generics[index], arguments[index])
+    mapping.set generics[index], arguments[index]
   }
-  substitute(checker.types, target, mapping)
+  substitute checker.types, target, mapping
 }
 
 /** The type a name stands for, as the target of a constructor call or of a static member. */
@@ -394,14 +394,14 @@ public fn typeTarget(var checker: Checker, own: TypeId, text: String): Target {
       constructs: Some(own),
     )
     // A type with cases is constructed through them, so the name itself is only a namespace
-    .None => Target(Resolution.TypeOf(own), own, name: text, constructs: Some(own))
+    None => Target Resolution.TypeOf(own), own, name: text, constructs: Some(own)
   }
 }
 
 /** A function type is what makes a value callable: a binding or a field that holds a closure. */
 public fn formOf(checker: Checker, annotation: TypeId): FunctionForm? {
   if const .Function(form) = checker.types.form(annotation) {
-    return Some(form)
+    return Some form
   }
   None
 }
@@ -414,7 +414,7 @@ public fn formOf(checker: Checker, annotation: TypeId): FunctionForm? {
  */
 fn formOfCandidate(checker: Checker, candidate: Candidate): FunctionForm? {
   if const Some(found) = candidate.form {
-    return Some(found)
+    return Some found
   }
   const form = formOf(checker, candidate.annotation)?
   for parameter in form.parameters {
@@ -422,7 +422,7 @@ fn formOfCandidate(checker: Checker, candidate: Candidate): FunctionForm? {
       return None
     }
   }
-  Some(form)
+  Some form
 }
 
 // --- Messages -------------------------------------------------------------------------------------------------------
@@ -452,7 +452,7 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
   }
   if const Some(annotation) = expected {
     if caseNamed(checker, annotation, text).isSome() {
-      const owner = checker.describe(annotation)
+      const owner = checker.describe annotation
       checker.reportHere(
         Diagnostic.error(
           "`{text}` alone is a type, a function or a variable. A case is written `.{text}` or `{owner}.{text}`",
@@ -462,13 +462,13 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
       return
     }
   }
-  var problem = Diagnostic.error("Cannot find `{text}` here", at)
+  var problem = Diagnostic.error "Cannot find `{text}` here", at
   if checker.receiverType.isSome() {
     problem = problem.withNote(
       "Only the innermost receiver is implicit: name the parameter to reach an outer one (`report \{ r => r.{text} \}`)"
     )
   }
-  checker.reportHere(problem)
+  checker.reportHere problem
 }
 
 /**
@@ -479,8 +479,8 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
   if !isFullyKnown(checker, receiver) {
     return false
   }
-  const shown = checker.describe(receiver)
-  var problem = Diagnostic.error("`{shown}` has no member `{text}`", at)
+  const shown = checker.describe receiver
+  var problem = Diagnostic.error "`{shown}` has no member `{text}`", at
   // `level .Debug` lexes as `level.Debug`: whitespace never changes what a token sequence means, so `.` is one of the
   // tokens a first command argument must not start with (gap 42)
   if caseNamed(checker, receiver, text).isSome() {
@@ -502,9 +502,9 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
     return true
   }
   if const Some(similar) = nearestMember(checker, receiver, text) {
-    problem = problem.withNote("Did you mean `{similar}`?")
+    problem = problem.withNote "Did you mean `{similar}`?"
   }
-  checker.reportHere(problem)
+  checker.reportHere problem
   true
 }
 
@@ -537,7 +537,7 @@ fn nearestMember(var checker: Checker, receiver: TypeId, text: String): String? 
     const found = editDistance(name, text, distance - 1)
     if found < distance {
       distance = found
-      best = Some(name)
+      best = Some name
     }
   }
   best

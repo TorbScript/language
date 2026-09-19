@@ -33,14 +33,14 @@ public fn genericsOf(var checker: Checker, symbol: SymbolId): List<ParameterId> 
   }
   const site = match checker.siteOf(symbol) {
     Some(found) => found
-    .None => {
-      checker.genericParameters.set(symbol, [])
+    None => {
+      checker.genericParameters.set symbol, []
       return []
     }
   }
-  var parameters = enclosingParameters(site)
-  parameters.addAll(declareParameters(checker, site.module, Some(symbol), declaredParameters(site)))
-  checker.genericParameters.set(symbol, parameters)
+  var parameters = enclosingParameters site
+  parameters.addAll declareParameters(checker, site.module, Some(symbol), declaredParameters(site))
+  checker.genericParameters.set symbol, parameters
   parameters
 }
 
@@ -57,7 +57,7 @@ public fn declareParameters(
   var parameters: List<ParameterId> = []
   for index in 0..declared.length() {
     const parameter = declared[index]
-    const symbol = checker.resolvedName(module, parameter.name.span)
+    const symbol = checker.resolvedName module, parameter.name.span
     parameters.add(
       checker.types.declareParameter(
         ParameterDeclaration(parameter.name.text, symbol, owner, parameter.isConst, index, parameter.default, module)
@@ -104,29 +104,29 @@ public fn selfTypeOf(var checker: Checker, symbol: SymbolId): TypeId {
   if const Some(found) = checker.selfTypes.get(symbol) {
     return found
   }
-  const generics = genericsOf(checker, symbol)
+  const generics = genericsOf checker, symbol
   const module = checker.symbolAt(symbol).module ?? ModuleId(0)
   var built = checker.invalidType
   if const .Trait = checker.symbolAt(symbol).kind {
     const parameter = checker.types.declareParameter(
       ParameterDeclaration("Self", None, Some(symbol), false, -1, None, module)
     )
-    built = checker.types.intern(TypeForm.Parameter(parameter))
+    built = checker.types.intern TypeForm.Parameter(parameter)
     // The one bound of `Self` is the trait itself, which is what makes a member lookup on it find the trait's members
     var arguments: List<TypeId> = []
     for own in generics {
-      arguments.add(checker.types.intern(TypeForm.Parameter(own)))
+      arguments.add checker.types.intern(TypeForm.Parameter(own))
     }
-    const bound = checker.nominal(symbol, arguments)
-    checker.parameterBounds.set(parameter.value, [bound])
+    const bound = checker.nominal symbol, arguments
+    checker.parameterBounds.set parameter.value, [bound]
   } else {
     var arguments: List<TypeId> = []
     for parameter in generics {
-      arguments.add(checker.types.intern(TypeForm.Parameter(parameter)))
+      arguments.add checker.types.intern(TypeForm.Parameter(parameter))
     }
-    built = checker.nominal(symbol, arguments)
+    built = checker.nominal symbol, arguments
   }
-  checker.selfTypes.set(symbol, built)
+  checker.selfTypes.set symbol, built
   built
 }
 
@@ -145,33 +145,33 @@ public fn aliasTargetOf(var checker: Checker, symbol: SymbolId): TypeId {
       return checker.invalidType
     }
     .Running => {
-      checker.aliasStates.set(symbol, SignatureState.Failed)
-      reportCycle(checker, symbol)
+      checker.aliasStates.set symbol, SignatureState.Failed
+      reportCycle checker, symbol
       return checker.invalidType
     }
     _ => {}
   }
   const site = match checker.siteOf(symbol) {
     Some(found) => found
-    .None => {
-      checker.aliasStates.set(symbol, SignatureState.Failed)
+    None => {
+      checker.aliasStates.set symbol, SignatureState.Failed
       return checker.invalidType
     }
   }
-  checker.aliasStates.set(symbol, SignatureState.Running)
-  const _ = genericsOf(checker, symbol)
+  checker.aliasStates.set symbol, SignatureState.Running
+  const _ = genericsOf checker, symbol
   var target = checker.invalidType
   if const .Declared(declaration) = site.kind {
     if const .Alias(alias) = declaration.kind {
-      target = typeFromReference(checker, alias.target, TypeScope(site.module))
+      target = typeFromReference checker, alias.target, TypeScope(site.module)
     }
   }
   if isFailed(checker.aliasStates.get(symbol)) {
     return checker.invalidType
   }
-  checker.aliasTargets.add(target)
+  checker.aliasTargets.add target
   const index = checker.aliasTargets.length() - 1
-  checker.aliasStates.set(symbol, SignatureState.Ready(index))
+  checker.aliasStates.set symbol, SignatureState.Ready(index)
   target
 }
 
@@ -187,21 +187,21 @@ fn isFailed(state: SignatureState?): Bool {
  * result type has to be inferred from a body that calls it, and a `const` that is defined in terms of itself.
  */
 fn reportCycle(var checker: Checker, symbol: SymbolId) {
-  const declared = checker.symbolAt(symbol)
+  const declared = checker.symbolAt symbol
   const module = match declared.module {
     Some(found) => found
-    .None => {
+    None => {
       return
     }
   }
   const problem = match cycleKindOf(checker, symbol) {
     .Result => {
       const message = "The return type of `{declared.name}` cannot be inferred: it calls itself. Annotate it"
-      Diagnostic.error(message, declared.span)
+      Diagnostic.error message, declared.span
     }
     .Initializer => {
       const message = "The type of `{declared.name}` cannot be inferred: its value is defined in terms of itself"
-      Diagnostic.error(message, declared.span)
+      Diagnostic.error message, declared.span
     }
     .Alias => {
       const note = "An alias is another name for a type that exists."
@@ -209,7 +209,7 @@ fn reportCycle(var checker: Checker, symbol: SymbolId) {
       Diagnostic.error("`{declared.name}` is a cycle: it names itself", declared.span).withNote(note)
     }
   }
-  checker.report(module, problem)
+  checker.report module, problem
 }
 
 /** Which of the three it is, read from the declaration the symbol came from. */
@@ -222,7 +222,7 @@ type CycleKind {
 fn cycleKindOf(checker: Checker, symbol: SymbolId): CycleKind {
   const site = match checker.siteOf(symbol) {
     Some(found) => found
-    .None => {
+    None => {
       return CycleKind.Alias
     }
   }
@@ -245,13 +245,13 @@ public fn functionOfSite(site: DeclarationSite): FunctionDeclaration? {
   match site.kind {
     .Declared(declaration) => {
       if const .Function(function) = declaration.kind {
-        return Some(function)
+        return Some function
       }
       None
     }
     .Owned(_, _, member) => {
       if const .Function(function) = member.kind {
-        return Some(function)
+        return Some function
       }
       None
     }
@@ -262,16 +262,16 @@ public fn functionOfSite(site: DeclarationSite): FunctionDeclaration? {
 /** The `const` a declaration site holds: a top-level one, or a member of a type. */
 public fn bindingOfSite(site: DeclarationSite): Binding? {
   match site.kind {
-    .Constant(binding) => Some(binding)
+    .Constant(binding) => Some binding
     .Declared(declaration) => {
       if const .Constant(binding) = declaration.kind {
-        return Some(binding)
+        return Some binding
       }
       None
     }
     .Owned(_, _, member) => {
       if const .Constant(binding) = member.kind {
-        return Some(binding)
+        return Some binding
       }
       None
     }
@@ -283,7 +283,7 @@ public fn bindingOfSite(site: DeclarationSite): Binding? {
  * annotated it is inferred from the body, which is what `signatureOf` does on the way.
  */
 public fn resultOf(var checker: Checker, symbol: SymbolId): TypeId {
-  const identifier = signatureOf(checker, symbol)
+  const identifier = signatureOf checker, symbol
   checker.signature(identifier).form.result
 }
 
@@ -298,52 +298,52 @@ public fn signatureOf(var checker: Checker, symbol: SymbolId): SignatureId {
   // it gets is `Void`, which is right for every recursive statement; only if the body turns out to produce something
   // else is the assumption wrong, and `inferredSignature` reports it then.
   if checker.inferringResults.containsKey(symbol) {
-    checker.inferringResults.set(symbol, true)
+    checker.inferringResults.set symbol, true
   }
   match checker.signatureStates.get(symbol) ?? SignatureState.Missing {
     .Ready(index) => {
-      return SignatureId(index)
+      return SignatureId index
     }
     .Failed => {
       return checker.brokenSignature()
     }
     .Running => {
-      checker.signatureStates.set(symbol, SignatureState.Failed)
-      reportCycle(checker, symbol)
+      checker.signatureStates.set symbol, SignatureState.Failed
+      reportCycle checker, symbol
       return checker.brokenSignature()
     }
     _ => {}
   }
   const site = match checker.siteOf(symbol) {
     Some(found) => found
-    .None => {
-      checker.signatureStates.set(symbol, SignatureState.Failed)
+    None => {
+      checker.signatureStates.set symbol, SignatureState.Failed
       return checker.brokenSignature()
     }
   }
-  checker.signatureStates.set(symbol, SignatureState.Running)
-  const built = buildSignature(checker, symbol, site)
+  checker.signatureStates.set symbol, SignatureState.Running
+  const built = buildSignature checker, symbol, site
   if isFailed(checker.signatureStates.get(symbol)) {
     return checker.brokenSignature()
   }
   // A declaration whose result is inferred registered its own signature before it checked its body, so that a call of
   // it inside of that body still sees the parameters it takes
   if const Some(.Ready(index)) = checker.signatureStates.get(symbol) {
-    return SignatureId(index)
+    return SignatureId index
   }
-  const identifier = checker.addSignature(built)
-  checker.signatureStates.set(symbol, SignatureState.Ready(identifier.value))
+  const identifier = checker.addSignature built
+  checker.signatureStates.set symbol, SignatureState.Ready(identifier.value)
   identifier
 }
 
 /** A call of a generic signature: `map<Int>` on an `Iterable<String>`. */
 public fn instantiate(var checker: Checker, signature: SignatureId, arguments: List<TypeId>): FunctionForm {
-  const found = checker.signature(signature)
+  const found = checker.signature signature
   var mapping: Map<ParameterId, TypeId> = [:]
   for index in 0..found.generics.length().min(arguments.length()) {
-    mapping.set(found.generics[index], arguments[index])
+    mapping.set found.generics[index], arguments[index]
   }
-  substituteFunction(checker.types, found.form, mapping)
+  substituteFunction checker.types, found.form, mapping
 }
 
 fn buildSignature(var checker: Checker, symbol: SymbolId, site: DeclarationSite): Signature {
@@ -356,30 +356,30 @@ fn buildSignature(var checker: Checker, symbol: SymbolId, site: DeclarationSite)
           } else {
             ResultRule.Ordinary
           }
-          functionSignature(checker, symbol, site.module, function, None, rule)
+          functionSignature checker, symbol, site.module, function, None, rule
         }
-        .Constant(binding) => constantSignature(checker, symbol, site.module, binding, None)
+        .Constant(binding) => constantSignature checker, symbol, site.module, binding, None
         // A `type`, a `trait` and an alias are not values: `typeSignatureOf` answers for them
-        _ => brokenSignatureOf(checker, symbol)
+        _ => brokenSignatureOf checker, symbol
       }
     }
     .Owned(owner, _, member) => {
       match member.kind {
         .Function(function) => {
-          const rule = memberResultRule(checker, member, owner)
-          functionSignature(checker, symbol, site.module, function, owner, rule)
+          const rule = memberResultRule checker, member, owner
+          functionSignature checker, symbol, site.module, function, owner, rule
         }
         .Field(field) => {
-          const scope = TypeScope(site.module, selfType: owner)
-          const annotation = typeFromReference(checker, field.annotation, scope.forType())
-          Signature(symbol, genericsOf(checker, symbol), FunctionForm([], annotation), [], owner, false, false, false)
+          const scope = TypeScope site.module, selfType: owner
+          const annotation = typeFromReference checker, field.annotation, scope.forType()
+          Signature symbol, genericsOf(checker, symbol), FunctionForm([], annotation), [], owner, false, false, false
         }
-        .Constant(binding) => constantSignature(checker, symbol, site.module, binding, owner)
+        .Constant(binding) => constantSignature checker, symbol, site.module, binding, owner
         // `Shape.Circle(1.0)`: a case is a function from its fields to the type it belongs to
-        .Case(caseDeclaration) => caseSignature(checker, symbol, site.module, caseDeclaration, owner)
+        .Case(caseDeclaration) => caseSignature checker, symbol, site.module, caseDeclaration, owner
       }
     }
-    .Constant(binding) => constantSignature(checker, symbol, site.module, binding, None)
+    .Constant(binding) => constantSignature checker, symbol, site.module, binding, None
   }
 }
 
@@ -402,7 +402,7 @@ fn memberResultRule(checker: Checker, member: Member, owner: TypeId?): ResultRul
 fn isTraitOwner(checker: Checker, owner: TypeId?): Bool {
   const annotation = match owner {
     Some(found) => found
-    .None => {
+    None => {
       return false
     }
   }
@@ -413,7 +413,7 @@ fn isTraitOwner(checker: Checker, owner: TypeId?): Bool {
 }
 
 fn brokenSignatureOf(checker: Checker, symbol: SymbolId): Signature {
-  Signature(symbol, [], FunctionForm([], checker.invalidType), [], None, false, false, false)
+  Signature symbol, [], FunctionForm([], checker.invalidType), [], None, false, false, false
 }
 
 /** Without an annotation the type of a `const` is the type of its initializer, which is checked here and once. */
@@ -424,23 +424,23 @@ fn constantSignature(
   binding: Binding,
   owner: TypeId?,
 ): Signature {
-  const scope = TypeScope(module, selfType: owner)
+  const scope = TypeScope module, selfType: owner
   // An annotated initializer is checked here too, and not where the declaration is walked: the annotation *is* the
   // signature, so nobody would ask for the value again - and a `const` that holds a receiver closure
   // (`const perimeter: (self: Rectangle) => Int`) would never have its body looked at
   const annotation = match binding.annotation {
     Some(reference) => {
-      const built = typeFromReference(checker, reference, scope.forType())
-      checker.checkedBodies.set(symbol, true)
-      const _ = checkInitializer(checker, module, binding.value, owner, Some(built))
+      const built = typeFromReference checker, reference, scope.forType()
+      checker.checkedBodies.set symbol, true
+      const _ = checkInitializer checker, module, binding.value, owner, Some(built)
       built
     }
-    .None => {
-      checker.checkedBodies.set(symbol, true)
-      checkInitializer(checker, module, binding.value, owner, None)
+    None => {
+      checker.checkedBodies.set symbol, true
+      checkInitializer checker, module, binding.value, owner, None
     }
   }
-  Signature(symbol, genericsOf(checker, symbol), FunctionForm([], annotation), [], owner, false, false, true)
+  Signature symbol, genericsOf(checker, symbol), FunctionForm([], annotation), [], owner, false, false, true
 }
 
 fn functionSignature(
@@ -451,8 +451,8 @@ fn functionSignature(
   owner: TypeId?,
   rule: ResultRule,
 ): Signature {
-  const generics = genericsOf(checker, symbol)
-  const scope = TypeScope(module, selfType: owner)
+  const generics = genericsOf checker, symbol
+  const scope = TypeScope module, selfType: owner
   var parameters: List<ParameterForm> = []
   var takesSelf = false
   var isVarSelf = false
@@ -462,20 +462,20 @@ fn functionSignature(
       isVarSelf = parameter.isVar
       continue
     }
-    parameters.add(parameterForm(checker, parameter, scope))
+    parameters.add parameterForm(checker, parameter, scope)
   }
   const hasBody = function.body.isSome()
-  const bounds = boundsOf(checker, generics, function.generics, function.whereClauses, scope)
+  const bounds = boundsOf checker, generics, function.generics, function.whereClauses, scope
   if const Some(annotation) = function.returnType {
-    const result = typeFromReference(checker, annotation, scope.forType())
-    return Signature(symbol, generics, FunctionForm(parameters, result), bounds, owner, takesSelf, isVarSelf, hasBody)
+    const result = typeFromReference checker, annotation, scope.forType()
+    return Signature symbol, generics, FunctionForm(parameters, result), bounds, owner, takesSelf, isVarSelf, hasBody
   }
   // Without a body there is nothing to infer from, so the result is `Void`
   if !hasBody {
     const voidType = checker.voidType
-    return Signature(symbol, generics, FunctionForm(parameters, voidType), bounds, owner, takesSelf, isVarSelf, false)
+    return Signature symbol, generics, FunctionForm(parameters, voidType), bounds, owner, takesSelf, isVarSelf, false
   }
-  inferredSignature(checker, symbol, module, function, generics, parameters, bounds, owner, takesSelf, isVarSelf, rule)
+  inferredSignature checker, symbol, module, function, generics, parameters, bounds, owner, takesSelf, isVarSelf, rule
 }
 
 /**
@@ -510,10 +510,10 @@ fn inferredSignature(
     isVarSelf,
     true,
   )
-  const identifier = checker.addSignature(provisional)
-  checker.signatureStates.set(symbol, SignatureState.Ready(identifier.value))
-  checker.inferringResults.set(symbol, false)
-  checker.checkedBodies.set(symbol, true)
+  const identifier = checker.addSignature provisional
+  checker.signatureStates.set symbol, SignatureState.Ready(identifier.value)
+  checker.inferringResults.set symbol, false
+  checker.checkedBodies.set symbol, true
   const result = checkFunctionBody(
     checker,
     module,
@@ -528,17 +528,17 @@ fn inferredSignature(
     rule,
   )
   const namedItself = checker.inferringResults.get(symbol) ?? false
-  const _ = checker.inferringResults.remove(symbol)
+  const _ = checker.inferringResults.remove symbol
   // A declaration that does not infer keeps the `Void` it was registered with, whatever its body produced
   if const Some(_) = rule.describe() {
     return provisional
   }
   // The recursion assumed `Void`, and the body produces something else: only an annotation can settle that
   if namedItself && result != voidType && result != checker.neverType {
-    reportCycle(checker, symbol)
+    reportCycle checker, symbol
   }
-  const found = provisional.copy(form: FunctionForm(parameters, result))
-  checker.signatures.set(identifier.value, found)
+  const found = provisional.copy form: FunctionForm(parameters, result)
+  checker.signatures.set identifier.value, found
   found
 }
 
@@ -549,15 +549,15 @@ fn caseSignature(
   caseDeclaration: CaseDeclaration,
   owner: TypeId?,
 ): Signature {
-  const generics = genericsOf(checker, symbol)
-  const scope = TypeScope(module, selfType: owner)
+  const generics = genericsOf checker, symbol
+  const scope = TypeScope module, selfType: owner
   var parameters: List<ParameterForm> = []
   for field in caseDeclaration.fields {
-    const annotation = typeFromReference(checker, field.annotation, scope.forType())
-    parameters.add(ParameterForm(Some(field.name.text), ParameterMode.Value, annotation, field.default.isSome()))
+    const annotation = typeFromReference checker, field.annotation, scope.forType()
+    parameters.add ParameterForm(Some(field.name.text), ParameterMode.Value, annotation, field.default.isSome())
   }
   const result = owner ?? checker.invalidType
-  Signature(symbol, generics, FunctionForm(parameters, result), [], owner, false, false, false)
+  Signature symbol, generics, FunctionForm(parameters, result), [], owner, false, false, false
 }
 
 fn parameterForm(var checker: Checker, parameter: Parameter, scope: TypeScope): ParameterForm {
@@ -569,14 +569,14 @@ fn parameterForm(var checker: Checker, parameter: Parameter, scope: TypeScope): 
   if const Some(reference) = parameter.annotation {
     if const .Lazy(inner) = reference.kind {
       mode = ParameterMode.Lazy
-      annotation = typeFromReference(checker, inner, scope.forType())
-      checker.recordType(scope.module, reference.span, annotation)
+      annotation = typeFromReference checker, inner, scope.forType()
+      checker.recordType scope.module, reference.span, annotation
     } else {
-      annotation = typeFromReference(checker, reference, scope.forType())
+      annotation = typeFromReference checker, reference, scope.forType()
     }
   }
-  const name = if parameter.name.text.isEmpty() { None } else { Some(parameter.name.text) }
-  ParameterForm(name, mode, annotation, parameter.default.isSome())
+  const name = if parameter.name.text.isEmpty() { None } else { Some parameter.name.text }
+  ParameterForm name, mode, annotation, parameter.default.isSome()
 }
 
 /** `<Item: Hash>` and `where Item: Hash` are the same thing, so both land here. */
@@ -594,24 +594,24 @@ public fn boundsOf(
     // `<Value = Key>`: the default is a type position of the declaration, however a later use of it fills the list
     if const Some(default) = parameter.default {
       const inner = if parameter.isConst { scope.forConstant() } else { scope.forType() }
-      const _ = typeFromReference(checker, default, inner)
+      const _ = typeFromReference checker, default, inner
     }
     if parameter.isConst {
       // `<const Size: Int>`: the single item of `bounds` is the type of the value, not a trait
       for bound in parameter.bounds {
-        const _ = typeFromReference(checker, bound, scope.forType())
+        const _ = typeFromReference checker, bound, scope.forType()
       }
       continue
     }
     if parameter.bounds.isEmpty() {
       continue
     }
-    const subject = checker.types.intern(TypeForm.Parameter(generics[offset + index]))
-    addBound(checker, bounds, subject, parameter.bounds, scope)
+    const subject = checker.types.intern TypeForm.Parameter(generics[offset + index])
+    addBound checker, bounds, subject, parameter.bounds, scope
   }
   for clause in clauses {
-    const subject = typeFromReference(checker, clause.subject, scope.forType())
-    addBound(checker, bounds, subject, clause.bounds, scope)
+    const subject = typeFromReference checker, clause.subject, scope.forType()
+    addBound checker, bounds, subject, clause.bounds, scope
   }
   bounds
 }
@@ -625,21 +625,21 @@ fn addBound(
 ) {
   var traits: List<TypeId> = []
   for reference in references {
-    traits.addAll(traitsFromReference(checker, reference, subject, scope))
+    traits.addAll traitsFromReference(checker, reference, subject, scope)
   }
   if traits.isEmpty() {
     return
   }
-  bounds.add(Bound(subject, traits))
+  bounds.add Bound(subject, traits)
   // `<Item: Hash>` and `where Item: Hash` are what a member lookup on `Item` may see (design 4.1, `Parameter`)
   if const .Parameter(parameter) = checker.types.form(subject) {
     var known = checker.parameterBounds.get(parameter.value) ?? []
     for bound in traits {
       if !known.contains(bound) {
-        known.add(bound)
+        known.add bound
       }
     }
-    checker.parameterBounds.set(parameter.value, known)
+    checker.parameterBounds.set parameter.value, known
   }
 }
 
@@ -649,49 +649,49 @@ fn addBound(
 public fn typeSignatureOf(var checker: Checker, symbol: SymbolId): TypeSignatureId {
   match checker.typeSignatureStates.get(symbol) ?? SignatureState.Missing {
     .Ready(index) => {
-      return TypeSignatureId(index)
+      return TypeSignatureId index
     }
     .Failed => {
       return checker.brokenTypeSignature()
     }
     .Running => {
-      checker.typeSignatureStates.set(symbol, SignatureState.Failed)
-      reportCycle(checker, symbol)
+      checker.typeSignatureStates.set symbol, SignatureState.Failed
+      reportCycle checker, symbol
       return checker.brokenTypeSignature()
     }
     _ => {}
   }
   const site = match checker.siteOf(symbol) {
     Some(found) => found
-    .None => {
-      checker.typeSignatureStates.set(symbol, SignatureState.Failed)
+    None => {
+      checker.typeSignatureStates.set symbol, SignatureState.Failed
       return checker.brokenTypeSignature()
     }
   }
-  checker.typeSignatureStates.set(symbol, SignatureState.Running)
-  const built = buildTypeSignature(checker, symbol, site)
+  checker.typeSignatureStates.set symbol, SignatureState.Running
+  const built = buildTypeSignature checker, symbol, site
   if isFailed(checker.typeSignatureStates.get(symbol)) {
     return checker.brokenTypeSignature()
   }
-  const identifier = checker.addTypeSignature(built)
-  checker.typeSignatureStates.set(symbol, SignatureState.Ready(identifier.value))
+  const identifier = checker.addTypeSignature built
+  checker.typeSignatureStates.set symbol, SignatureState.Ready(identifier.value)
   identifier
 }
 
 fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationSite): TypeSignature {
-  const generics = genericsOf(checker, symbol)
-  const own = selfTypeOf(checker, symbol)
-  const scope = TypeScope(site.module, selfType: Some(own))
+  const generics = genericsOf checker, symbol
+  const own = selfTypeOf checker, symbol
+  const scope = TypeScope site.module, selfType: Some(own)
   const declaration = match site.kind {
     .Declared(found) => found
     _ => {
-      return TypeSignature(symbol, generics, own, [], [], [], [], [:], false, false)
+      return TypeSignature symbol, generics, own, [], [], [], [], [:], false, false
     }
   }
   match declaration.kind {
     .Type(typeDeclaration) => {
       var body = MemberSet()
-      collectMembers(checker, body, symbol, site.module, own, generics, typeDeclaration.members, scope)
+      collectMembers checker, body, symbol, site.module, own, generics, typeDeclaration.members, scope
       const traits = delegatedTraitList(
         checker,
         typeDeclaration.traits,
@@ -701,7 +701,7 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
         body.fields,
         !body.cases.isEmpty(),
       )
-      const bounds = boundsOf(checker, generics, typeDeclaration.generics, typeDeclaration.whereClauses, scope)
+      const bounds = boundsOf checker, generics, typeDeclaration.generics, typeDeclaration.whereClauses, scope
       TypeSignature(
         symbol,
         generics,
@@ -716,10 +716,10 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
       )
     }
     .Trait(traitDeclaration) => {
-      const traits = plainTraitList(checker, traitDeclaration.supertraits, own, scope)
-      const bounds = boundsOf(checker, generics, traitDeclaration.generics, [], scope)
+      const traits = plainTraitList checker, traitDeclaration.supertraits, own, scope
+      const bounds = boundsOf checker, generics, traitDeclaration.generics, [], scope
       var body = MemberSet()
-      collectMembers(checker, body, symbol, site.module, own, generics, traitDeclaration.members, scope)
+      collectMembers checker, body, symbol, site.module, own, generics, traitDeclaration.members, scope
       TypeSignature(
         symbol,
         generics,
@@ -733,7 +733,7 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
         declaration.modifiers.isShared,
       )
     }
-    _ => TypeSignature(symbol, generics, own, [], [], [], [], [:], false, false)
+    _ => TypeSignature symbol, generics, own, [], [], [], [], [:], false, false
   }
 }
 
@@ -743,7 +743,7 @@ public fn traitList(var checker: Checker, references: List<TypeReference>, of: T
   for reference in references {
     for bound in traitsFromReference(checker, reference, of, scope) {
       if !traits.contains(bound) {
-        traits.add(bound)
+        traits.add bound
       }
     }
   }
@@ -752,7 +752,7 @@ public fn traitList(var checker: Checker, references: List<TypeReference>, of: T
 
 /** The supertraits of a trait, none of them delegated (only a `type` has fields). */
 fn plainTraitList(var checker: Checker, references: List<TypeReference>, of: TypeId, scope: TypeScope): List<DelegatedTrait> {
-  traitList(checker, references, of, scope).map { capability => DelegatedTrait(capability, None) }.toList()
+  traitList(checker, references, of, scope).map { capability => DelegatedTrait capability, None }.toList()
 }
 
 /**
@@ -774,11 +774,11 @@ fn delegatedTraitList(
   for clause in clauses {
     var delegate: String? = None
     if const Some(name) = clause.delegate {
-      delegate = delegateFieldOf(checker, scope.module, typeName, name, fields, hasCases)
+      delegate = delegateFieldOf checker, scope.module, typeName, name, fields, hasCases
     }
     for capability in traitsFromReference(checker, clause.capability, of, scope) {
       if !containsCapability(traits, capability) {
-        traits.add(DelegatedTrait(capability, delegate))
+        traits.add DelegatedTrait(capability, delegate)
       }
     }
   }
@@ -825,7 +825,7 @@ fn delegateFieldOf(
     )
     return None
   }
-  Some(only.name)
+  Some only.name
 }
 
 /** `has no fields`, `` has `amount` ``, `` has `amount` and `currency` ``. */
@@ -862,38 +862,38 @@ fn collectMembers(
   scope: TypeScope,
 ) {
   for member in members {
-    const site = DeclarationSite(module, DeclarationSiteKind.Owned(Some(own), generics, member))
+    const site = DeclarationSite module, DeclarationSiteKind.Owned(Some(own), generics, member)
     match member.kind {
       .Field(field) => {
-        const symbol = defineMember(checker, module, field.name, SymbolKind.Field(owner), member)
-        checker.addSite(symbol, site)
-        body.fields.add(fieldSignature(checker, symbol, field, member, scope))
+        const symbol = defineMember checker, module, field.name, SymbolKind.Field(owner), member
+        checker.addSite symbol, site
+        body.fields.add fieldSignature(checker, symbol, field, member, scope)
       }
       .Constant(binding) => {
         if const .Binding(name) = binding.pattern.kind {
-          const at = Name(name, binding.pattern.span)
-          const symbol = defineMember(checker, module, at, SymbolKind.Constant, member)
-          checker.addSite(symbol, site)
-          body.members.set(name, symbol)
+          const at = Name name, binding.pattern.span
+          const symbol = defineMember checker, module, at, SymbolKind.Constant, member
+          checker.addSite symbol, site
+          body.members.set name, symbol
         }
       }
       .Function(function) => {
         if !function.name.text.isEmpty() {
-          const symbol = defineMember(checker, module, function.name, SymbolKind.Function, member)
-          checker.addSite(symbol, site)
-          body.members.set(function.name.text, symbol)
+          const symbol = defineMember checker, module, function.name, SymbolKind.Function, member
+          checker.addSite symbol, site
+          body.members.set function.name.text, symbol
         }
       }
       // The cases of a type have their ids already: milestone 3 needed them for `use Option.Some, Option.None`
       .Case(caseDeclaration) => {
         if const Some(symbol) = checker.symbols.caseNamed(owner, caseDeclaration.name.text) {
-          checker.addSite(symbol, site)
+          checker.addSite symbol, site
           var fields: List<FieldSignature> = []
           for field in caseDeclaration.fields {
-            const fieldSymbol = defineMember(checker, module, field.name, SymbolKind.Field(symbol), member)
-            fields.add(fieldSignature(checker, fieldSymbol, field, member, scope))
+            const fieldSymbol = defineMember checker, module, field.name, SymbolKind.Field(symbol), member
+            fields.add fieldSignature(checker, fieldSymbol, field, member, scope)
           }
-          body.cases.add(CaseSignature(symbol, caseDeclaration.name.text, fields))
+          body.cases.add CaseSignature(symbol, caseDeclaration.name.text, fields)
         }
       }
     }
@@ -912,31 +912,31 @@ public fn extensionMembers(
   members: List<Member>,
 ): Map<String, SymbolId> {
   var found: Map<String, SymbolId> = [:]
-  const scope = TypeScope(module, selfType: Some(target))
+  const scope = TypeScope module, selfType: Some(target)
   for member in members {
-    const site = DeclarationSite(module, DeclarationSiteKind.Owned(Some(target), generics, member))
+    const site = DeclarationSite module, DeclarationSiteKind.Owned(Some(target), generics, member)
     match member.kind {
       .Function(function) => {
         if !function.name.text.isEmpty() {
-          const symbol = defineMember(checker, module, function.name, SymbolKind.Function, member)
-          checker.addSite(symbol, site)
-          found.set(function.name.text, symbol)
+          const symbol = defineMember checker, module, function.name, SymbolKind.Function, member
+          checker.addSite symbol, site
+          found.set function.name.text, symbol
         }
       }
       .Constant(binding) => {
         if const .Binding(name) = binding.pattern.kind {
-          const symbol = defineMember(checker, module, Name(name, binding.pattern.span), SymbolKind.Constant, member)
-          checker.addSite(symbol, site)
-          found.set(name, symbol)
+          const symbol = defineMember checker, module, Name(name, binding.pattern.span), SymbolKind.Constant, member
+          checker.addSite symbol, site
+          found.set name, symbol
         }
       }
       // Fields and cases belong to the declaration of a type; milestone 4.9 reports them here
       .Field(field) => {
-        const _ = typeFromReference(checker, field.annotation, scope.forType())
+        const _ = typeFromReference checker, field.annotation, scope.forType()
       }
       .Case(caseDeclaration) => {
         for field in caseDeclaration.fields {
-          const _ = typeFromReference(checker, field.annotation, scope.forType())
+          const _ = typeFromReference checker, field.annotation, scope.forType()
         }
       }
     }
@@ -951,7 +951,7 @@ fn fieldSignature(
   member: Member,
   scope: TypeScope,
 ): FieldSignature {
-  const annotation = typeFromReference(checker, field.annotation, scope.forType())
+  const annotation = typeFromReference checker, field.annotation, scope.forType()
   // `private(var) balance: Int = 0` *is* the `var`: the field is writable, and only its type may write it (4.9)
   const isPrivateVar = member.modifiers.visibility == Visibility.PrivateVar
   FieldSignature(
@@ -967,7 +967,7 @@ fn fieldSignature(
 /** `private` hides a member, `private(var)` only its `var`: everything else a type has, it has in the open. */
 fn defineMember(var checker: Checker, module: ModuleId, name: Name, kind: SymbolKind, member: Member): SymbolId {
   const isPublic = member.modifiers.visibility != Visibility.Private
-  checker.symbols.add(Symbol(name.text, kind, isPublic, Some(module), name.span))
+  checker.symbols.add Symbol(name.text, kind, isPublic, Some(module), name.span)
 }
 
 // --- Where a declaration is -----------------------------------------------------------------------------------------
@@ -980,12 +980,12 @@ fn defineMember(var checker: Checker, module: ModuleId, name: Name, kind: Symbol
 public fn declareSites(var checker: Checker, module: ModuleId, statements: List<Statement>) {
   for statement in statements {
     match statement.kind {
-      .Declare(declaration) => declareSite(checker, module, declaration)
+      .Declare(declaration) => declareSite checker, module, declaration
       // A plain top-level `const` is a statement; `public const` is a `Declaration` and goes through `declareSite`
       .Bind(binding) => {
         if const .Binding(_) = binding.pattern.kind {
           if const Some(symbol) = checker.resolvedName(module, binding.pattern.span) {
-            checker.addSite(symbol, DeclarationSite(module, DeclarationSiteKind.Constant(binding)))
+            checker.addSite symbol, DeclarationSite(module, DeclarationSiteKind.Constant(binding))
           }
         }
       }
@@ -996,13 +996,13 @@ public fn declareSites(var checker: Checker, module: ModuleId, statements: List<
 
 fn declareSite(var checker: Checker, module: ModuleId, declaration: Declaration) {
   match declaration.kind {
-    .Function(function) => declareNamed(checker, module, function.name, declaration)
-    .Type(typeDeclaration) => declareNamed(checker, module, typeDeclaration.name, declaration)
-    .Alias(alias) => declareNamed(checker, module, alias.name, declaration)
-    .Trait(traitDeclaration) => declareNamed(checker, module, traitDeclaration.name, declaration)
+    .Function(function) => declareNamed checker, module, function.name, declaration
+    .Type(typeDeclaration) => declareNamed checker, module, typeDeclaration.name, declaration
+    .Alias(alias) => declareNamed checker, module, alias.name, declaration
+    .Trait(traitDeclaration) => declareNamed checker, module, traitDeclaration.name, declaration
     .Constant(binding) => {
       if const .Binding(name) = binding.pattern.kind {
-        declareNamed(checker, module, Name(name, binding.pattern.span), declaration)
+        declareNamed checker, module, Name(name, binding.pattern.span), declaration
       }
     }
     // The functions of a `foreign` block are functions of the module, and their bodies are somewhere else entirely
@@ -1010,7 +1010,7 @@ fn declareSite(var checker: Checker, module: ModuleId, declaration: Declaration)
       for member in library.members {
         if const .Function(function) = member.kind {
           if const Some(symbol) = checker.resolvedName(module, function.name.span) {
-            checker.addSite(symbol, DeclarationSite(module, DeclarationSiteKind.Owned(None, [], member)))
+            checker.addSite symbol, DeclarationSite(module, DeclarationSiteKind.Owned(None, [], member))
           }
         }
       }
@@ -1021,6 +1021,6 @@ fn declareSite(var checker: Checker, module: ModuleId, declaration: Declaration)
 
 fn declareNamed(var checker: Checker, module: ModuleId, name: Name, declaration: Declaration) {
   if const Some(symbol) = checker.resolvedName(module, name.span) {
-    checker.addSite(symbol, DeclarationSite(module, DeclarationSiteKind.Declared(declaration)))
+    checker.addSite symbol, DeclarationSite(module, DeclarationSiteKind.Declared(declaration))
   }
 }

@@ -18,12 +18,12 @@ public type Parsed {
  * per part of the language. This type is only the cursor they share.
  */
 public fn parse(source: SourceText): Parsed {
-  const lexed = lex(source)
-  var parser = Parser(source, lexed.tokens, docs: lexed.docs)
-  const statements = parseStatementsUntil(parser, TokenKind.EndOfFile)
-  var diagnostics = lexed.diagnostics.addedAll(parser.diagnostics)
+  const lexed = lex source
+  var parser = Parser source, lexed.tokens, docs: lexed.docs
+  const statements = parseStatementsUntil parser, TokenKind.EndOfFile
+  var diagnostics = lexed.diagnostics.addedAll parser.diagnostics
   diagnostics.sort({ _.span.start })
-  Parsed(SourceFile(statements), diagnostics)
+  Parsed SourceFile(statements), diagnostics
 }
 
 /**
@@ -75,12 +75,12 @@ public type Parser {
     const start = span().start
     var found: DocComment? = None
     while nextDoc < docs.length() && docs[nextDoc].span.end <= start {
-      found = Some(docs[nextDoc])
+      found = Some docs[nextDoc]
       nextDoc = nextDoc + 1
     }
     const doc = found?
     if source.text[doc.span.end..start].isBlank() {
-      Some(doc.text)
+      Some doc.text
     } else {
       None
     }
@@ -91,7 +91,7 @@ public type Parser {
   }
 
   fn isAtAny(self, expected: List<TokenKind>): Bool {
-    expected.contains(kind())
+    expected.contains kind()
   }
 
   fn isAtKeyword(self, keyword: Keyword): Bool {
@@ -117,7 +117,7 @@ public type Parser {
   }
 
   fn eat(var self, expected: TokenKind): Bool {
-    const isFound = isAt(expected)
+    const isFound = isAt expected
     if isFound {
       bump()
     }
@@ -125,14 +125,14 @@ public type Parser {
   }
 
   fn eatKeyword(var self, keyword: Keyword): Bool {
-    eat(TokenKind.Reserved(keyword))
+    eat TokenKind.Reserved(keyword)
   }
 
   fn expect(var self, expected: TokenKind): Bool {
     if eat(expected) {
       return true
     }
-    errorHere("Expected {expected.describe()}, found {kind().describe()}")
+    errorHere "Expected {expected.describe()}, found {kind().describe()}"
     false
   }
 
@@ -142,7 +142,7 @@ public type Parser {
   }
 
   fn errorHere(var self, message: String) {
-    error(message, span())
+    error message, span()
   }
 
   fn error(var self, message: String, at: Span) {
@@ -150,7 +150,7 @@ public type Parser {
     if diagnostics.last()?.span == Some(at) {
       return
     }
-    diagnostics.add(Diagnostic.error(message, at))
+    diagnostics.add Diagnostic.error(message, at)
   }
 
   /** Did something go wrong since this copy of the parser was taken? */
@@ -161,7 +161,7 @@ public type Parser {
   fn withTrailingClosures<Output>(var self, allowed: Bool, parseInner: (var parser: Parser) => Output): Output {
     const before = allowsTrailingClosures
     allowsTrailingClosures = allowed
-    const output = parseInner(self)
+    const output = parseInner self
     allowsTrailingClosures = before
     output
   }
@@ -169,16 +169,16 @@ public type Parser {
   fn name(var self): Name {
     const at = span()
     if eat(TokenKind.Identifier) {
-      return Name(text(at), at)
+      return Name text(at), at
     }
     match kind() {
       .Reserved(_) => {
-        errorHere("`{text(at)}` is a keyword and cannot be used as a name here")
+        errorHere "`{text(at)}` is a keyword and cannot be used as a name here"
         bump()
       }
-      _ => errorHere("Expected a name, found {kind().describe()}")
+      _ => errorHere "Expected a name, found {kind().describe()}"
     }
-    Name("", at)
+    Name "", at
   }
 
   /** After a `.` and as a label, keywords are ordinary names. */
@@ -187,7 +187,7 @@ public type Parser {
     match kind() {
       .Reserved(_) => {
         bump()
-        Name(text(at), at)
+        Name text(at), at
       }
       _ => name()
     }
@@ -199,7 +199,7 @@ public type Parser {
     skipNewlines()
     while !isAt(close) && !isAt(TokenKind.EndOfFile) {
       const before = position
-      items.add(parseItem(self))
+      items.add parseItem(self)
       skipNewlines()
       if !eat(TokenKind.Comma) {
         break
@@ -209,7 +209,7 @@ public type Parser {
         bump()
       }
     }
-    expect(close)
+    expect close
     items
   }
 

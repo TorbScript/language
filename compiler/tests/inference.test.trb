@@ -16,8 +16,8 @@ group "Unification variables" {
   test "a generic call solves its parameter from the argument, and records what it was instantiated with" {
     const source = "fn identity<Value>(value: Value): Value \{\n  value\n\}\n\n"
       + inBody("  const found = identity(3)")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("identity(3)") == "Int64")
     assert(found.typeArgumentsOf("identity(3)") == ["Int64"])
     assert(found.resolutionOf("identity(3)") == "call identity")
@@ -41,16 +41,16 @@ group "Unification variables" {
   test "the expected type of the binding decides what a call produces" {
     const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n"
       + inBody("  const found: Int = make()")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeArgumentsOf("make()") == ["Int64"])
   }
 
   test "an explicit type argument fills the parameters from the left" {
     const source = "fn make<Value>(): Value \{\n  panic \"no\"\n\}\n\n"
       + inBody("  const found = make<String>()")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("make<String>()") == "String")
     assert(found.typeArgumentsOf("make<String>()") == ["String"])
   }
@@ -62,7 +62,7 @@ group "Unification variables" {
   }
 
   test "a variable never leaves its statement: what one line cannot decide, the next one may not" {
-    const source = inBody("  var items = []\n  items.add(1)\n  print items.length()")
+    const source = inBody "  var items = []\n  items.add(1)\n  print items.length()"
     assert(problems(source) == ["Cannot infer the type of this collection"])
     assert(
       notes(source) == ["An empty literal needs a type: annotate the binding (`const items: List<Int> = []`)"]
@@ -74,8 +74,8 @@ group "Literals through a variable" {
   test "a literal that arrives at a variable solves it with its own type" {
     const source = "fn fold<State>(initial: State, combine: (State) => State): State \{\n  combine(initial)\n\}\n\n"
       + inBody("  const total = fold(0) \{ _ + 1 \}")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("fold(0) \{ _ + 1 \}") == "Int64")
     assert(found.typeArgumentsOf("fold(0) \{ _ + 1 \}") == ["Int64"])
   }
@@ -83,8 +83,8 @@ group "Literals through a variable" {
   test "a literal that arrives at a known numeric type adapts to it, and records what it became" {
     const source = "fn take<Value>(value: Value): Value \{\n  value\n\}\n\n"
       + inBody("  const small: Int8 = take(1)")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.adaptationsOf("1") == ["literal Int8"])
     assert(found.typeArgumentsOf("take(1)") == ["Int8"])
   }
@@ -92,23 +92,23 @@ group "Literals through a variable" {
   test "a decimal literal is a `Float64` where nothing else says so" {
     const source = "fn take<Value>(value: Value): Value \{\n  value\n\}\n\n"
       + inBody("  const found = take(1.5)")
-    const probed = probe(source)
+    const probed = probe source
     assert(probed.typeArgumentsOf("take(1.5)") == ["Float64"])
   }
 }
 
 group "Empty and inferred collection literals" {
   test "an empty list takes its item type from the annotation, and the literal is recorded as that list" {
-    const source = inBody("  const items: List<Int> = []")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    const source = inBody "  const items: List<Int> = []"
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("[]") == "List<Int64>")
   }
 
   test "an empty map takes both of its item types from the annotation" {
-    const source = inBody("  const index: Map<String, Int> = [:]")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    const source = inBody "  const index: Map<String, Int> = [:]"
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.typeOf("[:]") == "Map<String, Int64>")
   }
 
@@ -117,7 +117,7 @@ group "Empty and inferred collection literals" {
   }
 
   test "without an expectation the first item decides the item type" {
-    const found = probe(inBody("  const items = [1, 2, 3]"))
+    const found = probe inBody("  const items = [1, 2, 3]")
     assert(found.typeOf("[1, 2, 3]") == "List<Int64>")
   }
 
@@ -129,38 +129,38 @@ group "Empty and inferred collection literals" {
     const source = "type Square \{\n  size: Int\n\}\n\nextend Square with Show \{\n"
       + "  fn show(self): String \{\n    \"square\"\n  \}\n\}\n\n"
       + inBody("  const shapes: List<Show> = [Square(2)]")
-    assert(problems(source).isEmpty())
-    const found = probe(source)
+    assert problems(source).isEmpty()
+    const found = probe source
     assert(found.adaptationsOf("Square(2)") == ["trait value Show"])
   }
 
   test "an empty list inside a generic call is solved by another argument of the same call" {
     const source = "fn build<State>(initial: State, also: State): State \{\n  initial\n\}\n\n"
       + inBody("  const found = build([], [1])")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("[]") == "List<Int64>")
   }
 }
 
 group "`.Case` against the expected type" {
   test "the expected type names the type a case belongs to" {
-    const source = inBody("  const found: Int? = .Some(1)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const found: Int? = .Some(1)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf(".Some(1)") == "Option<Int64>")
     assert(probed.resolutionOf(".Some(1)") == "case Option<Int64>.Some")
   }
 
   test "a case without fields is the value itself" {
-    const source = inBody("  const found: Int? = .None")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const found: Int? = .None"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf(".None") == "Option<Int64>")
   }
 
   test "`.Case` without an expectation says what to write instead" {
-    const source = inBody("  const found = .None")
+    const source = inBody "  const found = .None"
     assert(problems(source) == ["`.None` needs a type, and nothing here says which one"])
     assert(notes(source) == ["Write it out: `Shape.None(...)`, or annotate what the value goes into"])
   }
@@ -171,15 +171,15 @@ group "`.Case` against the expected type" {
 
   test "a bare case constructor takes the arguments of the expected type" {
     const source = "fn probe(): Int? \{\n  Some(1)\n\}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("Some(1)") == "Option<Int64>")
   }
 
   test "a bare case constructor without an expectation infers from its argument" {
-    const source = inBody("  const found = Some(1)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    const source = inBody "  const found = Some(1)"
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("Some(1)") == "Option<Int64>")
   }
 }
@@ -187,24 +187,24 @@ group "`.Case` against the expected type" {
 group "The arms of an `if` and a `match`" {
   test "the arms are unified, so one arm learns the type from the other" {
     const source = "fn probe(flag: Bool): Int? \{\n  const found = if flag \{ None \} else \{ Some(1) \}\n  found\n\}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("None") == "Option<Int64>")
     assert(probed.typeOf("if flag \{ None \} else \{ Some(1) \}") == "Option<Int64>")
   }
 
   test "an empty literal in one arm is solved by the other" {
     const source = "fn probe(flag: Bool): List<Int> \{\n  if flag \{ [] \} else \{ [1] \}\n\}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("[]") == "List<Int64>")
   }
 
   test "arms that do not agree and are expected of nothing are statements, and the whole is `Void`" {
     const source = "fn one(): Int \{\n  1\n\}\n\nfn other() \{\n\}\n\n"
       + "fn probe(flag: Bool) \{\n  match flag \{\n    true => one()\n    false => other()\n  \}\n\}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("match flag \{\n    true => one()\n    false => other()\n  \}") == "Void")
   }
 
@@ -215,8 +215,8 @@ group "The arms of an `if` and a `match`" {
 
   test "an arm that diverges decides nothing" {
     const source = "fn probe(flag: Bool): Int \{\n  const found = if flag \{ 1 \} else \{ panic \"no\" \}\n  found\n\}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("if flag \{ 1 \} else \{ panic \"no\" \}") == "Int64")
   }
 }
@@ -225,8 +225,8 @@ group "What the expected type reaches" {
   test "the result of the callee is matched against the expected type before its arguments are read" {
     const source = "fn first<Item>(items: List<Item>): Item? \{\n  .None\n\}\n\n"
       + inBody("  const found: Int? = first([])")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeArgumentsOf("first([])") == ["Int64"])
     // The empty literal is checked *after* the result told the call what `Item` is
     assert(probed.typeOf("[]") == "List<Int64>")
@@ -235,16 +235,16 @@ group "What the expected type reaches" {
   test "a coercion never solves a variable: the value stays what it is (design 2.5)" {
     const source = "fn identity<Value>(value: Value): Value \{\n  value\n\}\n\n"
       + inBody("  const shown: Show = identity(1)")
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeArgumentsOf("identity(1)") == ["Int64"])
     assert(probed.adaptationsOf("identity(1)") == ["trait value Show"])
   }
 
   test "a function whose result is a `Task` has a body that produces the value" {
     const source = "fn probe(): Task<Int> \{\n  1\n\}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("1") == "Int64")
   }
 
@@ -252,8 +252,8 @@ group "What the expected type reaches" {
     const source = "type ConfigError \{\n  case Missing(key: String)\n\}\n\n"
       + "fn probe(value: Int?): Result<Int, ConfigError> \{\n"
       + "  const found = value.okOr(ConfigError.Missing(\"port\"))?\n  Ok(found)\n\}"
-    assert(problems(source).isEmpty())
-    const probed = probe(source)
+    assert problems(source).isEmpty()
+    const probed = probe source
     assert(probed.typeOf("value.okOr(ConfigError.Missing(\"port\"))?") == "Int64")
   }
 

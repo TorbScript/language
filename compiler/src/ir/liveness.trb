@@ -76,10 +76,10 @@ public fn countedSlotsOf(program: IrProgram, function: IrFunction): Counted {
       indices.add(0 - 1)
       continue
     }
-    indices.add(slots.length())
-    slots.add(Slot(index))
+    indices.add slots.length()
+    slots.add Slot(index)
   }
-  Counted(indices, slots)
+  Counted indices, slots
 }
 
 fn isCountedSlot(program: IrProgram, function: IrFunction, index: Int, role: SlotRole): Bool {
@@ -123,7 +123,7 @@ public type LiveSets {
 public fn filledFlags(count: Int, value: Bool): List<Bool> {
   var filled: List<Bool> = []
   for _ in 0..count {
-    filled.add(value)
+    filled.add value
   }
   filled
 }
@@ -132,7 +132,7 @@ public fn filledFlags(count: Int, value: Bool): List<Bool> {
 public fn unionFlags(var target: List<Bool>, other: List<Bool>) {
   for index in 0..target.length() {
     if other[index] {
-      target.set(index, true)
+      target.set index, true
     }
   }
 }
@@ -150,19 +150,19 @@ public fn postorderOf(function: IrFunction): List<Int> {
   if blockCount == 0 {
     return order
   }
-  var visited = filledFlags(blockCount, false)
+  var visited = filledFlags blockCount, false
   var stack = [0]
   var cursor = [0]
-  visited.set(0, true)
+  visited.set 0, true
   while !stack.isEmpty() {
     const top = stack.length() - 1
     const block = stack[top]
-    const targets = successorsOf(function.blocks[block])
+    const targets = successorsOf function.blocks[block]
     const at = cursor[top]
     if at >= targets.length() {
-      order.add(block)
-      stack.removeAt(top)
-      cursor.removeAt(top)
+      order.add block
+      stack.removeAt top
+      cursor.removeAt top
       continue
     }
     cursor.set(top, at + 1)
@@ -170,9 +170,9 @@ public fn postorderOf(function: IrFunction): List<Int> {
     if next < 0 || next >= blockCount || visited[next] {
       continue
     }
-    visited.set(next, true)
-    stack.add(next)
-    cursor.add(0)
+    visited.set next, true
+    stack.add next
+    cursor.add 0
   }
   order
 }
@@ -184,22 +184,22 @@ public fn postorderOf(function: IrFunction): List<Int> {
 public fn livenessOf(program: IrProgram, function: IrFunction, counted: Counted): LiveSets {
   const blockCount = function.blocks.length()
   const width = counted.width()
-  const postorder = postorderOf(function)
+  const postorder = postorderOf function
   var liveIn: List<List<Bool>> = []
   var liveOut: List<List<Bool>> = []
   for _ in 0..blockCount {
-    liveIn.add(filledFlags(width, false))
-    liveOut.add(filledFlags(width, false))
+    liveIn.add filledFlags(width, false)
+    liveOut.add filledFlags(width, false)
   }
   if width == 0 || blockCount == 0 {
-    return LiveSets(liveIn, liveOut, postorder, 0)
+    return LiveSets liveIn, liveOut, postorder, 0
   }
   var generated: List<List<Bool>> = []
   var killed: List<List<Bool>> = []
   for index in 0..blockCount {
-    const (upward, written) = effectOfBlock(function, counted, index, width)
-    generated.add(upward)
-    killed.add(written)
+    const (upward, written) = effectOfBlock function, counted, index, width
+    generated.add upward
+    killed.add written
   }
   var rounds = 0
   var isChanged = true
@@ -207,31 +207,31 @@ public fn livenessOf(program: IrProgram, function: IrFunction, counted: Counted)
     isChanged = false
     rounds = rounds + 1
     for block in postorder {
-      var leaving = filledFlags(width, false)
+      var leaving = filledFlags width, false
       for target in successorsOf(function.blocks[block]) {
         if target >= 0 && target < blockCount {
-          unionFlags(leaving, liveIn[target])
+          unionFlags leaving, liveIn[target]
         }
       }
-      var arriving = filledFlags(width, false)
+      var arriving = filledFlags width, false
       const kills = killed[block]
       for position in 0..width {
         if leaving[position] && !kills[position] {
-          arriving.set(position, true)
+          arriving.set position, true
         }
       }
-      unionFlags(arriving, generated[block])
+      unionFlags arriving, generated[block]
       if leaving != liveOut[block] {
-        liveOut.set(block, leaving)
+        liveOut.set block, leaving
         isChanged = true
       }
       if arriving != liveIn[block] {
-        liveIn.set(block, arriving)
+        liveIn.set block, arriving
         isChanged = true
       }
     }
   }
-  LiveSets(liveIn, liveOut, postorder, rounds)
+  LiveSets liveIn, liveOut, postorder, rounds
 }
 
 /**
@@ -240,31 +240,31 @@ public fn livenessOf(program: IrProgram, function: IrFunction, counted: Counted)
  * uses - the order of the transfer function.
  */
 fn effectOfBlock(function: IrFunction, counted: Counted, index: Int, width: Int): (List<Bool>, List<Bool>) {
-  var generated = filledFlags(width, false)
-  var killed = filledFlags(width, false)
+  var generated = filledFlags width, false
+  var killed = filledFlags width, false
   const block = function.blocks[index]
   for slot in usedByTerminator(block.terminator) {
-    const position = counted.positionOf(slot)
+    const position = counted.positionOf slot
     if position >= 0 {
-      generated.set(position, true)
-      killed.set(position, false)
+      generated.set position, true
+      killed.set position, false
     }
   }
   var at = block.instructions.length() - 1
   while at >= 0 {
     const instruction = block.instructions[at]
     if const Some(target) = definedSlot(instruction) {
-      const position = counted.positionOf(target)
+      const position = counted.positionOf target
       if position >= 0 {
-        generated.set(position, false)
-        killed.set(position, true)
+        generated.set position, false
+        killed.set position, true
       }
     }
     for slot in usedSlots(instruction) {
-      const position = counted.positionOf(slot)
+      const position = counted.positionOf slot
       if position >= 0 {
-        generated.set(position, true)
-        killed.set(position, false)
+        generated.set position, true
+        killed.set position, false
       }
     }
     at = at - 1

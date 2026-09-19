@@ -72,20 +72,20 @@ public type WellKnown {
   numerics: Map<Int, String> = [:]
 
   fn symbolNamed(self, name: String): SymbolId? {
-    names.get(name)
+    names.get name
   }
 
   /** `Int8`, `UInt64`, `Float32`, `Decimal`: the name a numeric type of the prelude was declared under. */
   fn numericNamed(self, symbol: SymbolId): String? {
-    numerics.get(symbol.value)
+    numerics.get symbol.value
   }
 
   fn isVoid(self, symbol: SymbolId): Bool {
-    voidSymbols.contains(symbol)
+    voidSymbols.contains symbol
   }
 
   fn isNever(self, symbol: SymbolId): Bool {
-    neverSymbols.contains(symbol)
+    neverSymbols.contains symbol
   }
 }
 
@@ -94,7 +94,7 @@ public type WellKnown {
  * a project may name another prelude, but `Item?` still means the `Option` of the standard library.
  */
 public fn wellKnownOf(program: Program): WellKnown {
-  const exports = preludeExports(program)
+  const exports = preludeExports program
   WellKnown(
     exports,
     bothNames(program, exports, "Void"),
@@ -149,7 +149,7 @@ fn numericNames(exports: Map<String, SymbolId>): Map<Int, String> {
   ]
   for name in declared {
     if const Some(symbol) = exports.get(name) {
-      found.set(symbol.value, name)
+      found.set symbol.value, name
     }
   }
   found
@@ -162,11 +162,11 @@ fn numericNames(exports: Map<String, SymbolId>): Map<Int, String> {
 fn bothNames(program: Program, exports: Map<String, SymbolId>, name: String): List<SymbolId> {
   var found: List<SymbolId> = []
   if const Some(builtin) = program.builtins.get(name) {
-    found.add(builtin)
+    found.add builtin
   }
   if const Some(declared) = exports.get(name) {
     if !found.contains(declared) {
-      found.add(declared)
+      found.add declared
     }
   }
   found
@@ -175,12 +175,12 @@ fn bothNames(program: Program, exports: Map<String, SymbolId>, name: String): Li
 fn preludeExports(program: Program): Map<String, SymbolId> {
   const package = match program.workspace.packageNamed("std/prelude") {
     Some(found) => found
-    .None => {
+    None => {
       return [:]
     }
   }
   match program.graph.moduleAt(joinPath(package.directory, "src/lib.trb")) {
     Some(module) => program.scopes[module.value].exported
-    .None => [:]
+    None => [:]
   }
 }

@@ -33,35 +33,35 @@ public fn checkTypes(
   modules: List<ModuleId>,
   withTimings: Bool = false,
 ): Checker {
-  var checker = newChecker(program, resolutions)
+  var checker = newChecker program, resolutions
   checker.withTimings = withTimings
-  var clock = Stopwatch(withTimings)
+  var clock = Stopwatch withTimings
   clock.start()
   // Where every declaration is written, for every module: a signature of one module is built from another's
   for module in program.graph.modules {
-    declareSites(checker, module.id, module.file.statements)
+    declareSites checker, module.id, module.file.statements
   }
   const sites = clock.taken()
-  checker.timings.add(Timing("declaration sites", sites))
+  checker.timings.add Timing("declaration sites", sites)
   // Every implementation of the program, then the two rules that need all of them: the orphan rule and overlap
-  buildImplementations(checker)
+  buildImplementations checker
   const index = clock.taken()
-  checker.timings.add(Timing("the implementation index", index))
-  checkCoherence(checker)
+  checker.timings.add Timing("the implementation index", index)
+  checkCoherence checker
   const coherence = clock.taken()
-  checker.timings.add(Timing("coherence", coherence))
+  checker.timings.add Timing("coherence", coherence)
   for module in modules {
-    checkImplementations(checker, module)
+    checkImplementations checker, module
   }
   const requirements = clock.taken()
-  checker.timings.add(Timing("trait requirements", requirements))
+  checker.timings.add Timing("trait requirements", requirements)
   for module in modules {
-    checkModule(checker, module)
+    checkModule checker, module
   }
   const bodies = clock.taken()
   const shape = checker.shapeMilliseconds
-  checker.timings.add(Timing("bodies", bodies - shape))
-  checker.timings.add(Timing("program shape and constant folding", shape))
+  checker.timings.add Timing("bodies", bodies - shape)
+  checker.timings.add Timing("program shape and constant folding", shape)
   checker
 }
 
@@ -100,30 +100,30 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   // `project.trb` and a configuration file are bodies, not modules: they are checked against their receiver (4.7)
   if checker.program.graph.at(module).receiver.isSome() {
     if const Some(receiver) = scriptReceiverOf(checker, module) {
-      checkReceiverScript(checker, module, receiver)
+      checkReceiverScript checker, module, receiver
     }
     return
   }
   const statements = checker.program.graph.at(module).file.statements
   const voidType = checker.voidType
-  const saved = checker.enterBody(module, voidType, true, None)
+  const saved = checker.enterBody module, voidType, true, None
   checker.openScope()
   // The sites of the top level are known already, so nothing is collected here
   for statement in statements {
-    checkTopLevel(checker, TypeScope(module), statement)
+    checkTopLevel checker, TypeScope(module), statement
   }
   // The top level of a file is one body, so its changes are settled like any other's (design 5.3)
-  settleChanges(checker)
+  settleChanges checker
   checker.closeScope()
-  checker.leaveBody(saved)
+  checker.leaveBody saved
   // Visibility and the shape of the declarations (4.9), last: folding a top-level `const` reads what its names meant
   const withTimings = checker.withTimings
-  var clock = Stopwatch(withTimings)
+  var clock = Stopwatch withTimings
   clock.start()
-  checkShape(checker, module)
+  checkShape checker, module
   const spent = clock.taken()
   checker.shapeMilliseconds = checker.shapeMilliseconds + spent
-  reportUnchecked(checker, module)
+  reportUnchecked checker, module
 }
 
 /**
@@ -138,7 +138,7 @@ fn reportUnchecked(var checker: Checker, module: ModuleId) {
   if !checker.diagnostics[module.value].isEmpty() {
     return
   }
-  const unchecked = checker.uncheckedSpanOf(module)
+  const unchecked = checker.uncheckedSpanOf module
   if const Some(at) = unchecked {
     checker.report(
       module,
@@ -150,7 +150,7 @@ fn reportUnchecked(var checker: Checker, module: ModuleId) {
 
 /** How much of a module the checker already understands, for `torb check --statistics`. */
 public fn statisticsOf(checker: Checker, module: ModuleId): Statistics {
-  checker.statisticsOf(module)
+  checker.statisticsOf module
 }
 
 /**
@@ -159,10 +159,10 @@ public fn statisticsOf(checker: Checker, module: ModuleId): Statistics {
  */
 fn checkTopLevel(var checker: Checker, scope: TypeScope, statement: Statement) {
   match statement.kind {
-    .Declare(declaration) => checkDeclaration(checker, scope, declaration)
-    .Bind(binding) => checkTopLevelBinding(checker, scope, binding)
+    .Declare(declaration) => checkDeclaration checker, scope, declaration
+    .Bind(binding) => checkTopLevelBinding checker, scope, binding
     _ => {
-      const _ = checkStatement(checker, statement)
+      const _ = checkStatement checker, statement
     }
   }
 }
@@ -171,15 +171,15 @@ fn checkTopLevel(var checker: Checker, scope: TypeScope, statement: Statement) {
 fn checkTopLevelBinding(var checker: Checker, scope: TypeScope, binding: Binding) {
   if const .Binding(_) = binding.pattern.kind {
     if const Some(symbol) = checker.resolvedName(scope.module, binding.pattern.span) {
-      const _ = resultOf(checker, symbol)
+      const _ = resultOf checker, symbol
       return
     }
   }
   var annotation: TypeId? = None
   if const Some(reference) = binding.annotation {
-    annotation = Some(typeFromReference(checker, reference, scope.forType()))
+    annotation = Some typeFromReference(checker, reference, scope.forType())
   }
-  const _ = checkInitializer(checker, scope.module, binding.value, scope.selfType, annotation)
+  const _ = checkInitializer checker, scope.module, binding.value, scope.selfType, annotation
 }
 
 /** One declaration, wherever it stands: at the top level of a file, in a block, or in the body of a type. */
@@ -187,39 +187,39 @@ public fn checkDeclaration(var checker: Checker, scope: TypeScope, declaration: 
   match declaration.kind {
     .Function(function) => {
       match checker.resolvedName(scope.module, function.name.span) {
-        Some(symbol) => checkBodyOf(checker, symbol)
+        Some(symbol) => checkBodyOf checker, symbol
         // A declaration without a name is a parse error that was reported; its body still has type positions
-        .None => checkUnnamedBody(checker, scope, function)
+        None => checkUnnamedBody checker, scope, function
       }
-      checkDefaults(checker, scope, function)
+      checkDefaults checker, scope, function
     }
     .Type(typeDeclaration) => {
-      checkTypeBody(checker, scope, typeDeclaration.name.span, typeDeclaration.members)
+      checkTypeBody checker, scope, typeDeclaration.name.span, typeDeclaration.members
     }
     .Trait(traitDeclaration) => {
-      checkTypeBody(checker, scope, traitDeclaration.name.span, traitDeclaration.members)
+      checkTypeBody checker, scope, traitDeclaration.name.span, traitDeclaration.members
     }
     .Alias(alias) => {
       if const Some(symbol) = checker.resolvedName(scope.module, alias.name.span) {
-        const _ = aliasTargetOf(checker, symbol)
-        const generics = genericsOf(checker, symbol)
-        const _ = boundsOf(checker, generics, alias.generics, [], scope)
+        const _ = aliasTargetOf checker, symbol
+        const generics = genericsOf checker, symbol
+        const _ = boundsOf checker, generics, alias.generics, [], scope
         return
       }
-      const _ = typeFromReference(checker, alias.target, scope.forType())
+      const _ = typeFromReference checker, alias.target, scope.forType()
     }
-    .Extend(extension) => checkExtension(checker, scope, extension)
+    .Extend(extension) => checkExtension checker, scope, extension
     // The functions of a `foreign` block are functions of the module, so they have signatures like any other
     .Foreign(library) => {
       for member in library.members {
         if const .Function(function) = member.kind {
           if const Some(symbol) = checker.resolvedName(scope.module, function.name.span) {
-            const _ = signatureOf(checker, symbol)
+            const _ = signatureOf checker, symbol
           }
         }
       }
     }
-    .Constant(binding) => checkTopLevelBinding(checker, scope, binding)
+    .Constant(binding) => checkTopLevelBinding checker, scope, binding
     .Use(_) => {}
   }
 }
@@ -233,44 +233,44 @@ fn checkTypeBody(var checker: Checker, scope: TypeScope, at: Span, members: List
   const symbol = match checker.resolvedName(scope.module, at) {
     Some(found) => found
     // A declaration without a name is a parse error that was reported; its members still have type positions
-    .None => {
-      checkMembers(checker, scope, [:], members)
+    None => {
+      checkMembers checker, scope, [:], members
       return
     }
   }
-  const identifier = typeSignatureOf(checker, symbol)
-  const shape = checker.typeSignature(identifier)
-  const inner = scope.copy(selfType: Some(shape.own))
-  checkMembers(checker, inner, shape.members, members)
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
+  const inner = scope.copy selfType: Some(shape.own)
+  checkMembers checker, inner, shape.members, members
 }
 
 fn checkMembers(var checker: Checker, scope: TypeScope, known: Map<String, SymbolId>, members: List<Member>) {
   for member in members {
     match member.kind {
       .Field(field) => {
-        const annotation = typeFromReference(checker, field.annotation, scope.forType())
-        checkDefault(checker, scope, field.default, Some(annotation))
+        const annotation = typeFromReference checker, field.annotation, scope.forType()
+        checkDefault checker, scope, field.default, Some(annotation)
       }
       // The annotation of a `const` member is its signature; a `const` that got no id keeps the ordinary way
       .Constant(binding) => {
         match constantMember(known, binding) {
           Some(symbol) => {
-            const _ = resultOf(checker, symbol)
+            const _ = resultOf checker, symbol
           }
-          .None => checkTopLevelBinding(checker, scope, binding)
+          None => checkTopLevelBinding checker, scope, binding
         }
       }
       .Function(function) => {
         match known.get(function.name.text) {
-          Some(symbol) => checkBodyOf(checker, symbol)
-          .None => checkUnnamedBody(checker, scope, function)
+          Some(symbol) => checkBodyOf checker, symbol
+          None => checkUnnamedBody checker, scope, function
         }
-        checkDefaults(checker, scope, function)
+        checkDefaults checker, scope, function
       }
       .Case(caseDeclaration) => {
         for field in caseDeclaration.fields {
-          const annotation = typeFromReference(checker, field.annotation, scope.forType())
-          checkDefault(checker, scope, field.default, Some(annotation))
+          const annotation = typeFromReference checker, field.annotation, scope.forType()
+          checkDefault checker, scope, field.default, Some(annotation)
         }
       }
     }
@@ -280,7 +280,7 @@ fn checkMembers(var checker: Checker, scope: TypeScope, known: Map<String, Symbo
 /** The id a `const` of a body got. A pattern that is not a name there is a parse error that was reported. */
 fn constantMember(known: Map<String, SymbolId>, binding: Binding): SymbolId? {
   if const .Binding(name) = binding.pattern.kind {
-    return known.get(name)
+    return known.get name
   }
   None
 }
@@ -294,19 +294,19 @@ fn checkExtension(var checker: Checker, scope: TypeScope, extension: ExtendDecla
   const implementation = match extensionAt(checker, scope.module, extension.target.span) {
     Some(found) => found
     // A target that did not build a type produced no implementation; its members still have type positions
-    .None => {
-      const generics = declareParameters(checker, scope.module, None, extension.generics)
-      const target = typeFromReference(checker, extension.target, scope.forType())
-      const inner = scope.copy(selfType: Some(target))
-      const _ = boundsOf(checker, generics, extension.generics, extension.whereClauses, inner)
-      const _ = traitList(checker, extension.traits, target, inner)
-      checkMembers(checker, inner, [:], extension.members)
+    None => {
+      const generics = declareParameters checker, scope.module, None, extension.generics
+      const target = typeFromReference checker, extension.target, scope.forType()
+      const inner = scope.copy selfType: Some(target)
+      const _ = boundsOf checker, generics, extension.generics, extension.whereClauses, inner
+      const _ = traitList checker, extension.traits, target, inner
+      checkMembers checker, inner, [:], extension.members
       return
     }
   }
-  const inner = scope.copy(selfType: Some(implementation.target))
+  const inner = scope.copy selfType: Some(implementation.target)
   const members = implementation.members
-  checkMembers(checker, inner, members, extension.members)
+  checkMembers checker, inner, members, extension.members
 }
 
 /**
@@ -322,15 +322,15 @@ fn checkDefaults(var checker: Checker, scope: TypeScope, function: FunctionDecla
     var annotation: TypeId? = None
     if const Some(reference) = parameter.annotation {
       const known = checker.typePositions[scope.module.value]
-      annotation = known.get(reference.span)
+      annotation = known.get reference.span
     }
-    checkDefault(checker, scope, parameter.default, annotation)
+    checkDefault checker, scope, parameter.default, annotation
   }
 }
 
 fn checkDefault(var checker: Checker, scope: TypeScope, default: Expression?, annotation: TypeId?) {
   if const Some(expression) = default {
-    const _ = checkInitializer(checker, scope.module, expression, scope.selfType, annotation)
+    const _ = checkInitializer checker, scope.module, expression, scope.selfType, annotation
   }
 }
 
@@ -342,14 +342,14 @@ fn checkDefault(var checker: Checker, scope: TypeScope, default: Expression?, an
 fn checkUnnamedBody(var checker: Checker, scope: TypeScope, function: FunctionDeclaration) {
   for parameter in function.parameters {
     if const Some(reference) = parameter.annotation {
-      const _ = typeFromReference(checker, reference, scope.forType())
+      const _ = typeFromReference checker, reference, scope.forType()
     }
   }
   if const Some(returnType) = function.returnType {
-    const _ = typeFromReference(checker, returnType, scope.forType())
+    const _ = typeFromReference checker, returnType, scope.forType()
   }
   if const Some(body) = function.body {
-    declareSites(checker, scope.module, body.statements)
-    deferBlock(checker, body)
+    declareSites checker, scope.module, body.statements
+    deferBlock checker, body
   }
 }

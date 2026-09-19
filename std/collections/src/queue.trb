@@ -13,7 +13,7 @@ public trait Queue<Item>
   with Collection<Item>
 {
   fn of(...items: Item): Queue<Item> {
-    ArrayQueue.from(items)
+    ArrayQueue.from items
   }
 
   // --- In place ------------------------------------------------------------------------------------
@@ -22,13 +22,13 @@ public trait Queue<Item>
   fn dequeue(var self): Item?
 
   fn add(var self, value: Item) {
-    enqueue(value)
+    enqueue value
   }
 
   // --- Changed copies --------------------------------------------------------------------------------
 
   fn enqueued(self, value: Item): Self {
-    added(value)
+    added value
   }
 
   /** The next element and the remaining queue, or `None` if the queue is empty. */
@@ -45,7 +45,7 @@ public trait Queue<Item>
 
 extend<Item> Queue<Item> with From<Iterable<Item>> {
   fn from(items: Iterable<Item>): Queue<Item> {
-    ArrayQueue.from(items)
+    ArrayQueue.from items
   }
 }
 
@@ -53,13 +53,13 @@ extend<Item> Queue<Item> with From<Iterable<Item>> {
 
 /** Ring buffer on top of a `List`. Nothing is moved and nothing is allocated until the buffer is full. */
 public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
-  private var slots: List<Item?> = List.filled(16, None)
+  private var slots: List<Item?> = List.filled 16, None
   private var head: Int = 0
   private var count: Int = 0
 
   fn from(items: Iterable<Item>): ArrayQueue<Item> {
     var queue = Self()
-    queue.addAll(items)
+    queue.addAll items
     queue
   }
 
@@ -67,20 +67,20 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
     if count == slots.length() {
       grow()
     }
-    slots[slot(count)] = Some(value)
+    slots[slot(count)] = Some value
     count = count + 1
   }
 
   fn dequeue(var self): Item? {
     const next = slots[head]?            // Empty queue: the slot is `None`
     slots[head] = None                   // Release the value
-    head = slot(1)
+    head = slot 1
     count = count - 1
-    Some(next)
+    Some next
   }
 
   fn clear(var self) {
-    slots = List.filled(16, None)
+    slots = List.filled 16, None
     head = 0
     count = 0
   }

@@ -26,14 +26,14 @@ fn connect(host: String, transport: "tcp" | "udp" = "tcp", retries: 0 | 1 | 3 = 
   print "{transport}://{host} ({retries} retries)"
 }
 
-connect("example.test", transport: "udp")
+connect "example.test", transport: "udp"
 // connect("example.test", retries: 2)   // Compile error
 
 // --- Const parameters: values in types ----------------------------------------------------------
 
 // `Array` has its length in the type. It is a small inline value: no heap, no reference count.
 type Matrix<const Rows: Int, const Columns: Int> {
-  private var cells: Array<Array<Float, Columns>, Rows> = Array.filled(Array.filled(0.0))
+  private var cells: Array<Array<Float, Columns>, Rows> = Array.filled Array.filled(0.0)
 
   fn get(self, row: Int, column: Int): Float {
     cells[row][column]
@@ -49,7 +49,7 @@ type Matrix<const Rows: Int, const Columns: Int> {
     for row in 0..Rows {
       for column in 0..Other {
         const sum = (0..Columns).map { get(row, _) * other.get(_, column) }.sum()
-        result.set(row, column, sum)
+        result.set row, column, sum
       }
     }
     result
@@ -58,12 +58,12 @@ type Matrix<const Rows: Int, const Columns: Int> {
 
 const projection = Matrix<2, 3>()
 const model = Matrix<3, 4>()
-const combined = projection.multiplied(model)       // Matrix<2, 4>
+const combined = projection.multiplied model       // Matrix<2, 4>
 // const wrong = model.multiplied(model)            // Compile error: expected Matrix<4, _>, found Matrix<3, 4>
 
 // A const argument is a literal, a named `const` or another const parameter. There is no arithmetic in types.
 const channels = 4
-var pixel: Array<UInt8, channels> = Array.filled(255)
+var pixel: Array<UInt8, channels> = Array.filled 255
 pixel[0] = 0
 // pixel[4] = 0                                     // Compile error: the index is known to be out of bounds
 
@@ -93,7 +93,7 @@ type Registry {
   private(var) entries: List<Show & Hash> = []
 
   fn register(var self, entry: Show & Hash) {
-    entries.add(entry)
+    entries.add entry
   }
 }
 
@@ -116,5 +116,5 @@ fn resize<Value: Into<Width>>(width: Value) {
   }
 }
 
-resize(120)                              // `Width.from(120)` is generated: `Pixels` is the only case that wraps an Int
-resize("wide")
+resize 120                              // `Width.from(120)` is generated: `Pixels` is the only case that wraps an Int
+resize "wide"

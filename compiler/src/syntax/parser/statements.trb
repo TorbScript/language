@@ -16,10 +16,10 @@ public fn parseStatementsUntil(var parser: Parser, end: TokenKind): List<Stateme
       break
     }
     const before = parser.position
-    statements.add(parseStatement(parser))
+    statements.add parseStatement(parser)
     if !parser.isAtEndOfStatement() {
       const found = parser.kind().describe()
-      parser.errorHere("Expected the end of the statement, found {found}")
+      parser.errorHere "Expected the end of the statement, found {found}"
       parser.recoverToLineEnd()
     }
     if parser.position == before {
@@ -34,35 +34,35 @@ public fn parseBlock(var parser: Parser): Block {
   if !parser.expect(TokenKind.BraceOpen) {
     return Block([], start)
   }
-  parseBlockAfterBrace(parser, start)
+  parseBlockAfterBrace parser, start
 }
 
 /** The rest of a block whose `{` is consumed already. `start` is the span of that `{`. */
 public fn parseBlockAfterBrace(var parser: Parser, start: Span): Block {
-  const statements = parser.withTrailingClosures(true, { parser => parseStatementsUntil(parser, TokenKind.BraceClose) })
-  parser.expect(TokenKind.BraceClose)
-  Block(statements, start.to(parser.previousSpan()))
+  const statements = parser.withTrailingClosures(true, { parser => parseStatementsUntil parser, TokenKind.BraceClose })
+  parser.expect TokenKind.BraceClose
+  Block statements, start.to(parser.previousSpan())
 }
 
 fn parseStatement(var parser: Parser): Statement {
   const start = parser.span()
   const kind = match parser.kind() {
     .Reserved(.Public | .Private | .Native | .Shared | .Fn | .Type | .Trait | .Extend | .Use | .Foreign) => {
-      StatementKind.Declare(parseDeclaration(parser))
+      StatementKind.Declare parseDeclaration(parser)
     }
-    .Reserved(.Const | .Var) => StatementKind.Bind(parseBinding(parser))
-    .Reserved(.For) => parseFor(parser)
+    .Reserved(.Const | .Var) => StatementKind.Bind parseBinding(parser)
+    .Reserved(.For) => parseFor parser
     .Reserved(.While) => {
       parser.bump()
-      const condition = parseCondition(parser)
-      StatementKind.While(condition, parseBlock(parser))
+      const condition = parseCondition parser
+      StatementKind.While condition, parseBlock(parser)
     }
     .Reserved(.Return) => {
       parser.bump()
       if parser.isAtEndOfStatement() {
-        StatementKind.Return(None)
+        StatementKind.Return None
       } else {
-        StatementKind.Return(Some(parseCommandExpression(parser)))
+        StatementKind.Return Some(parseCommandExpression(parser))
       }
     }
     .Reserved(.Break) => {
@@ -74,53 +74,53 @@ fn parseStatement(var parser: Parser): Statement {
       StatementKind.Continue
     }
     _ => {
-      const target = parseCommandExpression(parser)
+      const target = parseCommandExpression parser
       if parser.eat(TokenKind.Equal) {
-        StatementKind.Assign(target, parseCommandExpression(parser))
+        StatementKind.Assign target, parseCommandExpression(parser)
       } else {
-        StatementKind.Evaluate(target)
+        StatementKind.Evaluate target
       }
     }
   }
-  Statement(kind, start.to(parser.previousSpan()))
+  Statement kind, start.to(parser.previousSpan())
 }
 
 /** `const x: Int = 1`, `var (a, b) = pair`. The position is at `const` or `var`. */
 public fn parseBinding(var parser: Parser): Binding {
   const doc = parser.takeDoc()
-  const isVar = parser.isAtKeyword(Keyword.Var)
+  const isVar = parser.isAtKeyword Keyword.Var
   parser.bump()
-  const pattern = parsePattern(parser)
-  const annotation = if parser.eat(TokenKind.Colon) { Some(parseType(parser)) } else { None }
+  const pattern = parsePattern parser
+  const annotation = if parser.eat(TokenKind.Colon) { Some parseType(parser) } else { None }
   if !parser.isAt(TokenKind.Equal) {
-    parser.errorHere("A binding needs a value: there are no uninitialized bindings and no default values")
-    return Binding(doc, isVar, pattern, annotation, Expression(ExpressionKind.Invalid, parser.span()))
+    parser.errorHere "A binding needs a value: there are no uninitialized bindings and no default values"
+    return Binding doc, isVar, pattern, annotation, Expression(ExpressionKind.Invalid, parser.span())
   }
   parser.bump()
-  Binding(doc, isVar, pattern, annotation, parseCommandExpression(parser))
+  Binding doc, isVar, pattern, annotation, parseCommandExpression(parser)
 }
 
 fn parseFor(var parser: Parser): StatementKind {
   parser.bump()
-  const pattern = parsePattern(parser)
-  parser.expect(TokenKind.Reserved(Keyword.In))
-  const iterable = parseHeadExpression(parser)
-  StatementKind.For(pattern, iterable, parseBlock(parser))
+  const pattern = parsePattern parser
+  parser.expect TokenKind.Reserved(Keyword.In)
+  const iterable = parseHeadExpression parser
+  StatementKind.For pattern, iterable, parseBlock(parser)
 }
 
 /** The head of `if` and `while`. */
 public fn parseCondition(var parser: Parser): Condition {
   if parser.isAtKeyword(Keyword.Const) || parser.isAtKeyword(Keyword.Var) {
-    const isVar = parser.isAtKeyword(Keyword.Var)
+    const isVar = parser.isAtKeyword Keyword.Var
     parser.bump()
-    const pattern = parsePattern(parser)
-    parser.expect(TokenKind.Equal)
-    return Condition.Bind(isVar, pattern, parseHeadExpression(parser))
+    const pattern = parsePattern parser
+    parser.expect TokenKind.Equal
+    return Condition.Bind isVar, pattern, parseHeadExpression(parser)
   }
-  Condition.Test(parseHeadExpression(parser))
+  Condition.Test parseHeadExpression(parser)
 }
 
 /** An expression in front of a `{` that belongs to the statement. */
 public fn parseHeadExpression(var parser: Parser): Expression {
-  parser.withTrailingClosures(false, parseExpression)
+  parser.withTrailingClosures false, parseExpression
 }

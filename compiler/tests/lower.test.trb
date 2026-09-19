@@ -18,76 +18,79 @@ use irOf, textOf, unsupportedIn from "./lower-harness"
 group "Functions, slots and blocks" {
   test "the parameters are slots in declaration order, and the body is one block" {
     const source = r"""
-fn double(value: Int): Int {
-  value * 2
-}
-"""
+      fn double(value: Int): Int {
+        value * 2
+      }
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main_double") == r"""fn t_acme_x2f_app_main_double(value: Int64 borrowed) -> Int64 {
-  slot %0 parameter value: Int64
-  slot %1 temporary: Int64
-  slot %2 temporary: Int64
-b0: # acme/app/src/main.trb:1 body
-  %1 = constant s_literal__Int64_2
-  %2 = intrinsic multiply.i64 %0, %1 at acme/app/src/main.trb:2:3
-  return %2 borrowed
-}"""
+      irOf(source, "t_acme_x2f_app_main_double") == r"""
+        fn t_acme_x2f_app_main_double(value: Int64 borrowed) -> Int64 {
+          slot %0 parameter value: Int64
+          slot %1 temporary: Int64
+          slot %2 temporary: Int64
+        b0: # acme/app/src/main.trb:1 body
+          %1 = constant s_literal__Int64_2
+          %2 = intrinsic multiply.i64 %0, %1 at acme/app/src/main.trb:2:3
+          return %2 borrowed
+        }"""
     )
   }
 
   test "a local is a slot the value is computed into, and an assignment writes the same one" {
     const source = r"""
-fn sum(first: Int, second: Int): Int {
-  const doubled = first * 2
-  var total = doubled
-  total = total + second
-  total
-}
-"""
+      fn sum(first: Int, second: Int): Int {
+        const doubled = first * 2
+        var total = doubled
+        total = total + second
+        total
+      }
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main_sum") == r"""fn t_acme_x2f_app_main_sum(first: Int64 borrowed, second: Int64 borrowed) -> Int64 {
-  slot %0 parameter first: Int64
-  slot %1 parameter second: Int64
-  slot %2 local doubled: Int64
-  slot %3 temporary: Int64
-  slot %4 local total: Int64
-b0: # acme/app/src/main.trb:1 body
-  %3 = constant s_literal__Int64_2
-  %2 = intrinsic multiply.i64 %0, %3 at acme/app/src/main.trb:2:19
-  %4 = copy %2
-  %4 = intrinsic add.i64 %4, %1 at acme/app/src/main.trb:4:11
-  return %4 borrowed
-}"""
+      irOf(source, "t_acme_x2f_app_main_sum") == r"""
+        fn t_acme_x2f_app_main_sum(first: Int64 borrowed, second: Int64 borrowed) -> Int64 {
+          slot %0 parameter first: Int64
+          slot %1 parameter second: Int64
+          slot %2 local doubled: Int64
+          slot %3 temporary: Int64
+          slot %4 local total: Int64
+        b0: # acme/app/src/main.trb:1 body
+          %3 = constant s_literal__Int64_2
+          %2 = intrinsic multiply.i64 %0, %3 at acme/app/src/main.trb:2:19
+          %4 = copy %2
+          %4 = intrinsic add.i64 %4, %1 at acme/app/src/main.trb:4:11
+          return %4 borrowed
+        }"""
     )
   }
 
   test "a function that produces nothing returns without a value" {
     const source = r"""
-fn nothing(value: Int) {
-  const doubled = value + value
-}
-"""
+      fn nothing(value: Int) {
+        const doubled = value + value
+      }
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main_nothing") == r"""fn t_acme_x2f_app_main_nothing(value: Int64 borrowed) -> Void {
-  slot %0 parameter value: Int64
-  slot %1 local doubled: Int64
-b0: # acme/app/src/main.trb:1 body
-  %1 = intrinsic add.i64 %0, %0 at acme/app/src/main.trb:2:19
-  return
-}"""
+      irOf(source, "t_acme_x2f_app_main_nothing") == r"""
+        fn t_acme_x2f_app_main_nothing(value: Int64 borrowed) -> Void {
+          slot %0 parameter value: Int64
+          slot %1 local doubled: Int64
+        b0: # acme/app/src/main.trb:1 body
+          %1 = intrinsic add.i64 %0, %0 at acme/app/src/main.trb:2:19
+          return
+        }"""
     )
   }
 
   test "one static value per distinct literal, whatever it is written in" {
     const source = r"""
-fn twice(): Int {
-  const first = 7
-  const second = 7
-  first + second
-}
-"""
-    const text = textOf(source)
-    assert(text.contains("static s_literal__Int64_7: Int64 = 7"))
+      fn twice(): Int {
+        const first = 7
+        const second = 7
+        first + second
+      }
+      """
+    const text = textOf source
+    assert text.contains("static s_literal__Int64_7: Int64 = 7")
     assert(!text.contains("s_literal__Int64_7: Int64 = 7\nstatic s_literal__Int64_7"))
   }
 }
@@ -95,253 +98,259 @@ fn twice(): Int {
 group "Control flow" {
   test "both arms of an `if` produce into one slot, and an arm that returns does not join" {
     const source = r"""
-fn pick(flag: Bool, value: Int): Int {
-  const found = if flag { value } else { 0 - value }
-  if found > 10 {
-    return 10
-  }
-  found
-}
-"""
+      fn pick(flag: Bool, value: Int): Int {
+        const found = if flag { value } else { 0 - value }
+        if found > 10 {
+          return 10
+        }
+        found
+      }
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main_pick") == r"""fn t_acme_x2f_app_main_pick(flag: Bool borrowed, value: Int64 borrowed) -> Int64 {
-  slot %0 parameter flag: Bool
-  slot %1 parameter value: Int64
-  slot %2 local found: Int64
-  slot %3 temporary: Int64
-  slot %4 temporary: Int64
-  slot %5 temporary: Bool
-  slot %6 temporary: Void
-  slot %7 temporary: Int64
-b0: # acme/app/src/main.trb:1 body
-  branch %0 then b1 else b2
-b1: # acme/app/src/main.trb:2 then
-  %2 = copy %1
-  jump b3
-b2: # acme/app/src/main.trb:2 else
-  %3 = constant s_literal__Int64_0
-  %2 = intrinsic subtract.i64 %3, %1 at acme/app/src/main.trb:2:42
-  jump b3
-b3: # acme/app/src/main.trb:2 join
-  %4 = constant s_literal__Int64_10
-  %5 = intrinsic greater.i64 %2, %4 at acme/app/src/main.trb:3:6
-  branch %5 then b4 else b5
-b4: # acme/app/src/main.trb:3 then
-  %7 = constant s_literal__Int64_10
-  return %7 borrowed
-b5: # acme/app/src/main.trb:3 join
-  return %2 borrowed
-}"""
+      irOf(source, "t_acme_x2f_app_main_pick") == r"""
+        fn t_acme_x2f_app_main_pick(flag: Bool borrowed, value: Int64 borrowed) -> Int64 {
+          slot %0 parameter flag: Bool
+          slot %1 parameter value: Int64
+          slot %2 local found: Int64
+          slot %3 temporary: Int64
+          slot %4 temporary: Int64
+          slot %5 temporary: Bool
+          slot %6 temporary: Void
+          slot %7 temporary: Int64
+        b0: # acme/app/src/main.trb:1 body
+          branch %0 then b1 else b2
+        b1: # acme/app/src/main.trb:2 then
+          %2 = copy %1
+          jump b3
+        b2: # acme/app/src/main.trb:2 else
+          %3 = constant s_literal__Int64_0
+          %2 = intrinsic subtract.i64 %3, %1 at acme/app/src/main.trb:2:42
+          jump b3
+        b3: # acme/app/src/main.trb:2 join
+          %4 = constant s_literal__Int64_10
+          %5 = intrinsic greater.i64 %2, %4 at acme/app/src/main.trb:3:6
+          branch %5 then b4 else b5
+        b4: # acme/app/src/main.trb:3 then
+          %7 = constant s_literal__Int64_10
+          return %7 borrowed
+        b5: # acme/app/src/main.trb:3 join
+          return %2 borrowed
+        }"""
     )
   }
 
   test "`&&` is control flow: the right side runs only where it decides anything" {
     const source = r"""
-fn both(first: Bool, second: Bool): Bool {
-  first && second
-}
-"""
+      fn both(first: Bool, second: Bool): Bool {
+        first && second
+      }
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main_both") == r"""fn t_acme_x2f_app_main_both(first: Bool borrowed, second: Bool borrowed) -> Bool {
-  slot %0 parameter first: Bool
-  slot %1 parameter second: Bool
-  slot %2 temporary: Bool
-b0: # acme/app/src/main.trb:1 body
-  %2 = copy %0
-  branch %2 then b1 else b2
-b1: # acme/app/src/main.trb:2 right
-  %2 = copy %1
-  jump b2
-b2: # acme/app/src/main.trb:2 join
-  return %2 borrowed
-}"""
+      irOf(source, "t_acme_x2f_app_main_both") == r"""
+        fn t_acme_x2f_app_main_both(first: Bool borrowed, second: Bool borrowed) -> Bool {
+          slot %0 parameter first: Bool
+          slot %1 parameter second: Bool
+          slot %2 temporary: Bool
+        b0: # acme/app/src/main.trb:1 body
+          %2 = copy %0
+          branch %2 then b1 else b2
+        b1: # acme/app/src/main.trb:2 right
+          %2 = copy %1
+          jump b2
+        b2: # acme/app/src/main.trb:2 join
+          return %2 borrowed
+        }"""
     )
   }
 
   test "`||` is the same branch the other way round" {
     const source = r"""
-fn either(first: Bool, second: Bool): Bool {
-  first || second
-}
-"""
-    assert(irOf(source, "t_acme_x2f_app_main_either").contains("branch %2 then b2 else b1"))
+      fn either(first: Bool, second: Bool): Bool {
+        first || second
+      }
+      """
+    assert irOf(source, "t_acme_x2f_app_main_either").contains("branch %2 then b2 else b1")
   }
 
   test "`for` over a range is a counter, a comparison and an increment, and `break` leaves it" {
     const source = r"""
-fn count(limit: Int): Int {
-  var total = 0
-  for index in 0..limit {
-    if index == 3 {
-      continue
-    }
-    total = total + index
-  }
-  total
-}
-"""
+      fn count(limit: Int): Int {
+        var total = 0
+        for index in 0..limit {
+          if index == 3 {
+            continue
+          }
+          total = total + index
+        }
+        total
+      }
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main_count") == r"""fn t_acme_x2f_app_main_count(limit: Int64 borrowed) -> Int64 {
-  slot %0 parameter limit: Int64
-  slot %1 local total: Int64
-  slot %2 local index: Int64
-  slot %3 temporary: Int64
-  slot %4 temporary: Bool
-  slot %5 temporary: Int64
-  slot %6 temporary: Bool
-  slot %7 temporary: Void
-  slot %8 temporary: Int64
-b0: # acme/app/src/main.trb:1 body
-  %1 = constant s_literal__Int64_0
-  %2 = constant s_literal__Int64_0
-  %3 = copy %0
-  jump b1
-b1: # acme/app/src/main.trb:3 for
-  %4 = intrinsic less.i64 %2, %3 at acme/app/src/main.trb:3:3
-  branch %4 then b2 else b4
-b2: # acme/app/src/main.trb:3 body
-  %5 = constant s_literal__Int64_3
-  %6 = intrinsic equal.i64 %2, %5 at acme/app/src/main.trb:4:8
-  branch %6 then b5 else b6
-b3: # acme/app/src/main.trb:3 step
-  %8 = constant s_literal__Int64_1
-  %2 = intrinsic add.i64 %2, %8 at acme/app/src/main.trb:3:3
-  jump b1
-b4: # acme/app/src/main.trb:3 done
-  return %1 borrowed
-b5: # acme/app/src/main.trb:4 then
-  jump b3
-b6: # acme/app/src/main.trb:4 join
-  %1 = intrinsic add.i64 %1, %2 at acme/app/src/main.trb:7:13
-  jump b3
-}"""
+      irOf(source, "t_acme_x2f_app_main_count") == r"""
+        fn t_acme_x2f_app_main_count(limit: Int64 borrowed) -> Int64 {
+          slot %0 parameter limit: Int64
+          slot %1 local total: Int64
+          slot %2 local index: Int64
+          slot %3 temporary: Int64
+          slot %4 temporary: Bool
+          slot %5 temporary: Int64
+          slot %6 temporary: Bool
+          slot %7 temporary: Void
+          slot %8 temporary: Int64
+        b0: # acme/app/src/main.trb:1 body
+          %1 = constant s_literal__Int64_0
+          %2 = constant s_literal__Int64_0
+          %3 = copy %0
+          jump b1
+        b1: # acme/app/src/main.trb:3 for
+          %4 = intrinsic less.i64 %2, %3 at acme/app/src/main.trb:3:3
+          branch %4 then b2 else b4
+        b2: # acme/app/src/main.trb:3 body
+          %5 = constant s_literal__Int64_3
+          %6 = intrinsic equal.i64 %2, %5 at acme/app/src/main.trb:4:8
+          branch %6 then b5 else b6
+        b3: # acme/app/src/main.trb:3 step
+          %8 = constant s_literal__Int64_1
+          %2 = intrinsic add.i64 %2, %8 at acme/app/src/main.trb:3:3
+          jump b1
+        b4: # acme/app/src/main.trb:3 done
+          return %1 borrowed
+        b5: # acme/app/src/main.trb:4 then
+          jump b3
+        b6: # acme/app/src/main.trb:4 join
+          %1 = intrinsic add.i64 %1, %2 at acme/app/src/main.trb:7:13
+          jump b3
+        }"""
     )
   }
 
   test "the end of a `while true` without a `break` is an empty `unreachable` marker" {
     const source = r"""
-fn forever(): Int {
-  while true {
-    const _ = 1
-  }
-}
-"""
-    const text = irOf(source, "t_acme_x2f_app_main_forever")
-    assert(text.contains("b3: # acme/app/src/main.trb:2 done\n  unreachable"))
+      fn forever(): Int {
+        while true {
+          const _ = 1
+        }
+      }
+      """
+    const text = irOf source, "t_acme_x2f_app_main_forever"
+    assert text.contains("b3: # acme/app/src/main.trb:2 done\n  unreachable")
   }
 
   test "a `while` with a `break` ends in the block the `break` jumps to" {
     const source = r"""
-fn halve(value: Int): Int {
-  var total = value
-  while true {
-    total = total / 2
-    if total == 0 {
-      break
-    }
-  }
-  total
-}
-"""
-    assert(irOf(source, "t_acme_x2f_app_main_halve").contains("return %1 borrowed"))
+      fn halve(value: Int): Int {
+        var total = value
+        while true {
+          total = total / 2
+          if total == 0 {
+            break
+          }
+        }
+        total
+      }
+      """
+    assert irOf(source, "t_acme_x2f_app_main_halve").contains("return %1 borrowed")
   }
 }
 
 group "Values" {
   test "a comparison of a built-in type is one intrinsic and never a call" {
     const source = r"""
-fn compareThem(first: Int, second: Int, text: String, other: String, flag: Bool): Bool {
-  first < second && text == other && flag != flag
-}
-"""
-    const text = irOf(source, "t_acme_x2f_app_main_compareThem")
-    assert(text.contains("intrinsic less.i64 %0, %1"))
-    assert(text.contains("intrinsic textEqual %2, %3"))
-    assert(text.contains("intrinsic notEqual %4, %4"))
+      fn compareThem(first: Int, second: Int, text: String, other: String, flag: Bool): Bool {
+        first < second && text == other && flag != flag
+      }
+      """
+    const text = irOf source, "t_acme_x2f_app_main_compareThem"
+    assert text.contains("intrinsic less.i64 %0, %1")
+    assert text.contains("intrinsic textEqual %2, %3")
+    assert text.contains("intrinsic notEqual %4, %4")
   }
 
   test "`+` on two strings is one concatenation, never a call of `String.add`" {
     const source = r"""
-fn joined(first: String, second: String): String {
-  first + second
-}
-"""
-    assert(irOf(source, "t_acme_x2f_app_main_joined").contains("intrinsic textConcat %0, %1"))
+      fn joined(first: String, second: String): String {
+        first + second
+      }
+      """
+    assert irOf(source, "t_acme_x2f_app_main_joined").contains("intrinsic textConcat %0, %1")
   }
 
   test "a tuple is a layout, and a tuple pattern reads its positions" {
     const source = r"""
-fn parts(pair: (Int, Bool)): Int {
-  const (number, flag) = pair
-  if flag {
-    return number
-  }
-  0
-}
-"""
+      fn parts(pair: (Int, Bool)): Int {
+        const (number, flag) = pair
+        if flag {
+          return number
+        }
+        0
+      }
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main_parts") == r"""fn t_acme_x2f_app_main_parts(pair: Tuple(T_tuple__Int64_Bool) borrowed) -> Int64 {
-  slot %0 parameter pair: Tuple(T_tuple__Int64_Bool)
-  slot %1 local number: Int64
-  slot %2 local flag: Bool
-  slot %3 temporary: Void
-  slot %4 temporary: Int64
-b0: # acme/app/src/main.trb:1 body
-  %1 = read %0.0
-  %2 = read %0.1
-  branch %2 then b1 else b2
-b1: # acme/app/src/main.trb:3 then
-  return %1 borrowed
-b2: # acme/app/src/main.trb:3 join
-  %4 = constant s_literal__Int64_0
-  return %4 borrowed
-}"""
+      irOf(source, "t_acme_x2f_app_main_parts") == r"""
+        fn t_acme_x2f_app_main_parts(pair: Tuple(T_tuple__Int64_Bool) borrowed) -> Int64 {
+          slot %0 parameter pair: Tuple(T_tuple__Int64_Bool)
+          slot %1 local number: Int64
+          slot %2 local flag: Bool
+          slot %3 temporary: Void
+          slot %4 temporary: Int64
+        b0: # acme/app/src/main.trb:1 body
+          %1 = read %0.0
+          %2 = read %0.1
+          branch %2 then b1 else b2
+        b1: # acme/app/src/main.trb:3 then
+          return %1 borrowed
+        b2: # acme/app/src/main.trb:3 join
+          %4 = constant s_literal__Int64_0
+          return %4 borrowed
+        }"""
     )
   }
 
   test "a record is a layout, a field is a `read`, and `copy` builds from the old fields" {
     const source = r"""
-type Point {
-  x: Int
-  y: Int = 0
+      type Point {
+        x: Int
+        y: Int = 0
 
-  fn moved(self): Point {
-    copy(x: 5)
-  }
-}
-"""
-    const text = textOf(source)
-    assert(text.contains("layout T_acme_x2f_app_main_Point inline size 16 align 8 fields(x: Int64, y: Int64)"))
+        fn moved(self): Point {
+          copy(x: 5)
+        }
+      }
+      """
+    const text = textOf source
+    assert text.contains("layout T_acme_x2f_app_main_Point inline size 16 align 8 fields(x: Int64, y: Int64)")
     assert(
-      irOf(source, "t_acme_x2f_app_main_Point_moved") == r"""fn t_acme_x2f_app_main_Point_moved(self: Record(T_acme_x2f_app_main_Point) borrowed) -> Record(T_acme_x2f_app_main_Point) {
-  slot %0 parameter self: Record(T_acme_x2f_app_main_Point)
-  slot %1 temporary: Int64
-  slot %2 temporary: Int64
-  slot %3 temporary: Record(T_acme_x2f_app_main_Point)
-b0: # acme/app/src/main.trb:5 body
-  %1 = constant s_literal__Int64_5
-  %2 = read %0.y
-  %3 = construct T_acme_x2f_app_main_Point (%1 borrowed, %2 borrowed)
-  return %3 borrowed
-}"""
+      irOf(source, "t_acme_x2f_app_main_Point_moved") == r"""
+        fn t_acme_x2f_app_main_Point_moved(self: Record(T_acme_x2f_app_main_Point) borrowed) -> Record(T_acme_x2f_app_main_Point) {
+          slot %0 parameter self: Record(T_acme_x2f_app_main_Point)
+          slot %1 temporary: Int64
+          slot %2 temporary: Int64
+          slot %3 temporary: Record(T_acme_x2f_app_main_Point)
+        b0: # acme/app/src/main.trb:5 body
+          %1 = constant s_literal__Int64_5
+          %2 = read %0.y
+          %3 = construct T_acme_x2f_app_main_Point (%1 borrowed, %2 borrowed)
+          return %3 borrowed
+        }"""
     )
   }
 
   test "`panic` is an instruction, and nothing after it in the block is reachable" {
     const source = r"""
-fn never(): Int {
-  panic "no"
-}
-"""
+      fn never(): Int {
+        panic "no"
+      }
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main_never") == r"""fn t_acme_x2f_app_main_never() -> Int64 {
-  slot %0 temporary: String
-  slot %1 temporary: Void
-b0: # acme/app/src/main.trb:1 body
-  %0 = constant s_literal__String_no
-  panic %0 borrowed at acme/app/src/main.trb:2:3
-  unreachable
-}"""
+      irOf(source, "t_acme_x2f_app_main_never") == r"""
+        fn t_acme_x2f_app_main_never() -> Int64 {
+          slot %0 temporary: String
+          slot %1 temporary: Void
+        b0: # acme/app/src/main.trb:1 body
+          %0 = constant s_literal__String_no
+          panic %0 borrowed at acme/app/src/main.trb:2:3
+          unreachable
+        }"""
     )
   }
 }
@@ -349,34 +358,35 @@ b0: # acme/app/src/main.trb:1 body
 group "The top level of a file" {
   test "a top-level `const` is static data with a name, and there is no module initialization" {
     const source = r"""
-const greeting = "hi"
+      const greeting = "hi"
 
-fn shout(text: String): String {
-  text + greeting
-}
-"""
-    const text = textOf(source)
-    assert(text.contains("static s_acme_x2f_app_main_greeting: String = \"hi\""))
-    assert(irOf(source, "t_acme_x2f_app_main_shout").contains("%1 = constant s_acme_x2f_app_main_greeting"))
+      fn shout(text: String): String {
+        text + greeting
+      }
+      """
+    const text = textOf source
+    assert text.contains("static s_acme_x2f_app_main_greeting: String = \"hi\"")
+    assert irOf(source, "t_acme_x2f_app_main_shout").contains("%1 = constant s_acme_x2f_app_main_greeting")
   }
 
   test "the top-level code of an entry file is the entry function, named after the file" {
     const source = r"""
-fn twice(value: Int): Int {
-  value + value
-}
+      fn twice(value: Int): Int {
+        value + value
+      }
 
-const _ = twice(21)
-"""
+      const _ = twice(21)
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main") == r"""fn t_acme_x2f_app_main() -> Void {
-  slot %0 temporary: Int64
-  slot %1 temporary: Int64
-b0: # acme/app/src/main.trb:5 entry
-  %0 = constant s_literal__Int64_21
-  %1 = call t_acme_x2f_app_main_twice(%0 borrowed) at acme/app/src/main.trb:5:11
-  return
-}"""
+      irOf(source, "t_acme_x2f_app_main") == r"""
+        fn t_acme_x2f_app_main() -> Void {
+          slot %0 temporary: Int64
+          slot %1 temporary: Int64
+        b0: # acme/app/src/main.trb:5 entry
+          %0 = constant s_literal__Int64_21
+          %1 = call t_acme_x2f_app_main_twice(%0 borrowed) at acme/app/src/main.trb:5:11
+          return
+        }"""
     )
   }
 
@@ -387,22 +397,23 @@ b0: # acme/app/src/main.trb:5 entry
    */
   test "the top-level bindings of an entry file are locals of the entry function, and a `var` can be assigned to" {
     const source = r"""
-var counter = 0
+      var counter = 0
 
-const step = 2
+      const step = 2
 
-counter = counter + step
-"""
+      counter = counter + step
+      """
     assert(
-      irOf(source, "t_acme_x2f_app_main") == r"""fn t_acme_x2f_app_main() -> Void {
-  slot %0 local counter: Int64
-  slot %1 local step: Int64
-b0: # acme/app/src/main.trb:1 entry
-  %0 = constant s_literal__Int64_0
-  %1 = constant s_literal__Int64_2
-  %0 = intrinsic add.i64 %0, %1 at acme/app/src/main.trb:5:11
-  return
-}"""
+      irOf(source, "t_acme_x2f_app_main") == r"""
+        fn t_acme_x2f_app_main() -> Void {
+          slot %0 local counter: Int64
+          slot %1 local step: Int64
+        b0: # acme/app/src/main.trb:1 entry
+          %0 = constant s_literal__Int64_0
+          %1 = constant s_literal__Int64_2
+          %0 = intrinsic add.i64 %0, %1 at acme/app/src/main.trb:5:11
+          return
+        }"""
     )
     // Nothing of the entry file is static data with a name of its own any more
     assert(!textOf(source).contains("static s_acme_x2f_app_main_counter"))
@@ -410,14 +421,14 @@ b0: # acme/app/src/main.trb:1 entry
 
   test "a top-level `var` a function reads is a clean finding, because it would read the initializer" {
     const source = r"""
-var counter = 0
+      var counter = 0
 
-fn read(): Int {
-  counter
-}
+      fn read(): Int {
+        counter
+      }
 
-counter = counter + 1
-"""
+      counter = counter + 1
+      """
     assert(unsupportedIn(source) == ["not supported by the back end yet: a top-level `var` read from a function"])
   }
 }
@@ -425,18 +436,19 @@ counter = counter + 1
 group "What the back end does not lower yet" {
   test "every construct of a later sub-milestone is named, and the function becomes an `unreachable` stub" {
     const source = r"""
-fn collected(value: Int): Int {
-  const items = [value, value]
-  items.length()
-}
-"""
+      fn collected(value: Int): Int {
+        const items = [value, value]
+        items.length()
+      }
+      """
     assert(unsupportedIn(source) == ["not supported by the back end yet: a list literal"])
     assert(
-      irOf(source, "t_acme_x2f_app_main_collected") == r"""fn t_acme_x2f_app_main_collected(value: Int64 borrowed) -> Int64 {
-  slot %0 parameter value: Int64
-b0: # not supported yet
-  unreachable
-}"""
+      irOf(source, "t_acme_x2f_app_main_collected") == r"""
+        fn t_acme_x2f_app_main_collected(value: Int64 borrowed) -> Int64 {
+          slot %0 parameter value: Int64
+        b0: # not supported yet
+          unreachable
+        }"""
     )
   }
 
@@ -476,7 +488,7 @@ b0: # not supported yet
    * instance of, which is what keeps the progress bar about declarations rather than about calls.
    */
   test "a generic declaration nothing calls has no instance of its own" {
-    const found = unsupportedIn("fn identity<Value>(value: Value): Value \{\n  value\n\}")
+    const found = unsupportedIn "fn identity<Value>(value: Value): Value \{\n  value\n\}"
     assert(found == ["not supported by the back end yet: a declaration the back end cannot build an instance of"])
   }
 }
@@ -484,12 +496,12 @@ b0: # not supported yet
 group "Real code" {
   /** The root of the repository, found from wherever the test runner was started. */
   fn repositoryRoot(): String? {
-    var current = normalizePath(File.absolutePath(".").expect("the working directory"))
+    var current = normalizePath File.absolutePath(".").expect("the working directory")
     while pathDepth(current) >= 1 {
       if File.exists(joinPath(current, "compiler/project.trb")) {
-        return Some(current)
+        return Some current
       }
-      const parent = parentPath(current)
+      const parent = parentPath current
       if parent == current {
         return None
       }
@@ -506,26 +518,26 @@ group "Real code" {
   test "every function of `source.trb` and `diagnostic.trb` is lowered or blocked by a named construct" {
     const root = repositoryRoot().expect("the root of the repository above the working directory")
     const tree = readSourceTree([root]).expect("the sources of the repository")
-    const first = joinPath(root, "compiler/src/syntax/source.trb")
-    const second = joinPath(root, "compiler/src/syntax/diagnostic.trb")
-    const checked = check(tree, [first, second], false, true)
+    const first = joinPath root, "compiler/src/syntax/source.trb"
+    const second = joinPath root, "compiler/src/syntax/diagnostic.trb"
+    const checked = check tree, [first, second], false, true
     var reported: List<String> = []
     for file in checked.files {
       for diagnostic in file.diagnostics {
-        reported.add("{file.path}: {diagnostic.message}")
+        reported.add "{file.path}: {diagnostic.message}"
       }
     }
-    assert(reported.isEmpty())
-    var found = lowerChecked(checked)
+    assert reported.isEmpty()
+    var found = lowerChecked checked
     // A body the verifier rejects is a bug of the lowering, and a stub is a body like any other
-    assert(verifyProgram(found.program).isEmpty())
-    assert(found.program.problems.isEmpty())
-    assert(found.problems.isEmpty())
+    assert verifyProgram(found.program).isEmpty()
+    assert found.program.problems.isEmpty()
+    assert found.problems.isEmpty()
     // Nine declarations of the two files, plus the instances and the generated members the worklist reached from them
     assert(found.lowered + found.stubbed == 16)
     var blocked: List<String> = []
     for entry in found.unsupported {
-      blocked.add(entry.what)
+      blocked.add entry.what
     }
     blocked.sort({ _ })
     // `add` takes a `var self`, so it is not in a witness table: a `var` receiver is milestone 5.9's

@@ -17,328 +17,328 @@ use PatternLiteral, PatternStep from "../src/semantics/checker/exhaustive"
  * its size, which is what keeps these tests fast and readable.
  */
 public const preludeSource = r"""
-public trait Show {
-  fn show(self): String
-}
-
-public trait Equals {
-  fn equals(self, other: Self): Bool
-}
-
-public trait Compare with Equals {
-  fn compare(self, other: Self): Int
-
-  /** A default member: written in terms of the required one, and not forwarded by `by field` (gap 14). */
-  fn max(self, other: Self): Self {
-    if compare(other) > 0 { self } else { other }
+  public trait Show {
+    fn show(self): String
   }
-}
 
-public trait Hash {
-  fn hash(self): Int
-}
-
-public trait Add<Other = Self, Output = Self> {
-  fn add(self, other: Other): Output
-}
-
-public trait Subtract<Other = Self, Output = Self> {
-  fn subtract(self, other: Other): Output
-}
-
-public trait Multiply<Other = Self, Output = Self> {
-  fn multiply(self, other: Other): Output
-}
-
-public trait Divide<Other = Self, Output = Self> {
-  fn divide(self, other: Other): Output
-}
-
-public trait Remainder<Other = Self, Output = Self> {
-  fn remainder(self, other: Other): Output
-}
-
-public trait Negate {
-  fn negate(self): Self
-}
-
-public trait Indexed<Key, Value> {
-  fn at(self, key: Key): Value
-}
-
-/** `a[key] = v`, and what makes `a[key]` a `var` path at all (milestone 4.6). */
-public trait MutableIndexed<Key, Value> with Indexed<Key, Value> {
-  fn set(var self, key: Key, value: Value)
-}
-
-public trait Slice {
-  fn slice(self, range: Range<Int>): Self
-}
-
-/** `samples[0..100].sort()`: a window into the original, which is what a range as a `var` path is. */
-public trait MutableSlice with Slice {
-  fn replace(var self, range: Range<Int>, values: Self)
-}
-
-public trait Iterable<Item> {
-  fn iterator(self): Iterator<Item>
-}
-
-public trait Iterator<Item> {
-  fn next(var self): Item?
-}
-
-public trait From<Source> {
-  fn from(value: Source): Self
-}
-
-public trait Into<Target> {
-  fn into(self): Target
-}
-
-extend<Source, Target> Source with Into<Target> where Target: From<Source> {
-  fn into(self): Target {
-    Target.from(self)
+  public trait Equals {
+    fn equals(self, other: Self): Bool
   }
-}
 
-public trait TryFrom<Source, Failure> {
-  fn tryFrom(value: Source): Result<Self, Failure>
-}
+  public trait Compare with Equals {
+    fn compare(self, other: Self): Int
 
-public trait Encode {
-  fn encode(self): String
-}
-
-/**
- * `Expression<Value>` quotes what arrives at it: the argument is checked as an ordinary `Value` and handed over with its
- * tree. Everything it captures has to be `Encode`, which is why the numbers and the collections below have it.
- */
-public native type Expression<Value> {
-  source: String
-
-  native fn value(self): Value
-  native fn captures(self): List<Encode>
-}
-
-/** The one quotation every test file of the language is full of. */
-public native fn assert(condition: Expression<Bool>)
-
-/** `nameOf(user.email)` is `"email"`: an ordinary function over a quotation, not an intrinsic. */
-public native fn nameOf<Value>(expression: Expression<Value>): String
-
-public trait Length {
-  fn length(self): Int
-
-  fn isEmpty(self): Bool {
-    length() == 0
-  }
-}
-
-public trait Numeric with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show {}
-
-public trait Signed with Numeric, Negate {}
-
-public native type Int8 with Signed, Hash, Encode {}
-public native type Int32 with Signed, Hash, Encode {}
-public native type Int64 with Signed, Hash, Encode {}
-public native type UInt8 with Numeric, Hash, Encode {}
-public native type Float32 with Signed, Encode {}
-public native type Float64 with Signed, Encode {}
-public native type Bool with Equals, Hash, Show, Encode {}
-
-/** As in `std/core`: the traits of `Void` are declared here, not on the name the language provides. */
-public native type Void with Equals, Hash, Show {}
-public native type Char with Equals, Compare, Hash, Show, Encode {}
-
-public native type String with Equals, Compare, Hash, Show, Add, Slice, Encode {
-  native fn byteLength(self): Int64
-  native fn isEmpty(self): Bool
-}
-
-public type Int = Int64
-public type Float = Float64
-
-public type Option<Value> {
-  case Some(value: Value)
-  case None
-
-  fn isSome(self): Bool {
-    match self {
-      Some(_) => true
-      .None => false
+    /** A default member: written in terms of the required one, and not forwarded by `by field` (gap 14). */
+    fn max(self, other: Self): Self {
+      if compare(other) > 0 { self } else { other }
     }
   }
 
-  fn orElse(self, fallback: lazy Value): Value {
-    match self {
-      Some(value) => value
-      .None => fallback
+  public trait Hash {
+    fn hash(self): Int
+  }
+
+  public trait Add<Other = Self, Output = Self> {
+    fn add(self, other: Other): Output
+  }
+
+  public trait Subtract<Other = Self, Output = Self> {
+    fn subtract(self, other: Other): Output
+  }
+
+  public trait Multiply<Other = Self, Output = Self> {
+    fn multiply(self, other: Other): Output
+  }
+
+  public trait Divide<Other = Self, Output = Self> {
+    fn divide(self, other: Other): Output
+  }
+
+  public trait Remainder<Other = Self, Output = Self> {
+    fn remainder(self, other: Other): Output
+  }
+
+  public trait Negate {
+    fn negate(self): Self
+  }
+
+  public trait Indexed<Key, Value> {
+    fn at(self, key: Key): Value
+  }
+
+  /** `a[key] = v`, and what makes `a[key]` a `var` path at all (milestone 4.6). */
+  public trait MutableIndexed<Key, Value> with Indexed<Key, Value> {
+    fn set(var self, key: Key, value: Value)
+  }
+
+  public trait Slice {
+    fn slice(self, range: Range<Int>): Self
+  }
+
+  /** `samples[0..100].sort()`: a window into the original, which is what a range as a `var` path is. */
+  public trait MutableSlice with Slice {
+    fn replace(var self, range: Range<Int>, values: Self)
+  }
+
+  public trait Iterable<Item> {
+    fn iterator(self): Iterator<Item>
+  }
+
+  public trait Iterator<Item> {
+    fn next(var self): Item?
+  }
+
+  public trait From<Source> {
+    fn from(value: Source): Self
+  }
+
+  public trait Into<Target> {
+    fn into(self): Target
+  }
+
+  extend<Source, Target> Source with Into<Target> where Target: From<Source> {
+    fn into(self): Target {
+      Target.from(self)
     }
   }
 
-  fn okOr<Failure>(self, error: lazy Failure): Result<Value, Failure> {
-    match self {
-      Some(value) => Ok(value)
-      .None => Fail(error)
+  public trait TryFrom<Source, Failure> {
+    fn tryFrom(value: Source): Result<Self, Failure>
+  }
+
+  public trait Encode {
+    fn encode(self): String
+  }
+
+  /**
+   * `Expression<Value>` quotes what arrives at it: the argument is checked as an ordinary `Value` and handed over with its
+   * tree. Everything it captures has to be `Encode`, which is why the numbers and the collections below have it.
+   */
+  public native type Expression<Value> {
+    source: String
+
+    native fn value(self): Value
+    native fn captures(self): List<Encode>
+  }
+
+  /** The one quotation every test file of the language is full of. */
+  public native fn assert(condition: Expression<Bool>)
+
+  /** `nameOf(user.email)` is `"email"`: an ordinary function over a quotation, not an intrinsic. */
+  public native fn nameOf<Value>(expression: Expression<Value>): String
+
+  public trait Length {
+    fn length(self): Int
+
+    fn isEmpty(self): Bool {
+      length() == 0
     }
   }
-}
 
-public type Result<Value, Failure> {
-  case Ok(value: Value)
-  case Fail(error: Failure)
+  public trait Numeric with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show {}
 
-  fn ok(self): Value? {
-    match self {
-      Ok(value) => Some(value)
-      Fail(_) => None
+  public trait Signed with Numeric, Negate {}
+
+  public native type Int8 with Signed, Hash, Encode {}
+  public native type Int32 with Signed, Hash, Encode {}
+  public native type Int64 with Signed, Hash, Encode {}
+  public native type UInt8 with Numeric, Hash, Encode {}
+  public native type Float32 with Signed, Encode {}
+  public native type Float64 with Signed, Encode {}
+  public native type Bool with Equals, Hash, Show, Encode {}
+
+  /** As in `std/core`: the traits of `Void` are declared here, not on the name the language provides. */
+  public native type Void with Equals, Hash, Show {}
+  public native type Char with Equals, Compare, Hash, Show, Encode {}
+
+  public native type String with Equals, Compare, Hash, Show, Add, Slice, Encode {
+    native fn byteLength(self): Int64
+    native fn isEmpty(self): Bool
+  }
+
+  public type Int = Int64
+  public type Float = Float64
+
+  public type Option<Value> {
+    case Some(value: Value)
+    case None
+
+    fn isSome(self): Bool {
+      match self {
+        Some(_) => true
+        .None => false
+      }
+    }
+
+    fn orElse(self, fallback: lazy Value): Value {
+      match self {
+        Some(value) => value
+        .None => fallback
+      }
+    }
+
+    fn okOr<Failure>(self, error: lazy Failure): Result<Value, Failure> {
+      match self {
+        Some(value) => Ok(value)
+        .None => Fail(error)
+      }
     }
   }
 
-  fn orElse(self, fallback: lazy Value): Value {
-    match self {
-      Ok(value) => value
-      Fail(_) => fallback
+  public type Result<Value, Failure> {
+    case Ok(value: Value)
+    case Fail(error: Failure)
+
+    fn ok(self): Value? {
+      match self {
+        Ok(value) => Some(value)
+        Fail(_) => None
+      }
+    }
+
+    fn orElse(self, fallback: lazy Value): Value {
+      match self {
+        Ok(value) => value
+        Fail(_) => fallback
+      }
     }
   }
-}
 
-public type Range<Value> {
-  start: Value?
-  end: Value?
-  isInclusive: Bool = false
-}
-
-extend Range<Int> with Iterable<Int> {
-  native fn iterator(self): Iterator<Int>
-}
-
-public trait List<Item> with Iterable<Item>, MutableIndexed<Int, Item>, MutableSlice {
-  fn length(self): Int
-  fn add(var self, value: Item)
-  fn added(self, value: Item): Self
-  fn removeAt(var self, index: Int): Item?
-  fn sort(var self, by: (value: Item) => Int)
-
-  /** `List.of(1, 2)`: a factory of the trait itself, which is what a trait as a namespace means (gap 31). */
-  fn of(...items: Item): List<Item> {
-    ArrayList.from(items)
+  public type Range<Value> {
+    start: Value?
+    end: Value?
+    isInclusive: Bool = false
   }
-}
 
-/** What makes `List.from(...)` and `toList()` work: an implementation whose target is the trait. */
-extend<Item> List<Item> with From<Iterable<Item>> {
-  fn from(items: Iterable<Item>): List<Item> {
-    ArrayList.from(items)
+  extend Range<Int> with Iterable<Int> {
+    native fn iterator(self): Iterator<Int>
   }
-}
 
-public trait Map<Key, Value> with MutableIndexed<Key, Value> {
-  fn length(self): Int
-  fn isEmpty(self): Bool
-}
+  public trait List<Item> with Iterable<Item>, MutableIndexed<Int, Item>, MutableSlice {
+    fn length(self): Int
+    fn add(var self, value: Item)
+    fn added(self, value: Item): Self
+    fn removeAt(var self, index: Int): Item?
+    fn sort(var self, by: (value: Item) => Int)
 
-/** Every list is showable: an implementation whose target is the *trait* covers every type that implements it. */
-extend<Item: Show> List<Item> with Show {
-  fn show(self): String {
-    "a list"
+    /** `List.of(1, 2)`: a factory of the trait itself, which is what a trait as a namespace means (gap 31). */
+    fn of(...items: Item): List<Item> {
+      ArrayList.from(items)
+    }
   }
-}
 
-/** A quotation may capture a list or an option, so both carry `Encode` exactly as they do in the real prelude. */
-extend<Item: Encode> List<Item> with Encode {
-  fn encode(self): String {
-    "a list"
+  /** What makes `List.from(...)` and `toList()` work: an implementation whose target is the trait. */
+  extend<Item> List<Item> with From<Iterable<Item>> {
+    fn from(items: Iterable<Item>): List<Item> {
+      ArrayList.from(items)
+    }
   }
-}
 
-extend<Value: Encode> Option<Value> with Encode {
-  fn encode(self): String {
-    "an option"
+  public trait Map<Key, Value> with MutableIndexed<Key, Value> {
+    fn length(self): Int
+    fn isEmpty(self): Bool
   }
-}
 
-/** As in `std/core`: what makes a `Result` showable, and the bound every trait-typed failure has to witness. */
-extend<Value: Show, Failure: Show> Result<Value, Failure> with Show {
-  fn show(self): String {
-    "a result"
+  /** Every list is showable: an implementation whose target is the *trait* covers every type that implements it. */
+  extend<Item: Show> List<Item> with Show {
+    fn show(self): String {
+      "a list"
+    }
   }
-}
 
-extend<Key: Encode, Value: Encode> Map<Key, Value> with Encode {
-  fn encode(self): String {
-    "a map"
+  /** A quotation may capture a list or an option, so both carry `Encode` exactly as they do in the real prelude. */
+  extend<Item: Encode> List<Item> with Encode {
+    fn encode(self): String {
+      "a list"
+    }
   }
-}
 
-public native type ArrayList<Item> with List<Item>, From<Iterable<Item>> {
-  native fn from(items: Iterable<Item>): ArrayList<Item>
-}
+  extend<Value: Encode> Option<Value> with Encode {
+    fn encode(self): String {
+      "an option"
+    }
+  }
 
-public type Array<Item, const Size: Int> {}
+  /** As in `std/core`: what makes a `Result` showable, and the bound every trait-typed failure has to witness. */
+  extend<Value: Show, Failure: Show> Result<Value, Failure> with Show {
+    fn show(self): String {
+      "a result"
+    }
+  }
 
-public native fn print(...values: Show): Void
+  extend<Key: Encode, Value: Encode> Map<Key, Value> with Encode {
+    fn encode(self): String {
+      "a map"
+    }
+  }
 
-public native fn panic(message: String): Never
+  public native type ArrayList<Item> with List<Item>, From<Iterable<Item>> {
+    native fn from(items: Iterable<Item>): ArrayList<Item>
+  }
 
-/** Only a `shared type` has an identity, so this is callable on one and on nothing else (BACKEND gap 15). */
-public native fn isSame<Object>(first: Object, second: Object): Bool
+  public type Array<Item, const Size: Int> {}
 
-/** Resources have an identity, so `using` takes a `var` and a temporary is a valid argument for one (gap 2). */
-public shared trait Close {
-  fn close(var self)
-}
+  public native fn print(...values: Show): Void
 
-public fn using<Resource: Close, Value>(var resource: Resource, body: (Resource) => Value): Value {
-  const result = body(resource)
-  resource.close()
-  result
-}
+  public native fn panic(message: String): Never
 
-public fn do<Value>(body: () => Value): Value {
-  body()
-}
+  /** Only a `shared type` has an identity, so this is callable on one and on nothing else (BACKEND gap 15). */
+  public native fn isSame<Object>(first: Object, second: Object): Bool
 
-/** A function that returns a `Task<Value>` has a body that produces the `Value`. */
-public native shared type Task<Value> {
-  native fn await(self): Value
-}
-"""
+  /** Resources have an identity, so `using` takes a `var` and a temporary is a valid argument for one (gap 2). */
+  public shared trait Close {
+    fn close(var self)
+  }
+
+  public fn using<Resource: Close, Value>(var resource: Resource, body: (Resource) => Value): Value {
+    const result = body(resource)
+    resource.close()
+    result
+  }
+
+  public fn do<Value>(body: () => Value): Value {
+    body()
+  }
+
+  /** A function that returns a `Task<Value>` has a body that produces the `Value`. */
+  public native shared type Task<Value> {
+    native fn await(self): Value
+  }
+  """
 
 public const workspace = [
   "project.trb": r"""
-name "acme/all"
-workspace { members "std/*", "app" }
-""",
+    name "acme/all"
+    workspace { members "std/*", "app" }
+    """,
   "std/prelude/project.trb": r"""
-name "std/prelude"
-""",
+    name "std/prelude"
+    """,
   "std/prelude/src/types.trb": preludeSource,
   "std/prelude/src/lib.trb": r"""
-public use Show, Equals, Compare, Hash, Negate, Iterable, Iterator from "./types"
-public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
-public use MutableIndexed, MutableSlice from "./types"
-public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
-public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
-public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
-public use print, panic, using, do, assert, nameOf, Expression from "./types"
-public use Void from "./types"
-public use isSame from "./types"
-public use Option.Some, Option.None from "./types"
-public use Result.Ok, Result.Fail from "./types"
-""",
+    public use Show, Equals, Compare, Hash, Negate, Iterable, Iterator from "./types"
+    public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
+    public use MutableIndexed, MutableSlice from "./types"
+    public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
+    public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
+    public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
+    public use print, panic, using, do, assert, nameOf, Expression from "./types"
+    public use Void from "./types"
+    public use isSame from "./types"
+    public use Option.Some, Option.None from "./types"
+    public use Result.Ok, Result.Fail from "./types"
+    """,
   "app/project.trb": r"""
-name "acme/app"
-""",
+    name "acme/app"
+    """,
 ]
 
 public fn workspaceWith(files: Map<String, String>): SourceTree {
   var all = workspace
   for (path, text) in files {
-    all.set(path, text)
+    all.set path, text
   }
-  SourceTree.of(all)
+  SourceTree.of all
 }
 
 /** One checked `app/src/main.trb`, and everything a test asks about it. */
@@ -368,7 +368,7 @@ public type Probed {
       const rest = source.slice(from..length)
       const found = match rest.indexOf(written) {
         Some(index) => index
-        .None => {
+        None => {
           from = length
           continue
         }
@@ -384,81 +384,81 @@ public type Probed {
 
   /** The adaptations of the last expression that is written exactly like this, in the order they apply. */
   fn lastAdaptationsOf(self, written: String): List<String> {
-    const at = lastSpanOf(written)
+    const at = lastSpanOf written
     var found: List<String> = []
     for adaptation in checker.adaptationsAt(module, at) {
-      found.add(describeAdaptation(checker, adaptation))
+      found.add describeAdaptation(checker, adaptation)
     }
     found
   }
 
   /** The type of the expression that is written exactly like this, as a message would show it. */
   fn typeOf(self, written: String): String {
-    const at = spanOf(written)
+    const at = spanOf written
     const found = checker.expressionType(module, at).expect("an expression at `{written}`")
-    checker.describe(found)
+    checker.describe found
   }
 
   /** The type of the pattern that is written exactly like this. */
   fn patternTypeOf(self, written: String): String {
-    const at = spanOf(written)
+    const at = spanOf written
     const found = checker.patternType(module, at).expect("a pattern at `{written}`")
-    checker.describe(found)
+    checker.describe found
   }
 
   /** What the expression at `written` resolved to, in the shape a test can compare. */
   fn resolutionOf(self, written: String): String {
-    const at = spanOf(written)
+    const at = spanOf written
     const found = checker.resolutionAt(module, at).expect("a resolution at `{written}`")
-    describeResolution(checker, found)
+    describeResolution checker, found
   }
 
   /** How the call or the operator at `written` reaches its target. */
   fn dispatchOf(self, written: String): String {
-    const at = spanOf(written)
-    dispatchAt(checker, module, at)
+    const at = spanOf written
+    dispatchAt checker, module, at
   }
 
   /** The adaptations of the expression at `written`, in the order they apply. */
   fn adaptationsOf(self, written: String): List<String> {
-    const at = spanOf(written)
+    const at = spanOf written
     var found: List<String> = []
     for adaptation in checker.adaptationsAt(module, at) {
-      found.add(describeAdaptation(checker, adaptation))
+      found.add describeAdaptation(checker, adaptation)
     }
     found
   }
 
   /** Which parameter every written argument of the call at `written` fills. */
   fn argumentsOf(self, written: String): List<Int> {
-    const at = spanOf(written)
+    const at = spanOf written
     checker.argumentTargetsAt(module, at).expect("a call at `{written}`")
   }
 
   /** The type arguments the generic call at `written` was instantiated with, in declaration order. */
   fn typeArgumentsOf(self, written: String): List<String> {
-    const at = spanOf(written)
+    const at = spanOf written
     const found = checker.typeArgumentsAt(module, at) ?? []
     var shown: List<String> = []
     for argument in found {
-      shown.add(checker.describe(argument))
+      shown.add checker.describe(argument)
     }
     shown
   }
 
   /** One witness per trait of every bound of the callee at `written`, in the order of the signature. */
   fn witnessesOf(self, written: String): List<String> {
-    const at = spanOf(written)
+    const at = spanOf written
     var shown: List<String> = []
     for witness in checker.witnessesAt(module, at) ?? [] {
-      shown.add(describeWitness(checker, witness))
+      shown.add describeWitness(checker, witness)
     }
     shown
   }
 
   /** Which bindings the closure at `written` captures, and which of them are `var`. */
   fn capturesOf(self, written: String): List<String> {
-    const at = spanOf(written)
+    const at = spanOf written
     var shown: List<String> = []
     for capture in checker.capturesAt(module, at) ?? [] {
       const name = checker.binding(capture.binding).name
@@ -473,20 +473,20 @@ public type Probed {
    * named by the text that was written there, which is what a test can read.
    */
   fn quotationOf(self, written: String): List<String> {
-    const at = spanOf(written)
+    const at = spanOf written
     const found = checker.quotationAt(module, at).expect("a quotation at `{written}`")
     var lines = ["value {checker.describe(found.annotation)}"]
     for index in 0..found.captures.length() {
       const capture = found.captures[index]
-      const shown = checker.describe(capture.annotation)
-      const witness = describeWitness(checker, capture.witness)
-      lines.add("capture {index} {capture.name}: {shown} through {witness}")
+      const shown = checker.describe capture.annotation
+      const witness = describeWitness checker, capture.witness
+      lines.add "capture {index} {capture.name}: {shown} through {witness}"
     }
     var inside: List<(Span, String)> = []
     for (span, parameters) in found.lambdas {
       var parts: List<String> = []
       for parameter in parameters {
-        parts.add("{parameter.name}: {checker.describe(parameter.annotation)}")
+        parts.add "{parameter.name}: {checker.describe(parameter.annotation)}"
       }
       inside.add((span, "lambda `{textAt(span)}` ({parts.joined(separator: ", ")})"))
     }
@@ -508,9 +508,9 @@ public type Probed {
 
   /** The receiver of the receiver closure at `written`. `Span(0, 0)` is the body of a receiver script. */
   fn receiverOf(self, written: String): String {
-    const at = if written.isEmpty() { Span(0, 0) } else { spanOf(written) }
+    const at = if written.isEmpty() { Span 0, 0 } else { spanOf written }
     const found = checker.receiverAt(module, at).expect("a receiver closure at `{written}`")
-    describeReceiver(checker, found)
+    describeReceiver checker, found
   }
 
   /**
@@ -518,47 +518,47 @@ public type Probed {
    * a `while const` are recorded under the span of their pattern.
    */
   fn matchPlanOf(self, written: String): List<String> {
-    const at = spanOf(written)
+    const at = spanOf written
     const plan = checker.matchAt(module, at).expect("a match at `{written}`")
-    describeArms(checker, plan)
+    describeArms checker, plan
   }
 
   /** Whether the `match` at `written` covers every value, and the values it does not. */
   fn witnessesOfMatch(self, written: String): List<String> {
-    const at = spanOf(written)
+    const at = spanOf written
     checker.matchAt(module, at).expect("a match at `{written}`").witnesses
   }
 
   fn isExhaustive(self, written: String): Bool {
-    const at = spanOf(written)
+    const at = spanOf written
     checker.matchAt(module, at).expect("a match at `{written}`").isExhaustive
   }
 
   /** The place the assignment, `var` argument, `var self` receiver or `if var` subject at `written` names. */
   fn placeOf(self, written: String): String {
-    const at = spanOf(written)
+    const at = spanOf written
     const found = checker.placeAt(module, at).expect("a place at `{written}`")
-    describePlace(checker, found)
+    describePlace checker, found
   }
 
   /** Whether a place was recorded at all, which is the question a test about a rejected path asks. */
   fn hasPlaceAt(self, written: String): Bool {
-    const at = spanOf(written)
+    const at = spanOf written
     checker.placeAt(module, at).isSome()
   }
 
   /** Whether the closure at `written` may outlive the call it stands in (BACKEND gap 14). */
   fn closureKindOf(self, written: String): String {
-    const at = spanOf(written)
+    const at = spanOf written
     match checker.closureKindAt(module, at) {
       Some(.Local) => "local"
       Some(.Escaping) => "escaping"
-      .None => "none"
+      None => "none"
     }
   }
 
   fn statistics(self): Statistics {
-    checker.statisticsOf(module)
+    checker.statisticsOf module
   }
 }
 
@@ -568,16 +568,16 @@ public fn describeArms(checker: Checker, plan: MatchPlan): List<String> {
   for arm in plan.arms {
     var branches: List<String> = []
     for branch in arm.branches {
-      branches.add(describeBranch(checker, branch))
+      branches.add describeBranch(checker, branch)
     }
-    var line = branches.joined(separator: " | ")
+    var line = branches.joined separator: " | "
     if arm.hasGuard {
       line = "{line} guarded"
     }
     if !arm.isReachable {
       line = "{line} unreachable"
     }
-    lines.add(line)
+    lines.add line
   }
   lines
 }
@@ -586,18 +586,18 @@ public fn describeArms(checker: Checker, plan: MatchPlan): List<String> {
 fn describeBranch(checker: Checker, branch: PatternBranch): String {
   var parts: List<String> = []
   for probed in branch.tests {
-    const place = describePath(checker, probed.path)
-    parts.add("{place} {describeCheck(checker, probed.check)}")
+    const place = describePath checker, probed.path
+    parts.add "{place} {describeCheck(checker, probed.check)}"
   }
   for bound in branch.bindings {
-    const place = describePath(checker, bound.path)
+    const place = describePath checker, bound.path
     const name = if bound.isVar { "var {bound.name}" } else { bound.name }
-    parts.add("{name}={place}")
+    parts.add "{name}={place}"
   }
   if parts.isEmpty() {
     return "anything"
   }
-  parts.joined(separator: " ")
+  parts.joined separator: " "
 }
 
 fn describeCheck(checker: Checker, check: PatternCheck): String {
@@ -615,8 +615,8 @@ fn describeCheck(checker: Checker, check: PatternCheck): String {
 
 fn describePatternLiteral(literal: PatternLiteral): String {
   match literal.value {
-    Some(found) => describeLiteral(found)
-    .None => "?"
+    Some(found) => describeLiteral found
+    None => "?"
   }
 }
 
@@ -673,9 +673,9 @@ public fn describePlace(checker: Checker, place: Place): String {
 }
 
 public fn probe(source: String): Probed {
-  const checked = check(workspaceWith(["app/src/main.trb": source]), ["app"])
+  const checked = check workspaceWith(["app/src/main.trb": source]), ["app"]
   const module = checked.program.graph.moduleAt("app/src/main.trb").expect("the module of the file")
-  Probed(source, checked.checker, module)
+  Probed source, checked.checker, module
 }
 
 /**
@@ -684,7 +684,7 @@ public fn probe(source: String): Probed {
  * entry file imports.
  */
 public fn probeModule(files: Map<String, String>, path: String): Probed {
-  const checked = check(workspaceWith(files), ["app"])
+  const checked = check workspaceWith(files), ["app"]
   const module = checked.program.graph.moduleAt(path).expect("the module of the file")
   Probed(files.get(path) ?? "", checked.checker, module)
 }
@@ -694,7 +694,7 @@ public fn problems(source: String): List<String> {
   var found: List<String> = []
   for file in check(workspaceWith(["app/src/main.trb": source]), ["app"]).files {
     for diagnostic in file.diagnostics {
-      found.add(diagnostic.message)
+      found.add diagnostic.message
     }
   }
   found
@@ -705,7 +705,7 @@ public fn problemsOf(files: Map<String, String>): List<String> {
   var found: List<String> = []
   for file in check(workspaceWith(files), ["app"]).files {
     for diagnostic in file.diagnostics {
-      found.add(diagnostic.message)
+      found.add diagnostic.message
     }
   }
   found
@@ -716,7 +716,7 @@ public fn problemsAt(files: Map<String, String>, paths: List<String>): List<Stri
   var found: List<String> = []
   for file in check(workspaceWith(files), paths).files {
     for diagnostic in file.diagnostics {
-      found.add(diagnostic.message)
+      found.add diagnostic.message
     }
   }
   found
@@ -770,7 +770,7 @@ public fn describeResolution(checker: Checker, resolution: Resolution): String {
 /** The receiver of the receiver closure at `written`, as a test compares it: the binding, its type, and how it got it. */
 public fn describeReceiver(checker: Checker, found: ReceiverClosure): String {
   const name = checker.binding(found.binding).name
-  const shown = checker.describe(found.annotation)
+  const shown = checker.describe found.annotation
   const how = if found.isImplicit { "implicit" } else { "named" }
   const mode = if found.isVar { "var " } else { "" }
   "{how} {mode}{name}: {shown}"
@@ -801,23 +801,23 @@ public fn describeAdaptation(checker: Checker, adaptation: Adaptation): String {
 fn describeBounds(checker: Checker, bounds: List<TypeId>): String {
   var parts: List<String> = []
   for bound in bounds {
-    parts.add(checker.describe(bound))
+    parts.add checker.describe(bound)
   }
-  parts.joined(separator: " + ")
+  parts.joined separator: " + "
 }
 
 /** A witness as a test writes it: which implementation makes a bound hold, and for which type. */
 public fn describeWitness(checker: Checker, witness: Witness): String {
   match witness {
     .Implementation(implementation, _, inner) => {
-      const found = checker.implementations.at(implementation)
+      const found = checker.implementations.at implementation
       const shown = "{checker.describe(found.target)}: {describeTrait(checker, found.capability)}"
       if inner.isEmpty() {
         return shown
       }
       var parts: List<String> = []
       for nested in inner {
-        parts.add(describeWitness(checker, nested))
+        parts.add describeWitness(checker, nested)
       }
       "{shown} [{parts.joined(separator: ", ")}]"
     }
@@ -830,8 +830,8 @@ public fn describeWitness(checker: Checker, witness: Witness): String {
 
 fn describeTrait(checker: Checker, applied: TypeId?): String {
   match applied {
-    Some(found) => checker.describe(found)
-    .None => "-"
+    Some(found) => checker.describe found
+    None => "-"
   }
 }
 
@@ -840,8 +840,8 @@ public fn describeDispatch(checker: Checker, dispatch: Dispatch): String {
   match dispatch {
     .Direct => "direct"
     .Implementation(implementation, _) => {
-      const found = checker.implementations.at(implementation)
-      const shown = describeTrait(checker, found.capability)
+      const found = checker.implementations.at implementation
+      const shown = describeTrait checker, found.capability
       "implementation {checker.describe(found.target)}: {shown}"
     }
     .Object(bound, _) => "object {checker.describe(bound)}"
@@ -852,7 +852,7 @@ public fn describeDispatch(checker: Checker, dispatch: Dispatch): String {
 /** The dispatch that was recorded for the expression at `written`, for a test about an operator or a trait member. */
 public fn dispatchAt(checker: Checker, module: ModuleId, at: Span): String {
   match checker.resolutionAt(module, at) {
-    Some(.Callable(_, _, dispatch)) => describeDispatch(checker, dispatch)
+    Some(.Callable(_, _, dispatch)) => describeDispatch checker, dispatch
     _ => "none"
   }
 }

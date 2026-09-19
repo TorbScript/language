@@ -388,12 +388,12 @@ public type Argument {
 
 /** A borrowed operand: what phase 1 of the lowering emits everywhere. */
 public fn borrowed(slot: Slot): Argument {
-  Argument(slot, Ownership.Borrowed, false)
+  Argument slot, Ownership.Borrowed, false
 }
 
 /** An operand position that takes the count: `Construct`, `BoxNew`, `TraitValue`, `Return`, a stored parameter. */
 public fn owned(slot: Slot): Argument {
-  Argument(slot, Ownership.Owned, false)
+  Argument slot, Ownership.Owned, false
 }
 
 /**
@@ -401,7 +401,7 @@ public fn owned(slot: Slot): Argument {
  * the caller holds the base live for the whole call and exclusivity keeps a second path to the same storage out.
  */
 public fn referenced(place: Reference): Argument {
-  Argument(place.base, Ownership.Borrowed, false, Some(place))
+  Argument place.base, Ownership.Borrowed, false, Some(place)
 }
 
 // --- Witnesses at a call site ---------------------------------------------------------------------------------------
@@ -599,13 +599,13 @@ public type IrProgram {
   // --- Types
 
   fn internType(var self, form: IrType): IrTypeId {
-    const key = keyOfIrType(form)
+    const key = keyOfIrType form
     if const Some(existing) = typeIdentifiers.get(key) {
       return existing
     }
-    const identifier = IrTypeId(types.length())
-    types.add(form)
-    typeIdentifiers.set(key, identifier)
+    const identifier = IrTypeId types.length()
+    types.add form
+    typeIdentifiers.set key, identifier
     identifier
   }
 
@@ -624,13 +624,13 @@ public type IrProgram {
   // --- Traits
 
   fn internTrait(var self, applied: IrTrait): TraitId {
-    const key = keyOfTrait(applied)
+    const key = keyOfTrait applied
     if const Some(existing) = traitIdentifiers.get(key) {
       return existing
     }
-    const identifier = TraitId(traits.length())
-    traits.add(applied)
-    traitIdentifiers.set(key, identifier)
+    const identifier = TraitId traits.length()
+    traits.add applied
+    traitIdentifiers.set key, identifier
     identifier
   }
 
@@ -641,13 +641,13 @@ public type IrProgram {
   // --- Signatures
 
   fn internSignature(var self, signature: IrSignature): IrSignatureId {
-    const key = keyOfSignature(signature)
+    const key = keyOfSignature signature
     if const Some(existing) = signatureIdentifiers.get(key) {
       return existing
     }
-    const identifier = IrSignatureId(signatures.length())
-    signatures.add(signature)
-    signatureIdentifiers.set(key, identifier)
+    const identifier = IrSignatureId signatures.length()
+    signatures.add signature
+    signatureIdentifiers.set key, identifier
     identifier
   }
 
@@ -661,7 +661,7 @@ public type IrProgram {
 
   /** Only `finishProgram` uses this, to fill in what follows from the finished layouts. */
   fn setSignature(var self, id: IrSignatureId, signature: IrSignature) {
-    signatures.set(id.value, signature)
+    signatures.set id.value, signature
   }
 
   // --- Layouts
@@ -672,12 +672,12 @@ public type IrProgram {
    */
   fn reserveLayout(var self, name: String, kind: LayoutKind): ReservedLayout {
     if const Some(existing) = layoutIdentifiers.get(name) {
-      return ReservedLayout(existing, false)
+      return ReservedLayout existing, false
     }
-    const identifier = LayoutId(layouts.length())
-    layouts.add(Layout(name, kind))
-    layoutIdentifiers.set(name, identifier)
-    ReservedLayout(identifier, true)
+    const identifier = LayoutId layouts.length()
+    layouts.add Layout(name, kind)
+    layoutIdentifiers.set name, identifier
+    ReservedLayout identifier, true
   }
 
   fn layoutAt(self, id: LayoutId): Layout {
@@ -686,11 +686,11 @@ public type IrProgram {
 
   /** The layout with this name, if the lowering built one. A name is the whole identity of a layout. */
   fn layoutNamed(self, name: String): LayoutId? {
-    layoutIdentifiers.get(name)
+    layoutIdentifiers.get name
   }
 
   fn setLayout(var self, id: LayoutId, layout: Layout) {
-    layouts.set(id.value, layout)
+    layouts.set id.value, layout
   }
 
   fn hasLayout(self, id: LayoutId): Bool {
@@ -704,9 +704,9 @@ public type IrProgram {
     if const Some(existing) = locationIdentifiers.get(key) {
       return existing
     }
-    const identifier = LocationId(locations.length())
-    locations.add(location)
-    locationIdentifiers.set(key, identifier)
+    const identifier = LocationId locations.length()
+    locations.add location
+    locationIdentifiers.set key, identifier
     identifier
   }
 
@@ -721,7 +721,7 @@ public type IrProgram {
   // --- Everything else
 
   fn addFunction(var self, function: IrFunction): FunctionId {
-    functions.add(function)
+    functions.add function
     FunctionId(functions.length() - 1)
   }
 
@@ -734,7 +734,7 @@ public type IrProgram {
   }
 
   fn addStatic(var self, value: StaticValue): StaticId {
-    statics.add(value)
+    statics.add value
     StaticId(statics.length() - 1)
   }
 
@@ -747,14 +747,14 @@ public type IrProgram {
   }
 
   fn addWitnessTable(var self, table: WitnessTable): WitnessTableId {
-    witnessTables.add(table)
-    witnessTableIdentifiers.set(table.name, WitnessTableId(witnessTables.length() - 1))
+    witnessTables.add table
+    witnessTableIdentifiers.set table.name, WitnessTableId(witnessTables.length() - 1)
     WitnessTableId(witnessTables.length() - 1)
   }
 
   /** The table with this name, if it is there already. A name is the whole identity of a table, as it is of a layout. */
   fn witnessTableNamed(self, name: String): WitnessTableId? {
-    witnessTableIdentifiers.get(name)
+    witnessTableIdentifiers.get name
   }
 
   fn witnessTableAt(self, id: WitnessTableId): WitnessTable {
@@ -767,7 +767,7 @@ public type IrProgram {
    * table that is not there yet would be built a second time.
    */
   fn setWitnessTable(var self, id: WitnessTableId, table: WitnessTable) {
-    witnessTables.set(id.value, table)
+    witnessTables.set id.value, table
   }
 
   fn witnessTableCount(self): Int {
@@ -779,7 +779,7 @@ public type IrProgram {
   }
 
   fn addElement(var self, descriptor: ElementDescriptor): ElementId {
-    elements.add(descriptor)
+    elements.add descriptor
     ElementId(elements.length() - 1)
   }
 
@@ -788,20 +788,20 @@ public type IrProgram {
   }
 
   fn setElement(var self, id: ElementId, descriptor: ElementDescriptor) {
-    elements.set(id.value, descriptor)
+    elements.set id.value, descriptor
   }
 
   /** An internal error of the compiler: the lowering produced something no back end can represent. */
   fn reportProblem(var self, message: String) {
     if !problems.contains(message) {
-      problems.add(message)
+      problems.add message
     }
   }
 
   /** A construct that is well formed and waits for a milestone. One root cause gets one message, however often. */
   fn reportPlanned(var self, message: String) {
     if !planned.contains(message) {
-      planned.add(message)
+      planned.add message
     }
   }
 }
@@ -884,7 +884,7 @@ public fn keyOfSignature(signature: IrSignature): String {
   var key = ""
   for parameter in signature.parameters {
     const reference = if parameter.isReference { "&" } else { "" }
-    const ownership = keyOfOwnership(parameter.ownership)
+    const ownership = keyOfOwnership parameter.ownership
     key = key + ";{reference}{ownership}{parameter.annotation.value}"
   }
   var witnesses = ""

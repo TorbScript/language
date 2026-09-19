@@ -38,7 +38,7 @@ public type Setting {
   block: List<Setting>
 
   fn first(self): String? {
-    texts.get(0)
+    texts.get 0
   }
 
   /** The string arguments of every `word` line of the block, in order. */
@@ -46,7 +46,7 @@ public type Setting {
     var found: List<String> = []
     for setting in block {
       if setting.word == word {
-        found.addAll(setting.texts)
+        found.addAll setting.texts
       }
     }
     found
@@ -71,17 +71,17 @@ public fn readManifest(file: SourceFile): Manifest {
     match setting.word {
       "name" => {
         if const Some(text) = setting.first() {
-          manifest = manifest.copy(name: text)
+          manifest = manifest.copy name: text
         }
       }
       "version" => {
         if const Some(text) = setting.first() {
-          manifest = manifest.copy(version: text)
+          manifest = manifest.copy version: text
         }
       }
       "prelude" => {
         if const Some(text) = setting.first() {
-          manifest = manifest.copy(prelude: text)
+          manifest = manifest.copy prelude: text
         }
       }
       "dependencies" => {
@@ -91,16 +91,16 @@ public fn readManifest(file: SourceFile): Manifest {
         )
       }
       "workspace" => {
-        manifest = manifest.copy(workspaceMembers: setting.textsOf("members"))
+        manifest = manifest.copy workspaceMembers: setting.textsOf("members")
       }
       "build" => {
         if const Some(text) = firstTextOf(setting, "input") {
-          manifest = manifest.copy(buildInput: text)
+          manifest = manifest.copy buildInput: text
         }
       }
       "test" => {
         if const Some(text) = firstTextOf(setting, "input") {
-          manifest = manifest.copy(testInput: text)
+          manifest = manifest.copy testInput: text
         }
       }
       _ => {}
@@ -125,7 +125,7 @@ public fn readSettings(statements: List<Statement>): List<Setting> {
   var settings: List<Setting> = []
   for statement in statements {
     if const Some(setting) = settingOf(statement) {
-      settings.add(setting)
+      settings.add setting
     }
   }
   settings
@@ -156,25 +156,25 @@ fn settingOf(statement: Statement): Setting? {
     match argument.value.kind {
       .TextLiteral(segments) => {
         if const Some(text) = plainText(segments) {
-          texts.add(text)
+          texts.add text
         }
       }
       .Closure(closure) => {
-        block = readSettings(closure.body.statements)
+        block = readSettings closure.body.statements
       }
       _ => {}
     }
   }
-  Some(Setting(word, texts, block))
+  Some Setting(word, texts, block)
 }
 
 /** `None` for a string with `{...}` in it: what it means depends on evaluation. */
 fn plainText(segments: List<TextSegment>): String? {
   if const [.Literal(text)] = segments {
-    return Some(text)
+    return Some text
   }
   if segments.isEmpty() {
-    return Some("")
+    return Some ""
   }
   None
 }

@@ -48,7 +48,7 @@ public type CaseEdge {
 
 public type DecisionGraph {
   var nodes: List<DecisionNode> = []
-  var root: NodeId = NodeId(0)
+  var root: NodeId = NodeId 0
   /** The node one set of rows became: what makes a shared subtree one node instead of two identical ones. */
   var memo: Map<String, NodeId> = [:]
 
@@ -82,50 +82,50 @@ public fn decisionTreeOf(plan: MatchPlan): DecisionGraph {
       continue
     }
     for branch in 0..found.branches.length() {
-      rows.add(Row(arm, branch, found.branches[branch].tests, found.hasGuard))
+      rows.add Row(arm, branch, found.branches[branch].tests, found.hasGuard)
     }
   }
-  const root = buildNode(graph, rows)
+  const root = buildNode graph, rows
   graph.root = root
   graph
 }
 
 fn addNode(var graph: DecisionGraph, node: DecisionNode): NodeId {
-  graph.nodes.add(node)
+  graph.nodes.add node
   NodeId(graph.nodes.length() - 1)
 }
 
 fn buildNode(var graph: DecisionGraph, rows: List<Row>): NodeId {
-  const key = keyOfRows(rows)
+  const key = keyOfRows rows
   if const Some(found) = graph.memo.get(key) {
     return found
   }
-  const made = buildFresh(graph, rows)
-  graph.memo.set(key, made)
+  const made = buildFresh graph, rows
+  graph.memo.set key, made
   made
 }
 
 fn buildFresh(var graph: DecisionGraph, rows: List<Row>): NodeId {
   const first = match rows.first() {
     Some(found) => found
-    .None => {
-      return addNode(graph, DecisionNode.Fail)
+    None => {
+      return addNode graph, DecisionNode.Fail
     }
   }
   if first.tests.isEmpty() {
     if !first.hasGuard {
-      return addNode(graph, DecisionNode.Arm(first.arm, first.branch))
+      return addNode graph, DecisionNode.Arm(first.arm, first.branch)
     }
     // A guard may always be false, so the arms after this one are still candidates
     const rest = rows[1..rows.length()]
-    const otherwise = buildNode(graph, rest)
-    return addNode(graph, DecisionNode.Guarded(first.arm, first.branch, otherwise))
+    const otherwise = buildNode graph, rest
+    return addNode graph, DecisionNode.Guarded(first.arm, first.branch, otherwise)
   }
   const test = first.tests[0]
   if const .IsCase(owner, _) = test.check {
-    return buildSwitch(graph, rows, test.path, owner)
+    return buildSwitch graph, rows, test.path, owner
   }
-  buildCheck(graph, rows, test.path, test.check)
+  buildCheck graph, rows, test.path, test.check
 }
 
 /**
@@ -137,7 +137,7 @@ fn buildSwitch(var graph: DecisionGraph, rows: List<Row>, path: List<PatternStep
   for row in rows {
     if const Some(found) = caseTestedAt(row, path) {
       if !variants.contains(found) {
-        variants.add(found)
+        variants.add found
       }
     }
   }
@@ -148,22 +148,22 @@ fn buildSwitch(var graph: DecisionGraph, rows: List<Row>, path: List<PatternStep
       match caseTestedAt(row, path) {
         Some(found) => {
           if found == variant {
-            taken.add(withoutTest(row, path, PatternCheck.IsCase(owner, variant)))
+            taken.add withoutTest(row, path, PatternCheck.IsCase(owner, variant))
           }
         }
-        .None => taken.add(row)
+        None => taken.add row
       }
     }
-    edges.add(CaseEdge(variant, buildNode(graph, taken)))
+    edges.add CaseEdge(variant, buildNode(graph, taken))
   }
   var rest: List<Row> = []
   for row in rows {
     if caseTestedAt(row, path).isNone() {
-      rest.add(row)
+      rest.add row
     }
   }
-  const otherwise = buildNode(graph, rest)
-  addNode(graph, DecisionNode.SwitchCase(path, owner, edges, otherwise))
+  const otherwise = buildNode graph, rest
+  addNode graph, DecisionNode.SwitchCase(path, owner, edges, otherwise)
 }
 
 /**
@@ -177,15 +177,15 @@ fn buildCheck(var graph: DecisionGraph, rows: List<Row>, path: List<PatternStep>
   var rest: List<Row> = []
   for row in rows {
     if hasTest(row, path, check) {
-      taken.add(withoutTest(row, path, check))
+      taken.add withoutTest(row, path, check)
       continue
     }
-    taken.add(row)
-    rest.add(row)
+    taken.add row
+    rest.add row
   }
-  const then = buildNode(graph, taken)
-  const otherwise = buildNode(graph, rest)
-  addNode(graph, DecisionNode.Check(path, check, then, otherwise))
+  const then = buildNode graph, taken
+  const otherwise = buildNode graph, rest
+  addNode graph, DecisionNode.Check(path, check, then, otherwise)
 }
 
 /** The case one row tests at this path, if it tests one there at all. */
@@ -195,7 +195,7 @@ fn caseTestedAt(row: Row, path: List<PatternStep>): SymbolId? {
       continue
     }
     if const .IsCase(_, variant) = test.check {
-      return Some(variant)
+      return Some variant
     }
   }
   None
@@ -219,9 +219,9 @@ fn withoutTest(row: Row, path: List<PatternStep>, check: PatternCheck): Row {
       isRemoved = true
       continue
     }
-    kept.add(test)
+    kept.add test
   }
-  row.copy(tests: kept)
+  row.copy tests: kept
 }
 
 /** The key a set of rows is memoized under. Injective: every part carries what it is, and nothing is a separator. */
@@ -230,19 +230,19 @@ fn keyOfRows(rows: List<Row>): String {
   for row in rows {
     var tests: List<String> = []
     for test in row.tests {
-      tests.add("{keyOfPath(test.path)}={keyOfCheck(test.check)}")
+      tests.add "{keyOfPath(test.path)}={keyOfCheck(test.check)}"
     }
-    parts.add("{row.arm}/{row.branch}/{tests.joined(separator: "&")}")
+    parts.add "{row.arm}/{row.branch}/{tests.joined(separator: "&")}"
   }
-  parts.joined(separator: ";")
+  parts.joined separator: ";"
 }
 
 fn keyOfPath(path: List<PatternStep>): String {
   var parts: List<String> = []
   for step in path {
-    parts.add(keyOfStep(step))
+    parts.add keyOfStep(step)
   }
-  parts.joined(separator: ".")
+  parts.joined separator: "."
 }
 
 fn keyOfStep(step: PatternStep): String {
@@ -268,9 +268,9 @@ fn keyOfCheck(check: PatternCheck): String {
 
 fn keyOfLiteral(literal: PatternLiteral): String {
   match literal.value {
-    Some(found) => describeLiteral(found)
+    Some(found) => describeLiteral found
     // A decimal literal and a text with interpolation have no value: the span is what tells two of them apart
-    .None => "?{literal.at.start}"
+    None => "?{literal.at.start}"
   }
 }
 
@@ -284,9 +284,9 @@ fn keyOfLiteral(literal: PatternLiteral): String {
 public fn printDecisionGraph(var checker: Checker, graph: DecisionGraph): String {
   var lines = ["root n{graph.root.value}"]
   for index in 0..graph.nodes.length() {
-    lines.add("n{index}: {printDecisionNode(checker, graph.nodes[index])}")
+    lines.add "n{index}: {printDecisionNode(checker, graph.nodes[index])}"
   }
-  lines.joined(separator: "\n")
+  lines.joined separator: "\n"
 }
 
 fn printDecisionNode(var checker: Checker, node: DecisionNode): String {
@@ -294,13 +294,13 @@ fn printDecisionNode(var checker: Checker, node: DecisionNode): String {
     .SwitchCase(path, _, edges, otherwise) => {
       var parts: List<String> = []
       for edge in edges {
-        parts.add(".{checker.symbolAt(edge.variant).name} -> n{edge.target.value}")
+        parts.add ".{checker.symbolAt(edge.variant).name} -> n{edge.target.value}"
       }
-      const shown = parts.joined(separator: ", ")
+      const shown = parts.joined separator: ", "
       "switch {printPath(checker, path)} [{shown}] otherwise n{otherwise.value}"
     }
     .Check(path, check, then, otherwise) => {
-      const question = printCheck(checker, check)
+      const question = printCheck checker, check
       "check {printPath(checker, path)} {question} then n{then.value} else n{otherwise.value}"
     }
     .Arm(arm, branch) => "arm {arm} branch {branch}"
@@ -344,7 +344,7 @@ fn printCheck(var checker: Checker, check: PatternCheck): String {
 
 fn printLiteral(literal: PatternLiteral): String {
   match literal.value {
-    Some(found) => describeLiteral(found)
-    .None => "?"
+    Some(found) => describeLiteral found
+    None => "?"
   }
 }

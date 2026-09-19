@@ -14,9 +14,9 @@ public type Graph {
   fn of(modules: List<Module>): Graph {
     var byPath: Map<String, Int> = [:]
     for module in modules {
-      byPath.set(module.path, module.id.value)
+      byPath.set module.path, module.id.value
     }
-    Self(modules, byPath)
+    Self modules, byPath
   }
 
   fn at(self, id: ModuleId): Module {
@@ -35,13 +35,13 @@ public fn buildGraph(tree: SourceTree, workspace: Workspace): Graph {
     const package = workspace.packages[index]
     for path in package.files {
       const source = SourceText.of(tree.text(path) ?? "")
-      const parsed = parse(source)
-      const id = ModuleId(modules.length())
-      modules.add(Module(id, index, path, source, parsed.file, parsed.diagnostics, isEntryFile(package, path)))
+      const parsed = parse source
+      const id = ModuleId modules.length()
+      modules.add Module(id, index, path, source, parsed.file, parsed.diagnostics, isEntryFile(package, path))
     }
   }
-  addReceiverScripts(tree, workspace, modules)
-  Graph.of(modules)
+  addReceiverScripts tree, workspace, modules
+  Graph.of modules
 }
 
 /** A script that belongs to no project is always an entry: nobody imports it. */
@@ -62,39 +62,39 @@ fn addReceiverScripts(tree: SourceTree, workspace: Workspace, var modules: List<
   const ordinary = modules.length()
   var known: Set<String> = Set.of()
   for module in modules {
-    known.add(module.path)
+    known.add module.path
   }
   if workspace.packageNamed("std/project").isSome() {
     for index in 0..workspace.packages.length() {
-      const path = joinPath(workspace.packages[index].directory, "project.trb")
+      const path = joinPath workspace.packages[index].directory, "project.trb"
       if !tree.exists(path) || known.contains(path) {
         continue
       }
-      known.add(path)
-      addScript(tree, modules, index, path, ScriptReceiver.ProjectFile)
+      known.add path
+      addScript tree, modules, index, path, ScriptReceiver.ProjectFile
     }
   }
   for index in 0..ordinary {
     const package = modules[index].package
     const directory = workspace.packages[package].directory
-    const loads = scriptLoadsOf(modules[index].file)
+    const loads = scriptLoadsOf modules[index].file
     const from = modules[index].id
     for load in loads {
-      const path = joinPath(directory, load.path)
+      const path = joinPath directory, load.path
       if !tree.exists(path) || known.contains(path) {
         continue
       }
-      known.add(path)
-      addScript(tree, modules, package, path, ScriptReceiver.Loaded(from, load.annotation))
+      known.add path
+      addScript tree, modules, package, path, ScriptReceiver.Loaded(from, load.annotation)
     }
   }
 }
 
 fn addScript(tree: SourceTree, var modules: List<Module>, package: Int, path: String, receiver: ScriptReceiver) {
   const source = SourceText.of(tree.text(path) ?? "")
-  const parsed = parse(source)
-  const id = ModuleId(modules.length())
-  modules.add(Module(id, package, path, source, parsed.file, parsed.diagnostics, true, receiver: Some(receiver)))
+  const parsed = parse source
+  const id = ModuleId modules.length()
+  modules.add Module(id, package, path, source, parsed.file, parsed.diagnostics, true, receiver: Some(receiver))
 }
 
 /** What a `use "..."` path names, or why it names nothing. */
@@ -119,24 +119,24 @@ public fn resolveImport(graph: Graph, workspace: Workspace, from: ModuleId, path
     // A receiver script is not a module anybody imports: it is a body, checked against a receiver type
     if const Some(id) = graph.moduleAt(target) {
       if graph.at(id).receiver.isNone() {
-        return Import.Found(id)
+        return Import.Found id
       }
     }
-    return Import.NoModule(path)
+    return Import.NoModule path
   }
-  const segments = path.split("/")
+  const segments = path.split "/"
   if segments.length() < 2 {
-    return Import.NoPackage(path)
+    return Import.NoPackage path
   }
   const name = "{segments[0]}/{segments[1]}"
   const package = match workspace.packageNamed(name) {
     Some(found) => found
     None => {
-      return Import.NoPackage(name)
+      return Import.NoPackage name
     }
   }
   if !isAvailable(workspace.packages[module.package], name) {
-    return Import.NotADependency(name)
+    return Import.NotADependency name
   }
   const inside = if segments.length() == 2 {
     "src/lib.trb"
@@ -144,9 +144,9 @@ public fn resolveImport(graph: Graph, workspace: Workspace, from: ModuleId, path
     "src/{segments.skip(2).joined(separator: "/")}.trb"
   }
   if const Some(id) = graph.moduleAt(joinPath(package.directory, inside)) {
-    return Import.Found(id)
+    return Import.Found id
   }
-  Import.NoModuleInPackage(name, path)
+  Import.NoModuleInPackage name, path
 }
 
 /**
