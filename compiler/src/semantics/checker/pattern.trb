@@ -11,8 +11,8 @@ use checkExpression from "./expression"
  * Patterns, as far as the names they bind. A bare name always binds - a case is written `.Circle` or `Shape.Circle` -
  * and every pattern is checked against the type of the value it matches, so that the names it introduces have types.
  *
- * Whether the arms of a `match` cover every value, and whether one of them can never match, is milestone 4.5: that is
- * one algorithm over a pattern matrix and it needs nothing from here but the types.
+ * Whether the arms of a `match` cover every value, and whether one of them can never match, is `exhaustive.trb`: one
+ * algorithm over a pattern matrix, which needs nothing from here but the types.
  */
 public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, isVar: Bool) {
   checker.typedPattern(pattern.span, subject)
@@ -51,13 +51,91 @@ public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, 
     }
     .ImplicitVariant(name, fields) => variantPattern(checker, name, fields, subject, pattern.span, isVar)
     // `1 | 2 | 3`: every alternative matches the same value, so every one of them is checked against its type
-    .Alternatives(patterns) => {
-      for alternative in patterns {
-        checkPattern(checker, alternative, subject, isVar)
-      }
-    }
+    .Alternatives(patterns) => alternativePatterns(checker, patterns, subject, isVar)
     .Invalid => {}
   }
+}
+
+/**
+ * `.Circle(radius) | .Ring(radius)`: every alternative matches the same value and every one of them has to bind the
+ * same names with the same types, because the body sees one set of names whichever one matched. So each alternative
+ * binds in a scope of its own, they are compared, and the names of the first one are declared once for the arm - which
+ * is also what gives the arm exactly one `BindingId` per name, whatever path the value took to it.
+ */
+fn alternativePatterns(var checker: Checker, patterns: List<Pattern>, subject: TypeId, isVar: Bool) {
+  var first: List<LocalBinding> = []
+  for index in 0..patterns.length() {
+    checker.openScope()
+    const start = checker.bindings.length()
+    checkPattern(checker, patterns[index], subject, isVar)
+    const bound = boundSince(checker, start)
+    checker.closeScope()
+    if index == 0 {
+      first = bound
+      continue
+    }
+    compareAlternatives(checker, first, bound, patterns[index].span)
+  }
+  for binding in first {
+    declareName(checker, binding.name, binding.annotation, binding.at, binding.isVar)
+  }
+}
+
+/** The bindings one alternative declared, in the order it declared them. Ids are never reused, so an index suffices. */
+fn boundSince(checker: Checker, start: Int): List<LocalBinding> {
+  var found: List<LocalBinding> = []
+  for index in start..checker.bindings.length() {
+    found.add(checker.bindings[index])
+  }
+  found
+}
+
+fn compareAlternatives(
+  var checker: Checker,
+  first: List<LocalBinding>,
+  other: List<LocalBinding>,
+  at: Span,
+) {
+  const note = "Every alternative of a pattern binds the same names, so the body sees one set whichever one matched"
+  for binding in first {
+    match findBinding(other, binding.name) {
+      Some(found) => {
+        if found.annotation == binding.annotation {
+          continue
+        }
+        const expected = checker.describe(binding.annotation)
+        const given = checker.describe(found.annotation)
+        checker.reportHere(
+          Diagnostic.error("`{binding.name}` is `{expected}` in the first alternative and `{given}` here", found.at)
+            .withNote(note)
+        )
+      }
+      .None => {
+        checker.reportHere(
+          Diagnostic.error("`{binding.name}` is bound by the first alternative and not by this one", at)
+            .withNote(note)
+        )
+      }
+    }
+  }
+  for binding in other {
+    if findBinding(first, binding.name).isSome() {
+      continue
+    }
+    checker.reportHere(
+      Diagnostic.error("`{binding.name}` is bound by this alternative and not by the first one", binding.at)
+        .withNote(note)
+    )
+  }
+}
+
+fn findBinding(bindings: List<LocalBinding>, name: String): LocalBinding? {
+  for binding in bindings {
+    if binding.name == name {
+      return Some(binding)
+    }
+  }
+  None
 }
 
 /** A name a pattern binds, with the rule that the same scope may not declare a name twice. */
@@ -72,8 +150,8 @@ public fn declareName(var checker: Checker, name: String, annotation: TypeId, at
   const _ = checker.declareBinding(LocalBinding(name, annotation, isVar, at))
 }
 
-/** The `Item` of the `Iterable<Item>` a list pattern matches. */
-fn itemOfSubject(var checker: Checker, subject: TypeId): TypeId {
+/** The `Item` of the `Iterable<Item>` a list pattern matches, which is also the type of every column it opens. */
+public fn itemOfSubject(var checker: Checker, subject: TypeId): TypeId {
   if checker.absorbs(subject) {
     return checker.deferredType
   }

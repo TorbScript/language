@@ -9,6 +9,7 @@ use resolveType, hasVariable, unify, suppressVariables from "./unify"
 use checkBlock, bodyExpectation, inferredResult, scopeHere from "./statement"
 use expectationOf, deferClosureParameters, deferBlock from "./expression"
 use checkPattern from "./pattern"
+use requireIrrefutable from "./exhaustive"
 use typeFromReference from "./lowering"
 
 /**
@@ -210,7 +211,9 @@ fn checkClosureBody(
       }
       const form = parameters.get(index) ?? ParameterForm(None, ParameterMode.Value, checker.deferredType)
       const isVar = isVarMode(form.mode)
-      checkPattern(checker, closure.parameters[index].pattern, form.annotation, isVar)
+      const own = closure.parameters[index].pattern
+      checkPattern(checker, own, form.annotation, isVar)
+      requireIrrefutable(checker, own, form.annotation, "The parameter of a closure", "value")
     }
   }
   const outcome = checkBlock(checker, closure.body, inner)

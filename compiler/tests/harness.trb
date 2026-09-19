@@ -3,7 +3,9 @@ use SourceTree from "../src/project/source-tree"
 use ModuleId from "../src/semantics/module"
 use check from "../src/semantics/check"
 use Checker, Resolution, Adaptation, Dispatch, Statistics, ReceiverClosure from "../src/semantics/checker/context"
-use TypeId, Witness from "../src/semantics/checker/type"
+use TypeId, Witness, describeLiteral from "../src/semantics/checker/type"
+use MatchPlan, MatchArmPlan, PatternBranch, PatternTest, PatternCheck from "../src/semantics/checker/exhaustive"
+use PatternLiteral, PatternStep from "../src/semantics/checker/exhaustive"
 
 /**
  * One in-memory workspace for the tests of the type checker, and the questions they ask about it.
@@ -368,8 +370,107 @@ public type Probed {
     describeReceiver(checker, found)
   }
 
+  /**
+   * The plan of the `match` at `written`, one line per arm: what it tests, where, and what it binds. An `if const` and
+   * a `while const` are recorded under the span of their pattern.
+   */
+  fn matchPlanOf(self, written: String): List<String> {
+    const at = spanOf(written)
+    const plan = checker.matchAt(module, at).expect("a match at `{written}`")
+    describeArms(checker, plan)
+  }
+
+  /** Whether the `match` at `written` covers every value, and the values it does not. */
+  fn witnessesOfMatch(self, written: String): List<String> {
+    const at = spanOf(written)
+    checker.matchAt(module, at).expect("a match at `{written}`").witnesses
+  }
+
+  fn isExhaustive(self, written: String): Bool {
+    const at = spanOf(written)
+    checker.matchAt(module, at).expect("a match at `{written}`").isExhaustive
+  }
+
   fn statistics(self): Statistics {
     checker.statisticsOf(module)
+  }
+}
+
+/** One line per arm of a `MatchPlan`, in the order milestone 5 lowers them. */
+public fn describeArms(checker: Checker, plan: MatchPlan): List<String> {
+  var lines: List<String> = []
+  for arm in plan.arms {
+    var branches: List<String> = []
+    for branch in arm.branches {
+      branches.add(describeBranch(checker, branch))
+    }
+    var line = String.join(branches, separator: " | ")
+    if arm.hasGuard {
+      line = "{line} guarded"
+    }
+    if !arm.isReachable {
+      line = "{line} unreachable"
+    }
+    lines.add(line)
+  }
+  lines
+}
+
+/** One alternative: the tests it makes in order, then the names it binds with the path to each of them. */
+fn describeBranch(checker: Checker, branch: PatternBranch): String {
+  var parts: List<String> = []
+  for probed in branch.tests {
+    const place = describePath(checker, probed.path)
+    parts.add("{place} {describeCheck(checker, probed.check)}")
+  }
+  for bound in branch.bindings {
+    const place = describePath(checker, bound.path)
+    const name = if bound.isVar { "var {bound.name}" } else { bound.name }
+    parts.add("{name}={place}")
+  }
+  if parts.isEmpty() {
+    return "anything"
+  }
+  String.join(parts, separator: " ")
+}
+
+fn describeCheck(checker: Checker, check: PatternCheck): String {
+  match check {
+    .IsCase(_, variant) => "is .{checker.symbolAt(variant).name}"
+    .IsLiteral(literal) => "is {describePatternLiteral(literal)}"
+    .IsInRange(low, high, isInclusive) => {
+      const between = if isInclusive { "..=" } else { ".." }
+      "in {describePatternLiteral(low)}{between}{describePatternLiteral(high)}"
+    }
+    .HasLength(length) => "hasLength {length}"
+    .HasAtLeast(length) => "hasAtLeast {length}"
+  }
+}
+
+fn describePatternLiteral(literal: PatternLiteral): String {
+  match literal.value {
+    Some(found) => describeLiteral(found)
+    .None => "?"
+  }
+}
+
+/** `subject`, `subject.radius`, `subject.0`, `subject[1]`, `subject[1...]`: how the lowering reaches one value. */
+fn describePath(checker: Checker, path: List<PatternStep>): String {
+  var shown = "subject"
+  for step in path {
+    shown = shown + describeStep(checker, step)
+  }
+  shown
+}
+
+fn describeStep(checker: Checker, step: PatternStep): String {
+  match step {
+    .CaseField(_, _, _, field) => ".{checker.symbolAt(field).name}"
+    .Field(_, _, field) => ".{checker.symbolAt(field).name}"
+    .TupleField(_, index) => ".{index}"
+    .Item(index) => "[{index}]"
+    .ItemFromEnd(index) => "[-{index}]"
+    .Rest(index) => "[{index}...]"
   }
 }
 

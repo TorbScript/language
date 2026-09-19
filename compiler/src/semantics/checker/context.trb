@@ -8,6 +8,7 @@ use TypeId, TypeForm, TypeTable, FunctionForm, ParameterId, VariableId, Bound, d
 use Signature, SignatureId, SignatureState, TypeSignature, TypeSignatureId from "./type"
 use ImplementationId, ImplementationTable, Resolved, Witness, DerivedImplementation from "./type"
 use WellKnown, wellKnownOf from "./wellknown"
+use MatchPlan from "./exhaustive"
 
 /** What may stand in a type position: a type, or the value a `const` parameter asks for. */
 public type TypePosition {
@@ -331,6 +332,11 @@ public type Tables {
   var captures: Map<Span, List<Capture>> = [:]
   /** Per receiver closure span, and at `Span(0, 0)` for a receiver script: the binding its receiver is reached under. */
   var receivers: Map<Span, ReceiverClosure> = [:]
+  /**
+   * Per `match` span, and per pattern span of an `if const` or a `while const`: the decision order of the arms, what
+   * every one of them tests, and what it binds. Milestone 5 lowers a `match` to a decision tree from this alone.
+   */
+  var matches: Map<Span, MatchPlan> = [:]
 }
 
 /** No expected type, a type, or "a value is not wanted here". */
@@ -765,6 +771,15 @@ public type Checker {
 
   fn receiverAt(self, module: ModuleId, at: Span): ReceiverClosure? {
     tables[module.value].receivers.get(at)
+  }
+
+  /** The plan of one `match`, `if const` or `while const`: what milestone 5 builds its decision tree from. */
+  fn recordMatch(var self, at: Span, plan: MatchPlan) {
+    tables[module.value].matches.set(at, plan)
+  }
+
+  fn matchAt(self, module: ModuleId, at: Span): MatchPlan? {
+    tables[module.value].matches.get(at)
   }
 
   /** A variable that was solved: every table of the statement is walked once at its end, through these. */

@@ -15,6 +15,7 @@ use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
 use checkClosure from "./closure"
 use checkBlock, checkDiscarded, scopeHere from "./statement"
 use checkPattern from "./pattern"
+use MatchArmPlan, armPlanOf, checkExhaustive, checkConditionPattern from "./exhaustive"
 use checkDeclaration from "./check"
 
 /**
@@ -1042,7 +1043,7 @@ fn ifType(
 ): TypeId {
   // `if const Some(user) = lookup()` binds for the body of the `if` and for nothing after it
   checker.openScope()
-  checkCondition(checker, condition)
+  checkCondition(checker, condition, false)
   const alternative = match otherwise {
     Some(found) => found
     // An `if` without an `else` has no value, so its body is checked as a block of statements
@@ -1065,21 +1066,22 @@ fn ifType(
 }
 
 /**
- * The head of an `if` or a `while`. A pattern in it (`if const Some(user) = lookup()`) binds for the body only and
- * has to be refutable, which milestone 4.5 decides; the names it binds are needed here already.
+ * The head of an `if` or a `while`. A pattern in it (`if const Some(user) = lookup()`) binds for the body only and has
+ * to be able to fail; `isLoop` says which of the two it is, because a pattern that always matches is a `const` in an
+ * `if` and an endless loop in a `while`.
  */
-public fn checkCondition(var checker: Checker, condition: Condition) {
+public fn checkCondition(var checker: Checker, condition: Condition, isLoop: Bool) {
   match condition {
     .Test(expression) => {
       const boolean = checker.booleanType()
       const _ = checkExpression(checker, expression, Expectation.Type(boolean))
     }
-    // `if const Some(user) = lookup()`: the pattern is checked against the subject, and that it has to be refutable
-    // but possible is milestone 4.5's question
+    // `if const Some(user) = lookup()`: the pattern is checked against the subject, and it has to be able to fail
     .Bind(isVar, pattern, value) => {
       const found = inferExpression(checker, value)
       const inner = if checker.absorbs(found) { checker.deferredType } else { found }
       checkPattern(checker, pattern, inner, isVar)
+      checkConditionPattern(checker, pattern, inner, isLoop)
     }
   }
 }
@@ -1087,9 +1089,12 @@ public fn checkCondition(var checker: Checker, condition: Condition) {
 fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, expected: Expectation): TypeId {
   const found = inferExpression(checker, subject)
   var produced: List<TypeId> = []
+  var plans: List<MatchArmPlan> = []
   for arm in arms {
     checker.openScope()
     checkPattern(checker, arm.pattern, found, false)
+    const plan = armPlanOf(checker, arm, found)
+    plans.add(plan)
     if const Some(guard) = arm.guard {
       const boolean = checker.booleanType()
       const _ = checkExpression(checker, guard, Expectation.Type(boolean))
@@ -1097,6 +1102,7 @@ fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, ex
     produced.add(checkExpression(checker, arm.body, expected))
     checker.closeScope()
   }
+  const _ = checkExhaustive(checker, found, arms, plans, subject.span)
   if const Some(annotation) = expected.annotationOf() {
     return annotation
   }

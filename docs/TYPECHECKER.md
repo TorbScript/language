@@ -895,7 +895,8 @@ compiler/src/semantics/checker/
 ├ expression.trb      check/infer for every ExpressionKind, operators, interpolation, `?`, `??`, `?.`
 ├ closure.trb         Closures from an expected function type, implicit parameters, receiver closures
 ├ pattern.trb         Patterns and the names they bind
-├ exhaustive.trb      The pattern matrix: usefulness, specialization, witnesses, MatchPlan
+├ usefulness.trb      The pattern matrix: usefulness, specialization by constructor, the default matrix, witnesses
+├ exhaustive.trb      Patterns to the matrix and back: refutability, the messages, the MatchPlan
 ├ place.trb           Places, mutability, exclusivity, dead changes
 ├ statement.trb       Statements, blocks, definite return, loops, assignment
 ├ declaration.trb     Types, traits, extends, functions: requirements, visibility, top-level rules
@@ -936,7 +937,11 @@ public fn requireMutable(var checker: Checker, place: Place, at: Span, what: Str
 public fn openAccess(var checker: Checker, place: Place, at: Span)
 public fn closeAccess(var checker: Checker)
 
-public fn checkExhaustive(var checker: Checker, subject: TypeId, arms: List<MatchArm>, at: Span): MatchPlan
+public fn checkExhaustive(var checker: Checker, subject: TypeId, arms: List<MatchArm>,      // exhaustive.trb
+                          plans: List<MatchArmPlan>, at: Span): MatchPlan
+public fn armPlanOf(var checker: Checker, arm: MatchArm, subject: TypeId): MatchArmPlan
+public fn checkConditionPattern(var checker: Checker, pattern: Pattern, subject: TypeId, isLoop: Bool)
+public fn requireIrrefutable(var checker: Checker, pattern: Pattern, subject: TypeId, what: String, kind: String)
 ```
 
 ### 7.1 What the IR lowering reads
@@ -980,7 +985,7 @@ files that have to check cleanly afterwards.
 | **4.2** | **Done.** Statements, blocks and monomorphic expressions. Literals with adaptation, locals, bindings with irrefutable patterns, assignment, `if`/`match` types without exhaustiveness, calls of top-level functions and of methods on concrete types, arguments/labels/defaults/variadics, field and static member access, definite return, `Never`. Everything else becomes `TypeForm.Deferred` and is counted (`torb check --statistics`). | `expression.trb`, `statement.trb`, `call.trb`, `member.trb`, `name.trb`, `pattern.trb` | 4.1 |
 | **4.3** | **Done.** Traits and implementations. The index, bound resolution with memoization, coherence, overlap, supertraits, member lookup through traits and extensions (the `extend` visibility rule), delegation `by`, derived implementations, operators, interpolation through `Show`, `Iterable` in `for`, `?`/`??`/`?.`, `into()`. | `implementation.trb`, `derive.trb`, `member.trb`, `expression.trb` | 4.2 |
 | **4.4** | **Done.** Generics and inference. Unification variables, inference contexts, two-pass argument checking, closures from expected function types, implicit `_`/named parameters, `.Case`, empty literals, bounds at call sites, witnesses, trait-typed values and per-call object safety. **Gate: `torb check compiler/src/syntax` is clean** - and so is all of `std/` and `compiler/`, at 100% of their expressions. | `unify.trb`, `closure.trb`, `call.trb`, `implementation.trb` | 4.3 |
-| **4.5** | Exhaustiveness and redundancy. The pattern matrix over ADTs, literals, ranges, tuples, lists with rest, literal unions, `Option`/`Result`; witnesses; `MatchPlan`; `if const`/`if var`/`while const`. | `exhaustive.trb`, `pattern.trb` | 4.4 |
+| **4.5** | **Done.** Exhaustiveness and redundancy. The pattern matrix over ADTs, literals, ranges, tuples, lists with rest, literal unions, `Option`/`Result`; witnesses; `MatchPlan`; `if const`/`if var`/`while const`, and every pattern that has to match. | `exhaustive.trb`, `usefulness.trb`, `pattern.trb` | 4.4 |
 | **4.6** | Places and the mutation rules. `const`/`var`, valid paths, `var` parameters and temporaries, `private(var)`, exclusivity, dead changes, `break`/`continue`. | `place.trb`, `statement.trb` | 4.4 |
 | **4.7** | **Done.** Receivers and the DSL. Receiver closures, the innermost-receiver rule, command calls, property commands (`.Assign`, `.AssignClosure`, `.Configure`), receiver scripts (`project.trb` against the `Project` of the new `std/project`, and every file a `Sandbox.load<Value>` names with a literal path). | `closure.trb`, `command.trb`, `receiver.trb`, `scripts.trb`, `name.trb` | 4.4 |
 | **4.8** | `Expression<Value>` and `lazy`. What is quotable, building the tree after resolution, captures and their `Encode` bound, `Quotation` in the tables, `lazy` parameters. **Gate: `compiler/tests/*.test.trb` check cleanly** (they are full of `assert`). | `quote.trb`, `call.trb` | 4.4, 4.7 |
@@ -1298,6 +1303,64 @@ list. Everything else is as written.
   and the static reader (`project/manifest.trb`, which stays exactly as it is until milestone 7) keeps working alone.
 - **Gap 42 is the parser's already:** `startsCommandArgument` never accepted `.`, so `level .Debug` has always been the
   member path `level.Debug`. What 4.7 adds is the note that says so, on the message about the missing member.
+
+### What 4.5 does differently from sections 1 to 7
+
+- **The algorithm is its own file, `usefulness.trb`, and `exhaustive.trb` is the two things around it.** The matrix
+  knows exactly one shape - "everything, or one constructor applied to arguments" - and it knows nothing about the
+  syntax tree. Turning a `Pattern` into that shape, and turning the answer into a message and into a `MatchPlan`, is the
+  other half and it is twice the code. `pattern.trb` stayed what it was: the types a pattern gives its names.
+- **`MatchPlan` lives in `exhaustive.trb`, and `context.trb` imports it.** 4.1 and 4.3 put their data model in
+  `type.trb`, but a plan is not a type and nothing but the lowering reads it, so `Tables.matches` is the one line that
+  crosses over. The two files use each other, as `lowering.trb` and `signature.trb` do.
+- **An arm is a list of _branches_, one per alternative.** `1 | 2 | 3` is three, and nested alternatives multiply out,
+  because `.Circle(r) | .Ring(r)` keeps `r` at a different path in each of them and a single flat list of tests could
+  not say that. Every branch carries its own tests and its own bindings, and the arm matches when one of them does.
+- **A plan is recorded for every pattern position, not only for `match`.** `if const`, `while const`, a destructuring
+  `const`/`var`, a `for` pattern and a closure parameter are lowered exactly like a `match` with one arm, so they are
+  recorded in the same shape - under the span of their **pattern**, while a `match` is recorded under the span of its
+  **subject** (which is also where the message about a case that is not handled points). Both are the node milestone 5
+  holds in its hand when it needs the plan. A pattern that is a plain name records nothing: there is nothing to decide.
+- **A binding is looked up, not remembered.** The plan of an arm is built while the arm's own scope is still open
+  (`armPlanOf` is called right after `checkPattern`), because a pattern's names are locals and a local is reachable
+  nowhere else. That is what makes `BindingId` in the plan free of a side table.
+- **Alternatives bind in a scope of their own and are then declared once.** `.Circle(size) | .Rectangle(size, _)` needs
+  every alternative to bind the same names with the same types, so each one is checked in its own scope, they are
+  compared, and the names of the first are declared for the arm - which also gives the arm exactly one `BindingId` per
+  name, whatever path the value took to it. Before 4.5 the second alternative reported "`size` is already declared".
+- **`Int64`, `UInt64`, `Char`, `String` and the decimal types have no coverable range.** Splitting integers into
+  intervals is what the design asks for and what happens, but only for the widths whose bounds can be written as
+  literals of the language the checker itself runs in - `Int8` to `UInt32`. A `match` over an `Int` therefore always
+  needs a `_`, which is true of every real program, and the witness there is `_`. That is the safe direction: the
+  checker never reports a `match` that is in fact complete.
+- **A pattern the checker does not model stands for itself.** A decimal literal (told apart by the text it is written
+  as), a range over anything but an integer type, a list pattern with an item *behind* the `...` - each becomes one
+  opaque constructor that covers nothing but itself. So it never makes a `match` exhaustive and never hides an arm
+  below it, and `1.5` written twice is still found.
+- **Anything already reported keeps the `match` quiet.** A case that does not exist, a pattern with the wrong number of
+  fields, a tuple of the wrong width and a subject the checker could not type all mark the normalization as broken, and
+  then neither exhaustiveness nor reachability is reported: one root cause, one message.
+- **The witness search stops where nothing is covered.** A matrix without rows means "every value here is missing", so
+  the witness is `_` per column instead of a walk into the constructors - which is not only cheaper but the only reason
+  the descent ends at all, because a `shared type` may contain itself. A depth limit of 24 behind that turns the
+  remaining case into an answer rather than a hang.
+- **Three optimizations carry the performance, and all three were needed.** A row of nothing but wildcards in the
+  matrix answers both questions without looking at the column at all (that is the `_` arm, and it is what makes 4.5
+  cost +0.7 s over the whole repository instead of minutes). A case, a single value and an opaque constructor cover
+  exactly themselves in every split, so a `match` over sixty token kinds never builds the constructors of its type.
+  And a name or `_` as the pattern of a binding is irrefutable whatever its type is, which is almost every binding of a
+  program.
+- **An arm is reachable when one of its alternatives is.** `1 | 1` is redundant in itself and the arm still matches, so
+  the redundancy of a single alternative is not reported - only of a whole arm (gap 25).
+- **The refutability of a closure parameter is only checked where the parameter type is known.** At
+  `items.map { Some(value) => value }` the `Item` is still an inference variable when the closure is read, so nothing
+  is said; with an expected function type (`const unwrap: (Int?) => Int`) it is.
+- **`while const P` with an irrefutable pattern reads "so this `while` never ends".** Design 5.5's "Use `const`" is the
+  message for `if const`; in a loop that advice would be wrong, and what the author wrote is an endless loop.
+- **More than three witnesses are counted.** Up to sixteen are collected so that the message can say "and 2 more" with
+  a number instead of "and more", and only beyond that does it give up on the count.
+- **The one finding in the sources was `compiler/src/ir/instantiate.trb`**, whose `match` over `TypeForm` handled every
+  case but `Deferred` - which now reports the same way `Invalid` does.
 
 ---
 

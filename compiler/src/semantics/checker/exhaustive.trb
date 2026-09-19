@@ -1,0 +1,803 @@
+use Span from "../../syntax/source"
+use Diagnostic from "../../syntax/diagnostic"
+use Pattern, FieldPattern, RestPattern, MatchArm, Expression from "../../syntax/ast"
+use SymbolId from "../symbols"
+use TypeId, LiteralValue, literalKey, describeLiteral from "./type"
+use Checker, BindingId from "./context"
+use caseNamed, fieldsOf, typeNameOf from "./member"
+use itemOfSubject from "./pattern"
+use literalOf from "./lowering"
+use Normal, Constructor, Matrix, isUseful, missingValues, describeNormal from "./usefulness"
+
+/**
+ * Whether the arms of a `match` cover every value of its subject, whether one of them can never be reached, and what
+ * a lowering has to test in which order to tell them apart.
+ *
+ * The algorithm is in `usefulness.trb`; this file is the two things around it. **Before** it runs, every pattern is
+ * turned into the "one constructor applied to arguments" shape the matrix knows, with alternatives expanded into one
+ * row each and every case resolved to the declaration it names. **After** it, a `MatchPlan` is recorded for milestone
+ * 5: the arms in source order, the tests each one makes with the path from the subject to the value they test, and
+ * every name it binds with the path to the value it stands for.
+ *
+ * The plan is what makes the lowering a decision tree instead of a second pattern checker: nothing in it has to be
+ * looked up again, and nothing in it depends on a scope.
+ */
+
+// --- What milestone 5 reads -----------------------------------------------------------------------------------------
+
+/** One `match`, `if const` or `while const`, resolved: everything a decision tree over it needs. */
+public type MatchPlan {
+  /** The type of the subject, which is what every test of every arm is a test on. */
+  subject: TypeId
+  /** The arms in source order. An `if const` and a `while const` have exactly one. */
+  arms: List<MatchArmPlan>
+  /** Whether the arms without a guard cover every value of `subject`. */
+  isExhaustive: Bool
+  /** Up to three values no arm covers, as a message writes them (`.Rectangle(_, _)`). Empty when exhaustive. */
+  witnesses: List<String>
+}
+
+/**
+ * One arm. `branches` holds one entry per alternative of its pattern (`1 | 2 | 3` has three): the arm matches when
+ * one of them matches, and every one of them binds the same names - to a different path, because `.Circle(r)` and
+ * `.Ring(r)` keep `r` in a different field.
+ */
+public type MatchArmPlan {
+  /** The span of the pattern, which is what a message about this arm points at. */
+  at: Span
+  branches: List<PatternBranch>
+  /** An arm with a guard matches only when the guard holds, so it never makes a `match` exhaustive. */
+  hasGuard: Bool
+  /** Whether any value at all reaches this arm. An arm that none does is an error (gap 25). */
+  isReachable: Bool = true
+}
+
+/** One alternative of one pattern: what has to hold for it, and what it binds when it does. */
+public type PatternBranch {
+  /** In the order they are made: outermost first, then left to right. */
+  tests: List<PatternTest>
+  bindings: List<PatternBinding>
+}
+
+public type PatternTest {
+  /** How to reach the value this tests, from the subject. */
+  path: List<PatternStep>
+  check: PatternCheck
+}
+
+public type PatternCheck {
+  /** The value is this case of its type. */
+  case IsCase(owner: TypeId, variant: SymbolId)
+  case IsLiteral(literal: PatternLiteral)
+  /** `4..=9`: the value lies between the two literals. */
+  case IsInRange(low: PatternLiteral, high: PatternLiteral, isInclusive: Bool)
+  case HasLength(length: Int)
+  /** `[first, ...rest]`: at least this many items. */
+  case HasAtLeast(length: Int)
+}
+
+/** One literal a pattern compares against: where it is written, and what it is worth. */
+public type PatternLiteral {
+  at: Span
+  /**
+   * `None` for a decimal literal and for text with interpolation, which the checker does not reduce to one value. The
+   * type and the adaptations of the expression at `at` are recorded as for every other expression.
+   */
+  value: LiteralValue? = None
+}
+
+/** One name a pattern binds, with the path from the subject to the value it stands for. */
+public type PatternBinding {
+  name: String
+  binding: BindingId
+  path: List<PatternStep>
+  annotation: TypeId
+  /** `var (a, b) = pair` and `if var Some(inner) = current` bind mutable names. */
+  isVar: Bool
+}
+
+/** One step from the subject towards a value inside of it. An empty list of steps is the subject itself. */
+public type PatternStep {
+  /** `.Circle(radius)`: the field at that position of that case. */
+  case CaseField(owner: TypeId, variant: SymbolId, index: Int, field: SymbolId)
+  /** `Point(x, y)`: the field at that position of the type itself. */
+  case Field(owner: TypeId, index: Int, field: SymbolId)
+  case TupleField(owner: TypeId, index: Int)
+  /** `[first, second]`: the item at that index, counted from the front. */
+  case Item(index: Int)
+  /** `[..., last]`: the item at that index, counted from the back, `0` being the last one. */
+  case ItemFromEnd(index: Int)
+  /** `[first, ...rest]`: the items from that index on, as a list. */
+  case Rest(index: Int)
+}
+
+// --- `match` --------------------------------------------------------------------------------------------------------
+
+/**
+ * The exhaustiveness and the reachability of one `match`, plus the plan milestone 5 lowers it from. The arms have
+ * already been checked, so the plans of the individual arms are handed in: an arm's bindings are only reachable while
+ * its own scope is open.
+ *
+ * The plan is recorded under the span of the **subject**, which is also where a message about a case that is not
+ * handled points - a single pattern (`if const`, a binding, `for`, a closure parameter) is recorded under the span of
+ * the pattern. Both are the node milestone 5 holds when it needs the plan.
+ */
+public fn checkExhaustive(
+  var checker: Checker,
+  subject: TypeId,
+  arms: List<MatchArm>,
+  plans: List<MatchArmPlan>,
+  at: Span,
+): MatchPlan {
+  // Nothing is said about a subject the checker could not type, and nothing about a pattern that was already reported
+  if checker.absorbs(subject) {
+    const plan = MatchPlan(subject, plans, true, [])
+    checker.recordMatch(at, plan)
+    return plan
+  }
+  var rows: List<List<Normal>> = []
+  var reachable = plans
+  var isBroken = false
+  for index in 0..arms.length() {
+    const arm = arms[index]
+    var state = Normalizing()
+    const own = normalizedRows(checker, state, arm.pattern, subject)
+    if state.isBroken {
+      isBroken = true
+    }
+    // An arm with a guard binds and is reachable, but it covers nothing: the guard may always be false
+    if arm.guard.isSome() {
+      continue
+    }
+    if !isBroken && !isAnyUseful(checker, Matrix([subject], rows), own) {
+      const shown = coveringPattern(checker, subject, rows, own)
+      reportUnreachable(checker, arm.pattern.span, shown)
+      reachable.set(index, plans[index].copy(isReachable: false))
+    }
+    for row in own {
+      rows.add(row)
+    }
+  }
+  const matrix = Matrix([subject], rows)
+  var witnesses: List<String> = []
+  if !isBroken {
+    witnesses = shownWitnesses(checker, matrix)
+    if !witnesses.isEmpty() {
+      reportMissing(checker, witnesses, at)
+    }
+  }
+  const plan = MatchPlan(subject, reachable, witnesses.isEmpty(), witnesses)
+  checker.recordMatch(at, plan)
+  plan
+}
+
+/** An arm is reachable when one of its alternatives is: `1 | 1` is redundant in itself, the arm still matches. */
+fn isAnyUseful(var checker: Checker, matrix: Matrix, rows: List<List<Normal>>): Bool {
+  for row in rows {
+    if isUseful(checker, matrix, row) {
+      return true
+    }
+  }
+  false
+}
+
+/**
+ * Which arm above makes this one unreachable, for the note of the message. One arm alone usually does it ("`_` above
+ * already matches everything"); where only all of them together do, the note says that instead. This runs only for an
+ * arm that is unreachable already, so its cost never shows.
+ */
+fn coveringPattern(
+  var checker: Checker,
+  subject: TypeId,
+  rows: List<List<Normal>>,
+  own: List<List<Normal>>,
+): String {
+  for row in rows {
+    if !isAnyUseful(checker, Matrix([subject], [row]), own) {
+      return describeNormal(row.get(0) ?? Normal.Anything)
+    }
+  }
+  ""
+}
+
+fn reportUnreachable(var checker: Checker, at: Span, shown: String) {
+  if shown.isEmpty() {
+    checker.reportHere(
+      Diagnostic.error("This arm is never reached", at)
+        .withNote("The arms above it already cover every value it could match")
+    )
+    return
+  }
+  const note = if shown == "_" {
+    "`_` above already matches everything"
+  } else {
+    "`{shown}` above already matches it"
+  }
+  checker.reportHere(Diagnostic.error("This arm is never reached", at).withNote(note))
+}
+
+/** Up to sixteen witnesses, so that the message can say how many more there are without enumerating a type. */
+fn shownWitnesses(var checker: Checker, matrix: Matrix): List<String> {
+  var shown: List<String> = []
+  for witness in missingValues(checker, matrix, 16) {
+    shown.add(describeNormal(witness.get(0) ?? Normal.Anything))
+  }
+  shown
+}
+
+fn reportMissing(var checker: Checker, witnesses: List<String>, at: Span) {
+  checker.reportHere(Diagnostic.error("`match` does not handle {listOfWitnesses(witnesses)}", at))
+}
+
+/** One, two or three witnesses by name, and a count behind them where there are more (design 5.5). */
+fn listOfWitnesses(witnesses: List<String>): String {
+  var quoted: List<String> = []
+  for index in 0..witnesses.length().min(3) {
+    quoted.add("`{witnesses[index]}`")
+  }
+  if witnesses.length() > 3 {
+    const listed = String.join(quoted, separator: ", ")
+    if witnesses.length() >= 16 {
+      return "{listed} and more"
+    }
+    return "{listed} and {witnesses.length() - 3} more"
+  }
+  if quoted.length() == 1 {
+    return quoted[0]
+  }
+  const last = quoted.removeAt(quoted.length() - 1) ?? ""
+  const listed = String.join(quoted, separator: ", ")
+  "{listed} and {last}"
+}
+
+// --- `if const`, `while const`, and the patterns that have to match -------------------------------------------------
+
+/**
+ * `if const Some(user) = lookup()`: the pattern binds for the body only and has to be able to fail. One that always
+ * matches is a `const` binding written in the wrong place, and in a `while` it is a loop that never ends.
+ */
+public fn checkConditionPattern(var checker: Checker, pattern: Pattern, subject: TypeId, isLoop: Bool) {
+  const plan = onePatternPlan(checker, pattern, subject)
+  checker.recordMatch(pattern.span, plan)
+  if checker.absorbs(subject) || !plan.isExhaustive {
+    return
+  }
+  const message = if isLoop {
+    "This pattern always matches, so this `while` never ends"
+  } else {
+    "This pattern always matches. Use `const`"
+  }
+  checker.reportHere(Diagnostic.error(message, pattern.span))
+}
+
+/**
+ * One pattern as a plan of its own: `if const`, `while const` and every destructuring binding are lowered exactly as
+ * a `match` with one arm, so they are recorded in the same shape and under the span of their pattern.
+ */
+fn onePatternPlan(var checker: Checker, pattern: Pattern, subject: TypeId): MatchPlan {
+  const arm = MatchArmPlan(pattern.span, branchesOf(checker, pattern, subject, []), false)
+  if checker.absorbs(subject) {
+    return MatchPlan(subject, [arm], false, [])
+  }
+  if alwaysMatches(pattern) {
+    return MatchPlan(subject, [arm], true, [])
+  }
+  const witnesses = irrefutableWitnesses(checker, pattern, subject, 3)
+  MatchPlan(subject, [arm], witnesses.isEmpty(), witnesses)
+}
+
+/**
+ * `const Point(x, y) = p`, `for (key, value) in map`, `{ (a, b) => ... }`: a pattern that stands where there is no
+ * second way to go has to match every value, and the message names one it does not.
+ */
+public fn requireIrrefutable(
+  var checker: Checker,
+  pattern: Pattern,
+  subject: TypeId,
+  what: String,
+  kind: String,
+) {
+  // `const total = ...` and `for item in items` are almost every binding of a program, and a name matches everything:
+  // asking the matrix about one would build the constructors of its type for nothing
+  if alwaysMatches(pattern) {
+    return
+  }
+  const plan = onePatternPlan(checker, pattern, subject)
+  checker.recordMatch(pattern.span, plan)
+  if checker.absorbs(subject) {
+    return
+  }
+  const witness = match plan.witnesses.first() {
+    Some(found) => found
+    .None => {
+      return
+    }
+  }
+  checker.reportHere(
+    Diagnostic.error("{what} has to match every {kind}, and `{witness}` does not", pattern.span)
+      .withNote("A pattern that can fail belongs in a `match` or in an `if const`")
+  )
+}
+
+/** A name and `_` match every value there is, whatever type it has - which is most patterns of a program. */
+fn alwaysMatches(pattern: Pattern): Bool {
+  match pattern.kind {
+    .Wildcard => true
+    .Binding(_) => true
+    // A message about it was given already, and everything after it says nothing
+    .Invalid => true
+    _ => false
+  }
+}
+
+/** The values one pattern alone does not match. Empty means it is irrefutable. */
+fn irrefutableWitnesses(var checker: Checker, pattern: Pattern, subject: TypeId, limit: Int): List<String> {
+  var state = Normalizing()
+  const rows = normalizedRows(checker, state, pattern, subject)
+  if state.isBroken {
+    return []
+  }
+  var shown: List<String> = []
+  for witness in missingValues(checker, Matrix([subject], rows), limit) {
+    shown.add(describeNormal(witness.get(0) ?? Normal.Anything))
+  }
+  shown
+}
+
+// --- One pattern, as the matrix sees it -----------------------------------------------------------------------------
+
+/**
+ * Whether anything about the pattern was already reported. A pattern the checker could not resolve must not produce a
+ * second message about a `match` that looks incomplete because of it.
+ */
+type Normalizing {
+  var isBroken: Bool = false
+}
+
+/** One row per alternative: `1 | 2 | 3` is three rows of one column, and nested alternatives multiply out. */
+fn normalizedRows(
+  var checker: Checker,
+  var state: Normalizing,
+  pattern: Pattern,
+  subject: TypeId,
+): List<List<Normal>> {
+  var rows: List<List<Normal>> = []
+  for one in normalizedPatterns(checker, state, pattern, subject) {
+    rows.add([one])
+  }
+  rows
+}
+
+fn normalizedPatterns(
+  var checker: Checker,
+  var state: Normalizing,
+  pattern: Pattern,
+  subject: TypeId,
+): List<Normal> {
+  match pattern.kind {
+    .Wildcard => [Normal.Anything]
+    .Binding(_) => [Normal.Anything]
+    .Literal(value) => [applied(literalConstructor(checker, value, subject), [])]
+    .RangePattern(start, end, isInclusive) => {
+      [applied(rangeConstructor(checker, start, end, isInclusive, subject, pattern.span), [])]
+    }
+    .TuplePattern(items) => normalizedTuple(checker, state, items, subject)
+    .ListPattern(items, rest) => {
+      const position = match rest {
+        Some(found) => found.position
+        .None => items.length()
+      }
+      // `[..., last]`: an item behind the rest sits at a position that depends on the length, which the matrix has no
+      // constructor for - so the pattern stands for itself and decides nothing
+      if position < items.length() {
+        return [applied(Constructor.Opaque(pattern.span.start), [])]
+      }
+      const element = itemOfSubject(checker, subject)
+      var columns: List<List<Normal>> = []
+      for item in items {
+        columns.add(normalizedPatterns(checker, state, item, element))
+      }
+      const constructor = Constructor.ListOf(items.length(), rest.isSome())
+      productOf(constructor, columns)
+    }
+    .Variant(path, fields) => {
+      const name = path[path.length() - 1]
+      normalizedVariant(checker, state, name.text, fields, subject, pattern.span)
+    }
+    .ImplicitVariant(name, fields) => {
+      normalizedVariant(checker, state, name.text, fields, subject, pattern.span)
+    }
+    .Alternatives(patterns) => {
+      var found: List<Normal> = []
+      for alternative in patterns {
+        for one in normalizedPatterns(checker, state, alternative, subject) {
+          found.add(one)
+        }
+      }
+      found
+    }
+    .Invalid => {
+      state.isBroken = true
+      [Normal.Anything]
+    }
+  }
+}
+
+fn applied(constructor: Constructor, arguments: List<Normal>): Normal {
+  Normal.Applied(constructor, arguments)
+}
+
+fn normalizedTuple(
+  var checker: Checker,
+  var state: Normalizing,
+  items: List<Pattern>,
+  subject: TypeId,
+): List<Normal> {
+  var types: List<TypeId> = []
+  if const .Tuple(fields) = checker.types.form(subject) {
+    for field in fields {
+      types.add(field.annotation)
+    }
+  }
+  if types.length() != items.length() {
+    state.isBroken = true
+    return [Normal.Anything]
+  }
+  var columns: List<List<Normal>> = []
+  for index in 0..items.length() {
+    columns.add(normalizedPatterns(checker, state, items[index], types[index]))
+  }
+  productOf(Constructor.Named("", "", items.length()), columns)
+}
+
+fn normalizedVariant(
+  var checker: Checker,
+  var state: Normalizing,
+  name: String,
+  fields: List<FieldPattern>,
+  subject: TypeId,
+  at: Span,
+): List<Normal> {
+  var types: List<TypeId> = []
+  var constructor = Constructor.Opaque(at.start)
+  if const Some(variant) = caseNamed(checker, subject, name) {
+    for field in variant.fields {
+      types.add(field.annotation)
+    }
+    constructor = Constructor.Named(name, ".{name}", types.length())
+  } else if name == "Self" || typeNameOf(checker, subject) == Some(name) {
+    for field in fieldsOf(checker, subject) {
+      types.add(field.annotation)
+    }
+    const shown = typeNameOf(checker, subject) ?? name
+    constructor = Constructor.Named(shown, shown, types.length())
+  } else {
+    // The message about a case that does not exist was given while the pattern was checked
+    state.isBroken = true
+    return [Normal.Anything]
+  }
+  if types.length() != fields.length() {
+    state.isBroken = true
+    return [Normal.Anything]
+  }
+  var columns: List<List<Normal>> = []
+  for index in 0..fields.length() {
+    columns.add(normalizedPatterns(checker, state, fields[index].pattern, types[index]))
+  }
+  productOf(constructor, columns)
+}
+
+/** Every combination of the alternatives of the arguments: `(a | b, c | d)` is four patterns of one constructor. */
+fn productOf(constructor: Constructor, columns: List<List<Normal>>): List<Normal> {
+  var combinations: List<List<Normal>> = [[]]
+  for column in columns {
+    var grown: List<List<Normal>> = []
+    for known in combinations {
+      for one in column {
+        grown.add(known.added(one))
+      }
+    }
+    combinations = grown
+  }
+  var found: List<Normal> = []
+  for arguments in combinations {
+    found.add(Normal.Applied(constructor, arguments))
+  }
+  found
+}
+
+// --- The constructors of a literal and of a range -------------------------------------------------------------------
+
+/**
+ * A literal is a value of the subject's type, and which constructor that is depends on the type: a member of a literal
+ * type and a `String` are one value, an integer is the interval of one, and `true` and `false` are the two cases `Bool`
+ * has. A decimal is told apart by the text it is written as, so `1.5` twice is still the same value.
+ */
+fn literalConstructor(var checker: Checker, value: Expression, subject: TypeId): Constructor {
+  if const Some(text) = decimalTextOf(value) {
+    return Constructor.Literal("f{text}", text)
+  }
+  const literal = match literalOf(value) {
+    Some(found) => found
+    .None => {
+      return Constructor.Opaque(value.span.start)
+    }
+  }
+  if const .Literals(_, _) = checker.types.form(subject) {
+    return Constructor.Literal(literalKey(literal), describeLiteral(literal))
+  }
+  match literal {
+    .Boolean(inner) => {
+      const shown = if inner { "true" } else { "false" }
+      Constructor.Named(shown, shown, 0)
+    }
+    .Integer(inner) => {
+      if isIntegerType(checker, subject) {
+        return Constructor.Interval(inner, inner)
+      }
+      Constructor.Literal(literalKey(literal), describeLiteral(literal))
+    }
+    _ => Constructor.Literal(literalKey(literal), describeLiteral(literal))
+  }
+}
+
+/** `4..=9` over an integer type is one interval; over anything else it stands only for itself. */
+fn rangeConstructor(
+  var checker: Checker,
+  start: Expression,
+  end: Expression,
+  isInclusive: Bool,
+  subject: TypeId,
+  at: Span,
+): Constructor {
+  if !isIntegerType(checker, subject) {
+    return Constructor.Opaque(at.start)
+  }
+  const low = integerValueOf(start)
+  const high = integerValueOf(end)
+  match (low, high) {
+    (Some(from), Some(to)) => {
+      const last = if isInclusive { to } else { to - 1 }
+      if last < from {
+        return Constructor.Opaque(at.start)
+      }
+      Constructor.Interval(from, last)
+    }
+    _ => Constructor.Opaque(at.start)
+  }
+}
+
+fn integerValueOf(value: Expression): Int? {
+  if const Some(.Integer(inner)) = literalOf(value) {
+    return Some(inner)
+  }
+  None
+}
+
+/** Whether a literal of this type is a whole number, which is the only kind the matrix keeps as an interval. */
+fn isIntegerType(var checker: Checker, subject: TypeId): Bool {
+  if const .Nominal(symbol, _) = checker.types.form(subject) {
+    if const Some(name) = checker.wellKnown.numericNamed(symbol) {
+      return !name.startsWith("Float") && name != "Decimal"
+    }
+  }
+  false
+}
+
+/** `1.5` and `-1.5`: the text of a decimal literal, which is how two of them are told apart. */
+fn decimalTextOf(value: Expression): String? {
+  match value.kind {
+    .FloatLiteral(text) => Some(text)
+    .Unary(operator, operand) => {
+      if const .Negate = operator {
+        if const .FloatLiteral(text) = operand.kind {
+          return Some("-{text}")
+        }
+      }
+      None
+    }
+    _ => None
+  }
+}
+
+// --- The plan of one arm --------------------------------------------------------------------------------------------
+
+/**
+ * The plan of one arm, built while its own scope is still open: the bindings of a pattern are locals, and a local is
+ * only reachable there. Whether the arm is reachable is decided afterwards, by the matrix.
+ */
+public fn armPlanOf(var checker: Checker, arm: MatchArm, subject: TypeId): MatchArmPlan {
+  const branches = branchesOf(checker, arm.pattern, subject, [])
+  MatchArmPlan(arm.pattern.span, branches, arm.guard.isSome())
+}
+
+/** One branch per alternative: what has to hold for it, and what it binds where it does. */
+fn branchesOf(
+  var checker: Checker,
+  pattern: Pattern,
+  subject: TypeId,
+  path: List<PatternStep>,
+): List<PatternBranch> {
+  match pattern.kind {
+    .Wildcard => [PatternBranch([], [])]
+    .Binding(name) => {
+      match bindingOf(checker, name, path) {
+        Some(bound) => [PatternBranch([], [bound])]
+        .None => [PatternBranch([], [])]
+      }
+    }
+    .Literal(value) => {
+      const check = PatternCheck.IsLiteral(patternLiteral(value))
+      [PatternBranch([PatternTest(path, check)], [])]
+    }
+    .RangePattern(start, end, isInclusive) => {
+      const check = PatternCheck.IsInRange(patternLiteral(start), patternLiteral(end), isInclusive)
+      [PatternBranch([PatternTest(path, check)], [])]
+    }
+    .TuplePattern(items) => tupleBranches(checker, items, subject, path)
+    .ListPattern(items, rest) => listBranches(checker, items, rest, subject, path)
+    .Variant(qualified, fields) => {
+      const name = qualified[qualified.length() - 1]
+      variantBranches(checker, name.text, fields, subject, path)
+    }
+    .ImplicitVariant(name, fields) => variantBranches(checker, name.text, fields, subject, path)
+    .Alternatives(patterns) => {
+      var found: List<PatternBranch> = []
+      for alternative in patterns {
+        for branch in branchesOf(checker, alternative, subject, path) {
+          found.add(branch)
+        }
+      }
+      found
+    }
+    .Invalid => [PatternBranch([], [])]
+  }
+}
+
+/** The literal a pattern compares against: where it is written, and what it is worth where that is one value. */
+fn patternLiteral(value: Expression): PatternLiteral {
+  PatternLiteral(value.span, literalOf(value))
+}
+
+/**
+ * The binding a name stands for. It is looked up instead of remembered, because `checkPattern` declared it and every
+ * alternative of a pattern binds the same names - so whichever alternative wrote it down, the arm has one binding.
+ */
+fn bindingOf(var checker: Checker, name: String, path: List<PatternStep>): PatternBinding? {
+  if name == "_" {
+    return None
+  }
+  const found = match checker.findLocal(name) {
+    Some(.Bound(binding)) => binding
+    _ => {
+      return None
+    }
+  }
+  const local = checker.binding(found)
+  Some(PatternBinding(name, found, path, local.annotation, local.isVar))
+}
+
+fn tupleBranches(
+  var checker: Checker,
+  items: List<Pattern>,
+  subject: TypeId,
+  path: List<PatternStep>,
+): List<PatternBranch> {
+  var types: List<TypeId> = []
+  if const .Tuple(fields) = checker.types.form(subject) {
+    for field in fields {
+      types.add(field.annotation)
+    }
+  }
+  var branches: List<PatternBranch> = [PatternBranch([], [])]
+  for index in 0..items.length() {
+    const inner = types.get(index) ?? checker.deferredType
+    const step = PatternStep.TupleField(subject, index)
+    const grown = branchesOf(checker, items[index], inner, path.added(step))
+    branches = combined(branches, grown)
+  }
+  branches
+}
+
+fn listBranches(
+  var checker: Checker,
+  items: List<Pattern>,
+  rest: RestPattern?,
+  subject: TypeId,
+  path: List<PatternStep>,
+): List<PatternBranch> {
+  const element = itemOfSubject(checker, subject)
+  const position = match rest {
+    Some(found) => found.position
+    .None => items.length()
+  }
+  const check = if rest.isSome() {
+    PatternCheck.HasAtLeast(items.length())
+  } else {
+    PatternCheck.HasLength(items.length())
+  }
+  var branches: List<PatternBranch> = [PatternBranch([PatternTest(path, check)], [])]
+  for index in 0..items.length() {
+    // An item in front of the `...` is counted from the front, one behind it from the back
+    const step = if index < position {
+      PatternStep.Item(index)
+    } else {
+      PatternStep.ItemFromEnd(items.length() - 1 - index)
+    }
+    const grown = branchesOf(checker, items[index], element, path.added(step))
+    branches = combined(branches, grown)
+  }
+  if const Some(more) = rest {
+    if const Some(name) = more.name {
+      const step = PatternStep.Rest(position)
+      if const Some(bound) = bindingOf(checker, name.text, path.added(step)) {
+        branches = withBinding(branches, bound)
+      }
+    }
+  }
+  branches
+}
+
+fn variantBranches(
+  var checker: Checker,
+  name: String,
+  fields: List<FieldPattern>,
+  subject: TypeId,
+  path: List<PatternStep>,
+): List<PatternBranch> {
+  var branches: List<PatternBranch> = [PatternBranch([], [])]
+  if const Some(variant) = caseNamed(checker, subject, name) {
+    const check = PatternCheck.IsCase(subject, variant.symbol)
+    branches = [PatternBranch([PatternTest(path, check)], [])]
+    for index in 0..fields.length() {
+      const field = variant.fields.get(index)
+      const inner = match field {
+        Some(found) => found.annotation
+        .None => checker.deferredType
+      }
+      const symbol = match field {
+        Some(found) => found.symbol
+        .None => variant.symbol
+      }
+      const step = PatternStep.CaseField(subject, variant.symbol, index, symbol)
+      const grown = branchesOf(checker, fields[index].pattern, inner, path.added(step))
+      branches = combined(branches, grown)
+    }
+    return branches
+  }
+  // `Point(x, y)` and `Self(value)`: the one constructor of the type, which needs no test
+  const declared = fieldsOf(checker, subject)
+  for index in 0..fields.length() {
+    const field = declared.get(index)
+    const inner = match field {
+      Some(found) => found.annotation
+      .None => checker.deferredType
+    }
+    const step = match field {
+      Some(found) => PatternStep.Field(subject, index, found.symbol)
+      .None => PatternStep.TupleField(subject, index)
+    }
+    const grown = branchesOf(checker, fields[index].pattern, inner, path.added(step))
+    branches = combined(branches, grown)
+  }
+  branches
+}
+
+/** The cross product of two sets of branches: the tests of both, and the bindings of both. */
+fn combined(left: List<PatternBranch>, right: List<PatternBranch>): List<PatternBranch> {
+  var found: List<PatternBranch> = []
+  for one in left {
+    for other in right {
+      found.add(PatternBranch(one.tests.addedAll(other.tests), one.bindings.addedAll(other.bindings)))
+    }
+  }
+  found
+}
+
+fn withBinding(branches: List<PatternBranch>, bound: PatternBinding): List<PatternBranch> {
+  var found: List<PatternBranch> = []
+  for branch in branches {
+    found.add(branch.copy(bindings: branch.bindings.added(bound)))
+  }
+  found
+}

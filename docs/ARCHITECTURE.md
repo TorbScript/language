@@ -61,7 +61,7 @@ binary" rests on: both back ends consume the same, fully resolved program, and e
 | `syntax/`                | Source text, spans, diagnostics, tokens, lexer, AST, parser           | done, verified against stage 0 |
 | `project/`               | Paths, the source tree, `project.trb`, workspaces and their members   | done     |
 | `semantics/`             | Modules, symbols, visibility, names in type positions (`torb check`)  | done     |
-| `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: types and signatures (4.1), statements and monomorphic expressions (4.2), traits and implementations (4.3), generics, inference and closures (4.4), receivers and the configuration DSL (4.7) |
+| `semantics/checker/`     | The type checker ([docs/TYPECHECKER.md](TYPECHECKER.md))              | started: see the table in section 8 of TYPECHECKER.md for what is done |
 | `cli/`                   | Collecting files, rendering diagnostics                               | started  |
 | `ir/`                    | Typed IR, lowering, last-use analysis                                 | started: the IR, layouts, mangling, the verifier, the text format (5.1) |
 | `backend/c/`             | Typed IR to C                                                         | started: the manifest of natives (5.R1) |
