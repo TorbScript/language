@@ -276,7 +276,7 @@ group "Forms of a type" {
     const symbol = found.symbolNamed("Amount")
     const shape = typeSignatureOf(found.checker, symbol)
     const signature = found.checker.typeSignature(shape)
-    assert(found.show(signature.traits[0]) == "Add<Amount, Amount>")
+    assert(found.show(signature.traits[0].capability) == "Add<Amount, Amount>")
   }
 }
 
@@ -346,17 +346,17 @@ group "Signatures" {
     assert(signature.fields[1].isVar && signature.fields[1].hasDefault)
     assert(signature.fields[2].name == "label")
     assert(signature.fields[2].visibility == Visibility.Private)
-    assert(found.show(signature.traits[0]) == "Show")
-    assert(found.show(signature.traits[1]) == "Hash")
+    assert(found.show(signature.traits[0].capability) == "Show")
+    assert(found.show(signature.traits[1].capability) == "Hash")
     assert(signature.members.containsKey("area"))
   }
 
-  test "`with ... by field` is remembered, and so is `native`" {
+  test "`with ... by field` is remembered per trait, and so is `native`" {
     var found = probe("public native type Meters with Add by value \{\n  value: Float64\n\}")
     const symbol = found.symbolNamed("Meters")
     const shape = typeSignatureOf(found.checker, symbol)
     const signature = found.checker.typeSignature(shape)
-    assert(signature.delegate == Some("value"))
+    assert(signature.traits[0].delegate == Some("value"))
     assert(signature.isNative)
   }
 

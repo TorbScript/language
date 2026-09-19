@@ -115,6 +115,13 @@ pub struct TypeInfo {
     /// `from` exists once per source type, so it is kept apart and chosen by the type of the argument
     pub conversions: RefCell<Vec<Rc<FunctionInfo>>>,
     pub traits: RefCell<Vec<&'static ast::TypeReference>>,
+    /// `with Add & Subtract by value`: one entry per element of the `with` list that has a `by`, capability and
+    /// field name, before the capability is expanded into the trait names `delegates` dispatches by.
+    delegate_clauses: Vec<(&'static ast::TypeReference, &'static str)>,
+    /// Every required member `delegate_clauses` forwards, flattened to `(member name, field name)` by
+    /// `apply_delegations`: the interpreter has no type checker, so a delegated call is found by name, the same way
+    /// `+` finds `add`.
+    delegates: RefCell<Vec<(&'static str, &'static str)>>,
     /// One bit per name the type has, from any of its fields, cases, methods and statics. Most questions about a name
     /// are "is this a member of the receiver, or of `Self`?", and for a top-level function the answer is no - this
     /// answers that without looking at the fields or the methods at all.
@@ -147,6 +154,11 @@ impl TypeInfo {
         fields.iter().position(|field| field.mark == mark && field.name == name)
     }
 
+    /// The field a required member with this name is delegated to (`with Add & Subtract by value`), if any.
+    pub fn delegated_field_of(&self, name: &str) -> Option<&'static str> {
+        self.delegates.borrow().iter().find(|(member, _)| *member == name).map(|(_, field)| *field)
+    }
+
     pub fn case_index(&self, name: &str) -> Option<usize> {
         crate::profile::add("scan.cases", self.cases.len());
         let mark = mark(name);
@@ -160,6 +172,9 @@ pub struct TraitInfo {
     pub supertraits: &'static [ast::TypeReference],
     /// Default methods. They are copied into every type that implements the trait.
     pub methods: RefCell<Vec<&'static ast::FunctionDeclaration>>,
+    /// Required members (`self`, no body): only the names are kept, which is all `with ... by field` needs to know
+    /// what to forward (the interpreter has no type checker to ask instead).
+    pub required: RefCell<Vec<&'static str>>,
     pub statics: RefCell<Names<Rc<FunctionInfo>>>,
 }
 
@@ -273,6 +288,9 @@ pub fn load(entry: &Path) -> Result<Program, Vec<String>> {
     }
     for module in &loader.order {
         loader.problems.extend(apply_traits(module, &prelude));
+    }
+    for module in &loader.order {
+        apply_delegations(module, &prelude);
     }
     if !loader.problems.is_empty() {
         return Err(loader.problems);
@@ -487,11 +505,15 @@ fn declare_one(module: &Rc<Module>, declaration: &'static ast::Declaration) {
                 module: module.clone(),
                 supertraits: &declaration_of_trait.supertraits,
                 methods: RefCell::new(Vec::new()),
+                required: RefCell::new(Vec::new()),
                 statics: RefCell::new(Names::default()),
             });
             for member in &declaration_of_trait.members {
                 let MemberKind::Function(function) = &member.kind else { continue };
                 if function.body.is_none() {
+                    if has_self(function) {
+                        info.required.borrow_mut().push(&function.name.text);
+                    }
                     continue;
                 }
                 if has_self(function) {
@@ -548,6 +570,12 @@ fn declare_type(module: &Rc<Module>, declaration: &'static ast::TypeDeclaration,
             MemberKind::Constant(_) | MemberKind::Function(_) => {}
         }
     }
+    let mut delegate_clauses = Vec::new();
+    for clause in &declaration.traits {
+        if let Some(field) = &clause.delegate {
+            delegate_clauses.push((&clause.capability, field.text.as_str()));
+        }
+    }
     let info = Rc::new(TypeInfo {
         name: &declaration.name.text,
         module: module.clone(),
@@ -557,7 +585,9 @@ fn declare_type(module: &Rc<Module>, declaration: &'static ast::TypeDeclaration,
         methods: RefCell::new(Names::default()),
         statics: RefCell::new(Names::default()),
         conversions: RefCell::new(Vec::new()),
-        traits: RefCell::new(declaration.traits.iter().collect()),
+        traits: RefCell::new(declaration.traits.iter().map(|clause| &clause.capability).collect()),
+        delegate_clauses,
+        delegates: RefCell::new(Vec::new()),
         names: Cell::new(0),
     });
     for field in &info.fields {
@@ -685,6 +715,15 @@ fn apply_extends(module: &Rc<Module>, prelude: &Rc<Module>, extensions: &mut Ext
     problems
 }
 
+/// The trait names one element of a `with` list stands for: one for a plain name, several for an `&` group
+/// (`Add & Subtract`). Anything else (a bound that did not resolve to a name) contributes none.
+fn trait_names_of(reference: &'static ast::TypeReference) -> Vec<&'static str> {
+    match &reference.kind {
+        TypeKind::Intersection(members) => members.iter().filter_map(named).collect(),
+        _ => named(reference).into_iter().collect(),
+    }
+}
+
 /// Copies the default methods of the traits (and of their supertraits) into the types that implement them.
 fn apply_traits(module: &Rc<Module>, prelude: &Rc<Module>) -> Vec<String> {
     let mut problems = Vec::new();
@@ -698,11 +737,14 @@ fn apply_traits(module: &Rc<Module>, prelude: &Rc<Module>) -> Vec<String> {
         })
         .collect();
     for info in types {
-        let mut pending: Vec<(&'static ast::TypeReference, Rc<Module>)> =
-            info.traits.borrow().iter().map(|reference| (*reference, info.module.clone())).collect();
+        let mut pending: Vec<(&'static str, Span, Rc<Module>)> = info
+            .traits
+            .borrow()
+            .iter()
+            .flat_map(|reference| trait_names_of(reference).into_iter().map(|name| (name, reference.span, info.module.clone())))
+            .collect();
         let mut seen: Vec<&'static str> = Vec::new();
-        while let Some((reference, context)) = pending.pop() {
-            let Some(name) = named(reference) else { continue };
+        while let Some((name, span, context)) = pending.pop() {
             if seen.contains(&name) {
                 continue;
             }
@@ -717,7 +759,7 @@ fn apply_traits(module: &Rc<Module>, prelude: &Rc<Module>) -> Vec<String> {
                 if info.fields.iter().any(|field| field.name == method_name) {
                     problems.push(format!(
                         "{}: `{}` has a field `{method_name}`, which is also a method of `{name}`",
-                        info.module.location(reference.span),
+                        info.module.location(span),
                         info.name
                     ));
                 }
@@ -725,8 +767,68 @@ fn apply_traits(module: &Rc<Module>, prelude: &Rc<Module>) -> Vec<String> {
                 info.remember(method_name);
                 info.methods.borrow_mut().insert(method_name, Rc::new(function));
             }
-            pending.extend(implemented.supertraits.iter().map(|supertrait| (supertrait, implemented.module.clone())));
+            pending.extend(implemented.supertraits.iter().flat_map(|supertrait| {
+                trait_names_of(supertrait).into_iter().map(|name| (name, supertrait.span, implemented.module.clone()))
+            }));
         }
     }
     problems
+}
+
+/// Every required member a trait asks for, transitively over its supertraits: what `apply_delegations` forwards to a
+/// field. Only the name is kept - the interpreter has no type checker to ask what the signature is.
+fn required_members_of(start: &Rc<TraitInfo>, prelude: &Rc<Module>) -> Vec<&'static str> {
+    let mut found: Vec<&'static str> = start.required.borrow().clone();
+    let mut pending: Vec<(&'static str, Rc<Module>)> = start
+        .supertraits
+        .iter()
+        .flat_map(|reference| trait_names_of(reference).into_iter().map(|name| (name, start.module.clone())))
+        .collect();
+    let mut seen: Vec<&'static str> = vec![start.name];
+    while let Some((name, context)) = pending.pop() {
+        if seen.contains(&name) {
+            continue;
+        }
+        seen.push(name);
+        let Some(Item::Value(Value::Trait(implemented))) = lookup(&context, prelude, name) else { continue };
+        found.extend(implemented.required.borrow().iter().copied());
+        pending.extend(
+            implemented
+                .supertraits
+                .iter()
+                .flat_map(|reference| trait_names_of(reference).into_iter().map(|name| (name, implemented.module.clone()))),
+        );
+    }
+    found
+}
+
+/// `with Add & Subtract by value`: every required member `Add` and `Subtract` ask for is dispatched to `value` at
+/// the call, exactly the way `+` is dispatched to a hand-written `add` (`operate`) - the interpreter has no type
+/// checker in front of it, so this is found by name and not by signature.
+fn apply_delegations(module: &Rc<Module>, prelude: &Rc<Module>) {
+    let types: Vec<Rc<TypeInfo>> = module
+        .scope
+        .borrow()
+        .values()
+        .filter_map(|item| match item {
+            Item::Value(Value::Type(info)) if Rc::ptr_eq(&info.module, module) => Some(info.clone()),
+            _ => None,
+        })
+        .collect();
+    for info in &types {
+        for (reference, field) in &info.delegate_clauses {
+            if info.field_position(None, field).is_none() {
+                continue;
+            }
+            for name in trait_names_of(reference) {
+                let Some(Item::Value(Value::Trait(implemented))) = lookup(module, prelude, name) else { continue };
+                for member in required_members_of(&implemented, prelude) {
+                    let mut delegates = info.delegates.borrow_mut();
+                    if !delegates.iter().any(|(existing, _)| *existing == member) {
+                        delegates.push((member, field));
+                    }
+                }
+            }
+        }
+    }
 }

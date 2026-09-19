@@ -104,13 +104,32 @@ fn declarations() {
     assert_eq!(declaration.members.len(), 3);
     assert_eq!(declaration.members[1].modifiers.visibility, Visibility::PrivateVar);
 
-    parse_ok("type Meters with Add, Compare by value {\n  value: Float\n}");
+    parse_ok("type Meters with Add & Compare by value {\n  value: Float\n}");
     parse_ok("type Handler = (request: String, var context: Context) => Result<String, Failure>");
     parse_ok(
         "extend<Source, Target> Source with Into<Target> where Target: From<Source> {\n  fn into(self): Target { Target.from(self) }\n}",
     );
     parse_ok("use * as http from \"std/net/http\"\npublic use Stack, ArrayStack from \"./collections/stack\"");
     assert!(first_error("fn record(type: String) {}").contains("keyword"));
+}
+
+/// `by` binds to the one element of the `with` list directly in front of it, and that element may be an `&` group.
+#[test]
+fn trait_clause_delegation() {
+    let file = parse_ok("type Seconds with Show, Add & Subtract by value, Compare by value {\n  value: Int\n}");
+    let StatementKind::Declaration(Declaration { kind: DeclarationKind::Type(declaration), .. }) = &file.statements[0].kind else {
+        panic!()
+    };
+    assert_eq!(declaration.traits.len(), 3);
+    assert!(declaration.traits[0].delegate.is_none());
+    assert_eq!(declaration.traits[1].delegate.as_ref().map(|name| name.text.as_str()), Some("value"));
+    assert_eq!(declaration.traits[2].delegate.as_ref().map(|name| name.text.as_str()), Some("value"));
+    assert!(matches!(declaration.traits[1].capability.kind, TypeKind::Intersection(ref members) if members.len() == 2));
+
+    // `extend` and a `trait`'s supertraits have no field of their own to delegate to
+    assert!(first_error("extend Meters with Add by value {\n  fn add(self, other: Self): Self { self }\n}")
+        .contains("only a `type` has fields to name"));
+    assert!(first_error("trait Numeric with Add by value {\n}").contains("only a `type` has fields to name"));
 }
 
 #[test]

@@ -51,11 +51,10 @@ fn declaration(declaration: &Declaration) -> String {
         }
         DeclarationKind::Function(declaration) => format!("Function(declaration: {})", function(declaration)),
         DeclarationKind::Type(declaration) => format!(
-            "Type(declaration: TypeDeclaration(name: {}, generics: {}, traits: {}, delegate: {}, whereClauses: {}, members: {}))",
+            "Type(declaration: TypeDeclaration(name: {}, generics: {}, traits: {}, whereClauses: {}, members: {}))",
             name(&declaration.name),
             list(&declaration.generics, generic_parameter),
-            list(&declaration.traits, type_reference),
-            option(&declaration.delegate, name),
+            list(&declaration.traits, trait_clause),
             list(&declaration.where_clauses, where_clause),
             list(&declaration.members, member),
         ),
@@ -107,6 +106,10 @@ fn generic_parameter(parameter: &GenericParameter) -> String {
 
 fn where_clause(clause: &WhereClause) -> String {
     format!("WhereClause(subject: {}, bounds: {})", type_reference(&clause.subject), list(&clause.bounds, type_reference))
+}
+
+fn trait_clause(clause: &TraitClause) -> String {
+    format!("TraitClause(capability: {}, delegate: {})", type_reference(&clause.capability), option(&clause.delegate, name))
 }
 
 fn function(function: &FunctionDeclaration) -> String {

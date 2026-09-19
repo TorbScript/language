@@ -1,12 +1,12 @@
 use Diagnostic from "../../syntax/diagnostic"
 use Name, Statement, Binding, Declaration, Visibility from "../../syntax/ast"
-use TypeReference, GenericParameter, WhereClause from "../../syntax/ast"
+use TypeReference, GenericParameter, WhereClause, TraitClause from "../../syntax/ast"
 use FunctionDeclaration, Parameter, Member, Field, CaseDeclaration from "../../syntax/ast"
 use ModuleId from "../module"
 use SymbolId, SymbolKind, Symbol from "../symbols"
 use TypeId, TypeForm, FunctionForm, ParameterForm, ParameterMode from "./type"
 use ParameterId, ParameterDeclaration from "./type"
-use Bound, Signature, SignatureId, SignatureState, FieldSignature, CaseSignature from "./type"
+use Bound, Signature, SignatureId, SignatureState, FieldSignature, CaseSignature, DelegatedTrait from "./type"
 use TypeSignature, TypeSignatureId from "./type"
 use Checker, TypeScope, DeclarationSite, DeclarationSiteKind, ResultRule from "./context"
 use typeFromReference, traitsFromReference from "./lowering"
@@ -685,19 +685,23 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
   const declaration = match site.kind {
     .Declared(found) => found
     _ => {
-      return TypeSignature(symbol, generics, own, [], [], [], [], [:], None, false, false)
+      return TypeSignature(symbol, generics, own, [], [], [], [], [:], false, false)
     }
   }
   match declaration.kind {
     .Type(typeDeclaration) => {
-      const traits = traitList(checker, typeDeclaration.traits, own, scope)
-      const bounds = boundsOf(checker, generics, typeDeclaration.generics, typeDeclaration.whereClauses, scope)
       var body = MemberSet()
       collectMembers(checker, body, symbol, site.module, own, generics, typeDeclaration.members, scope)
-      var delegate: String? = None
-      if const Some(name) = typeDeclaration.delegate {
-        delegate = Some(name.text)
-      }
+      const traits = delegatedTraitList(
+        checker,
+        typeDeclaration.traits,
+        own,
+        scope,
+        typeDeclaration.name,
+        body.fields,
+        !body.cases.isEmpty(),
+      )
+      const bounds = boundsOf(checker, generics, typeDeclaration.generics, typeDeclaration.whereClauses, scope)
       TypeSignature(
         symbol,
         generics,
@@ -707,13 +711,12 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
         body.fields,
         body.cases,
         body.members,
-        delegate,
         declaration.modifiers.isNative,
         declaration.modifiers.isShared,
       )
     }
     .Trait(traitDeclaration) => {
-      const traits = traitList(checker, traitDeclaration.supertraits, own, scope)
+      const traits = plainTraitList(checker, traitDeclaration.supertraits, own, scope)
       const bounds = boundsOf(checker, generics, traitDeclaration.generics, [], scope)
       var body = MemberSet()
       collectMembers(checker, body, symbol, site.module, own, generics, traitDeclaration.members, scope)
@@ -726,16 +729,15 @@ fn buildTypeSignature(var checker: Checker, symbol: SymbolId, site: DeclarationS
         body.fields,
         body.cases,
         body.members,
-        None,
         declaration.modifiers.isNative,
         declaration.modifiers.isShared,
       )
     }
-    _ => TypeSignature(symbol, generics, own, [], [], [], [], [:], None, false, false)
+    _ => TypeSignature(symbol, generics, own, [], [], [], [], [:], false, false)
   }
 }
 
-/** `with Show, Encode` and the supertraits of a trait: every one of them, flattened. */
+/** `with Show, Encode` of an `extend`, and the supertraits of a trait: every one of them, flattened. */
 public fn traitList(var checker: Checker, references: List<TypeReference>, of: TypeId, scope: TypeScope): List<TypeId> {
   var traits: List<TypeId> = []
   for reference in references {
@@ -746,6 +748,96 @@ public fn traitList(var checker: Checker, references: List<TypeReference>, of: T
     }
   }
   traits
+}
+
+/** The supertraits of a trait, none of them delegated (only a `type` has fields). */
+fn plainTraitList(var checker: Checker, references: List<TypeReference>, of: TypeId, scope: TypeScope): List<DelegatedTrait> {
+  traitList(checker, references, of, scope).map { capability => DelegatedTrait(capability, None) }.toList()
+}
+
+/**
+ * `with Show, Add & Subtract by value, Compare by value`: one `DelegatedTrait` per trait, `Show` derives or is
+ * hand-written, `Add`, `Subtract` and `Compare` are forwarded to `value`. `by` needs a type with exactly one field,
+ * named by `by` itself (gap 14, "Distinct Types") - checked here, once per clause, against the fields this same
+ * declaration just collected.
+ */
+fn delegatedTraitList(
+  var checker: Checker,
+  clauses: List<TraitClause>,
+  of: TypeId,
+  scope: TypeScope,
+  typeName: Name,
+  fields: List<FieldSignature>,
+  hasCases: Bool,
+): List<DelegatedTrait> {
+  var traits: List<DelegatedTrait> = []
+  for clause in clauses {
+    var delegate: String? = None
+    if const Some(name) = clause.delegate {
+      delegate = delegateFieldOf(checker, scope.module, typeName, name, fields, hasCases)
+    }
+    for capability in traitsFromReference(checker, clause.capability, of, scope) {
+      if !containsCapability(traits, capability) {
+        traits.add(DelegatedTrait(capability, delegate))
+      }
+    }
+  }
+  traits
+}
+
+fn containsCapability(traits: List<DelegatedTrait>, capability: TypeId): Bool {
+  for existing in traits {
+    if existing.capability == capability {
+      return true
+    }
+  }
+  false
+}
+
+/** The field `by name` names, or `None` with a diagnostic already reported at `name`. */
+fn delegateFieldOf(
+  var checker: Checker,
+  module: ModuleId,
+  typeName: Name,
+  name: Name,
+  fields: List<FieldSignature>,
+  hasCases: Bool,
+): String? {
+  if hasCases {
+    checker.report(
+      module,
+      Diagnostic.error("`by` needs a type with a single field: `{typeName.text}` has cases, not fields", name.span)
+    )
+    return None
+  }
+  if fields.length() != 1 {
+    checker.report(
+      module,
+      Diagnostic.error("`by` needs a type with a single field: `{typeName.text}` has {describeFields(fields)}", name.span)
+    )
+    return None
+  }
+  const only = fields[0]
+  if only.name != name.text {
+    checker.report(
+      module,
+      Diagnostic.error("`by` names the field of the type: `{typeName.text}` has `{only.name}`, not `{name.text}`", name.span)
+    )
+    return None
+  }
+  Some(only.name)
+}
+
+/** `has no fields`, `` has `amount` ``, `` has `amount` and `currency` ``. */
+fn describeFields(fields: List<FieldSignature>): String {
+  if fields.isEmpty() {
+    return "no fields"
+  }
+  const shown = fields.map { field => "`{field.name}`" }.toList()
+  if shown.length() == 1 {
+    return shown[0]
+  }
+  "{shown.slice(0..(shown.length() - 1)).joined(separator: ", ")} and {shown[shown.length() - 1]}"
 }
 
 /** What a declaration body contributes, in one value so that one `var` parameter can collect all of it. */

@@ -3,7 +3,7 @@ use Diagnostic from "../syntax/diagnostic"
 use Name, Statement, Block, Binding, Condition from "../syntax/ast"
 use Declaration, GenericParameter, WhereClause from "../syntax/ast"
 use FunctionDeclaration, Member, Field from "../syntax/ast"
-use TypeReference, Expression, Argument from "../syntax/ast"
+use TypeReference, Expression, Argument, TraitClause from "../syntax/ast"
 use ModuleId from "./module"
 use SymbolId, SymbolKind, Symbol, Symbols from "./symbols"
 use Program from "./scope"
@@ -158,7 +158,7 @@ fn walkDeclaration(var walk: Walk, scope: Scope, declaration: Declaration) {
     .Type(typeDeclaration) => {
       const own = lookUp(walk, scope, typeDeclaration.name.text)
       const inner = withGenerics(walk, withSelf(scope, own), typeDeclaration.generics)
-      walkTypes(walk, inner, typeDeclaration.traits)
+      walkTraitClauses(walk, inner, typeDeclaration.traits)
       walkWhereClauses(walk, inner, typeDeclaration.whereClauses)
       walkMembers(walk, inner, typeDeclaration.members)
     }
@@ -287,6 +287,16 @@ fn walkBlock(var walk: Walk, scope: Scope, block: Block) {
 fn walkTypes(var walk: Walk, scope: Scope, references: List<TypeReference>) {
   for reference in references {
     walkType(walk, scope, reference)
+  }
+}
+
+/**
+ * `with Show, Add & Subtract by value`: the capability of every element. The field it delegates to is a field name,
+ * not a type, and is resolved by the checker instead (gap 14).
+ */
+fn walkTraitClauses(var walk: Walk, scope: Scope, clauses: List<TraitClause>) {
+  for clause in clauses {
+    walkType(walk, scope, clause.capability)
   }
 }
 

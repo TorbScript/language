@@ -139,7 +139,7 @@ group "Coherence" {
 
 group "Delegation with `by`" {
   test "`by field` forwards every required member, and the default members come from the trait (gap 14)" {
-    const source = "type Meters with Add<Meters, Meters>, Compare by value \{\n  value: Float\n\}\n\n"
+    const source = "type Meters with Add<Meters, Meters> & Compare by value \{\n  value: Float\n\}\n\n"
       + inBody("  const sum = Meters(1.0) + Meters(2.0)\n  const longer = Meters(1.0).max(Meters(2.0))")
     assert(problems(source).isEmpty())
     const found = probe(source)
@@ -165,6 +165,45 @@ group "Delegation with `by`" {
     const source = "type Meters with Add<Meters, Meters> by value \{\n  value: Float\n\}\n\n"
       + inBody("  const area = Meters(1.0) * Meters(2.0)")
     assert(problems(source) == ["`Meters` does not implement `Multiply`, so `a * b` has no meaning for it"])
+  }
+
+  test "`by` binds to one element of the `with` list: derived, a delegated group, a delegated trait alone, and a hand-written one all coexist" {
+    const source = "trait Named \{\n  fn name(self): String\n\}\n\n"
+      + "type Seconds with Show, Add<Seconds, Seconds> & Subtract<Seconds, Seconds> by value, Compare by value, Named \{\n"
+      + "  value: Int\n\n  fn name(self): String \{\n    \"seconds\"\n  \}\n\}\n\n"
+      + inBody(
+        "  const sum = Seconds(1) + Seconds(2)\n"
+          + "  const difference = Seconds(3) - Seconds(1)\n"
+          + "  const longer = Seconds(1).max(Seconds(2))\n"
+          + "  const named = Seconds(1).name()"
+      )
+    assert(problems(source).isEmpty())
+    const found = probe(source)
+    assert(found.typeOf("Seconds(1) + Seconds(2)") == "Seconds")
+    assert(found.typeOf("Seconds(3) - Seconds(1)") == "Seconds")
+    assert(found.adaptationsOf("Seconds(1) + Seconds(2)") == ["delegate value"])
+    assert(found.adaptationsOf("Seconds(3) - Seconds(1)") == ["delegate value"])
+    // `max` is a default member of `Compare`: not forwarded, so it is not `delegate value` (gap 14)
+    assert(found.adaptationsOf("Seconds(1).max(Seconds(2))") == [])
+    // `Named` is not delegated: `name` is the hand-written one, so it is not `delegate value` either
+    assert(found.adaptationsOf("Seconds(1).name()") == [])
+  }
+
+  test "`by` needs a type with a single field" {
+    const source = "type Money with Show by amount \{\n  amount: Int\n  currency: String\n\n"
+      + "  fn show(self): String \{\n    \"money\"\n  \}\n\}"
+    assert(problems(source) == ["`by` needs a type with a single field: `Money` has `amount` and `currency`"])
+  }
+
+  test "`by` names the field of the type" {
+    const source = "type Seconds with Show by amount \{\n  value: Int\n\n  fn show(self): String \{\n    \"seconds\"\n  \}\n\}"
+    assert(problems(source) == ["`by` names the field of the type: `Seconds` has `value`, not `amount`"])
+  }
+
+  test "a type with cases cannot delegate" {
+    const source = "type Shape with Show by value \{\n  case Circle(value: Int)\n  case Empty\n\n"
+      + "  fn show(self): String \{\n    \"shape\"\n  \}\n\}"
+    assert(problems(source) == ["`by` needs a type with a single field: `Shape` has cases, not fields"])
   }
 }
 

@@ -66,22 +66,33 @@ fn collectDeclaration(var checker: Checker, module: ModuleId, package: Int, decl
       }
       const identifier = typeSignatureOf(checker, symbol)
       const shape = checker.typeSignature(identifier)
-      const origin = if shape.delegate.isSome() {
-        ImplementationOrigin.Delegated
-      } else {
-        ImplementationOrigin.Declared
-      }
       const own = shape.own
       const generics = shape.generics
       const bounds = shape.bounds
       const members = shape.members
-      const delegate = shape.delegate
       const isNative = shape.isNative
       const at = typeDeclaration.name.span
       for bound in shape.traits {
+        const origin = if bound.delegate.isSome() {
+          ImplementationOrigin.Delegated
+        } else {
+          ImplementationOrigin.Declared
+        }
         addOne(
           checker,
-          Implementation(Some(bound), own, generics, bounds, module, package, members, delegate, origin, at, isNative),
+          Implementation(
+            Some(bound.capability),
+            own,
+            generics,
+            bounds,
+            module,
+            package,
+            members,
+            bound.delegate,
+            origin,
+            at,
+            isNative,
+          ),
         )
       }
     }
@@ -702,7 +713,7 @@ public fn supertraitsOfBound(var checker: Checker, bound: TypeId, own: TypeId): 
   }
   var found: List<TypeId> = []
   for supertrait in shape.traits {
-    found.add(substitute(checker.types, supertrait, mapping))
+    found.add(substitute(checker.types, supertrait.capability, mapping))
   }
   found
 }
@@ -1407,7 +1418,7 @@ fn isProvidedOtherwise(var checker: Checker, index: Int, bound: TypeId): Bool {
   if const .Nominal(symbol, _) = checker.types.form(target) {
     const identifier = typeSignatureOf(checker, symbol)
     const shape = checker.typeSignature(identifier)
-    if shape.isNative || shape.delegate.isSome() {
+    if shape.isNative {
       return true
     }
   }

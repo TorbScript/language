@@ -484,14 +484,16 @@ public type EntityId = Int
 
 ### Distinct Types (opaque "aliases")
 
-There is no separate concept for this. A distinct type is a `type` with a single field, and `by` forwards
-traits to that field so the wrapper does not cost boilerplate:
+There is no separate concept for this. A distinct type is a `type` with a single field, and `by` forwards traits to
+that field so the wrapper does not cost boilerplate. `by` binds to **the one element of the `with` list directly in
+front of it** - which may be an `&` group - never to the whole list, so a mixed line says exactly what happens to
+each trait:
 
 ```trb
 type UserId { value: Int }
 
-type Meters with Add, Subtract, Compare by value {
-  value: Float
+type Seconds with Show, Add & Subtract by value, Compare by value {
+  value: Int
 }
 
 type Email with Show by value {
@@ -499,19 +501,24 @@ type Email with Show by value {
   fn parse(text: String): Result<Email, ParseError> { ... }
 }
 
-const distance = Meters(5.0) + Meters(2.5)     // Meters(7.5)
-// Meters(5.0) + 2.5                           // Compile error: Float is not Meters
-// Meters(5.0) + Seconds(2.0)                  // Compile error
-const raw = distance.value                     // Explicit way out
+const total = Seconds(5) + Seconds(2)          // Seconds(7)
+// Seconds(5) + 2                              // Compile error: Int is not Seconds
+// Seconds(5) + Meters(2.0)                    // Compile error
+const raw = total.value                        // Explicit way out
 ```
 
-- `with A, B by field` implements the listed traits by delegating to the field. Traits not listed are not available:
-  `Meters * Meters` does not compile, which is the point (that would be square meters).
+- `Show` above is derived, `Add`, `Subtract` and `Compare` are delegated to `value` - one line, one decision per
+  trait. A trait that is neither derived, delegated nor written by hand is not available: `Seconds * Seconds` does
+  not compile, which is the point (that would be square seconds).
+- **`by` needs a type with exactly one field, and the name after `by` names that field.** `Money` with `amount` and
+  `currency` cannot delegate `Add` to either one - what would `Add` do with `currency`? - and a type with cases
+  cannot delegate at all, having no field of its own to name. The single-field rule is what keeps a delegated
+  member's meaning unambiguous without saying more than the field's name.
 - Where a forwarded signature mentions `Self` (`add(self, other: Self): Self`), arguments are unwrapped and results
   wrapped again. That only works for single-field types. Traits without `Self` in arguments or results can be
   delegated by any type (`type Team with Iterable<User> by members { ... }`).
-- **`by` forwards the required members, the default members come from the trait.** `distance.max(Meters(10.0))` is
-  `Compare.max` over the forwarded `compare`, so it returns a `Meters` and nothing has to be rewrapped. A default
+- **`by` forwards the required members, the default members come from the trait.** `total.max(Seconds(10))` is
+  `Compare.max` over the forwarded `compare`, so it returns a `Seconds` and nothing has to be rewrapped. A default
   that is written in terms of the required members stays correct by construction.
 - Everything else comes from the existing rules: visibility of the constructor, factories, `From`/`Into`, methods,
   `extend`. `Equals`, `Hash` and `Show` are generated as for every `type`.
@@ -2026,7 +2033,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - The capabilities of a `Sandbox` are a closed list defined by the runtime. What a library wants to offer to a script
   goes through the receiver type, which already is the whitelist.
 - Literal defaults (`Int64`, `Float64`) are fixed and do not follow a shadowed `Int` alias
-- No `opaque alias`. Distinct types are single-field `type`s plus trait delegation (`with Add, Compare by value`).
+- No `opaque alias`. Distinct types are single-field `type`s plus trait delegation (`with Add & Compare by value`).
   Scala-3-style opaque types (transparent inside the declaring scope, opaque outside) make type identity depend on
   the scope, which hurts error messages and the coherence rules of `extend`. Go-style `type X Y` would need its own
   rules for construction, visibility and which operations carry over - the `type` already has all of them.
@@ -2207,6 +2214,11 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   clause (`where Item: Show`). One way to join instead of two, and it reads left to right with the rest of a
   pipeline; the collector `joining` stays for a prefix, a suffix, or a step inside `collect`.
 - `&` instead of `+` for an intersection of traits (was: `+`, from Rust).
+- `by` belongs to one element of the `with` list and needs a single-field type (was: one `by` for the whole list).
+  `with Show, Add & Subtract by value, Compare by value` derives `Show` and delegates the other two, each to
+  `value`; an element may be an `&` group, so the group delegates together. The old form (`with A, B by field` for
+  the whole list) is gone rather than kept as a shorthand, so that "which trait goes where" is always in the line
+  and never implied by what the type happens to have.
 
 ## Open Questions
 

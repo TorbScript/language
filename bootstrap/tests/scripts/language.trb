@@ -246,3 +246,30 @@ const pattern = r"""
   literal braces {like this} and backslashes \n stay as written
   """
 print pattern
+
+// `by` binds to one element of the `with` list, and the element may be an `&` group: `Add` and `Subtract` are
+// delegated together to `value`, `Compare` is delegated on its own, `max` (a default member) stays the trait's
+trait Add {
+  fn add(self, other: Self): Self
+}
+
+trait Subtract {
+  fn subtract(self, other: Self): Self
+}
+
+trait Compare {
+  fn compare(self, other: Self): Ordering
+
+  fn max(self, other: Self): Self {
+    if compare(other) == .Greater { self } else { other }
+  }
+}
+
+type Seconds with Add & Subtract by value, Compare by value {
+  value: Int
+}
+
+const total = Seconds(5) + Seconds(2)
+const difference = Seconds(5) - Seconds(2)
+const longer = Seconds(5).max(Seconds(2))
+print total, difference, longer, Seconds(5) > Seconds(2)

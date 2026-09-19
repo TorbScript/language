@@ -2,7 +2,7 @@ use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Name, Modifiers, Visibility, Declaration, Member, Binding, Argument, Expression from "../../syntax/ast"
 use FunctionDeclaration, TypeDeclaration, TraitDeclaration, ExtendDeclaration from "../../syntax/ast"
-use ForeignDeclaration, TypeReference from "../../syntax/ast"
+use ForeignDeclaration, TypeReference, TraitClause from "../../syntax/ast"
 use joinPath from "../../project/path"
 use ModuleId from "../module"
 use SymbolId from "../symbols"
@@ -572,8 +572,9 @@ fn checkMemberShape(
  * A `shared type` may only implement a `shared trait` (CONCEPT.md, "Traits"), which is what keeps every value of a
  * non-shared trait type a value: nobody changes it while you hold it, and it can be passed to another task.
  */
-fn requireSharedTraits(var checker: Checker, module: ModuleId, name: Name, traits: List<TypeReference>) {
-  for reference in traits {
+fn requireSharedTraits(var checker: Checker, module: ModuleId, name: Name, traits: List<TraitClause>) {
+  for clause in traits {
+    const reference = clause.capability
     const symbol = match traitSymbolOf(checker, module, reference) {
       Some(found) => found
       .None => {

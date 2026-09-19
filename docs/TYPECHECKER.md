@@ -554,7 +554,7 @@ public type Implementation {
   module: ModuleId
   package: PackageId
   members: Map<String, SymbolId>
-  /** `with Add, Compare by value` */
+  /** `with Add & Compare by value` */
   delegate: SymbolId?
   origin: ImplementationOrigin      // .Declared, .Derived, .Delegated, .Native
 }
@@ -582,11 +582,12 @@ public fn resolveBound(var checker: Checker, type: TypeId, bound: TypeId): Resol
   names both declarations.
 - **Supertraits** are requirements, not inheritance: `type Square with Compare` must also satisfy `Equals`
   (by declaring it, by delegation or by derivation), and the error says so.
-- **`with ... by field`** creates a `.Delegated` implementation: every _required_ member of the trait is forwarded to
-  the field, with `Self` in parameters unwrapped and `Self` in the result wrapped again (only possible for a type with
-  exactly one field; a trait without `Self` in parameters or result can be delegated by any type). Default members
-  come from the trait as usual, so `Meters.max` works through the delegated `compare`. `Adaptation.Delegate` records
-  the field.
+- **`with ... by field`** binds to one element of the `with` list (which may be an `&` group) and creates a
+  `.Delegated` implementation for each trait it names: every _required_ member is forwarded to the field, with
+  `Self` in parameters unwrapped and `Self` in the result wrapped again (only possible for a type with exactly one
+  field, named by `by` itself; a trait without `Self` in parameters or result can be delegated by any type). Default
+  members come from the trait as usual, so `Seconds.max` works through the delegated `compare`.
+  `Adaptation.Delegate` records the field.
 - **Derived implementations** are recorded as `.Derived` and generated where they are used:
 
 | Trait                   | Derived for                                                             | Not derived for                              |
@@ -877,7 +878,7 @@ The catalogue (the ~40 that matter):
 | Supertrait | ``` `Compare` requires `Equals`. `Square` has neither an `equals` nor a derived one ``` |
 | Orphan | ``` `extend String with Show`: neither `String` nor `Show` belongs to this package ``` |
 | Overlap | ``` `String` already implements `Show` (in `std/prelude/src/convert`) ``` |
-| Not delegated | ``` `Meters` has no `multiply`: `Multiply` was not forwarded by `with Add, Subtract, Compare by value` ``` |
+| Not delegated | ``` `Meters` has no `multiply`: `Multiply` was not forwarded by `with Add & Subtract & Compare by value` ``` |
 | Not object-safe here | ``` `equals` cannot be called on a `Show & Hash` value: it needs two values of the same type ``` |
 | List `+` | ``` `List<Encode>` has no `+`: lists have no `Add`. Use `addedAll` ``` |
 | `?` conversion | ``` `IoError` does not convert into `AppError`. Add a case that wraps it, or `extend AppError with From<IoError>` ``` |
@@ -1833,7 +1834,9 @@ _Proposal:_ `by` forwards the _required_ members only; default members come from
 _Reason:_ it needs no `Self` rewrapping for defaults, and a default that is written in terms of the required members
 stays correct by construction.
 
-_Decision:_ accepted.
+_Decision:_ accepted. Refined later: `by` binds to one element of the `with` list, not to the whole list, and only
+on a type with exactly one field named by `by` itself (CONCEPT, "Distinct Types", Decision Log). The forwarding rule
+here is unchanged - it now just applies per trait instead of per type.
 
 **15. Property commands with parentheses.**
 "Property commands": "a _command_ on a field never calls it, it writes it", and "`=` works, too". But

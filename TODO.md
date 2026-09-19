@@ -389,6 +389,9 @@ Falls wir das hier _nicht_ automatisch deriven, sollten wir vielleicht ein impli
       eingepackt (`Seconds + Seconds` ist `Seconds`) - wie bisher.
   - **Wird gelöst** (eigener Agent, nach dem laufenden Merge-Block): beide Parser (`with`-Liste: Element + optionales
     `by`), AST, Checker-Delegation mit der Ein-Feld-Regel, die 8 Stellen, Konzept ("Distinct Types") + Decision Log.
+  - **Erledigt:** `by` hängt jetzt am einzelnen `with`-Element (auch als `&`-Gruppe) statt an der ganzen Liste, mit
+    der Ein-Feld-Regel und den beiden Fehlermeldungen in Checker und beiden Parsern durchgesetzt, und Stage 0
+    delegiert zur Laufzeit ebenso pro Trait.
 
 - Oftmals wird z.B. `Ok(x)` statt `Ok x` geschrieben, ganz oft könnte man `Error a` oder `.SomeThing x, y, z` schreiben. Finde da am besten eine "Best Practice" die das strikt deklariert und an die sich alle halten und passe das rückwirkend auf der Codebase an (eventuell durch den Linter)
   - **Antwort:** Das Konzept hat dafür schon eine Formatter-Canon ("Command Calls"), sie ist nur nicht scharf genug

@@ -389,6 +389,16 @@ public type Bound {
 }
 
 /**
+ * One trait a `type` or a `trait` declaration names, with the field it delegates to, if any: `with Show, Add &
+ * Subtract by value` is `[DelegatedTrait(Show, None), DelegatedTrait(Add, Some("value")), DelegatedTrait(Subtract,
+ * Some("value"))]`, one entry per trait even where an `&` group named several at once.
+ */
+public type DelegatedTrait {
+  capability: TypeId
+  delegate: String?
+}
+
+/**
  * What a `fn`, a method, a case constructor, a field or a `const` is, as a type. A field has no parameters and its
  * type as the result, so everything that holds a value answers the same question.
  */
@@ -433,15 +443,16 @@ public type TypeSignature {
   generics: List<ParameterId>
   /** `Point`, `List<Item>` for a type; the `Self` parameter for a trait. This is what `Self` means in the body. */
   own: TypeId
-  /** `with Show, Encode` of a type, the supertraits of a trait: one `Nominal` of a trait each. */
-  traits: List<TypeId>
+  /**
+   * `with Show, Encode` of a type, the supertraits of a trait: one `Nominal` of a trait each, with its own
+   * delegated field, if `with ... by field` gave it one (gap 14).
+   */
+  traits: List<DelegatedTrait>
   bounds: List<Bound>
   fields: List<FieldSignature>
   cases: List<CaseSignature>
   /** The constants and functions of the body, by name. */
   members: Map<String, SymbolId>
-  /** `with Add, Compare by value`: the field everything required is forwarded to. */
-  delegate: String?
   isNative: Bool
   isShared: Bool
 }
@@ -475,7 +486,7 @@ public type ImplementationOrigin {
   case Declared
   /** `extend X { ... }`: members without a trait, which is the other half of the same table. */
   case Inherent
-  /** `with Add, Compare by value`: every required member is forwarded to the field. */
+  /** `with Add & Compare by value`: every required member is forwarded to the field. */
   case Delegated
   /** `Show`, `Equals`, `Hash`, `Encode`, `Decode`, the `From` of a wrapper case: generated on first use. */
   case Derived
@@ -498,7 +509,7 @@ public type Implementation {
   /** The index of the package in `Workspace.packages`: the unit of coherence, and of `private` (gap 29). */
   package: Int
   members: Map<String, SymbolId>
-  /** `with Add, Compare by value`: the field every *required* member is forwarded to (gap 14). */
+  /** `with Add & Compare by value`: the field every *required* member is forwarded to (gap 14). */
   delegate: String?
   origin: ImplementationOrigin
   /** Where a message about this implementation points: the name of the type, or the target of the `extend`. */

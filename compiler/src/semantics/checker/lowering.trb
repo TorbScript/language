@@ -554,7 +554,9 @@ fn intersectionType(
 ): TypeId {
   var bounds: List<TypeId> = []
   for member in members {
-    const built = typeFromReference(checker, member, scope.forType())
+    // Keep `scope.subject`: an `&` group in a bound position (`with Add & Subtract`, gap 14) fills each member's
+    // defaulted `Self` from the same subject the group itself was asked of, exactly as a lone trait would.
+    const built = typeFromReference(checker, member, scope.copy(position: TypePosition.Type))
     match checker.types.form(built) {
       .Traits(inner) => {
         for bound in inner {

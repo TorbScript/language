@@ -648,11 +648,19 @@ impl Interpreter {
                 if let Some(method) = object.info.methods.borrow().get(name).cloned() {
                     return Some(Value::Function(Rc::new(Function::Declared { info: method, receiver: Some(receiver.clone()) })));
                 }
+                if let Some(field) = object.info.delegated_field_of(name) {
+                    return Some(Value::Function(Rc::new(Function::Delegated { object: object.clone(), field, name })));
+                }
                 natives::is_object_method(name)
                     .then(|| Value::Function(Rc::new(Function::NativeMethod { receiver: receiver.clone(), name })))
             }
-            Value::Object(_) => natives::is_object_method(name)
-                .then(|| Value::Function(Rc::new(Function::NativeMethod { receiver: receiver.clone(), name }))),
+            Value::Object(object) => {
+                if let Some(field) = object.info.delegated_field_of(name) {
+                    return Some(Value::Function(Rc::new(Function::Delegated { object: object.clone(), field, name })));
+                }
+                natives::is_object_method(name)
+                    .then(|| Value::Function(Rc::new(Function::NativeMethod { receiver: receiver.clone(), name })))
+            }
             _ => {
                 let method = self.program.extensions.get(receiver.type_name())?.get(name)?.clone();
                 Some(Value::Function(Rc::new(Function::Declared { info: method, receiver: Some(receiver.clone()) })))
@@ -898,7 +906,7 @@ impl Interpreter {
             return Ok(ordering);
         }
         if let Value::Object(object) = left {
-            if object.info.methods.borrow().contains_key("compare") {
+            if object.info.methods.borrow().contains_key("compare") || object.info.delegated_field_of("compare").is_some() {
                 let result = self.call_method_by_name(left, "compare", vec![right.clone()])?;
                 if let Value::Object(ordering) = &result {
                     match ordering.case.map(|case| ordering.info.cases[case].name) {
@@ -1525,6 +1533,13 @@ impl Interpreter {
                 _ => {}
             }
         }
+        // `with Add & Subtract by value`: a required member without a body of its own is forwarded to the field
+        if let Value::Object(object) = &receiver {
+            if let Some(field) = object.info.delegated_field_of(name) {
+                let arguments = self.eval_arguments(arguments, environment)?;
+                return self.delegated_call(object, field, name, arguments.positional);
+            }
+        }
         let arguments = self.eval_arguments(arguments, environment)?;
         if !natives::is_mutating(&receiver, name) {
             let mut receiver = receiver;
@@ -1781,6 +1796,10 @@ impl Interpreter {
                     let mut receiver = receiver.clone();
                     natives::call_method(self, &mut receiver, name, Arguments::positional(arguments))
                 }
+                Function::Delegated { object, field, name } => {
+                    let (object, field, name) = (object.clone(), *field, *name);
+                    self.delegated_call(&object, field, name, arguments)
+                }
                 Function::Constructor { info, case } => self.construct(info, *case, Arguments::positional(arguments)),
                 Function::Conversion(info) => self.convert(info, Arguments::positional(arguments)),
                 Function::Wrap(name) => wrap(name, arguments),
@@ -1874,8 +1893,43 @@ impl Interpreter {
                 return self.call_function(&function, arguments);
             }
         }
+        if let Value::Object(object) = receiver {
+            if let Some(field) = object.info.delegated_field_of(name) {
+                return self.delegated_call(object, field, name, arguments);
+            }
+        }
         let mut receiver = receiver.clone();
         natives::call_method(self, &mut receiver, name, Arguments::positional(arguments))
+    }
+
+    /// `with Add & Subtract by value`: unwraps a `Self` argument to the field, calls the field's own method, and
+    /// wraps a result of the field's type back into `Self` (`Seconds + Seconds` is `Seconds`, not `Int`). The
+    /// interpreter has no type checker, so "of the field's type" is decided dynamically, the same way the field
+    /// itself was picked by name and not by signature.
+    fn delegated_call(&mut self, object: &Rc<Object>, field: &'static str, name: &'static str, arguments: Vec<Value>) -> Eval {
+        let Some(position) = object.info.field_position(object.case, field) else {
+            return Err(failure(format!("`{}` has no field `{field}` to delegate to", object.info.name)));
+        };
+        let receiver = object.fields[position].clone();
+        let unwrapped: Vec<Value> = arguments
+            .into_iter()
+            .map(|value| match &value {
+                Value::Object(other) if Rc::ptr_eq(&other.info, &object.info) => other.fields[position].clone(),
+                _ => value,
+            })
+            .collect();
+        // `add`, `subtract`, ... are never *called* on a native number or a `String` (`operate` is the only path to
+        // them, the same way `+` reaches a hand-written `add`), so a delegated arithmetic member goes through it too.
+        let result = match (arithmetic_operator_of(name), unwrapped.as_slice()) {
+            (Some(operator), [only]) => self.operate(operator, receiver.clone(), only.clone()),
+            _ => self.call_method_by_name(&receiver, name, unwrapped),
+        }?;
+        if result.type_name() == receiver.type_name() {
+            let mut fields = object.fields.clone();
+            fields[position] = result;
+            return Ok(Value::Object(Rc::new(Object { info: object.info.clone(), case: object.case, fields })));
+        }
+        Ok(result)
     }
 
     /// The one constructor of a type: fields in declaration order, positional or labeled, defaults for the rest.
@@ -2074,6 +2128,20 @@ fn to_float(value: Value) -> Value {
     match value {
         Value::Int(value) => Value::Float(value as f64),
         other => other,
+    }
+}
+
+/// The reverse of `operate`'s own name-per-operator mapping: what a delegated `Add`, `Subtract`, `Multiply`,
+/// `Divide` or `Remainder` calls its required member - a native number or a `String` has no callable method for
+/// one, only the operator itself, so `delegated_call` has to reach it the same way `+` does.
+fn arithmetic_operator_of(name: &str) -> Option<BinaryOperator> {
+    match name {
+        "add" => Some(BinaryOperator::Add),
+        "subtract" => Some(BinaryOperator::Subtract),
+        "multiply" => Some(BinaryOperator::Multiply),
+        "divide" => Some(BinaryOperator::Divide),
+        "remainder" => Some(BinaryOperator::Remainder),
+        _ => None,
     }
 }
 

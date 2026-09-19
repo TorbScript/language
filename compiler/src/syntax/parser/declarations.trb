@@ -1,6 +1,6 @@
 use TokenKind, Keyword, TextPart from "../token"
 use Declaration, DeclarationKind, Modifiers, Visibility, UseDeclaration, UseItems, UseSource from "../ast"
-use FunctionDeclaration, Parameter, GenericParameter, WhereClause, TypeReference from "../ast"
+use FunctionDeclaration, Parameter, GenericParameter, WhereClause, TypeReference, TraitClause from "../ast"
 use TypeDeclaration, AliasDeclaration, TraitDeclaration, ExtendDeclaration, ForeignDeclaration from "../ast"
 use Member, MemberKind, Field, CaseDeclaration, Name from "../ast"
 use Parser from "./parser"
@@ -204,7 +204,10 @@ fn parseWhereClauses(var parser: Parser): List<WhereClause> {
   clauses
 }
 
-/** `with Add, Compare` */
+/**
+ * `with Add, Compare`, for a `trait`'s supertraits and an `extend`'s implementations - neither has a field of its
+ * own to delegate to, so a stray `by` is rejected here rather than parsed and ignored.
+ */
 fn parseTraitList(var parser: Parser): List<TypeReference> {
   if !parser.eatKeyword(Keyword.With) {
     return []
@@ -213,7 +216,37 @@ fn parseTraitList(var parser: Parser): List<TypeReference> {
   while parser.eat(TokenKind.Comma) {
     traits.add(parseType(parser))
   }
+  if parser.isAtWord("by") {
+    parser.errorHere("`by` delegates to a field: only a `type` has fields to name")
+    parser.bump()
+    parser.name()
+  }
   traits
+}
+
+/**
+ * `with Show, Add & Subtract by value, Compare by value`: `by` binds to the one element directly in front of it,
+ * which may be an `&` group.
+ */
+fn parseDelegatedTraitList(var parser: Parser): List<TraitClause> {
+  if !parser.eatKeyword(Keyword.With) {
+    return []
+  }
+  var traits = [parseTraitClause(parser)]
+  while parser.eat(TokenKind.Comma) {
+    traits.add(parseTraitClause(parser))
+  }
+  traits
+}
+
+fn parseTraitClause(var parser: Parser): TraitClause {
+  const capability = parseType(parser)
+  var delegate: Name? = None
+  if parser.isAtWord("by") {
+    parser.bump()
+    delegate = Some(parser.name())
+  }
+  TraitClause(capability, delegate)
 }
 
 fn parseTypeDeclaration(var parser: Parser): DeclarationKind {
@@ -223,14 +256,9 @@ fn parseTypeDeclaration(var parser: Parser): DeclarationKind {
   if parser.eat(TokenKind.Equal) {
     return DeclarationKind.Alias(AliasDeclaration(name, generics, parseType(parser)))
   }
-  const traits = parseTraitList(parser)
-  var delegate: Name? = None
-  if parser.isAtWord("by") {
-    parser.bump()
-    delegate = Some(parser.name())
-  }
+  const traits = parseDelegatedTraitList(parser)
   const whereClauses = parseWhereClauses(parser)
-  DeclarationKind.Type(TypeDeclaration(name, generics, traits, delegate, whereClauses, parseMembers(parser)))
+  DeclarationKind.Type(TypeDeclaration(name, generics, traits, whereClauses, parseMembers(parser)))
 }
 
 fn parseTrait(var parser: Parser): DeclarationKind {

@@ -185,7 +185,8 @@ impl Parser<'_> {
         }
     }
 
-    /// `with Add, Compare`
+    /// `with Add, Compare`, for a `trait`'s supertraits and an `extend`'s implementations - neither has a field of
+    /// its own to delegate to, so a stray `by` is rejected here rather than parsed and ignored.
     fn trait_list(&mut self) -> Vec<TypeReference> {
         if !self.eat_keyword(Keyword::With) {
             return Vec::new();
@@ -194,7 +195,36 @@ impl Parser<'_> {
         while self.eat(TokenKind::Comma) {
             traits.push(self.type_reference());
         }
+        if self.at_word("by") {
+            self.error_here("`by` delegates to a field: only a `type` has fields to name");
+            self.bump();
+            self.name();
+        }
         traits
+    }
+
+    /// `with Show, Add & Subtract by value, Compare by value`: `by` binds to the one element directly in front of
+    /// it, which may be an `&` group.
+    fn delegated_trait_list(&mut self) -> Vec<TraitClause> {
+        if !self.eat_keyword(Keyword::With) {
+            return Vec::new();
+        }
+        let mut traits = vec![self.trait_clause()];
+        while self.eat(TokenKind::Comma) {
+            traits.push(self.trait_clause());
+        }
+        traits
+    }
+
+    fn trait_clause(&mut self) -> TraitClause {
+        let capability = self.type_reference();
+        let delegate = if self.at_word("by") {
+            self.bump();
+            Some(self.name())
+        } else {
+            None
+        };
+        TraitClause { capability, delegate }
     }
 
     fn type_declaration(&mut self) -> DeclarationKind {
@@ -204,16 +234,10 @@ impl Parser<'_> {
         if self.eat(TokenKind::Equal) {
             return DeclarationKind::Alias(AliasDeclaration { name, generics, target: self.type_reference() });
         }
-        let traits = self.trait_list();
-        let delegate = if self.at_word("by") {
-            self.bump();
-            Some(self.name())
-        } else {
-            None
-        };
+        let traits = self.delegated_trait_list();
         let where_clauses = self.where_clauses();
         let members = self.members();
-        DeclarationKind::Type(TypeDeclaration { name, generics, traits, delegate, where_clauses, members })
+        DeclarationKind::Type(TypeDeclaration { name, generics, traits, where_clauses, members })
     }
 
     fn trait_declaration(&mut self) -> DeclarationKind {

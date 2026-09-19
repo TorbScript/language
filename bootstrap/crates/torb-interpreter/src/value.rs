@@ -112,6 +112,13 @@ pub enum Function {
         receiver: Value,
         name: &'static str,
     },
+    /// `with Add & Subtract by value`: a required member with no body of its own, taken as a value (`self.compare`
+    /// inside of `max`'s default body, `compare(other)` being `self.compare(other)`) instead of called outright.
+    Delegated {
+        object: Rc<Object>,
+        field: &'static str,
+        name: &'static str,
+    },
     Constructor {
         info: Rc<TypeInfo>,
         case: Option<usize>,

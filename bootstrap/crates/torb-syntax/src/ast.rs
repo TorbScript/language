@@ -123,11 +123,18 @@ pub struct Parameter {
 pub struct TypeDeclaration {
     pub name: Name,
     pub generics: Vec<GenericParameter>,
-    pub traits: Vec<TypeReference>,
-    /// `with Add, Compare by value`
-    pub delegate: Option<Name>,
+    pub traits: Vec<TraitClause>,
     pub where_clauses: Vec<WhereClause>,
     pub members: Vec<Member>,
+}
+
+/// One element of a `with` list: `Add & Subtract by value` is one clause, its capability an intersection of two
+/// traits. `by` binds to this element alone, not to the list (`with Show, Add & Subtract by value, Compare by value`
+/// derives `Show` and delegates the other two, each to `value`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TraitClause {
+    pub capability: TypeReference,
+    pub delegate: Option<Name>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
