@@ -922,3 +922,15 @@ Wenn nicht, was bedeutet, bewirkt es?
     Meldung). `Source.next(var self)`, `Sink.add(var self, item)`, `finish(var self)` - spiegelt `Iterator.next(var
     self)`; eine Quelle, aus der gelesen wird, steht in einer `var`-Bindung, `const` ist die Nur-Lese-Sicht wie bei
     jedem Shared-Objekt. Die Closure-Kisten werden gewöhnliche Shared-Typen mit `var`-Feldern.
+
+- (Chat, 2026-09-20) `...items: Item` ist eine `List<Item>` - wäre `Array<Item, count>`, ein Tupel oder ein (lazy)
+  `Iterable` schlauer?
+  - **Antwort / entschieden: es bleibt `List<Item>`.** `Array<Item, count>` macht jede variadische Funktion generisch
+    über die Anzahl (eine Instanz pro Aufruflänge, nicht als Funktionswert oder Trait-Member nutzbar) und kann kein
+    Spread (`...someSet` hat keine statische Länge). Ein Tupel bräuchte variadische Generics. Ein lazy `Iterable`
+    bricht "Argumente sind vor dem Aufruf ausgewertet" (ein gespreizter `map`-Ausdruck mit Seiteneffekten liefe im
+    Rumpf, vielleicht zweimal, vielleicht nie) und nimmt dem Rumpf `length()`, Index und zweites Durchlaufen. C# hat
+    `params Span<T>`/`IEnumerable<T>` nur wegen der Heap-Kosten nachgerüstet - die hat TorbScript so nicht: Listen sind
+    Werte mit Copy-on-Write, `f(...someList)` teilt den Speicher in O(1), `List.of` gibt `items` ohne Kopie zurück.
+    Dass eine Argumentliste aus Literalen, die den Aufruf nicht überlebt, gar keinen Heap braucht, ist eine
+    unsichtbare Back-End-Optimierung (Kandidat für 5.14), keine Frage des Typs.
