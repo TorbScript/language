@@ -106,3 +106,54 @@ double torb_round_f64(double value) {
 bool torb_is_nan_f64(double value) {
   return isnan(value) ? true : false;
 }
+
+/*
+ * `std/math`: thin wrappers over `<math.h>`. A domain error (`torb_math_natural_log(-1.0)`,
+ * `torb_math_arc_sine(2.0)`, ...) answers `nan` from libm itself, exactly like `torb_square_root_f64` already does;
+ * none of these ever panics. Bit-identical results across platforms are only guaranteed where libm itself guarantees
+ * them - the runtime does not try to improve on libm.
+ */
+
+double torb_math_power(double base, double exponent) {
+  return pow(base, exponent);
+}
+
+double torb_math_exponential(double value) {
+  return exp(value);
+}
+
+double torb_math_natural_log(double value) {
+  return log(value);
+}
+
+double torb_math_logarithm(double value, double base) {
+  return log(value) / log(base);
+}
+
+double torb_math_sine(double value) {
+  return sin(value);
+}
+
+double torb_math_cosine(double value) {
+  return cos(value);
+}
+
+double torb_math_tangent(double value) {
+  return tan(value);
+}
+
+double torb_math_arc_sine(double value) {
+  return asin(value);
+}
+
+double torb_math_arc_cosine(double value) {
+  return acos(value);
+}
+
+double torb_math_arc_tangent(double value) {
+  return atan(value);
+}
+
+double torb_math_arc_tangent2(double y, double x) {
+  return atan2(y, x);
+}

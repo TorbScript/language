@@ -24,7 +24,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 
 | File                  | Contains                                                                                  |
 |-----------------------|-------------------------------------------------------------------------------------------|
-| `include/torb.h`      | The public ABI: the header, `torb_text`, `torb_list`, `torb_map`, the closure and object shapes, panics, allocation, element descriptors, console, process, files |
+| `include/torb.h`      | The public ABI: the header, `torb_text`, `torb_list`, `torb_map`, the closure and object shapes, panics, allocation, element descriptors, console, process, files, `torb_file`, `Instant`/`Duration`, `std/math` |
 | `include/torb_number.h` | The checked arithmetic of all eight integer widths as `static inline`, plus the conversions |
 | `include/torb_natives.h` | Generated from the manifest by `torb natives --header`. Do not edit                      |
 | `memory.c`            | Block header, non-atomic counts, retain/release/is-unique/make-unique, immortal values, the live-block counter |
@@ -32,16 +32,20 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `text.c`              | UTF-8, slices, concatenation, comparison, hashing, `Show`, float formatting, parsing       |
 | `list.c`              | The one contiguous list: growth, shared slices, copy on write, a stable merge sort         |
 | `map.c`               | The one insertion-ordered hash table, and the set on top of it                             |
-| `number.c`            | The float routines, the total order of gap 5, the wrapping pair, the checked narrowings     |
+| `number.c`            | The float routines, the total order of gap 5, the wrapping pair, the checked narrowings, and `std/math` (thin `<math.h>` wrappers) |
 | `console.c`           | `print`, `printError`, `readLine`                                                          |
 | `process.c`           | `Process.arguments`, `Process.exit`                                                        |
-| `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`           |
-| `platform.c`          | **The only file with an `#ifdef _WIN32`**: path kind, working directory, directory listing, whole-file read and write |
+| `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open handle (`File.open`/`readAll`/`close`) |
+| `clock.c`             | `std/time`: `Clock.now` and the arithmetic of `Instant` and `Duration`                     |
+| `environment.c`       | `std/environment`: `Environment.get`                                                       |
+| `platform.c`          | **The only file with an `#ifdef _WIN32`**: path kind, working directory, directory listing, whole-file read and write, a monotonic clock reading, setting an environment variable (for `runtime/tests` only) |
 | `tests/`              | `harness.h`/`harness.c` plus one `*_test.c` per area, one executable                       |
 
-Not here yet, by design: `task.c` (milestone 7.3), `collect.c` (the cycle collector, 7.7), `clock.c` and
-`environment.c` (5.12). The manifest records every one of those as `.Planned` with its milestone, so using one is a
-compile error naming the milestone and never a link error.
+Not here yet, by design: `task.c` (milestone 7.3), `collect.c` (the cycle collector, 7.7). `File.lines` is also still
+`.Planned`, for 5.7 rather than 5.12: it answers `Result<Iterable<String>, IoError>`, and `Iterable` is a trait-typed
+value over an iterator type - the ABI 5.7 defines. Reading the whole file to fake a streaming iterator now would mean
+inventing that ABI early and probably wrong, so it waits. The manifest records every one of these as `.Planned` with
+its milestone, so using one is a compile error naming the milestone and never a link error.
 
 ## The ABI in one page
 
@@ -176,6 +180,27 @@ storage of capacity zero. Shrinking that away would mean a fourth word in every 
 
 **A text and a list are at most 4 GiB and 2^32 elements.** `offset` and `length` are `uint32_t`, which keeps
 `torb_text` at 16 bytes. Both limits panic rather than wrap.
+
+**`Instant` and `Duration` are nanoseconds as a plain `int64_t`.** Both are native value types with no fields the
+language can see, so the representation is the runtime's choice: `torb_instant` is one monotonic reading from an
+unspecified per-process origin (only a difference of two is ever meaningful), `torb_duration` a signed span. About
+292 years fit before an `int64_t` nanosecond count overflows, which a monotonic clock within one process never
+approaches; `Instant.subtract` still reuses the checked `Int64` subtraction so that never-reached case panics rather
+than silently wrapping. `Duration.show()` is the fractional number of seconds through `torb_show_f64`, then `s`
+(`"1.5s"`), reusing the shortest round-tripping float formatting instead of a second one.
+
+**`std/math` is thin wrappers over `<math.h>`, nothing more.** A domain error (`naturalLog(-1.0)`, `arcSine(2.0)`)
+answers `nan` the way libm already does, never a panic - the same rule `Float64.squareRoot` follows. Bit-identical
+results across platforms hold only where libm itself guarantees them; the runtime does not add a portable
+implementation on top to fix that, which is a real (if narrow) gap in the conformance suite's cross-platform promise.
+
+**`File` is a `shared type` the runtime owns end to end.** `torb_file` (torb.h) is a counted block like any other -
+header first, so the generic `torb_retain`/`torb_release` already work on it - holding the path (for error messages)
+and the OS handle. The language has no destructors, so `torb_file_drop`, the block's `torb_drop_function`, closes the
+handle if the program never called `close`: a `File` a program drops on the floor still cannot leak the OS handle.
+`close` is idempotent and reading a closed file is the ordinary `Result`/`IoError` path, never a panic.
+`runtime/tests/file_test.c` proves the handle is not leaked by releasing an unclosed `File` and then deleting its
+file - which an OS that locks open files (Windows) would refuse if the handle were still open.
 
 ## What is deliberately approximate
 

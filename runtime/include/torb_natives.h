@@ -29,20 +29,40 @@ torb_char torb_char_to_lower_case(torb_char character);
 torb_char torb_char_to_upper_case(torb_char character);
 /* Char.tryFrom */
 bool torb_char_try_from_i64(int64_t value, torb_char *out);
+/* Clock.now */
+torb_instant torb_clock_now(void);
 /* Float64.compare */
 int32_t torb_compare_f64(double first, double second);
 /* Int64.tryFrom */
 bool torb_convert_f64_i64_checked(double value, int64_t *out);
 /* Int32.tryFrom */
 bool torb_convert_i64_i32_checked(int64_t value, int32_t *out);
+/* Duration.compare */
+int32_t torb_duration_compare(torb_duration first, torb_duration second);
+/* Duration.equals */
+bool torb_duration_equals(torb_duration first, torb_duration second);
+/* Int64.seconds */
+torb_duration torb_duration_of_seconds(int64_t seconds, torb_location at);
+/* Duration.seconds */
+double torb_duration_seconds(torb_duration duration);
+/* Duration.show */
+torb_text torb_duration_show(torb_duration duration);
+/* Environment.get */
+bool torb_environment_get(torb_text name, torb_text *out);
 /* File.absolutePath */
 bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);
+/* File.close */
+void torb_file_close(torb_file *self);
 /* File.exists */
 bool torb_file_exists(torb_text path);
 /* File.isDirectory */
 bool torb_file_is_directory(torb_text path);
 /* File.list */
 bool torb_file_list(torb_text path, torb_list *out, torb_text *error);
+/* File.open */
+bool torb_file_open(torb_text path, torb_file **out, torb_text *error);
+/* File.readAll */
+bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error);
 /* File.readText */
 bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error);
 /* File.writeText */
@@ -57,6 +77,12 @@ uint64_t torb_hash_char(torb_char character);
 uint64_t torb_hash_i64(int64_t value);
 /* UInt16.hash, UInt32.hash, UInt64.hash, UInt8.hash */
 uint64_t torb_hash_u64(uint64_t value);
+/* Instant.compare */
+int32_t torb_instant_compare(torb_instant first, torb_instant second);
+/* Instant.equals */
+bool torb_instant_equals(torb_instant first, torb_instant second);
+/* Instant.subtract */
+torb_duration torb_instant_subtract(torb_instant first, torb_instant second, torb_location at);
 /* Float64.isNaN */
 bool torb_is_nan_f64(double value);
 /* ArrayList.add, TrieList.add */
@@ -97,6 +123,28 @@ bool torb_map_remove(torb_map *map, const void *key, void *out);
 void torb_map_set(torb_map *map, const void *key, const void *value);
 /* HashMap.withCapacity */
 torb_map torb_map_with_capacity(const torb_element *key, const torb_element *value, int64_t capacity, torb_location at);
+/* arcCosine */
+double torb_math_arc_cosine(double value);
+/* arcSine */
+double torb_math_arc_sine(double value);
+/* arcTangent */
+double torb_math_arc_tangent(double value);
+/* arcTangent2 */
+double torb_math_arc_tangent2(double y, double x);
+/* cosine */
+double torb_math_cosine(double value);
+/* exponential */
+double torb_math_exponential(double value);
+/* logarithm */
+double torb_math_logarithm(double value, double base);
+/* naturalLog */
+double torb_math_natural_log(double value);
+/* power */
+double torb_math_power(double base, double exponent);
+/* sine */
+double torb_math_sine(double value);
+/* tangent */
+double torb_math_tangent(double value);
 /* UInt64.multipliedWrapping */
 uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);
 /* panic */

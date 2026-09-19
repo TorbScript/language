@@ -657,9 +657,38 @@ bool torb_file_list(torb_text path, torb_list *out, torb_text *error);
  */
 bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);
 
+/**
+ * `File`: a `native shared type` (BACKEND 3.7) with no fields the language can see, so the runtime owns its whole
+ * representation - the same way `torb_list` is what `ArrayList` is. `path` is kept only so the message of an
+ * `IoError` raised after the handle has already been closed can still name the file; `handle` is a `FILE *`, owned
+ * while non-`NULL` and `NULL` once closed.
+ *
+ * The language has no destructors, so a `File` the program never closes must still not leak the OS handle:
+ * `torb_file_drop` is its `torb_drop_function`, called by `torb_release` when the last reference goes away, and it
+ * closes the handle if `close` never ran. `close` itself is idempotent - closing an already-closed file, and reading
+ * one, both follow the ordinary `Result`/`IoError` path and never panic, exactly like every other IO failure here.
+ *
+ * There is no `torb_file_retain`/`torb_file_release`: the header is the first member, so the generic `torb_retain`
+ * and `torb_release(block, torb_file_drop)` already work on it, the same as any other counted block.
+ */
+typedef struct torb_file {
+  torb_header header;
+  torb_text path;
+  void *handle;
+} torb_file;
+
+/** `path` borrowed. Opens for reading. Result owned (a fresh block of count 1); `*error` owned on failure. */
+bool torb_file_open(torb_text path, torb_file **out, torb_text *error);
+/** `self` borrowed: a `shared type` value is the one heap object, never copied. Reads everything left unread. */
+bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error);
+/** `self` borrowed. Idempotent. */
+void torb_file_close(torb_file *self);
+/** The `torb_drop_function` of `torb_file`: closes the handle if `close` never ran, then releases `path`. */
+void torb_file_drop(void *block);
+
 /* ---------------------------------------------------------------------------------------- the platform layer --- */
 
-/** Windows and POSIX behind five functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32`. */
+/** Windows and POSIX behind seven functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32`. */
 
 typedef enum torb_path_kind {
   TORB_PATH_MISSING = 0,
@@ -679,6 +708,76 @@ bool torb_platform_list_directory(const char *path, torb_list *out, const char *
 /** Read a whole file. `*bytes` owned (`torb_raw_free`). False on failure with a libc message in `*message`. */
 bool torb_platform_read_file(const char *path, uint8_t **bytes, size_t *length, const char **message);
 bool torb_platform_write_file(const char *path, const uint8_t *bytes, size_t length, const char **message);
+/** A monotonic clock reading, in nanoseconds, from an unspecified origin. Never goes backwards within one process. */
+int64_t torb_platform_monotonic_nanoseconds(void);
+/**
+ * `name` and `value` borrowed, NUL terminated. Only `runtime/tests` calls this - no native sets an environment
+ * variable, so there is nothing above the platform layer to route it through. False on failure.
+ */
+bool torb_platform_set_environment_variable(const char *name, const char *value);
+
+/* ------------------------------------------------------------------------------------------------------- time --- */
+
+/**
+ * `Instant`: one monotonic clock reading, in nanoseconds since an unspecified per-process origin - only the
+ * difference of two is ever meaningful, never the value on its own (`std/time`'s own doc comment says so).
+ * `Duration`: a signed nanosecond span, `Instant - Instant` or a length of time asked for directly
+ * (`Int64.seconds()`). Both are native value types with no fields the language can see, so like `Instant`/`Duration`
+ * being plain numbers rather than counted blocks, nanoseconds as `int64_t` is a free choice: about 292 years fit
+ * before it overflows, which a monotonic clock reading within one process never approaches.
+ */
+typedef int64_t torb_instant;
+typedef int64_t torb_duration;
+
+/** The monotonic clock. Needs the `std/time` capability inside a sandboxed script (7.4). */
+torb_instant torb_clock_now(void);
+
+bool torb_instant_equals(torb_instant first, torb_instant second);
+/** -1, 0 or 1: the emitter maps it to `Ordering`. */
+int32_t torb_instant_compare(torb_instant first, torb_instant second);
+/** `first - second`. Reuses the checked `Int64` subtraction, so a difference that could never happen in practice
+ * (billions of years apart) panics instead of silently wrapping. */
+torb_duration torb_instant_subtract(torb_instant first, torb_instant second, torb_location at);
+
+bool torb_duration_equals(torb_duration first, torb_duration second);
+int32_t torb_duration_compare(torb_duration first, torb_duration second);
+/** `"1.5s"`: fractional seconds with the shortest round-tripping decimal (`torb_show_f64`), then `s`. Result owned. */
+torb_text torb_duration_show(torb_duration duration);
+/** As a fractional number of seconds: `(Clock.now() - start).seconds()`. */
+double torb_duration_seconds(torb_duration duration);
+/** `Int64.seconds()`: whole seconds to a `Duration`. Panics on overflow like any other multiplication. */
+torb_duration torb_duration_of_seconds(int64_t seconds, torb_location at);
+
+/* ---------------------------------------------------------------------------------------------- environment --- */
+
+/**
+ * `name` borrowed. `Environment.get`: false when the variable is not set. `*out` owned on success. Capability
+ * filtering for a sandboxed script (`environment "APP_*"`) is a front-end concern of milestone 7.4; every variable
+ * `getenv` can see is visible here, which is what a native, non-sandboxed program expects.
+ */
+bool torb_environment_get(torb_text name, torb_text *out);
+
+/* ---------------------------------------------------------------------------------------------------- math --- */
+
+/**
+ * Thin wrappers over `<math.h>`. A domain error (`naturalLog` of a non-positive number, `arcSine` outside
+ * `[-1, 1]`, ...) answers `nan`, exactly like the float methods already do (`Float64.squareRoot`); none of these ever
+ * panics. Results are bit-identical across platforms only where libm itself guarantees it - the runtime does not try
+ * to improve on libm.
+ */
+double torb_math_power(double base, double exponent);
+double torb_math_exponential(double value);
+double torb_math_natural_log(double value);
+/** `logarithm(value, base)`: `naturalLog(value) / naturalLog(base)`. */
+double torb_math_logarithm(double value, double base);
+double torb_math_sine(double value);
+double torb_math_cosine(double value);
+double torb_math_tangent(double value);
+double torb_math_arc_sine(double value);
+double torb_math_arc_cosine(double value);
+double torb_math_arc_tangent(double value);
+/** `arcTangent(y / x)`, using the sign of both to pick the correct quadrant (`atan2`). */
+double torb_math_arc_tangent2(double y, double x);
 
 /* ---------------------------------------------------------------------------------------------------- hashing --- */
 

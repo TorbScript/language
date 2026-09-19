@@ -195,6 +195,46 @@ TORB_TEST(parsing_integers_checks_the_range) {
   TORB_CHECK(!parse_radix("g", 16, &value));
 }
 
+/** `|a - b| < 1e-9`, for the results that are not exact in `double` (a logarithm in another base, `arcTangent2`). */
+static bool close_enough(double a, double b) {
+  double difference = a - b;
+  if (difference < 0.0) {
+    difference = -difference;
+  }
+  return difference < 1e-9;
+}
+
+TORB_TEST(math_functions_match_known_values) {
+  TORB_CHECK(torb_math_power(2.0, 10.0) == 1024.0);
+  TORB_CHECK(torb_math_exponential(0.0) == 1.0);
+  TORB_CHECK(torb_math_natural_log(1.0) == 0.0);
+  TORB_CHECK(close_enough(torb_math_logarithm(8.0, 2.0), 3.0));
+  TORB_CHECK(torb_math_sine(0.0) == 0.0);
+  TORB_CHECK(torb_math_cosine(0.0) == 1.0);
+  TORB_CHECK(torb_math_tangent(0.0) == 0.0);
+  TORB_CHECK(torb_math_arc_sine(0.0) == 0.0);
+  TORB_CHECK(torb_math_arc_cosine(1.0) == 0.0);
+  TORB_CHECK(torb_math_arc_tangent(0.0) == 0.0);
+  TORB_CHECK(close_enough(torb_math_arc_tangent2(1.0, 1.0), 0.7853981633974483));
+  /* `arcTangent2` picks the quadrant from the sign of both arguments, which a plain `arcTangent(y / x)` cannot. */
+  TORB_CHECK(close_enough(torb_math_arc_tangent2(1.0, -1.0), 2.356194490192345));
+}
+
+TORB_TEST(math_domain_errors_answer_nan_and_never_panic) {
+  TORB_CHECK(torb_is_nan_f64(torb_math_natural_log(-1.0)));
+  TORB_CHECK(torb_is_nan_f64(torb_math_arc_sine(2.0)));
+  TORB_CHECK(torb_is_nan_f64(torb_math_arc_sine(-2.0)));
+  TORB_CHECK(torb_is_nan_f64(torb_math_arc_cosine(2.0)));
+  TORB_CHECK(torb_is_nan_f64(torb_math_power(-1.0, 0.5)));
+  /* A pole, not a domain error: `log(0)` is `-infinity`, which is still not a panic. */
+  {
+    double zero = 0.0;
+    double negative_infinity = -1.0 / zero;
+    TORB_CHECK(torb_math_natural_log(0.0) == negative_infinity);
+    TORB_CHECK(!torb_is_nan_f64(torb_math_natural_log(0.0)));
+  }
+}
+
 void torb_register_number_tests(void) {
   TORB_ADD(addition_overflows_at_every_width);
   TORB_ADD(subtraction_overflows_at_every_width);
@@ -209,4 +249,6 @@ void torb_register_number_tests(void) {
   TORB_ADD(the_narrowing_conversions_check_their_range);
   TORB_ADD(the_total_order_of_floats_puts_nan_above_everything);
   TORB_ADD(parsing_integers_checks_the_range);
+  TORB_ADD(math_functions_match_known_values);
+  TORB_ADD(math_domain_errors_answer_nan_and_never_panic);
 }

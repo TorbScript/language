@@ -564,11 +564,26 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "torb_file_absolute_path",
     "bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);",
   ))
-  // An open handle is a `shared type`, which arrives with 5.9, and `lines` needs an iterator.
-  entries.add(plannedRuntimeOf("File.open", "torb_file_open", "5.12"))
-  entries.add(plannedRuntimeOf("File.readAll", "torb_file_read_all", "5.12"))
-  entries.add(plannedRuntimeOf("File.close", "torb_file_close", "5.12"))
-  entries.add(plannedRuntimeOf("File.lines", "torb_file_lines", "5.12"))
+  // `File` is a `shared type`: the runtime owns its whole representation (`torb_file` in torb.h, header first,
+  // retained and released generically like any other counted block) and its `torb_drop_function` is
+  // `torb_file_drop`, which closes the handle if `close` never ran - the language has no destructors, so a leaked
+  // reference must not leak the OS handle either. Emitting a call to one of these three still needs the `shared
+  // type` lowering of 5.9; the runtime side is ready now.
+  entries.add(runtimeOf(
+    "File.open",
+    "torb_file_open",
+    "bool torb_file_open(torb_text path, torb_file **out, torb_text *error);",
+  ))
+  entries.add(runtimeOf(
+    "File.readAll",
+    "torb_file_read_all",
+    "bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error);",
+  ))
+  entries.add(runtimeOf("File.close", "torb_file_close", "void torb_file_close(torb_file *self);"))
+  // `lines` answers `Result<Iterable<String>, IoError>`; `Iterable` is a trait-typed value over an iterator type,
+  // which is the ABI of 5.7 (see `String.chars` above) - reading the whole file now to fake it would invent that
+  // ABI early instead of waiting for the real one.
+  entries.add(plannedRuntimeOf("File.lines", "torb_file_lines", "5.7"))
 
   entries.add(runtimeOf("readLine", "torb_read_line", "bool torb_read_line(torb_text *out);"))
 
@@ -580,28 +595,86 @@ fn fileEntries(var entries: List<NativeEntry>) {
   entries.add(runtimeOf("Process.exit", "torb_process_exit", "void torb_process_exit(int64_t code);"))
 }
 
-fn plannedPackageEntries(var entries: List<NativeEntry>) {
-  const mathFunctions = [
-    "power", "exponential", "naturalLog", "logarithm", "sine", "cosine", "tangent", "arcSine", "arcCosine",
-    "arcTangent", "arcTangent2",
-  ]
-  for name in mathFunctions {
-    entries.add(plannedRuntimeOf(name, "torb_math_{name}", "5.12"))
-  }
+/** `std/math`: everything is a thin wrapper over `<math.h>` in `number.c`, so there is one entry per function. */
+fn mathEntries(var entries: List<NativeEntry>) {
+  entries.add(runtimeOf("power", "torb_math_power", "double torb_math_power(double base, double exponent);"))
+  entries.add(runtimeOf("exponential", "torb_math_exponential", "double torb_math_exponential(double value);"))
+  entries.add(runtimeOf("naturalLog", "torb_math_natural_log", "double torb_math_natural_log(double value);"))
+  entries.add(runtimeOf(
+    "logarithm",
+    "torb_math_logarithm",
+    "double torb_math_logarithm(double value, double base);",
+  ))
+  entries.add(runtimeOf("sine", "torb_math_sine", "double torb_math_sine(double value);"))
+  entries.add(runtimeOf("cosine", "torb_math_cosine", "double torb_math_cosine(double value);"))
+  entries.add(runtimeOf("tangent", "torb_math_tangent", "double torb_math_tangent(double value);"))
+  entries.add(runtimeOf("arcSine", "torb_math_arc_sine", "double torb_math_arc_sine(double value);"))
+  entries.add(runtimeOf("arcCosine", "torb_math_arc_cosine", "double torb_math_arc_cosine(double value);"))
+  entries.add(runtimeOf("arcTangent", "torb_math_arc_tangent", "double torb_math_arc_tangent(double value);"))
+  entries.add(runtimeOf(
+    "arcTangent2",
+    "torb_math_arc_tangent2",
+    "double torb_math_arc_tangent2(double y, double x);",
+  ))
+}
 
-  entries.add(plannedRuntimeOf("Environment.get", "torb_environment_get", "5.12"))
-
-  entries.add(plannedRuntimeOf("Instant.equals", "torb_instant_equals", "5.12"))
-  entries.add(plannedRuntimeOf("Instant.compare", "torb_instant_compare", "5.12"))
-  entries.add(plannedRuntimeOf("Instant.subtract", "torb_instant_subtract", "5.12"))
-  entries.add(plannedRuntimeOf("Duration.equals", "torb_duration_equals", "5.12"))
-  entries.add(plannedRuntimeOf("Duration.compare", "torb_duration_compare", "5.12"))
-  entries.add(plannedRuntimeOf("Duration.show", "torb_duration_show", "5.12"))
-  entries.add(plannedRuntimeOf("Duration.seconds", "torb_duration_seconds", "5.12"))
-  entries.add(plannedRuntimeOf("Int64.seconds", "torb_duration_of_seconds", "5.12"))
-  entries.add(plannedRuntimeOf("Clock.now", "torb_clock_now", "5.12"))
+/**
+ * `std/time`: `Instant` and `Duration` are both `int64_t` nanoseconds in `clock.c` (see `runtime/README.md`), so none
+ * of these members build a type of the program - `Instant.compare`/`Duration.compare` still answer `Ordering`
+ * through a `.Runtime` entry rather than `.Derived`, the same exception `Float64.compare` is, because the ordering
+ * of a monotonic reading is not something a comparison intrinsic can give.
+ */
+fn timeEntries(var entries: List<NativeEntry>) {
+  entries.add(runtimeOf(
+    "Instant.equals",
+    "torb_instant_equals",
+    "bool torb_instant_equals(torb_instant first, torb_instant second);",
+  ))
+  entries.add(runtimeOf(
+    "Instant.compare",
+    "torb_instant_compare",
+    "int32_t torb_instant_compare(torb_instant first, torb_instant second);",
+  ))
+  entries.add(runtimeOf(
+    "Instant.subtract",
+    "torb_instant_subtract",
+    "torb_duration torb_instant_subtract(torb_instant first, torb_instant second, torb_location at);",
+  ))
+  entries.add(runtimeOf(
+    "Duration.equals",
+    "torb_duration_equals",
+    "bool torb_duration_equals(torb_duration first, torb_duration second);",
+  ))
+  entries.add(runtimeOf(
+    "Duration.compare",
+    "torb_duration_compare",
+    "int32_t torb_duration_compare(torb_duration first, torb_duration second);",
+  ))
+  entries.add(runtimeOf("Duration.show", "torb_duration_show", "torb_text torb_duration_show(torb_duration duration);"))
+  entries.add(runtimeOf(
+    "Duration.seconds",
+    "torb_duration_seconds",
+    "double torb_duration_seconds(torb_duration duration);",
+  ))
+  entries.add(runtimeOf(
+    "Int64.seconds",
+    "torb_duration_of_seconds",
+    "torb_duration torb_duration_of_seconds(int64_t seconds, torb_location at);",
+  ))
+  entries.add(runtimeOf("Clock.now", "torb_clock_now", "torb_instant torb_clock_now(void);"))
   entries.add(plannedRuntimeOf("sleep", "torb_sleep", "7.3"))
+}
 
+/** `std/environment`: capability filtering for the sandbox (`environment "APP_*"`) is a front-end concern of 7.4. */
+fn environmentEntries(var entries: List<NativeEntry>) {
+  entries.add(runtimeOf(
+    "Environment.get",
+    "torb_environment_get",
+    "bool torb_environment_get(torb_text name, torb_text *out);",
+  ))
+}
+
+fn plannedPackageEntries(var entries: List<NativeEntry>) {
   entries.add(plannedRuntimeOf("Task.await", "torb_task_await", "7.3"))
   entries.add(plannedRuntimeOf("Task.map", "torb_task_map", "7.3"))
   entries.add(plannedRuntimeOf("Task.flatMap", "torb_task_flat_map", "7.3"))
@@ -650,6 +723,9 @@ public fn nativeEntries(): List<NativeEntry> {
   consoleEntries(entries)
   collectionEntries(entries)
   fileEntries(entries)
+  mathEntries(entries)
+  timeEntries(entries)
+  environmentEntries(entries)
   plannedPackageEntries(entries)
   entries
 }

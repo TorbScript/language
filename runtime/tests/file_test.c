@@ -187,9 +187,77 @@ TORB_TEST(absolute_paths_are_text_arithmetic) {
   torb_text_release(error);
 }
 
+/* --------------------------------------------------------------------------------------------- open handles --- */
+
+TORB_TEST(opening_a_missing_file_is_an_error) {
+  torb_text path = torb_text_from_cstring("torb-runtime-test-missing-handle.txt");
+  torb_file *file = NULL;
+  torb_text error = torb_text_empty();
+  TORB_CHECK(!torb_file_open(path, &file, &error));
+  TORB_CHECK(torb_text_byte_length(error) > torb_text_byte_length(path));
+  TORB_CHECK(torb_text_starts_with(error, path));
+  torb_text_release(error);
+  torb_text_release(path);
+}
+
+TORB_TEST(opening_reading_and_double_closing_a_file) {
+  torb_text directory = temporary_directory();
+  torb_text path = path_in(directory, "torb-runtime-test-handle.txt");
+  torb_text contents = torb_text_from_cstring("line one\nline two\n");
+  torb_text error = torb_text_empty();
+  torb_file *file = NULL;
+  torb_text read_back = torb_text_empty();
+
+  TORB_CHECK(torb_file_write_text(path, contents, &error));
+  TORB_CHECK(torb_file_open(path, &file, &error));
+  TORB_CHECK(torb_file_read_all(file, &read_back, &error));
+  TORB_CHECK_TEXT(read_back, "line one\nline two\n");
+  torb_text_release(read_back);
+
+  torb_file_close(file);
+  /* Reading a closed file follows the ordinary `Result`/`IoError` path, never a panic. */
+  read_back = torb_text_empty();
+  TORB_CHECK(!torb_file_read_all(file, &read_back, &error));
+  torb_text_release(error);
+  /* Closing an already-closed file is a no-op, not a panic. */
+  torb_file_close(file);
+
+  torb_release(file, torb_file_drop);
+  remove_path(path);
+  TORB_CHECK(!torb_file_exists(path));
+
+  torb_text_release(contents);
+  torb_text_release(path);
+  torb_text_release(directory);
+}
+
+TORB_TEST(releasing_a_file_without_closing_it_still_closes_the_handle) {
+  torb_text directory = temporary_directory();
+  torb_text path = path_in(directory, "torb-runtime-test-handle-unclosed.txt");
+  torb_text contents = torb_text_from_cstring("content");
+  torb_text error = torb_text_empty();
+  torb_file *file = NULL;
+
+  TORB_CHECK(torb_file_write_text(path, contents, &error));
+  TORB_CHECK(torb_file_open(path, &file, &error));
+  /* `close` is never called: the drop function must close the OS handle by itself, or the next line - which an OS
+     that locks open files (Windows) would refuse if the handle had leaked - fails. */
+  torb_release(file, torb_file_drop);
+  remove_path(path);
+  TORB_CHECK(!torb_file_exists(path));
+
+  torb_text_release(contents);
+  torb_text_release(path);
+  torb_text_release(directory);
+  torb_text_release(error);
+}
+
 void torb_register_file_tests(void) {
   TORB_ADD(writing_reading_and_listing_a_directory);
   TORB_ADD(reading_a_file_that_is_not_there_is_an_error_with_a_message);
   TORB_ADD(reading_a_file_whose_bytes_are_not_utf8_is_an_error);
   TORB_ADD(absolute_paths_are_text_arithmetic);
+  TORB_ADD(opening_a_missing_file_is_an_error);
+  TORB_ADD(opening_reading_and_double_closing_a_file);
+  TORB_ADD(releasing_a_file_without_closing_it_still_closes_the_handle);
 }

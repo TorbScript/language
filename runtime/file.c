@@ -1,19 +1,21 @@
 /*
- * file.c - the minimum of `std/fs` the compiler itself needs: `readText`, `writeText`, `exists`, `isDirectory`,
- * `list` (sorted) and `absolutePath`.
+ * file.c - `std/fs`: `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open
+ * handle (`File.open`/`readAll`/`close`) that lets a program read a file without holding it in memory as one
+ * `readText`.
  *
  * Every function answers false on failure and puts the message of the `IoError` into `*error` (owned). The `IoError`
  * record and the `Result` around it are layouts of the program, so the lowering builds them - a runtime function
  * never constructs a type of the language.
  *
- * `readText` validates UTF-8 and fails when the bytes are not: a `String` is always valid UTF-8, so a file that is
- * not is an `IoError` and never a replacement character (decided gap 7).
+ * `readText` and `File.readAll` both validate UTF-8 and fail when the bytes are not: a `String` is always valid
+ * UTF-8, so a file that is not is an `IoError` and never a replacement character (decided gap 7).
  *
  * Directory listings are sorted by bytes, always. The fixpoint test of the compiler depends on it.
  */
 
 #include "torb.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -240,4 +242,82 @@ bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error) {
   torb_raw_free(result, result_capacity);
   torb_raw_free(joined, joined_capacity);
   return true;
+}
+
+/* --------------------------------------------------------------------------------------------- open handles --- */
+
+/**
+ * `File.open`/`readAll`/`close`: the `torb_file` `shared type` of torb.h. `open` is read-only: nothing in `std/fs`
+ * writes through an open handle, only `File.writeText` on a path.
+ */
+
+bool torb_file_open(torb_text path, torb_file **out, torb_text *error) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, &capacity);
+  FILE *handle = fopen(name, "rb");
+  torb_raw_free(name, capacity);
+  if (handle == NULL) {
+    *error = torb_io_error(path, strerror(errno));
+    return false;
+  }
+  {
+    torb_file *file = (torb_file *)torb_allocate(sizeof(torb_file), TORB_BLOCK_SHARED);
+    file->path = torb_text_retained(path);
+    file->handle = handle;
+    *out = file;
+  }
+  return true;
+}
+
+bool torb_file_read_all(torb_file *self, torb_text *out, torb_text *error) {
+  size_t capacity = 65536u;
+  size_t filled = 0u;
+  uint8_t *buffer;
+  size_t bad_offset = 0u;
+  if (self->handle == NULL) {
+    *error = torb_io_error(self->path, "the file is already closed");
+    return false;
+  }
+  buffer = (uint8_t *)torb_raw_allocate(capacity);
+  for (;;) {
+    size_t read = fread(buffer + filled, 1u, capacity - filled, (FILE *)self->handle);
+    filled += read;
+    if (filled < capacity) {
+      if (ferror((FILE *)self->handle)) {
+        *error = torb_io_error(self->path, strerror(errno));
+        torb_raw_free(buffer, capacity);
+        return false;
+      }
+      break;
+    }
+    {
+      uint8_t *grown = (uint8_t *)torb_raw_allocate(capacity * 2u);
+      memcpy(grown, buffer, filled);
+      torb_raw_free(buffer, capacity);
+      buffer = grown;
+      capacity *= 2u;
+    }
+  }
+  if (!torb_text_try_from_bytes(buffer, filled, out, &bad_offset)) {
+    char detail[96];
+    snprintf(detail, sizeof detail, "the byte at offset %lu is not valid UTF-8", (unsigned long)bad_offset);
+    *error = torb_io_error(self->path, detail);
+    torb_raw_free(buffer, capacity);
+    return false;
+  }
+  torb_raw_free(buffer, capacity);
+  return true;
+}
+
+void torb_file_close(torb_file *self) {
+  if (self->handle != NULL) {
+    fclose((FILE *)self->handle);
+    self->handle = NULL;
+  }
+}
+
+void torb_file_drop(void *block) {
+  torb_file *file = (torb_file *)block;
+  torb_file_close(file);
+  torb_text_release(file->path);
 }

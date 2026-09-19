@@ -37,6 +37,8 @@ void torb_register_text_tests(void);
 void torb_register_list_tests(void);
 void torb_register_map_tests(void);
 void torb_register_file_tests(void);
+void torb_register_clock_tests(void);
+void torb_register_environment_tests(void);
 
 #define TORB_CHECK(condition)                                        \
   do {                                                               \

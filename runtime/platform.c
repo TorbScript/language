@@ -1,17 +1,21 @@
 /*
  * platform.c - the only file in the runtime with an `#ifdef _WIN32`.
  *
- * Five functions: what kind of thing a path is, the working directory, the entries of a directory, and reading and
- * writing a whole file. Everything above this file is portable.
+ * Seven functions: what kind of thing a path is, the working directory, the entries of a directory, reading and
+ * writing a whole file, a monotonic clock reading, and setting an environment variable (for `runtime/tests` only -
+ * no native ever sets one). Everything above this file is portable.
  */
 
 #include "torb.h"
 
 #include <errno.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(_WIN32)
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
 #  include <direct.h>
 #  include <io.h>
 #  include <sys/stat.h>
@@ -23,6 +27,7 @@
 #else
 #  include <dirent.h>
 #  include <sys/stat.h>
+#  include <time.h>
 #  include <unistd.h>
 #  define TORB_STAT struct stat
 #  define TORB_STAT_CALL stat
@@ -166,3 +171,41 @@ bool torb_platform_write_file(const char *path, const uint8_t *bytes, size_t len
   }
   return true;
 }
+
+#if defined(_WIN32)
+
+int64_t torb_platform_monotonic_nanoseconds(void) {
+  static LARGE_INTEGER frequency;
+  static bool have_frequency = false;
+  LARGE_INTEGER counter;
+  int64_t seconds;
+  int64_t remainder_nanoseconds;
+  if (!have_frequency) {
+    QueryPerformanceFrequency(&frequency);
+    have_frequency = true;
+  }
+  QueryPerformanceCounter(&counter);
+  /* Split into whole seconds and a remainder before multiplying by a billion, so a counter that has run for years
+     does not overflow the way `counter.QuadPart * 1000000000` would. */
+  seconds = counter.QuadPart / frequency.QuadPart;
+  remainder_nanoseconds = (counter.QuadPart % frequency.QuadPart) * 1000000000LL / frequency.QuadPart;
+  return seconds * 1000000000LL + remainder_nanoseconds;
+}
+
+bool torb_platform_set_environment_variable(const char *name, const char *value) {
+  return _putenv_s(name, value) == 0;
+}
+
+#else
+
+int64_t torb_platform_monotonic_nanoseconds(void) {
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (int64_t)now.tv_sec * 1000000000LL + (int64_t)now.tv_nsec;
+}
+
+bool torb_platform_set_environment_variable(const char *name, const char *value) {
+  return setenv(name, value, 1) == 0;
+}
+
+#endif

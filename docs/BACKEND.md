@@ -835,7 +835,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.9** | `var` paths: `var` parameters, interior projections, `TakeOut`/`PutBack`, slices as windows, `shared type` objects with their headers and trace functions, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.4, 5.7 |
 | **5.10** | Text and data: interpolation, `Show` for every shape in the format of gap 23, float formatting, `describe`, derived `Encode`/`Decode`, `std/json` | `runtime/text.c` (float), `ir/lower/derive.trb`, `std/json` natives | `11-data.trb`, the `Show` format is pinned by a table-driven test | 5.6, 5.7 |
 | **5.11** | `Expression<Value>`: static trees, captures, `assert`, `test`/`group` and `torb test` natively. **Gate: `compiler/tests/*.test.trb` run from the native binary** | `ir/lower/quote.trb`, `runtime/`, `cli/test.trb` | The compiler's own tests | 5.10 |
-| **5.12** | The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
+| **5.12** | **Runtime half done.** The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
 | **5.13** | The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir` | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE | 5.3 |
 | **5.14** | Conformance and determinism: one runner over stage 0 and the C back end, `--emit-c` twice byte identical for the whole workspace, no absolute path in the output, timing budget | `compiler/tests/backend.test.trb`, the runner | Everything above | 5.1-5.13 |
 | **6.1** | Compile `compiler/` with stage 1: every missing intrinsic, every crash, every construct the compiler uses and the lowering does not cover yet. **Gate: a `torb` binary exists** | wherever it hurts | `torb check ..` from the new binary gives the same output as stage 1 | 5.14 |
@@ -860,6 +860,12 @@ run against **stage 0, the C back end and later the VM** by the same runner.
   lowering. 5.1 defines the manifest's shape, so 5.R1 can start immediately after it.
 - 5.7, 5.8 and 5.12 are independent of each other; 5.9 and 5.10 are independent; 5.13 only needs 5.3.
 - **Hello world is native at 5.3. The tour runs at 5.12. The fixpoint gate is 6.2.**
+- **5.12's runtime half is done**: `runtime/file.c` (open handles), `clock.c`, `environment.c` and the math functions
+  in `number.c` all exist and are `.Ready` in the manifest, with `runtime/tests` for each (see `runtime/README.md`
+  for the representations chosen - nanosecond `Instant`/`Duration`, the `torb_file` `shared type`). `File.lines`
+  stays `.Planned`, but for 5.7 rather than 5.12: it answers an `Iterable`, whose ABI is 5.7's. The tour itself still
+  cannot run natively until the lowering this milestone does not touch (5.3's emitter, and whichever of 5.4-5.11 a
+  module's constructs need) exists to call these symbols.
 
 ### What 5.1 does differently from sections 1 to 3
 

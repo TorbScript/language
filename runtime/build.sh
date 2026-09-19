@@ -10,8 +10,8 @@ command -v "$cc" >/dev/null 2>&1 || cc=clang
 out=build
 mkdir -p "$out"
 warnings="-Wall -Wextra -Wpedantic -Werror"
-sources="memory.c panic.c text.c list.c map.c number.c console.c process.c platform.c file.c"
-tests="tests/harness.c tests/memory_test.c tests/number_test.c tests/text_test.c tests/list_test.c tests/map_test.c tests/file_test.c"
+sources="memory.c panic.c text.c list.c map.c number.c console.c process.c platform.c file.c clock.c environment.c"
+tests="tests/harness.c tests/memory_test.c tests/number_test.c tests/text_test.c tests/list_test.c tests/map_test.c tests/file_test.c tests/clock_test.c tests/environment_test.c"
 echo "compiling the runtime with $cc"
 # shellcheck disable=SC2086
 "$cc" -std=c11 $warnings $CFLAGS -Iinclude -c $sources
