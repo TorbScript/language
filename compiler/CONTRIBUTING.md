@@ -32,6 +32,9 @@ the checker is a bug of the checker.
   integer ids (`ModuleId`, `SymbolId`, `TypeId`, ...).
 - Cases: `.Case` in patterns, `Type.Case` in expressions unless stage 0 can see the expected type (the table in
   `bootstrap/README.md`). A bare name in a pattern always binds. Positional arguments come before named ones.
+- Prefer the short form where the type is expected and stage 0 can see it: `addNode(graph, .SwitchCase(path))` for a
+  parameter of a declared function, `const kind: TokenKind = .Dot`, `kinds == [.Dot, .Name]`. Write `Type.Case` only
+  where stage 0 cannot (trap 8).
 - A case name must not shadow a prelude type (`TupleType`, `Floating`, `VoidType`, not `Tuple`, `Float`, `Void`).
 - `type`, `trait`, `where`, `shared` are keywords and cannot be names (`annotation`, `capability`, ...).
 - **A `public` function and a trait method never infer their result.** Without a result type they produce `Void`, which
