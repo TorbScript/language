@@ -2095,3 +2095,21 @@ whitespace never changes the meaning of a token sequence.
 _Decision:_ `.` joins `(`, `[`, `-` and `!` in the list of tokens a first command argument must not start with.
 Write `level(.Debug)` (which gap 15 makes a property command with parentheses) or `level = .Debug`.
 
+**43. What satisfies a bound on a trait-typed value, and what `Void` implements.**
+"Traits": "Every trait-typed value carries a witness table per bound" and "a trait value to fewer bounds or to a
+supertrait" say what *coercion* does, and nothing says whether the same value may be the **witness** of a bound an
+implementation asks for - which `extend<Value: Show, Failure: Show> Result<Value, Failure> with Show` needs for
+`Result<Void, Error>`, where `Failure` is the trait `Error` and `trait Error with Show`. The second half is `Void`:
+a signature says it as the type of the language, while `with Equals, Hash, Show` stands on the `native type Void` of
+`std/core`, so nothing connected the two and `Void` implemented nothing at all.
+_Proposal:_ a trait-typed value, `&` intersections included, satisfies a bound on any trait of the supertrait closure
+of its own traits, and the witness recorded is `Witness.Object(annotation, bound)` - the value's own table, which the
+back end reads as `WitnessRoot.Value(slot, bound)` plus the steps through `WitnessTable.nested` (BACKEND 1.4). And
+trait resolution asks about the declaration of `Void` wherever the type `Void` is the subject. _Reason:_ both are the
+same question - "which declaration says what this type implements" - and neither needs a new witness shape.
+
+_Decision:_ accepted. The supertrait half was already implemented (`boundArgumentsOf` searches the closure and
+`witnessOfBound` records the `Object` witness) but had no test; the `Void` half was the actual defect behind
+"`Result<Void, Error>` does not implement `Show`" and is fixed in `resolveUncached` and `directTraitsOf`. Object
+safety is untouched: what a trait value may *call* is decided per call (gap 7), and an operator is deliberately not
+checked there - witnessing a bound is not a call.

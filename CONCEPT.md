@@ -1351,7 +1351,9 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   (`const shapes: List<Shape> = [Square(2.0), Circle(1.0)]`).
 - **A generic member can be called on a trait-typed value.** Every trait-typed value carries a witness table per
   bound, and a generic call passes one witness per bound; where no trait-typed value is involved, a back end
-  monomorphizes as before. **Object safety is checked per call, not per type:** a member that mentions `Self` in a
+  monomorphizes as before. That table is also what *witnesses* a bound another declaration asks for: a trait-typed
+  value satisfies a bound on any trait its own traits require, which is why `Result<Void, Error>` is `Show`
+  (`trait Error with Show`, and `extend<Value: Show, Failure: Show> Result<Value, Failure> with Show`). **Object safety is checked per call, not per type:** a member that mentions `Self` in a
   parameter or in its result, or that has no `self`, cannot be called on a trait-typed value. So `List<Show & Hash>`
   and `fn audit(entry: Show & Encode)` stay legal, and only calls that have no meaning are rejected.
 - Functions without `self` in a trait: without a body they are a requirement for the implementing types

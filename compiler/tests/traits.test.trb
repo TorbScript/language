@@ -273,3 +273,57 @@ group "Coercion to a trait type" {
     assert(problems(source).isEmpty())
   }
 }
+
+/**
+ * A trait-typed value carries a witness table per bound, so it satisfies a bound on any trait of the supertrait closure
+ * of its own traits - not only when it is *coerced* to that trait, but also as the witness of a bound an implementation
+ * asks for. `Result<Void, Error>` needs both: `Failure: Show` through `trait Error with Show`, and `Value: Show` from
+ * the declaration of `Void`.
+ */
+const witnessSource = "trait Problem with Show \{\n  fn code(self): Int\n\}\n\n"
+  + "fn render<Value: Show>(value: Value): String \{\n  \"\{value\}\"\n\}\n\n"
+  + "fn one(problem: Problem): String \{\n  render(problem)\n\}\n\n"
+  + "fn two(failed: Result<Int, Problem>): String \{\n  render(failed)\n\}\n\n"
+  + "fn three(pair: Result<Int, Show & Hash>): String \{\n  render(pair)\n\}\n\n"
+  + "fn four(nothing: Void): String \{\n  render(nothing)\n\}\n\n"
+  + "fn five(done: Result<Void, Problem>): String \{\n  render(done)\n\}"
+
+group "A bound a trait-typed value witnesses" {
+  test "a value of a trait satisfies a bound on a trait its own trait requires" {
+    assert(problems(witnessSource).isEmpty())
+    // The witness is the value's own table, which is what a back end reads at the call instead of a static one
+    assert(probe(witnessSource).witnessesOf("render(problem)") == ["object Problem: Show"])
+  }
+
+  test "and it does so as the bound of an implementation, which is what `Result<_, Error>` needs" {
+    // `extend<Value: Show, Failure: Show> Result<Value, Failure> with Show`: the inner witness for `Failure` is the
+    // table the trait-typed value brings, so the whole tree is usable even though its root is a static implementation
+    assert(
+      probe(witnessSource).witnessesOf("render(failed)")
+        == ["Result<Value, Failure>: Show [Int64: Signed, object Problem: Show]"]
+    )
+  }
+
+  test "an `&` intersection witnesses the bound its parts cover" {
+    assert(
+      probe(witnessSource).witnessesOf("render(pair)")
+        == ["Result<Value, Failure>: Show [Int64: Signed, object Show & Hash: Show]"]
+    )
+  }
+
+  test "`Void` implements what its declaration in the standard library says" {
+    // A signature says `Void` as the type of the language, and the traits it comes with are declared on the
+    // `native type Void` of `std/core`: resolution asks about that one, so `Void` is `Show` like every other type
+    const found = probe(witnessSource)
+    assert(found.witnessesOf("render(nothing)") == ["Void: Show"])
+    assert(found.witnessesOf("render(done)") == ["Result<Value, Failure>: Show [Void: Show, object Problem: Show]"])
+  }
+
+  test "a bound no trait of the value covers is still reported" {
+    const source = "trait Problem \{\n  fn code(self): Int\n\}\n\n"
+      + "fn render<Value: Show>(value: Value): String \{\n  \"\{value\}\"\n\}\n\n"
+      + "fn report(problem: Problem): String \{\n  render(problem)\n\}"
+    assert(problems(source) == ["`Problem` does not implement `Show`"])
+    assert(notes(source) == ["`render` asks for it"])
+  }
+}

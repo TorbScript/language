@@ -361,17 +361,20 @@ fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolI
   if checker.absorbs(annotation) {
     return Resolved.Missing
   }
+  // Every signature says `Void` as `TypeForm.VoidType`, which no `extend` can name: the question is about the
+  // `native type Void` the standard library declares, and that is where its `Show` comes from
+  const subject = declaredVoidOf(checker, annotation) ?? annotation
   // A trait-typed value and a generic parameter carry their witness: what their bounds say is the answer
-  if const Some(arguments) = boundArgumentsOf(checker, annotation, capability, wanted) {
+  if const Some(arguments) = boundArgumentsOf(checker, subject, capability, wanted) {
     return Resolved.Bounded(arguments)
   }
   var first = -1
   var second = -1
   var arguments: List<TypeId> = []
-  const head = headSymbolOf(checker, annotation)
+  const head = headSymbolOf(checker, subject)
   const candidates = checker.implementations.candidatesOf(capability, head)
   for index in candidates {
-    if const Some(given) = applies(checker, index, annotation, wanted) {
+    if const Some(given) = applies(checker, index, subject, wanted) {
       if first < 0 {
         first = index
         arguments = given
@@ -389,11 +392,23 @@ fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolI
     return Resolved.Found(ImplementationId(first), arguments)
   }
   // `Int64 with Signed`, `Signed with Numeric`, `Numeric with Add<Self, Self>`
-  if const Some(found) = throughSupertraits(checker, annotation, capability, wanted) {
+  if const Some(found) = throughSupertraits(checker, subject, capability, wanted) {
     return found
   }
   // `Show`, `Equals`, `Hash`, `Encode`, `Decode` and the `From` of a wrapper case are generated on first use
-  deriveFor(checker, annotation, capability, wanted)
+  deriveFor(checker, subject, capability, wanted)
+}
+
+/**
+ * The `native type Void` of the standard library, where the type asked about is `Void`. `None` for everything else, and
+ * for a workspace whose prelude does not declare it - there `Void` implements nothing, as before.
+ */
+fn declaredVoidOf(var checker: Checker, annotation: TypeId): TypeId? {
+  if const .VoidType = checker.types.form(annotation) {
+    const symbol = checker.wellKnown.declaredVoid?
+    return Some(checker.nominal(symbol, []))
+  }
+  None
 }
 
 /** What the bounds of a trait-typed value or of a generic parameter say about one trait. */
@@ -813,6 +828,13 @@ fn addClosure(var checker: Checker, var found: List<TypeId>, bound: TypeId, own:
 fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
   match checker.types.form(annotation) {
     .Traits(bounds) => bounds
+    // `Void` carries what its declaration in the standard library says, so `nothing.show()` is a member like any other
+    .VoidType => {
+      match declaredVoidOf(checker, annotation) {
+        Some(declared) => directTraitsOf(checker, declared)
+        .None => []
+      }
+    }
     .Parameter(parameter) => checker.parameterBounds.get(parameter.value) ?? []
     // A literal type has the traits of its base plus the `Parse` the language generates for it, which replaces the
     // base's own: `Status.parse(text)` fails with a `LiteralParseError` and not with a `NumberParseError` (gap 32)

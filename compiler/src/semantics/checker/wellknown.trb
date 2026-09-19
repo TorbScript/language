@@ -20,6 +20,11 @@ public type WellKnown {
   /** Every symbol that means `Void`: the name the language provides, and the `native type Void` of the prelude. */
   voidSymbols: List<SymbolId> = []
   neverSymbols: List<SymbolId> = []
+  /**
+   * The `native type Void` of the standard library. A signature says `Void` as `TypeForm.VoidType`, but the traits it
+   * implements (`Equals`, `Hash`, `Show`) are declared on this one, so trait resolution asks about it instead.
+   */
+  declaredVoid: SymbolId? = None
   /** `Item?` is sugar for `Option<Item>`, so building a type needs this one. */
   option: SymbolId? = None
   /** `?`, `??` and `.ok()` have to tell an `Option` and a `Result` apart. */
@@ -94,6 +99,7 @@ public fn wellKnownOf(program: Program): WellKnown {
     exports,
     bothNames(program, exports, "Void"),
     bothNames(program, exports, "Never"),
+    declaredVoid: exports.get("Void"),
     option: exports.get("Option"),
     result: exports.get("Result"),
     show: exports.get("Show"),
