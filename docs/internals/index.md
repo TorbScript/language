@@ -12,6 +12,8 @@ documents:
   - ../STREAMS.md
   - ../ENCODING.md
   - ../LINEAR.md
+
+  - ../PATH.md
 ---
 
 The toolchain is written in TorbScript and lives in `compiler/`. Until it compiles itself it runs on stage 0, an untyped
@@ -48,5 +50,6 @@ a rule nothing holds either side to.
 - **[Streams](../STREAMS.md)**
 - **[Encoding](../ENCODING.md)**
 - **[Linear Algebra and Geometry](../LINEAR.md)**
+- **[File Paths](../PATH.md)**
 
 <!-- torb:index:end -->

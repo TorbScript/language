@@ -1732,6 +1732,31 @@ Wenn nicht, was bedeutet, bewirkt es?
     Engine-Reihe (Bezier, Splines, Polylinien, Tessellierung) heißt `std/curve` - ein Wort, das nur eines bedeutet,
     und "path" liest jeder zuerst als Dateipfad. Das Design-Dokument `docs/PATH.md` entsteht jetzt schon parallel
     (neue Datei, stört keine laufende Runde), die Umsetzung bleibt hinter der Aufräumrunde `std/core`.
+  - **Erledigt:** Design-Dokument `docs/PATH.md` (in `docs/internals/index.md` eingetragen, beide Doku-Gates grün).
+    Die drei wichtigsten Entscheidungen: **`joined` läßt die Wurzel des Arguments fallen** statt ein `Result` zu
+    antworten (`base.joined(x)` beginnt damit *immer* mit `base` - stärker als ein `Result`, und die ~25 Aufrufstellen
+    im Compiler brauchen kein `?`; `resolved(inside:)` bleibt das fehlbare Member für fremde Eingaben). **`/` UND `\`
+    trennen auf JEDER Plattform**, `.` fällt beim Bauen weg, `..` bleibt bis `normalized()` (`a/./b` ist immer `a/b`,
+    `a/../b` nur ohne Symlink - eine Konstruktion rät nicht). **`Path` ist `Equals`/`Hash`/`Compare`, lexikalisch und
+    überall case-sensitiv**; ob zwei Pfade dieselbe Datei meinen, fragt das Dateisystem.
+    - **`fn open(path: Into<Path>)` geht heute NICHT**, und die Probe sagt genau warum: ein Trait als Parametertyp
+      funktioniert (auch ein generisches, auch mit Coercion aus einem fremden `extend`) - gemessen auf Stage 0, im
+      Typprüfer und als kompiliertes Binary. Nur `Into` selbst scheitert: `isConversionCall`
+      (`compiler/src/semantics/checker/expression.trb:1959`) fängt JEDEN argumentlosen `into`-Aufruf ab und deutet ihn
+      als `From` des Ziels, auch wenn der Empfänger selbst den Typ `Into<Path>` hat und `into` sein eigenes Member ist.
+      Eine Bedingung im Checker. Bis dahin: `fn open(path: Path)` und `.into()` an der Aufrufstelle (kein `expect`).
+    - Der ganze Typ samt aller Member ist als Probe gebaut worden: 38 Zeilen Ausgabe, Stage 0 und Binary identisch.
+      In `std` fehlt dafür nur `String.lastIndexOf`.
+  - **Entschieden (2026-09-21, zu den offenen Fragen von `docs/PATH.md`):** `Path` kommt NICHT ins Prelude
+    (`use Path from "std/path"`, wie `std/fs`). `Root.Share` kommt gleich mit - ohne es würde `//server/share/x`
+    FALSCH geparst statt gar nicht. Die Wide-Char-Runtime für Windows (`runtime/platform.c` geht heute als schmaler
+    `char *` ans System: Nicht-ASCII-Pfade scheitern im Binary, Pfade über `MAX_PATH` gehen gar nicht - beides echte
+    Abweichungen zu Stage 0) wird eine **eigene Runde vor Slice 2**, mit Gate-Programm. Der `isConversionCall`-Fix
+    ist der laufenden kleinen Runde mitgegeben; `String.lastIndexOf` kommt in die Aufräumrunde `std/core`.
+    **Deine Wahl (Geschmack):** `nameWithoutExtension` (so im Dokument) oder `stem`.
+  - **Wird gelöst (mit den Slices):** `File.list` und `File.absolutePath` weichen zwischen Stage 0 und C-Runtime ab
+    (lossy Namen bzw. Backslashes) - Slice 2 macht beide zu `Path`-Antworten mit EINER Form; `SandboxError` trägt
+    keinen Pfad (Slice 3); `Process.run(workingDirectory:)` existiert noch nicht (Slice 3).
 
 
 - (**Erledigt: Meilenstein 5.14 - zwei Implementierungen, ein beobachtbares Verhalten**, 2026-09-20)
