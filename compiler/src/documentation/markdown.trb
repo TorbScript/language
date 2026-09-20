@@ -419,8 +419,11 @@ fn scanBody(path: String, lines: List<String>, from: Int): ReadPage {
     const line = lines[index]
     const number = index + 1
     body.add line
-    if line.startsWith("```") {
-      const collected = collectBlock path, lines, index
+    // A fence inside a list item carries the indentation of the item, which is the style of the page templates: the
+    // block is read there exactly as at column 0, and its content is dedented by the same amount
+    const indent = indentOf line
+    if line.slice(indent..line.byteLength()).startsWith("```") {
+      const collected = collectBlock path, lines, index, indent
       problems.addAll collected.problems
       blocks.add collected.block
       var inside = index + 1
@@ -432,7 +435,7 @@ fn scanBody(path: String, lines: List<String>, from: Int): ReadPage {
       continue
     }
     // A tilde fence and an indented code block name no language, so nothing could verify what is in them
-    if line.startsWith("~~~") {
+    if line.slice(indent..line.byteLength()).startsWith("~~~") {
       problems.add DocumentationProblem(path, number, "A code block is fenced with three backticks and names its language")
     }
     if line.startsWith("#") {
@@ -470,20 +473,44 @@ public fn fenceLengthOf(line: String): Int {
   length
 }
 
+/** How many spaces a line starts with: the indentation a fence inside a list item carries. */
+public fn indentOf(line: String): Int {
+  var length = 0
+  for character in line.chars() {
+    if character != ' ' {
+      break
+    }
+    length = length + 1
+  }
+  length
+}
+
+/** The line with up to `indent` leading spaces taken off, which is what a block inside a list item is written with. */
+fn dedented(line: String, indent: Int): String {
+  const found = indentOf line
+  const take = if found < indent { found } else { indent }
+  line.slice(take..line.byteLength())
+}
+
 /**
- * A line that closes a fence: it starts at the first column with at least as many backticks as the fence that was
- * opened, and holds nothing else. An indented run of backticks is content, which is what lets a block show a fence.
+ * A line that closes a fence: it stands at the indentation the fence was opened at, has at least as many backticks as
+ * that fence, and holds nothing else. A run of backticks that is indented *deeper* is content, which is what lets a
+ * block show a fence.
  */
-fn closesFence(line: String, opened: Int): Bool {
-  const length = fenceLengthOf line
+fn closesFence(line: String, opened: Int, indent: Int): Bool {
+  if indentOf(line) != indent {
+    return false
+  }
+  const rest = line.slice(indent..line.byteLength())
+  const length = fenceLengthOf rest
   if length < opened {
     return false
   }
-  line.slice(length..line.byteLength()).trim().isEmpty()
+  rest.slice(length..rest.byteLength()).trim().isEmpty()
 }
 
-fn collectBlock(path: String, lines: List<String>, at: Int): CollectedBlock {
-  const opening = lines[at]
+fn collectBlock(path: String, lines: List<String>, at: Int, indent: Int): CollectedBlock {
+  const opening = lines[at].slice(indent..lines[at].byteLength())
   var problems: List<DocumentationProblem> = []
   const fence = fenceLengthOf opening
   const info = opening.slice(fence..opening.byteLength()).trim()
@@ -502,12 +529,12 @@ fn collectBlock(path: String, lines: List<String>, at: Int): CollectedBlock {
   var isClosed = false
   while index < lines.length() {
     const line = lines[index]
-    if closesFence(line, fence) {
+    if closesFence(line, fence, indent) {
       isClosed = true
       index = index + 1
       break
     }
-    content.add line
+    content.add dedented(line, indent)
     index = index + 1
   }
   if !isClosed {

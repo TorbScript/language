@@ -198,6 +198,34 @@ group "the reader of a page" {
     assert(page.blocks[0].language == "md")
   }
 
+  test "a fence inside a list item is read, and its content is dedented by the item's indentation" {
+    // The reader only saw a fence at column 0, so every example inside a numbered list item - which is the style of the
+    // page templates - was silently skipped: not parsed, not type checked, not even counted as a `trb skip`
+    const source = "---\ntitle: One\n---\n\n1. **A claim.** The rule that follows from it.\n\n"
+      + "   ```trb check\n   const answer = 42\n   print answer\n   ```\n"
+    const page = readPage "docs/a.md", source
+    assert(page.blocks.length() == 1)
+    assert(page.blocks[0].language == "trb")
+    assert(page.blocks[0].marker == "check")
+    assert(page.blocks[0].text == "const answer = 42\nprint answer")
+    assert(page.blocks[0].line == 7)
+  }
+
+  test "a fence a list item shows inside one of its own blocks is content, because it is indented deeper" {
+    const source = "---\ntitle: One\n---\n\n1. A claim.\n\n   ```md\n      ```trb\n      const x = 1\n      ```\n   ```\n"
+    const page = readPage "docs/a.md", source
+    assert(page.blocks.length() == 1)
+    assert(page.blocks[0].language == "md")
+  }
+
+  test "an indented block that is never closed is reported at its own line" {
+    const source = "---\ntitle: One\n---\n\n1. A claim.\n\n   ```trb\n   const answer = 42\n"
+    const page = readPage "docs/a.md", source
+    assert(page.problems.length() == 1)
+    assert(page.problems[0].message == "This code block is never closed")
+    assert(page.problems[0].line == 7)
+  }
+
   test "a fence of four backticks is closed by four" {
     const source = "---\ntitle: One\n---\n\n````md\n```trb\nconst x = 1\n```\n````\n"
     const page = readPage "docs/a.md", source
