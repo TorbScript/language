@@ -14,6 +14,7 @@ cargo run --release -- parse ..                               # Check the syntax
 cargo run --release -- tokens file.trb                        # Tokens, in the format of compiler/src/syntax/dump.trb
 cargo run --release -- ast file.trb                           # Syntax tree, as the generated Show of compiler/src/syntax/ast.trb
 cargo run --release -- canon --check ..                        # Is every file in the formatter canon? (see below)
+cargo run --release -- highlight file.trb                     # Semantic tokens as JSON, for the VS Code extension
 cargo test                                                    # Includes the differential tests against compiler/
 ```
 
@@ -27,6 +28,19 @@ of stage 0. Every edit is applied on its own and the file is parsed again; it on
 from before with every span and every `CallStyle` erased, so a run cannot change what a program means. A file that does
 not parse is skipped, `tests/parser-cases/` and `tests/lexer-cases/` are not even read, and a second run over the same
 tree changes nothing.
+
+`torb highlight <file>` (or `torb highlight --stdin`, for an editor buffer that was never saved) prints one JSON
+document of semantic tokens for the `.vscode/extensions/torbscript` VS Code extension:
+`{"tokens": [[line, startCharacter, length, "kind", ["modifier", ...]], ...]}`, 0-based, UTF-16 code units (what
+`SemanticTokensBuilder` wants), sorted, non-overlapping, single-line. `crates/torb-cli/src/highlight/resolver.rs` is
+a syntactic scope resolver over `torb_syntax`'s tree - not a type checker, there is none in stage 0 - that decides
+what a name is (`type`, `interface`, `typeParameter`, `enumMember`, `namespace`, `function`, `method`, `parameter`,
+`variable`, `property`) and whether it is `readonly`/`mutable` (`const` vs. `var`), `static` (a method without
+`self`) or `defaultLibrary` (a prelude name). It never panics - a file with syntax errors still yields every token
+the parser could resolve around the damage - and its doc comment lists exactly what it cannot know without a type
+checker (an arbitrary receiver's real type, a single-segment import's real kind). This is stage-0 tooling: milestone
+8's language server replaces it behind the *same* JSON protocol, so the extension does not need to change again when
+that happens.
 
 | Crate              | Contains                                              |
 |--------------------|-------------------------------------------------------|

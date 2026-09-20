@@ -129,17 +129,25 @@
           }
         },
         {
-          "match": "\\b(type|trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "storage.type.trb" },
             "2": { "name": "entity.name.type.trb" }
           }
         },
         {
+          "comment": "A trait's own name gets a scope of its own (entity.name.type.interface), distinct from a type's",
+          "match": "\\b(trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": { "name": "storage.type.trb" },
+            "2": { "name": "entity.name.type.interface.trb" }
+          }
+        },
+        {
           "match": "\\b(case)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "keyword.control.case.trb" },
-            "2": { "name": "entity.name.type.variant.trb" }
+            "2": { "name": "variable.other.enummember.trb" }
           }
         },
         {
@@ -176,9 +184,29 @@
         { "name": "constant.language.boolean.trb", "match": "\\b(true|false|void)\\b" },
         { "name": "variable.language.self.trb", "match": "\\bself\\b" },
         { "name": "support.type.self.trb", "match": "\\bSelf\\b" },
-        { "name": "support.constant.trb", "match": "\\bNone\\b(?!\\s*[<(])" },
-        { "name": "support.function.variant.trb", "match": "\\b(Some|Ok|Fail)\\b(?=\\s*\\()" },
+        { "include": "#cases" },
         { "name": "support.function.builtin.trb", "match": "\\b(panic|print|assert|do|spawn)\\b" }
+      ]
+    },
+    "cases": {
+      "comment": "`.Circle` (a case with no receiver in front of it - the dot is never preceded by a word character or a closing bracket, unlike `shape.Circle`), `Shape.Circle` (both segments capitalized - this language never dots into a nested type, only into a case or a lowercase namespace), and the four prelude cases bare. This is a heuristic, like the rest of this grammar without a type checker: `torb highlight` (see README) resolves the same forms exactly.",
+      "patterns": [
+        {
+          "match": "(?<![\\w)\\]])(\\.)([A-Z][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "punctuation.accessor.trb" },
+            "2": { "name": "variable.other.enummember.trb" }
+          }
+        },
+        {
+          "match": "\\b([A-Z][A-Za-z0-9_]*)(\\.)([A-Z][A-Za-z0-9_]*)\\b",
+          "captures": {
+            "1": { "name": "entity.name.type.trb" },
+            "2": { "name": "punctuation.accessor.trb" },
+            "3": { "name": "variable.other.enummember.trb" }
+          }
+        },
+        { "name": "variable.other.enummember.trb", "match": "\\b(Some|None|Ok|Fail)\\b" }
       ]
     },
     "types": {
@@ -206,15 +234,21 @@
       ]
     },
     "calls": {
+      "comment": "A call written after a `.` is a method (`receiver.name(...)`, `receiver.name argument`) in every style; a bare one is a function - the same rule `torb highlight` (see README) applies from the syntax tree. Both scopes are assigned regardless of command style vs. parentheses style, so the two never differ in color here either.",
       "patterns": [
         {
-          "comment": "name(...) and name<T>(...)",
-          "match": "\\b([a-z_][A-Za-z0-9_]*)(?=\\s*(<[^<>()=]*(<[^<>()=]*>[^<>()=]*)*>)?\\()",
-          "captures": { "1": { "name": "entity.name.function.call.trb" } }
+          "comment": ".name(...) and .name<T>(...) - a method call with parentheses",
+          "match": "(?<=\\.)([a-z_][A-Za-z0-9_]*)(?=\\s*(<[^<>()=]*(<[^<>()=]*>[^<>()=]*)*>)?\\()",
+          "captures": { "1": { "name": "entity.name.function.member.trb" } }
         },
         {
-          "comment": ".name { ... } - a call with only a trailing closure",
+          "comment": ".name { ... } - a method call with only a trailing closure",
           "match": "(?<=\\.)([a-z_][A-Za-z0-9_]*)(?=\\s*\\{)",
+          "captures": { "1": { "name": "entity.name.function.member.trb" } }
+        },
+        {
+          "comment": "name(...) and name<T>(...), not written after a `.`",
+          "match": "(?<!\\.)\\b([a-z_][A-Za-z0-9_]*)(?=\\s*(<[^<>()=]*(<[^<>()=]*>[^<>()=]*)*>)?\\()",
           "captures": { "1": { "name": "entity.name.function.call.trb" } }
         },
         {
@@ -223,9 +257,9 @@
           "captures": { "1": { "name": "entity.name.function.call.command.trb" } }
         },
         {
-          "comment": "Command calls on a member path: `Email.parse \"x\"`, `expect(x).toBe 3`",
+          "comment": "Command calls on a member path: `Email.parse \"x\"`, `expect(x).toBe 3` - a method, like the parenthesized form",
           "match": "(?<=\\.)([a-z_][A-Za-z0-9_]*)(?=[ \\t]+([\"'0-9]|[A-Z][A-Za-z0-9_]*\\())",
-          "captures": { "1": { "name": "entity.name.function.call.command.trb" } }
+          "captures": { "1": { "name": "entity.name.function.member.trb" } }
         }
       ]
     },

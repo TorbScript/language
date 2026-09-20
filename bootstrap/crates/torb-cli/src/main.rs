@@ -1,6 +1,7 @@
 //! The `torb` command line tool.
 
 mod canon;
+mod highlight;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -20,6 +21,7 @@ Usage:
   torb tokens <file>     Print the tokens of a file
   torb ast <file>        Print the syntax tree of a file
   torb canon <path>...   Write sources in the canon of the formatter (`torb canon --help`)
+  torb highlight <file>  Print semantic tokens as JSON, for editors (`torb highlight --stdin` reads standard input)
   torb help              Show this text
 ";
 
@@ -40,6 +42,8 @@ fn dispatch() -> ExitCode {
         Some((command, paths)) if command == "parse" && !paths.is_empty() => parse(paths),
         Some((command, paths)) if command == "tokens" && paths.len() == 1 => tokens(&paths[0]),
         Some((command, paths)) if command == "ast" && paths.len() == 1 => ast(&paths[0]),
+        Some((command, rest)) if command == "highlight" && rest == ["--stdin"] => highlight::highlight(None),
+        Some((command, paths)) if command == "highlight" && paths.len() == 1 => highlight::highlight(Some(&paths[0])),
         Some((command, rest)) if command == "canon" && matches!(rest.first().map(String::as_str), Some("--help" | "help")) => {
             print!("{}", canon::USAGE);
             ExitCode::SUCCESS

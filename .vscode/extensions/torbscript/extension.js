@@ -1,13 +1,20 @@
 // Highlights ```trb code blocks in the Markdown PREVIEW.
 // (The editor is handled by the TextMate grammars in ./syntaxes, the preview uses highlight.js classes instead.)
+//
+// This keyword list must stay in sync with `bootstrap/crates/torb-syntax/src/token.rs`'s `Keyword` enum (the
+// lexer's source of truth) plus its three contextual words (`from`, `as`, `by` - ordinary identifiers to the
+// lexer, keywords only in the positions this list's caller already restricts them to).
 
 const KEYWORDS = new Set([
   'if', 'else', 'match', 'for', 'in', 'while', 'break', 'continue', 'return',
   'const', 'var', 'fn', 'type', 'trait', 'extend', 'foreign', 'case', 'use', 'from', 'as',
   'public', 'private', 'native', 'shared', 'lazy', 'with', 'where', 'by',
 ]);
-const LITERALS = new Set(['true', 'false', 'None', 'Void', 'self', 'Self']);
-const BUILTINS = new Set(['print', 'panic', 'assert', 'do', 'spawn', 'Some', 'Ok', 'Error']);
+const LITERALS = new Set(['true', 'false', 'void', 'self', 'Self']);
+// `Some`, `None`, `Ok`, `Fail` are cases (CONCEPT.md, "Algebraic Data Types"), not ordinary built-in functions -
+// they get one shared class distinct from `BUILTINS`, matching the semantic token legend's `enumMember`.
+const CASES = new Set(['Some', 'None', 'Ok', 'Fail']);
+const BUILTINS = new Set(['print', 'panic', 'assert', 'do', 'spawn']);
 
 const TOKEN = new RegExp([
   /(\/\/[^\n]*)/,                                                                  // 1 line comment
@@ -71,6 +78,11 @@ function highlightCode(code) {
     html += escapeHtml(code.slice(last, match.index));
     last = match.index + match[0].length;
     const [text, comment, string, number, word] = match;
+    // Not preceded by an identifier character: true for `.Circle` (no receiver) and for `Shape.Circle`'s `Circle`
+    // (the dot right before it), never for `shape.Circle` read as one longer word - there is none here, `word` is
+    // this token alone. A capitalized word right after a `.` is always a case in this language (CONCEPT.md,
+    // "Algebraic Data Types"): types never nest through a dot, only a case or a lowercase namespace does.
+    const afterDot = code[match.index - 1] === '.';
     if (comment) {
       html += span('hljs-comment', text);
     } else if (string) {
@@ -81,12 +93,19 @@ function highlightCode(code) {
       html += span('hljs-keyword', text);
     } else if (LITERALS.has(word)) {
       html += span('hljs-literal', text);
+    } else if (CASES.has(word) || (afterDot && /^[A-Z]/.test(word))) {
+      // `Some`, `None`, `Ok`, `Fail`, `.Circle`, `Shape.Circle` - a case, colored apart from an ordinary type.
+      html += span('hljs-symbol', text);
     } else if (BUILTINS.has(word)) {
       html += span('hljs-built_in', text);
     } else if (/^[A-Z]/.test(word)) {
       html += span('hljs-type', text);
-    } else if (previousWord === 'fn' || /^\s*(<[^<>()]*>)?\(/.test(code.slice(last))) {
+    } else if (previousWord === 'fn') {
       html += span('hljs-title function_', text);
+    } else if (/^\s*(<[^<>()]*>)?\(/.test(code.slice(last))) {
+      // A call: `.name(` is a method (CONCEPT.md, "Command Calls") - command style and call style are not told
+      // apart here, on purpose (they color the same everywhere else in this extension too).
+      html += span(afterDot ? 'hljs-title function_ invoke__' : 'hljs-title function_', text);
     } else {
       html += escapeHtml(text);
     }
@@ -101,7 +120,190 @@ function highlight(code) {
     .join('');
 }
 
-function activate() {
+// --- Semantic tokens: runs `torb highlight --stdin` and turns its JSON into a SemanticTokensBuilder result --------
+//
+// The TextMate grammar in ./syntaxes is a heuristic; it cannot know whether a name is a field or a local, a case
+// or a plain type, a method or a function - that needs the syntax tree, which only the `torb` binary has (there is
+// no language server yet, see bootstrap/README.md). This provider is the bridge: one process per request, its
+// stdout is one JSON document (`bootstrap/crates/torb-cli/src/highlight/mod.rs` documents the exact shape), and if
+// the binary is missing, fails, or answers late, this provider gives VS Code no tokens at all - the TextMate
+// grammar's colors stand on their own, and the only trace is one line in the "TorbScript" output channel, never a
+// popup. See README.md for the settings and the color palette this feeds through `configurationDefaults`.
+
+const TOKEN_TYPES = [
+  'type', 'interface', 'typeParameter', 'enumMember', 'namespace', 'function', 'method', 'parameter', 'variable', 'property',
+];
+const TOKEN_MODIFIERS = ['declaration', 'readonly', 'static', 'defaultLibrary', 'mutable'];
+
+let outputChannel = null;
+function log(vscode, message) {
+  if (!outputChannel) {
+    outputChannel = vscode.window.createOutputChannel('TorbScript');
+  }
+  outputChannel.appendLine(message);
+}
+
+/** `torbscript.executablePath`, or a `torb`/`torb.exe` this looks for under the open workspace folders'
+ * `bootstrap/target/{release,debug}`, or finally the bare command name to try on `PATH`. */
+function findExecutable(vscode, fs, path) {
+  const vscode_config = vscode.workspace.getConfiguration('torbscript');
+  const configured = vscode_config.get('executablePath');
+  if (configured) {
+    return configured;
+  }
+  const exeName = process.platform === 'win32' ? 'torb.exe' : 'torb';
+  for (const folder of vscode.workspace.workspaceFolders || []) {
+    for (const profile of ['release', 'debug']) {
+      const candidate = path.join(folder.uri.fsPath, 'bootstrap', 'target', profile, exeName);
+      try {
+        if (fs.existsSync(candidate)) {
+          return candidate;
+        }
+      } catch (error) {
+        // Treated the same as "not found": fall through to the next candidate.
+      }
+    }
+  }
+  return exeName === 'torb.exe' ? 'torb' : exeName; // Try PATH under the bare command name either way.
+}
+
+class TorbSemanticTokensProvider {
+  constructor(vscode, cp, fs, path) {
+    this.vscode = vscode;
+    this.cp = cp;
+    this.fs = fs;
+    this.path = path;
+    this.legend = new vscode.SemanticTokensLegend(TOKEN_TYPES, TOKEN_MODIFIERS);
+    this.current = null; // The child process of the request still in flight, if any.
+  }
+
+  provideDocumentSemanticTokens(document, cancellationToken) {
+    const { vscode } = this;
+    const enabled = vscode.workspace.getConfiguration('torbscript').get('semanticHighlighting.enabled', true);
+    const builder = new vscode.SemanticTokensBuilder(this.legend);
+    if (!enabled) {
+      return builder.build();
+    }
+    this.killCurrent();
+    const executable = findExecutable(vscode, this.fs, this.path);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        resolve(result);
+      };
+      let child;
+      try {
+        child = this.cp.spawn(executable, ['highlight', '--stdin'], { cwd: this.workspaceRoot(document) });
+      } catch (error) {
+        log(vscode, `could not start "${executable}": ${error.message}`);
+        return finish(builder.build());
+      }
+      this.current = child;
+      const timeout = setTimeout(() => {
+        log(vscode, `"${executable} highlight --stdin" timed out, killing it`);
+        child.kill();
+      }, 4000);
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => (stdout += chunk));
+      child.stderr.on('data', (chunk) => (stderr += chunk));
+      // If the process exits (crashes, or a small file makes it finish before this extension is done writing) the
+      // write end of its stdin pipe closes; without a listener here, Node treats that as an *unhandled* error and
+      // crashes the whole extension host. `child`'s own `error`/`close` handlers below already report and resolve.
+      child.stdin.on('error', () => {});
+      child.on('error', (error) => {
+        clearTimeout(timeout);
+        log(vscode, `could not run "${executable} highlight --stdin": ${error.message}`);
+        finish(builder.build());
+      });
+      child.on('close', () => {
+        clearTimeout(timeout);
+        if (this.current === child) {
+          this.current = null;
+        }
+        if (stderr.trim()) {
+          log(vscode, stderr.trim());
+        }
+        finish(this.buildTokens(builder, stdout));
+      });
+      // Kills this request's own process, never whatever `this.current` has become by the time this fires - a
+      // newer request may already have replaced it (killCurrent() at the top of this method takes care of that
+      // case instead).
+      cancellationToken.onCancellationRequested(() => {
+        try {
+          child.kill();
+        } catch (error) {
+          // Already gone.
+        }
+      });
+      try {
+        child.stdin.write(document.getText());
+        child.stdin.end();
+      } catch (error) {
+        // The process may already have exited (e.g. the executable was not actually runnable); `close` above
+        // still fires and resolves the promise.
+      }
+    });
+  }
+
+  killCurrent() {
+    if (!this.current) {
+      return;
+    }
+    try {
+      this.current.kill();
+    } catch (error) {
+      // Already gone.
+    }
+    this.current = null;
+  }
+
+  workspaceRoot(document) {
+    const folder = this.vscode.workspace.getWorkspaceFolder(document.uri);
+    return folder ? folder.uri.fsPath : undefined;
+  }
+
+  buildTokens(builder, stdout) {
+    let parsed;
+    try {
+      parsed = JSON.parse(stdout);
+    } catch (error) {
+      if (stdout.trim()) {
+        log(this.vscode, `could not parse its output as JSON: ${error.message}`);
+      }
+      return builder.build();
+    }
+    for (const entry of parsed.tokens || []) {
+      const [line, startCharacter, length, kind, modifiers] = entry;
+      if (!TOKEN_TYPES.includes(kind)) {
+        continue; // A future `torb` may know kinds this extension's legend does not yet declare.
+      }
+      const range = new this.vscode.Range(line, startCharacter, line, startCharacter + length);
+      try {
+        builder.push(range, kind, (modifiers || []).filter((modifier) => TOKEN_MODIFIERS.includes(modifier)));
+      } catch (error) {
+        log(this.vscode, `dropped a token it could not place: ${error.message}`);
+      }
+    }
+    return builder.build();
+  }
+}
+
+function activate(context) {
+  const vscode = require('vscode');
+  const cp = require('child_process');
+  const fs = require('fs');
+  const path = require('path');
+
+  const provider = new TorbSemanticTokensProvider(vscode, cp, fs, path);
+  context.subscriptions.push(
+    vscode.languages.registerDocumentSemanticTokensProvider({ language: 'trb' }, provider, provider.legend)
+  );
+
   return {
     extendMarkdownIt(md) {
       const fallback = md.options.highlight;
@@ -116,4 +318,4 @@ function activate() {
   };
 }
 
-module.exports = { activate, highlight };
+module.exports = { activate, highlight, TorbSemanticTokensProvider, findExecutable, TOKEN_TYPES, TOKEN_MODIFIERS };
