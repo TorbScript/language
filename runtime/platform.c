@@ -217,48 +217,227 @@ bool torb_platform_write_file(const char *path, const uint8_t *bytes, size_t len
 }
 
 /**
- * A child process, run to its end, with its two output streams collected.
- *
- * `popen` is what both platforms have, and it gives **one** stream - so the standard error of the child is redirected
- * into the same pipe and both come back as one text. That is a real limitation and it is the one `torb build` can live
- * with: what it needs to tell apart is "there is no C compiler" (no process at all) from "the C compiler said no" (an
- * exit code plus its message), and it prints the message either way. `Process.start` with three real pipes is 7.3's, and
- * it is what a program that has to keep them apart waits for.
- *
- * The arguments are **quoted** here and nowhere else: `popen` takes a command line and not a list, so a path with a
- * space in it (`C:/Program Files/LLVM/bin/clang.exe`) has to survive the shell that runs it. Nothing else about them is
- * interpreted - that is what "there is no shell" in `std/process` promises - so a quote inside an argument is escaped and
- * everything else is passed through.
+ * Room for `needed` more bytes plus the terminator, doubling. Both command line builders below grow the same way.
  */
-static void torb_quote_argument(const char *argument, char **into, size_t *filled, size_t *capacity) {
-  size_t index;
-  const size_t length = strlen(argument);
-  /* Two quotes, a backslash before every quote of the argument, and one space in front of it */
-  const size_t needed = *filled + length * 2u + 4u;
-  if (needed > *capacity) {
-    size_t grown = *capacity * 2u;
-    char *buffer;
-    while (grown < needed) {
-      grown *= 2u;
-    }
-    buffer = (char *)torb_raw_allocate(grown);
-    memcpy(buffer, *into, *filled);
-    torb_raw_free(*into, *capacity);
-    *into = buffer;
-    *capacity = grown;
+static void torb_reserve_line(size_t needed, char **into, size_t filled, size_t *capacity) {
+  size_t grown = *capacity;
+  char *buffer;
+  if (filled + needed + 1u <= *capacity) {
+    return;
   }
-  (*into)[(*filled)++] = ' ';
-  (*into)[(*filled)++] = '"';
+  while (grown < filled + needed + 1u) {
+    grown *= 2u;
+  }
+  buffer = (char *)torb_raw_allocate(grown);
+  memcpy(buffer, *into, filled + 1u);
+  torb_raw_free(*into, *capacity);
+  *into = buffer;
+  *capacity = grown;
+}
+
+#if defined(_WIN32)
+
+/**
+ * One argument of a Windows command line, quoted the way `CommandLineToArgvW` reads it back - which is the rule the
+ * child's own C runtime undoes, so the argument arrives as exactly the text that was passed.
+ *
+ * The rule has one subtlety: a backslash is only an escape **in front of a quote**, so a run of backslashes is doubled
+ * where a quote follows it (including the closing one) and passed through everywhere else. `C:\Program Files\` as the
+ * last argument would otherwise end as `C:\Program Files\"` and swallow the quote.
+ *
+ * An argument that needs no quoting is written bare, which keeps a command line readable in a debugger.
+ */
+static void torb_append_windows_argument(const char *argument, char **into, size_t *filled, size_t *capacity) {
+  const size_t length = strlen(argument);
+  size_t index;
+  bool needsQuotes = length == 0u;
   for (index = 0u; index < length; index++) {
-    if (argument[index] == '"' || argument[index] == '\\') {
-      (*into)[(*filled)++] = '\\';
+    if (argument[index] == ' ' || argument[index] == '\t' || argument[index] == '"') {
+      needsQuotes = true;
+      break;
     }
-    (*into)[(*filled)++] = argument[index];
+  }
+  /* Two quotes, one space, and in the worst case two bytes per byte of the argument */
+  torb_reserve_line(length * 2u + 3u, into, *filled, capacity);
+  if (*filled > 0u) {
+    (*into)[(*filled)++] = ' ';
+  }
+  if (!needsQuotes) {
+    memcpy(*into + *filled, argument, length);
+    *filled += length;
+    (*into)[*filled] = '\0';
+    return;
+  }
+  (*into)[(*filled)++] = '"';
+  index = 0u;
+  while (index < length) {
+    size_t slashes = 0u;
+    while (index < length && argument[index] == '\\') {
+      slashes++;
+      index++;
+    }
+    if (index == length) {
+      /* In front of the closing quote, so every backslash is doubled */
+      slashes *= 2u;
+    } else if (argument[index] == '"') {
+      slashes = slashes * 2u + 1u;
+    }
+    while (slashes > 0u) {
+      (*into)[(*filled)++] = '\\';
+      slashes--;
+    }
+    if (index < length) {
+      (*into)[(*filled)++] = argument[index];
+      index++;
+    }
   }
   (*into)[(*filled)++] = '"';
   (*into)[*filled] = '\0';
 }
 
+/**
+ * A child process, run to its end, with its two output streams collected - through `CreateProcess` and a pipe, and
+ * through **no shell at all**.
+ *
+ * `_popen` would be four lines instead of forty, and it was what this did. It cannot work: `_popen` runs `cmd.exe /c`
+ * with a command line, and `cmd` re-parses the quotes by a rule that depends on where the first quote stands and on
+ * whether what precedes it names an executable file (`cmd /?`, "processing of quote characters"). Measured on this
+ * machine: `"gcc" "--version"` arrives at `cmd` as one command *named* `gcc" "--version`, so **`torb build` from the
+ * compiled compiler reported "no C compiler found"** while the interpreter, which uses no shell, found gcc on the same
+ * PATH. There is no quoting that survives both that rule and a nested `cmd /c` - which is what
+ * `Process.run("cmd", ["/c", "echo torb"])` is - so the shell has to go.
+ *
+ * What that buys, beyond the bug: **"there is no shell" in `std/process` is now true on this platform**, and a program
+ * that cannot be started at all is a failure again instead of `cmd`'s own exit code 1 - which is the difference
+ * `findCompiler` reads and what the interpreter answers.
+ *
+ * Both output streams still go into **one** pipe, because a `ProcessOutput` is what a caller gets and `Process.start`
+ * with three real pipes is 7.3's.
+ */
+bool torb_platform_run_process(
+  const char *command,
+  const char **arguments,
+  size_t count,
+  int64_t *code,
+  uint8_t **output,
+  size_t *length,
+  size_t *capacity,
+  const char **message
+) {
+  size_t lineCapacity = 512u;
+  size_t filled = 0u;
+  char *line = (char *)torb_raw_allocate(lineCapacity);
+  size_t index;
+  size_t outputCapacity = 65536u;
+  size_t outputFilled = 0u;
+  uint8_t *buffer;
+  SECURITY_ATTRIBUTES inheritable;
+  STARTUPINFOA startup;
+  PROCESS_INFORMATION child;
+  HANDLE readEnd = NULL;
+  HANDLE writeEnd = NULL;
+  DWORD status = 0u;
+  line[0] = '\0';
+  torb_append_windows_argument(command, &line, &filled, &lineCapacity);
+  for (index = 0u; index < count; index++) {
+    torb_append_windows_argument(arguments[index], &line, &filled, &lineCapacity);
+  }
+  inheritable.nLength = (DWORD)sizeof(inheritable);
+  inheritable.lpSecurityDescriptor = NULL;
+  inheritable.bInheritHandle = TRUE;
+  if (!CreatePipe(&readEnd, &writeEnd, &inheritable, 0u)) {
+    *message = "the pipe for the output of the child process could not be created";
+    torb_raw_free(line, lineCapacity);
+    return false;
+  }
+  /* Our end of the pipe must not reach the child, or the read below never sees the pipe close */
+  SetHandleInformation(readEnd, HANDLE_FLAG_INHERIT, 0u);
+  memset(&startup, 0, sizeof(startup));
+  memset(&child, 0, sizeof(child));
+  startup.cb = (DWORD)sizeof(startup);
+  startup.dwFlags = STARTF_USESTDHANDLES;
+  /* Our own standard input, so a child that reads one still can - and no handle at all where this process has none,
+     because `STARTF_USESTDHANDLES` with an invalid one would fail the whole call */
+  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  if (startup.hStdInput == INVALID_HANDLE_VALUE) {
+    startup.hStdInput = NULL;
+  }
+  startup.hStdOutput = writeEnd;
+  startup.hStdError = writeEnd;
+  /* No application name, so Windows searches PATH and appends `.exe` to a name without an extension */
+  if (!CreateProcessA(NULL, line, NULL, NULL, TRUE, 0u, NULL, NULL, &startup, &child)) {
+    *message = "the program could not be started";
+    CloseHandle(readEnd);
+    CloseHandle(writeEnd);
+    torb_raw_free(line, lineCapacity);
+    return false;
+  }
+  torb_raw_free(line, lineCapacity);
+  /* And our copy of the write end has to go too, for the same reason */
+  CloseHandle(writeEnd);
+  buffer = (uint8_t *)torb_raw_allocate(outputCapacity);
+  for (;;) {
+    DWORD read = 0u;
+    if (outputFilled == outputCapacity) {
+      uint8_t *grown = (uint8_t *)torb_raw_allocate(outputCapacity * 2u);
+      memcpy(grown, buffer, outputFilled);
+      torb_raw_free(buffer, outputCapacity);
+      buffer = grown;
+      outputCapacity *= 2u;
+    }
+    if (!ReadFile(readEnd, buffer + outputFilled, (DWORD)(outputCapacity - outputFilled), &read, NULL) || read == 0u) {
+      break;
+    }
+    outputFilled += (size_t)read;
+  }
+  CloseHandle(readEnd);
+  WaitForSingleObject(child.hProcess, INFINITE);
+  if (!GetExitCodeProcess(child.hProcess, &status)) {
+    status = (DWORD)-1;
+  }
+  CloseHandle(child.hProcess);
+  CloseHandle(child.hThread);
+  *code = (int64_t)(int32_t)status;
+  *output = buffer;
+  *length = outputFilled;
+  *capacity = outputCapacity;
+  return true;
+}
+
+#else
+
+/**
+ * One argument for `/bin/sh`, in single quotes, which is the one quoting a POSIX shell does not interpret at all. A
+ * single quote inside the argument ends the run and is written as `'\''`.
+ */
+static void torb_quote_argument(const char *argument, char **into, size_t *filled, size_t *capacity) {
+  size_t index;
+  const size_t length = strlen(argument);
+  /* Two quotes, four bytes for every quote of the argument, and one space in front of it */
+  torb_reserve_line(length * 4u + 4u, into, *filled, capacity);
+  (*into)[(*filled)++] = ' ';
+  (*into)[(*filled)++] = '\'';
+  for (index = 0u; index < length; index++) {
+    if (argument[index] == '\'') {
+      (*into)[(*filled)++] = '\'';
+      (*into)[(*filled)++] = '\\';
+      (*into)[(*filled)++] = '\'';
+      (*into)[(*filled)++] = '\'';
+      continue;
+    }
+    (*into)[(*filled)++] = argument[index];
+  }
+  (*into)[(*filled)++] = '\'';
+  (*into)[*filled] = '\0';
+}
+
+/**
+ * The same, through `popen`, which is `/bin/sh -c`. A shell here is a compromise the Windows half no longer makes: a
+ * `fork` plus `execvp` would keep the promise of `std/process` exactly, and single quotes keep it in practice, because
+ * nothing inside them is interpreted. It is `Process.start`'s job (7.3) to make both platforms shell free.
+ *
+ * Both output streams go into one pipe: `popen` has one, and a `ProcessOutput` is what a caller gets.
+ */
 bool torb_platform_run_process(
   const char *command,
   const char **arguments,
@@ -283,25 +462,13 @@ bool torb_platform_run_process(
   for (index = 0u; index < count; index++) {
     torb_quote_argument(arguments[index], &line, &filled, &lineCapacity);
   }
-  /* Both streams into one pipe: `popen` has one, and 7.3's `Process.start` is what keeps them apart */
   {
     const char *tail = " 2>&1";
-    const size_t needed = filled + strlen(tail) + 1u;
-    if (needed > lineCapacity) {
-      char *grown = (char *)torb_raw_allocate(needed);
-      memcpy(grown, line, filled + 1u);
-      torb_raw_free(line, lineCapacity);
-      line = grown;
-      lineCapacity = needed;
-    }
+    torb_reserve_line(strlen(tail), &line, filled, &lineCapacity);
     memcpy(line + filled, tail, strlen(tail) + 1u);
     filled += strlen(tail);
   }
-#if defined(_WIN32)
-  pipe = _popen(line, "rb");
-#else
   pipe = popen(line, "r");
-#endif
   if (pipe == NULL) {
     *message = strerror(errno);
     torb_raw_free(line, lineCapacity);
@@ -322,9 +489,6 @@ bool torb_platform_run_process(
       outputCapacity *= 2u;
     }
   }
-#if defined(_WIN32)
-  status = _pclose(pipe);
-#else
   status = pclose(pipe);
   if (status != -1) {
     /* The exit code is in the high byte of `wait`'s status, and a child killed by a signal has none at all */
@@ -334,7 +498,6 @@ bool torb_platform_run_process(
       status = 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
     }
   }
-#endif
   torb_raw_free(line, lineCapacity);
   if (status == -1) {
     *message = strerror(errno);
@@ -347,6 +510,8 @@ bool torb_platform_run_process(
   *capacity = outputCapacity;
   return true;
 }
+
+#endif
 
 #if defined(_WIN32)
 

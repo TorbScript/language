@@ -1527,3 +1527,42 @@ Wenn nicht, was bedeutet, bewirkt es?
     CONCEPT eingetragen; eine Erklärseite ("Where are my overloads?") kommt mit der nächsten Doku-Pflege. Ebenso
     entschieden: die Plan-Nummern ("(milestone 5.9b)") kommen aus den Back-End-Meldungen an Nutzer heraus - zusammen
     mit der Doku-Welle für `ir/`+`backend/` nach dem Fixpunkt (die Meldungen sind durch Tests festgenagelt).
+
+
+- (**Meilenstein 6.2, der Fixpunkt**, 2026-09-20) **Er hält: das C von Stufe 1 und das von Stufe 2 sind byte-gleich,
+  und Stufe 3 schreibt dasselbe noch einmal.** Der "Hänger" war kein Fehler im Back-End, sondern eine quadratische
+  Bibliotheksfunktion, die nur ein kompiliertes Programm bezahlt.
+  - **Ursache:** `Iterable.joined` faltete `result + separator + item.show()`. Ein `String` ist ein Wert, also kopiert
+    jeder Schritt alles, was schon drin steht - `n` Stücke kopieren `O(n²)` Bytes. Und **Stage 0 hat davon nie eine
+    Zeile ausgeführt**: `joined`, `String.from` und die ganze `Iterable`-Fläche sind Natives des Interpreters, und
+    Rusts `parts.join(separator)` läuft einmal über die Bytes. Das `program.c` des Compilers hat 786457 Zeilen und
+    66 MB, und `emittedText` ist EIN `joined` darüber - hochgerechnet über drei Stunden Kopieren, ohne ein Byte
+    Ausgabe. Gemessen an einer Sonde (60000 Stücke, 1,4 MB): **20,6 s vorher, 0,068 s nachher, 0,065 s auf Stage 0.**
+  - `concatenated(pieces, separator)` (neu, `std/iteration/src/concatenate.trb`) mischt **Nachbarn paarweise**: jedes
+    Byte wird einmal pro Ebene des Mischbaums kopiert, und es gibt `log n` Ebenen. Gleiche Reihenfolge, gleiche Anzahl
+    Trenner. Dieselbe Form war auch in `String.from(Iterable<Char>)` (ebenfalls von einer Stage-0-Native verdeckt) und
+    im `joining`-Collector. Nebenbei einen echten Fehler mitgenommen: ein **führendes leeres Stück** hat seinen Trenner
+    verschluckt (`["", "b"].joined(separator: ",")` war `b` statt `,b`), weil `result.isEmpty()` "noch nichts" nicht
+    von "der leere Text" unterscheiden kann.
+  - **Zweite Abweichung, die erst der Fixpunkt fand:** `Process.run` lief über eine Shell, und deshalb fand das Binary
+    keinen C-Compiler ("no C compiler found", während der Interpreter gcc im gleichen PATH fand). `_popen` startet
+    `cmd /c`, und `cmd` liest die Anführungszeichen nach einer Regel neu, die davon abhängt, wo das erste steht:
+    `"gcc" "--version"` kommt als EIN Kommando namens `gcc" "--version` an. Mit einer C-Sonde durchprobiert - es gibt
+    keine Zitierweise, die das UND ein verschachteltes `cmd /c "echo torb"` übersteht, also ist die Shell weg:
+    `CreateProcess` plus eine Pipe. Damit stimmen zwei Versprechen wieder, die der Interpreter schon hielt ("es gibt
+    keine Shell", und ein Programm, das gar nicht startet, ist ein Fehler und kein Exit-Code). POSIX behält `popen`
+    mit einfachen Anführungszeichen; `fork`+`execvp` wäre dort die gleiche Reparatur und gehört zu 7.3.
+  - **Der Rest stimmte schon:** vor der Reparatur wurden alle 41 Gate-Programme von Stufe 1 und Stufe 2 emittiert und
+    byte-weise verglichen - **41 von 41 gleich**. Keine Iterationsreihenfolge, kein nicht initialisierter Slot, kein
+    adressabhängiger Hash, kein Float-Format.
+  - **Der Fixpunkt-Test** ist `bootstrap/crates/torb-cli/tests/fixpoint.rs`, `#[ignore]`d weil er Minuten braucht:
+    `cargo test --release --test fixpoint -- --ignored --nocapture`. Er meldet bei einem Unterschied das **erste
+    abweichende Byte mit dem Text drumherum** in beiden Dateien.
+  - Danach mitgenommen: **`Float64.compare` hat jetzt einen Wrapper** (`NativeResult.Ordering` - die Runtime antwortet
+    ein Vorzeichen, der Wrapper die drei Fälle; dieselbe Form für `Instant.compare`/`Duration.compare`), also kann ein
+    Tupel mit Float-Feld emittiert werden und das Float-Feld ist in `tuple-compare.trb` zurück. Ein `nan` kann dort
+    **nicht** stehen: Stage 0 weigert sich, einen zu vergleichen ("the Float NaN and the Float 1.5 cannot be
+    compared") - eine weitere Zeile auf der 5.14-Liste.
+  - **Offen, in der Reihenfolge:** quotierte Ausdrücke 5.11 (58 Befunde, alle in `compiler/tests/`; `torb test` nativ),
+    eine Collection aus einem Trait-Wert lesen (7.3), und 6.3s Messungen - `joined` ist der Grund, dort nach mehr vom
+    gleichen zu suchen (ein Build pro Lesen eines Modul-`const`, die Instanzzahl).

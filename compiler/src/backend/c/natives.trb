@@ -19,8 +19,10 @@ use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind from "../../ir/ir"
  * - A native whose result is an `Option` or a `Result` becomes a runtime function that answers `bool` and writes the
  *   payload through an out parameter (`torb_list_get`, `torb_text_index_of`, `torb_file_read_text`). The lowering
  *   builds the `Option`, the `Result` and the `IoError` around it.
- * - A native whose result is `Ordering` is `.Derived`: the lowering generates the two comparisons and the
- *   `Construct`, because `Ordering` is a layout of the program.
+ * - A native whose result is `Ordering` never answers one: either it is `.Derived`, and the lowering generates the two
+ *   comparisons and the `Construct` from the layout, or the runtime owns the order and answers a **sign** that the
+ *   wrapper turns into the three cases (`NativeResult.Ordering`). Both exist because `Ordering` is a layout of the
+ *   program.
  */
 
 /** One `native` declaration and what it becomes. */
@@ -83,6 +85,13 @@ public type NativeResult {
    * two halves of an entry live in two arrays of the table anyway, so nothing could write a tuple in one piece.
    */
   case OptionalParts
+  /**
+   * The runtime answers a **sign** as an `int32_t` where the declaration answers an `Ordering`: negative is `Less`,
+   * positive `Greater`, zero `Equal`. It is the shape of every comparison the runtime owns rather than derives - a total
+   * order over the floats with `nan` above everything (decided gap 5), and the two of `std/time` - and the three cases
+   * are a variant type of the *program*, so `runtime/` could not build one (BACKEND 5.R1).
+   */
+  case Ordering
 }
 
 public type NativeTarget {
@@ -141,6 +150,20 @@ fn containerOf(name: String, kind: RuntimeKind): NativeEntry {
 
 fn runtimeOf(name: String, function: String, prototype: String): NativeEntry {
   NativeEntry name: name, target: NativeTarget.Runtime(function), prototype: prototype
+}
+
+/**
+ * A comparison of the runtime: the symbol answers a **sign** as an `int32_t` where the declaration answers an `Ordering`,
+ * which is a variant type of the program that no function of `runtime/` could build (BACKEND 5.R1). The wrapper turns the
+ * sign into the three cases.
+ */
+fn orderingRuntimeOf(name: String, function: String, prototype: String): NativeEntry {
+  NativeEntry(
+    name: name,
+    target: NativeTarget.Runtime(function),
+    result: NativeResult.Ordering,
+    prototype: prototype,
+  )
 }
 
 /**
@@ -324,7 +347,11 @@ fn floatEntries(var entries: List<NativeEntry>) {
   )
   signedMembers entries, "Float64", kind
   // `compare` is a total order with `nan` above everything (decided gap 5), which no comparison intrinsic gives.
-  entries.add runtimeOf("Float64.compare", "torb_compare_f64", "int32_t torb_compare_f64(double first, double second);")
+  entries.add(orderingRuntimeOf(
+    "Float64.compare",
+    "torb_compare_f64",
+    "int32_t torb_compare_f64(double first, double second);",
+  ))
   entries.add runtimeOf("Float64.squareRoot", "torb_square_root_f64", "double torb_square_root_f64(double value);")
   entries.add runtimeOf("Float64.floor", "torb_floor_f64", "double torb_floor_f64(double value);")
   entries.add runtimeOf("Float64.ceiling", "torb_ceiling_f64", "double torb_ceiling_f64(double value);")
@@ -850,7 +877,7 @@ fn timeEntries(var entries: List<NativeEntry>) {
     "torb_instant_equals",
     "bool torb_instant_equals(torb_instant first, torb_instant second);",
   ))
-  entries.add(runtimeOf(
+  entries.add(orderingRuntimeOf(
     "Instant.compare",
     "torb_instant_compare",
     "int32_t torb_instant_compare(torb_instant first, torb_instant second);",
@@ -865,7 +892,7 @@ fn timeEntries(var entries: List<NativeEntry>) {
     "torb_duration_equals",
     "bool torb_duration_equals(torb_duration first, torb_duration second);",
   ))
-  entries.add(runtimeOf(
+  entries.add(orderingRuntimeOf(
     "Duration.compare",
     "torb_duration_compare",
     "int32_t torb_duration_compare(torb_duration first, torb_duration second);",

@@ -843,7 +843,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.13** | The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir`, the `error:` report of a top-level `?` (it walks `cause()`) and `?` return traces in the debug profile | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE, an error chain of three prints three lines | 5.3 |
 | **5.14** | Conformance and determinism: one runner over stage 0 and the C back end, `--emit-c` twice byte identical for the whole workspace, no absolute path in the output, timing budget | `compiler/tests/backend.test.trb`, the runner | Everything above | 5.1-5.13 |
 | **6.1** | Compile `compiler/` with stage 1: every missing intrinsic, every crash, every construct the compiler uses and the lowering does not cover yet. **Gate: a `torb` binary exists** | wherever it hurts | `torb check ..` from the new binary gives the same output as stage 1 | 5.14 |
-| **6.2** | The fixpoint: stage 2 compiles `compiler/` again, the two C files are compared byte for byte, both binaries pass the conformance suite. `bootstrap/` frozen | the runner | **The fixpoint gate** | 6.1 |
+| **6.2** | **Done.** The fixpoint: stage 2 compiles `compiler/` again, the two C files are compared byte for byte, stage 3 emits a third one. `bootstrap/` frozen | `std/iteration/src/concatenate.trb`, `runtime/platform.c`, `bootstrap/crates/torb-cli/tests/fixpoint.rs` | **The fixpoint gate** (`cargo test --release --test fixpoint -- --ignored`) | 6.1 |
 | **6.3** | Performance and size: measure, shard the translation unit if it pays, cut the obvious waste (instance count, string copies), state a budget for `torb build` of the workspace | `backend/c/emit.trb` | A timing test in the suite | 6.2 |
 | **7.1** | Bytecode: the format, the emitter from the IR, a disassembler for the snapshots | `backend/bytecode/*.trb` | Disassembly snapshots next to the IR snapshots | 6.2 |
 | **7.2** | The interpreter loop, `torb run` through the VM, the conformance suite through the VM. **Gate: stage 0, C and the VM agree on every script** | `vm/*.trb` | The full suite, three back ends | 7.1 |
@@ -2619,26 +2619,149 @@ itself, and the most important sentence of this round.
 - The `Ordering` of a tuple is a **generated function of the program**, lexicographic over each field's own `Compare` - not
   an opcode, and not a comparison the VM may shortcut.
 
-**What is left, in the order it will bite.**
-
-1. **The fixpoint hangs.** The stage-1 binary `check`s and `ir --statistics`-es the repository byte for byte like stage 1
-   and in seconds, and then `build ../compiler` runs for **ten minutes on one core without writing a line of C**. It is
-   therefore not the front end, not the lowering and not `insertOwnership` - `ir --statistics` runs all three - so it is
-   `verifyOwnedProgram` or the emitter, and both are full of `while isChanged` fixpoints (the `R_`/`D_` demand sets closed
-   over the fields, `elementOrder`). A value that shares storage where it must not makes such a loop never settle, which is
-   the same family as the boxed-copy bug above and the first thing to look at. This is 6.2's whole distance.
-2. **Quoted expressions, 5.11** (58 findings, every one in `compiler/tests/`): `torb test` from the native binary. Nothing
-   of `compiler/src/` needs it, so it blocks no build - only the compiler's own tests running natively.
-3. **`Float64.compare` has no wrapper.** The one `.Runtime` comparison of the manifest answers `int32_t` where the
-   declaration answers `Ordering`, so a tuple with a float field cannot be emitted. It needs one `NativeResult` shape -
-   "an ordering out of a sign" - and `torb ir` never notices, because it never looks at a prototype.
-4. **Reading a collection back out of a trait-typed value** for a native argument, which `Process.start` and `Task.all`
-   will want at 7.3: the first hop into a boxed payload is a `.data` member and no `PathStep` the emitter has.
-
 **One divergence recorded for 5.14, not fixed:** a tuple has a `compare` **member** on stage 0 and none in the checker
 (which gives a tuple the operators and nothing else), so `pair.compare(other)` runs on stage 0 and is a type error in the
 front end. `==` on a tuple records no resolution at all for the same reason, which is why `lowerOperator` asks
 `dispatchedOn` for one.
+
+### What 6.2 decided: the fixpoint
+
+**`main.exe build ../compiler` writes the same `program.c` stage 1 wrote, to the byte, and the binary built from that
+does it again.** Milestone 6.2 is one bug wide, and the bug was not in the back end at all.
+
+**Joining a text is a merge tree, and a `String` is a value.** This is the whole hang.
+
+- `Iterable.joined` folded `result + separator + item.show()` over its pieces. A `String` is a value, so every step copies
+  everything that is already in the accumulator, and `n` pieces copy `O(n²)` bytes. `emittedText` is one `joined` over the
+  lines of the translation unit, and the compiler's own is **786457 lines and 66 megabytes**: measured on a probe that
+  joins 60000 pieces into 1.4 MB (20.6 seconds natively), that extrapolates to **over three hours** of copying before one
+  byte reaches the file. "Ten minutes on one core without a line of C" was the first ten minutes of it.
+- **Stage 0 never ran a line of the fold.** `joined`, `String.from` and the whole `Iterable` surface are natives of the
+  interpreter (`natives.rs`), and Rust's `parts.join(separator)` walks the bytes once - so the square was paid by the
+  emitted C alone and nothing in the repository could see it. That is the shape of the class: *not* a value that shares
+  storage where it must not, and *not* a fixpoint that fails to settle, but a **library algorithm whose cost only the
+  compiled program pays, because stage 0 answers the same call with Rust**. Every `native` entry of `natives.rs` that has
+  a TorbScript body in `std/` is a place where this can happen again.
+- `concatenated(pieces, separator)` in `std/iteration/src/concatenate.trb` merges **neighbours pairwise**: every byte is
+  copied once per level of the merge tree and there are `log n` levels. 20.6 seconds became **0.068**, and stage 0 takes
+  0.065 for the same probe. What comes out is the same text either way - a tree over `n` leaves has `n - 1` forks and each
+  fork writes one separator.
+- It is a module of its own because `collectors.trb` needs it too and `iteration.trb` already imports that one; and it is
+  in `std/iteration` and not in `std/text` because `std/text` depends on that package and not the other way round.
+- The same shape in two more places, both fixed with it: `String.from(Iterable<Char>)` appended one character at a time
+  (also a native of stage 0, so also invisible), and the `joining` collector accumulated a `String?`.
+- **A leading empty piece used to swallow its separator.** `result.isEmpty()` cannot tell "nothing yet" from "the empty
+  text", so `["", "b"].joined(separator: ",")` came out as `b` where stage 0 answers `,b`. A list of pieces has no such
+  ambiguity, so the bug went with the fold. It is what makes the gate program fail before the fix.
+- Gate: `bootstrap/tests/native/joined.trb` - every count of pieces (the even/odd carry of the tree), an empty piece in
+  every position, a multi-byte separator, non-`String` items, a lazy pipeline, `String.from`, and 40000 pieces so that a
+  regression to the square shows in the time the file takes. Byte-equal with stage 0, `live blocks at exit: 0`.
+  `concatenated` and `joining` have no program of their own: **stage 0 does not load `std/` at all** (its world is
+  `natives.rs` plus the embedded `prelude.trb`), so a program that names either of them has nothing to be compared
+  against - which is a limit of every gate program and worth knowing before writing one.
+
+**A comparison the runtime owns answers a sign, not an `Ordering`.** `Float64.compare` is a `.Runtime` entry, because a
+total order with `nan` above everything (decided gap 5) is no comparison intrinsic - and `torb_compare_f64` answers an
+`int32_t` where the declaration answers `Ordering`, which the emitter refused as a prototype that does not match. So no
+program with a `Float64` in a tuple could be built, and `torb ir` never noticed because it never looks at a prototype.
+`NativeResult.Ordering` is the fifth shape and costs no new machinery in the signature: a sign in the place of the result
+is the same override at position -1 that a coerced collection already uses for its storage. The body is built by
+`orderingOutOfSign`, which the generated `compare` of a `String` uses over the sign of `torb_text_compare`, so which case
+a negative sign stands for is decided once for both back ends. It covers `Instant.compare` and `Duration.compare` too.
+The `Float64` field is back in `bootstrap/tests/native/tuple-compare.trb`.
+
+**Everything else about the emitter already agreed.** Before the fix was written, all 41 gate programs of
+`bootstrap/tests/native/` were emitted by stage 1 and by stage 2 and compared byte for byte: **41 of 41 identical**. So
+there was no iteration order, no uninitialized slot, no address-dependent hash and no float formatting to find - the
+emitter was already a pure function of the program, and the one thing between 6.1 and the same `program.c` was the cost
+of `joined`.
+
+**The second divergence: `Process.run` went through a shell, and the binary therefore found no C compiler.** Stage 2 wrote
+the C and then reported `no C compiler found` where stage 1 found gcc on the same PATH - so there was no stage 3.
+
+- `_popen` runs `cmd.exe /c <command line>`, and `cmd` re-parses the quotes by a rule that depends on where the first
+  quote stands and on whether what precedes it names an executable file (`cmd /?`). `"gcc" "--version"` arrives as one
+  command **named** `gcc" "--version`. Measured with a C probe: neither an extra outer pair of quotes, nor `cmd /s /c`,
+  nor the redirect in front of the command works for both that and a nested `cmd /c "echo torb"`, which is what
+  `Process.run("cmd", ["/c", ...])` is. **There is no quoting that survives both**, so the shell had to go.
+- `runtime/platform.c` runs a child through `CreateProcess` plus one pipe on Windows now, with the arguments quoted by
+  the `CommandLineToArgvW` rule the child's own C runtime undoes. Two promises become true with it, and the interpreter
+  kept both already: "there is no shell" (`std/process`), and **a program that cannot be started at all is a failure**
+  rather than `cmd`'s own exit code 1.
+- POSIX keeps `popen`, with every argument in single quotes. `fork` plus `execvp` is what would make that half shell free
+  as well, and it is `Process.start`'s job at 7.3; the difference is recorded in `runtime/README.md`.
+- **Why no round before this one noticed:** the only gate that runs a child process ran `cmd /c "echo torb"`, and a
+  command with **two** quoted arguments happened to survive the rule that a command with one does not. Both shapes are in
+  `runtime/tests/process_test.c` and in `bootstrap/tests/native/files.trb` now.
+
+**The fixpoint test is `bootstrap/crates/torb-cli/tests/fixpoint.rs`,** `#[ignore]`d because it takes minutes and needs a
+C compiler:
+
+```text
+cargo test --release --test fixpoint -- --ignored --nocapture
+```
+
+It builds the compiler with stage 1, builds it again with the binary that came out, compares the two `program.c` byte for
+byte, and lets stage 3 emit a third one. A difference is reported as the **first differing byte with the 300 bytes around
+it in both files**, because "the files differ" says nothing about 66 megabytes.
+
+**What the two stages cost.** One machine (16 cores, gcc 13.2, `-O2`), the whole repository or the compiler's own
+package, wall time and peak working set of the one process:
+
+| What | Stage 1 (the interpreter) | Stage 2 (the binary) | Factor |
+|---|---|---|---|
+| `check ..` - 280 files, 178832 expressions | 47.2 s, 726 MB | **7.2 s, 216 MB** | 6.6x |
+| `ir --statistics ../compiler` - lower, own, verify | 131.0 s, 1054 MB | **15.0 s, 322 MB** | 8.7x |
+| `build ../compiler`, up to the written `program.c` | 158 s, 1409 MB | **20.7 s, 403 MB** | 7.6x |
+| the gcc that follows it, on one 65715134-byte file | 95 s | 96 s | 1.0x |
+| `build ../compiler` in full | 253.1 s | **116.7 s** | 2.2x |
+| `test ../compiler/tests` - 1453 tests, 55 files | 246.9 s | not yet (5.11) | - |
+
+The three build rows are one run of the fixpoint test, so they add up; the memory figures come from a run measured on its
+own, because peak working set is the one number a second process in the same run would confuse.
+
+- **The C compiler is the build now**, not the compiler: 96 of stage 2's 116.7 seconds are one gcc on one translation
+  unit, and that number is the same for both stages because it is the same C. It is what 6.3's "shard the translation unit
+  if it pays" is about, and the only number in the table a faster emitter cannot move.
+- **Memory is the same story as time**: the binary needs 403 MB where the interpreter needs 1409 MB for the same work, and
+  the shape is the same in all three rows - roughly a third. Nothing here is close to a limit.
+- `test ../compiler/tests` runs one process per file, so the peak of the runner says nothing; stage 2 cannot run it at all
+  until 5.11 lowers a quoted expression.
+- Both stages still answer `check --statistics ..` and `ir --statistics ../compiler` **byte for byte identically**, which
+  is what says the speed costs no agreement.
+
+**What the VM of 7.x has to know from this round.**
+
+- **A cost that stage 0 hides is a cost only the back ends pay.** Whatever `natives.rs` answers with Rust while `std/`
+  carries a TorbScript body for the same declaration is invisible to every test that runs on stage 0. The VM pays the same
+  bill the C back end pays, so a VM that runs `compiler/` will meet exactly the places this round found - and the way to
+  find them is a probe compiled by the back end, never a script on stage 0.
+- `concatenated` is ordinary TorbScript over `String + String` and needs **no** intrinsic and no new opcode. A VM that
+  wants joining to be cheaper implements `Add.add` on a text well; nothing above it has to change.
+- **`Process.run` must not go through a shell.** The VM implements `torb_process_run_collecting` like the C runtime does:
+  an argument list, never a command line a shell re-parses. A program that cannot be started is `-1` plus a reason.
+
+**What is left, in the order it will bite.**
+
+1. **Quoted expressions, 5.11** (58 findings, every one in `compiler/tests/`): `torb test` from the native binary. Nothing
+   of `compiler/src/` needs it, so it blocks no build - only the compiler's own tests running natively, which is the one
+   row of the table above that stage 2 cannot fill.
+2. **Reading a collection back out of a trait-typed value** for a native argument, which `Process.start` and `Task.all`
+   will want at 7.3: the first hop into a boxed payload is a `.data` member and no `PathStep` the emitter has.
+3. **Shard the translation unit, or do not** - 6.3's question, and the table above says it is the only one worth asking
+   about the time a build takes: 96 of stage 2's 117 seconds are one gcc on one 65-megabyte file.
+4. **Look for more of what `joined` was.** Every `native` of `natives.rs` that has a TorbScript body in `std/` is a cost
+   the interpreter hides; and the two the back end already knows about are one build per read of a module `const` (the
+   immortal counted static above) and the instance count.
+
+**Two more entries for 5.14's list of differences between stage 0 and the binary**, both found by a gate program of this
+round and neither fixed:
+
+- **Stage 0 refuses to compare a `nan` at all** ("the Float NaN and the Float 1.5 cannot be compared"), where the language
+  says `nan` is above everything (decided gap 5) and `torb_compare_f64` implements that. So no program can compare the two
+  back ends on one, which is why `tuple-compare.trb` has no `nan` in it.
+- **A program that cannot be started at all** is an `IoError` in the interpreter and on Windows, and the shell's own exit
+  code on POSIX, where `Process.run` still goes through `popen`.
 
 ### How the C emitter is written
 

@@ -8,8 +8,8 @@
  *
  * What is under test is the lexicographic rule itself: the first field that is not equal decides, a tuple whose first
  * fields agree falls through to the next one, and two tuples that agree everywhere are equal. The widths are mixed on
- * purpose (an `Int`, a `String`, a `Char`, a `Bool`-free `Float`, and a tuple inside a tuple) because each field goes
- * through a *different* member.
+ * purpose (an `Int`, a `String`, a `Char`, a `Float` and a tuple inside a tuple) because each field goes through a
+ * *different* member.
  */
 fn pairs() {
   const first = (1, "b")
@@ -34,11 +34,31 @@ fn ordering() {
 }
 
 /**
- * A `Float64` field is **not** here, and its absence is a finding of its own: `Float64.compare` is the one `.Runtime`
- * comparison of the manifest (a total order with `nan` above everything is no comparison intrinsic), and it answers
- * `int32_t` where the declaration answers `Ordering` - so it needs a wrapper that builds the three cases out of a sign,
- * which is a shape `NativeResult` does not have yet. Nothing of the compiler compares a float, so it blocks no build.
+ * A `Float64` field, which is the one field whose order the **runtime** owns: a total order with `nan` above everything
+ * (decided gap 5) is no comparison intrinsic, so `Float64.compare` is a `.Runtime` entry - and its symbol answers a
+ * **sign** as an `int32_t` where the declaration answers an `Ordering`. `NativeResult.Ordering` is the wrapper that turns
+ * the sign into the three cases, and it is why a tuple with a float field can be emitted at all.
+ *
+ * A `nan` is **not** here, and its absence is a difference between the two back ends and not a gap in the wrapper: stage 0
+ * refuses to compare one at all ("the Float NaN and the Float 1.5 cannot be compared"), so no program can compare the two
+ * on it. What the order of a `nan` is belongs to `torb_compare_f64` and is pinned in `runtime/tests/number_test.c`; that
+ * the wrapper calls it, and does not compare with `<`, is pinned in `compiler/tests/lower-natives.test.trb`.
  */
+fn floats() {
+  const first = (1.5, "m")
+  print(first < (2.5, "a"))
+  print(first < (1.5, "n"))
+  print(first > (0.5, "z"))
+  print(first == (1.5, "m"))
+  print(first >= (1.5, "m"))
+  // Computed, so that no folding of a literal can be behind the answer
+  const half = 1.0 / 2.0
+  print(first > (half, "z"))
+  var rows = [(2.0, "a"), (0.5, "z"), (1.5, "b"), (0.5, "a")]
+  rows.sort({ _ })
+  print rows
+}
+
 fn triples() {
   const first = (1, 'a', "m")
   print(first < (1, 'a', "n"))
@@ -72,6 +92,7 @@ fn single() {
 
 pairs()
 ordering()
+floats()
 triples()
 nested()
 sorting()

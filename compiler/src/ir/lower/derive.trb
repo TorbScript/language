@@ -743,6 +743,55 @@ fn compareBody(var lowering: Lowering, var builder: FunctionBuilder, subject: Ty
   answerOrdering lowering, builder, layout, "Equal", at
 }
 
+/**
+ * The three cases of an `Ordering` out of a **sign**: a negative number is `Less`, a positive one `Greater` and zero is
+ * `Equal`. It ends the body - all three blocks `return` - and it is the one place that knows which case of `Ordering`
+ * stands for what.
+ *
+ * It is here and not in `ir/lower/native.trb` because the generated `compare` of a `String` already does exactly this
+ * over the sign `torb_text_compare` answers, and a second answer to "which case is a negative sign" is how two back ends
+ * start to disagree. Its other caller is the wrapper of a `.Runtime` comparison whose symbol answers a sign where the
+ * declaration answers an `Ordering` - `Float64.compare`, `Instant.compare`, `Duration.compare`.
+ */
+public fn orderingOutOfSign(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  sign: Slot,
+  annotation: IrTypeId,
+  ordering: LayoutId,
+  at: Span,
+) {
+  const location = locationOf lowering, at
+  const kind = match numericKindOf(lowering.program, annotation) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "an `Ordering` out of a sign that is not a number", at
+      return
+    }
+  }
+  const boolean = booleanTypeOf lowering
+  // The entry block dominates both comparisons, so one zero serves them both
+  const zero = zeroSlot lowering, builder, annotation
+  const isLess = addTemporary builder, boolean
+  emit builder, Instruction.Intrinsic(Some(isLess), Intrinsic(IntrinsicOperation.Less, Some(kind)), [sign, zero], location)
+  const less = addBlock builder, "less", Some(location)
+  const other = addBlock builder, "not less", Some(location)
+  terminate builder, Terminator.Branch(isLess, less, other)
+  switchTo builder, less
+  answerOrdering lowering, builder, ordering, "Less", at
+  switchTo builder, other
+  const isGreater = addTemporary builder, boolean
+  const greaterThan = Intrinsic IntrinsicOperation.Greater, Some(kind)
+  emit builder, Instruction.Intrinsic(Some(isGreater), greaterThan, [sign, zero], location)
+  const greater = addBlock builder, "greater", Some(location)
+  const equal = addBlock builder, "equal", Some(location)
+  terminate builder, Terminator.Branch(isGreater, greater, equal)
+  switchTo builder, greater
+  answerOrdering lowering, builder, ordering, "Greater", at
+  switchTo builder, equal
+  answerOrdering lowering, builder, ordering, "Equal", at
+}
+
 fn isTupleType(var lowering: Lowering, subject: TypeId): Bool {
   match lowering.checker.types.form(subject) {
     .Tuple(_) => true

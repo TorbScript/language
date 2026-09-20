@@ -38,6 +38,14 @@ fn run(): Result<Int, IoError> {
   const outcome = Process.run(executable(), argumentsOf())?
   print outcome.isSuccess()
   print outcome.standardOutput.contains("torb")
+  // A program on PATH plus exactly ONE argument, which is how `torb build` looks for a C compiler. Only the shape of the
+  // answer is printed, because what `where`/`uname` writes is a property of the machine
+  const looked = Process.run(lookupProgram(), lookupArguments())?
+  print looked.isSuccess()
+  print(looked.standardOutput.byteLength() > 0)
+  // A program that is nowhere cannot be started at all, so it is a failure and not an exit code. The *message* is the
+  // operating system's and differs between the two back ends, so only the branch is printed
+  print Process.run("torb-no-such-program-anywhere", []).isOk()
   Ok text.byteLength()
 }
 
@@ -48,6 +56,19 @@ fn executable(): String {
 
 fn argumentsOf(): List<String> {
   if Environment.get("COMSPEC").isSome() { ["/c", "echo torb"] } else { ["-c", "echo torb"] }
+}
+
+/**
+ * A program that has to be found on PATH and whose name carries no extension, which is what `gcc` is. It takes one
+ * argument, because a command line with one quoted argument is the shape a shell in between used to get wrong and a
+ * command line with two happened to survive.
+ */
+fn lookupProgram(): String {
+  if Environment.get("COMSPEC").isSome() { "where" } else { "uname" }
+}
+
+fn lookupArguments(): List<String> {
+  if Environment.get("COMSPEC").isSome() { ["cmd"] } else { ["-s"] }
 }
 
 match run() {

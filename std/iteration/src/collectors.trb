@@ -18,6 +18,7 @@
 use Compare, Hash from "std/core"
 use From from "std/core"
 use Add from "std/core"
+use concatenated from "./concatenate"
 
 /**
  * The push-based state of one run of a [Collector]: values arrive one at a time through `add`, and `finish` produces
@@ -194,14 +195,16 @@ public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, 
   }
 }
 
-/** Every value, joined into one `String`, with `separator` between values and `prefix`/`suffix` around all of them. */
+/**
+ * Every value, joined into one `String`, with `separator` between values and `prefix`/`suffix` around all of them.
+ *
+ * It buffers the pieces and concatenates once at the end, for the reason `concatenated` gives: a `String` is a value, so
+ * appending to one copies everything that is already in it.
+ */
 public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Collector<String, String> {
-  const initial: String? = None
-  collector(initial, finish: { text => prefix + (text ?? "") + suffix }) { text, part =>
-    match text {
-      Some(existing) => Some(existing + separator + part)
-      None => Some part
-    }
+  const initial: List<String> = []
+  collector(initial, finish: { parts => prefix + concatenated(parts, separator) + suffix }) { parts, part =>
+    parts.added part
   }
 }
 

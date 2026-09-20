@@ -6,7 +6,7 @@
 
 use Equals, Compare, Hash, Show, From, TryFrom, Add from "std/core"
 use Int64, NumberRangeError from "std/number"
-use Iterable, Length from "std/iteration"
+use Iterable, Length, concatenated from "std/iteration"
 
 /**
  * A Unicode scalar value: one character, decoded from UTF-8.
@@ -66,15 +66,15 @@ public native type String
    *
    * Ordinary TorbScript, and it **cannot** be a function of the runtime for the same reason `ArrayList.from` cannot be
    * one: `value` is a trait-typed `Iterable` of the *program*, so reading it means calling `iterator` and `next` through
-   * a witness table, which C code cannot do. One `+` per character is what the language has for it; a builder that grows
-   * one buffer would need a mutable text, and the language has none - a `String` is a value.
+   * a witness table, which C code cannot do. So it collects the characters and hands them to [concatenated]: a `String`
+   * is a value, so appending to one in a loop copies everything that is already in it, which is `O(n²)` in the bytes.
    */
   fn from(value: Iterable<Char>): String {
-    var text = ""
+    var pieces: List<String> = []
     for character in value {
-      text = text + character.show()
+      pieces.add character.show()
     }
-    text
+    concatenated pieces, ""
   }
 
   /** The characters, decoded one at a time: `for character in text.chars()`. Ordinary TorbScript, see [Characters]. */

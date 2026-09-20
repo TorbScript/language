@@ -38,7 +38,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open handle (`File.open`/`readAll`/`close`) |
 | `clock.c`             | `std/time`: `Clock.now` and the arithmetic of `Instant` and `Duration`                     |
 | `environment.c`       | `std/environment`: `Environment.get`                                                       |
-| `platform.c`          | **The only file with an `#ifdef _WIN32`**: path kind, working directory, directory listing, whole-file read and write, a monotonic clock reading, setting an environment variable (for `runtime/tests` only) |
+| `platform.c`          | **The only file with an `#ifdef _WIN32`**: path kind, working directory, directory listing, whole-file read and write, running a child process, a monotonic clock reading, setting an environment variable (for `runtime/tests` only) |
 | `tests/`              | `harness.h`/`harness.c` plus one `*_test.c` per area, one executable                       |
 
 Not here yet, by design: `task.c` (milestone 7.3), `collect.c` (the cycle collector, 7.7). `File.lines` is also still
@@ -212,3 +212,10 @@ file - which an OS that locks open files (Windows) would refuse if the handle we
   behind `torb_allocate` and changes nothing above it. Per-task heaps and channel transfer arrive with 7.7.
 - **No small-string optimization**, on purpose: it doubles the code path of every string operation for a win the
   compiler does not need, whose strings are slices of source files.
+- **A child process goes through a shell on POSIX and through none on Windows.** `Process.run` is `CreateProcess` plus one
+  pipe on Windows - `_popen` could not work, because `cmd` re-parses the quotes of the command line by a rule that
+  depends on where the first quote stands, and `"gcc" "--version"` arrives as one command *named* `gcc" "--version`. On
+  POSIX it is still `popen`, which is `/bin/sh -c`, with every argument in single quotes so that nothing inside one is
+  interpreted. Two consequences of the difference, both on 5.14's list: a program that cannot be started at all is a
+  **failure** on Windows (what `std/process` promises) and the shell's own exit code on POSIX, and `fork` plus `execvp`
+  is what would make POSIX shell free as well - which is `Process.start`'s job at 7.3.

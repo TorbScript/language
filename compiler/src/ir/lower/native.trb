@@ -16,6 +16,7 @@ use RuntimeShape, StoragePosition, runtimeFunctionShaped, instanceArgumentsOf, i
 use Lowering, reportUnsupported, locationOf, irTypeOfClosed, internStatic, substituted from "./context"
 use variantLayoutOfType, variantNamed from "./match"
 use CollectionCrossing, collectionCrossingOf, lowerTraitValue from "./generic"
+use orderingOutOfSign from "./derive"
 
 /**
  * The two conventions of `runtime/`, and the wrapper the lowering builds around them.
@@ -172,6 +173,12 @@ fn runtimeShapeOf(
       storage.add StoragePosition(0 - 1, found.storage)
     }
     return RuntimeShape entry.addressedParameters, [], storage
+  }
+  // A comparison of the runtime answers a sign in the place of the `Ordering`, which is the same override a coerced
+  // collection uses for its storage: position -1 is the result
+  if const .Ordering = entry.result {
+    const sign = lowering.program.internType IrType.Integer(32, true)
+    return RuntimeShape entry.addressedParameters, [], [StoragePosition(0 - 1, sign)]
   }
   const identifier = signatureOf lowering.checker, member
   const signature = lowering.checker.signature identifier
@@ -330,6 +337,15 @@ fn buildWrapper(
     lowering.nativeWrappers.set name, direct
     return Some direct
   }
+  if const .Ordering = entry.result {
+    if !orderingWrapperBody(lowering, builder, declared, raw, given, location, at) {
+      reportUnsupported lowering, "`{entry.name}`, whose result is not an `Ordering`", at
+      return None
+    }
+    const ordered = finishFunction lowering.program, builder
+    lowering.nativeWrappers.set name, ordered
+    return Some ordered
+  }
   const layout = match variantLayoutOfType(lowering, declared.result) {
     Some(found) => found
     None => {
@@ -429,6 +445,36 @@ fn directWrapperBody(
   const target = addTemporary builder, declared.result
   emit builder, Instruction.Call(Some(target), raw, given, empty, Some(location))
   terminate builder, Terminator.Return(Some(borrowed(target)))
+  true
+}
+
+/**
+ * `Less`, `Greater` or `Equal` out of the **sign** the runtime answered. `false` where the declared result is no
+ * `Ordering` at all, which is a clean finding and not C that does not compile.
+ *
+ * The three cases are built by `orderingOutOfSign`, which the generated `compare` of a `String` uses over the sign of
+ * `torb_text_compare`: which case a negative sign stands for is decided once, for both back ends.
+ */
+fn orderingWrapperBody(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  declared: IrSignature,
+  raw: FunctionId,
+  given: List<Argument>,
+  location: LocationId,
+  at: Span,
+): Bool {
+  const ordering = match layoutOfType(lowering.program, declared.result) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const sign = lowering.program.internType IrType.Integer(32, true)
+  const answered = addTemporary builder, sign
+  const empty: List<WitnessSource> = []
+  emit builder, Instruction.Call(Some(answered), raw, given, empty, Some(location))
+  orderingOutOfSign lowering, builder, answered, sign, ordering, at
   true
 }
 

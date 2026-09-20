@@ -18,6 +18,7 @@ use Compare, Hash from "std/core"
 use From, Show from "std/core"
 use Add from "std/core"
 use Collector, groupingBy from "./collectors"
+use concatenated from "./concatenate"
 use Stage from "./stage"
 use Staged from "./staged"
 use Mapped, Filtered, FilterMapped, MappedWhile, FlatMapped, Taken, Skipped, TakenWhile, Zipped, Sorted from "./stages"
@@ -197,11 +198,21 @@ public trait Iterable<Item> {
     to<Set<Item>>()
   }
 
-  /** `["a", "b"].joined(separator: ", ")` is `"a, b"`. For `String` items, `show()` is the text itself. */
+  /**
+   * `["a", "b"].joined(separator: ", ")` is `"a, b"`. For `String` items, `show()` is the text itself.
+   *
+   * # Pitfalls
+   *
+   * It costs one pass over the pieces and `log n` passes over the bytes, and it holds the pieces and one merged level at
+   * the same time - so joining a gigabyte needs two of them. `concatenated` says why appending to one accumulator would
+   * be worse.
+   */
   fn joined(self, separator: String = ""): String where Item: Show {
-    fold "" { result, item =>
-      if result.isEmpty() { item.show() } else { result + separator + item.show() }
+    var pieces: List<String> = []
+    for item in self {
+      pieces.add item.show()
     }
+    concatenated pieces, separator
   }
 
   /** Runs `action` once for every value, for a step that produces nothing itself. */

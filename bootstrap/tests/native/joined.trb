@@ -1,0 +1,72 @@
+/**
+ * **Putting many texts together is one merge tree, not one accumulator.** A `String` is a value, so appending to one
+ * copies everything that is already in it - `n` appends copy `O(n²)` bytes. `concatenated` merges neighbours pairwise
+ * instead, which copies every byte once per level of the tree and has `log n` levels.
+ *
+ * This is the program that decided milestone 6.2. `Iterable.joined` used to fold `result + separator + item.show()`, and
+ * stage 0 never ran a line of it: `joined`, `String.from` and the whole `Iterable` surface are natives of the
+ * interpreter, and Rust's `parts.join(separator)` walks the bytes once. So the emitted C was the only thing that ever
+ * paid the square - and the compiler's own `program.c` is 786457 lines and 66 megabytes, which the binary spent hours
+ * copying while it looked like a hang with no output at all.
+ *
+ * The last block is a big join for exactly that reason: a fold takes seconds there and a merge tree takes none, so a
+ * regression is visible in the time this file needs. Everything above it is the behaviour, which a fold got wrong in one
+ * place too - a **leading empty piece** swallowed its separator, because "nothing yet" and "the empty text" are the same
+ * value of a `String` accumulator and are two different pieces of a list.
+ *
+ * `concatenated` and the `joining` collector are the same fix and have no program here: stage 0 does not load `std/` at
+ * all (its world is `natives.rs` plus `prelude.trb`), so a program that names either of them has nothing to be compared
+ * against. What this file compares is exactly the two entries the interpreter answers with Rust's own `join`.
+ */
+
+// --- `joined`, which stage 0 answers with a native ------------------------------------------------------------------
+
+const empty: List<String> = []
+print empty.joined(separator: ", ")
+print(["only"].joined(separator: ", "))
+print(["a", "b", "c"].joined(separator: ", "))
+// An even count of pieces pairs up exactly; an odd one carries the last piece into the next level
+print(["a", "b", "c", "d"].joined(separator: "-"))
+print(["a", "b", "c", "d", "e"].joined(separator: "-"))
+print(["a", "b", "c", "d", "e", "f", "g"].joined(separator: "-"))
+print(["a", "b"].joined())
+
+// An empty piece is a piece, wherever it stands
+print(["", "b"].joined(separator: ","))
+print(["a", "", "c"].joined(separator: ","))
+print(["", "", ""].joined(separator: "|"))
+print(["", ""].joined())
+
+// Multi-byte pieces and a multi-byte separator: the offsets are bytes and the pieces are characters
+print(["ä", "ö", "ü"].joined(separator: " → "))
+
+// Not a `String` item: `show()` is what renders it
+print([1, 2, 3].joined(separator: "+"))
+print([true, false].joined(separator: " and "))
+
+// A lazy pipeline is an `Iterable` like any other
+print((0..4).joined(separator: "-"))
+print((1..4).map({ "n{_}" }).joined(separator: ", "))
+
+// --- `String.from`, the other one stage 0 answers with a native -----------------------------------------------------
+
+print String.from("hällö wörld".chars())
+print String.from("".chars())
+print String.from("abc".chars())
+
+// --- Many pieces, which is where the square used to bite -------------------------------------------------------------
+
+var lines: List<String> = []
+for index in 0..40000 {
+  lines.add "line {index} of the probe"
+}
+const joinedText = lines.joined separator: "\n"
+print joinedText.byteLength()
+print joinedText.startsWith("line 0 of the probe\nline 1")
+print joinedText.endsWith("line 39999 of the probe")
+
+var characters: List<Char> = []
+for _ in 0..20000 {
+  characters.add 'x'
+}
+print String.from(characters).byteLength()

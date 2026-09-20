@@ -1,0 +1,47 @@
+/**
+ * One step, and the reason the whole package needs it: putting many short texts together into one long one.
+ *
+ * It is here and not in `std/text` because `std/text` depends on this package and not the other way round, and because
+ * both places that join a text - `Iterable.joined` and the `joining` collector - are words of this package.
+ */
+
+/**
+ * The pieces in one text, with `separator` between every two of them. This is what `Iterable.joined` is, and the way to
+ * build a long text out of many short ones.
+ *
+ * **Reach for it instead of appending in a loop.** A `String` is a value, so appending to one copies everything that is
+ * already in it: `n` appends copy `O(n²)` bytes, and for the 66 megabytes of C the compiler writes about itself that is
+ * hours of copying. This merges **neighbours pairwise** instead, so every byte is copied once per level of the merge tree
+ * and there are `log n` levels - a fraction of a second for the same text. What comes out is the same either way: a tree
+ * over `n` leaves has `n - 1` forks, and each fork writes one separator.
+ *
+ * # Examples
+ *
+ *     print concatenated(["a", "b", "c"], ", ")
+ *     print concatenated([], ", ")
+ *
+ * # Pitfalls
+ *
+ * It holds the pieces and one merged level at the same time, so the peak is about twice the result. A caller that has to
+ * stay inside a fixed budget writes the pieces out one at a time instead of building the whole text at all.
+ */
+public fn concatenated(pieces: List<String>, separator: String): String {
+  if pieces.isEmpty() {
+    return ""
+  }
+  var level = pieces
+  while level.length() > 1 {
+    var merged: List<String> = []
+    var index = 0
+    while index + 1 < level.length() {
+      merged.add(level[index] + separator + level[index + 1])
+      index = index + 2
+    }
+    // An odd piece at the end rides along unmerged; its separator is written when the next level pairs it up
+    if index < level.length() {
+      merged.add level[index]
+    }
+    level = merged
+  }
+  level[0]
+}

@@ -15,6 +15,7 @@ cargo run --release -q -- run ../compiler check --timings ..       # The wall ti
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --release                                    # Everything, including the differential tests (minutes)
+cargo test --release --test fixpoint -- --ignored --nocapture   # The fixpoint of 6.2 (a quarter of an hour, see below)
 sh ../runtime/build.sh                                  # The C runtime and its tests (gcc or clang)
 cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops ..
 cargo run --release -q -- canon ../std ../compiler ../examples ../bootstrap/tests    # ...write it (a minute)
@@ -26,6 +27,17 @@ cargo run --release -q -- run ../compiler docs index ../docs         # ...write 
 
 A change is done when all of them are green and the repository still checks with "no problems". A false positive of
 the checker is a bug of the checker.
+
+**The fixpoint is not in the list above, and it is what says the compiler is correct about itself.** It builds the
+compiler with stage 1, builds it again with the binary that came out, compares the two `program.c` byte for byte and lets
+stage 3 emit a third one - roughly a quarter of an hour, so it is `#[ignore]`d and run when a change could move the
+emitted C (the emitter, the lowering, the ownership pass, `std/`). A difference is reported as the first differing byte
+with the text around it in both files. `docs/BACKEND.md` ("What 6.2 decided") says what it has caught.
+
+**A cost that stage 0 hides is a cost only a compiled program pays.** Everything `natives.rs` answers with Rust while
+`std/` carries a TorbScript body for the same declaration is invisible to every test that runs on stage 0 - that is how a
+quadratic `joined` sat in `std/iteration` until the binary tried to join the 786457 lines of its own `program.c`. When a
+`std/` body loops over something that grows, measure it with a **compiled** probe and never on stage 0.
 
 `docs/` is the user-facing documentation of the language and has its own rules and its own gate
 ([docs/contributing](../docs/contributing/index.md)): every page carries front matter, the body of every `index.md` is
