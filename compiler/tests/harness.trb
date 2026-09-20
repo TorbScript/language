@@ -336,6 +336,31 @@ public const preludeSource = r"""
   public native shared type Task<Value> {
     native fn await(self): Value
   }
+
+  // Everything below is at the end on purpose: the tests of the IR name lines of this file, so a declaration that is
+  // added in the middle moves them all.
+
+  /** As in `std/iteration`: the one collection target the language has, and what gap 53 is about. */
+  extend<Item> Iterable<Item> {
+    fn to<Target: From<Iterable<Item>>>(self): Target {
+      Target.from self
+    }
+  }
+
+  /** As in `std/text`: a `String` is built from its characters, and it is not `Iterable<Char>` itself. */
+  extend String with From<Iterable<Char>> {
+    native fn from(value: Iterable<Char>): String
+  }
+
+  /**
+   * As in `std/core` (gap 50): `Never` coerces to everything, so the conversion is total and forced. It is also what
+   * makes `From` the one trait a type implements several times, which is what gap 53 is about.
+   */
+  extend<Target> Target with From<Never> {
+    fn from(value: Never): Target {
+      value
+    }
+  }
   """
 
 public const workspace = [

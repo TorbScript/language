@@ -124,6 +124,63 @@ group "Traits as a namespace" {
   }
 }
 
+/**
+ * An `extend` whose *target* is a trait type makes the trait-typed value the implementer (gap 53). Its **instance**
+ * members reach a concrete implementer through the coercion of the receiver - that is what `extend<Item: Show>
+ * List<Item> with Show` means by "every list is showable" - but it is not a blanket implementation *for* every
+ * implementer: a member without `self` that answers `Self` would answer "some `List`" where an `ArrayList` is asked for.
+ */
+group "An `extend` of a trait type" {
+  test "a static member that answers `Self` stays the trait's own: `ArrayList` has one candidate for `From`" {
+    const source = "fn probe(numbers: List<Int>): ArrayList<Int> \{\n  numbers.to<ArrayList<Int>>()\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.witnessesOf("numbers.to<ArrayList<Int>>()") == ["ArrayList<Item>: From<Iterable<Item>>"])
+  }
+
+  test "the trait itself is the one the extension implements" {
+    const source = "fn probe(numbers: List<Int>): List<Int> \{\n  numbers.to<List<Int>>()\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.witnessesOf("numbers.to<List<Int>>()") == ["List<Item>: From<Iterable<Item>>"])
+  }
+
+  test "a trait target with a bound of its own is reached the same way, and brings its inner witness" {
+    const source = "fn probe(numbers: List<Int>): Set<Int> \{\n  numbers.to<Set<Int>>()\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.witnessesOf("numbers.to<Set<Int>>()") == ["Set<Item>: From<Iterable<Item>> [Int64: Hash]"])
+  }
+
+  test "a concrete implementer of such a trait uses its own implementation, not the extension" {
+    const source = "fn probe(numbers: List<Int>): TrieSet<Int> \{\n  numbers.to<TrieSet<Int>>()\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.witnessesOf("numbers.to<TrieSet<Int>>()") == ["TrieSet<Item>: From<Iterable<Item>> [Int64: Hash]"])
+  }
+
+  test "an instance member of a trait-type extension still reaches a concrete receiver" {
+    const source = "fn probe(numbers: ArrayList<Int>): String \{\n  numbers.show()\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.dispatchOf("numbers.show()") == "implementation List<Item>: Show")
+  }
+
+  test "a type that implements neither is still told so" {
+    const source = "fn probe(numbers: List<Int>): Int \{\n  numbers.to<Int>()\n\}"
+    assert(problems(source) == ["`Int64` does not implement `From<Iterable<Int64>>`"])
+  }
+
+  test "`From` is the one trait a type implements several times, and `From<Never>` never hides another one" {
+    // `String` has `From<Iterable<Char>>` of its own and the blanket `From<Never>` of gap 50: "the argument of `From`
+    // for a `String`" has two answers, and "which of them takes an `Iterable`" has one
+    const source = "fn probe(): String \{\n  const text: String = ['a', 'b']\n  text\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.collectionOf("['a', 'b']") == "from String of Char through String: From<Iterable<Char>>")
+  }
+}
+
 group "Operators through their traits" {
   test "arithmetic takes `Other` and `Output` from the trait the left operand implements" {
     const source = "type Meters with Add<Meters, Meters> \{\n  value: Float\n\n"

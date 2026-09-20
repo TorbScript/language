@@ -1,23 +1,32 @@
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Argument from "../../syntax/ast"
-use Checker, Place, BindingId, BindingUse, Capture, ClosureKind from "./context"
+use SymbolId from "../symbols"
+use TypeId, SignatureId, SignatureState from "./type"
+use Checker, Place, PlaceRoot, BindingId, UseRoot, ValueUse, useKey from "./context"
+use Capture, ClosureKind from "./context"
 use isSharedType from "./declaration"
+use isDeclaredVar from "./place"
 
 /**
  * The two rules that need the whole body instead of one expression: a change nobody reads, and whether a closure may
  * outlive the call it stands in.
  *
- * **Dead changes** (design 5.3, rule 1) keep the source-ordered reads and changes of every local `var` binding of one
- * body, plus a mark for the ones a loop brings a read back around to. A change is dead when no read follows it in
- * source order and no read shares a loop with it. There is no fixpoint beyond that: a loop is settled once, when it
- * closes. A `var` parameter, `var self` and a captured binding are exempt - the first two write back into the caller's
- * place and the third is a shared box whose read may be anywhere (gap 19).
+ * **Dead changes** (design 5.3, rule 1) keep the source-ordered reads and changes of every `var` value of one body, plus
+ * a mark for the ones a loop brings a read back around to. A change is dead when no read follows it in source order and
+ * no read shares a loop with it. There is no fixpoint beyond that: a loop is settled once, when it closes. A `var`
+ * parameter, `var self` and a captured binding are exempt - the first two write back into the caller's place and the
+ * third is a shared box whose read may be anywhere (gap 19).
  *
  * A change that goes through a *step* (`first.value = 1`, `first.increment()`, `fill(buffer)`) reads the old value as
- * well, so the read the target produced stays. Only `x = value` replaces the whole binding, and only there the read
+ * well, so the read the target produced stays. Only `x = value` replaces the whole value, and only there the read
  * becomes the change - which is what makes `var total = 0` followed by `total = 1` and nothing else a dead change while
  * `x = 1` followed by `x.part = 2` and a read of `x` is fine.
+ *
+ * **A top-level `var` is counted too** (gap 52), and it is the one value whose body is not the whole story: the
+ * statements of the file are one body, but a function of the module, a closure inside one and the initializer of a
+ * top-level `const` read the same declaration. So a change of one is dead when no statement after it reads it **and**
+ * nothing else in the module does (`Checker.readDeclarations`) **and** the declaration is not exported.
  */
 
 // --- Dead changes ---------------------------------------------------------------------------------------------------
@@ -31,7 +40,23 @@ public fn noteRead(var checker: Checker, binding: BindingId, at: Span) {
   if !isCounted(checker, binding) {
     return
   }
-  checker.bindingUses.add BindingUse(binding, false, at)
+  checker.valueUses.add ValueUse(UseRoot.Local(binding), false, at)
+}
+
+/**
+ * Every read of a top-level `var`, which is a declaration and not a local. Inside the statements of its own file it is
+ * one more use in source order; anywhere else - a function of the module, a closure, the initializer of a top-level
+ * `const` - it is the answer "something else reads this" and the rule says nothing about it any more (gap 52).
+ */
+public fn noteDeclaredRead(var checker: Checker, symbol: SymbolId, at: Span) {
+  if !isCountedDeclaration(checker, symbol) {
+    return
+  }
+  if !checker.isTopLevel {
+    checker.readDeclarations.set symbol.value, true
+    return
+  }
+  checker.valueUses.add ValueUse(UseRoot.Declared(symbol), false, at)
 }
 
 /** Whether the dead-change rule has anything to say about this binding at all. */
@@ -46,39 +71,87 @@ fn isCounted(var checker: Checker, binding: BindingId): Bool {
 }
 
 /**
+ * The same question for a top-level binding. A `const` is never changed and a shared object is not a copy, so only a
+ * top-level `var` of a value type is counted. `isPublic` is what keeps the rule out of a value another module may read -
+ * gap 41 makes `public var` at top level illegal, so there is none today, and the rule still says what it depends on.
+ */
+fn isCountedDeclaration(var checker: Checker, symbol: SymbolId): Bool {
+  if !isDeclaredVar(checker, symbol) {
+    return false
+  }
+  const found = checker.symbolAt symbol
+  if found.isPublic {
+    return false
+  }
+  match declaredTypeOf(checker, symbol) {
+    Some(held) => !isSharedType(checker, held)
+    None => true
+  }
+}
+
+/**
+ * The type of a top-level `var`, where the checker has worked it out already. Every read and every change of one goes
+ * through the name first, which is what asks for the signature - so this is a lookup and never starts one, and a
+ * declaration whose signature is still running (its own initializer) has no answer and no shared object either.
+ */
+fn declaredTypeOf(var checker: Checker, symbol: SymbolId): TypeId? {
+  if const .Ready(index) = checker.signatureStates.get(symbol) ?? SignatureState.Missing {
+    return Some checker.signature(SignatureId(index)).form.result
+  }
+  None
+}
+
+/**
  * One change of the root of a place, at the point the change happens - which for an assignment is *after* its value has
  * been read, so that `total = total + 1` does not count its own right-hand side as the read that keeps it alive.
  */
 public fn noteChange(var checker: Checker, place: Place, changedBy: String) {
-  const binding = match place.root {
-    .Local(found) => found
-    _ => {
+  const root = match useRootOf(place.root) {
+    Some(found) => found
+    None => {
       return
     }
   }
-  if !isCounted(checker, binding) {
+  if !isCountedRoot(checker, root) {
     return
   }
-  checker.bindingUses.add BindingUse(binding, true, place.at, changedBy: changedBy)
+  checker.valueUses.add ValueUse(root, true, place.at, changedBy: changedBy)
+}
+
+/** A place whose root the rule counts at all: a local or a top-level declaration, never a temporary. */
+fn useRootOf(root: PlaceRoot): UseRoot? {
+  match root {
+    .Local(binding) => Some UseRoot.Local(binding)
+    .Declared(symbol) => Some UseRoot.Declared(symbol)
+    _ => None
+  }
+}
+
+fn isCountedRoot(var checker: Checker, root: UseRoot): Bool {
+  match root {
+    .Local(binding) => isCounted checker, binding
+    .Declared(symbol) => isCountedDeclaration checker, symbol
+  }
 }
 
 /**
- * `x = value` replaces the whole binding, so naming `x` as the target of it is not a read of anything: the read that
+ * `x = value` replaces the whole value, so naming `x` as the target of it is not a read of anything: the read that
  * resolving the target produced goes away again. A change through a *step* (`x.part = value`, `x.increment()`) does read
  * the old value, and there the read stays.
  */
 public fn dropRead(var checker: Checker, place: Place) {
-  const binding = match place.root {
-    .Local(found) => found
-    _ => {
+  const root = match useRootOf(place.root) {
+    Some(found) => found
+    None => {
       return
     }
   }
-  var index = checker.bindingUses.length() - 1
+  const key = useKey root
+  var index = checker.valueUses.length() - 1
   while index >= 0 {
-    const entry = checker.bindingUses[index]
-    if !entry.isChange && entry.binding == binding && entry.at == place.at {
-      const _ = checker.bindingUses.removeAt index
+    const entry = checker.valueUses[index]
+    if !entry.isChange && useKey(entry.root) == key && entry.at == place.at {
+      const _ = checker.valueUses.removeAt index
       return
     }
     index = index - 1
@@ -86,17 +159,17 @@ public fn dropRead(var checker: Checker, place: Place) {
 }
 
 /**
- * A loop that has closed. Every change inside it whose binding is read anywhere inside it is alive, whatever stands
- * after the loop: the next round reads what this one wrote. That is the whole of what the design calls "flow-sensitive
- * but simple" - one pass per loop, and no fixpoint.
+ * A loop that has closed. Every change inside it whose value is read anywhere inside it is alive, whatever stands after
+ * the loop: the next round reads what this one wrote. That is the whole of what the design calls "flow-sensitive but
+ * simple" - one pass per loop, and no fixpoint.
  */
 public fn settleLoop(var checker: Checker, from: Int) {
   var readers: Map<Int, Bool> = [:]
   var index = from
-  while index < checker.bindingUses.length() {
-    const entry = checker.bindingUses[index]
+  while index < checker.valueUses.length() {
+    const entry = checker.valueUses[index]
     if !entry.isChange {
-      readers.set entry.binding.value, true
+      readers.set useKey(entry.root), true
     }
     index = index + 1
   }
@@ -104,12 +177,12 @@ public fn settleLoop(var checker: Checker, from: Int) {
     return
   }
   index = from
-  while index < checker.bindingUses.length() {
-    const entry = checker.bindingUses[index]
+  while index < checker.valueUses.length() {
+    const entry = checker.valueUses[index]
     if entry.isChange && !entry.isLive {
-      if readers.containsKey(entry.binding.value) {
+      if readers.containsKey(useKey(entry.root)) {
         const alive = entry.copy isLive: true
-        checker.bindingUses.set index, alive
+        checker.valueUses.set index, alive
       }
     }
     index = index + 1
@@ -122,28 +195,38 @@ public fn settleLoop(var checker: Checker, from: Int) {
  */
 public fn settleChanges(var checker: Checker) {
   var readAfter: Map<Int, Bool> = [:]
-  var index = checker.bindingUses.length() - 1
+  var index = checker.valueUses.length() - 1
   while index >= 0 {
-    const entry = checker.bindingUses[index]
+    const entry = checker.valueUses[index]
     if entry.isChange {
-      if !entry.isLive && !readAfter.containsKey(entry.binding.value) {
+      if !entry.isLive && !readAfter.containsKey(useKey(entry.root)) {
         reportDeadChange checker, entry
       }
     } else {
-      readAfter.set entry.binding.value, true
+      readAfter.set useKey(entry.root), true
     }
     index = index - 1
   }
-  checker.bindingUses = []
+  checker.valueUses = []
 }
 
-fn reportDeadChange(var checker: Checker, entry: BindingUse) {
-  const binding = checker.binding entry.binding
-  // A captured `var` binding is a shared box, not a copy: the read can be anywhere the closure is run (gap 19)
-  if checker.capturedBindings.containsKey(entry.binding.value) {
-    return
+fn reportDeadChange(var checker: Checker, entry: ValueUse) {
+  const name = match entry.root {
+    .Local(binding) => {
+      // A captured `var` binding is a shared box, not a copy: the read can be anywhere the closure is run (gap 19)
+      if checker.capturedBindings.containsKey(binding.value) {
+        return
+      }
+      checker.binding(binding).name
+    }
+    // A function of the module reads the same declaration, and nothing says where it is called (gap 52)
+    .Declared(symbol) => {
+      if checker.readDeclarations.containsKey(symbol.value) {
+        return
+      }
+      checker.symbolAt(symbol).name
+    }
   }
-  const name = binding.name
   var problem = Diagnostic.error "This change has no effect: `{name}` is never read again", entry.at
   if const Some(member) = participleHint(entry.changedBy) {
     problem = problem.withNote "`{name}` is a copy. Did you mean the path it came from (`items[0].{member}()`)?"

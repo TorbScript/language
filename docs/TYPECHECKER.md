@@ -1709,10 +1709,10 @@ nothing told a back end how such a literal is built.
   implementation of the trait is (`const numbers: TrieList<Int> = [1, 2]`). **A concrete implementation is therefore
   `Default` and not `FromIterable`:** a literal knows its items, so building the type that is asked for directly *is*
   the fast path the concept asks the compiler to find, and going through `Target.from` would be a list built to be
-  thrown away. (It is also the only answer resolution can give today: the standard library has both
-  `extend<Item> List<Item> with From<Iterable<Item>>` and `with From<Iterable<Item>>` on `ArrayList` itself, and both
-  apply to `ArrayList<Int>` - so `resolveBound` calls it ambiguous, exactly as it does for `.to<ArrayList<Int>>()`.
-  That is gap 5's overlap rule, not this slice's.)
+  thrown away. (While this was written it was also the only answer resolution could give, because both
+  `extend<Item> List<Item> with From<Iterable<Item>>` and the `with From<Iterable<Item>>` on `ArrayList` itself applied
+  to `ArrayList<Int>`. Gap 53 settled that: only `ArrayList`'s own does, and `.to<ArrayList<Int>>()` works. The reason
+  above is the one that stands.)
 - **`Array<Item, Size>` is checked before anything else**, because it is the one target that is not built from a
   collection at all: the items go into the inline slots. The number of them is static, so it has to be `Size`
   (`` `Array<Int64, 4>` has 4 items, and this literal has 3 ``), and where `Size` is still an open variable the count
@@ -1724,10 +1724,10 @@ nothing told a back end how such a literal is built.
   what the target itself iterates (`Iterable<Item>`), or - for a target that is not iterable at all - the
   `Iterable<Item>` its own `From` takes. So a literal accepts exactly the targets `.to<Target>()` accepts, trait types
   included: `Set<String>` and `Queue<Int>` are `From<Iterable<Item>>` through an `extend` whose target is the trait, and
-  the `Witness` that is recorded is that implementation with its inner witnesses (`String: Hash`). The fallback over the
-  target's own `From` only answers where that `From` is unambiguous, which gap 50's blanket `From<Never>` now prevents
-  for a target that is not iterable at all - `String` is the one in the repository, so `const text: String = ['a', 'b']`
-  is refused and `String.from(['a', 'b'])` is how it is written. Nothing in the repository did either.
+  the `Witness` that is recorded is that implementation with its inner witnesses (`String: Hash`). For a target that is
+  not iterable at all the `Item` comes from its own `From`, and **which** of several `From` implementations that is,
+  `iterableSourceOf` answers - so `const text: String = ['a', 'b']` is `String.from(['a', 'b'])` and gap 50's blanket
+  `From<Never>` does not get in the way (gap 53).
 - **A type that is none of these is an error** instead of a silent acceptance:
   `` A list literal cannot become a `Point`: `Point` is not `From<Iterable<Item>>` ``, and for a map literal
   `` ... is not `From<Iterable<(Key, Value)>>` ``. A trait type the collection merely *coerces* to is deliberately not
@@ -1748,6 +1748,26 @@ nothing told a back end how such a literal is built.
   `Array [1, 2, 3, 4]` is **not** a second spelling: it already parses as an index expression, and a command's first
   argument may not start with `[`.
 - **`WellKnown.array`** joins `list` and `map`: both rules ask for the symbol at every literal and at every call.
+- The `Array.of` message says "this **call** has 3" and the literal's says "this **literal** has 3": one
+  `reportArraySize` with a word for the place.
+
+### What the follow-ups add (gaps 52 and 53)
+
+- **The dead-change rule reaches the top level of a file** (gap 52). A top-level `var` is a declaration, not a local, so
+  `BindingUse` became `ValueUse` with a `UseRoot` of `.Local(binding)` or `.Declared(symbol)`, `Checker.isTopLevel` says
+  which body is the statement sequence of a file, and `Checker.readDeclarations` is every top-level `var` that a
+  function, a closure or another top-level initializer reads. The message and its two notes are unchanged - the rule is
+  the same rule - and `settleChanges` at the end of `checkModule` now has something to settle. It found six dead changes
+  in `examples/tour`.
+- **An `extend` whose target is a trait type implements the trait for the trait-typed value** (gap 53), and reaches a
+  concrete implementer only through the coercion of the receiver: every member of the implemented trait has to take
+  `self` and none may answer `Self`. `reachesImplementers` guards the one branch of `matchTarget` that let a
+  trait-targeted implementation match any implementer, so `ArrayList<Int>` has exactly one candidate for
+  `From<Iterable<Int>>` - its own - and `.to<ArrayList<Int>>()`, `.to<TrieSet<Int>>()` and a literal expected as one all
+  resolve. `Show`/`Equals`/`Hash`/`Encode` still reach implementers, so `ArrayList<Int>.show()` is unchanged.
+- **`iterableSourceOf`** is the question the collection protocol really has: not "what is the argument of `From` for this
+  type" (which has no single answer - `From` is the one trait a type implements several times) but "which of its `From`
+  implementations takes an `Iterable`". That is what brings `const text: String = ['a', 'b']` back.
 
 ---
 
@@ -2321,3 +2341,67 @@ _Decision:_ accepted. Three points had to be decided beyond the proposal:
   `const ordered: Compare = [1, 2]` is reported with the existing "does not implement" message.
 - **Set literals are not touched**, because the parser has no set literal: `{a, b}` is in the concept and in no
   `ExpressionKind`. The rule is written so that adding one is `listLiteralType` with `Set` in place of `List`.
+
+**52. Does the dead-change rule reach the top level of a file?**
+Rule 5.3 reports a change no read follows, and `checkModule` settles the statements of a file like any other body - but a
+top-level `var` is a **declaration** and not a local, so `noteRead` and `noteChange` never saw one: `var counters = [...]`
+/ `var first = counters[0]` / `first.increment()` at the top level of `src/main.trb` checked silently while the very same
+lines inside a function were reported. Nothing says what the rule should be there either, because the statements of the
+file are not the whole life of the declaration: a function of the module reads the same one, and nothing says where that
+function is called.
+_Proposal:_ a top-level `var` is counted, and a change of one is dead when **no statement after it reads it and nothing
+else in the module does**. "Something else" is a function, a closure inside one, the initializer of a top-level `const` -
+every body other than the statement sequence of the file. An exported one is never counted, because a module that has not
+been checked yet may read it.
+_Reason:_ it is the same rule with the same justification (the change is thrown away), and the extra condition is what
+the difference between a local and a declaration actually is. Anything weaker leaves the most common shape of the copy
+trap - a script - unchecked.
+
+_Decision:_ accepted. `BindingUse` is `ValueUse` with a `UseRoot` of `.Local(binding)` or `.Declared(symbol)` (the two
+roots of a `Place` the rule counts), `Checker.isTopLevel` says which body is the statement sequence of the file, and
+`Checker.readDeclarations` collects every top-level `var` that something else reads. Three consequences:
+- **A read in the initializer of another top-level binding counts as "something else",** because that initializer is a
+  body of its own (`checkInitializer`) and is reached lazily through `resultOf`. So `var first = counters[0]` keeps
+  `counters` alive whatever follows. That is conservative in the safe direction - it never reports a change that is read -
+  and making it exact would mean checking a top-level initializer inside the statement body, where a read of it would be
+  discarded with that body's own uses instead of ordered against the statements.
+- **Order does not matter.** Every function of a module is walked before `settleChanges` runs at the end of
+  `checkModule`, so a function declared *above* the `var` it reads keeps it alive exactly as one below it does.
+- **`public var` needs no exception in practice**: gap 41 makes it illegal at top level, and the rule still says that an
+  exported value is not counted, so the two cannot drift apart.
+
+It found six real dead changes in `examples/tour` (`01-bindings-and-values.trb`, `03-types.trb` twice,
+`07-collections.trb` twice, `12-type-system.trb`), all of them a value that is changed to illustrate something and then
+never read - each is now followed by the `print` that shows the effect, which is what the example wanted to say anyway.
+
+**53. What does an `extend` whose target is a *trait type* implement?**
+CONCEPT says `extend<Item> List<Item> with Show` "makes every list showable" and that
+`extend<Item> List<Item> with From<Iterable<Item>>` "makes `List<Item>` itself a valid target of `to<List<Item>>()`" -
+one sentence about every implementer, one about the trait-typed value, and nothing about which of the two it is. The
+checker read it as "every implementer": `matchTarget` lets a trait-targeted implementation match any type that implements
+the trait. So `ArrayList<Int>` had **two** candidates for `From<Iterable<Int>>` - its own and the extension's - and
+`resolveBound` called it ambiguous, which made `.to<ArrayList<Int>>()` fail and a literal expected as an `ArrayList<Int>`
+unable to name its own `from`.
+_Proposal:_ such an `extend` implements the trait **for the trait-typed value**. Its members reach a concrete implementer
+through the coercion of the receiver, which is what makes every list showable and what lets
+`extend<Failure> Sink<Bytes, Failure> { fn addText ... }` reach a `File`. It is *not* a blanket implementation for every
+implementer: a member without `self`, or one that answers `Self`, would answer "some `List`" where an `ArrayList` is
+required, which is unsound. So a concrete implementer gets it only when every member of the implemented trait takes
+`self` and none of them answers `Self`; a `Self` in a *parameter* is fine, because there the concrete value coerces into
+the trait.
+_Reason:_ it is object safety (gap 7) read from the implementation side, it needs no new syntax, and it is the only
+reading under which both of CONCEPT's sentences are true at once.
+
+_Decision:_ accepted; CONCEPT "Traits" says it now. `reachesImplementers` in `implementation.trb` answers it per trait
+and keeps the answer, and it asks the **declaration** of the trait and not its signatures: bound resolution runs while
+signatures are still being built, and one that is not ready yet would give a different answer than the same question a
+moment later. `Show`, `Equals`, `Hash` and `Encode` reach implementers; `From` and `Decode` do not. Two notes:
+- **The blanket `From<Never>` of gap 50 was a different defect and is fixed at the asking end.** `resolveTrait(String,
+  From)` has no single answer by design - `From` is the one trait a type implements several times (`Int.from` for five
+  widths, and `From<Never>` for *every* type) - so "the argument of `From` for a `String`" is rightly `Ambiguous`, and
+  preferring one candidate over another would be arbitrary. The question the collection protocol actually has is "which
+  of them takes an `Iterable`", and `iterableSourceOf` answers that one. `const text: String = ['a', 'b']` works again.
+- **A concrete implementation of a collection trait stays `CollectionLiteral.Default`** (gap 51): now that resolution can
+  name `ArrayList<Int>`'s own `from`, that is no longer the reason - the reason is the one that was always first, that a
+  literal knows its items and building the type that is asked for directly *is* the fast path the concept asks the
+  compiler to find.

@@ -10,7 +10,7 @@ use isConcrete, hiddenExtensionOf from "./implementation"
 use signatureOf, aliasTargetOf, genericsOf, resultOf from "./signature"
 use substitute from "./unify"
 use implicitParameterTarget, isImplicitName from "./closure"
-use noteRead, noteCapturedBinding from "./mutation"
+use noteRead, noteDeclaredRead, noteCapturedBinding from "./mutation"
 
 /**
  * What a name in an *expression* means. This cannot happen before type checking: what `port` means in
@@ -218,6 +218,8 @@ public fn symbolTarget(
     .Function => callableTarget checker, symbol, text, explicit
     .Constant => {
       const annotation = resultOf checker, symbol
+      // A top-level `var` is a declaration and not a local, so its reads are counted here (gap 52)
+      noteDeclaredRead checker, symbol, at
       Target Resolution.Constant(symbol, None), annotation, form: formOf(checker, annotation), name: text
     }
     .Type => namedTypeTarget checker, symbol, text, at, expected, explicit

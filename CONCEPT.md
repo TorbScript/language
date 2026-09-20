@@ -1440,6 +1440,13 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   a default implementation (`List.of(1, 2)`, `Set.of("a")`).
 - Because a trait is a type, it can be extended like one. `extend<Item> List<Item> with Show where Item: Show` makes every list
   showable, `extend<Item> List<Item> with From<Iterable<Item>>` makes `List<Item>` itself a valid target of `to<List<Item>>()`.
+- **Such an `extend` implements the trait for the trait-typed value, and reaches a concrete implementer only through the
+  receiver.** `show` takes `self`, so an `ArrayList<Int>` is showable through it: the receiver coerces to `List<Int>` and
+  the member is found. `From.from` has no `self` and answers `Self`, so an `ArrayList<Int>` does **not** get it - the
+  `from` would answer "some `List`" where an `ArrayList` is required. So every member of the implemented trait has to
+  take `self` and none of them may answer `Self`; a `Self` in a *parameter* is fine, because there the concrete value
+  coerces into the trait, which is the direction that always holds. `ArrayList` therefore has exactly one
+  `From<Iterable<Int>>` - its own - and `List<Int>` has the extension's.
 - **`Trait.member` reads the trait's own members first, then the members of implementations whose target is the
   trait itself.** That is what makes `List.from(...)` and `Map.from(...)` work, where `from` comes from
   `extend<Key: Hash, Value> Map<Key, Value> with From<Iterable<(Key, Value)>>`. Two such implementations are an

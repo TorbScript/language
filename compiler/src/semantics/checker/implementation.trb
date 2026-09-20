@@ -1,6 +1,7 @@
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Declaration, ExtendDeclaration, Visibility from "../../syntax/ast"
+use FunctionDeclaration, TypeReference from "../../syntax/ast"
 use ModuleId from "../module"
 use SymbolId from "../symbols"
 use resolveImport from "../graph"
@@ -433,6 +434,66 @@ fn boundArgumentsOf(
 }
 
 /**
+ * The `Item` of the `Iterable<Item>` a type can be built from, where exactly one of its `From` implementations takes
+ * one.
+ *
+ * `From` is the one trait a type may implement several times - `Int.from` exists for five widths, and gap 50's
+ * `extend<Target> Target with From<Never>` adds one to *every* type - so "what is the argument of `From` for this type"
+ * has no single answer and `resolveTrait` rightly says `Ambiguous`. "Which of them takes an `Iterable`" does have one,
+ * and that is the collection protocol a literal and `to<Target>()` ask about (gap 51).
+ */
+public fn iterableSourceOf(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
+  buildImplementations checker
+  const conversion = checker.wellKnown.from?
+  const head = headSymbolOf checker, annotation
+  const candidates = checker.implementations.candidatesOf conversion, head
+  var found: TypeId? = None
+  for index in candidates {
+    const given = match applies(checker, index, annotation, None) {
+      Some(arguments) => arguments
+      None => {
+        continue
+      }
+    }
+    if given.length() != 1 {
+      continue
+    }
+    const item = match itemOfIterableBound(checker, given[0], iterable) {
+      Some(inner) => inner
+      None => {
+        continue
+      }
+    }
+    // Two implementations that both take an `Iterable` are an overlap, which `checkCoherence` reports at their
+    // declarations - so nothing is said here and nothing is guessed either
+    if const Some(other) = found {
+      if other != item {
+        return None
+      }
+      continue
+    }
+    found = Some item
+  }
+  found
+}
+
+/** The `Item` of an `Iterable<Item>` in a type position, which is a trait value of one bound. */
+fn itemOfIterableBound(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
+  const bounds = match checker.types.form(annotation) {
+    .Traits(found) => found
+    _ => [annotation]
+  }
+  for bound in bounds {
+    if const .Nominal(symbol, arguments) = checker.types.form(bound) {
+      if symbol == iterable {
+        return arguments.first()
+      }
+    }
+  }
+  None
+}
+
+/**
  * Whether one candidate applies to this type: its target is a pattern, the type is concrete, and matching binds the
  * implementation's own parameters. Every one of them has to be bound, and every bound of the implementation has to
  * hold - which is where resolution recurses.
@@ -482,6 +543,10 @@ fn matchTarget(
     if matchPattern(checker, target, annotation, implementation.generics, mapping) {
       return true
     }
+    // ...and has to be able to reach what the implementation provides at all (gap 53)
+    if !reachesImplementers(checker, implementation.capability) {
+      return false
+    }
     const pattern = match checker.types.form(target) {
       .Traits(bounds) => bounds[0]
       _ => {
@@ -511,6 +576,125 @@ fn matchTarget(
     return true
   }
   matchPattern checker, target, annotation, implementation.generics, mapping
+}
+
+/**
+ * Whether an implementation whose target is a *trait type* serves the concrete implementers of that trait as well.
+ *
+ * `extend<Item: Show> List<Item> with Show` does: `show` takes `self`, so an `ArrayList<Int>` reaches it through the
+ * coercion of its receiver - which is exactly what "makes every list showable" means (CONCEPT, "Traits").
+ * `extend<Item> List<Item> with From<Iterable<Item>>` does **not**: `From.from` has no `self` and answers `Self`, so for
+ * an `ArrayList<Int>` it would answer "some `List`" and not an `ArrayList`. That implementation belongs to the
+ * trait-typed value alone, and `List.from(...)` and `to<List<Int>>()` are what reach it (gap 53).
+ *
+ * So the rule is: every member of the implemented trait takes `self`, and none of them answers `Self`. A `Self` in a
+ * *parameter* is fine - there the concrete value coerces *into* the trait, which is the direction that always holds.
+ *
+ * The question is asked of the **declaration** of the trait and not of its signatures: bound resolution runs while
+ * signatures are still being built, and one that is not ready yet would give a different answer than the same question
+ * a moment later. The answer is a property of the trait, so it is kept.
+ */
+fn reachesImplementers(var checker: Checker, applied: TypeId?): Bool {
+  const capability = match capabilitySymbolOf(checker, applied) {
+    Some(found) => found
+    None => {
+      return true
+    }
+  }
+  if const Some(known) = checker.reachingTraits.get(capability.value) {
+    return known
+  }
+  const found = everyMemberReaches checker, capability
+  checker.reachingTraits.set capability.value, found
+  found
+}
+
+fn everyMemberReaches(var checker: Checker, capability: SymbolId): Bool {
+  const site = match checker.siteOf(capability) {
+    Some(found) => found
+    None => {
+      return true
+    }
+  }
+  const members = match site.kind {
+    .Declared(declaration) => {
+      match declaration.kind {
+        .Trait(declared) => declared.members
+        _ => {
+          return true
+        }
+      }
+    }
+    _ => {
+      return true
+    }
+  }
+  for member in members {
+    if const .Function(function) = member.kind {
+      if !memberReaches(function) {
+        return false
+      }
+    }
+  }
+  true
+}
+
+/** One member: it has to take `self`, and its result must not name `Self` anywhere. */
+fn memberReaches(function: FunctionDeclaration): Bool {
+  var takesSelf = false
+  for parameter in function.parameters {
+    if parameter.name.text == "self" && parameter.annotation.isNone() {
+      takesSelf = true
+    }
+  }
+  if !takesSelf {
+    return false
+  }
+  match function.returnType {
+    Some(annotation) => !namesSelf(annotation)
+    None => true
+  }
+}
+
+/** Whether a written type names `Self` anywhere inside it. There is no other way to mean it, so this is exact. */
+fn namesSelf(reference: TypeReference): Bool {
+  match reference.kind {
+    .Named(path, arguments) => {
+      if path.length() == 1 && path[0].text == "Self" {
+        return true
+      }
+      anyNamesSelf arguments
+    }
+    .Optional(inner) => namesSelf inner
+    .Lazy(inner) => namesSelf inner
+    .Intersection(members) => anyNamesSelf members
+    .TupleType(fields) => {
+      for field in fields {
+        if namesSelf(field.annotation) {
+          return true
+        }
+      }
+      false
+    }
+    .FunctionType(parameters, result) => {
+      for parameter in parameters {
+        if namesSelf(parameter.annotation) {
+          return true
+        }
+      }
+      namesSelf result
+    }
+    _ => false
+  }
+}
+
+fn anyNamesSelf(references: List<TypeReference>): Bool {
+  for reference in references {
+    if namesSelf(reference) {
+      return true
+    }
+  }
+  false
 }
 
 /**

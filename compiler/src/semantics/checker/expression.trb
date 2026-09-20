@@ -8,7 +8,7 @@ use Checker, Expectation, Resolution, Adaptation, Dispatch, CollectionLiteral fr
 use Target, deferredTarget, resolveName, symbolTarget, targetOfCandidate from "./name"
 use formOf, reportUnknownMember, isFullyKnown from "./name"
 use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf, requireObjectSafe from "./member"
-use traitArgumentsOf, witnessFor, isConcrete, implementsBound from "./implementation"
+use traitArgumentsOf, witnessFor, isConcrete, implementsBound, iterableSourceOf from "./implementation"
 use typeFromReference, integerLiteral from "./lowering"
 use sameType, unify, resolveType, resolveTypes, hasVariable, openVariableOf, suppressVariables from "./unify"
 use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
@@ -966,7 +966,7 @@ fn builtTargetOf(var checker: Checker, expected: TypeId?): BuiltTarget? {
   if !isConcrete(checker, annotation) {
     return None
   }
-  const item = itemOfTarget(checker, annotation, iterable, conversion)?
+  const item = itemOfTarget(checker, annotation, iterable)?
   const applied = checker.nominal iterable, [item]
   const source = checker.types.intern TypeForm.Traits([applied])
   const bound = checker.nominal conversion, [source]
@@ -978,16 +978,16 @@ fn builtTargetOf(var checker: Checker, expected: TypeId?): BuiltTarget? {
 }
 
 /** What a target iterates, which is the `Item` its `From<Iterable<Item>>` takes. */
-fn itemOfTarget(var checker: Checker, annotation: TypeId, iterable: SymbolId, conversion: SymbolId): TypeId? {
+fn itemOfTarget(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
   if const Some(arguments) = traitArgumentsOf(checker, annotation, iterable) {
     if const Some(item) = arguments.first() {
       return Some item
     }
   }
-  // A target that is not iterable itself - `Histogram with From<Iterable<Int>>` - says it in its own `From`
-  const given = traitArgumentsOf checker, annotation, conversion
-  const source = (given ?? []).first()?
-  itemOfIterable checker, source, iterable
+  // A target that is not iterable itself - `String`, a `Histogram with From<Iterable<Int>>` - says it in its own `From`.
+  // Which of several `From` implementations that is, is the question `iterableSourceOf` answers: `String` has two
+  // (`From<Iterable<Char>>` and gap 50's blanket `From<Never>`) and only one of them takes an `Iterable`
+  iterableSourceOf checker, annotation, iterable
 }
 
 /** The `Item` of an expected type that is merely iterable: `const numbers: Iterable<Int> = []` holds `Int64`s. */
@@ -996,22 +996,6 @@ fn itemOfIterated(var checker: Checker, expected: TypeId?): TypeId? {
   const annotation = expected?
   const arguments = traitArgumentsOf(checker, annotation, iterable)?
   arguments.first()
-}
-
-/** The `Item` of `Iterable<Item>` written as a type, which is a trait value of one bound. */
-fn itemOfIterable(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
-  const bounds = match checker.types.form(annotation) {
-    .Traits(found) => found
-    _ => [annotation]
-  }
-  for bound in bounds {
-    if const .Nominal(symbol, arguments) = checker.types.form(bound) {
-      if symbol == iterable {
-        return arguments.first()
-      }
-    }
-  }
-  None
 }
 
 /** The `Key` and the `Value` of a map target, which takes `Iterable<(Key, Value)>` and nothing else. */
@@ -1069,7 +1053,7 @@ fn arrayLiteralType(var checker: Checker, items: List<Argument>, target: Expecte
     suppressVariables checker, target.size
     return target.annotation
   }
-  if !matchArraySize(checker, target.annotation, target.size, count, at) {
+  if !matchArraySize(checker, target.annotation, target.size, count, "literal", at) {
     return target.annotation
   }
   const item = resolveType checker, target.item
@@ -1112,14 +1096,22 @@ fn constantLengthOf(checker: Checker, size: TypeId): Int? {
  * `const numbers = Array.of(1, 2, 3)` gets its type - and a written one has to be exactly it. A `Size` that is a const
  * *parameter* (`Array<Float, Columns>` inside a generic type) says nothing here: what `Columns` is, the caller decides.
  */
-public fn matchArraySize(var checker: Checker, annotation: TypeId, given: TypeId, count: Int, at: Span): Bool {
+public fn matchArraySize(
+  var checker: Checker,
+  annotation: TypeId,
+  given: TypeId,
+  count: Int,
+  /** `"literal"` or `"call"`: what the message calls the place the items were counted. */
+  kind: String,
+  at: Span,
+): Bool {
   const size = resolveType checker, given
   if const Some(wanted) = constantLengthOf(checker, size) {
     if wanted == count {
       return true
     }
     const shown = resolveType checker, annotation
-    reportArraySize checker, shown, wanted, count, at
+    reportArraySize checker, shown, wanted, count, kind, at
     return false
   }
   if openVariableOf(checker, size).isNone() {
@@ -1238,11 +1230,21 @@ fn reportWrongTarget(var checker: Checker, annotation: TypeId, kind: String, pro
   )
 }
 
-/** The size of an `Array` is part of its type, so a literal and a call of `Array.of` are counted against it. */
-public fn reportArraySize(var checker: Checker, annotation: TypeId, wanted: Int, given: Int, at: Span) {
+/**
+ * The size of an `Array` is part of its type, so a literal and a call of `Array.of` are both counted against it. `kind`
+ * is what the message calls the place: "this literal" for `[1, 2, 3]`, "this call" for `Array.of(1, 2, 3)`.
+ */
+public fn reportArraySize(
+  var checker: Checker,
+  annotation: TypeId,
+  wanted: Int,
+  given: Int,
+  kind: String,
+  at: Span,
+) {
   const shown = checker.describe annotation
   checker.reportHere(
-    Diagnostic.error("`{shown}` has {wanted} items, and this literal has {given}", at)
+    Diagnostic.error("`{shown}` has {wanted} items, and this {kind} has {given}", at)
       .withNote("The size of an `Array` is part of its type, so the number of items is counted where it is written")
   )
 }

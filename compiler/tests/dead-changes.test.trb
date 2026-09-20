@@ -93,6 +93,70 @@ group "Loops" {
   }
 }
 
+/**
+ * The statements of an entry file or a script are a body like any other, but a top-level `var` is a *declaration* and
+ * not a local: a function of the module reads the same one, and nothing says where that function is called. So the rule
+ * is "no statement after it reads it, and nothing else in the module does either" (gap 52).
+ */
+group "Top-level `var` bindings" {
+  test "the copy trap at the top level of an entry file" {
+    const source = "{counter}var counters = [Counter(), Counter()]\nvar first = counters[0]\n"
+      + "first.increment()\nprint counters[0].count\n"
+    assert(problems(source) == ["This change has no effect: `first` is never read again"])
+    assert(
+      notes(source) == ["`first` is a copy. Did you mean the path it came from (`items[0].increment()`)?"]
+    )
+  }
+
+  test "an assignment at the top level that nothing reads afterwards" {
+    const source = "var total = 0\ntotal = 1\n"
+    assert(problems(source) == ["This change has no effect: `total` is never read again"])
+    assert(notes(source) == ["With value semantics a change nobody reads is always a mistake"])
+  }
+
+  test "a later statement that reads it keeps it alive" {
+    assert problems("var total = 0\ntotal = 1\nprint total\n").isEmpty()
+  }
+
+  test "a function of the module that reads it keeps it alive, wherever it is declared" {
+    const before = "fn show() \{\n  print total\n\}\n\nvar total = 0\ntotal = 1\n"
+    assert problems(before).isEmpty()
+    const after = "var total = 0\ntotal = 1\n\nfn show() \{\n  print total\n\}\n"
+    assert problems(after).isEmpty()
+  }
+
+  test "a closure inside a function reads it too" {
+    const source = "fn show(): () => Void \{\n  \{ print total \}\n\}\n\nvar total = 0\ntotal = 1\n"
+    assert problems(source).isEmpty()
+  }
+
+  test "a method of a type of the module reads it" {
+    const source = "type Report \{\n  fn show(self) \{\n    print total\n  \}\n\}\n\nvar total = 0\ntotal = 1\n"
+    assert problems(source).isEmpty()
+  }
+
+  test "a top-level `const` is never changed, so it is never one" {
+    assert problems("const total = 0\nprint total\n").isEmpty()
+  }
+
+  test "a top-level `var` that holds a shared object has no entry at all (gap 48)" {
+    const source = "shared type Handle \{\n  var open: Bool = true\n\n"
+      + "  fn close(var self) \{\n    open = false\n  \}\n\}\n\nvar handle = Handle()\nhandle.close()\n"
+    assert problems(source).isEmpty()
+  }
+
+  test "`public var` is not a top-level binding at all, and the rule adds no third message (gap 41)" {
+    const source = "public var total = 0\ntotal = 1\n"
+    assert(
+      problems(source)
+        == [
+          "A module has no mutable state: only `const` can be public",
+          "`total` is a `const`. Only a `var` binding can be changed",
+        ]
+    )
+  }
+}
+
 group "What the rule does not reach" {
   test "a `var` parameter writes into the caller's place" {
     assert problems("{counter}fn probe(var target: Counter) \{\n  target.increment()\n\}").isEmpty()

@@ -418,17 +418,38 @@ public type Access {
 }
 
 /**
- * One read or one change of a local `var` binding, in source order. This is the whole state the dead-change rule needs
+ * What a use of the dead-change rule is about. The two cases are `PlaceRoot.Local` and `PlaceRoot.Declared` under their
+ * own names, because the other two roots of a place - a temporary and an unknown one - are nothing the rule counts.
+ */
+public type UseRoot {
+  case Local(binding: BindingId)
+  /**
+   * A top-level `var` of an entry file or a script. Those are *declarations* and not locals, so the statements of the
+   * file are only part of their life: a function of the module may read one too (gap 52).
+   */
+  case Declared(symbol: SymbolId)
+}
+
+/**
+ * One read or one change of a `var` value, in source order. This is the whole state the dead-change rule needs
  * (design 5.3): a change is dead when no read follows it and no read shares a loop with it.
  */
-public type BindingUse {
-  binding: BindingId
+public type ValueUse {
+  root: UseRoot
   isChange: Bool
   at: Span
   /** A change a loop brings a read back around to is alive, whatever stands after it. */
   var isLive: Bool = false
   /** The member that changed it, `""` for an assignment: the note names the path that was probably meant. */
   changedBy: String = ""
+}
+
+/** One number per root, so that the rule's maps stay `Map<Int, Bool>`. Locals and symbols never collide. */
+public fn useKey(root: UseRoot): Int {
+  match root {
+    .Local(binding) => binding.value
+    .Declared(symbol) => -2 - symbol.value
+  }
 }
 
 /**
@@ -593,11 +614,13 @@ public type BodyState {
   contextStarts: List<Int>
   pendingSpans: List<Span>
   hasVariables: Bool
-  /** The mutation rules are per body: an open access and the uses of a binding never reach out of one (4.6). */
+  /** The mutation rules are per body: an open access and the uses of a value never reach out of one (4.6). */
   accesses: List<Access>
-  bindingUses: List<BindingUse>
+  valueUses: List<ValueUse>
   resultRule: ResultRule
   runningClosures: Int = 0
+  /** Whether the body is the statement sequence of a file, which is the one body a top-level `var` lives in (gap 52). */
+  isTopLevel: Bool = false
 }
 
 /**
@@ -725,8 +748,17 @@ public type Checker {
   var callSerial: Int = 0
   /** How many closure bodies are being checked. A quotation is not run, so it does not count here (4.8). */
   var runningClosures: Int = 0
-  /** Every read and every change of a local `var` binding of the body that is being checked, in source order. */
-  var bindingUses: List<BindingUse> = []
+  /** Every read and every change of a `var` value of the body that is being checked, in source order. */
+  var valueUses: List<ValueUse> = []
+  /** Whether the body that is being checked is the statement sequence of a file (gap 52). */
+  var isTopLevel: Bool = false
+  /**
+   * Every top-level `var` that something other than the statements of its own file reads: a function of the module, a
+   * closure inside one, the initializer of a top-level `const`. A top-level `var` is a declaration and not a local, so
+   * the statement sequence is only part of its life and a change of one is only dead when nothing else reads it either.
+   * By `SymbolId.value`, and never cleared: a symbol belongs to one file, and one answer about it is enough (gap 52).
+   */
+  var readDeclarations: Map<Int, Bool> = [:]
   /** Every binding a closure captures, by `BindingId.value`: a captured binding is a shared box and never dead (gap 19). */
   var capturedBindings: Map<Int, Bool> = [:]
   /** The closures that stand straight as the argument of a call, by span: those are the ones that cannot escape. */
@@ -786,6 +818,11 @@ public type Checker {
   var traitDepth: Int = 0
   /** Every trait a type implements, transitively over supertraits, by interned type id. */
   var traitClosures: Map<Int, List<TypeId>> = [:]
+  /**
+   * Per trait symbol: whether an `extend` of a *trait type* with it serves the concrete implementers of that trait as
+   * well. `Show` does, `From` does not - `from` has no `self` and answers `Self` (gap 53).
+   */
+  var reachingTraits: Map<Int, Bool> = [:]
   /** The traits a generic parameter is bounded by, by `ParameterId.value`: what a member lookup on it may see. */
   var parameterBounds: Map<Int, List<TypeId>> = [:]
   /** Every derived implementation that was generated, which milestone 5 has to emit the members of. */
@@ -1308,9 +1345,10 @@ public type Checker {
       pendingSpans,
       hasVariables,
       accesses,
-      bindingUses,
+      valueUses,
       resultRule,
       runningClosures,
+      isTopLevel,
     )
     module = inside
     locals = []
@@ -1328,8 +1366,9 @@ public type Checker {
     pendingSpans = []
     hasVariables = false
     accesses = []
-    bindingUses = []
+    valueUses = []
     runningClosures = 0
+    isTopLevel = false
     saved
   }
 
@@ -1350,8 +1389,9 @@ public type Checker {
     pendingSpans = saved.pendingSpans
     hasVariables = saved.hasVariables
     accesses = saved.accesses
-    bindingUses = saved.bindingUses
+    valueUses = saved.valueUses
     runningClosures = saved.runningClosures
+    isTopLevel = saved.isTopLevel
   }
 
   /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */
