@@ -1,11 +1,29 @@
+/**
+ * Concurrent work: [Task], a computation that finishes later, and [Channel], a queue between two tasks.
+ *
+ * Asynchrony lives in the type: a function that returns `Task<Value>` may call `await()`, and its body produces the
+ * `Value` - the same way a function that returns `Result` may use `?`. `Task` and `Channel` are the two shared types
+ * that connect concurrent work; everything else is copied when it crosses into one.
+ *
+ * # Open
+ *
+ * A program that calls [spawn] or [Task.await] type checks, but no current back end runs it: there is nothing yet
+ * that gives a `Task` or a `Channel` a value.
+ */
+
 use Source, Sink from "std/stream"
 
 /**
- * A computation that finishes later. Asynchrony lives in the type: a function that returns `Task<Value>` may call
- * `await()`, and its body produces the `Value` - the same way a function that returns `Result` may use `?`.
+ * A computation that finishes later, running from the moment it is created (`spawn { ... }`, or calling a function
+ * that returns one).
  *
- * A task starts running when it is created (`spawn { ... }`, or calling a function that returns one).
- * `Task` and `Channel` are the two shared types that connect tasks; everything else is copied into a task.
+ * Reach for it wherever work should happen while the caller keeps going. `map` and `flatMap` mean the same as
+ * everywhere else and work on the finished value.
+ *
+ * # Related
+ *
+ * - [spawn] - starts a task from a closure.
+ * - [all] - waits for two tasks of different types at once; [Task.all] does the same for any number of the same type.
  */
 public native shared type Task<Value> {
   /**
@@ -14,7 +32,10 @@ public native shared type Task<Value> {
    */
   native fn await(self): Value
 
+  /** Changes the value once the task finishes, without waiting for it here. */
   native fn map<Output>(self, transform: (value: Value) => Output): Task<Output>
+
+  /** Continues with another task once this one finishes, and keeps one level: the async form of [Result.flatMap]. */
   native fn flatMap<Output>(self, transform: (value: Value) => Task<Output>): Task<Output>
 
   /** A task for every item, running at the same time. The values arrive in the order of the tasks. */
@@ -55,9 +76,10 @@ public native shared type Channel<Item> {
 
 /**
  * Nobody is reading any more: the reading end of the channel was closed. The only way a `Channel`'s writing end fails,
- * and a value rather than a panic because a producer that is no longer needed should stop, not crash.
+ * and a value rather than a panic, because a producer with nobody left to feed should stop, not crash.
  */
 public type ChannelClosed with Show, Error {
+  /** `"the channel is closed"`. */
   fn show(self): String {
     "the channel is closed"
   }

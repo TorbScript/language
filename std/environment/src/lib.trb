@@ -1,8 +1,25 @@
 /**
- * The process environment. Needs the `std/environment` capability inside a sandboxed script; only the variables
- * matching the patterns granted there (`environment "APP_*"`) are visible to it.
+ * The process environment: a capability-gated way for code to read a variable set outside it.
+ *
+ * Reach for [Environment.get] instead of a literal or a config file wherever a value is meant to come from outside
+ * the program - a host name, a feature flag, a secret. Inside a sandboxed script it needs the `std/environment`
+ * capability, and only the variables matching the patterns granted there (`environment "APP_*"`) are visible to it.
  */
+
+/** The single capability that reads a variable from the process environment. */
 public native type Environment {
-  /** `None` if the variable is not set, or the caller is not allowed to see it. */
+  /**
+   * The value of `name`, or `None` if it is not set, or if the caller is not allowed to see it.
+   *
+   * # Examples
+   *
+   *     const home = Environment.get "HOME"
+   *     print(home ?? "not set")
+   *
+   * # Pitfalls
+   *
+   * A missing variable and a variable the sandbox has not granted look identical: both answer `None`. A script
+   * cannot tell a capability it was denied from one that simply has nothing behind it.
+   */
   native fn get(name: String): String?
 }

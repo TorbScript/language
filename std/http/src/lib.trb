@@ -1,18 +1,25 @@
 /**
- * A minimal HTTP client.
+ * A minimal HTTP client: [get], [post] and [request] answer a [Task] of a [Response], whose [Body] is a stream.
+ *
+ * A body is a stream: [Body] is a `Source<Bytes, HttpError>`, so a response of any size can be piped into a file or
+ * read item by item, and the convenience that covers nine cases out of ten sits on top of it (`body.text()`,
+ * `body.json<User>()`, all with a size limit).
+ *
+ * Needs the network capability inside a sandboxed script.
+ *
+ * # Examples
  *
  *     use * as http from "std/http"
  *
- *     fn fetchUser(id: Int): Task<Result<User, HttpError>> {
- *       const response = http.get("https://example.test/users/{id}").await()?
- *       response.json<User>().await()
+ *     type User {
+ *       id: Int
+ *       name: String
  *     }
  *
- * A body is a **stream** (`docs/STREAMS.md`): `Body` is a `Source<Bytes, HttpError>`, so a response of any size can be
- * piped into a file or read item by item, and the convenience that covers nine cases out of ten sits on top of it
- * (`body.text()`, `body.json<User>()`, all with a size limit).
- *
- * Needs the network capability inside a sandboxed script.
+ *     fn fetchUser(id: Int): Task<Result<User, HttpError>> {
+ *       var response = http.get("https://example.test/users/{id}").await()?
+ *       response.json<User>().await()
+ *     }
  */
 
 use Json, JsonError from "std/json"
@@ -21,8 +28,11 @@ use lines as streamLines from "std/stream"
 
 /** One HTTP request, for `request()`. `get` and `post` build one of these for the common cases. */
 public type Request {
+  /** `"GET"`, `"POST"`, or any other HTTP method. */
   method: String
+  /** The full URL, including its scheme. */
   url: String
+  /** Additional request headers. */
   headers: Map<String, String> = [:]
   /** `var`, because reading a body changes it: whoever reads one needs a `var` path to it. */
   var body: Body = Body.empty()
@@ -34,14 +44,15 @@ public type Request {
  * the same reason a `File` does.
  */
 public shared type Response {
+  /** The HTTP status code, e.g. `200` or `404`. */
   status: Int
+  /** The response headers. */
   headers: Map<String, String> = [:]
   /** `var`, because reading a body changes it: whoever reads one needs a `var` path to it. */
   var body: Body
 
   /**
-   * Decodes the body as JSON. A `Task` since the body arrives over the network: what used to be a plain `Result` was
-   * only a `Result` because the whole response was read before anybody looked at it.
+   * Decodes the body as JSON. A `Task`, because the body arrives over the network and decoding it means reading it.
    */
   fn json<Value: Decode>(var self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
     body.json<Value>(limit: limit).await()
@@ -68,10 +79,12 @@ public shared type Body with Source<Bytes, HttpError> {
 
   private var reading: Source<Bytes, HttpError>
 
+  /** The next chunk, or `None` at the end of the body. Most callers reach for [Body.bytes] or [Body.text] instead. */
   fn next(var self): Task<Result<Bytes?, HttpError>> {
     reading.next().await()
   }
 
+  /** Releases the underlying connection without reading the rest of the body. */
   fn close(var self) {
     reading.close()
   }
@@ -113,6 +126,7 @@ public shared type Body with Source<Bytes, HttpError> {
     Body source
   }
 
+  /** A body with nothing in it, e.g. for a `GET` request. */
   fn empty(): Body {
     const nothing: List<Bytes> = []
     Body Source.from(nothing)
@@ -165,6 +179,7 @@ public type HttpError with Show, Error {
     Self kind: .Status(code, message)
   }
 
+  /** `url` could not be parsed as a request at all. */
   fn invalidUrl(message: String): HttpError {
     Self kind: .InvalidUrl(message)
   }
@@ -184,6 +199,7 @@ public type HttpError with Show, Error {
     Self kind: .InvalidText(cause)
   }
 
+  /** Whether the server did not respond in time. */
   fn isTimeout(self): Bool {
     match kind {
       .Timeout => true
@@ -209,6 +225,7 @@ public type HttpError with Show, Error {
     }
   }
 
+  /** A message naming what went wrong, e.g. `"404: Not Found"` or `"request timed out"`. */
   fn show(self): String {
     match kind {
       .Timeout => "request timed out"

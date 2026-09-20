@@ -1,13 +1,24 @@
+/**
+ * Every numeric type of the language: [Numeric], [Signed] and [Bits], the traits their operators go through; the
+ * sized integer types and the two floating-point types; [Decimal]; and the conversions between all of them.
+ *
+ * Reach for `Int`, `UInt` or `Float` - the three default-width aliases - and only name a sized type (`Int8`,
+ * `UInt32`, ...) where a signature has to say exactly how wide a value is.
+ */
+
 use Equals, Compare, Hash from "std/core"
 use From, TryFrom, Parse, Show from "std/core"
 use Error from "std/core"
 use Add, Subtract, Multiply, Divide, Remainder, Negate from "std/core"
 
+/** The arithmetic and comparison every number has: `+`, `-`, `*`, `/`, `%`, `==`, `<`, and parsing from text. */
 public trait Numeric
   with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show, Parse<NumberParseError> {}
 
+/** [Numeric] plus a sign: the unary `-` and [Signed.absolute]. What every signed number has beyond an unsigned one. */
 public trait Signed
   with Numeric, Negate {
+  /** The value without its sign. */
   fn absolute(self): Self
 }
 
@@ -22,19 +33,29 @@ public trait Signed
  * a negative amount or by the width of the type or more panics, like every other operation that leaves its range.
  */
 public trait Bits {
+  /** Bit-for-bit `and`. */
   fn bitwiseAnd(self, other: Self): Self
+  /** Bit-for-bit `or`. */
   fn bitwiseOr(self, other: Self): Self
+  /** Bit-for-bit `xor`. */
   fn bitwiseExclusiveOr(self, other: Self): Self
+  /** Every bit flipped. */
   fn bitwiseNot(self): Self
+  /** Shifted towards the high bits. Arithmetic for a signed type, logical for an unsigned one. */
   fn shiftedLeft(self, by: Int64): Self
+  /** Shifted towards the low bits. Arithmetic for a signed type, logical for an unsigned one. */
   fn shiftedRight(self, by: Int64): Self
 }
 
+/** What [Numeric.parse] fails with: the text is not a valid number. */
 public type NumberParseError with Error {
+  /** The text that failed to parse. */
   text: String
 }
 
+/** What a narrowing conversion (`Int8.tryFrom`, `Int64.tryFrom`) fails with: the value does not fit the target type. */
 public type NumberRangeError with Error {
+  /** What went out of range. */
   message: String
 }
 
@@ -43,77 +64,112 @@ public type NumberRangeError with Error {
 
 // The types always carry their width. This file uses the sized names only, because here the width is the point.
 
+/** An 8-bit signed integer, from [Int8.minimum] to [Int8.maximum]. */
 public native type Int8 with Signed, Hash, Bits {}
+/** A 16-bit signed integer, from [Int16.minimum] to [Int16.maximum]. */
 public native type Int16 with Signed, Hash, Bits {}
+/** A 32-bit signed integer, from [Int32.minimum] to [Int32.maximum]. */
 public native type Int32 with Signed, Hash, Bits {}
-/** The type of integer literals. */
+/** A 64-bit signed integer, and the type of an integer literal. */
 public native type Int64 with Signed, Hash, Bits {}
 
+/** An 8-bit unsigned integer, from `0` to [UInt8.maximum]. */
 public native type UInt8 with Numeric, Hash, Bits {}
+/** A 16-bit unsigned integer, from `0` to [UInt16.maximum]. */
 public native type UInt16 with Numeric, Hash, Bits {}
+/** A 32-bit unsigned integer, from `0` to [UInt32.maximum]. */
 public native type UInt32 with Numeric, Hash, Bits {}
+/** A 64-bit unsigned integer, from `0` to [UInt64.maximum]. */
 public native type UInt64 with Numeric, Hash, Bits {}
 
+/** The range of an `Int8`. */
 extend Int8 {
+  /** The smallest `Int8`. */
   const minimum: Int8 = -128
+  /** The largest `Int8`. */
   const maximum: Int8 = 127
 }
 
+/** The range of an `Int16`. */
 extend Int16 {
+  /** The smallest `Int16`. */
   const minimum: Int16 = -32768
+  /** The largest `Int16`. */
   const maximum: Int16 = 32767
 }
 
+/** The range of an `Int32`. */
 extend Int32 {
+  /** The smallest `Int32`. */
   const minimum: Int32 = -2147483648
+  /** The largest `Int32`. */
   const maximum: Int32 = 2147483647
 }
 
+/** The range of a `UInt8`. */
 extend UInt8 {
+  /** Always `0`. */
   const minimum: UInt8 = 0
+  /** The largest `UInt8`. */
   const maximum: UInt8 = 255
 }
 
+/** The range of a `UInt16`. */
 extend UInt16 {
+  /** Always `0`. */
   const minimum: UInt16 = 0
+  /** The largest `UInt16`. */
   const maximum: UInt16 = 65535
 }
 
+/** The range of a `UInt32`. */
 extend UInt32 {
+  /** Always `0`. */
   const minimum: UInt32 = 0
+  /** The largest `UInt32`. */
   const maximum: UInt32 = 4294967295
 }
 
+/** A 32-bit floating-point number. */
 public native type Float32 with Signed {}
-/** The type of decimal literals. */
+/** A 64-bit floating-point number, and the type of a decimal literal. */
 public native type Float64 with Signed {}
 
 /**
  * Exact base-10 arithmetic. Decimal literals adapt to it: `const price: Decimal = 19.99`
  *
- * The runtime does not implement it yet, so using it is a compile error that names the milestone - a `native`
- * declaration the runtime is missing is never a link error.
+ * # Open
+ *
+ * The type checks today, but no back end gives it a value: there is no diagnostic for using it, only the absence of
+ * anything that runs it.
  */
 public native type Decimal with Signed, Hash {}
 
 // The defaults. Plain aliases, nothing the language treats specially.
+/** The default width for a whole number: `Int64`. */
 public type Int = Int64
+/** The default width for a non-negative whole number: `UInt64`. */
 public type UInt = UInt64
+/** The default width for a floating-point number: `Float64`. */
 public type Float = Float64
 
+/** The range of an `Int64`, and reading digits in another base. */
 extend Int64 {
   /**
    * The smallest `Int64` cannot be written as a positive literal negated (`9223372036854775808` alone does not fit
    * any integer type), so it is spelled the way C spells `INT64_MIN`: one more than the smallest literal there is.
    */
   const minimum: Int64 = -9223372036854775807 - 1
+  /** The largest `Int64`. */
   const maximum: Int64 = 9223372036854775807
 
   /** Digits in another base: `Int.parseDigits("ff", radix: 16)`. No sign, no prefix, `_` is allowed between digits. */
   native fn parseDigits(text: String, radix: Int64): Result<Int64, NumberParseError>
 }
 
+/** The range of a `UInt64`, and the two operations that wrap instead of panicking. */
 extend UInt64 {
+  /** Always `0`. */
   const minimum: UInt64 = 0
   /** Every integer literal is parsed as an `Int64` first, so `18446744073709551615` does not fit as a literal here
    * either - `UInt64.minimum.bitwiseNot()` is all ones, which is the largest `UInt64` there is. */
@@ -133,14 +189,22 @@ extend UInt64 {
   native fn multipliedWrapping(self, other: UInt64): UInt64
 }
 
+/** The two constants and the operations of a `Float64` that read as its own, not as a function of a value. */
 extend Float64 {
+  /** The ratio of a circle's circumference to its diameter. */
   const pi: Float64 = 3.141592653589793
+  /** The base of the natural logarithm. */
   const e: Float64 = 2.718281828459045
 
+  /** The non-negative square root. */
   native fn squareRoot(self): Float64
+  /** Rounded towards negative infinity. */
   native fn floor(self): Float64
+  /** Rounded towards positive infinity. */
   native fn ceiling(self): Float64
+  /** Rounded to the nearest integer. */
   native fn round(self): Float64
+  /** Whether the value is "not a number" - the one value for which `==` is never true, not even with itself. */
   native fn isNaN(self): Bool
 
   /**
@@ -160,14 +224,17 @@ extend Float64 {
 }
 
 // Widening conversions are infallible...
+/** A narrower signed integer always fits: `Int.from(byte)` for an `Int8`. */
 extend Int64 with From<Int8> {
   native fn from(value: Int8): Int64
 }
 
+/** A narrower signed integer always fits: `Int.from(short)` for an `Int16`. */
 extend Int64 with From<Int16> {
   native fn from(value: Int16): Int64
 }
 
+/** A narrower signed integer always fits: `Int.from(word)` for an `Int32`. */
 extend Int64 with From<Int32> {
   native fn from(value: Int32): Int64
 }
@@ -177,31 +244,38 @@ extend Int64 with From<UInt8> {
   native fn from(value: UInt8): Int64
 }
 
+/** Every unsigned value below the width of an `Int64` fits into it. */
 extend Int64 with From<UInt16> {
   native fn from(value: UInt16): Int64
 }
 
+/** Every unsigned value below the width of an `Int64` fits into it. */
 extend Int64 with From<UInt32> {
   native fn from(value: UInt32): Int64
 }
 
+/** Every `Int64` is representable as a `Float64`. */
 extend Float64 with From<Int64> {
   native fn from(value: Int64): Float64
 }
 
+/** Every `Float32` widens to `Float64` without loss. */
 extend Float64 with From<Float32> {
   native fn from(value: Float32): Float64
 }
 
 // ...narrowing conversions are not.
+/** Fails with a [NumberRangeError] when the `Int64` does not fit an `Int8`. */
 extend Int8 with TryFrom<Int64, NumberRangeError> {
   native fn tryFrom(value: Int64): Result<Int8, NumberRangeError>
 }
 
+/** Fails with a [NumberRangeError] when the `Int64` does not fit an `Int32`. */
 extend Int32 with TryFrom<Int64, NumberRangeError> {
   native fn tryFrom(value: Int64): Result<Int32, NumberRangeError>
 }
 
+/** Fails with a [NumberRangeError] when the `Float64` does not fit an `Int64`, e.g. `nan` or a value out of range. */
 extend Int64 with TryFrom<Float64, NumberRangeError> {
   native fn tryFrom(value: Float64): Result<Int64, NumberRangeError>
 }

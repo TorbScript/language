@@ -1,15 +1,27 @@
 /**
- * Quoted expressions. If a parameter or binding has the type `Expression<Value>`, the compiler type checks the argument as
- * an ordinary `Value` and then passes it together with its expression tree. See "Quoted Expressions" in CONCEPT.md.
+ * Quoted expressions: [Expression], the typed tree a quoted parameter hands over, and [ExpressionNode], the plain
+ * data anyone can build, match and transform. [assert] and [nameOf] are what most callers reach for; a provider
+ * that renders its own explanation of a captured expression works with [ExpressionNode] directly.
+ */
+
+/**
+ * The typed tree behind a quoted parameter: `Expression<Value>` type checks its argument as an ordinary `Value` and
+ * hands it over together with the expression tree that produced it.
  *
- * `Expression` values can only be created by the compiler. `ExpressionNode` trees are plain data and can be built,
- * matched and transformed by everybody.
+ * A caller writes nothing special for this - passing an ordinary `Value` where a parameter is declared
+ * `Expression<Value>` is enough. Only the compiler creates one; [ExpressionNode] is the data an ordinary function
+ * can build as well.
+ *
+ * # Related
+ *
+ * - [assert] - the one function most callers need an `Expression<Bool>` for.
  */
 public native type Expression<Value> {
   /** Static data, created at compile time. */
   tree: ExpressionNode
   /** The source text of the quoted expression: `"_.age >= minAge"` */
   source: String
+  /** Where the quoted expression starts in its file. */
   location: SourceLocation
 
   /** The ordinary value (for function types: the closure). Evaluated at most once. */
@@ -19,11 +31,16 @@ public native type Expression<Value> {
   native fn captures(self): List<Encode>
 }
 
+/** A place in a source file: what [Expression.location] and a diagnostic point at. */
 public type SourceLocation with Show {
+  /** The path of the file. */
   file: String
+  /** The line the location points at. */
   line: Int
+  /** The column the location points at. */
   column: Int
 
+  /** `"{file}:{line}:{column}"`. */
   fn show(self): String {
     "{file}:{line}:{column}"
   }
@@ -31,9 +48,12 @@ public type SourceLocation with Show {
 
 /** A description of a type. Data, not reflection: there is no way back from a `TypeReference` to a type. */
 public type TypeReference with Show {
+  /** The type's name, without its arguments. */
   name: String
+  /** The type arguments, empty for a type with none. */
   arguments: List<TypeReference> = []
 
+  /** `name`, or `name<arguments>` when there are any. */
   fn show(self): String {
     if arguments.isEmpty() {
       return name
@@ -43,24 +63,41 @@ public type TypeReference with Show {
   }
 }
 
+/** The prefix operators a quoted expression can carry, one case per operator. */
 public type UnaryOperator {
+  /** `-`. */
   case Negate
+  /** `!`. */
   case Not
 }
 
+/** The infix operators a quoted expression can carry, one case per operator. */
 public type BinaryOperator {
+  /** `+`. */
   case Add
+  /** `-`. */
   case Subtract
+  /** `*`. */
   case Multiply
+  /** `/`. */
   case Divide
+  /** `%`. */
   case Remainder
+  /** `==`. */
   case Equal
+  /** `!=`. */
   case NotEqual
+  /** `<`. */
   case Less
+  /** `<=`. */
   case LessOrEqual
+  /** `>`. */
   case Greater
+  /** `>=`. */
   case GreaterOrEqual
+  /** `&&`. */
   case And
+  /** `||`. */
   case Or
 }
 
@@ -72,16 +109,27 @@ public type BinaryOperator {
  * `_ => Fail(Unsupported(...))` anyway, because they need that arm for calls they do not know.
  */
 public type ExpressionNode {
+  /** A literal value written in the source. */
   case Literal(value: Encode, of: TypeReference)
+  /** An explicit parameter of the quoted closure, or its implicit `_`. */
   case Parameter(index: Int, name: String, of: TypeReference)
+  /** A binding from outside the quoted expression, captured by value. */
   case Captured(index: Int, name: String, of: TypeReference)
+  /** A field read off `target`, or a receiver method turned into a field access. */
   case Field(target: ExpressionNode, name: String, of: TypeReference)
+  /** A method call on `target`, or a free function call when `target` is `None`. */
   case Call(target: ExpressionNode?, owner: TypeReference, method: String, arguments: List<ExpressionNode>, of: TypeReference)
+  /** A constructor call for the type `of`. */
   case Construct(arguments: List<ExpressionNode>, of: TypeReference)
+  /** A prefix operator applied to `operand`. */
   case Unary(operator: UnaryOperator, operand: ExpressionNode, of: TypeReference)
+  /** An infix operator applied to `left` and `right`. */
   case Binary(operator: BinaryOperator, left: ExpressionNode, right: ExpressionNode, of: TypeReference)
+  /** An `if`/`else` expression. */
   case Conditional(condition: ExpressionNode, then: ExpressionNode, otherwise: ExpressionNode, of: TypeReference)
+  /** A closure literal, with its parameter names and its body. */
   case Lambda(parameters: List<String>, body: ExpressionNode, of: TypeReference)
+  /** A list or tuple literal. */
   case Items(items: List<ExpressionNode>, of: TypeReference)
   /** `"{a} and {b}"`: literals and expressions in order. `?.` and `??` have no nodes, they are calls on `Option`. */
   case Interpolation(parts: List<ExpressionNode>)
@@ -108,7 +156,16 @@ public type ExpressionNode {
 
 /**
  * The name of what was written, never its value: `nameOf(user.email)` is `"email"`, `nameOf(limit)` is `"limit"`.
- * (For types there is the compile-time function `typeName<User>()`.)
+ * For a type there is the compile-time function `typeName<User>()` instead.
+ *
+ * # Examples
+ *
+ *     fn label(value: Expression<Int>): String {
+ *       nameOf value
+ *     }
+ *
+ *     const limit = 5
+ *     print label(limit)
  */
 public fn nameOf<Value>(expression: Expression<Value>): String {
   match expression.tree {
@@ -121,8 +178,18 @@ public fn nameOf<Value>(expression: Expression<Value>): String {
 }
 
 /**
- *     assert(adults.length() > limit)
- *     // Assertion failed: adults.length() > limit   (adults = [...], limit = 5)   at main.trb:12:1
+ * Panics if `condition` is `false`. There are no matchers: the message names the source text and every captured
+ * value instead, e.g. `Assertion failed: adults.length() > limit   (adults = [...], limit = 5)   at main.trb:12:1`.
+ *
+ * # Examples
+ *
+ *     const limit = 5
+ *     const adults = [1, 2, 3]
+ *     assert(adults.length() < limit)
+ *
+ * # Panics
+ *
+ * When `condition` is `false`.
  */
 public fn assert(condition: Expression<Bool>) {
   if condition.value() {

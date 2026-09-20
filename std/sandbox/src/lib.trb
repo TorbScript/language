@@ -10,9 +10,12 @@ use Duration from "std/time"
  * have. `line` is 0 when the problem is not about one place in the script (e.g. the file could not be read).
  */
 public type SandboxError with Show, Error {
+  /** `0` when the problem is not about one place in the script, such as the file not being readable at all. */
   line: Int
+  /** What went wrong, without the line number. */
   message: String
 
+  /** `"{line}: {message}"`, or just `message` when there is no line. */
   fn show(self): String {
     if line == 0 {
       return message
@@ -21,6 +24,7 @@ public type SandboxError with Show, Error {
   }
 }
 
+/** The byte unit [SandboxCapabilities.limits] is written in. */
 extend Int64 {
   /** Bytes, for `SandboxCapabilities.limits`: `64.megabytes()`. */
   fn megabytes(self): Int64 {
@@ -61,14 +65,21 @@ public native type Script<Value> {
 public native type Sandbox {
   /**
    * Type checks `path` against `Value` and returns it as a [Script], ready to run against a `Value` of the caller's
-   * own. What is wrong with the file (syntax, types, a module the script may not import) is reported here, what goes
-   * wrong while it runs by [Script.apply]. The trailing block grants capabilities beyond the defaults:
+   * own. What is wrong with the file (syntax, types, a module the script may not import) is reported here; what goes
+   * wrong while it runs is reported by [Script.apply] instead. The trailing block grants capabilities beyond the
+   * defaults.
    *
-   *     const script = Sandbox.load<ServerConfig>(path) {
+   * # Examples
+   *
+   *     type ServerConfig {
+   *       var port: Int = 8080
+   *     }
+   *
+   *     const loaded = Sandbox.load<ServerConfig>("./config.trb") {
    *       files readOnly: "./config"
    *       limits steps: 1_000_000, memory: 16.megabytes()
-   *     }?
-   *     script.apply(config)?
+   *     }
+   *     print loaded.isOk()
    */
   native fn load<Value>(
     path: String,

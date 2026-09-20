@@ -1,11 +1,22 @@
+/**
+ * The process itself, and the child processes it starts: [Process] for arguments and exiting, [Child] for a running
+ * program's pipes, and [ProcessOutput] for what a finished one left behind.
+ *
+ * A child process's three pipes are the same [Source] and [Sink] a file or a socket has, so a pipeline between two
+ * programs is `first.output().into(second.input())`.
+ */
+
 use IoError from "std/fs"
 use ArrayList from "std/collections"
 use Source, Sink, Bytes from "std/stream"
 
-/** What a program that was run to its end left behind. */
+/** What a program run with [Process.run] left behind. */
 public type ProcessOutput {
+  /** `0` for success, anything else for the code the program exited with. */
   exitCode: Int
+  /** Everything the program wrote to either stream, in the order it wrote it; see [Process.run]'s pitfall. */
   standardOutput: String
+  /** Always empty for a program run with [Process.run]; see its pitfall about why. */
   standardError: String
 
   /** The usual question about a child process: did it do what it was asked. */
@@ -15,33 +26,47 @@ public type ProcessOutput {
 }
 
 /**
- * A child process that is still running. Its three pipes are the same `Source` and `Sink` a file or a socket has, so
- * a pipeline between two programs is `first.output().into(second.input())`.
+ * A child process that is still running, started with [Process.start]. Its three pipes are the same [Source] and
+ * [Sink] a file or a socket has, so a pipeline between two programs is `first.output().into(second.input())`.
+ *
+ * # Examples
  *
  *     var child = Process.start("sort", ["-u"])?
- *     using child { running =>
- *       running.input().fill(Source.from(words)).await()?
- *       const sorted = running.output().lines().toList().await()?
- *       running.wait().await()
+ *     const result: Result<Void, IoError> = using child { running =>
+ *       var input = running.input()
+ *       input.addLine("banana").await()?
+ *       input.addLine("apple").await()?
+ *       input.finish().await()?
+ *       const chunks = running.output().toList().await()?
+ *       const code = running.wait().await()?
+ *       print chunks.length(), code
+ *       Ok(void)
  *     }
+ *     print result
  *
- * `close()` releases the pipes and stops waiting for the child; it does not kill it, because ending somebody else's
- * program is a decision and not a cleanup.
+ * # Pitfalls
+ *
+ * [Child.close] releases the pipes and stops waiting for the child; it does not kill it, because ending somebody
+ * else's program is a decision and not a cleanup.
  */
 public native shared type Child with Close {
   /** What the child reads. `finish()` closes its standard input, which is how most filters learn that they are done. */
   native fn input(self): Sink<Bytes, IoError>
 
+  /** What the child writes to standard output. */
   native fn output(self): Source<Bytes, IoError>
+
+  /** What the child writes to standard error, kept apart from [Child.output]. */
   native fn errors(self): Source<Bytes, IoError>
 
   /** The exit code, once the program has ended. */
   native fn wait(self): Task<Result<Int, IoError>>
 
+  /** Releases the three pipes and stops waiting for the child; see the type's own pitfall about killing it. */
   native fn close(var self)
 }
 
-/** The running program. */
+/** The running program: its command line, how it exits, and the child processes it starts. */
 public native type Process {
   /** The command line arguments, without the program itself. */
   native fn arguments(): List<String>
@@ -56,10 +81,11 @@ public native type Process {
    * A program that could not be started at all is an `IoError`; a program that ran and failed is an exit code, which
    * is why `torb build` can tell "there is no C compiler" from "the C compiler said no".
    *
-   * **Both output streams arrive in `standardOutput`, and `standardError` is empty**, until `Process.start` brings
-   * three real pipes (milestone 7.3): what a program writes is one stream in the order it wrote it, which is what a
-   * reader of a compiler's output wants anyway. Ordinary TorbScript over `runCollecting`, because `ProcessOutput` is a
-   * record of the program and a runtime function may not build one.
+   * # Pitfalls
+   *
+   * Both output streams arrive in [ProcessOutput.standardOutput], in the order the program wrote them, and
+   * [ProcessOutput.standardError] is always empty. A caller that needs the two streams kept apart reaches for
+   * [Process.start] instead, which hands out real pipes.
    */
   fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError> {
     var output = ""
