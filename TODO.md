@@ -1474,3 +1474,23 @@ Wenn nicht, was bedeutet, bewirkt es?
     `entry.0`/`entry.1` auf `entry.key`/`entry.value` umgestellt.
   - **Aufgefallen, nicht angefasst:** `indexed()` liefert weiter `Iterable<(Int, Item)>` ohne Labels
     (`(index:, item:)` würde sich gleich gut lesen) - gehört in eine eigene kleine Runde, wenn gewünscht.
+
+- (**Meilenstein 6.1 erreicht**, 2026-09-22) Gemergt, alle Gates grün (1452 Tests, 95 Runtime-Tests, volle
+  `cargo test`, 30 native Gate-Programme byte-gleich mit Stage 0). **Von mir nachgeprüft:** `torb build ../compiler`
+  schreibt in 4,5 Minuten `compiler/build/release/main.exe` (11 MB, 66 MB C); das Binary prüft das ganze Repository in
+  **6,9 Sekunden** ("279 files, no problems") und gibt bei `ir --statistics ../compiler` byte-gleich dasselbe aus wie
+  Stage 1. Compiler und Repository 99 % gelowert, 0 interne Fehler; offen in `compiler/` sind nur die 58 quotierten
+  Ausdrücke in den Tests.
+  - Closed-World-Fehler behoben: die Welt sind die PAKETE des Programms (Wurzeln, Abhängigkeiten, Prelude);
+    Stolperdraht 115/163/38/3; zwei Tests nageln es fest. Die zwei roten Tests sind grün.
+  - Was erst der selbstgebaute Compiler fand: eine Kopie eines geboxten Werts sah die Änderung am Original (der Parser
+    kopiert sich beim Backtracking); `!=` wurde für jeden Typ mit aufgerufener Gleichheit als `==` gelowert.
+  - **Offen bis 6.2 (Fixpunkt):** das Binary HÄNGT beim Bauen des Compilers (10 Minuten, keine Zeile C; Front-End,
+    Lowering und Ownership stimmen byte-gleich - es bleiben `verifyOwnedProgram` und der Emitter mit ihren
+    `while isChanged`-Schleifen). Danach: quotierte Ausdrücke 5.11 (`torb test` nativ), `Float64.compare`-Wrapper,
+    Collection aus einem Trait-Wert lesen (7.3).
+- (Checker-Runde, 2026-09-22) **Erledigt, gemergt (`e9b0d06`):** Extension-Sichtbarkeit (`use Int64.seconds from
+  "std/time"`, `as`; das eigene Paket sieht seine Extensions ohne Import; Prelude re-exportiert genau eine Zeile),
+  `loop` (17 Stellen umgestellt), `??` über `OrElse`, `const None = x` ist ein Fehler, `Map.iterator` liefert
+  `(key:, value:)`. Notiert: `indexed()` könnte `(index:, item:)` liefern; `reportHere` behält nur EINE Meldung pro
+  Span und verschluckt die zweite.
