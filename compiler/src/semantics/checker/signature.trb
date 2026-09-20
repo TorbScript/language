@@ -1,3 +1,12 @@
+/**
+ * What a declaration is, as a type: builds a [Signature] for a `fn`, a method, a field or a `const`, and a
+ * [TypeSignature] for a `type` or a `trait`. A signature is built the first time somebody asks for it and kept
+ * afterwards, because building one needs the types of other declarations - and an alias that names itself is the one
+ * cycle that can come out of that.
+ *
+ * Turning the syntax of a type into a type is `lowering.trb`, which this file uses and which uses it back.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Name, Statement, Binding, Declaration, Visibility from "../../syntax/ast"
@@ -14,14 +23,6 @@ use typeFromReference, traitsFromReference from "./lowering"
 use substituteFunction from "./unify"
 use checkFunctionBody, checkInitializer, checkDestructuredBinding, taskValueOf from "./statement"
 use isSharedType, isSharedTrait, allowsTopLevelCode from "./declaration"
-
-/**
- * What a declaration is, as a type. A signature is built the first time somebody asks for it and kept afterwards,
- * because building one needs the types of other declarations - and an alias that names itself is the one cycle that
- * can come out of that.
- *
- * Turning the syntax of a type into a type is `lowering.trb`, which this file uses and which uses it back.
- */
 
 // --- Generic parameters and `Self` ----------------------------------------------------------------------------------
 
@@ -406,9 +407,9 @@ fn destructuredSignature(
 }
 
 /**
- * Which declarations do not infer their result (milestone 4.9). A member of a `type` still does - members are public
- * unless marked `private`, so the rule is about the `public` *modifier* - and a member of a trait never does, because
- * it is what an implementor writes against.
+ * Which declarations do not infer their result. A member of a `type` still does - members are public unless marked
+ * `private`, so the rule is about the `public` *modifier* - and a member of a trait never does, because it is what
+ * an implementor writes against.
  */
 fn memberResultRule(checker: Checker, member: Member, owner: TypeId?): ResultRule {
   if isTraitOwner(checker, owner) {
@@ -508,8 +509,8 @@ fn functionSignature(
  * registered *before* that with an `Invalid` result, so that a call inside of the body still sees the parameters it
  * takes - and asking for that signature while it is being built is the recursion `reportCycle` names.
  *
- * A `public` function and a trait method do not infer (milestone 4.9): their result stays the `Void` the signature was
- * registered with, and a body that produces a value is reported where the value stands.
+ * A `public` function and a trait method do not infer: their result stays the `Void` the signature was registered
+ * with, and a body that produces a value is reported where the value stands.
  */
 fn inferredSignature(
   var checker: Checker,
@@ -874,8 +875,7 @@ fn plainTraitList(var checker: Checker, references: List<TypeReference>, of: Typ
 /**
  * `with Show, Add & Subtract by value, Compare by value`: one `DelegatedTrait` per trait, `Show` derives or is
  * hand-written, `Add`, `Subtract` and `Compare` are forwarded to `value`. `by` needs a type with exactly one field,
- * named by `by` itself (gap 14, "Distinct Types") - checked here, once per clause, against the fields this same
- * declaration just collected.
+ * named by `by` itself - checked here, once per clause, against the fields this same declaration just collected.
  */
 fn delegatedTraitList(
   var checker: Checker,
@@ -1000,7 +1000,7 @@ fn collectMembers(
           body.members.set function.name.text, symbol
         }
       }
-      // The cases of a type have their ids already: milestone 3 needed them for `use Option.Some, Option.None`
+      // The cases of a type have their ids already: name resolution needed them for `use Option.Some, Option.None`
       .Case(caseDeclaration) => {
         if const Some(symbol) = checker.symbols.caseNamed(owner, caseDeclaration.name.text) {
           checker.addSite symbol, site
@@ -1017,8 +1017,8 @@ fn collectMembers(
 }
 
 /**
- * The members of an `extend`. It has no symbol of its own - milestone 4.3 turns it into an implementation - so its
- * members only get their ids and where they are written, which is enough to build their types.
+ * The members of an `extend`. It has no symbol of its own - `implementation.trb` turns it into an implementation -
+ * so its members only get their ids and where they are written, which is enough to build their types.
  */
 public fn extensionMembers(
   var checker: Checker,
@@ -1046,7 +1046,7 @@ public fn extensionMembers(
           found.set name, symbol
         }
       }
-      // Fields and cases belong to the declaration of a type; milestone 4.9 reports them here
+      // Fields and cases belong to the declaration of a type; one written on an `extend` is reported elsewhere
       .Field(field) => {
         const _ = typeFromReference checker, field.annotation, scope.forType()
       }
@@ -1068,7 +1068,7 @@ fn fieldSignature(
   scope: TypeScope,
 ): FieldSignature {
   const annotation = typeFromReference checker, field.annotation, scope.forType()
-  // `private(var) balance: Int = 0` *is* the `var`: the field is writable, and only its type may write it (4.9)
+  // `private(var) balance: Int = 0` *is* the `var`: the field is writable, and only its type may write it
   const isPrivateVar = member.modifiers.visibility == Visibility.PrivateVar
   FieldSignature(
     symbol,

@@ -1,3 +1,19 @@
+/**
+ * What a valid place is ([Place], [placeOf]), whether a change may go through it ([isMutable], [requireMutable]), and
+ * what may run while one is running (exclusivity: [openAccess], [checkNewAccess], [checkAccess]).
+ *
+ * A place is a path: a root and the steps from it to one value. The root of a path that leads anywhere is a local
+ * binding - `self` is one of those, so `Place.Receiver` is a `Local` whose binding `isReceiver` - and a path that
+ * starts anywhere else is a `Temporary`, which is a valid *argument* for a `var` parameter and never the base of a
+ * path. Whether the path may be written through is one walk from the root outwards: the root has to be a `var`,
+ * every field step a `var` field this file may write, an index step needs `MutableIndexed` and a range step
+ * `MutableSlice`.
+ *
+ * `placeOf` never checks an expression again. Everything it needs - what a name resolved to, what type a base has - is
+ * in the tables by the time somebody asks for a place, so this is a walk over the syntax tree plus two map lookups per
+ * node. That is what keeps it off the hot path: nothing here runs for an expression that changes nothing.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, TextSegment from "../../syntax/ast"
@@ -11,33 +27,17 @@ use traitArgumentsOf from "./implementation"
 use noteChange, dropRead from "./mutation"
 use isInsideType, isSharedType from "./declaration"
 
-/**
- * What a valid place is, whether a change may go through it, and what may run while one is running.
- *
- * A place is a path: a root and the steps from it to one value. The root of a path that leads anywhere is a local
- * binding - `self` is one of those, so the design's `Place.Receiver` is a `Local` whose binding `isReceiver` - and a
- * path that starts anywhere else is a `Temporary`, which is a valid *argument* for a `var` parameter (gap 2) and never
- * the base of a path. Whether the path may be written through is one walk from the root outwards: the root has to be a
- * `var`, every field step a `var` field this file may write, an index step needs `MutableIndexed` and a range step
- * `MutableSlice`.
- *
- * `placeOf` never checks an expression again. Everything it needs - what a name resolved to, what type a base has - is
- * in the tables by the time somebody asks for a place, so this is a walk over the syntax tree plus two map lookups per
- * node. That is what keeps the whole sub-milestone off the hot path: nothing here runs for an expression that changes
- * nothing.
- */
-
 /** Why a place has to be mutable. The message follows from this, so every caller says what it is doing. */
 public type Mutation {
   /** `place = value` */
   case Write
-  /** `port 8080`, `database { ... }`: a property command writes the field it names (gap 15). */
+  /** `port 8080`, `database { ... }`: a property command writes the field it names. */
   case Command(member: String)
   /** `list.add(1)`: the member that declares `var self`. */
   case Receiver(member: String)
   /** A `var` parameter: which one, and of what. */
   case Argument(parameter: String, callee: String)
-  /** `if var Some(inner) = current`: the pattern binds `var` paths into the subject (gap 3). */
+  /** `if var Some(inner) = current`: the pattern binds `var` paths into the subject. */
   case Subject
 }
 
@@ -226,7 +226,7 @@ public fn requireMutable(var checker: Checker, place: Place, at: Span, cause: Mu
     return false
   }
   // A temporary is a valid *argument* for a `var` parameter: the callee is its only owner, so "copy in, copy out" is
-  // exact and nothing would have to be written back anywhere (gap 2). It is never the base of a path
+  // exact and nothing would have to be written back anywhere. It is never the base of a path
   if const .TemporaryRoot = problem {
     if place.steps.isEmpty() {
       if const .Argument(_, _) = cause {
@@ -264,7 +264,7 @@ fn problemOfRoot(var checker: Checker, root: PlaceRoot, at: Span): MutationProbl
       const name = checker.symbolAt(symbol).name
       MutationProblem.ConstantRoot name
     }
-    // A freshly produced object **is** a `var` path (gap 52). The rule against a temporary protects values: there the
+    // A freshly produced object **is** a `var` path. The rule against a temporary protects values: there the
     // change would be lost with the copy it was made in. An object has no copy, so nothing is lost, and nobody else
     // holds a view of something that was just made - so the full permission is the caller's to give
     .Temporary => {
@@ -351,9 +351,9 @@ fn problemOfField(var checker: Checker, owner: TypeId, field: SymbolId): Mutatio
       return MutationProblem.Unknown
     }
   }
-  // `private` reaches as far as the type does: its body, and every `extend` of it in the same package (gap 29)
+  // `private` reaches as far as the type does: its body, and every `extend` of it in the same package
   const isInside = isInsideType checker, owner
-  // A field this code may not even *name* was reported where it was named (4.9): one root cause, one message
+  // A field this code may not even *name* was reported where it was named: one root cause, one message
   if const .Private = signature.visibility {
     if !isInside {
       return MutationProblem.Unknown
@@ -483,7 +483,7 @@ fn reportTemporary(var checker: Checker, at: Span, cause: Mutation) {
   )
 }
 
-/** `private(var)`: the field reads from everywhere and is written by its own type alone (gap 29). */
+/** `private(var)`: the field reads from everywhere and is written by its own type alone. */
 fn reportPrivateField(var checker: Checker, owner: TypeId, field: SymbolId, at: Span) {
   const name = checker.symbolAt(field).name
   const shown = checker.describe owner
@@ -515,9 +515,9 @@ fn participleOf(name: String): String? {
 // --- The places one statement or one call names ----------------------------------------------------------------------
 
 /**
- * `place = value`. The target has to be a valid place and the place is recorded for milestone 5. The *change* is noted
- * by `noteAssignment` afterwards, because the value of the assignment is read before the change happens; what happens
- * here is that naming the target of an overwrite stops counting as a read of it.
+ * `place = value`. The target has to be a valid place and the place is recorded for the IR lowering. The *change* is
+ * noted by [noteAssignment] afterwards, because the value of the assignment is read before the change happens; what
+ * happens here is that naming the target of an overwrite stops counting as a read of it.
  */
 public fn checkAssignment(var checker: Checker, target: Expression): Place {
   const place = placeOf checker, target
@@ -534,7 +534,7 @@ public fn checkAssignment(var checker: Checker, target: Expression): Place {
   place
 }
 
-/** The change an assignment makes, once its value has been read (design 5.3). */
+/** The change an assignment makes, once its value has been read. */
 public fn noteAssignment(var checker: Checker, place: Place) {
   noteChange checker, place, ""
 }
@@ -542,7 +542,7 @@ public fn noteAssignment(var checker: Checker, place: Place) {
 /**
  * `port 8080`, `database { ... }`: a property command writes a field, so it is an assignment written another way and
  * asks the very same question - is the path to the field one a change may go through, `private(var)` and a `const` root
- * included. Only the message says which of the two the author wrote. The change itself is noted by `noteAssignment`
+ * included. Only the message says which of the two the author wrote. The change itself is noted by [noteAssignment]
  * once the value has been read, exactly as for `=`.
  */
 public fn checkPropertyWrite(var checker: Checker, callee: Expression, member: String): Place {
@@ -558,8 +558,8 @@ public fn checkPropertyWrite(var checker: Checker, callee: Expression, member: S
 }
 
 /**
- * `if var Some(inner) = current`: the pattern binds `var` paths *into* the subject (gap 3), so the subject has to be a
- * valid place. The place is recorded under the span of the subject, which is what tells milestone 5 that the bindings
+ * `if var Some(inner) = current`: the pattern binds `var` paths *into* the subject, so the subject has to be a valid
+ * place. The place is recorded under the span of the subject, which is what tells the IR lowering that the bindings
  * of the pattern are references into it and not copies.
  */
 public fn checkSubject(var checker: Checker, value: Expression) {
@@ -574,9 +574,9 @@ public fn checkSubject(var checker: Checker, value: Expression) {
 }
 
 /**
- * The receiver of a `var self` call. The access begins once every argument has been evaluated, and it stays open while a
- * closure argument runs - which is exactly what makes `root.div { root.attribute "lang", "en" }` a mistake (design 5.2)
- * while `items.removeAt(items.length() - 1)` is legal.
+ * The receiver of a `var self` call. The access begins once every argument has been evaluated, and it stays open while
+ * a closure argument runs - which is exactly what makes `root.div { root.attribute "lang", "en" }` a mistake while
+ * `items.removeAt(items.length() - 1)` is legal.
  */
 public fn openReceiverAccess(
   var checker: Checker,
@@ -656,7 +656,7 @@ public fn openArgumentAccess(
     checker.recordPlace at, place
   } else {
     const named = if parameter.isEmpty() { "its argument" } else { parameter }
-    // A temporary is a valid argument, and milestone 5 has to know that this one is owned by the callee (gap 2)
+    // A temporary is a valid argument, and the IR lowering has to know that this one is owned by the callee
     if requireMutable(checker, place, at, Mutation.Argument(named, callee)) {
       checker.recordPlace at, place
     }
@@ -669,6 +669,11 @@ public fn openArgumentAccess(
 
 // --- Exclusivity ----------------------------------------------------------------------------------------------------
 
+/**
+ * Pushes one open `var` access onto the stack that [checkNewAccess] and [checkAccess] check every later place
+ * against, for as long as it stays open (closed again by [closeAccessesTo]). `call` is the serial of the call this
+ * access belongs to, so two accesses of the same call can still be told from an access that has merely not closed yet.
+ */
 public fn openAccess(var checker: Checker, place: Place, changedBy: String, at: Span, call: Int = 0) {
   // A path that leads nowhere cannot be reached a second time either, so it is not worth a place on the stack
   if rootKey(place.root) != noRoot {
@@ -734,7 +739,7 @@ public fn checkAccess(var checker: Checker, place: Place, at: Span): Bool {
 /**
  * Two places overlap when they have the same root and neither path leaves the other: two field steps with different
  * symbols and two tuple positions are disjoint, two indexes only where both were written as different literals, and a
- * window overlaps everything of its base (design 5.2).
+ * window overlaps everything of its base.
  */
 fn overlaps(first: Place, second: Place): Bool {
   const root = rootKey first.root
@@ -938,10 +943,10 @@ fn checkReadsInText(var checker: Checker, segments: List<TextSegment>) {
   }
 }
 
-// --- `shared type` (gap 20) -----------------------------------------------------------------------------------------
+// --- `shared type` -----------------------------------------------------------------------------------------------
 
 /**
- * A `var` binding, `var` field or `var` argument may not be taken from a `const` path to a shared object (gap 20).
+ * A `var` binding, `var` field or `var` argument may not be taken from a `const` path to a shared object.
  * There is no copy that would make it a different object, so `var writable = view` would hand out exactly what the
  * `const` withheld - and then "no `var` path, no mutation" would be vacuous for the types where identity matters.
  */
@@ -967,7 +972,7 @@ public fn requireSharedSource(var checker: Checker, value: Expression, annotatio
 
 /**
  * Whether a `break` here would have to leave a closure to find its loop. A closure is a function, so it cannot, and
- * the message says that instead of "there is no loop" (design 3.5).
+ * the message says that instead of "there is no loop".
  */
 public fn leavesClosure(checker: Checker): Bool {
   const last = checker.closureFrames.length() - 1
@@ -979,7 +984,7 @@ public fn leavesClosure(checker: Checker): Bool {
 
 /**
  * A field that may be written at all. `private(var) balance: Int` *is* a `var` - the modifier carries it, and
- * `signature.isVar` says so since 4.9 - so the visibility only decides *who* may write it, never whether anybody may.
+ * `signature.isVar` says so - so the visibility only decides *who* may write it, never whether anybody may.
  */
 fn isVarField(signature: FieldSignature): Bool {
   signature.isVar

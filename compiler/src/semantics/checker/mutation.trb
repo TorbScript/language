@@ -1,3 +1,24 @@
+/**
+ * The two rules that need the whole body instead of one expression: a change nobody reads, and whether a closure may
+ * outlive the call it stands in.
+ *
+ * **Dead changes** keep the source-ordered reads and changes of every `var` value of one body, plus a mark for the
+ * ones a loop brings a read back around to. A change is dead when no read follows it in source order and no read
+ * shares a loop with it. There is no fixpoint beyond that: a loop is settled once, when it closes ([settleLoop]). A
+ * `var` parameter, `var self` and a captured binding are exempt - the first two write back into the caller's place and
+ * the third is a shared box whose read may be anywhere.
+ *
+ * A change that goes through a *step* (`first.value = 1`, `first.increment()`, `fill(buffer)`) reads the old value as
+ * well, so the read the target produced stays. Only `x = value` replaces the whole value, and only there the read
+ * becomes the change - which is what makes `var total = 0` followed by `total = 1` and nothing else a dead change while
+ * `x = 1` followed by `x.part = 2` and a read of `x` is fine.
+ *
+ * **A top-level `var` is counted too**, and it is the one value whose body is not the whole story: the statements of
+ * the file are one body, but a function of the module, a closure inside one and the initializer of a top-level
+ * `const` read the same declaration. So a change of one is dead when no statement after it reads it **and** nothing
+ * else in the module does (`Checker.readDeclarations`) **and** the declaration is not exported.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Argument from "../../syntax/ast"
@@ -7,27 +28,6 @@ use Checker, Place, PlaceRoot, BindingId, UseRoot, ValueUse, useKey from "./cont
 use Capture, ClosureKind from "./context"
 use isSharedType from "./declaration"
 use isDeclaredVar from "./place"
-
-/**
- * The two rules that need the whole body instead of one expression: a change nobody reads, and whether a closure may
- * outlive the call it stands in.
- *
- * **Dead changes** (design 5.3, rule 1) keep the source-ordered reads and changes of every `var` value of one body, plus
- * a mark for the ones a loop brings a read back around to. A change is dead when no read follows it in source order and
- * no read shares a loop with it. There is no fixpoint beyond that: a loop is settled once, when it closes. A `var`
- * parameter, `var self` and a captured binding are exempt - the first two write back into the caller's place and the
- * third is a shared box whose read may be anywhere (gap 19).
- *
- * A change that goes through a *step* (`first.value = 1`, `first.increment()`, `fill(buffer)`) reads the old value as
- * well, so the read the target produced stays. Only `x = value` replaces the whole value, and only there the read
- * becomes the change - which is what makes `var total = 0` followed by `total = 1` and nothing else a dead change while
- * `x = 1` followed by `x.part = 2` and a read of `x` is fine.
- *
- * **A top-level `var` is counted too** (gap 54), and it is the one value whose body is not the whole story: the
- * statements of the file are one body, but a function of the module, a closure inside one and the initializer of a
- * top-level `const` read the same declaration. So a change of one is dead when no statement after it reads it **and**
- * nothing else in the module does (`Checker.readDeclarations`) **and** the declaration is not exported.
- */
 
 // --- Dead changes ---------------------------------------------------------------------------------------------------
 
@@ -46,7 +46,7 @@ public fn noteRead(var checker: Checker, binding: BindingId, at: Span) {
 /**
  * Every read of a top-level `var`, which is a declaration and not a local. Inside the statements of its own file it is
  * one more use in source order; anywhere else - a function of the module, a closure, the initializer of a top-level
- * `const` - it is the answer "something else reads this" and the rule says nothing about it any more (gap 54).
+ * `const` - it is the answer "something else reads this", and the rule says nothing more precise about where.
  */
 public fn noteDeclaredRead(var checker: Checker, symbol: SymbolId, at: Span) {
   if !isCountedDeclaration(checker, symbol) {
@@ -72,8 +72,8 @@ fn isCounted(var checker: Checker, binding: BindingId): Bool {
 
 /**
  * The same question for a top-level binding. A `const` is never changed and a shared object is not a copy, so only a
- * top-level `var` of a value type is counted. `isPublic` is what keeps the rule out of a value another module may read -
- * gap 41 makes `public var` at top level illegal, so there is none today, and the rule still says what it depends on.
+ * top-level `var` of a value type is counted. `isPublic` guards against a value another module could read - `public
+ * var` at top level is itself illegal today, so the check only ever confirms what `isDeclaredVar` already implies.
  */
 fn isCountedDeclaration(var checker: Checker, symbol: SymbolId): Bool {
   if !isDeclaredVar(checker, symbol) {
@@ -133,7 +133,7 @@ fn isCountedRoot(var checker: Checker, root: UseRoot): Bool {
     /**
      * A change to a top-level `var` is only counted in the statements of its own file. Inside a function there is no
      * "after it" to look at, and the statements that read it need not have been checked yet - a function is checked
-     * where it is declared, which may be above every line that reads what it wrote (gap 54).
+     * where it is declared, which may be above every line that reads what it wrote.
      */
     .Declared(symbol) => {
       if !checker.isTopLevel {
@@ -223,13 +223,13 @@ public fn settleChanges(var checker: Checker) {
 fn reportDeadChange(var checker: Checker, entry: ValueUse) {
   const name = match entry.root {
     .Local(binding) => {
-      // A captured `var` binding is a shared box, not a copy: the read can be anywhere the closure is run (gap 19)
+      // A captured `var` binding is a shared box, not a copy: the read can be anywhere the closure is run
       if checker.capturedBindings.containsKey(binding.value) {
         return
       }
       checker.binding(binding).name
     }
-    // A function of the module reads the same declaration, and nothing says where it is called (gap 54)
+    // A function of the module reads the same declaration, and nothing says where it is called
     .Declared(symbol) => {
       if checker.readDeclarations.containsKey(symbol.value) {
         return
@@ -256,7 +256,7 @@ fn participleHint(changedBy: String): String? {
 
 // --- Closures -------------------------------------------------------------------------------------------------------
 
-/** Which closures stand straight as the argument of a call: exactly those cannot outlive it (BACKEND gap 14). */
+/** Which closures stand straight as the argument of a call: exactly those cannot outlive it. */
 public fn noteArgumentClosures(var checker: Checker, arguments: List<Argument>) {
   for argument in arguments {
     if const .Closure(_) = argument.value.kind {
@@ -265,15 +265,15 @@ public fn noteArgumentClosures(var checker: Checker, arguments: List<Argument>) 
   }
 }
 
-/** A binding a closure reads is marked, because a captured `var` binding is a shared box and never dead (gap 19). */
+/** A binding a closure reads is marked, because a captured `var` binding is a shared box and never dead. */
 public fn noteCapturedBinding(var checker: Checker, binding: BindingId) {
   checker.capturedBindings.set binding.value, true
 }
 
 /**
  * The bindings from here on are references into a place of the caller and not copies of it: the parameters a closure
- * declared, and the names an `if var` pattern binds into its subject (gap 3). Both are exempt from the dead-change rule
- * - the change lands in the place they point at - and neither may be carried off by an escaping closure (gap 14).
+ * declared, and the names an `if var` pattern binds into its subject. Both are exempt from the dead-change rule -
+ * the change lands in the place they point at - and neither may be carried off by an escaping closure.
  */
 public fn markReferenceBindings(var checker: Checker, from: Int) {
   var index = from
@@ -293,7 +293,7 @@ public fn markReferenceBindings(var checker: Checker, from: Int) {
  * everywhere else: bound to a name, stored in a field, returned, or built inside a collection literal.
  *
  * A closure that may escape may not capture a `var` parameter or `var self`: those are references, and a reference is
- * second-class (BACKEND gap 14). Everything else it captures is a value or the shared box of a `var` binding.
+ * second-class. Everything else it captures is a value or the shared box of a `var` binding.
  */
 public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture>) {
   const isLocal = checker.argumentClosures.containsKey at

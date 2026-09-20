@@ -1,3 +1,25 @@
+/**
+ * `Expression<Value>`: a parameter or a binding of that type does not take a value, it takes the expression that was
+ * written - checked as an ordinary `Value` and then handed over together with its tree ([checkQuotation]).
+ *
+ * **Quoting happens after name resolution**, which is what keeps it free of the phase problem of macros: implicit `_`,
+ * named closure parameters, receivers and implicit `self` are already resolved when the tree is built, so the tree only
+ * ever holds explicit `Parameter`, `Field` and `Call` nodes - it reads what every earlier pass over the expression
+ * already recorded, and touches nothing that pass did not.
+ *
+ * Three things happen here, in this order:
+ *
+ * 1. the expression is checked against the `Value` of the `Expression<Value>`, inside a frame of its own so that every
+ *    binding from around it that a name inside means becomes a **capture**;
+ * 2. it is validated as **quotable** - exactly what the concept lists as an expression, and nothing that is a statement
+ *    (`const`, an assignment, `return`, a loop), no early `?` and no `match`;
+ * 3. every capture is required to be `Encode`, because a provider has to be able to look at the values, and a
+ *    `Quotation` is recorded that says which name in the tree is which parameter and which capture.
+ *
+ * Nothing of the tree itself is stored: the tree *is* the syntax tree of that span, and the type of every node of it is
+ * already in `Tables.expressionTypes`.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, Block, Statement, Closure, Condition from "../../syntax/ast"
@@ -9,28 +31,6 @@ use witnessFor, implementsBound from "./implementation"
 use formOf from "./name"
 use resultOf from "./signature"
 use resolveType from "./unify"
-
-/**
- * `Expression<Value>`: a parameter or a binding of that type does not take a value, it takes the expression that was
- * written - checked as an ordinary `Value` and then handed over together with its tree.
- *
- * **Quoting happens after name resolution**, which is what keeps it free of the phase problem of macros: implicit `_`,
- * named closure parameters, receivers and implicit `self` are already resolved when the tree is built, so the tree only
- * ever holds explicit `Parameter`, `Field` and `Call` nodes. That is also why this is the last sub-milestone of the
- * checker that touches expressions: it reads what 4.4 and 4.7 recorded.
- *
- * Three things happen here, in this order:
- *
- * 1. the expression is checked against the `Value` of the `Expression<Value>`, inside a frame of its own so that every
- *    binding from around it that a name inside means becomes a **capture**;
- * 2. it is validated as **quotable** - exactly what the concept lists as an expression, and nothing that is a statement
- *    (`const`, an assignment, `return`, a loop), no early `?` and no `match`;
- * 3. every capture is required to be `Encode`, because a provider has to be able to look at the values (gap 36), and a
- *    `Quotation` is recorded that says which name in the tree is which parameter and which capture.
- *
- * Nothing of the tree itself is stored: the tree *is* the syntax tree of that span, and the type of every node of it is
- * already in `Tables.expressionTypes`.
- */
 
 /** `Expression<Value>` quotes what arrives at it instead of evaluating it. */
 public fn isQuotation(checker: Checker, annotation: TypeId): Bool {
@@ -86,10 +86,10 @@ public fn isQuotationValue(var checker: Checker, expression: Expression): Bool {
 }
 
 /**
- * The argument of an `Expression<Value>` parameter, or the initializer of such a binding (gap 37: a binding behaves
- * exactly like a parameter). Gives back the `Expression<Value>` itself, because that is what arrives at the parameter -
- * while `Tables.expressionTypes` keeps the type of the quoted expression for every node of the tree, which is what
- * milestone 5 builds the `TypeReference`s from.
+ * The argument of an `Expression<Value>` parameter, or the initializer of such a binding, which behaves exactly like
+ * a parameter. Gives back the `Expression<Value>` itself, because that is what arrives at the parameter - while
+ * `Tables.expressionTypes` keeps the type of the quoted expression for every node of the tree, which is what the IR
+ * lowering builds the `TypeReference`s from.
  */
 public fn checkQuotation(var checker: Checker, expression: Expression, wanted: TypeId): TypeId {
   const owner = checker.quotingOwner
@@ -144,6 +144,7 @@ public fn openThunk(var checker: Checker, at: Span) {
   checker.closureFrames.add ClosureFrame(at, start, [], [], [], [], true, 0)
 }
 
+/** Closes the frame [openThunk] opened and records what it captured, unless the argument itself already did. */
 public fn closeThunk(var checker: Checker, at: Span) {
   const last = checker.closureFrames.length() - 1
   if last < 0 {
@@ -259,7 +260,7 @@ fn quoteArguments(var checker: Checker, var state: QuotationWalk, arguments: Lis
 }
 
 /**
- * A call, and the one thing that looks like one but is not: `port 8080` writes a field (gap 15), and an assignment is a
+ * A call, and the one thing that looks like one but is not: `port 8080` writes a field, and an assignment is a
  * statement whatever it is written as. The callee is not walked - what it resolved to is the `method` and the `owner` of
  * the `Call` node, never a value of its own.
  */
@@ -316,7 +317,7 @@ fn quoteClosure(var checker: Checker, var state: QuotationWalk, closure: Closure
 /**
  * The parameters the `Lambda` node names. A closure that wrote them down is read from the source; one that did not is
  * read from the function type it was checked against, which is where `_` and a name from the expected type come from -
- * both are already resolved by 4.4, so the tree only holds explicit parameters.
+ * both are already resolved before quoting runs, so the tree only holds explicit parameters.
  */
 fn lambdaParametersOf(var checker: Checker, closure: Closure, at: Span): List<QuotationParameter> {
   const annotation = checker.expressionTypeHere(at) ?? checker.deferredType
@@ -414,11 +415,11 @@ fn statementNameOf(statement: Statement): String {
 /**
  * Which node a name becomes. A parameter of one of the quoted closures is a `Parameter`, a binding from around the
  * quotation a `Captured` - and a name that means anything else (a function, a type, a module `const`, a case) needs no
- * entry: what it resolved to is in `Tables.resolutions`, and a module `const` is compile-time evaluable (gap 27), so it
- * becomes a `Literal` and not a capture.
+ * entry: what it resolved to is in `Tables.resolutions`, and a module `const` is compile-time evaluable, so it becomes
+ * a `Literal` and not a capture.
  */
 fn quoteName(var checker: Checker, var state: QuotationWalk, at: Span) {
-  // `_`, `_2` and a name the expected function type gives: 4.4 recorded which parameter it is
+  // `_`, `_2` and a name the expected function type gives: already recorded which parameter it is
   if const Some(index) = implicitParameterIndexOf(checker, at) {
     state.names.set at, QuotationName.Parameter(index)
     return
@@ -485,8 +486,8 @@ fn captureIndexOf(state: QuotationWalk, binding: BindingId): Int {
 // --- Captures and their `Encode` bound -------------------------------------------------------------------------------
 
 /**
- * **Captured variables must be `Encode`** (gap 36): `captures()` hands the current values to whoever reads the tree, and
- * a SQL driver binds them as parameters with its own `Encoder` while `assert` shows them in its message. So the bound is
+ * **Captured variables must be `Encode`**: `captures()` hands the current values to whoever reads the tree, and a SQL
+ * driver binds them as parameters with its own `Encoder` while `assert` shows them in its message. So the bound is
  * required here, with the witness a back end needs, and the message names the quoting parameter as the reason.
  */
 fn encodedCaptures(

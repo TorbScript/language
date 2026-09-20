@@ -1,3 +1,12 @@
+/**
+ * What a name in an *expression* means. This cannot happen before type checking: what `port` means in
+ * `server { port 8080 }` depends on the type of the parameter that closure is passed to, so resolving a name and
+ * checking a type are one pass.
+ *
+ * The order the checker searches in: the local scope chain, then the implicit parameters of the closure that is being
+ * checked, then the innermost receiver and only that one, then the file scope, then the prelude.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use SymbolId from "../symbols"
@@ -12,25 +21,16 @@ use substitute from "./unify"
 use implicitParameterTarget, isImplicitName, namesImplicitParameter from "./closure"
 use noteRead, noteDeclaredRead, noteCapturedBinding from "./mutation"
 
-/**
- * What a name in an *expression* means. This cannot happen before type checking: what `port` means in
- * `server { port 8080 }` depends on the type of the parameter that closure is passed to, so resolving a name and
- * checking a type are one pass (design principle 1).
- *
- * The order is the one of the design: the local scope chain, then the implicit parameters of the closure that is being
- * checked, then the innermost receiver (and only that one, gap 4), then the file scope, then the prelude.
- */
-
 /** What a name, a member path or any other callee resolved to. */
 public type Target {
   resolution: Resolution
-  /** The target read as a value. `Deferred` where a later sub-milestone decides. */
+  /** The target read as a value. `Deferred` where this pass has not resolved it yet. */
   annotation: TypeId
   /** When the target can be called: its form, with everything that is known already substituted. */
   form: FunctionForm? = None
   /** For a message: "`connect` takes 2 arguments". */
   name: String = ""
-  /** A call through it changes its receiver, which milestone 4.6 checks the place of. */
+  /** A call through it changes its receiver, which `place.trb` checks the place of. */
   isVarSelf: Bool = false
   /** The name denotes a type, so a call of it is a construction: `Point(10, 20)`, `Self(text)`. */
   constructs: TypeId? = None
@@ -42,7 +42,7 @@ public type Target {
   arguments: List<TypeId> = []
   /** `Int.from`: several implementations provide the member, so the argument decides which one is meant. */
   overloads: List<Candidate> = []
-  /** A parameter of the member is `Self`, which has no meaning on a trait-typed value (gap 7). */
+  /** A parameter of the member is `Self`, which has no meaning on a trait-typed value. */
   takesSelfArgument: Bool = false
   takesSelf: Bool = false
 }
@@ -67,12 +67,12 @@ public fn resolveName(
   if text == "self" {
     match checker.receiverBinding {
       Some(receiver) => {
-        // A closure that names the receiver captures it, which is what decides whether that closure may escape (gap 14)
+        // A closure that names the receiver captures it, which is what decides whether that closure may escape
         noteCapture checker, receiver
         const annotation = checker.binding(receiver).annotation
         return Target Resolution.Local(receiver), annotation, name: "self"
       }
-      // A field default, a parameter default and a static function have no receiver (gap 26, milestone 4.9)
+      // A field default, a parameter default and a static function have no receiver
       None => {
         checker.reportHere(
           Diagnostic.error("There is no `self` here", at)
@@ -110,7 +110,7 @@ public fn resolveName(
   if const Some(found) = implicitParameterTarget(checker, text, at) {
     return found
   }
-  // The innermost receiver, and only that one: `server { s => s.database { ... } }` names the outer one (gap 4)
+  // The innermost receiver, and only that one: `server { s => s.database { ... } }` names the outer one
   if const Some(receiver) = checker.receiverType {
     if const Some(candidate) = lookupMember(checker, receiver, text, Some(at)) {
       return implicitTarget checker, candidate, text, at
@@ -134,7 +134,7 @@ fn localTarget(
   match found {
     .Bound(binding) => {
       noteCapture checker, binding
-      // Every read of a local `var` binding, in source order: what the dead-change rule counts (design 5.3)
+      // Every read of a local `var` binding, in source order: what the dead-change rule counts
       noteRead checker, binding, at
       // ...and every read of any binding at all, which is what a binding of a refutable pattern has to have
       checker.noteBindingRead binding
@@ -153,7 +153,7 @@ fn localTarget(
 
 /**
  * A binding that was declared outside of the closure that is being checked is captured by it, and by every closure in
- * between. The back ends need the list: a captured `var` binding is a shared box, not a copy (gap 19).
+ * between. The back ends need the list: a captured `var` binding is a shared box, not a copy.
  */
 public fn noteCapture(var checker: Checker, binding: BindingId) {
   if checker.closureFrames.isEmpty() {
@@ -171,7 +171,7 @@ public fn noteCapture(var checker: Checker, binding: BindingId) {
     if !captures.any({ _.binding == binding }) {
       captures.add Capture(binding, isVar)
       checker.closureFrames.set index, frame.copy(captures: captures)
-      // A captured `var` binding is a shared box, not a copy, so it is exempt from the dead-change rule (gap 19)
+      // A captured `var` binding is a shared box, not a copy, so it is exempt from the dead-change rule
       noteCapturedBinding checker, binding
     }
     index = index + 1
@@ -180,7 +180,7 @@ public fn noteCapture(var checker: Checker, binding: BindingId) {
 
 /**
  * A member of `self` that was written without it. The lowering puts the receiver back, so it is recorded here - and a
- * closure that reads a member of a receiver from further out captures that receiver like any other binding (gap 19).
+ * closure that reads a member of a receiver from further out captures that receiver like any other binding.
  */
 fn implicitTarget(var checker: Checker, candidate: Candidate, text: String, at: Span): Target {
   if const Some(receiver) = checker.receiverBinding {
@@ -228,7 +228,7 @@ public fn symbolTarget(
     .Function => callableTarget checker, symbol, text, explicit
     .Constant => {
       const annotation = resultOf checker, symbol
-      // A top-level `var` is a declaration and not a local, so its reads are counted here (gap 54)
+      // A top-level `var` is a declaration and not a local, so its reads are counted here
       noteDeclaredRead checker, symbol, at
       Target Resolution.Constant(symbol, None), annotation, form: formOf(checker, annotation), name: text
     }
@@ -244,7 +244,7 @@ public fn symbolTarget(
       const applied = substituteInto checker, target, generics, arguments
       typeTarget checker, applied, text
     }
-    // A trait is a namespace for its own members and for the ones an implementation of it provides (gap 31)
+    // A trait is a namespace for its own members and for the ones an implementation of it provides
     .Trait => traitNamespaceTarget checker, symbol, text, at, expected, explicit
     .Case(owner) => caseTarget checker, symbol, owner, text, at, expected, explicit
     .Namespace(target) => Target Resolution.Namespace(target), checker.voidType, name: text
@@ -425,8 +425,7 @@ public fn formOf(checker: Checker, annotation: TypeId): FunctionForm? {
 /**
  * What a member is when it is *called*. A field or a `const` that holds a function is callable with `()` - that is what
  * `state = step(state, value)` and `button.onClick()` are - and only with `()`, because a command on it writes it
- * instead (design 3.3). A receiver closure in a field (`const perimeter: (self: Rectangle) => Int`) applies its
- * receiver, which is milestone 4.7.
+ * instead. A receiver closure in a field (`const perimeter: (self: Rectangle) => Int`) applies its receiver.
  */
 fn formOfCandidate(checker: Checker, candidate: Candidate): FunctionForm? {
   if const Some(found) = candidate.form {
@@ -505,7 +504,7 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
     )
   }
   // `level .Debug` lexes as `level.Debug`: whitespace never changes what a token sequence means, so `.` is one of the
-  // tokens a first command argument must not start with (gap 42)
+  // tokens a first command argument must not start with
   if caseNamed(checker, receiver, text).isSome() {
     checker.reportHere(
       problem.withNote(
@@ -545,15 +544,17 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
  * Whether every member of a type is visible, which is what every message about a missing one asks first. A type that
  * still holds an unsolved variable says nothing, and neither does anything that is broken already.
  *
- * Three forms *are* fully known, and two of them were not before:
+ * Three forms are fully known:
  *
  * - a **concrete nominal type**, a tuple, and a literal type (which carries `parse`, `show`, `equals`, `hash`,
- *   `encode`, `decode` and `into` without declaring any of them - since 4.10 all seven are generated),
+ *   `encode`, `decode` and `into` without declaring any of them - all seven are generated),
  * - a **trait-typed value**: `Shape` has the members of its bounds, their defaults, their supertraits and every
  *   `extend Shape` visible here, and no call site adds to that list,
- * - a **generic parameter**: what it has is its bounds, and those stand at its declaration. `value.length()` on an
- *   unbound `Value` used to be silently unchecked, so the only thing said about it was 4.10's "The checker did not work
- *   out the type of this expression" - the message about a bug of the compiler.
+ * - a **generic parameter**: what it has is its bounds, and those stand at its declaration.
+ *
+ * A member of a type that is not fully known - an unbound `Value` inside a generic function, for instance - is
+ * silently not checked here: `checkModule`'s closing walk over the module reports "The checker did not work out the
+ * type of this expression" for whatever it leaves untyped, which is the message that names a bug of the compiler.
  */
 public fn isFullyKnown(var checker: Checker, of: TypeId): Bool {
   if checker.absorbs(of) {

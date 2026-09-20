@@ -1,3 +1,21 @@
+/**
+ * Traits and implementations: which type implements which trait, and through which implementation.
+ *
+ * Everything here answers one question - `resolveTrait(type, trait)` - and every operator, every `for`, every
+ * interpolated part and every `?` asks it. So the answer is memoized by interned type id and trait symbol, and the
+ * index over the implementations is built once from the declarations of the whole program. That is what keeps the pass
+ * near-linear although trait resolution is recursive.
+ *
+ * Two rules of the design shape the code:
+ *
+ * - A **supertrait is reachable**: `Int64 with Signed`, `Signed with Numeric`, `Numeric with Add<Self, Self>` answers
+ *   `1 + 2` with `Int64`. Supertraits are still *requirements* - that a type with `with Compare` also provides
+ *   `equals` is what `checkImplementations` verifies - but a type that satisfies them implements them.
+ * - There are **no inference variables here**. An implementation's target is a pattern, the type is concrete, and
+ *   matching one against the other binds the implementation's own parameters. Nothing else is needed, which is why
+ *   trait resolution needs no unification variable of its own even though it runs before a call's own inference does.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Declaration, ExtendDeclaration, Visibility, UseItem from "../../syntax/ast"
@@ -16,24 +34,6 @@ use extensionMembers, signatureOf, functionOfSite from "./signature"
 use typeFromReference from "./lowering"
 use substitute, substituteFunction, sameType, sameFunction from "./unify"
 use derivableMembers from "./derive"
-
-/**
- * Traits and implementations: which type implements which trait, and through which implementation.
- *
- * Everything here answers one question - `resolveTrait(type, trait)` - and every operator, every `for`, every
- * interpolated part and every `?` asks it. So the answer is memoized by interned type id and trait symbol, and the
- * index over the implementations is built once from the declarations of the whole program. That is what keeps the pass
- * near-linear although trait resolution is recursive.
- *
- * Two rules of the design shape the code:
- *
- * - A **supertrait is reachable**: `Int64 with Signed`, `Signed with Numeric`, `Numeric with Add<Self, Self>` answers
- *   `1 + 2` with `Int64`. Supertraits are still *requirements* - that a type with `with Compare` also provides
- *   `equals` is what `checkImplementations` verifies - but a type that satisfies them implements them.
- * - There are **no inference variables here**. An implementation's target is a pattern, the type is concrete, and
- *   matching one against the other binds the implementation's own parameters. Nothing else is needed, which is why
- *   trait resolution works a whole sub-milestone before inference exists.
- */
 
 // --- Building the index ---------------------------------------------------------------------------------------------
 
@@ -279,8 +279,8 @@ fn resolveEveryBound(var checker: Checker, annotation: TypeId, bounds: List<Type
 
 /**
  * Whether a type satisfies a bound. A subject that is not fully concrete - a generic parameter, a unification
- * variable, something not checked yet - is *not* reported here: milestone 4.4 decides those, with the inference
- * context that knows what the parameter stands for.
+ * variable, something not checked yet - is *not* reported here: unifying an argument against a call's parameters is
+ * what decides those, with the inference context that knows what the parameter stands for.
  */
 public fn implementsBound(var checker: Checker, annotation: TypeId, bound: TypeId): Bool {
   if !isConcrete(checker, annotation) || !isConcrete(checker, bound) {
@@ -292,7 +292,7 @@ public fn implementsBound(var checker: Checker, annotation: TypeId, bound: TypeI
 /**
  * The witness a call or an adaptation records: which implementation makes the bound hold, and how the bounds of *that*
  * implementation hold in turn. A back end may monomorphize a call whose whole tree holds neither an `Object` nor a
- * `Forwarded`, so the tree and not only its root is what milestone 5 reads.
+ * `Forwarded`, so the tree and not only its root is what the IR lowering reads.
  */
 public fn witnessFor(var checker: Checker, annotation: TypeId, bound: TypeId): Witness {
   // A witness is a pure function of the two interned ids, and every interpolation, every `==` and every generic call
@@ -361,7 +361,7 @@ public fn traitArgumentsOf(var checker: Checker, annotation: TypeId, capability:
 }
 
 fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolId, wanted: TypeId?): Resolved {
-  // A bound on `Never` holds, whatever the trait is (gap 55): there is no value of `Never`, so nothing can ever reach
+  // A bound on `Never` holds, whatever the trait is: there is no value of `Never`, so nothing can ever reach
   // the member. That is what makes `Source<Item, Never>` - the reading end of a channel, which cannot fail - printable,
   // because the generated `Show` of a `Result` asks its `Failure` for one. Asked *without* a bound the answer stays
   // `Missing`: which arguments `Add` would have for a `Never` is nothing the question says
@@ -456,10 +456,10 @@ fn boundArgumentsOf(
  * The `Item` of the `Iterable<Item>` a type can be built from, where exactly one of its `From` implementations takes
  * one.
  *
- * `From` is the one trait a type may implement several times - `Int.from` exists for five widths, and gap 50's
+ * `From` is the one trait a type may implement several times - `Int.from` exists for five widths, and
  * `extend<Target> Target with From<Never>` adds one to *every* type - so "what is the argument of `From` for this type"
  * has no single answer and `resolveTrait` rightly says `Ambiguous`. "Which of them takes an `Iterable`" does have one,
- * and that is the collection protocol a literal and `to<Target>()` ask about (gap 51).
+ * and that is the collection protocol a literal and `to<Target>()` ask about.
  */
 public fn iterableSourceOf(var checker: Checker, annotation: TypeId, iterable: SymbolId): TypeId? {
   buildImplementations checker
@@ -562,7 +562,7 @@ fn matchTarget(
     if matchPattern(checker, target, annotation, implementation.generics, mapping) {
       return true
     }
-    // ...and has to be able to reach what the implementation provides at all (gap 53)
+    // ...and has to be able to reach what the implementation provides at all
     if !reachesImplementers(checker, implementation.capability) {
       return false
     }
@@ -604,7 +604,7 @@ fn matchTarget(
  * coercion of its receiver - which is exactly what "makes every list showable" means (CONCEPT, "Traits").
  * `extend<Item> List<Item> with From<Iterable<Item>>` does **not**: `From.from` has no `self` and answers `Self`, so for
  * an `ArrayList<Int>` it would answer "some `List`" and not an `ArrayList`. That implementation belongs to the
- * trait-typed value alone, and `List.from(...)` and `to<List<Int>>()` are what reach it (gap 53).
+ * trait-typed value alone, and `List.from(...)` and `to<List<Int>>()` are what reach it.
  *
  * So the rule is: every member of the implemented trait takes `self`, and none of them answers `Self`. A `Self` in a
  * *parameter* is fine - there the concrete value coerces *into* the trait, which is the direction that always holds.
@@ -1040,7 +1040,7 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
     }
     .Parameter(parameter) => checker.parameterBounds.get(parameter.value) ?? []
     // A literal type has the traits of its base plus the `Parse` the language generates for it, which replaces the
-    // base's own: `Status.parse(text)` fails with a `LiteralParseError` and not with a `NumberParseError` (gap 32)
+    // base's own: `Status.parse(text)` fails with a `LiteralParseError` and not with a `NumberParseError`
     .Literals(base, _) => {
       const inherited = directTraitsOf checker, base
       const parse = literalParseBound checker
@@ -1426,6 +1426,7 @@ public fn importPathOf(checker: Checker, module: ModuleId): String {
   "{package.name}/{relative}"
 }
 
+/** The package a symbol's declaration belongs to, by index into `Workspace.packages`: `-1` for one with no module. */
 public fn packageOfSymbol(checker: Checker, symbol: SymbolId): Int {
   match checker.symbolAt(symbol).module {
     Some(module) => checker.program.graph.at(module).package
@@ -1550,8 +1551,8 @@ public fn mappingOfImplementation(
 
 /**
  * One-directional matching, for the back end: every parameter of `generics` binds to what stands at its place and
- * everything else has to be the same type. Milestone 5.6 builds the substitution of an instance with it - the owner of
- * a member against the type the member was reached on - which is the same question trait resolution asks.
+ * everything else has to be the same type. The IR lowering builds the substitution of an instance with it - the
+ * owner of a member against the type the member was reached on - which is the same question trait resolution asks.
  */
 public fn matchTypePattern(
   var checker: Checker,
@@ -1565,8 +1566,8 @@ public fn matchTypePattern(
 
 /**
  * The member an implementation provides under one name: its own, the one the type declares, or the one another
- * implementation of the same target declares - which is how a supertrait is satisfied. A witness table of milestone 5.6
- * is built from exactly this, so that a table and the checker's own requirement check cannot disagree.
+ * implementation of the same target declares - which is how a supertrait is satisfied. The IR lowering builds a
+ * witness table from exactly this, so that a table and the checker's own requirement check cannot disagree.
  */
 public fn memberOfImplementation(var checker: Checker, implementation: ImplementationId, name: String): SymbolId? {
   providerOf checker, implementation.value, name
@@ -1636,7 +1637,7 @@ fn reportOrphan(var checker: Checker, implementation: Implementation, applied: T
   checker.report implementation.module, Diagnostic.error(message, implementation.at).withNote(note)
 }
 
-/** Two implementations of one trait may not overlap, and disjointness is only proved by different heads (gap 5). */
+/** Two implementations of one trait may not overlap, and disjointness is only proved by different heads. */
 fn checkOverlaps(var checker: Checker) {
   var groups: Map<Int, List<Int>> = [:]
   const total = checker.implementations.all.length()
@@ -1729,7 +1730,7 @@ fn isOpenType(checker: Checker, annotation: TypeId): Bool {
 
 /**
  * Every required member of every trait an implementation of this module names, and of their supertraits. A `native`
- * type is exempt: there the requirement is one on the runtime, not on any source (gap 22).
+ * type is exempt: there the requirement is one on the runtime, not on any source.
  */
 public fn checkImplementations(var checker: Checker, module: ModuleId) {
   buildImplementations checker
@@ -1857,7 +1858,7 @@ public fn defaultInClosureOf(var checker: Checker, annotation: TypeId, name: Str
   defaultOfClosure checker, closure, name
 }
 
-/** A member with a `where` clause of its own exists only where the clause holds, so it is no requirement (gap 9). */
+/** A member with a `where` clause of its own exists only where the clause holds, so it is no requirement. */
 fn hasConditions(checker: Checker, member: SymbolId): Bool {
   const site = match checker.siteOf(member) {
     Some(found) => found

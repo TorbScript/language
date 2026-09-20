@@ -1,3 +1,10 @@
+/**
+ * Type equality, substitution and unification: `sameType`/`sameFunction` decide whether two [TypeForm]s are the same
+ * type, `substitute` replaces a generic parameter by a type, and `unify` solves a unification variable against an
+ * exact type. `openInference`/`closeInference` bracket the one statement a variable lives inside of, and the
+ * `prune*` functions write a variable's solution back into every table that recorded a type before it was solved.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use TypeId, TypeForm, TypeTable, TupleField, FunctionForm, ParameterForm, ParameterMode, ParameterId, Bound from "./type"
@@ -10,8 +17,9 @@ use Quotation, QuotationCapture, QuotationParameter from "./context"
  *
  * Types are interned, so this is `==` in almost every case. The one exception is a *name*: a tuple label and the name
  * of a function parameter are documentation for a position, not part of type identity, so `(lowest: Int, highest: Int)`
- * and `(Int, Int)` are one type. That a label at the same position must still be the right one is a separate rule
- * (milestone 4.2), which is exactly why the names stay in the form and only this function ignores them.
+ * and `(Int, Int)` are one type. That a label at the same position must still be the right one is a rule of argument
+ * matching, checked where a call is resolved, which is exactly why the names stay in the form and only this function
+ * ignores them.
  */
 public fn sameType(types: TypeTable, left: TypeId, right: TypeId): Bool {
   if left == right {
@@ -55,6 +63,7 @@ public fn sameType(types: TypeTable, left: TypeId, right: TypeId): Bool {
   }
 }
 
+/** [sameType] over two lists, position by position: the generic arguments of a `Nominal`, the bounds of a `Traits`. */
 public fn sameTypes(types: TypeTable, left: List<TypeId>, right: List<TypeId>): Bool {
   if left.length() != right.length() {
     return false
@@ -166,6 +175,7 @@ public fn substitute(var types: TypeTable, id: TypeId, mapping: Map<ParameterId,
   }
 }
 
+/** [substitute] over a list of types, such as the generic arguments of a `Nominal`. */
 public fn substituteAll(var types: TypeTable, arguments: List<TypeId>, mapping: Map<ParameterId, TypeId>): List<TypeId> {
   var replaced: List<TypeId> = []
   for argument in arguments {
@@ -174,6 +184,7 @@ public fn substituteAll(var types: TypeTable, arguments: List<TypeId>, mapping: 
   replaced
 }
 
+/** [substitute] over every parameter type and the result of a [FunctionForm]. */
 public fn substituteFunction(var types: TypeTable, form: FunctionForm, mapping: Map<ParameterId, TypeId>): FunctionForm {
   var parameters: List<ParameterForm> = []
   for parameter in form.parameters {
@@ -182,6 +193,7 @@ public fn substituteFunction(var types: TypeTable, form: FunctionForm, mapping: 
   FunctionForm parameters, substitute(types, form.result, mapping)
 }
 
+/** [substitute] over the subject and the traits of every [Bound] of a `where` clause or an implementation. */
 public fn substituteBounds(var types: TypeTable, bounds: List<Bound>, mapping: Map<ParameterId, TypeId>): List<Bound> {
   var replaced: List<Bound> = []
   for bound in bounds {
@@ -210,6 +222,12 @@ public fn openInference(var checker: Checker) {
   checker.contextStarts.add start
 }
 
+/**
+ * Closes the innermost inference context: reports every variable of it that is still unsolved, and - once the
+ * outermost context of the statement closes - writes every solution into the tables ([pruneAt]). A block nested
+ * inside the statement's own expression settles nothing on its own, because the statement around it may still learn
+ * a variable's type from another branch (`const x = if c { None } else { Some(1) }`).
+ */
 public fn closeInference(var checker: Checker) {
   const last = checker.contextStarts.length() - 1
   if last < 0 {
@@ -334,6 +352,7 @@ fn resolveFunction(var checker: Checker, form: FunctionForm, depth: Int): Functi
   FunctionForm parameters, resolveDeep(checker, form.result, depth + 1)
 }
 
+/** [resolveType] over a list of types, such as the type arguments of a call. */
 public fn resolveTypes(var checker: Checker, arguments: List<TypeId>): List<TypeId> {
   resolveList checker, arguments, 0
 }
@@ -379,9 +398,9 @@ fn anyVariable(var checker: Checker, arguments: List<TypeId>): Bool {
 }
 
 /**
- * Marks every variable a type still holds as answered. A construct a later sub-milestone checks (a receiver closure, a
- * quotation) leaves the parameters of its call open, and "cannot infer" would then be a message about the checker
- * instead of about the source.
+ * Marks every variable a type still holds as answered, without solving it. A construct that is not type-checked
+ * itself (a receiver closure, a quotation) can leave the parameters of its call open, and without this "cannot
+ * infer" would then be a message about the checker instead of about the source.
  */
 public fn suppressVariables(var checker: Checker, id: TypeId) {
   match checker.types.form(id) {
@@ -433,8 +452,8 @@ public fn openVariableOf(var checker: Checker, id: TypeId): VariableId? {
 
 /**
  * First-order unification over `TypeForm`, with an occurs check. The only thing it may do is solve a variable with an
- * exact type: coercion is a separate, directed step (design 2.5) and never solves one, which is why
- * `[Square(2.0), Circle(1.0)]` does not infer `List<Shape>`.
+ * exact type: coercion (to a trait value, from a literal) is a separate, directed step applied only in a check
+ * position, and never solves a variable, which is why `[Square(2.0), Circle(1.0)]` does not infer `List<Shape>`.
  *
  * A generic parameter is rigid: it unifies with itself and with nothing else. What is broken or not checked yet
  * absorbs, exactly as it does everywhere else in the checker.
@@ -576,7 +595,7 @@ fn unifyAll(var checker: Checker, left: List<TypeId>, right: List<TypeId>, depth
   true
 }
 
-/** The name of a parameter is not part of type identity (gap 17), so only the modes and the types have to line up. */
+/** The name of a parameter is not part of type identity, so only the modes and the types have to line up. */
 fn unifyFunction(var checker: Checker, left: FunctionForm, right: FunctionForm, depth: Int): Bool {
   if left.parameters.length() != right.parameters.length() {
     return false
@@ -645,7 +664,7 @@ fn pruneAt(var checker: Checker, at: Span) {
     }
   }
   // A quotation holds the types of the quoted expression, of its captures and of the parameters of its closures, and
-  // `nameOf(limit)` learns its `Value` from the argument - so they are solved here like everything else (4.8)
+  // `nameOf(limit)` learns its `Value` from the argument - so they are solved here like everything else
   if const Some(found) = checker.quotationAt(checker.module, at) {
     const solved = pruneQuotation checker, found
     checker.recordQuotation at, solved
@@ -742,6 +761,7 @@ fn pruneDispatch(var checker: Checker, dispatch: Dispatch): Dispatch {
   }
 }
 
+/** [resolveType] over every type a list of [Witness]es carries, recursively through `.Implementation`'s own witnesses. */
 public fn pruneWitnesses(var checker: Checker, witnesses: List<Witness>): List<Witness> {
   var replaced: List<Witness> = []
   for witness in witnesses {

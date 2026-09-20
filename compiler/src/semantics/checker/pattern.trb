@@ -1,3 +1,13 @@
+/**
+ * Patterns, as far as the names they bind. A name that starts with a lowercase letter binds; an uppercase one is a case
+ * the scope knows (`None`) or a type read backwards (`Point(x, y)`), never a binding - a case of the matched type that
+ * is not in scope is written `.Circle` or `Shape.Circle`. Every pattern is checked against the type of the value it
+ * matches, so that the names it introduces have types.
+ *
+ * Whether the arms of a `match` cover every value, and whether one of them can never match, is `exhaustive.trb`: one
+ * algorithm over a pattern matrix, which needs nothing from here but the types.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Pattern, FieldPattern, Name from "../../syntax/ast"
@@ -12,13 +22,9 @@ use checkExpression from "./expression"
 use requireVisibleFields from "./declaration"
 
 /**
- * Patterns, as far as the names they bind. A name that starts with a lowercase letter binds; an uppercase one is a case
- * the scope knows (`None`) or a type read backwards (`Point(x, y)`), never a binding - a case of the matched type that
- * is not in scope is written `.Circle` or `Shape.Circle`. Every pattern is checked against the type of the value it
- * matches, so that the names it introduces have types.
- *
- * Whether the arms of a `match` cover every value, and whether one of them can never match, is `exhaustive.trb`: one
- * algorithm over a pattern matrix, which needs nothing from here but the types.
+ * Checks a pattern against `subject`, the type of the value it matches, and declares the names it binds. `isVar`
+ * makes every binding it declares a `var` path into the subject instead of a copy - the mode `if var` and a `var`
+ * binding pass down through every nested pattern.
  */
 public fn checkPattern(var checker: Checker, pattern: Pattern, subject: TypeId, isVar: Bool) {
   checker.typedPattern pattern.span, subject
@@ -164,7 +170,7 @@ public fn declareName(var checker: Checker, name: String, annotation: TypeId, at
     checker.reportHere Diagnostic.error("`{name}` is already declared in this scope", at)
     return
   }
-  // The parameters of a function and the top level of its body are one scope (milestone 4.9)
+  // The parameters of a function and the top level of its body are one scope
   if checker.shadowsParameter(name) {
     checker.reportHere(
       Diagnostic.error("`{name}` is already a parameter of this function", at)
@@ -396,8 +402,8 @@ fn nearestCase(var checker: Checker, subject: TypeId, text: String): String? {
 
 /**
  * `Some(value)`, `.Circle(radius)`, `Point(x, y)`: a case of the type that is being matched, or the fields of that
- * type itself. A case always belongs to the declaration of its type - an `extend` can add none (gap 39) - so a name
- * that is none of them is a mistake even while the rest of member lookup waits for milestone 4.3.
+ * type itself. A case always belongs to the declaration of its type - an `extend` can add none - so a name that is
+ * none of them is a mistake.
  */
 fn variantPattern(
   var checker: Checker,
@@ -411,7 +417,7 @@ fn variantPattern(
   // that was written
   const declared = declaredCaseName checker, name.text
   if const Some(variant) = caseNamed(checker, subject, declared) {
-    // A private field cannot be read from outside the type, in a pattern as anywhere else (4.9)
+    // A private field cannot be read from outside the type, in a pattern as anywhere else
     requireVisibleFields checker, subject, name.text, variant.fields, at
     checkFieldPatterns checker, name.text, fields, variant.fields, at, isVar
     return
@@ -434,8 +440,8 @@ fn variantPattern(
 }
 
 /**
- * The fields of a case are matched by position; a label that is written has to name the field at that position
- * (gap 16), because a label that is not checked is worse than none.
+ * The fields of a case are matched by position; a label that is written has to name the field at that position,
+ * because a label that is not checked is worse than none.
  */
 fn checkFieldPatterns(
   var checker: Checker,

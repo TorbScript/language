@@ -1,16 +1,8 @@
-use Diagnostic from "../../syntax/diagnostic"
-use Name, Statement, Declaration, Member, Binding, Condition, Block from "../../syntax/ast"
-use UseItem, UseItems, GenericParameter, FunctionDeclaration, Parameter, Field from "../../syntax/ast"
-use TypeReference, WhereClause, Expression, Argument, Closure, Pattern from "../../syntax/ast"
-use ModuleId from "../module"
-use boundNamesOf from "../symbols"
-use Checker from "./context"
-
 /**
  * How a name is spelled is a rule of the language, not a convention: the parser already decides between a pattern
  * binding and a case by the first letter (`limit =>` binds, `Limit =>` is a case), so the first letter has to mean the
- * same thing everywhere or reading a pattern would be guesswork. This pass says it at the **declaration**, where it can
- * be fixed, instead of leaving it to the one place that happens to depend on it.
+ * same thing everywhere or reading a pattern would be guesswork. [checkSpelling] says it at the **declaration**, where
+ * it can be fixed, instead of leaving it to the one place that happens to depend on it.
  *
  * "Uppercase" is `A` to `Z`; a name that starts with `_` or `a` to `z` is lowercase. A name is ASCII (the lexer says
  * so), so there is no third possibility.
@@ -23,10 +15,20 @@ use Checker from "./context"
  *
  * A pattern binding needs nothing here: the parser reads an uppercase name as a case, so a binding that starts with an
  * uppercase letter cannot be written at all. The one name in a pattern the parser takes as written is `...rest`.
- *
- * It is one walk over the syntax of one module and asks nothing of the types, which is why it runs before anything is
- * resolved and reports at most one finding per declaration. Names the compiler generates never pass through it: it only
- * ever sees what somebody wrote.
+ */
+
+use Diagnostic from "../../syntax/diagnostic"
+use Name, Statement, Declaration, Member, Binding, Condition, Block from "../../syntax/ast"
+use UseItem, UseItems, GenericParameter, FunctionDeclaration, Parameter, Field from "../../syntax/ast"
+use TypeReference, WhereClause, Expression, Argument, Closure, Pattern from "../../syntax/ast"
+use ModuleId from "../module"
+use boundNamesOf from "../symbols"
+use Checker from "./context"
+
+/**
+ * Checks the spelling of every name a module declares: one walk over its syntax that asks nothing of the types, which
+ * is why it runs before anything is resolved and reports at most one finding per declaration. Names the compiler
+ * generates never pass through it - it only ever sees what somebody wrote.
  */
 public fn checkSpelling(var checker: Checker, module: ModuleId) {
   const statements = checker.program.graph.at(module).file.statements

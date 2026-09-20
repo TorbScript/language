@@ -1,3 +1,14 @@
+/**
+ * Receiver scripts: checking a `.trb` file that is the body of a receiver closure instead of an ordinary module.
+ * `project.trb` and a configuration file loaded through `Sandbox.load` are the same mechanism with a different
+ * receiver type - "`project.trb` and `project.lock.trb` are exactly this mechanism with the receiver `Project`"
+ * (CONCEPT.md, "Receiver Scripts and the Sandbox").
+ *
+ * [scriptReceiverOf] decides the receiver type, [checkReceiverScript] checks the file against it. Which files are
+ * receiver scripts is decided before anything here runs (`semantics/scripts.trb`), because a receiver script is a
+ * module in its own right and everything the checker keeps is per module.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Statement from "../../syntax/ast"
@@ -10,19 +21,9 @@ use checkStatement from "./statement"
 use settleChanges from "./mutation"
 
 /**
- * Receiver scripts: a `.trb` file that is the body of a receiver closure. `project.trb` and a configuration file are
- * the same mechanism with a different receiver - "`project.trb` and `project.lock.trb` are exactly this mechanism with
- * the receiver `Project`" (CONCEPT.md, "Receiver Scripts and the Sandbox").
- *
- * The file is checked as the body of `(var self: Receiver) => Void` with the file scope "the prelude, and nothing
- * else" (gap 34). There is no purity analysis behind that: the prelude has no IO, and what a script may reach beyond it
- * is granted where it is loaded, so a `use` in such a file is an error and not a capability it could give itself.
- *
- * Which files these are is decided before anything is checked (`semantics/scripts.trb`), because a receiver script is
- * a module and everything the checker keeps is per module.
+ * The type a script's body is checked against: `Project` for `project.trb`, or the type argument of the
+ * `Sandbox.load` that named the file. `None` where the file is not a receiver script, or nothing says which type.
  */
-
-/** The type a script's body is checked against. `None` where the file is not a receiver script, or nothing says which. */
 public fn scriptReceiverOf(var checker: Checker, module: ModuleId): TypeId? {
   const script = checker.program.graph.at(module).receiver?
   match script {
@@ -45,15 +46,17 @@ fn projectType(var checker: Checker): TypeId? {
 }
 
 /**
- * The file as the body of `(var self: Receiver) => Void`. The top level of a script is ordinary code - bindings, loops,
- * conditions and functions - and the one thing that makes it a script is the receiver: a bare name may mean a member
- * of it, and `self` names it.
+ * The file as the body of `(var self: Receiver) => Void`. The top level of a script is ordinary code - bindings,
+ * loops, conditions and functions - and the one thing that makes it a script is the receiver: a bare name may mean a
+ * member of it, and `self` names it. The file scope is the prelude and nothing else: there is no purity analysis
+ * behind that, the prelude has no IO, and what a script may reach beyond it is granted where it is loaded, so a
+ * `use` in the file itself is reported by [reportImport] instead of naming a capability the script could give itself.
  */
 public fn checkReceiverScript(var checker: Checker, module: ModuleId, receiver: TypeId) {
   const statements = checker.program.graph.at(module).file.statements
   const nothing = checker.voidType
   const saved = checker.enterBody module, nothing, true, None
-  // A receiver script is a script, and `await()` is allowed at the top level of one (CONCEPT, "Concurrency")
+  // A receiver script is a script, and `await()` is allowed at its top level (CONCEPT, "Concurrency")
   checker.awaitsTasks = true
   checker.openScope()
   const binding = checker.declareBinding(
@@ -68,13 +71,13 @@ public fn checkReceiverScript(var checker: Checker, module: ModuleId, receiver: 
     reportImport checker, statement
     const _ = checkStatement checker, statement
   }
-  // The file is a body like any other, so a change in it that nothing reads afterwards is one too (design 5.3)
+  // The file is a body like any other, so a change in it that nothing reads afterwards is reported the same way
   settleChanges checker
   checker.closeScope()
   checker.leaveBody saved
 }
 
-/** Everything beyond the prelude is granted at the call site of `Sandbox.load`, never by the script itself (gap 34). */
+/** Everything beyond the prelude is granted at the call site of `Sandbox.load`, never by the script itself. */
 fn reportImport(var checker: Checker, statement: Statement) {
   if const .Declare(declaration) = statement.kind {
     if const .Use(_) = declaration.kind {

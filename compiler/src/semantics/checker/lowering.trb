@@ -1,3 +1,14 @@
+/**
+ * From the syntax of a type to a type: a `TypeReference` in, a `TypeId` out.
+ *
+ * Name resolution has already resolved every *name* in a type position, so what is left is what the declarations
+ * behind those names say - how many parameters they take, which of them are a `const`, what an alias expands to -
+ * plus the forms that have no name at all: tuples, function types, literal types and intersections.
+ *
+ * The declarations themselves are `signature.trb`, which this file asks and which asks it back. The two are one job,
+ * split where it reads best: nothing here knows what a `fn` is, and nothing there knows what a tuple is.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Name, TypeReference, FunctionTypeParameter, Expression from "../../syntax/ast"
@@ -9,19 +20,8 @@ use genericsOf, aliasTargetOf, selfTypeOf from "./signature"
 use substitute from "./unify"
 
 /**
- * From the syntax of a type to a type: a `TypeReference` in, a `TypeId` out.
- *
- * Milestone 3 resolved every *name* in a type position, so what is left is what the declarations behind those names
- * say - how many parameters they take, which of them are a `const`, what an alias expands to - plus the forms that
- * have no name at all: tuples, function types, literal types and intersections.
- *
- * The declarations themselves are `signature.trb`, which this file asks and which asks it back. The two are one job,
- * split where it reads best: nothing here knows what a `fn` is, and nothing there knows what a tuple is.
- */
-
-/**
  * The type a `TypeReference` of the syntax tree stands for. Every reference is recorded by its span, which is what
- * milestone 5 reads instead of looking at a name a second time.
+ * the IR lowering reads instead of looking at a name a second time.
  */
 public fn typeFromReference(var checker: Checker, reference: TypeReference, scope: TypeScope): TypeId {
   var built = buildType checker, reference, scope
@@ -114,13 +114,13 @@ fn namedType(
   const last = path[path.length() - 1]
   const invalid = checker.invalidType
   if path.length() == 1 && last.text == "Self" {
-    // "`Self` is only available inside of a type, a trait or an `extend`" was reported by milestone 3
+    // "`Self` is only available inside of a type, a trait or an `extend`" was already reported when names were resolved
     const own = scope.selfType ?? invalid
     return withoutArguments checker, own, arguments, scope
   }
   const symbol = match checker.resolvedName(scope.module, last.span) {
     Some(found) => found
-    // The name itself did not resolve, which milestone 3 reported
+    // The name itself did not resolve, which was already reported when names were resolved
     None => {
       return withoutArguments checker, invalid, arguments, scope
     }
@@ -149,7 +149,7 @@ fn namedType(
       const built = constantArgument checker, symbol, reference, scope
       withoutArguments checker, built, arguments, scope
     }
-    // A case, a function, a module and a field: every one of them reported by milestone 3
+    // A case, a function, a module and a field: none of them is a type, which was already reported when the name was resolved
     _ => withoutArguments checker, invalid, arguments, scope
   }
 }
@@ -556,7 +556,7 @@ fn intersectionType(
 ): TypeId {
   var bounds: List<TypeId> = []
   for member in members {
-    // Keep `scope.subject`: an `&` group in a bound position (`with Add & Subtract`, gap 14) fills each member's
+    // Keep `scope.subject`: an `&` group in a bound position (`with Add & Subtract`) fills each member's
     // defaulted `Self` from the same subject the group itself was asked of, exactly as a lone trait would.
     const built = typeFromReference checker, member, scope.copy(position: TypePosition.Type)
     match checker.types.form(built) {

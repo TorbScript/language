@@ -1,3 +1,15 @@
+/**
+ * The checker's representation of a type: [TypeForm] and the ids that address it, and [TypeTable], which interns
+ * every type of the program so that `==` on a [TypeId] means "the same type". `describeType`, `describeFunction` and
+ * `describeLiteral` write a type back out for a diagnostic.
+ *
+ * The file also carries the shapes every other pass builds from a declaration: a [Signature] is what a `fn`, a
+ * method, a field or a `const` is as a type (`signature.trb` builds it); a [TypeSignature] is what a `type` or a
+ * `trait` declaration says about its instances; an [Implementation] is one trait implemented for one type, and
+ * [ImplementationTable] is the index `implementation.trb` searches to answer "does this type implement that trait,
+ * and through which one".
+ */
+
 use Span from "../../syntax/source"
 use Visibility, TypeReference from "../../syntax/ast"
 use ModuleId from "../module"
@@ -37,7 +49,7 @@ public type TypeForm {
   case Traits(bounds: List<TypeId>)
   /** `Item`, `Key`, `Self` inside of a trait, `const Size`. The parameter table says which. */
   case Parameter(parameter: ParameterId)
-  /** A unification variable, solved while one statement is checked (milestone 4.4). */
+  /** A unification variable, solved while one statement is checked. */
   case Variable(variable: VariableId)
   /** `(Int, String)`, `(lowest: Int, highest: Int)` */
   case Tuple(fields: List<TupleField>)
@@ -53,9 +65,10 @@ public type TypeForm {
   /** Something was already reported here. Every operation on it yields it again, and says nothing. */
   case Invalid
   /**
-   * A construct a later sub-milestone checks (a generic call, a trait member, a closure body, `?`). It absorbs
-   * every further message exactly as `Invalid` does, but it stands for "not checked yet" instead of "wrong", so that
-   * `torb check --statistics` can say how much of a module the checker already understands.
+   * A construct this pass has not typed yet. It absorbs every further message exactly as `Invalid` does, but it
+   * stands for "not checked yet" instead of "wrong", so that `torb check --statistics` can say how much of a module
+   * the checker already understands. `checkModule` reports every expression that is still `Deferred` once it is
+   * done, so a `Deferred` type that survives to the end of a module is always a bug of the checker.
    */
   case Deferred
 }
@@ -66,11 +79,13 @@ public type TupleField {
   annotation: TypeId
 }
 
+/** The shape of a callable: `(Int, String) => Bool`, and the `form` every [Signature] carries. */
 public type FunctionForm {
   parameters: List<ParameterForm>
   result: TypeId
 }
 
+/** One parameter of a [FunctionForm]: its label, how it is passed ([ParameterMode]), and its type. */
 public type ParameterForm {
   /** The label at a call site, and the name a closure may use implicitly. `None` in a bare function type. */
   name: String?
@@ -81,6 +96,7 @@ public type ParameterForm {
   hasDefault: Bool = false
 }
 
+/** How a parameter takes its argument: by value, `var`, `lazy`, `...variadic`, or as a receiver. */
 public type ParameterMode {
   case Value
   /** `var counter: Counter`: the argument is a `var` path. */
@@ -307,6 +323,7 @@ public fn describeType(types: TypeTable, symbols: Symbols, id: TypeId): String {
   }
 }
 
+/** A [FunctionForm] the way a signature is written: `(count: Int, var list: List<Int>) => Bool`. */
 public fn describeFunction(types: TypeTable, symbols: Symbols, form: FunctionForm): String {
   var parts: List<String> = []
   for parameter in form.parameters {
@@ -428,6 +445,7 @@ public type FieldSignature {
   visibility: Visibility
 }
 
+/** One case of a `type` with cases, with the fields it wraps. */
 public type CaseSignature {
   symbol: SymbolId
   name: String
@@ -445,7 +463,7 @@ public type TypeSignature {
   own: TypeId
   /**
    * `with Show, Encode` of a type, the supertraits of a trait: one `Nominal` of a trait each, with its own
-   * delegated field, if `with ... by field` gave it one (gap 14).
+   * delegated field, if `with ... by field` gave it one.
    */
   traits: List<DelegatedTrait>
   bounds: List<Bound>
@@ -506,15 +524,15 @@ public type Implementation {
   generics: List<ParameterId>
   bounds: List<Bound>
   module: ModuleId
-  /** The index of the package in `Workspace.packages`: the unit of coherence, and of `private` (gap 29). */
+  /** The index of the package in `Workspace.packages`: the unit of coherence, and of `private`. */
   package: Int
   members: Map<String, SymbolId>
-  /** `with Add & Compare by value`: the field every *required* member is forwarded to (gap 14). */
+  /** `with Add & Compare by value`: the field every *required* member is forwarded to. */
   delegate: String?
   origin: ImplementationOrigin
   /** Where a message about this implementation points: the name of the type, or the target of the `extend`. */
   at: Span
-  /** A `native type` provides the members of its traits through the runtime, without bodies (gap 22). */
+  /** A `native type` provides the members of its traits through the runtime, without bodies. */
   isNative: Bool = false
 }
 

@@ -1,3 +1,19 @@
+/**
+ * What `a.b` and `Type.b` mean: [lookupMember] and [lookupStaticMember], in this order, for a receiver of type `T`
+ * and a name `n`:
+ *
+ * 1. the fields of `T`
+ * 2. the constants and methods of its body
+ * 3. the members an `extend T` of the package that declares `T` adds - those are part of the type everywhere
+ * 4. the members an `extend T` of another package adds, in every file that imports the module it is written in
+ * 5. the members of the traits `T` implements, their defaults and their supertraits
+ * 6. the generated members: `copy`, and the members of a derived implementation
+ *
+ * Steps 3 and 4 are the `extend` visibility rule of the concept, and two visible extensions that bring the same member
+ * for the same type are an ambiguity error *at the use* - which is why the lookup collects candidates instead of
+ * stopping at the first hit.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use ModuleId from "../module"
@@ -14,24 +30,9 @@ use importPathOf from "./implementation"
 use requireVisibleMember from "./declaration"
 
 /**
- * What `a.b` and `Type.b` mean. The order is the one of the design, for a receiver of type `T` and a name `n`:
- *
- * 1. the fields of `T`
- * 2. the constants and methods of its body
- * 3. the members an `extend T` of the package that declares `T` adds - those are part of the type everywhere
- * 4. the members an `extend T` of another package adds, in every file that imports the module it is written in
- * 5. the members of the traits `T` implements, their defaults and their supertraits
- * 6. the generated members: `copy`, and the members of a derived implementation
- *
- * Steps 3 and 4 are the `extend` visibility rule of the concept, and two visible extensions that bring the same member
- * for the same type are an ambiguity error *at the use* - which is why the lookup collects candidates instead of
- * stopping at the first hit.
- */
-
-/**
  * `type Meters with Add & Subtract & Compare by value`: a *required* member of a delegated implementation is forwarded to
  * the field, with `Self` in the parameters unwrapped and `Self` in the result wrapped again. A default member comes from
- * the trait and is not forwarded (gap 14), so only a member without a body records this.
+ * the trait and is not forwarded, so only a member without a body records this.
  */
 public fn recordDelegation(var checker: Checker, at: Span, candidate: Candidate) {
   const implementation = match candidate.dispatch {
@@ -60,17 +61,17 @@ public fn recordDelegation(var checker: Checker, at: Span, candidate: Candidate)
 }
 
 /**
- * Object safety, checked **per call and not per type** (gap 7): a trait may always be used as a type, and what cannot be
+ * Object safety, checked **per call and not per type**: a trait may always be used as a type, and what cannot be
  * done with a value of one is call a member that needs a second value of the same concrete type (`equals`, `compare`) or
  * a member without `self` (`Type.from`). Everything else keeps its meaning, so `List<Show & Hash>` stays a legal type
  * and `items.added(x)` stays a legal call - the result is a value of the same trait type.
  *
  * The second half holds for **every** receiver, not only a trait-typed one: a static function is reached through the
  * type and through nothing else (CONCEPT.md, "Types, Values and Reflection", names `Point.parse(...)` as the one
- * bridge), so `rectangle.square(5)` is a mistake that used to resolve and silently throw the receiver away.
+ * bridge), so `rectangle.square(5)` - calling a static function on a value instead of the type - is reported here too.
  *
- * Using the trait as a *namespace* (`List.from(pairs)`, gap 31) is a different question and goes through the static
- * lookup, which never reaches this.
+ * Using the trait as a *namespace* (`List.from(pairs)`) is a different question and goes through the static lookup,
+ * which never reaches this.
  */
 public fn requireObjectSafe(var checker: Checker, receiver: TypeId, candidate: Candidate, name: String, at: Span) {
   const shown = checker.describe receiver
@@ -105,7 +106,7 @@ fn isMethod(candidate: Candidate): Bool {
   }
 }
 
-/** What a member resolves to for milestone 5, which is the same question with the answer in the other shape. */
+/** What a member resolves to for the IR lowering, which is the same question with the answer in the other shape. */
 public fn resolutionOfCandidate(candidate: Candidate): Resolution {
   match candidate.kind {
     .Field(owner, field) => Resolution.Field owner, field
@@ -134,8 +135,9 @@ public fn lookupStaticMember(var checker: Checker, owner: TypeId, name: String, 
 }
 
 /**
- * Whether this code may *name* the member it found is milestone 4.9's question, and it is asked outside of the
- * memoization: the answer below depends on the module, visibility depends on the declaration the use stands in.
+ * Whether this code may *name* the member it found is asked outside of the memoization below, through
+ * [requireVisibleMember]: the memoized answer depends on the module, receiver and name, while visibility depends on
+ * the declaration the use stands in.
  */
 fn lookupMemberAt(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool, at: Span?): Candidate? {
   const found = findMember checker, receiver, name, isStatic, at
@@ -156,7 +158,8 @@ fn findMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bo
   }
   // The answer depends on the module (extensions of a foreign type reach the files that import them), the receiver and
   // the name, and on nothing else - so it is kept. The key is a tuple and not a string: this is the hottest question of
-  // the pass, and interpolating four values into a text for every member of every expression cost seconds (4.10)
+  // the pass, and a text built by interpolating four values into it for every member of every expression would cost
+  // seconds over the whole repository
   const key = (checker.module.value, receiver.value, isStatic, name)
   if checker.memberMissing.containsKey(key) {
     return None
@@ -207,7 +210,7 @@ fn searchMember(var checker: Checker, receiver: TypeId, name: String, isStatic: 
   if const Some(found) = traitMember(checker, receiver, name, isStatic) {
     return Some found
   }
-  // `Trait.member`: the members of an implementation whose target is the trait itself, like `List.from` (gap 31)
+  // `Trait.member`: the members of an implementation whose target is the trait itself, like `List.from`
   if isStatic {
     if const .Traits(_) = checker.types.form(receiver) {
       return lookupTraitNamespace checker, receiver, name
@@ -246,7 +249,7 @@ fn nominalMember(
   if const Some(member) = shape.members.get(name) {
     return Some memberCandidate(checker, receiver, member, mapping, own, isStatic, Dispatch.Direct)
   }
-  // `copy` is generated for every `type`, with the shape of the constructor and every field optional (gap 24)
+  // `copy` is generated for every `type`, with the shape of the constructor and every field optional
   if !isStatic && name == "copy" && shape.cases.isEmpty() && !shape.isShared {
     const form = constructorForm checker, receiver, shape, mapping, allOptional: true
     return Some Candidate(CandidateKind.Copy(receiver), checker.functionType(form), form: Some(form))
@@ -306,7 +309,7 @@ fn reportAmbiguousExtension(var checker: Checker, name: String, first: ModuleId,
  *
  * `Int64` implements `From<Int32>`, `From<UInt8>`, `From<UInt16>`, `From<UInt32>` and `From<Char>`, so `Int.from` is
  * one name with five signatures. That is the one place where the language has an overload set, and what it means is
- * decided by the argument - which is milestone 4.4's work, so the member becomes "needs its arguments" here.
+ * decided by the argument at the call site, so the member becomes "needs its arguments" here.
  */
 fn traitMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool): Candidate? {
   const bounds = traitsOf checker, receiver
@@ -371,7 +374,7 @@ fn memberOfTrait(
   }
   const own = shape.generics.length()
   const dispatch = dispatchOf checker, receiver, symbol, bound
-  // `Self` of the trait is what makes `equals(self, other: Self)` meaningless on a trait-typed value (gap 7)
+  // `Self` of the trait is what makes `equals(self, other: Self)` meaningless on a trait-typed value
   Some memberCandidate(checker, receiver, member, mapping, own, isStatic, dispatch, Some(shape.own))
 }
 
@@ -515,7 +518,7 @@ fn memberCandidate(
 
 /**
  * Whether a parameter of the member *is* `Self`. Such a member needs two values of the same type, which a trait-typed
- * value cannot promise, and that is what per-call object safety rejects (gap 7).
+ * value cannot promise, and that is what [requireObjectSafe] rejects.
  */
 fn mentionsSelf(form: FunctionForm, selfParameter: TypeId?): Bool {
   const own = match selfParameter {
@@ -675,6 +678,7 @@ public fn caseNamed(var checker: Checker, owner: TypeId, name: String): CaseSign
   }
 }
 
+/** The generic parameters of a declaration, bound to the type arguments of a use of it, position by position. */
 public fn argumentMapping(generics: List<ParameterId>, arguments: List<TypeId>): Map<ParameterId, TypeId> {
   var mapping: Map<ParameterId, TypeId> = [:]
   for index in 0..generics.length().min(arguments.length()) {
@@ -685,7 +689,7 @@ public fn argumentMapping(generics: List<ParameterId>, arguments: List<TypeId>):
 
 // --- What a type comes with -----------------------------------------------------------------------------------------
 
-/** Whether a type has cases. They always belong to its declaration - an `extend` can add none (gap 39). */
+/** Whether a type has cases. They always belong to its declaration - an `extend` can add none. */
 public fn hasCases(var checker: Checker, of: TypeId): Bool {
   match checker.types.form(of) {
     .Nominal(symbol, _) => {
@@ -754,7 +758,7 @@ public fn memberNames(var checker: Checker, of: TypeId): List<String> {
   names
 }
 
-/** `Trait.member` (gap 31): the members of an implementation whose target is the trait itself, like `List.from`. */
+/** `Trait.member`: the members of an implementation whose target is the trait itself, like `List.from`. */
 public fn lookupTraitNamespace(var checker: Checker, owner: TypeId, name: String): Candidate? {
   buildImplementations checker
   var candidates = checker.implementations.open

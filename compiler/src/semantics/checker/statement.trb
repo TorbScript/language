@@ -1,3 +1,12 @@
+/**
+ * Statements, blocks and the bodies of declarations: what a block is worth ([checkBlock]), whether it returns for
+ * certain, and the scope every local lives in.
+ *
+ * A body is checked exactly once, whether the walk over the module reached it or somebody asked for the result type of
+ * a function that does not declare one - which checks its body right there ([checkBodyOf]). That is what makes the
+ * result of `fn parse() { ... }` inferable without checking anything twice.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Statement, Block, Binding, Condition, Expression, Pattern from "../../syntax/ast"
@@ -20,15 +29,6 @@ use typeFromReference from "./lowering"
 use isQuotation from "./quote"
 use checkDeclaration from "./check"
 use requireDeclaredResult, allowsTopLevelCode from "./declaration"
-
-/**
- * Statements, blocks and the bodies of declarations: what a block is worth, whether it returns for certain, and the
- * scope every local lives in.
- *
- * A body is checked exactly once, whether the walk over the module reached it or somebody asked for the result type of
- * a function that does not declare one - which checks its body right there. That is what makes the result of
- * `fn parse() { ... }` inferable without checking anything twice.
- */
 
 /** What a block is worth: the type of its value, and whether control never reaches its end. */
 public type BlockResult {
@@ -102,7 +102,7 @@ fn declaredName(declaration: Declaration): Name? {
  * Answers whether control never reaches the statement after this one.
  *
  * One statement is one inference context: the unification variables a call in it makes are solved inside of it, and
- * closing it reports the ones that are left and writes the solutions into the tables of this statement (design 2.2).
+ * closing it reports the ones that are left and writes the solutions into the tables of this statement.
  */
 public fn checkStatement(var checker: Checker, statement: Statement): Bool {
   openInference checker
@@ -123,7 +123,7 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
       false
     }
     // The target has to be a valid place, and the change is noted before the value is read so that the read the target
-    // itself produced is the one that becomes the change (milestone 4.6)
+    // itself produced is the one that becomes the change
     .Assign(target, value) => {
       const annotation = inferExpression checker, target
       const place = checkAssignment checker, target
@@ -145,13 +145,13 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
       // the `isChanged = false` at the top of the body alive
       const uses = checker.valueUses.length()
       checkCondition checker, condition, true
-      // `while const Some(item) = next()`: what the pattern bound has to be read in the body (milestone 4.10)
+      // `while const Some(item) = next()`: what the pattern bound has to be read in the body
       const bound = checker.bindingsHere()
       checker.loopDepth = checker.loopDepth + 1
       const _ = checkBlock checker, body, Expectation.Statement
       checker.loopDepth = checker.loopDepth - 1
       requireReadBindings checker, bound
-      // A change the next round reads again is alive, whatever stands after the loop (design 5.3)
+      // A change the next round reads again is alive, whatever stands after the loop
       settleLoop checker, uses
       checker.closeScope()
       false
@@ -196,7 +196,7 @@ fn checkBinding(var checker: Checker, binding: Binding) {
   const found = match annotation {
     Some(wanted) => {
       const inner = expectationOf checker, wanted
-      // `const condition: Expression<Bool> = age > 1` quotes its initializer exactly as a parameter does (gap 37), and
+      // `const condition: Expression<Bool> = age > 1` quotes its initializer exactly as a parameter does, and
       // the message about a capture that is not `Encode` names the binding as the reason
       if isQuotation(checker, wanted) {
         checker.quotingOwner = nameOfPattern binding.pattern
@@ -208,7 +208,7 @@ fn checkBinding(var checker: Checker, binding: Binding) {
   }
   var bound = annotation ?? found
   // A `var` binding may not be taken from a `const` path to a shared object: there is no copy that would make it a
-  // different one, so it would hand out exactly what the `const` withheld (gap 20)
+  // different one, so it would hand out exactly what the `const` withheld
   if binding.isVar {
     requireSharedSource checker, binding.value, bound
   }
@@ -230,8 +230,8 @@ fn nameOfPattern(pattern: Pattern): String {
 }
 
 /**
- * `for x in xs` evaluates the subject once into a temporary and binds a copy of every item (gap 40). The item type is
- * the `Item` of the `Iterable<Item>` the subject implements - through its own declaration, through an `extend`
+ * `for x in xs` evaluates the subject once into a temporary and binds a copy of every item. The item type is the
+ * `Item` of the `Iterable<Item>` the subject implements - through its own declaration, through an `extend`
  * (`extend Range<Int> with Iterable<Int>`) or through a supertrait, which is one and the same question.
  */
 fn checkLoop(var checker: Checker, pattern: Pattern, iterable: Expression, body: Block) {
@@ -309,7 +309,7 @@ fn checkReturn(var checker: Checker, value: Expression?, at: Span) {
   if checker.isResultInferred {
     const found = inferExpression checker, expression
     checker.returnTypes.add found
-    // A `public` function and a trait method do not infer: `return e` has to say what `e` is (milestone 4.9)
+    // A `public` function and a trait method do not infer: `return e` has to say what `e` is
     requireDeclaredResult checker, found, expression.span
     return
   }
@@ -380,7 +380,7 @@ fn requireLoop(var checker: Checker, keyword: String, at: Span) {
   if checker.loopDepth > 0 {
     return
   }
-  // A closure is a function, so a `break` in one cannot reach the loop around it (design 3.5)
+  // A closure is a function, so a `break` in one cannot reach the loop around it
   if leavesClosure(checker) {
     checker.reportHere(
       Diagnostic.error("`{keyword}` cannot leave a closure", at)
@@ -395,8 +395,8 @@ fn requireLoop(var checker: Checker, keyword: String, at: Span) {
 }
 
 /**
- * An expression statement must have the type `Void` or `Never` (gap 18), unless the call it consists of changes
- * something through a `var` receiver or a `var` argument - then the mutation is the effect and the result may go.
+ * An expression statement must have the type `Void` or `Never`, unless the call it consists of changes something
+ * through a `var` receiver or a `var` argument - then the mutation is the effect and the result may go.
  */
 public fn checkDiscarded(var checker: Checker, expression: Expression, found: TypeId) {
   if checker.absorbs(found) || found == checker.voidType {
@@ -449,7 +449,7 @@ fn hasEffect(var checker: Checker, expression: Expression): Bool {
       }
       false
     }
-    // A closure in a field or a binding, and everything a later sub-milestone resolves: not this rule's business
+    // A closure in a field or a binding, and everything this pass has not resolved yet: not this rule's business
     .Deferred => true
     .Local(_) => true
     .Field(_, _) => true
@@ -493,6 +493,7 @@ fn verbOf(name: String): String? {
 
 // --- Bodies ---------------------------------------------------------------------------------------------------------
 
+/** The [TypeScope] a type reference at the current point of the body is resolved in: the module and `Self`, if any. */
 public fn scopeHere(checker: Checker): TypeScope {
   TypeScope checker.module, selfType: checker.selfType
 }
@@ -562,7 +563,8 @@ public fn checkFunctionBody(
     }
   }
   // `fn fetch(): Task<User>`: its body produces the `User`, exactly as the body of a `Result` function produces the
-  // value and `?` returns the error (concept, Concurrency). Where `await()` is allowed is milestone 7's rule
+  // value and `?` returns the error (concept, Concurrency). Whether `await()` may appear here is `checker.awaitsTasks`,
+  // checked where `await()` itself is resolved
   const produced = taskValueOf(checker, result) ?? result
   const saved = checker.enterBody module, produced, isInferred, owner, rule
   // `await()` is allowed in a function that answers a `Task` and says so in its result type (CONCEPT, "Concurrency")
@@ -575,12 +577,12 @@ public fn checkFunctionBody(
   var found = outcome.annotation
   if isInferred {
     found = inferredResult checker, outcome
-    // A `public` function and a trait method do not infer: the value the body ends in has to be declared (4.9)
+    // A `public` function and a trait method do not infer: the value the body ends in has to be declared
     requireDeclaredEnding checker, body, outcome
   } else {
     requireResult checker, outcome, produced, body.span
   }
-  // Every change of this body that no read follows (design 5.3): the uses are per body and gone with it
+  // Every change of this body that no read follows is reported here: the uses are per body and gone with it
   settleChanges checker
   checker.closeScope()
   checker.leaveBody saved
@@ -618,7 +620,7 @@ public fn taskValueOf(checker: Checker, result: TypeId): TypeId? {
   None
 }
 
-/** The initializer of a `const`, and every default: a scope without `self` and without the other fields (gap 26). */
+/** The initializer of a `const`, and every default: a scope without `self` and without the other fields. */
 public fn checkInitializer(
   var checker: Checker,
   module: ModuleId,
@@ -692,6 +694,7 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
   checker.leaveBody saved
 }
 
+/** The expectation a body's last expression is checked against: none where the result is inferred, `Void` where it is. */
 public fn bodyExpectation(checker: Checker, result: TypeId, isInferred: Bool): Expectation {
   if isInferred {
     return Expectation.None
