@@ -1587,3 +1587,17 @@ Wenn nicht, was bedeutet, bewirkt es?
   (mit `docs/LINEAR.md`, Trait `Real`, `Fixed` als deterministischer Skalar - ausdrücklich auch als Härtetest: was die
   Sprache nicht kann, wird mit Reproduktion gemeldet), **Doku-Welle 3** (`ir/`, `ir/lower`, `backend/c`,
   `examples/encoding-lab`).
+
+- (Rolle von `Array`, 2026-09-23) **Anlass (Nutzer):** `native fn of(...items: Item): Array<Item, Size>` ist
+  unintuitiv - die Signatur sagt "variadisch, also Liste", und Compiler-Magie löst daraus `Size` und erlaubt einen
+  Spread nur aus einem anderen `Array`. **Entschieden (Nutzer, auf meinen Vorschlag):** `Array.of` entfällt und mit ihm
+  der Checker-Sonderfall `checkArrayOf`. `Array<Item, const Size: Int>` ist das INLINE-SPEICHERPRIMITIV (feste Größe,
+  kein Heap, neben dem geplanten `Buffer<Item>` für den Heap), keine weitere Collection. Es entsteht nur auf Wegen,
+  deren Signatur ehrlich ist: das Listen-Literal gegen einen erwarteten Array-Typ (Anzahl geprüft; die Anzahl steht nur
+  im Literal syntaktisch fest - so machen es Rust, Swift 6.2, Zig, Go), `Array.filled(value)`, NEU
+  `Array.generated { index => ... }` (beide: `Size` aus dem erwarteten Typ, gewöhnliche Inferenz) und
+  `Array.from(items): Array<Item, Size>?`. Die Größe wird vorerst ausgeschrieben (der Fehler nennt die richtige
+  Zahl); `_` als Typargument ("leite ab", `Array<Int, _>`, allgemein auch `Map<String, _>`) ist als Kandidat notiert.
+  **Wird gelöst:** kleine Runde zusammen mit den notierten Kleinigkeiten (`indexed()` mit Labels, `reportHere`
+  verschluckt die zweite Meldung, Gate-Fehlalarm bei `...` in Backticks, toter Schutz in `mutation.trb`, Erklärseite
+  "Where are my overloads?").
