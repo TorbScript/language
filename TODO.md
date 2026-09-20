@@ -1203,3 +1203,6 @@ Wenn nicht, was bedeutet, bewirkt es?
     `Self<Output>` - das ist die Higher-Kinded-Form, die CONCEPT ausschließt → bleibt `Option`. `?` verlässt die
     umgebende Funktion, das kann keine Methode; Rusts `Try`-Trait ist seit 2016 instabil (Residual-Typen, Kollision
     mit Blanket-`From`) → bleibt `Option`/`Result`, kann später ohne Bruch geöffnet werden.
+  - **Entschieden (Nutzer, 2026-09-21):** so wie empfohlen - `??` wird der Trait `OrElse<Value>`, `?.` bleibt
+    `Option`, `?` bleibt `Option`/`Result`. **Wird gelöst:** zusammen mit `loop` und der Extension-Sichtbarkeit in der
+    nächsten Checker-Runde (nach der Schreibregel-Runde).
