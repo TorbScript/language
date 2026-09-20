@@ -6,11 +6,13 @@
  * Only what is more than that (`route`, `redact`, `secret`) is a method.
  */
 
+/** A path mounted to a handler name, added by the `route` command. */
 public type Route {
   path: String
   handler: String
 }
 
+/** The severity a log line carries. `logging { level(.Debug) }` sets it for the whole section. */
 public type LogLevel {
   case Debug
   case Info
@@ -18,6 +20,7 @@ public type LogLevel {
   case Error
 }
 
+/** The `database { }` section: where to connect and how many connections to keep open. */
 public type DatabaseConfig {
   var url: String = ""
   var username: String = ""
@@ -25,6 +28,7 @@ public type DatabaseConfig {
   var poolSize: Int = 10
 }
 
+/** The `logging { }` section: the level, and the keys `redact` hides from whatever reads this config. */
 public type LoggingConfig {
   var level: LogLevel = .Info
   private(var) redacted: Set<String> = Set.of()              // Readable for the application, only `redact` writes
@@ -37,6 +41,10 @@ public type LoggingConfig {
 
 }
 
+/**
+ * The receiver `config.trb` configures: host, port, TLS, a [DatabaseConfig] and a [LoggingConfig] section, and the
+ * routes `route` adds. `secret` is the only way a script reaches outside of what is written here.
+ */
 public type ServerConfig {
   var host: String = "localhost"
   var port: Int = 8080
@@ -71,6 +79,7 @@ public type ServerConfig {
   }
 }
 
+/** Why [ServerConfig.validate] refused a configuration. */
 public type ConfigError {
   message: String
 }

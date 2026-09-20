@@ -1,7 +1,15 @@
+/**
+ * Loads `config.trb` into a [ServerConfig] and prints what it produced.
+ *
+ * `loadConfig` is the sandboxed path: a file, checked against `ServerConfig` and run with [Sandbox]. `testConfig`
+ * writes the same vocabulary inline, for a caller that needs no file at all.
+ */
+
 use Sandbox, SandboxError from "std/sandbox"
 use Environment from "std/environment"
 use ServerConfig, ConfigError from "./server-config"
 
+/** Everything that can keep the server from starting: the script itself failed, or what it produced does not validate. */
 type StartupError {
   case Script(cause: SandboxError)
   case Config(cause: ConfigError)
@@ -9,6 +17,14 @@ type StartupError {
 
 // Both cases wrap exactly one error, so `From<SandboxError>` and `From<ConfigError>` are generated and `?` converts.
 
+/**
+ * Parses and type checks `config.trb` against [ServerConfig], runs it in a sandbox, and validates the result.
+ *
+ * # Errors
+ *
+ * `StartupError.Script` if the file does not parse, does not type check against `ServerConfig`, or panics while it
+ * runs; `StartupError.Config` if the config it produced does not validate.
+ */
 fn loadConfig(): Result<ServerConfig, StartupError> {
   // Parses and type checks the file against ServerConfig. The result is a Script<ServerConfig>: loading reports what
   // is wrong with the file, `apply` what goes wrong while it runs (a limit, or a panic inside the script).
@@ -28,7 +44,7 @@ fn loadConfig(): Result<ServerConfig, StartupError> {
   Ok(config.validate()?)
 }
 
-// The same vocabulary works inline, without a file
+/** The same vocabulary as `config.trb`, written inline instead of loaded from a file. */
 fn testConfig(): ServerConfig {
   var config = ServerConfig()
   const configure: (var self: ServerConfig) => Void = {

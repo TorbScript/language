@@ -1,9 +1,18 @@
+/**
+ * The systems this game runs every frame: pure functions from one [World] to the next, folded together in
+ * `main.trb`.
+ *
+ * `movement`, `falling`, `collisions` and `cleanup` change entities through `World.mapEntities`/`query`; `onlyEvery`
+ * builds a new [System] out of an existing one, for a system that only has to run every so often.
+ */
+
 use Vector2 from "./math/vector2"
 use Component, ComponentKind, Entity from "./ecs/component"
 use World, System from "./ecs/world"
 
 const gravity = Vector2 0.0, 9.81
 
+/** Moves every entity that has a position and a velocity by `velocity * deltaTime`. */
 public fn movement(world: World, deltaTime: Float): World {
   world.mapEntities([ComponentKind.Transform, ComponentKind.Velocity]) {
     match (entity.position(), entity.velocity()) {
@@ -13,6 +22,7 @@ public fn movement(world: World, deltaTime: Float): World {
   }
 }
 
+/** Applies gravity to every entity that has a velocity. */
 public fn falling(world: World, deltaTime: Float): World {
   world.mapEntities([ComponentKind.Velocity]) {
     const velocity = entity.velocity() ?? Vector2.zero
@@ -20,6 +30,7 @@ public fn falling(world: World, deltaTime: Float): World {
   }
 }
 
+/** Deals damage to every collider that overlaps another one, scaled by how many others it touches. */
 public fn collisions(world: World, deltaTime: Float): World {
   const bodies = world.query ComponentKind.Transform, ComponentKind.Collider, ComponentKind.Health
 
@@ -48,6 +59,7 @@ public fn onlyEvery(seconds: Float, system: System): System {
   }
 }
 
+/** Whether two entities' colliders overlap, judged by the distance between their positions and their radii. */
 fn touches(a: Entity, b: Entity): Bool {
   match (a.position(), b.position(), radius(a), radius(b)) {
     (Some(p1), Some(p2), Some(r1), Some(r2)) => p1.distanceTo(p2) <= r1 + r2
@@ -55,6 +67,7 @@ fn touches(a: Entity, b: Entity): Bool {
   }
 }
 
+/** The radius of `entity`'s [Component.Collider], or `None` if it has none. */
 fn radius(entity: Entity): Float? {
   match entity.components.get(ComponentKind.Collider) {
     Some(.Collider(radius)) => Some radius
@@ -62,6 +75,7 @@ fn radius(entity: Entity): Float? {
   }
 }
 
+/** Subtracts `amount` from `entity`'s health, never below zero, and returns the changed copy. */
 fn damage(entity: Entity, amount: Int): Entity {
   match entity.components.get(ComponentKind.Health) {
     Some(.Health(current, maximum)) => entity.attached(.Health((current - amount).max(0), maximum))

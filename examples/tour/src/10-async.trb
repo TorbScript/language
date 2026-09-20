@@ -1,32 +1,42 @@
+/**
+ * Concurrency: `Task` and `await()`, sequential versus concurrent awaiting, `spawn` for parallel work, and
+ * `Channel` for tasks that talk to each other.
+ */
+
 // DRAFT - see "Concurrency" in CONCEPT.md
 
 use * as http from "std/http"
 use HttpError from "std/http"
 use sleep from "std/time"
 
+/** A user fetched by [fetchUser]. */
 type User {
   id: Int
   name: String
 }
 
+/** A post fetched by [fetchPosts]. */
 type Post {
   title: String
 }
 
 // There is no `async` keyword. A function that returns a `Task` may `await()`, and its body produces the value.
 // `await()` is a method on Task and composes with `?`.
+/** Fetches a user by id. `await()` is a method on `Task` and composes with `?` like any other fallible step. */
 fn fetchUser(id: Int): Task<Result<User, HttpError>> {
   // A `Response` owns one end of a stream and is read once, so it is a shared object in a `var` binding
   var response = http.get("https://example.test/users/{id}").await()?
   response.json<User>().await()
 }
 
+/** Fetches a user's posts by their id. */
 fn fetchPosts(userId: Int): Task<Result<List<Post>, HttpError>> {
   var response = http.get("https://example.test/users/{userId}/posts").await()?
   response.json<List<Post>>().await()
 }
 
 // Sequential
+/** Fetches a user and their posts one after the other. */
 fn loadProfile(id: Int): Task<Result<String, HttpError>> {
   const user = fetchUser(id).await()?
   const posts = fetchPosts(user.id).await()?
@@ -34,6 +44,7 @@ fn loadProfile(id: Int): Task<Result<String, HttpError>> {
 }
 
 // Concurrent: start both tasks, then wait for both
+/** The same result as [loadProfile], but starts both fetches before waiting for either one. */
 fn loadProfileFast(id: Int): Task<Result<String, HttpError>> {
   const (userResult, postsResult) = all(fetchUser(id), fetchPosts(id)).await()
   const user = userResult?

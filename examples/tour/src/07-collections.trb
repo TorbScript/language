@@ -1,3 +1,8 @@
+/**
+ * Collections: persistent `List`/`Map`/`Set` values plus mutable `HashMap`/`Stack`/`Queue`, slices, `Iterable` for
+ * a type of your own, and the pipeline of lazy stages, terminal operations and collectors that queries them.
+ */
+
 use File from "std/fs"
 
 // --- Collections are values: the binding decides about mutation ------------------
@@ -45,6 +50,7 @@ const unique: Set<Int> = [1, 2, 2, 3]                 // Set.from([1, 2, 2, 3]) 
 var index: Map<String, Int> = HashMap()  // Flat hash table instead of the default trie
 
 // Without `var` a parameter is read-only. Any map will do, and nobody can change it while you hold it.
+/** Greets `name` by its title in `titles`, or "dear" if it has none. Any `Map` implementation works here. */
 fn greet(name: String, titles: Map<String, String>): String {
   const title = titles.get(name) ?? "dear"
   "Hello {title} {name}"
@@ -53,6 +59,7 @@ fn greet(name: String, titles: Map<String, String>): String {
 print greet("Ada", titles: ["Ada": "Countess"])
 
 // Less specific: `Collection` (or `Iterable`) accepts every kind
+/** How many items `items` has - `Collection` accepts a `List`, a `Set` or a `Map` alike. */
 fn describe<Item>(items: Collection<Item>): String {
   if items.isEmpty() { "nothing" } else { "{items.length()} items" }
 }
@@ -61,6 +68,7 @@ print describe(numbers)
 print describe(ages)                     // A Map is a Collection<(Key, Value)>
 
 // A `var` parameter works on the caller's collection, whatever it is
+/** Adds the squares up to `upTo` into `target`, whatever kind of collection the caller passes. */
 fn fillWithSquares(var target: Collection<Int>, upTo: Int) {
   target.addAll((1..=upTo).map { _ * _ })
 }
@@ -82,6 +90,7 @@ print middle                             // Still [3, 9, 1]: a slice is a value,
 samples[1..4].sort { _ }                 // A range is a `var` path, too: sorts this part in place
 print samples                            // [0, 1, 3, 9, 7, 2]
 
+/** Overwrites every item of `target` with zero; a slice like `samples[0..2]` is a `var` path too. */
 fn fillWithZeros(var target: List<Int>) {
   for index in 0..target.length() {
     target[index] = 0
@@ -105,6 +114,7 @@ for i in 0..numbers.length() {
 }
 
 // Your own types take part by implementing `Iterable`
+/** The state of one countdown in progress: an `Iterator<Int>` that counts down to zero and then stops. */
 type CountdownIterator with Iterator<Int> {
   var current: Int
 
@@ -117,6 +127,7 @@ type CountdownIterator with Iterator<Int> {
   }
 }
 
+/** Counts down from `start`; every `for` or pipeline over it gets a fresh [CountdownIterator]. */
 type Countdown with Iterable<Int> {
   start: Int
 
@@ -133,6 +144,7 @@ print odd
 
 // --- Pipelines: source -> lazy stages -> terminal operation ------------------------------
 
+/** A row for the pipeline and collector examples below. */
 type Employee {
   name: String
   department: String
@@ -184,6 +196,7 @@ print employees.collect(salaryStatistics)
 print(employees.filter { _.age < 50 }.collect(salaryStatistics))
 
 // Your own collector: a fold with a final step...
+/** A collector of your own: folds values into a list, then finishes by sorting it and taking the middle one. */
 fn median<Item>(value: (value: Item) => Int): Collector<Item, Int?> {
   collector([], finish: { values: List<Int> => values.sorted { _ }.skip(values.length() / 2).first() }) {
     values, item => values.added value(item)

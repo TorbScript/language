@@ -1,11 +1,15 @@
+/**
+ * The scene DSL: [scene] builds a [World] out of nested `entity { }` blocks, one builder `var` per level, and each
+ * builder's commands add [Component]s to whatever is currently open.
+ *
+ * Builders are where changing in place is the natural fit; what comes out at the end is a value a system passes on.
+ */
+
 use Vector2 from "./math/vector2"
 use Component from "./ecs/component"
 use World from "./ecs/world"
 
-/**
- * Scene DSL. Builders are where changing in place is the natural fit. The builder lives in a local `var`,
- * what comes out is a `World` that systems pass on as a value.
- */
+/** The commands inside an `entity { }` block: each one adds a [Component] to the entity being built. */
 public type EntityBuilder {
   private(var) components: List<Component> = []
 
@@ -35,6 +39,7 @@ public type EntityBuilder {
 
 }
 
+/** The commands at the top level of a [scene]: `entity { }` adds one entity to the world being built. */
 public type SceneBuilder {
   private(var) world: World = World()
 
@@ -46,6 +51,18 @@ public type SceneBuilder {
 
 }
 
+/**
+ * Builds a [World] out of nested `entity { }` blocks.
+ *
+ * # Examples
+ *
+ *     const world = scene {
+ *       entity {
+ *         tag "player"
+ *       }
+ *     }
+ *     print world.entities.length()
+ */
 public fn scene(build: (var self: SceneBuilder) => Void): World {
   var builder = SceneBuilder()
   build builder

@@ -1,3 +1,10 @@
+/**
+ * Runs a small scene for five simulated seconds and prints who is left.
+ *
+ * [scene] builds the starting [World], a `List<System>` says what happens every frame, and `run` folds the systems
+ * over the world once per frame, keeping every intermediate world so replay and "halfway there" are free.
+ */
+
 use sleep, Clock from "std/time"
 use ComponentKind from "./ecs/component"
 use World, System from "./ecs/world"
@@ -40,6 +47,12 @@ const systems: List<System> = [
 const frameTime = 1.0 / 60.0
 
 // The loop is the only place with state: one `var` holding the current world.
+/**
+ * Steps `start` forward by a fixed time step until `seconds` have passed, sleeping out whatever time a frame has left.
+ *
+ * Returns every intermediate world: they share their storage with each other, so keeping the whole history costs
+ * only what actually changed.
+ */
 fn run(start: World, seconds: Float): Task<List<World>> {
   var world = start
   var history: List<World> = []          // Worlds share their storage, keeping all of them is cheap

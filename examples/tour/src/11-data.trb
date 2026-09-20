@@ -1,14 +1,21 @@
+/**
+ * Data without reflection: `Encode`/`Decode` generated from a public constructor, written by hand where an
+ * invariant or an older wire format needs it, and `JsonValue` for looking at a document without a type.
+ */
+
 // Types and values are strictly separate: there is no runtime reflection.
 // What reflection is usually needed for is covered by the generated traits `Encode` and `Decode`.
 
 use Json, JsonValue, JsonError from "std/json"
 
+/** Why [Email.parse] refused a value. */
 type ParseError {
   message: String
 }
 
 // Private constructor: `Email` has an invariant, so `Decode` is NOT generated. It is written by hand
 // and goes through `parse` - a decoded Email is as valid as any other.
+/** An email address with a private constructor: `Decode` is written by hand and goes through `parse`. */
 type Email {
   private value: String
 
@@ -20,6 +27,7 @@ type Email {
   }
 }
 
+/** An Email is a plain string on the wire, not a record with one field. */
 extend Email with Encode, Decode {
   fn encode(self, var encoder: Encoder) {
     encoder.string value                // An Email is a string on the wire, not a record with one field
@@ -31,12 +39,14 @@ extend Email with Encode, Decode {
   }
 }
 
+/** A user's role: an admin, or a member since a given year. */
 type Role {
   case Admin
   case Member(since: Int)
 }
 
 // Public constructor, all fields are Encode/Decode: both traits are generated.
+/** A user with a public constructor and only `Encode`/`Decode`-able fields, so both traits are generated. */
 type User {
   name: String
   email: Email
@@ -81,11 +91,13 @@ match Json.decode<User>(r"""{"name": "Grace", "email": "not-an-email"}""") {
 
 // --- A different wire format: write the functions by hand, there are no annotations -------------
 
+/** The shape this program works with; the wire format it decodes from is older and nests the mail under `contact`. */
 type LegacyUser {
   name: String
   mail: String
 }
 
+/** Reads the `LegacyUser` shape by hand: there is no annotation to bridge `mail` and the nested `contact.e_mail`. */
 extend LegacyUser with Decode {
   fn decode(var decoder: Decoder): Result<LegacyUser, DecodeError> {
     decoder.record "LegacyUser" { fields =>
@@ -95,10 +107,12 @@ extend LegacyUser with Decode {
   }
 }
 
+/** The nested `contact` object of this older wire format. */
 type LegacyContact {
   mail: String
 }
 
+/** Reads the field name this older format actually uses: `e_mail`, not `mail`. */
 extend LegacyContact with Decode {
   fn decode(var decoder: Decoder): Result<LegacyContact, DecodeError> {
     decoder.record "LegacyContact" { fields =>
@@ -110,6 +124,7 @@ extend LegacyContact with Decode {
 // --- When you want to look at a document without knowing its type: that is a library type ------------------
 
 // `JsonValue` is an ordinary ADT of std/json (and `Encode`/`Decode` itself). Nothing in the language knows it.
+/** The paths where two JSON documents differ, recursing into objects and stopping where values are already equal. */
 fn diff(before: JsonValue, after: JsonValue, path: String = ""): List<String> {
   match (before, after) {
     // Directly inside of a `match`, a line that starts with `.` is the next arm: a chain goes into a block

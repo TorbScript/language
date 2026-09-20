@@ -1,5 +1,6 @@
 /** Translates expression trees to SQL. Pure: a tree and its captures go in, a fragment comes out. */
 
+/** Why a query could not be translated to SQL: an [ExpressionNode] this provider does not support. */
 public type QueryError {
   case Unsupported(what: String)
 }
@@ -37,6 +38,14 @@ extend Fragment with Show {
   }
 }
 
+/**
+ * Turns one node of an [Expression]'s tree into a [Fragment] of SQL, recursively over its children.
+ *
+ * # Errors
+ *
+ * [QueryError.Unsupported] for a node kind this provider does not translate: a method call it does not recognize, or
+ * any node outside the small subset handled here.
+ */
 public fn translate(node: ExpressionNode, captures: List<Encode>): Result<Fragment, QueryError> {
   match node {
     // `_.age`: a field of the row parameter is a column
@@ -80,6 +89,7 @@ public fn translate(node: ExpressionNode, captures: List<Encode>): Result<Fragme
   }
 }
 
+/** The SQL operator for a [BinaryOperator], `AND`/`OR` included alongside the arithmetic and comparison ones. */
 fn keyword(operator: BinaryOperator): String {
   match operator {
     .Add => "+"

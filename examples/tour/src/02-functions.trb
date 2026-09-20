@@ -1,13 +1,21 @@
+/**
+ * Functions: declaration and hoisting, defaults and labels, variadics and spread, generics, closures, higher-order
+ * functions, and the command-call syntax that lets `print greeting` skip the parentheses.
+ */
+
 // Declarations are hoisted: `isEven` can be used before and inside of `isOdd`.
+/** Whether `n` is odd, defined in terms of `isEven` before it is declared: top-level declarations are hoisted. */
 fn isOdd(n: Int): Bool {
   if n == 0 { false } else { isEven(n - 1) }
 }
 
+/** Whether `n` is even, the other half of the mutual recursion above. */
 fn isEven(n: Int): Bool {
   if n == 0 { true } else { isOdd(n - 1) }
 }
 
 // The last expression is the result. `return` exits early.
+/** `n!`. The last expression of the body is the result; `return` is only needed to leave early. */
 fn factorial(n: Int): Int {
   if n <= 1 {
     return 1
@@ -16,6 +24,7 @@ fn factorial(n: Int): Int {
 }
 
 // Defaults and labeled arguments
+/** A default for `port`, and a label on `timeout` that only has to be written when the call passes one. */
 fn connect(host: String, port: Int = 5432, timeout: Int = 30): String {
   "{host}:{port} (timeout {timeout}s)"
 }
@@ -25,6 +34,7 @@ print connect("localhost", 3306)
 print connect("localhost", timeout: 10)
 
 // Variadics and spread
+/** The sum of a variadic list of numbers; `...someSet` below spreads any `Iterable` into the same parameter. */
 fn sumAll(...numbers: Int): Int {
   numbers.fold 0 { a, b => a + b }
 }
@@ -34,10 +44,12 @@ print sumAll(1, 2, 3)
 print sumAll(1, ...someSet)              // Spread works with every Iterable
 
 // Generics
+/** The first item of `items`, or `fallback` if it has none. */
 fn firstOr<Item>(items: List<Item>, fallback: Item): Item {
   items.first() ?? fallback
 }
 
+/** The largest of `first` and `rest`, for any type that can be compared. */
 fn largest<Value: Compare>(first: Value, ...rest: Value): Value {
   rest.fold first { a, b => a.max b }
 }
@@ -54,12 +66,14 @@ const clamp = { x: Int, low: Int, high: Int =>
 }
 
 // Need a return type annotation or recursion? That is what local `fn` is for.
+/** Fibonacci, recursively: a closure cannot call itself or declare its own result type, a local `fn` can do both. */
 fn fib(n: Int): Int {
   if n < 2 { n } else { fib(n - 1) + fib(n - 2) }
 }
 const fibs = [1, 2, 3, 4, 5].map(fib)
 
 // Closures capture their scope
+/** A fresh counter: the closure it returns captures `count` and increments it on every call. */
 fn counter(): () => Int {
   var count = 0
   {
@@ -72,10 +86,12 @@ const next = counter()
 print "{next()}, {next()}, {next()}"      // 1, 2, 3
 
 // Higher-order functions
+/** Applies `f` to its own result: `twice(double)` is the function `x => double(double(x))`. */
 fn twice<Value>(f: (Value) => Value): (Value) => Value {
   { f f(_) }
 }
 
+/** `f` then `g`, as one function: `compose(f, g)(x)` is `g(f(x))`. */
 fn compose<Input, Middle, Output>(f: (Input) => Middle, g: (Middle) => Output): (Input) => Output {
   { g f(_) }
 }

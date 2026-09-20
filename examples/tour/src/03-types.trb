@@ -1,5 +1,12 @@
+/**
+ * Types: value semantics by default, `shared type` for identity, generated constructors and `Show`/`Equals`,
+ * factories and `From`/`Into` for construction, visibility, and a single-field type to give a raw value a name of
+ * its own.
+ */
+
 // --- Types are values: the binding decides about mutation -----------------------
 
+/** A point with `var` fields: `translate` changes it in place, `translated` returns a changed copy. */
 type Point {
   var x: Int                           // `var` fields can be changed - through a `var` path
   var y: Int
@@ -51,6 +58,7 @@ print([p, q].map(Point.area).toList())    // Not `print [...]`: that would be in
 
 // --- Fields are const unless marked `var` ---------------------------------------------
 
+/** A field is `const` unless marked `var`, even inside a type whose binding is itself a `var`. */
 type Counter {
   var count: Int = 0
   step: Int = 1                      // Never changes, not even in a `var` counter
@@ -75,6 +83,7 @@ print frozen.isZero()
 // frozen.count = 1                  // Compile error: assignment through a const binding
 
 // A `var` parameter works on the caller's value. The argument has to be a `var` path.
+/** Increments `target` twice, in place: a `var` parameter reaches into the caller's own value. */
 fn incrementTwice(var target: Counter) {
   target.increment()
   target.increment()
@@ -105,6 +114,7 @@ counters.update 1 { element =>
 
 // The exception for everything that has an identity: resources, windows, connections.
 // Assigning a shared object does not copy it, everybody who holds it sees the same object.
+/** A connection has identity, not just a value: `shared type` is the exception where assigning never copies. */
 shared type Connection {
   url: String
   private(var) sent: Int = 0
@@ -124,10 +134,12 @@ const readOnly = connection          // Same rule as everywhere: no `var` path, 
 
 // --- Construction without logic: factories, parse, From/Into -----------------
 
+/** Why `Email.parse` or `Percent.tryFrom` below refused a value. */
 type ParseError {
   message: String
 }
 
+/** An email address, validated once in `parse` and never again: the field is private, so only a checked value exists. */
 type Email with Parse<ParseError> {
   private value: String              // Private without default: only `Email` can call `Email(...)`
 
@@ -151,14 +163,17 @@ match email {
   Fail(error) => print "Invalid: {error.message}"
 }
 
+/** A temperature in degrees Celsius. */
 type Celsius {
   degrees: Float
 }
 
+/** A temperature in degrees Fahrenheit, convertible to [Celsius] below. */
 type Fahrenheit {
   degrees: Float
 }
 
+/** `Celsius.from` and, for free, `Fahrenheit.into()`. */
 extend Celsius with From<Fahrenheit> {
   fn from(value: Fahrenheit): Celsius {
     Celsius((value.degrees - 32.0) / 1.8)
@@ -169,6 +184,7 @@ const boiling = Celsius.from Fahrenheit(212.0)
 const freezing: Celsius = Fahrenheit(32.0).into()   // `Into` comes for free
 
 // Fallible conversion
+/** A percentage, `0`-`100`: `TryFrom` is the fallible counterpart of `From`, for a conversion that can be refused. */
 type Percent with TryFrom<Int, ParseError> {
   value: Int
 
@@ -182,6 +198,7 @@ type Percent with TryFrom<Int, ParseError> {
 
 // --- Visibility ---------------------------------------------------------------
 
+/** A member is public unless marked `private`; `private(var)` is public to read and private to write. */
 type Account {
   owner: String                                        // Members are public unless marked `private`
   private(var) balance: Int = 0                         // The `var` is private: everybody reads, only Account writes
@@ -205,6 +222,7 @@ print account.balance                // 100
 
 // --- A method is a constant of the type that holds a receiver closure ------------------------
 
+/** A method is sugar for a constant that holds a receiver closure; `perimeter` writes that out without the `fn`. */
 type Rectangle {
   width: Int
   height: Int
@@ -223,6 +241,7 @@ const bound = rectangle.area         // Bound to `rectangle`: () => Int
 print bound()
 
 // An instance field can hold a function, too. The call looks the same.
+/** A field can hold a function too - `onClick` is called exactly like a method would be. */
 type Button {
   label: String
   var onClick: () => Void = {}
@@ -236,10 +255,14 @@ button.onClick()
 
 // `Int`, `UInt` and `Float` are nothing special: the prelude declares `type Int = Int64` exactly like this.
 
+/** A plain alias: transparent, so a `UserId` is an `Int` everywhere, as the assignments below show. */
 type UserId = Int
+/** A name for a function type, to avoid repeating it at every use. */
 type Handler = (request: String) => String
+/** A generic alias: two values of the same type. */
 type Pair<Value> = (Value, Value)
-type Sample = Float32                   // Say why the width matters instead of redefining `Float`
+/** Says why the width matters, instead of redefining `Float`. */
+type Sample = Float32
 
 // Aliases are transparent: a UserId is an Int
 const id: UserId = 42
@@ -248,15 +271,18 @@ const range: Pair<UserId> = (id, next)
 
 // --- Distinct types: single-field types, `by` forwards traits to the field ----------------
 
+/** A single-field type: distinct from `Int`, so a raw id cannot be passed where an `OrderId` is expected. */
 type OrderId {
   value: Int
 }
 // const wrong: OrderId = id             // Compile error: Int is not an OrderId
 
+/** A distinct `Float` with only the operations that make sense for a length: `by value` forwards them from the field. */
 type Meters with Add & Subtract & Compare by value {
   value: Float
 }
 
+/** A distinct `Float` for a duration, with the same forwarded operations as [Meters]. */
 type Seconds with Add & Subtract & Compare by value {
   value: Float
 }
@@ -268,10 +294,12 @@ const longer = distance.max Meters(10.0)        // `Compare` is forwarded, too
 const raw: Float = distance.value                // Explicit way out
 
 // Units can define exactly the operations that make sense
+/** What dividing a [Meters] by a [Seconds] produces. */
 type MetersPerSecond {
   value: Float
 }
 
+/** Only this specific division is defined: `Multiply` between two [Meters] would be an area, so `by value` did not forward it. */
 extend Meters with Divide<Seconds, MetersPerSecond> {
   fn divide(self, other: Seconds): MetersPerSecond {
     MetersPerSecond(value / other.value)

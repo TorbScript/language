@@ -1,3 +1,8 @@
+/**
+ * What an entity is built from: [Component] is the data, [ComponentKind] says which case a value is without
+ * matching on it, and [Entity] is the bag of components a world steps forward one frame at a time.
+ */
+
 use Vector2 from "../math/vector2"
 
 /** Components have no `var` fields. Systems replace them instead of changing them. */
@@ -22,6 +27,7 @@ public type Component {
   }
 }
 
+/** Which [Component] case a value is, without carrying it: the key `Entity` stores a component under and `World.query` asks for. */
 public type ComponentKind {
   case Transform
   case Velocity
@@ -31,8 +37,15 @@ public type ComponentKind {
   case Tag
 }
 
+/** An entity's identity, stable across every copy of the world it lives in - what a system stores instead of the entity itself. */
 public type EntityId = Int
 
+/**
+ * One entity: an [EntityId] and the [Component]s attached to it, at most one of each [ComponentKind].
+ *
+ * `attach`/`detach` change it in place; `attached`/`detached` return a changed copy, for a system that works on
+ * values instead.
+ */
 public type Entity {
   id: EntityId
   private(var) components: Map<ComponentKind, Component> = [:]

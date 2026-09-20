@@ -1,8 +1,14 @@
+/**
+ * Receiver closures: a closure whose first parameter is `self` resolves names against it, exactly like inside a
+ * method. Builds an HTML DSL and a property-command config below, both without any special syntax of their own.
+ */
+
 // A receiver closure is a closure whose first parameter is called `self`.
 // Inside of it, names resolve against the receiver - exactly like inside of a method.
 
 // --- An HTML builder -----------------------------------------------------------------
 
+/** A builder for one HTML element: attributes and children are added by calling methods on the receiver. */
 type Element {
   tag: String
   private var attributes: Map<String, String> = [:]
@@ -36,6 +42,7 @@ type Element {
   }
 }
 
+/** A child of an [Element]: either text or another element. */
 type Node {
   case Text(content: String)
   case Child(element: Element)
@@ -48,6 +55,7 @@ type Node {
   }
 }
 
+/** Builds a page by running `build` against a fresh root `Element`. */
 fn html(build: (var self: Element) => Void): Element {
   var root = Element "html"
   build root
@@ -74,11 +82,13 @@ print page.render()
 // A command on a field never calls it, it writes it: `port 8080` is `port = 8080`, `onStart { ... }` assigns the
 // closure, and `limits { ... }` applies the receiver closure to the field's value. No setters, no section methods.
 
+/** The `limits { }` section of a [ServerOptions]. */
 type Limits {
   var maxConnections: Int = 100
   var timeoutSeconds: Int = 30
 }
 
+/** The receiver `serve` configures: every field is set by a command, never by an assignment. */
 type ServerOptions {
   var host: String = "localhost"
   var port: Int = 8080
@@ -87,6 +97,7 @@ type ServerOptions {
   var onStart: () => Void = {}
 }
 
+/** Builds a [ServerOptions] by running `configure` against a fresh one. */
 fn serve(configure: (var self: ServerOptions) => Void): ServerOptions {
   var options = ServerOptions()
   configure options

@@ -1,3 +1,9 @@
+/**
+ * Failure and absence: `Option` and `Result`, `?` and `??`, error conversion through `From`, and `panic` for a bug
+ * instead of an expected failure.
+ */
+
+/** A user with an optional manager, for the `Option` chaining below. */
 type User {
   id: Int
   name: String
@@ -11,6 +17,7 @@ const users = [
 
 // --- Option -------------------------------------------------------------------
 
+/** Finds a user by id, or `None` if there is no such user. */
 fn findUser(id: Int): User? {
   users.find { _.id == id }
 }
@@ -26,11 +33,13 @@ if const Some(user) = findUser(3) {
 
 // --- Result -------------------------------------------------------------------
 
+/** Why `readPort` could not read the `port` setting. */
 type ConfigError {
   case Missing(key: String)
   case Invalid(key: String, reason: String)
 }
 
+/** Reads and validates the `port` setting, turning an absent or unparsable value into a [ConfigError]. */
 fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
   // The short form needs a type that is already known: here only the `?` would decide the failure type, and it runs
   // after the argument has been read - so the case is written with its type
@@ -50,6 +59,7 @@ match readPort(["port": "80a"]) {
 
 // --- Error conversion with From -------------------------------------------------
 
+/** Everything `start` can fail with; `Config` wraps a [ConfigError] and gets `From` generated for it. */
 type AppError {
   case Config(cause: ConfigError)
   case Startup(message: String)
@@ -58,6 +68,7 @@ type AppError {
 // A case with exactly one field, whose type no other case wraps, generates `From`:
 // `AppError.from(configError)` is `AppError.Config(configError)`. That is all `?` needs.
 
+/** Reads the settings and reports where the server would listen, converting [ConfigError] to [AppError] through `?`. */
 fn start(settings: Map<String, String>): Result<Void, AppError> {
   const port = readPort(settings)?       // ConfigError is converted to AppError through `From`
   print "Listening on {port}"
@@ -68,6 +79,13 @@ fn start(settings: Map<String, String>): Result<Void, AppError> {
 // For bugs, not for expected failures. Not catchable: it prints `panic: <message>` and the site to stderr and
 // aborts the program with exit code 101. Nothing else runs on the way out - no `Close`, no `using` cleanup.
 
+/**
+ * `part` as a percentage of `total`.
+ *
+ * # Panics
+ *
+ * If `total` is zero: a caller passing zero is a bug, not a failure this function should have to report.
+ */
 fn percentage(part: Int, total: Int): Int {
   if total == 0 {
     panic "total must not be zero"

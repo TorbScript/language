@@ -1,3 +1,8 @@
+/**
+ * Streams: one flow with two ends - `Source` to read from, `Sink` to write into - and `Stage` in between, the same
+ * value a synchronous `Iterable` takes. `ImportError` shows one error type collecting several causes through `From`.
+ */
+
 // Streams: one flow in one direction, with two ends - `Source` to read from, `Sink` to write into.
 // Everything in between is a `Stage`, which is the very same value a synchronous `Iterable` takes.
 // See docs/STREAMS.md for the model and CONCEPT.md, "Streams".
@@ -7,6 +12,7 @@ use Body, HttpError from "std/http"
 use File, IoError from "std/fs"
 use Utf8Error from "std/stream"
 
+/** A row read out of the newline-separated JSON of example 2 below. */
 type User {
   id: Int
   name: String
@@ -15,6 +21,7 @@ type User {
 
 // One error type for the whole program: `?` and `checked()` convert into it through `From`, so no signature has to
 // name three failures at once.
+/** One error type for the whole file: `?` and `checked()` convert into it through `From` below. */
 type ImportError with Show, Error {
   private kind: ImportErrorKind
 
@@ -53,6 +60,7 @@ type ImportError with Show, Error {
   }
 }
 
+/** Which step of an import failed, and why. */
 type ImportErrorKind {
   case Request(cause: HttpError)
   case File(cause: IoError)
@@ -60,24 +68,28 @@ type ImportErrorKind {
   case Stopped(cause: ChannelClosed)
 }
 
+/** Lets `?` convert a failed request into an [ImportError]. */
 extend ImportError with From<HttpError> {
   fn from(value: HttpError): ImportError {
     ImportError.requestFailed value
   }
 }
 
+/** Lets `?` convert a failed file operation into an [ImportError]. */
 extend ImportError with From<IoError> {
   fn from(value: IoError): ImportError {
     ImportError.fileFailed value
   }
 }
 
+/** Lets `?` convert a failed decode into an [ImportError]. */
 extend ImportError with From<JsonError> {
   fn from(value: JsonError): ImportError {
     ImportError.documentFailed value
   }
 }
 
+/** Lets `?` convert a closed channel into an [ImportError]. */
 extend ImportError with From<ChannelClosed> {
   fn from(value: ChannelClosed): ImportError {
     ImportError.producerStopped value
@@ -92,6 +104,7 @@ extend ImportError with From<ChannelClosed> {
 // on to its wrapper, so it needs the permission just as `next` does. A chain is still one expression, because what a
 // call just produced is a `var` path: nothing is thrown away where there is no copy.
 
+/** Streams `url` straight into a file at `path`, without ever holding the whole response in memory. */
 fn download(url: String, path: String): Task<Result<Void, ImportError>> {
   var response = http.get(url).await()?
   var file = File.create(path)?
@@ -107,6 +120,7 @@ fn download(url: String, path: String): Task<Result<Void, ImportError>> {
 // `Json.items<User>()` is a resumable framer: it finds where one value ends in whatever bytes arrived - across chunk
 // borders - and decodes that one value synchronously. Memory is one `User`, whatever the file weighs.
 
+/** Counts the active users in a newline-separated JSON file, decoding one `User` at a time. */
 fn countActiveUsers(path: String): Task<Result<Int, ImportError>> {
   var file = File.open(path)?
   const total = file.chunks()
@@ -124,6 +138,7 @@ fn countActiveUsers(path: String): Task<Result<Int, ImportError>> {
 // A producer that pushes instead of being pulled, and no generators in the language: the body runs as a task of its
 // own and writes into a `Sink`. The default capacity `0` hands every item over directly, which is generator lock-step.
 
+/** A source that pushes lines instead of being pulled: the body runs as its own task and writes into a `Sink`. */
 fn reports(names: List<String>): Source<String, ImportError> {
   Source.produce { sink =>
     for name in names {
@@ -135,6 +150,7 @@ fn reports(names: List<String>): Source<String, ImportError> {
 
 // The loop over a source. Deliberately not a `for`: `await()` and `?` are both visible, and there would be no place
 // for the `?` in a `for` head.
+/** Prints every line of `reports`, written as a `while` instead of a `for` so `await()` and `?` both have a place. */
 fn printReports(names: List<String>): Task<Result<Int, ImportError>> {
   var source = reports names
   var written = 0
@@ -151,11 +167,13 @@ fn printReports(names: List<String>): Task<Result<Int, ImportError>> {
 
 const activeNames: Stage<User, String> = filtering<User>({ _.active }).then(mapping { _.name })
 
+/** The active users' names, over a plain `List`: the same `activeNames` stage [namesFrom] runs over an HTTP body. */
 fn namesOf(users: List<User>): List<String> {
   users.through(activeNames).toList()
 }
 
 // `var body`, because reading it is what this does - a `const` body is a read-only view and cannot be consumed.
+/** The same `activeNames` stage as [namesOf], run over a decoded HTTP body instead of a list. */
 fn namesFrom(var body: Body): Task<Result<List<String>, ImportError>> {
   body
     .mapFailure(ImportError.requestFailed)
@@ -168,6 +186,7 @@ fn namesFrom(var body: Body): Task<Result<List<String>, ImportError>> {
 
 // --- 5. Text on a byte sink, and buffering that says where it flushes ------------------------------
 
+/** Writes `lines` to a file through a buffered sink, flushing only when the buffer says to. */
 fn writeReport(path: String, lines: Iterable<String>): Task<Result<Void, IoError>> {
   var file = File.create(path)?
   var out = file.buffered capacity: 4096
