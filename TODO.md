@@ -1883,3 +1883,14 @@ Wenn nicht, was bedeutet, bewirkt es?
     **Zurückgestellt:** Lücke 5/6 (Paket-Importe und Instanzierungen in Stage 0) - Stage 0 ist der Bootstrap, die
     Antwort ist die VM (7.x) bzw. `main.exe test`; Lücke 8 (`Float32`-Arithmetik), 9 (`Array` läuft nirgends - hängt
     an der kleinen Runde und dem Back-End), 10 (ein Trait fordert ein `const` - Kandidat, eigene Entscheidung).
+
+- (`Default`, 2026-09-21) **Entschieden (mit dir besprochen, "Ok passt"): kein `default`-Schlüsselwort, kein
+  `Default`-Trait.** Steht im Decision-Log von CONCEPT. C#s `default(T)` ist genullter Speicher am Konstruktor vorbei
+  (bricht validierte Typen, ist `null` durch die Hintertür); Rusts `Default` bündelt fünf Bedeutungen, die bei uns je
+  einen präzisen Namen haben: Feld-Defaults (`Config(port: 1)`), sichtbarer Ersatz (`value ?? 0`), das Literal als
+  neutrales Element (`var result: Scalar = 0`), Feld-Default beim Decodieren, `None`.
+  - **Wird gelöst:** `Map.getOrInsert(key, fallback: lazy Value)` in der Aufräumrunde `std/core` (das ist Rusts
+    `entry().or_default()`, mit sichtbarem Ersatz). Das Literal im generischen Rumpf ist Lücke 2 der Runde
+    "generische Zahlen".
+  - **Kandidat, erst bei zwei konkreten Bedarfsstellen:** ein implizit abgeleiteter Fakt "ohne Argumente
+    konstruierbar" (`Type()`), nach derselben Logik wie das abgeleitete `Encode`.

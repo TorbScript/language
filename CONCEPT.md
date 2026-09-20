@@ -2505,6 +2505,13 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   that stay coherent: a name per **receiver** (`List.first`, `Queue.first` - methods and `extend`) and a trait with a
   **parameter** (`From<Source>`, `Multiply<Other, Output>`: `Int.from(small)`, `matrix * vector`, `matrix * 2.0`).
   Arity is a default parameter, and a second constructor is a named static function (`Color.hex("...")`).
+- No `default` keyword and no `Default` trait. A value of a type comes from its constructor and from nowhere else:
+  a zeroed value (`default(T)` of C#) skips the constructor, which breaks every validated type and is `null` under
+  another name. A `Default` trait puts five meanings under one word, and each has its own: a configuration is
+  **field defaults** (`Config(port: 1)`), a replacement is written where it is used (`value ?? 0`,
+  `groups.getOrInsert(key, [])`), the neutral element is the **literal** (`0` and `1` adapt to a `Scalar: Numeric`),
+  a missing field of a decoded record is its field default, and an absent value is `None`. `Value: Default` as a bound
+  says "any value", which is not what an algorithm asks for: `sum` wants zero and `product` wants one.
 - `native` bodies will be IR and stay reserved for `std/` until the IR format is stable, then become a capability like
   `foreign` (no second keyword for "unstable"). Natives stay few: a fast path of a back end is not a `native`.
 - One generic `Encode`/`Decode` instead of a pair per format (`JsonEncode`, `TomlEncode`, ...): a pair per format is
