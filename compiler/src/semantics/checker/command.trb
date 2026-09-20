@@ -9,6 +9,7 @@ use typeSignatureOf from "./signature"
 use resolveType from "./unify"
 use trailingClosureAt from "./call"
 use checkPropertyWrite, noteAssignment from "./place"
+use noteArgumentClosures from "./mutation"
 
 /**
  * Property commands. A command call of a *function* is an ordinary call and needs nothing here; a call of a member that
@@ -87,6 +88,14 @@ fn writeField(
   // A command writes a field, so the path it is written through is a place like the target of an `=` (milestone 4.6)
   const named = target.name
   const place = checkPropertyWrite checker, callee, named
+  // `database { url "..." }`: the block is applied to the field *in place* and stands straight as the argument of the
+  // command, so it cannot outlive it any more than the trailing closure of an ordinary call can (BACKEND gap 14).
+  // Without this every nested block of a DSL counted as escaping and CONCEPT's own
+  // `server { s => s.database { url "{s.host}/db" } }` was "This closure captures the `var` parameter `s` and may
+  // outlive the call". `onStart { ... }` is the other half and really does escape: it is *stored* in the field
+  if const .Configure = kind {
+    noteArgumentClosures checker, arguments
+  }
   const inner = match kind {
     .Configure => configurationOf checker, annotation, target.name, expression
     _ => Some annotation

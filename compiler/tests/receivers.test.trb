@@ -133,6 +133,30 @@ group "Only the innermost receiver is implicit (gap 4)" {
       + "  fn build(self): Element \{\n    html \{\n      tag title\n    \}\n  \}\n\}\n{element}"
     assert(problems(source) == ["Cannot find `title` here"])
   }
+
+  test "the named receiver reaches into a nested block, which is what CONCEPT's own example does" {
+    // The block of a `.Configure` property command is applied to the field *in place*, so it cannot outlive the command
+    // any more than the trailing closure of an ordinary call can (BACKEND gap 14). While it counted as escaping, every
+    // nested block that named its outer receiver was "This closure captures the `var` parameter `s` and may outlive the
+    // call" - and `server { s => s.database { url "{s.host}/db" } }` is the concept's own way to reach an outer one
+    const source = "type Database \{\n  var url: String = \"\"\n\}\n\n"
+      + "type Server \{\n  var host: String = \"localhost\"\n  var database: Database = Database()\n\}\n\n"
+      + "fn server(configure: (var self: Server) => Void): Server \{\n"
+      + "  var created = Server()\n  configure created\n  created\n\}\n\n"
+      + "fn probe(): String \{\n  const built = server \{ s =>\n"
+      + "    s.database \{\n      url \"\{s.host\}/db\"\n    \}\n  \}\n  built.database.url\n\}"
+    assert problems(source).isEmpty()
+    const probed = probe source
+    assert(probed.closureKindOf("\{\n      url \"\{s.host\}/db\"\n    \}") == "local")
+  }
+
+  test "a block that is *stored* in a field still escapes, because the field keeps it" {
+    const source = "type Options \{\n  var onStart: () => Int = \{ 0 \}\n\}\n\n"
+      + "fn options(configure: (var self: Options) => Void): Options \{\n"
+      + "  var made = Options()\n  configure made\n  made\n\}\n\n"
+      + "fn probe(var total: Int): Options \{\n  options \{ o =>\n    o.onStart \{ total \}\n  \}\n\}"
+    assert(problems(source) == ["This closure captures the `var` parameter `total` and may outlive the call"])
+  }
 }
 
 group "A method is a constant that holds a receiver closure" {
