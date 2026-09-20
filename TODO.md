@@ -1728,6 +1728,10 @@ Wenn nicht, was bedeutet, bewirkt es?
     String-Bastelei). Kandidat für später: String-LITERALE passen sich an einen erwarteten `Path` an (Literal-Traits),
     Variablen müssten dann bewusst konvertiert werden.
   - Kurzes Design-Dokument wie `LINEAR.md`, dann Umsetzung.
+  - **Entschieden (2026-09-21, Namenskollision):** `std/path` gehört den DATEIPFADEN. Das Kurven-Paket der
+    Engine-Reihe (Bezier, Splines, Polylinien, Tessellierung) heißt `std/curve` - ein Wort, das nur eines bedeutet,
+    und "path" liest jeder zuerst als Dateipfad. Das Design-Dokument `docs/PATH.md` entsteht jetzt schon parallel
+    (neue Datei, stört keine laufende Runde), die Umsetzung bleibt hinter der Aufräumrunde `std/core`.
 
 
 - (**Erledigt: Meilenstein 5.14 - zwei Implementierungen, ein beobachtbares Verhalten**, 2026-09-20)
