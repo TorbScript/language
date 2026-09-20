@@ -1640,3 +1640,23 @@ Wenn nicht, was bedeutet, bewirkt es?
     Arguments unterscheiden), Tour, Encoding-Labor, Doku. Funktionen, die bei einem FORMAT `parse` heißen
     (`Json.parse`), sind kein Trait und bleiben. **Eigene Runde, NACH Schwanz 3 und der Konformitätsrunde** (beide
     arbeiten in genau diesen Dateien). `TryInto` kommt wie besprochen schon mit der kleinen Runde.
+
+- (Offene Ranges und Panics in std, 2026-09-23) **Anlass (Nutzer):** die `expect`s in `Range<Int>.iterator`/`length`
+  gefallen ihm gar nicht. Zu Recht - und der Kommentar daneben ("would need dependent types") ist falsch.
+  **Entschieden (Nutzer: "passt alles so"):** der TYP sagt, welche Enden es gibt, gewählt von der Syntax:
+  `a..b`/`a..=b` → `Range<Value>` (`start`, `end`, `inclusive`; für `Int` `Iterable` + `Length`), `a..` →
+  `RangeFrom<Value>` (für `Int` `Iterable`, endlos, kein `Length`), `..b`/`..=b` → `RangeTo<Value>` (weder noch).
+  Kein Feld ist mehr optional, kein `expect`; `for i in ..10` und `(0..).length()` werden Compile-Fehler an der
+  Schreibstelle. Was jede Form annimmt (Slices: `text[2..]`, `items[..3]`), nimmt den kleinen Trait `Bounds<Value>`
+  (`lowest()`, `highest()`, `contains` als Default). `inclusive` bleibt ein `Bool`-Feld (Rust zieht es in den Typ und
+  hat deshalb sechs Typen). Range-Patterns im `match` sind Syntax und unberührt.
+  - **Dazu eine std-Designregel für CONTRIBUTING:** ein Panic in std ist nur für Aufruferfehler, die KEIN Typ
+    ausdrücken kann (Index außerhalb); wo der Typ es sagen kann, sagt es der Typ. Die rund zehn Panic-Stellen in std
+    werden in derselben Runde durchgesehen.
+  - **Wird gelöst:** eine Aufräumrunde `std/core` zusammen mit der `Parse`-Streichung, NACH Schwanz 3 und der
+    Konformitätsrunde (beide arbeiten im Lowering und in Stage 0).
+- (Validierte Typen, 2026-09-23) **Antwort:** das gibt es schon - ein `private` Feld ohne Default macht den Konstruktor
+  von außen unbenutzbar ("`Email` cannot be constructed here: `value` is private and has no default", durch ein
+  Doku-Snippet festgenagelt); `copy` und das abgeleitete `Decode` folgen derselben Regel. Preis: das Feld ist von
+  außen auch nicht lesbar (eine Zeile Accessor). Ein Modifier "öffentlich lesbar, privat konstruierbar" ist als
+  Kandidat notiert, falls er mehr als einmal fehlt.
