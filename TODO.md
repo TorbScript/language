@@ -1276,3 +1276,20 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Neue Härtetests für die Sprache:** Rechnen mit Größenparametern (`Rows * 2`) - voraussichtlich nicht, daher
     Laufzeitform; Operator-Traits mit fremdem `Other`/`Output` (Tensor × Skalar); Buffer über 2^31 und
     speicherabgebildete Dateien; quotierte Ausdrücke mit Kontrollfluss; garantierte In-place-Änderung bei einem Besitzer.
+
+- (Dokumentation AM Code, 2026-09-21) **Wunsch (Nutzer):** aller trb-Code im Repository (std, Compiler, Examples) ist
+  sauber und simpel dokumentiert, für Menschen und Agents: was ein Konstrukt JETZT tut und wofür es da ist, simple
+  Beispiele für die Anwendungsfälle, verwandte Konstrukte verlinkt, Pitfalls und offene Probleme am Code sichtbar.
+  Keine Vergangenheit ("früher", "nicht mehr", Meilenstein-/Rundennummern).
+  - **Entschieden (ich) - der Standard** (baut auf CONCEPT "Doc Comments" auf, kommt in CONTRIBUTING): erster Satz =
+    was es tut; dann wofür es da ist. Feste Überschriften, sonst keine: `# Examples` (laufen als Tests), `# Errors`,
+    `# Panics`, `# Pitfalls`, `# Open` (offenes Problem, im Präsens, ohne Plan-Nummern), `# Related` (Links
+    `[Iterator]`, `[List.add]`, werden aufgelöst). Jede Datei beginnt mit einem Modul-Kommentar (wofür das Modul da
+    ist, seine Hauptkonstrukte, wie sie zusammenhängen). Pflicht: jede `public`-Deklaration in std; im Compiler jede
+    `public`-Deklaration und jede Datei; in Examples jede Datei und jedes gezeigte Konstrukt.
+  - **Entschieden (ich) - das Gate:** `torb docs source <pfad>` prüft genau das (fehlender Kommentar, fremde
+    Überschrift, Link löst nicht auf, Beispiel checkt nicht, Wörter der Vergangenheit) - ohne Gate verrottet es.
+  - **Reihenfolge (wegen Merge-Konflikten mit den laufenden Code-Runden):** jetzt das Werkzeug + der Standard
+    (berührt nur `compiler/src/documentation/`); dann Welle 1 `examples/` + `std/` (Sonnet-Schreiber, paketweise, Gate
+    als Abnahme); Welle 2 `compiler/src` nach den Back-End-Merges und der nächsten Checker-Runde; Tests bekommen nur
+    einen Datei-Kommentar. Umfang: 256 Dateien, rund 82.000 Zeilen (davon Compiler 54.000).
