@@ -1293,3 +1293,13 @@ Wenn nicht, was bedeutet, bewirkt es?
     (berührt nur `compiler/src/documentation/`); dann Welle 1 `examples/` + `std/` (Sonnet-Schreiber, paketweise, Gate
     als Abnahme); Welle 2 `compiler/src` nach den Back-End-Merges und der nächsten Checker-Runde; Tests bekommen nur
     einen Datei-Kommentar. Umfang: 256 Dateien, rund 82.000 Zeilen (davon Compiler 54.000).
+
+- (std/markdown, 2026-09-21) **Wunsch (Nutzer), eingeplant:** ein Markdown-Parser und -Writer in der std,
+  mittelfristig. **Einordnung (ich):** Bedarf gibt es im eigenen Haus schon dreifach - Docblocks SIND Markdown
+  (`torb doc`, Hover im Language Server, beides Meilenstein 8), und das Doku-Werkzeug hat heute einen eigenen,
+  schmalen Leser (`compiler/src/documentation/markdown.trb`, 686 Zeilen: Front Matter, Überschriften, Zäune, Links).
+  Deshalb VOR Meilenstein 8, nicht erst mit der std-Breite: `std/markdown` mit einem Dokumentbaum als Wert
+  (Blöcke/Inlines als Cases), Parser nach CommonMark (die ~650 Beispiele der Spezifikation sind die Testsuite) plus
+  Tabellen und Front Matter, Writer mit Round-Trip, HTML-Ausgabe als eigener Schritt. Es ist ein DOKUMENTformat,
+  also eigene Traits neben `Encode`/`Decode` (so steht es in CONCEPT), und blockweise streambar über `Source`. Der
+  Leser im Compiler wird danach durch das Paket ersetzt.
