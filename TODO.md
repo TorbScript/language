@@ -1628,3 +1628,15 @@ Wenn nicht, was bedeutet, bewirkt es?
     `Parse` zum Wert, nie über `TryFrom<String>` (später als Lint). Der Vorschlag "`Parse: TryFrom` mit
     Default-`parse`" ist nicht ausdrückbar: eine Funktion ohne `self` MIT Rumpf in einem Trait gehört dem Trait selbst
     (`List.of`), sie ist kein Default der Implementierer; ein Blanket-Alias gäbe drei Schreibweisen für einen Aufruf.
+  - **Revidiert (Nutzer, 2026-09-23): `Parse` wird gestrichen.** Sein Einwand trägt: `Show` ist unser `toString()`
+    (Anzeige und Debuggen, ein Mix aus Rusts `Display` und `Debug`) und nicht der Partner eines Parsers - das
+    abgeleitete `Show` eines Records liest auch kein `Parse` zurück; meine Paar-Begründung war schwach, und meine
+    Trennregel hätte einen Lint gebraucht, um zu halten. `Email.tryFrom "a@b.com"` ist in Ordnung. **Entschieden:**
+    Text wird wie jede andere fehlbare Konvertierung über `TryFrom<String, Failure>` zum Wert (und über `tryInto()`
+    in einer Kette); damit gibt es genau EINEN Weg und keine Regel, die jemand überwachen müsste. Betrifft: den Trait
+    in `std/core`, `Numeric` (`Parse<NumberParseError>`), das abgeleitete `Parse` der Literaltypen (wird abgeleitetes
+    `TryFrom<String, LiteralParseError>`), Checker (`derive.trb`, `implementation.trb`), Lowering (`generic.trb`,
+    `witness.trb`), Stage 0 (`Int.parse`, `Float.parse` in `natives.rs` - `tryFrom` muss dort nach dem Laufzeittyp des
+    Arguments unterscheiden), Tour, Encoding-Labor, Doku. Funktionen, die bei einem FORMAT `parse` heißen
+    (`Json.parse`), sind kein Trait und bleiben. **Eigene Runde, NACH Schwanz 3 und der Konformitätsrunde** (beide
+    arbeiten in genau diesen Dateien). `TryInto` kommt wie besprochen schon mit der kleinen Runde.
