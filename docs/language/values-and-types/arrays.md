@@ -10,12 +10,16 @@ keywords:
   - fixed size
 source:
   - CONCEPT.md#const-parameters-and-array
-  - std/collections/src/array.trb
+  - std/core/src/array.trb
 ---
 
 `Array<Item, const Size: Int>` puts a number in a type: the length is part of what the type is, checked the same way
 every other type argument is. A type parameter is ordinarily a type; a `const` parameter is a value instead - a
 literal, a named `const`, or another `const` parameter.
+
+`Array` is the **inline storage primitive** of the language, not one more collection, and that is why it lives in
+`std/core` next to `Option`, `Result` and `Range` rather than in `std/collections`: the language itself refers to it,
+because a list literal against an expected `Array` type is written straight into its slots.
 
 ## Example
 
@@ -29,7 +33,11 @@ print identity[0]
 
 ```text
 Array<Item, const Size: Int>             the fixed-size array type
+const a: Array<Int, 3> = [1, 2, 3]       a list literal written into the inline slots
+const a: Array<Int, 3> = [...half, 3]    a spread of another Array, whose size is known
 Array.filled(value)                      Size comes from the expected type
+Array.generated({ index => ... })        one item per slot, from its index
+Array.from(items)                        an Option: the count is checked at run time
 type Name<const Size: Int> { ... }       declaring a const parameter of your own
 ```
 
@@ -40,13 +48,40 @@ type Name<const Size: Int> { ... }       declaring a const parameter of your own
 
 2. **`Size` comes from the expected type, not from a value passed to `filled`.** `Array.filled 0.0` above produces
    an `Array<Float, 4>` because the annotation says so; the same call would produce a different length against a
-   different annotation.
+   different annotation. There is nothing else for it to come from, and a call that has no expected type says so:
 
-3. **A `const` parameter is `Int`, `Bool`, `Char` or `String`, and inside the type it is an ordinary constant.** A
+   ```trb error
+   const zeros = Array.filled 0.0
+   print zeros
+   // error: Cannot infer `Size` of `Array`
+   ```
+
+3. **Every way to build one writes its size down.** A list literal is counted against `Size`; a `...` inside one is
+   allowed when what it spreads is itself an `Array`, and the sizes add up; `filled` and `generated` take `Size` from
+   the expected type; `from` counts at run time and answers an `Option`. There is no factory whose argument count
+   *becomes* the size, because no signature could say that.
+
+   ```trb check
+   const half: Array<Int, 2> = [1, 2]
+   const whole: Array<Int, 3> = [...half, 3]
+   const squares: Array<Int, 3> = Array.generated { index => index * index }
+   const parsed: Array<Int, 3>? = Array.from([1, 2, 3])
+   print "{whole} {squares} {parsed}"
+   ```
+
+   A count that disagrees with the annotation names both numbers:
+
+   ```trb error
+   const whole: Array<Int, 4> = [1, 2, 3]
+   print whole
+   // error: `Array<Int64, 4>` has 4 items, and this literal has 3
+   ```
+
+4. **A `const` parameter is `Int`, `Bool`, `Char` or `String`, and inside the type it is an ordinary constant.** A
    `const` parameter can be used anywhere a value of its type is needed within the declaration, such as bounding a
    `for` loop.
 
-4. **A const argument is a literal, a named `const`, or another const parameter - never an expression.** There is no
+5. **A const argument is a literal, a named `const`, or another const parameter - never an expression.** There is no
    arithmetic in types: the checker only compares const arguments for equality.
 
    ```trb check
@@ -62,17 +97,20 @@ type Name<const Size: Int> { ... }       declaring a const parameter of your own
    // error: `size` is a constant, not a type
    ```
 
-5. **A generic type or function can itself take a `const` parameter**, written `<const Name: Type>` alongside its
+6. **A generic type or function can itself take a `const` parameter**, written `<const Name: Type>` alongside its
    ordinary type parameters, and it is checked for equality across calls the same way a type parameter is.
 
-6. **`Equals` and `Hash` follow the items, and both are order-dependent.** Two arrays are equal when the items at the
-   same index are; the length is part of the type, so two arrays that compare at all have the same one and there is
-   nothing to test about it.
+7. **`Equals`, `Hash` and `Show` follow the items, and the first two are order-dependent.** Two arrays are equal when
+   the items at the same index are; the length is part of the type, so two arrays that compare at all have the same one
+   and there is nothing to test about it. An Array shows like a `List` (`[1, 2]`): the size is in its type and a reader
+   can count.
 
    ```trb check
-   const first: Array<Int, 2> = Array.of 1, 2
-   print(first == Array.of(1, 2))
-   print(first == Array.of(2, 1))
+   const first: Array<Int, 2> = [1, 2]
+   const same: Array<Int, 2> = [1, 2]
+   const other: Array<Int, 2> = [2, 1]
+   print(first == same)
+   print(first == other)
    ```
 
 ## What this is not

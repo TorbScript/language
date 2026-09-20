@@ -9,18 +9,21 @@ keywords:
   - Option
   - Result
   - Error
+  - Array
   - operators
   - using
 source:
   - std/core/src/lib.trb
 ---
 
-`std/core` is what every other package builds on: the two types the language itself refers to, the two that model absence
-and failure, the traits the operators and the conversions go through, and the control flow that is an ordinary function.
-Everything in it is re-exported by the prelude, so a file rarely imports it by name.
+`std/core` is what every other package builds on: the types the language itself refers to - `Option` behind `Value?`,
+`Result` behind `?`, `Range` behind `a..b`, `Array` as the inline storage a list literal adapts to - the traits the
+operators and the conversions go through, and the control flow that is an ordinary function. Everything in it is
+re-exported by the prelude, so a file rarely imports it by name.
 
-Nothing in `std/core` knows about text, numbers or collections - with the one exception that `String` is unavoidable in a
-signature (`Show.show`, `panic`). That import points at `std/text`, which is why the packages of the standard library are
+A data structure is not in here: `List`, `Map` and `Set` are written on top of a storage primitive and live in
+[std/collections](collections.md). Nothing in `std/core` knows about text or numbers - with the one exception that
+`String` is unavoidable in a signature (`Show.show`, `panic`). That import points at `std/text`, which is why the packages of the standard library are
 cyclic, and cycles between modules are allowed because nothing runs when a module is imported.
 
 ## Import
@@ -100,10 +103,12 @@ members include `min` and `max`. `Ordering` is what `compare` answers. `Hash` ha
 hand-written `hash` folds with. `Float32` and `Float64` are deliberately not `Hash`, so a float can never be a `Map` key
 and the `nan` key does not exist.
 
-### From, Into, TryFrom, Parse, Show, LiteralParseError
+### From, Into, TryFrom, TryInto, Parse, Show, LiteralParseError
 
 Conversions follow `From` and `Into`: implementing `From` provides `Into` for free through a blanket implementation.
-`TryFrom` is the fallible form and `Parse` is the one for text. Every type has `From<Self>`, and that conversion is the
+`TryFrom` is the fallible form and provides `TryInto` the same way; `Parse` is the one for text. One direction of each
+pair is the one to implement, and an `extend` that writes `Into` or `TryInto` by hand is told which `From` or `TryFrom`
+to write instead. Every type has `From<Self>`, and that conversion is the
 value itself. `Show` has `show` and is what string interpolation calls; `showNested` is what a value inside another value
 uses, and only `String` and `Char` override it. `LiteralParseError` is what a generated `Parse` of a literal type answers.
 
@@ -128,6 +133,32 @@ public type Range<Value> {
 `0..10` is `Range(start: Some(0), end: Some(10))`, `0..=10` sets `isInclusive`, and `0..` and `..10` leave one end `None`.
 `Range<Int>` is `Iterable<Int>` and `Length`, and the open ends are checked at runtime: `iterator()` panics for a range
 without a start, `length()` panics for a range without both ends, and `0..` iterates forever.
+
+### Array
+
+```trb fragment
+public native type Array<Item, const Size: Int>
+  with Iterable<Item>, Length, MutableIndexed<Int, Item>
+{
+  fn filled(value: Item): Array<Item, Size>
+  fn generated(produce: (index: Int) => Item): Array<Item, Size>
+  fn from(items: Iterable<Item>): Array<Item, Size>?
+  fn set(var self, index: Int, value: Item)
+  fn fill(var self, value: Item)
+  fn mapped<Output>(self, transform: (value: Item) => Output): Array<Output, Size>
+}
+```
+
+The inline storage primitive: a fixed number of items, and the number is part of the type (`Array<Float, 16>`). No
+storage on the heap, no reference count, and copying it copies its items. `Size` is a const parameter - a literal, a
+named `const` or another const parameter - and there is no arithmetic over one, so an out-of-bounds index the compiler
+can work out at the call site is a compile error rather than a panic.
+
+Every way to build one writes its size down. A list literal against an expected `Array` type goes straight into the
+inline slots and its items are counted against `Size`; a `...` inside such a literal is allowed when what it spreads is
+itself an `Array`, and the sizes add up. `filled` and `generated` take `Size` from the expected type, and `from` counts
+at run time and answers `Array<Item, Size>?`. It is `Equals`, `Hash` and `Show` wherever `Item` is, and the first two
+by index and therefore order-dependent. See [Arrays and const parameters](../language/values-and-types/arrays.md).
 
 ### Shared and isSame
 

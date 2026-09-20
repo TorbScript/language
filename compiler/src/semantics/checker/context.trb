@@ -250,6 +250,8 @@ public type VariableState {
   owner: String
   /** Where a message about it points: the call or the literal that created it. */
   at: Span
+  /** `<const Size: Int>`: the parameter is a value, and no argument of the call can ever say what it is. */
+  isConst: Bool = false
   /** What it was solved with. A variable is solved by an exact type only, never by a coercion. */
   var solution: TypeId? = None
   /** One message per variable, however often it is mentioned. */
@@ -1054,8 +1056,20 @@ public type Checker {
    * calling the version above: a `var self` method whose argument reads another field of `self` would read a place
    * that has already been taken out, which the interpreter of stage 0 cannot see and cannot report.
    */
+  /** Whether anything has been said about this span already, which is what a consequence asks before it adds itself. */
+  fn hasDiagnosticAt(self, at: Span): Bool {
+    diagnostics[module.value].any({ _.span == at })
+  }
+
+  /**
+   * One diagnostic per span **and message**. Two passes that arrive at the same root cause from different directions
+   * say the same thing, and the reader needs it once; two that have different things to say about one expression are two
+   * findings, and dropping the second one hides it.
+   */
   fn reportHere(var self, problem: Diagnostic) {
-    if diagnostics[module.value].any({ _.span == problem.span }) {
+    const shown = problem.message
+    const at = problem.span
+    if diagnostics[module.value].any({ found => found.span == at && found.message == shown }) {
       return
     }
     diagnostics[module.value].add(problem)
@@ -1255,8 +1269,8 @@ public type Checker {
   // --- Unification variables ------------------------------------------------------------------------------------------
 
   /** A fresh variable for one generic parameter of one call. Ids are never reused: an interned form names one. */
-  fn newVariable(var self, name: String, owner: String, at: Span): TypeId {
-    variables.add VariableState(name, owner, at)
+  fn newVariable(var self, name: String, owner: String, at: Span, isConst: Bool = false): TypeId {
+    variables.add VariableState(name, owner, at, isConst: isConst)
     const identifier = VariableId(variables.length() - 1)
     hasVariables = true
     types.intern TypeForm.Variable(identifier)

@@ -327,5 +327,5 @@ summary of each, so the right page can be chosen without opening any. The sectio
 Every page is self-contained: it defines or links every term it uses, so one page is enough to answer one
 question. A page marked `status: draft` may still be wrong; verify it against the compiler.
 
-There are 197 pages. Pages of features that are designed but not implemented are not part of
+There are 200 pages. Pages of features that are designed but not implemented are not part of
 this skill at all, so everything in `reference/` is a feature that exists today.

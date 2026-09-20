@@ -219,12 +219,17 @@ These are things TypeScript has that TorbScript deliberately does not, and what 
 - **`while (true)` and `for (;;)`.** The endless loop is `loop { ... }`, and `while true` is the error "A loop that never
   ends is written `loop`". Its type is `Never` while no `break` targets it - so nothing after it is reached - and `Void`
   once one does, and a `break` carries no value.
+- **Overload signatures over one implementation.** A list of `declare function` overloads in front of one body has no
+  counterpart: a name means one declaration. An argument that may be one of several *types* is a trait with a
+  parameter or a `type` with cases, and an optional argument is a default parameter. See
+  [where are my overloads](where-are-my-overloads.md).
 - **Enum members with an implicit numeric value.** A case is never secretly a number; it either carries the fields it
   declares or none at all, and it prints by name through the generated `Show`, not through an ordinal nobody wrote
   down. See [Cases and match](../language/pattern-matching/cases-and-match.md).
 
 ## Related
 
+- [Where are my overloads](where-are-my-overloads.md) - one signature per call, and the two forms that replace an overload set.
 - [Traits](../language/traits/traits.md) - what does travel between unrelated types, and how it is spelled out.
 - [Option](../language/values-and-types/option.md) - `Some`/`None`, the one representation of absence.
 - [Literal types](../language/values-and-types/literal-types.md) - the exact reach of `|` in this language.

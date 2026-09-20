@@ -72,7 +72,17 @@ stack.popped(): (Item, Self)?         queue.dequeued(): (Item, Self)?
    }
    ```
 
-4. **Each trait has exactly one implementation, written in plain TorbScript rather than as a `native type`.**
+4. **`Equals` and `Hash` follow the items, and both are order-dependent like a `List`'s.** Two stacks or two queues are
+   equal when they hold equal items in the order they iterate in - top down for a `Stack`, front to back for a `Queue` -
+   so two stacks with the same items in a different order are unequal and need not hash alike.
+
+   ```trb check
+   const stack = Stack.of 1, 2
+   print(stack == Stack.of(1, 2))
+   print(stack == Stack.of(2, 1))
+   ```
+
+5. **Each trait has exactly one implementation, written in plain TorbScript rather than as a `native type`.**
    `ArrayStack` is a `List` used from the end; `ArrayQueue` is a ring buffer on top of a `List`, so nothing is moved
    and nothing is allocated until the buffer is full. Unlike `List`, `Map` and `Set`, there is no second, trie-backed
    implementation of either trait.

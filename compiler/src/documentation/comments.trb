@@ -223,14 +223,39 @@ public fn firstSentence(sections: Sections): String {
       continue
     }
     words = if words.isEmpty() { content.text } else { "{words} {content.text}" }
-    if words.contains(". ") || words.endsWith(".") {
+    if sentenceEnd(words).isSome() || words.endsWith(".") {
       break
     }
   }
-  match words.indexOf(". ") {
+  match sentenceEnd(words) {
     Some(stop) => words[0..stop]
     None => if words.endsWith(".") { words[0..(words.byteLength() - 1)] } else { words }
   }
+}
+
+/**
+ * The byte offset of the `.` that ends the first sentence, or `None` where the text is one sentence.
+ *
+ * What stands between backticks is code and not prose, so a period in it ends nothing: the summary of a construct is
+ * one sentence even when it names `loop { ... }` or `0..list.length()`.
+ */
+fn sentenceEnd(text: String): Int? {
+  var isQuoted = false
+  var isAfterPeriod = false
+  var offset = 0
+  for character in text.chars() {
+    if isAfterPeriod && character == ' ' {
+      return Some(offset - 1)
+    }
+    isAfterPeriod = false
+    if character == '`' {
+      isQuoted = !isQuoted
+    } else if !isQuoted && character == '.' {
+      isAfterPeriod = true
+    }
+    offset = offset + character.byteLength()
+  }
+  None
 }
 
 /** How much of an example the tool can say something about. The spelling mirrors the markers of a documentation page. */

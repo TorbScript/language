@@ -448,4 +448,36 @@ group "the first sentence" {
       """
     assert standard(source).isEmpty()
   }
+
+  /**
+   * A period between backticks is part of a snippet and ends no sentence. Without this, `{ ... }` cut the sentence
+   * below down to "The body", which is the name and nothing else, and the gate reported a comment that says plenty.
+   */
+  test "a period between backticks ends no sentence" {
+    const source = r"""
+      /** What this module is for. */
+
+      /** The body `{ ... }` of a loop, and the statements in it. */
+      public type Body {
+        /** How far it got. */
+        position: Int
+      }
+      """
+    assert standard(source).isEmpty()
+  }
+
+  test "a period that is prose still ends the sentence, backticks or not" {
+    const source = r"""
+      /** What this module is for. */
+
+      /** The body. Everything a `loop { ... }` repeats. */
+      public type Body {
+        /** How far it got. */
+        position: Int
+      }
+      """
+    const found = standard source
+    assert(found.length() == 1)
+    assert found[0].contains("only repeats its name")
+  }
 }

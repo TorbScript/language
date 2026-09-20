@@ -201,42 +201,39 @@ group "A literal against a type it cannot become" {
   }
 }
 
-group "`Array.of`" {
-  test "the number of arguments is the size" {
-    const source = inBody "  const numbers = Array.of(1, 2, 3, 4)"
+group "`Array.filled` and `Array.generated`" {
+  test "`filled` takes its size from the expected type" {
+    const source = inBody "  const zeros: Array<Int, 4> = Array.filled(0)"
     assert problems(source).isEmpty()
     const found = probe source
-    assert(found.typeOf("Array.of(1, 2, 3, 4)") == "Array<Int64, 4>")
+    assert(found.typeOf("Array.filled(0)") == "Array<Int64, 4>")
   }
 
-  test "an expectation and the number of arguments have to agree, and the message says `call`" {
-    const source = inBody "  const numbers: Array<Int, 4> = Array.of(1, 2, 3)"
-    assert(problems(source) == ["`Array<Int64, 4>` has 4 items, and this call has 3"])
+  test "`generated` takes its size from the expected type and sees `Item` in its closure" {
+    const source = inBody "  const squares: Array<Int, 3> = Array.generated \{ index => index * index \}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Array.generated \{ index => index * index \}") == "Array<Int64, 3>")
+  }
+
+  test "nothing to take the size from says that a `const` parameter is never inferred" {
+    const source = inBody "  const zeros = Array.filled(0)"
+    assert(problems(source) == ["Cannot infer `Size` of `Array`"])
     assert(
       notes(source)
-        == ["The size of an `Array` is part of its type, so the number of items is counted where it is written"]
+        == [
+          "`Size` is a `const` parameter and is never inferred from an argument: write it in the type that is "
+            + "expected of this value",
+        ]
     )
   }
 
-  test "an expectation that agrees is ordinary" {
-    const source = inBody "  const numbers: Array<Int, 3> = Array.of(1, 2, 3)"
-    assert problems(source).isEmpty()
-    const found = probe source
-    assert(found.typeOf("Array.of(1, 2, 3)") == "Array<Int64, 3>")
-  }
-
-  test "a spread of another `Array` adds its size" {
-    const source = inBody "  const half: Array<Int, 2> = [1, 2]\n  const whole = Array.of(...half, 3)"
-    assert problems(source).isEmpty()
-    const found = probe source
-    assert(found.typeOf("Array.of(...half, 3)") == "Array<Int64, 3>")
-  }
-
-  test "a spread of anything else cannot be counted" {
-    const source = inBody "  const rest: List<Int> = [1, 2]\n  const whole = Array.of(...rest, 3)"
+  test "an ordinary type parameter keeps the note that names the three ways a type is written" {
+    const source = "fn empty<Item>(): List<Item> \{\n  []\n\}\n\n" + inBody("  const nothing = empty()")
+    assert(problems(source) == ["Cannot infer `Item` of `empty`"])
     assert(
-      problems(source)
-        == ["`List<Int64>` does not say how many items it has, so `...` cannot fill an `Array`"]
+      notes(source)
+        == ["Annotate the closure parameter or the result, or write the type argument: `empty<Item>(...)`"]
     )
   }
 }

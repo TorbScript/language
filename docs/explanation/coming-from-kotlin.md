@@ -217,12 +217,17 @@ These are things Kotlin has that TorbScript deliberately does not, and what repl
 - **`?:` as a built-in operator.** `a ?? b` is the method call `a.orElse(b)`, so it is the trait `OrElse`: `Option`,
   `Result` and a type of your own come with it, and a type that does not hears so at the operator. See
   [Operators](../language/traits/operators.md).
+- **Overloading by parameter type, and an extension function that reads like a member of anything.** A name means one
+  declaration, and an extension is an `extend` on a named type whose members a calling file imports by name. A second
+  argument type is a trait with a parameter, and a second arity is a default parameter. See
+  [where are my overloads](where-are-my-overloads.md).
 - **An `else` branch to satisfy `when`'s exhaustiveness checker.** `match` on a `type` with cases is exhaustive by
   construction, checked against the declaration, not by falling back to a catch-all arm you added out of caution. An
   arm that can never run is an error, not dead code a linter might mention.
 
 ## Related
 
+- [Where are my overloads](where-are-my-overloads.md) - one signature per call, and the two forms that replace an overload set.
 - [Optional chaining](../language/errors/option-chaining.md) - `?.` and `??` in full.
 - [Option](../language/values-and-types/option.md) - `Some`/`None`, and why nothing wraps into it implicitly.
 - [Receiver closures](../language/configuration/receiver-closures.md) - the one-implicit-receiver rule in full.

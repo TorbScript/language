@@ -479,17 +479,20 @@ type Matrix<const Rows: Int, const Columns: Int> {
 const combined = Matrix<2, 3>().multiplied(Matrix<3, 4>())   // Matrix<2, 4>, checked by the compiler
 ```
 
-- `Array<Item, const Size: Int>` is the array with a fixed size, as in Rust and Go: a small inline value without heap
-  storage and without a reference count. An index that is known at compile time is checked at compile time.
-  Everything that grows is a `List` (`ArrayList` is what `Vec` is in Rust).
-- **An array is built from a literal or from `Array.of`, and both count their items:**
-  `const corners: Array<Int, 4> = [1, 2, 3, 4]` and `const diagonal = Array.of(1.0, 0.0, 0.0, 1.0)`, which is an
-  `Array<Float, 4>` - the number of arguments is the `Size`. Both write the items straight into the inline slots, so no
-  list is built and nothing can fail; `Array.from(iterable)` is the fallible runtime form and answers `Array<Item, Size>?`.
-  A `...` in either is only allowed where its operand is an `Array` as well, because the number of items has to be known.
-  There is no way to *write down* that the size of a result is the number of arguments, and the language gets none: the
-  count is the compiler's answer for these two forms and for nothing else. `Array [1, 2, 3]` is not a spelling of it -
-  that already parses as an index expression.
+- `Array<Item, const Size: Int>` is **the inline storage primitive**, as in Rust and Go: a small inline value without
+  heap storage and without a reference count, whose size is part of its type. An index that is known at compile time is
+  checked at compile time. It is not one more collection - everything that grows is a `List` (`ArrayList` is what `Vec`
+  is in Rust) - and it therefore lives in `std/core`, next to the other types the language itself refers to, while
+  `std/collections` holds the data structures written on top of a storage primitive. The planned heap kernel
+  `Buffer<Item>` is its counterpart and belongs beside it.
+- **Every way to build an Array writes its size down, and none of them computes it.** A list literal against an
+  expected `Array` type is counted: `const corners: Array<Int, 4> = [1, 2, 3, 4]`. A `...` inside such a literal is
+  allowed where its operand is an `Array` as well, because only then is the number of items known, and the sizes add up
+  to what the annotation says. `Array.filled(value)` and `Array.generated { index => ... }` take `Size` from the
+  expected type; `Array.from(iterable)` counts at run time and answers `Array<Item, Size>?`. A literal and `generated`
+  write the items straight into the inline slots, so no list is built and nothing can fail. **There is no factory whose
+  number of arguments becomes the `Size`:** no signature can say that, so no signature pretends to, and a call with no
+  expected type is told plainly that a `const` parameter is never inferred from an argument.
 - A const argument is a literal, a named `const` or another const parameter. **There is no arithmetic in types**
   (`Array<Item, Size + 1>`): the type checker compares const arguments for equality and nothing else.
 - Const parameters are `Int`, `Bool`, `Char` or `String`. Inside of the type they are ordinary constants (`0..Rows`).
@@ -1123,8 +1126,10 @@ const email = Email.parse("info@example.test")?
 
 ### Conversions
 
-Conversions follow the `From`/`Into` principle. Implementing `From` provides `Into` for free, fallible conversions
-use `TryFrom`, text uses `Parse`.
+Conversions follow the `From`/`Into` principle. Implementing `From` provides `Into` for free, fallible conversions use
+`TryFrom`, which provides `TryInto` the same way, and text uses `Parse`. One direction of each pair is the one to
+implement: `Into` and `TryInto` come from a blanket implementation over the other, so an `extend` that writes one by
+hand overlaps that blanket and is answered with the line to write instead.
 
 ```trb
 extend Celsius with From<Fahrenheit> {
@@ -1137,7 +1142,12 @@ const a = Celsius.from(Fahrenheit(100.0))
 const b: Celsius = Fahrenheit(100.0).into()
 ```
 
-The `?` operator uses `From` to convert error types.
+The `?` operator uses `From` to convert error types. `tryInto()` reads both its target and its failure out of the
+`Result` that is expected of it, so what receives the call is what says which conversion is meant; a `?` on the call
+passes no target down, and then the message names `Target.tryFrom(value)` instead.
+
+**Converting your own type into a foreign one is `extend Foreign with From<Mine>`**, which the coherence rule allows
+because a type named as an argument of the trait counts as owning the implementation.
 
 **Every type has `From<Self>`**, and that conversion is the value itself. It is not written down anywhere and could not
 be: a blanket `extend<Value> Value with From<Value>` would overlap with every other implementation of `From`. It is what
@@ -1465,7 +1475,11 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   (`trait Collection<Item> with Iterable<Item>, Length, Accumulator<Item, Self>`). `Self` is a type, not a type
   constructor, so this is not the `Self<U>` that ["One Vocabulary"](#one-vocabulary-instead-of-higher-kinded-types)
   rules out, and it costs nothing.
-- **Coherence:** you can only `extend X with Trait` if your package owns `X` or `Trait`.
+- **Coherence:** you can only `extend X with Trait<Arguments...>` if your package owns `X`, or `Trait`, or a type that
+  is named as an argument of the trait. The third way is what lets a package convert **its own type into a foreign
+  one** (`extend Float64 with From<Celsius>`), and it keeps the implementation unique: only the owner of `Celsius`
+  reaches it that way, and a fourth package owns none of the three. Only the top level of an argument counts, and
+  only a named type - `From<List<Celsius>>` is not yours.
 - **Blanket implementations:** an implementation whose target is a bare type parameter
   (`extend<Source, Target> Source with Into<Target> where Target: From<Source>`) covers every type, and is allowed
   when the package owns the trait. Two implementations of one trait may never overlap. Disjointness is proved by
@@ -2633,7 +2647,11 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - The lazy stage `sortBy` became `sorted(by:)` to fit the verb/participle rule; `list.sort(by:)` sorts in place.
 - `Option`/`Result`/`?` instead of exceptions (also: trivial to implement identically in VM and AOT)
 - `with` is the only keyword for trait implementation (`implements` is gone), bounds use `where Item: Trait`
-- Orphan rule for `extend ... with`
+- Orphan rule for `extend ... with`, counting a type named as an argument of the trait as owning it (Rust RFC 2451 is
+  the model; the stricter reading, so a nested `List<Mine>` does not count)
+- A trait that has a blanket implementation is never implemented by hand, and the message is built from the blanket's
+  own `where` clause with the concrete types put in: `extend Celsius with Into<Float64>` answers "`Into` comes from
+  `From` for every type" and names `extend Float64 with From<Celsius>`
 - One member namespace. A method is structurally a constant of the type that holds a receiver closure, `fn` is its
   declaration form. Not a per-instance field: methods cost no memory per instance, cannot be swapped at runtime, and
   value types stay plain data. (Rejected: separate namespaces for fields and methods, Java style.)
@@ -2766,6 +2784,12 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `for` over a `Source`: there is no place in a `for` head for the `?` the pull needs, so v1 has
   `while const Some(item) = source.next().await()? { ... }`. Swift needs `for try await` for exactly this. Reconsider if
   a spelling turns up that keeps `await` and `?` visible without a keyword combination.
+- `_` as a type argument, meaning "infer this one": `Array<Int, _>`, `Map<String, _>`. A CANDIDATE, nothing more. The
+  case for it is the inline storage primitive, where the item type is worth writing and the size is not
+  (`const zeros: Array<Int, _> = [0, 0, 0]`), and the same shape turns up wherever one argument of several is obvious.
+  What has to be decided first: whether it may stand in a signature or only at a binding (Rust allows it in a body and
+  not in a signature, for a good reason), what it means in a `type` field, and whether it reads as an admission that
+  the argument list is too long. Until then the size is written out.
 - Registry protocol and the exact format of `project.lock.trb`
 - REPL: every input is a nested scope of the previous one (so redefining a name is ordinary shadowing). A type that
   is defined again shadows the old one, values of the old type keep it and show up as `Point#1`.

@@ -19,9 +19,7 @@ use Checker, Expectation, Resolution, Adaptation, Dispatch, Candidate from "./co
 use Target, targetOfCandidate from "./name"
 use checkExpression, inferExpression, deferExpression, deferArguments from "./expression"
 use resolveTarget, expectationOf from "./expression"
-use spreadLengthOf, matchArraySize, reportOpenSpread from "./expression"
 use substituteFunction, substituteBounds, sameType, unify, resolveType, resolveTypes, openVariableOf from "./unify"
-use suppressVariables from "./unify"
 use witnessFor, isConcrete, traitArgumentsOf from "./implementation"
 use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads from "./place"
@@ -117,8 +115,6 @@ public fn checkCall(
   // A `var` field with an identity needs a `var` path, wherever the constructor is called from. After the
   // arguments, because the paths it asks about are the ones checking them recorded
   requireSharedFields checker, target, arguments
-  // `Array.of(1, 2, 3, 4)` is an `Array<Int64, 4>`: the one call whose number of arguments solves a const parameter
-  checkArrayOf checker, calleeName, inner, arguments, plan, expression.span
   checkCallReads checker, callee, arguments, plan.targets, inner.parameters, isVarReceiver
   closeAccessesTo checker, openAccesses
   const witnesses = checkBounds checker, instantiation.bounds, target.name, expression.span
@@ -169,8 +165,8 @@ public fn instantiateTarget(
     if index < target.arguments.length() {
       argument = target.arguments[index]
     } else {
-      const name = checker.types.parameter(parameter).name
-      argument = checker.newVariable name, target.name, at
+      const declared = checker.types.parameter parameter
+      argument = checker.newVariable declared.name, target.name, at, isConst: declared.isConst
     }
     mapping.set parameter, argument
     solved.add argument
@@ -503,71 +499,6 @@ fn checkArgumentPass(
       openArgumentAccess checker, argument.value, named, callee, notes, call
     }
   }
-}
-
-/**
- * `Array.of(1, 2, 3, 4)` is an `Array<Int64, 4>`: the number of variadic arguments *is* the `Size` of the array.
- * `Array.of` is a well-known special case here, exactly as `[1, 2, 3, 4]` is one in `listLiteralType`.
- *
- * A `...` is only allowed where its operand is itself an `Array` of a known size: the size has to be static.
- *
- * # Open
- *
- * There is no way to declare the link between a count of arguments and a const parameter in the language itself, so
- * every function whose result size depends on its argument count needs a case like this one instead of a signature it
- * could write down.
- */
-fn checkArrayOf(
-  var checker: Checker,
-  callee: String,
-  form: FunctionForm,
-  arguments: List<Argument>,
-  plan: ArgumentPlan,
-  at: Span,
-) {
-  if callee != "of" || plan.variadic < 0 {
-    return
-  }
-  const array = match checker.wellKnown.array {
-    Some(found) => found
-    None => {
-      return
-    }
-  }
-  const (symbol, given) = match checker.types.form(form.result) {
-    .Nominal(found, held) => (found, held)
-    _ => {
-      return
-    }
-  }
-  if symbol != array || given.length() != 2 {
-    return
-  }
-  var count = 0
-  for index in 0..arguments.length() {
-    if plan.targets.get(index) != Some(plan.variadic) {
-      continue
-    }
-    const argument = arguments[index]
-    if !argument.isSpread {
-      count = count + 1
-      continue
-    }
-    // The argument was already checked, so what it is stands in the table: asking it again would check it twice
-    const held = checker.expressionTypeHere(argument.value.span) ?? checker.deferredType
-    match spreadLengthOf(checker, held, given[0]) {
-      Some(length) => {
-        count = count + length
-      }
-      None => {
-        // The message about the spread is the root cause: "cannot infer `Size`" on top of it would say nothing new
-        reportOpenSpread checker, held, argument.value.span
-        suppressVariables checker, given[1]
-        return
-      }
-    }
-  }
-  const _ = matchArraySize checker, form.result, given[1], count, "call", at
 }
 
 /**

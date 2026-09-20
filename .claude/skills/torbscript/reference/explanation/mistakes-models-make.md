@@ -445,6 +445,68 @@ renames it, and two members of one name for one type stay an error at the use. W
 own needs the trait as a name of the file instead of the member (`use Slug from "acme/slug"`), which is why the
 operators, `for`, interpolation, `?`, `??` and `into()` need no import: their traits are in the prelude.
 
+### 19. A name means one declaration, and an Array is built from a literal
+
+Two habits that both come from a language with overloading: a second `fn` of the same name with other parameter types,
+and a factory whose number of arguments is the size of what it builds.
+
+```trb check
+type Circle {
+  radius: Float
+}
+
+type Square {
+  side: Float
+}
+
+trait Draw<Shape> {
+  fn draw(self, shape: Shape): String
+}
+
+type Canvas {
+  scale: Float
+}
+
+extend Canvas with Draw<Circle> {
+  fn draw(self, shape: Circle): String {
+    "circle of {shape.radius * scale}"
+  }
+}
+
+const corners: Array<Int, 4> = [1, 2, 3, 4]
+print "{Canvas(2.0).draw(Circle(1.0))} {corners}"
+```
+
+```trb error
+type Circle {
+  radius: Float
+}
+
+type Square {
+  side: Float
+}
+
+type Canvas {
+  fn draw(self, shape: Circle): String {
+    "circle"
+  }
+
+  fn draw(self, shape: Square): String {
+    "square"
+  }
+}
+
+print Canvas().draw(Circle(1.0))
+// error: `draw` is already declared in `Canvas`
+```
+
+There is no overloading by parameter type and no uniform function call syntax: an operation belongs to its receiver (a
+method, or an `extend`) or to a trait with a parameter, one `extend` per instantiation, and a second arity is a default
+parameter. An `Array` comes from a list literal whose items are counted against `Size`, from `Array.filled(value)` or
+`Array.generated { index => ... }`, which take `Size` from the expected type, or from `Array.from(items)`, which counts
+at run time and answers an `Option`. See [where are my overloads](where-are-my-overloads.md) and
+[Arrays and const parameters](../language/values-and-types/arrays.md).
+
 ### The rest, in one table
 
 | Do not write | Write | Why |
@@ -453,6 +515,9 @@ operators, `for`, interpolation, `?`, `??` and `into()` need no import: their tr
 | `throw`, `try`, `catch` | `return Fail problem`, `?` | there are no exceptions |
 | `class`, `interface`, `enum`, `struct` | `type`, `trait` | one keyword for data, one for capability |
 | `impl Trait for Type` | `extend Type with Trait` | `with` is the only word for it |
+| `extend Mine with Into<Foreign>` | `extend Foreign with From<Mine>` | `Into` comes from a blanket over `From` |
+| a second `fn` of the same name | a trait with a parameter, or a default parameter | a name means one declaration |
+| `Array.of(1, 2, 3)` | `const a: Array<Int, 3> = [1, 2, 3]` | only a literal counts its items |
 | `#[derive(...)]`, `@Annotation` | nothing | there are no annotations; what can be generated is |
 | `list[i]` for a possibly missing index | `list.get(i)` | `list[i]` panics out of bounds |
 | `a.iter().map(...)` | `a.map(...)` | there is one pipeline and no `iter()` step |
@@ -482,6 +547,7 @@ which is where mistake 1 shows up. See [Verify your work](../tooling/verifying-y
 
 - [Syntax cheat sheet](../language/syntax/cheat-sheet.md) - every form of the language in one place.
 - [Command calls](../language/syntax/command-calls.md) - the canon behind mistake 1.
+- [Where are my overloads](where-are-my-overloads.md) - the argument behind mistake 19.
 - [Cases and match](../language/pattern-matching/cases-and-match.md) - the rules behind mistakes 2, 12 and 15.
 - [Naming](../language/syntax/naming.md) - the rules behind mistakes 13 and 14.
 - [Result](../language/errors/result.md) - the rules behind mistake 3.

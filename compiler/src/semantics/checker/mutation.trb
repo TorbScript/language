@@ -72,15 +72,13 @@ fn isCounted(var checker: Checker, binding: BindingId): Bool {
 
 /**
  * The same question for a top-level binding. A `const` is never changed and a shared object is not a copy, so only a
- * top-level `var` of a value type is counted. `isPublic` guards against a value another module could read - `public
- * var` at top level is itself illegal today, so the check only ever confirms what `isDeclaredVar` already implies.
+ * top-level `var` of a value type is counted.
+ *
+ * A `public` one cannot arrive here: `public` makes a binding a `Declaration`, and a declaration gets a `Declared`
+ * site rather than the `Constant` site [isDeclaredVar] reads - quite apart from `public var` being a parse error.
  */
 fn isCountedDeclaration(var checker: Checker, symbol: SymbolId): Bool {
   if !isDeclaredVar(checker, symbol) {
-    return false
-  }
-  const found = checker.symbolAt symbol
-  if found.isPublic {
     return false
   }
   match declaredTypeOf(checker, symbol) {

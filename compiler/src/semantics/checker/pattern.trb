@@ -375,6 +375,12 @@ fn namesACase(var checker: Checker, symbol: SymbolId): Bool {
  * says the rule, and a case of the matched type is offered where one is close enough.
  */
 fn reportUnknownCase(var checker: Checker, name: Name, subject: TypeId) {
+  // The spelling rule runs before any pattern is checked, and where this name is a binding somebody capitalized
+  // (`const Limit = 10`) it has already said what to write. "Not a case in scope" is then the same mistake from the
+  // other side, and the fix is in the other message
+  if checker.hasDiagnosticAt(name.span) {
+    return
+  }
   var problem = Diagnostic.error("`{name.text}` is not a case in scope", name.span)
     .withNote("A name that starts with an uppercase letter is a case, never a binding: a binding starts lowercase")
   if const Some(similar) = nearestCase(checker, subject, name.text) {

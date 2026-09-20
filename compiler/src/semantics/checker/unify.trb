@@ -258,18 +258,30 @@ fn settleVariables(var checker: Checker, start: Int) {
     const state = checker.variables[index]
     if state.solution.isNone() && !state.isReported {
       checker.markReported VariableId(index)
-      reportUnsolved checker, state.name, state.owner, state.at
+      reportUnsolved checker, state.name, state.owner, state.at, state.isConst
     }
     index = index + 1
   }
 }
 
-fn reportUnsolved(var checker: Checker, name: String, owner: String, at: Span) {
+fn reportUnsolved(var checker: Checker, name: String, owner: String, at: Span, isConst: Bool) {
   // Only a collection literal makes a variable that belongs to no declaration
   if owner.isEmpty() {
     checker.reportHere(
       Diagnostic.error("Cannot infer the type of this collection", at)
         .withNote("An empty literal needs a type: annotate the binding (`const items: List<Int> = []`)")
+    )
+    return
+  }
+  // A `const` parameter is a *value*, so none of the three ways a type is pinned down applies to it: no argument of
+  // the call mentions it, and the note that names them would send the reader looking in the wrong place
+  if isConst {
+    checker.reportHere(
+      Diagnostic.error("Cannot infer `{name}` of `{owner}`", at)
+        .withNote(
+          "`{name}` is a `const` parameter and is never inferred from an argument: write it in the type that is "
+            + "expected of this value"
+        )
     )
     return
   }

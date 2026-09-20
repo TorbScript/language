@@ -69,6 +69,15 @@ group "Literals" {
     assert(found.typeOf("(lowest: 1, highest: 9)") == "(lowest: Int64, highest: Int64)")
   }
 
+  test "the labels of a tuple survive inference, which is what lets `indexed()` answer `(index:, item:)`" {
+    const source = "fn paired<Item>(value: Item): (index: Int, item: Item) \{\n  (index: 0, item: value)\n\}\n\n"
+      + inBody("  const pair = paired(\"a\")\n  const shown = pair.item")
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("paired(\"a\")") == "(index: Int64, item: String)")
+    assert(found.typeOf("pair.item") == "String")
+  }
+
   test "a label at a position that has another name is an error, so a swap cannot happen silently" {
     const source = inBody "  const bounds: (lowest: Int, highest: Int) = (highest: 1, lowest: 9)"
     assert(

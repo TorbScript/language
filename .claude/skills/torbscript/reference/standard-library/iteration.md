@@ -15,6 +15,7 @@ source:
   - std/iteration/src/lib.trb
   - std/iteration/src/iteration.trb
   - std/iteration/src/collectors.trb
+  - std/iteration/src/concatenate.trb
   - std/iteration/src/stage.trb
   - std/iteration/src/staged.trb
 ---
@@ -31,6 +32,7 @@ use Iterator, Iterable, Length from "std/iteration"
 use Collector, Accumulator, collector, into, listing from "std/iteration"
 use counting, summing, groupingBy, joining from "std/iteration"
 use Stage, mapping, filtering, taking from "std/iteration"
+use concatenated from "std/iteration"
 ```
 
 ```trb check
@@ -73,7 +75,7 @@ public trait Iterable<Item> {
   fn skip(self, amount: Int): Iterable<Item>
   fn takeWhile(self, predicate: (value: Item) => Bool): Iterable<Item>
   fn zip<Output>(self, other: Iterable<Output>): Iterable<(Item, Output)>
-  fn indexed(self): Iterable<(Int, Item)>
+  fn indexed(self): Iterable<(index: Int, item: Item)>
   fn sorted<Key: Compare>(self, by: (value: Item) => Key): Iterable<Item>
   fn through<Output>(self, stage: Stage<Item, Output>): Iterable<Output>
   fn collect<Output>(self, collector: Collector<Item, Output>): Output
@@ -161,6 +163,23 @@ public fn groupingBy<Item, Key: Hash>(key: (value: Item) => Key): Grouping<Item,
 the collector's accumulator directly, with no queue in between - while `iterator()` needs a small queue, because one
 value pushed in can become none or many coming out while the caller asks for exactly one. `Queueing` is the
 `Accumulator` that tail of a staged pipeline pushes into.
+
+### Putting many texts together
+
+```trb fragment
+fn concatenated(pieces: List<String>, separator: String): String
+```
+
+The pieces in one text, with `separator` between every two of them. It is what `joined` and the `joining` collector are
+built on, and it is what to reach for instead of appending in a loop: a `String` is a value, so appending to one copies
+everything that is already in it, and `n` appends copy `O(n²)` bytes. `concatenated` merges neighbours pairwise, so every
+byte is copied once per level of the merge tree and there are `log n` levels.
+
+```trb check
+use concatenated from "std/iteration"
+
+print concatenated(["a", "b", "c"], ", ")
+```
 
 <!-- torb:declarations:end -->
 

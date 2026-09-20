@@ -1,7 +1,10 @@
 /**
- * Conversion between types: [From]/[Into] for a conversion that always works, [TryFrom] for one that can fail, and
- * [Parse] for the one from text. [Show] is the direction into a `String` for printing, and [LiteralParseError] is
- * what a generated [Parse] of a literal type answers.
+ * Conversion between types: [From]/[Into] for a conversion that always works, [TryFrom]/[TryInto] for one that can
+ * fail, and [Parse] for the one from text. [Show] is the direction into a `String` for printing, and
+ * [LiteralParseError] is what a generated [Parse] of a literal type answers.
+ *
+ * One direction of each pair is the one to implement: [From] and [TryFrom]. [Into] and [TryInto] come from a blanket
+ * implementation over them, so an `extend` that writes one by hand is reported with the line to write instead.
  */
 
 use Error from "./error"
@@ -14,9 +17,27 @@ use Error from "./error"
  *     const codepoint: Int = Int.from 'A'
  *     print codepoint
  *
+ * This is also how a package converts **its own type into a foreign one**: a type of this package named as an
+ * argument of the trait is enough to own the implementation, so `Float64` may be the target although it belongs to
+ * somebody else.
+ *
+ *     type Celsius {
+ *       degrees: Float
+ *     }
+ *
+ *     extend Float64 with From<Celsius> {
+ *       fn from(value: Celsius): Float64 {
+ *         value.degrees
+ *       }
+ *     }
+ *
+ *     const degrees: Float64 = Celsius(21.5).into()
+ *     print degrees
+ *
  * # Related
  *
  * - [Into] - the other direction, gained for free from this one.
+ * - [TryFrom] - the same conversion where it can fail.
  */
 public trait From<Source> {
   /** Makes a `Self` from a `Source`. This is what `Self.from(source)` calls, and what [Into.into] calls through it. */
@@ -28,8 +49,11 @@ public trait From<Source> {
  *
  * # Pitfalls
  *
- * - Implement [From] and not this. The blanket implementation below is the only `Into`, so a type that implements
- *   `Into` directly conflicts with it instead of adding to it.
+ * - Implement [From] and not this one; the compiler says so at an `extend` that tries.
+ *
+ * # Related
+ *
+ * - [TryInto] - the same step where the conversion can fail.
  */
 public trait Into<Target> {
   /** Makes a `Target` from `self`. */
@@ -54,10 +78,59 @@ extend<Target> Target with From<Never> {
   }
 }
 
-/** Fallible conversion: the [From] for a source that may not represent a valid value. */
+/**
+ * Fallible conversion: the [From] for a source that may not represent a valid value. Implement this one, `TryInto`
+ * comes for free.
+ *
+ * # Examples
+ *
+ *     const narrow: Result<Int8, NumberRangeError> = Int8.tryFrom 300
+ *     print narrow.isError()
+ *
+ * # Related
+ *
+ * - [TryInto] - the other direction, gained for free from this one.
+ * - [From] - the same conversion where it cannot fail.
+ */
 public trait TryFrom<Source, Failure> {
-  /** Makes a `Self` from a `Source`, or answers why it could not. */
+  /**
+   * Makes a `Self` from a `Source`, or answers why it could not. This is what `Self.tryFrom(source)` calls, and what
+   * [TryInto.tryInto] calls through it.
+   */
   fn tryFrom(value: Source): Result<Self, Failure>
+}
+
+/**
+ * The other direction of [TryFrom], gained for free wherever `Target: TryFrom<Self, Failure>`.
+ *
+ * Write the target out. `tryInto()` answers a `Result`, so a `?` in front of the annotation is what a reader sees
+ * first and the target itself has nowhere else to come from:
+ *
+ * # Examples
+ *
+ *     const narrow: Result<Int8, NumberRangeError> = 300.tryInto()
+ *     print narrow.isError()
+ *
+ * # Pitfalls
+ *
+ * - Implement [TryFrom] and not this one. The blanket implementation below is the only `TryInto` there is, and the
+ *   compiler says so at an `extend` that tries.
+ *
+ * # Related
+ *
+ * - [TryFrom] - the one to implement.
+ * - [Into] - the same step where the conversion cannot fail.
+ */
+public trait TryInto<Target, Failure> {
+  /** Makes a `Target` from `self`, or answers why it could not. */
+  fn tryInto(self): Result<Target, Failure>
+}
+
+/** The blanket implementation that gives every [TryFrom] its [TryInto] for free: nothing implements `TryInto` by hand. */
+extend<Source, Target, Failure> Source with TryInto<Target, Failure> where Target: TryFrom<Source, Failure> {
+  fn tryInto(self): Result<Target, Failure> {
+    Target.tryFrom self
+  }
 }
 
 /**

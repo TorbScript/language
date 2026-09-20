@@ -1,6 +1,6 @@
 ---
 title: Conversions
-summary: From provides Into for free, TryFrom is for a conversion that can fail, Parse is for text, and the language has exactly four coercions that apply only where a type is expected.
+summary: From provides Into for free and TryFrom provides TryInto, Parse is for text, and the language has exactly four coercions that apply only where a type is expected.
 kind: reference
 status: stable
 order: 110
@@ -8,6 +8,7 @@ keywords:
   - From
   - Into
   - TryFrom
+  - TryInto
   - Parse
   - coercion
 source:
@@ -17,7 +18,8 @@ source:
 ---
 
 A conversion between two types is a trait implementation, never a hidden rule of the language. `From` is the one to
-write; `Into`, the four coercions, and `Every type has From<Self>` all follow from it without another line of code.
+write, or `TryFrom` where it can fail; `Into`, `TryInto`, the four coercions and `Every type has From<Self>` all follow
+from them without another line of code.
 
 ## Example
 
@@ -50,7 +52,10 @@ extend <Target> with From<Source> {
 
 value.into()                          // Free, once From is implemented
 Target.tryFrom(value)                 // Result<Target, Failure>
+value.tryInto()                       // Free, once TryFrom is implemented
 Target.parse(text)                    // Result<Target, Failure>, text specifically
+
+extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
 ```
 
 ## Rules
@@ -77,14 +82,59 @@ Target.parse(text)                    // Result<Target, Failure>, text specifica
    print percent
    ```
 
+   `TryFrom` provides `TryInto` the way `From` provides `Into`, and `tryInto()` reads both its target and its failure
+   out of the `Result` that is expected of it:
+
+   ```trb
+   type Port {
+     value: Int
+   }
+
+   extend Port with TryFrom<Int, String> {
+     fn tryFrom(value: Int): Result<Port, String> {
+       if value < 1 {
+         return Fail "{value} is not a port"
+       }
+       Ok Port(value)
+     }
+   }
+
+   const port: Result<Port, String> = 8080.tryInto()
+   print port.isOk()
+   ```
+
+   A `?` on the call passes no target down, so `const small: Port = 8080.tryInto()?` has nothing to go on and is told
+   so; annotate the `Result`, or write `Port.tryFrom(8080)`.
+
 3. **A conversion from text is `Parse`, not `From` or `TryFrom`.** `Int.parse "42"` and `Email.parse
    "info@example.test"` both answer a `Result`, and the argument is always a `String`.
 
-4. **Every type has `From<Self>`, generated without being written.** A blanket implementation could not be written by
+4. **Converting your own type into a foreign one is `extend Foreign with From<Mine>`.** A package owns an
+   implementation when it owns the type, the trait, **or** a type named as an argument of the trait - so the package
+   that declares `Celsius` may write `extend Float64 with From<Celsius>` although neither `Float64` nor `From` is
+   its own. Only the top level of an argument counts: `From<List<Celsius>>` is not yours. See
+   [Coherence](../traits/coherence.md).
+
+   ```trb
+   type Celsius {
+     degrees: Float
+   }
+
+   extend Float64 with From<Celsius> {
+     fn from(value: Celsius): Float64 {
+       value.degrees
+     }
+   }
+
+   const degrees: Float64 = Celsius(21.5).into()
+   print degrees
+   ```
+
+5. **Every type has `From<Self>`, generated without being written.** A blanket implementation could not be written by
    hand - it would overlap with every other `From` - which is what lets a function ask for `Item: From<Int>` and still
    accept an `Item` itself.
 
-5. **The language has exactly four coercions, and every one of them applies only where a type is expected.** None of
+6. **The language has exactly four coercions, and every one of them applies only where a type is expected.** None of
    them decides what a bare expression means and none of them solves an inference variable on its own:
 
    - a value where a trait it implements is expected,
@@ -92,7 +142,24 @@ Target.parse(text)                    // Result<Target, Failure>, text specifica
    - `Never` where anything is expected,
    - a literal where a literal type that contains it is expected.
 
-6. **There is no implicit `Some`.** A value never wraps itself into an `Option` on its own; `Some(item)` has to be
+7. **`Into<Target>` is also a type, and `into()` on such a value is an ordinary call.** A parameter declared
+   `Into<Path>` takes anything that converts into a `Path`, and `into` is the trait's one required member - the
+   conversion through `From` is what happens for a receiver whose own type has no such member.
+
+   ```trb
+   type Path {
+     text: String
+   }
+
+   fn open(path: Into<Path>): String {
+     const target: Path = path.into()
+     target.text
+   }
+
+   print open(Path("notes"))
+   ```
+
+8. **There is no implicit `Some`.** A value never wraps itself into an `Option` on its own; `Some(item)` has to be
    written out.
 
    ```trb error
@@ -102,9 +169,10 @@ Target.parse(text)                    // Result<Target, Failure>, text specifica
 
 ## What this is not
 
-**`Into` is not something you implement.** Writing `extend Fahrenheit with Into<Celsius>` next to a `From<Fahrenheit>`
-on `Celsius` is redundant at best; `Into` exists automatically once `From` does, in the other direction, and there is
-nothing to add to it.
+**`Into` and `TryInto` are not something you implement.** Each of them comes from a blanket implementation over the
+other direction, so writing one by hand overlaps that blanket, and the compiler answers with the line to write
+instead: `extend Celsius with Into<Float64>` is `` `Into` comes from `From` for every type ``, with the note
+"Write `extend Float64 with From<Celsius>`".
 
 ```trb
 extend Celsius with From<Fahrenheit> {
@@ -129,3 +197,4 @@ to another, only `Int.parse("42")` written out. `Int` is an alias for `Int64`, w
 - [Construction](construction.md) - the static factory functions `TryFrom` and `Parse` are examples of.
 - [Declaring a type](declaring-a-type.md) - where `Self` and `extend` are introduced.
 - [Result](../errors/result.md) - what every fallible conversion in this page answers with.
+- [Coherence](../traits/coherence.md) - which package may write which implementation, and the blanket message.

@@ -272,6 +272,11 @@ comparison.
 - **`Try`, and `?` for a type of your own.** `?` leaves the *enclosing function*, which no method can do, so it stays
   `Option` and `Result` - the reason Rust's own `Try` has been unstable since 2016. `??` is open to every type instead,
   because `a ?? b` is the ordinary method call `a.orElse(b)` and therefore a trait, `OrElse`.
+- **Traits as the only overloading, and no uniform function call syntax.** Rust already has no ad-hoc overloading, and
+  TorbScript agrees: a name means one declaration. What Rust reaches a trait for (`From<T>`, `Add<Rhs>`) is the same
+  answer here. What does *not* carry over is a trait implementation giving a free function a method spelling - a
+  member of a foreign type is an `extend`, and `value.f(x)` never resolves to `f(value, x)`. See
+  [where are my overloads](where-are-my-overloads.md).
 - **Semicolons, and `;` as an expression terminator.** A statement ends at the end of its line. The distinction Rust makes
   with a trailing `;` is made here by the rule that an expression statement has to be `Void` or `Never` unless the call has
   a `var` receiver or a `var` argument.
@@ -279,6 +284,7 @@ comparison.
 ## Related
 
 - [Why values instead of references](why-values-instead-of-references.md) - the argument behind the ownership difference.
+- [Where are my overloads](where-are-my-overloads.md) - one signature per call, and the two forms that replace an overload set.
 - [Command calls](../language/syntax/command-calls.md) - the canon, in full.
 - [Result](../language/errors/result.md) - `Ok`, `Fail` and `?`.
 - [Cases and match](../language/pattern-matching/cases-and-match.md) - how a case is spelled.

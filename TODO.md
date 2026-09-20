@@ -1919,3 +1919,90 @@ Wenn nicht, was bedeutet, bewirkt es?
     "generische Zahlen".
   - **Kandidat, erst bei zwei konkreten Bedarfsstellen:** ein implizit abgeleiteter Fakt "ohne Argumente
     konstruierbar" (`Type()`), nach derselben Logik wie das abgeleitete `Encode`.
+
+- **Erledigt (Checker-Runde: `Array`, Kleinigkeiten, Kohärenz, `TryInto`, 2026-09-20)** - alle Gates grün.
+  - **`Array.of` ist weg**, und mit ihm `checkArrayOf`. Ein `Array` entsteht nur noch aus einem Listen-Literal (Anzahl
+    gegen `Size` geprüft, Spread aus einem anderen `Array` addiert sich), aus `Array.filled(value)`, aus dem neuen
+    `Array.generated { index => ... }` oder aus `Array.from(items)`. Die Fehlermeldung nennt beide Zahlen:
+    "`Array<Int64, 4>` has 4 items, and this literal has 3".
+  - **`Array` liegt jetzt in `std/core`** (`std/core/src/array.trb`), nicht mehr in `std/collections`; das Prelude
+    exportiert es weiter, also ändert sich für kein Programm etwas. `Array` hat neu auch `Show` - vorher konnte man
+    ein Array nicht ausgeben ("does not implement `Show`"), was jedes Doku-Beispiel auffiel.
+  - **Ein `const`-Parameter, den nichts löst, hat eine eigene Notiz.** `Array.filled 0.0` ohne erwarteten Typ sagt
+    jetzt "`Size` is a `const` parameter and is never inferred from an argument: write it in the type that is expected
+    of this value" statt der Notiz über Closure-Parameter und Typargumente, die auf einen Wert nicht passt.
+  - **`_` als Typargument ist nur als Kandidat notiert** (CONCEPT, Open Questions), nicht implementiert.
+  - `Iterable.indexed()` liefert `(index: Int, item: Item)`; `std` liest `pair.index`/`pair.item`.
+  - **`reportHere` behält jetzt eine Meldung pro Span UND Text.** Das hat sofort einen versteckten Befund gezeigt:
+    `[head, ...Rest]` bekam nur die Schreibweise gemeldet, nicht dass die Bindung nie gelesen wird - beide stimmen,
+    beide stehen jetzt da. Wo die zweite Meldung wirklich eine Folge ist, sagt die Stelle das selbst
+    (`reportUnknownCase` fragt `hasDiagnosticAt`, damit "not a case in scope" nicht auf "write `limit`" draufkommt).
+  - Gate-Fehlalarm behoben: ein Punkt in Backticks beendet keinen Satz mehr (`sentenceEnd` in
+    `compiler/src/documentation/comments.trb`, mit Test).
+  - Der `isPublic`-Schutz in `mutation.trb` war tatsächlich tot und ist weg: `public` macht aus einer Bindung eine
+    `Declaration`, die eine `Declared`-Stelle bekommt und nicht die `Constant`-Stelle, die `isDeclaredVar` liest.
+  - Neue Seite `docs/explanation/where-are-my-overloads.md`, von den vier Kontrastseiten und der Fehlerliste
+    verlinkt. **Dabei gefunden:** zwei `draw`-Methoden in EINEM `type`-Körper gehen nicht (ein Namensraum pro Typ) -
+    ein `extend` pro Trait-Instanz ist die Form, genau wie `std/core` es mit `From` macht.
+  - **Kohärenz zählt jetzt die Typargumente des Traits.** `extend Float64 with From<Celsius>` ist im Paket von
+    `Celsius` erlaubt: so konvertiert ein Paket seinen eigenen Typ in einen fremden. Nur die oberste Ebene eines
+    Arguments zählt und nur ein benannter Typ (`From<List<Celsius>>` gilt nicht) - die strengere Lesart von Rusts
+    RFC 2451. Ein Blanket behält die alte Regel.
+  - **Ein Trait mit Blanket-Implementierung von Hand zu schreiben hat eine eigene Meldung**, aus dem `where` des
+    Blankets gebaut: "`Into` comes from `From` for every type" mit "Write `extend Float64 with From<Celsius>`: the
+    blanket implementation in `std/core` makes `Celsius.into()` out of that". Nur wenn das `where` EIN Trait-Bound
+    auf einem Parameter ist; sonst bleibt die alte Overlap-Meldung.
+  - **`TryInto<Target, Failure>` ist da**, mit Blanket über `TryFrom`, im Prelude. `tryInto()` liest Ziel UND Fehler
+    aus dem erwarteten `Result`. **Was es nicht erreicht: ein `?` auf dem Aufruf** - `tryType` inferiert seinen
+    Operanden ohne Erwartung, also hat `const small: Int8 = wide.tryInto()?` kein `Result` zum Lesen. Das sauber zu
+    machen heißt, eine Erwartung durch `?` zu schieben und den Fehlertyp aus der umgebenden Funktion zu holen - eine
+    Änderung an der Inferenz, nicht an einem Aufruf. Der Fall sagt es deshalb klar: "The target of `tryInto()` is not
+    known here", mit `Target.tryFrom(value)` in der Notiz. **Frage an dich: soll das eine eigene kleine Runde werden?**
+  - Nachgesehen: **nichts in `std/`, `compiler/` oder `examples/` implementiert `TryFrom<String, _>`.** Kein Blanket,
+    das jedes `From` zu einem `TryFrom` mit `Never` macht - es würde jedes handgeschriebene `TryFrom` überlappen.
+  - **Noch gefunden, nicht behoben (zwei Meldungen, die fehlen):**
+    1. `Array.of 1, 2, 3` sagt heute nicht "`Array` has no member `of`", sondern "Cannot infer `Item` of `Array`".
+       Grund: `reportUnknownMember` schweigt, wenn der Empfänger noch eine offene Variable enthält - bei einem
+       STATISCHEN Zugriff auf einen generischen Typnamen sind die Variablen aber vom Checker selbst gemacht, nicht vom
+       Schreiber. `List.nothingLikeThis 1, 2` hat dasselbe Loch, `String.nothingLikeThis` (nicht generisch) meldet
+       richtig. Ein echter Fehlalarm-in-die-andere-Richtung, aber die Unterscheidung "statischer Zugriff" gehört in
+       eine eigene Runde.
+    2. `names.map(String.toUpperCase)` TYPPRÜFT, läuft aber auf Stage 0 nicht ("does not know
+       `String.toUpperCase`"). Deshalb steht es NICHT in der neuen Erklärseite. Ebenso: `into()` wird von Stage 0
+       überhaupt nicht aufgelöst ("a `Celsius` has no method `into`"), auch nicht für eigene Typen - also war für
+       `tryInto()` in `bootstrap/` nichts zu tun.
+  - Im Back-End nur die Manifest-Zeile: `Array.generated` steht dort wie `Array.filled` als `planned` (5.9b),
+    `Array.of` ist raus. `Adaptation.Convert` für `tryInto()` wird von der Lowering wie die für `into()` behandelt,
+    also mit einem sauberen "noch nicht unterstützt" und nicht mit falschem C.
+  - **`into()` auf einem Empfänger vom Trait-Typ `Into<Target>` war kaputt und ist behoben.** `isConversionCall` hat
+    JEDEN argumentlosen Aufruf von `into` mit erwartetem Typ abgefangen, ohne zu fragen, ob der Empfänger die
+    Methode selbst schon hat - `fn open(path: Into<Path>) { const target: Path = path.into() }` meldete
+    "`Into<Path>` does not convert into `Path`". Neue Regel, und sie ist auch die ehrlichere: **`into()` ist die
+    `From` des Ziels nur dort, wo der Typ des Empfängers die Methode NICHT hat.** Hat er sie (ein Wert vom
+    Trait-Typ `Into<Target>` hat sie, es ist die eine Pflichtmethode), ist es ein gewöhnlicher dynamischer Aufruf
+    und geht durch `checkCall`. Dasselbe für `tryInto` auf einem `TryInto<Target, Failure>`. Drei Tests in
+    `conversions.test.trb`, eine Regel auf `docs/language/types/conversions.md`.
+  - **Kein natives Gate-Programm dafür, und der Grund ist ein Back-End-Befund.** `torb run ../compiler build` sagt
+    zu `path.into()` bei `path: Into<Path>`: "not supported by the back end yet: `into`, a member the back end
+    cannot build an instance of" (`compiler/src/ir/witness.trb:169`, `instanceFor` gibt `None`). Ein
+    HANDGESCHRIEBENES `trait Convert<Target>` mit direkter Implementierung baut dagegen sauber durch - der
+    Unterschied ist also das BLANKET: der Tabelleneintrag für `into` zeigt auf den Blanket-Körper, und der braucht
+    im Eintrag den inneren Zeugen `Target: From<Source>`. Das liegt in `ir/` und damit nicht in meinem Bereich;
+    Reproduktion: die drei Typen aus dem Test oben als Programm unter `bootstrap/tests/native/`. Stage 0 löst
+    `into()` ohnehin nicht auf, ein Konformitätsprogramm braucht also beide Seiten.
+  - **Zwei weitere Löcher, bestätigt, nicht behoben:** (1) `fn open<Source: Into<Path>>(path: Source): Path {
+    path.into() }` typprüft und erreicht keines der beiden Back-Ends. (2) Ein `where`, dessen SUBJEKT ein konkreter
+    Typ ist, wird nicht beachtet: `fn open<Source>(path: Source): Path where Path: From<Source> { Path.from path }`
+    meldet "`Path` has no member `from`".
+  - **Gates** (nach dem Merge von master mit 5.14): `cargo build --release`, `check ..` 280 Dateien "no problems",
+    `check tests/native tests/scripts` 62 Dateien "no problems", `check --statistics ..` 180021/180021 getypt und
+    **0 deferred**, `torb test ../compiler/tests` **1469 passed, 0 failed** (55 Dateien), `canon --check` 0 von 344
+    Dateien, `docs check` 220 Seiten / 911 Snippets, `docs index --check` 24 Indizes,
+    `docs source ../std/core ../std/collections ../std/iteration ../compiler/src/semantics ../compiler/src/documentation`
+    75 Dateien / 904 Deklarationen / 50 Beispiele "no problems", `cargo fmt --check`, `cargo clippy --all-targets`,
+    volle `cargo test --release`. Der Skill ist neu erzeugt und nach `.claude/skills/torbscript/` kopiert.
+  - **Nicht gelaufen: der Fixpunkt.** Er steht nicht auf meiner Gate-Liste, aber `std/` hat sich geändert (`Array`
+    umgezogen, `Show` dazu, `TryInto` mit Blanket) - wer als Nächstes am Back-End ist, sollte
+    `cargo test --release --test fixpoint -- --ignored` einmal laufen lassen. Ein Blanket über JEDEN Typ ist genau
+    die Form, die in BACKEND.md einmal die Instanzliste zum Wachsen gebracht hat (`Iterable.indexed`); hier steht in
+    keinem Repository-Programm ein `tryInto()`, also erwarte ich nichts - geprüft ist es nicht.

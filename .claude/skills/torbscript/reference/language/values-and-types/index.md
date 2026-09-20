@@ -21,7 +21,7 @@ an example first, then the syntax, then numbered rules, then what the construct 
 - **[Built-in types](built-in-types.md)** - Every type a file has without an import - the sized numbers, Bool, Char, String, tuples, lists, maps, ranges, Option, function types, Void and Never.
 - **[Bindings](bindings.md)** - A const binding never changes and nothing below it changes; a var binding can be changed in place. That one rule replaces every mutable-and-immutable type pair.
 - **[Integers](integers.md)** - Eight sized integer types with fixed ranges on every platform, an unannotated literal is always Int64, and overflow is a compile error when it is written and a panic when it happens at runtime.
-- **[Floating-point numbers](floating-point.md)** - On a Float, `==` is IEEE-754 and `compare` is a total order that disagrees with it on `nan` and `-0.0`, and neither Float type is Hash.
+- **[Floating-point numbers](floating-point.md)** - On a Float every operator is IEEE-754 and `compare` is a total order that disagrees with them on `nan` and `-0.0`, and neither Float type is Hash.
 - **[Decimal](decimal.md)** _(planned)_ - Decimal is designed for exact base-ten arithmetic such as money, and a decimal literal adapts to it the way it adapts to Float - but no back end implements it yet.
 - **[Strings](strings.md)** - A String has no length() and no text[i], because "length" and "the i-th character" each have three different answers and two of them are slow.
 - **[Tuples](tuples.md)** - A tuple is positional and accessed by .0, .1; a label makes a position easier to read but is not part of the type, so a labelled and an unlabelled tuple of the same shape are the same type.

@@ -1588,7 +1588,10 @@ public fn checkCoherence(var checker: Checker) {
   checkOverlaps checker
 }
 
-/** `extend X with Trait` needs the current package to declare `X` or `Trait`. */
+/**
+ * `extend X with Trait<Arguments...>` needs the current package to declare `X`, or `Trait`, or a type that is named as
+ * an argument of the trait.
+ */
 fn checkOrphan(var checker: Checker, index: Int) {
   const implementation = checker.implementations.all[index]
   if isGenerated(implementation) {
@@ -1614,6 +1617,11 @@ fn checkOrphan(var checker: Checker, index: Int) {
     reportOrphan checker, implementation, declared
     return
   }
+  // The third way: a type of this package named as an argument of the trait. `extend Float64 with From<Celsius>` is the
+  // package of `Celsius` converting its own type into a foreign one, and no other package can write that line
+  if ownsTraitArgument(checker, implementation) {
+    return
+  }
   const head = match headSymbolOf(checker, implementation.target) {
     Some(found) => found
     // A tuple or a function type as the target: nothing owns it
@@ -1628,13 +1636,53 @@ fn checkOrphan(var checker: Checker, index: Int) {
   reportOrphan checker, implementation, declared
 }
 
+/**
+ * Whether a type this package declares stands as an argument of the trait: `extend Float64 with From<Celsius>` in the
+ * package of `Celsius`. Only the owner of `Celsius` satisfies the rule this way, the owner of `Float64` and the owner
+ * of `From` satisfy it through the other two, and a fourth package owns none of the three - so the implementation
+ * still has exactly one possible author.
+ *
+ * Only the **top level** of an argument counts, and only a named type. `From<List<Celsius>>` does not: an argument
+ * that merely contains an owned type somewhere inside would let one package claim an implementation through a
+ * nesting another package wrote, and the overlap rule proves disjointness by heads alone.
+ */
+fn ownsTraitArgument(var checker: Checker, implementation: Implementation): Bool {
+  const applied = implementation.capability ?? checker.invalidType
+  const arguments = match checker.types.form(applied) {
+    .Nominal(_, held) => held
+    _ => {
+      return false
+    }
+  }
+  for argument in arguments {
+    if const Some(symbol) = headSymbolOf(checker, argument) {
+      if packageOfSymbol(checker, symbol) == implementation.package {
+        return true
+      }
+    }
+  }
+  false
+}
+
 fn reportOrphan(var checker: Checker, implementation: Implementation, applied: TypeId) {
   const target = checker.describe implementation.target
   const capability = checker.describe applied
   const message = "`extend {target} with {capability}`: neither `{target}` nor `{capability}` belongs to this package"
-  const note = "An implementation belongs to the package of the type or to the package of the trait,"
+  var note = "An implementation belongs to the package of the type or to the package of the trait,"
     + " so that no two packages can write the same one"
+  // With arguments there is a third way in, and a trait that has them is exactly where somebody reaches for it:
+  // `extend Float64 with From<Celsius>` converts an owned type into a foreign one
+  if hasArguments(checker, applied) {
+    note = note + ", or to the package of a type named as an argument of the trait"
+  }
   checker.report implementation.module, Diagnostic.error(message, implementation.at).withNote(note)
+}
+
+fn hasArguments(checker: Checker, applied: TypeId): Bool {
+  if const .Nominal(_, held) = checker.types.form(applied) {
+    return !held.isEmpty()
+  }
+  false
 }
 
 /** Two implementations of one trait may not overlap, and disjointness is only proved by different heads. */
@@ -1672,6 +1720,14 @@ fn reportOverlap(var checker: Checker, first: Int, second: Int) {
   if !couldUnify(checker, leftTrait, rightTrait) {
     return
   }
+  // One of the two covers every type: the other one was written by hand against a trait nobody implements directly,
+  // and the message that helps is the line to write instead
+  if reportBlanketOverlap(checker, left, right) {
+    return
+  }
+  if reportBlanketOverlap(checker, right, left) {
+    return
+  }
   const target = checker.describe right.target
   const capability = checker.describe rightTrait
   const other = checker.program.graph.at(left.module).path
@@ -1680,6 +1736,105 @@ fn reportOverlap(var checker: Checker, first: Int, second: Int) {
     Diagnostic.error("`{target}` already implements `{capability}` (in `{other}`)", right.at)
       .withNote("Two implementations of one trait may not overlap: only different target types tell them apart")
   )
+}
+
+/**
+ * `extend Celsius with Into<Float64>`: the trait already has a **blanket** implementation, so nobody implements it
+ * directly and the overlap is not the point - the point is which trait to implement instead.
+ *
+ * Answers whether it said anything. It says something where `blanket` covers every type, where the hand-written one
+ * does not, and where the blanket names one bound on one trait in its `where` clause - which is what makes the line to
+ * write derivable. Anything else keeps the plain overlap message.
+ */
+fn reportBlanketOverlap(var checker: Checker, blanket: Implementation, written: Implementation): Bool {
+  if written.module == blanket.module {
+    return false
+  }
+  const covered = targetShapeOf checker, blanket.target
+  if const .Blanket = targetShapeOf(checker, written.target) {
+    return false
+  }
+  if const .Blanket = covered {
+    const advice = match blanketAdviceOf(checker, blanket, written) {
+      Some(found) => found
+      None => {
+        return false
+      }
+    }
+    const capability = nameOfCapability checker, written.capability
+    const source = nameOfCapability checker, firstBoundTraitOf(blanket)
+    const package = checker.program.workspace.packages[blanket.package].name
+    const target = checker.describe written.target
+    var note = "Write `{advice}`: the blanket implementation in `{package}` makes it out of that"
+    if const Some(member) = onlyMemberOf(blanket) {
+      note = "Write `{advice}`: the blanket implementation in `{package}` makes `{target}.{member}()` out of that"
+    }
+    checker.report(
+      written.module,
+      Diagnostic.error("`{capability}` comes from `{source}` for every type", written.at).withNote(note)
+    )
+    return true
+  }
+  false
+}
+
+/**
+ * The line to write instead: the blanket's own `where` clause with the concrete types of the hand-written
+ * implementation put in. `Target: From<Source>` with `Source` as `Celsius` and `Target` as `Float64` is
+ * `extend Float64 with From<Celsius>`.
+ */
+fn blanketAdviceOf(var checker: Checker, blanket: Implementation, written: Implementation): String? {
+  if blanket.bounds.length() != 1 {
+    return None
+  }
+  const bound = blanket.bounds[0]
+  if bound.traits.length() != 1 {
+    return None
+  }
+  const generics = blanket.generics
+  var mapping: Map<ParameterId, TypeId> = [:]
+  const target = written.target
+  if !matchTypePattern(checker, blanket.target, target, generics, mapping) {
+    return None
+  }
+  const pattern = blanket.capability ?? checker.invalidType
+  const applied = written.capability ?? checker.invalidType
+  if !matchTypePattern(checker, pattern, applied, generics, mapping) {
+    return None
+  }
+  const subject = substitute checker.types, bound.subject, mapping
+  const capability = substitute checker.types, bound.traits[0], mapping
+  if !isConcrete(checker, subject) || !isConcrete(checker, capability) {
+    return None
+  }
+  const shownSubject = checker.describe subject
+  const shownCapability = checker.describe capability
+  Some "extend {shownSubject} with {shownCapability}"
+}
+
+/** The trait of the first bound of an implementation, which for a blanket is where its condition stands. */
+fn firstBoundTraitOf(implementation: Implementation): TypeId? {
+  const bound = implementation.bounds.first()?
+  bound.traits.first()
+}
+
+/** `Into` of `Into<Target>`, for a message that talks about the trait and not about one application of it. */
+fn nameOfCapability(checker: Checker, applied: TypeId?): String {
+  match capabilitySymbolOf(checker, applied) {
+    Some(symbol) => checker.symbolAt(symbol).name
+    None => "the trait"
+  }
+}
+
+/** The one member a blanket provides, where it provides exactly one: `into` of the blanket over `From`. */
+fn onlyMemberOf(implementation: Implementation): String? {
+  if implementation.members.length() != 1 {
+    return None
+  }
+  for (name, _) in implementation.members {
+    return Some name
+  }
+  None
 }
 
 /** Conservative: a generic parameter unifies with anything, and only two different heads are provably disjoint. */

@@ -318,11 +318,12 @@ public const preludeSource = r"""
     native fn contains(self, value: Item): Bool
   }
 
-  /** `Array.of(1, 2)` is an `Array<Int, 2>`: the number of arguments is the size, and the checker says so (gap 51). */
+  /** `[1, 2]` against an `Array<Int, 2>` writes the items into the inline slots, and the checker counts them. */
   public native type Array<Item, const Size: Int>
     with Iterable<Item>, Length, MutableIndexed<Int, Item>
   {
-    native fn of(...items: Item): Array<Item, Size>
+    native fn filled(value: Item): Array<Item, Size>
+    native fn generated(produce: (index: Int) => Item): Array<Item, Size>
     native fn from(items: Iterable<Item>): Array<Item, Size>?
 
     native fn length(self): Int
@@ -383,6 +384,17 @@ public const preludeSource = r"""
     }
   }
 
+  /** As in `std/core`: the blanket that gives every `TryFrom` its `TryInto`, which nothing implements by hand. */
+  public trait TryInto<Target, Failure> {
+    fn tryInto(self): Result<Target, Failure>
+  }
+
+  extend<Source, Target, Failure> Source with TryInto<Target, Failure> where Target: TryFrom<Source, Failure> {
+    fn tryInto(self): Result<Target, Failure> {
+      Target.tryFrom self
+    }
+  }
+
   /** As in `std/core`: `a ?? b` is `a.orElse(b)`, so it is a trait like every other operator. */
   public trait OrElse<Value> {
     fn orElse(self, fallback: lazy Value): Value
@@ -405,7 +417,7 @@ public const workspace = [
     public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
     public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
     public use Set, TrieSet, TrieMap, TrieList from "./types"
-    public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
+    public use From, Into, TryFrom, TryInto, Encode, Length, Close, Task from "./types"
     public use print, printError, panic, using, do, assert, nameOf, Expression from "./types"
     public use Void from "./types"
     public use isSame from "./types"

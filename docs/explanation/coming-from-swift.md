@@ -249,12 +249,17 @@ lists what carries over would be an advertisement.
 - **`??` as an operator the compiler knows about for `Optional`.** `a ?? b` is `a.orElse(b)`, so it is the trait `OrElse`
   and `Result` and a type of your own can come with it. `?.` stays `Option`-only, because it chooses between `map` and
   `flatMap` by the type of the result and a trait cannot say that without a type constructor with a hole in it.
+- **Overloading by argument type and by label.** Swift picks between `draw(_: Circle)` and `draw(_: Square)`, and
+  between two functions that differ only in their labels. Here a name means one declaration: the operation belongs to
+  its receiver (a method, or an `extend`), or to a trait with a parameter (`From<Source>`, `Multiply<Other, Output>`),
+  and a second arity is a default parameter. See [where are my overloads](where-are-my-overloads.md).
 - **Guard statements as a shape of their own.** `guard let x = opt else { return }` is exactly what `?` already does
   at the end of an expression; a function that returns `Option` or `Result` never needs a separate early-exit
   keyword. See [The question mark operator](../language/errors/question-mark.md).
 
 ## Related
 
+- [Where are my overloads](where-are-my-overloads.md) - one signature per call, and the two forms that replace an overload set.
 - [Why values instead of references](why-values-instead-of-references.md) - the argument behind `const`/`var`
   replacing struct and class.
 - [Shared types](../language/types/shared-types.md) - `shared type` in full, the one place Swift's `let`-on-a-class

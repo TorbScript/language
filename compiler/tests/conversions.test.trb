@@ -1,6 +1,6 @@
 /**
- * `?`, `??`, `?.` and `into()`: the four constructs that are nothing but calls, and whose meaning comes out of
- * `From`, `Option` and `Result` instead of out of a node of the syntax tree.
+ * `?`, `??`, `?.`, `into()` and `tryInto()`: the constructs that are nothing but calls, and whose meaning comes out of
+ * `From`, `TryFrom`, `Option` and `Result` instead of out of a node of the syntax tree.
  */
 
 use test, group from "std/test"
@@ -239,7 +239,7 @@ group "`?.`" {
   }
 }
 
-group "`into()` and `From`" {
+group "`into()`, `tryInto()` and their traits" {
   test "the target comes from the expectation, and the conversion is the `From` of that target" {
     const source = "type Celsius \{\n  degrees: Float\n\}\n\ntype Fahrenheit \{\n  degrees: Float\n\}\n\n"
       + "extend Celsius with From<Fahrenheit> \{\n"
@@ -280,6 +280,87 @@ group "`into()` and `From`" {
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.typeOf("Port.tryFrom(8080)") == "Result<Port, String>")
+  }
+
+  test "`tryInto()` reads its target and its failure out of the `Result` that is expected of it" {
+    const source = "type Port \{\n  value: Int\n\}\n\n"
+      + "extend Port with TryFrom<Int, String> \{\n"
+      + "  fn tryFrom(value: Int): Result<Port, String> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
+      + "fn probe() \{\n  const port: Result<Port, String> = 8080.tryInto()\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("8080.tryInto()") == "Result<Port, String>")
+    assert(found.adaptationsOf("8080.tryInto()") == ["convert tryFrom through Port: TryFrom<Int64, String>"])
+    assert(found.resolutionOf("8080.tryInto()") == "call tryFrom")
+  }
+
+  test "a target that has no `TryFrom` from this source says how to provide it" {
+    const source = "type Port \{\n  value: Int\n\}\n\n"
+      + "fn probe() \{\n  const port: Result<Port, String> = 8080.tryInto()\n\}"
+    assert(problems(source) == ["`Int64` does not convert into `Port`"])
+    assert(
+      notes(source)
+        == [
+          "`tryInto()` is the `TryFrom` of the target: `extend Port with TryFrom<Int64, String>` provides it",
+        ]
+    )
+  }
+
+  test "nothing that says the target is a message of its own, and a `?` passes none down" {
+    const source = "type Port \{\n  value: Int\n\}\n\n"
+      + "extend Port with TryFrom<Int, String> \{\n"
+      + "  fn tryFrom(value: Int): Result<Port, String> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
+      + "fn probe() \{\n  const port = 8080.tryInto()\n\}"
+    assert(problems(source) == ["The target of `tryInto()` is not known here"])
+    assert(
+      notes(source)
+        == [
+          "It comes from the `Result<Target, Failure>` that is expected of the call, and a `?` on the call passes"
+            + " none down: annotate that `Result`, or write `Target.tryFrom(value)` - the source is `Int64`",
+        ]
+    )
+  }
+
+  test "writing `TryInto` by hand names the `TryFrom` to write instead" {
+    const source = "type Port \{\n  value: Int\n\}\n\n"
+      + "extend Port with TryInto<Int, String> \{\n"
+      + "  fn tryInto(self): Result<Int, String> \{\n    Ok(value)\n  \}\n\}"
+    assert(problems(source) == ["`TryInto` comes from `TryFrom` for every type"])
+    assert(
+      notes(source)
+        == [
+          "Write `extend Int64 with TryFrom<Port, String>`: the blanket implementation in `std/prelude` makes"
+            + " `Port.tryInto()` out of that",
+        ]
+    )
+  }
+
+  test "a receiver of the trait type `Into<Target>` has `into` already, and the call is an ordinary one" {
+    const source = "type Path \{\n  text: String\n\}\n\n"
+      + "fn open(path: Into<Path>): Path \{\n  const target: Path = path.into()\n  target\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("path.into()") == "Path")
+  }
+
+  test "the same for `tryInto` on a receiver of the trait type `TryInto<Target, Failure>`" {
+    const source = "type Path \{\n  text: String\n\}\n\n"
+      + "fn open(path: TryInto<Path, String>): Result<Path, String> \{\n  path.tryInto()\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("path.tryInto()") == "Result<Path, String>")
+  }
+
+  test "a concrete receiver still goes through the `From` of the target, once" {
+    const source = "type Celsius \{\n  degrees: Float\n\}\n\ntype Fahrenheit \{\n  degrees: Float\n\}\n\n"
+      + "extend Celsius with From<Fahrenheit> \{\n"
+      + "  fn from(value: Fahrenheit): Celsius \{\n    Celsius(value.degrees)\n  \}\n\}\n\n"
+      + "fn cool(): Fahrenheit \{\n  Fahrenheit(32.0)\n\}\n\n"
+      + "fn probe() \{\n  const warm: Celsius = cool().into()\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("cool().into()") == "Celsius")
+    assert(found.adaptationsOf("cool().into()") == ["convert from through Celsius: From<Fahrenheit>"])
   }
 
   /** There is no implicit `Some`: wrapping a value into an `Option` is written, the four coercions do not include it. */

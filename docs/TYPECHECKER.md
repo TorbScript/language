@@ -1787,18 +1787,17 @@ nothing told a back end how such a literal is built.
 - **Map literals had the same hole and are fixed by the same three rules**, minus the `Array` one. **Set literals have
   none of it, because the syntax has no set literal yet:** `{a, b}` is in the concept and nothing in the parser builds a
   node for it, so there was nothing to verify. When it arrives it is `listLiteralType` with `Set` in place of `List`.
-- **`Array.of(...items: Item): Array<Item, Size>` is a well-known special case in `checkCall`.** There is no way to
-  declare that the size of a result is the number of arguments, and the language gets none, so `checkArrayOf` counts the
-  variadic arguments and solves `Size` with the count; with an expectation the two have to agree, with the same message
-  as the literal. A `...` follows the same rule as in a literal. What triggers it is the *shape* and not the declaration
-  it came from - a call of a member named `of` that has a variadic parameter and whose result is the well-known
-  `Array<Item, Size>` - because a member symbol does not carry its owner; a hand-written `fn of(...items: Int):
-  Array<Int, 4>` would be counted the same way, and counting is the only thing that could make that signature true.
-  `Array [1, 2, 3, 4]` is **not** a second spelling: it already parses as an index expression, and a command's first
-  argument may not start with `[`.
-- **`WellKnown.array`** joins `list` and `map`: both rules ask for the symbol at every literal and at every call.
-- The `Array.of` message says "this **call** has 3" and the literal's says "this **literal** has 3": one
-  `reportArraySize` with a word for the place.
+- **A literal is the only place the checker counts items.** There is no factory whose number of arguments becomes the
+  `Size`, because no signature can say that: an Array is built from a literal, from `Array.filled(value)` or
+  `Array.generated { index => ... }` (both take `Size` from the expected type by ordinary inference) or from
+  `Array.from(items)`, which counts at run time and answers an `Option`. `Array [1, 2, 3, 4]` is not a spelling of a
+  factory either: it already parses as an index expression, and a command's first argument may not start with `[`.
+- **`WellKnown.array`** joins `list` and `map`: the literal rule asks for the symbol at every literal.
+- **A `const` parameter that nothing solves gets its own note.** `Array.filled(0.0)` with no expected type is
+  `` Cannot infer `Size` of `Array` `` with the note "`` `Size` `` is a `const` parameter and is never inferred from
+  an argument: write it in the type that is expected of this value". The ordinary note names the closure parameter,
+  the result and the written type argument, and none of the three applies to a value: `VariableState.isConst` carries
+  `ParameterDeclaration.isConst` from the instantiation to `reportUnsolved`.
 
 ### What the follow-ups add (gaps 53 and 54)
 
@@ -2453,16 +2452,15 @@ need a second implementation for `Never` as the source, and `Never` has no value
 "Collections and Iteration" says `[1, 2]` is a `List` and `["a": 1]` a `Map`, and "literals adapt to the expected type"
 is stated for numbers. Nothing said what an `Array<Item, Size>` or a `Set<String>` does with one - `listLiteralType`
 handed *any* expected collection type back unverified, so `const wrong: Array<Int, 4> = [1, 2, 3]` and
-`const origin: Point = [1, 2]` both checked without a problem, and no table said how the literal is built. And nothing
-links the number of arguments of `Array.of(1, 2, 3)` to its `Size`: a const parameter cannot be written in terms of an
-argument count.
+`const origin: Point = [1, 2]` both checked without a problem, and no table said how the literal is built. A const parameter also cannot be written in terms of an argument count, so nothing could
+link the number of arguments of a factory to its `Size`.
 _Proposal:_ a collection literal adapts to exactly three things and nothing else - the collection its expected type
 names, built directly; an `Array<Item, Size>`, filled inline, whose number of items has to be `Size` (an open `Size` is
 solved by the count, a spread has to come from an `Array` too); and any `From<Iterable<Item>>` target, built from the
 collection, which is the one collection protocol the language has. Anything else is an error that names what a target has
 to be. What the literal became is recorded per span (`CollectionLiteral`), so a back end reads the decision instead of
-making it again. `Array.of` is a well-known special case of the same counting rule, and there is no second spelling of it:
-`Array [1, 2, 3, 4]` is an index expression.
+making it again. A literal is the only place items are counted - `Array [1, 2, 3, 4]` is an index expression, and a
+factory whose argument count became the `Size` would be a signature that lies, so the language has none.
 _Reason:_ it needs no new trait - "no `Collectable`/`FromIterator`" stays - and it puts the one decision a back end
 cannot make in the one place that already knows the expected type. The fast path for a literal is the compiler's job
 precisely because the compiler knows the items; for a *value* it is a type pattern inside `from`, which is an ordinary
@@ -2624,7 +2622,7 @@ _Decision:_ accepted. `namesImplicitParameter` in `closure.trb` asks the frames,
 the local back, and the message is the catalogue's minus the line of the shadowed name (a `Diagnostic` carries notes,
 not a second span). It found **five** ambiguous reads in the sources, and every one of them really was ambiguous -
 `any { _ == value }` in `Collection.contains`, `(0..count).map { value }` in `List.filled`,
-`indexed().find { _.1 == value }` in `List.indexOf`, `box.update { _.added value }` in `Queueing.add` and
+`indexed().find { _.item == value }` in `List.indexOf`, `box.update { _.added value }` in `Queueing.add` and
 `indicators.any({ value.startsWith _ })` in the documentation's own index writer. All five name the parameter now.
 
 **57. Does a binding that destructures work at the top level of a file?**
@@ -2693,3 +2691,71 @@ entry file**, where the program really does end with the error - inside a functi
 What stays open is a body whose result is *inferred*: `fn probe() { read()? }` produces `Void` and is accepted, because
 the result is not settled when the `?` is checked. Closing it needs the question asked again after the body, with the
 span kept, and it is a message and not a hole in the types.
+
+**60. May a package convert its own type into a foreign one?**
+Rule 2 of coherence asked the package to own the target or the trait, so `extend Float64 with From<Celsius>` was
+refused - neither `Float64` nor `From` is yours - and `extend Celsius with Into<Float64>` overlapped the blanket over
+`From`. A package could therefore not convert its own type into a foreign one at all, which is the most ordinary thing
+a conversion does.
+_Proposal:_ count a type named as an **argument** of the trait as owning the implementation. Rust's RFC 2451 is the
+model, in its stricter reading: only the top level of an argument counts, and only a named type, so `From<List<Celsius>>`
+is not yours.
+_Reason:_ the implementation still has exactly one possible author. The owner of `Celsius` reaches it through the
+argument, the owners of `Float64` and of `From` through the two existing ways, and a fourth package owns none of the
+three - and the overlap rule still rejects two implementations that could unify.
+
+_Decision:_ accepted (`ownsTraitArgument` in `implementation.trb`). A **blanket** target keeps the old rule: it covers
+every type, so no owned argument narrows it to a line only one package could write, which is Rust's reason as well. The
+message of rule 2 is unchanged, and its note gains ", or to the package of a type named as an argument of the trait"
+where the trait has arguments - a trait without them has no third way in and says nothing about one.
+
+**61. What does a hand-written implementation of a trait that has a blanket implementation say?**
+`extend Celsius with Into<Float64>` got the generic overlap message, which names a file of `std/` and a rule about
+disjointness. Neither tells the reader the one thing they need: `Into` is not implemented by hand, `From` is.
+_Proposal:_ where one of two overlapping implementations covers every type and the other does not, report at the
+hand-written one and build the advice from the blanket's own `where` clause with the concrete types substituted.
+_Reason:_ the blanket already says what to implement instead - `Target: From<Source>` *is* the line to write - so the
+message can be derived rather than special-cased per trait.
+
+_Decision:_ accepted (`reportBlanketOverlap` and `blanketAdviceOf`). `` `Into` comes from `From` for every type `` with
+the note "Write `extend Float64 with From<Celsius>`: the blanket implementation in `std/core` makes `Celsius.into()` out
+of that". The advice is only given where the `where` clause is **one bound on one trait**, which every blanket of the
+standard library is; anything else keeps the plain overlap message, because a clause of several bounds is a sentence and
+not a line to write. The member in the note is the blanket's own, where it provides exactly one.
+
+**62. How does `tryInto()` find its target?**
+`into()` is a well-known call whose target is the expected type (`conversionType`). `TryInto<Target, Failure>` joins it,
+and it needs two types rather than one: `TryFrom` carries the failure as well.
+_Proposal:_ read both out of the `Result` that is expected of the call. `Target` and `Failure` are the two arguments of
+an expected `Result<Target, Failure>`; the receiver is the `Source`; and the conversion is the `TryFrom` implementation
+of the target, exactly as `into()` uses the `From` of its target.
+_Reason:_ it is the same rule as `into()` and needs no new inference, only a second reading of the expected type.
+
+_Decision:_ accepted (`fallibleConversionType` in `expression.trb`, `WellKnown.tryFrom`). **What it does not reach is a
+`?` on the call:** `tryType` infers its operand without an expectation, so `const small: Int8 = wide.tryInto()?` has no
+`Result` to read. Pushing an expectation through `?` would mean deriving the failure from the enclosing function's error
+type, which is a change to inference and not to one call, so the case says so plainly instead: "The target of
+`tryInto()` is not known here", with the note that names `Target.tryFrom(value)`. A call with no annotation at all gets
+the same message, which is the honest answer there too.
+
+No blanket makes every `From` a `TryFrom` with `Never` as the failure: it would overlap every hand-written `TryFrom`,
+because disjointness is proved by heads alone.
+
+**63. Is `value.into()` always the `From` of the target?**
+`isConversionCall` caught every argument-less call of a member named `into` that had an expected type, and asked
+nothing about the receiver. `Into<Target>` is also a *type*, though, and a value of it has `into` as the trait's one
+required member - so `fn open(path: Into<Path>) { const target: Path = path.into() }` was told
+`` `Into<Path>` does not convert into `Path` `` about the one call the parameter exists for.
+_Proposal:_ the conversion is what happens where the receiver's own type has no such member. Look the member up on the
+receiver once its type is known; where it is there, the call is an ordinary one and goes through `checkCall`.
+_Reason:_ it is what the special case always meant. A concrete receiver has no `into`, because the blanket over `From`
+cannot be resolved without knowing the target - which is exactly why the expected type has to decide. A receiver that
+already has the member needs no rule of the language at all.
+
+_Decision:_ accepted (`hasMemberNamed` in `expression.trb`, for `into` and for `tryInto` alike). The receiver is
+inferred by `conversionType` and then again by `resolveTarget` inside `checkCall`; that is idempotent for a type and a
+resolution, and a diagnostic that would arrive twice is dropped by `reportHere`, which keeps one message per span **and**
+text. **Two neighbouring holes stay open and are not this entry:** `path.into()` under `<Source: Into<Path>>` type
+checks and reaches neither back end, and a `where` clause whose *subject* is a concrete type is not honoured -
+`fn open<Source>(path: Source): Path where Path: From<Source> { Path.from path }` answers
+`` `Path` has no member `from` ``.

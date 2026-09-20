@@ -31,7 +31,7 @@ What does not belong here: the language rules that a type participates in, which
 
 - **[std/core](core.md)** - The bottom of the standard library: Option, Result, Error, the operator and conversion traits, and the control structures that are functions.
 - **[std/text](text.md)** - Char, a Unicode scalar value, and String, always-valid UTF-8 text with no length() and no indexing by character.
-- **[std/number](number.md)** - Every numeric type of the language, the traits their arithmetic and bit operations go through, and Bits.
+- **[std/number](number.md)** - Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
 - **[std/collections](collections.md)** - The collection traits every signature talks about, and the implementations that only show up where one is built.
 - **[std/iteration](iteration.md)** - Iterable and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
 - **[std/encoding](encoding.md)** - Encode and Decode, the Encoder and Decoder a format implements, and Format for the streaming side.
@@ -39,6 +39,8 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/task](task.md)** _(planned)_ - Task and Channel, the two shared types that connect concurrent work, and spawn - designed, but not run by any back end yet.
 - **[std/console](console.md)** - print and printError, the two functions that write to the standard streams.
 - **[std/math](math.md)** - The functions on Float that read as an operation rather than a method, under the math namespace import.
+- **[std/linear](linear.md)** - Vectors, matrices, quaternions and angles over one generic scalar, plus Fixed, the fixed-point scalar whose answers are the same bits everywhere.
+- **[std/geometry](geometry.md)** - The shapes of the plane and of space, with the half-open rule that makes a row of rectangles a tiling and the ray tests that answer a distance.
 - **[std/json](json.md)** - Json for encoding and decoding, and JsonValue for the rare document whose shape is not known ahead of time.
 - **[std/time](time.md)** - Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.
 - **[std/fs](fs.md)** - File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.

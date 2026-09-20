@@ -11,7 +11,6 @@ keywords:
   - Set
   - Stack
   - Queue
-  - Array
 source:
   - std/collections/src/lib.trb
   - std/collections/src/collection.trb
@@ -20,18 +19,20 @@ source:
   - std/collections/src/set.trb
   - std/collections/src/stack.trb
   - std/collections/src/queue.trb
-  - std/collections/src/array.trb
 ---
 
-`std/collections` is one trait per kind of collection - `List`, `Map`, `Set`, `Stack`, `Queue` - plus `Array`, which is
-not a collection at all. A signature, a field or a binding names the trait; the implementation (`ArrayList`, `HashMap`,
-...) only shows up where something is constructed. Every name below is already in scope through the prelude.
+`std/collections` is one trait per kind of collection - `List`, `Map`, `Set`, `Stack`, `Queue` - and the
+implementations behind them. A signature, a field or a binding names the trait; the implementation (`ArrayList`,
+`HashMap`, ...) only shows up where something is constructed. Every name below is already in scope through the prelude.
+
+**An `Array` is not a collection**, and it is not here: it is the inline storage primitive a data structure is written
+on top of, so it lives in [std/core](core.md) next to the other types the language itself refers to.
 
 ## Import
 
 ```trb fragment
 use Collection, List, ArrayList, Map, TrieMap, Set, TrieSet from "std/collections"
-use Stack, ArrayStack, Queue, ArrayQueue, Array from "std/collections"
+use Stack, ArrayStack, Queue, ArrayQueue from "std/collections"
 ```
 
 ```trb check
@@ -165,28 +166,6 @@ public trait Queue<Item>
 the order of `dequeue`). `popped()`/`dequeued()` are the participle form for a `const` binding: the top or next element
 together with the rest, or `None` when empty. `ArrayStack` is a `List` underneath; `ArrayQueue` is a ring buffer that
 grows only when it is full. Both are `Equals` and `Hash` wherever `Item` is, order-dependent like a `List`.
-
-### Array
-
-```trb fragment
-public native type Array<Item, const Size: Int>
-  with Iterable<Item>, Length, MutableIndexed<Int, Item>
-{
-  fn filled(value: Item): Array<Item, Size>
-  fn of(...items: Item): Array<Item, Size>
-  fn from(items: Iterable<Item>): Array<Item, Size>?
-  fn set(var self, index: Int, value: Item)
-  fn fill(var self, value: Item)
-  fn mapped<Output>(self, transform: (value: Item) => Output): Array<Output, Size>
-}
-```
-
-A fixed number of items, and the number is part of the type (`Array<Float, 16>`): no storage on the heap, no reference
-count, and copying it copies its items. `Size` is a const parameter - a literal, a named `const` or another const
-parameter - and there is no arithmetic over one, so an out-of-bounds index that the compiler can work out at the call
-site is a compile error rather than a panic. `Array.of(1, 2, 3, 4)` fixes `Size` from the number of arguments the
-compiler counts; `Array.from(iterable)` is the fallible runtime form and answers `Array<Item, Size>?`. It is `Equals` and
-`Hash` wherever `Item` is, by index and therefore order-dependent.
 
 <!-- torb:declarations:end -->
 

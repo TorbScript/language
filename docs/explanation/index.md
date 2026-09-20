@@ -47,5 +47,6 @@ reference instead of restating it.
 - **[Why traits instead of inheritance](why-traits-instead-of-inheritance.md)** - A type comes with a trait instead of extending a base class, so composition and delegation replace an inheritance hierarchy, and a value can still be typed by capability without carrying a class it did not ask for.
 - **[Why a method is a constant](why-one-member-namespace.md)** - A method is structurally a constant of the type that holds a receiver closure, so a field and a method live in one namespace and cannot share a name, which is what lets a command call on a field write it instead of needing a second rule.
 - **[Why every match is exhaustive](why-exhaustive-matches.md)** - A public ADT is a promise about every case it has today, so a match must cover all of them and a new case is a breaking change, while a library that wants room to grow hides its ADT behind a type instead.
+- **[Where are my overloads](where-are-my-overloads.md)** - A call has exactly one signature, because that signature is what gives every argument its meaning, so overloading by parameter type and uniform function call syntax are both out.
 
 <!-- torb:index:end -->

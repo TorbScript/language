@@ -1,6 +1,6 @@
 ---
 title: std/number
-summary: Every numeric type of the language, the traits their arithmetic and bit operations go through, and Bits.
+summary: Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
 kind: package
 status: stable
 order: 30
@@ -10,13 +10,14 @@ keywords:
   - Float
   - Decimal
   - Bits
+  - Real
   - overflow
 source:
   - std/number/src/lib.trb
 ---
 
-`std/number` declares every numeric type, the traits their operators go through (`Numeric`, `Signed`, `Bits`), and the
-two error types a numeric conversion fails with. Every name below is already in scope through the prelude.
+`std/number` declares every numeric type, the traits their operators go through (`Numeric`, `Signed`, `Bits`, `Real`),
+and the two error types a numeric conversion fails with. Every name below is already in scope through the prelude.
 
 ## Import
 
@@ -34,7 +35,7 @@ print value.absolute()
 
 <!-- torb:declarations:begin -->
 
-### Numeric, Signed, Bits
+### Numeric, Signed, Bits, Real
 
 ```trb fragment
 public trait Numeric
@@ -61,6 +62,41 @@ masking and shifting are named methods on `Bits` instead: `value.bitwiseAnd(0xFF
 `seed.bitwiseExclusiveOr(byte).shiftedLeft(by: 5)`. The shift of a signed type is arithmetic (it keeps the sign), the
 shift of an unsigned type is logical, and a shift by a negative amount or by the width of the type or more panics, like
 every other operation that leaves its range.
+
+```trb fragment
+public trait Real with Signed {
+  fn squareRoot(self): Self
+  fn sine(self): Self
+  fn cosine(self): Self
+  fn tangent(self): Self
+  fn arcSine(self): Self
+  fn arcCosine(self): Self
+  fn arcTangent(self): Self
+  fn arcTangentDivided(self, by: Self): Self
+  fn floor(self): Self
+  fn ceiling(self): Self
+  fn round(self): Self
+  fn halved(self): Self
+  fn radiansOfDegrees(self): Self
+  fn degreesOfRadians(self): Self
+  fn unit(self): Self
+  fn doubled(self): Self
+}
+```
+
+`Real` is `Signed` plus everything that needs a root or an angle, and it is the bound a library that is generic over its
+scalar separates its two halves along: `dot` and `lengthSquared` are arithmetic and need only `Numeric`, while `length`,
+`normalized` and every rotation need a `Real`. Angles are in radians throughout, and `arcTangentDivided(by:)` is the
+two-argument arc tangent that uses the sign of both to pick the quadrant - it takes a label because the order of the two
+is the one thing everybody gets wrong.
+
+Two implementors. `Float64` is the fast one and answers whatever the platform's mathematics library answers, which is not
+the same bits on every machine. `Fixed` (`std/linear`) is the deterministic one: every operation on it, the square root
+and the trigonometry included, is integer arithmetic, so a lockstep simulation and a replay run on it.
+
+`unit`, `halved` and `doubled` are the constants a body that is generic over its scalar cannot write for itself: a
+numeric literal has a type, and inside such a body that type is the type parameter. `unit(self)` does not read `self` at
+all - it is the scalar type asked for its own one, through a value of it.
 
 ### NumberParseError, NumberRangeError
 

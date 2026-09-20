@@ -39,6 +39,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `explanation/coming-from-typescript.md` - **Coming from TypeScript** (contrast): What carries over from TypeScript - literal unions, structural-looking optional chaining, declarative generics - and the four places TypeScript's type-level programming has no counterpart at all.
 - `explanation/index.md` - **Why the language is like this** (index): The arguments behind the decisions, and the contrast pages for people and models arriving from Rust, Swift, Kotlin or TypeScript.
 - `explanation/mistakes-models-make.md` - **What a model trained on other languages gets wrong** (explanation): The mistakes a language model makes in TorbScript because it has read Rust, Swift, Kotlin and TypeScript, each with the wrong line, the right line and the diagnostic.
+- `explanation/where-are-my-overloads.md` - **Where are my overloads** (explanation): A call has exactly one signature, because that signature is what gives every argument its meaning, so overloading by parameter type and uniform function call syntax are both out.
 - `explanation/why-cases-are-never-bare.md` - **Why a case is never bare** (explanation): Circle alone is a type, a function or a variable, exactly like every other name, so a case is written Shape.Circle, .Circle or imported by its path, and a misspelled case can never fall back to matching everything.
 - `explanation/why-commands.md` - **Why a call is written as a command** (explanation): A call is written without parentheses wherever the grammar allows it, so a control structure, a DSL and an ordinary call share one shape and no library gets special syntax the language itself does not have.
 - `explanation/why-dead-changes-are-errors.md` - **Why a change that cannot be seen is an error** (explanation): A var that is changed and never read again, or the discarded result of a method that takes self, is a compile error rather than a lint, because with value semantics such a change is always a mistake and never a defensive copy.
@@ -206,7 +207,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 
 ## language/traits
 
-- `language/traits/coherence.md` - **Coherence and blanket implementations** (reference): A package may implement a trait for a type only if it owns the type or the trait, and two implementations of one trait may never overlap.
+- `language/traits/coherence.md` - **Coherence and blanket implementations** (reference): A package may implement a trait for a type only if it owns the type, the trait, or a type named as an argument of the trait, and two implementations of one trait may never overlap.
 - `language/traits/delegation.md` - **Delegation with by** (reference): by forwards a trait's required members to the one field of a single-field type, binding only to the trait or & group written directly in front of it.
 - `language/traits/extend.md` - **extend** (reference): extend adds constants and functions to a type after its declaration, with a trait or without one, never adds a field or a case, and is named by the file that uses it when it targets a type of another package.
 - `language/traits/index.md` - **Traits** (index): How a capability is declared, how a type comes with one, and how a trait is used as a type.
@@ -220,7 +221,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 ## language/types
 
 - `language/types/construction.md` - **Construction** (reference): Every type has exactly one constructor, generated from its fields in declaration order, and it never contains logic - validation and parsing are static factory functions instead.
-- `language/types/conversions.md` - **Conversions** (reference): From provides Into for free, TryFrom is for a conversion that can fail, Parse is for text, and the language has exactly four coercions that apply only where a type is expected.
+- `language/types/conversions.md` - **Conversions** (reference): From provides Into for free and TryFrom provides TryInto, Parse is for text, and the language has exactly four coercions that apply only where a type is expected.
 - `language/types/copy-and-equality.md` - **Copy and equality** (reference): Assigning, passing or capturing a value copies it, and Equals, Hash and copy are generated for a type without being written, each only if every field supports it.
 - `language/types/declaring-a-type.md` - **Declaring a type** (reference): One keyword declares every data type. Fields are const unless marked var, members are public unless marked private, and Equals, Hash, Show and copy are generated.
 - `language/types/exclusivity.md` - **Exclusivity** (reference): Two var accesses of the same call may never target the same path, so swap(a, a) and two indices the checker cannot tell apart are both compile errors, and items.swapAt is the one access that is allowed instead.
@@ -239,7 +240,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `language/values-and-types/bindings.md` - **Bindings** (reference): A const binding never changes and nothing below it changes; a var binding can be changed in place. That one rule replaces every mutable-and-immutable type pair.
 - `language/values-and-types/built-in-types.md` - **Built-in types** (reference): Every type a file has without an import - the sized numbers, Bool, Char, String, tuples, lists, maps, ranges, Option, function types, Void and Never.
 - `language/values-and-types/distinct-types.md` - **Distinct types** (reference): A distinct type is an ordinary single-field type, and `by` forwards specific traits to that field so the wrapper costs no boilerplate - there is no separate opaque-alias feature.
-- `language/values-and-types/floating-point.md` - **Floating-point numbers** (reference): On a Float, `==` is IEEE-754 and `compare` is a total order that disagrees with it on `nan` and `-0.0`, and neither Float type is Hash.
+- `language/values-and-types/floating-point.md` - **Floating-point numbers** (reference): On a Float every operator is IEEE-754 and `compare` is a total order that disagrees with them on `nan` and `-0.0`, and neither Float type is Hash.
 - `language/values-and-types/index.md` - **Values and types** (index): Bindings, the built-in types, and the type forms that are about values rather than about behaviour.
 - `language/values-and-types/integers.md` - **Integers** (reference): Eight sized integer types with fixed ranges on every platform, an unannotated literal is always Int64, and overflow is a compile error when it is written and a panic when it happens at runtime.
 - `language/values-and-types/literal-types.md` - **Literal types** (reference): `"tcp" | "udp"` is a type made only of specific values of one base type; only literals combine with `|`, because there are no unions of types.
@@ -259,13 +260,15 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `standard-library/environment.md` - **std/environment** (package): Environment, the one type that reads a process environment variable.
 - `standard-library/expression.md` - **std/expression** (package): Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
 - `standard-library/fs.md` - **std/fs** (package): File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.
+- `standard-library/geometry.md` - **std/geometry** (package): The shapes of the plane and of space, with the half-open rule that makes a row of rectangles a tiling and the ray tests that answer a distance.
 - `standard-library/http.md` - **std/http** (package): A minimal HTTP client - get, post and request answer a Task, and a response body is a stream of any size.
 - `standard-library/index.md` - **The standard library** (index): One page per package of std, what each contains, and which of them are in scope everywhere without an import.
 - `standard-library/io.md` - **std/io** (package): Standard input and the streams every process is started with - readLine for the short form, Source and Sink for the rest.
 - `standard-library/iteration.md` - **std/iteration** (package): Iterable and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
 - `standard-library/json.md` - **std/json** (package): Json for encoding and decoding, and JsonValue for the rare document whose shape is not known ahead of time.
+- `standard-library/linear.md` - **std/linear** (package): Vectors, matrices, quaternions and angles over one generic scalar, plus Fixed, the fixed-point scalar whose answers are the same bits everywhere.
 - `standard-library/math.md` - **std/math** (package): The functions on Float that read as an operation rather than a method, under the math namespace import.
-- `standard-library/number.md` - **std/number** (package): Every numeric type of the language, the traits their arithmetic and bit operations go through, and Bits.
+- `standard-library/number.md` - **std/number** (package): Every numeric type of the language, the traits their arithmetic and bit operations go through, and Real.
 - `standard-library/prelude.md` - **std/prelude** (package): The package of re-exports that is in scope in every file of a project, unless project.trb names another one.
 - `standard-library/process.md` - **std/process** (package): Process for arguments and exiting, Child for a running program's pipes, and ProcessOutput for what it left behind.
 - `standard-library/project.md` - **std/project** (package): The receiver type of project.trb - Project, Dependencies, Build, Test and Workspace.

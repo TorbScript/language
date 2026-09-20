@@ -156,6 +156,76 @@ group "Coherence" {
     assert problems(source).isEmpty()
   }
 
+  test "a type of this package as an argument of the trait is the third way in" {
+    const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
+      + "extend Float64 with From<Celsius> \{\n  fn from(value: Celsius): Float64 \{\n    value.degrees\n  \}\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "an argument that only *contains* a type of this package is not enough" {
+    const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
+      + "extend Float64 with From<List<Celsius>> \{\n"
+      + "  fn from(value: List<Celsius>): Float64 \{\n    1.0\n  \}\n\}"
+    assert(
+      problems(source)
+        == ["`extend Float64 with From<List<Celsius>>`: neither `Float64` nor `From<List<Celsius>>` belongs to this"
+          + " package"]
+    )
+  }
+
+  test "a package that owns none of the three is still refused, and the note names all three ways" {
+    const source = "extend Float64 with From<Int8> \{\n  fn from(value: Int8): Float64 \{\n    1.0\n  \}\n\}"
+    assert(
+      problems(source) == ["`extend Float64 with From<Int8>`: neither `Float64` nor `From<Int8>` belongs to this package"]
+    )
+    assert(
+      notes(source)
+        == [
+          "An implementation belongs to the package of the type or to the package of the trait, so that no two"
+            + " packages can write the same one, or to the package of a type named as an argument of the trait",
+        ]
+    )
+  }
+
+  test "a trait without arguments keeps the note it had, because there is no third way" {
+    const source = "extend String with Show \{\n  fn show(self): String \{\n    self\n  \}\n\}"
+    assert(
+      notes(source)
+        == [
+          "An implementation belongs to the package of the type or to the package of the trait, so that no two"
+            + " packages can write the same one",
+        ]
+    )
+  }
+
+  test "a trait that has a blanket implementation says which trait to implement instead" {
+    const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
+      + "extend Celsius with Into<Float64> \{\n  fn into(self): Float64 \{\n    degrees\n  \}\n\}"
+    assert(problems(source) == ["`Into` comes from `From` for every type"])
+    assert(
+      notes(source)
+        == [
+          "Write `extend Float64 with From<Celsius>`: the blanket implementation in `std/prelude` makes"
+            + " `Celsius.into()` out of that",
+        ]
+    )
+  }
+
+  test "the line it names is coherent, because the argument of the trait is a type of this package" {
+    const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
+      + "extend Float64 with From<Celsius> \{\n  fn from(value: Celsius): Float64 \{\n    value.degrees\n  \}\n\}\n\n"
+      + inBody("  const degrees: Float64 = Celsius(100.0).into()")
+    assert problems(source).isEmpty()
+  }
+
+  test "a blanket whose condition is not one trait bound keeps the plain overlap message" {
+    const source = "trait Loud \{\n  fn shout(self): String\n\}\n\n"
+      + "extend<Value> Value with Loud \{\n  fn shout(self): String \{\n    \"any\"\n  \}\n\}\n\n"
+      + "type Amount \{\n  value: Int\n\}\n\n"
+      + "extend Amount with Loud \{\n  fn shout(self): String \{\n    \"a\"\n  \}\n\}"
+    assert(problems(source) == ["`Amount` already implements `Loud` (in `app/src/main.trb`)"])
+  }
+
   test "a blanket implementation covers every type, so it needs the trait" {
     const source = "extend<Source> Source with Show \{\n  fn show(self): String \{\n    \"any\"\n  \}\n\}"
     assert(problems(source) == ["`extend Source with Show`: neither `Source` nor `Show` belongs to this package"])

@@ -10,7 +10,7 @@
 
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
-use Expression, Argument, TextSegment, Condition, Block, Statement from "../../syntax/ast"
+use Expression, Argument, CallStyle, TextSegment, Condition, Block, Statement from "../../syntax/ast"
 use MatchArm, PrefixOperator, InfixOperator, Closure, TypeReference from "../../syntax/ast"
 use SymbolId from "../symbols"
 use TypeId, TypeForm, TupleField, LiteralValue, FunctionForm, ParameterForm, ParameterMode, Witness from "./type"
@@ -103,8 +103,11 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
     // `.Circle(1.0)`, `.None`: the case of the type that is expected here
     .ImplicitMember(name) => implicitMemberType checker, name.text, annotation, expression.span
     // `value.into()` is chosen by the expected type, so it is the one call the callee alone cannot answer
-    .Call(callee, arguments, _) if isConversionCall(checker, callee, arguments, annotation) =>
-      conversionType checker, expression, callee, annotation
+    .Call(callee, arguments, style) if isConversionCall(checker, callee, arguments, annotation) =>
+      conversionType checker, expression, callee, arguments, style, expected
+    // `value.tryInto()` is the same, with the target and the failure read out of the expected `Result`
+    .Call(callee, arguments, style) if isFallibleConversionCall(checker, callee, arguments) =>
+      fallibleConversionType checker, expression, callee, arguments, style, expected
     .Call(callee, arguments, style) => checkCall checker, expression, callee, arguments, style, expected
     .Index(target, index) => indexType checker, target, index, expression.span
     .TupleLiteral(items) => tupleLiteralType checker, items, annotation
@@ -1138,7 +1141,7 @@ fn arrayLiteralType(var checker: Checker, items: List<Argument>, target: Expecte
     suppressVariables checker, target.size
     return target.annotation
   }
-  if !matchArraySize(checker, target.annotation, target.size, count, "literal", at) {
+  if !matchArraySize(checker, target.annotation, target.size, count, at) {
     return target.annotation
   }
   const item = resolveType checker, target.item
@@ -1150,7 +1153,7 @@ fn arrayLiteralType(var checker: Checker, items: List<Argument>, target: Expecte
  * How many items a `...` contributes to an array. Only an `Array` of a known size has an answer: anything else would
  * make the size of the array depend on a value, and the size is part of its type.
  */
-public fn spreadLengthOf(var checker: Checker, given: TypeId, item: TypeId): Int? {
+fn spreadLengthOf(var checker: Checker, given: TypeId, item: TypeId): Int? {
   const array = checker.wellKnown.array?
   const (symbol, arguments) = match checker.types.form(given) {
     .Nominal(found, held) => (found, held)
@@ -1177,26 +1180,18 @@ fn constantLengthOf(checker: Checker, size: TypeId): Int? {
 }
 
 /**
- * The number of items against the `Size` of the array. An open `Size` is solved by the count - that is how
- * `const numbers = Array.of(1, 2, 3)` gets its type - and a written one has to be exactly it. A `Size` that is a const
- * *parameter* (`Array<Float, Columns>` inside a generic type) says nothing here: what `Columns` is, the caller decides.
+ * The number of items of a literal against the `Size` of the array. An open `Size` is solved by the count, and a
+ * written one has to be exactly it. A `Size` that is a const *parameter* (`Array<Float, Columns>` inside a generic
+ * type) says nothing here: what `Columns` is, the caller decides.
  */
-public fn matchArraySize(
-  var checker: Checker,
-  annotation: TypeId,
-  given: TypeId,
-  count: Int,
-  /** `"literal"` or `"call"`: what the message calls the place the items were counted. */
-  kind: String,
-  at: Span,
-): Bool {
+fn matchArraySize(var checker: Checker, annotation: TypeId, given: TypeId, count: Int, at: Span): Bool {
   const size = resolveType checker, given
   if const Some(wanted) = constantLengthOf(checker, size) {
     if wanted == count {
       return true
     }
     const shown = resolveType checker, annotation
-    reportArraySize checker, shown, wanted, count, kind, at
+    reportArraySize checker, shown, wanted, count, at
     return false
   }
   if openVariableOf(checker, size).isNone() {
@@ -1316,26 +1311,19 @@ fn reportWrongTarget(var checker: Checker, annotation: TypeId, kind: String, pro
 }
 
 /**
- * The size of an `Array` is part of its type, so a literal and a call of `Array.of` are both counted against it. `kind`
- * is what the message calls the place: "this literal" for `[1, 2, 3]`, "this call" for `Array.of(1, 2, 3)`.
+ * The size of an `Array` is part of its type, so the items of a literal are counted against it where they are
+ * written: `[1, 2, 3]` against an `Array<Int, 4>` is as wrong as a field a constructor did not fill.
  */
-public fn reportArraySize(
-  var checker: Checker,
-  annotation: TypeId,
-  wanted: Int,
-  given: Int,
-  kind: String,
-  at: Span,
-) {
+fn reportArraySize(var checker: Checker, annotation: TypeId, wanted: Int, given: Int, at: Span) {
   const shown = checker.describe annotation
   checker.reportHere(
-    Diagnostic.error("`{shown}` has {wanted} items, and this {kind} has {given}", at)
+    Diagnostic.error("`{shown}` has {wanted} items, and this literal has {given}", at)
       .withNote("The size of an `Array` is part of its type, so the number of items is counted where it is written")
   )
 }
 
 /** A `...` whose number of items nothing knows, where the size of an `Array` has to come out of it. */
-public fn reportOpenSpread(var checker: Checker, given: TypeId, at: Span) {
+fn reportOpenSpread(var checker: Checker, given: TypeId, at: Span) {
   const shown = checker.describe given
   checker.reportHere(
     Diagnostic.error("`{shown}` does not say how many items it has, so `...` cannot fill an `Array`", at)
@@ -1943,6 +1931,130 @@ fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
   }
 }
 
+/**
+ * `value.tryInto()`: the target and the failure are the two arguments of the expected `Result`, and the conversion is
+ * the `TryFrom` implementation of that target - which is what the blanket
+ * `extend<Source, Target, Failure> Source with TryInto<Target, Failure>` of the prelude says.
+ *
+ * Unlike `into()`, nothing here can be read from a target alone: the receiver says the `Source`, and the `Result` that
+ * is expected says both the `Target` and the `Failure`. Where the expected type is not a `Result` of two known types,
+ * the message says so and names the call to write instead.
+ */
+fn isFallibleConversionCall(checker: Checker, callee: Expression, arguments: List<Argument>): Bool {
+  if !arguments.isEmpty() {
+    return false
+  }
+  if const .Member(_, name, isOptional) = callee.kind {
+    return name.text == "tryInto" && !isOptional
+  }
+  false
+}
+
+fn fallibleConversionType(
+  var checker: Checker,
+  expression: Expression,
+  callee: Expression,
+  arguments: List<Argument>,
+  style: CallStyle,
+  expected: Expectation,
+): TypeId {
+  const base = match callee.kind {
+    .Member(inner, _, _) => inner
+    _ => {
+      return checker.deferredType
+    }
+  }
+  const source = inferExpression checker, base
+  if hasMemberNamed(checker, source, "tryInto") {
+    return checkCall checker, expression, callee, arguments, style, expected
+  }
+  const wanted = expected.annotationOf()
+  const answer = wanted ?? checker.deferredType
+  // `value.tryInto` is `(self: Source) => Result<Target, Failure>`: a fact about this call, so the callee is typed
+  const form = FunctionForm([ParameterForm(Some("self"), ParameterMode.Value, source)], answer)
+  const shown = checker.functionType form
+  const _ = checker.typed callee.span, shown
+  const parts = resultArgumentsOf checker, wanted
+  const (target, failure) = match parts {
+    Some(found) => found
+    None => {
+      reportOpenConversionTarget checker, source, expression.span
+      return checker.invalidType
+    }
+  }
+  if checker.absorbs(source) {
+    return answer
+  }
+  const tryFrom = match checker.wellKnown.tryFrom {
+    Some(symbol) => symbol
+    None => {
+      return answer
+    }
+  }
+  const bound = checker.nominal tryFrom, [source, failure]
+  const witness = witnessFor checker, target, bound
+  if const .Unresolved = witness {
+    const given = checker.describe source
+    const wanted = checker.describe target
+    const problem = checker.describe failure
+    checker.reportHere(
+      Diagnostic.error("`{given}` does not convert into `{wanted}`", expression.span)
+        .withNote(
+          "`tryInto()` is the `TryFrom` of the target: `extend {wanted} with TryFrom<{given}, {problem}>` provides it"
+        )
+    )
+    return checker.invalidType
+  }
+  if const Some(symbol) = memberSymbolOf(checker, target, "tryFrom") {
+    checker.adapted expression.span, Adaptation.Convert(witness, symbol)
+    checker.resolved expression.span, Resolution.Callable(symbol, [], Dispatch.Direct)
+  }
+  answer
+}
+
+/**
+ * Whether the receiver's own type declares this member. A value of the trait type `Into<Target>` has `into` - it is
+ * the trait's one required member - so the call is an ordinary dynamic one and not a conversion through `From`. The
+ * conversion is what happens for a receiver whose type has no such member, which is every concrete type: the blanket
+ * over `From` cannot be resolved without knowing the target, and the target is what the expected type says.
+ */
+fn hasMemberNamed(var checker: Checker, receiver: TypeId, name: String): Bool {
+  if checker.absorbs(receiver) {
+    return false
+  }
+  lookupMember(checker, receiver, name).isSome()
+}
+
+/** The `Value` and the `Failure` of an expected `Result<Value, Failure>`, where both of them are known. */
+fn resultArgumentsOf(var checker: Checker, expected: TypeId?): (TypeId, TypeId)? {
+  const result = checker.wellKnown.result?
+  const annotation = expected?
+  const resolved = resolveType checker, annotation
+  if const .Nominal(symbol, arguments) = checker.types.form(resolved) {
+    if symbol == result && arguments.length() == 2 {
+      if isConcrete(checker, arguments[0]) && isConcrete(checker, arguments[1]) {
+        return Some((arguments[0], arguments[1]))
+      }
+    }
+  }
+  None
+}
+
+/**
+ * `wide.tryInto()` where nothing says what to convert into. `tryInto()` reads its target *and* its failure out of the
+ * `Result` that is expected of it, so a call whose result goes nowhere annotated has nothing to go on.
+ */
+fn reportOpenConversionTarget(var checker: Checker, source: TypeId, at: Span) {
+  const given = checker.describe source
+  checker.reportHere(
+    Diagnostic.error("The target of `tryInto()` is not known here", at)
+      .withNote(
+        "It comes from the `Result<Target, Failure>` that is expected of the call, and a `?` on the call passes none"
+          + " down: annotate that `Result`, or write `Target.tryFrom(value)` - the source is `{given}`"
+      )
+  )
+}
+
 fn memberSymbolOf(var checker: Checker, owner: TypeId, name: String): SymbolId? {
   const candidate = lookupStaticMember(checker, owner, name)?
   match candidate.kind {
@@ -1966,8 +2078,15 @@ fn isConversionCall(checker: Checker, callee: Expression, arguments: List<Argume
   false
 }
 
-fn conversionType(var checker: Checker, expression: Expression, callee: Expression, expected: TypeId?): TypeId {
-  const target = expected ?? checker.deferredType
+fn conversionType(
+  var checker: Checker,
+  expression: Expression,
+  callee: Expression,
+  arguments: List<Argument>,
+  style: CallStyle,
+  expected: Expectation,
+): TypeId {
+  const target = expected.annotationOf() ?? checker.deferredType
   const base = match callee.kind {
     .Member(inner, _, _) => inner
     _ => {
@@ -1975,6 +2094,9 @@ fn conversionType(var checker: Checker, expression: Expression, callee: Expressi
     }
   }
   const source = inferExpression checker, base
+  if hasMemberNamed(checker, source, "into") {
+    return checkCall checker, expression, callee, arguments, style, expected
+  }
   // `value.into` is `(self: Source) => Target` - the one member whose type the expected type decides and the receiver
   // alone cannot. That is a fact and not a construct a later pass looks at, so the callee is typed and not deferred
   const form = FunctionForm([ParameterForm(Some("self"), ParameterMode.Value, source)], target)

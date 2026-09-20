@@ -75,7 +75,7 @@ public trait Iterable<Item> {
   fn skip(self, amount: Int): Iterable<Item>
   fn takeWhile(self, predicate: (value: Item) => Bool): Iterable<Item>
   fn zip<Output>(self, other: Iterable<Output>): Iterable<(Item, Output)>
-  fn indexed(self): Iterable<(Int, Item)>
+  fn indexed(self): Iterable<(index: Int, item: Item)>
   fn sorted<Key: Compare>(self, by: (value: Item) => Key): Iterable<Item>
   fn through<Output>(self, stage: Stage<Item, Output>): Iterable<Output>
   fn collect<Output>(self, collector: Collector<Item, Output>): Output

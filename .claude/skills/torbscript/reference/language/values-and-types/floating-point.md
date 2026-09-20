@@ -1,6 +1,6 @@
 ---
 title: Floating-point numbers
-summary: On a Float, `==` is IEEE-754 and `compare` is a total order that disagrees with it on `nan` and `-0.0`, and neither Float type is Hash.
+summary: On a Float every operator is IEEE-754 and `compare` is a total order that disagrees with them on `nan` and `-0.0`, and neither Float type is Hash.
 kind: reference
 status: stable
 order: 12
@@ -43,17 +43,31 @@ Float64.pi  Float64.e                    the two named constants
 1. **`Float` is an alias for `Float64`.** A decimal literal without an expected type is `Float64`; see
    [Literals](../syntax/literals.md).
 
-2. **`==` on a `Float` is exactly IEEE-754.** `nan != nan` is true, and `0.0 == -0.0` is true.
+2. **Every operator on a `Float` is exactly IEEE-754.** That is `==`, `!=`, `<`, `<=`, `>` and `>=`: `nan != nan` is
+   true, every comparison with a `nan` on either side is `false`, and `0.0 == -0.0` is true.
 
    ```trb check
    const nan = 0.0 / 0.0
    print(nan == nan)
+   print(nan < 1.5)
+   print(nan > 1.5)
    print(0.0 == -0.0)
    ```
 
-3. **`compare` is a total order, and it disagrees with `==` on both of `==`'s exceptions.** `compare` puts `nan` above
-   every other value and treats `-0.0` as equal to `0.0`, so a sort over floats terminates whatever pivot it picks
-   and whatever is in the list - it never needs a `nan` special case at the call site.
+3. **`compare` is a total order, and it disagrees with every operator on both of their exceptions.** `compare` puts
+   `nan` above every other value and treats `-0.0` as equal to `0.0`, so a sort over floats terminates whatever pivot it
+   picks and whatever is in the list - it never needs a `nan` special case at the call site.
+
+   A `Float` is the one type where an operator and the member behind it disagree, and that is why everything in the
+   standard library that *orders* values - `sort`, `sorted`, `minBy`, `maxBy` - calls `compare` instead of writing `<=`.
+   Only a total order is an order at all; an IEEE `<=` would leave a `nan` wherever it happened to start.
+
+   ```trb check
+   const nan = 0.0 / 0.0
+   const mixed = [1.5, nan, 0.5]
+
+   print mixed.sorted({ _ }).toList()
+   ```
 
 4. **`Float32` and `Float64` are deliberately not `Hash`.** A float can never be a `Map` key, and there is no `nan`
    key to worry about, because the type that would need one does not have the trait a key needs.

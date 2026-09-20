@@ -40,9 +40,9 @@ print(values.filterMap { _ }.sum())
 public use Void, Never, panic, Bool, Option, Result, Error from "std/core"
 public use Option.Some, Option.None, Result.Ok, Result.Fail from "std/core"
 public use Equals, Compare, Ordering, Hash, combineHashes from "std/core"
-public use From, Into, TryFrom, Parse, Show, LiteralParseError from "std/core"
+public use From, Into, TryFrom, TryInto, Parse, Show, LiteralParseError from "std/core"
 public use Add, Subtract, Multiply, Divide, Remainder, Negate, Indexed, MutableIndexed, Slice, MutableSlice from "std/core"
-public use Range, Shared, isSame from "std/core"
+public use Range, Array, Shared, isSame from "std/core"
 public use do, unless, retry, using, Close from "std/core"
 
 public use Char, String from "std/text"
@@ -53,7 +53,7 @@ public use Float32, Float64, Decimal, Int, UInt, Float from "std/number"
 
 public use Collection, List, ArrayList, TrieList from "std/collections"
 public use Map, TrieMap, HashMap, Set, TrieSet, HashSet from "std/collections"
-public use Stack, ArrayStack, Queue, ArrayQueue, Array from "std/collections"
+public use Stack, ArrayStack, Queue, ArrayQueue from "std/collections"
 
 public use Iterator, Iterable, Length, Stage from "std/iteration"
 public use mapping, filtering, filterMapping, mappingWhile, flatMapping from "std/iteration"
