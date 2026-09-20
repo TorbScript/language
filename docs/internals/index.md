@@ -11,6 +11,7 @@ documents:
   - ../BACKEND.md
   - ../STREAMS.md
   - ../ENCODING.md
+  - ../LINEAR.md
 ---
 
 The toolchain is written in TorbScript and lives in `compiler/`. Until it compiles itself it runs on stage 0, an untyped
@@ -46,5 +47,6 @@ a rule nothing holds either side to.
 - **[The Back Ends (Milestones 5-7)](../BACKEND.md)**
 - **[Streams](../STREAMS.md)**
 - **[Encoding](../ENCODING.md)**
+- **[Linear Algebra and Geometry](../LINEAR.md)**
 
 <!-- torb:index:end -->

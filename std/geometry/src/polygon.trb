@@ -1,0 +1,256 @@
+/**
+ * [Polygon], a closed chain of corners in the plane, with the convex tests written first: a convex polygon is what a
+ * collision narrow phase, a view frustum in the plane and a navigation cell all are.
+ */
+
+use Numeric, Signed, Real from "std/number"
+use zeroOf from "./scalar"
+use Vector2 from "../../linear/src/vector2"
+use Rectangle from "./rectangle"
+use Segment from "./segment"
+use Triangle2 from "./triangle2"
+
+/**
+ * A closed chain of corners: the last one is joined back to the first, and there is no repeated corner at the end.
+ *
+ * The **convex** tests - [Polygon.containsConvex] and [Polygon.intersectsConvex] - are the ones to reach for, and they
+ * are the ones a program can guarantee cheaply with [Polygon.isConvex]. [Polygon.contains] works for any polygon,
+ * including one with a dent, and costs a walk over every edge.
+ *
+ * # Examples
+ *
+ *     const square = Polygon([Vector2(0, 0), Vector2(4, 0), Vector2(4, 4), Vector2(0, 4)])
+ *     print "{square.isConvex()} {square.contains(Vector2(2, 2))}"
+ *
+ * # Pitfalls
+ *
+ * - Fewer than three corners describe no area, and every test answers `false` for such a polygon rather than panicking.
+ * - [Polygon.contains] divides, and over a whole-number scalar that division truncates: where an edge crosses the test
+ *   line between two cells, the crossing is counted at the cell below it. [Polygon.containsConvex] multiplies only and
+ *   is exact for every scalar, which is one more reason to establish convexity once.
+ * - [Polygon.containsConvex] answers nonsense for a polygon that is not convex, and it does not check. That is the
+ *   whole point of it: the caller has already established convexity, once, instead of per query.
+ *
+ * # Open
+ *
+ * - There is no triangulation and no convex decomposition here. Both are algorithms rather than geometry, they want a
+ *   scratch buffer, and a mesh library is where they earn their place.
+ *
+ * # Related
+ *
+ * - [Triangle2] - the three-corner case, which needs no loop.
+ * - [Rectangle] - what [Polygon.bounds] answers.
+ */
+public type Polygon<Scalar: Numeric = Float> {
+  /** The corners, in order. The last one is joined back to the first. */
+  corners: List<Vector2<Scalar>>
+
+  /** The polygon of a triangle's three corners. */
+  fn ofTriangle(triangle: Triangle2<Scalar>): Polygon<Scalar> {
+    Polygon([triangle.first, triangle.second, triangle.third])
+  }
+
+  /** The polygon of a rectangle's four corners, running from the first axis towards the second. */
+  fn ofRectangle(rectangle: Rectangle<Scalar>): Polygon<Scalar> {
+    const low = rectangle.minimum()
+    const high = rectangle.maximum()
+    Polygon([low, Vector2(high.x, low.y), high, Vector2(low.x, high.y)])
+  }
+
+  /** Whether the chain describes no area at all, which is the case below three corners. */
+  fn isEmpty(self): Bool {
+    corners.length() < 3
+  }
+
+  /** The edges, in the order the corners are written, with the closing edge last. */
+  fn edges(self): List<Segment<Scalar>> {
+    var found: List<Segment<Scalar>> = []
+    const count = corners.length()
+    if count < 2 {
+      return found
+    }
+    var index = 0
+    loop {
+      if index >= count {
+        break
+      }
+      const next = if index + 1 == count { 0 } else { index + 1 }
+      found.add Segment(corners[index], corners[next])
+      index = index + 1
+    }
+    found
+  }
+
+  /** Twice the area, with a sign that says which way the corners run. This is the shoelace sum. */
+  fn signedDoubledArea(self): Scalar {
+    if isEmpty() {
+      return zeroOf corners[0].x
+    }
+    var total = zeroOf corners[0].x
+    const count = corners.length()
+    var index = 0
+    loop {
+      if index >= count {
+        break
+      }
+      const next = if index + 1 == count { 0 } else { index + 1 }
+      total = total + corners[index].cross(corners[next])
+      index = index + 1
+    }
+    total
+  }
+
+  /** The smallest rectangle that holds the polygon. Empty where there are no corners. */
+  fn bounds(self): Rectangle<Scalar> {
+    if corners.isEmpty() {
+      const nothing: Vector2<Scalar> = Vector2.filled zeroOf(signedDoubledArea())
+      return Rectangle nothing, nothing
+    }
+    var low = corners[0]
+    var high = corners[0]
+    for corner in corners {
+      low = low.min corner
+      high = high.max corner
+    }
+    Rectangle low, high.subtract(low)
+  }
+
+  /**
+   * Whether every turn goes the same way, which is what makes the cheap tests correct. A polygon with fewer than three
+   * corners is not convex.
+   */
+  fn isConvex(self): Bool {
+    if isEmpty() {
+      return false
+    }
+    const nothing = zeroOf corners[0].x
+    const count = corners.length()
+    var negative = false
+    var positive = false
+    var index = 0
+    loop {
+      if index >= count {
+        break
+      }
+      const here = corners[index]
+      const next = corners[if index + 1 == count { 0 } else { index + 1 }]
+      const after = corners[if index + 2 >= count { index + 2 - count } else { index + 2 }]
+      const turn = next.subtract(here).cross(after.subtract(next))
+      if turn < nothing {
+        negative = true
+      }
+      if turn > nothing {
+        positive = true
+      }
+      index = index + 1
+    }
+    !negative || !positive
+  }
+
+  /**
+   * Whether the point is inside, for a polygon that is **convex**: it is inside where it is on the same side of every
+   * edge. An edge counts as inside.
+   *
+   * Nothing checks that the polygon is convex; [Polygon.isConvex] is what a caller establishes once.
+   */
+  fn containsConvex(self, point: Vector2<Scalar>): Bool {
+    if isEmpty() {
+      return false
+    }
+    const nothing = zeroOf point.x
+    var negative = false
+    var positive = false
+    for edge in edges() {
+      const side = edge.sideOf point
+      if side < nothing {
+        negative = true
+      }
+      if side > nothing {
+        positive = true
+      }
+    }
+    !negative || !positive
+  }
+
+  /**
+   * Whether the point is inside, for any polygon: the crossing count of a ray towards the first axis, which is odd
+   * exactly inside.
+   *
+   * A point exactly on an edge may come out either way, which is what a crossing count answers for one.
+   */
+  fn contains(self, point: Vector2<Scalar>): Bool {
+    if isEmpty() {
+      return false
+    }
+    var inside = false
+    for edge in edges() {
+      const low = edge.from.y.min edge.to.y
+      const high = edge.from.y.max edge.to.y
+      if low <= point.y && point.y < high {
+        const step = edge.step()
+        const crossing = edge.from.x + (point.y - edge.from.y) * step.x / step.y
+        if point.x < crossing {
+          inside = !inside
+        }
+      }
+    }
+    inside
+  }
+
+  /**
+   * Whether the two **convex** polygons share a point, by the separating axis test: two convex shapes miss each other
+   * exactly where some edge normal of one of them has all of one on one side and all of the other on the other.
+   */
+  fn intersectsConvex(self, other: Polygon<Scalar>): Bool {
+    if isEmpty() || other.isEmpty() {
+      return false
+    }
+    !separated(self, other) && !separated(other, self)
+  }
+
+  /** The same polygon moved. */
+  fn translated(self, by: Vector2<Scalar>): Polygon<Scalar> {
+    Polygon(corners.map({ _.add(by) }).toList())
+  }
+}
+
+/** What a sign buys: the area without its sign. */
+extend<Scalar: Signed> Polygon<Scalar> {
+  /** Twice the area, without a sign. */
+  fn doubledArea(self): Scalar {
+    signedDoubledArea().absolute()
+  }
+}
+
+/** What a halving buys: the area itself. */
+extend<Scalar: Real> Polygon<Scalar> {
+  /** How much of the plane the polygon covers. */
+  fn area(self): Scalar {
+    signedDoubledArea().absolute().halved()
+  }
+}
+
+/** Whether an edge normal of the first polygon has the two of them wholly on opposite sides. */
+fn separated<Scalar: Numeric>(first: Polygon<Scalar>, second: Polygon<Scalar>): Bool {
+  for edge in first.edges() {
+    const normal = edge.step()
+    const here = spread first, normal
+    const there = spread second, normal
+    if here.highest < there.lowest || there.highest < here.lowest {
+      return true
+    }
+  }
+  false
+}
+
+/** How far a polygon reaches along a direction: the smallest and the largest dot product of its corners. */
+fn spread<Scalar: Numeric>(polygon: Polygon<Scalar>, direction: Vector2<Scalar>): (lowest: Scalar, highest: Scalar) {
+  var lowest = polygon.corners[0].dot(direction)
+  var highest = lowest
+  for corner in polygon.corners {
+    const reach = corner.dot direction
+    lowest = lowest.min reach
+    highest = highest.max reach
+  }
+  (lowest: lowest, highest: highest)
+}

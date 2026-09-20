@@ -1,0 +1,179 @@
+/**
+ * The tests of `Fixed`: the arithmetic, the exact decimal it shows, the text it reads, and the trigonometry.
+ *
+ * Everything here is integer arithmetic, which is the point of the type - so the interpreter runs all of it, and every
+ * number written below is the number both it and a compiled binary answer. The imports are relative, because the
+ * interpreter resolves no package import at all and reads a module of `std/` only by its path.
+ */
+
+use test, group from "std/test"
+use Fixed from "../src/fixed"
+
+/** The value a decimal describes, or a panic naming the text. */
+fn read(text: String): Fixed {
+  Fixed.parse(text).expect("{text} is a decimal")
+}
+
+group "Fixed" {
+  group "arithmetic" {
+    test "adds and subtracts exactly" {
+      assert(read("1.5") + read("2.25") == read("3.75"))
+      assert(read("1.5") - read("2.25") == read("-0.75"))
+    }
+
+    test "multiplies and divides by scaling back down" {
+      assert(read("1.5") * read("2.0") == read("3.0"))
+      assert(read("3.0") / read("2.0") == read("1.5"))
+      assert(read("0.5") * read("0.5") == read("0.25"))
+    }
+
+    test "divides towards zero, as an Int does" {
+      assert(read("7.0") / read("2.0") == read("3.5"))
+      assert(read("-7.0") % read("2.0") == read("-1.0"))
+    }
+
+    test "carries a sign" {
+      assert(-read("1.5") == read("-1.5"))
+      assert(read("-1.5").absolute() == read("1.5"))
+    }
+
+    test "orders totally" {
+      assert(read("-1.0") < read("0.0"))
+      assert(read("2.0") > read("1.9999"))
+      assert(read("1.5").min(read("2.5")) == read("1.5"))
+      assert(read("1.5").clamp(read("2.0"), read("3.0")) == read("2.0"))
+    }
+
+    test "halves and doubles" {
+      assert(read("3.0").halved() == read("1.5"))
+      assert(read("1.5").doubled() == read("3.0"))
+    }
+  }
+
+  group "text" {
+    test "shows the exact decimal it holds" {
+      assert(read("1.5").show() == "1.5")
+      assert(read("-2.25").show() == "-2.25")
+      assert(Fixed.zero.show() == "0.0")
+      assert(Fixed.one.show() == "1.0")
+    }
+
+    test "a tenth is not a tenth, and the text says so" {
+      assert(read("0.1").show() == "0.100006103515625")
+    }
+
+    test "the smallest step shows every one of its digits" {
+      assert(Fixed.step.show() == "0.0000152587890625")
+    }
+
+    test "rejects what is not a decimal" {
+      assert Fixed.parse("x").isError()
+      assert Fixed.parse("").isError()
+      assert Fixed.parse("1.2.3").isError()
+    }
+
+    test "reads a whole number and a sign" {
+      assert(read("42") == Fixed.from(42))
+      assert(read("-42") == Fixed.from(-42))
+    }
+  }
+
+  group "rounding" {
+    test "floors towards negative infinity" {
+      assert(read("2.5").floor() == read("2.0"))
+      assert(read("-2.5").floor() == read("-3.0"))
+    }
+
+    test "ceilings towards positive infinity" {
+      assert(read("2.5").ceiling() == read("3.0"))
+      assert(read("-2.5").ceiling() == read("-2.0"))
+    }
+
+    test "rounds halves away from zero" {
+      assert(read("2.5").round() == read("3.0"))
+      assert(read("-2.5").round() == read("-3.0"))
+      assert(read("2.4").round() == read("2.0"))
+    }
+
+    test "truncates towards zero on the way to an Int" {
+      assert(read("2.9").toInt() == 2)
+      assert(read("-2.9").toInt() == -2)
+    }
+  }
+
+  group "roots" {
+    test "the root of a square is the number" {
+      assert(read("4.0").squareRoot() == read("2.0"))
+      assert(read("9.0").squareRoot() == read("3.0"))
+    }
+
+    test "the root of two is right to four parts" {
+      assert read("2.0").squareRoot().isCloseTo(read("1.41421356"), tolerance: Fixed(4))
+    }
+
+    test "a negative number has no root, and answers zero" {
+      assert(read("-1.0").squareRoot() == Fixed.zero)
+    }
+  }
+
+  group "angles" {
+    test "the sine and the cosine of nothing" {
+      assert Fixed.zero.sine().isCloseTo(Fixed.zero, tolerance: Fixed(4))
+      assert Fixed.zero.cosine().isCloseTo(Fixed.one, tolerance: Fixed(4))
+    }
+
+    test "a quarter turn takes the cosine to zero" {
+      const quarter = Fixed 102944
+      assert quarter.sine().isCloseTo(Fixed.one, tolerance: Fixed(4))
+      assert quarter.cosine().isCloseTo(Fixed.zero, tolerance: Fixed(4))
+    }
+
+    test "half a turn flips the cosine" {
+      assert Fixed.pi.sine().isCloseTo(Fixed.zero, tolerance: Fixed(4))
+      assert Fixed.pi.cosine().isCloseTo(-Fixed.one, tolerance: Fixed(4))
+    }
+
+    test "a sixth of pi is a half" {
+      const sixth = Fixed(205887 / 6)
+      assert sixth.sine().isCloseTo(read("0.5"), tolerance: Fixed(8))
+    }
+
+    test "the arc tangent of one is an eighth of a turn" {
+      assert Fixed.one.arcTangent().isCloseTo(Fixed(51472), tolerance: Fixed(8))
+    }
+
+    test "the arc tangent of a pair picks the quadrant" {
+      const turned = Fixed.one.arcTangentDivided(by: -Fixed.one)
+      assert turned.isCloseTo(Fixed(154415), tolerance: Fixed(16))
+    }
+
+    test "the arc sine of a half is a sixth of pi" {
+      assert read("0.5").arcSine().isCloseTo(Fixed(205887 / 6), tolerance: Fixed(8))
+    }
+
+    test "the arc cosine of a half is a third of pi" {
+      assert read("0.5").arcCosine().isCloseTo(Fixed(205887 / 3), tolerance: Fixed(8))
+    }
+
+    test "degrees and radians convert both ways" {
+      assert Fixed.from(180).radiansOfDegrees().isCloseTo(Fixed.pi, tolerance: Fixed(8))
+      assert Fixed.pi.degreesOfRadians().isCloseTo(Fixed.from(180), tolerance: Fixed(16))
+    }
+  }
+
+  group "conversions" {
+    test "a whole number is exact" {
+      assert(Fixed.from(7).parts == 7 * 65536)
+      assert(Fixed.from(7).toFloat() == 7.0)
+    }
+
+    test "a float is rounded to the nearest part" {
+      assert(Fixed.approximating(1.25) == read("1.25"))
+      assert(Fixed.approximating(-1.25) == read("-1.25"))
+    }
+
+    test "the one and the unit agree" {
+      assert(Fixed.zero.unit() == Fixed.one)
+    }
+  }
+}

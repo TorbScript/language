@@ -1,0 +1,208 @@
+/**
+ * The tests of `Vector2`, `Vector3` and `Vector4`: the arithmetic every scalar has, what a sign adds, and what a root
+ * adds.
+ *
+ * The operators are written out here, because the interpreter resolves them on a generic type although a compiled
+ * program cannot yet - so this file is also what says that `a + b` and `a.add(b)` are the same call.
+ *
+ * The float vector is exercised with everything that reaches a native of the interpreter (`squareRoot`, `absolute`), and
+ * the `Real` members that go through `std/number`'s own implementation - every angle, and `halved` - are exercised with
+ * `Fixed`, whose implementation is in this package and therefore runs everywhere.
+ */
+
+use test, group from "std/test"
+use Fixed from "../src/fixed"
+use Angle from "../src/angle"
+use Vector2 from "../src/vector2"
+use Vector3 from "../src/vector3"
+use Vector4 from "../src/vector4"
+
+/** A deterministic scalar from a whole number, which is what every `Fixed` case here is built out of. */
+fn exact(value: Int): Fixed {
+  Fixed.from value
+}
+
+/** A deterministic vector from two whole numbers. */
+fn point(x: Int, y: Int): Vector2<Fixed> {
+  Vector2 exact(x), exact(y)
+}
+
+group "Vector2" {
+  group "over Numeric" {
+    test "adds, subtracts and scales component-wise" {
+      assert(Vector2(1, 2) + Vector2(3, 4) == Vector2(4, 6))
+      assert(Vector2(1, 2) - Vector2(3, 4) == Vector2(-2, -2))
+      assert(Vector2(1, 2) * 3 == Vector2(3, 6))
+      assert(Vector2(6, 9) / 3 == Vector2(2, 3))
+    }
+
+    test "the operator and the trait method are one call" {
+      assert(Vector2(1, 2) + Vector2(3, 4) == Vector2(1, 2).add(Vector2(3, 4)))
+      assert(Vector2(1, 2) * 3 == Vector2(1, 2).multiply(3))
+    }
+
+    test "the dot product is zero exactly between perpendicular vectors" {
+      assert(Vector2(1, 0).dot(Vector2(0, 1)) == 0)
+      assert(Vector2(3, 4).dot(Vector2(3, 4)) == 25)
+      assert(Vector2(3, 4).lengthSquared() == 25)
+    }
+
+    test "the cross product says which side" {
+      assert(Vector2(1, 0).cross(Vector2(0, 1)) == 1)
+      assert(Vector2(1, 0).cross(Vector2(0, -1)) == -1)
+      assert(Vector2(1, 0).cross(Vector2(2, 0)) == 0)
+    }
+
+    test "component-wise products and quotients" {
+      assert(Vector2(2, 3).scaled(by: Vector2(4, 5)) == Vector2(8, 15))
+      assert(Vector2(8, 15).divided(by: Vector2(4, 5)) == Vector2(2, 3))
+    }
+
+    test "min, max and clamped work per component" {
+      assert(Vector2(1, 5).min(Vector2(3, 2)) == Vector2(1, 2))
+      assert(Vector2(1, 5).max(Vector2(3, 2)) == Vector2(3, 5))
+      assert(Vector2(-1, 9).clamped(Vector2(0, 0), Vector2(4, 4)) == Vector2(0, 4))
+    }
+
+    test "a component is replaced, and the parts are read" {
+      assert(Vector2(1, 2).withX(9) == Vector2(9, 2))
+      assert(Vector2(1, 2).withY(9) == Vector2(1, 9))
+      assert(Vector2(1, 2).sum() == 3)
+      assert(Vector2(1, 2).largestComponent() == 2)
+      assert(Vector2(1, 2).smallestComponent() == 1)
+    }
+
+    test "a filled vector, and the emptiness test" {
+      const twos: Vector2<Int> = Vector2.filled 2
+      assert(twos == Vector2(2, 2))
+      assert Vector2(0, 0).isZero()
+      assert(!Vector2(0, 1).isZero())
+    }
+  }
+
+  group "over Signed" {
+    test "negates and drops the sign" {
+      assert(-Vector2(1, -2) == Vector2(-1, 2))
+      assert(Vector2(-3, 4).absolute() == Vector2(3, 4))
+    }
+
+    test "the Manhattan length counts steps on a grid" {
+      assert(Vector2(3, -4).manhattanLength() == 7)
+      assert(Vector2(1, 1).manhattanDistanceTo(Vector2(4, 5)) == 7)
+    }
+
+    test "the perpendicular is a quarter turn and needs no trigonometry" {
+      assert(Vector2(1, 0).perpendicular() == Vector2(0, 1))
+      assert(Vector2(0, 1).perpendicular() == Vector2(-1, 0))
+      assert(Vector2(3, 4).perpendicular().dot(Vector2(3, 4)) == 0)
+    }
+  }
+
+  group "over Real" {
+    test "the length of a three-four-five triangle" {
+      assert(Vector2(3.0, 4.0).length() == 5.0)
+      assert(Vector2(0.0, 0.0).distanceTo(Vector2(3.0, 4.0)) == 5.0)
+      assert(Vector2(0.0, 0.0).distanceSquaredTo(Vector2(3.0, 4.0)) == 25.0)
+    }
+
+    test "a normalized vector keeps its direction and loses its length" {
+      assert(Vector2(3.0, 4.0).normalized() == Vector2(0.6, 0.8))
+      assert(Vector2(0.0, 0.0).normalized() == Vector2(0.0, 0.0))
+      assert(Vector2(3.0, 4.0).withLength(10.0) == Vector2(6.0, 8.0))
+    }
+
+    test "interpolation reaches both ends" {
+      const here = Vector2 1.0, 2.0
+      const there = Vector2 3.0, 6.0
+      assert(here.interpolated(toward: there, by: 0.0) == here)
+      assert(here.interpolated(toward: there, by: 1.0) == there)
+      assert(here.interpolated(toward: there, by: 0.5) == Vector2(2.0, 4.0))
+    }
+
+    test "a projection lands on the other vector" {
+      assert(Vector2(3.0, 4.0).projectedOnto(Vector2(1.0, 0.0)) == Vector2(3.0, 0.0))
+    }
+
+    test "a rotation by a quarter turn takes the first axis onto the second" {
+      const turned = point(1, 0).rotated(by: Angle.degrees(exact(90)))
+      assert turned.isCloseTo(point(0, 1), tolerance: Fixed(8))
+    }
+
+    test "a rotation around a point leaves that point alone" {
+      const center = point 2, 3
+      const turned = center.rotatedAround center, by: Angle.degrees(exact(37))
+      assert turned.isCloseTo(center, tolerance: Fixed(2))
+    }
+
+    test "the angle of a direction reads back as degrees" {
+      const turn = point(1, 1).angle()
+      assert turn.toDegrees().isCloseTo(exact(45), tolerance: Fixed(64))
+    }
+
+    test "the angle between two directions is the difference" {
+      const spread = point(1, 0).angleTo(point(0, 1))
+      assert spread.toDegrees().isCloseTo(exact(90), tolerance: Fixed(64))
+    }
+
+    test "a reflection in an axis flips one component" {
+      const bounced = point(1, -1).reflected(point(0, 1))
+      assert bounced.isCloseTo(point(1, 1), tolerance: Fixed(2))
+    }
+  }
+
+  group "crossing the scalar" {
+    test "a grid vector goes up exactly" {
+      assert(Vector2(3, -4).toFloat() == Vector2(3.0, -4.0))
+      assert(Vector2(3, -4).toFixed() == point(3, -4))
+    }
+
+    test "a float vector comes down the three ways it can" {
+      assert(Vector2(1.5, -1.5).rounded() == Vector2(2, -2))
+      assert(Vector2(1.5, -1.5).floored() == Vector2(1, -2))
+      assert(Vector2(1.5, -1.5).ceiling() == Vector2(2, -1))
+    }
+  }
+}
+
+group "Vector3" {
+  test "the cross product of the first two axes is the third" {
+    assert(Vector3(1, 0, 0).cross(Vector3(0, 1, 0)) == Vector3(0, 0, 1))
+    assert(Vector3(0, 1, 0).cross(Vector3(1, 0, 0)) == Vector3(0, 0, -1))
+  }
+
+  test "arithmetic and the parts" {
+    assert(Vector3(1, 2, 3) + Vector3(1, 1, 1) == Vector3(2, 3, 4))
+    assert(Vector3(1, 2, 3).dot(Vector3(1, 2, 3)) == 14)
+    assert(Vector3(1, 2, 3).toVector2() == Vector2(1, 2))
+    assert(Vector3(1, 2, 3).sum() == 6)
+    assert(Vector3(1, -2, 3).manhattanLength() == 6)
+  }
+
+  test "the length of a one-two-two vector is three" {
+    assert(Vector3(1.0, 2.0, 2.0).length() == 3.0)
+    assert(Vector3(0.0, 3.0, 4.0).normalized() == Vector3(0.0, 0.6, 0.8))
+  }
+
+  test "the angle between two axes is a quarter turn" {
+    const first = Vector3 Fixed.one, Fixed.zero, Fixed.zero
+    const second = Vector3 Fixed.zero, Fixed.one, Fixed.zero
+    assert first.angleTo(second).toDegrees().isCloseTo(exact(90), tolerance: Fixed(64))
+  }
+}
+
+group "Vector4" {
+  test "arithmetic and the two ways to three components" {
+    assert(Vector4(1, 2, 3, 4) + Vector4(1, 1, 1, 1) == Vector4(2, 3, 4, 5))
+    assert(Vector4(1, 2, 3, 4).toVector3() == Vector3(1, 2, 3))
+    assert(Vector4(1, 2, 3, 4).sum() == 10)
+  }
+
+  test "a homogeneous point divides its fourth component out" {
+    assert(Vector4(2.0, 4.0, 6.0, 2.0).projected() == Vector3(1.0, 2.0, 3.0))
+  }
+
+  test "a point is built from a vector and a fourth component" {
+    const homogeneous: Vector4<Int> = Vector4.of Vector3(1, 2, 3), 1
+    assert(homogeneous == Vector4(1, 2, 3, 1))
+  }
+}

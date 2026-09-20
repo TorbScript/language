@@ -1,0 +1,248 @@
+/**
+ * [Matrix4], the 4x4 matrix: the affine transformation of space - rotation, scale, shear and a translation - that a
+ * scene graph is built out of.
+ *
+ * The fields are the columns, and a column is where a basis vector lands; the fourth column is the translation. What is
+ * deliberately absent is a projection: a projection matrix depends on the clip space of the API that consumes it - how
+ * deep it is and which way it points - and this package knows nothing about an API. Those belong where that convention
+ * is known.
+ */
+
+use Numeric, Signed, Real from "std/number"
+use zeroOf from "./scalar"
+use Add, Subtract, Multiply, Negate from "std/core"
+use Fixed from "./fixed"
+use Vector3 from "./vector3"
+use Vector4 from "./vector4"
+use Matrix3 from "./matrix3"
+
+/**
+ * An affine transformation of space, held as the four vectors its homogeneous basis lands on.
+ *
+ * Vectors are columns and a transformation is applied on the left, so composing `a` after `b` is `a * b` and a chain
+ * reads right to left, the way it does in mathematics.
+ *
+ * # Examples
+ *
+ *     const move = Matrix4.translation of: Vector3(1.0, 2.0, 3.0)
+ *     print move.transformedPoint(Vector3(0.0, 0.0, 0.0))
+ *
+ * # Open
+ *
+ * - The operators are declared and type check; a compiled program writes `a.multiply(b)` until a back end lowers an
+ *   operator on a generic type.
+ * - [Matrix4.identity] needs its scalar written out: `Matrix4<Float>.identity`.
+ * - There is no general inverse, only [Matrix4.inverseAffine]. A full 4x4 inverse is sixteen cofactors and is only
+ *   needed for a matrix that is not affine, which in practice is a projection - and there is no projection here.
+ *
+ * # Related
+ *
+ * - [Matrix3] - the linear part on its own, and the affine form for the plane.
+ * - `Quaternion` - a rotation that interpolates without shearing.
+ */
+public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
+  /** Where the first basis vector lands. */
+  xAxis: Vector4<Scalar>
+  /** Where the second basis vector lands. */
+  yAxis: Vector4<Scalar>
+  /** Where the third basis vector lands. */
+  zAxis: Vector4<Scalar>
+  /** Where the origin lands: the translation, with a one in its fourth component. */
+  wAxis: Vector4<Scalar>
+
+  /** The three rows and columns that are the linear part: the rotation, the scale and the shear, without the move. */
+  fn linearPart(self): Matrix3<Scalar> {
+    Matrix3 xAxis.toVector3(), yAxis.toVector3(), zAxis.toVector3()
+  }
+
+  /** The translation the transformation carries. */
+  fn translationPart(self): Vector3<Scalar> {
+    wAxis.toVector3()
+  }
+
+  /** The rows read as columns. */
+  fn transposed(self): Matrix4<Scalar> {
+    Matrix4(
+      Vector4(xAxis.x, yAxis.x, zAxis.x, wAxis.x),
+      Vector4(xAxis.y, yAxis.y, zAxis.y, wAxis.y),
+      Vector4(xAxis.z, yAxis.z, zAxis.z, wAxis.z),
+      Vector4(xAxis.w, yAxis.w, zAxis.w, wAxis.w),
+    )
+  }
+
+  /** The column at that index. Panics outside `0..4`. */
+  fn column(self, index: Int): Vector4<Scalar> {
+    if index == 0 {
+      return xAxis
+    }
+    if index == 1 {
+      return yAxis
+    }
+    if index == 2 { zAxis } else { wAxis }
+  }
+
+  /** The cell in that row and that column. Panics outside `0..4`. */
+  fn at(self, row: Int, index: Int): Scalar {
+    const axis = column index
+    if row == 0 {
+      return axis.x
+    }
+    if row == 1 {
+      return axis.y
+    }
+    if row == 2 { axis.z } else { axis.w }
+  }
+
+  /** The row at that index. Panics outside `0..4`. */
+  fn row(self, index: Int): Vector4<Scalar> {
+    Vector4 at(index, 0), at(index, 1), at(index, 2), at(index, 3)
+  }
+
+  /** Cell by cell. Adding two transformations is not composing them; `multiply` is. */
+  fn add(self, other: Matrix4<Scalar>): Matrix4<Scalar> {
+    Matrix4(
+      xAxis.add(other.xAxis),
+      yAxis.add(other.yAxis),
+      zAxis.add(other.zAxis),
+      wAxis.add(other.wAxis),
+    )
+  }
+
+  /** Cell by cell. */
+  fn subtract(self, other: Matrix4<Scalar>): Matrix4<Scalar> {
+    Matrix4(
+      xAxis.subtract(other.xAxis),
+      yAxis.subtract(other.yAxis),
+      zAxis.subtract(other.zAxis),
+      wAxis.subtract(other.wAxis),
+    )
+  }
+
+  /** The composition: `self` after `other`. */
+  fn multiply(self, other: Matrix4<Scalar>): Matrix4<Scalar> {
+    Matrix4(
+      applied(to: other.xAxis),
+      applied(to: other.yAxis),
+      applied(to: other.zAxis),
+      applied(to: other.wAxis),
+    )
+  }
+
+  /**
+   * The homogeneous vector transformed: the combination of the four columns.
+   *
+   * It is a method and not `matrix * vector`, because a type has one namespace of members and `multiply` is already the
+   * composition of two matrices.
+   */
+  fn applied(self, to: Vector4<Scalar>): Vector4<Scalar> {
+    xAxis.multiply(to.x).add(yAxis.multiply(to.y)).add(zAxis.multiply(to.z)).add(wAxis.multiply(to.w))
+  }
+
+  /** A direction, turned by the transformation: the translation is not applied. */
+  fn transformedDirection(self, direction: Vector3<Scalar>): Vector3<Scalar> {
+    const turned = applied to: Vector4.of(direction, zeroOf(direction.x))
+    turned.toVector3()
+  }
+}
+
+/** Every cell turned around. */
+extend<Scalar: Signed> Matrix4<Scalar> with Negate {
+  /** Every cell with its sign flipped. */
+  fn negate(self): Matrix4<Scalar> {
+    Matrix4 xAxis.negate(), yAxis.negate(), zAxis.negate(), wAxis.negate()
+  }
+}
+
+/** What a one and a division buy: the constructors, the points and the inverse of an affine transformation. */
+extend<Scalar: Real> Matrix4<Scalar> {
+  /** A diagonal matrix: each axis scaled on its own, and the translation left at the origin. */
+  fn scaling(by: Vector3<Scalar>): Matrix4<Scalar> {
+    const nothing = zeroOf(by.x)
+    Matrix4(
+      Vector4(by.x, nothing, nothing, nothing),
+      Vector4(nothing, by.y, nothing, nothing),
+      Vector4(nothing, nothing, by.z, nothing),
+      Vector4(nothing, nothing, nothing, by.x.unit()),
+    )
+  }
+
+  /**
+   * The transformation that moves everything by that much and changes nothing else.
+   *
+   *     print Matrix4.translation of: Vector3(1.0, 0.0, 0.0)).translationPart(
+   */
+  fn translation(of: Vector3<Scalar>): Matrix4<Scalar> {
+    const nothing = zeroOf of.x
+    const whole = of.x.unit()
+    Matrix4(
+      Vector4(whole, nothing, nothing, nothing),
+      Vector4(nothing, whole, nothing, nothing),
+      Vector4(nothing, nothing, whole, nothing),
+      Vector4(of.x, of.y, of.z, whole),
+    )
+  }
+
+  /** The affine transformation that applies the linear part and then moves by `by`. */
+  fn affine(linear: Matrix3<Scalar>, by: Vector3<Scalar>): Matrix4<Scalar> {
+    const nothing = zeroOf(by.x)
+    Matrix4(
+      Vector4.of(linear.xAxis, nothing),
+      Vector4.of(linear.yAxis, nothing),
+      Vector4.of(linear.zAxis, nothing),
+      Vector4.of(by, by.x.unit()),
+    )
+  }
+
+  /** A point, moved by the transformation: the translation is applied. */
+  fn transformedPoint(self, point: Vector3<Scalar>): Vector3<Scalar> {
+    const moved = applied to: Vector4.of(point, point.x.unit())
+    moved.toVector3()
+  }
+
+  /**
+   * The transformation that undoes this one, read as an affine transformation: the linear part is inverted and the
+   * translation is carried back through it. `None` where the linear part has no inverse.
+   *
+   * It answers nothing about the bottom row, which an affine transformation has as `(0, 0, 0, 1)` by construction.
+   */
+  fn inverseAffine(self): Matrix4<Scalar>? {
+    const linear = linearPart()
+    match linear.inverse() {
+      Some(undone) => {
+        const back = undone.applied to: translationPart().negate()
+        Some Matrix4.affine(undone, by: back)
+      }
+      None => None
+    }
+  }
+
+  /** Whether every cell is within `tolerance` of the other matrix's. */
+  fn isCloseTo(self, other: Matrix4<Scalar>, tolerance: Scalar): Bool {
+    xAxis.isCloseTo(other.xAxis, tolerance: tolerance)
+      && yAxis.isCloseTo(other.yAxis, tolerance: tolerance)
+      && zAxis.isCloseTo(other.zAxis, tolerance: tolerance)
+      && wAxis.isCloseTo(other.wAxis, tolerance: tolerance)
+  }
+}
+
+/** The float matrix's identity. */
+extend Matrix4<Float> {
+  /** The transformation that changes nothing. */
+  const identity: Matrix4<Float> = Matrix4(
+    Vector4(1.0, 0.0, 0.0, 0.0),
+    Vector4(0.0, 1.0, 0.0, 0.0),
+    Vector4(0.0, 0.0, 1.0, 0.0),
+    Vector4(0.0, 0.0, 0.0, 1.0),
+  )
+}
+
+/** The deterministic matrix's identity. */
+extend Matrix4<Fixed> {
+  /** The transformation that changes nothing. */
+  const identity: Matrix4<Fixed> = Matrix4(
+    Vector4(Fixed(65536), Fixed(0), Fixed(0), Fixed(0)),
+    Vector4(Fixed(0), Fixed(65536), Fixed(0), Fixed(0)),
+    Vector4(Fixed(0), Fixed(0), Fixed(65536), Fixed(0)),
+    Vector4(Fixed(0), Fixed(0), Fixed(0), Fixed(65536)),
+  )
+}

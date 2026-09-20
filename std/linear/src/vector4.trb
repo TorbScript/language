@@ -1,0 +1,212 @@
+/**
+ * [Vector4], the four-component vector: a homogeneous point or direction, and the column a `Matrix4` is made of.
+ *
+ * There is no cross product here. A fourth component turns a point in space into something a 4x4 matrix can translate,
+ * and that is what this type is for.
+ */
+
+use Numeric, Signed, Real from "std/number"
+use zeroOf from "./scalar"
+use Add, Subtract, Multiply, Divide, Negate from "std/core"
+use Fixed from "./fixed"
+use Vector3 from "./vector3"
+
+/**
+ * Four components, over whatever scalar the program counts in: the homogeneous form of a point (`w` one) or of a
+ * direction (`w` zero), and a colour with an alpha where a program wants one.
+ *
+ * # Examples
+ *
+ *     const point = Vector4 1.0, 2.0, 3.0, 1.0
+ *     print "{point.toVector3()} {point.dot(point)}"
+ *
+ * # Open
+ *
+ * - The operators are declared and type check; a compiled program writes `a.add(b)` and the other trait methods until
+ *   a back end lowers an operator on a generic type.
+ * - The constants need their scalar written out: `Vector4<Float>.zero`.
+ *
+ * # Related
+ *
+ * - `Matrix4` - what these are the columns of.
+ * - [Vector4.projected] - the way back from homogeneous coordinates.
+ */
+public type Vector4<Scalar: Numeric = Float> with Add, Subtract, Multiply<Scalar>, Divide<Scalar> {
+  /** The first component. */
+  x: Scalar
+  /** The second component. */
+  y: Scalar
+  /** The third component. */
+  z: Scalar
+  /** The fourth component: one for a point, zero for a direction. */
+  w: Scalar
+
+  /** Every component set to the same value. */
+  fn filled(value: Scalar): Vector4<Scalar> {
+    Vector4 value, value, value, value
+  }
+
+  /** A point in space as a homogeneous point, with `w` set to what is given. */
+  fn of(point: Vector3<Scalar>, w: Scalar): Vector4<Scalar> {
+    Vector4 point.x, point.y, point.z, w
+  }
+
+  /** The sum, component by component. */
+  fn add(self, other: Vector4<Scalar>): Vector4<Scalar> {
+    Vector4(x + other.x, y + other.y, z + other.z, w + other.w)
+  }
+
+  /** The difference, component by component. */
+  fn subtract(self, other: Vector4<Scalar>): Vector4<Scalar> {
+    Vector4(x - other.x, y - other.y, z - other.z, w - other.w)
+  }
+
+  /** Every component multiplied by the scalar. */
+  fn multiply(self, other: Scalar): Vector4<Scalar> {
+    Vector4(x * other, y * other, z * other, w * other)
+  }
+
+  /** Every component divided by the scalar. Panics on a division by zero. */
+  fn divide(self, other: Scalar): Vector4<Scalar> {
+    Vector4(x / other, y / other, z / other, w / other)
+  }
+
+  /** The dot product. */
+  fn dot(self, other: Vector4<Scalar>): Scalar {
+    x * other.x + y * other.y + z * other.z + w * other.w
+  }
+
+  /** The square of the length. */
+  fn lengthSquared(self): Scalar {
+    dot self
+  }
+
+  /** Component by component. */
+  fn scaled(self, by: Vector4<Scalar>): Vector4<Scalar> {
+    Vector4(x * by.x, y * by.y, z * by.z, w * by.w)
+  }
+
+  /** The smaller of each pair of components. */
+  fn min(self, other: Vector4<Scalar>): Vector4<Scalar> {
+    Vector4 x.min(other.x), y.min(other.y), z.min(other.z), w.min(other.w)
+  }
+
+  /** The larger of each pair of components. */
+  fn max(self, other: Vector4<Scalar>): Vector4<Scalar> {
+    Vector4 x.max(other.x), y.max(other.y), z.max(other.z), w.max(other.w)
+  }
+
+  /** The first three components, with the fourth dropped rather than divided out. */
+  fn toVector3(self): Vector3<Scalar> {
+    Vector3 x, y, z
+  }
+
+  /** Whether every component is zero. */
+  fn isZero(self): Bool {
+    const nothing = zeroOf x
+    x == nothing && y == nothing && z == nothing && w == nothing
+  }
+
+  /** Every component added together. */
+  fn sum(self): Scalar {
+    x + y + z + w
+  }
+}
+
+/** A vector of a signed scalar can be turned around. */
+extend<Scalar: Signed> Vector4<Scalar> with Negate {
+  /** Every component with its sign flipped. */
+  fn negate(self): Vector4<Scalar> {
+    Vector4(-x, -y, -z, -w)
+  }
+}
+
+/** Every component without its sign. */
+extend<Scalar: Signed> Vector4<Scalar> {
+  /** Every component without its sign. */
+  fn absolute(self): Vector4<Scalar> {
+    Vector4 x.absolute(), y.absolute(), z.absolute(), w.absolute()
+  }
+}
+
+/** What a root buys: a length, a direction and the way out of homogeneous coordinates. */
+extend<Scalar: Real> Vector4<Scalar> {
+  /** The euclidean length over all four components. */
+  fn length(self): Scalar {
+    lengthSquared().squareRoot()
+  }
+
+  /** The same direction with length one. A zero vector answers itself. */
+  fn normalized(self): Vector4<Scalar> {
+    const size: Scalar = self.length()
+    if size == zeroOf(size) {
+      return self
+    }
+    divide size
+  }
+
+  /**
+   * The point this homogeneous vector stands for: the first three components divided by the fourth. Panics where the
+   * fourth is zero, which is the one case that stands for a direction and not for a point.
+   */
+  fn projected(self): Vector3<Scalar> {
+    Vector3(x / w, y / w, z / w)
+  }
+
+  /** The point `factor` of the way from here to there. */
+  fn interpolated(self, toward: Vector4<Scalar>, by: Scalar): Vector4<Scalar> {
+    add toward.subtract(self).multiply(by)
+  }
+
+  /** Whether every component is within `tolerance` of the other vector's. */
+  fn isCloseTo(self, other: Vector4<Scalar>, tolerance: Scalar): Bool {
+    (x - other.x).absolute() <= tolerance
+      && (y - other.y).absolute() <= tolerance
+      && (z - other.z).absolute() <= tolerance
+      && (w - other.w).absolute() <= tolerance
+  }
+}
+
+/** The float vector's constants. */
+extend Vector4<Float> {
+  /** Every component zero. */
+  const zero: Vector4<Float> = Vector4 0.0, 0.0, 0.0, 0.0
+  /** Every component one. */
+  const one: Vector4<Float> = Vector4 1.0, 1.0, 1.0, 1.0
+  /** The first basis vector. */
+  const unitX: Vector4<Float> = Vector4 1.0, 0.0, 0.0, 0.0
+  /** The second basis vector. */
+  const unitY: Vector4<Float> = Vector4 0.0, 1.0, 0.0, 0.0
+  /** The third basis vector. */
+  const unitZ: Vector4<Float> = Vector4 0.0, 0.0, 1.0, 0.0
+  /** The fourth basis vector, which is the origin as a homogeneous point. */
+  const unitW: Vector4<Float> = Vector4 0.0, 0.0, 0.0, 1.0
+}
+
+/** The grid vector's constants, and the way up to a scalar that has fractions. */
+extend Vector4<Int> {
+  /** Every component zero. */
+  const zero: Vector4<Int> = Vector4 0, 0, 0, 0
+  /** Every component one. */
+  const one: Vector4<Int> = Vector4 1, 1, 1, 1
+
+  /** The same vector over `Float`, exactly. */
+  fn toFloat(self): Vector4<Float> {
+    Vector4 Float.from(x), Float.from(y), Float.from(z), Float.from(w)
+  }
+
+  /** The same vector over `Fixed`, exactly. */
+  fn toFixed(self): Vector4<Fixed> {
+    Vector4 Fixed.from(x), Fixed.from(y), Fixed.from(z), Fixed.from(w)
+  }
+}
+
+/** The deterministic vector's constants. */
+extend Vector4<Fixed> {
+  /** Every component zero. */
+  const zero: Vector4<Fixed> = Vector4 Fixed(0), Fixed(0), Fixed(0), Fixed(0)
+  /** Every component one. */
+  const one: Vector4<Fixed> = Vector4 Fixed(65536), Fixed(65536), Fixed(65536), Fixed(65536)
+  /** The fourth basis vector, which is the origin as a homogeneous point. */
+  const unitW: Vector4<Fixed> = Vector4 Fixed(0), Fixed(0), Fixed(0), Fixed(65536)
+}

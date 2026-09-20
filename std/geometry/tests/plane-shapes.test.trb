@@ -1,0 +1,378 @@
+/**
+ * The tests of the shapes of the plane: the half-open rule of `Rectangle`, what a `Circle` counts as inside, where two
+ * segments cross, what a ray hits, and the two containment tests of a polygon.
+ *
+ * The whole-number cases are the point of the half-open rule, so `Rectangle<Int>` carries them. What needs a root or an
+ * angle is written over `Fixed`, whose `Real` runs in the interpreter as well as in a binary.
+ */
+
+use test, group from "std/test"
+use Fixed from "../../linear/src/fixed"
+use Vector2 from "../../linear/src/vector2"
+use Rectangle from "../src/rectangle"
+use Circle from "../src/circle"
+use Segment from "../src/segment"
+use Ray2 from "../src/ray2"
+use Triangle2 from "../src/triangle2"
+use Polygon from "../src/polygon"
+
+/** A deterministic scalar from a whole number. */
+fn exact(value: Int): Fixed {
+  Fixed.from value
+}
+
+/** A deterministic point from two whole numbers. */
+fn point(x: Int, y: Int): Vector2<Fixed> {
+  Vector2 exact(x), exact(y)
+}
+
+/** How far two deterministic answers may be apart and still count as the same: about a thousandth. */
+const nearly: Fixed = Fixed 66
+
+group "Rectangle" {
+  group "the half-open rule" {
+    test "the minimum edge is inside and the maximum edge is outside" {
+      const tile = Rectangle Vector2(0, 0), Vector2(8, 8)
+      assert tile.contains(Vector2(0, 0))
+      assert tile.contains(Vector2(7, 7))
+      assert(!tile.contains(Vector2(8, 0)))
+      assert(!tile.contains(Vector2(0, 8)))
+      assert(!tile.contains(Vector2(-1, 0)))
+    }
+
+    test "two tiles in a row share no cell" {
+      const first = Rectangle Vector2(0, 0), Vector2(8, 8)
+      const second = Rectangle Vector2(8, 0), Vector2(8, 8)
+      assert(!first.intersects(second))
+      assert first.intersection(second).isEmpty()
+      var column = 0
+      loop {
+        if column >= 16 {
+          break
+        }
+        const cell = Vector2 column, 0
+        assert(first.contains(cell) != second.contains(cell))
+        column = column + 1
+      }
+    }
+
+    test "the area of a whole-number rectangle counts its cells" {
+      assert(Rectangle(Vector2(0, 0), Vector2(8, 8)).area() == 64)
+    }
+  }
+
+  group "corners and sizes" {
+    test "a rectangle from two corners takes either order" {
+      const first = Rectangle.between Vector2(4, 4), Vector2(1, 2)
+      assert(first == Rectangle.between(Vector2(1, 2), Vector2(4, 4)))
+      assert(first.minimum() == Vector2(1, 2))
+      assert(first.maximum() == Vector2(4, 4))
+    }
+
+    test "a size with a zero side is empty" {
+      assert Rectangle(Vector2(0, 0), Vector2(0, 8)).isEmpty()
+      assert Rectangle(Vector2(0, 0), Vector2(-1, 8)).isEmpty()
+      assert(!Rectangle(Vector2(0, 0), Vector2(1, 1)).isEmpty())
+    }
+
+    test "enclosing, moving and growing" {
+      const outer = Rectangle Vector2(0, 0), Vector2(8, 8)
+      assert outer.encloses(Rectangle(Vector2(1, 1), Vector2(2, 2)))
+      assert(!outer.encloses(Rectangle(Vector2(1, 1), Vector2(9, 9))))
+      assert(outer.translated(by: Vector2(1, 1)).minimum() == Vector2(1, 1))
+      assert(outer.grown(by: Vector2(1, 1)) == Rectangle(Vector2(-1, -1), Vector2(10, 10)))
+      assert(outer.withSize(Vector2(2, 2)).size == Vector2(2, 2))
+    }
+  }
+
+  group "what two rectangles share" {
+    test "the overlap is the rectangle both cover" {
+      const first = Rectangle Vector2(0, 0), Vector2(4, 4)
+      const second = Rectangle Vector2(2, 2), Vector2(4, 4)
+      assert first.intersects(second)
+      assert(first.intersection(second) == Rectangle(Vector2(2, 2), Vector2(2, 2)))
+      assert(first.combined(second) == Rectangle(Vector2(0, 0), Vector2(6, 6)))
+    }
+
+    test "an empty rectangle contributes nothing to a union" {
+      const first = Rectangle Vector2(0, 0), Vector2(4, 4)
+      const nothing = Rectangle Vector2(9, 9), Vector2(0, 0)
+      assert(first.combined(nothing) == first)
+      assert(nothing.combined(first) == first)
+    }
+
+    test "a point is covered by growing the rectangle to it, as a closed hull" {
+      const first = Rectangle Vector2(0, 0), Vector2(4, 4)
+      const wider = first.covering Vector2(6, 1)
+      assert(wider.maximum() == Vector2(6, 4))
+      assert(!wider.contains(Vector2(6, 1)))
+      assert(Rectangle(Vector2(9, 9), Vector2(0, 0)).covering(Vector2(1, 1)).origin == Vector2(1, 1))
+    }
+  }
+
+  group "distances" {
+    test "the nearest point of a rectangle is the point itself where it is inside" {
+      const tile = Rectangle Vector2(0, 0), Vector2(8, 8)
+      assert(tile.closestPoint(to: Vector2(3, 3)) == Vector2(3, 3))
+      assert(tile.closestPoint(to: Vector2(-5, 3)) == Vector2(0, 3))
+      assert(tile.manhattanDistanceTo(Vector2(-5, 3)) == 5)
+    }
+
+    test "the midpoint and the euclidean distance need a scalar with fractions" {
+      const tile = Rectangle point(0, 0), point(4, 4)
+      assert(tile.center() == point(2, 2))
+      assert tile.distanceTo(point(4, 0)).isCloseTo(Fixed.zero, tolerance: nearly)
+      assert tile.distanceTo(point(7, 0)).isCloseTo(exact(3), tolerance: nearly)
+    }
+
+    test "a rectangle from a midpoint" {
+      const tile = Rectangle.centered at: point(0, 0), size: point(4, 4)
+      assert(tile.minimum() == point(-2, -2))
+    }
+  }
+}
+
+group "Circle" {
+  test "the boundary is inside, unlike a rectangle's maximum edge" {
+    const unit = Circle point(0, 0), Fixed.one
+    assert unit.contains(point(0, 0))
+    assert unit.contains(point(1, 0))
+    assert(!unit.contains(Vector2(Fixed(65537), Fixed.zero)))
+  }
+
+  test "two discs that touch share a point" {
+    const first = Circle point(0, 0), Fixed.one
+    assert first.intersects(Circle(point(2, 0), Fixed.one))
+    assert(!first.intersects(Circle(point(3, 0), Fixed.one)))
+    assert first.encloses(Circle(point(0, 0), Fixed.one))
+    assert(!first.encloses(Circle(point(1, 0), Fixed.one)))
+  }
+
+  test "a disc against a rectangle is a test against the nearest point of the rectangle" {
+    const unit = Circle point(0, 0), Fixed.one
+    assert unit.intersectsRectangle(Rectangle(point(1, -1), point(2, 2)))
+    assert(!unit.intersectsRectangle(Rectangle(point(2, -1), point(2, 2))))
+  }
+
+  test "the nearest point of a disc lies on its boundary" {
+    const unit = Circle point(0, 0), Fixed.one
+    assert(unit.closestPoint(to: point(0, 0)) == point(0, 0))
+    assert unit.closestPoint(to: point(4, 0)).isCloseTo(point(1, 0), tolerance: nearly)
+    assert unit.distanceTo(point(4, 0)).isCloseTo(exact(3), tolerance: nearly)
+    assert(unit.distanceTo(point(0, 0)) == Fixed.zero)
+  }
+
+  test "the bounding rectangle of a disc is as wide as its diameter" {
+    const unit = Circle point(0, 0), Fixed.one
+    assert(unit.bounds() == Rectangle(point(-1, -1), point(2, 2)))
+  }
+
+  test "the area and the way around come out of pi" {
+    const unit = Circle point(0, 0), Fixed.one
+    assert unit.area().isCloseTo(Fixed.pi, tolerance: nearly)
+    assert unit.circumference().isCloseTo(Fixed.tau, tolerance: nearly)
+  }
+
+  test "moving and growing a disc" {
+    const unit = Circle point(0, 0), Fixed.one
+    assert(unit.translated(by: point(1, 1)).center == point(1, 1))
+    assert(unit.grown(by: Fixed.one).radius == exact(2))
+    assert Circle(point(0, 0), -Fixed.one).isEmpty()
+  }
+}
+
+group "Segment" {
+  test "the step, the side and the bounds" {
+    const wall = Segment Vector2(0, 0), Vector2(4, 0)
+    assert(wall.step() == Vector2(4, 0))
+    assert(wall.sideOf(Vector2(2, 1)) > 0)
+    assert(wall.sideOf(Vector2(2, -1)) < 0)
+    assert(wall.sideOf(Vector2(2, 0)) == 0)
+    assert(wall.bounds() == Rectangle(Vector2(0, 0), Vector2(4, 0)))
+    assert(wall.manhattanLength() == 4)
+  }
+
+  test "two segments that cross, and two that do not" {
+    const across = Segment Vector2(0, -1), Vector2(0, 1)
+    assert Segment(Vector2(-1, 0), Vector2(1, 0)).intersects(across)
+    assert(!Segment(Vector2(2, 0), Vector2(4, 0)).intersects(across))
+  }
+
+  test "two segments on one line cross only where they overlap" {
+    const first = Segment Vector2(0, 0), Vector2(4, 0)
+    assert first.intersects(Segment(Vector2(2, 0), Vector2(6, 0)))
+    assert(!first.intersects(Segment(Vector2(5, 0), Vector2(6, 0))))
+  }
+
+  test "the crossing point, and none for two parallel segments" {
+    const across = Segment point(0, -1), point(0, 1)
+    const along = Segment point(-1, 0), point(1, 0)
+    match along.intersection(across) {
+      Some(found) => assert found.isCloseTo(point(0, 0), tolerance: nearly)
+      None => assert false
+    }
+    assert(along.intersection(Segment(point(-1, 1), point(1, 1))) == None)
+  }
+
+  test "lengths, the midpoint and the nearest point" {
+    const wall = Segment point(0, 0), point(4, 0)
+    assert(wall.length() == exact(4))
+    assert(wall.center() == point(2, 0))
+    assert(wall.at(Fixed.zero) == point(0, 0))
+    assert wall.direction().isCloseTo(point(1, 0), tolerance: nearly)
+    assert(wall.closestPoint(to: point(2, 3)) == point(2, 0))
+    assert(wall.closestPoint(to: point(-5, 0)) == point(0, 0))
+    assert(wall.distanceTo(point(2, 3)) == exact(3))
+  }
+}
+
+group "Ray2" {
+  test "a ray hits a disc in front of it and not one behind it" {
+    const look = Ray2 point(0, 0), point(1, 0)
+    match look.hits(Circle(point(5, 0), Fixed.one)) {
+      Some(found) => assert found.isCloseTo(exact(4), tolerance: nearly)
+      None => assert false
+    }
+    assert(look.hits(Circle(point(-5, 0), Fixed.one)) == None)
+    assert(look.hits(Circle(point(5, 5), Fixed.one)) == None)
+  }
+
+  test "a ray that starts inside a disc answers nothing travelled" {
+    const look = Ray2 point(0, 0), point(1, 0)
+    match look.hits(Circle(point(0, 0), Fixed.one)) {
+      Some(found) => assert(found == Fixed.zero)
+      None => assert false
+    }
+  }
+
+  test "a ray hits a rectangle where the last axis lets it in" {
+    const look = Ray2 point(-5, 1), point(1, 0)
+    match look.hitsRectangle(Rectangle(point(0, 0), point(2, 2))) {
+      Some(found) => assert found.isCloseTo(exact(5), tolerance: nearly)
+      None => assert false
+    }
+    assert(look.hitsRectangle(Rectangle(point(0, 8), point(2, 2))) == None)
+  }
+
+  test "a ray parallel to an axis misses a rectangle it is not level with" {
+    const look = Ray2 point(-5, 9), point(1, 0)
+    assert(look.hitsRectangle(Rectangle(point(0, 0), point(2, 2))) == None)
+  }
+
+  test "a ray hits a segment across it" {
+    const look = Ray2 point(0, 0), point(1, 0)
+    match look.hitsSegment(Segment(point(3, -1), point(3, 1))) {
+      Some(found) => assert found.isCloseTo(exact(3), tolerance: nearly)
+      None => assert false
+    }
+    assert(look.hitsSegment(Segment(point(-3, -1), point(-3, 1))) == None)
+  }
+
+  test "a ray towards a point has a direction of length one, and at reads back" {
+    const look = Ray2.towards point(0, 0), to: point(0, 4)
+    assert look.direction.isCloseTo(point(0, 1), tolerance: nearly)
+    assert look.at(exact(4)).isCloseTo(point(0, 4), tolerance: nearly)
+  }
+
+  test "a ray with no direction hits nothing" {
+    const still = Ray2 point(0, 0), point(0, 0)
+    assert(still.hits(Circle(point(0, 0), Fixed.one)) == None)
+    assert(still.hitsRectangle(Rectangle(point(0, 0), point(2, 2))) == None)
+  }
+}
+
+group "Triangle2" {
+  test "a point inside, on an edge and outside" {
+    const face = Triangle2 Vector2(0, 0), Vector2(4, 0), Vector2(0, 4)
+    assert face.contains(Vector2(1, 1))
+    assert face.contains(Vector2(0, 0))
+    assert face.contains(Vector2(2, 0))
+    assert(!face.contains(Vector2(3, 3)))
+    assert(!face.contains(Vector2(-1, 0)))
+  }
+
+  test "the winding shows in the sign of the area" {
+    const face = Triangle2 Vector2(0, 0), Vector2(4, 0), Vector2(0, 4)
+    const other = Triangle2 Vector2(0, 0), Vector2(0, 4), Vector2(4, 0)
+    assert(face.signedArea() == 16)
+    assert(other.signedArea() == -16)
+    assert(other.doubledArea() == 16)
+    assert other.contains(Vector2(1, 1))
+  }
+
+  test "the bounds, the edges and a move" {
+    const face = Triangle2 Vector2(0, 0), Vector2(4, 0), Vector2(0, 4)
+    assert(face.bounds() == Rectangle(Vector2(0, 0), Vector2(4, 4)))
+    assert(face.edges().length() == 3)
+    assert(face.translated(by: Vector2(1, 1)).first == Vector2(1, 1))
+  }
+
+  test "the area, the midpoint and the nearest point" {
+    const face = Triangle2 point(0, 0), point(4, 0), point(0, 4)
+    assert(face.area() == exact(8))
+    assert face.center().isCloseTo(Vector2(Fixed(87381), Fixed(87381)), tolerance: nearly)
+    assert(face.closestPoint(to: point(1, 1)) == point(1, 1))
+    assert(face.closestPoint(to: point(-3, 1)) == point(0, 1))
+    assert(face.distanceTo(point(-3, 1)) == exact(3))
+  }
+}
+
+group "Polygon" {
+  test "a square is convex, a dented quadrangle is not" {
+    const square = Polygon([Vector2(0, 0), Vector2(4, 0), Vector2(4, 4), Vector2(0, 4)])
+    const dented = Polygon([Vector2(0, 0), Vector2(4, 0), Vector2(1, 1), Vector2(0, 4)])
+    assert square.isConvex()
+    assert(!dented.isConvex())
+    assert(!Polygon([Vector2(0, 0), Vector2(1, 1)]).isConvex())
+  }
+
+  test "both containment tests agree on a convex polygon" {
+    const square = Polygon([Vector2(0, 0), Vector2(4, 0), Vector2(4, 4), Vector2(0, 4)])
+    assert square.containsConvex(Vector2(2, 2))
+    assert square.contains(Vector2(2, 2))
+    assert(!square.containsConvex(Vector2(5, 2)))
+    assert(!square.contains(Vector2(5, 2)))
+  }
+
+  test "the crossing count handles a dent, where the cheap test does not" {
+    const dented = Polygon([Vector2(0, 0), Vector2(6, 0), Vector2(3, 3), Vector2(6, 6), Vector2(0, 6)])
+    assert dented.contains(Vector2(1, 3))
+    assert(!dented.contains(Vector2(5, 3)))
+  }
+
+  test "the shoelace sum is the doubled area, and its sign is the winding" {
+    const square = Polygon([Vector2(0, 0), Vector2(4, 0), Vector2(4, 4), Vector2(0, 4)])
+    const other = Polygon([Vector2(0, 4), Vector2(4, 4), Vector2(4, 0), Vector2(0, 0)])
+    assert(square.signedDoubledArea() == 32)
+    assert(other.signedDoubledArea() == -32)
+    assert(other.doubledArea() == 32)
+  }
+
+  test "the area of a polygon over a scalar with fractions" {
+    const square = Polygon([point(0, 0), point(4, 0), point(4, 4), point(0, 4)])
+    assert(square.area() == exact(16))
+  }
+
+  test "the bounds, a move, and the two ways in" {
+    const square = Polygon([Vector2(0, 0), Vector2(4, 0), Vector2(4, 4), Vector2(0, 4)])
+    assert(square.bounds() == Rectangle(Vector2(0, 0), Vector2(4, 4)))
+    assert(square.translated(by: Vector2(1, 1)).corners[0] == Vector2(1, 1))
+    assert(Polygon.ofRectangle(Rectangle(Vector2(0, 0), Vector2(4, 4))).corners == square.corners)
+    assert(Polygon.ofTriangle(Triangle2(Vector2(0, 0), Vector2(1, 0), Vector2(0, 1))).corners.length() == 3)
+  }
+
+  test "the separating axis test answers what two squares share" {
+    const first = Polygon([Vector2(0, 0), Vector2(4, 0), Vector2(4, 4), Vector2(0, 4)])
+    const overlapping = Polygon([Vector2(2, 2), Vector2(6, 2), Vector2(6, 6), Vector2(2, 6)])
+    const apart = Polygon([Vector2(9, 9), Vector2(10, 9), Vector2(10, 10), Vector2(9, 10)])
+    assert first.intersectsConvex(overlapping)
+    assert(!first.intersectsConvex(apart))
+  }
+
+  test "a polygon below three corners is no shape at all" {
+    const line = Polygon([Vector2(0, 0), Vector2(4, 0)])
+    assert line.isEmpty()
+    assert(!line.contains(Vector2(1, 0)))
+    assert(!line.containsConvex(Vector2(1, 0)))
+  }
+}

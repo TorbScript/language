@@ -1,0 +1,135 @@
+/**
+ * [Circle], the disc in the plane: the shape a broad-phase test is cheapest against, because the test is one
+ * subtraction, one dot product and one comparison.
+ */
+
+use Real from "std/number"
+use zeroOf from "./scalar"
+use Vector2 from "../../linear/src/vector2"
+use Rectangle from "./rectangle"
+
+/**
+ * A disc: a midpoint and a radius. The boundary is inside it.
+ *
+ * A circle is closed where a [Rectangle] is half-open, and the reason is that a rectangle tiles and a circle does not:
+ * nothing is lost by counting the boundary of a circle twice, and a great deal is lost by leaving it out of both of two
+ * touching circles.
+ *
+ * `Circle` needs a `Real` scalar. A radius without a square root is a [Rectangle]'s job.
+ *
+ * # Examples
+ *
+ *     const unit = Circle Vector2(0.0, 0.0), 1.0
+ *     print "{unit.contains(Vector2(1.0, 0.0))} {unit.contains(Vector2(1.1, 0.0))}"
+ *
+ * # Pitfalls
+ *
+ * - A negative radius describes no points, and [Circle.isEmpty] says so. Nothing normalizes it.
+ *
+ * # Related
+ *
+ * - `Sphere` - the same in space.
+ * - [Rectangle] - what [Circle.bounds] answers, and what a broad phase indexes by.
+ */
+public type Circle<Scalar: Real = Float> {
+  /** The midpoint. */
+  center: Vector2<Scalar>
+  /** How far the disc reaches from its midpoint. */
+  radius: Scalar
+
+  /** Whether the radius is negative, in which case the disc describes no points. */
+  fn isEmpty(self): Bool {
+    radius < zeroOf(radius)
+  }
+
+  /** Whether the point is in the disc, boundary included. */
+  fn contains(self, point: Vector2<Scalar>): Bool {
+    center.distanceSquaredTo(point) <= radius * radius
+  }
+
+  /** Whether the other disc is inside this one, boundary included. */
+  fn encloses(self, other: Circle<Scalar>): Bool {
+    if other.isEmpty() {
+      return true
+    }
+    const gap = radius - other.radius
+    gap >= zeroOf(gap) && center.distanceSquaredTo(other.center) <= gap * gap
+  }
+
+  /**
+   * Whether the two discs share a point, touching included.
+   *
+   *     const first = Circle Vector2(0.0, 0.0), 1.0
+   *     print first.intersects(Circle(Vector2(2.0, 0.0), 1.0))
+   */
+  fn intersects(self, other: Circle<Scalar>): Bool {
+    const reach = radius + other.radius
+    center.distanceSquaredTo(other.center) <= reach * reach
+  }
+
+  /** Whether the disc shares a point with the rectangle, which is a test against the nearest point of the rectangle. */
+  fn intersectsRectangle(self, other: Rectangle<Scalar>): Bool {
+    if other.isEmpty() {
+      return false
+    }
+    other.distanceSquaredTo(center) <= radius * radius
+  }
+
+  /** The point of the disc that is nearest to the one given, which is the point itself where it is inside. */
+  fn closestPoint(self, to: Vector2<Scalar>): Vector2<Scalar> {
+    const step = to.subtract center
+    if step.lengthSquared() <= radius * radius {
+      return to
+    }
+    center.add step.withLength(radius)
+  }
+
+  /** The distance from the point to the nearest point of the disc. Zero where it is inside. */
+  fn distanceTo(self, point: Vector2<Scalar>): Scalar {
+    const gap = center.distanceTo(point) - radius
+    gap.max zeroOf(gap)
+  }
+
+  /** The same disc moved. */
+  fn translated(self, by: Vector2<Scalar>): Circle<Scalar> {
+    Circle center.add(by), radius
+  }
+
+  /** The same disc with the radius grown by that much. A negative amount shrinks it. */
+  fn grown(self, by: Scalar): Circle<Scalar> {
+    Circle(center, radius + by)
+  }
+
+  /** The smallest rectangle that holds the disc. */
+  fn bounds(self): Rectangle<Scalar> {
+    Rectangle center.subtract(Vector2(radius, radius)), Vector2(radius.doubled(), radius.doubled())
+  }
+
+  /**
+   * How much of the plane the disc covers.
+   *
+   * The value of pi comes out of `arcCosine(-1)`, because a body that is generic over the scalar can write neither the
+   * digits of pi nor a literal of the scalar's type. It is exact for a `Float` and within a part for a `Fixed`.
+   */
+  fn area(self): Scalar {
+    halfTurnOf(radius) * radius * radius
+  }
+
+  /** How long the way around the disc is. */
+  fn circumference(self): Scalar {
+    halfTurnOf(radius) * radius.doubled()
+  }
+}
+
+/**
+ * Half a turn in radians - the value of pi - in the type of the value given.
+ *
+ * `arcCosine(-1)` is pi by definition, and it is the one way a body that is generic over its scalar can reach the
+ * constant at all: the digits cannot be written, because a literal in such a body keeps the type it had before the
+ * instance was built.
+ *
+ *     print halfTurnOf(1.0)
+ */
+public fn halfTurnOf<Scalar: Real>(value: Scalar): Scalar {
+  (-value.unit()).arcCosine()
+}

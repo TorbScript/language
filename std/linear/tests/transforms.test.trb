@@ -1,0 +1,260 @@
+/**
+ * The tests of `Angle`, the matrices and `Quaternion`: what a composition does, what a rotation does to an axis, and
+ * that the matrix form of a quaternion turns a point the same way the quaternion does.
+ *
+ * Everything that needs a trigonometric function or a halving is written over `Fixed`, whose implementation of `Real`
+ * lives in this package and therefore runs in the interpreter as well as in a binary. The whole-number matrices carry
+ * the rest.
+ */
+
+use test, group from "std/test"
+use Fixed from "../src/fixed"
+use Angle from "../src/angle"
+use Vector2 from "../src/vector2"
+use Vector3 from "../src/vector3"
+use Vector4 from "../src/vector4"
+use Matrix2 from "../src/matrix2"
+use Matrix3 from "../src/matrix3"
+use Matrix4 from "../src/matrix4"
+use Quaternion from "../src/quaternion"
+
+/** A deterministic scalar from a whole number. */
+fn exact(value: Int): Fixed {
+  Fixed.from value
+}
+
+/** A deterministic vector of two whole numbers. */
+fn flat(x: Int, y: Int): Vector2<Fixed> {
+  Vector2 exact(x), exact(y)
+}
+
+/** A deterministic vector of three whole numbers. */
+fn deep(x: Int, y: Int, z: Int): Vector3<Fixed> {
+  Vector3 exact(x), exact(y), exact(z)
+}
+
+/** How far two deterministic values may be apart and still count as the same answer: about a thousandth. */
+const nearly: Fixed = Fixed 66
+
+group "Angle" {
+  test "degrees and radians are the same rotation" {
+    const half = Angle.degrees exact(180)
+    assert half.radians.isCloseTo(Fixed.pi, tolerance: nearly)
+    assert half.toDegrees().isCloseTo(exact(180), tolerance: nearly)
+  }
+
+  test "rotations add, subtract and scale" {
+    const quarter = Angle.degrees exact(90)
+    assert((quarter + quarter).toDegrees().isCloseTo(exact(180), tolerance: nearly))
+    assert((quarter - quarter).radians == Fixed.zero)
+    assert((quarter * exact(2)).toDegrees().isCloseTo(exact(180), tolerance: nearly))
+    assert((-quarter).toDegrees().isCloseTo(exact(-90), tolerance: nearly))
+  }
+
+  test "rotations compare by the rotation they are" {
+    assert(Angle.degrees(exact(30)) < Angle.degrees(exact(60)))
+  }
+
+  test "the sine and the cosine of a quarter turn" {
+    const quarter = Angle.degrees exact(90)
+    assert quarter.sine().isCloseTo(Fixed.one, tolerance: nearly)
+    assert quarter.cosine().isCloseTo(Fixed.zero, tolerance: nearly)
+  }
+
+  test "a rotation of more than a whole turn normalizes into a half turn either way" {
+    const long = Angle.degrees exact(370)
+    assert long.normalized().toDegrees().isCloseTo(exact(10), tolerance: nearly)
+  }
+
+  test "half of a rotation is half of its radians" {
+    const quarter = Angle.degrees exact(90)
+    assert quarter.halved().toDegrees().isCloseTo(exact(45), tolerance: nearly)
+  }
+}
+
+group "Matrix2" {
+  test "a diagonal matrix scales each axis on its own" {
+    const scale = Matrix2.scaling by: Vector2(2, 3)
+    assert(scale.applied(to: Vector2(1, 1)) == Vector2(2, 3))
+    assert(scale.determinant() == 6)
+    assert(scale.at(0, 0) == 2)
+    assert(scale.at(1, 1) == 3)
+    assert(scale.at(0, 1) == 0)
+  }
+
+  test "a column is where a basis vector lands" {
+    const scale = Matrix2.scaling by: Vector2(2, 3)
+    assert(scale.xAxis == Vector2(2, 0))
+    assert(scale.applied(to: Vector2(1, 0)) == scale.xAxis)
+  }
+
+  test "the identity changes nothing" {
+    const same = Matrix2 Vector2(1, 0), Vector2(0, 1)
+    assert(same.applied(to: Vector2(3, 4)) == Vector2(3, 4))
+    assert(same.determinant() == 1)
+  }
+
+  test "a composition is applied right to left" {
+    const scale = Matrix2.scaling by: Vector2(2, 2)
+    const twice = scale * scale
+    assert(twice.applied(to: Vector2(1, 1)) == Vector2(4, 4))
+  }
+
+  test "transposing twice is doing nothing" {
+    const shear = Matrix2 Vector2(1, 2), Vector2(3, 4)
+    assert(shear.transposed().transposed() == shear)
+    assert(shear.transposed() == Matrix2(Vector2(1, 3), Vector2(2, 4)))
+  }
+
+  test "cells add and the sign flips" {
+    const shear = Matrix2 Vector2(1, 2), Vector2(3, 4)
+    assert(shear + shear == Matrix2(Vector2(2, 4), Vector2(6, 8)))
+    assert(shear - shear == Matrix2(Vector2(0, 0), Vector2(0, 0)))
+    assert(-shear == Matrix2(Vector2(-1, -2), Vector2(-3, -4)))
+  }
+
+  test "an inverse undoes the transformation, and a flat one has none" {
+    const scale = Matrix2.scaling by: flat(2, 4)
+    match scale.inverse() {
+      Some(undone) => {
+        const there = scale.applied to: flat(3, 5)
+        assert undone.applied(to: there).isCloseTo(flat(3, 5), tolerance: nearly)
+      }
+      None => assert false
+    }
+    assert(Matrix2.scaling(by: flat(0, 1)).inverse() == None)
+  }
+
+  test "a rotation by a quarter turn takes the first axis onto the second" {
+    const turn = Matrix2.rotation by: Angle.degrees(exact(90))
+    assert turn.applied(to: flat(1, 0)).isCloseTo(flat(0, 1), tolerance: nearly)
+  }
+}
+
+group "Matrix3" {
+  test "the identity and the determinant of a scaling" {
+    const same = Matrix3 Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)
+    assert(same.determinant() == 1)
+    assert(Matrix3.scaling(by: Vector3(2, 3, 4)).determinant() == 24)
+  }
+
+  test "a row and a column are read out" {
+    const scale = Matrix3.scaling by: Vector3(2, 3, 4)
+    assert(scale.column(1) == Vector3(0, 3, 0))
+    assert(scale.row(1) == Vector3(0, 3, 0))
+  }
+
+  test "an affine transformation of the plane moves a point and not a direction" {
+    const move = Matrix3.affine Matrix2<Fixed>.identity, by: flat(3, 4)
+    assert(move.transformedPoint(flat(1, 1)) == flat(4, 5))
+    assert(move.transformedDirection(flat(1, 1)) == flat(1, 1))
+    assert(move.translationPart() == flat(3, 4))
+    assert(move.linearPart() == Matrix2<Fixed>.identity)
+  }
+
+  test "a rotation around the third axis is the rotation of the plane" {
+    const turn = Matrix3.rotationAroundZ by: Angle.degrees(exact(90))
+    assert turn.applied(to: deep(1, 0, 0)).isCloseTo(deep(0, 1, 0), tolerance: nearly)
+  }
+
+  test "a rotation around the first axis leaves it alone" {
+    const turn = Matrix3.rotationAroundX by: Angle.degrees(exact(90))
+    assert turn.applied(to: deep(1, 0, 0)).isCloseTo(deep(1, 0, 0), tolerance: nearly)
+    assert turn.applied(to: deep(0, 1, 0)).isCloseTo(deep(0, 0, 1), tolerance: nearly)
+  }
+
+  test "a rotation around the second axis takes the third onto the first" {
+    const turn = Matrix3.rotationAroundY by: Angle.degrees(exact(90))
+    assert turn.applied(to: deep(0, 0, 1)).isCloseTo(deep(1, 0, 0), tolerance: nearly)
+  }
+
+  test "the inverse of a scaling is the scaling by the reciprocals" {
+    const scale = Matrix3.scaling by: deep(2, 4, 8)
+    match scale.inverse() {
+      Some(undone) => assert undone.applied(to: scale.applied(to: deep(1, 1, 1))).isCloseTo(deep(1, 1, 1), tolerance: nearly)
+      None => assert false
+    }
+  }
+}
+
+group "Matrix4" {
+  test "a translation moves a point and not a direction" {
+    const move = Matrix4.translation of: deep(1, 2, 3)
+    assert(move.transformedPoint(deep(0, 0, 0)) == deep(1, 2, 3))
+    assert(move.transformedDirection(deep(1, 0, 0)) == deep(1, 0, 0))
+    assert(move.translationPart() == deep(1, 2, 3))
+  }
+
+  test "the identity changes nothing, and a row is read out" {
+    assert(Matrix4<Fixed>.identity.transformedPoint(deep(3, 4, 5)) == deep(3, 4, 5))
+    assert(Matrix4<Fixed>.identity.row(0) == Vector4(Fixed.one, Fixed.zero, Fixed.zero, Fixed.zero))
+  }
+
+  test "a composition of two translations adds them" {
+    const first = Matrix4.translation of: deep(1, 0, 0)
+    const second = Matrix4.translation of: deep(0, 2, 0)
+    assert((first * second).transformedPoint(deep(0, 0, 0)) == deep(1, 2, 0))
+  }
+
+  test "the affine inverse carries the translation back through the linear part" {
+    const move = Matrix4.affine Matrix3.scaling(by: deep(2, 2, 2)), by: deep(4, 0, 0)
+    match move.inverseAffine() {
+      Some(undone) => {
+        const there = move.transformedPoint deep(1, 1, 1)
+        assert undone.transformedPoint(there).isCloseTo(deep(1, 1, 1), tolerance: nearly)
+      }
+      None => assert false
+    }
+  }
+
+  test "transposing twice is doing nothing" {
+    const move = Matrix4.translation of: deep(1, 2, 3)
+    assert(move.transposed().transposed() == move)
+  }
+}
+
+group "Quaternion" {
+  test "no rotation leaves a point alone" {
+    assert(Quaternion<Fixed>.identity.applied(to: deep(1, 2, 3)) == deep(1, 2, 3))
+  }
+
+  test "a quarter turn around the third axis takes the first onto the second" {
+    const turn = Quaternion.rotation around: deep(0, 0, 1), by: Angle.degrees(exact(90))
+    assert turn.applied(to: deep(1, 0, 0)).isCloseTo(deep(0, 1, 0), tolerance: nearly)
+  }
+
+  test "two quarter turns are a half turn" {
+    const turn = Quaternion.rotation around: deep(0, 0, 1), by: Angle.degrees(exact(90))
+    assert((turn * turn).applied(to: deep(1, 0, 0)).isCloseTo(deep(-1, 0, 0), tolerance: nearly))
+  }
+
+  test "the conjugate undoes the rotation" {
+    const turn = Quaternion.rotation around: deep(0, 0, 1), by: Angle.degrees(exact(90))
+    const there = turn.applied to: deep(1, 2, 0)
+    assert turn.conjugate().applied(to: there).isCloseTo(deep(1, 2, 0), tolerance: nearly)
+  }
+
+  test "a rotation has length one" {
+    const turn = Quaternion.rotation around: deep(1, 1, 1), by: Angle.degrees(exact(37))
+    assert turn.lengthSquared().isCloseTo(Fixed.one, tolerance: nearly)
+  }
+
+  test "the matrix form turns a point the same way" {
+    const turn = Quaternion.rotation around: deep(0, 0, 1), by: Angle.degrees(exact(90))
+    const byQuaternion = turn.applied to: deep(1, 2, 0)
+    const byMatrix = turn.toMatrix3().applied(to: deep(1, 2, 0))
+    assert byMatrix.isCloseTo(byQuaternion, tolerance: nearly)
+  }
+
+  test "a zero axis is no rotation at all" {
+    const still = Quaternion.rotation around: deep(0, 0, 0), by: Angle.degrees(exact(90))
+    assert(still.applied(to: deep(1, 2, 3)) == deep(1, 2, 3))
+  }
+
+  test "interpolation reaches both ends" {
+    const turn = Quaternion.rotation around: deep(0, 0, 1), by: Angle.degrees(exact(90))
+    const start = Quaternion<Fixed>.identity
+    assert start.interpolated(toward: turn, by: Fixed.zero).isCloseTo(start, tolerance: nearly)
+    assert start.interpolated(toward: turn, by: Fixed.one).isCloseTo(turn, tolerance: nearly)
+  }
+}

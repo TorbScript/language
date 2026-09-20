@@ -1,6 +1,6 @@
 /**
- * Every numeric type of the language: [Numeric], [Signed] and [Bits], the traits their operators go through; the
- * sized integer types and the two floating-point types; [Decimal]; and the conversions between all of them.
+ * Every numeric type of the language: [Numeric], [Signed], [Bits] and [Real], the traits their operators go through;
+ * the sized integer types and the two floating-point types; [Decimal]; and the conversions between all of them.
  *
  * Reach for `Int`, `UInt` or `Float` - the three default-width aliases - and only name a sized type (`Int8`,
  * `UInt32`, ...) where a signature has to say exactly how wide a value is.
@@ -10,6 +10,7 @@ use Equals, Compare, Hash from "std/core"
 use From, TryFrom, Parse, Show from "std/core"
 use Error from "std/core"
 use Add, Subtract, Multiply, Divide, Remainder, Negate from "std/core"
+use * as math from "std/math"
 
 /** The arithmetic and comparison every number has: `+`, `-`, `*`, `/`, `%`, `==`, `<`, and parsing from text. */
 public trait Numeric
@@ -20,6 +21,117 @@ public trait Signed
   with Numeric, Negate {
   /** The value without its sign. */
   fn absolute(self): Self
+}
+
+/**
+ * [Signed] plus the operations that need a root or an angle: the scalar of geometry, trigonometry and interpolation.
+ *
+ * It is the bound that separates what a vector can do with whole numbers from what it needs a continuous scalar for.
+ * `lengthSquared` and `dot` are arithmetic and live under [Numeric]; `length`, `normalized`, `rotated` and every angle
+ * need a `Real`. A library that is generic over the scalar therefore says which half it is in by its bound alone, and a
+ * grid vector never accidentally gets a square root.
+ *
+ * Two types carry it. `Float64` is the fast one and answers whatever the platform's mathematics library answers.
+ * `Fixed` (`std/linear`) is the deterministic one: every operation is integer arithmetic, so it answers the same bits on
+ * every platform and out of every back end, which is what lockstep simulation and a replay need.
+ *
+ * Angles are in radians throughout, and `std/linear`'s `Angle` is the wrapper that keeps degrees from being passed as
+ * radians.
+ *
+ * # Examples
+ *
+ *     fn hypotenuse<Scalar: Real>(first: Scalar, second: Scalar): Scalar {
+ *       (first * first + second * second).squareRoot()
+ *     }
+ *
+ *     print hypotenuse(3.0, 4.0)
+ *
+ * # Pitfalls
+ *
+ * - The results are **not** bit-identical between implementors, and for `Float64` not even between platforms:
+ *   `sine` is whatever the platform's mathematics library computes. Where the last bit has to agree - a lockstep
+ *   simulation, a replay, a checksum over a world state - the scalar is `Fixed` and not `Float`.
+ *
+ * # Open
+ *
+ * - `Float32` cannot carry it. `Float32` has no `squareRoot` and no arithmetic that a compiled program runs, and there
+ *   is no conversion from a `Float64` back down to one, so no body can be written for it at all.
+ * - A real-valued power (`pow`) is not a member. `Float` has `math.power`, and an exact integer algorithm for a
+ *   fixed-point scalar needs an exponential and a logarithm that do not exist yet.
+ *
+ * # Related
+ *
+ * - [Signed] - what a `Real` is on top of.
+ * - [Numeric] - the bound the arithmetic half of a vector library lives under.
+ */
+public trait Real with Signed {
+  /** The non-negative square root. Negative input answers a value the implementor documents. */
+  fn squareRoot(self): Self
+
+  /** The sine of an angle in radians. */
+  fn sine(self): Self
+
+  /** The cosine of an angle in radians. */
+  fn cosine(self): Self
+
+  /** The tangent of an angle in radians. */
+  fn tangent(self): Self
+
+  /** The angle in radians whose sine is this value, in `[-pi/2, pi/2]`. */
+  fn arcSine(self): Self
+
+  /** The angle in radians whose cosine is this value, in `[0, pi]`. */
+  fn arcCosine(self): Self
+
+  /** The angle in radians whose tangent is this value, in `(-pi/2, pi/2)`. */
+  fn arcTangent(self): Self
+
+  /**
+   * The angle in radians of the point `(by, self)`, in `(-pi, pi]`: the arc tangent of `self / by` that uses the sign
+   * of both to pick the quadrant. This is what turns a vector into a direction, and it is why it takes a label -
+   * `y.arcTangentDivided(by: x)` says which of the two is which, where a bare pair of arguments does not.
+   */
+  fn arcTangentDivided(self, by: Self): Self
+
+  /** Rounded towards negative infinity. */
+  fn floor(self): Self
+
+  /** Rounded towards positive infinity. */
+  fn ceiling(self): Self
+
+  /** Rounded to the nearest whole value, halves away from zero. */
+  fn round(self): Self
+
+  /**
+   * Half the value. It is a member and not `value / 2` at the call, because a body that is generic over the scalar
+   * cannot write the literal `2` at all: a literal has a type, and inside such a body that type is the parameter.
+   * Halving is what a midpoint, a radius and an average are made of, so the trait carries it.
+   */
+  fn halved(self): Self
+
+  /** Twice the value. */
+  fn doubled(self): Self {
+    self + self
+  }
+
+  /**
+   * The angle in radians that this many degrees is.
+   *
+   * Degrees are a member of the scalar and not a function of `std/linear`, because the conversion needs the value of
+   * pi in *this* scalar's type - and a body that is generic over the scalar can write neither pi nor `180`. Each
+   * implementor carries its own exact factor.
+   */
+  fn radiansOfDegrees(self): Self
+
+  /** The angle in degrees that this many radians is. */
+  fn degreesOfRadians(self): Self
+
+  /**
+   * The value one, of this scalar's type. `self` is not read at all: it is there because a body that is generic over
+   * the scalar cannot write the literal `1`, and asking a value of the type for it is the way to get one. The
+   * homogeneous row of a transformation matrix, an identity and a "full" interpolation factor are all made of it.
+   */
+  fn unit(self): Self
 }
 
 /**
@@ -223,6 +335,61 @@ extend Float64 {
    */
   fn isCloseTo(self, other: Float64, tolerance: Float64 = 0.000001): Bool {
     (self - other).absolute() <= tolerance
+  }
+}
+
+/**
+ * `Float64` is the fast [Real]: the square root, the rounding and `isCloseTo` are its own methods already, and the eight
+ * trigonometric ones are the free functions of `std/math` behind the trait's names.
+ *
+ * # Pitfalls
+ *
+ * - What `sine` answers is what the platform's mathematics library answers, so two machines may differ in the last bit.
+ *   `Fixed` (`std/linear`) is the implementor that does not.
+ */
+extend Float64 with Real {
+  fn sine(self): Float64 {
+    math.sine self
+  }
+
+  fn cosine(self): Float64 {
+    math.cosine self
+  }
+
+  fn tangent(self): Float64 {
+    math.tangent self
+  }
+
+  fn arcSine(self): Float64 {
+    math.arcSine self
+  }
+
+  fn arcCosine(self): Float64 {
+    math.arcCosine self
+  }
+
+  fn arcTangent(self): Float64 {
+    math.arcTangent self
+  }
+
+  fn arcTangentDivided(self, by: Float64): Float64 {
+    math.arcTangent2 self, by
+  }
+
+  fn halved(self): Float64 {
+    self / 2.0
+  }
+
+  fn radiansOfDegrees(self): Float64 {
+    self * 0.017453292519943295
+  }
+
+  fn degreesOfRadians(self): Float64 {
+    self * 57.29577951308232
+  }
+
+  fn unit(self): Float64 {
+    1.0
   }
 }
 

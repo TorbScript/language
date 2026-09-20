@@ -1,0 +1,72 @@
+/**
+ * The four things a library that is generic over a number type cannot do in a compiled program, each in as few lines as
+ * it takes. `torb check .` answers "no problems"; `torb build .` names the **first** of them and stops, so the next one
+ * becomes visible when the line above it is deleted. `docs/LINEAR.md` section 12 lists all four with the smallest change
+ * that would close each, and `std/linear` is written around them.
+ *
+ * The interpreter runs the whole file, and two of its four lines of output are wrong: `Pair.nothing()` answers
+ * `Pair(value: 0)` for a `Float` wrapper, and `Pair<Float>.zero` would answer the first-declared instantiation's value
+ * whichever one was asked for. The interpreter has no types, which is the same cause seen from the other side.
+ */
+
+use Numeric from "std/number"
+use Add from "std/core"
+
+/**
+ * A number in a wrapper, generic over the number, with the arithmetic through the trait the operator goes through: the
+ * smallest type that has the shape `Vector2` has.
+ */
+public type Pair<Item: Numeric = Float> with Add {
+  /** The only field. */
+  value: Item
+
+  /** The same wrapper with a value of the type's own zero, which is what needs a literal of the parameter's type. */
+  fn nothing(): Pair<Item> {
+    Pair 0
+  }
+
+  fn add(self, other: Pair<Item>): Pair<Item> {
+    Pair(value + other.value)
+  }
+}
+
+/** The constant this wrapper is asked for most often, and the one no back end instantiates per type argument. */
+extend Pair<Float> {
+  /** The wrapper of nothing. */
+  const zero: Pair<Float> = Pair 0.0
+}
+
+/**
+ * A literal in a body that is generic over its number type. The checker adapts it to the parameter; the back end keeps
+ * the type it had before the instance was built, and reports it for the `Float64` instance.
+ */
+public fn oneOf<Item: Numeric>(): Item {
+  1
+}
+
+/** The same, reached through an operator rather than a `return`. */
+public fn doubled<Item: Numeric>(value: Item): Item {
+  value * 2
+}
+
+// 1. An operator on a generic type: `not supported by the back end yet: a generic function or a member of a generic
+//    type`. The method form of the very same call compiles, which is why `std/linear`'s gate programs are written in it.
+//    This is the one the build stops at; delete the two lines below it to see the next
+const one = Pair 1
+const sum = one + one
+print "{sum} {one.add(one)}"
+
+// 2. A numeric literal in a generic body: `the function returns Float64 and return carries Int64`, and
+//    `multiply.f64 works on Float64, and %1 is Int64`
+const whole: Int = oneOf()
+const fractional: Float = oneOf()
+print "{whole} {fractional} {doubled(3)} {doubled(1.5)}"
+
+// 3. A static member of a generic type whose body holds a literal: the same cause as 2, one level in
+const empty: Pair<Float> = Pair.nothing()
+print empty
+
+// 4. A constant of a concrete `extend` of a generic type: `Pair.zero` does not resolve at all without the type argument,
+//    although the declaration says `Item: Numeric = Float` - and the interpreter cannot tell two instantiations of one
+//    `extend` apart, so it reads whichever was declared first
+print Pair<Float>.zero

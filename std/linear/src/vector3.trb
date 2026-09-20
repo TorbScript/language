@@ -1,0 +1,307 @@
+/**
+ * [Vector3], the three-component vector, layered by its scalar's bound exactly as [Vector2] is.
+ *
+ * The one member that has no two-dimensional twin is [Vector3.cross], which answers a vector rather than a number:
+ * in the plane there is only one direction perpendicular to two vectors, and in space there is a whole vector of it.
+ */
+
+use Numeric, Signed, Real from "std/number"
+use zeroOf from "./scalar"
+use Add, Subtract, Multiply, Divide, Negate from "std/core"
+use Fixed from "./fixed"
+use Angle from "./angle"
+use Vector2, wholeOf from "./vector2"
+
+/**
+ * A point, a direction or a size in space, over whatever scalar the program counts in.
+ *
+ * The basis is right-handed: `unitX.cross(unitY)` is `unitZ`. Which way a program *draws* those three axes is the
+ * program's own business, and nothing here assumes that the second one points up.
+ *
+ * # Examples
+ *
+ *     const step = Vector3 1.0, 2.0, 2.0
+ *     print "{step.length()} {step.cross(Vector3(0.0, 1.0, 0.0))}"
+ *
+ * # Open
+ *
+ * - The operators are declared and type check; a compiled program writes `a.add(b)` and the other trait methods until
+ *   a back end lowers an operator on a generic type.
+ * - The constants need their scalar written out: `Vector3<Float>.zero`.
+ *
+ * # Related
+ *
+ * - [Vector2] - the same layering with two components.
+ * - `Quaternion` - what rotates one of these without a matrix.
+ */
+public type Vector3<Scalar: Numeric = Float> with Add, Subtract, Multiply<Scalar>, Divide<Scalar> {
+  /** The first component. */
+  x: Scalar
+  /** The second component. */
+  y: Scalar
+  /** The third component. */
+  z: Scalar
+
+  /** Every component set to the same value. */
+  fn filled(value: Scalar): Vector3<Scalar> {
+    Vector3 value, value, value
+  }
+
+  /** The sum, component by component. */
+  fn add(self, other: Vector3<Scalar>): Vector3<Scalar> {
+    Vector3(x + other.x, y + other.y, z + other.z)
+  }
+
+  /** The difference, component by component. */
+  fn subtract(self, other: Vector3<Scalar>): Vector3<Scalar> {
+    Vector3(x - other.x, y - other.y, z - other.z)
+  }
+
+  /** Every component multiplied by the scalar. */
+  fn multiply(self, other: Scalar): Vector3<Scalar> {
+    Vector3(x * other, y * other, z * other)
+  }
+
+  /** Every component divided by the scalar. Panics on a division by zero. */
+  fn divide(self, other: Scalar): Vector3<Scalar> {
+    Vector3(x / other, y / other, z / other)
+  }
+
+  /** The dot product. Zero exactly where the two are perpendicular. */
+  fn dot(self, other: Vector3<Scalar>): Scalar {
+    x * other.x + y * other.y + z * other.z
+  }
+
+  /** The square of the length: the comparison that needs no root. */
+  fn lengthSquared(self): Scalar {
+    dot self
+  }
+
+  /**
+   * The vector perpendicular to both, with the length of the parallelogram they span, in the right-handed sense.
+   *
+   *     print Vector3 1.0, 0.0, 0.0).cross(Vector3(0.0, 1.0, 0.0)
+   */
+  fn cross(self, other: Vector3<Scalar>): Vector3<Scalar> {
+    Vector3(y * other.z - z * other.y, z * other.x - x * other.z, x * other.y - y * other.x)
+  }
+
+  /** Component by component. */
+  fn scaled(self, by: Vector3<Scalar>): Vector3<Scalar> {
+    Vector3(x * by.x, y * by.y, z * by.z)
+  }
+
+  /** Component by component. Panics where a component of `by` is zero. */
+  fn divided(self, by: Vector3<Scalar>): Vector3<Scalar> {
+    Vector3(x / by.x, y / by.y, z / by.z)
+  }
+
+  /** The smaller of each pair of components. */
+  fn min(self, other: Vector3<Scalar>): Vector3<Scalar> {
+    Vector3 x.min(other.x), y.min(other.y), z.min(other.z)
+  }
+
+  /** The larger of each pair of components. */
+  fn max(self, other: Vector3<Scalar>): Vector3<Scalar> {
+    Vector3 x.max(other.x), y.max(other.y), z.max(other.z)
+  }
+
+  /** Every component pulled into the box the two corners span. */
+  fn clamped(self, low: Vector3<Scalar>, high: Vector3<Scalar>): Vector3<Scalar> {
+    Vector3 x.clamp(low.x, high.x), y.clamp(low.y, high.y), z.clamp(low.z, high.z)
+  }
+
+  /** The first two components. */
+  fn toVector2(self): Vector2<Scalar> {
+    Vector2 x, y
+  }
+
+  /** The same vector with another first component. */
+  fn withX(self, value: Scalar): Vector3<Scalar> {
+    Vector3 value, y, z
+  }
+
+  /** The same vector with another second component. */
+  fn withY(self, value: Scalar): Vector3<Scalar> {
+    Vector3 x, value, z
+  }
+
+  /** The same vector with another third component. */
+  fn withZ(self, value: Scalar): Vector3<Scalar> {
+    Vector3 x, y, value
+  }
+
+  /** Whether every component is zero. */
+  fn isZero(self): Bool {
+    const nothing = zeroOf x
+    x == nothing && y == nothing && z == nothing
+  }
+
+  /** The largest of the three components. */
+  fn largestComponent(self): Scalar {
+    x.max(y).max(z)
+  }
+
+  /** The smallest of the three components. */
+  fn smallestComponent(self): Scalar {
+    x.min(y).min(z)
+  }
+
+  /** Every component added together. */
+  fn sum(self): Scalar {
+    x + y + z
+  }
+}
+
+/** A vector of a signed scalar can be turned around. */
+extend<Scalar: Signed> Vector3<Scalar> with Negate {
+  /** Every component with its sign flipped. */
+  fn negate(self): Vector3<Scalar> {
+    Vector3(-x, -y, -z)
+  }
+}
+
+/** What a sign buys: a distance along the axes, without a root. */
+extend<Scalar: Signed> Vector3<Scalar> {
+  /** Every component without its sign. */
+  fn absolute(self): Vector3<Scalar> {
+    Vector3 x.absolute(), y.absolute(), z.absolute()
+  }
+
+  /** The distance along the axes, `|x| + |y| + |z|`. */
+  fn manhattanLength(self): Scalar {
+    x.absolute() + y.absolute() + z.absolute()
+  }
+
+  /** The [Vector3.manhattanLength] of the step from here to there. */
+  fn manhattanDistanceTo(self, other: Vector3<Scalar>): Scalar {
+    subtract(other).manhattanLength()
+  }
+}
+
+/** What a root and an angle buy: lengths, directions and interpolation. */
+extend<Scalar: Real> Vector3<Scalar> {
+  /** The euclidean length. */
+  fn length(self): Scalar {
+    lengthSquared().squareRoot()
+  }
+
+  /** The distance from here to there. */
+  fn distanceTo(self, other: Vector3<Scalar>): Scalar {
+    subtract(other).length()
+  }
+
+  /** The square of the distance from here to there. */
+  fn distanceSquaredTo(self, other: Vector3<Scalar>): Scalar {
+    subtract(other).lengthSquared()
+  }
+
+  /** The same direction with length one. A zero vector answers itself. */
+  fn normalized(self): Vector3<Scalar> {
+    const size: Scalar = self.length()
+    if size == zeroOf(size) {
+      return self
+    }
+    divide size
+  }
+
+  /** The same direction with the length given. A zero vector stays zero. */
+  fn withLength(self, value: Scalar): Vector3<Scalar> {
+    normalized().multiply(value)
+  }
+
+  /** The rotation between the two directions, in `[0, pi]`. Panics where either one is zero. */
+  fn angleTo(self, other: Vector3<Scalar>): Angle<Scalar> {
+    const spread: Scalar = cross(other).length()
+    Angle spread.arcTangentDivided(by: dot(other))
+  }
+
+  /** The point `factor` of the way from here to there. */
+  fn interpolated(self, toward: Vector3<Scalar>, by: Scalar): Vector3<Scalar> {
+    add toward.subtract(self).multiply(by)
+  }
+
+  /** The part of this vector that lies along the other one. Panics where the other one is zero. */
+  fn projectedOnto(self, other: Vector3<Scalar>): Vector3<Scalar> {
+    other.multiply(dot(other) / other.lengthSquared())
+  }
+
+  /** Mirrored in the plane through the origin whose normal is given. The normal is expected to have length one. */
+  fn reflected(self, normal: Vector3<Scalar>): Vector3<Scalar> {
+    subtract normal.multiply(dot(normal).doubled())
+  }
+
+  /** Whether every component is within `tolerance` of the other vector's. */
+  fn isCloseTo(self, other: Vector3<Scalar>, tolerance: Scalar): Bool {
+    (x - other.x).absolute() <= tolerance
+      && (y - other.y).absolute() <= tolerance
+      && (z - other.z).absolute() <= tolerance
+  }
+}
+
+/** The float vector: its constants, and the three ways down to a grid. */
+extend Vector3<Float> {
+  /** Every component zero. */
+  const zero: Vector3<Float> = Vector3 0.0, 0.0, 0.0
+  /** Every component one. */
+  const one: Vector3<Float> = Vector3 1.0, 1.0, 1.0
+  /** The first basis vector. */
+  const unitX: Vector3<Float> = Vector3 1.0, 0.0, 0.0
+  /** The second basis vector. */
+  const unitY: Vector3<Float> = Vector3 0.0, 1.0, 0.0
+  /** The third basis vector. */
+  const unitZ: Vector3<Float> = Vector3 0.0, 0.0, 1.0
+
+  /** Every component rounded to the nearest whole number, halves away from zero. */
+  fn rounded(self): Vector3<Int> {
+    Vector3 wholeOf(x.round()), wholeOf(y.round()), wholeOf(z.round())
+  }
+
+  /** Every component rounded towards negative infinity. */
+  fn floored(self): Vector3<Int> {
+    Vector3 wholeOf(x.floor()), wholeOf(y.floor()), wholeOf(z.floor())
+  }
+
+  /** Every component rounded towards positive infinity. */
+  fn ceiling(self): Vector3<Int> {
+    Vector3 wholeOf(x.ceiling()), wholeOf(y.ceiling()), wholeOf(z.ceiling())
+  }
+}
+
+/** The grid vector: its constants, and the two ways up to a scalar that has fractions. */
+extend Vector3<Int> {
+  /** Every component zero. */
+  const zero: Vector3<Int> = Vector3 0, 0, 0
+  /** Every component one. */
+  const one: Vector3<Int> = Vector3 1, 1, 1
+  /** The first basis vector. */
+  const unitX: Vector3<Int> = Vector3 1, 0, 0
+  /** The second basis vector. */
+  const unitY: Vector3<Int> = Vector3 0, 1, 0
+  /** The third basis vector. */
+  const unitZ: Vector3<Int> = Vector3 0, 0, 1
+
+  /** The same vector over `Float`, exactly. */
+  fn toFloat(self): Vector3<Float> {
+    Vector3 Float.from(x), Float.from(y), Float.from(z)
+  }
+
+  /** The same vector over `Fixed`, exactly. */
+  fn toFixed(self): Vector3<Fixed> {
+    Vector3 Fixed.from(x), Fixed.from(y), Fixed.from(z)
+  }
+}
+
+/** The deterministic vector's constants. Its conversions are `Fixed`'s own, one component at a time. */
+extend Vector3<Fixed> {
+  /** Every component zero. */
+  const zero: Vector3<Fixed> = Vector3 Fixed(0), Fixed(0), Fixed(0)
+  /** Every component one. */
+  const one: Vector3<Fixed> = Vector3 Fixed(65536), Fixed(65536), Fixed(65536)
+  /** The first basis vector. */
+  const unitX: Vector3<Fixed> = Vector3 Fixed(65536), Fixed(0), Fixed(0)
+  /** The second basis vector. */
+  const unitY: Vector3<Fixed> = Vector3 Fixed(0), Fixed(65536), Fixed(0)
+  /** The third basis vector. */
+  const unitZ: Vector3<Fixed> = Vector3 Fixed(0), Fixed(0), Fixed(65536)
+}

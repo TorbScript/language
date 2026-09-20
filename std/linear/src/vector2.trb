@@ -1,0 +1,373 @@
+/**
+ * [Vector2], the two-component vector, and the three layers of members its scalar decides.
+ *
+ * There is one type and not two. `Vector2` is the `Float` vector, `Vector2<Int>` is the pixel or tile vector, and
+ * `Vector2<Fixed>` is the deterministic one; what each of them can do follows from the scalar's bound. Arithmetic,
+ * `dot`, `lengthSquared` and the grid operations need only `Numeric`; a sign and a Manhattan length need `Signed`;
+ * `length`, `normalized`, `angle` and `rotated` need `Real`, and a grid vector therefore never gets a square root by
+ * accident.
+ */
+
+use Numeric, Signed, Real from "std/number"
+use zeroOf from "./scalar"
+use Add, Subtract, Multiply, Divide, Negate from "std/core"
+use Fixed from "./fixed"
+use Angle from "./angle"
+
+/**
+ * A point, a direction or a size in the plane, over whatever scalar the program counts in.
+ *
+ * Nothing here knows which way is up. `y` is the second component and that is all it is: a program that draws with
+ * `y` growing downwards and one that draws with `y` growing upwards use the same vectors, and only the program's own
+ * `rotated` calls look different to a viewer.
+ *
+ * # Examples
+ *
+ *     const step = Vector2 3.0, 4.0
+ *     const tile = Vector2 3, 4
+ *     print "{step.length()} {tile.dot(tile)} {step.add(step)}"
+ *
+ * # Pitfalls
+ *
+ * - `Vector2(1, 2)` is a `Vector2<Int>` and `Vector2(1.0, 2.0)` is a `Vector2<Float>`: the literals decide, and the
+ *   two do not mix. Cross the boundary on purpose with [Vector2.toFloat] and [Vector2.rounded].
+ * - Overflow panics, here as everywhere. `lengthSquared` on a `Vector2<Int>` squares both components, so a pair of
+ *   coordinates above three billion leaves the range of an `Int` although the vector itself is ordinary.
+ *
+ * # Open
+ *
+ * - The operators are declared and type check, and a compiled program cannot yet use their symbols on a generic type:
+ *   write `a.add(b)`, `a.subtract(b)`, `a.multiply(factor)` and `a.negate()` where the program is built to a binary.
+ *   The trait methods are exactly the operators and cost nothing extra.
+ * - The constants need their scalar written out - `Vector2<Float>.zero`, not `Vector2.zero` - because a member of an
+ *   `extend` of one instantiation does not take the scalar from the expected type and does not fall back to the
+ *   declared default either.
+ * - The interpreter has no types, so it cannot tell `extend Vector2<Float>` from `extend Vector2<Int>`: a program run
+ *   on it reads whichever of the four constants was declared first, whatever scalar it asked for. Build such a program
+ *   to a binary, or write the components out.
+ *
+ * # Related
+ *
+ * - `Vector3` - the same members with a third component.
+ * - [Angle] - what [Vector2.angle] answers and what [Vector2.rotated] takes.
+ */
+public type Vector2<Scalar: Numeric = Float> with Add, Subtract, Multiply<Scalar>, Divide<Scalar> {
+  /** The first component. */
+  x: Scalar
+  /** The second component. */
+  y: Scalar
+
+  /**
+   * Both components set to the same value: the generic way to write a constant vector, where a literal cannot be
+   * written at all.
+   *
+   *     print Vector2.filled 2.0
+   */
+  fn filled(value: Scalar): Vector2<Scalar> {
+    Vector2 value, value
+  }
+
+  /** The sum, component by component. */
+  fn add(self, other: Vector2<Scalar>): Vector2<Scalar> {
+    Vector2(x + other.x, y + other.y)
+  }
+
+  /** The difference, component by component. */
+  fn subtract(self, other: Vector2<Scalar>): Vector2<Scalar> {
+    Vector2(x - other.x, y - other.y)
+  }
+
+  /** Every component multiplied by the scalar. */
+  fn multiply(self, other: Scalar): Vector2<Scalar> {
+    Vector2(x * other, y * other)
+  }
+
+  /** Every component divided by the scalar. Panics on a division by zero. */
+  fn divide(self, other: Scalar): Vector2<Scalar> {
+    Vector2(x / other, y / other)
+  }
+
+  /**
+   * The dot product: `length * other.length * cosine(angle between them)`, without a square root and without an angle.
+   * Zero exactly where the two are perpendicular, positive where they point the same way.
+   */
+  fn dot(self, other: Vector2<Scalar>): Scalar {
+    x * other.x + y * other.y
+  }
+
+  /**
+   * The square of the length. This is the comparison to reach for: sorting by distance, a radius test and a
+   * "did it move at all" test all work on it, and none of them needs the root that [Vector2.length] would take.
+   */
+  fn lengthSquared(self): Scalar {
+    dot self
+  }
+
+  /**
+   * The one number a cross product has in the plane: `x * other.y - y * other.x`. It is the signed area of the
+   * parallelogram the two span, so its sign says which side of `self` the other vector is on, and it is zero exactly
+   * where the two are parallel.
+   */
+  fn cross(self, other: Vector2<Scalar>): Scalar {
+    x * other.y - y * other.x
+  }
+
+  /** Component by component, which is what scaling a size by a size means. */
+  fn scaled(self, by: Vector2<Scalar>): Vector2<Scalar> {
+    Vector2(x * by.x, y * by.y)
+  }
+
+  /** Component by component. Panics where a component of `by` is zero. */
+  fn divided(self, by: Vector2<Scalar>): Vector2<Scalar> {
+    Vector2(x / by.x, y / by.y)
+  }
+
+  /** The smaller of each pair of components: the corner of the box that holds both. */
+  fn min(self, other: Vector2<Scalar>): Vector2<Scalar> {
+    Vector2 x.min(other.x), y.min(other.y)
+  }
+
+  /** The larger of each pair of components. */
+  fn max(self, other: Vector2<Scalar>): Vector2<Scalar> {
+    Vector2 x.max(other.x), y.max(other.y)
+  }
+
+  /** Every component pulled into the box the two corners span. */
+  fn clamped(self, low: Vector2<Scalar>, high: Vector2<Scalar>): Vector2<Scalar> {
+    Vector2 x.clamp(low.x, high.x), y.clamp(low.y, high.y)
+  }
+
+  /** The same vector with another first component. */
+  fn withX(self, value: Scalar): Vector2<Scalar> {
+    Vector2 value, y
+  }
+
+  /** The same vector with another second component. */
+  fn withY(self, value: Scalar): Vector2<Scalar> {
+    Vector2 x, value
+  }
+
+  /** Whether both components are zero. */
+  fn isZero(self): Bool {
+    const nothing = zeroOf x
+    x == nothing && y == nothing
+  }
+
+  /** The larger of the two components. */
+  fn largestComponent(self): Scalar {
+    x.max y
+  }
+
+  /** The smaller of the two components. */
+  fn smallestComponent(self): Scalar {
+    x.min y
+  }
+
+  /** Both components added together: the area of a box this size is [Vector2.scaled] instead. */
+  fn sum(self): Scalar {
+    x + y
+  }
+}
+
+/** A vector of a signed scalar can be turned around, and that is what a direction needs. */
+extend<Scalar: Signed> Vector2<Scalar> with Negate {
+  /** Every component with its sign flipped. */
+  fn negate(self): Vector2<Scalar> {
+    Vector2(-x, -y)
+  }
+}
+
+/** What a sign buys: a distance that needs no root, and the quarter turn that needs no trigonometry. */
+extend<Scalar: Signed> Vector2<Scalar> {
+  /** Every component without its sign. */
+  fn absolute(self): Vector2<Scalar> {
+    Vector2 x.absolute(), y.absolute()
+  }
+
+  /**
+   * The distance along the axes, `|x| + |y|`: the number of steps on a four-neighbour grid, and the cheapest distance
+   * there is.
+   *
+   *     print Vector2(3, -4).manhattanLength()
+   */
+  fn manhattanLength(self): Scalar {
+    x.absolute() + y.absolute()
+  }
+
+  /** The [Vector2.manhattanLength] of the step from here to there. */
+  fn manhattanDistanceTo(self, other: Vector2<Scalar>): Scalar {
+    subtract(other).manhattanLength()
+  }
+
+  /**
+   * A quarter turn from the first axis towards the second, `(-y, x)`. Exact for every scalar, integers included, which
+   * is why a right angle in this library is this and not a rotation by [Angle.quarterTurn].
+   */
+  fn perpendicular(self): Vector2<Scalar> {
+    Vector2(-y, x)
+  }
+}
+
+/** What a root and an angle buy: lengths, directions and interpolation. */
+extend<Scalar: Real> Vector2<Scalar> {
+  /** The euclidean length. [Vector2.lengthSquared] is the one to compare with. */
+  fn length(self): Scalar {
+    lengthSquared().squareRoot()
+  }
+
+  /** The distance from here to there. */
+  fn distanceTo(self, other: Vector2<Scalar>): Scalar {
+    subtract(other).length()
+  }
+
+  /** The square of the distance from here to there, without the root. */
+  fn distanceSquaredTo(self, other: Vector2<Scalar>): Scalar {
+    subtract(other).lengthSquared()
+  }
+
+  /**
+   * The same direction with length one. A vector that is already zero answers itself, because there is no direction to
+   * keep and a division by zero would be a worse answer than the honest one.
+   *
+   *     print Vector2 3.0, 4.0).normalized(
+   */
+  fn normalized(self): Vector2<Scalar> {
+    const size: Scalar = self.length()
+    if size == zeroOf(size) {
+      return self
+    }
+    divide size
+  }
+
+  /** The same direction with the length given. A zero vector stays zero. */
+  fn withLength(self, value: Scalar): Vector2<Scalar> {
+    normalized().multiply(value)
+  }
+
+  /** The direction, measured from the first axis towards the second. A zero vector answers no rotation. */
+  fn angle(self): Angle<Scalar> {
+    Angle y.arcTangentDivided(by: x)
+  }
+
+  /** The rotation that takes this direction onto the other one, in `(-pi, pi]`. */
+  fn angleTo(self, other: Vector2<Scalar>): Angle<Scalar> {
+    Angle cross(other).arcTangentDivided(by: dot(other))
+  }
+
+  /**
+   * Turned by the angle, from the first axis towards the second. Whether a viewer sees that as clockwise depends on
+   * which way the program draws its second axis, and this library does not decide that.
+   *
+   *     print Vector2 1.0, 0.0).rotated(by: Angle.degrees(90.0)).isCloseTo(Vector2(0.0, 1.0), tolerance: 0.0001
+   */
+  fn rotated(self, by: Angle<Scalar>): Vector2<Scalar> {
+    const sine = by.sine()
+    const cosine = by.cosine()
+    Vector2(x * cosine - y * sine, x * sine + y * cosine)
+  }
+
+  /** Turned around the given point instead of around the origin. */
+  fn rotatedAround(self, center: Vector2<Scalar>, by: Angle<Scalar>): Vector2<Scalar> {
+    subtract(center).rotated(by: by).add(center)
+  }
+
+  /**
+   * The point `factor` of the way from here to there: `0` is here, `1` is there, and a factor outside `[0, 1]` carries
+   * on past either end.
+   */
+  fn interpolated(self, toward: Vector2<Scalar>, by: Scalar): Vector2<Scalar> {
+    add toward.subtract(self).multiply(by)
+  }
+
+  /** The part of this vector that lies along the other one. Panics where the other one is zero. */
+  fn projectedOnto(self, other: Vector2<Scalar>): Vector2<Scalar> {
+    other.multiply(dot(other) / other.lengthSquared())
+  }
+
+  /** Mirrored in the line through the origin whose normal is given. The normal is expected to have length one. */
+  fn reflected(self, normal: Vector2<Scalar>): Vector2<Scalar> {
+    subtract normal.multiply(dot(normal).doubled())
+  }
+
+  /** Whether every component is within `tolerance` of the other vector's. */
+  fn isCloseTo(self, other: Vector2<Scalar>, tolerance: Scalar): Bool {
+    (x - other.x).absolute() <= tolerance && (y - other.y).absolute() <= tolerance
+  }
+}
+
+/** The float vector: its constants, and the three ways down to a grid. */
+extend Vector2<Float> {
+  /** Both components zero. */
+  const zero: Vector2<Float> = Vector2 0.0, 0.0
+  /** Both components one. */
+  const one: Vector2<Float> = Vector2 1.0, 1.0
+  /** The first basis vector. */
+  const unitX: Vector2<Float> = Vector2 1.0, 0.0
+  /** The second basis vector. */
+  const unitY: Vector2<Float> = Vector2 0.0, 1.0
+
+  /**
+   * Every component rounded to the nearest whole number, halves away from zero. Panics outside the range of an `Int`.
+   *
+   *     print Vector2(1.5, -1.5).rounded()
+   */
+  fn rounded(self): Vector2<Int> {
+    Vector2 wholeOf(x.round()), wholeOf(y.round())
+  }
+
+  /** Every component rounded towards negative infinity: which cell of a grid the point is in. */
+  fn floored(self): Vector2<Int> {
+    Vector2 wholeOf(x.floor()), wholeOf(y.floor())
+  }
+
+  /** Every component rounded towards positive infinity. */
+  fn ceiling(self): Vector2<Int> {
+    Vector2 wholeOf(x.ceiling()), wholeOf(y.ceiling())
+  }
+}
+
+/** The grid vector: its constants, and the two ways up to a scalar that has fractions. */
+extend Vector2<Int> {
+  /** Both components zero. */
+  const zero: Vector2<Int> = Vector2 0, 0
+  /** Both components one. */
+  const one: Vector2<Int> = Vector2 1, 1
+  /** The first basis vector. */
+  const unitX: Vector2<Int> = Vector2 1, 0
+  /** The second basis vector. */
+  const unitY: Vector2<Int> = Vector2 0, 1
+
+  /** The same vector over `Float`, exactly. */
+  fn toFloat(self): Vector2<Float> {
+    Vector2 Float.from(x), Float.from(y)
+  }
+
+  /** The same vector over `Fixed`, exactly: the step from a grid into the deterministic scalar. */
+  fn toFixed(self): Vector2<Fixed> {
+    Vector2 Fixed.from(x), Fixed.from(y)
+  }
+}
+
+/**
+ * The deterministic vector. It needs no conversions of its own: `Fixed` carries them
+ * (`Vector2(point.x.toFloat(), point.y.toFloat())`), and giving the same name to two instantiations is what the
+ * interpreter cannot tell apart.
+ */
+extend Vector2<Fixed> {
+  /** Both components zero. */
+  const zero: Vector2<Fixed> = Vector2 Fixed(0), Fixed(0)
+  /** Both components one. */
+  const one: Vector2<Fixed> = Vector2 Fixed(65536), Fixed(65536)
+  /** The first basis vector. */
+  const unitX: Vector2<Fixed> = Vector2 Fixed(65536), Fixed(0)
+  /** The second basis vector. */
+  const unitY: Vector2<Fixed> = Vector2 Fixed(0), Fixed(65536)
+}
+
+/** The whole number a rounded `Float` is. Panics where it does not fit, which is an overflow like any other. */
+public fn wholeOf(value: Float): Int {
+  match Int64.tryFrom(value) {
+    Ok(found) => found
+    Fail(problem) => panic "{problem.message}"
+  }
+}

@@ -1,0 +1,262 @@
+/**
+ * The tests of the shapes of space: the half-open rule of `Box`, what a `Sphere` counts as inside, which side of a
+ * `Plane` a point is on, what a ray hits, and how a triangle reads a point as a mix of its corners.
+ *
+ * The whole-number cases carry the half-open rule; everything that needs a root is written over `Fixed`, whose `Real`
+ * runs in the interpreter as well as in a binary.
+ */
+
+use test, group from "std/test"
+use Fixed from "../../linear/src/fixed"
+use Vector3 from "../../linear/src/vector3"
+use Box from "../src/box"
+use Sphere from "../src/sphere"
+use Plane from "../src/plane"
+use Triangle3 from "../src/triangle3"
+use Ray3 from "../src/ray3"
+
+/** A deterministic scalar from a whole number. */
+fn exact(value: Int): Fixed {
+  Fixed.from value
+}
+
+/** A deterministic point from three whole numbers. */
+fn place(x: Int, y: Int, z: Int): Vector3<Fixed> {
+  Vector3 exact(x), exact(y), exact(z)
+}
+
+/** How far two deterministic answers may be apart and still count as the same: about a thousandth. */
+const nearly: Fixed = Fixed 66
+
+group "Box" {
+  test "the minimum face is inside and the maximum face is outside" {
+    const cell = Box Vector3(0, 0, 0), Vector3(8, 8, 8)
+    assert cell.contains(Vector3(0, 0, 0))
+    assert cell.contains(Vector3(7, 7, 7))
+    assert(!cell.contains(Vector3(8, 0, 0)))
+    assert(!cell.contains(Vector3(0, 0, 8)))
+  }
+
+  test "two cells in a row share no point" {
+    const first = Box Vector3(0, 0, 0), Vector3(8, 8, 8)
+    const second = Box Vector3(8, 0, 0), Vector3(8, 8, 8)
+    assert(!first.intersects(second))
+    assert first.intersection(second).isEmpty()
+  }
+
+  test "a box from two corners, the volume and the emptiness test" {
+    const cell = Box.between Vector3(4, 4, 4), Vector3(1, 2, 3)
+    assert(cell.minimum() == Vector3(1, 2, 3))
+    assert(cell.maximum() == Vector3(4, 4, 4))
+    assert(Box(Vector3(0, 0, 0), Vector3(2, 3, 4)).volume() == 24)
+    assert Box(Vector3(0, 0, 0), Vector3(0, 3, 4)).isEmpty()
+  }
+
+  test "what two boxes share, and what covers both" {
+    const first = Box Vector3(0, 0, 0), Vector3(4, 4, 4)
+    const second = Box Vector3(2, 2, 2), Vector3(4, 4, 4)
+    assert first.intersects(second)
+    assert(first.intersection(second) == Box(Vector3(2, 2, 2), Vector3(2, 2, 2)))
+    assert(first.combined(second) == Box(Vector3(0, 0, 0), Vector3(6, 6, 6)))
+    assert first.encloses(Box(Vector3(1, 1, 1), Vector3(1, 1, 1)))
+    assert(first.covering(Vector3(6, 1, 1)).maximum() == Vector3(6, 4, 4))
+  }
+
+  test "moving, growing and the nearest point" {
+    const cell = Box Vector3(0, 0, 0), Vector3(4, 4, 4)
+    assert(cell.translated(by: Vector3(1, 1, 1)).minimum() == Vector3(1, 1, 1))
+    assert(cell.grown(by: Vector3(1, 1, 1)) == Box(Vector3(-1, -1, -1), Vector3(6, 6, 6)))
+    assert(cell.closestPoint(to: Vector3(9, 1, 1)) == Vector3(4, 1, 1))
+    assert(cell.manhattanDistanceTo(Vector3(9, 1, 1)) == 5)
+    assert(cell.bounds() == cell)
+  }
+
+  test "the midpoint and the euclidean distance need a scalar with fractions" {
+    const cell = Box place(0, 0, 0), place(4, 4, 4)
+    assert(cell.center() == place(2, 2, 2))
+    assert cell.distanceTo(place(7, 0, 0)).isCloseTo(exact(3), tolerance: nearly)
+    assert(Box.centered(at: place(0, 0, 0), size: place(4, 4, 4)).minimum() == place(-2, -2, -2))
+  }
+}
+
+group "Sphere" {
+  test "the surface is inside" {
+    const ball = Sphere place(0, 0, 0), Fixed.one
+    assert ball.contains(place(0, 0, 0))
+    assert ball.contains(place(1, 0, 0))
+    assert(!ball.contains(Vector3(Fixed(65537), Fixed.zero, Fixed.zero)))
+  }
+
+  test "two balls that touch share a point" {
+    const first = Sphere place(0, 0, 0), Fixed.one
+    assert first.intersects(Sphere(place(2, 0, 0), Fixed.one))
+    assert(!first.intersects(Sphere(place(3, 0, 0), Fixed.one)))
+    assert first.encloses(Sphere(place(0, 0, 0), Fixed.one))
+  }
+
+  test "a ball against a box is a test against the nearest point of the box" {
+    const ball = Sphere place(0, 0, 0), Fixed.one
+    assert ball.intersectsBox(Box(place(1, -1, -1), place(2, 2, 2)))
+    assert(!ball.intersectsBox(Box(place(2, -1, -1), place(2, 2, 2))))
+  }
+
+  test "the nearest point, the distance and the bounding box" {
+    const ball = Sphere place(0, 0, 0), Fixed.one
+    assert ball.closestPoint(to: place(4, 0, 0)).isCloseTo(place(1, 0, 0), tolerance: nearly)
+    assert ball.distanceTo(place(4, 0, 0)).isCloseTo(exact(3), tolerance: nearly)
+    assert(ball.distanceTo(place(0, 0, 0)) == Fixed.zero)
+    assert(ball.bounds() == Box(place(-1, -1, -1), place(2, 2, 2)))
+  }
+
+  test "the ball around a box holds its corners" {
+    const cell = Box place(-1, -1, -1), place(2, 2, 2)
+    const ball = Sphere.around(cell).grown(by: Fixed.step)
+    assert ball.contains(cell.maximum())
+    assert ball.contains(cell.minimum())
+  }
+
+  test "the ball that holds two holds both" {
+    const first = Sphere place(0, 0, 0), Fixed.one
+    const second = Sphere place(4, 0, 0), Fixed.one
+    const both = first.combined second
+    assert both.encloses(first)
+    assert both.encloses(second)
+    assert(first.combined(Sphere(place(0, 0, 0), Fixed.one)) == first)
+  }
+
+  test "moving and growing a ball" {
+    const ball = Sphere place(0, 0, 0), Fixed.one
+    assert(ball.translated(by: place(1, 1, 1)).center == place(1, 1, 1))
+    assert(ball.grown(by: Fixed.one).radius == exact(2))
+    assert Sphere(place(0, 0, 0), -Fixed.one).isEmpty()
+  }
+}
+
+group "Plane" {
+  test "the front is the side the normal points into" {
+    const ground = Plane place(0, 1, 0), Fixed.zero
+    assert(ground.signedDistanceTo(place(0, 2, 0)) == exact(2))
+    assert(ground.signedDistanceTo(place(0, -2, 0)) == exact(-2))
+    assert(ground.distanceTo(place(0, -2, 0)) == exact(2))
+    assert ground.isInFront(place(0, 2, 0))
+    assert(!ground.isInFront(place(0, 0, 0)))
+  }
+
+  test "the nearest point drops onto the plane, and a mirror goes through it" {
+    const ground = Plane place(0, 1, 0), Fixed.zero
+    assert(ground.closestPoint(to: place(3, 2, 0)) == place(3, 0, 0))
+    assert(ground.mirrored(place(3, 2, 0)) == place(3, -2, 0))
+  }
+
+  test "a plane through a point, and one through three" {
+    const ground = Plane.through place(0, 5, 0), normal: place(0, 2, 0)
+    assert ground.distance.isCloseTo(exact(5), tolerance: nearly)
+    const face = Plane.ofPoints place(0, 0, 0), place(1, 0, 0), place(0, 0, -1)
+    assert face.normal.isCloseTo(place(0, 1, 0), tolerance: nearly)
+  }
+
+  test "flipping a plane turns the front around" {
+    const ground = Plane place(0, 1, 0), exact(2)
+    const other = ground.flipped()
+    assert(other.normal == place(0, -1, 0))
+    assert(other.distance == exact(-2))
+    assert other.isInFront(place(0, 0, 0))
+  }
+}
+
+group "Triangle3" {
+  test "the normal follows the order of the corners" {
+    const face = Triangle3 place(0, 0, 0), place(1, 0, 0), place(0, 1, 0)
+    assert face.normal().isCloseTo(place(0, 0, 1), tolerance: nearly)
+    const other = Triangle3 place(0, 0, 0), place(0, 1, 0), place(1, 0, 0)
+    assert other.normal().isCloseTo(place(0, 0, -1), tolerance: nearly)
+  }
+
+  test "the area, the edges and the bounding box" {
+    const face = Triangle3 place(0, 0, 0), place(4, 0, 0), place(0, 4, 0)
+    assert(face.area() == exact(8))
+    assert(face.firstEdge() == place(4, 0, 0))
+    assert(face.secondEdge() == place(0, 4, 0))
+    assert(face.bounds() == Box(place(0, 0, 0), place(4, 4, 0)))
+    assert(face.translated(by: place(1, 1, 1)).first == place(1, 1, 1))
+  }
+
+  test "the weights of a corner are one and nothing" {
+    const face = Triangle3 place(0, 0, 0), place(4, 0, 0), place(0, 4, 0)
+    const corner = face.weightsOf place(0, 0, 0)
+    assert corner.first.isCloseTo(Fixed.one, tolerance: nearly)
+    assert corner.second.isCloseTo(Fixed.zero, tolerance: nearly)
+    assert corner.third.isCloseTo(Fixed.zero, tolerance: nearly)
+  }
+
+  test "a point inside and a point outside" {
+    const face = Triangle3 place(0, 0, 0), place(4, 0, 0), place(0, 4, 0)
+    assert face.contains(place(1, 1, 0))
+    assert(!face.contains(place(3, 3, 0)))
+  }
+
+  test "the plane of a triangle holds its corners" {
+    const face = Triangle3 place(0, 0, 0), place(4, 0, 0), place(0, 4, 0)
+    assert face.plane().distanceTo(place(0, 0, 0)).isCloseTo(Fixed.zero, tolerance: nearly)
+    assert face.plane().distanceTo(place(0, 0, 2)).isCloseTo(exact(2), tolerance: nearly)
+  }
+}
+
+group "Ray3" {
+  test "a ray hits a ball in front of it" {
+    const shot = Ray3 place(0, 0, 0), place(0, 0, 1)
+    match shot.hits(Sphere(place(0, 0, 5), Fixed.one)) {
+      Some(found) => assert found.isCloseTo(exact(4), tolerance: nearly)
+      None => assert false
+    }
+    assert(shot.hits(Sphere(place(0, 0, -5), Fixed.one)) == None)
+    assert(shot.hits(Sphere(place(9, 0, 5), Fixed.one)) == None)
+  }
+
+  test "a ray that starts inside a ball answers nothing travelled" {
+    const shot = Ray3 place(0, 0, 0), place(0, 0, 1)
+    match shot.hits(Sphere(place(0, 0, 0), Fixed.one)) {
+      Some(found) => assert(found == Fixed.zero)
+      None => assert false
+    }
+  }
+
+  test "a ray crosses a plane in front of it and not one behind it" {
+    const shot = Ray3 place(0, 0, 0), place(0, 0, 1)
+    match shot.hitsPlane(Plane(place(0, 0, 1), exact(4))) {
+      Some(found) => assert found.isCloseTo(exact(4), tolerance: nearly)
+      None => assert false
+    }
+    assert(shot.hitsPlane(Plane(place(0, 0, 1), exact(-4))) == None)
+    assert(shot.hitsPlane(Plane(place(1, 0, 0), exact(4))) == None)
+  }
+
+  test "a ray hits a box where the last axis lets it in" {
+    const shot = Ray3 place(0, 0, -5), place(0, 0, 1)
+    match shot.hitsBox(Box(place(-1, -1, 0), place(2, 2, 2))) {
+      Some(found) => assert found.isCloseTo(exact(5), tolerance: nearly)
+      None => assert false
+    }
+    assert(shot.hitsBox(Box(place(8, -1, 0), place(2, 2, 2))) == None)
+  }
+
+  test "a ray hits a triangle it crosses and misses one beside it" {
+    const face = Triangle3 place(-1, -1, 4), place(3, -1, 4), place(-1, 3, 4)
+    const shot = Ray3 place(0, 0, 0), place(0, 0, 1)
+    match shot.hitsTriangle(face) {
+      Some(found) => assert found.isCloseTo(exact(4), tolerance: nearly)
+      None => assert false
+    }
+    const aside = Ray3 place(9, 9, 0), place(0, 0, 1)
+    assert(aside.hitsTriangle(face) == None)
+  }
+
+  test "a ray towards a point, and one with no direction" {
+    const shot = Ray3.towards place(0, 0, 0), to: place(0, 0, 4)
+    assert shot.direction.isCloseTo(place(0, 0, 1), tolerance: nearly)
+    assert shot.at(exact(4)).isCloseTo(place(0, 0, 4), tolerance: nearly)
+    const still = Ray3 place(0, 0, 0), place(0, 0, 0)
+    assert(still.hits(Sphere(place(0, 0, 5), Fixed.one)) == None)
+    assert(still.hitsBox(Box(place(0, 0, 0), place(2, 2, 2))) == None)
+  }
+}

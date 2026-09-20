@@ -1,0 +1,179 @@
+/**
+ * [Box], the axis-aligned box in space: what a bounding volume hierarchy is built out of, and the three-dimensional
+ * half-open shape.
+ */
+
+use Numeric, Signed, Real from "std/number"
+use zeroOf from "./scalar"
+use Vector3 from "../../linear/src/vector3"
+
+/**
+ * An axis-aligned box: where it starts, and how big it is.
+ *
+ * **The minimum face is inside and the maximum face is outside**, on all three axes and for every scalar, exactly as
+ * `Rectangle` decides it in the plane. A stack of boxes therefore tiles space without a cell belonging to two of them.
+ *
+ * # Examples
+ *
+ *     const cell = Box Vector3(0, 0, 0), Vector3(8, 8, 8)
+ *     print "{cell.contains(Vector3(0, 0, 0))} {cell.contains(Vector3(8, 0, 0))}"
+ *
+ * # Pitfalls
+ *
+ * - A size with a negative or zero component describes no points, and [Box.isEmpty] says so. `intersection` answers an
+ *   empty box rather than `None`, so that a chain of them stays a box.
+ *
+ * # Related
+ *
+ * - `Rectangle` - the same in the plane, where the rule is decided.
+ * - `Sphere` - the other bounding volume.
+ */
+public type Box<Scalar: Numeric = Float> {
+  /** The corner with the smaller coordinates. */
+  origin: Vector3<Scalar>
+  /** How far the box reaches from its origin, along each axis. */
+  size: Vector3<Scalar>
+
+  /** The smallest box with those two points as corners. Either point may be either corner. */
+  fn between(first: Vector3<Scalar>, second: Vector3<Scalar>): Box<Scalar> {
+    const low = first.min second
+    Box low, first.max(second).subtract(low)
+  }
+
+  /** The corner with the smaller coordinates, which is inside the box. */
+  fn minimum(self): Vector3<Scalar> {
+    origin
+  }
+
+  /** The corner with the larger coordinates, which is **outside** the box. */
+  fn maximum(self): Vector3<Scalar> {
+    origin.add size
+  }
+
+  /** Whether the box describes no points, which is the case as soon as a side is zero or negative. */
+  fn isEmpty(self): Bool {
+    const nothing = zeroOf size.x
+    size.x <= nothing || size.y <= nothing || size.z <= nothing
+  }
+
+  /** How much the box holds: cells for a whole-number scalar, volume for one with fractions. */
+  fn volume(self): Scalar {
+    size.x * size.y * size.z
+  }
+
+  /** Whether the point is inside, with the minimum face in and the maximum face out. */
+  fn contains(self, point: Vector3<Scalar>): Bool {
+    const far = maximum()
+    origin.x <= point.x
+      && point.x < far.x
+      && origin.y <= point.y
+      && point.y < far.y
+      && origin.z <= point.z
+      && point.z < far.z
+  }
+
+  /** Whether the other box is inside this one, faces included. An empty box is inside everything. */
+  fn encloses(self, other: Box<Scalar>): Bool {
+    if other.isEmpty() {
+      return true
+    }
+    const far = maximum()
+    const otherFar = other.maximum()
+    origin.x <= other.origin.x
+      && origin.y <= other.origin.y
+      && origin.z <= other.origin.z
+      && otherFar.x <= far.x
+      && otherFar.y <= far.y
+      && otherFar.z <= far.z
+  }
+
+  /** Whether the two boxes share at least one point. */
+  fn intersects(self, other: Box<Scalar>): Bool {
+    !intersection(other).isEmpty()
+  }
+
+  /** The box both cover, which is empty where they do not overlap. */
+  fn intersection(self, other: Box<Scalar>): Box<Scalar> {
+    const low = origin.max other.origin
+    const high = maximum().min(other.maximum())
+    Box low, high.subtract(low)
+  }
+
+  /** The smallest box that covers both. An empty box contributes nothing. */
+  fn combined(self, other: Box<Scalar>): Box<Scalar> {
+    if isEmpty() {
+      return other
+    }
+    if other.isEmpty() {
+      return self
+    }
+    const low = origin.min other.origin
+    Box low, maximum().max(other.maximum()).subtract(low)
+  }
+
+  /**
+   * The smallest box whose corners hold this one and the point.
+   *
+   * Like `bounds`, it answers the **closed** hull: the point can come to lie exactly on the maximum face, and
+   * [Box.contains] then answers `false` for it.
+   */
+  fn covering(self, point: Vector3<Scalar>): Box<Scalar> {
+    const nothing = zeroOf size.x
+    if isEmpty() {
+      return Box point, Vector3(nothing, nothing, nothing)
+    }
+    const low = origin.min point
+    Box low, maximum().max(point).subtract(low)
+  }
+
+  /** The same box moved. */
+  fn translated(self, by: Vector3<Scalar>): Box<Scalar> {
+    Box origin.add(by), size
+  }
+
+  /** The same box with every side grown by that much on both ends. A negative amount shrinks it. */
+  fn grown(self, by: Vector3<Scalar>): Box<Scalar> {
+    Box origin.subtract(by), size.add(by).add(by)
+  }
+
+  /** The point of the box that is nearest to the one given, which is the point itself where it is inside. */
+  fn closestPoint(self, to: Vector3<Scalar>): Vector3<Scalar> {
+    to.clamped origin, maximum()
+  }
+
+  /** The box itself: what every shape in space answers, so that one broad phase can hold all of them. */
+  fn bounds(self): Box<Scalar> {
+    self
+  }
+}
+
+/** What a sign buys: the distance to a point, along the axes. */
+extend<Scalar: Signed> Box<Scalar> {
+  /** The distance from the point to the nearest point of the box, along the axes. Zero where it is inside. */
+  fn manhattanDistanceTo(self, point: Vector3<Scalar>): Scalar {
+    point.manhattanDistanceTo closestPoint(to: point)
+  }
+}
+
+/** What a root and a halving buy: the midpoint and the euclidean distance. */
+extend<Scalar: Real> Box<Scalar> {
+  /** The box of that size whose midpoint is the point given. */
+  fn centered(at: Vector3<Scalar>, size: Vector3<Scalar>): Box<Scalar> {
+    Box at.subtract(Vector3(size.x.halved(), size.y.halved(), size.z.halved())), size
+  }
+
+  /** The midpoint. */
+  fn center(self): Vector3<Scalar> {
+    origin.add Vector3(size.x.halved(), size.y.halved(), size.z.halved())
+  }
+
+  /** The distance from the point to the nearest point of the box. Zero where it is inside. */
+  fn distanceTo(self, point: Vector3<Scalar>): Scalar {
+    point.distanceTo closestPoint(to: point)
+  }
+
+  /** The square of [Box.distanceTo], for a comparison that needs no root. */
+  fn distanceSquaredTo(self, point: Vector3<Scalar>): Scalar {
+    point.distanceSquaredTo closestPoint(to: point)
+  }
+}

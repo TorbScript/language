@@ -1,0 +1,480 @@
+/**
+ * [Fixed], the deterministic scalar: a whole number of `1/65536` parts, with every operation - the square root and the
+ * trigonometry included - computed in integer arithmetic alone.
+ *
+ * It exists for the one thing a `Float` cannot promise: the same bits everywhere. `sine` on a `Float64` is whatever the
+ * platform's mathematics library computes, and that differs between machines, between C libraries and between back
+ * ends. A lockstep simulation, a replay and a checksum over a world state all need two machines to agree exactly, so
+ * they run on a `Fixed` instead, and everything in `std/linear` and `std/geometry` that is generic over a [Real] scalar
+ * works unchanged with one.
+ */
+
+use Numeric, Signed, Real, NumberParseError from "std/number"
+use Add, Subtract, Multiply, Divide, Remainder, Negate from "std/core"
+use Equals, Compare, Ordering, Hash, From, Parse, Show from "std/core"
+
+/**
+ * A number held as a whole number of `1/65536` parts: the Q16.16 fixed-point scalar, and the only [Real] whose answers
+ * are the same bits on every platform and out of every back end.
+ *
+ * The field is the raw count, so `Fixed(65536)` is one and `Fixed(1)` is the smallest step there is. Build a value
+ * with [Fixed.from], [Fixed.approximating] or [Fixed.parse] rather than by counting parts.
+ *
+ * `Fixed` carries [Real], so `Vector2<Fixed>`, `Rectangle<Fixed>` and every intersection test of `std/geometry` accept
+ * it in place of `Float` with no other change to the code.
+ *
+ * # Examples
+ *
+ *     const half = Fixed.parse("0.5").expect("half parses")
+ *     const three = Fixed.from 3
+ *     print "{three * half} {three.squareRoot()}"
+ *
+ * # Pitfalls
+ *
+ * - The range of a product is the real limit, not the range of the type. `multiply` forms `parts * other.parts`
+ *   before it scales back down, so two values above about 46341 overflow and the multiplication panics, although both
+ *   operands are far inside [Fixed.largest].
+ * - `squareRoot` scales up before it takes the root, so it panics above about 2147483648 for the same reason.
+ * - Division and the remainder truncate towards zero, exactly as they do on `Int`.
+ * - [Fixed.smallest] cannot be shown or negated. Its count of parts is the smallest `Int` there is, and that one has no
+ *   positive counterpart - so `absolute` on it overflows, here as everywhere.
+ * - Every step is a multiple of `1/65536`, so a value that a decimal writes exactly is usually not one a `Fixed`
+ *   holds exactly: `Fixed.parse("0.1")` is `0.100006103515625`, and [Fixed.show] writes that, because that is the
+ *   number.
+ *
+ * # Related
+ *
+ * - [Real] - the trait that makes this and `Float64` interchangeable.
+ * - [Fixed.parts] - the raw count, for a checksum or a wire format.
+ */
+public type Fixed with Signed, Real, Hash, Show, Parse<NumberParseError> {
+  /** The value counted in `1/65536` parts. `Fixed(65536)` is one, and `Fixed(1)` is the smallest step. */
+  parts: Int64
+
+  /** How many parts one whole is: `65536`, which is what makes this Q16.16. */
+  const partsPerWhole: Int64 = 65536
+
+  /** The largest value the type holds. Arithmetic on it overflows long before this. */
+  const largest: Fixed = Fixed 9223372036854775807
+
+  /** The smallest value the type holds. */
+  const smallest: Fixed = Fixed(-9223372036854775807 - 1)
+
+  /** The smallest step between two values: `1/65536`. */
+  const step: Fixed = Fixed 1
+
+  /** The value nothing: no parts at all. */
+  const zero: Fixed = Fixed 0
+
+  /** The whole, which is 65536 parts. */
+  const one: Fixed = Fixed 65536
+
+  /** The ratio of a circle's circumference to its diameter, to the nearest part. */
+  const pi: Fixed = Fixed 205887
+
+  /** A full turn in radians, to the nearest part. */
+  const tau: Fixed = Fixed 411775
+
+  /**
+   * The value a `Float64` is closest to, rounded to the nearest part.
+   *
+   * This is the bridge out of floating point, and it is deliberately not a [From]: it loses information, and a
+   * conversion that loses information says so at the call.
+   *
+   *     print Fixed.approximating 0.5
+   */
+  fn approximating(value: Float64): Fixed {
+    const scaled = value * 65536.0
+    match Int64.tryFrom(scaled.round()) {
+      Ok(parts) => Fixed parts
+      Fail(_) => panic "the Float {value} is outside the range of a Fixed"
+    }
+  }
+
+  /** The value as the nearest `Float64`. Exact for every `Fixed` whose magnitude is below `2^37`. */
+  fn toFloat(self): Float64 {
+    Float64.from(parts) / 65536.0
+  }
+
+  /** The whole part, truncated towards zero: what `Int` this value is, ignoring everything after the point. */
+  fn toInt(self): Int64 {
+    parts / partsPerWhole
+  }
+
+  /** The sum: two counts of parts added, exactly. */
+  fn add(self, other: Fixed): Fixed {
+    Fixed(parts + other.parts)
+  }
+
+  /** The difference: two counts of parts subtracted, exactly. */
+  fn subtract(self, other: Fixed): Fixed {
+    Fixed(parts - other.parts)
+  }
+
+  /** The product, scaled back down. Panics where the intermediate `parts * other.parts` leaves the range of an `Int`. */
+  fn multiply(self, other: Fixed): Fixed {
+    Fixed(parts * other.parts / partsPerWhole)
+  }
+
+  /** The quotient, truncated towards zero. Panics on a division by zero and where `parts * 65536` overflows. */
+  fn divide(self, other: Fixed): Fixed {
+    Fixed(parts * partsPerWhole / other.parts)
+  }
+
+  /** What is left after dividing out as many of the other as fit, with the sign of this value. */
+  fn remainder(self, other: Fixed): Fixed {
+    Fixed(parts % other.parts)
+  }
+
+  /** The value with its sign flipped. */
+  fn negate(self): Fixed {
+    Fixed(-parts)
+  }
+
+  /** The value without its sign. */
+  fn absolute(self): Fixed {
+    Fixed parts.absolute()
+  }
+
+  /** Whether the two hold the same count of parts, which is exact equality. */
+  fn equals(self, other: Fixed): Bool {
+    parts == other.parts
+  }
+
+  /** Which of the two is the smaller, as a total order with no value like a `nan` in it. */
+  fn compare(self, other: Fixed): Ordering {
+    parts.compare other.parts
+  }
+
+  /** The count of parts itself: two values that are equal hold the same count. */
+  fn hash(self): Int {
+    parts
+  }
+
+  /**
+   * The exact decimal the value is, with at least one digit after the point. A `Fixed` is a multiple of `1/65536`, so
+   * the expansion always ends, after at most sixteen digits.
+   *
+   *     print Fixed.parse("0.1").expect("a tenth parses")
+   */
+  fn show(self): String {
+    const whole = parts.absolute() / partsPerWhole
+    var fraction = parts.absolute() % partsPerWhole
+    var digits = ""
+    loop {
+      if fraction == 0 {
+        break
+      }
+      const carried = fraction * 10
+      digits = "{digits}{carried / partsPerWhole}"
+      fraction = carried % partsPerWhole
+    }
+    const written = if digits.isEmpty() { "{whole}.0" } else { "{whole}.{digits}" }
+    if parts < 0 { "-{written}" } else { written }
+  }
+
+  /**
+   * Reads a decimal, rounding to the nearest part. At most nine digits after the point are read; what follows them is
+   * below the resolution of the type anyway.
+   *
+   *     print Fixed.parse("-2.25")
+   *
+   * # Errors
+   *
+   * - [NumberParseError] where the text is not a decimal, or where its whole part does not fit.
+   */
+  fn parse(text: String): Result<Fixed, NumberParseError> {
+    const trimmed = text.trim()
+    const negative = trimmed.startsWith "-"
+    const unsigned = if negative { trimmed.substringAfter("-") ?? "" } else { trimmed }
+    const pieces = unsigned.split "."
+    if unsigned.isEmpty() || pieces.length() > 2 {
+      return Fail NumberParseError(text)
+    }
+    const whole = match Int64.parse(pieces[0]) {
+      Ok(found) => found
+      Fail(_) => {
+        return Fail NumberParseError(text)
+      }
+    }
+    if whole > 140737488355327 {
+      return Fail NumberParseError(text)
+    }
+    const digits = if pieces.length() == 2 { pieces[1] } else { "" }
+    match fractionParts(digits) {
+      Some(fraction) => {
+        const total = whole * Fixed.partsPerWhole + fraction
+        Ok Fixed(if negative { -total } else { total })
+      }
+      None => Fail NumberParseError(text)
+    }
+  }
+
+  /** The non-negative square root, to the nearest part below the true one. Negative input answers zero. */
+  fn squareRoot(self): Fixed {
+    if parts <= 0 {
+      return Fixed 0
+    }
+    Fixed integerSquareRoot(parts * partsPerWhole)
+  }
+
+  /** The sine of this many radians, within about two parts of the true value. */
+  fn sine(self): Fixed {
+    Fixed circular(parts).sine
+  }
+
+  /** The cosine of this many radians, within about two parts of the true value. */
+  fn cosine(self): Fixed {
+    Fixed circular(parts).cosine
+  }
+
+  /** The sine over the cosine. Panics where the cosine is zero, which is a division by zero like any other. */
+  fn tangent(self): Fixed {
+    const turned = circular parts
+    Fixed(turned.sine * partsPerWhole / turned.cosine)
+  }
+
+  /** The angle whose sine this is. Panics outside `[-1, 1]`, where there is no such angle. */
+  fn arcSine(self): Fixed {
+    if parts.absolute() > partsPerWhole {
+      panic "the arc sine of {show()} does not exist: the sine of an angle is between -1 and 1"
+    }
+    const cosine = integerSquareRoot(partsPerWhole * partsPerWhole - parts * parts)
+    Fixed direction(cosine, parts)
+  }
+
+  /** The angle whose cosine this is. Panics outside `[-1, 1]`, where there is no such angle. */
+  fn arcCosine(self): Fixed {
+    Fixed(102944 - arcSine().parts)
+  }
+
+  /** The angle in radians whose tangent this is. */
+  fn arcTangent(self): Fixed {
+    Fixed direction(partsPerWhole, parts)
+  }
+
+  /** The angle in radians of the point `(by, self)`, in `(-pi, pi]`. */
+  fn arcTangentDivided(self, by: Fixed): Fixed {
+    Fixed direction(by.parts, parts)
+  }
+
+  /** The value rounded towards negative infinity. */
+  fn floor(self): Fixed {
+    const left = parts % partsPerWhole
+    if left == 0 || parts > 0 { Fixed(parts - left) } else { Fixed(parts - left - partsPerWhole) }
+  }
+
+  /** The value rounded towards positive infinity. */
+  fn ceiling(self): Fixed {
+    const left = parts % partsPerWhole
+    if left == 0 || parts < 0 { Fixed(parts - left) } else { Fixed(parts - left + partsPerWhole) }
+  }
+
+  /** The value rounded to the nearest whole number, halves away from zero. */
+  fn round(self): Fixed {
+    const half = partsPerWhole / 2
+    if parts >= 0 {
+      Fixed((parts + half) / partsPerWhole * partsPerWhole)
+    } else {
+      Fixed(-((half - parts) / partsPerWhole * partsPerWhole))
+    }
+  }
+
+  /** Half the value, rounded towards zero by the last part. */
+  fn halved(self): Fixed {
+    Fixed(parts / 2)
+  }
+
+  /** The angle in radians that this many degrees is, rounded to the nearest part. */
+  fn radiansOfDegrees(self): Fixed {
+    Fixed(parts * 205887 / 180 / 65536)
+  }
+
+  /** The angle in degrees that this many radians is, rounded to the nearest part. */
+  fn degreesOfRadians(self): Fixed {
+    Fixed(parts * 180 * 65536 / 205887)
+  }
+
+  /** The value one. */
+  fn unit(self): Fixed {
+    Fixed 65536
+  }
+
+  /** Twice the value. */
+  fn doubled(self): Fixed {
+    Fixed(parts + parts)
+  }
+
+  /** Whether the two values are within `tolerance` of each other. The default is about `0.001`. */
+  fn isCloseTo(self, other: Fixed, tolerance: Fixed = Fixed(66)): Bool {
+    (parts - other.parts).absolute() <= tolerance.parts
+  }
+}
+
+/** A whole number is exact as a `Fixed` while its magnitude stays below `2^47`; above that the multiplication panics. */
+extend Fixed with From<Int64> {
+  fn from(value: Int64): Fixed {
+    Fixed(value * 65536)
+  }
+}
+
+/**
+ * The digits after the point as a count of parts, rounded to the nearest one, or `None` where a character is not a
+ * digit. At most nine digits are read: ten would overflow the intermediate, and the tenth is already far below
+ * `1/65536`.
+ */
+fn fractionParts(digits: String): Int64? {
+  var index = 0
+  var numerator: Int64 = 0
+  var scale: Int64 = 1
+  loop {
+    if index >= digits.byteLength() || index >= 9 {
+      break
+    }
+    const character = digits.charAt(index) ?? ' '
+    if !character.isDigit() {
+      return None
+    }
+    numerator = numerator * 10 + Int64.from(character) - 48
+    scale = scale * 10
+    index = index + 1
+  }
+  Some((numerator * 65536 + scale / 2) / scale)
+}
+
+/**
+ * The largest whole number whose square is at most `value`, by Newton's method on integers. Every step is an integer
+ * division, so the answer is the same on every platform.
+ */
+fn integerSquareRoot(value: Int64): Int64 {
+  if value <= 0 {
+    return 0
+  }
+  var guess = value
+  var next = (guess + value / guess) / 2
+  loop {
+    if next >= guess {
+      break
+    }
+    guess = next
+    next = (guess + value / guess) / 2
+  }
+  guess
+}
+
+/**
+ * `value / divisor`, rounded to the nearest whole number instead of towards zero. A rotation step that always
+ * truncates pulls every vector towards the origin, and sixteen of them add up to a visible error.
+ */
+fn scaledDown(value: Int64, divisor: Int64): Int64 {
+  const half = divisor / 2
+  if value >= 0 { (value + half) / divisor } else { (value - half) / divisor }
+}
+
+/** `2^index` for the sixteen steps of the rotation, as a divisor: a shift written as the division it is. */
+fn halvings(index: Int): Int64 {
+  const powers = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]
+  powers[index]
+}
+
+/** `arcTangent(2^-index)` in parts, the angle one rotation step turns by. */
+fn stepAngle(index: Int): Int64 {
+  const angles = [51472, 30386, 16055, 8150, 4091, 2047, 1024, 512, 256, 128, 64, 32, 16, 8, 4, 2]
+  angles[index]
+}
+
+/**
+ * The sine and the cosine of an angle in parts, by CORDIC: sixteen rotations by a fixed angle each, where every
+ * rotation is an addition and a division by a power of two. No table of sines, no series, no floating point - which is
+ * what makes the answer the same everywhere.
+ */
+fn circular(angle: Int64): (sine: Int64, cosine: Int64) {
+  const halfTurn: Int64 = 205887
+  const fullTurn: Int64 = 411775
+  const quarterTurn: Int64 = 102944
+  var reduced = angle % fullTurn
+  if reduced > halfTurn {
+    reduced = reduced - fullTurn
+  }
+  if reduced < -halfTurn {
+    reduced = reduced + fullTurn
+  }
+  var opposite = false
+  if reduced > quarterTurn {
+    reduced = halfTurn - reduced
+    opposite = true
+  }
+  if reduced < -quarterTurn {
+    reduced = -halfTurn - reduced
+    opposite = true
+  }
+  // The rotation shrinks every vector by the same factor, so it starts at the reciprocal of that factor and ends at one
+  var horizontal: Int64 = 39797
+  var vertical: Int64 = 0
+  var left = reduced
+  var index = 0
+  loop {
+    if index >= 16 {
+      break
+    }
+    const divisor = halvings index
+    const sideways = scaledDown vertical, divisor
+    const upwards = scaledDown horizontal, divisor
+    if left >= 0 {
+      horizontal = horizontal - sideways
+      vertical = vertical + upwards
+      left = left - stepAngle(index)
+    } else {
+      horizontal = horizontal + sideways
+      vertical = vertical - upwards
+      left = left + stepAngle(index)
+    }
+    index = index + 1
+  }
+  (sine: vertical, cosine: if opposite { -horizontal } else { horizontal })
+}
+
+/**
+ * The angle in parts of the point `(horizontal, vertical)`, in `(-pi, pi]`, by CORDIC in the other direction: the
+ * rotations that drive the vertical component to zero add up to the angle.
+ */
+fn direction(horizontal: Int64, vertical: Int64): Int64 {
+  const halfTurn: Int64 = 205887
+  const quarterTurn: Int64 = 102944
+  if horizontal == 0 {
+    if vertical > 0 {
+      return quarterTurn
+    }
+    if vertical < 0 {
+      return -quarterTurn
+    }
+    return 0
+  }
+  const flipped = horizontal < 0
+  var across = if flipped { -horizontal } else { horizontal }
+  var upwards = if flipped { -vertical } else { vertical }
+  var turned: Int64 = 0
+  var index = 0
+  loop {
+    if index >= 16 {
+      break
+    }
+    const divisor = halvings index
+    const sideways = scaledDown upwards, divisor
+    const downwards = scaledDown across, divisor
+    if upwards > 0 {
+      across = across + sideways
+      upwards = upwards - downwards
+      turned = turned + stepAngle(index)
+    } else {
+      across = across - sideways
+      upwards = upwards + downwards
+      turned = turned - stepAngle(index)
+    }
+    index = index + 1
+  }
+  if !flipped {
+    return turned
+  }
+  if vertical >= 0 { turned + halfTurn } else { turned - halfTurn }
+}

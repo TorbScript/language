@@ -1809,3 +1809,77 @@ Wenn nicht, was bedeutet, bewirkt es?
     `docs check` 219 Seiten / 895 Snippets, `docs index --check` 24 Indizes, `cargo fmt --check`,
     `cargo clippy --all-targets -- -D warnings`, `sh runtime/build.sh` 96 Tests, `torb test ../compiler/tests`,
     volle `cargo test --release`.
+
+
+- (**`std/linear` + `std/geometry`**, 2026-09-20) **Erledigt, im Zweig grün.** Entwurf `docs/LINEAR.md`, Trait `Real` in
+  `std/number`, die beiden Pakete, 164 Tests unter `torb test`, drei native Gate-Programme byte-gleich mit Stage 0
+  (`linear.trb`, `geometry.trb`, `grid-vectors.trb`), Referenzseiten `docs/standard-library/linear.md`+`geometry.md`.
+  - **Was steht.** EIN generischer Typ je Breite (`Vector2<Scalar: Numeric = Float>`, `Vector3`, `Vector4`,
+    `Matrix2/3/4`, `Quaternion`, `Angle`) plus `Fixed`; in `std/geometry` `Rectangle`, `Circle`, `Segment`, `Ray2`,
+    `Triangle2`, `Polygon`, `Box`, `Sphere`, `Ray3`, `Plane`, `Triangle3`. Die Schichtung über bedingtes `extend`
+    funktioniert vollständig - Checker, Interpreter und C-Back-End -, und `Vector2<Int>`, `Vector2<Float>` und
+    `Vector2<Fixed>` sind eine Deklaration und drei Instanzen.
+  - **`Fixed` ist implementiert, nicht nur entworfen: Q16.16 in einem `Int64`.** Q32.32 fiel raus, weil die
+    Multiplikation ein 128-Bit-Zwischenergebnis braucht, das die Sprache nicht hat; `Wurzel` ist Newton auf Ganzzahlen,
+    `sine`/`cosine`/`arcTangent2` sind CORDIC (16 Drehungen, je eine Addition und eine Division durch eine Zweierpotenz,
+    Rundung zur nächsten Zahl statt Richtung Null - ohne das summieren sich 16 Abschneidungen zu einem sichtbaren
+    Fehler). Genauigkeit ca. zwei Teile von 65536. **Keine Bit-Operationen**, weil Stage 0 `shiftedLeft` gar nicht hat -
+    jede Schiebung ist als Division geschrieben, und genau deshalb laufen Tests und Gate-Programme überhaupt.
+  - **Der eigentliche Gewinn ist eingetreten:** `Vector2<Fixed>`, `Rectangle<Fixed>`, `Quaternion<Fixed>` und jeder
+    Schnitttest laufen unverändert, byte-gleich zwischen Interpreter und Binary. `Fixed` ist zurzeit auch die EINZIGE
+    Trigonometrie, die der Interpreter ausführen kann (siehe unten).
+  - **Meine Entscheidungen:** Matrix speichert ihre SPALTEN als Vektoren (`xAxis`...), nicht `Array<Scalar, 16>` -
+    `Array` läuft in keinem Back-End und eine Spalte ist genau das, was eine Frage beantwortet; Matrix × Vektor heißt
+    `applied(to:)` und nicht `*`; `Angle`-Wrapper JA (radiant innen, Grad an der Grenze); rechtshändig, Spaltenvektoren,
+    `matrix * vector`, Winkel von der ersten zur zweiten Achse; `Rectangle`/`Box` halb-offen (Minimum drin, Maximum
+    draußen - damit kachelt eine Reihe), `Circle`/`Sphere` geschlossen; y-oben/y-unten wird NICHT angenommen (kein
+    `up`/`top`/`bottom` im ganzen Paket); kein SIMD, keine Swizzles, keine Projektionsmatrix, keine Farbe.
+  - **Was Sprache/Compiler liefern müssen** - Abschnitt 12 von `docs/LINEAR.md`, nach Schmerz geordnet, jeweils mit
+    Reproduktion. Die drei, die wirklich weh taten: (1) **ein Operator auf einem generischen Typ wird nicht gelowert**
+    (`a + b` scheitert, `a.add(b)` nicht; Ursache in `ir/lower/call.trb`, `operandTypeOf` nimmt das Ziel der
+    Implementierung statt den geschriebenen Operanden) - deshalb stehen in den Gate-Programmen Methoden; (2) **ein
+    Zahlliteral in einem generischen Körper behält seinen alten Typ** (interner Fehler im Back-End bei `Float64`) -
+    daraus fallen `Real.unit`, `Real.halved` und `zeroOf` als Behelf, sie verschwinden mit der Reparatur; (3) **Stage 0
+    löst KEINEN Paketimport auf** - jeder Test und jedes Gate-Programm importiert Module von `std/` über den PFAD, und
+    `std/geometry` erreicht `std/linear` so ebenfalls; deshalb liegt `zeroOf` als eine Zeile in beiden Paketen statt
+    einmal in `std/number`.
+  - **Daneben gefunden:** ein `const` eines generischen Typs wird nicht per Typargument instanziert; ein Default eines
+    Typparameters wird für ein Mitglied eines konkreten `extend` nicht benutzt (`Vector2<Float>.zero` nötig statt
+    `Vector2.zero`); Stage 0 kann zwei Instanzierungen eines `extend` nicht unterscheiden (deshalb trägt KEINE
+    Konversion denselben Namen in zwei Instanzierungen); ein statisches Mitglied ist über einen Typparameter nicht
+    erreichbar; `Float32` kann `Real` nicht tragen (keine Arithmetik im C-Back-End UND keine Konversion von `Float64`
+    herunter); ein Trait kann kein `const` fordern (sonst trüge `Real` `pi`); ein `where` an einer Methode eines
+    generischen `type` fügt nichts hinzu; zwei `Multiply`-Implementierungen an einem Typ sind unerreichbar.
+  - **Offene Fragen an dich** stehen in Abschnitt 14 von `docs/LINEAR.md`: `isCloseTo` oder `isNear` (ich habe den
+    bestehenden std-Namen genommen); `interpolated` oder `lerp`; `Segment` oder `Segment2`; sollen die vier
+    Vektorkonstanten auf jeder Instanzierung bleiben (das ist die einzige Stelle, an der ein Interpreter-Programm den
+    falschen Skalar liest); soll `Matrix4` eine allgemeine Inverse bekommen; `Quaternion.interpolated` nimmt den geraden
+    Weg statt des Großkreises; gehört `std/linear` ins Prelude.
+  - **Nächster Schritt laut Plan:** `Buffer<Item>`, dann `std/tensor` + `Dual`. `std/transform` ist der Ort für
+    Koordinatenräume (euclids Phantom-Parameter - der beste Fund der Recherche, und in `std/linear` wäre er falsch),
+    `std/collision` der Ort für Kontakte, `trait Bounds` und Broadphase; Abschnitt 13 von `docs/LINEAR.md` hat je einen
+    Absatz zu `std/transform`, `std/collision`, `std/path`, `std/animation`, `std/color`.
+  - **Entschieden (2026-09-21, zu den offenen Fragen - nur 1 ist Geschmack und bleibt bei dir):**
+    1. `isCloseTo` bleibt vorerst (bestehender std-Name); `isNear` wäre eine mechanische Umbenennung über die ganze
+       std - **deine Wahl**, sag Bescheid.
+    2. `interpolated(toward:, by:)`, nicht `lerp` - volle Wörter.
+    3. `Segment2`: `Ray2`/`Ray3` und `Triangle2`/`Triangle3` tragen die Ziffer, und für die Strecke gibt es kein
+       eigenes Raumwort wie bei `Rectangle`/`Box` und `Circle`/`Sphere`.
+    4. Die vier Vektorkonstanten bleiben auf jeder Instanzierung. Die Falle ist ein Fehler von Stage 0 (Lücke 6),
+       keiner der API - die API richtet sich nicht nach dem Bootstrap-Interpreter.
+    5. `Matrix4` bekommt die allgemeine Inverse; `inverseAffine` bleibt als der schnelle Weg daneben.
+    6. `Quaternion.interpolated` bleibt der gerade Weg mit Renormalisierung; der Großkreis kommt als
+       `interpolatedSpherically` mit `std/animation`, wo er gebraucht wird.
+    7. `std/linear` kommt NICHT ins Prelude: das Prelude ist der Wortschatz jedes Programms, nicht der einer Domäne.
+    - In `docs/LINEAR.md` Abschnitt 13 heißt das Kurven-Paket noch `std/path`; es heißt `std/curve` (siehe Eintrag
+      `std/path`). Wird mit der Folgerunde korrigiert.
+  - **Wird gelöst - Runde "generische Zahlen" im Back-End (nach Schwanz 4, weil beide `ir/lower` anfassen):**
+    Lücken 1-4, 7, 11, 12 und die zwei kleinen aus 13: Operator auf generischem Typ, Zahlliteral im generischen
+    Rumpf, `const`-Mitglied je Typargument, Parameter-Default bei konkretem `extend`, statisches Mitglied über einen
+    Typparameter (`Scalar.zero()`), `where` an der Methode eines generischen Typs, zwei `Multiply` an einem Typ.
+    Danach verschwinden `unit`/`halved`/`doubled`/`zeroOf` aus `Real`, die Gate-Programme schreiben `a + b`, und
+    `Segment2`, die `Matrix4`-Inverse und `std/curve` im Text ziehen in derselben Runde mit. `Fixed.parse` wird in der
+    Aufräumrunde `std/core` zu `TryFrom<String, NumberParseError>`.
+    **Zurückgestellt:** Lücke 5/6 (Paket-Importe und Instanzierungen in Stage 0) - Stage 0 ist der Bootstrap, die
+    Antwort ist die VM (7.x) bzw. `main.exe test`; Lücke 8 (`Float32`-Arithmetik), 9 (`Array` läuft nirgends - hängt
+    an der kleinen Runde und dem Back-End), 10 (ein Trait fordert ein `const` - Kandidat, eigene Entscheidung).

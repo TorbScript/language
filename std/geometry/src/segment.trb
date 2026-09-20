@@ -1,0 +1,157 @@
+/**
+ * [Segment], the straight piece of line between two points in the plane: an edge of a polygon, a wall, a swept step.
+ */
+
+use Numeric, Signed, Real from "std/number"
+use zeroOf from "./scalar"
+use Vector2 from "../../linear/src/vector2"
+use Rectangle from "./rectangle"
+
+/**
+ * A straight piece of line, from one point to another. Both ends belong to it.
+ *
+ * # Examples
+ *
+ *     const wall = Segment Vector2(0.0, 0.0), Vector2(4.0, 0.0)
+ *     print "{wall.step()} {wall.closestPoint(to: Vector2(2.0, 3.0))}"
+ *
+ * # Pitfalls
+ *
+ * - A segment whose two ends are the same point is a point, and every test here answers what it should for one - but
+ *   [Segment.direction] has no answer, so it answers a zero vector.
+ *
+ * # Related
+ *
+ * - `Ray2` - the half-line, which is what a hit test is usually written against.
+ * - `Polygon` - what a sequence of these bounds.
+ */
+public type Segment<Scalar: Numeric = Float> {
+  /** Where the segment begins. */
+  from: Vector2<Scalar>
+  /** Where the segment ends. */
+  to: Vector2<Scalar>
+
+  /** The step from one end to the other. */
+  fn step(self): Vector2<Scalar> {
+    to.subtract(from)
+  }
+
+  /** Which side of the segment's line the point is on: positive on the left of the step, zero exactly on the line. */
+  fn sideOf(self, point: Vector2<Scalar>): Scalar {
+    step().cross(point.subtract(from))
+  }
+
+  /** The smallest rectangle that holds the segment. Its size is zero on an axis the segment does not cross. */
+  fn bounds(self): Rectangle<Scalar> {
+    Rectangle.between(from, to)
+  }
+
+  /**
+   * Whether the two segments cross, which includes an end lying on the other segment.
+   *
+   * Two segments that lie on one line count as crossing only where they overlap, which is the case a sign test alone
+   * cannot answer - so that case is decided by the bounding rectangles.
+   */
+  fn intersects(self, other: Segment<Scalar>): Bool {
+    const nothing = zeroOf(from.x)
+    const first = sideOf other.from
+    const second = sideOf other.to
+    const third = other.sideOf(from)
+    const fourth = other.sideOf to
+    if first == nothing && second == nothing {
+      return overlapping self, other
+    }
+    signOf(first) != signOf(second) && signOf(third) != signOf(fourth)
+  }
+}
+
+/** What a sign buys: the length along the axes. */
+extend<Scalar: Signed> Segment<Scalar> {
+  /** The length of the step along the axes, `|x| + |y|`. */
+  fn manhattanLength(self): Scalar {
+    step().manhattanLength()
+  }
+}
+
+/** What a root buys: lengths, the nearest point and the crossing point. */
+extend<Scalar: Real> Segment<Scalar> {
+  /** How long the segment is. */
+  fn length(self): Scalar {
+    step().length()
+  }
+
+  /** The direction from one end to the other, with length one. A segment of no length answers a zero vector. */
+  fn direction(self): Vector2<Scalar> {
+    step().normalized()
+  }
+
+  /** The midpoint. */
+  fn center(self): Vector2<Scalar> {
+    from.interpolated toward: to, by: from.x.unit().halved()
+  }
+
+  /** The point `factor` of the way along the segment: `0` is `from` and `1` is `to`. */
+  fn at(self, factor: Scalar): Vector2<Scalar> {
+    from.interpolated toward: to, by: factor
+  }
+
+  /** The point of the segment that is nearest to the one given. */
+  fn closestPoint(self, to: Vector2<Scalar>): Vector2<Scalar> {
+    const along = step()
+    const size: Scalar = along.lengthSquared()
+    if size == zeroOf(size) {
+      return from
+    }
+    const nothing = zeroOf size
+    const factor = to.subtract(from).dot(along) / size
+    from.add along.multiply(factor.clamp(nothing, nothing.unit()))
+  }
+
+  /** The distance from the point to the nearest point of the segment. */
+  fn distanceTo(self, point: Vector2<Scalar>): Scalar {
+    point.distanceTo closestPoint(to: point)
+  }
+
+  /**
+   * Where the two segments cross, or `None` where they do not cross at all or lie on one line.
+   *
+   *     const across = Segment Vector2(0.0, -1.0), Vector2(0.0, 1.0)
+   *     print Segment Vector2(-1.0, 0.0), Vector2(1.0, 0.0)).intersection(across
+   */
+  fn intersection(self, other: Segment<Scalar>): Vector2<Scalar>? {
+    const along = step()
+    const across = other.step()
+    const twist: Scalar = along.cross across
+    if twist == zeroOf(twist) {
+      return None
+    }
+    const nothing = zeroOf twist
+    const whole = nothing.unit()
+    const gap = other.from.subtract(from)
+    const here = gap.cross(across) / twist
+    const there = gap.cross(along) / twist
+    if here < nothing || here > whole || there < nothing || there > whole {
+      return None
+    }
+    Some(from.add(along.multiply(here)))
+  }
+}
+
+/** Whether two segments that lie on one line share a point at all, which their bounding rectangles decide. */
+fn overlapping<Scalar: Numeric>(first: Segment<Scalar>, second: Segment<Scalar>): Bool {
+  const here = first.bounds()
+  const there = second.bounds()
+  here.minimum().x <= there.maximum().x
+    && there.minimum().x <= here.maximum().x
+    && here.minimum().y <= there.maximum().y
+    && there.minimum().y <= here.maximum().y
+}
+
+/** Minus one, zero or one: which side of a line a value stands for, reduced to something two of them can be compared by. */
+fn signOf<Scalar: Numeric>(value: Scalar): Int {
+  const nothing = zeroOf value
+  if value < nothing {
+    return -1
+  }
+  if value > nothing { 1 } else { 0 }
+}

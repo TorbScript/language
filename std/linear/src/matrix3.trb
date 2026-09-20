@@ -1,0 +1,248 @@
+/**
+ * [Matrix3], the 3x3 matrix: a linear transformation of space, and at the same time the affine transformation of the
+ * plane - rotation, scale, shear and a translation - that a 2D scene graph is built out of.
+ *
+ * The fields are the columns, and a column is where a basis vector lands. Read as an affine transformation of the
+ * plane, the third column is the translation and the third row is `(0, 0, 1)`.
+ */
+
+use Numeric, Signed, Real from "std/number"
+use zeroOf from "./scalar"
+use Add, Subtract, Multiply, Negate from "std/core"
+use Fixed from "./fixed"
+use Angle from "./angle"
+use Vector2 from "./vector2"
+use Vector3 from "./vector3"
+use Matrix2 from "./matrix2"
+
+/**
+ * A linear transformation of space, held as the three vectors its basis lands on - or an affine transformation of the
+ * plane, where the third column is the translation.
+ *
+ * Vectors are columns and a transformation is applied on the left, so composing `a` after `b` is `a * b`.
+ *
+ * # Examples
+ *
+ *     const move = Matrix3.affine Matrix2<Float>.identity, by: Vector2(3.0, 4.0)
+ *     print move.transformedPoint(Vector2(1.0, 1.0))
+ *
+ * # Open
+ *
+ * - The operators are declared and type check; a compiled program writes `a.multiply(b)` until a back end lowers an
+ *   operator on a generic type.
+ * - [Matrix3.identity] needs its scalar written out: `Matrix3<Float>.identity`.
+ * - The affine form needs a `Real` scalar, although an affine transformation of a tile grid is ordinary whole-number
+ *   arithmetic: its bottom row ends in a one, and a body that is generic over the scalar cannot write that literal.
+ *   A `Matrix3<Int>` is built by writing its three columns out.
+ *
+ * # Related
+ *
+ * - `Matrix4` - the same for affine transformations of space.
+ * - `Quaternion` - a rotation of space that interpolates without shearing.
+ */
+public type Matrix3<Scalar: Numeric = Float> with Add, Subtract, Multiply {
+  /** Where the first basis vector lands. */
+  xAxis: Vector3<Scalar>
+  /** Where the second basis vector lands. */
+  yAxis: Vector3<Scalar>
+  /** Where the third basis vector lands, which for an affine transformation of the plane is the translation. */
+  zAxis: Vector3<Scalar>
+
+  /** A diagonal matrix: each axis scaled on its own. */
+  fn scaling(by: Vector3<Scalar>): Matrix3<Scalar> {
+    const nothing = zeroOf(by.x)
+    Matrix3(
+      Vector3(by.x, nothing, nothing),
+      Vector3(nothing, by.y, nothing),
+      Vector3(nothing, nothing, by.z),
+    )
+  }
+
+  /** The two rows and columns an affine transformation of the plane keeps as its linear part. */
+  fn linearPart(self): Matrix2<Scalar> {
+    Matrix2 Vector2(xAxis.x, xAxis.y), Vector2(yAxis.x, yAxis.y)
+  }
+
+  /** The translation an affine transformation of the plane carries: the first two components of the third column. */
+  fn translationPart(self): Vector2<Scalar> {
+    Vector2 zAxis.x, zAxis.y
+  }
+
+  /** The rows read as columns. */
+  fn transposed(self): Matrix3<Scalar> {
+    Matrix3(
+      Vector3(xAxis.x, yAxis.x, zAxis.x),
+      Vector3(xAxis.y, yAxis.y, zAxis.y),
+      Vector3(xAxis.z, yAxis.z, zAxis.z),
+    )
+  }
+
+  /** The factor the transformation multiplies a volume by. Zero where it collapses space onto a plane or less. */
+  fn determinant(self): Scalar {
+    xAxis.dot yAxis.cross(zAxis)
+  }
+
+  /** The cell in that row and that column. Panics outside `0..3`. */
+  fn at(self, row: Int, index: Int): Scalar {
+    const axis = column index
+    if row == 0 {
+      return axis.x
+    }
+    if row == 1 { axis.y } else { axis.z }
+  }
+
+  /** The column at that index. Panics outside `0..3`. */
+  fn column(self, index: Int): Vector3<Scalar> {
+    if index == 0 {
+      return xAxis
+    }
+    if index == 1 { yAxis } else { zAxis }
+  }
+
+  /** The row at that index. Panics outside `0..3`. */
+  fn row(self, index: Int): Vector3<Scalar> {
+    Vector3 at(index, 0), at(index, 1), at(index, 2)
+  }
+
+  /** Cell by cell. Adding two transformations is not composing them; `multiply` is. */
+  fn add(self, other: Matrix3<Scalar>): Matrix3<Scalar> {
+    Matrix3 xAxis.add(other.xAxis), yAxis.add(other.yAxis), zAxis.add(other.zAxis)
+  }
+
+  /** Cell by cell. */
+  fn subtract(self, other: Matrix3<Scalar>): Matrix3<Scalar> {
+    Matrix3 xAxis.subtract(other.xAxis), yAxis.subtract(other.yAxis), zAxis.subtract(other.zAxis)
+  }
+
+  /** The composition: `self` after `other`. */
+  fn multiply(self, other: Matrix3<Scalar>): Matrix3<Scalar> {
+    Matrix3 applied(to: other.xAxis), applied(to: other.yAxis), applied(to: other.zAxis)
+  }
+
+  /**
+   * The vector transformed: the column combination `x * xAxis + y * yAxis + z * zAxis`.
+   *
+   * It is a method and not `matrix * vector`, because a type has one namespace of members and `multiply` is already the
+   * composition of two matrices.
+   */
+  fn applied(self, to: Vector3<Scalar>): Vector3<Scalar> {
+    xAxis.multiply(to.x).add(yAxis.multiply(to.y)).add(zAxis.multiply(to.z))
+  }
+
+  /** A direction of the plane, turned by the affine transformation: the translation is not applied. */
+  fn transformedDirection(self, direction: Vector2<Scalar>): Vector2<Scalar> {
+    const turned = applied to: Vector3(direction.x, direction.y, zeroOf(direction.x))
+    Vector2 turned.x, turned.y
+  }
+}
+
+/** Every cell turned around. */
+extend<Scalar: Signed> Matrix3<Scalar> with Negate {
+  /** Every cell with its sign flipped. */
+  fn negate(self): Matrix3<Scalar> {
+    Matrix3 xAxis.negate(), yAxis.negate(), zAxis.negate()
+  }
+}
+
+/** What an angle, a division and a one buy: the affine form, the three rotations, and the way back. */
+extend<Scalar: Real> Matrix3<Scalar> {
+  /**
+   * The affine transformation of the plane that applies the linear part and then moves by `by`.
+   *
+   *     print Matrix3.affine Matrix2<Float>.identity, by: Vector2(1.0, 2.0)).translationPart(
+   */
+  fn affine(linear: Matrix2<Scalar>, by: Vector2<Scalar>): Matrix3<Scalar> {
+    const nothing = zeroOf(by.x)
+    Matrix3(
+      Vector3(linear.xAxis.x, linear.xAxis.y, nothing),
+      Vector3(linear.yAxis.x, linear.yAxis.y, nothing),
+      Vector3(by.x, by.y, by.x.unit()),
+    )
+  }
+
+  /** A point of the plane, moved by the affine transformation: the translation is applied. */
+  fn transformedPoint(self, point: Vector2<Scalar>): Vector2<Scalar> {
+    const moved = applied to: Vector3(point.x, point.y, point.x.unit())
+    Vector2 moved.x, moved.y
+  }
+
+  /** The rotation of space around the first axis. */
+  fn rotationAroundX(by: Angle<Scalar>): Matrix3<Scalar> {
+    const sine = by.sine()
+    const cosine = by.cosine()
+    const nothing = zeroOf sine
+    Matrix3(
+      Vector3(sine.unit(), nothing, nothing),
+      Vector3(nothing, cosine, sine),
+      Vector3(nothing, -sine, cosine),
+    )
+  }
+
+  /** The rotation of space around the second axis. */
+  fn rotationAroundY(by: Angle<Scalar>): Matrix3<Scalar> {
+    const sine = by.sine()
+    const cosine = by.cosine()
+    const nothing = zeroOf sine
+    Matrix3(
+      Vector3(cosine, nothing, -sine),
+      Vector3(nothing, sine.unit(), nothing),
+      Vector3(sine, nothing, cosine),
+    )
+  }
+
+  /** The rotation of space around the third axis, which is the rotation of the plane. */
+  fn rotationAroundZ(by: Angle<Scalar>): Matrix3<Scalar> {
+    const sine = by.sine()
+    const cosine = by.cosine()
+    const nothing = zeroOf sine
+    Matrix3(
+      Vector3(cosine, sine, nothing),
+      Vector3(-sine, cosine, nothing),
+      Vector3(nothing, nothing, sine.unit()),
+    )
+  }
+
+  /** The transformation that undoes this one, or `None` where the determinant is zero and there is none. */
+  fn inverse(self): Matrix3<Scalar>? {
+    const scale: Scalar = self.determinant()
+    if scale == zeroOf(scale) {
+      return None
+    }
+    // The adjugate is the transpose of the cofactors, and each cofactor is a cross product of two columns
+    const first = yAxis.cross(zAxis).divide(scale)
+    const second = zAxis.cross(xAxis).divide(scale)
+    const third = xAxis.cross(yAxis).divide(scale)
+    Some Matrix3(first, second, third).transposed()
+  }
+
+  /** Whether every cell is within `tolerance` of the other matrix's. */
+  fn isCloseTo(self, other: Matrix3<Scalar>, tolerance: Scalar): Bool {
+    xAxis.isCloseTo(other.xAxis, tolerance: tolerance)
+      && yAxis.isCloseTo(other.yAxis, tolerance: tolerance)
+      && zAxis.isCloseTo(other.zAxis, tolerance: tolerance)
+  }
+}
+
+/** The float matrix's identity. */
+extend Matrix3<Float> {
+  /** The transformation that changes nothing. */
+  const identity: Matrix3<Float> =
+    Matrix3 Vector3(1.0, 0.0, 0.0), Vector3(0.0, 1.0, 0.0), Vector3(0.0, 0.0, 1.0)
+}
+
+/** The grid matrix's identity. */
+extend Matrix3<Int> {
+  /** The transformation that changes nothing. */
+  const identity: Matrix3<Int> = Matrix3 Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)
+}
+
+/** The deterministic matrix's identity. */
+extend Matrix3<Fixed> {
+  /** The transformation that changes nothing. */
+  const identity: Matrix3<Fixed> = Matrix3(
+    Vector3(Fixed(65536), Fixed(0), Fixed(0)),
+    Vector3(Fixed(0), Fixed(65536), Fixed(0)),
+    Vector3(Fixed(0), Fixed(0), Fixed(65536)),
+  )
+}
+

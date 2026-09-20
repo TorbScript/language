@@ -1,0 +1,128 @@
+/**
+ * [Angle], the wrapper that keeps a quarter turn written as `90` from being read as `90` radians.
+ *
+ * Every angle in `std/linear` and `std/geometry` is an `Angle`, never a bare scalar, and the unit is named at the one
+ * place where the number comes in (`Angle.degrees 90.0`) and at the one place where it goes out (`turn.toDegrees()`).
+ * In between the unit cannot be lost, because there is no unit - there is an `Angle`.
+ */
+
+use Real from "std/number"
+use Add, Subtract, Negate, Multiply, Equals, Compare, Ordering from "std/core"
+
+/**
+ * A rotation, held in radians and constructed by the unit it is written in. `Angle(1.5)` is radians - the field says
+ * so - and `Angle.degrees 90.0` is the other unit, spelled out.
+ *
+ * Angles grow from the first axis towards the second: a quarter turn takes `unitX` onto `unitY`. Whether a viewer
+ * calls that clockwise depends on which way the program draws its second axis, and this library does not decide it.
+ *
+ * # Examples
+ *
+ *     const quarter = Angle.degrees 90.0
+ *     print "{quarter.toDegrees()} {quarter.radians}"
+ *
+ * # Pitfalls
+ *
+ * - `Angle(value)` and `Angle.degrees(value)` both take a plain number, and only the spelling says which unit it is
+ *   in. A number that comes from somewhere else - a file, a protocol - becomes an `Angle` at the boundary and is never
+ *   carried on as a bare scalar.
+ *
+ * # Open
+ *
+ * - The four constants are written for `Float` only, because the value of pi has to be written out and the interpreter
+ *   cannot tell two instantiations of one `extend` apart. A `Fixed` angle comes from [Angle.degrees].
+ *
+ * # Related
+ *
+ * - `Vector2.angle` - the direction of a vector, as one of these.
+ * - [Angle.normalized] - the same rotation written in `(-pi, pi]`.
+ */
+public type Angle<Scalar: Real = Float> with Add, Subtract, Negate, Multiply<Scalar>, Compare {
+  /** The rotation in radians. */
+  radians: Scalar
+
+  /**
+   * The angle that many degrees is.
+   *
+   *     print Angle.degrees(180.0).radians
+   */
+  fn degrees(value: Scalar): Angle<Scalar> {
+    Angle value.radiansOfDegrees()
+  }
+
+  /** Which of the two rotations is the smaller one, by the radians they hold. */
+  fn compare(self, other: Angle<Scalar>): Ordering {
+    radians.compare other.radians
+  }
+
+  /** The two rotations one after the other. */
+  fn add(self, other: Angle<Scalar>): Angle<Scalar> {
+    Angle(radians + other.radians)
+  }
+
+  /** The rotation from the other one to this one. */
+  fn subtract(self, other: Angle<Scalar>): Angle<Scalar> {
+    Angle(radians - other.radians)
+  }
+
+  /** The same rotation the other way round. */
+  fn negate(self): Angle<Scalar> {
+    Angle(-radians)
+  }
+
+  /** The rotation, that many times over. */
+  fn multiply(self, other: Scalar): Angle<Scalar> {
+    Angle(radians * other)
+  }
+
+  /** The rotation in degrees. */
+  fn toDegrees(self): Scalar {
+    radians.degreesOfRadians()
+  }
+
+  /** The sine of the angle. */
+  fn sine(self): Scalar {
+    radians.sine()
+  }
+
+  /** The cosine of the angle. */
+  fn cosine(self): Scalar {
+    radians.cosine()
+  }
+
+  /** The tangent of the angle. Panics at a quarter turn, where there is none. */
+  fn tangent(self): Scalar {
+    radians.tangent()
+  }
+
+  /** Half of the rotation. */
+  fn halved(self): Angle<Scalar> {
+    Angle radians.halved()
+  }
+
+  /**
+   * The same rotation written in `(-pi, pi]`: what two headings have to be reduced to before they are compared.
+   *
+   * It goes around the circle rather than dividing by a whole turn, because a body that is generic over the scalar
+   * cannot write one: the sine and the cosine of a rotation do not care how many turns it carries, and the arc tangent
+   * of that pair is the rotation without them.
+   */
+  fn normalized(self): Angle<Scalar> {
+    Angle radians.sine().arcTangentDivided(by: radians.cosine())
+  }
+}
+
+/** The four rotations that are worth a name, for the scalar that can write the value of pi out. */
+extend Angle<Float> {
+  /** No rotation. */
+  const zero: Angle<Float> = Angle 0.0
+
+  /** A quarter turn: the first axis onto the second. */
+  const quarterTurn: Angle<Float> = Angle 1.5707963267948966
+
+  /** Half a turn. */
+  const halfTurn: Angle<Float> = Angle 3.141592653589793
+
+  /** A whole turn. */
+  const fullTurn: Angle<Float> = Angle 6.283185307179586
+}

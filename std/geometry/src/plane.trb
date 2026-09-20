@@ -1,0 +1,79 @@
+/**
+ * [Plane], the flat surface in space, held as a normal and a distance: what a frustum, a ground and a clipping surface
+ * all are.
+ */
+
+use Real from "std/number"
+use zeroOf from "./scalar"
+use Vector3 from "../../linear/src/vector3"
+
+/**
+ * A flat surface, as the direction that points away from it and how far along that direction it lies.
+ *
+ * A point is on the plane where `normal.dot(point) == distance`. The **front** is the side the normal points into, so
+ * [Plane.signedDistanceTo] is positive in front and negative behind - and which of the two a program calls "outside" is
+ * the program's own business.
+ *
+ * # Examples
+ *
+ *     const ground = Plane Vector3(0.0, 1.0, 0.0), 0.0
+ *     print "{ground.signedDistanceTo(Vector3(0.0, 2.0, 0.0))} {ground.closestPoint(to: Vector3(3.0, 2.0, 0.0))}"
+ *
+ * # Pitfalls
+ *
+ * - The normal is expected to have length one. Every constructor here answers one that has, and a plane built by
+ *   writing the fields out is the caller's to normalize: with a longer normal the distances come out scaled.
+ *
+ * # Related
+ *
+ * - `Ray3.hitsPlane` - where a ray crosses one.
+ * - `Triangle3.plane` - the plane a triangle lies in.
+ */
+public type Plane<Scalar: Real = Float> {
+  /** The direction that points away from the front of the plane, with length one. */
+  normal: Vector3<Scalar>
+  /** How far along the normal the plane lies, from the origin. */
+  distance: Scalar
+
+  /** The plane through that point with that normal. The normal is normalized. */
+  fn through(point: Vector3<Scalar>, normal: Vector3<Scalar>): Plane<Scalar> {
+    const facing = normal.normalized()
+    Plane facing, facing.dot(point)
+  }
+
+  /** The plane through those three points, with the normal in the right-handed sense of their order. */
+  fn ofPoints(first: Vector3<Scalar>, second: Vector3<Scalar>, third: Vector3<Scalar>): Plane<Scalar> {
+    Plane.through first, normal: second.subtract(first).cross(third.subtract(first))
+  }
+
+  /** How far the point is in front of the plane: negative behind it, zero exactly on it. */
+  fn signedDistanceTo(self, point: Vector3<Scalar>): Scalar {
+    normal.dot(point) - distance
+  }
+
+  /** How far the point is from the plane, without a side. */
+  fn distanceTo(self, point: Vector3<Scalar>): Scalar {
+    signedDistanceTo(point).absolute()
+  }
+
+  /** Whether the point is in front of the plane. A point exactly on it is not in front of it. */
+  fn isInFront(self, point: Vector3<Scalar>): Bool {
+    const gap = signedDistanceTo point
+    gap > zeroOf(gap)
+  }
+
+  /** The point of the plane that is nearest to the one given. */
+  fn closestPoint(self, to: Vector3<Scalar>): Vector3<Scalar> {
+    to.subtract normal.multiply(signedDistanceTo(to))
+  }
+
+  /** The point mirrored in the plane. */
+  fn mirrored(self, point: Vector3<Scalar>): Vector3<Scalar> {
+    point.subtract normal.multiply(signedDistanceTo(point).doubled())
+  }
+
+  /** The same plane with the front on the other side. */
+  fn flipped(self): Plane<Scalar> {
+    Plane(normal.negate(), -distance)
+  }
+}
