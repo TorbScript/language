@@ -1,8 +1,3 @@
-use IrProgram, IrFunction, IrSignature, IrTypeId, Ownership, FunctionId from "./ir"
-use Slot, SlotRole, Instruction, Argument from "./ir"
-use Reference, PathStep, Capture, WitnessSource from "./ir"
-use containsCountedType from "./layout"
-
 /**
  * Every operand occurrence of an instruction, and what the position it stands in does with the count.
  *
@@ -13,6 +8,11 @@ use containsCountedType from "./layout"
  * It is the one file of the ownership pass that knows the *shape* of every instruction, which is why it is a file of its
  * own: a new instruction is added here, and the three passes over it need no change at all.
  */
+
+use IrProgram, IrFunction, IrSignature, IrTypeId, Ownership, FunctionId from "./ir"
+use Slot, SlotRole, Instruction, Argument from "./ir"
+use Reference, PathStep, Capture, WitnessSource from "./ir"
+use containsCountedType from "./layout"
 
 // --- What the pass needs to know about the slots of one function ----------------------------------------------------
 
@@ -40,6 +40,7 @@ public type SlotFacts {
   }
 }
 
+/** The [SlotFacts] of one function: its slots' types, which of them carry a count, and which are parameters. */
 public fn slotFactsOf(program: IrProgram, function: IrFunction): SlotFacts {
   var types: List<IrTypeId> = []
   var isCounted: List<Bool> = []
@@ -122,7 +123,8 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
       found.addAll closureOperands(program, facts, callee, arguments)
       found
     }
-    // Which parameters a witness member keeps is the signature of the member, which arrives with 5.6
+    // Every argument of a witness call is borrowed: the member's own parameter modes are not read here, which only
+    // costs a retain nothing needed and never gets the count wrong
     .CallWitness(_, witness, _, arguments) => {
       var found = borrowedOperands witnessSlotsOf([witness])
       found.addAll borrowedOperands(slotsOfArguments(arguments))
@@ -193,8 +195,8 @@ fn closureOperands(
  *
  * A `var` parameter is never one of them: its argument is a place, the base of which is the slot the argument names, and
  * a place carries no count at all - so the position borrows the base and the caller keeps it live across the call. One
- * operand per argument is what `withOperands` writes the answers back through; an index *into* a place would be a second
- * operand of the same position, which is why an index path waits for 5.9b.
+ * operand per argument is what `withOperands` writes the answers back through; an index *into* a place is not turned
+ * into an operand of its own here, unlike `placeSlotsOf` for every other instruction that reads or writes a place.
  */
 fn signatureOperands(signature: IrSignature, arguments: List<Argument>): List<Operand> {
   var found: List<Operand> = []

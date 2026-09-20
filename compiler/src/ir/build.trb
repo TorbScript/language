@@ -1,16 +1,18 @@
+/**
+ * How a function is built: [FunctionBuilder] holds the function under construction and which block instructions go
+ * into. The lowering threads it as `var builder: FunctionBuilder`, exactly as the grammar threads `var parser: Parser`
+ * and the checker `var checker: Checker`.
+ *
+ * Nothing here decides anything. The functions below number slots and blocks, keep the order the lowering created them
+ * in - which the text format and every snapshot test rely on - and append through a path
+ * (`builder.function.blocks[i].instructions`) so that no instruction list is ever copied.
+ */
+
 use SymbolId from "../semantics/symbols"
 use IrTypeId, IrProgram, IrFunction, IrSignature, FunctionId, FunctionKind from "./ir"
 use Block, BlockId, Slot, SlotDeclaration, SlotRole, Instruction, Terminator, LocationId from "./ir"
 
-/**
- * How a function is built: one small value that holds the function under construction and which block instructions go
- * into. The lowering threads it as `var builder: FunctionBuilder`, exactly as the grammar threads `var parser: Parser`
- * and the checker `var checker: Checker`.
- *
- * Nothing here decides anything. It numbers slots and blocks, keeps the order the lowering created them in - which the
- * text format and every snapshot test rely on - and appends through a path (`builder.function.blocks[i].instructions`)
- * so that no instruction list is ever copied.
- */
+/** The function under construction, and the block that [emit] appends new instructions to. */
 public type FunctionBuilder {
   var function: IrFunction
   /** The block `emit` appends to. */
@@ -84,6 +86,7 @@ public fn openBlock(var builder: FunctionBuilder, label: String, at: LocationId?
   opened
 }
 
+/** Appends an instruction to the current block, after everything already emitted into it. */
 public fn emit(var builder: FunctionBuilder, instruction: Instruction) {
   const index = builder.current.value
   builder.function.blocks[index].instructions.add(instruction)
@@ -105,7 +108,7 @@ public fn setBlockLocation(var builder: FunctionBuilder, block: BlockId, at: Loc
   builder.function.blocks[block.value].at = at
 }
 
-/** A body is a state machine over `Task<Value>`: only the task lowering of 7.3 sets this. */
+/** A body is a state machine over `Task<Value>`: only the task lowering sets this (BACKEND 5.3). */
 public fn setFunctionKind(var builder: FunctionBuilder, kind: FunctionKind) {
   builder.function = builder.function.copy kind: kind
 }

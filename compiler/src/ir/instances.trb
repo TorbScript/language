@@ -1,3 +1,17 @@
+/**
+ * The monomorphization worklist: which declarations become functions of the program, and under which name.
+ *
+ * An instance is a declaration plus the **type arguments of every generic parameter that is in scope of it**, and
+ * `IrProgram.instances` maps its key to the `FunctionId` it became - so two routes to the same declaration with the same
+ * arguments are one function however the lowering reached them. The arguments of a *method of a generic type* are the
+ * owner's, of a *generic function* its own, and of a **trait default member** the `Self` it was reached for; all three
+ * are the same list, in the order of `Signature.generics` with `Self` in front where there is one.
+ *
+ * Every instance is added to the program *before* its body is lowered, with an `unreachable` placeholder body: a
+ * function that calls itself needs its own id before the body that makes the call exists. `drainPending` in
+ * `ir/lower/lower.trb` then lowers each instance's real body in turn, from `IrProgram.pending`.
+ */
+
 use FunctionDeclaration from "../syntax/ast"
 use SymbolId from "../semantics/symbols"
 use TypeId, TypeForm, ParameterId, ParameterForm, ParameterMode, Signature from "../semantics/checker/type"
@@ -9,21 +23,6 @@ use Lowering, irTypeOfClosed, reportUnsupported from "./lower/context"
 use functionName from "./mangle"
 use symbolPathOf, cellType from "./instantiate"
 use newFunction, finishFunction from "./build"
-
-/**
- * The monomorphization worklist: which declarations become functions of the program, and under which name.
- *
- * An instance is a declaration plus the **type arguments of every generic parameter that is in scope of it**, and
- * `IrProgram.instances` maps its key to the `FunctionId` it became - so two routes to the same declaration with the same
- * arguments are one function however the lowering reached them. The arguments of a *method of a generic type* are the
- * owner's, of a *generic function* its own, and of a **trait default member** the `Self` it was reached for; all three
- * are the same list, in the order of `Signature.generics` with `Self` in front where there is one.
- *
- * Every instance is added to the program *before* its body is lowered, with an `unreachable` body: a function that
- * calls itself needs its own id, and a function whose body turns out to need a construct of a later sub-milestone keeps
- * exactly that body - so a caller of it is still a well typed `Call` and the later sub-milestones replace the stubs one
- * by one.
- */
 
 /** What a monomorphic declaration is as a function of the IR, or `None` where nothing can be built from it. */
 public fn instanceOfSymbol(var lowering: Lowering, symbol: SymbolId): FunctionId? {
@@ -76,9 +75,10 @@ public fn instanceFor(
 /**
  * The backstop against a worklist that does not end. A type-growing instance - one whose body asks for itself with a
  * *bigger* type argument - would otherwise be a hang and not a message: `Iterable.indexed` is `Zipped(0.., self)`, so a
- * table holding it asks for `Zipped<Int, (Int, Item)>`, then for `Zipped<Int, (Int, (Int, Item))>`, and so on. The
- * fourth round of 5.7 keeps the defaults nothing overrides out of the tables, which is what really bounds it; this is
- * the guard that turns any remaining case into a finding at the declaration instead of a build that never finishes.
+ * table holding it asks for `Zipped<Int, (Int, Item)>`, then for `Zipped<Int, (Int, (Int, Item))>`, and so on. A witness
+ * table holds only the members a type overrides, not its trait's defaults (BACKEND 5.6), which is what really bounds it
+ * in practice; this is the guard that turns any remaining case into a finding at the declaration instead of a build
+ * that never finishes.
  *
  * The limit is deliberately generous: the deepest type argument the repository really instantiates nests four
  * (`Map<String, List<Diagnostic>>` inside a generic function), so nothing legitimate comes near it.
@@ -152,7 +152,7 @@ public fn runtimeFunctionOf(var lowering: Lowering, symbol: SymbolId, runtime: S
 /**
  * What the ABI of one function of the runtime really is, where it is not the declaration's: which declared parameters go
  * by address because there is one C implementation per container (BACKEND 3.1), and the out parameter through which it
- * writes the payload of an `Option` or a `Result` while answering `bool` (5.R1).
+ * writes the payload of an `Option` or a `Result` while answering `bool` (BACKEND 5.R1).
  *
  * It comes out of the natives manifest and nothing else, so both back ends read the same shape.
  */
@@ -421,8 +421,8 @@ public fn functionDeclarationOf(var lowering: Lowering, symbol: SymbolId): Funct
 
 /**
  * The IR signature of a closed declaration: `self` first, then the parameters in declaration order. Every one of them
- * is `Borrowed` here - which parameters the callee stores is what the summary pass of 5.4 decides, and it reads the
- * body the lowering writes.
+ * is `Borrowed` here - which parameters the callee stores is what the ownership summary pass decides (BACKEND 2.2),
+ * and it reads the body the lowering writes.
  */
 public fn irSignatureOf(var lowering: Lowering, signature: Signature): IrSignature {
   const empty: Map<ParameterId, TypeId> = [:]
@@ -432,7 +432,7 @@ public fn irSignatureOf(var lowering: Lowering, signature: Signature): IrSignatu
 /**
  * The same with the generic parameters of the instance filled in. There are **no witness parameters**: a trait-typed
  * value carries its own tables, so a bound that is not known statically is read out of the value it belongs to
- * (see the note of 5.6 in docs/BACKEND.md).
+ * (BACKEND 5.6).
  */
 public fn irSignatureUnder(
   var lowering: Lowering,
@@ -475,8 +475,9 @@ fn parameterTypeOf(
 
 /**
  * What a variadic parameter holds: the **`List<Item>` the body sees**, and not the buffer the call site fills. The checker
- * declares the binding of `...values: Show` as `List<Show>`, which in a type position is a trait-typed value (5.6's note),
- * so a signature that said `ArrayList<Item>` would have the body read a buffer through a pointer to an `Object`.
+ * declares the binding of `...values: Show` as `List<Show>`, which in a type position is a trait-typed value
+ * (BACKEND 5.6), so a signature that said `ArrayList<Item>` would have the body read a buffer through a pointer to an
+ * `Object`.
  *
  * Without `List` in the prelude there is nothing to box it with, and the buffer is the honest answer: a workspace with
  * another prelude has to keep working, and nothing of the language reaches such a parameter there.
@@ -498,6 +499,7 @@ public fn cellTypeFor(var lowering: Lowering, item: TypeId, inner: IrTypeId): Ir
   cellType lowering.program, lowering.checker, lowering.instantiation, item, inner
 }
 
+/** Whether a parameter of this mode is passed as a `Reference` rather than by value: a `var` parameter or receiver. */
 public fn isReferenceParameter(mode: ParameterMode): Bool {
   match mode {
     .Var => true
@@ -506,7 +508,7 @@ public fn isReferenceParameter(mode: ParameterMode): Bool {
   }
 }
 
-/** Whether a call of this declaration would need a `var` path, which is milestone 5.9's. */
+/** Whether a call of this declaration would need a `var` path: a `var self`, or a parameter that takes one. */
 public fn needsReference(signature: Signature): Bool {
   if signature.isVarSelf {
     return true

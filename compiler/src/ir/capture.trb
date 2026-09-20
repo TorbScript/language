@@ -1,21 +1,21 @@
-use IrProgram, IrTypeId, IrType, IrSignature, LayoutId from "./ir"
-use Layout, LayoutKind, FieldLayout, isSharedStorageKind from "./layout"
-use boxLayoutName, cellLayoutName, environmentLayoutName from "./mangle"
-
 /**
  * The three layouts a closure needs: the environment that holds its captures, the box a captured `var` binding lives in,
  * and the memo cell of a `lazy` parameter.
  *
- * **Everything a closure stores is a layout** (milestone 5.8). That is not a convenience: a layout already carries a C
- * struct, its place in the definition order, the `containsCounted` flag and the `R_`/`D_` pair the ownership pass emits
- * for every counted block, so nothing about a closure needs a second way to be retained and dropped. It is the same
- * decision that made the boxed payload of a trait-typed value an ordinary layout in 5.6, for the same reason - a second
- * mechanism beside the layouts is a second place to get a retain wrong.
+ * **Everything a closure stores is a layout.** That is not a convenience: a layout already carries a C struct, its
+ * place in the definition order, the `containsCounted` flag and the `R_`/`D_` pair the ownership pass emits for every
+ * counted block, so nothing about a closure needs a second way to be retained and dropped. It is the same decision
+ * that makes the boxed payload of a trait-typed value an ordinary layout, for the same reason - a second mechanism
+ * beside the layouts is a second place to get a retain wrong.
  *
  * The two of them that are **shared on purpose** - the box and the cell - carry a `LayoutKind` that says so, because
- * `MakeUnique` may never copy one: a box is the one place where a variable is shared (gap 19), and a cell is what
- * "evaluated at most once" rests on.
+ * `MakeUnique` may never copy one: a box is the one place where a variable is shared between a closure and the scope
+ * that captured it, and a cell is what "evaluated at most once" rests on.
  */
+
+use IrProgram, IrTypeId, IrType, IrSignature, LayoutId from "./ir"
+use Layout, LayoutKind, FieldLayout, isSharedStorageKind from "./layout"
+use boxLayoutName, cellLayoutName, environmentLayoutName from "./mangle"
 
 /** The one field of a box, and the field of a cell that holds the value once something forced it. */
 public const boxFieldName = "value"
@@ -27,7 +27,7 @@ public const cellThunkName = "thunk"
  * The layout of the shared box of a captured `var` binding of this type: one field, always a counted block.
  *
  * A read of the binding is a `Read` through `Field(box, 0)` and a write a `Write` through the same path, so both sides
- * of the capture see one variable - which is the whole of gap 19.
+ * of the capture see one variable - the only sharing of a variable the language has.
  */
 public fn boxLayoutOf(var program: IrProgram, item: IrTypeId): LayoutId {
   const name = boxLayoutName program, item

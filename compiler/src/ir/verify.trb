@@ -1,11 +1,3 @@
-use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, FunctionKind, RuntimeKind, Ownership from "./ir"
-use Block, BlockId, Slot, SlotRole, Instruction, Terminator, Argument, Reference, PathStep from "./ir"
-use Intrinsic, IntrinsicOperation, NumericKind, WitnessSource, WitnessRoot, Capture, LayoutId from "./ir"
-use FunctionId, IrSignatureId from "./ir"
-use isManagedType, containsCountedType from "./layout"
-use isEnvironmentLayout from "./capture"
-use describeIrType, describeIntrinsic, describeNumericKind from "./print"
-
 /**
  * The IR verifier. The lowering runs on stage 0, an untyped tree walker, so a bug in it shows up as a wrong C file and
  * not as an error - unless something checks the IR itself. This is that something: it runs in the tests, in the debug
@@ -23,6 +15,20 @@ use describeIrType, describeIntrinsic, describeNumericKind from "./print"
  * What it does *not* demand: that every counted value is consumed or released exactly once on every path. That is only
  * true of the IR **after** the ownership pass, and asking it of phase one would reject every function there is - so it
  * lives next to the pass that inserts them, in `ownership-verify.trb`, and `verifyOwnedProgram` is the two together.
+ */
+
+use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, FunctionKind, RuntimeKind, Ownership from "./ir"
+use Block, BlockId, Slot, SlotRole, Instruction, Terminator, Argument, Reference, PathStep from "./ir"
+use Intrinsic, IntrinsicOperation, NumericKind, WitnessSource, WitnessRoot, Capture, LayoutId from "./ir"
+use FunctionId, IrSignatureId from "./ir"
+use isManagedType, containsCountedType from "./layout"
+use isEnvironmentLayout from "./capture"
+use describeIrType, describeIntrinsic, describeNumericKind from "./print"
+
+/**
+ * Every finding against one function: its parameters, its graph, that every block is reachable, that every slot is
+ * defined before it is used, and that every type agrees. Later checks run only once the earlier ones are clean, since
+ * a dangling edge or a wrong parameter makes everything after it meaningless.
  */
 public fn verifyFunction(program: IrProgram, function: IrFunction): List<String> {
   var found: List<String> = []
@@ -415,7 +421,7 @@ fn leaving(definedIn: List<List<Bool>>, defines: List<List<Bool>>, block: Int, s
 
 // --- What an instruction reads and writes ---------------------------------------------------------------------------
 
-/** Every slot an instruction reads, in evaluation order. The ownership pass of 5.4 walks this list backwards. */
+/** Every slot an instruction reads, in evaluation order. The ownership pass walks this list backwards (BACKEND 2.2). */
 public fn usedSlots(instruction: Instruction): List<Slot> {
   match instruction {
     .Constant(_, _) => []
@@ -500,6 +506,7 @@ public fn definedSlot(instruction: Instruction): Slot? {
   }
 }
 
+/** The slots a terminator reads: the condition of a `Branch`, the scrutinee of a `Switch`, the value of a `Return`. */
 public fn usedByTerminator(terminator: Terminator): List<Slot> {
   match terminator {
     .Branch(condition, _, _) => [condition]
@@ -526,6 +533,7 @@ fn slotsOfArguments(arguments: List<Argument>): List<Slot> {
   used
 }
 
+/** The base of a place and every slot that indexes into it, the base first. */
 public fn slotsOfReference(reference: Reference): List<Slot> {
   var used = [reference.base]
   for step in reference.steps {
@@ -1429,7 +1437,7 @@ fn expectNumeric(
  * code point (BACKEND 3.1), and `Int.from('A')` is the one conversion the language writes over one.
  *
  * It is not `numericKindOf`, and the difference is the point: a `Char` is not a number, so no arithmetic and no comparison
- * intrinsic may name a kind for one (5.6's note) - only the width of the bits a conversion moves.
+ * intrinsic may name a kind for one (BACKEND 5.6) - only the width of the bits a conversion moves.
  */
 public fn conversionKindOf(program: IrProgram, id: IrTypeId): NumericKind? {
   if const .Character = program.typeAt(id) {
@@ -1567,6 +1575,7 @@ fn describeStep(program: IrProgram, step: PathStep): String {
   }
 }
 
+/** The layout behind a type, for a record, a variant, a tuple or a `shared type` object - `None` for anything else. */
 public fn layoutOfType(program: IrProgram, id: IrTypeId): LayoutId? {
   match program.typeAt(id) {
     .Record(layout) => Some layout

@@ -1,3 +1,21 @@
+/**
+ * Witness tables: what a trait-typed value and a dynamic call go through.
+ *
+ * A table is static data, one per `(trait with its arguments, target type)`, holding one function pointer per member the
+ * ABI can reach, in a deterministic order. A **default** member is deliberately not in a table: calling one is a call of
+ * the monomorphic instance of the default body with `Self` bound to the target, which is what makes `by` forward the
+ * required members only.
+ *
+ * Two things are decided here and not in BACKEND section 1.4, and both are recorded in BACKEND 5.6:
+ *
+ * - **A trait-typed value carries its own tables, so nothing is ever passed as a witness parameter.** Every open bound
+ *   of the language belongs to a value that is in hand - the receiver of the call, the argument that is interpolated -
+ *   and reading the table out of that value is what `WitnessRoot.Value` is for.
+ * - **The members of the supertraits are flattened into the table instead of sitting in a nested one.** A call through a
+ *   table has to spell the member's C type, and the only trait a back end can name at a `CallWitness` is the bound the
+ *   value carries - so a path through nested tables could not be spelled at all. `WitnessTable.nested` stays empty.
+ */
+
 use Span from "../syntax/source"
 use SymbolId from "../semantics/symbols"
 use TypeId, ParameterId, Signature, ImplementationId from "../semantics/checker/type"
@@ -14,24 +32,6 @@ use instanceFor, isClosedType from "./instances"
 use Lowering, Generated, reportUnsupported, irTypeOfClosed, nativeNamed from "./lower/context"
 use generatedFunctionOf from "./lower/derive"
 use nativeFunctionOf, needsNativeWrapper from "./lower/native"
-
-/**
- * Witness tables: what a trait-typed value and a dynamic call go through.
- *
- * A table is static data, one per `(trait with its arguments, target type)`, holding one function pointer per member the
- * ABI can reach, in a deterministic order. A **default** member is deliberately not in a table: calling one is a call of
- * the monomorphic instance of the default body with `Self` bound to the target, which is what makes `by` forward the
- * required members only (gap 14).
- *
- * Two things are decided here and not in BACKEND section 1.4, and both are recorded in the note of 5.6:
- *
- * - **A trait-typed value carries its own tables, so nothing is ever passed as a witness parameter.** Every open bound
- *   of the language belongs to a value that is in hand - the receiver of the call, the argument that is interpolated -
- *   and reading the table out of that value is what `WitnessRoot.Value` is for.
- * - **The members of the supertraits are flattened into the table instead of sitting in a nested one.** A call through a
- *   table has to spell the member's C type, and the only trait a back end can name at a `CallWitness` is the bound the
- *   value carries - so a path through nested tables could not be spelled at all. `WitnessTable.nested` stays empty.
- */
 
 /**
  * The static table of one concrete type and one trait, built once. Both types have to be closed: a table is named after
@@ -218,7 +218,7 @@ public fn providerOfMember(
 /**
  * Which manifest entry a member belongs to: the **target** type of the implementation and not the type that declares the
  * member. `Int64.hash` is an entry although `hash` is written in `trait Hash`, and `native type Int64 with Signed {}`
- * declares nothing at all - the runtime provides every member of every trait it comes with (gap 22).
+ * declares nothing at all - the runtime provides every member of every trait it comes with.
  *
  * The subject comes first, and the implementation's target stands in where the subject has no name of its own:
  * `Void` is `TypeForm.VoidType` and not a nominal type, while its members are declared on the `native type Void` of the
@@ -282,7 +282,7 @@ public fn memberOfType(
 
 /**
  * What a member without a body does. A `native` declaration of `std/` is in the manifest; a member of a derived
- * implementation is one of the ones the language generates; anything else waits for a milestone.
+ * implementation is one of the ones the language generates; anything else is a clean "not supported" finding.
  */
 public fn generatedKindOf(
   var lowering: Lowering,
@@ -338,13 +338,14 @@ fn isDerivedName(name: String): Bool {
 /**
  * The members the language generates for a derived implementation.
  *
- * **`Encode` and `Decode` are not among them, and they wait for 5.7 and not for 5.10.** A generated `encode` is
+ * # Open
+ *
+ * `Encode` and `Decode` are not among them. A generated `encode` is
  * `encoder.record("User") \{ fields => fields.field("name", name) \}`, and every member of `Encoder`, `RecordEncoder`,
  * `SequenceEncoder` and `Decoder` takes a **`var self`** - which a witness table cannot hold until the payload box of a
- * trait-typed value can be made unique (step 5 of the chain in BACKEND's note of 5.7). A derived `decode` needs one thing
- * more that no milestone plans yet: `Decoder.record<Output>` has a generic parameter of its own, so it is not object safe
- * and can never be in a table at all - the trait has to hand the closure a *concrete* decoder, or `decode` has to take
- * one by generic parameter instead of as a trait-typed value.
+ * trait-typed value can be made unique. A derived `decode` needs something more: `Decoder.record<Output>` has a generic
+ * parameter of its own, so it is not object safe and can never be in a table at all - the trait has to hand the closure
+ * a *concrete* decoder, or `decode` has to take one by generic parameter instead of as a trait-typed value.
  */
 fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generated? {
   if name == "show" {
@@ -498,18 +499,19 @@ public type TableMember {
  * and one with generic parameters of its own, whose call would need witnesses appended. A call of one through a table is
  * therefore a clean "the member is not in the table" finding and never a wrong call.
  *
- * A **`var self`** member *is* in a table (5.6 left it out): its thunk takes the address of the payload inside the box,
- * and the caller makes that box unique first - which is what the `size` and the two helpers in the table are for
- * (milestone 5.7). Without it `List.add`, `Map.set`, `Set.add` and `Iterator.next` would be unreachable on a
- * trait-typed value, and every collection of the language is one.
+ * A **`var self`** member *is* in a table: its thunk takes the address of the payload inside the box, and the caller
+ * makes that box unique first, which is what the `size` and the two helpers in the table are for. Without it
+ * `List.add`, `Map.set`, `Set.add` and `Iterator.next` would be unreachable on a trait-typed value, and every
+ * collection of the language is one.
  *
- * A **default** member is in the table only where some implementation of the program **overrides** it (5.6 put every one
- * of them in): which of the two a trait-typed value reaches is a run-time question exactly then. A default that nothing
- * overrides is dispatched statically with `Self` bound to the trait type itself, because a default body reaches `self`
- * only through the trait's own members - so one instance per trait type serves every implementer and what runs is what
- * would have run anyway. That is what bounds the instance set: `Iterable.indexed` is `Zipped(0.., self)`, so a table that
- * held it would need the table of `Iterable<(Int, Item)>` for `Zipped<Int, Item>`, which holds `indexed` again, and the
- * worklist would never end (the fourth round of 5.7 in docs/BACKEND.md).
+ * A **default** member is in the table only where some implementation of the program **overrides** it: which of the
+ * two a trait-typed value reaches is a run-time question exactly then. A default that nothing overrides is dispatched
+ * statically with `Self` bound to the trait type itself, because a default body reaches `self` only through the
+ * trait's own members - so one instance per trait type serves every implementer and what runs is what would have run
+ * anyway. That is what bounds the instance set: `Iterable.indexed` is `Zipped(0.., self)`, so a table that held it
+ * would need the table of `Iterable<(Int, Item)>` for `Zipped<Int, Item>`, which holds `indexed` again, and the
+ * worklist would never end - a witness table holds only the members a type overrides, not its trait's defaults
+ * (BACKEND 5.6).
  */
 public fn tableMembersOf(var lowering: Lowering, bound: TypeId, subject: TypeId): List<TableMember> {
   var found: List<TableMember> = []
@@ -694,7 +696,7 @@ fn anyParameterMentions(var lowering: Lowering, signature: Signature, parameter:
   false
 }
 
-/** Whether `Self` occurs in a type. A member that says `Self` has no meaning on a trait-typed value (gap 7). */
+/** Whether `Self` occurs in a type. A member that says `Self` has no meaning on a trait-typed value. */
 fn mentionsSelfElsewhere(var lowering: Lowering, id: TypeId, parameter: ParameterId): Bool {
   match lowering.checker.types.form(id) {
     .Parameter(found) => found == parameter

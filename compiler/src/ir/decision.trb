@@ -1,8 +1,3 @@
-use SymbolId from "../semantics/symbols"
-use TypeId, describeLiteral from "../semantics/checker/type"
-use Checker from "../semantics/checker/context"
-use MatchPlan, PatternTest, PatternCheck, PatternLiteral, PatternStep from "../semantics/checker/exhaustive"
-
 /**
  * A `MatchPlan` as a decision tree: which value is tested in which order, and where every outcome goes.
  *
@@ -20,11 +15,17 @@ use MatchPlan, PatternTest, PatternCheck, PatternLiteral, PatternStep from "../s
  * one test fewer; in every other child the row is gone. So each child is strictly smaller than its parent.
  */
 
+use SymbolId from "../semantics/symbols"
+use TypeId, describeLiteral from "../semantics/checker/type"
+use Checker from "../semantics/checker/context"
+use MatchPlan, PatternTest, PatternCheck, PatternLiteral, PatternStep from "../semantics/checker/exhaustive"
+
 /** The index of a node in `DecisionGraph.nodes`. */
 public type NodeId {
   value: Int
 }
 
+/** One node of a [DecisionGraph]: a question about the value at a path, or an outcome. */
 public type DecisionNode {
   /**
    * Which case the value at `path` is. One edge per variant any row tests, in the order they are written, and
@@ -41,11 +42,13 @@ public type DecisionNode {
   case Fail
 }
 
+/** One arm of a [DecisionNode.SwitchCase]: the variant it answers, and the node reached when the value is that variant. */
 public type CaseEdge {
   variant: SymbolId
   target: NodeId
 }
 
+/** The decision graph [decisionTreeOf] builds: the nodes in creation order, the entry node, and the sharing memo. */
 public type DecisionGraph {
   var nodes: List<DecisionNode> = []
   var root: NodeId = NodeId 0
@@ -70,7 +73,7 @@ type Row {
 }
 
 /**
- * The decision graph of one plan. An arm no value reaches is left out: the checker reported it (gap 25), and a block
+ * The decision graph of one plan. An arm no value reaches is left out: the checker already reported it, and a block
  * nothing jumps to is not a block.
  */
 public fn decisionTreeOf(plan: MatchPlan): DecisionGraph {

@@ -1,6 +1,3 @@
-use LiteralValue from "../semantics/checker/type"
-use IrTypeId, IrType, TraitId, IrSignatureId, IrProgram, Instance, RuntimeKind, Ownership from "./ir"
-
 /**
  * The names a back end sees. Deterministic, ASCII, collision free, and stable under anything that does not change the
  * program:
@@ -14,11 +11,14 @@ use IrTypeId, IrType, TraitId, IrSignatureId, IrProgram, Instance, RuntimeKind, 
  *
  * `t_std_x2f_collections_list_ArrayList_add__Int64`. **No id ever appears in a name:** a name is a
  * function of the source path plus the arguments, so it does not move when an unrelated module is added, and the
- * fixpoint of milestone 6 compares two C files that were produced by two different binaries.
+ * fixpoint compares two C files that were produced by two different binaries.
  *
  * C reserved spellings cannot be hit, because every name starts with a lowercase or uppercase prefix letter and a
  * component never ends in a way that could be confused with the `__` of an instance.
  */
+
+use LiteralValue from "../semantics/checker/type"
+use IrTypeId, IrType, TraitId, IrSignatureId, IrProgram, Instance, RuntimeKind, Ownership from "./ir"
 
 /** Where a declaration is written, unescaped: the components of its mangled name, in order. */
 public type SymbolPath {
@@ -89,10 +89,10 @@ public fn hexDigits(value: Int, count: Int): String {
 /**
  * Sixteen hexadecimal digits that stand for a spelling which was too long to write out.
  *
- * Two polynomial hashes over prime moduli rather than the FNV-1a-64 the design asked for: FNV needs wrapping
- * multiplication of 64 bit values, and every arithmetic operation of the language panics on overflow - the wrapping
- * operations of gap 3 are `native` and the runtime does not have them yet. Each half stays below 2^31, so no
- * multiplication here can leave the range of an `Int64`.
+ * Two polynomial hashes over prime moduli rather than the FNV-1a-64 the design asks for: FNV needs wrapping
+ * multiplication of 64 bit values, and switching to it would change the hash - and so every long mangled name - at
+ * once, which nothing does automatically. Each half stays below 2^31, so no multiplication here can leave the range
+ * of an `Int64`.
  */
 public fn nameHash(text: String): String {
   var high = 2166136261
@@ -284,8 +284,8 @@ public fn layoutName(program: IrProgram, path: SymbolPath, arguments: List<IrTyp
 
 /**
  * `T_tuple__Int64_String`. A tuple has no declaration anywhere, so its one component is the word `tuple` and its
- * instance is the list of its field types - labels are not part of type identity (gap 17), so `(lowest: Int,
- * highest: Int)` and `(Int, Int)` are one layout and one name.
+ * instance is the list of its field types - labels are not part of type identity, so `(lowest: Int, highest: Int)`
+ * and `(Int, Int)` are one layout and one name.
  */
 public fn tupleLayoutName(program: IrProgram, fields: List<IrTypeId>): String {
   mangledName "T", ["tuple"], canonicalTypes(program, fields)

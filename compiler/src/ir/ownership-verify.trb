@@ -1,13 +1,5 @@
-use IrProgram, IrFunction, IrSignature, Ownership, Slot, SlotRole, Instruction, Terminator from "./ir"
-use Argument, FunctionId from "./ir"
-use verifyProgram, verifyFunction, usedSlots, definedSlot, usedByTerminator from "./verify"
-use outParameterSlotsOf from "./verify"
-use successorsOf, reachableBlocks from "./verify"
-use Counted, countedSlotsOf, postorderOf from "./liveness"
-use SlotFacts, slotFactsOf, consumedSlotsOf from "./operand"
-
 /**
- * The ownership invariants of the IR: the safety net every sub-milestone after 5.4 leans on.
+ * The ownership invariants of the IR: the safety net every later pass of the back end leans on.
  *
  * `verify.trb` asks whether a body is well *typed* and well *formed*. This asks whether it is well *counted*, which is
  * the one thing a wrong answer in the back end shows up as a leak or a double free rather than as an error:
@@ -26,9 +18,17 @@ use SlotFacts, slotFactsOf, consumedSlotsOf from "./operand"
  * which is the state a leak on one path shows up as. It settles because a block either passes a state through or
  * overwrites it, and `unknown` only ever grows.
  *
- * A panic runs nothing (decided gap 9), so an instruction after one is never reached and an `unreachable` terminator
- * demands nothing at all: what a panicking task still owns is not a leak, it is a program that is over.
+ * A panic runs nothing, so an instruction after one is never reached and an `unreachable` terminator demands nothing at
+ * all: what a panicking task still owns is not a leak, it is a program that is over.
  */
+
+use IrProgram, IrFunction, IrSignature, Ownership, Slot, SlotRole, Instruction, Terminator from "./ir"
+use Argument, FunctionId from "./ir"
+use verifyProgram, verifyFunction, usedSlots, definedSlot, usedByTerminator from "./verify"
+use outParameterSlotsOf from "./verify"
+use successorsOf, reachableBlocks from "./verify"
+use Counted, countedSlotsOf, postorderOf from "./liveness"
+use SlotFacts, slotFactsOf, consumedSlotsOf from "./operand"
 
 /** Nothing is known about the slot on the paths into this block yet. */
 const unknownState = 0
@@ -373,7 +373,7 @@ fn runInstruction(
   var found: List<String>,
   reports: Bool,
 ) {
-  // A panic aborts without running anything, so what it reads is neither consumed nor released (decided gap 9)
+  // A panic aborts without running anything, so what it reads is neither consumed nor released
   if const .Panic(_, _) = instruction {
     return
   }

@@ -1,3 +1,12 @@
+/**
+ * From a checker type to an IR type: one `TypeId` plus a substitution for the generic parameters that are in scope,
+ * and out comes the monomorphic type a back end can lay out.
+ *
+ * **The substituted checker type is the monomorphization key.** Checker types are interned, so a closed `TypeId` is
+ * already the canonical name of one type - the memo here is keyed by it, and two instantiations that arrive at the
+ * same type share one IR type, one layout and one mangled name whatever route they took.
+ */
+
 use relativePath, joinPath, pathName, isInside from "../project/path"
 use ModuleId from "../semantics/module"
 use SymbolId, SymbolKind from "../semantics/symbols"
@@ -11,15 +20,6 @@ use IrSignature, IrSignatureId, IrParameter, Ownership, LayoutId from "./ir"
 use Layout, LayoutKind, FieldLayout, VariantLayout from "./layout"
 use cellLayoutOf, thunkTypeOf from "./capture"
 use SymbolPath, layoutName, tupleLayoutName from "./mangle"
-
-/**
- * From a checker type to an IR type: one `TypeId` plus a substitution for the generic parameters that are in scope,
- * and out comes the monomorphic type a back end can lay out.
- *
- * **The substituted checker type is the monomorphization key.** Checker types are interned, so a closed `TypeId` is
- * already the canonical name of one type - the memo here is keyed by it, and two instantiations that arrive at the
- * same type share one IR type, one layout and one mangled name whatever route they took.
- */
 
 /** What the back end represents a `native` declaration of the prelude as. Everything else is a record or a variant. */
 public type PrimitiveKind {
@@ -45,8 +45,8 @@ public type Instantiation {
   /** `TypeId.value` of a closed checker type to the IR type it became. */
   var memo: Map<Int, IrTypeId> = [:]
   /**
-   * `TypeId.value` of every closed type that **is or contains** a `native type` whose representation a later milestone
-   * writes, to the reason a body that mentions one is a clean finding.
+   * `TypeId.value` of every closed type that **is or contains** a `native type` whose representation the back end
+   * does not implement yet, to the reason a body that mentions one is a clean finding.
    *
    * Such a type has no representation at all: `nominalType` answers `VoidType` for one so that a layout it sits in can
    * still be built, and a *value* of it is then a slot nothing ever defines. `Clock.now()` in the tour was two internal
@@ -189,7 +189,7 @@ fn buildType(var program: IrProgram, var checker: Checker, var instantiation: In
   }
 }
 
-/** A tuple layout is named after its field types, because a label is not part of type identity (gap 17). */
+/** A tuple layout is named after its field types: a label is not part of type identity. */
 fn tupleType(
   var program: IrProgram,
   var checker: Checker,
@@ -449,12 +449,12 @@ fn primitiveType(
 }
 
 /**
- * The milestone that gives a `native type` without fields a representation, or the empty string for one that should
- * have had it already - which is an internal error of the compiler.
+ * The label that names when a `native type` without fields gets a representation, or the empty string for one that
+ * should have had it already - which is an internal error of the compiler.
  *
  * A `native type` with neither fields nor cases is one the runtime owns end to end (BACKEND 5.1's list). Those the
- * primitive table knows are types already; these are the ones whose runtime side a later milestone writes, and using
- * one has to be a clean "not supported yet" and never an internal error. `Instant` and `Duration` are the odd ones:
+ * primitive table knows are types already; these are the ones whose runtime side is not written yet, and using one
+ * has to be a clean "not supported yet" and never an internal error. `Instant` and `Duration` are the odd ones:
  * `runtime/clock.c` has them as `int64_t` nanoseconds, so what is missing is only the lowering that maps them - which
  * is the row `std/time` sits in.
  */

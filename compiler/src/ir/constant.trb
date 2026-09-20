@@ -1,3 +1,19 @@
+/**
+ * The compile-time constant evaluator: the one place that turns an expression into static data.
+ *
+ * What is evaluable follows [docs/TYPECHECKER.md](../../../docs/TYPECHECKER.md) ("What exactly is compile-time
+ * evaluable?") plus the arithmetic it adds: literals, the unary operators, the arithmetic, comparison and logical
+ * operators of the built-in number types and of `Bool`, interpolation of such, constructors and tuples of such, and
+ * references to other compile-time constants. No function call and no `native` call, because a constant may not run
+ * code.
+ *
+ * **Overflow, a division by zero and a `nan` out of a literal expression are compile errors at that expression** (see
+ * [docs/BACKEND.md](../../../docs/BACKEND.md), "Overflow and division by zero in a compile-time constant"): a program
+ * that cannot start is worse than one that does not compile. Everything else that is simply not evaluable is not an
+ * error here - it is a construct the back end does not lower yet, counted like every other one, until the checker
+ * enforces the rule at the declaration.
+ */
+
 use Span from "../syntax/source"
 use Expression, Argument, TextSegment, PrefixOperator, InfixOperator from "../syntax/ast"
 use SymbolId from "../semantics/symbols"
@@ -12,28 +28,15 @@ use describeIrType from "./print"
 use staticName from "./mangle"
 use symbolPathOf from "./instantiate"
 
-/**
- * The compile-time constant evaluator: the one place that turns an expression into static data.
- *
- * What is evaluable is decided gap 27 of [docs/TYPECHECKER.md](../../../docs/TYPECHECKER.md) plus the arithmetic it
- * adds: literals, the unary operators, the arithmetic, comparison and logical operators of the built-in number types
- * and of `Bool`, interpolation of such, constructors and tuples of such, and references to other compile-time
- * constants. No function call and no `native` call, because a constant may not run code.
- *
- * **Overflow, a division by zero and a `nan` out of a literal expression are compile errors at that expression**
- * (decided gap 11 of [docs/BACKEND.md](../../../docs/BACKEND.md)): a program that cannot start is worse than one that
- * does not compile. Everything else that is simply not evaluable is not an error here - it is a construct the back end
- * does not lower yet, counted like every other one, until the checker enforces the rule at the declaration.
- */
-
 /** One compile-time value: what it is, and what type it has. */
 public type ConstantValue {
   contents: StaticContents
   annotation: IrTypeId
 }
 
-/** The largest and the smallest `Int64`, spelled the way `std/number` spells them. */
+/** The largest `Int64`, spelled the way `std/number` spells it. */
 public const largestInteger = 9223372036854775807
+/** The smallest `Int64`, spelled the way `std/number` spells it. */
 public const smallestInteger = -9223372036854775807 - 1
 
 // --- One expression -------------------------------------------------------------------------------------------------
@@ -359,7 +362,7 @@ fn floatConstant(
   at: Span,
 ): ConstantValue? {
   const value = Float.parse(text).ok()?
-  // `-value` and not `0.0 - value`: the two differ for zero, and `-0.0` has to keep its sign (decided gap 4)
+  // `-value` and not `0.0 - value`: the two differ for zero, and `-0.0` has to keep its sign
   Some(ConstantValue(StaticContents.Floating(if isNegative { -value } else { value }), annotation))
 }
 
@@ -466,8 +469,8 @@ fn aggregateConstant(
 
 /**
  * `Point(0, 0)`: the constructor of a record, with every field written out. A field that takes its default is not
- * evaluated here - a default is an expression of the declaration and belongs to the call site (gap 13), and a
- * constant has no call site.
+ * evaluated here - a default is an expression of the declaration and belongs to the call site, and a constant has no
+ * call site.
  */
 fn callConstant(
   var lowering: Lowering,
@@ -539,6 +542,7 @@ public fn staticOfConstant(var lowering: Lowering, symbol: SymbolId): StaticId? 
 
 // --- Reading a value ------------------------------------------------------------------------------------------------
 
+/** The value as an `Int`, or `None` when the constant holds something else. */
 public fn integerOf(value: ConstantValue): Int? {
   if const .Literal(literal) = value.contents {
     if const .Integer(found) = literal {
@@ -548,6 +552,7 @@ public fn integerOf(value: ConstantValue): Int? {
   None
 }
 
+/** The value as a `Float`, or `None` when the constant holds something else. */
 public fn floatOf(value: ConstantValue): Float? {
   if const .Floating(found) = value.contents {
     return Some found
@@ -555,6 +560,7 @@ public fn floatOf(value: ConstantValue): Float? {
   None
 }
 
+/** The value as a `Bool`, or `None` when the constant holds something else. */
 public fn booleanOf(value: ConstantValue): Bool? {
   if const .Literal(literal) = value.contents {
     if const .Boolean(found) = literal {
@@ -564,6 +570,7 @@ public fn booleanOf(value: ConstantValue): Bool? {
   None
 }
 
+/** The value as a `String`, or `None` when the constant holds something else. */
 public fn textOf(value: ConstantValue): String? {
   if const .Literal(literal) = value.contents {
     if const .Text(found) = literal {
@@ -573,6 +580,7 @@ public fn textOf(value: ConstantValue): String? {
   None
 }
 
+/** The value as a `Char`, or `None` when the constant holds something else. */
 public fn characterOf(value: ConstantValue): Char? {
   if const .Literal(literal) = value.contents {
     if const .Character(found) = literal {
@@ -599,6 +607,7 @@ public fn addedChecked(first: Int, second: Int): Int? {
   Some(first + second)
 }
 
+/** Subtraction that answers `None` instead of leaving the range of an `Int64`, checked before it runs (BACKEND 3.3). */
 public fn subtractedChecked(first: Int, second: Int): Int? {
   if second < 0 && first > largestInteger + second {
     return None
@@ -609,6 +618,7 @@ public fn subtractedChecked(first: Int, second: Int): Int? {
   Some(first - second)
 }
 
+/** Multiplication that answers `None` instead of leaving the range of an `Int64`, checked before it runs (BACKEND 3.3). */
 public fn multipliedChecked(first: Int, second: Int): Int? {
   if first == 0 || second == 0 {
     return Some 0

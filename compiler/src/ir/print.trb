@@ -1,11 +1,3 @@
-use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, IrParameter, TraitId, RuntimeKind from "./ir"
-use Block, BlockId, Slot, SlotDeclaration, SlotRole, Instruction, Terminator, Argument, Ownership from "./ir"
-use Reference, PathStep, Capture, WitnessSource, Intrinsic, IntrinsicOperation, NumericKind from "./ir"
-use LayoutId, LocationId, Location, StaticValue, StaticContents, ElementDescriptor, WitnessTable from "./ir"
-use FunctionKind, ResultMode, IrSignatureId, FunctionId from "./ir"
-use Layout, FieldLayout, Representation from "./layout"
-use LiteralValue, describeLiteral from "../semantics/checker/type"
-
 /**
  * The text format of the IR: what `torb ir <path>`, `torb build --emit-ir` and every snapshot test show.
  *
@@ -17,6 +9,14 @@ use LiteralValue, describeLiteral from "../semantics/checker/type"
  *
  * A test that compares this text catches an ownership regression far earlier than a C-level test can.
  */
+
+use IrTypeId, IrType, IrProgram, IrFunction, IrSignature, IrParameter, TraitId, RuntimeKind from "./ir"
+use Block, BlockId, Slot, SlotDeclaration, SlotRole, Instruction, Terminator, Argument, Ownership from "./ir"
+use Reference, PathStep, Capture, WitnessSource, Intrinsic, IntrinsicOperation, NumericKind from "./ir"
+use LayoutId, LocationId, Location, StaticValue, StaticContents, ElementDescriptor, WitnessTable from "./ir"
+use FunctionKind, ResultMode, IrSignatureId, FunctionId from "./ir"
+use Layout, FieldLayout, Representation from "./layout"
+use LiteralValue, describeLiteral from "../semantics/checker/type"
 
 /** The whole program, in the order a reader needs it: what things are, then what they do. */
 public fn printProgram(program: IrProgram): String {
@@ -146,6 +146,7 @@ fn printBlockComment(program: IrProgram, block: Block): String {
 
 // --- Instructions ---------------------------------------------------------------------------------------------------
 
+/** One instruction, in the text format `torb ir` and the snapshot tests print. */
 public fn printInstruction(program: IrProgram, function: IrFunction, instruction: Instruction): String {
   match instruction {
     .Constant(target, value) => "{printTarget(target)}constant {program.staticAt(value).name}"
@@ -221,6 +222,7 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
   }
 }
 
+/** How a block ends, in the text format. */
 public fn printTerminator(program: IrProgram, function: IrFunction, terminator: Terminator): String {
   match terminator {
     .Jump(target) => "jump b{target.value}"
@@ -367,6 +369,7 @@ fn fieldNameOf(program: IrProgram, layout: LayoutId, index: Int): String {
   shape.fields[index].name
 }
 
+/** `path:line:column`, relative to the workspace root, or `?` for a location the program does not have. */
 public fn printLocation(program: IrProgram, at: LocationId): String {
   if !program.hasLocation(at) {
     return "?"
@@ -377,6 +380,7 @@ public fn printLocation(program: IrProgram, at: LocationId): String {
 
 // --- Layouts, static data, witnesses --------------------------------------------------------------------------------
 
+/** One layout: its name, its representation, its size and alignment, and its fields or its variants. */
 public fn printLayout(program: IrProgram, layout: Layout): String {
   var parts = ["layout", layout.name, printRepresentation(layout.representation)]
   if layout.isRecursive {
@@ -429,6 +433,7 @@ fn printRepresentation(representation: Representation): String {
   }
 }
 
+/** One element descriptor: its item type, its size and alignment, and the functions it carries, where it has any. */
 public fn printElement(program: IrProgram, element: ElementDescriptor): String {
   var parts = [
     "element",
@@ -453,6 +458,7 @@ fn addFunctionPart(program: IrProgram, var parts: List<String>, word: String, fu
   }
 }
 
+/** One witness table: its members in table order, and the tables of its direct supertraits. */
 public fn printWitnessTable(program: IrProgram, table: WitnessTable): String {
   var members: List<String> = []
   for member in table.members {
@@ -469,6 +475,7 @@ public fn printWitnessTable(program: IrProgram, table: WitnessTable): String {
   "{head} members({members.joined(separator: ", ")}) nested({nested.joined(separator: ", ")})"
 }
 
+/** One static value: its name, its type, and its contents. */
 public fn printStatic(program: IrProgram, value: StaticValue): String {
   "static {value.name}: {describeIrType(program, value.annotation)} = {printContents(program, value.contents)}"
 }
@@ -579,6 +586,7 @@ public fn describeTrait(program: IrProgram, id: TraitId): String {
   "{applied.path.name}<{parts.joined(separator: ", ")}>"
 }
 
+/** `List`, `Map`, `Set`, `Task`, `Channel`, `Expression`, `Decimal`: a runtime kind, in a message and in the text format. */
 public fn describeRuntimeKind(kind: RuntimeKind): String {
   match kind {
     .ListStorage => "List"

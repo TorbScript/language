@@ -1,8 +1,3 @@
-use SymbolId from "../semantics/symbols"
-use LiteralValue, literalKey from "../semantics/checker/type"
-use Layout, LayoutKind from "./layout"
-use SymbolPath from "./mangle"
-
 /**
  * The typed IR: a control flow graph of basic blocks holding three-address instructions over numbered slots.
  *
@@ -14,6 +9,11 @@ use SymbolPath from "./mangle"
  * the same rule the front end follows with `ModuleId` and `SymbolId`. Types, layouts, traits, signatures and source
  * locations are *interned*, so `==` on their ids means "the same thing" and a back end never walks a type twice.
  */
+
+use SymbolId from "../semantics/symbols"
+use LiteralValue, literalKey from "../semantics/checker/type"
+use Layout, LayoutKind from "./layout"
+use SymbolPath from "./mangle"
 
 // --- Ids ------------------------------------------------------------------------------------------------------------
 
@@ -142,7 +142,7 @@ public type RuntimeKind {
   case ChannelObject
   /** `Expression<Value>`: a static tree plus the captures collected at the quotation site. */
   case ExpressionTree
-  /** Exact base-10 arithmetic. Not implemented before milestone 8; using one is a clean compile error. */
+  /** Exact base-10 arithmetic. Not implemented yet; using one is a clean compile error. */
   case DecimalNumber
 }
 
@@ -308,6 +308,7 @@ public type SlotRole {
   case ResultPointer
 }
 
+/** One slot of a function's frame: its type, the role it plays, and the source name it prints as. */
 public type SlotDeclaration {
   annotation: IrTypeId
   role: SlotRole
@@ -330,6 +331,7 @@ public type FunctionKind {
   case Runtime(symbol: String)
 }
 
+/** One basic block: the instructions that run in it, in order, and how it ends. */
 public type Block {
   var instructions: List<Instruction> = []
   /**
@@ -343,6 +345,7 @@ public type Block {
   var at: LocationId? = None
 }
 
+/** One function of the program: its signature, its slots and blocks, and what kind of body it has. */
 public type IrFunction {
   /** The mangled name. Unique, deterministic, the only identity a back end needs. */
   name: String
@@ -378,6 +381,7 @@ public type Reference {
   steps: List<PathStep> = []
 }
 
+/** One step of a [Reference]'s path: a field, a variant field, a tuple field, an array element, or a dereference. */
 public type PathStep {
   case Field(layout: LayoutId, index: Int)
   case Variant(layout: LayoutId, variant: Int, index: Int)
@@ -435,7 +439,7 @@ public type WitnessRoot {
    *
    * A **place** and not a slot, because a `var self` member reached through a table writes through the value the table
    * came from - `holder.items.add(x)` reads the table out of `holder.items` and hands the callee the payload inside
-   * exactly that box (milestone 5.7). A bare slot is `Reference(slot, [])`.
+   * exactly that box. A bare slot is `Reference(slot, [])`.
    */
   case Value(place: Reference, bound: Int)
 }
@@ -508,9 +512,9 @@ public type IntrinsicOperation {
    * `print a, b` and `printError a, b`: the already shown parts, joined by the runtime with one space and one `\n`.
    *
    * They take as many operands as the call was written with, exactly as `TextConcat` does, and they produce nothing.
-   * `print(...values: Show)` is a variadic parameter and therefore a *list* at the call site, which is milestone 5.7's -
-   * so until then the lowering shows the arguments itself and hands the parts over as one instruction. The join stays
-   * in `runtime/console.c`, so the two back ends cannot disagree about the format.
+   * `print(...values: Show)` is a variadic parameter and would otherwise build a `List<Show>` at the call site, but the
+   * lowering keeps this one as a fast path instead: it shows every argument itself and hands the parts over as one
+   * instruction, so the join stays in `runtime/console.c` and the two back ends cannot disagree about the format.
    */
   case PrintParts
   case PrintErrorParts
@@ -518,15 +522,15 @@ public type IntrinsicOperation {
    * Ends the program with this exit code. Nothing follows it, so the block that holds it ends `unreachable`.
    *
    * It is an intrinsic and not a call of `Process.exit`, because it is what the *language* does where a top-level `?`
-   * hands on a failure (decided gap 9: `error: <the error>` and exit code 1) - and an entry file that never imports
-   * `std/process` has no name for that function, while the behaviour is the same in both back ends either way.
+   * hands on a failure - `error: <the error>` and exit code 1 - and an entry file that never imports `std/process`
+   * has no name for that function, while the behaviour is the same in both back ends either way.
    */
   case ExitWithCode
 }
 
 /**
  * One intrinsic: an operation and, where the operation has more than one form, the numeric type it works on. The
- * pair is what prints as `add.i64` and what the natives manifest of 5.R1 maps a `native fn` to.
+ * pair is what prints as `add.i64` and what the natives manifest (BACKEND 5.R1) maps a `native fn` to.
  */
 public type Intrinsic {
   operation: IntrinsicOperation
@@ -535,6 +539,10 @@ public type Intrinsic {
 
 // --- Instructions ---------------------------------------------------------------------------------------------------
 
+/**
+ * One instruction of a [Block], run in order: an ownership operation, a call, a read or write through a [Reference],
+ * a construct, or anything else a back end executes as one step.
+ */
 public type Instruction {
   case Constant(target: Slot, value: StaticId)
   /** Ownership moves: the source is dead afterwards. Inserted by 5.4. */
@@ -598,6 +606,7 @@ public type Instruction {
   case Suspend(state: Int, awaited: Slot)
 }
 
+/** How a [Block] ends: a jump, a branch, a switch, a return, or code nothing may reach. */
 public type Terminator {
   case Jump(target: BlockId)
   case Branch(condition: Slot, then: BlockId, otherwise: BlockId)
@@ -645,9 +654,9 @@ public type IrProgram {
   /** What could not be represented. An entry here is an internal error of the compiler, never the user's fault. */
   var problems: List<String> = []
   /**
-   * What is well formed and waits for a milestone: a `native type` whose representation the runtime does not have yet
-   * (`Script`, `Sandbox`, `Instant`). It is a clean finding with the milestone in it - a program that uses one cannot
-   * be built, but nothing about it is an internal error, which is what an entry in `problems` means.
+   * What is well formed but not implemented yet: a `native type` whose representation the runtime does not have
+   * (`Script`, `Sandbox`, `Instant`). It is a clean finding that names what is missing - a program that uses one
+   * cannot be built, but nothing about it is an internal error, which is what an entry in `problems` means.
    */
   var planned: List<String> = []
 
@@ -863,7 +872,7 @@ public type IrProgram {
     }
   }
 
-  /** A construct that is well formed and waits for a milestone. One root cause gets one message, however often. */
+  /** A construct that is well formed but not implemented yet. One root cause gets one message, however often. */
   fn reportPlanned(var self, message: String) {
     if !planned.contains(message) {
       planned.add message
@@ -924,6 +933,7 @@ fn keyOfIrTypes(arguments: List<IrTypeId>): String {
   key
 }
 
+/** The key one `RuntimeKind` interns under. */
 public fn keyOfRuntimeKind(kind: RuntimeKind): String {
   match kind {
     .ListStorage => "list"
@@ -936,6 +946,7 @@ public fn keyOfRuntimeKind(kind: RuntimeKind): String {
   }
 }
 
+/** The key an applied trait interns under: which trait, and which type arguments. */
 public fn keyOfTrait(applied: IrTrait): String {
   "{applied.symbol.value}{keyOfIrTypes(applied.arguments)}"
 }

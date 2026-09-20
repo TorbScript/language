@@ -1,7 +1,3 @@
-use SymbolId from "../semantics/symbols"
-use IrTypeId, IrType, LayoutId, IrProgram, RuntimeKind from "./ir"
-use IrSignatureId, ElementId, ResultMode from "./ir"
-
 /**
  * Layouts and the representation classes.
  *
@@ -11,12 +7,16 @@ use IrSignatureId, ElementId, ResultMode from "./ir"
  * business, because it is not observable - there is no `sizeof`, no field offset and no reflection in the language.
  */
 
+use SymbolId from "../semantics/symbols"
+use IrTypeId, IrType, LayoutId, IrProgram, RuntimeKind from "./ir"
+use IrSignatureId, ElementId, ResultMode from "./ir"
+
 /** What shape a layout has. A tuple is a record without names, an environment a record the lowering invented. */
 public type LayoutKind {
   case Record
   case Variant
   case Tuple
-  /** The captured values of one closure (milestone 5.8). */
+  /** The captured values of one closure. */
   case Environment
   /**
    * The boxed payload of a trait-typed value: one field, always a counted block.
@@ -28,7 +28,7 @@ public type LayoutKind {
    */
   case Payload
   /**
-   * The shared box a captured `var` binding lives in: one field, always a counted block (gap 19).
+   * The shared box a captured `var` binding lives in: one field, always a counted block.
    *
    * It is a layout for the same reason the payload is one, and it is **never made unique**: a box is shared between the
    * frame and every closure that captured the binding on purpose, so copying it would split the one variable in two.
@@ -70,6 +70,7 @@ public fn isSharedStorageKind(kind: LayoutKind): Bool {
   }
 }
 
+/** How a value of a layout is represented at runtime: inline, a counted block, or a niche over one field. */
 public type Representation {
   /** Copied, no count. All fields inline, estimated size at most 32 bytes, not part of a cycle of the field graph. */
   case Inline
@@ -82,6 +83,7 @@ public type Representation {
   case Niche(variant: Int, field: Int)
 }
 
+/** One field of a [Layout]: its name, its type, and the field of the source it came from, where it has one. */
 public type FieldLayout {
   name: String
   annotation: IrTypeId
@@ -253,6 +255,7 @@ fn sizeOfLayoutAsField(program: IrProgram, id: LayoutId): Int {
   }
 }
 
+/** How many bytes a value of this type must be aligned to, by the same fixed model [sizeOfType] uses. */
 public fn alignmentOfType(program: IrProgram, id: IrTypeId): Int {
   match program.typeAt(id) {
     .Integer(width, _) => width / 8

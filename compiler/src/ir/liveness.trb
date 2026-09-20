@@ -1,7 +1,3 @@
-use IrProgram, IrFunction, Ownership, Slot, SlotRole from "./ir"
-use containsCountedType from "./layout"
-use usedSlots, definedSlot, usedByTerminator, successorsOf from "./verify"
-
 /**
  * Liveness over the slots a frame owns a count of: the analysis that says where the last use of a value is, and
  * therefore where a `Move` may stand instead of a `Copy`, where a `Retain` has to, and where a `Release` goes
@@ -23,6 +19,10 @@ use usedSlots, definedSlot, usedByTerminator, successorsOf from "./verify"
  * reads and writes one slot (`%2 = textConcat %2, %1`) come out right - the old value is used there, so the slot is
  * live before it.
  */
+
+use IrProgram, IrFunction, Ownership, Slot, SlotRole from "./ir"
+use containsCountedType from "./layout"
+use usedSlots, definedSlot, usedByTerminator, successorsOf from "./verify"
 
 /**
  * Which slots of one function carry a count the frame is responsible for, and where each of them sits in a live set.
@@ -88,8 +88,8 @@ public fn countedSlotsOf(program: IrProgram, function: IrFunction): Counted {
  * `countedSlotsOf` answers the narrower question "which values does this frame own", and a borrowed parameter is not one
  * of them - the caller keeps its count for the whole call. But a frame that only *borrows* a counted value can still
  * have to retain it: a closure body that returns its parameter hands a count on that nobody gave it, and a closure's
- * parameters are always borrowed (5.7's fourth round), so the closure has to take a count of its own first. So this is
- * the question "walk this function at all", and `countedSlotsOf` stays the question "which slots have a last use".
+ * parameters are always borrowed, so the closure has to take a count of its own first. So this is the question "walk
+ * this function at all", and `countedSlotsOf` stays the question "which slots have a last use".
  */
 public fn holdsCountedValue(program: IrProgram, function: IrFunction): Bool {
   for declaration in function.slots {
