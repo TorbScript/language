@@ -1267,9 +1267,6 @@ fn witnessCallStatements(
       return reported emission, "a call through a witness table that does not belong to a value"
     }
   }
-  if !witness.steps.isEmpty() {
-    return reported emission, "a call through a nested witness table"
-  }
   const table = witnessExpression emission, program, body, witness
   const result = match target {
     Some(slot) => valueTypeOf program, typeOfSlot(body, slot)
@@ -1295,14 +1292,32 @@ fn witnessCallStatements(
   }
 }
 
-/** Which table a witness source names: one of the witness pointers of a value, or a static table of the program. */
+/**
+ * Which table a witness source names: one of the witness pointers of a value, or a static table of the program, and then
+ * one `nested[i]` step per supertrait the lowering walked down (`narrowingPathOf`). The indices belong to the trait, so
+ * this is the one place where a table of a type the value has erased can be named at all.
+ */
 fn witnessExpression(
   var emission: Emission,
   program: IrProgram,
   body: Body,
   witness: WitnessSource,
 ): CExpression {
-  match witness.root {
+  var found = rootExpression emission, program, body, witness.root
+  for step in witness.steps {
+    const list = CExpression.PointerMember found, "nested"
+    found = CExpression.Index list, CExpression.Literal("{step}")
+  }
+  found
+}
+
+fn rootExpression(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  root: WitnessRoot,
+): CExpression {
+  match root {
     .Value(place, bound) => {
       const value = placeExpression emission, program, body, place
       CExpression.Member value, witnessMemberNameOf(bound)

@@ -1,4 +1,4 @@
-use Intrinsic, IntrinsicOperation, NumericKind from "../../ir/ir"
+use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind from "../../ir/ir"
 
 /**
  * The manifest of natives: the contract between the lowering and the runtime (BACKEND 3.7).
@@ -77,6 +77,13 @@ public type NativeTarget {
   case Runtime(function: String)
   /** Generated from the layout: derived members of native types. */
   case Derived(derived: DerivedKind)
+  /**
+   * An **empty container** of one kind, which is `Instruction.ContainerNew` and can be nothing else: the runtime needs
+   * one element descriptor per type argument, and no declaration of `std/` can name one (5.7's note). It is the one
+   * native whose target the *lowering* knows better than the runtime does, and it is what lets `ArrayList.from` be
+   * ordinary TorbScript instead of a function of the runtime that would have to walk a witness table.
+   */
+  case Container(kind: RuntimeKind)
 }
 
 public type NativeState {
@@ -110,6 +117,11 @@ fn intrinsicOf(name: String, operation: IntrinsicOperation): NativeEntry {
 
 fn numericOf(name: String, operation: IntrinsicOperation, kind: NumericKind): NativeEntry {
   NativeEntry name: name, target: NativeTarget.Intrinsic(Intrinsic(operation: operation, kind: Some(kind)))
+}
+
+/** An empty container the lowering builds itself, over the element descriptors of the owner's type arguments. */
+fn containerOf(name: String, kind: RuntimeKind): NativeEntry {
+  NativeEntry name: name, target: NativeTarget.Container(kind)
 }
 
 fn runtimeOf(name: String, function: String, prototype: String): NativeEntry {
@@ -491,17 +503,16 @@ fn consoleEntries(var entries: List<NativeEntry>) {
  * performance: iteration order and `Show` are the same either way (decided gap 18).
  */
 fn listEntries(var entries: List<NativeEntry>, owner: String, hasIterator: Bool) {
-  entries.add plannedRuntimeOf("{owner}.from", "torb_list_from_iterable", "5.7")
-  // `ArrayList.iterator` is ordinary TorbScript over `get` since 5.7 (`ListIterator`), so it is no `native` at all.
-  // `TrieList` has none yet: its cursor is the trie's, and nothing constructs one before the trie exists (milestone 8).
+  // `ArrayList.from` is ordinary TorbScript since the fourth round of 5.7, and it cannot be anything else: it walks a
+  // trait-typed `Iterable` of the *program* through a witness table, which a C function cannot do. `TrieList.from` waits
+  // for the trie itself, because nothing constructs a `TrieList` before it exists.
   if hasIterator {
+    entries.add plannedRuntimeOf("{owner}.from", "torb_list_from_iterable", "8")
     entries.add plannedRuntimeOf("{owner}.iterator", "torb_list_iterator", "8")
   }
-  entries.add(runtimeOf(
-    "{owner}.withCapacity",
-    "torb_list_with_capacity",
-    "torb_list torb_list_with_capacity(const torb_element *element, int64_t capacity, torb_location at);",
-  ))
+  // `withCapacity` is the empty container, which is an instruction and no call: `torb_list_with_capacity` takes an
+  // element descriptor that no declaration of `std/` can name. The capacity is a hint the first version drops.
+  entries.add containerOf("{owner}.withCapacity", RuntimeKind.ListStorage)
   entries.add runtimeOf("{owner}.length", "torb_list_length", "int64_t torb_list_length(torb_list list);")
   entries.add(optionalRuntimeOf(
     "{owner}.get",
@@ -645,9 +656,8 @@ fn collectionEntries(var entries: List<NativeEntry>) {
   // A `Range` is an ordinary record; only its iteration is native, and it panics without both ends (decided gap 17).
   entries.add derivedOf("Range.equals", DerivedKind.Equals)
   entries.add derivedOf("Range.hash", DerivedKind.Hash)
-  entries.add derivedOf("Range.show", DerivedKind.Show)
-  entries.add plannedRuntimeOf("Range.iterator", "torb_range_iterator", "5.7")
-  entries.add plannedRuntimeOf("Range.length", "torb_range_length", "5.7")
+  // `Range.show` writes the source form (`0..10`, `0..=10`), which the derived one cannot, and `iterator` and `length`
+  // are ordinary TorbScript over `RangeIterator` - so none of the three is a native any more (`std/core/src/range.trb`)
 }
 
 // --- The packages outside the prelude --------------------------------------------------------------------------------

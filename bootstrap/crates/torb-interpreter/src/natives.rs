@@ -46,7 +46,7 @@ pub fn items_of(value: &Value) -> Eval<Vec<Value>> {
         Value::List(items) => Ok(items.to_vec()),
         Value::Set(table) => Ok(table.keys().cloned().collect()),
         Value::Map(table) => Ok(table.iter().map(|(key, value)| Value::tuple(vec![key.clone(), value.clone()])).collect()),
-        Value::Range(Range { start, end: Some(end) }) => Ok((*start..*end).map(Value::Int).collect()),
+        Value::Range(Range { start, end: Some(end), .. }) => Ok((*start..*end).map(Value::Int).collect()),
         Value::Range(Range { end: None, .. }) => Err(failure("This range has no end. The bootstrap interpreter can only use it in `for`")),
         Value::Option(option) => Ok(option.iter().map(|value| (**value).clone()).collect()),
         other => Err(failure(format!("A value of type {} is not iterable", other.type_name()))),

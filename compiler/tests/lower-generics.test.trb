@@ -61,36 +61,107 @@ group "Trait-typed values" {
   }
 
   /**
-   * A **default** member is in the table as well, which BACKEND 1.4 does not say: an implementation may override one, and
-   * which of the two a trait-typed value reaches is only known at run time.
+   * A **default** member that no implementation of the program overrides is **not** a slot of the table (the fourth round
+   * of 5.7): the call is an instance of the default body with `Self` bound to the trait type itself. That is sound because
+   * a default body reaches `self` only through the members of its trait, so the one erased instance behaves exactly like
+   * the per-type one - and it is what bounds the instance set, because `Iterable.indexed` is `Zipped(0.., self)` and a
+   * table that held it would ask for a bigger `Zipped` for ever.
    */
-  test "a default member is a slot of the table, so an override wins at run time" {
+  test "a default no implementation overrides is not a slot: the erased `Self` instance runs" {
     assert(
       irOf(declarations, "t_acme_x2f_app_main_doubledOf") == r"""
         fn t_acme_x2f_app_main_doubledOf(value: Object(Sized) borrowed) -> Int64 {
           slot %0 parameter value: Object(Sized)
           slot %1 temporary: Int64
         b0: # acme/app/src/main.trb:21 body
-          %1 = callWitness value %0 bound 0 member 1()
+          %1 = call t_acme_x2f_app_main_Sized_doubled__Object_acme_x2f_app_main_Sized(%0 borrowed) at acme/app/src/main.trb:22:3
           return %1 borrowed
         }"""
     )
   }
 
-  /** The table holds the required member and the default, in declaration order, and the payload gets a layout. */
+  /** The table holds the required member alone, and the payload gets a layout. */
   test "the table of an implementation is static data, and the payload of the value is a layout" {
     const text = textOf declarations
     assert(
       text.contains(
         "witness w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small Sized for Record(T_acme_x2f_app_main_Small)"
-          + " members(t_acme_x2f_app_main_Small_size, t_acme_x2f_app_main_Sized_doubled__T_acme_x2f_app_main_Small)"
-          + " nested()"
+          + " members(t_acme_x2f_app_main_Small_size) nested()"
       )
     )
     assert(
       text.contains(
         "layout T_payload__T_acme_x2f_app_main_Small boxed size 8 align 8"
           + " fields(value: Record(T_acme_x2f_app_main_Small))"
+      )
+    )
+  }
+
+  /**
+   * The other half of the same decision: a default that some implementation of the program **does** override stays a
+   * slot, because which of the two a trait-typed value reaches is a run-time question exactly then. "Overridden
+   * anywhere" is a closed-world property, and the back end may ask it because it sees the whole program.
+   */
+  test "a default an implementation overrides stays a slot, and the override wins at run time" {
+    const source = r"""
+      trait Sized {
+        fn size(self): Int
+
+        fn doubled(self): Int {
+          size() * 2
+        }
+      }
+
+      type Small with Sized {
+        amount: Int
+
+        fn size(self): Int {
+          amount
+        }
+      }
+
+      type Fixed with Sized {
+        fn size(self): Int {
+          1
+        }
+
+        fn doubled(self): Int {
+          99
+        }
+      }
+
+      fn doubledOf(value: Sized): Int {
+        value.doubled()
+      }
+
+      fn used(): Int {
+        doubledOf(Small(2)) + doubledOf(Fixed())
+      }
+      """
+    assert(unsupportedIn(source) == [])
+    assert(
+      irOf(source, "t_acme_x2f_app_main_doubledOf") == r"""
+        fn t_acme_x2f_app_main_doubledOf(value: Object(Sized) borrowed) -> Int64 {
+          slot %0 parameter value: Object(Sized)
+          slot %1 temporary: Int64
+        b0: # acme/app/src/main.trb:27 body
+          %1 = callWitness value %0 bound 0 member 1()
+          return %1 borrowed
+        }"""
+    )
+    const text = textOf source
+    // The implementation that overrides points at its own member, the one that does not at the default for its type
+    assert(
+      text.contains(
+        "witness w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Fixed Sized for Record(T_acme_x2f_app_main_Fixed)"
+          + " members(t_acme_x2f_app_main_Fixed_size, t_acme_x2f_app_main_Fixed_doubled) nested()"
+      )
+    )
+    assert(
+      text.contains(
+        "witness w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small Sized for Record(T_acme_x2f_app_main_Small)"
+          + " members(t_acme_x2f_app_main_Small_size,"
+          + " t_acme_x2f_app_main_Sized_doubled__T_acme_x2f_app_main_Small) nested()"
       )
     )
   }
@@ -275,5 +346,33 @@ group "What a generic call cannot reach yet" {
     const found = unsupportedIn source
     assert(found.joined(separator: "; ")
       == "not supported by the back end yet: `pick`, which is not in the witness table of a trait-typed value")
+  }
+
+  /**
+   * The backstop of the worklist. A generic function that calls itself with a **bigger** type argument has no finite
+   * instance set at all, and without a guard that is a build that never finishes rather than a message. The limit on the
+   * nesting depth of an instance's type arguments is deliberately generous (the deepest the repository really
+   * instantiates nests four), so nothing legitimate comes near it.
+   */
+  test "a type-growing instance ends in a finding and not in a hang" {
+    const source = r"""
+      type Pair<First, Second> {
+        first: First
+        second: Second
+      }
+
+      fn deepen<Value>(value: Value): Int {
+        deepen Pair(value, value)
+      }
+
+      fn used(): Int {
+        deepen 1
+      }
+      """
+    const found = unsupportedIn source
+    // The guard fires in the deepest instance; the caller then reports that it cannot build an instance of the callee
+    assert(found.length() == 2)
+    const guard = "not supported by the back end yet: the instances of `deepen` do not end:"
+    assert(found.any({ _.startsWith guard }))
   }
 }

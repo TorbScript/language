@@ -161,7 +161,18 @@ public type ListIterator<Item> with Iterator<Item> {
 public native type ArrayList<Item>
   with List<Item>, From<Iterable<Item>>
 {
-  native fn from(items: Iterable<Item>): ArrayList<Item>
+  /**
+   * Ordinary TorbScript, and it **cannot** be a function of the runtime: `items` is a trait-typed value of the
+   * *program*, so reading it means calling `iterator` and `next` through a witness table, which C code cannot do.
+   * `withCapacity` is what builds the empty buffer, and it is the one native the lowering answers itself - the element
+   * descriptor a buffer needs is a function of the language and no declaration can name one.
+   */
+  fn from(items: Iterable<Item>): ArrayList<Item> {
+    var result: ArrayList<Item> = ArrayList.withCapacity 0
+    result.addAll items
+    result
+  }
+
   native fn withCapacity(capacity: Int): ArrayList<Item>
 
   native fn length(self): Int

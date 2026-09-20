@@ -69,6 +69,7 @@ public fn summarizeParameters(var program: IrProgram) {
     return
   }
   applyManifest program
+  const erased = closureBodiesOf program
   const callers = callersOf program
   var queue: List<Int> = []
   var isQueued = filledFlags count, true
@@ -80,7 +81,7 @@ public fn summarizeParameters(var program: IrProgram) {
     const index = queue[cursor]
     cursor = cursor + 1
     isQueued.set index, false
-    if !promoteParameters(program, index) {
+    if !promoteParameters(program, index, erased[index]) {
       continue
     }
     for caller in callers[index] {
@@ -152,6 +153,35 @@ fn applyOwnedParameters(var program: IrProgram, index: Int, positions: List<Int>
   program.functions.set index, updated
 }
 
+/**
+ * The functions a `Closure` instruction points at: closure bodies, and named functions used as a value.
+ *
+ * Their parameters may **never** be promoted to `Owned`. A closure is called through `CallClosure`, whose callee is a
+ * *slot*, so no call site can read the summary of the function it will reach - and the type of a closure is the type of
+ * every closure of its shape (5.8's note), so the signature in the type cannot answer it either. A closure body that
+ * stored an argument would therefore consume a count nobody handed it, which is a double release: `Iterable.joined`
+ * builds `separator + item` and was exactly that.
+ *
+ * It costs one copy inside a closure that really stores an argument, which is BACKEND 2.1's own rule: getting the
+ * summary wrong costs speed, never correctness.
+ */
+fn closureBodiesOf(program: IrProgram): List<Bool> {
+  const count = program.functions.length()
+  var found = filledFlags count, false
+  for index in 0..count {
+    for block in program.functions[index].blocks {
+      for instruction in block.instructions {
+        if const .Closure(_, callee, _, _) = instruction {
+          if callee.value >= 0 && callee.value < count {
+            found.set callee.value, true
+          }
+        }
+      }
+    }
+  }
+  found
+}
+
 /** Which function calls which, so that a summary that grew only wakes the call sites it can change. */
 fn callersOf(program: IrProgram): List<List<Int>> {
   const count = program.functions.length()
@@ -178,10 +208,14 @@ fn callersOf(program: IrProgram): List<List<Int>> {
 }
 
 /** One function's summary, applied. Answers whether anything became `Owned` that was not. */
-fn promoteParameters(var program: IrProgram, index: Int): Bool {
+fn promoteParameters(var program: IrProgram, index: Int, isErased: Bool): Bool {
   const function = program.functions[index]
   // A function of the runtime has no body to read: the manifest is the whole answer
   if const .Runtime(_) = function.kind {
+    return false
+  }
+  // A function some `Closure` points at is reached through the erased ABI of a closure value, which borrows everything
+  if isErased {
     return false
   }
   const escaping = escapingSlots program, function
@@ -358,8 +392,42 @@ fn rewriteFunction(var program: IrProgram, index: Int) {
     function.blocks[block].terminator = rewritten.terminator
     endDrops.add rewritten.endDrops
   }
-  splitEdges function, counted, live, endDrops, blockCount
+  const conditional = conditionalOutSlotsOf program, function
+  splitEdges function, counted, live, endDrops, blockCount, conditional
   program.functions.set index, function
+}
+
+/**
+ * The slots a call filled through an **out parameter**, which the frame owns only where that call answered `true`.
+ *
+ * `torb_list_get(list, index, void *out)` writes nothing when the index is past the end, so the wrapper of the
+ * `.Optional` convention (`ir/lower/native.trb`) has one slot that is defined on one of its two paths. Liveness sees an
+ * ordinary definition and would release it on the edge the value was never written on - which is a release of a zeroed
+ * trait-typed value, whose `w0->drop` is a null pointer. The `then` path moves the value into the `Option` it builds, so
+ * excluding these slots from the edge drops is exact and not a leak.
+ */
+fn conditionalOutSlotsOf(program: IrProgram, function: IrFunction): List<Bool> {
+  var found = filledFlags function.slots.length(), false
+  for block in function.blocks {
+    for instruction in block.instructions {
+      if const .Call(_, callee, arguments, _, _) = instruction {
+        if callee.value < 0 || callee.value >= program.functions.length() {
+          continue
+        }
+        const parameters = program.functions[callee.value].signature.parameters
+        for index in 0..arguments.length().min(parameters.length()) {
+          if !parameters[index].isOut {
+            continue
+          }
+          const slot = arguments[index].slot
+          if slot.value >= 0 && slot.value < found.length() {
+            found.set slot.value, true
+          }
+        }
+      }
+    }
+  }
+  found
 }
 
 /**
@@ -775,6 +843,7 @@ fn splitEdges(
   live: LiveSets,
   endDrops: List<List<Slot>>,
   blockCount: Int,
+  conditional: List<Bool>,
 ) {
   for block in 0..blockCount {
     const targets = successorsOf function.blocks[block]
@@ -783,14 +852,14 @@ fn splitEdges(
     }
     if targets.length() == 1 {
       // A `jump` reads nothing, so a release at the end of the block is on the edge
-      const drops = dropsOnEdge counted, live, endDrops, block, targets[0]
+      const drops = dropsOnEdge counted, live, endDrops, block, targets[0], conditional
       for slot in drops {
         function.blocks[block].instructions.add(Instruction.Release(slot))
       }
       continue
     }
     for position in 0..targets.length() {
-      const drops = dropsOnEdge counted, live, endDrops, block, targets[position]
+      const drops = dropsOnEdge counted, live, endDrops, block, targets[position], conditional
       if drops.isEmpty() {
         continue
       }
@@ -814,6 +883,7 @@ fn dropsOnEdge(
   endDrops: List<List<Slot>>,
   block: Int,
   target: Int,
+  conditional: List<Bool>,
 ): List<Slot> {
   var drops: List<Slot> = []
   if target >= 0 && target < live.liveIn.length() {
@@ -821,7 +891,11 @@ fn dropsOnEdge(
     const arriving = live.liveIn[target]
     for position in 0..counted.width() {
       if leaving[position] && !arriving[position] {
-        drops.add counted.slots[position]
+        const slot = counted.slots[position]
+        if slot.value < conditional.length() && conditional[slot.value] {
+          continue
+        }
+        drops.add slot
       }
     }
   }

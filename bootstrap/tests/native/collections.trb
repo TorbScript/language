@@ -1,0 +1,171 @@
+use Process from "std/process"
+
+/**
+ * The list of the language, natively: the literal, what its element type may be, `for`, `a[key]`, growth, and the
+ * **copy on write** that makes a collection a value.
+ *
+ * Three rounds of 5.7 built the collections and none of them ran one, which is what this program is for. Everything it
+ * prints has to be byte for byte what stage 0 prints, and it has to leave `live blocks at exit: 0` - a list is a counted
+ * buffer, so every one of these lines is also a test of `Retain`, `Release` and `MakeUnique`.
+ */
+
+type Point with Show {
+  x: Int
+  y: Int
+}
+
+type Shape with Show {
+  case Dot
+  case Line(length: Int)
+}
+
+/** The literal over every shape of element: a number, a counted `String`, a record, a case of an ADT, and a list. */
+fn literals() {
+  const numbers = [1, 2, 3]
+  print numbers
+  const words = ["a", "bb", "ccc"]
+  print words
+  const points = [Point(1, 2), Point(3, 4)]
+  print points
+  const shapes = [Shape.Dot, Shape.Line(7)]
+  print shapes
+  const nested = [["x"], ["y", "z"], []]
+  print nested
+  const empty: List<Int> = []
+  print empty
+  print empty.length()
+}
+
+/** `for` over a list, over the same list as a trait-typed `Iterable`, and with `break` and `continue`. */
+fn loops() {
+  const numbers = [1, 2, 3, 4, 5]
+  var sum = 0
+  for value in numbers {
+    sum = sum + value
+  }
+  print sum
+  print walked(numbers)
+  var first = 0
+  for value in numbers {
+    first = value
+    break
+  }
+  print first
+  var odd = 0
+  for value in numbers {
+    if value % 2 == 0 {
+      continue
+    }
+    odd = odd + value
+  }
+  print odd
+  var texts = ""
+  for text in ["a", "b"] {
+    texts = texts + text
+  }
+  print texts
+}
+
+/** The subject is erased to `Iterable<Int>` here, so the loop pulls through the nested table of `List<Int>`. */
+fn walked(values: Iterable<Int>): Int {
+  var count = 0
+  for _ in values {
+    count = count + 1
+  }
+  count
+}
+
+/** `a[key]` is `Indexed.at`, whose body is `get(key).expect(...)` - one default of `std/core` for every back end. */
+fn reads() {
+  const numbers = [10, 20, 30]
+  print numbers[0]
+  print numbers[2]
+  const words = ["a", "bb"]
+  print words[1]
+  print numbers.first()
+  print numbers.last()
+  print numbers.length()
+}
+
+/** `add` in a loop: the buffer doubles, which is the one place a list really allocates. */
+fn growth() {
+  var numbers: List<Int> = []
+  for value in 0..40 {
+    numbers.add value
+  }
+  print numbers.length()
+  print numbers[39]
+  var texts: List<String> = []
+  for value in 0..5 {
+    texts.add value.show()
+  }
+  print texts
+}
+
+/**
+ * **Copy on write.** A copy taken before a change keeps what it had, because a collection is a value - and the storage is
+ * shared until one of the two is written to, which is what `MakeUnique` is for.
+ */
+fn copies() {
+  var numbers = [1, 2, 3]
+  const before = numbers
+  numbers.add 4
+  print before.length()
+  print numbers.length()
+  print before
+  print numbers
+  var texts = ["a"]
+  const keptTexts = texts
+  texts.add "b"
+  print keptTexts
+  print texts
+}
+
+type Holder {
+  var items: List<Int>
+}
+
+/** The same through a field: the path is `holder.items`, and both owners are made unique before the write. */
+fn throughField() {
+  var holder = Holder([1, 2])
+  const before = holder
+  holder.items.add 3
+  print before.items.length()
+  print holder.items.length()
+}
+
+/** And the same through a `var` parameter, where the callee writes into the caller's storage. */
+fn appended(var numbers: List<Int>) {
+  numbers.add 99
+}
+
+fn throughParameter() {
+  var numbers = [1, 2]
+  const before = numbers
+  appended numbers
+  print before.length()
+  print numbers.length()
+  print numbers[2]
+}
+
+/** A closure pipeline: the lazy stages are values, and the terminal operation pulls the values through. */
+fn pipeline() {
+  const numbers = [1, 2, 3, 4, 5]
+  print numbers.map({ _ * 2 }).toList()
+  print numbers.filter({ _ % 2 == 1 }).toList()
+  print numbers.fold(0, { total, value => total + value })
+  print numbers.map({ _.show() }).joined(separator: "-")
+  print numbers.filter({ _ > 2 }).map({ _ * 10 }).fold(0, { total, value => total + value })
+  print numbers.map({ Point _, _ }).toList()
+}
+
+literals()
+loops()
+reads()
+growth()
+copies()
+throughField()
+throughParameter()
+pipeline()
+
+Process.exit 0

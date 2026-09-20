@@ -111,8 +111,6 @@ void torb_list_set(torb_list *list, int64_t index, const void *value, torb_locat
 torb_list torb_list_slice(torb_list list, int64_t from, int64_t to, torb_location at);
 /* ArrayList.sort, TrieList.sort */
 void torb_list_sort(torb_list *list, torb_compare_function compare, void *context);
-/* ArrayList.withCapacity, TrieList.withCapacity */
-torb_list torb_list_with_capacity(const torb_element *element, int64_t capacity, torb_location at);
 /* HashMap.clear, TrieMap.clear */
 void torb_map_clear(torb_map *map);
 /* HashMap.get, TrieMap.get */

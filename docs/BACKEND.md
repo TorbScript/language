@@ -833,7 +833,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
 | **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `bootstrap/tests/native/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
 | **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `bootstrap/tests/native/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
-| **5.7** | **Most of the way.** The ABI of the containers (the two conventions of `runtime/` as a generated wrapper), `var self` natives and `var self` members of a **trait-typed value** with the payload box made unique, the witness of a value as a *place*, `ArrayList.iterator` as TorbScript, element descriptors, `ContainerNew`, the list and map **literals**, the `finish` provider lookup, `a[key]` reads, `for` over a collection, and a range as a value. **Still open:** the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention), `ArrayList.from`, nested tables, index paths, `Range.iterator` (which waits for a bound on the instance set). **Gate: `language.trb` passes** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb` | `bootstrap/tests/native/{natives,reassignment,trait-values}.trb`, `compiler/tests/{lower-natives,ir-elements}.test.trb`; language.trb and `07-collections.trb` still blocked | 5.3, 5.6, 5.8 |
+| **5.7** | **The lists run.** The ABI of the containers, `var self` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterator`/`length`/`show` as TorbScript. **Still open:** the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention, which also blocks every map and set literal), index paths, variadics and the spread, list patterns, `String.chars`. **Gate: `bootstrap/tests/native/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `bootstrap/tests/native/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
 | **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `bootstrap/tests/native/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
 | **5.9a** | **Done.** `var` parameters and `var self` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
@@ -1800,6 +1800,127 @@ first, plus the two findings that were hiding behind each other.
   of now exists - but `withCapacity` has no element descriptor in its declaration, so the wrapper has nowhere to get one
   and `ContainerNew` is the instruction that does. Closing it is `ContainerNew` plus `addAll`, and it is the next step of
   this row together with the map cursor.
+
+**The fourth round: what bounds the instance set, and the first collections that really run.** The third round measured
+a worklist that does not end; this round decides why, and then writes the gate programs that three rounds had not
+written.
+
+- **Decision: a default member that no implementation in the program overrides is not a slot of a witness table.** It is
+  dispatched statically with `Self` bound to the **trait type** of the erased value - the mechanism 5.6 and 5.8 already
+  use for a default with generic parameters of its own (`map<Output>` on a trait-typed receiver), and `dynamicDispatch`
+  already had the fallback. It is sound because a default body reaches `self` only through the members of its own trait,
+  so one instance per trait type serves every implementer, and what runs is what would have run anyway: nobody overrides
+  it. This is Rust's `where Self: Sized` on `Iterator::enumerate`, arrived at from the other side. A default that some
+  implementation **does** override stays a slot (which of the two runs is a run-time question, 5.6's decision 3), and an
+  implementer that does not override it keeps pointing its slot at the per-type instance of the default body - the
+  simpler of the two shapes the note allowed, and the one that was already there.
+- **"Overridden anywhere in the program" is a closed-world question, and the back end may ask it.** It sees the whole
+  program: C is one translation unit, and the VM loads whole modules. `collectOverriddenMembers` in `ir/witness.trb`
+  walks every implementation once and collects every name a member can be answered under - the members of an
+  `extend ... with` block, the body of a `type ... with`, and the body of the implementation's *target*, which
+  `providerOf` reaches too. It **over-approximates on purpose**: reading a name as an override that nothing really
+  overrides costs one slot in one table, while missing one would run the default where the override belongs, which is
+  observable. Two exclusions are load bearing and both were measured rather than guessed. A target whose head is a
+  **trait** contributes nothing, or `extend<Item: Show> List<Item> with Show` would name every default of `List` and the
+  decision would be a no-op. And the **fields** of a target are not in it although `providerOf` answers a member with
+  one: a field is not a method and cannot be the body of a default, and one field of the compiler's own `WellKnown` is
+  called `indexed` - which put `Iterable.indexed` straight back into every table and brought the non-terminating worklist
+  back with it (the tripwire measured 967 declarations and eight `do not end` findings until the fields came out). For
+  separately compiled packages later this means the table layout of a trait is fixed **per program** - which it already
+  is, because a table is emitted with the program that uses it and its member order is computed from the same closed
+  world.
+- **The effect, measured.** The instance-count tripwire of `compiler/tests/lower.test.trb` went from 208 declarations /
+  258 functions / 20 witness tables / 2 element descriptors to **78 / 108 / 24 / 2** - a quarter of the functions, and
+  more tables only because the *nested* ones below are built now. Over the whole repository `torb ir --statistics ..`
+  went from 15257 of 17250 (88%) to **8301 of 9182 (90%)**: the *total* is what halved, because every collection's table
+  used to drag every default of `Iterable`, `Collection`, `MutableIndexed`, `Length` and `Accumulator` in per element
+  type. The 705 `Range.iterator` findings and the 140 `ArrayList.from` findings are gone (both are TorbScript now), the
+  `a[key]` assignment finding of `List.swapAt` and `List.updated` is gone from every table (neither is instantiated at
+  all any more), and the wall time of `torb ir --statistics ..` fell from 1m53s to 1m39s.
+- **The backstop, for the case the decision does not cover.** An overridden default that is itself type-growing would
+  still not end, so `boundedArguments` in `ir/instances.trb` refuses an instance whose type argument nests deeper than
+  **10** and reports "the instances of `deepen` do not end: its type argument `...` nests deeper than 10" at the
+  declaration. The deepest argument the repository really instantiates nests four, so nothing legitimate comes near it,
+  and a test pins that a self-growing generic function ends in that finding instead of in a hang.
+- **`Show` of a collection was unreachable for a reason that has nothing to do with tables.** `showSlot` in
+  `ir/lower/text.trb` looked a trait-typed value's `show` up in the value's **own** tables and reported otherwise -
+  while the whole point of `extend<Item: Show> List<Item> with Show` is that the implementation is for the **trait
+  type**, which is a static call. 5.10 taught `dynamicDispatch` exactly that fallback and this one place kept asking only
+  the tables, so `print numbers` and `"{numbers}"` were refused for every collection in the language. It is the same two
+  lines here now.
+- **Nested witness tables are built** (5.6 left `nested` empty and named this as what needs it). `nestedTablesOf` fills
+  one entry per **direct** supertrait, in the order of `supertraitsOfBound`, and `narrowingPathOf` walks that DAG to find
+  the bound index plus the `nested` indices a coercion has to follow; the emitter renders a step as `->nested[i]`. The
+  indices are a property of the **trait** and of nothing the value erased, which is exactly why a narrowing works at all.
+  Two things fell out of building them: a supertrait whose own table cannot be built leaves a **hole** (a null pointer, and
+  the narrowing that would have read it is a clean finding, which is what `Lowering.isSilent` is for), and the tables are
+  emitted in **topological** order rather than by name alone, because the initializer of a `static const` takes the
+  address of its nested tables and a tentative definition of a `const` object is not portable C (MSVC refuses one). The
+  order is still a pure function of the set: the name-smallest table whose nested tables are all placed goes next.
+- **`ArrayList.from` is TorbScript, and `withCapacity` is the one native the lowering answers itself.**
+  `NativeTarget.Container(kind)` is a new manifest target that means `Instruction.ContainerNew`: `torb_list_new` needs one
+  element descriptor per type argument, and no declaration of `std/` can name one, so this cannot be a `native fn` at all
+  (the third round wrote that down). `ArrayList.from` is then
+  `var result: ArrayList<Item> = ArrayList.withCapacity 0  result.addAll items  result`, which is what unblocks
+  `toList()`, `to<List<Item>>()` and `Iterable.to`. The capacity is dropped for now: it is a hint, and giving
+  `ContainerNew` an operand would change the instruction in both back ends for something that is not observable.
+  `TrieList.from`, `TrieSet.from`, `TrieMap.from` and `HashSet.from` stay `.Planned` - the tries need the trie, and the
+  hash containers need the cursor below.
+- **`ArrayList.withCapacity(0)` also needed the *type* of a static member of a generic type.** `ArrayList.from` calls it
+  on `ArrayList` written as a bare name, and what the checker records in front of the dot is the type of the type's
+  **constructor** (`(capacity: Int) => ArrayList<Item>`). 5.7's first round made `closedReceiver` answer `None` for a
+  function type, which was right for `Int.parse` (`Int64` has no arguments) and leaves a *generic* owner with nothing:
+  `constructedReceiver` takes the constructor's **result** as the type the member is reached on, and only where its head
+  is the head of the member's own owner - so `show` on a closure value is still not dispatched on the closure's result.
+- **`Range<Int>.iterator` and `length` are TorbScript** (`RangeIterator` in `std/core/src/range.trb`, 20 lines), which is
+  what the third round could not do because the instance set diverged. `Show` of a `Range` is an
+  `extend<Value: Show> Range<Value> with Show` that writes the **source** form (`0..10`, `0..=10`, `..10`, `0..`), and the
+  `.Derived` manifest entry for `Range.show` is gone. **`Equals` and `Hash` stay where they are**, although the derived
+  body of either needs `Value: Equals` or `Value: Hash` for the two `Option<Value>` fields and is in that sense as
+  conditional as `Show` was. The difference is what the derived answer *says*: field by field is the right answer for
+  both, so a `Range<Value>` whose `Value` cannot be compared is a clean finding inside a generated body and never a wrong
+  one - while a structural `Show` printed `Range(start: Some(0), end: Some(10), inclusive: false)`, which is not what a
+  reader writes and not what stage 0 prints. Keeping stage 0
+  identical needed two fields on its own `Range`: whether a start was written, and whether the range was inclusive - it
+  normalized both away and printed `0..7` for `..7` and `1..4` for `1..=3`. A range of anything but `Int` is still a value
+  stage 0 cannot build at all, which is one more entry on 5.14's list.
+- **Four bugs the gate programs found, and every one of them is the kind only running finds.**
+  - **A witness thunk borrowed everything.** The erased ABI borrows the payload and every argument, because a call site
+    knows the member's index and not its declaration - but the real member may take one **owned**: the `self` of
+    `ArrayList.iterator`, whose `ListIterator` stores the list, and the value of `ArrayList.add`, which the buffer keeps.
+    The thunk is where the counts are made now (the payload through a local of its own, because a read-only member's box
+    is `const`). Without it `for x in list` and `list.add(text)` released the same block twice.
+  - **A closure body's parameter may never be `Owned`.** `CallClosure`'s callee is a *slot*, so no call site can read the
+    summary of the function it will reach, and the type of a closure is the type of every closure of its shape (5.8's
+    note) - so the signature in the type cannot answer it either. `summarizeParameters` skips every function a `Closure`
+    instruction points at, which also covers a named function used as a value. `Iterable.joined` builds
+    `separator + item` and was exactly that.
+  - **The out parameter of a `.Optional` wrapper is owned on one path only.** `torb_list_get` writes nothing past the end,
+    so liveness released a slot the runtime never wrote - which for a trait-typed element is `NULL->drop`. Both the drop
+    edges (`conditionalOutSlotsOf`) and the ownership verifier (`conditionalOutPositions`) know it now; the `true` path
+    moves the value into the `Option` it builds, so there is nothing to leak.
+  - **`type Point with Show {}` declares the implementation and writes no member.** The checker accepts that for a trait
+    the language derives, and the back end only generated a body for an implementation the *checker* had created - the
+    origin of an implementation says who wrote it down, not who writes the body.
+- **The gate is not `language.trb`**, and it cannot be: like `basics.trb` before it, it is a stage-0 **script** and not a
+  checked program. Eleven of its lines are refused by the type checker itself and by no back end - `onStart { "...{port}" }`
+  captures `var self` in a closure that may outlive the call, `print counters.map({ _.count })` asks `Iterable<Int>` for
+  `Show`, `samples[1..4].sort()` calls `sort` without its `by`, `Seconds` implements none of `Add`, `Compare` or
+  `Subtract`, `match` does not handle `[_, _, ...]`, and `visit`/`seen`/`limit`/`toMap` are names that are not there. So
+  5.7's row needs a gate that is a program: `bootstrap/tests/native/{collections,ranges,collection-index}.trb` are it -
+  the literals of every element shape, `for` over a list and over a trait-typed `Iterable` with `break` and `continue`,
+  `a[key]` and its panic (exit 101, the message of `Indexed.at` and therefore the language's own), growth over the
+  doubling of the buffer, copy on write through a local, a field and a `var` parameter, the closure pipelines, and a range
+  in all four spellings. Each is compiled, run, compared with stage 0 byte for byte and asserted to leave zero live
+  blocks. **`examples/tour/src/07-collections.trb` is two findings away**, and both are the index *places* of the next
+  step: `numbers[0] = 5` and `swapAt`'s `var` argument through `a[key]`.
+- **What is left of the row, measured on this tree.** "A declaration the back end cannot build an instance of" (260, the
+  biggest single blocker left and not yet diagnosed), the index paths of 5.9b (155 + 34 + 11), `TrieMap.iterator` (137,
+  the map and set cursor with its `bool`-plus-two-outs convention, which also blocks **every map and set literal**:
+  `iterator` is required by `Iterable`, so the table of `Map<Key, Value>` cannot be built at all and `["a": 1]` does not
+  lower), `String.chars` (31), `sort` on a trait-typed value (20), the variadic parameters and arguments (8 + 5), and the
+  list patterns (8). The `print` interception of 5.10 therefore still stands, because a variadic parameter is still a
+  finding.
 
 **The first round's chain, for the record.** The row of the table says 5.7 depends on 5.8, and this is why - the chain is
 longer than "the pipelines need closures":

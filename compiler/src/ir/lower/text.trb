@@ -138,16 +138,16 @@ public fn showSlot(
         return unsupportedSlot lowering, builder, None, "`Show.show`, which the prelude does not declare", at
       }
     }
-    const found = match memberInValue(lowering, bounds, subject, Reference(value, []), member) {
-      Some(inner) => inner
-      None => {
-        const what = "`show`, which is not in the witness table of a trait-typed value"
-        return unsupportedSlot lowering, builder, None, what, at
-      }
+    // A member that is in none of the value's own tables is not a dead end: a trait the value does not carry may be
+    // implemented **for its trait type**, and `extend<Item: Show> List<Item> with Show` of the prelude is exactly that -
+    // so `"{list}"` on a `List<Item>` value is a *static* call of that implementation. `dynamicDispatch` asks the same
+    // question for every other member (5.10's note); this one asked only the tables, which is why no collection could be
+    // printed at all
+    if const Some(found) = memberInValue(lowering, bounds, subject, Reference(value, []), member) {
+      const none: List<Slot> = []
+      emit builder, Instruction.CallWitness(Some(target), found.source, found.member, borrowedArguments(none))
+      return target
     }
-    const none: List<Slot> = []
-    emit builder, Instruction.CallWitness(Some(target), found.source, found.member, borrowedArguments(none))
-    return target
   }
   const called = match memberOfType(lowering, subject, bound, "show", at) {
     Some(found) => found

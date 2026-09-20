@@ -8,6 +8,7 @@ use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
 use NativeEntry, DerivedKind from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
+use RuntimeKind from "../ir"
 use CallOperands, PlacePath from "./place"
 use referenceParametersOf, parameterTypeAt, receiverReference, argumentReference from "./place"
 use collidesWithPlace, writtenResult, lowerPropertyWrite, makeOwnersUnique from "./place"
@@ -18,7 +19,7 @@ use memberInValue, derivedKindOf, generatedKindOf from "../witness"
 use generatedFunctionOf from "./derive"
 use instanceFor, needsReference, isMonomorphic from "../instances"
 use nativeFunctionOf from "./native"
-use Lowering, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
+use Lowering, Generated, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
 use isNeverType, finishBlock, borrowedArguments from "./context"
 use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use variantIndexOf from "./match"
@@ -400,7 +401,31 @@ fn lowerNativeCall(
       }
       emitCall lowering, builder, destination, generated, operands, annotation, at
     }
+    // The empty container: one `ContainerNew` in a generated body, because the element descriptors are the lowering's
+    .Container(kind) => {
+      const built = match containerMemberOf(lowering, dispatched, kind, at) {
+        Some(found) => found
+        None => {
+          return abandonedSlot lowering, builder, destination
+        }
+      }
+      emitCall lowering, builder, destination, built, operands, annotation, at
+    }
   }
+}
+
+/** The generated body of `ArrayList.withCapacity` and friends: one per implementation per element type. */
+fn containerMemberOf(
+  var lowering: Lowering,
+  dispatched: Dispatched,
+  kind: RuntimeKind,
+  at: Span,
+): FunctionId? {
+  const subject = dispatched.subject?
+  const member = dispatched.member
+  const bound = dispatched.capability
+  const mapping = dispatched.mapping
+  generatedFunctionOf lowering, Generated.Container(kind), member, subject, bound, mapping, at
 }
 
 /**
@@ -1196,5 +1221,7 @@ fn lowerNativeOperator(
       }
       emitCall lowering, builder, destination, generated, operands, annotation, at
     }
+    // No operator of the language builds a container, so nothing reaches this
+    .Container(_) => unsupportedSlot lowering, builder, destination, "`{entry.name}` as an operator", at
   }
 }

@@ -7,7 +7,7 @@ use Checker from "../../semantics/checker/context"
 use NativeEntry, nativeEntries from "../../backend/c/natives"
 use IrProgram, IrTypeId, IrType, Slot, BlockId, StaticId, StaticValue, StaticContents from "../ir"
 use Location, LocationId, Terminator, Argument, Reference, borrowed, referenced from "../ir"
-use FunctionId, Intrinsic from "../ir"
+use FunctionId, Intrinsic, RuntimeKind from "../ir"
 use substitute from "../../semantics/checker/unify"
 use Instantiation, newInstantiation, instantiateType from "../instantiate"
 use canonicalType, canonicalLiteral, escapedComponent, mangledName from "../mangle"
@@ -71,6 +71,12 @@ public type Generated {
   /** `String.show()` is the text itself, `Void.equals` is always true: the argument, or one constant. */
   case Identity
   case Copy
+  /**
+   * An empty container over the element descriptors of the owner's type arguments: `ArrayList.withCapacity` and friends.
+   * It is `Instruction.ContainerNew` and can be nothing else, because `torb_list_new` needs a descriptor and no
+   * declaration of `std/` can name one.
+   */
+  case Container(kind: RuntimeKind)
 }
 
 /** One generated member that is known to be needed and not built yet. */
@@ -170,6 +176,12 @@ public type Lowering {
   var optionalReceiverTypes: Map<Span, TypeId> = [:]
   /** `false` once the function that is being lowered hit a construct the back end does not support yet. */
   var isSupported: Bool = true
+  /**
+   * Whether a finding is swallowed. Exactly one thing sets it: the **nested** tables of a witness table, which are built
+   * because some *other* coercion might narrow through one and may therefore not blame the value that is being boxed
+   * (`nestedTablesOf` in `ir/witness.trb`).
+   */
+  var isSilent: Bool = false
   /** Control cannot reach the end of the current block any more: `return`, `break`, `continue`, a panic. */
   var isDiverged: Bool = false
   /** Where a `break` and a `continue` of the innermost loop go, innermost last. */
@@ -208,6 +220,13 @@ public type Lowering {
   var nativeWrappers: Map<String, FunctionId> = [:]
   /** The witness tables that are being built right now: a supertrait that leads back to its own subtrait. */
   var buildingTables: Map<String, Bool> = [:]
+  /**
+   * The names under which some implementation of the program declares a member, which is the **closed-world** question
+   * "does anything override this default" (`ir/witness.trb`, `overridesAnyMember`). Built once, from the whole program,
+   * because the layout of a table has to be the same for every implementer of its trait.
+   */
+  var overriddenMembers: Map<String, Bool> = [:]
+  var overriddenMembersAreKnown: Bool = false
   /** The static value of every module constant, by `SymbolId.value`. */
   var constants: Map<Int, StaticId> = [:]
   /** The constants whose initializer is being evaluated right now: a `const` in terms of itself is a cycle. */
@@ -239,7 +258,7 @@ public fn newLowering(checker: Checker, paths: List<String>): Lowering {
  * root cause gets one message - the same rule the checker's diagnostics follow.
  */
 public fn reportUnsupported(var lowering: Lowering, what: String, at: Span) {
-  if !lowering.isSupported {
+  if lowering.isSilent || !lowering.isSupported {
     return
   }
   lowering.isSupported = false

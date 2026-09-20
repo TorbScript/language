@@ -581,9 +581,12 @@ impl Interpreter {
                         ),
                     }
                 };
-                let start = bound(self, start)?.unwrap_or(0);
+                let written = bound(self, start)?;
                 let end = bound(self, end)?.map(|end| if *inclusive { end + 1 } else { end });
-                Ok(Value::Range(Range { start, end }))
+                // The ends are normalized, because everything that *uses* a range wants them that way; the two flags are
+                // how the range is shown, which is the form the source wrote (`..7`, `1..=3`) and what the compiled back
+                // end's own `Show` writes
+                Ok(Value::Range(Range { start: written.unwrap_or(0), end, has_start: written.is_some(), inclusive: *inclusive }))
             }
             ExpressionKind::Closure(closure) => {
                 Ok(Value::Function(Rc::new(Function::Closure(Closure { ast: closure, environment: environment.clone(), signature: None }))))
@@ -2007,8 +2010,16 @@ impl Interpreter {
             // A label is not part of a tuple's type (gap 17), so it is not in the layout the compiled back end shows
             // from either: `(lowest: 1, highest: 9)` and `(1, 9)` are one type and therefore one shown form
             Value::Tuple(tuple) => format!("({})", self.show_all(tuple.items.iter())?),
-            Value::Range(Range { start, end: Some(end) }) => format!("{start}..{end}"),
-            Value::Range(Range { start, end: None }) => format!("{start}.."),
+            // The source form, exactly as `std/core/src/range.trb` writes it: `0..10`, `0..=10`, `..10`, `0..`
+            Value::Range(range) => {
+                let first = if range.has_start { range.start.to_string() } else { String::new() };
+                let dots = if range.inclusive { "..=" } else { ".." };
+                let last = match range.end {
+                    Some(end) => if range.inclusive { (end - 1).to_string() } else { end.to_string() },
+                    None => String::new(),
+                };
+                format!("{first}{dots}{last}")
+            }
             Value::Option(None) => "None".to_string(),
             Value::Option(Some(value)) => format!("Some({})", self.show(value, false)?),
             Value::Result(Ok(value)) => format!("Ok({})", self.show(value, false)?),

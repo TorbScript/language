@@ -1,6 +1,6 @@
 use LiteralValue from "../../semantics/checker/type"
 use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue, FunctionId from "../../ir/ir"
-use Slot, Instruction, WitnessTable, WitnessTableId from "../../ir/ir"
+use Slot, Instruction, WitnessTable, WitnessTableId, Ownership from "../../ir/ir"
 use ElementId, ElementDescriptor from "../../ir/ir"
 use Layout, FieldLayout, containsCountedType from "../../ir/layout"
 use typeOfReference from "../../ir/verify"
@@ -227,7 +227,13 @@ fn emitWitnessTables(var emission: Emission, program: IrProgram) {
   }
 }
 
-/** The tables sorted by their mangled name, so that neither the C nor the thunk order depends on the lowering. */
+/**
+ * The tables sorted by their mangled name, so that neither the C nor the thunk order depends on the lowering - except
+ * that a table whose `nested` list names another one has to come **after** it: the initializer of a `static const`
+ * takes the address of the nested tables, and a tentative definition of a `const` object is not portable C (MSVC
+ * refuses one). The supertrait relation is a DAG, so picking the name-smallest table whose nested tables are all placed
+ * is a total order and still a pure function of the set.
+ */
 fn witnessTableOrder(program: IrProgram): List<WitnessTableId> {
   var names: List<String> = []
   var byName: Map<String, Int> = [:]
@@ -241,12 +247,35 @@ fn witnessTableOrder(program: IrProgram): List<WitnessTableId> {
   var sorted = names
   sorted.sort({ _ })
   var order: List<WitnessTableId> = []
+  var placed: Map<Int, Bool> = [:]
   for name in sorted {
     if const Some(index) = byName.get(name) {
-      order.add WitnessTableId(index)
+      addWitnessTableAfterNested program, order, placed, WitnessTableId(index), 0
     }
   }
   order
+}
+
+/** One table and everything its `nested` list names, deepest first. The depth guard is the last resort against a cycle. */
+fn addWitnessTableAfterNested(
+  program: IrProgram,
+  var order: List<WitnessTableId>,
+  var placed: Map<Int, Bool>,
+  id: WitnessTableId,
+  depth: Int,
+) {
+  if placed.containsKey(id.value) || depth > 12 {
+    return
+  }
+  placed.set id.value, true
+  for inner in program.witnessTableAt(id).nested {
+    if const Some(found) = inner {
+      if program.hasWitnessTable(found) {
+        addWitnessTableAfterNested(program, order, placed, found, depth + 1)
+      }
+    }
+  }
+  order.add id
 }
 
 /** `W_..._0`: the thunk of one member of one table. `W` is no prefix of the mangling, so nothing can collide with it. */
@@ -316,14 +345,34 @@ fn emitThunks(var emission: Emission, program: IrProgram, table: WitnessTable) {
       Some(found) => payloadFieldOf program, found
       None => CExpression.Name "box"
     }
-    var given = [if writes { CExpression.AddressOf unwrapped } else { unwrapped }]
-    for position in 1..function.signature.parameters.length() {
-      given.add CExpression.Name("a{position}")
-    }
-    const called = CExpression.Call CExpression.Name(function.name), given
     var body: List<CStatement> = []
     const cast = CExpression.Cast spelling, CExpression.Name("self")
     body.add CStatement.Declaration(spelling, "box", Some(cast))
+    // **The erased ABI borrows every operand**, because a call site knows the member's index and not its declaration:
+    // `CallWitness` hands over `value.data` and the arguments as they are and keeps its own counts. A parameter the real
+    // member takes **owned** - the `self` of `ArrayList.iterator`, whose `ListIterator` stores the list, and the value of
+    // `ArrayList.add`, which the buffer keeps - would consume a count nobody handed over, and the caller's own release
+    // would then free the block twice. So the thunk is where the counts are made, which is also the one place that knows
+    // both conventions. The payload needs a local of its own because a read-only member's box is `const`; an ordinary
+    // parameter is already a local of the thunk and is retained in place
+    const receiver = match retainedReceiverOf(program, table, index) {
+      Some(statement) => {
+        const annotation = valueTypeOf program, function.signature.parameters[0].annotation
+        body.add CStatement.Declaration(annotation, receiverName, Some(unwrapped))
+        body.add statement
+        CExpression.Name receiverName
+      }
+      None => if writes { CExpression.AddressOf unwrapped } else { unwrapped }
+    }
+    var given = [receiver]
+    for position in 1..function.signature.parameters.length() {
+      const argument = CExpression.Name "a{position}"
+      if const Some(statement) = retainedArgumentOf(program, function, position, argument) {
+        body.add statement
+      }
+      given.add argument
+    }
+    const called = CExpression.Call CExpression.Name(function.name), given
     if isVoidResultOf(program, function.signature.result) {
       body.add CStatement.Evaluate(called)
       body.add CStatement.Return()
@@ -332,6 +381,40 @@ fn emitThunks(var emission: Emission, program: IrProgram, table: WitnessTable) {
     }
     write emission, CDeclaration.Definition("", head, body)
   }
+}
+
+/** The local a thunk hands an **owned** receiver over in. Named once, because the body writes it twice. */
+const receiverName = "owned_self"
+
+/**
+ * The retain a thunk owes its payload, where the member takes `self` by value and **owned**. `None` for a borrowing
+ * member, for a `var self` one (a reference carries no count) and for a payload that is not counted at all.
+ */
+fn retainedReceiverOf(program: IrProgram, table: WitnessTable, index: Int): CStatement? {
+  const function = program.functionAt table.members[index]
+  const parameter = function.signature.parameters.first()?
+  if parameter.isReference || parameter.ownership != Ownership.Owned {
+    return None
+  }
+  retainStatement program, parameter.annotation, CExpression.Name(receiverName)
+}
+
+/**
+ * The retain a thunk owes one of its own parameters, where the member takes it **owned**: the thunk's parameter is an
+ * ordinary local, so it is retained in place and handed on. `ArrayList.add` is the one that needs it - the buffer keeps
+ * the value - and without it `list.add(text)` through a table released the text twice.
+ */
+fn retainedArgumentOf(
+  program: IrProgram,
+  function: IrFunction,
+  position: Int,
+  argument: CExpression,
+): CStatement? {
+  const parameter = function.signature.parameters[position]
+  if parameter.isReference || parameter.ownership != Ownership.Owned {
+    return None
+  }
+  retainStatement program, parameter.annotation, argument
 }
 
 /** `box->f_value`: the payload the thunk unwraps out of the block a trait-typed value points at. */
@@ -366,11 +449,18 @@ fn emitWitnessTable(var emission: Emission, program: IrProgram, table: WitnessTa
   }
   var nested: List<CExpression> = []
   for inner in table.nested {
-    if !program.hasWitnessTable(inner) {
-      reportUnsupported emission, "a nested witness table that is not in the program"
+    const one = match inner {
+      Some(found) => found
+      None => {
+        nested.add CExpression.Literal("NULL")
+        continue
+      }
+    }
+    if !program.hasWitnessTable(one) {
+      nested.add CExpression.Literal("NULL")
       continue
     }
-    nested.add CExpression.AddressOf(CExpression.Name(program.witnessTableAt(inner).name))
+    nested.add CExpression.AddressOf(CExpression.Name(program.witnessTableAt(one).name))
   }
   const nestedName = "{table.name}_nested"
   if !nested.isEmpty() {

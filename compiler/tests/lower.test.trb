@@ -542,30 +542,29 @@ group "Real code" {
     assert found.program.problems.isEmpty()
     assert found.problems.isEmpty()
     // Nine declarations of the two files, plus the instances and the generated members the worklist reached from them
-    assert(found.lowered + found.stubbed == 208)
+    assert(found.lowered + found.stubbed == 78)
     // **The instance-count tripwire** (BACKEND section 7, "The instance count"). Monomorphization with `List<Item>`
     // everywhere can multiply, and what multiplies it is the **element type**: a container literal builds the witness
-    // table of `List<Item>`, and that one table drags in every default member of `Iterable`, `Collection`,
-    // `MutableIndexed`, `Length` and `Accumulator` for that one item type. These three numbers *are* the footprint - the
-    // functions, the tables and the descriptors - and they are asserted exactly so that an explosion fails a test
-    // instead of being noticed as a build time. What would bound them is in the note of 5.7.
-    assert(found.program.functions.length() == 258)
-    assert(found.program.witnessTables.length() == 20)
+    // table of `List<Item>`, and that table used to drag in every default member of `Iterable`, `Collection`,
+    // `MutableIndexed`, `Length` and `Accumulator` for that one item type. The fourth round of 5.7 keeps every default
+    // that nothing in the program overrides out of the tables, which took these numbers from 208 declarations / 258
+    // functions / 20 tables to a *quarter* of that. They *are* the footprint - the functions, the tables and the
+    // descriptors - and they are asserted exactly so that an explosion fails a test instead of being noticed as a
+    // build time.
+    assert(found.program.functions.length() == 108)
+    assert(found.program.witnessTables.length() == 24)
     assert(found.program.elements.length() == 2)
     var blocked: List<String> = []
     for entry in found.unsupported {
       blocked.add entry.what
     }
     blocked.sort({ _ })
-    // A list literal is lowered since 5.7 and a closure since 5.8, so what is left is the **members of the table** a
-    // `List<Item>` carries: `swapAt` writes through `a[key]`, `sort` hands one on as a `var` argument, `indexed` walks a
-    // `Range` and `Range.iterator` waits for a bound on the instance set, and `ArrayList.from` is the `.Planned` native
-    // that a function of the runtime cannot be at all (both in the note of 5.7)
+    // A list literal is lowered since 5.7 and a closure since 5.8, the defaults nothing overrides are out of the tables
+    // since the fourth round - so `swapAt`, `updated` and `indexed` are not instantiated at all any more - and
+    // `ArrayList.from` and `Range.iterator` are TorbScript. What is left is `sort`, which hands a place on as a `var`
+    // argument, and `String.chars`, which needs a wrapper around `torb_text_next_char`
     assert(blocked.joined(separator: "\n")
-      == "not supported by the back end yet: `ArrayList.from`, which the runtime provides from milestone 5.7 on\n"
-        + "not supported by the back end yet: `Range.iterator`, which the runtime provides from milestone 5.7 on\n"
-        + "not supported by the back end yet: `String.chars`, which the runtime provides from milestone 5.7 on\n"
-        + "not supported by the back end yet: a `var` argument through `a[key]` (milestone 5.7/5.9b)\n"
-        + "not supported by the back end yet: an assignment through `a[key]` (milestone 5.7/5.9b)")
+      == "not supported by the back end yet: `String.chars`, which the runtime provides from milestone 5.7 on\n"
+        + "not supported by the back end yet: a `var` argument through `a[key]` (milestone 5.7/5.9b)")
   }
 }

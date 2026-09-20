@@ -1112,3 +1112,45 @@ Wenn nicht, was bedeutet, bewirkt es?
     88 % sind gelowert, aber nie gelaufen. Runde 4 beginnt deshalb mit Gate-Programmen (inkl. Copy-on-Write-Beweis)
     für alles, was schon lowert, und behebt, was sie finden; danach Instanzmengen-Entscheidung, `ArrayList.from`,
     Map-/Set-Cursor, Index-Pfade, Varargs/Spread (dann fällt die `print`-Sonderbehandlung weg), Listen-Patterns.
+
+- (Checker-Konformitätsrunde 1, 2026-09-21) Gemergt (`bc0a413`): 1330 Tests, `check ..` ohne Probleme, volle
+  `cargo test` grün. Geschlossen: Trait-Wert ↔ konkreter Typ und Collection ↔ Skalar (eine Ursache: ein Trait-Typ
+  galt als "sagt nichts"), Spread in nicht-variadische Parameter, Exklusivität für Top-Level-`var`, `==`/`<`/
+  Interpolation/Operatoren fragen nach ihrem Trait (auch bei ungebundenen Typparametern), Bounds an Typparametern
+  eines Typs, fehlender Member auf Trait-Wert, statische Funktion nur über den Typ, ein Member-Namensraum,
+  Schatten durch impliziten Closure-Parameter (5 echte Mehrdeutigkeiten in der std gefunden), Destructuring auf
+  oberster Ebene, `await()` und `?` nur wo sie etwas bedeuten, umbenannte Cases, `.Configure`-Blöcke sind lokal
+  (das Konzept-Beispiel `server { s => s.database { … } }` prüft wieder), `extend` eines Literal-Typs,
+  statischer `Array`-Index außerhalb, Default an `fn`-Typparametern, der Canon-Widerspruch im Doku-Werkzeug,
+  eingerückte Code-Fences. Neue Entscheidungen: Gaps 55-59 in TYPECHECKER §9 (u. a. "eine Bound auf `Never` gilt").
+  - **Nicht reproduziert / kein Fehler:** `swap(a, a)` mit Locals war schon ein Fehler; die `Encode`-Bound an
+    Captures greift; `Decimal` bleibt typprüfbar (der Doku-Kommentar in `std/number` war falsch).
+  - **Offen gelassen:** Alias-Namen in Meldungen (`EntityId (Int64)`); `?` bei INFERIERTEM Ergebnis; welche Closures
+    ein Aufrufer als Task ausführt (Gap 58, braucht ein Signatur-Mittel - Meilenstein 7); `nan` statt `NaN` (Runtime).
+  - **Folge:** `docs check` ist auf `master` vorübergehend ROT (37 Probleme: 29 nie geprüfte Snippets in
+    eingerückten Fences + veraltete "wird noch nicht gemeldet"-Stellen). Eine Doku-Pflegerunde (Sonnet) behebt das,
+    aktualisiert die Aussagen zum nativen Back-End und erzeugt den Skill neu.
+
+- (5.7 Runde 4, 2026-09-21) Gemergt (`8854bc4`), alles grün (1332 Tests, volle `cargo test`). **Die Collections
+  laufen jetzt nativ:** drei Gate-Programme (`collections.trb`, `ranges.trb`, `collection-index.trb`), byte-gleich
+  mit Stage 0, 0 lebende Blöcke, Copy-on-Write über Local, Feld und `var`-Parameter bewiesen. Das Laufen hat sechs
+  Fehler gefunden, die das Lowern allein nie gezeigt hätte (u. a. Witness-Thunks liehen alles - doppelte Freigabe bei
+  `for x in list`; Closure-Parameter dürfen nie `Owned` sein; der Out-Parameter von `list.get` ist nur auf einem Pfad
+  belegt; keine Collection war druckbar). Vorher ließ sich NICHTS mit Collections bauen (alles-oder-nichts über die
+  Tabelle von `List<Item>`) - deshalb hatten drei Runden kein Gate-Programm.
+  - **Instanzmenge begrenzt (meine Entscheidung, umgesetzt):** nicht überschriebene Defaults sind keine
+    Tabellen-Slots. Stolperdraht 208 → **78 Deklarationen**, Repository 17250 → **9182 Deklarationen, 90 % gelowert**,
+    `Range.iterator` und `ArrayList.from` sind TorbScript, Supertrait-Tabellen (`nested`) gebaut, Tiefengrenze 10 als
+    Notbremse mit sauberer Meldung. `Show` einer `Range` druckt die Quellform.
+  - **Neuer Kompass: der Compiler selbst.** `torb ir --statistics ../compiler`: **7471 von 7954 (93 %)**. Es fehlen:
+    `var`-Argument/-Receiver/Zuweisung durch `a[key]` (178), `TrieMap.iterator` und damit alle Map-/Set-Literale
+    (130), quotierte Ausdrücke = `assert` in den Tests (40), nicht faltbare Konstanten (35), `String.chars`/`bytes`/
+    `from` (35), `sort`/`slice` auf Trait-Werten (29), Listen-Patterns (6), CLI-Natives (`File.createDirectory`,
+    `Process.run`, `milliseconds`), 1 interner Fehler (Closure gibt geliehenen Parameter zurück).
+  - **Entschieden (ich):** Index-Pfade - das Lowering läuft den Ziel-Ausdruck im Gleichschritt mit den Pfad-Schritten
+    ab, jeder Schlüssel wird genau einmal, in Quellreihenfolge und VOR Beginn des Zugriffs ausgewertet (Swift-Modell);
+    keine Checker-Änderung. `language.trb` ist als Gate von 5.7 abgelöst (es ist ein Stage-0-Skript, das der Checker
+    an 11 Stellen zu Recht ablehnt) - ob es repariert oder ersetzt wird, gehört zu 5.14.
+  - **Läuft (zwei Opus-Agents parallel):** "Collection-Kern" (Index-Pfade, Map-/Set-Cursor, `sort`/`slice`,
+    Varargs/Spread → `print`-Sonderfall weg) und "langer Schwanz" (interner Fehler, Konstanten, `String.chars`,
+    Listen-Patterns, CLI-Natives 5.12, Treiber 5.13, quotierte Ausdrücke 5.11).

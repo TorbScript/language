@@ -80,6 +80,10 @@ pub struct Range {
     pub start: i64,
     /// Exclusive. `None` is open-ended (`0..`)
     pub end: Option<i64>,
+    /// Whether the source wrote a start at all. `start` is 0 either way; this is what `..7` is shown by
+    pub has_start: bool,
+    /// Whether the source wrote `..=`. `end` above is exclusive either way; this is what `1..=3` is shown by
+    pub inclusive: bool,
 }
 
 pub type LabeledValues = Vec<(&'static str, Value)>;

@@ -5,8 +5,8 @@ use TypeId, ParameterId, LiteralValue from "../../semantics/checker/type"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use substitute from "../../semantics/checker/unify"
 use IrTypeId, IrType, FunctionId, Slot, BlockId, LayoutId, WitnessSource from "../ir"
-use Instruction, Terminator, Reference, PathStep, Argument, borrowed, referenced from "../ir"
-use Intrinsic, IntrinsicOperation, NumericKind, StaticContents from "../ir"
+use Instruction, Terminator, Reference, PathStep, Argument, borrowed, referenced, owned from "../ir"
+use Intrinsic, IntrinsicOperation, NumericKind, StaticContents, ElementId, RuntimeKind from "../ir"
 use Layout, FieldLayout from "../layout"
 use FunctionBuilder, newFunction, addTemporary, addBlock, emit, terminate, switchTo from "../build"
 use terminateBlock, finishFunction, setBlockLocation from "../build"
@@ -16,6 +16,7 @@ use functionName from "../mangle"
 use symbolPathOf from "../instantiate"
 use irSignatureUnder, runtimeFunctionUnder from "../instances"
 use memberOfType from "../witness"
+use elementFor from "../element"
 use Lowering, Generated, GeneratedRequest, reportUnsupported, locationOf from "./context"
 use irTypeOfClosed, internStatic, booleanTypeOf from "./context"
 
@@ -123,7 +124,54 @@ fn lowerGeneratedBody(
     .Show => showBody lowering, builder, request.subject, at
     .ShowNested => showBody lowering, builder, request.subject, at
     .Copy => reportUnsupported lowering, "a generated `copy`", at
+    .Container(kind) => containerBody lowering, builder, request, kind, at
   }
+}
+
+/**
+ * The empty container of one implementation: one `ContainerNew` over the element descriptors of the owner's type
+ * arguments, and nothing else. `ArrayList.withCapacity(0)` is what `ArrayList.from` starts from, and the descriptors are
+ * exactly what a declaration of `std/` cannot name - which is why this is a body the lowering generates and not a call of
+ * the runtime.
+ *
+ * The **capacity is dropped**: it is a hint, the list grows anyway, and giving `ContainerNew` an operand would change the
+ * instruction in both back ends for something that is not observable.
+ */
+fn containerBody(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  request: GeneratedRequest,
+  kind: RuntimeKind,
+  at: Span,
+) {
+  const arguments = match lowering.checker.types.form(request.subject) {
+    .Nominal(_, given) => given
+    _ => {
+      reportUnsupported lowering, "an empty container of a type that has no arguments", at
+      return
+    }
+  }
+  if arguments.isEmpty() {
+    reportUnsupported lowering, "an empty container without an item type", at
+    return
+  }
+  // A key of the hash table is compared and hashed through its descriptor; nothing else needs those two members
+  const hashesFirst = arguments.length() > 1
+  var elements: List<ElementId> = []
+  for index in 0..arguments.length() {
+    const wanted = hashesFirst && index == 0
+    const found = match elementFor(lowering, arguments[index], wanted, at) {
+      Some(one) => one
+      None => {
+        return
+      }
+    }
+    elements.add found
+  }
+  const result = builder.function.signature.result
+  const target = addTemporary builder, result
+  emit builder, Instruction.ContainerNew(target, kind, elements)
+  terminate builder, Terminator.Return(Some(owned(target)))
 }
 
 // --- The small bodies -------------------------------------------------------------------------------------------------

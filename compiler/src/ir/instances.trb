@@ -5,7 +5,7 @@ use signatureOf, functionOfSite from "../semantics/checker/signature"
 use substitute from "../semantics/checker/unify"
 use IrFunction, IrSignature, IrParameter, IrType, IrTypeId, Ownership from "./ir"
 use FunctionId, FunctionKind, Instance, SlotDeclaration, SlotRole, RuntimeKind from "./ir"
-use Lowering, irTypeOfClosed from "./lower/context"
+use Lowering, irTypeOfClosed, reportUnsupported from "./lower/context"
 use functionName from "./mangle"
 use symbolPathOf, cellType from "./instantiate"
 use newFunction, finishFunction from "./build"
@@ -52,6 +52,9 @@ public fn instanceFor(
   if const Some(found) = lowering.program.instances.get(key) {
     return Some found
   }
+  if !boundedArguments(lowering, symbol, mapping) {
+    return None
+  }
   const identifier = signatureOf lowering.checker, symbol
   const signature = lowering.checker.signature identifier
   if !signature.hasBody {
@@ -68,6 +71,72 @@ public fn instanceFor(
   lowering.instanceMappings.set key, mapping
   lowering.program.pending.add instance
   Some added
+}
+
+/**
+ * The backstop against a worklist that does not end. A type-growing instance - one whose body asks for itself with a
+ * *bigger* type argument - would otherwise be a hang and not a message: `Iterable.indexed` is `Zipped(0.., self)`, so a
+ * table holding it asks for `Zipped<Int, (Int, Item)>`, then for `Zipped<Int, (Int, (Int, Item))>`, and so on. The
+ * fourth round of 5.7 keeps the defaults nothing overrides out of the tables, which is what really bounds it; this is
+ * the guard that turns any remaining case into a finding at the declaration instead of a build that never finishes.
+ *
+ * The limit is deliberately generous: the deepest type argument the repository really instantiates nests four
+ * (`Map<String, List<Diagnostic>>` inside a generic function), so nothing legitimate comes near it.
+ */
+fn boundedArguments(
+  var lowering: Lowering,
+  symbol: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+): Bool {
+  const limit = 10
+  for (_, given) in mapping {
+    if nestingDepthOf(lowering, given, 0) <= limit {
+      continue
+    }
+    const name = lowering.checker.symbolAt(symbol).name
+    const shown = lowering.checker.describe given
+    const what = "the instances of `{name}` do not end: its type argument `{shown}` nests deeper than {limit}"
+    const at = lowering.checker.symbolAt(symbol).span
+    reportUnsupported lowering, what, at
+    return false
+  }
+  true
+}
+
+/** How deep a type nests: `Int64` is 1, `List<Int64>` 2, `Zipped<Int64, (Int64, Item)>` 3. */
+fn nestingDepthOf(var lowering: Lowering, id: TypeId, depth: Int): Int {
+  if depth > 12 {
+    return depth
+  }
+  match lowering.checker.types.form(id) {
+    .Nominal(_, arguments) => deepestOf lowering, arguments, depth
+    .Traits(bounds) => deepestOf lowering, bounds, depth
+    .Literals(base, _) => nestingDepthOf lowering, base, depth
+    .Constant(_, of) => nestingDepthOf lowering, of, depth
+    .Tuple(fields) => {
+      var deepest = depth + 1
+      for field in fields {
+        deepest = deepest.max nestingDepthOf(lowering, field.annotation, depth + 1)
+      }
+      deepest
+    }
+    .Function(form) => {
+      var deepest = depth + 1
+      for parameter in form.parameters {
+        deepest = deepest.max nestingDepthOf(lowering, parameter.annotation, depth + 1)
+      }
+      deepest.max nestingDepthOf(lowering, form.result, depth + 1)
+    }
+    _ => depth + 1
+  }
+}
+
+fn deepestOf(var lowering: Lowering, arguments: List<TypeId>, depth: Int): Int {
+  var deepest = depth + 1
+  for argument in arguments {
+    deepest = deepest.max nestingDepthOf(lowering, argument, depth + 1)
+  }
+  deepest
 }
 
 /**

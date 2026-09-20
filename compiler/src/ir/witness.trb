@@ -66,6 +66,7 @@ public fn witnessTableOf(var lowering: Lowering, subject: TypeId, bound: TypeId,
   }
   lowering.buildingTables.set name, true
   const members = membersOfTable lowering, subject, bound, implementation, at
+  const nested = nestedTablesOf lowering, subject, bound, at
   const _ = lowering.buildingTables.remove name
   const found = match members {
     Some(inner) => inner
@@ -73,8 +74,55 @@ public fn witnessTableOf(var lowering: Lowering, subject: TypeId, bound: TypeId,
       return None
     }
   }
-  const empty: List<WitnessTableId> = []
-  Some lowering.program.addWitnessTable(WitnessTable(name, applied, target, found, empty))
+  Some lowering.program.addWitnessTable(WitnessTable(name, applied, target, found, nested))
+}
+
+/**
+ * The table of every **direct** supertrait of a bound, in declaration order. That is what makes a narrowing coercion
+ * possible: `List<Item>` handed to a parameter of type `Iterable<Item>` has erased its payload's type, so the table of
+ * `(the payload's type, Iterable<Item>)` can only come out of the table the value already carries - and `nested[i]` is
+ * where it is (5.6 left the list empty and named this as what needs it).
+ *
+ * The indices are a static property of the **trait** and not of the erased target, because they are the positions of
+ * `supertraitsOfBound`, which reads the trait's own `with` list. So a step is spelled once, in the lowering, and every
+ * back end walks it the same way.
+ *
+ * A supertrait whose own table cannot be built leaves a hole: the narrowing that would have read it is a clean finding
+ * at the coercion, and a table nobody narrows through costs one null pointer.
+ */
+fn nestedTablesOf(
+  var lowering: Lowering,
+  subject: TypeId,
+  bound: TypeId,
+  at: Span,
+): List<WitnessTableId?> {
+  const target = irTypeOfClosed lowering, subject
+  var found: List<WitnessTableId?> = []
+  for supertrait in supertraitsOfBound(lowering.checker, bound, subject) {
+    const applied = traitIdOf lowering, supertrait
+    const name = witnessTableName lowering.program, applied, target
+    // A supertrait whose table is being built one level up would report "a witness table that needs itself"
+    if lowering.buildingTables.containsKey(name) {
+      found.add None
+      continue
+    }
+    found.add withoutReports(lowering, subject, supertrait, at)
+  }
+  found
+}
+
+/**
+ * A table that may fail to build without saying anything. A supertrait's table is built because *some* narrowing might
+ * need it, not because this coercion does - so a member of it the back end cannot provide may not blame the value that is
+ * being boxed here. Every member of a nested table is a member of the flattened one above it, so in practice a nested
+ * table fails exactly where the table above it fails and says so there.
+ */
+fn withoutReports(var lowering: Lowering, subject: TypeId, bound: TypeId, at: Span): WitnessTableId? {
+  const before = lowering.isSilent
+  lowering.isSilent = true
+  const built = witnessTableOf lowering, subject, bound, at
+  lowering.isSilent = before
+  built
 }
 
 /** `Show`, `Iterable<Int64>`: one bound, interned, so that a name is a function of the trait and its arguments. */
@@ -259,6 +307,9 @@ public fn generatedKindOf(
       .Derived(derived) => {
         return derivedKindOf lowering, derived, at
       }
+      .Container(kind) => {
+        return Some Generated.Container(kind)
+      }
     }
   }
   const found = lowering.checker.implementations.at implementation
@@ -269,8 +320,19 @@ public fn generatedKindOf(
     reportUnsupported lowering, "`by` delegation", at
     return None
   }
+  // `type Point with Show {}` **declares** the implementation and writes no member at all. The checker accepts that for
+  // a trait the language derives, so the body is generated from the layout exactly as for an implementation the checker
+  // created itself - the origin of the implementation says who wrote it down and not who writes the body
+  if isDerivedName(name) {
+    return generatedForDerived lowering, name, at
+  }
   reportUnsupported lowering, "`{name}`, which neither the source nor the natives manifest provides", at
   None
+}
+
+/** The members the language can generate from a layout. Everything else without a body is a program the checker missed. */
+fn isDerivedName(name: String): Bool {
+  name == "show" || name == "showNested" || name == "equals" || name == "hash" || name == "compare"
 }
 
 /**
@@ -441,10 +503,13 @@ public type TableMember {
  * (milestone 5.7). Without it `List.add`, `Map.set`, `Set.add` and `Iterator.next` would be unreachable on a
  * trait-typed value, and every collection of the language is one.
  *
- * A **default** member is in the table, which BACKEND 1.4 does not say: an implementation may override one, and which of
- * the two a trait-typed value reaches is only known at run time. The entry is the override where there is one and an
- * instance of the default body for the target type otherwise - so `by` still forwards the required members only, because
- * a delegated implementation declares no override.
+ * A **default** member is in the table only where some implementation of the program **overrides** it (5.6 put every one
+ * of them in): which of the two a trait-typed value reaches is a run-time question exactly then. A default that nothing
+ * overrides is dispatched statically with `Self` bound to the trait type itself, because a default body reaches `self`
+ * only through the trait's own members - so one instance per trait type serves every implementer and what runs is what
+ * would have run anyway. That is what bounds the instance set: `Iterable.indexed` is `Zipped(0.., self)`, so a table that
+ * held it would need the table of `Iterable<(Int, Item)>` for `Zipped<Int, Item>`, which holds `indexed` again, and the
+ * worklist would never end (the fourth round of 5.7 in docs/BACKEND.md).
  */
 public fn tableMembersOf(var lowering: Lowering, bound: TypeId, subject: TypeId): List<TableMember> {
   var found: List<TableMember> = []
@@ -490,10 +555,87 @@ fn addTableMembers(
     if !isTableMember(lowering, member, inherited) {
       continue
     }
+    if isUnoverriddenDefault(lowering, member, name) {
+      continue
+    }
     found.add TableMember(member, bound)
   }
   for supertrait in supertraitsOfBound(lowering.checker, bound, subject) {
     addTableMembers(lowering, found, supertrait, subject, depth + 1)
+  }
+}
+
+/**
+ * Whether a member is a **default** that nothing in the program overrides, which is what keeps it out of every witness
+ * table. Such a member is dispatched statically with `Self` bound to the trait type of the erased value
+ * (`dynamicDispatch` in `ir/lower/generic.trb`), which is the mechanism a default with generic parameters of its own has
+ * used since 5.6 - and it is sound for the same reason: a default body reaches `self` only through the members of its
+ * trait, so the one instance built for the trait type behaves like the per-type instance would.
+ *
+ * "Overridden anywhere in the program" is a **closed-world** property, and the back end may ask it because it sees the
+ * whole program: one translation unit in C, and whole modules in the VM. A separately compiled package would need the
+ * table layout of a trait fixed per *program* rather than per package - which it already is, because a table is emitted
+ * with the program that uses it and its member order is computed from the same closed world.
+ */
+fn isUnoverriddenDefault(var lowering: Lowering, member: SymbolId, name: String): Bool {
+  const identifier = signatureOf lowering.checker, member
+  if !lowering.checker.signature(identifier).hasBody {
+    return false
+  }
+  !overridesAnyMember(lowering, name)
+}
+
+/** Whether any implementation of the program provides a member under this name. Built once, over the whole program. */
+fn overridesAnyMember(var lowering: Lowering, name: String): Bool {
+  if !lowering.overriddenMembersAreKnown {
+    collectOverriddenMembers lowering
+  }
+  lowering.overriddenMembers.containsKey name
+}
+
+/**
+ * Every name some implementation answers a member with, which is every way an override can be **written**: the members of
+ * an `extend ... with` block, the body of a `type ... with`, and the body of the implementation's target, which
+ * `providerOf` reaches as well.
+ *
+ * It over-approximates on purpose. Reading a name as an override that nothing really overrides costs one slot in one
+ * table; *missing* one would run the default where the override should have run, which is observable.
+ *
+ * The **fields** of a target are deliberately not in it, although `providerOf` answers a member with one: a field is not
+ * a method and cannot be the body of a default, and one field of the compiler is called `indexed` - which would put
+ * `Iterable.indexed` back into every table and bring the non-terminating worklist back with it.
+ */
+fn collectOverriddenMembers(var lowering: Lowering) {
+  lowering.overriddenMembersAreKnown = true
+  const total = lowering.checker.implementations.all.length()
+  for index in 0..total {
+    const implementation = lowering.checker.implementations.all[index]
+    for (name, _) in implementation.members {
+      lowering.overriddenMembers.set name, true
+    }
+    addTargetMembers lowering, implementation.target
+  }
+}
+
+/**
+ * The members and the fields of the target of an implementation. A target whose head is a **trait** contributes nothing:
+ * `extend<Item: Show> List<Item> with Show` has `List<Item>` as its target, and reading the defaults of `List` there as
+ * overrides of themselves would put every one of them back into every table.
+ */
+fn addTargetMembers(var lowering: Lowering, target: TypeId) {
+  const symbol = match lowering.checker.types.form(target) {
+    .Nominal(found, _) => found
+    _ => {
+      return
+    }
+  }
+  if const .Trait = lowering.checker.symbolAt(symbol).kind {
+    return
+  }
+  const identifier = typeSignatureOf lowering.checker, symbol
+  const shape = lowering.checker.typeSignature identifier
+  for (name, _) in shape.members {
+    lowering.overriddenMembers.set name, true
   }
 }
 
@@ -634,4 +776,56 @@ public fn boundIndexOf(var lowering: Lowering, bounds: List<TypeId>, bound: Type
     }
   }
   -1
+}
+
+/**
+ * Where the table of a **supertrait** of one of a value's bounds sits: the index of the bound, and then one `nested`
+ * index per step down the supertrait lists. `List<Item>` narrowed to `Iterable<Item>` is bound 0 step 0, because
+ * `Iterable<Item>` is the first supertrait of `Collection<Item>`, which is the first of `List<Item>`.
+ *
+ * The steps are positions in `supertraitsOfBound` and therefore a static property of the **trait**, which is exactly why
+ * an erased payload can be narrowed at all: nothing about the path depends on the type the value has hidden.
+ */
+public fn narrowingPathOf(
+  var lowering: Lowering,
+  bounds: List<TypeId>,
+  subject: TypeId,
+  bound: TypeId,
+): WitnessSource? {
+  for index in 0..bounds.length() {
+    var steps: List<Int> = []
+    if stepsToBound(lowering, bounds[index], subject, bound, steps, 0) {
+      return Some WitnessSource(WitnessRoot.Value(Reference(Slot(0), []), index), steps)
+    }
+  }
+  None
+}
+
+/** Depth-first over the supertraits, writing the indices of the path it took. The trait graph is a DAG and shallow. */
+fn stepsToBound(
+  var lowering: Lowering,
+  from: TypeId,
+  subject: TypeId,
+  wanted: TypeId,
+  var steps: List<Int>,
+  depth: Int,
+): Bool {
+  if depth > 6 {
+    return false
+  }
+  const supertraits = supertraitsOfBound lowering.checker, from, subject
+  for index in 0..supertraits.length() {
+    if sameType(lowering.checker.types, supertraits[index], wanted) {
+      steps.add index
+      return true
+    }
+  }
+  for index in 0..supertraits.length() {
+    steps.add index
+    if stepsToBound(lowering, supertraits[index], subject, wanted, steps, depth + 1) {
+      return true
+    }
+    const _ = steps.removeAt(steps.length() - 1)
+  }
+  false
 }

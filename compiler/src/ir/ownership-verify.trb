@@ -237,6 +237,7 @@ fn verifyFlow(
   }
   entry.set 0, initialState(function, counted, width)
   var ignored: List<String> = []
+  const conditional = conditionalOutPositions program, function, counted
   var rounds = 0
   var isChanged = true
   while isChanged {
@@ -248,7 +249,7 @@ fn verifyFlow(
     }
     for block in order {
       var state = entry[block]
-      runBlock program, function, facts, counted, block, state, ignored, false
+      runBlock program, function, facts, counted, block, state, ignored, false, conditional
       for target in successorsOf(function.blocks[block]) {
         if target < 0 || target >= blockCount {
           continue
@@ -264,7 +265,7 @@ fn verifyFlow(
   }
   for block in order {
     var state = entry[block]
-    runBlock program, function, facts, counted, block, state, found, true
+    runBlock program, function, facts, counted, block, state, found, true, conditional
   }
 }
 
@@ -323,6 +324,7 @@ fn runBlock(
   var state: List<Int>,
   var found: List<String>,
   reports: Bool,
+  conditional: List<Bool>,
 ) {
   const at = "{function.name} b{block}"
   const instructions = function.blocks[block].instructions
@@ -330,7 +332,36 @@ fn runBlock(
     runInstruction program, counted, at, instruction, state, found, reports
   }
   const terminator = function.blocks[block].terminator
-  runTerminator counted, at, terminator, state, found, reports
+  runTerminator counted, at, terminator, state, found, reports, conditional
+}
+
+/**
+ * The positions of the slots a call filled through an **out parameter**. Such a slot owns a value on the path the call
+ * answered `true` on and holds nothing on the other, which is a state this pass has no word for - and it does not need
+ * one: the value is the callee's answer, the `true` path moves it into the `Option` it builds, and the `false` path has
+ * nothing to release. So the report at a `return` skips these positions instead of calling the honest shape a conflict.
+ */
+fn conditionalOutPositions(program: IrProgram, function: IrFunction, counted: Counted): List<Bool> {
+  var found = filledFlags counted.width(), false
+  for block in function.blocks {
+    for instruction in block.instructions {
+      for slot in outParameterSlotsOf(program, instruction) {
+        const position = counted.positionOf slot
+        if position >= 0 {
+          found.set position, true
+        }
+      }
+    }
+  }
+  found
+}
+
+fn filledFlags(count: Int, value: Bool): List<Bool> {
+  var filled: List<Bool> = []
+  for _ in 0..count {
+    filled.add value
+  }
+  filled
 }
 
 fn runInstruction(
@@ -397,6 +428,7 @@ fn runTerminator(
   var state: List<Int>,
   var found: List<String>,
   reports: Bool,
+  conditional: List<Bool>,
 ) {
   // Nothing runs after a panic or a call that does not return, so nothing has to be released before one either
   if isUnreachable(terminator) {
@@ -424,6 +456,9 @@ fn runTerminator(
     return
   }
   for position in 0..counted.width() {
+    if conditional[position] {
+      continue
+    }
     const slot = counted.slots[position]
     if state[position] == owningState {
       found.add "{at}: %{slot.value} still owns a value where the function returns"
