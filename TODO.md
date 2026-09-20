@@ -1380,3 +1380,21 @@ Wenn nicht, was bedeutet, bewirkt es?
     gerade keine Code-Runde anfasst (stream, io, fs, iteration, http, task, process, environment, console, number,
     math, time, test, expression, sandbox, project). `core`, `collections`, `prelude`, `text` nach den laufenden
     Code-Runden; `encoding`, `json` nach dem Encoding-Design; Compiler = Welle 2.
+
+- (Collection-Kern, 2026-09-22) **Erledigt, gemergt (`e9db188`), volle Gates grün** (1428 Tests, 94 Runtime-Tests,
+  volle `cargo test`): Compiler **99 % gelowert (12680 von 12745), 0 interne Fehler**; `torb build ../compiler` meldet
+  noch VIER Probleme (Closure über `var self` in `lexer.trb:543`, dreimal das generierte `compare` eines Tupels) -
+  das ist die ganze Strecke bis Meilenstein 6.1 und liegt bei "Schwanz 2". Index-Pfade = Herausnehmen/Zurücklegen
+  über `at`/`set`; Map-/Set-Cursor (eine Runtime-Funktion, Rest TorbScript); `sort` (stabiler Merge-Sort) und `slice`
+  sind Defaults von `List`; Varargs sind `List<Item>`, ein Spread ist ein `add` pro Item. `print` bleibt bewusst die
+  schnelle Zwei-Instruktionen-Form. Drei neue Gate-Programme.
+  - Der End-to-End-Test liest die Position eines `std/`-Frames jetzt als `_:_`: ein Docblock über einer Panic-Stelle
+    verschiebt die Zeile (so brach der Test nach dem Merge des Doku-Standards).
+- (Dokumentation am Code, Welle 1, 2026-09-22) **Erledigt, gemergt:** `examples/` 156/156, `std/stream`+`io`+`fs`
+  95/95, `std/iteration` 118/118, zwölf kleine std-Pakete 268/268 - alle "no problems" im Gate. Funde der Schreiber:
+  ein echter Fehler (`std/stream/src/bytes.trb:180`: `Utf8Error(0)` mit fest verdrahtetem Offset), zwei Doc-Beispiele,
+  die nie kompiliert hätten (`Process`, `Sandbox.load`), zwei Widersprüche Kommentar/Doku (`Decimal`, `std/project`),
+  mehrere bisher undokumentierte Pitfalls (`minBy`/`maxBy` bei Gleichstand, `Buffered.flush`, `Process.run`).
+  - **Offen:** drei Schwächen des Gates (Beispiele in Nicht-`lib.trb`-Dateien finden die freien Funktionen derselben
+    Datei nicht; Plural `milestones` wird nicht erkannt; `no longer` schlägt auch harmlos an) und zu wenige Beispiele
+    (16 auf 537 Deklarationen) - nach der Gate-Reparatur eine gezielte Beispiel-Runde für die Hauptkonstrukte.
