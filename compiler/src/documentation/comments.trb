@@ -385,6 +385,9 @@ fn isWord(text: String): Bool {
 /**
  * The words that turn a comment into a history of itself. A comment says what the construct does now; what it did
  * before is in the log, and a reader who has to subtract the past from the present reads twice.
+ *
+ * This is the one place the words are written down. A phrase matches whole words, and its last word matches its plural
+ * as well, so `milestone` also finds `milestones`: the inflected form is the same word and not a way around the rule.
  */
 public const historyPhrases: List<String> = [
   "used to",
@@ -397,6 +400,12 @@ public const historyPhrases: List<String> = [
   "was renamed",
   "milestone",
 ]
+
+/** The one phrase of the list that needs a second question asked of it, in `isAboutTheCode`. */
+const noLonger = "no longer"
+
+/** Words that end in `s` and are no verb, so that `no longer as fast` is not read as a change of the code. */
+const notVerbs: List<String> = ["as", "is", "was", "has", "its", "this", "thus", "less", "always", "perhaps"]
 
 /** The words a plan number follows: `gap 58`, `round four`. The number itself is what makes it a hit. */
 public const numberingWords: List<String> = ["gap", "round"]
@@ -432,7 +441,7 @@ public fn historyHits(comments: List<CommentLine>): List<HistoryHit> {
   for comment in comments {
     const words = wordsOf withoutCode(comment.text)
     for phrase in historyPhrases {
-      if containsWords(words, phrase.split(" ")) {
+      if tellsHistory(words, phrase) {
         hits.add HistoryHit(comment.line, phrase)
       }
     }
@@ -493,10 +502,12 @@ fn addWord(characters: List<Char>, var words: List<String>) {
   }
 }
 
-fn containsWords(words: List<String>, phrase: List<String>): Bool {
+/** Does one phrase of the list stand in these words, as a history of the code and not as prose? */
+fn tellsHistory(words: List<String>, phrase: String): Bool {
+  const parts = phrase.split " "
   var start = 0
-  while start + phrase.length() <= words.length() {
-    if matchesAt(words, phrase, start) {
+  while start + parts.length() <= words.length() {
+    if matchesAt(words, parts, start) && isAboutTheCode(words, phrase, start + parts.length()) {
       return true
     }
     start = start + 1
@@ -507,7 +518,8 @@ fn containsWords(words: List<String>, phrase: List<String>): Bool {
 fn matchesAt(words: List<String>, phrase: List<String>, start: Int): Bool {
   var offset = 0
   for word in phrase {
-    if words[start + offset] != word {
+    const isLast = offset == phrase.length() - 1
+    if !matchesWord(words[start + offset], word, isLast) {
       return false
     }
     offset = offset + 1
@@ -515,11 +527,49 @@ fn matchesAt(words: List<String>, phrase: List<String>, start: Int): Bool {
   true
 }
 
-/** `gap 58`, `round four`: the word, and a number behind it. */
+/** The word itself, and at the end of a phrase its plural too: `milestones` is `milestone`, said of several. */
+fn matchesWord(word: String, expected: String, withPlural: Bool): Bool {
+  if word == expected {
+    return true
+  }
+  if !withPlural {
+    return false
+  }
+  if expected.endsWith("y") {
+    return word == "{expected[0..(expected.byteLength() - 1)]}ies"
+  }
+  word == "{expected}s" || word == "{expected}es"
+}
+
+/**
+ * Whether the phrase that matched says something about the code. Every phrase of the list does on its own, except one.
+ *
+ * `no longer` is also ordinary prose: "a producer that is no longer needed" describes a value at run time and says
+ * nothing about the history of the code. So it counts only in front of a verb in the third person singular -
+ * `no longer takes a Range`, `no longer panics` - which is the shape a comment uses when it states a change of its own
+ * code; `no longer needed`, `no longer valid` and `no longer be scheduled` are a state and are not flagged. A change
+ * written in any other shape is missed on purpose: a gate that cries wolf is a gate that gets skipped.
+ */
+fn isAboutTheCode(words: List<String>, phrase: String, after: Int): Bool {
+  if phrase != noLonger {
+    return true
+  }
+  if after >= words.length() {
+    return false
+  }
+  isThirdPerson words[after]
+}
+
+/** `takes`, `panics`, `returns`: the form a comment about the code uses. */
+fn isThirdPerson(word: String): Bool {
+  word.byteLength() > 3 && word.endsWith("s") && !notVerbs.contains(word)
+}
+
+/** `gap 58`, `round four`, `gaps 58`: the word or its plural, and a number behind it. */
 fn isNumbered(words: List<String>, word: String): Bool {
   var index = 0
   while index + 1 < words.length() {
-    if words[index] == word && isNumber(words[index + 1]) {
+    if matchesWord(words[index], word, true) && isNumber(words[index + 1]) {
       return true
     }
     index = index + 1

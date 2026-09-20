@@ -22,7 +22,7 @@
 
 use File, IoError from "std/fs"
 use Span, SourceText, LineIndex from "../syntax/source"
-use SourceFile, Declaration, Member, Visibility from "../syntax/ast"
+use SourceFile, Declaration, Member, Pattern, Visibility from "../syntax/ast"
 use lex from "../syntax/lexer"
 use parse from "../syntax/parser/parser"
 use collectSourceFiles from "../cli/files"
@@ -386,6 +386,10 @@ fn fenceProblems(read: ReadSource, block: DocumentationBlock): List<Documentatio
 /**
  * What an example is checked with: the `use` lines of the file it documents, and an import of that file's own public
  * declarations. A file with top-level code cannot be imported, so there the imports are all an example gets.
+ *
+ * Only the `public` names are imported, and that is the rule and not a shortcut: an example stands in for what a user
+ * of the module writes, so it may only reach what a user can reach. A `fn` of the file that is not `public` is
+ * therefore invisible in its own examples - which is also why the standard asks for no comment on one.
  */
 fn contextOf(read: ReadSource): String {
   var lines: List<String> = []
@@ -413,12 +417,32 @@ fn withoutPublic(text: String): String {
   text
 }
 
-/** A file with a statement at its top level is a script, and a script is never imported. */
+/**
+ * A file with a statement at its top level is a script, and a script is never imported.
+ *
+ * A top-level `const name = ...` is not such a statement: it is a declaration of the module and static data, which is
+ * exactly what the language allows in an imported module (`requireSingleName`, `checkModuleBinding`). A `var` and a
+ * binding that destructures are code, because only a script may write them.
+ */
 fn hasTopLevelCode(file: SourceFile): Bool {
   for statement in file.statements {
-    if const .Declare(_) = statement.kind {
-      continue
+    match statement.kind {
+      .Declare(_) => {}
+      .Bind(binding) => {
+        if binding.isVar || !isSingleName(binding.pattern) {
+          return true
+        }
+      }
+      _ => {
+        return true
+      }
     }
+  }
+  false
+}
+
+fn isSingleName(pattern: Pattern): Bool {
+  if const .Binding(_) = pattern.kind {
     return true
   }
   false

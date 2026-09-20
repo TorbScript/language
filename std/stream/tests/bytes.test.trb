@@ -1,0 +1,113 @@
+/**
+ * The tests of the byte stages of `std/stream`: what `textOf`, `lines()` and `decodedText()` answer over chunks whose
+ * borders nobody chose, and which offset an invalid UTF-8 failure carries.
+ *
+ * The stages are driven by hand - `stage.onto(Collected())`, then one `add` per chunk and one `finish` - and not with
+ * `chunks.through(...)`: driving the accumulator is what a chunk border *is*, so the test says what it means, and it is
+ * also the only form stage 0 runs, which loads no `std/` and therefore has no methods of `Iterable`.
+ *
+ * For the same reason every sequence here is one byte long or incomplete: stage 0 has no `Int.bitwiseAnd`, so a
+ * complete multi-byte sequence is decoded by the self-hosted front end and not in this process.
+ */
+
+use test, group from "std/test"
+use Accumulator from "std/iteration"
+use Utf8Error, lines, decodedText, textOf from "../src/bytes"
+
+/** Everything a stage pushes, in the order it arrives: the downstream end of every pipeline here. */
+type Collected with Accumulator<Result<String, Utf8Error>, List<Result<String, Utf8Error>>> {
+  var items: List<Result<String, Utf8Error>> = []
+
+  fn add(var self, value: Result<String, Utf8Error>) {
+    items.add value
+  }
+
+  fn finish(self): List<Result<String, Utf8Error>> {
+    items
+  }
+
+  fn isDone(self): Bool {
+    false
+  }
+}
+
+/** Every chunk into the accumulator, then the end of the stream. */
+fn pushed(
+  accumulator: Accumulator<List<UInt8>, List<Result<String, Utf8Error>>>,
+  chunks: List<List<UInt8>>,
+): List<Result<String, Utf8Error>> {
+  var driven = accumulator
+  for chunk in chunks {
+    driven.add chunk
+  }
+  driven.finish()
+}
+
+/** What `lines()` answers for these chunks. */
+fn linesOf(chunks: List<List<UInt8>>): List<Result<String, Utf8Error>> {
+  pushed lines().onto(Collected()), chunks
+}
+
+/** What `decodedText()` answers for these chunks. */
+fn decodedOf(chunks: List<List<UInt8>>): List<Result<String, Utf8Error>> {
+  pushed decodedText().onto(Collected()), chunks
+}
+
+/** A text as two chunks, cut after `at` bytes: the chunk border every resumable stage has to survive. */
+fn cutAt(text: String, at: Int): List<List<UInt8>> {
+  const bytes = text.bytes().toList()
+  [bytes[0..at], bytes[at..]]
+}
+
+group "textOf" {
+  test "a whole chunk of UTF-8 is text" {
+    const bytes: List<UInt8> = [104, 105]
+    assert(textOf(bytes) == Ok("hi"))
+  }
+
+  test "an incomplete sequence at the end fails at the byte it starts on" {
+    const bytes: List<UInt8> = [104, 105, 0xE2, 0x82]
+    assert(textOf(bytes) == Fail(Utf8Error(2)))
+  }
+
+  test "a byte that can start nothing fails where it stands" {
+    const bytes: List<UInt8> = [104, 0xFF, 105]
+    assert(textOf(bytes) == Fail(Utf8Error(1)))
+  }
+}
+
+group "lines" {
+  test "a line split across two chunks is one line" {
+    assert(linesOf(cutAt("one\ntwo\n", 5)) == [Ok("one"), Ok("two")])
+  }
+
+  test "a last line without a line break is still a line" {
+    assert(linesOf(cutAt("one\ntwo", 5)) == [Ok("one"), Ok("two")])
+  }
+
+  test "a CRLF file reads like an LF file" {
+    assert(linesOf(cutAt("one\r\ntwo\r\n", 4)) == [Ok("one"), Ok("two")])
+  }
+
+  test "a broken line fails at a byte of that line, and the next line still arrives" {
+    const chunks: List<List<UInt8>> = [[0xFF, 10, 104, 105]]
+    assert(linesOf(chunks) == [Fail(Utf8Error(0)), Ok("hi")])
+  }
+}
+
+group "decodedText" {
+  test "an incomplete sequence at the end of the stream carries the offset it starts on" {
+    const chunks: List<List<UInt8>> = [[104, 105], [0xE2, 0x82]]
+    assert(decodedOf(chunks) == [Ok("hi"), Fail(Utf8Error(2))])
+  }
+
+  test "the offset counts the whole stream and not the last chunk" {
+    const chunks: List<List<UInt8>> = [[104, 105], [106, 107], [0xF0, 0x9F]]
+    assert(decodedOf(chunks) == [Ok("hi"), Ok("jk"), Fail(Utf8Error(4))])
+  }
+
+  test "a byte that can start nothing counts from the start of the stream as well" {
+    const chunks: List<List<UInt8>> = [[104, 105], [106, 0xFF]]
+    assert(decodedOf(chunks) == [Ok("hi"), Fail(Utf8Error(3))])
+  }
+}

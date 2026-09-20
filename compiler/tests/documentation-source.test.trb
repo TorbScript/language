@@ -68,6 +68,19 @@ fn withSections(sections: String): String {
   withComment "/**\n * Counts what a cursor walks over.\n *\n{sections} */"
 }
 
+/** An `# Examples` section with one line in it, which is all a test about the context of an example needs. */
+const exampleSection = " * # Examples\n *\n *     print 1\n"
+
+/** The imports the gate puts in front of the first example of a file. */
+fn context(text: String): String {
+  const read = readSource "std/a/src/a.trb", "std/a/src/a.trb", Tree.Standard, text
+  const checked = sourceProblems read, index()
+  match checked.examples.first() {
+    Some(found) => found.context
+    None => ""
+  }
+}
+
 group "the module comment" {
   test "a file that does not start with a doc comment is a finding" {
     const source = r"""
@@ -280,6 +293,57 @@ group "the examples of a doc comment" {
   }
 }
 
+group "the context an example is checked in" {
+  test "an example sees the public declarations of its own file" {
+    const found = context withSections(exampleSection)
+    assert(found == "use Iterator from \"std/iteration\"\nuse counted from \"./a\"")
+  }
+
+  test "a top-level const does not make the file a script" {
+    const withStep = withSections(exampleSection).replace("public fn", "const step = 1\n\npublic fn")
+    assert context(withStep).contains("use counted from \"./a\"")
+  }
+
+  test "a declaration that is not public is not imported" {
+    const source = withSections(exampleSection).replace("public fn counted", "fn counted")
+    assert(context(source) == "use Iterator from \"std/iteration\"")
+  }
+
+  test "a public type is imported, so its static functions are reachable" {
+    const source = r"""
+      /** What this module is for. */
+
+      /**
+       * Where something is.
+       *
+       * # Examples
+       *
+       *     print Point.origin()
+       */
+      public type Point {
+        /** How far along. */
+        x: Int
+
+        /** The point every walk starts at. */
+        fn origin(): Point {
+          Point 0
+        }
+      }
+      """
+    assert(context(source) == "use Point from \"./a\"")
+  }
+
+  test "a file with top-level code gets its imports and nothing else" {
+    const source = "{withSections(exampleSection)}\nprint 1\n"
+    assert(context(source) == "use Iterator from \"std/iteration\"")
+  }
+
+  test "a top-level const that destructures is code" {
+    const source = "{withSections(exampleSection)}\nconst (first, second) = (1, 2)\n"
+    assert(context(source) == "use Iterator from \"std/iteration\"")
+  }
+}
+
 group "a comment that tells its own history" {
   test "a word of the list is a finding" {
     const found = standard withComment("/** Counts. It previously counted twice. */")
@@ -316,6 +380,37 @@ group "a comment that tells its own history" {
 
   test "a word that only looks like one of the list is no finding" {
     assert historyHits(comments("// The gap between two tokens\n")).isEmpty()
+  }
+
+  test "the plural of a word of the list is the same word" {
+    const hits = historyHits comments("// One of the milestones this belongs to\n")
+    assert(hits.length() == 1)
+    assert(hits[0].word == "milestone")
+  }
+
+  test "a plan number behind a plural is a finding" {
+    const hits = historyHits comments("// The gaps 12 and 13 are what this closes\n")
+    assert(hits.length() == 1)
+    assert(hits[0].word == "gap <number>")
+  }
+
+  test "`no longer` in front of a verb is a change of the code" {
+    const hits = historyHits comments("// The head no longer takes a range\n")
+    assert(hits.length() == 1)
+    assert(hits[0].word == "no longer")
+  }
+
+  test "`no longer` in front of any verb, not only a long one" {
+    assert(historyHits(comments("// This no longer panics\n")).length() == 1)
+  }
+
+  test "`no longer` about a value at run time is no finding" {
+    assert historyHits(comments("// A producer that is no longer needed is dropped\n")).isEmpty()
+  }
+
+  test "`no longer` in front of a state is no finding" {
+    assert historyHits(comments("// A task that will no longer be scheduled is cancelled\n")).isEmpty()
+    assert historyHits(comments("// The handle is no longer valid after this\n")).isEmpty()
   }
 }
 

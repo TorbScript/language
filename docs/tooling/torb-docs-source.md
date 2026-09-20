@@ -51,8 +51,15 @@ module, so it is skipped too.
   [formatter canon](the-formatter-canon.md) and type checked.
 - **No comment tells the history of its own code.** `used to`, `formerly`, `previously`, `originally`, `at first`,
   `no longer`, `legacy`, `was renamed`, `milestone`, and a plan number behind `gap` or `round` are findings in a doc
-  comment and in a `//` comment alike. What stands between backticks is quoted and not prose, so a comment about the
-  rule can name the words.
+  comment and in a `//` comment alike. A phrase matches whole words, and its last word matches its plural as well, so
+  `milestones` and `gaps 12` are the same finding as `milestone` and `gap 12`. What stands between backticks is quoted
+  and not prose, so a comment about the rule can name the words.
+- **`no longer` counts only in front of a verb.** It is the one phrase of the list that is also ordinary prose: "a
+  producer that is no longer needed" describes a value at run time, not the history of the code. So it is a finding
+  in front of a verb in the third person singular - `no longer takes a Range`, `no longer panics` - which is the shape
+  a comment uses when it states a change of its own code, and it is no finding in front of a state
+  (`no longer needed`, `no longer valid`, `no longer be scheduled`). A change written in any other shape is missed on
+  purpose: a gate that cries wolf is a gate that gets skipped.
 - **A first sentence that only repeats the name** ("The parser." on `type Parser`) is a finding.
 
 The rules themselves are in [`compiler/CONTRIBUTING.md`](../../compiler/CONTRIBUTING.md), and
@@ -63,6 +70,18 @@ The rules themselves are in [`compiler/CONTRIBUTING.md`](../../compiler/CONTRIBU
 An example is checked as if it stood in a file next to the one it documents: it sees what that file imports and the
 file's own public declarations, and it is a script, so it may `print`. Every example of the whole walk is type checked in
 **one** run of the front end, the way `docs check` checks the snippets of the pages.
+
+What the example gets is exactly `use <the public names of the file> from "./<the file>"`, which has three consequences:
+
+- **Only what a user of the module can reach.** A `fn` or a `type` of the file that is not `public` is invisible in its
+  own examples, because a reader of the example cannot call it either. That is also why the standard asks for no doc
+  comment on one.
+- **A public type carries its members.** Importing the type is enough for `Point.origin()` and for `point.x`, so a
+  static function needs nothing of its own.
+- **A file with top-level code gets only its imports.** Such a file is a script, nothing may import it, and an example
+  of it therefore cannot name what the file declares. A top-level `const name = ...` is *not* top-level code - it is a
+  declaration of the module, the same way the language reads it - so a file of declarations and constants is importable
+  and its examples see its public names.
 
 An example that cannot stand alone says so in its first line:
 

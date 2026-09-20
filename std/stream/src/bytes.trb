@@ -25,7 +25,10 @@ public type Bytes = List<UInt8>
 
 /** Bytes that are not UTF-8, with the offset of the byte that broke it. A `String` is never anything else. */
 public type Utf8Error with Show, Error {
-  /** Counted from the start of the chunk that was being decoded. */
+  /**
+   * Counted in bytes from the start of what was decoded. What that is belongs to the stage that failed and is said
+   * there: the chunk for [textOf], the line for [lines], the whole stream for [decodedText].
+   */
   offset: Int
 
   /** `invalid UTF-8 at byte {offset}` - what a caller prints or logs. */
@@ -40,6 +43,18 @@ public type Utf8Error with Show, Error {
  *
  * Fallible, so the items are `Result`s; `source.through(lines()).checked()` turns them into the stream's own failure.
  * The same stage works on a plain `Iterable<Bytes>`, with no `Source` and no `Task` involved.
+ *
+ * # Examples
+ *
+ *     const chunks = ["one\ntw".bytes().toList(), "o\nthree".bytes().toList()]
+ *     for line in chunks.through(lines()) {
+ *       print line
+ *     }
+ *
+ * # Errors
+ *
+ * - [Utf8Error] for a line whose bytes are not UTF-8, with the offset counted from the start of *that line*. One
+ *   broken line fails once: every line around it arrives as it is, because each one is decoded on its own.
  */
 public fn lines(): Stage<Bytes, Result<String, Utf8Error>> {
   Lines()
@@ -48,6 +63,19 @@ public fn lines(): Stage<Bytes, Result<String, Utf8Error>> {
 /**
  * Bytes to text, one chunk at a time and cut at character borders: what arrives is whatever was complete, and a
  * character split across two chunks is held back until the rest is there.
+ *
+ * # Examples
+ *
+ *     const chunks: List<Bytes> = [[0xE2, 0x82], [0xAC]]
+ *     print chunks.through(decodedText()).toList()
+ *
+ * # Errors
+ *
+ * - [Utf8Error] for bytes that are not UTF-8, with the offset counted from the start of the **stream**: every byte the
+ *   stage has been handed since it started counts, not only the bytes of the chunk the failure was found in. A chunk
+ *   border is nobody's choice, so an offset inside a chunk would name a byte the caller cannot point at.
+ * - At the end of the stream an incomplete sequence is such a failure too, and its offset is the byte that sequence
+ *   starts on.
  *
  * # Pitfalls
  *
@@ -61,6 +89,16 @@ public fn decodedText(): Stage<Bytes, Result<String, Utf8Error>> {
 /**
  * A whole chunk of bytes as text - the short form for everything that has all of its bytes already (a file that was
  * read in one piece, a body below its limit). Bytes that are not UTF-8 are a failure, never a replacement character.
+ *
+ * # Examples
+ *
+ *     const bytes: Bytes = [104, 105]
+ *     print textOf(bytes)
+ *
+ * # Errors
+ *
+ * - [Utf8Error] with the offset counted from the start of `bytes`: the byte that cannot be decoded, or the byte an
+ *   incomplete sequence at the end starts on. Nothing is held back here - there is no next chunk to complete it with.
  */
 public fn textOf(bytes: Bytes): Result<String, Utf8Error> {
   const (text, used) = decodeUtf8(bytes)?
@@ -70,7 +108,18 @@ public fn textOf(bytes: Bytes): Result<String, Utf8Error> {
   Ok text
 }
 
-/** Text to bytes. UTF-8 needs no decision here: a `String` already is UTF-8. */
+/**
+ * Text to bytes. UTF-8 needs no decision here: a `String` already is UTF-8.
+ *
+ * # Examples
+ *
+ *     const words = ["hi", "there"]
+ *     print words.through(encodedText()).toList()
+ *
+ * # Related
+ *
+ * - [Sink.addText] - the same step for one text, written straight into a byte sink.
+ */
 public fn encodedText(): Stage<String, Bytes> {
   mapping { _.bytes().toList() }
 }
@@ -167,6 +216,8 @@ type DecodedText with Stage<Bytes, Result<String, Utf8Error>> {
 type DecodedTextAccumulator<Final> with Accumulator<Bytes, Final> {
   var downstream: Accumulator<Result<String, Utf8Error>, Final>
   var pending: Bytes = []
+  /** How many bytes of the stream are decoded and gone: the stream offset of the first byte of `pending` */
+  var consumed: Int = 0
 
   fn add(var self, value: Bytes) {
     pending.addAll value
@@ -174,22 +225,29 @@ type DecodedTextAccumulator<Final> with Accumulator<Bytes, Final> {
       Ok((text, used)) => {
         const rest = pending[used..]
         pending = rest
+        consumed = consumed + used
         if !text.isEmpty() {
           downstream.add Ok(text)
         }
       }
       Fail(problem) => {
+        // The whole pending block is dropped, so the stream is at its end for the purpose of the next offset
+        const at = consumed + problem.offset
+        consumed = consumed + pending.length()
         pending = []
-        downstream.add Fail(problem)
+        downstream.add Fail(Utf8Error(at))
       }
     }
   }
 
-  /** Bytes that are still incomplete at the end of the stream are broken UTF-8, not something to wait for. */
+  /**
+   * Bytes that are still incomplete at the end of the stream are broken UTF-8, not something to wait for. Everything
+   * complete is already gone, so `consumed` is where the incomplete sequence starts.
+   */
   fn finish(self): Final {
     var tail = downstream
     if !pending.isEmpty() {
-      tail.add Fail(Utf8Error(0))
+      tail.add Fail(Utf8Error(consumed))
     }
     tail.finish()
   }
