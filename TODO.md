@@ -1247,3 +1247,32 @@ Wenn nicht, was bedeutet, bewirkt es?
     Plattform und in jedem Back-End (Lockstep, Replays), was Floats wegen `sin`/`cos` der jeweiligen libm und wegen
     des JS-Back-Ends nie garantieren. Im Design-Dokument zu prüfen: Bound plus Default an einem Typparameter
     (`Scalar: Numeric = Float`), `From` zwischen `Vector2<Source>` und `Vector2<Target>` gegen die Blanket-Regel.
+
+- (ML/KI in der std, 2026-09-21) **Wunsch (Nutzer), eingeplant für Meilenstein 10, gemeinsam mit den Engine-Paketen:**
+  Training und Inferenz sollen mit der std möglich sein. **Entschieden (ich): kein eigener Turm, sondern dasselbe
+  Fundament wie Geometrie und Engine, in vier Schichten:**
+  - **Schicht 0 - Sprache/Runtime (gemeinsam):** `Buffer<Item>`-Kern (ohnehin nach dem Fixpunkt geplant), Trait `Real`
+    (aus `std/linear`), `Float16`/`BFloat16`, FFI (dieselbe Lücke wie bei DirectX/Metal), datenparallele Schleifen
+    über disjunkte Buffer-Abschnitte (dieselbe Lücke wie parallele ECS-Systeme), SIMD im C-Back-End.
+  - **Schicht 1 - reine Werte:** `std/linear`, `std/geometry` (kleine feste Vektoren), `std/tensor` (n-dimensional,
+    Broadcasting, Slices als Fenster, auf `Buffer<Item>`; Form zur Laufzeit geprüft, `Matrix<Scalar, Rows, Columns>`
+    bleibt in `std/linear`), `std/random` (seedbar und TEILBAR, ein Wert wie JAX-Keys - reproduzierbares Training),
+    `std/statistics`. Wert-Semantik passt: ein Tensor ist ein Wert, und eine Änderung über einen `var`-Pfad mit
+    einem einzigen Besitzer geschieht ohne Kopie (das, wofür JAX "donation" braucht).
+  - **Schicht 2 - Ableiten und Rechnen:** `std/gradient`. Vorwärtsmodus als `Dual<Scalar>` mit `Real` - damit ist
+    JEDE über `Real` generische Funktion (auch Geometrie, Animation, Physik) ohne Zutun ableitbar. Rückwärtsmodus über
+    QUOTIERTE AUSDRÜCKE (`gradient { x => ... }` bekommt den Ausdrucksbaum wie der Query-Provider) - das ist unser
+    einziger Meta-Mechanismus und ersetzt Makros/Tracing. `std/gpu`: eine abstrakte Rechen- und Zeichen-Schicht nach
+    dem WebGPU-Modell (bildet auf DirectX/Metal/Vulkan/WebGPU ab); derselbe Weg "quotierter Ausdruck → Kernel/Shader"
+    dient `std/render` UND `std/tensor`.
+  - **Schicht 3 - Anwendung:** `std/learning` (Schichten, Optimierer, Verluste, Trainingsschleife; Daten kommen als
+    `Source<Batch, Failure>` - das Stream-Protokoll ist die Daten-Pipeline), Modellformate (safetensors, ONNX, GGUF)
+    über die Encoding-Schicht, quantisierte Inferenz über Ganzzahl-/`Fixed`-Skalare. Daneben `std/ecs`, `std/render`,
+    `std/collision`, `std/animation`.
+  - **Reihenfolge nach dem Fixpunkt:** `std/linear` + `std/geometry` (bringen `Real`) → `Buffer<Item>` →
+    `std/tensor` auf der CPU + `Dual` (alles reines TorbScript, ohne FFI) → FFI-Design → `std/gpu` → Rückwärtsmodus,
+    `std/learning`, `std/render`, `std/ecs`. Zwei Design-Dokumente: `docs/ECS.md` und `docs/COMPUTE.md`
+    (Tensor/Gradient/GPU; Recherche JAX, PyTorch, Burn, tinygrad, Mojo, Swift for TensorFlow).
+  - **Neue Härtetests für die Sprache:** Rechnen mit Größenparametern (`Rows * 2`) - voraussichtlich nicht, daher
+    Laufzeitform; Operator-Traits mit fremdem `Other`/`Output` (Tensor × Skalar); Buffer über 2^31 und
+    speicherabgebildete Dateien; quotierte Ausdrücke mit Kontrollfluss; garantierte In-place-Änderung bei einem Besitzer.
