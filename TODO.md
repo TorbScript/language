@@ -1494,3 +1494,10 @@ Wenn nicht, was bedeutet, bewirkt es?
   `loop` (17 Stellen umgestellt), `??` über `OrElse`, `const None = x` ist ein Fehler, `Map.iterator` liefert
   `(key:, value:)`. Notiert: `indexed()` könnte `(index:, item:)` liefern; `reportHere` behält nur EINE Meldung pro
   Span und verschluckt die zweite.
+- (Läuft, 2026-09-22) **Fixpunkt-Agent (Opus):** den Hänger von Stage 2 finden (klein reproduzieren: jedes
+  Gate-Programm mit `main.exe` bauen und das C gegen Stage 1 diffen), Fixpunkt-Test ins Repository, danach
+  `Float64.compare`-Wrapper, quotierte Ausdrücke 5.11, Zeit-/Speichermessung Stage 1 gegen Stage 2.
+  **Doku-Welle 2 (sieben Sonnet-Schreiber):** `std/core`+`prelude`+`text`, `std/collections` (beide mit Schwerpunkt
+  Beispiele), Compiler `syntax`+`project`+`cli`, `semantics` in zwei Hälften, `documentation`, Datei-Kommentare und
+  Vergangenheitswörter der Tests. `ir/`, `backend/` und `std/encoding`+`json` folgen nach Fixpunkt bzw.
+  Encoding-Umbau.
