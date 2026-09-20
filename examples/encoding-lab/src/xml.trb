@@ -27,7 +27,7 @@ use ValueDecoder, shortName, structureOf from "./vocabulary"
 
 /** What one type looks like in XML. A value, built by the DSL below, held by the format and by nothing else. */
 public type XmlMapping {
-  /** The element name. Empty means "the short type name". */
+  /** The name the value is written as an element of. Empty means "the short type name". */
   private(var) elementName: String = ""
   /** Fields that are attributes of the element instead of children. */
   private(var) attributes: List<String> = []
@@ -138,6 +138,7 @@ public type Xml {
   }
 }
 
+/** The element name a mapping gives a type: its own `element`, or the short type name if it names none. */
 fn elementOf(mapping: XmlMapping, typeName: String): String {
   if mapping.elementName.isEmpty() {
     return shortName typeName
@@ -366,12 +367,14 @@ public type XmlEncoder with Encoder {
   }
 }
 
+/** A finished element's opening tag, its attributes, its text and children, and its closing tag. */
 fn rendered(frame: XmlFrame): String {
   const attributes = frame.attributes.joined separator: ""
   const inner = frame.text + frame.children
   "<{frame.elementName}{attributes}>{inner}</{frame.elementName}>"
 }
 
+/** One open element, sequence or map of `XmlEncoder`, with what has been written into it so far. */
 type XmlFrame {
   kind: XmlFrameKind
   elementName: String = ""
@@ -382,16 +385,19 @@ type XmlFrame {
   var pending: String = ""
 }
 
+/** What an `XmlFrame` is open as: which case decides how `XmlEncoder.finish` closes it. */
 type XmlFrameKind {
   case Element
   case Items
   case Entries
 }
 
+/** `&`, `<`, `>` and `"` as their entities, so a value's own text cannot be mistaken for markup. */
 fn escaped(value: String): String {
   value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 }
 
+/** The reverse of `escaped`: the five entities `XmlParser` reads back into their characters. */
 fn unescaped(value: String): String {
   value.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&")
 }
@@ -404,6 +410,7 @@ public type XmlNode {
   children: List<XmlNode> = []
 }
 
+/** One attribute of an `XmlNode`: its name and its value, already unescaped. */
 public type XmlAttribute {
   name: String
   value: String

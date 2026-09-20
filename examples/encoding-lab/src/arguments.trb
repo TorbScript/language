@@ -98,6 +98,7 @@ type Option {
   }
 }
 
+/** The option or options one field turns into: one for a scalar, one per nested field for a record or a wrapper. */
 fn optionsOf(field: StructureField, prefix: String): List<Option> {
   const path = if prefix.isEmpty() { field.name() } else { "{prefix}.{field.name()}" }
   const inner = field.of.withoutOptional()
@@ -108,6 +109,7 @@ fn optionsOf(field: StructureField, prefix: String): List<Option> {
   }
 }
 
+/** One scalar field as an `Option`: its dashed flag, its shape for the help text, and its default. */
 fn optionOf(field: StructureField, path: String, shape: Structure): Option {
   const flag = match shape {
     .Boolean => true
@@ -124,6 +126,7 @@ fn optionOf(field: StructureField, path: String, shape: Structure): Option {
   )
 }
 
+/** What the help text calls a field's shape: `number`, `count`, `yes/no`, `bytes`, or `text` for everything else. */
 fn shapeOf(structure: Structure): String {
   match structure {
     .Integer => "number"
@@ -186,6 +189,7 @@ fn recordOf(options: List<Option>, values: Map<String, String>): EncodedValue {
   EncodedValue.Record "", fields
 }
 
+/** `value`, or `floor` if that is larger: the padding of `Arguments.help` never goes negative. */
 fn maximumOf(value: Int, floor: Int): Int {
   if value < floor {
     return floor

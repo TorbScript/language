@@ -165,6 +165,12 @@ public type FieldDefault {
 
 // --- The scalars describe themselves --------------------------------------------------------------------------------
 
+/**
+ * `Bool` writes, reads and describes itself through the vocabulary's own `bool` method.
+ *
+ * A scalar has no fields to derive from, so its three forms are written directly instead of generated from a
+ * constructor.
+ */
 extend Bool with Encode, Decode, Describe {
   fn encode<Target: Encoder>(self, var target: Target) {
     target.bool self
@@ -179,6 +185,7 @@ extend Bool with Encode, Decode, Describe {
   }
 }
 
+/** `Int64` writes, reads and describes itself through the vocabulary's own `int` method, the same way `Bool` does. */
 extend Int64 with Encode, Decode, Describe {
   fn encode<Target: Encoder>(self, var target: Target) {
     target.int self
@@ -193,6 +200,7 @@ extend Int64 with Encode, Decode, Describe {
   }
 }
 
+/** `Float64` writes, reads and describes itself through the vocabulary's own `float` method. */
 extend Float64 with Encode, Decode, Describe {
   fn encode<Target: Encoder>(self, var target: Target) {
     target.float self
@@ -207,6 +215,7 @@ extend Float64 with Encode, Decode, Describe {
   }
 }
 
+/** `String` writes, reads and describes itself through the vocabulary's own `string` method. */
 extend String with Encode, Decode, Describe {
   fn encode<Target: Encoder>(self, var target: Target) {
     target.string self
@@ -223,6 +232,7 @@ extend String with Encode, Decode, Describe {
 
 // --- The collections describe themselves ----------------------------------------------------------------------------
 
+/** A list encodes as a `sequence`: its length in front, then every item written with its own `encode`. */
 extend<Item: Encode> List<Item> with Encode {
   fn encode<Target: Encoder>(self, var target: Target) {
     target.sequence Some(length())
@@ -233,6 +243,7 @@ extend<Item: Encode> List<Item> with Encode {
   }
 }
 
+/** A list describes as a `sequence` around its item's structure: the shape is one item, repeated. */
 extend<Item: Describe> List<Item> with Describe {
   fn describe<Target: Describer>(var target: Target) {
     target.sequence()
@@ -241,6 +252,7 @@ extend<Item: Describe> List<Item> with Describe {
   }
 }
 
+/** `Some` encodes as its value; `None` encodes as `nothing()`, so the field's default applies on the way back in. */
 extend<Value: Encode> Option<Value> with Encode {
   fn encode<Target: Encoder>(self, var target: Target) {
     match self {
@@ -250,6 +262,7 @@ extend<Value: Encode> Option<Value> with Encode {
   }
 }
 
+/** An optional value describes as `optional()` around the value's own structure. */
 extend<Value: Describe> Option<Value> with Describe {
   fn describe<Target: Describer>(var target: Target) {
     target.optional()
@@ -440,6 +453,7 @@ extend EncodedValue with Encode {
   }
 }
 
+/** Writes every field of a record or variant: its name, announced through `field`, then its value's own `encode`. */
 fn writeFields<Target: Encoder>(fields: List<EncodedField>, var target: Target) {
   for field in fields {
     target.field field.name
@@ -447,6 +461,7 @@ fn writeFields<Target: Encoder>(fields: List<EncodedField>, var target: Target) 
   }
 }
 
+/** One named field of an `EncodedValue.Record` or `.Variant`, in the shape `Encoder.field` and `Decoder.field` use. */
 public type EncodedField {
   name: String
   value: EncodedValue
@@ -456,11 +471,13 @@ public type EncodedField {
   }
 }
 
+/** The fields of a record or variant as `name: value` text, comma separated: what `EncodedValue.show` puts inside the parentheses. */
 fn showFields(fields: List<EncodedField>): String {
   const parts = fields.map { _.show() }
   parts.joined separator: ", "
 }
 
+/** The items of a sequence or a mapping as `show`n text inside brackets. */
 fn showItems(items: List<EncodedValue>): String {
   const parts = items.map { _.show() }
   const inner = parts.joined separator: ", "
@@ -576,6 +593,7 @@ public type Values with Encoder {
   }
 }
 
+/** One open `sequence`, `map`, `record` or `variant` of `Values`, with what has been written into it so far. */
 type ValueFrame {
   kind: ValueFrameKind
   var children: List<EncodedValue> = []
@@ -583,6 +601,7 @@ type ValueFrame {
   var pending: String? = None
 }
 
+/** What a `ValueFrame` is open as. Which case it is decides how `Values.finish` closes it into an `EncodedValue`. */
 type ValueFrameKind {
   case Sequence
   case Mapping
@@ -840,6 +859,7 @@ public type ValueDecoder with Decoder {
   }
 }
 
+/** One open `sequence`, `map`, `record` or `variant` of `ValueDecoder`, with the position `hasNext` and `field` read from. */
 type ValueCursor {
   kind: ValueCursorKind
   items: List<EncodedValue> = []
@@ -848,11 +868,13 @@ type ValueCursor {
   var selected: EncodedValue? = None
 }
 
+/** Whether a `ValueCursor` reads by position (`Items`, a sequence or a map) or by name (`Fields`, a record or variant). */
 type ValueCursorKind {
   case Items
   case Fields
 }
 
+/** Parses a whole number out of text, for a lenient format whose input has no numeric type of its own. */
 fn parseInteger(text: String, lenient: Bool): Result<Int64, DecodeError> {
   if !lenient {
     return Fail DecodeError("a whole number is needed")
@@ -863,6 +885,7 @@ fn parseInteger(text: String, lenient: Bool): Result<Int64, DecodeError> {
   }
 }
 
+/** Parses a number out of text, for a lenient format whose input has no numeric type of its own. */
 fn parseFloating(text: String, lenient: Bool): Result<Float64, DecodeError> {
   if !lenient {
     return Fail DecodeError("a number is needed")
@@ -933,6 +956,7 @@ public type Structure {
   }
 }
 
+/** One field of a `Structure.Record`: its description and the structure of the value it holds. */
 public type StructureField {
   description: FieldDescription
   of: Structure
@@ -957,6 +981,7 @@ public type StructureField {
   }
 }
 
+/** One case of a `Structure.Variant`: its name and the structure of its own fields. */
 public type StructureCase {
   name: String
   fields: List<StructureField>
@@ -1095,6 +1120,7 @@ public type Structures with Describer {
   }
 }
 
+/** One open `Structure` of `Structures`, with what has been described into it so far. */
 type StructureFrame {
   kind: StructureFrameKind
   var children: List<Structure> = []
@@ -1103,6 +1129,7 @@ type StructureFrame {
   var pending: FieldDescription? = None
 }
 
+/** What a `StructureFrame` is open as. Which case it is decides how `Structures.finish` closes it into a `Structure`. */
 type StructureFrameKind {
   case Optional
   case Sequence
