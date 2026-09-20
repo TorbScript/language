@@ -1,3 +1,22 @@
+/**
+ * One portable C11 translation unit for a whole program (BACKEND 3.6): [emitProgram] walks the [IrProgram] once and
+ * writes every declaration `writer.trb` renders, in the order this file's own functions are listed below.
+ *
+ * It is a **pure function of the `IrProgram`**: every table is sorted by its mangled name before it is written and
+ * every walk is depth first over that order, so two runs of the compiler produce the same bytes and the fixpoint test
+ * (BACKEND 3.6, "What 6.2 decided") is about the compiler and not about a `Map` iteration order. No path of a
+ * machine, no time and no build id can reach the output either: a location carries the path the lowering interned,
+ * relative to the workspace root.
+ *
+ * What the back end cannot emit yet is a **finding** and never C that does not compile: `torb build` reports the
+ * findings and refuses, exactly as `torb ir` counts what the lowering does not lower yet.
+ *
+ * # Related
+ *
+ * - [emittedProgramText] - the same walk, as the text `--emit-c` and the snapshot tests compare.
+ * - `type.trb`, `body.trb`, `natives.trb`, `prototype.trb` - the other files this one calls into.
+ */
+
 use LiteralValue from "../../semantics/checker/type"
 use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue, FunctionId from "../../ir/ir"
 use Slot, Instruction, WitnessTable, WitnessTableId, Ownership from "../../ir/ir"
@@ -15,18 +34,6 @@ use dropFunctionOf, pointerTo, closureThunkNameOf, environmentLayoutOfFunction f
 use retainChildrenFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
 use retainStatement, releaseStatement, describeCounted from "./body"
-
-/**
- * One portable C11 translation unit for a whole program (BACKEND 3.6).
- *
- * It is a **pure function of the `IrProgram`**: every table is sorted by its mangled name before it is written and
- * every walk is depth first over that order, so two runs of the compiler produce the same bytes and the fixpoint of
- * milestone 6 is about the compiler and not about a `Map` iteration order. No path of a machine, no time and no build
- * id can reach the output either: a location carries the path the lowering interned, relative to the workspace root.
- *
- * What the back end cannot emit yet is a **finding** and never C that does not compile: `torb build` reports the
- * findings and refuses, exactly as `torb ir` counts what the lowering does not lower yet.
- */
 
 /** Everything one translation unit is: the C, and what the back end could not emit. */
 public fn emitProgram(program: IrProgram, entry: String): Emission {
@@ -951,9 +958,9 @@ fn emitHelper(var emission: Emission, program: IrProgram, layout: Layout, prefix
 }
 
 /**
- * One statement per counted field. A variant layout switches on the tag: the common fields first, then the group of the
- * variant the value really is - which is the whole reason a counted field inside a case had to wait for this
- * sub-milestone.
+ * One statement per counted field. A variant layout switches on the tag: the common fields first, then the group of
+ * the variant the value really is - which is why a counted field inside a case needs its own `switch` and not a flat
+ * list of members.
  *
  * A helper of a layout nothing inside of which the ABI can count yet would have an empty body, and an unused parameter
  * is a warning, so it casts its own value to `void` once.
@@ -1413,7 +1420,7 @@ fn integerOf(number: Int): CExpression {
 
 /**
  * A float constant as the shortest decimal that reads back as the same value, which is what `Show` of a `Float`
- * answers. A value that is not finite cannot be a compile-time constant (decided gap 11), so there is nothing else.
+ * answers. A value that is not finite cannot be a compile-time constant, so there is nothing else.
  */
 fn floatOf(var emission: Emission, number: Float): CExpression {
   const shown = "{number}"

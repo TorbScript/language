@@ -1,11 +1,10 @@
 /**
  * A small structured writer for C, and the one renderer that turns it into lines.
  *
- * The emitter used to build its output by concatenating and interpolating strings: a statement, an expression, a struct
- * member and a whole helper function were all `String`. That made three things easy to get subtly wrong - where the
- * parentheses go, how deep a line is indented, and where a blank line belongs - and every new slice of milestone 5 added
- * more of it. So everything that **has structure** is a value here (`CExpression`, `CStatement`, `CMember`,
- * `CDeclaration`), and the renderer below is the only code in the back end that decides:
+ * Building C by concatenating and interpolating strings makes three things easy to get subtly wrong and invisible in
+ * review - where the parentheses go, how deep a line is indented, and where a blank line belongs. So everything that
+ * **has structure** is a value here (`CExpression`, `CStatement`, `CMember`, `CDeclaration`), and the renderer below
+ * is the only code in the back end that decides:
  *
  * - **where a parenthesis goes** (`rendered`, one table of precedences),
  * - **how far a line is indented** (`CWriter.depth`, two spaces a level),
@@ -26,8 +25,9 @@ public type CDesignatedField {
 }
 
 /**
- * A C expression. Nothing here carries a parenthesis: where one is needed is decided once, from the precedence of the
- * node and of the place it stands in, so a shape the emitter builds can never come out misread.
+ * One node of an expression the emitter builds, with no parenthesis anywhere in it: where one is needed is decided
+ * once, from the precedence of the node and of the place it stands in, so a shape the emitter builds can never come
+ * out misread.
  */
 public type CExpression {
   /** An identifier the program declares: a slot, a mangled function, a helper, a macro. */
@@ -302,7 +302,7 @@ public type CMember {
   case Field(annotation: String, name: String)
   /** `struct { ... } v0;`: one group of a variant layout. */
   case Group(name: String, members: List<CMember>)
-  /** `union { ... } payload;`: the groups of a variant layout together. */
+  /** The groups of a variant layout together, under one name: `union { ... } payload;`. */
   case Union(name: String, members: List<CMember>)
 }
 

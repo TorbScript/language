@@ -1,14 +1,12 @@
-use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind from "../../ir/ir"
-
 /**
  * The manifest of natives: the contract between the lowering and the runtime (BACKEND 3.7).
  *
  * Every `native` declaration of `std/` is in here exactly once, mapped either to an intrinsic the back ends emit
  * themselves, to a function of `runtime/` called by name, or to a body the lowering generates from the layout. A
- * declaration that the runtime does not implement yet is `.Planned(milestone)`, so using it is a clean compile error
- * that names the milestone and never a link error with a mangled name in it (decided gaps 18 and 22).
+ * declaration the runtime does not implement yet is `.Planned(milestone)`, so using it is a clean compile error that
+ * names what is missing and never a link error with a mangled name in it.
  *
- *     torb build → `Decimal.add` is not implemented yet (milestone 8)
+ *     torb build → `Decimal.add` is not implemented yet
  *
  * `torb natives --header` writes the `.Ready` `.Runtime` entries to `runtime/include/torb_natives.h`. That file is
  * included after `torb.h` by `runtime/tests/natives_header_test.c`, so the C compiler compares the two declarations
@@ -23,7 +21,14 @@ use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind from "../../ir/ir"
  *   comparisons and the `Construct` from the layout, or the runtime owns the order and answers a **sign** that the
  *   wrapper turns into the three cases (`NativeResult.Ordering`). Both exist because `Ordering` is a layout of the
  *   program.
+ *
+ * # Related
+ *
+ * - [NativeEntry] - one row of the manifest.
+ * - [NativeState.Planned] - what makes a declaration a clean compile error instead of a missing symbol.
  */
+
+use Intrinsic, IntrinsicOperation, NumericKind, RuntimeKind from "../../ir/ir"
 
 /** One `native` declaration and what it becomes. */
 public type NativeEntry {
@@ -88,12 +93,13 @@ public type NativeResult {
   /**
    * The runtime answers a **sign** as an `int32_t` where the declaration answers an `Ordering`: negative is `Less`,
    * positive `Greater`, zero `Equal`. It is the shape of every comparison the runtime owns rather than derives - a total
-   * order over the floats with `nan` above everything (decided gap 5), and the two of `std/time` - and the three cases
-   * are a variant type of the *program*, so `runtime/` could not build one (BACKEND 5.R1).
+   * order over the floats with `nan` above everything (runtime/README.md, "Determinism"), and the two of `std/time` -
+   * and the three cases are a variant type of the *program*, so `runtime/` could not build one (BACKEND 5.R1).
    */
   case Ordering
 }
 
+/** What a `NativeEntry` becomes: an opcode both back ends emit, a call into `runtime/`, or a body generated here. */
 public type NativeTarget {
   /** Emitted inline by the C back end, an opcode in the VM. */
   case Intrinsic(intrinsic: Intrinsic)
@@ -103,16 +109,17 @@ public type NativeTarget {
   case Derived(derived: DerivedKind)
   /**
    * An **empty container** of one kind, which is `Instruction.ContainerNew` and can be nothing else: the runtime needs
-   * one element descriptor per type argument, and no declaration of `std/` can name one (5.7's note). It is the one
-   * native whose target the *lowering* knows better than the runtime does, and it is what lets `ArrayList.from` be
-   * ordinary TorbScript instead of a function of the runtime that would have to walk a witness table.
+   * one element descriptor per type argument, and no declaration of `std/` can name one. It is the one native whose
+   * target the *lowering* knows better than the runtime does, and it is what lets `ArrayList.from` be ordinary
+   * TorbScript instead of a function of the runtime that would have to walk a witness table.
    */
   case Container(kind: RuntimeKind)
 }
 
+/** Whether a `native` declaration can be called today, or is still a named, clean compile error where it is used. */
 public type NativeState {
   case Ready
-  /** `Decimal`, `Float32` arithmetic, `std/http`: a clean compile error naming the milestone. */
+  /** `Decimal`, `Float32` arithmetic, `std/http`: a clean compile error naming what is still missing. */
   case Planned(milestone: String)
 }
 
@@ -346,7 +353,8 @@ fn floatEntries(var entries: List<NativeEntry>) {
     "bool torb_parse_f64(torb_text text, double *out);",
   )
   signedMembers entries, "Float64", kind
-  // `compare` is a total order with `nan` above everything (decided gap 5), which no comparison intrinsic gives.
+  // `compare` is a total order with `nan` above everything (runtime/README.md, "Determinism"), which no comparison
+  // intrinsic gives.
   entries.add(orderingRuntimeOf(
     "Float64.compare",
     "torb_compare_f64",
@@ -358,7 +366,7 @@ fn floatEntries(var entries: List<NativeEntry>) {
   entries.add runtimeOf("Float64.round", "torb_round_f64", "double torb_round_f64(double value);")
   entries.add runtimeOf("Float64.isNaN", "torb_is_nan_f64", "bool torb_is_nan_f64(double value);")
 
-  // `Float32` arithmetic is not implemented: everything narrows to `Float64` for now (decided gap 18).
+  // `Float32` arithmetic is not implemented: everything narrows to `Float64` for now.
   const float32Members = [
     "add", "subtract", "multiply", "divide", "remainder", "negate", "absolute", "equals", "compare", "show", "parse",
   ]
@@ -421,7 +429,7 @@ fn conversionEntries(var entries: List<NativeEntry>) {
 /**
  * `std/core/src/compare.trb`: the one helper that is not a member of a type. `List.hash` folds its items through it
  * (order-dependent); `Set.hash` and `Map.hash` combine theirs with `bitwiseExclusiveOr` instead, which needs nothing
- * from the runtime. Planned for the same milestone as the rest of the collections' natives (see `listEntries` below).
+ * from the runtime.
  */
 fn compareEntries(var entries: List<NativeEntry>) {
   entries.add(runtimeOf(
@@ -583,8 +591,8 @@ fn consoleEntries(var entries: List<NativeEntry>) {
 // --- The collections ------------------------------------------------------------------------------------------------
 
 /**
- * `ArrayList` and `TrieList` are the same implementation until milestone 8, which is observable only through
- * performance: iteration order and `Show` are the same either way (decided gap 18).
+ * `ArrayList` and `TrieList` share this implementation: the persistent variant does not exist yet, so the two are
+ * observable apart only through performance - iteration order and `Show` are the same either way.
  */
 fn listEntries(var entries: List<NativeEntry>, owner: String, hasIterator: Bool) {
   // `ArrayList.from` is ordinary TorbScript since the fourth round of 5.7, and it cannot be anything else: it walks a
@@ -731,13 +739,13 @@ fn collectionEntries(var entries: List<NativeEntry>) {
   setEntries entries, "TrieSet"
 
   // `Array<Item, Size>` is inline storage the emitter writes itself; the members arrive with the interior paths of 5.9b.
-  // `of` is the one whose result type the *checker* works out (gap 51): the number of arguments is the `Size`.
+  // `of` is the one whose result type the *checker* works out: the number of arguments is the `Size`.
   const arrayMembers = ["filled", "of", "from", "length", "get", "iterator", "set", "fill", "mapped"]
   for member in arrayMembers {
     entries.add plannedRuntimeOf("Array.{member}", "torb_array_{member}", "5.9b")
   }
 
-  // A `Range` is an ordinary record; only its iteration is native, and it panics without both ends (decided gap 17).
+  // A `Range` is an ordinary record; only its iteration is native, and it panics without both ends.
   entries.add derivedOf("Range.equals", DerivedKind.Equals)
   entries.add derivedOf("Range.hash", DerivedKind.Hash)
   // `Range.show` writes the source form (`0..10`, `0..=10`), which the derived one cannot, and `iterator` and `length`
@@ -957,7 +965,7 @@ fn plannedPackageEntries(var entries: List<NativeEntry>) {
   entries.add plannedRuntimeOf("Json.parse", "torb_json_parse", "5.7")
   entries.add plannedRuntimeOf("Json.value", "torb_json_value", "5.7")
 
-  // `isSame` compares the identity of a `shared` object, which the checker allows nowhere else (decided gap 15).
+  // `isSame` compares the identity of a `shared` object, which the checker allows nowhere else.
   entries.add plannedIntrinsicOf("isSame", IntrinsicOperation.Equal, "5.9")
 
   entries.add plannedRuntimeOf("SandboxCapabilities.modules", "torb_sandbox_modules", "7.4")
@@ -1082,6 +1090,7 @@ public type NativeCounts {
   symbols: Int = 0
 }
 
+/** The [NativeCounts] of the whole manifest: how many entries of each state, and how many distinct symbols. */
 public fn countNatives(entries: List<NativeEntry>): NativeCounts {
   var ready = 0
   var planned = 0

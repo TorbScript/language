@@ -1,3 +1,22 @@
+/**
+ * One function body as C: the slots as locals, the blocks as labels and `goto`, and one statement per instruction
+ * ([bodyStatements]).
+ *
+ * Everything here answers **values** of `writer.trb` and never text: an instruction becomes a list of `CStatement`, an
+ * operand a `CExpression`. So no part of this file decides a parenthesis or an indentation, and what it does decide -
+ * which shape of the ABI a retain is, where the `->` of a place goes - is what it is about.
+ *
+ * The shape follows BACKEND 3.6: all slots are declared at the top, so no `goto` can cross an initialization; every
+ * block carries its label as a comment; a `#line` directive points every statement at the TorbScript source. Every
+ * slot is zero initialized, and a slot nothing reads is cast to `void` once - the generated code has to compile with
+ * `-Wall -Wextra -Werror`, and an uninitialized or unused variable is a warning there.
+ *
+ * # Related
+ *
+ * - [Body] - the reads and the labels [bodyOf] precomputes for one function.
+ * - [retainStatement], [releaseStatement] - the ownership half: what the ABI does with a counted value.
+ */
+
 use IrProgram, IrFunction, IrSignature, IrTypeId, LayoutId, FunctionId from "../../ir/ir"
 use Slot, SlotDeclaration, BlockId, Instruction, Terminator, Argument, WitnessSource from "../../ir/ir"
 use Reference, LocationId, RuntimeKind, WitnessRoot, WitnessTableId, Capture from "../../ir/ir"
@@ -12,18 +31,7 @@ use cTypeOf, memberNameOf, variantMemberNameOf, witnessMemberNameOf from "./type
 use CExpression, CDesignatedField, CStatement, CSwitchCase, declarationOf from "./writer"
 use readPrototype, matchPrototype from "./prototype"
 
-/**
- * One function body as C: the slots as locals, the blocks as labels and `goto`, and one statement per instruction.
- *
- * Everything here answers **values** of `writer.trb` and never text: an instruction becomes a list of `CStatement`, an
- * operand a `CExpression`. So no part of this file decides a parenthesis or an indentation, and what it does decide -
- * which shape of the ABI a retain is, where the `->` of a place goes - is what it is about.
- *
- * The shape follows BACKEND 3.6: all slots are declared at the top, so no `goto` can cross an initialization; every
- * block carries its label as a comment; a `#line` directive points every statement at the TorbScript source. Every
- * slot is zero initialized, and a slot nothing reads is cast to `void` once - the generated code has to compile with
- * `-Wall -Wextra -Werror`, and an uninitialized or unused variable is a warning there.
- */
+/** One function, with which slots are read and which labels are jumped to precomputed once for the whole body. */
 public type Body {
   function: IrFunction
   /** The C prototype of every ready runtime symbol, by symbol (BACKEND 3.7). */
@@ -39,6 +47,10 @@ public type Body {
 /** The name the caller's result pointer has inside the callee. No mangled name can collide with it. */
 public const resultPointerName = "torb_result"
 
+/**
+ * Walks every block once to mark which slots are read and which labels are jumped to, so [bodyStatements] never has
+ * to ask an instruction twice what it does with a slot.
+ */
 public fn bodyOf(program: IrProgram, function: IrFunction, prototypes: Map<String, String>): Body {
   var reads: List<Bool> = []
   for _ in 0..function.slots.length() {
@@ -527,6 +539,7 @@ public fn retainStatement(program: IrProgram, id: IrTypeId, place: CExpression):
 /** The two members of `torb_closure`: the code pointer the thunks of the program fill in, and the environment. */
 public const codeMemberName = "code"
 
+/** The other member of `torb_closure`, alongside [codeMemberName]: the pointer to the closure's own environment. */
 public const environmentMemberName = "environment"
 
 /** A slice and a container answer the retained value rather than taking one, so the place is written back. */
@@ -678,6 +691,7 @@ fn releaseStatements(var emission: Emission, program: IrProgram, id: IrTypeId, p
   }
 }
 
+/** What kind of counted value this is, in the words [retainStatements] and [releaseStatements] put into a finding. */
 public fn describeCounted(program: IrProgram, id: IrTypeId): String {
   match program.typeAt(countedFormOf(program, id)) {
     .SharedObject(_) => "a `shared type` object (milestone 5.9b)"
@@ -690,6 +704,7 @@ public fn describeCounted(program: IrProgram, id: IrTypeId): String {
   }
 }
 
+/** A layout whose representation is boxed - the layout `torb_retain`/`torb_release` reach through a raw pointer. */
 public fn boxedLayoutOf(program: IrProgram, id: IrTypeId): LayoutId? {
   if !program.hasType(id) {
     return None
@@ -1092,7 +1107,15 @@ fn closureStatements(
   [CStatement.Block(inner)]
 }
 
-/** What one capture puts into the environment: the value, the box, or the pointer of a place. */
+/**
+ * What one capture puts into the environment: the value, the box, or the pointer of a place.
+ *
+ * # Open
+ *
+ * A capture of a `var` parameter (`.Place`) is reported as unsupported and its address is written anyway, so the walk
+ * can keep looking for further findings; `torb build` never reaches a C compiler with it, because a program with any
+ * finding is refused first.
+ */
 fn captureExpression(
   var emission: Emission,
   program: IrProgram,
@@ -1564,7 +1587,7 @@ fn floatingExpression(
     .Divide => Some CExpression.Binary(first, "/", second)
     .Negate => Some CExpression.Unary("-", first)
     // The one arithmetic operator of a float that is not a C operator. A remainder by zero answers `nan` and never
-    // panics, exactly as `a / 0.0` answers an infinity - only the integers panic (decided gap 2)
+    // panics, exactly as `a / 0.0` answers an infinity - only the integers panic (BACKEND 3.3)
     .Remainder => Some CExpression.Call(CExpression.Name("torb_remainder_{suffix}"), [first, second])
     _ => {
       reportUnsupported emission, "a bit operation on a float"

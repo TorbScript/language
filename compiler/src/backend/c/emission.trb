@@ -1,15 +1,27 @@
+/**
+ * What the C emitter writes into ([Emission]), and the small vocabulary every part of it shares: the C name of a
+ * [Slot], the [locationExpression] a checked operation carries, and the `#line` that points a debugger at the source.
+ *
+ * [write] is the only way a declaration reaches the output, which is what keeps the blank lines of the file out of
+ * every part of the emitter that builds one; [reportUnsupported] is the matching way a part of it says it cannot.
+ *
+ * # Related
+ *
+ * - [CDeclaration] - what a declaration written here is built out of.
+ */
+
 use IrProgram, IrFunction, Slot, LocationId, Location from "../../ir/ir"
 use escapedComponent from "../../ir/mangle"
 use CExpression, CStatement, CDeclaration from "./writer"
 use declarationLines, needsBlankLine, cStringOf from "./writer"
 
 /**
- * What the C emitter writes into, and the two things every part of it needs: a declaration of the translation unit, and
- * a finding.
+ * The translation unit as it is written so far, and every construct found on the way that the C back end cannot emit
+ * yet.
  *
- * A finding is **not** an internal error: it is a construct of the program that a later sub-milestone teaches the C
- * back end, counted and named the same way `torb ir` counts what the lowering does not lower yet. `torb build` refuses
- * a program that has any, so no C that cannot compile is ever written.
+ * A finding is **not** an internal error: it is a construct of the program the C back end does not support yet,
+ * counted and named the same way `torb ir` counts what the lowering does not lower yet. `torb build` refuses a
+ * program that has any, so no C that cannot compile is ever written.
  */
 public type Emission {
   var lines: List<String> = []
@@ -32,7 +44,7 @@ public fn write(var emission: Emission, declaration: CDeclaration) {
 }
 
 /**
- * One construct the C back end does not emit yet, with the milestone that brings it. The same construct is recorded
+ * One construct the C back end does not emit yet, with what it would take to add it. The same construct is recorded
  * once however often it occurs, because one root cause gets one message - the rule the diagnostics follow everywhere.
  */
 public fn reportUnsupported(var emission: Emission, what: String) {
@@ -43,8 +55,9 @@ public fn reportUnsupported(var emission: Emission, what: String) {
   emission.unsupported.add what
 }
 
+/** The finished translation unit, one line per entry of [Emission.lines]. */
 public fn emittedText(emission: Emission): String {
-  // Always `\n`, on every platform: the fixpoint of milestone 6 compares two files byte for byte
+  // Always `\n`, on every platform: the fixpoint test (BACKEND 3.6, "What 6.2 decided") compares two files byte for byte
   emission.lines.joined(separator: "\n") + "\n"
 }
 

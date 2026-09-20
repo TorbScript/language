@@ -1,21 +1,27 @@
+/**
+ * Every IR type as C, and the type definition of every layout (BACKEND 3.1).
+ *
+ * Nothing here decides anything: the representation class, the size and the niche are in the IR, because both back
+ * ends have to agree about them. This file only spells them, and it is a pure function of the program, so the
+ * translation unit is one too.
+ *
+ * A type the C back end cannot spell yet answers the empty string, and [whyNoCType] names what it is instead. That is
+ * how `torb build` refuses the program with a finding instead of writing C that does not compile.
+ *
+ * # Related
+ *
+ * - [objectDeclarationOf] - the one type this file writes a struct for on its own: a trait-typed value has no
+ *   [Layout] of the program in it.
+ * - [layoutDefinitionOrder] - the order every layout's own struct has to be written in.
+ */
+
 use IrProgram, IrTypeId, IrType, LayoutId, RuntimeKind from "../../ir/ir"
 use Layout, LayoutKind, Representation, FieldLayout from "../../ir/layout"
 use isEnvironmentLayout from "../../ir/capture"
 use escapedComponent, objectTypeName from "../../ir/mangle"
 use CMember, CDeclaration from "./writer"
 
-/**
- * Every IR type as C, and the type definition of every layout (BACKEND 3.1).
- *
- * Nothing here decides anything: the representation class, the size and the niche are in the IR, because both back
- * ends have to agree about them. This file only spells them, and it is a pure function of the program so that the
- * translation unit is one too.
- *
- * A type the C back end cannot spell yet answers the empty string, and `whyNoCType` says which milestone brings it.
- * That is how `torb build` refuses with a finding instead of writing C that does not compile.
- */
-
-/** The C type of a value of this type. Empty where the back end has none yet - `whyNoCType` says why. */
+/** The C type of a value of this type. Empty where the back end has none yet - [whyNoCType] says why. */
 public fn cTypeOf(program: IrProgram, id: IrTypeId): String {
   if !program.hasType(id) {
     return ""
@@ -83,7 +89,7 @@ public fn witnessMemberNameOf(bound: Int): String {
   "w{bound}"
 }
 
-/** Which milestone brings the C type of this type. One sentence, in the words of the sub-milestone table. */
+/** Why [cTypeOf] answers the empty string for this type. One sentence, naming the construct that is still missing. */
 public fn whyNoCType(program: IrProgram, id: IrTypeId): String {
   if !program.hasType(id) {
     return "a type that is not in the program"
