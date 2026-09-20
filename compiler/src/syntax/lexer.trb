@@ -140,6 +140,11 @@ type Lexer {
   var tokens: List<Token> = []
   var docs: List<DocComment> = []
   var diagnostics: List<Diagnostic> = []
+  /**
+   * The punctuation table, read once per file rather than once per token: a module `const` that is not static data is
+   * **built where it is read**, and this one is 35 pairs of a text and a case (`punctuationAt` below).
+   */
+  punctuationEntries: List<(String, TokenKind)> = punctuationTable
 
   fn run(var self) {
     while const Some(character) = peek() {
@@ -588,12 +593,12 @@ type Lexer {
    * The first entry of the punctuation table whose text stands at the position - the longest match, because that is the
    * order the table is written in.
    *
-   * It is a loop and not `punctuationTable.find({ (text, _) => isAt text })` because that closure captures `var self`
+   * It is a loop and not `punctuationEntries.find({ (text, _) => isAt text })` because that closure captures `var self`
    * as a place rather than a value (`Capture.Place`, see the note of 6.1 in docs/BACKEND.md), and this is the only
    * site in the compiler that needs it.
    */
   fn punctuationAt(self): (String, TokenKind)? {
-    for entry in punctuationTable {
+    for entry in punctuationEntries {
       if isAt(entry.0) {
         return Some entry
       }

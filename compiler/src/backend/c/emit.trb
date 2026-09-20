@@ -217,20 +217,39 @@ fn emitWitnessTables(var emission: Emission, program: IrProgram) {
   if order.isEmpty() {
     return
   }
+  const names = thunkNamesOf program
   write emission, CDeclaration.Comment("The witness tables: what a trait-typed value and a dynamic call go through.")
+  // One thunk per distinct name, however many tables point at it: the name says what the thunk is, so two tables that
+  // reach the same member of the same target share the one function
+  var written: Map<String, Bool> = [:]
   for id in order {
     const table = program.witnessTableAt id
     for index in 0..table.members.length() {
-      if const Some(head) = thunkHeadOf(emission, program, table, index) {
+      const name = thunkNameOf program, table, index, names
+      if written.containsKey(name) {
+        continue
+      }
+      written.set name, true
+      if const Some(head) = thunkHeadOf(emission, program, table, index, names) {
         write emission, CDeclaration.Prototype(head)
       }
     }
   }
+  var defined: Map<String, Bool> = [:]
   for id in order {
-    emitThunks emission, program, program.witnessTableAt(id)
+    const table = program.witnessTableAt id
+    for index in 0..table.members.length() {
+      const name = thunkNameOf program, table, index, names
+      if defined.containsKey(name) {
+        continue
+      }
+      defined.set name, true
+      emitThunk emission, program, table, index, names
+    }
   }
   for id in order {
-    emitWitnessTable emission, program, program.witnessTableAt(id)
+    const table = program.witnessTableAt id
+    emitWitnessTable emission, program, table, names
   }
 }
 
@@ -285,13 +304,90 @@ fn addWitnessTableAfterNested(
   order.add id
 }
 
-/** `W_..._0`: the thunk of one member of one table. `W` is no prefix of the mangling, so nothing can collide with it. */
-fn thunkNameOf(table: WitnessTable, index: Int): String {
-  "W{table.name[1..table.name.byteLength()]}_{index}"
+/**
+ * The name of every thunk of the program, by the **key** of what the thunk is: the member it calls and the payload
+ * block it unwraps.
+ *
+ * A thunk is a function of exactly those two things - it casts `void *self` to the payload of the target and calls one
+ * function of the program - so the same member of the same target reached through three traits is three copies of one
+ * function. `Accumulator.add`, `Collection.add` and `List.add` of one list type are such a triple, and the whole
+ * compiler has 16510 thunks of which 8221 are distinct; naming them after what they are instead of after the table they
+ * happen to sit in is 11.8% of the translation unit.
+ *
+ * A name that two keys would share is a **collision and not a merge**: the keys of a base name are sorted and numbered,
+ * so which one keeps the bare name is a function of the program and not of the order the tables were built in.
+ */
+fn thunkNamesOf(program: IrProgram): Map<String, String> {
+  var keysOfBase: Map<String, List<String>> = [:]
+  var bases: Map<String, String> = [:]
+  for index in 0..program.witnessTableCount() {
+    const table = program.witnessTables[index]
+    for member in 0..table.members.length() {
+      const key = thunkKeyOf program, table, member
+      if bases.containsKey(key) {
+        continue
+      }
+      const base = thunkBaseNameOf program, table, member
+      bases.set key, base
+      var keys = keysOfBase.get(base) ?? []
+      keys.add key
+      keysOfBase.set base, keys
+    }
+  }
+  var names: Map<String, String> = [:]
+  for (base, keys) in keysOfBase {
+    if keys.length() == 1 {
+      if const Some(only) = keys.first() {
+        names.set only, base
+      }
+      continue
+    }
+    var sorted = keys
+    sorted.sort({ _ })
+    for position in 0..sorted.length() {
+      names.set sorted[position], "{base}_{position}"
+    }
+  }
+  names
+}
+
+/** What a thunk is: the function it calls, and the payload layout it casts its receiver to. */
+fn thunkKeyOf(program: IrProgram, table: WitnessTable, index: Int): String {
+  const payload = match payloadLayoutOfTable(program, table) {
+    Some(found) => program.layoutAt(found).name
+    None => "void"
+  }
+  const member = table.members[index]
+  if !program.hasFunction(member) {
+    return "?{table.name}_{index}|{payload}"
+  }
+  "{program.functionAt(member).name}|{payload}"
+}
+
+/** `W_acme_x2f_app_main_Small_size`: the member's own name under the thunk prefix. */
+fn thunkBaseNameOf(program: IrProgram, table: WitnessTable, index: Int): String {
+  const member = table.members[index]
+  if !program.hasFunction(member) {
+    return "W{table.name[1..table.name.byteLength()]}_{index}"
+  }
+  const name = program.functionAt(member).name
+  "W{name[1..name.byteLength()]}"
+}
+
+/** The thunk of one member of one table. `W` is no prefix of the mangling, so nothing can collide with it. */
+fn thunkNameOf(program: IrProgram, table: WitnessTable, index: Int, names: Map<String, String>): String {
+  const key = thunkKeyOf program, table, index
+  names.get(key) ?? thunkBaseNameOf(program, table, index)
 }
 
 /** The head of one thunk, or `None` where the member it wraps is not a function of the program. */
-fn thunkHeadOf(var emission: Emission, program: IrProgram, table: WitnessTable, index: Int): String? {
+fn thunkHeadOf(
+  var emission: Emission,
+  program: IrProgram,
+  table: WitnessTable,
+  index: Int,
+  names: Map<String, String>,
+): String? {
   const member = table.members[index]
   if !program.hasFunction(member) {
     reportUnsupported emission, "a witness table member that is not a function of the program"
@@ -314,7 +410,8 @@ fn thunkHeadOf(var emission: Emission, program: IrProgram, table: WitnessTable, 
   }
   const result = resultTypeOf program, signature.result
   const written = parameters.joined separator: ", "
-  Some "static {declarationOf(result, "{thunkNameOf(table, index)}({written})")}"
+  const name = thunkNameOf program, table, index, names
+  Some "static {declarationOf(result, "{name}({written})")}"
 }
 
 /** Whether the member the thunk wraps writes through its receiver, which is what makes the box mutable. */
@@ -330,64 +427,68 @@ fn isVarSelfMember(program: IrProgram, table: WitnessTable, index: Int): Bool {
   }
 }
 
-fn emitThunks(var emission: Emission, program: IrProgram, table: WitnessTable) {
-  for index in 0..table.members.length() {
-    const head = match thunkHeadOf(emission, program, table, index) {
-      Some(found) => found
-      None => {
-        continue
-      }
+fn emitThunk(
+  var emission: Emission,
+  program: IrProgram,
+  table: WitnessTable,
+  index: Int,
+  names: Map<String, String>,
+) {
+  const head = match thunkHeadOf(emission, program, table, index, names) {
+    Some(found) => found
+    None => {
+      return
     }
-    const member = table.members[index]
-    const function = program.functionAt member
-    const payload = payloadLayoutOfTable program, table
-    // A `var self` member writes through the payload, so neither the box nor the pointer it hands on may be `const`
-    const writes = isVarSelfMember program, table, index
-    const qualifier = if writes { "" } else { "const " }
-    const spelling = match payload {
-      Some(found) => "{qualifier}{program.layoutAt(found).name} *"
-      None => "{qualifier}void *"
-    }
-    const unwrapped = match payload {
-      Some(found) => payloadFieldOf program, found
-      None => CExpression.Name "box"
-    }
-    var body: List<CStatement> = []
-    const cast = CExpression.Cast spelling, CExpression.Name("self")
-    body.add CStatement.Declaration(spelling, "box", Some(cast))
-    // **The erased ABI borrows every operand**, because a call site knows the member's index and not its declaration:
-    // `CallWitness` hands over `value.data` and the arguments as they are and keeps its own counts. A parameter the real
-    // member takes **owned** - the `self` of `ArrayList.iterator`, whose `ListIterator` stores the list, and the value of
-    // `ArrayList.add`, which the buffer keeps - would consume a count nobody handed over, and the caller's own release
-    // would then free the block twice. So the thunk is where the counts are made, which is also the one place that knows
-    // both conventions. The payload needs a local of its own because a read-only member's box is `const`; an ordinary
-    // parameter is already a local of the thunk and is retained in place
-    const receiver = match retainedReceiverOf(program, table, index) {
-      Some(statement) => {
-        const annotation = valueTypeOf program, function.signature.parameters[0].annotation
-        body.add CStatement.Declaration(annotation, receiverName, Some(unwrapped))
-        body.add statement
-        CExpression.Name receiverName
-      }
-      None => if writes { CExpression.AddressOf unwrapped } else { unwrapped }
-    }
-    var given = [receiver]
-    for position in 1..function.signature.parameters.length() {
-      const argument = CExpression.Name "a{position}"
-      if const Some(statement) = retainedArgumentOf(program, function, position, argument) {
-        body.add statement
-      }
-      given.add argument
-    }
-    const called = CExpression.Call CExpression.Name(function.name), given
-    if isVoidResultOf(program, function.signature.result) {
-      body.add CStatement.Evaluate(called)
-      body.add CStatement.Return()
-    } else {
-      body.add CStatement.Return(Some(called))
-    }
-    write emission, CDeclaration.Definition("", head, body)
   }
+  const member = table.members[index]
+  const function = program.functionAt member
+  const payload = payloadLayoutOfTable program, table
+  // A `var self` member writes through the payload, so neither the box nor the pointer it hands on may be `const`
+  const writes = isVarSelfMember program, table, index
+  const qualifier = if writes { "" } else { "const " }
+  const spelling = match payload {
+    Some(found) => "{qualifier}{program.layoutAt(found).name} *"
+    None => "{qualifier}void *"
+  }
+  const unwrapped = match payload {
+    Some(found) => payloadFieldOf program, found
+    None => CExpression.Name "box"
+  }
+  var body: List<CStatement> = []
+  const cast = CExpression.Cast spelling, CExpression.Name("self")
+  body.add CStatement.Declaration(spelling, "box", Some(cast))
+  // **The erased ABI borrows every operand**, because a call site knows the member's index and not its declaration:
+  // `CallWitness` hands over `value.data` and the arguments as they are and keeps its own counts. A parameter the real
+  // member takes **owned** - the `self` of `ArrayList.iterator`, whose `ListIterator` stores the list, and the value of
+  // `ArrayList.add`, which the buffer keeps - would consume a count nobody handed over, and the caller's own release
+  // would then free the block twice. So the thunk is where the counts are made, which is also the one place that knows
+  // both conventions. The payload needs a local of its own because a read-only member's box is `const`; an ordinary
+  // parameter is already a local of the thunk and is retained in place
+  const receiver = match retainedReceiverOf(program, table, index) {
+    Some(statement) => {
+      const annotation = valueTypeOf program, function.signature.parameters[0].annotation
+      body.add CStatement.Declaration(annotation, receiverName, Some(unwrapped))
+      body.add statement
+      CExpression.Name receiverName
+    }
+    None => if writes { CExpression.AddressOf unwrapped } else { unwrapped }
+  }
+  var given = [receiver]
+  for position in 1..function.signature.parameters.length() {
+    const argument = CExpression.Name "a{position}"
+    if const Some(statement) = retainedArgumentOf(program, function, position, argument) {
+      body.add statement
+    }
+    given.add argument
+  }
+  const called = CExpression.Call CExpression.Name(function.name), given
+  if isVoidResultOf(program, function.signature.result) {
+    body.add CStatement.Evaluate(called)
+    body.add CStatement.Return()
+  } else {
+    body.add CStatement.Return(Some(called))
+  }
+  write emission, CDeclaration.Definition("", head, body)
 }
 
 /** The local a thunk hands an **owned** receiver over in. Named once, because the body writes it twice. */
@@ -442,10 +543,15 @@ fn isVoidResultOf(program: IrProgram, id: IrTypeId): Bool {
   resultTypeOf(program, id) == "void"
 }
 
-fn emitWitnessTable(var emission: Emission, program: IrProgram, table: WitnessTable) {
+fn emitWitnessTable(
+  var emission: Emission,
+  program: IrProgram,
+  table: WitnessTable,
+  names: Map<String, String>,
+) {
   var members: List<CExpression> = []
   for index in 0..table.members.length() {
-    const name = thunkNameOf table, index
+    const name = thunkNameOf program, table, index, names
     members.add CExpression.Cast("torb_witness_member", CExpression.Name(name))
   }
   const arrayName = "{table.name}_members"

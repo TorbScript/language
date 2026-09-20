@@ -844,7 +844,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.14** | Conformance and determinism: one runner over stage 0 and the C back end, `--emit-c` twice byte identical for the whole workspace, no absolute path in the output, timing budget | `compiler/tests/backend.test.trb`, the runner | Everything above | 5.1-5.13 |
 | **6.1** | Compile `compiler/` with stage 1: every missing intrinsic, every crash, every construct the compiler uses and the lowering does not cover yet. **Gate: a `torb` binary exists** | wherever it hurts | `torb check ..` from the new binary gives the same output as stage 1 | 5.14 |
 | **6.2** | **Done.** The fixpoint: stage 2 compiles `compiler/` again, the two C files are compared byte for byte, stage 3 emits a third one. `bootstrap/` frozen | `std/iteration/src/concatenate.trb`, `runtime/platform.c`, `bootstrap/crates/torb-cli/tests/fixpoint.rs` | **The fixpoint gate** (`cargo test --release --test fixpoint -- --ignored`) | 6.1 |
-| **6.3** | Performance and size: measure, shard the translation unit if it pays, cut the obvious waste (instance count, string copies), state a budget for `torb build` of the workspace | `backend/c/emit.trb` | A timing test in the suite | 6.2 |
+| **6.3** | **Measured, and one third of it done** (see "What 6.3 measured"): the flags stay, the translation unit is **not** sharded (4.3x faster to compile, 2.3x slower a binary), one witness thunk per member instead of per table entry (-13.3% of the C, -22% of the gcc), the module `const` of the lexer read once per file. **Left:** the mangled names (62.5% of the file), the element-type-blind collection defaults, `R_`/`D_` keyed on a layout's shape, `#line` behind a profile, the immortal counted static for a module `const`, a budget for `torb build` of the workspace | `backend/c/emit.trb`, `syntax/lexer.trb` | A timing test in the suite | 6.2 |
 | **7.1** | Bytecode: the format, the emitter from the IR, a disassembler for the snapshots | `backend/bytecode/*.trb` | Disassembly snapshots next to the IR snapshots | 6.2 |
 | **7.2** | The interpreter loop, `torb run` through the VM, the conformance suite through the VM. **Gate: stage 0, C and the VM agree on every script** | `vm/*.trb` | The full suite, three back ends | 7.1 |
 | **7.3** | Tasks: the state-machine transformation in the lowering, `Task`/`spawn`/`await()`/`Channel`, the FIFO scheduler in C and in the VM. **Gate: `10-async.trb` in both back ends** | `ir/lower/task.trb`, `runtime/task.c`, `vm/task.trb` | `10-async.trb`, channel and ordering tests | 7.2 |
@@ -2762,6 +2762,219 @@ round and neither fixed:
   back ends on one, which is why `tuple-compare.trb` has no `nan` in it.
 - **A program that cannot be started at all** is an `IoError` in the interpreter and on Windows, and the shell's own exit
   code on POSIX, where `Process.run` still goes through `popen`.
+
+### What 6.3 measured: where the 65 megabytes are
+
+**The build is the C compiler now** (6.2's table: 96 of stage 2's 117 seconds), so the question of this round is not how
+fast the compiler is but how much C it writes. Everything below is measured on one machine (16 cores, gcc 13.2 UCRT,
+Windows, `-O2`) over the translation unit the compiler emits for itself, and a number taken while something else was
+building says so.
+
+**The flags stay as they are, and the translation unit is not sharded.** Measured on the 65 MB file, with the whole
+runtime linked in, in one quiet window (the numbers marked *loaded* were taken while another build ran and are only good
+as ratios inside their own row):
+
+| what gcc is called with | wall | the binary | `check ..` with it |
+|---|---|---|---|
+| `-std=c11 -O2 -g0 -Wall -Wextra -Werror`, what the driver does | **98.5 s** | 11296792 | **7.2 s** |
+| `-O1` instead | 70.4 s (-29%) | 11678074 | 7.9 s (+3-8%) |
+| `-O0` instead | 51.0 s (-48%) | 18652623 | 18.0 s (2.4x slower) |
+| `-O2 -pipe` | 109.6 s (+11%) | unchanged | - |
+| `-O2` without `-Wall -Wextra -Werror` | 101.5 s (+3%, noise) | unchanged | - |
+| `-c -O2`, no link *(loaded)* | 121.9 s | - | - |
+| `-fsyntax-only -O2` *(loaded)* | **7.1 s** | - | - |
+| 8 shards, `-c -O2`, one at a time *(loaded)* | 112.5 s | - | - |
+| **8 shards at once** plus the link *(loaded)* | **20.7 + 2.0 s** | 15620695 | **16.5 s (2.3x slower)** |
+
+- **The C compiler's front end is free and the per-function back end is everything**: `-ftime-report` at `-O2` puts 3% of
+  the CPU in parsing and 97% in "opt and generate", 83% of it in the callgraph's function expansion. That is why
+  `-fsyntax-only` is 7 seconds and a full compile is a hundred: sharding can win almost linearly, and the floor is low.
+- **And that is exactly why sharding is not worth it here.** A real 8-way split (every body round robin, a shared prelude
+  of everything else plus a prototype for all 35841 bodies, `static` dropped) compiles in 22.7 seconds instead of 98.5 -
+  **4.3x** - and no extra CPU in total. But **the binary that comes out is 2.28x slower** (`check ..` 16.5 s against 7.2 s,
+  as slow as `-O0`), because seven of eight call edges then cross a translation unit and nothing inlines across one. For a
+  compiler that is built in order to *run* the next stage, that trade is a loss. `-flto=8` would keep the whole-program
+  view and parallelize the codegen, and it does not work with this toolchain at all: the assembler refuses the object
+  (`too many sections (42392)`) and with `-Wa,-mbig-obj` the bundled `ld` has no LTO plugin.
+- So: **sharding needs a partition that keeps the hot call graphs inside one shard**, and until someone has one, the way
+  to make the build shorter is to emit **less C** - which is what the rest of this section is about. `-pipe` is a loss on
+  Windows and the warnings cost nothing; `-O1` is the flag for a *debug* profile when 5.13 has profiles (-29% build for
+  3-8% of the compiler's own speed, and it trips no new warning), and `-O0` is not: it buys 48% of the build for a
+  compiler that is 2.4x slower.
+
+**What the 65717562 bytes are.** Parsed with the grammar of `backend/c/writer.trb`, so the parts add up to the file:
+
+| part of `program.c` | count | bytes | share |
+|---|---|---|---|
+| function definitions | 35841 | 43913582 | 66.8% |
+| prototypes, one line each | 35388 | 9073508 | 13.8% |
+| static data | 14574 | 9019751 | 13.7% |
+| the comment over each definition | 13654 | 1908313 | 2.9% |
+| `struct` definitions | 3746 | 910857 | 1.4% |
+| forward `typedef`s | 3746 | 851909 | 1.3% |
+| *of the definitions:* `#line` directives | 73259 | 3835425 | 5.8% |
+
+| kind of function | count | bytes | share | median | max |
+|---|---|---|---|---|---|
+| a monomorphic function of the compiler | 2627 | 15764340 | 24.0% | 4068 | 91616 |
+| an instance of a generic | 7762 | 11876129 | 18.1% | 1332 | 9055 |
+| **a witness thunk** | **16510** | **11636722** | **17.7%** | 689 | 1622 |
+| drop glue `D_` | 2729 | 1333538 | 2.0% | 479 | 4540 |
+| a native wrapper | 1541 | 1099275 | 1.7% | 531 | 2708 |
+| retain glue `R_` | 2314 | 1093539 | 1.7% | 460 | 2705 |
+| a generated member (derived, or a wrapper around an intrinsic) | 1542 | 742463 | 1.1% | 267 | 30375 |
+| closure bodies and closure thunks | 361 | 202765 | 0.3% | 517 | 5445 |
+| element helpers `dR_`/`dD_`/`dE_`/`dH_` | 452 | 116046 | 0.2% | 232 | 617 |
+
+The top three are the compiler's own bodies, the instances of the generics and the thunks. **None of the twenty heaviest
+definitions is a duplicate**: eighteen are one-of-a-kind bodies of the compiler (`newChecker` is 91616 bytes, a `match`
+over `Instruction` in `verifyInstruction` 81977), so the waste is not in the head of the distribution but in the tail -
+14794 of 35841 definitions (41%) have a body that is byte-identical to another one's once the function's own name is
+substituted away.
+
+**A witness thunk is a function of what it does and not of the table it sits in, and that is fixed.** A thunk casts
+`void *self` to the payload layout of the target and calls one function of the program; nothing else is in it. So
+`Accumulator.add`, `Collection.add` and `List.add` of one list type were **three copies of one function**, because
+`thunkNameOf` keyed a thunk on *(table, member index)*. It is keyed on *(the member's function, the payload layout)* now
+and named `W` plus the member's own name (`W_acme_x2f_app_main_Small_size`), and one thunk is emitted per distinct name
+however many tables point at it. 16510 thunks become 8221, and the shorter names shrink the `w_..._members` arrays as
+well:
+
+| | before | after | |
+|---|---|---|---|
+| `program.c` of the compiler | 65717562 bytes | **56994210 bytes** | -13.3% |
+| lines | 787016 | 725997 | -7.8% |
+| thunk definitions | 16510 | 8221 | -50% |
+| gcc `-O2`, the same machine in the same load window | 111.8 s | **87.1 s** | -22% |
+
+A name that two keys would share is a **collision and not a merge**: the keys of a base name are sorted and numbered, so
+which one keeps the bare name is a function of the program and not of the order the tables were built in. The gate is the
+one every emitter change has - every program of `bootstrap/tests/native/` byte-equal with stage 0, zero live blocks, and
+the fixpoint, which **holds on the smaller file**: stage 1 and stage 2 agree on 56994748 bytes and stage 3 emits them
+again. Stage 2 builds the compiler in 112 s on the machine these numbers come from.
+
+**What is measured and not done, in the order of what it is worth.**
+
+1. **The mangled names are two thirds of the file.** 419044 occurrences of a mangled identifier, 43991922 bytes, mean
+   length 105; 53707 distinct names of mean length 139. `program.c` is *one* translation unit whose only external symbols
+   are `main` and what `torb.h` declares, so every `t_`/`T_`/`w_`/`d_`/`s_`/`n_`/`W_`/`F_`/`R_`/`D_` name could be a short
+   opaque symbol with the readable name in the comment above it: **41058614 bytes, 62.5% of the file**. Two cheap halves of
+   it: the `_x2f_` escape for a `/` is 1379431 occurrences (6897155 bytes, 10.5%), and the literal prefix
+   `torbscript_x2f_compiler_` is 453545 occurrences (10885080 bytes, 16.6%). It costs nothing semantically and it is the
+   biggest lever there is. What it costs is every `torb ir` snapshot and every pinned C in the tests, so it is its own
+   round.
+2. **1762 instances of six collection defaults never mention their element type** (`Length.isEmpty`,
+   `Collection.finish`, `ArrayList.clear/compact/length/reverse`, `TrieMap.clear/length`): 250 copies each of
+   `torb_list_length(self)`. One instance per *erased container* rather than per element type is 812599 bytes (1.2%) and
+   sound by the same argument the thunks are.
+3. **The `R_`/`D_` glue keyed on the layout's *shape*** - size, alignment and the offsets and runtime kinds of its counted
+   fields - instead of on the layout: 2729 `D_` collapse to 1363 and 2314 `R_` to 1037 under a key that abstracts the
+   layout name, which is 1538440 bytes (2.3%). **This is an upper bound and not a proof**: identical text modulo the layout
+   name shows the same operations on the same field *names*, and two layouts can still differ in a field the body never
+   mentions. It becomes sound the moment the glue is keyed on the shape itself.
+4. **The `#line` directives are 3835425 bytes (5.8%)** at about two per function. A profile that leaves them out, or a
+   `#line` whose file is an index into one table of paths, removes almost all of it.
+5. **The comment over each definition repeats the name on the next line**: 1908313 bytes, 2.9%.
+
+**A module `const` that is not static data is built where it is read, and the lexer pays for it per token.** The
+measurable case is `punctuationTable` in `compiler/src/syntax/lexer.trb`, 35 pairs of a text and a case. The emitted
+`punctuationAt` is the proof: it declares 105 slots and builds all 35 tuples and the whole list **inside its own body**,
+and it is called once per punctuation character of every file the compiler reads. A compiled probe over the same shape
+(10 pairs, 200000 reads, `bootstrap/tests/probe/` and deleted again) measures **1.43 microseconds per read** against
+0.83 for the walk alone, so the build is 63% of what such a read costs.
+
+**And it is worth half a second of a `check` of this repository.** `Lexer` reads the table into a field of its own once
+per file now, which is the read count an immortal static would have, and `check --timings ..` over the 280 files of the
+repository puts "lexing, parsing and the module graph" at **2145 and 2130 ms before, 1858 and 1631 ms after** - 14 to 23%
+of that pass, and the pass is a third of `check`. One `const`, one call site.
+
+The shape that removes it everywhere is the one 6.1's long tail named: the value is built **once** into an immortal
+counted static (`TORB_IMMORTAL_COUNT`, which `torb_retain`, `torb_release` and `torb_make_unique` already treat as "never
+counted, never freed, a write copies"), and a read of the `const` retains that one block. It is not written yet - and the
+same piece of the emitter is what a static `ExpressionNode` tree needs (5.11 below), so the two are one round.
+
+**What the VM of 7.x has to know from this round.**
+
+- **A witness thunk is not a thing of a table.** The C back end needs thunks because a table holds function pointers of
+  one erased signature; a VM that dispatches through an index into a member list needs none at all, and the lesson that
+  survives is the key: what a table entry *is* is *(the target's payload, the member's function)*, and two traits that
+  reach the same member of the same type must share whatever stands there.
+- **Code size is a cost of the C back end and not of the VM** - bytecode has no 139-byte names and no `#line` - but the
+  *instance count* behind it is shared: 7762 instances of generics and 1762 copies of six collection defaults that never
+  mention their element type are the same monomorphization in both back ends. A VM that interprets can share an instance
+  whose bytecode does not depend on the type arguments; the emitter can only merge identical text.
+- **A module `const` that is not static data is built where it is read in the VM too**, unless it holds the built value
+  somewhere. The decided shape is one immortal block per `const` and a retain per read, and it is the same decision for
+  both back ends because it is the *lowering* that inlines the initializer today.
+
+### What 5.11 needs, measured before it is written
+
+Quoted expressions are the one row left between the compiler and its own tests running natively: **58 findings, every one
+`a quoted expression`, every one in a function of `compiler/tests/`** (`torb ir --statistics ../compiler/tests`: 10752 of
+10810 instances lowered). Nothing of `compiler/src/` uses a quotation, so no build waits for this. What follows is what
+the round has to build, and the three costs that were measured first, because two of them decide the design.
+
+**The value.** `Expression<Value>` is `PrimitiveKind.Runtime(RuntimeKind.ExpressionTree)` today, a placeholder with
+pointer size and no contents. It does not have to stay one: the declaration in `std/expression` **has fields**, so
+dropping it from the primitive table of `ir/instantiate.trb` gives it the ordinary record layout of its own declaration
+(`tree`, `source`, `location`, with the declared field symbols, which is what `fieldIndexOf` matches a field read by), and
+the lowering appends what only it knows. The pieces already exist:
+
+- **`value()` is a `lazy` cell.** `cellType`/`cellLayoutOf` build `Option<Value>` plus a thunk, `lowerLazyArgument` builds
+  one from an expression, and `lowerForcedRead` forces it and writes the answer back - which is exactly "the ordinary
+  value, evaluated at most once". So `Expression.value` is a native the *lowering* owns and not a function of `runtime/`,
+  and the two `.Planned("5.11")` runtime entries go away rather than being written.
+- **The captures are in `Quotation.captures`** (`semantics/checker/context.trb`), as `BindingId`s in the order
+  `captures()` answers them. The closure machinery reads its captures from `Tables.captures` by span instead
+  (`capturePlansOf`), and a quotation must **not** be recorded there: when the quoted expression *is* a closure literal
+  (`filter { _.age >= minAge }`) the quotation and the closure have the **same span**, and the second write would take the
+  closure's own plan away. So the plans are built from the `Quotation`, with `capturePlansOf` refactored to take the
+  binding list it already maps.
+
+**`assert` as `std/expression` writes it cannot be lowered, and the reason is not the quotation.** Its failing path calls
+`describe(values[index])` over `List<Encode>`, and two measurements decide what a capture may be:
+
+- **`describe` is `.Planned("5.7")`** and a call of it is a clean finding today. It cannot be a function of `runtime/` at
+  all (it drives `Encode`, whose `Encoder` is a value of the *program*), and ENCODING's decided replacement is
+  `EncodedValue.of(value).show()` - which needs `Encode` per captured type.
+- **What per-captured-type machinery costs.** A probe that shows one whole `Checker` (`"{checker}"`) needs **1731
+  instances** and is blocked by one finding of its own: `a generated member without a receiver` at
+  `std/core/src/convert.trb:113`, which is `Show.showNested`'s instance for a type whose signature comes out with no
+  parameters. The compiler's own tests capture exactly such values (`assert(functionName(found.program, ...) == "...")`
+  captures `found`, which holds a whole checker and a whole IR program), so a quotation that boxes every capture into
+  `Encode`, or shows every capture through `Show`, pulls the transitive closure of that trait over the compiler's types
+  into the test binary - and one unshowable type anywhere in 2801 asserts refuses the whole build.
+
+So **how a capture is stored and how it is shown is one function of the lowering and nothing else may know it**, which is
+also what keeps ENCODING's redesign local when it lands (`captures()` answers `List<EncodedValue>` then, and `assert` reads
+`.show()` off one). The message a failing `assert` prints is what that function decides; the `_h`-free shape of it is the
+open question of the round, and the honest choices are (a) `Show` per capture, with the finding above fixed first and the
+instance cost paid, (b) the captures' names and types without their values, (c) a scalar shown and everything else named.
+
+**The tree is static data of a counted type, which the emitter does not have yet.** `StaticContents.Aggregate` of a
+`Boxed` layout reports `a constant of a counted type` (`emit.trb`), an `ExpressionNode` is recursive and therefore boxed,
+`Literal(value: Encode, of)` is a boxed *trait* value and `arguments: List<ExpressionNode>` is a runtime container with a
+side buffer - none of the three has a static form. **This is the same immortal counted static the module `const` above
+needs**, so the two are one piece of work: a `static const struct { torb_header header; ... }` with
+`TORB_IMMORTAL_HEADER`, and a value that is a pointer to it. Building the tree at the quote site with ordinary
+instructions instead is the alternative and costs its allocations per *evaluation* of the quotation.
+
+**`test` and `group` can be functions of the runtime, because the runtime can call a closure.** Every closure value's
+`code` points at a thunk with the erased signature `R (*)(torb_environment *, ...)` (`emitClosureThunk`), and a closure
+without captures has a thunk too - so `torb_test_case(torb_text name, torb_closure body)` casts and calls. What it needs
+beyond that is a **recovery point**: `torb_finish_panic` in `runtime/panic.c` renders the message into a fixed buffer and
+`_exit`s, and a test runner needs it to `longjmp` back instead while a test is running. A recovered panic runs no release,
+so **a program that recovers leaks what the aborted frame held** and the leak gate cannot apply to one - a native gate
+program of `test`/`group` therefore has passing tests only, which is also the only case that can be compared with stage 0:
+the interpreter prints an absolute path in the `at` line of a failed test and the binary a workspace-relative one.
+
+**`main.exe test ../compiler/tests` is one binary for all 55 files.** One binary per file is not an option: every test
+file imports the harness and through it the whole compiler, so it would be 55 gcc runs over 55 translation units the size
+of the compiler's own. The whole suite is 10810 instances against the compiler's 13629, so one program that holds every
+test module plus a generated entry that runs them in order is roughly the size of `program.c` and one gcc. The lowering
+already takes a **list** of entry modules (`lowerWorkspace ... modules`); what is missing is an entry that calls each
+module's entry function with the file's name printed in front of it, and `emitProgram` taking more than one entry name.
+The counts of the summary line belong in `runtime/` next to `test` itself, so that both back ends print one format.
 
 ### How the C emitter is written
 

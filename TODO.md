@@ -1660,3 +1660,71 @@ Wenn nicht, was bedeutet, bewirkt es?
   Doku-Snippet festgenagelt); `copy` und das abgeleitete `Decode` folgen derselben Regel. Preis: das Feld ist von
   außen auch nicht lesbar (eine Zeile Accessor). Ein Modifier "öffentlich lesbar, privat konstruierbar" ist als
   Kandidat notiert, falls er mehr als einmal fehlt.
+
+
+- (**Meilenstein 6.3, gemessen und ein Drittel erledigt**, 2026-09-20) **Der Build ist der C-Compiler, also ist die Frage
+  nicht "wie schnell ist der Compiler", sondern "wie viel C schreibt er".** Alles gemessen auf einer Maschine
+  (16 Threads, gcc 13.2, `-O2`); Zahlen unter Last sind als solche gekennzeichnet. Ausführlich in `docs/BACKEND.md`,
+  Abschnitt "What 6.3 measured".
+  - **Die Flags bleiben, und die Übersetzungseinheit wird NICHT aufgeteilt.** `-O2` 98,5 s; `-O1` 70,4 s (-29 %), macht
+    den Compiler aber nur 3-8 % langsamer - das ist das Flag für ein Debug-Profil, wenn 5.13 Profile hat. `-O0` spart
+    48 % und macht den Compiler 2,4x langsamer, also nein. `-pipe` ist unter Windows 11 % langsamer, die Warnungen
+    kosten nichts (3 %, Rauschen). Ein echter 8-Wege-Split (jeder Rumpf im Ringverfahren, gemeinsamer Vorspann plus
+    Prototypen für alle 35841 Rümpfe) übersetzt in **22,7 s statt 98,5 s (4,3x)** - aber **das Binary ist 2,28x
+    langsamer** (`check ..` 16,5 s statt 7,2 s), weil sieben von acht Aufrufkanten dann eine Übersetzungseinheit
+    kreuzen und nichts mehr inlinet. `-flto=8` wäre der Ausweg und geht mit dieser Toolchain nicht (Assembler: "too many
+    sections", und dem gebündelten `ld` fehlt das LTO-Plugin). Also: weniger C emittieren, nicht aufteilen.
+  - **Erledigt: ein Witness-Thunk heißt jetzt nach dem, was er ist.** Ein Thunk castet `void *self` auf das Payload-Layout
+    des Ziels und ruft EINE Funktion des Programms - sonst steht nichts drin. Benannt war er nach *(Tabelle, Index)*,
+    also waren `Accumulator.add`, `Collection.add` und `List.add` desselben Listentyps **drei Kopien einer Funktion**.
+    Jetzt nach *(Funktion des Members, Payload-Layout)*: **16510 Thunks werden 8221**, das `program.c` des Compilers
+    **65717562 -> 56994210 Bytes (-13,3 %)**, 787016 -> 725997 Zeilen, und gcc **111,8 -> 87,1 s (-22 %)** im gleichen
+    Lastfenster. Namensgleichheit zweier verschiedener Thunks ist eine Kollision und kein Zusammenlegen: die Schlüssel
+    eines Basisnamens werden sortiert und numeriert, damit der Name eine Funktion des Programms bleibt.
+  - **Woher die 65 MB kommen** (eine Zählung, die byteweise aufgeht): 66,8 % Funktionsrümpfe, 13,8 % Prototypen, 13,7 %
+    statische Daten. Nach Art: eigene monomorphe Funktionen des Compilers 24,0 %, Instanzen von Generics 18,1 %,
+    Witness-Thunks 17,7 %. **Keine der 20 größten Definitionen ist eine Kopie** - die Verschwendung steckt im Schwanz:
+    14794 von 35841 Rümpfen (41 %) sind byte-gleich mit einem anderen, wenn man den eigenen Namen wegnormiert.
+  - **Der größte Hebel liegt noch da: die Namen sind zwei Drittel der Datei.** 419044 Vorkommen gemangelter Namen,
+    43991922 Bytes, Mittel 105 Bytes; 53707 verschiedene Namen mit Mittel 139. Das `program.c` ist EINE
+    Übersetzungseinheit, deren einzige äußere Symbole `main` und die der Runtime sind - kurze opake Symbole mit dem
+    lesbaren Namen im Kommentar darüber wären **41058614 Bytes, 62,5 % der Datei**. Kostet inhaltlich nichts, nagelt
+    aber jeden `torb ir`-Schnappschuss und jedes gepinnte C in den Tests um: eigene Runde.
+  - **Ein Modul-`const`, das keine statischen Daten ist, wird bei JEDEM Lesen gebaut** - im emittierten C
+    nachweisbar: `punctuationAt` des Lexers deklariert 105 Slots und baut alle 35 Tupel und die ganze Liste **in seinem
+    eigenen Rumpf**, und es läuft einmal pro Interpunktionszeichen jeder Datei. Eine kompilierte Sonde (10 Paare,
+    200000 Lesungen) misst **1,43 µs pro Lesen** gegen 0,83 µs für den Durchlauf allein. Der Lexer liest die Tabelle
+    jetzt einmal pro Datei in ein eigenes Feld: "lexing, parsing and the module graph" über die 280 Dateien des Repos
+    **2145/2130 ms vorher, 1858/1631 ms nachher** (14-23 % dieses Passes, und der Pass ist ein Drittel von `check`).
+    Die allgemeine Form - ein **unsterblicher gezählter Static** pro `const`, einmal gebaut - ist noch nicht geschrieben,
+    und es ist dasselbe Stück Emitter, das ein statischer `ExpressionNode`-Baum braucht.
+  - **Der Fixpunkt hält auf der kleineren Datei:** Stufe 1 und Stufe 2 sind sich über 56994748 Bytes C einig,
+    Stufe 3 schreibt sie noch einmal; Stufe 2 baut den Compiler in 112 s auf dieser Maschine.
+  - **5.11 (quotierte Ausdrücke) ist gemessen, aber nicht implementiert** - die drei Kosten, die das Design entscheiden,
+    stehen in BACKEND ("What 5.11 needs"): `describe` ist `.Planned` und kann keine Runtime-Funktion sein; **einen
+    ganzen `Checker` zu zeigen kostet 1731 Instanzen** und scheitert heute an einem eigenen Befund
+    (`a generated member without a receiver`, `std/core/src/convert.trb:113`), und genau solche Werte fangen die Tests
+    des Compilers ein - also muss **eine** Funktion der Lowering entscheiden, wie eine eingefangene Variable gespeichert
+    und gezeigt wird. Der Baum braucht den unsterblichen gezählten Static von oben. `test`/`group` können
+    Runtime-Funktionen sein (die Runtime *kann* einen Closure aufrufen, jeder zeigt auf einen Thunk mit der gelöschten
+    Signatur), brauchen aber einen Wiederaufsetzpunkt (`setjmp` in `panic.c`); ein aufgefangener Panic gibt nichts frei,
+    also greift das Leck-Gate für ein Programm mit einem fehlschlagenden Test nicht. `main.exe test ../compiler/tests`
+    ist EIN Binary für alle 55 Dateien (10810 Instanzen gegen 13629 des Compilers), kein Binary pro Datei.
+  - **Nächstes:** 5.11 mit diesem Design, die unsterblichen gezählten Statics (Modul-`const` + Baum), die Namen im C,
+    dann Plan-Nummern aus den Meldungen.
+
+- (`std/path`, 2026-09-23) **Wunsch (Nutzer, mag Rusts `Path`), eingeplant NACH der Aufräumrunde `std/core`:**
+  ein Werttyp `Path` im eigenen Paket `std/path` - EIN Typ (kein `Path`/`PathBuf`, wir haben Werte), intern Wurzel
+  bzw. Laufwerk + Komponentenliste statt String, immer UTF-8 (ein Verzeichniseintrag mit ungültigem Namen ist ein
+  Fehler, steht als Pitfall da), `joined`, `parent`, `name`, `extension`, lexikalisches `normalized()`; `Show` immer
+  mit `/` (deterministisch, passt zu den Panic-Pfaden), die native Form samt `\?\` erst an der Grenze zum
+  Betriebssystem. Gegen die Path-Traversal-Falle (`base.join("/etc/passwd")`): `joined` nimmt nur Relatives, dazu
+  `resolved(inside: base): Result<Path, PathError>` - relevant für die Sandbox-Rechte.
+  - **Signaturen:** `fn open(path: Into<Path>): Result<File, IoError>` - ein Trait ist bei uns ein Typ und
+    `into(self): Target` ist objektsicher, also ohne Generics; ein String geht weiter direkt hinein
+    (`extend Path with From<String>`, unfehlbar - ob ein Pfad gültig ist, sagt das Dateisystem beim Öffnen). Das ist
+    unser `AsRef<Path>` und Designprinzip 1, keine implizite Konvertierung. Betrifft `std/fs`, `std/sandbox`,
+    `Process.run(workingDirectory:)`; danach ersetzt es `compiler/src/project/path.trb` (200 Zeilen
+    String-Bastelei). Kandidat für später: String-LITERALE passen sich an einen erwarteten `Path` an (Literal-Traits),
+    Variablen müssten dann bewusst konvertiert werden.
+  - Kurzes Design-Dokument wie `LINEAR.md`, dann Umsetzung.
