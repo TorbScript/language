@@ -1,0 +1,148 @@
+/**
+ * Format g: logfmt, `key=value key=value` on one line. Written last and on the clock, to find out what "bring your own
+ * format simply" actually costs. Nested fields become dotted keys, a value with a space is quoted, and that is the
+ * whole specification.
+ *
+ *     print Logfmt().encode(shipment)
+ *     // orderId=7 price.amount=19.99 price.currency=EUR tracking=XZ42 express=false
+ *     const back = Logfmt().decode(Shipment.decode, line)?
+ */
+
+use DecodeError, Encode, EncodedField, EncodedValue, Encoder, ValueDecoder from "./vocabulary"
+
+/** logfmt as a format. It has no options, so it has no mapping DSL either. */
+public type Logfmt {
+  fn encode<Value: Encode>(self, value: Value): String {
+    var target = LogfmtEncoder()
+    value.encode target
+    target.pairs.joined separator: " "
+  }
+
+  fn decode<Value>(
+    self,
+    read: (var source: ValueDecoder) => Result<Value, DecodeError>,
+    line: String,
+  ): Result<Value, DecodeError> {
+    var source = ValueDecoder.of recordOf(line), lenient: true
+    read source
+  }
+}
+
+type LogfmtEncoder with Encoder {
+  var pairs: List<String> = []
+  private var path: List<String> = []
+  private var pending: String = ""
+
+  fn nothing(var self) {
+    pending = ""
+  }
+
+  fn bool(var self, value: Bool) {
+    put "{value}"
+  }
+
+  fn int(var self, value: Int64) {
+    put "{value}"
+  }
+
+  fn unsigned(var self, value: UInt64) {
+    put "{value}"
+  }
+
+  fn float(var self, value: Float64) {
+    put "{value}"
+  }
+
+  fn string(var self, value: String) {
+    put value
+  }
+
+  fn bytes(var self, value: List<UInt8>) {
+    put "{value.length()}"
+  }
+
+  fn sequence(var self, length: Int?) {
+    const _length = length
+    descend()
+  }
+
+  fn map(var self, length: Int?) {
+    const _length = length
+    descend()
+  }
+
+  fn record(var self, typeName: String) {
+    const _typeName = typeName
+    descend()
+  }
+
+  fn variant(var self, typeName: String, name: String) {
+    const _typeName = typeName
+    descend()
+    put name
+  }
+
+  fn field(var self, name: String) {
+    pending = name
+  }
+
+  fn finish(var self) {
+    if !path.isEmpty() {
+      path = path.removedAt(path.length() - 1)
+    }
+  }
+
+  private fn descend(var self) {
+    path.add pending
+    pending = ""
+  }
+
+  private fn put(var self, value: String) {
+    const full = if pending.isEmpty() { path } else { path.added pending }
+    const key = full.filter({ !_.isEmpty() }).toList().joined(separator: ".")
+    pending = ""
+    if key.isEmpty() {
+      return
+    }
+    const shown = if value.contains(" ") { "\"{value}\"" } else { value }
+    pairs.add "{key}={shown}"
+  }
+}
+
+/** The line back into a record, nesting whatever the dots said. */
+fn recordOf(line: String): EncodedValue {
+  var fields: List<EncodedField> = []
+  for pair in line.split(" ") {
+    if pair.isEmpty() {
+      continue
+    }
+    const parts = pair.split "="
+    if parts.length() < 2 {
+      continue
+    }
+    const value = EncodedValue.String parts[1].replace("\"", "")
+    const keys = parts[0].split(".")
+    if keys.length() == 1 {
+      fields.add EncodedField(keys[0], value)
+      continue
+    }
+    fields = withNested fields, keys[0], keys[1], value
+  }
+  EncodedValue.Record "", fields
+}
+
+fn withNested(fields: List<EncodedField>, head: String, name: String, value: EncodedValue): List<EncodedField> {
+  const entry = EncodedField name, value
+  match fields.find({ _.name == head }) {
+    None => fields.added EncodedField(head, EncodedValue.Record("", [entry]))
+    Some(_) => fields.map({ field =>
+      if field.name != head {
+        return field
+      }
+      match field.value {
+        .Record(_, inner) => EncodedField head, EncodedValue.Record("", inner.added(entry))
+        _ => field
+      }
+    }).toList()
+  }
+}

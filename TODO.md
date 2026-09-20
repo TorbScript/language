@@ -1369,6 +1369,20 @@ Wenn nicht, was bedeutet, bewirkt es?
     "in zehn Minuten erfundenes" Format als Test für "eigenes Format simpel einbringen". Dazu ein ehrliches
     "Wie fühlt es sich an" (Zeilen für Nutzer und Formatautor, Vergleich mit serde/kotlinx) und die Liste, was
     Sprache/Compiler dafür liefern müssen (u. a. statischer Dispatch: was wird aus `Encode` als Typ?).
+  - **Erledigt (Entwurf + Labor, Gates grün):** `docs/ENCODING.md` und `examples/encoding-lab` (Vokabular lokal, vier
+    Beispieltypen mit dem von Hand geschriebenen "was der Compiler ableiten würde", sieben Formate: JSON, CSV, XML mit
+    Mapping-DSL, protobuf-artiges Binärformat, SQL-DDL + Zeilenbindung, Kommandozeile, logfmt; 34 Tests).
+    - **Drei Dinge, die das Labor am Entwurf geändert hat.** (1) NEUE Regel: *ein Record, der kein Feld anmeldet, ist
+      ein Wrapper.* `with Encode by value` erzeugt `record(typeName)` + einen Wert + `finish()`. Ohne sie verliert ein
+      wohlbekannter Typ seinen Namen und Punkt 2 des Vorschlags (Mapping über den Typnamen) funktioniert für
+      `Instant`/`Email` überhaupt nicht - JSON schreibt trotzdem nur den Wert, SQL liest den Namen und wählt
+      `VARCHAR(320)`. (2) Das Vokabular wird FLACH: ein Trait je Richtung statt vier, `field` + `finish` statt
+      Unter-Encodern (die bräuchten assoziierte Typen, die es nicht gibt). (3) Die Leseseite jedes puffernden Formats
+      ist ein Parser plus EIN geteilter `ValueDecoder` - deshalb kostet logfmt nur 116 Zeilen.
+    - **Offene Fragen an dich** stehen in Abschnitt 15 von `docs/ENCODING.md` (Name `Describe` neben der Funktion
+      `describe`; gehört `EncodedValue` ins Prelude; darf ein Format ein unbekanntes Feld ablehnen; wie viel
+      Tabellen-Hilfe gehört in `std/encoding`).
+    - **Nächster Schritt:** die acht Umsetzungsscheiben aus Abschnitt 14, jede für sich grün.
 
 - (Dokumentation am Code, 2026-09-21) **Erledigt: Standard + Gate, gemergt, Gates grün** (1422 Tests). `torb docs
   source <pfad>` prüft Docblocks (fehlend, fremde Überschrift, Link, Beispiel wird geparst + typgeprüft, Wörter der

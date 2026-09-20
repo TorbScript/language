@@ -1,0 +1,354 @@
+/**
+ * What the lab proves, asserted. One group per claim of `docs/ENCODING.md`, so a claim that stops holding fails here
+ * and not in a paragraph.
+ */
+
+use test, group from "std/test"
+use EncodedValue, Structure, describe, structureOf from "../src/vocabulary"
+use Arguments from "../src/arguments"
+use Csv from "../src/csv"
+use Json, Naming from "../src/json"
+use Logfmt from "../src/logfmt"
+use Packed from "../src/packed"
+use ColumnType, Sql from "../src/sql"
+use Xml from "../src/xml"
+use Category, Email, Order, Page, Price, Shipment, Status from "../src/samples"
+
+fn anOrder(): Order {
+  const customer = match Email.parse("ada@example.test") {
+    Ok(found) => found
+    Fail(_) => panic "the sample address does not parse"
+  }
+  Order(
+    id: 7,
+    customer: customer,
+    price: Price(19.99, "EUR"),
+    status: Status.Rejected("out of stock"),
+    tags: ["gift", "fragile"],
+  )
+}
+
+fn aShipment(): Shipment {
+  const recipient = match Email.parse("ada@example.test") {
+    Ok(found) => found
+    Fail(_) => panic "the sample address does not parse"
+  }
+  Shipment orderId: 7, recipient: recipient, price: Price(19.99, "EUR"), tracking: Some("XZ42")
+}
+
+group "`Describe`: the structure without a value" {
+  test "the fields are the constructor's parameters, in declaration order" {
+    const names = structureOf(Order.describe).recordFields().map({ _.name() }).toList()
+    assert(names == ["id", "customer", "price", "status", "note", "tags", "logLabel"])
+  }
+
+  test "a private field with a default is not part of any of the three forms" {
+    const names = structureOf(Order.describe).recordFields().map({ _.name() }).toList()
+    assert(!names.contains("summary"))
+    assert(!Json().encode(anOrder()).contains("summary"))
+  }
+
+  test "the doc comment of a field is the description, with no annotation anywhere" {
+    const fields = structureOf(Order.describe).recordFields()
+    const first = fields[0].description
+    assert(first.documentation == "The order's own number, unique for this shop")
+  }
+
+  test "a default that is static data is in the description, a computed one only says that it is there" {
+    const fields = structureOf(Order.describe).recordFields()
+    const tags = fields.find({ _.name() == "tags" })
+    const label = fields.find({ _.name() == "logLabel" })
+    assert(tags.flatMap({ _.defaultValue() }).isSome())
+    assert(label.flatMap({ _.defaultValue() }).isNone())
+    assert(!(label ?? fields[0]).isRequired())
+  }
+
+  test "a type that contains itself stops at a reference, so the walk terminates" {
+    const children = structureOf(Category.describe).recordFields()[1]
+    assert(children.of == Structure.Sequence(Structure.Reference("lab/Category")))
+  }
+
+  test "a wrapper keeps its type name, which is what a well-known type is mapped by" {
+    const customer = structureOf(Order.describe).recordFields()[1]
+    assert(customer.of == Structure.Wrapper("lab/Email", Structure.Text))
+  }
+}
+
+group "a: json" {
+  test "a value round-trips through text" {
+    const json = Json()
+    const text = json.encode anOrder()
+    assert(describe(json.decode(Order.decode, text) ?? anOrder()) == describe(anOrder()))
+  }
+
+  test "a case with fields is externally tagged, a case without fields is its name" {
+    const json = Json()
+    assert(json.encode(Status.Draft) == "\"Draft\"")
+    assert(json.encode(Status.Rejected("late")) == "\{\"Rejected\":\{\"reason\":\"late\"\}\}")
+  }
+
+  test "naming is an option of the format, and no type mentions it" {
+    assert Json().encode(anOrder()).contains("\"logLabel\"")
+    assert Json(naming: Naming.SnakeCase).encode(anOrder()).contains("\"log_label\"")
+  }
+
+  test "a wrapper is written as its value, not as a record around it" {
+    assert Json().encode(anOrder()).contains("\"customer\":\"ada@example.test\"")
+  }
+
+  test "a missing field with a default is the default, and a broken one names the field chain" {
+    const json = Json()
+    const short = "\{\"id\":1,\"customer\":\"a@b\",\"price\":\{\"amount\":1.0,\"currency\":\"EUR\"\}\}"
+    const value = json.decode Order.decode, short
+    assert value.isOk()
+    const broken = "\{\"id\":1,\"customer\":\"a@b\",\"price\":\{\"amount\":1.0\}\}"
+    match json.decode(Order.decode, broken) {
+      Ok(_) => assert false
+      Fail(problem) => assert(problem.show() == "price.currency: a value is needed")
+    }
+  }
+}
+
+group "b: csv" {
+  test "the header is the declaration order, with a flattened record as more columns" {
+    const csv = Csv.of(Shipment.describe, { format => format.flatten "price" })
+    match csv {
+      Ok(found) => assert(found.header() == "orderId,recipient,price.amount,price.currency,tracking,express")
+      Fail(_) => assert false
+    }
+  }
+
+  test "a row round-trips, and an empty cell is an absent value" {
+    match Csv.of(Shipment.describe, { format => format.flatten "price" }) {
+      Ok(csv) => {
+        const row = csv.row(aShipment()) ?? ""
+        assert(row == "7,ada@example.test,19.99,EUR,XZ42,false")
+        const back = csv.decode Shipment.decode, "8,grace@example.test,1.0,USD,,true"
+        assert(describe(back ?? aShipment()) == "Shipment(orderId: 8, recipient: \"grace@example.test\", price: Price(amount: 1.0, currency: \"USD\"), tracking: None, express: true)")
+      }
+      Fail(_) => assert false
+    }
+  }
+
+  test "a nested record without a flatten is an early error that names the field" {
+    match Csv.of(Shipment.describe, { _format => void }) {
+      Ok(_) => assert false
+      Fail(problem) => assert(problem.show() == "the column `price` is a record. Flatten it: `flatten \{ _.price \}`")
+    }
+  }
+
+  test "a sequence or a variant cannot be a column at all" {
+    match Csv.of(Order.describe, { format => format.flatten "price" }) {
+      Ok(_) => assert false
+      Fail(problem) => assert(problem.show() == "the column `status` has cases, and a table has one shape per column")
+    }
+  }
+}
+
+group "c: xml, with a mapping" {
+  fn mapped(): Xml {
+    const built = Xml.format({ format =>
+      format.map("lab/Price", Price.describe, { price =>
+        price.element "price"
+        price.attribute "currency"
+        price.text "amount"
+      })
+    })
+    match built {
+      Ok(found) => found
+      Fail(_) => panic "the sample mapping does not build"
+    }
+  }
+
+  test "the mapping of a nested type is found through the qualified type name" {
+    const document = mapped().encode(anOrder())
+    assert document.contains("<price currency=\"EUR\">19.99</price>")
+  }
+
+  test "without the mapping the same fields are child elements, and nothing else changes" {
+    const plain = match Xml.format({ _format => void }) {
+      Ok(found) => found
+      Fail(_) => panic "an empty mapping does not build"
+    }
+    assert plain.encode(anOrder()).contains("<price><amount>19.99</amount><currency>EUR</currency></price>")
+  }
+
+  test "decoding is tolerant: a field arrives as an attribute or as a child element" {
+    const xml = mapped()
+    const fromAttribute = xml.encode anOrder()
+    const fromChildren = "<Order><id>7</id><customer>ada@example.test</customer>"
+      + "<price><currency>EUR</currency><amount>19.99</amount></price>"
+      + "<status case=\"Draft\"/></Order>"
+    assert xml.decode(Order.decode, fromAttribute).isOk()
+    match xml.decode(Order.decode, fromChildren) {
+      Ok(order) => assert(order.price == Price(19.99, "EUR"))
+      Fail(_) => assert false
+    }
+  }
+
+  test "a repeated element is a sequence, and a value round-trips" {
+    const xml = mapped()
+    const document = xml.encode anOrder()
+    assert(describe(xml.decode(Order.decode, document) ?? anOrder()) == describe(anOrder()))
+  }
+
+  test "a mapping of a field that does not exist is an early error" {
+    const built = Xml.format({ format =>
+      format.map("lab/Price", Price.describe, { price => price.attribute "currancy" })
+    })
+    match built {
+      Ok(_) => assert false
+      Fail(problem) => assert(problem.show() == "`lab/Price` has no field `currancy`")
+    }
+  }
+}
+
+group "d: a packed binary format" {
+  fn numbered(): Packed {
+    const built = Packed.format({ format =>
+      format.numbers "lab/Price", ["currency", "amount"]
+      format.checked "lab/Price", Price.describe
+    })
+    match built {
+      Ok(found) => found
+      Fail(_) => panic "the sample numbering does not build"
+    }
+  }
+
+  test "a value round-trips through bytes, with its own `Decoder` and no tree in between" {
+    const packed = numbered()
+    const wire = packed.encode anOrder()
+    assert(wire.length() > 0)
+    assert(describe(packed.decode(Order.decode, wire) ?? anOrder()) == describe(anOrder()))
+  }
+
+  test "the mapping decides the field numbers, and the fields still travel in declaration order" {
+    const packed = numbered()
+    const wire = packed.encode Price(1.0, "EUR")
+    // Byte 0 is the record length, byte 1 the first key. 18 is field 2, length-delimited: `amount`, which the
+    // mapping numbered second and the declaration still writes first
+    assert(wire[1] == 18)
+    const plain = match Packed.format({ _format => void }) {
+      Ok(found) => found
+      Fail(_) => panic "an empty numbering does not build"
+    }
+    // Without the mapping `amount` is field 1, its position in the declaration
+    assert(plain.encode(Price(1.0, "EUR"))[1] == 10)
+    assert packed.decode(Price.decode, wire).isOk()
+  }
+
+  test "a field number that no field has is an early error" {
+    const built = Packed.format({ format =>
+      format.numbers "lab/Price", ["currancy"]
+      format.checked "lab/Price", Price.describe
+    })
+    match built {
+      Ok(_) => assert false
+      Fail(problem) => assert(problem.show() == "`lab/Price` has no field `currancy`")
+    }
+  }
+}
+
+group "e: sql" {
+  fn table(): Sql {
+    const built = Sql.of(Shipment.describe, { format =>
+      format.table "shipments"
+      format.primaryKey "orderId"
+      format.column "lab/Email", ColumnType.Varchar(320)
+    })
+    match built {
+      Ok(found) => found
+      Fail(_) => panic "the sample table does not build"
+    }
+  }
+
+  test "the statement comes out of `Describe`, with a nested record as more columns" {
+    assert table().createTable().contains("price_amount DOUBLE PRECISION NOT NULL")
+    assert table().createTable().contains("PRIMARY KEY (orderId)")
+  }
+
+  test "a field with a static default becomes a column default" {
+    assert table().createTable().contains("express BOOLEAN NOT NULL DEFAULT false")
+  }
+
+  test "an optional field is a nullable column" {
+    assert table().createTable().contains("tracking TEXT,")
+  }
+
+  test "the row comes out of `Encode`, in the column order, as parameters" {
+    const statement = table().insert(aShipment())
+    assert(statement.text == "INSERT INTO shipments (orderId, recipient, price_amount, price_currency, tracking, express) VALUES (?, ?, ?, ?, ?, ?)")
+    assert(statement.parameters.length() == 6)
+    assert(statement.parameters[1] == EncodedValue.String("ada@example.test"))
+    assert(statement.parameters[3] == EncodedValue.String("EUR"))
+  }
+
+  test "the column type of a well-known type is an override keyed by its type name" {
+    assert table().createTable().contains("recipient VARCHAR(320) NOT NULL")
+    // Without the override the wrapper falls back to what it wraps
+    const plain = match Sql.of(Shipment.describe, { _format => void }) {
+      Ok(found) => found
+      Fail(_) => panic "a table without a mapping does not build"
+    }
+    assert plain.createTable().contains("recipient TEXT NOT NULL")
+  }
+
+  test "a variant cannot be a column, whatever the mapping says" {
+    const built = Sql.of(Order.describe, { format => format.column "lab/Email", ColumnType.Varchar(320) })
+    match built {
+      Ok(_) => assert false
+      Fail(problem) => assert(problem.show() == "the column `status` has cases. A table has one shape per column")
+    }
+  }
+}
+
+group "f: command line arguments" {
+  test "the help text is built from the doc comments and the defaults" {
+    const help = Arguments.of(Shipment.describe).help()
+    assert help.contains("--order-id <number>")
+    assert help.contains("The order this belongs to (required)")
+    assert help.contains("Whether it goes out the same day (default: false)")
+  }
+
+  test "a nested field is a dashed option, and a truth value needs no argument" {
+    const arguments = Arguments.of Shipment.describe
+    const given = ["--order-id", "9", "--recipient", "grace@example.test", "--price-amount", "5.0", "--price-currency", "USD", "--express"]
+    match arguments.decode(Shipment.decode, given) {
+      Ok(shipment) => {
+        assert(shipment.orderId == 9)
+        assert(shipment.price == Price(5.0, "USD"))
+        assert shipment.express
+      }
+      Fail(_) => assert false
+    }
+  }
+
+  test "an option nobody declared says so, and a missing one falls back to the type's default" {
+    const arguments = Arguments.of Shipment.describe
+    match arguments.decode(Shipment.decode, ["--order-number", "9"]) {
+      Ok(_) => assert false
+      Fail(problem) => assert(problem.show() == "`--order-number` is not an option of this command")
+    }
+  }
+}
+
+group "g: logfmt, the format written last" {
+  test "a value round-trips through `key=value` lines" {
+    const logfmt = Logfmt()
+    const line = logfmt.encode aShipment()
+    assert(line == "orderId=7 recipient=ada@example.test price.amount=19.99 price.currency=EUR tracking=XZ42 express=false")
+    assert(describe(logfmt.decode(Shipment.decode, line) ?? aShipment()) == describe(aShipment()))
+  }
+}
+
+group "a generic container, and a value without its type" {
+  test "`Page<Order>` is `Encode` because `Order` is" {
+    const page = Page items: [anOrder()], total: 1
+    assert Json().encode(page).startsWith("\{\"items\":[")
+  }
+
+  test "an `EncodedValue` holds a value without its type and writes itself into any encoder" {
+    const held = EncodedValue.of anOrder()
+    assert(Json().encode(held) == Json().encode(anOrder()))
+  }
+}

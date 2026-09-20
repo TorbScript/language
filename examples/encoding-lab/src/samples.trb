@@ -1,0 +1,449 @@
+/**
+ * The sample types of the lab, each with the `encode`, `decode` and `describe` **the compiler would derive**, written
+ * out by hand so a reader can see what derivation means. Nothing here is clever: it is the constructor, three times.
+ *
+ * Every implementation below is marked `DERIVED` or `BY HAND`. `DERIVED` means "the compiler writes exactly this";
+ * `BY HAND` means the type derives nothing (`Email` has a private constructor) and says so itself.
+ *
+ * Three places where stage 0 cannot run what the compiler would write, so the lab writes the same call with the one
+ * lookup spelled out. All three are listed in `docs/ENCODING.md` under "What the language and the compiler must
+ * provide", and all three type check in the form the compiler uses - only running them needs types at run time:
+ *
+ * 1. A scalar field: the compiler writes `Int64.describe target` and `String.decode source`, a static trait member of
+ *    an `extend` on a built-in type. Stage 0 answers "the bootstrap interpreter does not know `String.decode`", so the
+ *    lab writes `target.int()` and `source.string()` - which is what those two members contain, and what a back end
+ *    that knows the field's type statically may inline anyway.
+ * 2. A collection field: the compiler writes `List<String>.decode source`, whose body calls `Item.decode` through the
+ *    bound. The lab calls `decodeSequence`/`decodeOptional` and hands the element's own `decode` in.
+ * 3. A generic type's `decode` and `describe` (`Page<Item>`): written here as the compiler writes them, and exercised
+ *    through the monomorphized form in `main.trb`, which is what a back end emits.
+ */
+
+use Decode, DecodeError, Describe, Describer, Decoder, Encode, Encoder from "./vocabulary"
+use FieldDefault, FieldDescription, EncodedValue from "./vocabulary"
+use decodeOptional, decodeSequence, encoded, optionalField, requiredField from "./vocabulary"
+
+/** What something costs, in the currency it costs it in. */
+public type Price {
+  /** The amount, in the currency's main unit. */
+  amount: Float64
+  /** The ISO 4217 code of the currency, in capitals. */
+  currency: String
+}
+
+/** DERIVED for `Price`. */
+extend Price with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(self, var target: Target) {
+    target.record "lab/Price"
+    target.field "amount"
+    encoded amount, target
+    target.field "currency"
+    encoded currency, target
+    target.finish()
+  }
+
+  fn decode<Source: Decoder>(var source: Source): Result<Price, DecodeError> {
+    source.record("lab/Price")?
+    const amount = requiredField(source, "amount", { inner => inner.float() })?
+    const currency = requiredField(source, "currency", { inner => inner.string() })?
+    source.finish()?
+    Ok Price(amount: amount, currency: currency)
+  }
+
+  fn describe<Target: Describer>(var target: Target) {
+    if !target.record("lab/Price") {
+      return
+    }
+    target.field FieldDescription("amount", documentation: "The amount, in the currency's main unit")
+    target.float()
+    target.field FieldDescription("currency", documentation: "The ISO 4217 code of the currency, in capitals")
+    target.string()
+    target.finish()
+  }
+}
+
+/**
+ * An address that has been checked. The field is `private` and has no default, so the constructor is not usable from
+ * outside and **none of the three forms is derived**: an `Email` that came out of a decoder would otherwise skip the
+ * check that `parse` exists to force.
+ */
+public type Email {
+  private value: String
+
+  fn parse(text: String): Result<Email, String> {
+    if !text.contains("@") {
+      return Fail "'{text}' is not an email address"
+    }
+    Ok Self(text)
+  }
+
+  fn text(self): String {
+    value
+  }
+}
+
+/**
+ * BY HAND, all three. Step 3 of the adjustment ladder is `type Email with Encode by value, Describe by value`, which
+ * forwards writing and describing to the one field and is what a wrapper should write - the checker accepts it. Stage 0
+ * runs a delegated method that takes a `var` parameter against a **copy** and drops the change without a word, so the
+ * lab writes the two forwards out; `docs/ENCODING.md` records it.
+ *
+ * Reading is never delegated: `by value` would hand the field's `decode` back, which answers a `String` and not an
+ * `Email`, and wrapping that would be exactly the check `parse` exists to force. So `decode` goes through `parse`, and
+ * the invariant holds for a decoded value too.
+ */
+extend Email with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(self, var target: Target) {
+    target.record "lab/Email"
+    encoded value, target
+    target.finish()
+  }
+
+  fn decode<Source: Decoder>(var source: Source): Result<Email, DecodeError> {
+    source.record("lab/Email")?
+    const text = source.string()?
+    source.finish()?
+    Email.parse(text).mapError { message => DecodeError message }
+  }
+
+  fn describe<Target: Describer>(var target: Target) {
+    if !target.record("lab/Email") {
+      return
+    }
+    target.string()
+    target.finish()
+  }
+}
+
+/** Where an order stands. One case carries a reason, the others carry nothing. */
+public type Status {
+  /** Written, not yet sent. */
+  case Draft
+  /** Sent to the customer. */
+  case Shipped
+  /** Turned down, with the reason the shop gave. */
+  case Rejected(reason: String)
+}
+
+/** DERIVED for a type with cases: `variant` instead of `record`, and the case's own fields inside it. */
+extend Status with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(self, var target: Target) {
+    match self {
+      .Draft => target.variant "lab/Status", "Draft"
+      .Shipped => target.variant "lab/Status", "Shipped"
+      .Rejected(reason) => {
+        target.variant "lab/Status", "Rejected"
+        target.field "reason"
+        encoded reason, target
+      }
+    }
+    target.finish()
+  }
+
+  fn decode<Source: Decoder>(var source: Source): Result<Status, DecodeError> {
+    const name = source.variant("lab/Status")?
+    const found = match name {
+      "Draft" => Status.Draft
+      "Shipped" => Status.Shipped
+      "Rejected" => Status.Rejected(requiredField(source, "reason", { inner => inner.string() })?)
+      other => {
+        return Fail DecodeError("`{other}` is not a case of `Status`")
+      }
+    }
+    source.finish()?
+    Ok found
+  }
+
+  fn describe<Target: Describer>(var target: Target) {
+    if !target.variant("lab/Status") {
+      return
+    }
+    target.variantCase "Draft"
+    target.finish()
+    target.variantCase "Shipped"
+    target.finish()
+    target.variantCase "Rejected"
+    target.field FieldDescription("reason", documentation: "Turned down, with the reason the shop gave")
+    target.string()
+    target.finish()
+    target.finish()
+  }
+}
+
+/** A label a log line can carry, computed at every construction: a default that is not static data. */
+fn defaultLabel(): String {
+  "order"
+}
+
+/** What a customer bought, with everything the shop keeps about it. */
+public type Order {
+  /** The order's own number, unique for this shop. */
+  id: Int64
+  /** Who placed it. */
+  customer: Email
+  /** What the customer pays, and the currency it is in. */
+  price: Price
+  /** Where the order stands. */
+  status: Status = Status.Draft
+  /** What the customer wrote into the note field, if anything. */
+  note: String? = None
+  /** Free-form labels the shop puts on an order. */
+  tags: List<String> = []
+  /** A short label for a log line. It is a call, so a schema knows there is a default but not which. */
+  logLabel: String = defaultLabel()
+  /** The rendered summary, kept so a list view does not build it twice. Private with a default, so it is not part. */
+  private summary: String = ""
+}
+
+/**
+ * DERIVED for `Order`. Seven fields, not eight: `summary` is `private` **and** has a default, so it is not a parameter
+ * of the constructor from outside and therefore not part of any of the three forms. No annotation said so.
+ */
+extend Order with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(self, var target: Target) {
+    target.record "lab/Order"
+    target.field "id"
+    encoded id, target
+    target.field "customer"
+    encoded customer, target
+    target.field "price"
+    encoded price, target
+    target.field "status"
+    encoded status, target
+    target.field "note"
+    encoded note, target
+    target.field "tags"
+    encoded tags, target
+    target.field "logLabel"
+    encoded logLabel, target
+    target.finish()
+  }
+
+  fn decode<Source: Decoder>(var source: Source): Result<Order, DecodeError> {
+    source.record("lab/Order")?
+    const id = requiredField(source, "id", { inner => inner.int() })?
+    const customer = requiredField(source, "customer", Email.decode)?
+    const price = requiredField(source, "price", Price.decode)?
+    const status = optionalField(source, "status", Status.Draft, Status.decode)?
+    const note = optionalField(source, "note", None, readOptionalText)?
+    const tags = optionalField(source, "tags", [], readTextSequence)?
+    const logLabel = optionalField(source, "logLabel", defaultLabel(), { inner => inner.string() })?
+    source.finish()?
+    Ok Order(id: id, customer: customer, price: price, status: status, note: note, tags: tags, logLabel: logLabel)
+  }
+
+  fn describe<Target: Describer>(var target: Target) {
+    if !target.record("lab/Order") {
+      return
+    }
+    target.field FieldDescription("id", documentation: "The order's own number, unique for this shop")
+    target.int()
+    target.field FieldDescription("customer", documentation: "Who placed it")
+    Email.describe target
+    target.field FieldDescription("price", documentation: "What the customer pays, and the currency it is in")
+    Price.describe target
+    target.field(FieldDescription(
+      "status",
+      documentation: "Where the order stands",
+      default: FieldDefault.Constant(EncodedValue.Variant("lab/Status", "Draft", [])),
+    ))
+    Status.describe target
+    target.field(FieldDescription(
+      "note",
+      documentation: "What the customer wrote into the note field, if anything",
+      default: FieldDefault.Constant(EncodedValue.Nothing),
+    ))
+    target.optional()
+    target.string()
+    target.finish()
+    target.field(FieldDescription(
+      "tags",
+      documentation: "Free-form labels the shop puts on an order",
+      default: FieldDefault.Constant(EncodedValue.Sequence([])),
+    ))
+    target.sequence()
+    target.string()
+    target.finish()
+    target.field(FieldDescription(
+      "logLabel",
+      documentation: "A short label for a log line",
+      default: FieldDefault.Computed,
+    ))
+    target.string()
+    target.finish()
+  }
+}
+
+/** `Option<String>.decode`, with the element's `decode` spelled out: see the module comment, point 2. */
+fn readOptionalText<Source: Decoder>(var source: Source): Result<String?, DecodeError> {
+  decodeOptional(source, { inner => inner.string() })
+}
+
+/** `List<String>.decode`, same reason. */
+fn readTextSequence<Source: Decoder>(var source: Source): Result<List<String>, DecodeError> {
+  decodeSequence(source, { inner => inner.string() })
+}
+
+/**
+ * What left the warehouse, and the row-shaped sample: every field is a scalar or a record of scalars, which is what a
+ * table, a DDL statement and a command line can carry.
+ */
+public type Shipment {
+  /** The order this belongs to. */
+  orderId: Int64
+  /** Who it goes to. */
+  recipient: Email
+  /** What was charged for it. */
+  price: Price
+  /** The carrier's tracking code, once the carrier gave one. */
+  tracking: String? = None
+  /** Whether it goes out the same day. */
+  express: Bool = false
+}
+
+/** DERIVED for `Shipment`. */
+extend Shipment with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(self, var target: Target) {
+    target.record "lab/Shipment"
+    target.field "orderId"
+    encoded orderId, target
+    target.field "recipient"
+    encoded recipient, target
+    target.field "price"
+    encoded price, target
+    target.field "tracking"
+    encoded tracking, target
+    target.field "express"
+    encoded express, target
+    target.finish()
+  }
+
+  fn decode<Source: Decoder>(var source: Source): Result<Shipment, DecodeError> {
+    source.record("lab/Shipment")?
+    const orderId = requiredField(source, "orderId", { inner => inner.int() })?
+    const recipient = requiredField(source, "recipient", Email.decode)?
+    const price = requiredField(source, "price", Price.decode)?
+    const tracking = optionalField(source, "tracking", None, readOptionalText)?
+    const express = optionalField(source, "express", false, { inner => inner.bool() })?
+    source.finish()?
+    Ok Shipment(orderId: orderId, recipient: recipient, price: price, tracking: tracking, express: express)
+  }
+
+  fn describe<Target: Describer>(var target: Target) {
+    if !target.record("lab/Shipment") {
+      return
+    }
+    target.field FieldDescription("orderId", documentation: "The order this belongs to")
+    target.int()
+    target.field FieldDescription("recipient", documentation: "Who it goes to")
+    Email.describe target
+    target.field FieldDescription("price", documentation: "What was charged for it")
+    Price.describe target
+    target.field(FieldDescription(
+      "tracking",
+      documentation: "The carrier's tracking code, once the carrier gave one",
+      default: FieldDefault.Constant(EncodedValue.Nothing),
+    ))
+    target.optional()
+    target.string()
+    target.finish()
+    target.field(FieldDescription(
+      "express",
+      documentation: "Whether it goes out the same day",
+      default: FieldDefault.Constant(EncodedValue.Bool(false)),
+    ))
+    target.bool()
+    target.finish()
+  }
+}
+
+/** One page of a longer list. Generic, so its three forms are conditional on `Item` having them. */
+public type Page<Item> {
+  /** The items on this page, in the order the source produced them. */
+  items: List<Item>
+  /** How many items there are over all pages. */
+  total: Int64 = 0
+}
+
+/** DERIVED, and conditional: `Page<Order>` is `Encode` because `Order` is. */
+extend<Item: Encode> Page<Item> with Encode {
+  fn encode<Target: Encoder>(self, var target: Target) {
+    target.record "lab/Page"
+    target.field "items"
+    encoded items, target
+    target.field "total"
+    encoded total, target
+    target.finish()
+  }
+}
+
+/**
+ * DERIVED, and the one implementation in this file that **stage 0 cannot run**: `Item.decode` is a static trait member
+ * reached through a bound. It type checks. `main.trb` exercises the monomorphized form.
+ */
+extend<Item: Decode> Page<Item> with Decode {
+  fn decode<Source: Decoder>(var source: Source): Result<Page<Item>, DecodeError> {
+    source.record("lab/Page")?
+    const items = requiredField(source, "items", { inner => decodeSequence inner, Item.decode })?
+    const total = optionalField(source, "total", 0, { inner => inner.int() })?
+    source.finish()?
+    Ok Page(items: items, total: total)
+  }
+}
+
+/** DERIVED, same condition and the same limit on stage 0. */
+extend<Item: Describe> Page<Item> with Describe {
+  fn describe<Target: Describer>(var target: Target) {
+    if !target.record("lab/Page") {
+      return
+    }
+    target.field FieldDescription("items", documentation: "The items on this page, in the order the source produced them")
+    target.sequence()
+    Item.describe target
+    target.finish()
+    target.field(FieldDescription(
+      "total",
+      documentation: "How many items there are over all pages",
+      default: FieldDefault.Constant(EncodedValue.Int(0)),
+    ))
+    target.int()
+    target.finish()
+  }
+}
+
+/** A tree of shop categories: a type that contains itself, which is what makes `Describe` need a stopping rule. */
+public type Category {
+  /** What the category is called. */
+  name: String
+  /** The categories below this one. */
+  children: List<Category> = []
+}
+
+/** DERIVED. The second `record("lab/Category")` answers `false`, so the walk stops and refers to the name. */
+extend Category with Encode, Describe {
+  fn encode<Target: Encoder>(self, var target: Target) {
+    target.record "lab/Category"
+    target.field "name"
+    encoded name, target
+    target.field "children"
+    encoded children, target
+    target.finish()
+  }
+
+  fn describe<Target: Describer>(var target: Target) {
+    if !target.record("lab/Category") {
+      return
+    }
+    target.field FieldDescription("name", documentation: "What the category is called")
+    target.string()
+    target.field(FieldDescription(
+      "children",
+      documentation: "The categories below this one",
+      default: FieldDefault.Constant(EncodedValue.Sequence([])),
+    ))
+    target.sequence()
+    Category.describe target
+    target.finish()
+    target.finish()
+  }
+}

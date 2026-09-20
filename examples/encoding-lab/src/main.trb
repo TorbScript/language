@@ -1,0 +1,145 @@
+/**
+ * The lab, run end to end: one set of types, seven formats, and no type that knows about any of them.
+ *
+ * Read `vocabulary.trb` first (the three traits and the three format-side traits), then `samples.trb` (the code the
+ * compiler would derive), then whichever format interests you. `docs/ENCODING.md` is the design this proves.
+ */
+
+use Describer, EncodedValue, FieldDescription, describe, structureOf from "./vocabulary"
+use Arguments from "./arguments"
+use Csv from "./csv"
+use Json, Naming from "./json"
+use Logfmt from "./logfmt"
+use Packed from "./packed"
+use ColumnType, Sql from "./sql"
+use Xml from "./xml"
+use Category, Email, Order, Page, Price, Shipment, Status from "./samples"
+
+const customer = Email.parse("ada@example.test")?
+
+const order = Order(
+  id: 7,
+  customer: customer,
+  price: Price(19.99, "EUR"),
+  status: Status.Rejected("out of stock"),
+  tags: ["gift", "fragile"],
+)
+
+const shipment = Shipment orderId: 7, recipient: customer, price: Price(19.99, "EUR"), tracking: Some("XZ42")
+
+print "--- the three forms"
+print describe(order)
+print structureOf(Order.describe).recordFields().map({ _.name() }).toList()
+// A type that contains itself stops at a `Reference`, so the walk terminates
+print structureOf(Category.describe)
+
+print ""
+print "--- a: json"
+const json = Json()
+const document = json.encode order
+print document
+print describe(json.decode(Order.decode, document)?)
+print Json(naming: Naming.SnakeCase).encode(order)
+
+print ""
+print "--- b: csv"
+const csv = Csv.of(Shipment.describe, { format => format.flatten "price" })?
+print csv.header()
+const row = csv.row(shipment)?
+print row
+print describe(csv.decode(Shipment.decode, row)?)
+match Csv.of(Shipment.describe, { _format => void }) {
+  Ok(_) => print "a table without the flatten"
+  Fail(problem) => print "early error: {problem}"
+}
+match Csv.of(Order.describe, { format => format.flatten "price" }) {
+  Ok(_) => print "a table of orders"
+  Fail(problem) => print "early error: {problem}"
+}
+
+print ""
+print "--- c: xml, with a mapping"
+const xml = Xml.format({ format =>
+  format.map("lab/Price", Price.describe, { price =>
+    price.element "price"
+    price.attribute "currency"
+    price.text "amount"
+  })
+})?
+const element = xml.encode order
+print element
+print describe(xml.decode(Order.decode, element)?)
+// The same mapping reads a field back out of a child element instead of the attribute it was written to
+const tolerant = "<Order><id>7</id><customer>ada@example.test</customer>"
+  + "<price><currency>EUR</currency><amount>19.99</amount></price>"
+  + "<status case=\"Draft\"/><logLabel>order</logLabel></Order>"
+print describe(xml.decode(Order.decode, tolerant)?)
+match Xml.format({ format => format.map("lab/Price", Price.describe, { price => price.attribute "currancy" }) }) {
+  Ok(_) => print "a mapping of a field that is not there"
+  Fail(problem) => print "early error: {problem}"
+}
+
+print ""
+print "--- d: a packed binary format, with field numbers"
+const packed = Packed.format({ format =>
+  format.numbers "lab/Price", ["currency", "amount"]
+  format.checked "lab/Price", Price.describe
+})?
+const wire = packed.encode order
+print "{wire.length()} bytes"
+print describe(packed.decode(Order.decode, wire)?)
+
+print ""
+print "--- e: sql"
+const sql = Sql.of(Shipment.describe, { format =>
+  format.table "shipments"
+  format.primaryKey "orderId"
+  format.column "lab/Email", ColumnType.Varchar(320)
+})?
+print sql.createTable()
+const statement = sql.insert shipment
+print statement.text
+print statement.parameters.map({ _.plain() }).toList()
+
+print ""
+print "--- f: command line arguments"
+const arguments = Arguments.of Shipment.describe
+print arguments.help()
+const parsed = arguments.decode(
+  Shipment.decode,
+  ["--order-id", "9", "--recipient", "grace@example.test", "--price-amount", "5.0", "--price-currency", "USD", "--express"],
+)?
+print describe(parsed)
+
+print ""
+print "--- g: logfmt, the format written last"
+const logfmt = Logfmt()
+const line = logfmt.encode shipment
+print line
+print describe(logfmt.decode(Shipment.decode, line)?)
+
+print ""
+print "--- a generic container"
+/*
+ * `Page<Item>` carries all three forms, and `Page<Order>`'s `Encode` runs as written. Its `decode` and `describe` call
+ * `Item.decode`/`Item.describe` through the bound, which stage 0 cannot resolve at run time, so `pageOfOrder` below is
+ * the **monomorphized** `describe` - what a back end emits for `Page<Order>`, written out.
+ */
+const page = Page items: [order], total: 1
+print json.encode(page)
+print describe(EncodedValue.of(page))
+print structureOf(pageOfOrder).recordFields().map({ _.name() }).toList()
+
+/** `Page<Order>.describe`, monomorphized: the body of `Page<Item>.describe` with `Item` replaced by `Order`. */
+fn pageOfOrder<Target: Describer>(var target: Target) {
+  if !target.record("lab/Page") {
+    return
+  }
+  target.field FieldDescription("items", documentation: "The items on this page")
+  target.sequence()
+  Order.describe target
+  target.finish()
+  target.field FieldDescription("total", documentation: "How many items there are over all pages")
+  target.int()
+  target.finish()
+}

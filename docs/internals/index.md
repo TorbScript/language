@@ -10,6 +10,7 @@ documents:
   - ../TYPECHECKER.md
   - ../BACKEND.md
   - ../STREAMS.md
+  - ../ENCODING.md
 ---
 
 The toolchain is written in TorbScript and lives in `compiler/`. Until it compiles itself it runs on stage 0, an untyped
@@ -34,5 +35,6 @@ TorbScript has no use for the internals of the compiler that compiles it.
 - **[The Type Checker (Milestone 4)](../TYPECHECKER.md)**
 - **[The Back Ends (Milestones 5-7)](../BACKEND.md)**
 - **[Streams](../STREAMS.md)**
+- **[Encoding](../ENCODING.md)**
 
 <!-- torb:index:end -->

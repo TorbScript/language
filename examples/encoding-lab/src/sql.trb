@@ -1,0 +1,294 @@
+/**
+ * Format e: SQL. A `CREATE TABLE` out of `Describe` and a bound row out of `Encode` - the case where a format needs the
+ * structure **and** the values, and where the two have to agree on the column order.
+ *
+ *     const sql = Sql.of(Shipment.describe, { format =>
+ *       format.table "shipments"
+ *       format.primaryKey "orderId"
+ *       format.column "lab/Email", ColumnType.Varchar(320)
+ *     })?
+ *     print sql.createTable()
+ *     print sql.insert(shipment).text
+ *
+ * `column` is the well-known-type override, keyed by the **qualified type name** - the same lookup XML uses for its
+ * mappings. It is how `std/time/Instant` becomes `TIMESTAMP` here and a tag in CBOR, without `Instant` knowing that SQL
+ * exists.
+ *
+ * A column is a scalar, so a nested record becomes more columns (`price_amount`), and a sequence or a variant is an
+ * early error: a table has no shape for either.
+ */
+
+use Encode, EncodedValue, Encoder, Structure, StructureField, Structures, structureOf from "./vocabulary"
+
+/** The column types this driver knows. An ADT, so a driver that knows more adds cases and nothing else changes. */
+public type ColumnType {
+  case Integer
+  case Real
+  case Text
+  case Boolean
+  case Blob
+  case Timestamp
+  case Varchar(length: Int)
+  case Numeric(precision: Int, scale: Int)
+
+  fn sql(self): String {
+    match self {
+      .Integer => "BIGINT"
+      .Real => "DOUBLE PRECISION"
+      .Text => "TEXT"
+      .Boolean => "BOOLEAN"
+      .Blob => "BYTEA"
+      .Timestamp => "TIMESTAMP"
+      .Varchar(length) => "VARCHAR({length})"
+      .Numeric(precision, scale) => "NUMERIC({precision}, {scale})"
+    }
+  }
+}
+
+/** What a table cannot hold, with the field it was found in. */
+public type SqlProblem with Show, Error {
+  field: String
+  reason: String
+
+  fn show(self): String {
+    "the column `{field}` {reason}"
+  }
+}
+
+/** The mapping DSL of a SQL driver: a table name, a key, and the column type of a well-known type. */
+public type SqlFormat {
+  private(var) tableName: String = ""
+  private(var) keys: List<String> = []
+  private(var) overrides: Map<String, ColumnType> = [:]
+
+  fn table(var self, name: String) {
+    tableName = name
+  }
+
+  /** `primaryKey { _.orderId }` in the design. */
+  fn primaryKey(var self, field: String) {
+    keys.add field
+  }
+
+  /** The column type of one type, everywhere it appears: `column<Instant> Timestamp`. */
+  fn column(var self, typeName: String, kind: ColumnType) {
+    overrides.set typeName, kind
+  }
+}
+
+/** One statement and the values that go into its placeholders. Nothing is ever pasted into the text. */
+public type SqlStatement {
+  text: String
+  parameters: List<EncodedValue>
+}
+
+/** A SQL table, derived once from the type and then used for every row. */
+public type Sql {
+  tableName: String
+  columns: List<SqlColumn>
+  keys: List<String>
+
+  fn of(
+    describe: (var target: Structures) => Void,
+    define: (var format: SqlFormat) => Void,
+  ): Result<Sql, SqlProblem> {
+    var format = SqlFormat()
+    define format
+    const structure = structureOf describe
+    var columns: List<SqlColumn> = []
+    for field in structure.recordFields() {
+      columns.addAll(columnsOf(field, "", format.overrides)?)
+    }
+    for key in format.keys {
+      if columns.find({ _.name == key }).isNone() {
+        return Fail SqlProblem(key, "is not a column of this table")
+      }
+    }
+    const name = if format.tableName.isEmpty() { lowered structure.declaredName() } else { format.tableName }
+    Ok Sql(name, columns, format.keys)
+  }
+
+  fn createTable(self): String {
+    var lines: List<String> = []
+    for column in columns {
+      const required = if column.required { " NOT NULL" } else { "" }
+      const given = match column.defaultValue {
+        Some(value) => " NOT NULL DEFAULT {literal(value)}"
+        None => ""
+      }
+      lines.add "  {column.name} {column.kind.sql()}{required}{given}"
+    }
+    if !keys.isEmpty() {
+      const key = keys.joined separator: ", "
+      lines.add "  PRIMARY KEY ({key})"
+    }
+    const body = lines.joined separator: ",\n"
+    "CREATE TABLE {tableName} (\n{body}\n)"
+  }
+
+  /** The row: the values in the column order, as parameters, never as text in the statement. */
+  fn insert<Value: Encode>(self, value: Value): SqlStatement {
+    var target = ColumnEncoder()
+    value.encode target
+    const names = columns.map({ _.name }).toList()
+    const placeholders = columns.map({ _ => "?" }).toList()
+    const parameters = columns.map { column => target.values.get(column.path) ?? EncodedValue.Nothing }
+    const columnList = names.joined separator: ", "
+    const placeholderList = placeholders.joined separator: ", "
+    const text = "INSERT INTO {tableName} ({columnList}) VALUES ({placeholderList})"
+    SqlStatement text, parameters.toList()
+  }
+}
+
+/** One column: where the value comes from, what it is called, what it is, and whether it may be missing. */
+public type SqlColumn {
+  path: String
+  name: String
+  kind: ColumnType
+  required: Bool
+  /** A field with a static default becomes a column default: the schema says what the type says. */
+  defaultValue: EncodedValue? = None
+}
+
+/** The column or columns one field becomes. A record becomes more of them; a sequence becomes an error. */
+fn columnsOf(
+  field: StructureField,
+  prefix: String,
+  overrides: Map<String, ColumnType>,
+): Result<List<SqlColumn>, SqlProblem> {
+  const name = if prefix.isEmpty() { field.name() } else { "{prefix}_{field.name()}" }
+  const inner = field.of.withoutOptional()
+  const required = field.isRequired()
+  match inner {
+    .Record(_, fields) => {
+      var columns: List<SqlColumn> = []
+      for nested in fields {
+        columns.addAll(columnsOf(nested, name, overrides)?)
+      }
+      // The path of a nested column is the path the encoder builds, which uses the field names and not the prefix
+      Ok(columns.map({ _.copy path: "{field.name()}.{_.path}" }).toList())
+    }
+    // A wrapper keeps its name, so this is where a well-known type gets the column type its driver wants
+    .Wrapper(typeName, of) => {
+      const kind = overrides.get(typeName) ?? scalarOf(of)
+      Ok([SqlColumn(field.name(), name, kind, required, defaultValue: constantOf(field))])
+    }
+    .Sequence(_) => Fail SqlProblem(name, "is a sequence. A table has one value per column")
+    .Mapping(_, _) => Fail SqlProblem(name, "is a map. A table has one value per column")
+    .Variant(_, _) => Fail SqlProblem(name, "has cases. A table has one shape per column")
+    .Reference(_) => Fail SqlProblem(name, "refers to itself. A table has no depth")
+    scalar => Ok([SqlColumn(field.name(), name, scalarOf(scalar), required, defaultValue: constantOf(field))])
+  }
+}
+
+/** A default that is static data and not `None`: `None` is what a nullable column already says. */
+fn constantOf(field: StructureField): EncodedValue? {
+  match field.defaultValue() {
+    Some(.Nothing) => None
+    other => other
+  }
+}
+
+fn literal(value: EncodedValue): String {
+  match value {
+    .String(text) => "'{text}'"
+    other => other.plain()
+  }
+}
+
+fn scalarOf(structure: Structure): ColumnType {
+  match structure {
+    .Boolean => ColumnType.Boolean
+    .Integer => ColumnType.Integer
+    .Natural => ColumnType.Integer
+    .Floating => ColumnType.Real
+    .Binary => ColumnType.Blob
+    _ => ColumnType.Text
+  }
+}
+
+fn lowered(typeName: String): String {
+  const parts = typeName.split "/"
+  (parts.last() ?? typeName).toLowerCase() + "s"
+}
+
+/**
+ * An `Encoder` that collects one parameter per column, keyed by the path of field names that led to it. The same shape
+ * as CSV's, and for the same reason: a row is flat and a path is what makes a nested field addressable.
+ */
+type ColumnEncoder with Encoder {
+  var values: Map<String, EncodedValue> = [:]
+  private var path: List<String> = []
+  private var pending: String = ""
+
+  fn nothing(var self) {
+    put EncodedValue.Nothing
+  }
+
+  fn bool(var self, value: Bool) {
+    put EncodedValue.Bool(value)
+  }
+
+  fn int(var self, value: Int64) {
+    put EncodedValue.Int(value)
+  }
+
+  fn unsigned(var self, value: UInt64) {
+    put EncodedValue.Unsigned(value)
+  }
+
+  fn float(var self, value: Float64) {
+    put EncodedValue.Float(value)
+  }
+
+  fn string(var self, value: String) {
+    put EncodedValue.String(value)
+  }
+
+  fn bytes(var self, value: List<UInt8>) {
+    put EncodedValue.Bytes(value)
+  }
+
+  fn sequence(var self, length: Int?) {
+    const _length = length
+    descend()
+  }
+
+  fn map(var self, length: Int?) {
+    const _length = length
+    descend()
+  }
+
+  fn record(var self, typeName: String) {
+    const _typeName = typeName
+    descend()
+  }
+
+  fn variant(var self, typeName: String, name: String) {
+    const _typeName = typeName
+    descend()
+    put EncodedValue.String(name)
+  }
+
+  fn field(var self, name: String) {
+    pending = name
+  }
+
+  fn finish(var self) {
+    if !path.isEmpty() {
+      path = path.removedAt(path.length() - 1)
+    }
+  }
+
+  private fn descend(var self) {
+    path.add pending
+    pending = ""
+  }
+
+  private fn put(var self, value: EncodedValue) {
+    const full = if pending.isEmpty() { path } else { path.added pending }
+    const key = full.filter({ !_.isEmpty() }).toList().joined(separator: ".")
+    values.set key, value
+    pending = ""
+  }
+}

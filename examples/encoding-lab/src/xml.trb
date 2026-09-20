@@ -1,0 +1,508 @@
+/**
+ * Format c: XML, and the point of the whole design - **what is special about one type in one format is a mapping value
+ * in that format's own DSL**. No annotation on the type, no second trait, no word in the vocabulary.
+ *
+ *     const xml = Xml.format { format =>
+ *       format.map("lab/Price", { price =>
+ *         price.element "price"
+ *         price.attribute "currency"
+ *         price.text "amount"
+ *       })
+ *     }
+ *     print xml.encode(order)
+ *     // <Order><id>7</id><customer>ada@example.test</customer><price currency="EUR">19.99</price>...
+ *
+ * The mapping is found while walking, through the **qualified type name** that `record(typeName)` carries anyway. So it
+ * works at any depth - `Price` inside `Order` inside a `Page` - without a type test, without specialization and
+ * without `Order` knowing that `Price` has a mapping. The same mapping drives the decode side: `price` comes back out
+ * of the attribute it went into, and out of a child element just as well, because both arrive as fields.
+ *
+ * In the design the field reference is a quoted expression - `attribute { _.currency }` - so a misspelled field does not
+ * compile. The lab writes the name as text and checks it against the type's own `Describe`, which is the same error one
+ * phase later; `Xml.format` answers a `Fail` naming the field.
+ */
+
+use DecodeError, Encode, EncodedField, EncodedValue, Encoder, Structures from "./vocabulary"
+use ValueDecoder, shortName, structureOf from "./vocabulary"
+
+/** What one type looks like in XML. A value, built by the DSL below, held by the format and by nothing else. */
+public type XmlMapping {
+  /** The element name. Empty means "the short type name". */
+  private(var) elementName: String = ""
+  /** Fields that are attributes of the element instead of children. */
+  private(var) attributes: List<String> = []
+  /** The field that is the element's text content, if any. */
+  private(var) textField: String = ""
+
+  fn element(var self, name: String) {
+    elementName = name
+  }
+
+  /** `attribute { _.currency }` in the design. */
+  fn attribute(var self, field: String) {
+    attributes.add field
+  }
+
+  /** `text { _.amount }` in the design: this field is the element's content, not a child. */
+  fn text(var self, field: String) {
+    textField = field
+  }
+
+  fn roleOf(self, field: String): XmlRole {
+    if attributes.contains(field) {
+      return XmlRole.Attribute
+    }
+    if field == textField {
+      return XmlRole.Text
+    }
+    XmlRole.Child
+  }
+}
+
+/** Where one field of a record goes. Three places, which is exactly what XML has and JSON does not. */
+public type XmlRole {
+  case Attribute
+  case Text
+  case Child
+}
+
+/** The DSL: `format.map(typeName) { ... }`, once per type that is special. */
+public type XmlFormat {
+  private(var) mappings: Map<String, XmlMapping> = [:]
+  private(var) described: Map<String, List<String>> = [:]
+
+  /**
+   * `map<Price> { ... }` in the design, where the type argument gives both the qualified name and the field names to
+   * check against. The lab passes the name and the type's `describe`, which is where both of those come from anyway.
+   */
+  fn map(var self, typeName: String, describe: (var target: Structures) => Void, define: (var mapping: XmlMapping) => Void) {
+    var mapping = XmlMapping()
+    define mapping
+    mappings.set typeName, mapping
+    const structure = structureOf describe
+    described.set typeName, structure.recordFields().map({ _.name() }).toList()
+  }
+}
+
+/** What a mapping got wrong. It is found once, when the format is built, and never again. */
+public type XmlProblem with Show, Error {
+  typeName: String
+  field: String
+
+  fn show(self): String {
+    "`{typeName}` has no field `{field}`"
+  }
+}
+
+/** XML as a format: the mappings, and one entry in each direction. */
+public type Xml {
+  private mappings: Map<String, XmlMapping> = [:]
+  /** Element name to type name, so the decode side finds the same mapping the encode side used. */
+  private byElement: Map<String, String> = [:]
+
+  fn format(define: (var format: XmlFormat) => Void): Result<Xml, XmlProblem> {
+    var built = XmlFormat()
+    define built
+    var byElement: Map<String, String> = [:]
+    for (typeName, mapping) in built.mappings {
+      const fields = built.described.get(typeName) ?? []
+      for name in mapping.attributes {
+        if !fields.contains(name) {
+          return Fail XmlProblem(typeName, name)
+        }
+      }
+      if !mapping.textField.isEmpty() && !fields.contains(mapping.textField) {
+        return Fail XmlProblem(typeName, mapping.textField)
+      }
+      byElement.set elementOf(mapping, typeName), typeName
+    }
+    Ok Xml(built.mappings, byElement)
+  }
+
+  fn encode<Value: Encode>(self, value: Value): String {
+    var target = XmlEncoder mappings: mappings
+    value.encode target
+    target.output
+  }
+
+  /** Tolerant on purpose: a field arrives whether it was written as an attribute, as text or as a child element. */
+  fn decode<Value>(
+    self,
+    read: (var source: ValueDecoder) => Result<Value, DecodeError>,
+    text: String,
+  ): Result<Value, DecodeError> {
+    var parser = XmlParser text.chars().toList()
+    const node = parser.element()?
+    var source = ValueDecoder.of valueOf(node, mappings, byElement), lenient: true
+    read source
+  }
+}
+
+fn elementOf(mapping: XmlMapping, typeName: String): String {
+  if mapping.elementName.isEmpty() {
+    return shortName typeName
+  }
+  mapping.elementName
+}
+
+/**
+ * A node to an `EncodedValue`: attributes and children become fields side by side, which is why a field may move
+ * between the two without any type noticing. The mapping says which field the text belongs to.
+ */
+fn valueOf(node: XmlNode, mappings: Map<String, XmlMapping>, byElement: Map<String, String>): EncodedValue {
+  const mapping = match byElement.get(node.name) {
+    Some(typeName) => mappings.get(typeName) ?? XmlMapping()
+    None => XmlMapping()
+  }
+  if node.attributes.isEmpty() && node.children.isEmpty() {
+    return EncodedValue.String node.text
+  }
+  var fields: List<EncodedField> = []
+  var caseName = ""
+  for attribute in node.attributes {
+    if attribute.name == caseAttribute {
+      caseName = attribute.value
+      continue
+    }
+    fields.add EncodedField(attribute.name, EncodedValue.String(attribute.value))
+  }
+  // Only when there is text: the same mapping has to read a field back out of a child element just as well
+  if !mapping.textField.isEmpty() && !node.text.isEmpty() {
+    fields.add EncodedField(mapping.textField, EncodedValue.String(node.text))
+  }
+  const names = node.children.map({ _.name }).toList()
+  for child in node.children {
+    const value = valueOf child, mappings, byElement
+    const repeated = names.filter({ _ == child.name }).count() > 1
+    if !repeated {
+      fields.add EncodedField(child.name, value)
+      continue
+    }
+    match fields.find({ _.name == child.name }) {
+      Some(_) => {
+        fields = grown fields, child.name, value
+      }
+      None => fields.add EncodedField(child.name, EncodedValue.Sequence([value]))
+    }
+  }
+  if !caseName.isEmpty() {
+    return EncodedValue.Variant "", caseName, fields
+  }
+  EncodedValue.Record "", fields
+}
+
+/** A second `<tags>` turns the first one into a sequence: XML has no brackets, so repetition is the only signal. */
+fn grown(fields: List<EncodedField>, name: String, value: EncodedValue): List<EncodedField> {
+  fields.map { field =>
+    if field.name != name {
+      return field
+    }
+    match field.value {
+      .Sequence(items) => EncodedField name, EncodedValue.Sequence(items.added(value))
+      only => EncodedField name, EncodedValue.Sequence([only, value])
+    }
+  }.toList()
+}
+
+/** The attribute a case is written into. A convention of this format, decided once, and no type mentions it. */
+const caseAttribute = "case"
+
+/**
+ * An `Encoder` that writes XML. An element is buffered until `finish`, because an attribute is written before the
+ * children and its value only arrives after the field name does.
+ */
+public type XmlEncoder with Encoder {
+  var output: String = ""
+  mappings: Map<String, XmlMapping> = [:]
+  private var frames: List<XmlFrame> = []
+
+  fn nothing(var self) {
+    // An absent value is an element that is not there, which is what XML says and what `field` then does not find
+    clearPending()
+  }
+
+  fn bool(var self, value: Bool) {
+    put "{value}"
+  }
+
+  fn int(var self, value: Int64) {
+    put "{value}"
+  }
+
+  fn unsigned(var self, value: UInt64) {
+    put "{value}"
+  }
+
+  fn float(var self, value: Float64) {
+    put "{value}"
+  }
+
+  fn string(var self, value: String) {
+    put escaped(value)
+  }
+
+  fn bytes(var self, value: List<UInt8>) {
+    put "{value.length()}"
+  }
+
+  fn sequence(var self, length: Int?) {
+    const _length = length
+    const name = pendingName()
+    clearPending()
+    frames.add XmlFrame(.Items, elementName: name)
+  }
+
+  fn map(var self, length: Int?) {
+    const _length = length
+    const name = pendingName()
+    clearPending()
+    frames.add XmlFrame(.Entries, elementName: name)
+  }
+
+  fn record(var self, typeName: String) {
+    const mapping = mappings.get(typeName) ?? XmlMapping()
+    const name = elementNameFor typeName, mapping
+    clearPending()
+    frames.add XmlFrame(.Element, elementName: name, mapping: mapping)
+  }
+
+  fn variant(var self, typeName: String, name: String) {
+    const mapping = mappings.get(typeName) ?? XmlMapping()
+    const element = elementNameFor typeName, mapping
+    clearPending()
+    var frame = XmlFrame(.Element, elementName: element, mapping: mapping)
+    frame.attributes.add " {caseAttribute}=\"{name}\""
+    frames.add frame
+  }
+
+  fn field(var self, name: String) {
+    const last = frames.length() - 1
+    frames[last].pending = name
+  }
+
+  fn finish(var self) {
+    const last = frames.length() - 1
+    const frame = frames[last]
+    frames = frames.removedAt last
+    match frame.kind {
+      .Element => emit frame.elementName, rendered(frame)
+      // A sequence is not an element of its own: its items have already been written with the field's name
+      _ => emit frame.elementName, frame.children
+    }
+  }
+
+  /** The element name: the mapping decides, then the field it sits in, then the short type name. */
+  private fn elementNameFor(self, typeName: String, mapping: XmlMapping): String {
+    if !mapping.elementName.isEmpty() {
+      return mapping.elementName
+    }
+    const pending = pendingName()
+    if !pending.isEmpty() {
+      return pending
+    }
+    shortName typeName
+  }
+
+  private fn pendingName(self): String {
+    if frames.isEmpty() {
+      return ""
+    }
+    frames[frames.length() - 1].pending
+  }
+
+  private fn clearPending(var self) {
+    if frames.isEmpty() {
+      return
+    }
+    frames[frames.length() - 1].pending = ""
+  }
+
+  /** One scalar, into the place the mapping gives its field. */
+  private fn put(var self, value: String) {
+    if frames.isEmpty() {
+      output = output + value
+      return
+    }
+    const last = frames.length() - 1
+    const frame = frames[last]
+    match frame.kind {
+      .Items => {
+        frames[last].children = frame.children + "<{frame.elementName}>{value}</{frame.elementName}>"
+      }
+      .Entries => {
+        frames[last].children = frame.children + "<entry>{value}</entry>"
+      }
+      .Element => {
+        const name = frame.pending
+        frames[last].pending = ""
+        // No field name: this is a wrapper's one value, and it is the element's content
+        if name.isEmpty() {
+          frames[last].text = value
+          return
+        }
+        match frame.mapping.roleOf(name) {
+          .Attribute => frames[last].attributes.add(" {name}=\"{value}\"")
+          .Text => {
+            frames[last].text = value
+          }
+          .Child => {
+            frames[last].children = frame.children + "<{name}>{value}</{name}>"
+          }
+        }
+      }
+    }
+  }
+
+  /** A finished element, into whatever is around it. */
+  private fn emit(var self, name: String, element: String) {
+    if frames.isEmpty() {
+      output = output + element
+      return
+    }
+    const last = frames.length() - 1
+    const _name = name
+    frames[last].children = frames[last].children + element
+    frames[last].pending = ""
+  }
+}
+
+fn rendered(frame: XmlFrame): String {
+  const attributes = frame.attributes.joined separator: ""
+  const inner = frame.text + frame.children
+  "<{frame.elementName}{attributes}>{inner}</{frame.elementName}>"
+}
+
+type XmlFrame {
+  kind: XmlFrameKind
+  elementName: String = ""
+  mapping: XmlMapping = XmlMapping()
+  var attributes: List<String> = []
+  var text: String = ""
+  var children: String = ""
+  var pending: String = ""
+}
+
+type XmlFrameKind {
+  case Element
+  case Items
+  case Entries
+}
+
+fn escaped(value: String): String {
+  value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}
+
+fn unescaped(value: String): String {
+  value.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&amp;", "&")
+}
+
+/** One element, as data. The tree a document-shaped XML program works on: step 6 of the adjustment ladder. */
+public type XmlNode {
+  name: String
+  attributes: List<XmlAttribute> = []
+  text: String = ""
+  children: List<XmlNode> = []
+}
+
+public type XmlAttribute {
+  name: String
+  value: String
+}
+
+/** Elements, attributes and text. No namespaces, no processing instructions, no entities beyond the five. */
+type XmlParser {
+  characters: List<Char>
+  var position: Int = 0
+
+  fn element(var self): Result<XmlNode, DecodeError> {
+    skipWhitespace()
+    if atEnd() || characters[position] != '<' {
+      return Fail DecodeError("an element was expected")
+    }
+    position = position + 1
+    const name = word()
+    var attributes: List<XmlAttribute> = []
+    skipWhitespace()
+    while !atEnd() && characters[position] != '>' && characters[position] != '/' {
+      const attributeName = word()
+      skipWhitespace()
+      if atEnd() || characters[position] != '=' {
+        return Fail DecodeError("the attribute `{attributeName}` has no value")
+      }
+      position = position + 1
+      attributes.add XmlAttribute(attributeName, quotedValue()?)
+      skipWhitespace()
+    }
+    if atEnd() {
+      return Fail DecodeError("`<{name}` is not closed")
+    }
+    if characters[position] == '/' {
+      position = position + 2
+      return Ok XmlNode(name, attributes)
+    }
+    position = position + 1
+    var text: List<Char> = []
+    var children: List<XmlNode> = []
+    while !atEnd() {
+      if characters[position] == '<' && position + 1 < characters.length() && characters[position + 1] == '/' {
+        break
+      }
+      if characters[position] == '<' {
+        children.add(element()?)
+        continue
+      }
+      text.add characters[position]
+      position = position + 1
+    }
+    if atEnd() {
+      return Fail DecodeError("`<{name}>` has no closing tag")
+    }
+    position = position + 2
+    const _closing = word()
+    if !atEnd() {
+      position = position + 1
+    }
+    Ok XmlNode(name, attributes, unescaped(String.from(text).trim()), children)
+  }
+
+  private fn atEnd(self): Bool {
+    position >= characters.length()
+  }
+
+  private fn skipWhitespace(var self) {
+    while !atEnd() && characters[position].isWhitespace() {
+      position = position + 1
+    }
+  }
+
+  private fn word(var self): String {
+    var out: List<Char> = []
+    while !atEnd() {
+      const character = characters[position]
+      if !character.isLetter() && !character.isDigit() && character != '_' && character != '.' {
+        break
+      }
+      out.add character
+      position = position + 1
+    }
+    String.from out
+  }
+
+  private fn quotedValue(var self): Result<String, DecodeError> {
+    skipWhitespace()
+    if atEnd() || characters[position] != '"' {
+      return Fail DecodeError("an attribute value in quotes was expected")
+    }
+    position = position + 1
+    var out: List<Char> = []
+    while !atEnd() && characters[position] != '"' {
+      out.add characters[position]
+      position = position + 1
+    }
+    if atEnd() {
+      return Fail DecodeError("this attribute value is not closed")
+    }
+    position = position + 1
+    Ok unescaped(String.from(out))
+  }
+}

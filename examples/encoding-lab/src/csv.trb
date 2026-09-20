@@ -1,0 +1,252 @@
+/**
+ * Format b: CSV, the tabular case. The header comes out of `Describe`, the cells come out of `Encode`, and the column
+ * order is the declaration order - which is what a table wants and what nothing else in the vocabulary provides.
+ *
+ *     const csv = Csv.of(Shipment.describe, { format => format.flatten("price") })?
+ *     print csv.header()
+ *     print csv.row(shipment)?
+ *
+ * A table is flat, so a field whose type is a record, a sequence, a map or a variant **cannot** be a column. That is an
+ * **early error**: `Csv.of` answers a `Fail` naming the field, before a single row is written. The one adjustment a
+ * table needs is `flatten`, which turns a nested record into more columns (`price.amount`, `price.currency`).
+ */
+
+use DecodeError, Describe, Encode, EncodedField, EncodedValue, Encoder from "./vocabulary"
+use Structure, StructureField, Structures, ValueDecoder, structureOf from "./vocabulary"
+
+/** What CSV cannot put in a column, with the field it found it in. */
+public type CsvProblem with Show, Error {
+  field: String
+  reason: String
+
+  fn show(self): String {
+    "the column `{field}` {reason}"
+  }
+}
+
+/** The mapping DSL of CSV. One word, because a table needs exactly one adjustment. */
+public type CsvFormat {
+  private(var) flattened: List<String> = []
+
+  /**
+   * `flatten { _.price }` in the design, `flatten "price"` here: a nested record becomes `price.amount`,
+   * `price.currency`. With a quoted expression the field reference is type checked and a misspelling does not compile;
+   * the lab checks the name against the type's own `Describe` instead, which is the same error one phase later.
+   */
+  fn flatten(var self, field: String) {
+    flattened.add field
+  }
+}
+
+/** CSV as a format: the column list is computed once, out of `Describe`, and every row follows it. */
+public type Csv {
+  private columns: List<CsvColumn>
+
+  /**
+   * The design writes `Csv.of<Shipment> { flatten { _.price } }`. Everything that can go wrong goes wrong here, once.
+   */
+  fn of(
+    describe: (var target: Structures) => Void,
+    define: (var format: CsvFormat) => Void,
+  ): Result<Csv, CsvProblem> {
+    var format = CsvFormat()
+    define format
+    const structure = structureOf describe
+    for name in format.flattened {
+      if structure.recordFields().find({ _.name() == name }).isNone() {
+        return Fail CsvProblem(name, "is not a field of `{structure.declaredName()}`")
+      }
+    }
+    var columns: List<CsvColumn> = []
+    for field in structure.recordFields() {
+      columns.addAll(columnsOf(field, format.flattened)?)
+    }
+    Ok Csv(columns)
+  }
+
+  fn header(self): String {
+    const names = columns.map({ _.name }).toList()
+    names.joined separator: ","
+  }
+
+  /** One row, in the column order. A cell that is `None` is empty, which is what a table means by absent. */
+  fn row<Value: Encode>(self, value: Value): Result<String, CsvProblem> {
+    var target = CsvEncoder()
+    value.encode target
+    const cells = columns.map { column => escaped(target.cells.get(column.path) ?? "") }
+    Ok cells.toList().joined(separator: ",")
+  }
+
+  /**
+   * One row back. The cells are text, so the decoder is lenient, and the nesting the header flattened is put back out
+   * of the column paths: that is the same mapping, read from the other side.
+   */
+  fn decode<Value>(
+    self,
+    read: (var source: ValueDecoder) => Result<Value, DecodeError>,
+    line: String,
+  ): Result<Value, DecodeError> {
+    const cells = line.split ","
+    if cells.length() != columns.length() {
+      return Fail DecodeError("this row has {cells.length()} cells, the header has {columns.length()}")
+    }
+    var values: Map<String, String> = [:]
+    for index in 0..columns.length() {
+      values.set columns[index].path, cells[index].trim()
+    }
+    var source = ValueDecoder.of recordOf(columns, values), lenient: true
+    read source
+  }
+}
+
+/** One column: the path through the fields that leads to it, and the name the header shows. */
+type CsvColumn {
+  path: String
+  name: String
+}
+
+fn columnsOf(field: StructureField, flattened: List<String>): Result<List<CsvColumn>, CsvProblem> {
+  const name = field.name()
+  match field.of.withoutOptional() {
+    .Record(_, inner) => {
+      if !flattened.contains(name) {
+        return Fail CsvProblem(name, "is a record. Flatten it: `flatten \{ _.{name} \}`")
+      }
+      var columns: List<CsvColumn> = []
+      for nested in inner {
+        const below = columnsOf(nested, flattened)?
+        for column in below {
+          columns.add CsvColumn("{name}.{column.path}", "{name}.{column.name}")
+        }
+      }
+      Ok columns
+    }
+    .Sequence(_) => Fail CsvProblem(name, "is a sequence, and a table has one value per cell")
+    .Mapping(_, _) => Fail CsvProblem(name, "is a map, and a table has one value per cell")
+    .Variant(_, _) => Fail CsvProblem(name, "has cases, and a table has one shape per column")
+    .Reference(_) => Fail CsvProblem(name, "refers to itself, and a table has no depth")
+    _ => Ok([CsvColumn(name, name)])
+  }
+}
+
+/** The flat cells back into the nesting the type expects: `price.amount` becomes `price` around `amount`. */
+fn recordOf(columns: List<CsvColumn>, values: Map<String, String>): EncodedValue {
+  var fields: List<EncodedField> = []
+  var seen: List<String> = []
+  for column in columns {
+    const parts = column.path.split "."
+    const head = parts[0]
+    if seen.contains(head) {
+      continue
+    }
+    seen.add head
+    if parts.length() == 1 {
+      fields.add EncodedField(head, cellOf(values.get(head) ?? ""))
+      continue
+    }
+    const inner = columns.filter({ _.path.startsWith "{head}." }).map { column =>
+      const name = column.path.split(".")[1]
+      EncodedField name, cellOf(values.get(column.path) ?? "")
+    }
+    fields.add EncodedField(head, EncodedValue.Record("", inner.toList()))
+  }
+  EncodedValue.Record "", fields
+}
+
+/** An empty cell is an absent value: a table has no other way to say it. */
+fn cellOf(text: String): EncodedValue {
+  if text.isEmpty() {
+    return EncodedValue.Nothing
+  }
+  EncodedValue.String text
+}
+
+/**
+ * An `Encoder` that collects one cell per scalar, keyed by the path of fields that led to it. Nesting needs no case of
+ * its own: the path is the state, and `Csv.of` has already made sure only records nest.
+ */
+type CsvEncoder with Encoder {
+  var cells: Map<String, String> = [:]
+  private var path: List<String> = []
+  private var pending: String = ""
+
+  fn nothing(var self) {
+    put ""
+  }
+
+  fn bool(var self, value: Bool) {
+    put "{value}"
+  }
+
+  fn int(var self, value: Int64) {
+    put "{value}"
+  }
+
+  fn unsigned(var self, value: UInt64) {
+    put "{value}"
+  }
+
+  fn float(var self, value: Float64) {
+    put "{value}"
+  }
+
+  fn string(var self, value: String) {
+    put value
+  }
+
+  fn bytes(var self, value: List<UInt8>) {
+    put "{value.length()} bytes"
+  }
+
+  fn sequence(var self, length: Int?) {
+    const _length = length
+    descend()
+  }
+
+  fn map(var self, length: Int?) {
+    const _length = length
+    descend()
+  }
+
+  fn record(var self, typeName: String) {
+    const _typeName = typeName
+    descend()
+  }
+
+  fn variant(var self, typeName: String, name: String) {
+    const _typeName = typeName
+    put name
+  }
+
+  fn field(var self, name: String) {
+    pending = name
+  }
+
+  fn finish(var self) {
+    if !path.isEmpty() {
+      path = path.removedAt(path.length() - 1)
+    }
+  }
+
+  /** Whatever opens takes the field name it sits in with it, so the path below is right. */
+  private fn descend(var self) {
+    path.add pending
+    pending = ""
+  }
+
+  private fn put(var self, value: String) {
+    const full = if pending.isEmpty() { path } else { path.added pending }
+    const key = full.filter({ !_.isEmpty() }).toList().joined(separator: ".")
+    cells.set key, value
+    pending = ""
+  }
+}
+
+/** A cell that holds a comma or a quote is quoted, and a quote inside it is doubled. That is all of RFC 4180. */
+fn escaped(cell: String): String {
+  if !cell.contains(",") && !cell.contains("\"") && !cell.contains("\n") {
+    return cell
+  }
+  const inner = cell.replace "\"", "\"\""
+  "\"{inner}\""
+}

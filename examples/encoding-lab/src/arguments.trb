@@ -1,0 +1,194 @@
+/**
+ * Format f: command line arguments. `Describe` plus `Decode`, and no `Encode` at all - a command line is read and never
+ * written, which is why the three forms are three and not one.
+ *
+ *     const arguments = Arguments.of Shipment.describe
+ *     print arguments.help()
+ *     const shipment = arguments.decode(Shipment.decode, ["--order-id", "7", "--express"])?
+ *
+ * The `--help` text is the **field doc comments** and the **defaults**, both of which `Describe` carries. This is what
+ * an `@description("...")` annotation is for in other languages, and here the doc comment already said it.
+ */
+
+use DecodeError, EncodedField, EncodedValue, Structure, StructureField, Structures, ValueDecoder, structureOf from "./vocabulary"
+
+/** A command line, derived from one type. */
+public type Arguments {
+  private options: List<Option>
+
+  fn of(describe: (var target: Structures) => Void): Arguments {
+    const structure = structureOf describe
+    var options: List<Option> = []
+    for field in structure.recordFields() {
+      options.addAll optionsOf(field, "")
+    }
+    Arguments options
+  }
+
+  /** One line per option: the flag, what it takes, the doc comment, and what happens when it is left out. */
+  fn help(self): String {
+    var lines: List<String> = []
+    for option in options {
+      const takes = if option.flag { "" } else { " <{option.shape}>" }
+      const head = "  --{option.name}{takes}"
+      const padded = head + " ".repeat(maximumOf(28 - head.byteLength(), 1))
+      lines.add "{padded}{option.documentation}{option.suffix()}"
+    }
+    lines.joined separator: "\n"
+  }
+
+  /**
+   * Arguments to a value. A flag without a value is `true`, an option that is not there is simply not a field, so the
+   * type's own default applies - which is the same rule every other format in the lab follows.
+   */
+  fn decode<Value>(
+    self,
+    read: (var source: ValueDecoder) => Result<Value, DecodeError>,
+    given: List<String>,
+  ): Result<Value, DecodeError> {
+    var values: Map<String, String> = [:]
+    var index = 0
+    while index < given.length() {
+      const word = given[index]
+      index = index + 1
+      if !word.startsWith("--") {
+        return Fail DecodeError("`{word}` is not an option")
+      }
+      const name = word.slice(2..word.byteLength())
+      const option = match options.find({ _.name == name }) {
+        Some(found) => found
+        None => {
+          return Fail DecodeError("`--{name}` is not an option of this command")
+        }
+      }
+      if option.flag {
+        values.set option.path, "true"
+        continue
+      }
+      if index >= given.length() {
+        return Fail DecodeError("`--{name}` needs a value")
+      }
+      values.set option.path, given[index]
+      index = index + 1
+    }
+    var source = ValueDecoder.of recordOf(options, values), lenient: true
+    read source
+  }
+}
+
+/** One option: where its value belongs, what it is called, and what the help text says about it. */
+type Option {
+  path: String
+  name: String
+  documentation: String
+  shape: String
+  /** A truth value needs no argument: `--express` is `true`. */
+  flag: Bool
+  default: EncodedValue?
+  required: Bool
+
+  fn suffix(self): String {
+    if const Some(value) = default {
+      return " (default: {value.plain()})"
+    }
+    if required {
+      return " (required)"
+    }
+    ""
+  }
+}
+
+fn optionsOf(field: StructureField, prefix: String): List<Option> {
+  const path = if prefix.isEmpty() { field.name() } else { "{prefix}.{field.name()}" }
+  const inner = field.of.withoutOptional()
+  match inner {
+    .Record(_, fields) => fields.flatMap({ optionsOf _, path }).toList()
+    .Wrapper(_, of) => [optionOf(field, path, of)]
+    _ => [optionOf(field, path, inner)]
+  }
+}
+
+fn optionOf(field: StructureField, path: String, shape: Structure): Option {
+  const flag = match shape {
+    .Boolean => true
+    _ => false
+  }
+  Option(
+    path,
+    dashed(path),
+    field.description.documentation,
+    shapeOf(shape),
+    flag: flag,
+    default: field.defaultValue(),
+    required: field.isRequired(),
+  )
+}
+
+fn shapeOf(structure: Structure): String {
+  match structure {
+    .Integer => "number"
+    .Natural => "count"
+    .Floating => "number"
+    .Boolean => "yes/no"
+    .Binary => "bytes"
+    _ => "text"
+  }
+}
+
+/** `price.amount` becomes `--price-amount`, and `orderId` becomes `--order-id`: one spelling, decided by the format. */
+fn dashed(path: String): String {
+  var out: List<Char> = []
+  for character in path.chars() {
+    if character == '.' {
+      out.add '-'
+      continue
+    }
+    const lower = character.toLowerCase()
+    if lower != character {
+      out.add '-'
+    }
+    out.add lower
+  }
+  String.from out
+}
+
+/** The flat options back into the nesting the type expects, out of the paths the help text already used. */
+fn recordOf(options: List<Option>, values: Map<String, String>): EncodedValue {
+  var fields: List<EncodedField> = []
+  var seen: List<String> = []
+  for option in options {
+    const parts = option.path.split "."
+    const head = parts[0]
+    if seen.contains(head) {
+      continue
+    }
+    seen.add head
+    if parts.length() == 1 {
+      if const Some(text) = values.get(head) {
+        fields.add EncodedField(head, EncodedValue.String(text))
+      }
+      continue
+    }
+    var inner: List<EncodedField> = []
+    for nested in options {
+      if !nested.path.startsWith("{head}.") {
+        continue
+      }
+      const name = nested.path.split(".")[1]
+      if const Some(text) = values.get(nested.path) {
+        inner.add EncodedField(name, EncodedValue.String(text))
+      }
+    }
+    if !inner.isEmpty() {
+      fields.add EncodedField(head, EncodedValue.Record("", inner))
+    }
+  }
+  EncodedValue.Record "", fields
+}
+
+fn maximumOf(value: Int, floor: Int): Int {
+  if value < floor {
+    return floor
+  }
+  value
+}
