@@ -1,3 +1,13 @@
+/**
+ * [resolveTypes]: a walk that resolves every name in a *type position* of one module, and hands the result to the
+ * type checker as a [Resolved] - the names it does not have to look up a second time.
+ *
+ * Signatures, fields, cases, aliases, trait lists, `extend` targets, bounds, `where` clauses, generic defaults, the
+ * annotations of bindings and closure parameters inside of bodies, and the type arguments of `List<Int>(...)` are
+ * all type positions and are resolved here. Names in *expressions* are a different question and are not walked at
+ * all - what a bare name means there can depend on the type of an argument, which this pass does not know.
+ */
+
 use Span from "../syntax/source"
 use Diagnostic from "../syntax/diagnostic"
 use Name, Statement, Block, Binding, Condition from "../syntax/ast"
@@ -21,7 +31,7 @@ public type Resolved {
  * bodies, and the type arguments of `List<Int>(...)`.
  *
  * Names in *expressions* are not resolved here, and cannot be: what `port` means in `server \{ port 8080 \}` depends
- * on the type of the parameter that closure is passed to, so resolving them is part of type checking (milestone 4).
+ * on the type of the parameter that closure is passed to, so resolving them is part of type checking, not of this walk.
  */
 public fn resolveTypes(var symbols: Symbols, program: Program, id: ModuleId): Resolved {
   var walk = Walk program, id, symbols
@@ -293,7 +303,7 @@ fn walkTypes(var walk: Walk, scope: Scope, references: List<TypeReference>) {
 
 /**
  * `with Show, Add & Subtract by value`: the capability of every element. The field it delegates to is a field name,
- * not a type, and is resolved by the checker instead (gap 14).
+ * not a type, and is resolved by the checker instead.
  */
 fn walkTraitClauses(var walk: Walk, scope: Scope, clauses: List<TraitClause>) {
   for clause in clauses {

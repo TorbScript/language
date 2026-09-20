@@ -1,17 +1,23 @@
-use SourceFile, Statement, Declaration, Member, Block, Expression, Argument from "../syntax/ast"
-use Closure, Condition, TextSegment, TypeReference from "../syntax/ast"
-
 /**
- * Which files a project loads as receiver scripts. `Sandbox.load<Value>("./config.trb")` says both things the checker
- * needs about such a file - which type its body is checked against, and where it is - and it says them statically,
- * which is the whole point of the mechanism: "because the type argument is known statically, a compiled binary knows
- * exactly which types need to be callable from interpreted code" (CONCEPT.md, "Receiver Scripts and the Sandbox").
+ * Which files a project loads as receiver scripts: [ScriptLoad], and [scriptLoadsOf], the walk that finds every
+ * `Sandbox.load<Value>("./config.trb")` of a file with a literal path.
+ *
+ * `Sandbox.load<Value>("./config.trb")` says both things the checker needs about such a file - which type its body is
+ * checked against, and where it is - and it says them statically, which is the whole point of the mechanism:
+ * "because the type argument is known statically, a compiled binary knows exactly which types need to be callable
+ * from interpreted code" (CONCEPT.md, "Receiver Scripts and the Sandbox").
  *
  * This is a walk over the syntax tree and nothing else. It has to run before the modules of a program exist, because
  * a receiver script *is* one of them, so it cannot ask what a name means - `Sandbox.load` is recognized by its shape.
- * A path that is not a literal is not found here, and such a file is simply not checked: only the sandbox of
- * milestone 7 can know what it was.
+ *
+ * # Open
+ *
+ * A path that is not a literal is not found here, so such a file is simply not checked against anything; only the
+ * sandbox that loads it at run time can know what it was.
  */
+
+use SourceFile, Statement, Declaration, Member, Block, Expression, Argument from "../syntax/ast"
+use Closure, Condition, TextSegment, TypeReference from "../syntax/ast"
 
 /** One `Sandbox.load<Value>(path)` with a literal path. */
 public type ScriptLoad {
@@ -21,6 +27,7 @@ public type ScriptLoad {
   annotation: TypeReference
 }
 
+/** Every `Sandbox.load<Value>("./path")` found by walking `file`, with a literal string as its first argument. */
 public fn scriptLoadsOf(file: SourceFile): List<ScriptLoad> {
   var found: List<ScriptLoad> = []
   walkStatements file.statements, found

@@ -1,3 +1,21 @@
+/**
+ * Visibility and the shape of a program: who may name what, which files may contain code, and what a declaration is
+ * allowed to look like. This is the part of the checker that reads declarations and not expressions.
+ *
+ * Two questions, and they are separate:
+ *
+ * 1. **Visibility** ([requireVisibleMember], [isInsideDeclaration]). `private` reaches exactly as far as its type
+ *    does - the body of the type and every `extend` of it in the same package - and `private(var)` hands out a
+ *    read-only path instead of hiding the field. Whether the *path* that leads to a member may be written is a
+ *    different question (`place.trb`'s mutability rules); whether this code may name the member at all is this one.
+ * 2. **Program shape** ([checkShape]). A `public` function declares its result type, top-level code lives in entry
+ *    files and scripts, a top-level `const` of a module is compile-time evaluable, an `extend` adds constants and
+ *    functions, `native` belongs to the standard library, and a `shared type` only implements `shared trait`s.
+ *
+ * The shape pass runs *after* the bodies of a module were checked, because a constant is folded from what the names in
+ * it resolved to.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Name, Modifiers, Visibility, Declaration, Member, Binding, Argument, Expression from "../../syntax/ast"
@@ -17,24 +35,6 @@ use substitute from "./unify"
 use typeFromReference from "./lowering"
 use implementsBound from "./implementation"
 use checkConstantInitializer from "./constant"
-
-/**
- * Visibility and the shape of a program: who may name what, which files may contain code, and what a declaration is
- * allowed to look like. This is the part of the checker that reads declarations and not expressions.
- *
- * Two questions, and they are separate:
- *
- * 1. **Visibility.** `private` reaches exactly as far as its type does - the body of the type and every `extend` of it
- *    in the same package (gap 29) - and `private(var)` hands out a read-only path instead of hiding the field.
- *    Whether the *path* that leads to a member may be written is milestone 4.6's question; whether this code may name
- *    the member at all is this one.
- * 2. **Program shape.** A `public` function declares its result type, top-level code lives in entry files and scripts,
- *    a top-level `const` of a module is compile-time evaluable, an `extend` adds constants and functions, `native`
- *    belongs to the standard library, and a `shared type` only implements `shared trait`s.
- *
- * The shape pass runs *after* the bodies of a module were checked, because a constant is folded from what the names in
- * it resolved to.
- */
 
 // --- Visibility of a member -----------------------------------------------------------------------------------------
 
@@ -115,7 +115,7 @@ fn declaringTypeOf(checker: Checker, member: SymbolId, owner: TypeId): SymbolId?
 }
 
 /**
- * `private` reaches as far as the type does (gap 29): the body of the declaration, and every `extend` of it in the
+ * `private` reaches as far as the type does: the body of the declaration, and every `extend` of it in the
  * package that declares it - an `extend` without a trait *is* part of the type, and the package is already the unit of
  * coherence.
  */
@@ -173,7 +173,7 @@ fn isPublicField(field: FieldSignature): Bool {
 /**
  * Outside of the type a `private` field cannot be passed, so the generated constructor is usable from outside exactly
  * when every private field has a default (CONCEPT.md, "Construction"). The generated `copy` follows the same rule with
- * every field optional (gap 24), so only the passing is checked for it.
+ * every field optional, so only the passing is checked for it.
  */
 public fn checkConstruction(var checker: Checker, target: Target, arguments: List<Argument>, at: Span) {
   const (owner, isCopy) = match target.resolution {
@@ -210,7 +210,7 @@ public fn checkConstruction(var checker: Checker, target: Target, arguments: Lis
 }
 
 /**
- * Gap 20 at a constructor: a `var` field whose type has an identity may not be filled from a `const` path, because a
+ * At a constructor too, a `var` field whose type has an identity may not be filled from a `const` path, because a
  * shared object is never copied and the field would hand on exactly the permission the `const` withheld.
  *
  * It needs a walk of its own, for two reasons. The parameters of a generated constructor are **values** - a `var` field
@@ -361,7 +361,7 @@ public fn checkShape(var checker: Checker, module: ModuleId) {
  *
  * It runs here, over the type of every type position the module recorded, and not in `lowering.trb` where the arguments
  * are built: bound resolution needs the implementation index and every signature of the program, and building a type is
- * what happens *while* those are still being built (4.3). A nested argument is a type position of its own, so
+ * what happens *while* those are still being built. A nested argument is a type position of its own, so
  * `List<HashMap<Float, String>>` is covered by the same walk.
  */
 fn checkTypeArgumentBounds(var checker: Checker, module: ModuleId) {
@@ -419,7 +419,7 @@ fn checkAppliedBounds(var checker: Checker, module: ModuleId, annotation: TypeId
 }
 
 /**
- * Where top-level code is allowed (gap 28): an entry file (`src/main.trb`), a script, a receiver script and a
+ * Where top-level code is allowed: an entry file (`src/main.trb`), a script, a receiver script and a
  * `tests/*.test.trb` file - and every file that nothing imports, because that is what the rule is *for*: an imported
  * module consists of declarations only, so there is no initialization order and a cyclic import is harmless. The
  * `src/lib.trb` of a named package is always a module, because it is what other packages import.
@@ -481,8 +481,8 @@ fn reportTopLevelCode(var checker: Checker, module: ModuleId, at: Span) {
 }
 
 /**
- * A top-level `const` of a module has to be compile-time evaluable (gap 27), and a module has no top-level `var` at
- * all: a module exports constants, it has no mutable state (gap 41).
+ * A top-level `const` of a module has to be compile-time evaluable, and a module has no top-level `var` at
+ * all: a module exports constants, it has no mutable state.
  */
 fn checkModuleBinding(var checker: Checker, module: ModuleId, binding: Binding) {
   if binding.isVar {
@@ -536,7 +536,7 @@ fn checkTopLevelDeclaration(var checker: Checker, module: ModuleId, declaration:
 /**
  * Where a top-level binding may destructure. In an entry file, a script or a test file the statements are ordinary code
  * and `const (quotient, remainder) = divide(7, 2)` is the binding CONCEPT writes. A **module** is different twice over:
- * its top-level `const` is a compile-time constant that milestone 5 *folds*, and a `public` one is a name of its
+ * its top-level `const` is a compile-time constant that the lowering *folds*, and a `public` one is a name of its
  * interface - and neither a fold nor an export can be one projection out of a pattern.
  */
 public fn requireSingleName(var checker: Checker, module: ModuleId, binding: Binding, isExported: Bool) {
@@ -572,7 +572,7 @@ fn requireFieldOnlyModifiers(var checker: Checker, module: ModuleId, modifiers: 
 
 /**
  * `native` marks what the compiler and its runtime implement instead of TorbScript code, so only the standard library
- * can use it (gap 22, CONCEPT.md "Foreign Functions").
+ * can use it (CONCEPT.md, "Foreign Functions").
  */
 fn requireStandardLibrary(var checker: Checker, module: ModuleId, modifiers: Modifiers, at: Span) {
   if !modifiers.isNative {
@@ -816,7 +816,7 @@ public fn isSharedTrait(var checker: Checker, symbol: SymbolId): Bool {
 }
 
 /**
- * An `extend` adds constants and functions, nothing else (gap 39): exhaustiveness and the generated constructor have to
+ * An `extend` adds constants and functions, nothing else: exhaustiveness and the generated constructor have to
  * be decidable from the declaration of a type alone.
  */
 fn checkExtendShape(var checker: Checker, module: ModuleId, extension: ExtendDeclaration) {
@@ -1048,8 +1048,8 @@ fn symbolAt(checker: Checker, module: ModuleId, at: Span): SymbolId {
 
 /**
  * `isSame` compares identity, and only a `shared type` has one: on a value the answer would expose whether the
- * implementation shares storage (BACKEND gap 15). The language has no bound that says "shared", so this is a named
- * special case next to object safety.
+ * implementation shares storage. The language has no bound that says "shared", so this is a named special case next
+ * to object safety.
  */
 public fn checkSharedIdentity(var checker: Checker, target: Target, arguments: List<TypeId>, at: Span) {
   const wanted = match checker.wellKnown.symbolNamed("isSame") {
@@ -1087,10 +1087,9 @@ public fn checkSharedIdentity(var checker: Checker, target: Target, arguments: L
  * Whether a type has an identity: a `shared type`, a trait-typed value whose every trait is a `shared trait`, or a
  * generic parameter one of whose bounds is one (`Self` inside a `shared trait`, `<Chosen: Source<...>>`).
  *
- * **This is the one predicate for it.** Gap 20 (a `var` place may not come from a `const` path to a shared object), the
- * dead-change rule (5.3), "only a shared object may be changed by a task" (gap 49) and "a temporary with an identity is
- * a `var` path" (gap 52) all ask the same question - and asking it in two places with two different answers is how the
- * holes of gap 20 came about.
+ * **This is the one predicate for it.** "A `var` place may not come from a `const` path to a shared object", the
+ * dead-change rule, "only a shared object may be changed by a task" and "a temporary with an identity is a `var` path"
+ * all ask the same question, and every one of them reads this function rather than deciding it again on its own.
  *
  * A bare generic parameter answers `false`: it *could* be instantiated with a shared type, but the language has no
  * bound that says "shared", so the checker cannot know and the rules that read this are about what is certain.

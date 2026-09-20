@@ -1,3 +1,15 @@
+/**
+ * The implementations the language generates: `Equals`, `Hash`, `Show`, `Encode`, `Decode`, the `From` of a wrapper
+ * case, and the members of a literal type. [derivableMembers] generates them *where they are used*, so nothing is
+ * generated for a type nobody asks about, and a hand-written member always wins - resolution only gets here when no
+ * declared implementation answered.
+ *
+ * The one thing this file has to get right is the cycle: the syntax tree of the compiler is `Show` although
+ * `Expression` contains a `List<Statement>` that contains an `Expression` again. So while the question "can this be
+ * derived" is being answered it is *assumed* to hold, which is the only sound reading - a structural implementation of
+ * a recursive type is well defined, it just recurses at run time as the value does.
+ */
+
 use Visibility from "../../syntax/ast"
 use SymbolId from "../symbols"
 use TypeId, ParameterId, FieldSignature from "./type"
@@ -5,18 +17,6 @@ use Checker from "./context"
 use typeSignatureOf from "./signature"
 use substitute, sameType from "./unify"
 use implementsBound, literalParseBound from "./implementation"
-
-/**
- * The implementations the language generates: `Equals`, `Hash`, `Show`, `Encode`, `Decode`, the `From` of a wrapper
- * case, and the members of a literal type. They are generated *where they are used*, so nothing is generated for a
- * type nobody asks about, and a hand-written member always wins - resolution only gets here when no declared
- * implementation answered.
- *
- * The one thing this file has to get right is the cycle: the syntax tree of the compiler is `Show` although
- * `Expression` contains a `List<Statement>` that contains an `Expression` again. So while the question "can this be
- * derived" is being answered it is *assumed* to hold, which is the only sound reading - a structural implementation of
- * a recursive type is well defined, it just recurses at run time as the value does.
- */
 
 /** The members a derived implementation of `capability` for `target` would generate, or `None`. */
 public fn derivableMembers(
@@ -126,10 +126,10 @@ fn canDerive(
   }
   match checker.types.form(target) {
     // A literal type has exactly what the concept's "Literal Types" names - `Parse<LiteralParseError>`, `Show`,
-    // `Equals`, `Hash`, `Encode`, `Decode`, and the `Into` of its base above - and nothing else (gap 32). `Compare` is
+    // `Equals`, `Hash`, `Encode`, `Decode`, and the `Into` of its base above - and nothing else. `Compare` is
     // not among them: an order over three strings is a decision, exactly as it is for a `type`
     .Literals(_, _) => isLiteralTrait checker, name, wanted
-    // Tuples and function types cannot be declared, so what a `type` gets generated they get generated too (gap 35)
+    // Tuples and function types cannot be declared, so what a `type` gets generated they get generated too
     .Tuple(_) => everyFieldImplements checker, target, capability, wanted
     .Function(_) => name == "Show"
     .Nominal(symbol, _) => {
@@ -301,7 +301,7 @@ fn wrapsExactlyOnce(var checker: Checker, target: TypeId, wanted: TypeId?): Bool
   matches == 1
 }
 
-/** `Into<String>` for `"a" | "b"`: a literal type converts into its own base, and into nothing else (gap 32). */
+/** `Into<String>` for `"a" | "b"`: a literal type converts into its own base, and into nothing else. */
 fn isIntoBase(var checker: Checker, target: TypeId, wanted: TypeId?): Bool {
   const bound = match wanted {
     Some(found) => found

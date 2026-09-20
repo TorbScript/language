@@ -1,3 +1,9 @@
+/**
+ * [checkTypes] is the entry point of the type checker: it checks the declarations of the given modules and returns
+ * the [Checker] that did it, which *is* the result - every type by id, every signature, the type of every type
+ * position, and the tables the next pass reads.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Statement, Binding, Declaration, Member from "../../syntax/ast"
@@ -29,7 +35,7 @@ use checkSpelling from "./spelling"
  * built on demand, which is why `torb check app` does not have to walk the whole standard library.
  *
  * The `Checker` it gives back *is* the result: it holds the types, the signatures, the type of every type position,
- * the tables of every module (milestone 4.2 on) and the diagnostics.
+ * the tables of every module and the diagnostics.
  */
 public fn checkTypes(
   program: Program,
@@ -104,7 +110,7 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   // How every name of the file is spelled: one walk over its syntax, before anything is resolved, and for a
   // configuration script as well as for a module
   checkSpelling checker, module
-  // `project.trb` and a configuration file are bodies, not modules: they are checked against their receiver (4.7)
+  // `project.trb` and a configuration file are bodies, not modules: they are checked against their receiver
   if checker.program.graph.at(module).receiver.isSome() {
     if const Some(receiver) = scriptReceiverOf(checker, module) {
       checkReceiverScript checker, module, receiver
@@ -115,7 +121,7 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   const voidType = checker.voidType
   const saved = checker.enterBody module, voidType, true, None
   // The statements of a file are the one body a top-level `var` lives in, and the dead-change rule needs to know it
-  // apart from the bodies of the functions that read the same declaration (gap 54)
+  // apart from the bodies of the functions that read the same declaration
   checker.isTopLevel = true
   // `await()` is allowed at the top level of an entry file and of a script (CONCEPT, "Concurrency"). In a module top
   // level code is an error of its own, so nothing is said about it twice
@@ -125,11 +131,11 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   for statement in statements {
     checkTopLevel checker, TypeScope(module), statement
   }
-  // The top level of a file is one body, so its changes are settled like any other's (design 5.3)
+  // The top level of a file is one body, so its changes are settled like any other's
   settleChanges checker
   checker.closeScope()
   checker.leaveBody saved
-  // Visibility and the shape of the declarations (4.9), last: folding a top-level `const` reads what its names meant
+  // Visibility and the shape of the declarations, last: folding a top-level `const` reads what its names meant
   const withTimings = checker.withTimings
   var clock = Stopwatch withTimings
   clock.start()
@@ -142,9 +148,9 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
 }
 
 /**
- * `Deferred` meant "a later sub-milestone decides" while the checker was being built. There is no later one: every
- * construct of the language is checked now, and the only way an expression can still be without a type is a construct a
- * message was already given about - a parse error, a name that does not resolve, a call that could not be resolved.
+ * Every construct of the language gets a real type, so the only way an expression can still be `Deferred` at the end
+ * is one a message was already given about - a parse error, a name that does not resolve, a call that could not be
+ * resolved.
  *
  * So a module that has an unchecked expression and **no message at all** is a hole in the checker, and it says so
  * instead of leaving the number in `--statistics` for somebody to notice. One message per module: the first span.
@@ -169,8 +175,8 @@ public fn statisticsOf(checker: Checker, module: ModuleId): Statistics {
 }
 
 /**
- * A statement at the top level of a module. Top-level code is only allowed in entry files and scripts, which is
- * milestone 4.9's rule; here every one of them is checked, because a script is an ordinary body.
+ * A statement at the top level of a module. Top-level code is only allowed in entry files and scripts; here every one
+ * of them is checked, because a script is an ordinary body.
  */
 fn checkTopLevel(var checker: Checker, scope: TypeScope, statement: Statement) {
   match statement.kind {
@@ -344,7 +350,7 @@ fn checkExtension(var checker: Checker, scope: TypeScope, extension: ExtendDecla
 
 /**
  * A default is evaluated at every call and at every construction, in the scope of the declaration - without `self`
- * and without the other parameters or fields (gap 26).
+ * and without the other parameters or fields.
  */
 fn checkDefaults(var checker: Checker, scope: TypeScope, function: FunctionDeclaration) {
   for parameter in function.parameters {

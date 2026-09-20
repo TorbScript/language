@@ -1,3 +1,19 @@
+/**
+ * Whether the arms of a `match` cover every value of its subject, whether one of them can never be reached, and what
+ * a lowering has to test in which order to tell them apart: [checkExhaustive] for a whole `match`,
+ * [checkConditionPattern] and [requireIrrefutable] for the single pattern of an `if const`, a `while const` or a
+ * binding, and [MatchPlan] for what both of them produce.
+ *
+ * The algorithm is in `usefulness.trb`; this file is the two things around it. **Before** it runs, every pattern is
+ * turned into the "one constructor applied to arguments" shape the matrix knows, with alternatives expanded into one
+ * row each and every case resolved to the declaration it names. **After** it, a [MatchPlan] is recorded: the arms in
+ * source order, the tests each one makes with the path from the subject to the value they test, and every name it
+ * binds with the path to the value it stands for.
+ *
+ * The plan is what makes the lowering a decision tree instead of a second pattern checker: nothing in it has to be
+ * looked up again, and nothing in it depends on a scope.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Pattern, FieldPattern, RestPattern, MatchArm, Expression from "../../syntax/ast"
@@ -9,21 +25,7 @@ use itemOfSubject, declaredCaseName from "./pattern"
 use literalOf from "./lowering"
 use Normal, Constructor, Matrix, isUseful, missingValues, describeNormal from "./usefulness"
 
-/**
- * Whether the arms of a `match` cover every value of its subject, whether one of them can never be reached, and what
- * a lowering has to test in which order to tell them apart.
- *
- * The algorithm is in `usefulness.trb`; this file is the two things around it. **Before** it runs, every pattern is
- * turned into the "one constructor applied to arguments" shape the matrix knows, with alternatives expanded into one
- * row each and every case resolved to the declaration it names. **After** it, a `MatchPlan` is recorded for milestone
- * 5: the arms in source order, the tests each one makes with the path from the subject to the value they test, and
- * every name it binds with the path to the value it stands for.
- *
- * The plan is what makes the lowering a decision tree instead of a second pattern checker: nothing in it has to be
- * looked up again, and nothing in it depends on a scope.
- */
-
-// --- What milestone 5 reads -----------------------------------------------------------------------------------------
+// --- What the lowering reads -----------------------------------------------------------------------------------------
 
 /** One `match`, `if const` or `while const`, resolved: everything a decision tree over it needs. */
 public type MatchPlan {
@@ -48,7 +50,7 @@ public type MatchArmPlan {
   branches: List<PatternBranch>
   /** An arm with a guard matches only when the guard holds, so it never makes a `match` exhaustive. */
   hasGuard: Bool
-  /** Whether any value at all reaches this arm. An arm that none does is an error (gap 25). */
+  /** Whether any value at all reaches this arm. An arm that none does is an error. */
   isReachable: Bool = true
 }
 
@@ -59,12 +61,14 @@ public type PatternBranch {
   bindings: List<PatternBinding>
 }
 
+/** One condition a value has to meet, at a path from the subject. */
 public type PatternTest {
   /** How to reach the value this tests, from the subject. */
   path: List<PatternStep>
   check: PatternCheck
 }
 
+/** What a [PatternTest] tests the value at its path for. */
 public type PatternCheck {
   /** The value is this case of its type. */
   case IsCase(owner: TypeId, variant: SymbolId)
@@ -114,13 +118,13 @@ public type PatternStep {
 // --- `match` --------------------------------------------------------------------------------------------------------
 
 /**
- * The exhaustiveness and the reachability of one `match`, plus the plan milestone 5 lowers it from. The arms have
- * already been checked, so the plans of the individual arms are handed in: an arm's bindings are only reachable while
- * its own scope is open.
+ * The exhaustiveness and the reachability of one `match`, plus the plan the lowering builds its decision tree from.
+ * The arms have already been checked, so the plans of the individual arms are handed in: an arm's bindings are only
+ * reachable while its own scope is open.
  *
  * The plan is recorded under the span of the **subject**, which is also where a message about a case that is not
  * handled points - a single pattern (`if const`, a binding, `for`, a closure parameter) is recorded under the span of
- * the pattern. Both are the node milestone 5 holds when it needs the plan.
+ * the pattern. Both are the node a later pass reads back when it needs the plan.
  */
 public fn checkExhaustive(
   var checker: Checker,

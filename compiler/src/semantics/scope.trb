@@ -1,3 +1,13 @@
+/**
+ * The names of every module of a workspace: [resolveNames] turns declarations and `use`s into a [Program], one
+ * [ModuleScope] per module, and [checkNames] reports what is wrong about a file's own top-level names and imports.
+ * A [MemberImport] is the special case of `use String.shout from "acme/text"`, a member another package attaches to
+ * a type it does not own.
+ *
+ * Imports are resolved to a fixpoint (`Binder.bindToFixpoint`), because re-export chains and cyclic imports are both
+ * legal: nothing runs when a module is imported, so a cycle is a reason not to recurse, never an error.
+ */
+
 use Span from "../syntax/source"
 use Diagnostic from "../syntax/diagnostic"
 use Name, Visibility, UseDeclaration, UseItem, Member from "../syntax/ast"
@@ -57,7 +67,7 @@ public type ModuleScope {
 
 /**
  * A program as the front end knows it. Everything program-wide is here, by id: this is what `torb check` produces and
- * what the type checker of the next milestone starts from.
+ * what the type checker starts from.
  */
 public type Program {
   workspace: Workspace

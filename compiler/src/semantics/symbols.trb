@@ -1,3 +1,12 @@
+/**
+ * Every name a module declares itself: [SymbolId] and [Symbol] in the program-wide [Symbols] table, and
+ * [declareModule], which walks one module's top-level statements into a list of [Definition]s.
+ *
+ * Only what a module writes down lives here - a function, a type and its cases, a trait, a constant. What it
+ * imports from elsewhere is a different table (`scope.trb`'s `ModuleScope`), because binding an import needs the
+ * exports of other modules to exist first.
+ */
+
 use Span from "../syntax/source"
 use Name, Declaration, Visibility, Pattern from "../syntax/ast"
 use ModuleId, Module from "./module"
@@ -7,6 +16,7 @@ public type SymbolId {
   value: Int
 }
 
+/** What kind of declaration a [Symbol] names: a function, a type, a case of one, an import alias, and so on. */
 public type SymbolKind {
   case Function
   case Type
@@ -114,9 +124,9 @@ public fn declareModule(var symbols: Symbols, module: Module): List<Definition> 
 }
 
 /**
- * The names a binding declares. Almost always one, and the pattern forms of CONCEPT's own examples
- * (`const (quotient, remainder) = divide(7, 2)`, `const Point(x, y) = p`) declare several - a top-level one of those
- * used to declare nothing at all, so the only symptom was "Cannot find `x`" wherever it was read.
+ * The names a binding declares. Almost always one, but a destructuring pattern declares several at once
+ * (`const (quotient, remainder) = divide(7, 2)`, `const Point(x, y) = p`), and every one of them is a name of the
+ * module when the binding is a top-level `const`.
  */
 public fn boundNamesOf(pattern: Pattern): List<Name> {
   var found: List<Name> = []

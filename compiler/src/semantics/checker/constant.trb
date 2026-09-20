@@ -1,3 +1,13 @@
+/**
+ * What "compile-time evaluable" means for the initializer of a top-level `const` of a module, and the folding
+ * that comes with it: the arithmetic, comparison and logical operators of the built-in number types and of `Bool` are
+ * part of the set, so [evaluateConstant] evaluates them - and a constant whose evaluation overflows or divides by zero
+ * is a compile error at that expression.
+ *
+ * This evaluator is deliberately self-contained and small. The back end has one of its own that has to agree with it;
+ * what they share is the rule, not the code.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, TextSegment, InfixOperator, PrefixOperator from "../../syntax/ast"
@@ -6,16 +16,6 @@ use SymbolId from "../symbols"
 use Checker from "./context"
 use integerLiteral from "./lowering"
 use bindingOfSite, resultOf from "./signature"
-
-/**
- * What "compile-time evaluable" means for the initializer of a top-level `const` of a module (gap 27), and the folding
- * that comes with it: the arithmetic, comparison and logical operators of the built-in number types and of `Bool` are
- * part of the set, so the checker evaluates them - and a constant whose evaluation overflows or divides by zero is a
- * compile error at that expression (BACKEND gap 11).
- *
- * This evaluator is deliberately self-contained and small. The back end has one of its own (milestone 5.2) that has to
- * agree with it; what they share is the rule, not the code.
- */
 
 /**
  * What a compile-time constant is worth. Only the scalars fold - an aggregate is evaluable exactly when its parts are,
@@ -76,9 +76,9 @@ fn isValue(result: ConstantResult): Bool {
 }
 
 /**
- * One expression, folded as far as the operators of gap 27 go. Everything the checker already resolved is read out of
- * the tables, which is why this runs after the body of a module was walked: whether `Point(0, 0)` is a constructor call
- * or a function call is a question only the resolution answers.
+ * One expression, folded as far as the compile-time operators go. Everything the checker already resolved is read out
+ * of the tables, which is why this runs after the body of a module was walked: whether `Point(0, 0)` is a constructor
+ * call or a function call is a question only the resolution answers.
  */
 public fn evaluateConstant(
   var checker: Checker,
@@ -117,7 +117,7 @@ public fn evaluateConstant(
   }
 }
 
-/** A literal the lexer kept the base of. One that does not parse at all was reported where it was written (gap 38). */
+/** A literal the lexer kept the base of. One that does not parse at all was reported where it was written. */
 fn integerConstant(text: String, isNegative: Bool, at: Span): ConstantResult {
   match integerLiteral(text, isNegative) {
     Some(.Integer(value)) => ConstantResult.Value ConstantValue.Integer(value)
@@ -133,7 +133,7 @@ fn floatConstant(text: String, isNegative: Bool, at: Span): ConstantResult {
 }
 
 /**
- * Interpolation is not a function call (gap 27), so a text of compile-time parts is one. A plain literal keeps its
+ * Interpolation is not a function call, so a text of compile-time parts is one. A plain literal keeps its
  * value, because that is the only text anything else could read; an interpolated one is an aggregate like any other.
  */
 fn textConstant(
@@ -239,7 +239,7 @@ fn callConstant(
   }
   match resolution {
     .Construct(_) | .CaseOf(_, _) => argumentsConstant checker, module, arguments, depth
-    // A construct a later sub-milestone resolves: nothing is said about what is not understood yet
+    // A construct that could not be resolved because of an earlier problem: nothing is said about it a second time
     .Deferred => ConstantResult.Value ConstantValue.Composite
     _ => ConstantResult.NotConstant expression.span
   }
@@ -369,7 +369,7 @@ fn binaryConstant(
 }
 
 /**
- * The arithmetic of the built-in number types. `+` on a `String` is `Add.add` and therefore a call (gap 27), so only
+ * The arithmetic of the built-in number types. `+` on a `String` is `Add.add` and therefore a call, so only
  * the numbers fold here - and every result is checked before it is built, because a checker that overflows would take
  * the whole compiler with it instead of reporting the line.
  */

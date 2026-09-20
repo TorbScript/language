@@ -1,3 +1,18 @@
+/**
+ * A closure is read from the type that is expected of it: the expected function type names its parameters and its
+ * result, so `numbers.map { _ * 2 }` needs no annotation anywhere. What the body produces is the result - the expected
+ * one flows in, but it never overrides what comes out.
+ *
+ * Three things are recorded here that the back ends cannot work out again: which parameter an implicit `_` or a name
+ * from the function type stands for (`Adaptation.ImplicitParameter`), which bindings of the scope around the closure
+ * its body reads and which of those are `var`, and the function type the closure turned out to have.
+ *
+ * A **receiver closure** (`(var self: Element) => Void`) is the same thing with one parameter that is not a value but
+ * the thing names resolve against: inside it, a bare name means a member of the receiver exactly as it does inside a
+ * method. Only that one receiver is implicit, so it replaces whatever was implicit around the closure, and
+ * naming it (`html { root => ... }`) means nothing is implicit at all.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Closure, ClosureParameter from "../../syntax/ast"
@@ -11,21 +26,6 @@ use checkPattern from "./pattern"
 use requireIrrefutable from "./exhaustive"
 use typeFromReference from "./lowering"
 use markReferenceBindings, noteClosureKind from "./mutation"
-
-/**
- * A closure is read from the type that is expected of it: the expected function type names its parameters and its
- * result, so `numbers.map { _ * 2 }` needs no annotation anywhere. What the body produces is the result - the expected
- * one flows in, but it never overrides what comes out.
- *
- * Three things are recorded here that the back ends cannot work out again: which parameter an implicit `_` or a name
- * from the function type stands for (`Adaptation.ImplicitParameter`), which bindings of the scope around the closure
- * its body reads and which of those are `var` (gap 19), and the function type the closure turned out to have.
- *
- * A **receiver closure** (`(var self: Element) => Void`) is the same thing with one parameter that is not a value but
- * the thing names resolve against: inside it, a bare name means a member of the receiver exactly as it does inside a
- * method. Only that one receiver is implicit (gap 4), so it replaces whatever was implicit around the closure, and
- * naming it (`html { root => ... }`) means nothing is implicit at all.
- */
 
 /** `{ x => x + 1 }`, `{ _ * 2 }`, `{ value: Int => ... }`: the closure, checked against what is expected of it. */
 public fn checkClosure(var checker: Checker, closure: Closure, at: Span, expected: TypeId?): TypeId {
@@ -210,13 +210,13 @@ fn checkClosureBody(
   // `await()` inside a closure is not reported, and cannot be: `spawn { ... }` runs its closure *as* a task, and so
   // does `Source.produce { sink => ... }` - whose body type is an ordinary `(var Sink) => Result<Void, Failure>`, so
   // nothing in the language says which closures a callee runs that way. The half that is decidable is the body a
-  // closure is not in, and that is the half this enforces (gap 58)
+  // closure is not in, and that is the half this enforces
   checker.awaitsTasks = true
   checker.returnTypes = []
   checker.loopDepth = 0
   checker.openScope()
   // A closure argument runs *during* the `var` access of its call, which is the one thing the Swift model of exclusivity
-  // still holds a call responsible for once its arguments have been evaluated (4.10)
+  // still holds a call responsible for once its arguments have been evaluated
   checker.runningClosures = checker.runningClosures + 1
   const start = checker.bindings.length()
   checker.closureFrames.add frame.copy(bindings: start, enclosingLoopDepth: savedDepth)
@@ -236,7 +236,7 @@ fn checkClosureBody(
     }
   }
   // A `var` parameter of a closure and a `var self` receiver are references like any other, so a nested closure may not
-  // carry them off (gap 14)
+  // carry them off
   markReferenceBindings checker, start
   const outcome = checkBlock checker, closure.body, inner
   var result = declared
@@ -258,7 +258,7 @@ fn checkClosureBody(
   checker.receiverBinding = savedReceiverBinding
   checker.awaitsTasks = savedAwaits
   checker.recordCaptures at, captures
-  // Whether the closure may outlive the call it stands in, and whether it may hold a reference (BACKEND gap 14)
+  // Whether the closure may outlive the call it stands in, and whether it may hold a reference
   noteClosureKind checker, at, captures
   if const Some(found) = expectedResult {
     if isInferred {
@@ -278,8 +278,8 @@ fn checkClosureBody(
 
 /**
  * The receiver of a receiver closure. Written down (`html { root => ... }`) it is an ordinary binding and **nothing**
- * is implicit inside the closure any more: reaching a receiver by name is exactly what gap 4 offers instead of a
- * second implicit one, and leaving the outer one implicit would be the scope leaking it rules out.
+ * is implicit inside the closure any more: naming the receiver is how a nested closure reaches one from further out
+ * instead of a second implicit one, and leaving the outer one implicit would be the scope leaking it rules out.
  *
  * Left out, `self` is the implicit receiver, and it replaces whatever was implicit around the closure. Either way the
  * binding is recorded, because an implicit receiver has no node in the tree that could carry it.

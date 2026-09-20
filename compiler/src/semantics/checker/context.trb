@@ -1,3 +1,14 @@
+/**
+ * The data the type checker threads through the whole pass: [Checker] itself, [Tables] (everything a later pass
+ * reads back per module), and the vocabulary they are built from - [Resolution] for what a name or a call resolved
+ * to, [Adaptation] for what the source did not spell out, [Dispatch] and `Witness` for how a call reaches its
+ * target, [Place] and [Access] for the mutation rules, and [Expectation] for what an expression is checked against.
+ *
+ * Program-wide data lives in lists here and is addressed by an id, because a value has no identity in TorbScript:
+ * `Checker` is the one `var` value the whole pass reads and writes, exactly as `var parser: Parser` is threaded
+ * through the grammar.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Declaration, Member, Binding from "../../syntax/ast"
@@ -18,7 +29,7 @@ public type TypePosition {
   case Constant
   /**
    * `Matrix<Rows, Other>()` in an expression: which parameter an argument fills is only known once the callee is
-   * resolved, which is milestone 4.2. Until then both are allowed here.
+   * resolved. Until then both are allowed here.
    */
   case Either
 }
@@ -94,7 +105,7 @@ public type LocalBinding {
   isReceiver: Bool = false
   /**
    * A `var` parameter and `var self` write back into the caller's place, so a change to one is never dead (design 5.3)
-   * and a closure that may outlive the call may not capture one (BACKEND gap 14).
+   * and a closure that may outlive the call may not capture one.
    */
   isParameter: Bool = false
   /** A `lazy Value` parameter: every read of it forces the cell, which records `Adaptation.Force` (design 3.4). */
@@ -107,6 +118,7 @@ public type Local {
   kind: LocalKind
 }
 
+/** What one name of the scope chain stands for: a value that was bound, or a declaration that is a namespace of its own. */
 public type LocalKind {
   case Bound(binding: BindingId)
   /** A `fn`, `type` or `trait` declared in this block, and a generic parameter that is in scope as a namespace. */
@@ -114,7 +126,7 @@ public type LocalKind {
 }
 
 /**
- * What a name, a member, a call or a constructor in an expression resolved to. Milestone 5 reads this instead of
+ * What a name, a member, a call or a constructor in an expression resolved to. The lowering reads this instead of
  * looking at a name a second time.
  */
 public type Resolution {
@@ -125,7 +137,7 @@ public type Resolution {
   case Constant(symbol: SymbolId, owner: TypeId?)
   /** The generated constructor of a type: `Point(10, 20)`, `Self(text)`. */
   case Construct(owner: TypeId)
-  /** The generated `copy` of a type (gap 24). */
+  /** The generated `copy` of a type. */
   case CopyOf(owner: TypeId)
   case CaseOf(owner: TypeId, variant: SymbolId)
   /** `.0`, `.1`, `.lowest`: the position a tuple member means. */
@@ -134,11 +146,11 @@ public type Resolution {
   /** The type itself, as the target of a static member or of a constructor: `Point` in `Point.origin`. */
   case TypeOf(owner: TypeId)
   /**
-   * `port 8080`, `onStart { ... }`, `database { ... }`: a call of a member that is not callable writes it (gap 15).
+   * `port 8080`, `onStart { ... }`, `database { ... }`: a call of a member that is not callable writes it.
    * The kind says which of the three the lowering has to emit.
    */
   case PropertyWrite(owner: TypeId, field: SymbolId, kind: PropertyWriteKind)
-  /** A construct a later sub-milestone resolves. It is recorded so that the statistics can count it. */
+  /** A construct that could not be resolved because a message was already given about it. */
   case Deferred
 }
 
@@ -202,7 +214,7 @@ public type Candidate {
   generics: List<ParameterId> = []
   /** The bounds of those parameters, with the arguments of the owner already filled in. */
   bounds: List<Bound> = []
-  /** A parameter of the member is `Self` itself, which has no meaning on a trait-typed value (gap 7). */
+  /** A parameter of the member is `Self` itself, which has no meaning on a trait-typed value. */
   takesSelfArgument: Bool = false
   /** Several implementations of one trait provide it (`Int.from`), so the arguments decide which one is meant. */
   needsArguments: Bool = false
@@ -214,6 +226,7 @@ public type Candidate {
   module: ModuleId? = None
 }
 
+/** What kind of member a [Candidate] found: a field, a constant, a method, a case constructor, or a generated member. */
 public type CandidateKind {
   case Field(owner: TypeId, field: SymbolId)
   case Constant(owner: TypeId, symbol: SymbolId)
@@ -221,7 +234,7 @@ public type CandidateKind {
   case CaseConstructor(owner: TypeId, variant: SymbolId)
   /** The generated constructor of a type. */
   case Construct(owner: TypeId)
-  /** The generated `copy` (gap 24). */
+  /** The generated `copy`. */
   case Copy(owner: TypeId)
   case TupleField(owner: TypeId, index: Int)
 }
@@ -246,7 +259,7 @@ public type VariableState {
 /** One binding a closure reads from the scope around it. The back ends need to know which ones, and which are `var`. */
 public type Capture {
   binding: BindingId
-  /** A captured `var` binding is a shared box, not a copy (gap 19). */
+  /** A captured `var` binding is a shared box, not a copy. */
   isVar: Bool
 }
 
@@ -309,7 +322,7 @@ public type Adaptation {
   case ImplicitSelf(receiver: BindingId)
   /** `_`, `_2` and a name the expected function type gives: the parameter of the closure this stands for. */
   case ImplicitParameter(index: Int)
-  /** A value that became a trait-typed value: `const shapes: List<Shape> = [Square(2.0)]` (gap 8). */
+  /** A value that became a trait-typed value: `const shapes: List<Shape> = [Square(2.0)]`. */
   case ToTraitValue(bounds: List<TypeId>, witnesses: List<Witness>)
   /** `?` and `into()`: the error or the value is converted through `From.from`. */
   case Convert(witness: Witness, method: SymbolId)
@@ -322,7 +335,7 @@ public type Adaptation {
 /**
  * What a collection literal turned out to be. The same three characters are three different things depending on what is
  * expected of them - `[1, 2]` is the default list, an `Array<Int, 2>` written into inline slots, or the argument of
- * `Target.from` - and *which* one is the checker's decision (gap 51). So the back ends read it here instead of asking
+ * `Target.from` - and *which* one is the checker's decision. So the back ends read it here instead of asking
  * the expected type a second time and answering it differently.
  */
 public type CollectionLiteral {
@@ -346,7 +359,7 @@ public type CollectionLiteral {
   case FromIterable(target: TypeId, item: TypeId, witness: Witness)
 }
 
-// --- Places and the mutation rules (milestone 4.6) -------------------------------------------------------------------
+// --- Places and the mutation rules ----------------------------------------------------------------------------------
 
 /**
  * Where a path starts. The `Receiver` of the design is a `Local` whose binding is `self` - `LocalBinding.isReceiver`
@@ -361,7 +374,7 @@ public type PlaceRoot {
   case Declared(symbol: SymbolId)
   /** A call result, a literal, a constructor: a value no path of the caller leads to. */
   case Temporary
-  /** A construct a later sub-milestone resolves, or one a message was already given about: every rule stays quiet. */
+  /** A construct that could not be resolved, or one a message was already given about: every rule stays quiet. */
   case Unknown
 }
 
@@ -380,7 +393,7 @@ public type PlaceStep {
 
 /**
  * A path from a root to one value: what an assignment writes, what a `var` argument hands over, what a `var self` call
- * changes, and what the pattern of an `if var` binds into. Milestone 5 needs nothing else to form the reference.
+ * changes, and what the pattern of an `if var` binds into. The lowering needs nothing else to form the reference.
  */
 public type Place {
   root: PlaceRoot
@@ -390,7 +403,7 @@ public type Place {
   at: Span = Span 0, 0
 }
 
-/** Whether a closure may outlive the call it is written in (BACKEND gap 14). */
+/** Whether a closure may outlive the call it is written in. */
 public type ClosureKind {
   /** Written straight as the argument of a call: its environment fits on the stack, and it may hold a reference. */
   case Local
@@ -425,7 +438,7 @@ public type UseRoot {
   case Local(binding: BindingId)
   /**
    * A top-level `var` of an entry file or a script. Those are *declarations* and not locals, so the statements of the
-   * file are only part of their life: a function of the module may read one too (gap 54).
+   * file are only part of their life: a function of the module may read one too.
    */
   case Declared(symbol: SymbolId)
 }
@@ -453,8 +466,8 @@ public fn useKey(root: UseRoot): Int {
 }
 
 /**
- * One quotation site, by the span of the expression that was quoted: everything milestone 5 needs to build the static
- * `ExpressionNode` tree and the list of captured values without resolving a single name again.
+ * One quotation site, by the span of the expression that was quoted: everything the lowering needs to build the
+ * static `ExpressionNode` tree and the list of captured values without resolving a single name again.
  *
  * The tree itself is *not* stored: it is the syntax tree of that very span, and every node of it already has its type
  * in `expressionTypes` and its target in `resolutions`. What cannot be worked out again is which name is a parameter of
@@ -487,7 +500,7 @@ public type QuotationCapture {
   binding: BindingId
   name: String
   annotation: TypeId
-  /** `Encode` for the captured value (gap 36). `Unresolved` where the type does not have it and it was reported. */
+  /** `Encode` for the captured value. `Unresolved` where the type does not have it and it was reported. */
   witness: Witness
 }
 
@@ -500,8 +513,8 @@ public type QuotationName {
 }
 
 /**
- * Everything milestone 5 reads, one of these per module. Keyed by the `Span` of the node it belongs to, as
- * milestone 3 keys its type positions: no two nodes of the same kind in a file have the same span.
+ * Everything the lowering reads, one of these per module. Keyed by the `Span` of the node it belongs to, the same
+ * way every type position of the module is keyed: no two nodes of the same kind in a file have the same span.
  */
 public type Tables {
   var expressionTypes: Map<Span, TypeId> = [:]
@@ -517,7 +530,7 @@ public type Tables {
   var argumentTargets: Map<Span, List<Int>> = [:]
   /**
    * Per call span: the type arguments the call was instantiated with, in the order of the callee's own generic
-   * parameters. Milestone 5 monomorphizes from exactly these.
+   * parameters. The lowering monomorphizes from exactly these.
    */
   var typeArguments: Map<Span, List<TypeId>> = [:]
   /**
@@ -530,29 +543,29 @@ public type Tables {
    * an entry too: the thunk it becomes is a closure, and `Adaptation.Lazy` at the same span is what marks it as one.
    */
   var captures: Map<Span, List<Capture>> = [:]
-  /** Per quoted expression span: the tree and the captures milestone 5 has to build (design 4.8). */
+  /** Per quoted expression span: the tree and the captures the lowering has to build (design 4.8). */
   var quotations: Map<Span, Quotation> = [:]
   /** Per receiver closure span, and at `Span(0, 0)` for a receiver script: the binding its receiver is reached under. */
   var receivers: Map<Span, ReceiverClosure> = [:]
   /**
    * Per `match` span, and per pattern span of an `if const` or a `while const`: the decision order of the arms, what
-   * every one of them tests, and what it binds. Milestone 5 lowers a `match` to a decision tree from this alone.
+   * every one of them tests, and what it binds. The lowering builds a decision tree from this alone.
    */
   var matches: Map<Span, MatchPlan> = [:]
   /**
    * Per assignment, `var` argument, `var self` receiver and `if var` subject: the place that is changed there. This is
-   * the table that tells milestone 5 where a copy is a move and where a path becomes a reference (design 7.1).
+   * the table that tells the lowering where a copy is a move and where a path becomes a reference (design 7.1).
    */
   var places: Map<Span, Place> = [:]
-  /** Per closure span: whether the closure may outlive the call it stands in (BACKEND gap 14). */
+  /** Per closure span: whether the closure may outlive the call it stands in. */
   var closureKinds: Map<Span, ClosureKind> = [:]
-  /** Per collection literal span: what the literal became, which the expected type alone does not say (gap 51). */
+  /** Per collection literal span: what the literal became, which the expected type alone does not say. */
   var collectionLiterals: Map<Span, CollectionLiteral> = [:]
   /**
    * Per `?.` member span: whether the member answers an `Option` of its own.
    *
-   * `a?.m` is `Option.map` when it does not and `Option.flatMap` when it does, so that `?.` never nests an `Option`
-   * (gap 12). The wrapping happens *inside* the function type the member is given, so nothing else in the tables says
+   * `a?.m` is `Option.map` when it does not and `Option.flatMap` when it does, so that `?.` never nests an `Option`.
+   * The wrapping happens *inside* the function type the member is given, so nothing else in the tables says
    * which of the two it was - and that is exactly what decides whether the arm of the lowering wraps its value or hands
    * it on.
    */
@@ -585,7 +598,7 @@ public type Expectation {
 
 /**
  * Whether the declaration whose body is being checked *infers* its result. A `public` function and a trait method do
- * not: an omitted result type is `Void` there, and a body that produces a value has to say which one (milestone 4.9).
+ * not: an omitted result type is `Void` there, and a body that produces a value has to say which one.
  * Everything else is `Ordinary`, whether its result was written down or is the body's answer.
  */
 public type ResultRule {
@@ -623,12 +636,12 @@ public type BodyState {
   contextStarts: List<Int>
   pendingSpans: List<Span>
   hasVariables: Bool
-  /** The mutation rules are per body: an open access and the uses of a value never reach out of one (4.6). */
+  /** The mutation rules are per body: an open access and the uses of a value never reach out of one. */
   accesses: List<Access>
   valueUses: List<ValueUse>
   resultRule: ResultRule
   runningClosures: Int = 0
-  /** Whether the body is the statement sequence of a file, which is the one body a top-level `var` lives in (gap 54). */
+  /** Whether the body is the statement sequence of a file, which is the one body a top-level `var` lives in. */
   isTopLevel: Bool = false
   /** Whether `await()` is allowed in this body (CONCEPT, "Concurrency"). */
   awaitsTasks: Bool = false
@@ -660,6 +673,7 @@ public type DeclarationSite {
   kind: DeclarationSiteKind
 }
 
+/** Where a [DeclarationSite] leads: a declaration written out, a member of an owner, or a top-level binding. */
 public type DeclarationSiteKind {
   /** A `fn`, `type`, `trait` or `type X =`, at the top level of a file or inside of a block. */
   case Declared(declaration: Declaration)
@@ -684,14 +698,14 @@ public type DeclarationSiteKind {
  */
 public type Checker {
   program: Program
-  /** Every name in a type position, by module and span: what milestone 3 resolved. */
+  /** Every name in a type position, by module and span: what name resolution already resolved. */
   resolutions: List<Map<Span, SymbolId>>
-  /** The name of every top-level declaration, by module and span. Milestone 3 has it as a list, the checker looks up. */
+  /** The name of every top-level declaration, by module and span: a list there, and the checker looks it up here. */
   definitions: List<Map<Span, SymbolId>>
   wellKnown: WellKnown
   /**
    * What name resolution produced, plus what the checker adds: fields, cases and members get their ids here.
-   * `program.symbols` is the state before that, so everything after milestone 3 reads this one.
+   * `program.symbols` is the state before that, so everything the checker adds from here on reads this one.
    */
   var symbols: Symbols
   var types: TypeTable
@@ -715,7 +729,7 @@ public type Checker {
   var sites: Map<SymbolId, DeclarationSite> = [:]
   /** One per module, in the order of `program.graph.modules`: the type of every type position, by its span. */
   var typePositions: List<Map<Span, TypeId>> = []
-  /** One per module, in the same order: everything about the expressions of that module (milestone 4.2 on). */
+  /** One per module, in the same order: everything about the expressions of that module. */
   var tables: List<Tables> = []
   /** One per module, so a message can be rendered with the file it belongs to. */
   var diagnostics: List<List<Diagnostic>> = []
@@ -723,7 +737,7 @@ public type Checker {
   var timings: List<Timing> = []
   /** Whether the clock is read at all. Two passes run per module and have to add their time up themselves. */
   var withTimings: Bool = false
-  /** What the shape pass (4.9) cost, added up over the modules: it runs inside the walk over the bodies. */
+  /** What the shape pass cost, added up over the modules: it runs inside the walk over the bodies. */
   var shapeMilliseconds: Int64 = 0
 
   // --- The state of the walk over one body ---------------------------------------------------------------------------
@@ -740,13 +754,13 @@ public type Checker {
   var resultType: TypeId
   /** Without a declared result, `return` and the last expression *are* the result, so nothing is checked against it. */
   var isResultInferred: Bool = false
-  /** Whether the declaration may infer its result at all: a `public fn` and a trait method may not (milestone 4.9). */
+  /** Whether the declaration may infer its result at all: a `public fn` and a trait method may not. */
   var resultRule: ResultRule = ResultRule.Ordinary
   /** What every `return` of the body produced, for the result of a function that does not declare one. */
   var returnTypes: List<TypeId> = []
   /** `break` and `continue` need an enclosing `for` or `while` of the same function. */
   var loopDepth: Int = 0
-  /** The innermost receiver: the type whose members a bare name may mean. Only one is ever implicit (gap 4). */
+  /** The innermost receiver: the type whose members a bare name may mean. Only one is ever implicit. */
   var receiverType: TypeId? = None
   var receiverBinding: BindingId? = None
   /** What `Self` means in the body that is being checked. A static function has one without having a receiver. */
@@ -756,22 +770,22 @@ public type Checker {
   /** A body is checked exactly once, whether the walk reached it or a caller asked for its result type first. */
   var checkedBodies: Map<SymbolId, Bool> = [:]
 
-  // --- Places and the mutation rules (milestone 4.6) ------------------------------------------------------------------
+  // --- Places and the mutation rules ------------------------------------------------------------------------------
 
   /** The `var` accesses that are running, outermost first: what the exclusivity rule compares against (design 5.2). */
   var accesses: List<Access> = []
   /** One number per call, so that the accesses of one call can be told from the accesses of the call around it. */
   var callSerial: Int = 0
-  /** How many closure bodies are being checked. A quotation is not run, so it does not count here (4.8). */
+  /** How many closure bodies are being checked. A quotation is not run, so it does not count here. */
   var runningClosures: Int = 0
   /** Every read and every change of a `var` value of the body that is being checked, in source order. */
   var valueUses: List<ValueUse> = []
-  /** Whether the body that is being checked is the statement sequence of a file (gap 54). */
+  /** Whether the body that is being checked is the statement sequence of a file. */
   var isTopLevel: Bool = false
   /**
    * Whether `await()` is allowed where the checker stands: in a body whose declared result is a `Task<...>`, at the top
    * level of an entry file or a script, and inside every closure - a closure may be the body a callee runs *as* a task
-   * (`spawn { ... }`, `Source.produce { sink => ... }`) and nothing in the language says which ones (gap 58).
+   * (`spawn { ... }`, `Source.produce { sink => ... }`) and nothing in the language says which ones.
    * Everywhere else a function that waits has to say so in its result type (CONCEPT, "Concurrency").
    */
   var awaitsTasks: Bool = false
@@ -779,10 +793,10 @@ public type Checker {
    * Every top-level `var` that something other than the statements of its own file reads: a function of the module, a
    * closure inside one, the initializer of a top-level `const`. A top-level `var` is a declaration and not a local, so
    * the statement sequence is only part of its life and a change of one is only dead when nothing else reads it either.
-   * By `SymbolId.value`, and never cleared: a symbol belongs to one file, and one answer about it is enough (gap 54).
+   * By `SymbolId.value`, and never cleared: a symbol belongs to one file, and one answer about it is enough.
    */
   var readDeclarations: Map<Int, Bool> = [:]
-  /** Every binding a closure captures, by `BindingId.value`: a captured binding is a shared box and never dead (gap 19). */
+  /** Every binding a closure captures, by `BindingId.value`: a captured binding is a shared box and never dead. */
   var capturedBindings: Map<Int, Bool> = [:]
   /**
    * Every binding a name in an expression read, by `BindingId.value`. A binding of a *refutable* pattern - an arm of a
@@ -794,18 +808,18 @@ public type Checker {
   /** The closures that stand straight as the argument of a call, by span: those are the ones that cannot escape. */
   var argumentClosures: Map<Span, Bool> = [:]
 
-  // --- Quotations (milestone 4.8) -------------------------------------------------------------------------------------
+  // --- Quotations -------------------------------------------------------------------------------------------------
 
   /**
    * What is quoting the expression that is about to be checked: `assert` and `condition` for `assert(x > 1)`, the name
    * of the binding and nothing for `const e: Expression<Bool> = x > 1`. Only the message about a capture that is not
-   * `Encode` reads them, and gap 36 asks that message to name the reason - so they are two plain names and not a
-   * sentence that would be built for every argument of every call.
+   * `Encode` reads them, to name the reason - so they are two plain names and not a sentence that would be built for
+   * every argument of every call.
    */
   var quotingOwner: String = ""
   var quotingParameter: String = ""
 
-  // --- Inference (milestone 4.4) --------------------------------------------------------------------------------------
+  // --- Inference ---------------------------------------------------------------------------------------------------
 
   /**
    * Every unification variable the pass ever made, append-only: an interned `Variable` form names one by index, so an
@@ -839,7 +853,7 @@ public type Checker {
    */
   var signatureTypes: Map<Int, TypeId> = [:]
 
-  // --- Traits and implementations (milestone 4.3) ---------------------------------------------------------------------
+  // --- Traits and implementations -----------------------------------------------------------------------------------
 
   /** Every implementation of the program, with the indexes bound resolution needs. Built once. */
   var implementations: ImplementationTable = ImplementationTable()
@@ -856,12 +870,12 @@ public type Checker {
   var traitClosures: Map<Int, List<TypeId>> = [:]
   /**
    * Per trait symbol: whether an `extend` of a *trait type* with it serves the concrete implementers of that trait as
-   * well. `Show` does, `From` does not - `from` has no `self` and answers `Self` (gap 53).
+   * well. `Show` does, `From` does not - `from` has no `self` and answers `Self`.
    */
   var reachingTraits: Map<Int, Bool> = [:]
   /** The traits a generic parameter is bounded by, by `ParameterId.value`: what a member lookup on it may see. */
   var parameterBounds: Map<Int, List<TypeId>> = [:]
-  /** Every derived implementation that was generated, which milestone 5 has to emit the members of. */
+  /** Every derived implementation that was generated, which the lowering has to emit the members of. */
   var derived: List<DerivedImplementation> = []
   /** `"{target}:{trait}"` to the index in `derived`, so one is generated once. */
   var derivedIndex: Map<(Int, Int), Int> = [:]
@@ -885,11 +899,11 @@ public type Checker {
   /** The inherent extensions of one type that one module may use, by module and type. */
   var visibleExtensions: Map<(Int, Int), List<Int>> = [:]
 
-  // --- Visibility and program shape (milestone 4.9) -------------------------------------------------------------------
+  // --- Visibility and program shape ---------------------------------------------------------------------------------
 
   /**
    * Which modules of the workspace some module imports, by `ModuleId.value`. Top-level code is only forbidden where it
-   * could create an initialization order, which is exactly a module somebody imports (gap 28).
+   * could create an initialization order, which is exactly a module somebody imports.
    */
   var importedModules: Map<Int, Bool> = [:]
   var hasImportedModules: Bool = false
@@ -998,7 +1012,7 @@ public type Checker {
     tables[module.value].argumentTargets.get(at)
   }
 
-  /** How many expressions of a module are typed, and how many wait for a later sub-milestone. */
+  /** How many expressions of a module are typed, and how many are still `Deferred`. */
   fn statisticsOf(self, module: ModuleId): Statistics {
     var typed = 0
     var deferred = 0
@@ -1014,7 +1028,7 @@ public type Checker {
 
   /**
    * The first expression of a module that has no type. `Deferred` is reachable only from a construct a message was
-   * already given about, so this is what a module without any message must not have (4.10).
+   * already given about, so this is what a module without any message must not have.
    */
   fn uncheckedSpanOf(self, module: ModuleId): Span? {
     var found: Span? = None
@@ -1102,7 +1116,7 @@ public type Checker {
     tables[module.value].argumentTargets.set(at, targets)
   }
 
-  /** The type arguments one call was instantiated with: what milestone 5 monomorphizes from. */
+  /** The type arguments one call was instantiated with: what the lowering monomorphizes from. */
   fn recordTypeArguments(var self, at: Span, arguments: List<TypeId>) {
     tables[module.value].typeArguments.set(at, arguments)
     if hasVariables && pendingSpans.last() != Some(at) {
@@ -1126,7 +1140,7 @@ public type Checker {
     tables[module.value].witnesses.get(at)
   }
 
-  /** Which bindings of the scope around a closure its body reads, and which of them are `var` (gap 19). */
+  /** Which bindings of the scope around a closure its body reads, and which of them are `var`. */
   fn recordCaptures(var self, at: Span, found: List<Capture>) {
     tables[module.value].captures.set(at, found)
   }
@@ -1135,7 +1149,7 @@ public type Checker {
     tables[module.value].captures.get(at)
   }
 
-  /** One quotation site: the tree and the captures milestone 5 builds an `Expression<Value>` from. */
+  /** One quotation site: the tree and the captures the lowering builds an `Expression<Value>` from. */
   fn recordQuotation(var self, at: Span, found: Quotation) {
     tables[module.value].quotations.set(at, found)
   }
@@ -1153,7 +1167,7 @@ public type Checker {
     tables[module.value].receivers.get(at)
   }
 
-  /** The plan of one `match`, `if const` or `while const`: what milestone 5 builds its decision tree from. */
+  /** The plan of one `match`, `if const` or `while const`: what the lowering builds its decision tree from. */
   fn recordMatch(var self, at: Span, plan: MatchPlan) {
     tables[module.value].matches.set(at, plan)
   }
@@ -1171,7 +1185,7 @@ public type Checker {
     tables[module.value].places.get(at)
   }
 
-  /** Whether a closure may outlive the call it stands in, which decides where its environment lives (BACKEND gap 14). */
+  /** Whether a closure may outlive the call it stands in, which decides where its environment lives. */
   fn recordClosureKind(var self, at: Span, kind: ClosureKind) {
     tables[module.value].closureKinds.set(at, kind)
   }
@@ -1180,7 +1194,7 @@ public type Checker {
     tables[module.value].closureKinds.get(at)
   }
 
-  /** What one collection literal became: the default collection, inline array slots, or `Target.from` (gap 51). */
+  /** What one collection literal became: the default collection, inline array slots, or `Target.from`. */
   fn recordCollectionLiteral(var self, at: Span, found: CollectionLiteral) {
     tables[module.value].collectionLiterals.set(at, found)
     if hasVariables && pendingSpans.last() != Some(at) {
@@ -1192,7 +1206,7 @@ public type Checker {
     tables[module.value].collectionLiterals.get(at)
   }
 
-  /** `a?.m` where `m` answers an `Option` already: `flatMap` and not `map`, so the arm hands its value on (gap 12). */
+  /** `a?.m` where `m` answers an `Option` already: `flatMap` and not `map`, so the arm hands its value on. */
   fn recordFlattenedOptional(var self, at: Span, flattened: Bool) {
     tables[module.value].flattenedOptionals.set(at, flattened)
   }
@@ -1456,7 +1470,7 @@ public type Checker {
   /**
    * Whether the name is a parameter of the function whose body is being checked, and this is the top level of that
    * body. `enterBody` clears the scopes, so the parameters are always the first scope of a body and its top level the
-   * second: the two are one scope, and a `const` there may not shadow a parameter (milestone 4.9).
+   * second: the two are one scope, and a `const` there may not shadow a parameter.
    */
   fn shadowsParameter(self, name: String): Bool {
     if scopeStarts.length() != 2 {
@@ -1521,7 +1535,7 @@ public type Checker {
   }
 }
 
-/** A checker for one workspace: the tables of milestone 3 plus what it resolved in every type position. */
+/** A checker for one workspace: the tables name resolution built, plus what it resolved in every type position. */
 public fn newChecker(program: Program, resolutions: List<Map<Span, SymbolId>>): Checker {
   var types = TypeTable()
   const voidType = types.intern TypeForm.VoidType

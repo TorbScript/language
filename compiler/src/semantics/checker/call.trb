@@ -1,3 +1,15 @@
+/**
+ * Calls: [checkCall] decides which parameter every written argument fills, what the generic parameters of the callee
+ * turn out to be, and which implementation makes every bound of it hold.
+ *
+ * The arguments are checked in **two passes** - everything that is not a closure first, in source order, then the
+ * closures. That is what makes `fold(0) { sum, number => sum + number }` work without an annotation: `State` is solved
+ * by the `0` before the closure is read from it.
+ *
+ * Everything the back ends must not work out again is recorded per call span: the parameter of every argument, the type
+ * arguments the call was instantiated with, one witness per bound, and everything the source did not spell out.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, CallStyle from "../../syntax/ast"
@@ -18,18 +30,6 @@ use taskValueOf from "./statement"
 use isQuotation, openThunk, closeThunk from "./quote"
 use checkConstruction, checkSharedIdentity, requireSharedFields from "./declaration"
 
-/**
- * Calls: which parameter every written argument fills, what the generic parameters of the callee turn out to be, and
- * which implementation makes every bound of it hold.
- *
- * The arguments are checked in **two passes** - everything that is not a closure first, in source order, then the
- * closures. That is what makes `fold(0) { sum, number => sum + number }` work without an annotation: `State` is solved
- * by the `0` before the closure is read from it.
- *
- * Everything the back ends must not work out again is recorded per call span: the parameter of every argument, the type
- * arguments the call was instantiated with, one witness per bound, and everything the source did not spell out.
- */
-
 /** Which parameter every written argument fills, and what the call adds to what was written. */
 public type ArgumentPlan {
   /** In written order: the parameter an argument fills, `-1` where nothing matched (a message was given). */
@@ -44,11 +44,17 @@ public type ArgumentPlan {
 /** A generic callee with its parameters filled in: fresh variables where the call site did not write them out. */
 public type Instantiation {
   form: FunctionForm
-  /** In the order of the callee's own generic parameters. This is what milestone 5 monomorphizes from. */
+  /** In the order of the callee's own generic parameters. This is what the lowering monomorphizes from. */
   arguments: List<TypeId>
   bounds: List<Bound>
 }
 
+/**
+ * `f(a, b)`, `f a, b`, `list.map { ... }`: a call, or the property command it turns out to be once the callee
+ * resolves to a field instead of a function ([propertyWrite]). Resolves the callee, matches and checks every
+ * argument, instantiates the generic parameters, checks the bounds they have to satisfy, and records everything a
+ * later pass needs to emit the call without looking at a name again.
+ */
 public fn checkCall(
   var checker: Checker,
   expression: Expression,
@@ -63,7 +69,7 @@ public fn checkCall(
   if !target.overloads.isEmpty() {
     target = chooseOverload checker, target, arguments, expression.span
   }
-  // `port 8080`, `onStart { ... }`, `database { ... }`: a call of a member that is not callable writes it (gap 15)
+  // `port 8080`, `onStart { ... }`, `database { ... }`: a call of a member that is not callable writes it
   if const Some(written) = propertyWrite(checker, expression, callee, target, arguments, style) {
     return written
   }
@@ -91,9 +97,9 @@ public fn checkCall(
   if const Some(annotation) = wanted {
     matchResult checker, inner.result, annotation
   }
-  // A private field cannot be passed from outside the type, which is what makes a constructor usable or not (4.9)
+  // A private field cannot be passed from outside the type, which is what makes a constructor usable or not
   checkConstruction checker, target, arguments, expression.span
-  // Places and the mutation rules (milestone 4.6). The receiver of a `var self` call stays an open access while the
+  // Places and the mutation rules. The receiver of a `var self` call stays an open access while the
   // arguments are evaluated and while a closure argument runs, which is what makes the DSL rule work; every `var`
   // argument joins it as it is checked; and at the end everything the call *reads* is held against all of them
   const openAccesses = checker.accesses.length()
@@ -108,7 +114,7 @@ public fn checkCall(
   const plan = matchArguments checker, target, inner, arguments, expression.span
   const calleeName = target.name
   checkArguments checker, inner, arguments, plan, calleeName, isDiscarded, call
-  // A `var` field with an identity needs a `var` path, wherever the constructor is called from (gap 20). After the
+  // A `var` field with an identity needs a `var` path, wherever the constructor is called from. After the
   // arguments, because the paths it asks about are the ones checking them recorded
   requireSharedFields checker, target, arguments
   // `Array.of(1, 2, 3, 4)` is an `Array<Int64, 4>`: the one call whose number of arguments solves a const parameter
@@ -117,7 +123,7 @@ public fn checkCall(
   closeAccessesTo checker, openAccesses
   const witnesses = checkBounds checker, instantiation.bounds, target.name, expression.span
   const solved = resolveTypes checker, instantiation.arguments
-  // `isSame` compares identity, and only a `shared type` has one (BACKEND gap 15)
+  // `isSame` compares identity, and only a `shared type` has one
   checkSharedIdentity checker, target, solved, expression.span
   if !solved.isEmpty() {
     checker.recordTypeArguments expression.span, solved
@@ -431,13 +437,13 @@ fn checkArguments(
   plan: ArgumentPlan,
   callee: String,
   isDiscarded: Bool,
-  /** Which call this is, so that two `var` accesses of it are told from an access of the call around it (4.10). */
+  /** Which call this is, so that two `var` accesses of it are told from an access of the call around it. */
   call: Int,
 ) {
-  // A closure written straight as an argument cannot outlive the call, which is what lets it hold a reference (gap 14)
+  // A closure written straight as an argument cannot outlive the call, which is what lets it hold a reference
   noteArgumentClosures checker, arguments
   // The ordinary arguments first, then the closures: every `var` access of the call is open by the time a closure of it
-  // runs, and every read of an ordinary argument has ended before the accesses begin (the Swift model, 4.10)
+  // runs, and every read of an ordinary argument has ended before the accesses begin (the Swift model of exclusivity)
   checkArgumentPass checker, form, arguments, plan, false, callee, isDiscarded, call
   checkArgumentPass checker, form, arguments, plan, true, callee, isDiscarded, call
 }
@@ -481,13 +487,13 @@ fn checkArgumentPass(
       closeThunk checker, at
       continue
     }
-    // `assert(x > 1)`: the message about a capture that is not `Encode` names what quotes it (gap 36)
+    // `assert(x > 1)`: the message about a capture that is not `Encode` names what quotes it
     if isQuotation(checker, annotation) {
       checker.quotingOwner = callee
       checker.quotingParameter = parameter.name ?? ""
     }
     const _ = checkExpression checker, argument.value, inner
-    // A `var` argument is a path into the caller's value, and it owns that path for the rest of the call (4.6)
+    // A `var` argument is a path into the caller's value, and it owns that path for the rest of the call
     if isVarArgument(parameter.mode) {
       const named = parameter.name ?? ""
       // A receiver closure changes its receiver through its own body, so `build(inner)` is not a change the dead-change
@@ -500,11 +506,16 @@ fn checkArgumentPass(
 }
 
 /**
- * `Array.of(1, 2, 3, 4)` is an `Array<Int64, 4>`: the number of variadic arguments *is* the `Size` of the array. There
- * is no way to declare the link between a count of arguments and a const parameter, and the language gets none
- * (gap 51) - so `Array.of` is a well-known special case here, exactly as `[1, 2, 3, 4]` is one in `listLiteralType`.
+ * `Array.of(1, 2, 3, 4)` is an `Array<Int64, 4>`: the number of variadic arguments *is* the `Size` of the array.
+ * `Array.of` is a well-known special case here, exactly as `[1, 2, 3, 4]` is one in `listLiteralType`.
  *
  * A `...` is only allowed where its operand is itself an `Array` of a known size: the size has to be static.
+ *
+ * # Open
+ *
+ * There is no way to declare the link between a count of arguments and a const parameter in the language itself, so
+ * every function whose result size depends on its argument count needs a case like this one instead of a signature it
+ * could write down.
  */
 fn checkArrayOf(
   var checker: Checker,
@@ -562,7 +573,7 @@ fn checkArrayOf(
 /**
  * Which parameter modes take a `var` path. The receiver of a **receiver closure** is one of them: `configure settings`
  * fills a `(var self: Settings) => Void`, and that argument is a path into the caller's value exactly as the argument of
- * a `var` parameter is - so it needs the same access and the same recorded `Place`, which milestone 5 forms the
+ * a `var` parameter is - so it needs the same access and the same recorded `Place`, which the lowering forms the
  * reference from.
  */
 fn isVarArgument(mode: ParameterMode): Bool {
@@ -674,7 +685,7 @@ fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterFor
 
 /**
  * Every bound of the callee, with the solutions put in: one witness per trait, in the order of `Signature.bounds`. This
- * is the list milestone 5 reads to decide between monomorphizing and passing a table, so it is recorded even where the
+ * is the list the lowering reads to decide between monomorphizing and passing a table, so it is recorded even where the
  * call itself is `Dispatch.Direct`.
  */
 public fn checkBounds(var checker: Checker, bounds: List<Bound>, owner: String, at: Span): List<Witness> {

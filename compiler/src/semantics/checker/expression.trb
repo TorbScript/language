@@ -1,3 +1,13 @@
+/**
+ * [checkExpression] and [inferExpression]: the type of every expression, and what every name in it means. Literals
+ * with their adaptation, locals, calls, constructors, field and static member access, `if`, `match` and blocks as
+ * expressions, the operators, and everything that reads a closure or a generic parameter.
+ *
+ * A construct nothing here can resolve becomes `Deferred` - a type that absorbs every further message exactly as
+ * `Invalid` does, but that `torb check --statistics` counts apart, because it is reachable only from a construct a
+ * message was already given about.
+ */
+
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, TextSegment, Condition, Block, Statement from "../../syntax/ast"
@@ -21,16 +31,6 @@ use checkPattern, requireReadBindings from "./pattern"
 use MatchArmPlan, armPlanOf, checkExhaustive, checkConditionPattern from "./exhaustive"
 use checkDeclaration from "./check"
 
-/**
- * The type of every expression, and what every name in it means.
- *
- * Milestone 4.2 checks the monomorphic part of the language: literals with their adaptation, locals, calls of
- * top-level functions and of methods of concrete types, constructors, field and static member access, `if`, `match`
- * and blocks as expressions. Everything that needs traits, generics or closures becomes `Deferred` - a type that
- * absorbs every further message exactly as `Invalid` does, but that counts as "not checked yet" so that
- * `torb check --statistics` can say how far the checker has come.
- */
-
 /** The type of an expression in a position that expects one. Every expression that is looked at is recorded. */
 public fn checkExpression(var checker: Checker, expression: Expression, expected: Expectation): TypeId {
   // `Expression<Value>` does not take a value, it takes the expression that was written (design 4.8). One hook covers
@@ -53,7 +53,7 @@ public fn checkExpression(var checker: Checker, expression: Expression, expected
       const _ = checkValue checker, found, annotation, expression.span
     }
   }
-  // A value that goes nowhere is a mistake with value semantics (gap 18), whether it stands as a statement or as the
+  // A value that goes nowhere is a mistake with value semantics, whether it stands as a statement or as the
   // body of an arm of a `match` that is used as one
   if expected.isStatement() {
     if !isNested(expression) {
@@ -208,7 +208,7 @@ fn memberTarget(
   const owner = resolveTarget checker, base, None
   checker.resolved base.span, owner.resolution
   const _ = checker.typed base.span, owner.annotation
-  // `a?.m` is `Option.map`, or `flatMap` when `m` gives back an `Option` itself: it never nests one (gap 12)
+  // `a?.m` is `Option.map`, or `flatMap` when `m` gives back an `Option` itself: it never nests one
   if isOptional {
     return optionalTarget checker, owner.annotation, text, at
   }
@@ -259,7 +259,7 @@ fn memberTarget(
 /**
  * `first()?.position()`: the member is looked up on the `Value` of the `Option`, and what comes out is an `Option`
  * again - `map` when the member gives back an ordinary value, `flatMap` when it gives back an `Option`, so that `?.`
- * never produces a nested one (gap 12). It is not defined on a `Result`.
+ * never produces a nested one. It is not defined on a `Result`.
  */
 fn optionalTarget(var checker: Checker, receiver: TypeId, text: String, at: Span): Target {
   const inner = match optionValueOf(checker, receiver) {
@@ -292,7 +292,7 @@ fn optionalTarget(var checker: Checker, receiver: TypeId, text: String, at: Span
   match target.form {
     Some(form) => {
       // `flatMap` where the member answers an `Option` already, `map` where it does not. The wrapping is inside the
-      // function type, so this flag is the only thing that still says which of the two it was (milestone 5's `?.`)
+      // function type, so this flag is the only thing that still says which of the two it was, for the lowering of `?.`
       checker.recordFlattenedOptional at, isOption(checker, form.result)
       const wrapped = optionalOf checker, form.result
       const inner = FunctionForm form.parameters, wrapped
@@ -500,7 +500,7 @@ fn requireIndexInBounds(var checker: Checker, receiver: TypeId, index: Expressio
 }
 
 /**
- * Which implementation and which member an operator, an index or an interpolation reached. Milestone 5 reads this
+ * Which implementation and which member an operator, an index or an interpolation reached. The lowering reads this
  * instead of looking a trait up again: the choice between monomorphizing and passing a table is made here.
  */
 fn recordTraitCall(var checker: Checker, at: Span, receiver: TypeId, capability: SymbolId, name: String) {
@@ -521,8 +521,8 @@ fn recordTraitCall(var checker: Checker, at: Span, receiver: TypeId, capability:
  * `Meters * Meters` and `"a"[0..2]`: the type does not come with the trait the operator needs.
  *
  * An operand whose type is a **generic parameter** gets the message the catalogue gives an unmet bound, because the fix
- * is a bound and not another type: `fn total<Value>(a: Value, b: Value) { a + b }` used to fall through to the back end,
- * and `a == b` on one said nothing at all.
+ * is a bound and not another type: `fn total<Value>(a: Value, b: Value) { a + b }` needs `where Value: Add`, and
+ * `a == b` on such a parameter needs `Value: Equals` the same way.
  */
 fn reportMissingOperator(var checker: Checker, receiver: TypeId, capability: String, written: String, at: Span) {
   if const .Parameter(_) = checker.types.form(receiver) {
@@ -552,10 +552,6 @@ fn isRange(checker: Checker, annotation: TypeId): Bool {
 
 // --- Literals -------------------------------------------------------------------------------------------------------
 
-/**
- * An integer literal checks against every integer and floating point type, against a literal type that contains it,
- * and is `Int64` without an expectation. A literal that does not fit the type it adapts to is an error (gap 38).
- */
 /** `-3` and `-1.5`: the sign belongs to the literal, so the value that is checked against a range is the real one. */
 fn isNumberLiteral(operand: Expression): Bool {
   match operand.kind {
@@ -572,6 +568,10 @@ fn negatedLiteral(var checker: Checker, operand: Expression, expected: TypeId?, 
   checker.typed operand.span, found
 }
 
+/**
+ * An integer literal checks against every integer and floating point type, against a literal type that contains it,
+ * and is `Int64` without an expectation. A literal that does not fit the type it adapts to is an error.
+ */
 fn integerLiteralType(var checker: Checker, text: String, isNegative: Bool, expected: TypeId?, at: Span): TypeId {
   const value = match integerLiteral(text, isNegative) {
     Some(.Integer(found)) => found
@@ -787,7 +787,7 @@ fn tupleLiteralType(var checker: Checker, items: List<Argument>, expected: TypeI
   checker.types.intern TypeForm.Tuple(fields)
 }
 
-/** A label is not part of the type of a tuple, but one at a position that has a different name is (gap 17). */
+/** A label is not part of the type of a tuple, but one at a position that has a different name is. */
 fn checkLabel(var checker: Checker, written: String?, wanted: String?, at: Span) {
   if const Some(label) = written {
     if const Some(other) = wanted {
@@ -802,11 +802,11 @@ fn checkLabel(var checker: Checker, written: String?, wanted: String?, at: Span)
 }
 
 /**
- * `[1, 2, 3]` adapts to what is expected of it, and what it became is recorded at its span (gap 51):
+ * `[1, 2, 3]` adapts to what is expected of it, and what it became is recorded at its span:
  *
  * - nothing expected, or the trait `List<Item>`: the default list. The item type comes from the expected type where
  *   there is one - and then every item is *checked* against it, so
- *   `const shapes: List<Shape> = [Square(2.0), Circle(1.0)]` coerces each one (gap 8). Without an expectation the first
+ *   `const shapes: List<Shape> = [Square(2.0), Circle(1.0)]` coerces each one. Without an expectation the first
  *   item decides and the rest are checked against it; an empty literal makes a variable, which the statement has to
  *   solve or the message asks for the annotation.
  * - an `Array<Item, Size>`: the items go straight into the inline slots, and how many of them there are is part of the
@@ -1071,7 +1071,7 @@ fn itemOfTarget(var checker: Checker, annotation: TypeId, iterable: SymbolId): T
   }
   // A target that is not iterable itself - `String`, a `Histogram with From<Iterable<Int>>` - says it in its own `From`.
   // Which of several `From` implementations that is, is the question `iterableSourceOf` answers: `String` has two
-  // (`From<Iterable<Char>>` and gap 50's blanket `From<Never>`) and only one of them takes an `Iterable`
+  // (`From<Iterable<Char>>` and the blanket `From<Never>`) and only one of them takes an `Iterable`
   iterableSourceOf checker, annotation, iterable
 }
 
@@ -1364,8 +1364,9 @@ fn rangeLiteralType(var checker: Checker, start: Expression?, end: Expression?):
 // --- Operators ------------------------------------------------------------------------------------------------------
 
 /**
- * `!a` is built in on `Bool` (gap 21), `-a` is `Negate.negate`. A type that does not *declare* the trait waits for
- * milestone 4.3, which looks implementations up instead of reading the `with` list of a declaration.
+ * `!a` is built in on `Bool`, `-a` is `Negate.negate`, resolved through the ordinary implementation lookup rather
+ * than the `with`-list walk the arithmetic operators use - so a type that implements `Negate` through a supertrait
+ * or an `extend` gets `-a` too, and not only one that declares it directly.
  */
 fn unaryType(
   var checker: Checker,
@@ -1430,7 +1431,7 @@ fn binaryType(
       recordComparison checker, operator, found, at
       boolean
     }
-    // `a ?? b` is `orElse` on an `Option` and on a `Result` alike, and `b` is `lazy` (gap 13)
+    // `a ?? b` is `orElse` on an `Option` and on a `Result` alike, and `b` is `lazy`
     .Coalesce => coalesceType checker, left, right, at
     _ => arithmeticType checker, operator, left, right, at, expected
   }
@@ -1493,12 +1494,12 @@ fn recordComparison(var checker: Checker, operator: InfixOperator, found: TypeId
   }
   const member = if isOrdering { "compare" } else { "equals" }
   /*
-   * Gap 7 would have `a == b` on two trait-typed values reported: `equals(self, other: Self)` takes a second `Self`,
-   * and two values of a trait type need not have the same type. It is **not** reported, and it cannot be: every
-   * collection of the language has a trait type (`List<String>` is `List` applied to `String`), so the rule would
-   * reject `parts == ["a"]` and with it half of every test in the repository. Object safety stays what 4.4 made it -
-   * a rule about a member that is *named* - and the operators are outside it until a literal-type-like "the two sides
-   * are the same type here" is written down. 4.10 tried it and took it back out.
+   * `a == b` on two trait-typed values is not reported as an object-safety violation, and deliberately so:
+   * `equals(self, other: Self)` takes a second `Self`, and two values of a trait type need not have the same type.
+   * Every collection of the language has a trait type (`List<String>` is `List` applied to `String`), so rejecting
+   * this would reject `parts == ["a"]` and with it half of every test in the repository. Object safety stays a rule
+   * about a member that is *named*, and the operators stay outside it until a literal-type-like "the two sides are
+   * the same type here" rule is written down.
    */
   const capability = if isOrdering { checker.wellKnown.compare } else { checker.wellKnown.equals }
   const symbol = match capability {
@@ -1671,7 +1672,7 @@ fn ifType(
   // `if const Some(user) = lookup()` binds for the body of the `if` and for nothing after it
   checker.openScope()
   checkCondition checker, condition, false
-  // What the pattern in the head bound: every one of those names has to be read in the body (milestone 4.10)
+  // What the pattern in the head bound: every one of those names has to be read in the body
   const bound = checker.bindingsHere()
   const alternative = match otherwise {
     Some(found) => found
@@ -1711,7 +1712,7 @@ public fn checkCondition(var checker: Checker, condition: Condition, isLoop: Boo
     .Bind(isVar, pattern, value) => {
       const found = inferExpression checker, value
       const inner = if checker.absorbs(found) { checker.deferredType } else { found }
-      // `if var Some(inner) = current` binds `var` paths *into* the subject (gap 3), so the subject has to be one and
+      // `if var Some(inner) = current` binds `var` paths *into* the subject, so the subject has to be one and
       // what the pattern binds is a reference into it and not a copy
       if isVar {
         checkSubject checker, value
@@ -1733,7 +1734,7 @@ fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, ex
   for arm in arms {
     checker.openScope()
     checkPattern checker, arm.pattern, found, false
-    // The names this arm bound: the guard and the body are where they have to be read (milestone 4.10)
+    // The names this arm bound: the guard and the body are where they have to be read
     const bound = checker.bindingsHere()
     const plan = armPlanOf checker, arm, found
     plans.add plan
@@ -1812,7 +1813,7 @@ fn tryType(var checker: Checker, inner: Expression, at: Span): TypeId {
     }
   }
   // At the top level of an entry file and in a body whose result is inferred there is nothing to convert towards: the
-  // program ends with the error, or milestone 4.4 decides once the result is known
+  // program ends with the error, or the enclosing result decides the conversion once it is known
   if checker.isResultInferred {
     return value
   }
@@ -1847,8 +1848,8 @@ fn tryType(var checker: Checker, inner: Expression, at: Span): TypeId {
 /**
  * `?` returns the failure from the enclosing function, so that function has to have a place for one: an `Option` or a
  * `Result` (CONCEPT, "Errors"). The top level of an entry file and a body whose result is inferred are out of this
- * already - there the result is not decided here - and a `Task<Result<...>>` stays exempt, because where `await()` is
- * allowed is milestone 7's rule and the `?` in `fetchUser(id).await()?` is about the value behind the task.
+ * already - there the result is not decided here - and a `Task<Result<...>>` stays exempt: the `?` in
+ * `fetchUser(id).await()?` is about the value behind the task, not about the task itself.
  */
 fn requireTryResult(var checker: Checker, result: TypeId, at: Span) {
   if optionValueOf(checker, result).isSome() || resultPartsOf(checker, result).isSome() {
@@ -1899,7 +1900,7 @@ fn matchedFailure(var checker: Checker, subject: TypeId): TypeId {
  *
  * Where the wanted failure is a trait-typed value (`fn main(): Result<Void, Error>`) no `From` can apply - nobody
  * extends a trait type - so the error becomes the trait value through the ordinary coercion of a value to a
- * trait-typed one instead (gap 8), recorded as `ToTraitValue` like every other one.
+ * trait-typed one instead, recorded as `ToTraitValue` like every other one.
  */
 fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
   if sameType(checker.types, error, wanted) {
@@ -2014,7 +2015,7 @@ fn conversionType(var checker: Checker, expression: Expression, callee: Expressi
 /**
  * Whether a value of type `found` may stand where `expected` is asked for. Exact type equality, plus the four
  * directed coercions of the design: a value to a trait it implements, a trait value to fewer bounds or to a
- * supertrait, `Never` to anything, and a literal to a literal type that contains it (gap 8). There is no variance.
+ * supertrait, `Never` to anything, and a literal to a literal type that contains it. There is no variance.
  */
 public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: Span): Bool {
   if checker.absorbs(found) || checker.isBroken(expected) {
@@ -2044,8 +2045,8 @@ public fn checkValue(var checker: Checker, found: TypeId, expected: TypeId, at: 
 
 /**
  * `const shapes: List<Shape> = [Square(2.0)]`: the value becomes a trait-typed value, and the witness of every bound
- * is recorded so that milestone 5 can build its table. A subject that is not concrete says nothing: what a generic
- * parameter implements is decided by the call site, which is milestone 4.4.
+ * is recorded so that the lowering can build its table. A subject that is not concrete says nothing: what a generic
+ * parameter implements is decided by the call site.
  */
 fn coerceToTraits(var checker: Checker, found: TypeId, bounds: List<TypeId>, at: Span): Bool {
   var witnesses: List<Witness> = []
@@ -2145,12 +2146,13 @@ fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
   }
 }
 
-// --- What waits for a later sub-milestone ---------------------------------------------------------------------------
+// --- Deferring a broken construct ------------------------------------------------------------------------------------
 
 /**
- * Records an expression, and everything in it, as not checked yet. The type positions inside of it are still built -
- * they are milestone 4.1's answer and do not depend on anything here - and so are the signatures of declarations in
- * nested blocks, so that a deferred closure body still contributes everything the earlier passes promise.
+ * Records an expression, and everything in it, as `Deferred`: used where the construct around it could not be
+ * resolved, so there is nothing to check its parts against. The type positions inside of it are still built - they
+ * do not depend on anything here - and so are the signatures of declarations in nested blocks, so that a deferred
+ * closure body still contributes everything a later lookup expects to find.
  */
 public fn deferExpression(var checker: Checker, expression: Expression) {
   const deferred = checker.deferredType
@@ -2218,13 +2220,14 @@ public fn deferExpression(var checker: Checker, expression: Expression) {
   }
 }
 
+/** Every argument's value, deferred: used for a call whose callee could not be resolved to a function. */
 public fn deferArguments(var checker: Checker, arguments: List<Argument>) {
   for argument in arguments {
     deferExpression checker, argument.value
   }
 }
 
-/** The explicit type arguments of an expression are still built: which parameter they fill is milestone 4.4's. */
+/** The explicit type arguments of an expression are still built: which parameter they fill is decided once the callee resolves. */
 fn deferTypeArguments(var checker: Checker, arguments: List<TypeReference>) {
   const scope = scopeHere checker
   for argument in arguments {
@@ -2232,6 +2235,7 @@ fn deferTypeArguments(var checker: Checker, arguments: List<TypeReference>) {
   }
 }
 
+/** The type of every annotated parameter of a closure whose body is deferred, without checking the body itself. */
 public fn deferClosureParameters(var checker: Checker, closure: Closure) {
   const scope = scopeHere checker
   for parameter in closure.parameters {
