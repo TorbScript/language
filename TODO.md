@@ -1340,3 +1340,23 @@ Wenn nicht, was bedeutet, bewirkt es?
       `extension.js` `[A-Za-z_]\w*` ohne `u`-Flag); geändert wurde dort nur `starts_upper_case` auf `A`-`Z`.
     - `docs/language/syntax/naming-conventions.md` heißt jetzt `naming.md`: die Seite sagte "today nothing enforces
       either rule", und zwei Drittel davon sind jetzt Diagnosen.
+
+- (Encode/Decode neu gedacht, 2026-09-21) **Anlass (Nutzer):** kein XML-Sonderfall im Vokabular ("die anderen
+  zigtausend Formate kriegen auch keinen"), kein zweiter Eingang (`decode`/`read`), und das "magische, alle Felder
+  fressende" Ableiten hakt noch. Gewünscht: implizit, automatisch, bei Bedarf anpassbar, eigene Formate simpel
+  einzubringen, Anpassung im DSL-Stil statt Meta-Programmierung.
+  - **Vorschlag (ich, Details im Chat, wartet auf das Okay des Nutzers):**
+    (1) EIN Prinzip statt einer Liste magischer Traits: *ein Wert ist sein Konstruktoraufruf.* Der Compiler kennt den
+    Konstruktor und bietet ihn in drei Formen an - geschrieben (`Encode`), gelesen (`Decode`), beschrieben
+    (NEU, Arbeitsname `Describe`: die Struktur OHNE Wert, mit Feld-Docblocks und Defaults - für SQL-DDL, Protobuf-/
+    Avro-/JSON-Schema, OpenAPI, CLI-Hilfe). Abgeleitet wird genau dann, wenn der Konstruktor von außen benutzbar
+    ist, und genau über seine Parameter - private Felder mit Default sind nicht dabei (kein Leck, "überspringen"
+    ohne Annotation). (2) Was an EINEM Typ in EINEM Format besonders ist (XML-Attribut, Protobuf-Feldnummer,
+    SQL-Spaltentyp, CSV-Spaltenfolge, Bitbreite), ist weder Annotation noch zweiter Trait noch Vokabel in
+    `std/encoding`, sondern ein Mapping-WERT in der DSL des Formatpakets, mit typgeprüften Feldbezügen über quotierte
+    Ausdrücke (`attribute { _.currency }`); das Format findet ihn beim Laufen über den qualifizierten Typnamen, den
+    `record(typeName, ...)` ohnehin trägt - deshalb wirkt er auch verschachtelt, ohne Typtest und ohne
+    Spezialisierung. Derselbe Weg für wohlbekannte Typen (`Instant` → CBOR-Tag/BSON-Datum). (3) `XmlEncode`/
+    `XmlDecode` entfallen; Dokument-XML ist der Baum `XmlNode`. (4) `Encode`/`Decode` bleiben implizit (mein
+    Vorschlag "ausdrücklich per `with`" ist damit zurückgezogen); die Fehlermeldung an der Aufrufstelle nennt die
+    Feldkette. Umsetzung: Design-Dokument `docs/ENCODING.md`, zusammen mit "Encoding auf statischen Dispatch".
