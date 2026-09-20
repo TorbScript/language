@@ -461,7 +461,7 @@ group "What the back end does not lower yet" {
    * `harness.trb` provides neither `iterator` nor `get` - which is what these two report. The real chain over `std/` is
    * what the repository-wide test below asserts, by what is *not* in its list of blocking constructs.
    */
-  test "a list literal and a top-level `?` each say which construct they are" {
+  test "a list literal says which construct it is" {
     assert(
       unsupportedIn("fn items(): Int \{\n  const found = [1, 2]\n  1\n\}")
         == ["not supported by the back end yet: `iterator`, which neither the source nor the natives manifest provides"]
@@ -470,15 +470,12 @@ group "What the back end does not lower yet" {
       unsupportedIn("fn first(items: ArrayList<Int>): Int \{\n  items[0]\n\}")
         == ["not supported by the back end yet: `at`, which neither the source nor the natives manifest provides"]
     )
-    // A `?` in a *function* whose result is neither is now the checker's message ("`?` needs a function that returns an
-    // `Option` or a `Result`"), so the one body that still reaches the back end's branch is the top level of an entry
-    // file: there the program ends with the error, which is what milestone 5.10 has to emit
+    // A `?` at the top level of an entry file is lowered since 6.1's long tail: `error: <the error through Show>` and
+    // exit code 1, which is decided gap 9 (`lower-match.test.trb`, and `bootstrap/tests/native/top-level-error.trb`).
+    // In a *function* whose result is neither an `Option` nor a `Result` the checker reports it, so no body of one
+    // reaches the back end at all
     assert(
-      unsupportedIn("fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\nconst value = read()?\nprint value")
-        == [
-          "not supported by the back end yet: `?` at the top level of an entry file,"
-            + " whose `error:` report is the driver's (milestone 5.13)",
-        ]
+      unsupportedIn("fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\nconst value = read()?\nprint value") == []
     )
   }
 
@@ -541,8 +538,11 @@ group "Real code" {
     assert verifyProgram(found.program).isEmpty()
     assert found.program.problems.isEmpty()
     assert found.problems.isEmpty()
-    // Nine declarations of the two files, plus the instances and the generated members the worklist reached from them
-    assert(found.lowered + found.stubbed == 78)
+    // Nine declarations of the two files, plus the instances and the generated members the worklist reached from them.
+    // It went from 78 to 121 when `chars()` became ordinary TorbScript (6.1's long tail): a text is iterated through
+    // `Characters` and `CharacterIterator` of `std/text` now, so the two files reach `Iterable<Char>`, `Iterator<Char>`
+    // and the payload boxes of both - one set for the whole program, and the same trade 5.7 made for `ArrayList.from`
+    assert(found.lowered + found.stubbed == 121)
     // **The instance-count tripwire** (BACKEND section 7, "The instance count"). Monomorphization with `List<Item>`
     // everywhere can multiply, and what multiplies it is the **element type**: a container literal builds the witness
     // table of `List<Item>`, and that table used to drag in every default member of `Iterable`, `Collection`,
@@ -551,9 +551,9 @@ group "Real code" {
     // functions / 20 tables to a *quarter* of that. They *are* the footprint - the functions, the tables and the
     // descriptors - and they are asserted exactly so that an explosion fails a test instead of being noticed as a
     // build time.
-    assert(found.program.functions.length() == 108)
-    assert(found.program.witnessTables.length() == 24)
-    assert(found.program.elements.length() == 2)
+    assert(found.program.functions.length() == 169)
+    assert(found.program.witnessTables.length() == 38)
+    assert(found.program.elements.length() == 3)
     var blocked: List<String> = []
     for entry in found.unsupported {
       blocked.add entry.what
@@ -561,10 +561,11 @@ group "Real code" {
     blocked.sort({ _ })
     // A list literal is lowered since 5.7 and a closure since 5.8, the defaults nothing overrides are out of the tables
     // since the fourth round - so `swapAt`, `updated` and `indexed` are not instantiated at all any more - and
-    // `ArrayList.from` and `Range.iterator` are TorbScript. What is left is `sort`, which hands a place on as a `var`
-    // argument, and `String.chars`, which needs a wrapper around `torb_text_next_char`
-    assert(blocked.joined(separator: "\n")
-      == "not supported by the back end yet: `String.chars`, which the runtime provides from milestone 5.7 on\n"
-        + "not supported by the back end yet: a `var` argument through `a[key]` (milestone 5.7/5.9b)")
+    // `ArrayList.from`, `Range.iterator` and now `String.chars` are TorbScript. What is left is `sort`, which hands a
+    // place on as a `var` argument through `a[key]`
+    assert(
+      blocked.joined(separator: "\n")
+        == "not supported by the back end yet: a `var` argument through `a[key]` (milestone 5.7/5.9b)"
+    )
   }
 }

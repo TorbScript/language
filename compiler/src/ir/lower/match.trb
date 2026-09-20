@@ -11,12 +11,17 @@ use FunctionBuilder, addLocal, addTemporary, addBlock from "../build"
 use emit from "../build"
 use layoutOfType, numericKindOf from "../verify"
 use instanceOfSymbol from "../instances"
-use emitCall, lowerConstruct from "./call"
+use emitCall, lowerConstruct, lowerDispatched from "./call"
+use dispatchedOn, resultTypeOf from "./generic"
+use traitsOf from "../../semantics/checker/implementation"
+use traitMemberNamed from "../witness"
 use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf, isVoidType from "./context"
+use irTypeOfClosed, substituted from "./context"
 use finishBlock, continueIn, enterLoop, leaveLoop from "./context"
 use lowerExpression, lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
-use constantSlot, emitIntrinsic, intrinsicSlot from "./expression"
+use constantSlot, emitIntrinsic, intrinsicSlot, integerSlot from "./expression"
 use lowerBlockInto from "./statement"
+use showSlot from "./text"
 
 /**
  * Patterns: `match`, `if const`, `while const`, a destructuring binding, and `?`.
@@ -335,7 +340,7 @@ fn emitBindings(
         return
       }
     }
-    readPathInto lowering, builder, subject, binding.path, slot, at
+    readPathInto lowering, builder, plan, subject, binding.path, slot, at
     if !lowering.isSupported {
       return
     }
@@ -383,7 +388,7 @@ fn labelOfNode(node: DecisionNode): String {
 fn emitNode(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk, node: DecisionNode) {
   match node {
     .SwitchCase(path, _, edges, otherwise) => {
-      const value = match readPath(lowering, builder, walk.subject, path, walk.at) {
+      const value = match readPath(lowering, builder, walk.plan, walk.subject, path, walk.at) {
         Some(found) => found
         None => {
           return
@@ -412,14 +417,16 @@ fn emitNode(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk, no
       const fallback = walk.blocks[otherwise.value]
       finishBlock lowering, builder, Terminator.Switch(tag, values, targets, fallback)
     }
-    .Check(path, check, then, otherwise) => {
-      const value = match readPath(lowering, builder, walk.subject, path, walk.at) {
+    .Check(path, check, thenNode, otherwise) => {
+      const value = match readPath(lowering, builder, walk.plan, walk.subject, path, walk.at) {
         Some(found) => found
         None => {
           return
         }
       }
-      emitCheck lowering, builder, walk, value, check, walk.blocks[then.value], walk.blocks[otherwise.value]
+      const then = walk.blocks[thenNode.value]
+      const fallback = walk.blocks[otherwise.value]
+      emitCheck lowering, builder, walk, path, value, check, then, fallback
     }
     .Arm(arm, branch) => {
       emitBindings lowering, builder, walk.plan, arm, branch, walk.subject, walk.at
@@ -463,6 +470,7 @@ fn emitCheck(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   walk: Walk,
+  path: List<PatternStep>,
   value: Slot,
   check: PatternCheck,
   then: BlockId,
@@ -499,8 +507,292 @@ fn emitCheck(
       finishBlock lowering, builder, Terminator.Branch(upper, then, otherwise)
     }
     .IsCase(_, _) => reportUnsupported lowering, "a case test outside of a switch", walk.at
-    .HasLength(_) => reportUnsupported lowering, "a list pattern (milestone 5.7)", walk.at
-    .HasAtLeast(_) => reportUnsupported lowering, "a list pattern with a rest (milestone 5.7)", walk.at
+    // `[]`, `[only]`, `[first, second]`: the length of the subject against a number, which is the whole test
+    .HasLength(length) => {
+      emitLengthTest lowering, builder, walk, path, value, length, IntrinsicOperation.Equal, then, otherwise
+    }
+    // `[first, ...rest]` and `[first, ..., last]`: at least this many, because the rest may be empty
+    .HasAtLeast(length) => {
+      const operation = IntrinsicOperation.GreaterOrEqual
+      emitLengthTest lowering, builder, walk, path, value, length, operation, then, otherwise
+    }
+  }
+}
+
+// --- List patterns ------------------------------------------------------------------------------------------------
+
+/**
+ * A list pattern is three members of the prelude and nothing of its own: `length()` for every test, `at(index)` for
+ * every item, and `skip(index).toList()` for the rest.
+ *
+ * **A list is not a layout**, so an item is no `PathStep`: a `List<Item>` value is a trait-typed one (5.6's note) and
+ * reading from it is a call through its witness table, exactly as `a[key]` is (`at` is `Indexed.at`, whose default body
+ * decides what an index out of range does - and here nothing is ever out of range, because the length was tested on the
+ * way in). That is also why `[first, ...rest]` copies: `Slice.slice` answers `Self` and is therefore not in the table of
+ * a trait-typed value at all (5.6), while `skip` and `toList` are ordinary members of `Iterable`. A value has no
+ * identity, so a copy of the rest is not observable - only its cost is, which is the same cost `toList()` has anywhere.
+ */
+fn emitLengthTest(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  walk: Walk,
+  path: List<PatternStep>,
+  value: Slot,
+  length: Int,
+  operation: IntrinsicOperation,
+  then: BlockId,
+  otherwise: BlockId,
+) {
+  const containerType = match containerTypeOf(lowering, walk.plan, path, walk.at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const counted = match lengthSlotOf(lowering, builder, value, containerType, walk.at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const integer = builder.typeOfSlot counted
+  const wanted = integerSlot lowering, builder, length, integer
+  const boolean = booleanTypeOf lowering
+  const kind = NumericKind.Signed 64
+  const slots = [counted, wanted]
+  const condition = intrinsicSlot lowering, builder, None, operation, Some(kind), slots, boolean, walk.at
+  finishBlock lowering, builder, Terminator.Branch(condition, then, otherwise)
+}
+
+/**
+ * The type of the container a list test or an item step works on, which is the **subject** of the plan.
+ *
+ * A list *inside* another pattern (`.Wrapped([first])`) would need the checker type halfway down a path, and a plan says
+ * nothing about one - only the layouts do, and a list has no layout. It is a clean finding, and the repository has none.
+ */
+fn containerTypeOf(var lowering: Lowering, plan: MatchPlan, path: List<PatternStep>, at: Span): TypeId? {
+  if !path.isEmpty() {
+    reportUnsupported lowering, "a list pattern inside another pattern", at
+    return None
+  }
+  Some substituted(lowering, plan.subject)
+}
+
+/**
+ * The trait to dispatch one member of a list pattern on: the first trait of the subject's own closure that declares the
+ * member, applied to the subject's arguments for it.
+ *
+ * Not a name of the prelude, because *which* trait declares a member is none of the back end's business: `length` is
+ * `Length`'s in `std/iteration` and the `List` trait's own in the miniature prelude of the compiler's tests, and a
+ * program may declare a collection of its own. The closure of the subject's traits answers all three the same way, and
+ * which implementation provides the member is then the ordinary question every dispatch asks.
+ */
+fn boundDeclaring(var lowering: Lowering, subject: TypeId, member: String, at: Span): TypeId? {
+  for bound in traitsOf(lowering.checker, subject) {
+    if traitMemberNamed(lowering, bound, member).isSome() {
+      return Some bound
+    }
+  }
+  const shown = lowering.checker.describe subject
+  reportUnsupported lowering, "a list pattern over `{shown}`, which declares no `{member}`", at
+  None
+}
+
+/** `length()` of the container: the one member of `Length`, which every collection of the language implements. */
+fn lengthSlotOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  container: Slot,
+  containerType: TypeId,
+  at: Span,
+): Slot? {
+  const bound = match boundDeclaring(lowering, containerType, "length", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const dispatched = match dispatchedOn(lowering, containerType, bound, "length", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const target = addTemporary builder, integer
+  const places: List<Reference?> = []
+  const found = lowerDispatched lowering, builder, Some(target), at, dispatched, [container], places, integer
+  if !lowering.isSupported {
+    return None
+  }
+  Some found
+}
+
+/** One item of the container, by an index the caller has in a slot: `at(index)`, which is what `a[key]` reads too. */
+fn itemSlotOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  container: Slot,
+  containerType: TypeId,
+  index: Slot,
+  destination: Slot?,
+  at: Span,
+): Slot? {
+  const bound = match boundDeclaring(lowering, containerType, "at", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const dispatched = match dispatchedOn(lowering, containerType, bound, "at", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const item = resultTypeOf lowering, dispatched
+  const annotation = irTypeOfClosed lowering, item
+  const target = match destination {
+    Some(found) => found
+    None => addTemporary builder, annotation
+  }
+  const places: List<Reference?> = []
+  const slots = [container, index]
+  const found = lowerDispatched lowering, builder, Some(target), at, dispatched, slots, places, annotation
+  if !lowering.isSupported {
+    return None
+  }
+  Some found
+}
+
+/** `[..., last]`: the item at `length() - 1 - index`, which is what counting from the back means. */
+fn itemFromEndOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  container: Slot,
+  containerType: TypeId,
+  index: Int,
+  destination: Slot?,
+  at: Span,
+): Slot? {
+  const counted = match lengthSlotOf(lowering, builder, container, containerType, at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const integer = builder.typeOfSlot counted
+  const back = integerSlot(lowering, builder, index + 1, integer)
+  const kind = NumericKind.Signed 64
+  const operation = IntrinsicOperation.Subtract
+  const position = intrinsicSlot lowering, builder, None, operation, Some(kind), [counted, back], integer, at
+  itemSlotOf lowering, builder, container, containerType, position, destination, at
+}
+
+/**
+ * `[first, ...rest]`: the items from `index` on, as a list of their own - `skip(index).toList()`.
+ *
+ * Both are members of `Iterable`, which is what makes this work on a trait-typed value at all: `Slice.slice` answers
+ * `Self` and is therefore not in a witness table (5.6's rule about object safety), so there is no way to *share* the
+ * storage from here. A copy is what the language can express, and value semantics make it indistinguishable.
+ */
+fn restSlotOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  container: Slot,
+  containerType: TypeId,
+  index: Int,
+  destination: Slot?,
+  at: Span,
+): Slot? {
+  const bound = match boundDeclaring(lowering, containerType, "skip", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const skipped = match dispatchedOn(lowering, containerType, bound, "skip", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const stage = resultTypeOf lowering, skipped
+  const stageAnnotation = irTypeOfClosed lowering, stage
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const amount = integerSlot lowering, builder, index, integer
+  const rest = addTemporary builder, stageAnnotation
+  const places: List<Reference?> = []
+  const _ = lowerDispatched(
+    lowering,
+    builder,
+    Some(rest),
+    at,
+    skipped,
+    [container, amount],
+    places,
+    stageAnnotation,
+  )
+  if !lowering.isSupported {
+    return None
+  }
+  const stageBound = match boundDeclaring(lowering, stage, "toList", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const collected = match dispatchedOn(lowering, stage, stageBound, "toList", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const listType = resultTypeOf lowering, collected
+  const annotation = irTypeOfClosed lowering, listType
+  const target = match destination {
+    Some(found) => found
+    None => addTemporary builder, annotation
+  }
+  const found = lowerDispatched lowering, builder, Some(target), at, collected, [rest], places, annotation
+  if !lowering.isSupported {
+    return None
+  }
+  Some found
+}
+
+/**
+ * One item step of a path, as the slot the value lands in. `destination` is the slot of a *name* the pattern binds,
+ * where there is one, so that a binding needs no copy afterwards.
+ */
+fn itemStepOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  plan: MatchPlan,
+  before: List<PatternStep>,
+  base: Slot,
+  step: PatternStep,
+  destination: Slot?,
+  at: Span,
+): Slot? {
+  const containerType = match containerTypeOf(lowering, plan, before, at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  match step {
+    .Item(index) => {
+      const integer = lowering.program.internType IrType.Integer(64, true)
+      const position = integerSlot lowering, builder, index, integer
+      itemSlotOf lowering, builder, base, containerType, position, destination, at
+    }
+    .ItemFromEnd(index) => itemFromEndOf lowering, builder, base, containerType, index, destination, at
+    .Rest(index) => restSlotOf lowering, builder, base, containerType, index, destination, at
+    _ => {
+      reportUnsupported lowering, "an item step that is none", at
+      None
+    }
   }
 }
 
@@ -580,12 +872,27 @@ type ResolvedStep {
 fn readPath(
   var lowering: Lowering,
   var builder: FunctionBuilder,
+  plan: MatchPlan,
   subject: Slot,
   path: List<PatternStep>,
   at: Span,
 ): Slot? {
   var current = subject
-  for step in path {
+  for index in 0..path.length() {
+    const step = path[index]
+    // An item of a list is a *call* and no step: `at(index)`, `skip(index).toList()` (see "List patterns" above)
+    if isItemStep(step) {
+      const before = path[0..index]
+      match itemStepOf(lowering, builder, plan, before, current, step, None, at) {
+        Some(found) => {
+          current = found
+          continue
+        }
+        None => {
+          return None
+        }
+      }
+    }
     const resolved = match resolveStep(lowering, builder, current, step, at) {
       Some(found) => found
       None => {
@@ -603,6 +910,7 @@ fn readPath(
 fn readPathInto(
   var lowering: Lowering,
   var builder: FunctionBuilder,
+  plan: MatchPlan,
   subject: Slot,
   path: List<PatternStep>,
   target: Slot,
@@ -613,11 +921,17 @@ fn readPathInto(
     return
   }
   const last = path.length() - 1
-  const base = match readPath(lowering, builder, subject, path[0..last], at) {
+  const before = path[0..last]
+  const base = match readPath(lowering, builder, plan, subject, before, at) {
     Some(found) => found
     None => {
       return
     }
+  }
+  // The last step produces straight into the slot of the name, so a binding needs no copy after it
+  if isItemStep(path[last]) {
+    const _ = itemStepOf lowering, builder, plan, before, base, path[last], Some(target), at
+    return
   }
   const resolved = match resolveStep(lowering, builder, base, path[last], at) {
     Some(found) => found
@@ -635,9 +949,9 @@ fn resolveStep(
   step: PatternStep,
   at: Span,
 ): ResolvedStep? {
-  // A list is asked about before its layout is, because a list has none: it is what the runtime owns (milestone 5.7)
+  // An item of a list is no step of a path at all: a list has no layout, and reading from one is a call
   if isItemStep(step) {
-    reportUnsupported lowering, "a list pattern (milestone 5.7)", at
+    reportUnsupported lowering, "an item of a list as a step of a path", at
     return None
   }
   const owner = builder.typeOfSlot base
@@ -721,17 +1035,14 @@ public fn lowerTry(
     }
   }
   const result = builder.function.signature.result
+  /*
+   * At the top level of an entry file there is nothing to hand a failure to, so the failure is **reported**: decided
+   * gap 9 says `error: <the error through Show>` to stderr and exit code 1, and that is what `lowerTopLevelTry` emits.
+   */
   const resultLayout = match variantLayoutOfType(lowering, result) {
     Some(found) => found
     None => {
-      /*
-       * At the top level of an entry file there is nothing to hand the failure to. What it has to do instead is decided
-       * gap 9 - `error: <the error through Show>` to stderr and exit code 1 - and `Show` is here now, but the *report*
-       * belongs to the driver: it walks `cause()` and, in the debug profile, prints the `?` return trace under the chain
-       * (BACKEND's note of 5.3, on the list of milestone 5.13 together with the profiles and the ICE report).
-       */
-      const what = "`?` at the top level of an entry file, whose `error:` report is the driver's (milestone 5.13)"
-      return unsupportedSlot lowering, builder, destination, what, expression.span
+      return lowerTopLevelTry lowering, builder, destination, inner, subject, subjectLayout, annotation
     }
   }
   const isResult = variantNamed(lowering, subjectLayout, "Ok") >= 0
@@ -756,6 +1067,131 @@ public fn lowerTry(
   const step = PathStep.Variant subjectLayout, success, 0
   emit builder, Instruction.Read(target, Reference(subject, [step]))
   target
+}
+
+/**
+ * `e?` at the top level of an **entry file**: the value where there is one, and otherwise the report of decided gap 9 -
+ * `error: <the error through Show>` to stderr, and the program ends with exit code **1**.
+ *
+ * Three decisions are written into this shape:
+ *
+ * - **The report is one line, because the error is a concrete type here.** Walking `cause()` needs the error as a
+ *   trait-typed `Error` value, and what an entry file has in hand is an `IoError` or whatever its own type is - so there
+ *   is nothing to walk, which is what BACKEND's note of 5.3 says about it. A `?` whose error *is* the trait value gets
+ *   the chain, and that is one loop over `cause()` on top of this (the `Error` trait is object safe: `cause(self)`
+ *   answers an `Error?` and mentions `Self` nowhere).
+ * - **Ending the program is an intrinsic and not a call of `Process.exit`.** An entry file that never imports
+ *   `std/process` has no name for that function, and what happens here is the language's own behaviour - so both back
+ *   ends get it out of the IR (`IntrinsicOperation.ExitWithCode`).
+ * - **The `?` return trace of the debug profile is not here.** It is a per-task ring buffer of locations that the report
+ *   prints under the chain (BACKEND 5.3), which needs the profiles the driver does not have yet - and it changes no
+ *   error type, so it can be added to exactly this block later. Stated as planned rather than half built.
+ */
+fn lowerTopLevelTry(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  inner: Expression,
+  subject: Slot,
+  subjectLayout: LayoutId,
+  annotation: IrTypeId,
+): Slot {
+  // The span of what stands *before* the `?`, because the error type is the second argument of its `Result` - the type
+  // recorded at the `?` itself is the type of the value it answers
+  const at = inner.span
+  const isResult = variantNamed(lowering, subjectLayout, "Ok") >= 0
+  const success = variantNamed(lowering, subjectLayout, if isResult { "Ok" } else { "Some" })
+  const failure = variantNamed(lowering, subjectLayout, if isResult { "Fail" } else { "None" })
+  if success < 0 || failure < 0 {
+    const what = "`?` on a value that is neither an `Option` nor a `Result`"
+    return unsupportedSlot lowering, builder, destination, what, at
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  const location = locationOf lowering, at
+  const value = addBlock builder, "value", Some(location)
+  const failed = addBlock builder, "failed", Some(location)
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const tag = addTemporary builder, integer
+  emit builder, Instruction.Tag(tag, subject)
+  finishBlock lowering, builder, Terminator.Switch(tag, [success], [value], failed)
+  continueIn lowering, builder, failed
+  reportFailure lowering, builder, subject, subjectLayout, failure, at
+  continueIn lowering, builder, value
+  const step = PathStep.Variant subjectLayout, success, 0
+  emit builder, Instruction.Read(target, Reference(subject, [step]))
+  target
+}
+
+/** `error: <the error>` to stderr and exit code 1. Nothing follows it, so the block ends `unreachable`. */
+fn reportFailure(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: Slot,
+  subjectLayout: LayoutId,
+  failure: Int,
+  at: Span,
+) {
+  const text = lowering.program.internType IrType.Text
+  const shape = lowering.program.layoutAt subjectLayout
+  const fields = shape.fieldsOfVariant failure
+  var parts: List<Slot> = []
+  parts.add constantSlot(lowering, builder, None, StaticContents.Literal(LiteralValue.Text("error: ")), text)
+  // A `None` carries nothing, so the line is the prefix alone: `x?` on an `Option` says that there was no value
+  if const Some(field) = fields.first() {
+    const carried = addTemporary builder, field.annotation
+    const step = PathStep.Variant subjectLayout, failure, 0
+    emit builder, Instruction.Read(carried, Reference(subject, [step]))
+    const shown = match shownFailure(lowering, builder, carried, at) {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    parts.add shown
+  }
+  // One part and not two: `printError` joins its parts with a space, and `error: ` already ends in one
+  const line = intrinsicSlot lowering, builder, None, IntrinsicOperation.TextConcat, None, parts, text, at
+  emitIntrinsic lowering, builder, None, IntrinsicOperation.PrintErrorParts, None, [line], at
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const code = integerSlot lowering, builder, 1, integer
+  emitIntrinsic lowering, builder, None, IntrinsicOperation.ExitWithCode, None, [code], at
+  finishBlock lowering, builder, Terminator.Unreachable
+}
+
+/** The error through `Show`, which is the same member an interpolation calls (`ir/lower/text.trb`). */
+fn shownFailure(var lowering: Lowering, var builder: FunctionBuilder, carried: Slot, at: Span): Slot? {
+  const module = lowering.module
+  const written = match lowering.checker.expressionType(module, at) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `?` whose error type the checker recorded nothing for", at
+      return None
+    }
+  }
+  // Hoisted: `showSlot` takes `lowering` by `var`, and stage 0 takes that argument before it evaluates the others
+  const failed = errorTypeOf lowering, written
+  const shown = showSlot lowering, builder, carried, failed, at
+  if !lowering.isSupported {
+    return None
+  }
+  Some shown
+}
+
+/**
+ * The checker type of the error a `?` hands on: the second argument of the `Result` the expression *before* the `?` had.
+ *
+ * The type recorded at the span of `e?` is the type of the **value** (the `Ok` payload), so the error is read out of the
+ * subject's own type - which is what `Show` has to be dispatched on.
+ */
+fn errorTypeOf(var lowering: Lowering, written: TypeId): TypeId {
+  // The substitution is taken out of `lowering` first: a `var` argument is taken before the other arguments are
+  // evaluated on stage 0 (CONTRIBUTING, trap 1), so reading a field of it in the same call reads a place that moved
+  const applied = substituted lowering, written
+  const arguments = match lowering.checker.types.form(applied) {
+    .Nominal(_, given) => given
+    _ => []
+  }
+  arguments.get(1) ?? lowering.checker.invalidType
 }
 
 /** The failure arm: the error, converted, built into the enclosing failure case, and returned. */

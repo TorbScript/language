@@ -66,6 +66,7 @@ int main(void) {
   torb_register_file_tests();
   torb_register_clock_tests();
   torb_register_environment_tests();
+  torb_register_process_tests();
 
   for (index = 0u; index < torb_test_count; index += 1u) {
     size_t before = torb_live_block_count();

@@ -1,0 +1,59 @@
+use File, IoError from "std/fs"
+use Process from "std/process"
+use Environment from "std/environment"
+use Clock from "std/time"
+
+/**
+ * What the compiler's own driver does to the outside world: make a directory, write a file, read it back, ask the
+ * environment, read the clock, and run a child process.
+ *
+ * Every one of these is a function of `runtime/` with the platform layer underneath it (`runtime/platform.c`), so this
+ * program is the gate that says the `.Fallible` convention reaches all the way through: the symbol answers `bool`, the
+ * payload of `Ok` comes through an out parameter (**none** where it is `Void`, which is `writeText`), and the `message`
+ * of the `IoError` through one more - because a runtime function may not build a `Result` of the program.
+ *
+ * `File.list` and `text.lines()` are **not** here: both answer a collection, which the runtime owns as a `torb_list`
+ * while the declaration says `List<String>` - a trait-typed value. The wrapper that coerces one to the other is the next
+ * step of this row, and until it exists the C back end names it instead of guessing.
+ *
+ * It works in a scratch directory under the working directory (`build/` is ignored by git), so it needs no absolute path
+ * and leaves nothing behind that a second run would trip over.
+ */
+fn run(): Result<Int, IoError> {
+  const directory = "build/native-tests-scratch/inner"
+  File.createDirectory(directory)?
+  const path = "{directory}/written.txt"
+  const _ = File.writeText(path, "one\ntwo\n")?
+  const text = File.readText(path)?
+  print text.byteLength()
+  print File.exists(path)
+  print File.isDirectory(directory)
+  // An absolute path is text arithmetic, so it answers for a file that does not exist too - only its shape is asserted
+  const absolute = File.absolutePath(path)?
+  print absolute.endsWith("written.txt")
+  print Environment.get("TORB_NATIVE_TEST_UNSET").isNone()
+  // Only differences between two readings are meaningful, so what is printed is that time does not go backwards
+  const before = Clock.milliseconds()
+  print(Clock.milliseconds() - before >= 0)
+  const outcome = Process.run(executable(), argumentsOf())?
+  print outcome.isSuccess()
+  print outcome.standardOutput.contains("torb")
+  Ok text.byteLength()
+}
+
+/** The one program every machine has, and the one way to make it print something: the shell. */
+fn executable(): String {
+  if Environment.get("COMSPEC").isSome() { "cmd" } else { "/bin/sh" }
+}
+
+fn argumentsOf(): List<String> {
+  if Environment.get("COMSPEC").isSome() { ["/c", "echo torb"] } else { ["-c", "echo torb"] }
+}
+
+match run() {
+  Ok(size) => Process.exit size
+  Fail(problem) => {
+    printError "error: {problem}"
+    Process.exit 1
+  }
+}

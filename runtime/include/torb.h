@@ -476,6 +476,20 @@ bool torb_utf8_is_continuation(uint8_t byte);
  */
 bool torb_text_next_char(torb_text text, uint32_t *offset, torb_char *character);
 
+/**
+ * The character at a byte offset, or false at (and past) the end. The one native `chars()` needs: decoding UTF-8 is
+ * reading raw storage, which the language cannot do at all - there is no `text[i]` - and the cursor of `chars()` is
+ * TorbScript over this plus `Char.byteLength()`, so walking a text stays O(1) per character. An offset inside a
+ * character panics like every other bad offset (decided gap 7). `text` borrowed.
+ */
+bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out);
+
+/**
+ * The byte at an offset, or false at (and past) the end: what `bytes()` iterates. The same reason as above - a `String`
+ * has no index - and a byte is never inside anything, so nothing about this one can panic. `text` borrowed.
+ */
+bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out);
+
 /* ------------------------------------------------------------------------------------------------------ char --- */
 
 bool torb_char_is_digit(torb_char character);
@@ -657,6 +671,17 @@ void torb_process_finish(void);
 /** `Process.arguments()`: the program's own name is not in it. Result owned. */
 torb_list torb_process_arguments(void);
 TORB_NORETURN void torb_process_exit(int64_t code);
+/**
+ * `Process.runCollecting(command, arguments, var output, var failure)`: a program run to its end. The result is its
+ * exit code, and everything it wrote is in `*output` (owned). **-1** means the program could not be started at all,
+ * and then `*failure` says why (owned) - a program that ran and failed is an exit code and not a failure of `run`,
+ * which is what lets `torb build` tell "there is no C compiler" from "the C compiler said no".
+ *
+ * The two output streams come back as **one** text: `popen` has one pipe, and `Process.start` with three real pipes
+ * is 7.3's. `arguments` borrowed; what `*output` and `*failure` held before is the caller's and is not released here,
+ * which is what a `var` parameter of a native means (the wrapper passes a fresh empty text).
+ */
+int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);
 
 /* -------------------------------------------------------------------------------------------------- files --- */
 
@@ -667,6 +692,12 @@ TORB_NORETURN void torb_process_exit(int64_t code);
  */
 bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error);
 bool torb_file_write_text(torb_text path, torb_text text, torb_text *error);
+/**
+ * `File.createDirectory`: the directory and every directory above it that is missing. "It is already there" is
+ * success, because a caller that only wants a place to write should not have to ask first - which is what
+ * `torb build` does before it writes the generated C.
+ */
+bool torb_file_create_directory(torb_text path, torb_text *error);
 bool torb_file_exists(torb_text path);
 bool torb_file_is_directory(torb_text path);
 /** The names of the entries of a directory, sorted by bytes. `.` and `..` are not in it. `*out` owned. */
@@ -708,7 +739,7 @@ void torb_file_drop(void *block);
 
 /* ---------------------------------------------------------------------------------------- the platform layer --- */
 
-/** Windows and POSIX behind seven functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32`. */
+/** Windows and POSIX behind nine functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32`. */
 
 typedef enum torb_path_kind {
   TORB_PATH_MISSING = 0,
@@ -728,6 +759,25 @@ bool torb_platform_list_directory(const char *path, torb_list *out, const char *
 /** Read a whole file. `*bytes` owned (`torb_raw_free`). False on failure with a libc message in `*message`. */
 bool torb_platform_read_file(const char *path, uint8_t **bytes, size_t *length, const char **message);
 bool torb_platform_write_file(const char *path, const uint8_t *bytes, size_t length, const char **message);
+/** A monotonic clock reading, in nanoseconds, from an unspecified origin. Never goes backwards within one process. */
+/** `mkdir -p`. False on failure with a libc message in `*message` (borrowed, static). */
+bool torb_platform_create_directory(const char *path, const char **message);
+/**
+ * A child process, run to its end. `*code` is its exit code and `*output` its two output streams as one block, owned
+ * and freed with `torb_raw_free(*output, *capacity)` - the capacity and not the length, because the buffer grows in
+ * doublings and the allocator is told the size it gave out. False only where the process could not be started at all,
+ * with a libc message in `*message`.
+ */
+bool torb_platform_run_process(
+  const char *command,
+  const char **arguments,
+  size_t count,
+  int64_t *code,
+  uint8_t **output,
+  size_t *length,
+  size_t *capacity,
+  const char **message
+);
 /** A monotonic clock reading, in nanoseconds, from an unspecified origin. Never goes backwards within one process. */
 int64_t torb_platform_monotonic_nanoseconds(void);
 /**
@@ -751,6 +801,13 @@ typedef int64_t torb_duration;
 
 /** The monotonic clock. Needs the `std/time` capability inside a sandboxed script (7.4). */
 torb_instant torb_clock_now(void);
+
+/**
+ * `Clock.milliseconds()`: monotonic milliseconds counted from the **first reading** of the process, which is the form
+ * a tool that measures its own work wants (`torb check --timings`). An `Instant` and a `Duration` would be the same
+ * number twice and a subtraction; only differences are meaningful either way.
+ */
+int64_t torb_clock_milliseconds(void);
 
 bool torb_instant_equals(torb_instant first, torb_instant second);
 /** -1, 0 or 1: the emitter maps it to `Ordering`. */

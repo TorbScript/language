@@ -1,7 +1,7 @@
 use test, group from "std/test"
 use lowered, irOf, ownedIrOf, unsupportedIn from "./lower-harness"
 use insertOwnership from "../src/ir/ownership"
-use emittedProgramText from "../src/backend/c/emit"
+use emitProgram, emittedProgramText from "../src/backend/c/emit"
 use IrProgram, IrType, IrSignature, IrParameter, Ownership from "../src/ir/ir"
 use Slot, Instruction, Terminator, Argument, Reference, borrowed, referenced from "../src/ir/ir"
 use finishProgram from "../src/ir/layout"
@@ -46,6 +46,31 @@ fn functionOf(source: String, name: String): String {
   }
   lines.joined separator: "\n"
 }
+
+/** What the C back end could not emit, after the ownership pass: a release of a `shared type` object is one. */
+fn emitterFindingsOf(source: String): List<String> {
+  var found = lowered source
+  insertOwnership found.program
+  emitProgram(found.program, entryName).unsupported
+}
+
+/** A resource with an identity, applied through `using`: the one generic `var` parameter of the standard library. */
+const resources = r"""
+  shared type Connection with Close {
+    fn send(self, text: String) {
+      print text
+    }
+
+    fn close(var self) {}
+  }
+
+  fn opened(): Int {
+    using(Connection(), { connection =>
+      connection.send "hello"
+      1
+    })
+  }
+  """
 
 const counters = r"""
   type Counter {
@@ -569,6 +594,43 @@ group "What the verifier demands of a place" {
     assert(
       verifyFunction(program, program.functionAt(identifier))
         == ["t_main_caller b0: argument 0 of `t_main_grow` names %1 and its place starts at %0"]
+    )
+  }
+}
+
+/**
+ * A `var` parameter of a **generic** declaration. `using<Resource: Close, Value>(var resource: Resource, ...)` is the
+ * one in the standard library, and the type of the place a call forms for it is the *callee's* parameter type with the
+ * callee's own instance arguments filled in - never the caller's substitution, which does not know `Resource` at all.
+ * Reading it with the caller's made three internal errors out of one line: the parameter reached the back end
+ * unsubstituted, the temporary the place was formed over became a `Void` slot, and the call passed a place of the
+ * wrong type.
+ */
+group "A `var` argument of a generic callee" {
+  test "the temporary of a `var` argument has the type the callee declares, for this instance" {
+    assert(
+      ownedIrOf(resources, "t_acme_x2f_app_main_opened") == r"""
+        fn t_acme_x2f_app_main_opened() -> Int64 {
+          slot %0 temporary: Shared(T_acme_x2f_app_main_Connection)
+          slot %1 temporary: Closure((Shared(T_acme_x2f_app_main_Connection)) -> Int64)
+          slot %2 temporary: Int64
+        b0: # acme/app/src/main.trb:9 body
+          %0 = construct T_acme_x2f_app_main_Connection ()
+          %1 = closure t_closure__t_acme_x2f_app_main_opened_0 captures() local
+          %2 = call t_std_x2f_prelude_types_using__T_acme_x2f_app_main_Connection_Int64(&%0 borrowed last, %1 borrowed last) at acme/app/src/main.trb:10:3
+          release %0
+          release %1
+          return %2 borrowed
+        }"""
+    )
+  }
+
+  /** The count of a `shared` object is 5.9b's, so the release the ownership pass writes is what the emitter stops at. */
+  test "a `shared type` object is a clean finding of the C back end and no internal error" {
+    assert(unsupportedIn(resources) == [])
+    assert(
+      emitterFindingsOf(resources).joined(separator: "; ")
+        == "a release of a `shared type` object (milestone 5.9b)"
     )
   }
 }

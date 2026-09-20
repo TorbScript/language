@@ -61,7 +61,19 @@ TORB_TEST(seconds_to_duration_overflows_at_the_edge) {
   TORB_EXPECT_PANIC(torb_duration_of_seconds(-9223372037LL, somewhere));
 }
 
+/**
+ * `Clock.milliseconds` counts from the first reading of the process, so the first answer is zero and no answer is ever
+ * smaller than one before it. Only the difference of two readings is meaningful, which is all that is asserted.
+ */
+TORB_TEST(milliseconds_count_from_the_first_reading_and_never_go_backwards) {
+  int64_t first = torb_clock_milliseconds();
+  int64_t second = torb_clock_milliseconds();
+  TORB_CHECK(first >= 0);
+  TORB_CHECK(second >= first);
+}
+
 void torb_register_clock_tests(void) {
+  TORB_ADD(milliseconds_count_from_the_first_reading_and_never_go_backwards);
   TORB_ADD(the_clock_never_goes_backwards);
   TORB_ADD(instant_subtraction_is_a_duration);
   TORB_ADD(duration_equals_and_compare_and_seconds);

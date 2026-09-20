@@ -1,6 +1,8 @@
 use test, group from "std/test"
 use NativeEntry, NativeState, NativeTarget from "../src/backend/c/natives"
 use nativeEntries, findNative, renderNativesHeader, countNatives from "../src/backend/c/natives"
+use File from "std/fs"
+use normalizePath, parentPath, pathDepth, joinPath from "../src/project/path"
 
 /**
  * The manifest of natives is the contract between the lowering and the runtime (BACKEND 3.7), so what is tested here
@@ -146,14 +148,42 @@ group "the manifest of natives" {
 
   test "the counts of the table" {
     const counts = countNatives nativeEntries()
-    assert(counts.ready == 284)
-    assert(counts.planned == 88)
-    assert(counts.symbols == 106)
+    assert(counts.ready == 289)
+    assert(counts.planned == 83)
+    assert(counts.symbols == 111)
     assert(counts.ready + counts.planned == nativeEntries().length())
   }
 }
 
 group "the generated header" {
+  /** The root of the repository, found from wherever the test runner was started. */
+  fn repositoryRoot(): String? {
+    var current = normalizePath File.absolutePath(".").expect("the working directory")
+    while pathDepth(current) >= 1 {
+      if File.exists(joinPath(current, "compiler/project.trb")) {
+        return Some current
+      }
+      const parent = parentPath current
+      if parent == current {
+        return None
+      }
+      current = parent
+    }
+    None
+  }
+
+  /**
+   * The checked-in header is what the manifest renders, byte for byte. `torb natives --header` writes it, and this is
+   * the other half of that contract: a manifest entry that is added without running the command fails here instead of
+   * failing at a link step with a mangled name in the message.
+   */
+  test "the file on disk is what the manifest renders" {
+    const root = repositoryRoot().expect("the root of the repository above the working directory")
+    const path = joinPath root, "runtime/include/torb_natives.h"
+    const written = File.readText(path).expect("the generated header")
+    assert(written == renderNativesHeader(nativeEntries()))
+  }
+
   test "it is a header with a guard and includes torb.h" {
     const lines = headerLines()
     assert(lines[0] == "/*")

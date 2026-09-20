@@ -222,9 +222,6 @@ const withTrim = [
   "std/prelude/src/types.trb": "{preludeSource}\nextend String \{\n  native fn trim(self): String\n\}\n",
 ]
 
-const withChars = [
-  "std/prelude/src/types.trb": "{preludeSource}\nextend String \{\n  native fn chars(self): Int\n\}\n",
-]
 
 group "Operators and natives" {
   test "an operator of a type of the program is an ordinary call of the member the implementation provides" {
@@ -290,15 +287,16 @@ group "Operators and natives" {
 
 group "What a call cannot reach yet" {
 
+  /** `TrieSet.from` waits for the trie itself (milestone 8): a planned entry is a finding and never a link error. */
   test "a native the runtime does not have yet names the milestone instead of failing to link" {
     const source = r"""
-      fn parts(text: String): Int {
-        text.chars()
+      fn collected(items: Iterable<Int>): TrieSet<Int> {
+        TrieSet.from items
       }
       """
     assert(
-      unsupportedIn(source, withChars)
-        == ["not supported by the back end yet: `String.chars`, which the runtime provides from milestone 5.7 on"]
+      unsupportedIn(source)
+        == ["not supported by the back end yet: `TrieSet.from`, which the runtime provides from milestone 5.7 on"]
     )
   }
 

@@ -5,6 +5,8 @@
  * per-process origin, `Duration` a signed nanosecond span. Neither is a counted block - they are plain numbers, like
  * `Int64` is - so every parameter here is a value, not a pointer, and "borrowed" is the only ownership there is.
  *
+ * `Clock.milliseconds()` is the same reading, counted from the first one of the process.
+ *
  * The monotonic read itself is the one platform difference (`torb_platform_monotonic_nanoseconds`, in platform.c);
  * everything else here is portable arithmetic. `Instant - Instant` reuses the checked `Int64` subtraction from
  * `torb_number.h`, so a difference that could never happen in practice (the two readings billions of years apart)
@@ -15,6 +17,21 @@
 
 torb_instant torb_clock_now(void) {
   return torb_platform_monotonic_nanoseconds();
+}
+
+/**
+ * Monotonic milliseconds from the first reading. The origin is per process and taken on the first call, so the first
+ * answer is zero - which is what makes the *difference* of two readings the only thing this is used for.
+ */
+int64_t torb_clock_milliseconds(void) {
+  static int64_t origin = 0;
+  static bool have_origin = false;
+  const int64_t now = torb_platform_monotonic_nanoseconds();
+  if (!have_origin) {
+    origin = now;
+    have_origin = true;
+  }
+  return (now - origin) / 1000000;
 }
 
 bool torb_instant_equals(torb_instant first, torb_instant second) {

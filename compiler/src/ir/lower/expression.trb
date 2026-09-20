@@ -9,6 +9,7 @@ use Intrinsic, IntrinsicOperation, NumericKind, StaticContents, LayoutId from ".
 use FunctionBuilder, addTemporary, addBlock, emit from "../build"
 use numericKindOf, layoutOfType from "../verify"
 use describeIrType from "../print"
+use bindingOfSite from "../../semantics/checker/signature"
 use evaluateConstant, staticOfConstant from "../constant"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
 use internStatic, isNeverType, isVoidType, finishBlock, continueIn, irTypeOfClosed from "./context"
@@ -553,13 +554,71 @@ fn lowerConstantReference(
   const identifier = match staticOfConstant(lowering, symbol) {
     Some(found) => found
     None => {
-      return unsupportedSlot lowering, builder, destination, "a constant that is not compile-time evaluable", at
+      return lowerConstantInitializer lowering, builder, destination, symbol, at
     }
   }
   const annotation = lowering.program.staticAt(identifier).annotation
   const target = valueSlot lowering, builder, destination, annotation
   emit builder, Instruction.Constant(target, identifier)
   target
+}
+
+/**
+ * A top-level `const` whose value is **not static data**, lowered where it is read.
+ *
+ * Static data is what has an immortal C spelling: a number, a `Bool`, a `Char`, a text, and an inline aggregate of
+ * those. A collection literal is a counted heap block, a case of a `Boxed` variant type is a counted heap block, and
+ * `"a" + "b"` is a call of `Add.add` - so `const knownFields: List<String> = [...]`, `CExpression.Literal "NULL"` and a
+ * source built out of pieces have no static value they could become, whatever the evaluator does.
+ *
+ * The answer is the one the language already gives for a **default** (BACKEND 1.6: a field default and a parameter
+ * default are lowered at the *call site*, at every call): the initializer is lowered here, in the module it is written
+ * in. It is sound because a `const` of a module is **pure** by the checker's own rule - literals, the operators of the
+ * number types, interpolation, collection literals, constructor calls and other constants, and never a function call
+ * (gap 27) - and because values have no identity, so a reader cannot tell one list from an equal one. And it keeps the
+ * promise of the table in 1.6: *there is no module initialization, ever*, not even for a list.
+ *
+ * What it costs is one build per read rather than one per program, which for `punctuationTable.find(...)` in the lexer is
+ * a list of 35 tuples per punctuation token. That is the one place in the compiler where it is measurable, and it is
+ * 6.3's ("cut the obvious waste"): the shape that would fix it is an immortal *counted* static - a list storage in
+ * read-only data whose count is the immortal sentinel, so that a retain and a release of it are no-ops and a write copies
+ * - which is a new `StaticContents` case plus its C spelling plus the VM's, and no program needs it to be correct.
+ *
+ * In an entry file or a test file a top-level `const` is ordinary code and the checker's rule does not apply, so an
+ * initializer with a **side effect** would run once per read there where stage 0 runs it once. Every one in the
+ * repository is a text or a list built out of literals; a call is what would make it observable, and a call is exactly
+ * what no module may write.
+ */
+fn lowerConstantInitializer(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  symbol: SymbolId,
+  at: Span,
+): Slot {
+  const site = match lowering.checker.siteOf(symbol) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a constant the checker did not declare", at
+    }
+  }
+  const binding = match bindingOfSite(site) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a constant without an initializer", at
+    }
+  }
+  // A constant in terms of itself is a cycle the checker reports; stopping here keeps the lowering from recursing on one
+  if lowering.inlinedConstants.containsKey(symbol.value) {
+    return unsupportedSlot lowering, builder, destination, "a constant that names itself", at
+  }
+  lowering.inlinedConstants.set symbol.value, true
+  const outer = lowering.module
+  lowering.module = site.module
+  const slot = lowerExpression lowering, builder, binding.value, destination
+  lowering.module = outer
+  const _ = lowering.inlinedConstants.remove symbol.value
+  slot
 }
 
 /**

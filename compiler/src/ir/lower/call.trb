@@ -8,12 +8,13 @@ use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
 use NativeEntry, DerivedKind from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
+use Intrinsic, NumericKind from "../ir"
 use RuntimeKind from "../ir"
 use CallOperands, PlacePath from "./place"
 use referenceParametersOf, parameterTypeAt, receiverReference, argumentReference from "./place"
 use collidesWithPlace, writtenResult, lowerPropertyWrite, makeOwnersUnique from "./place"
 use FunctionBuilder, emit from "../build"
-use layoutOfType from "../verify"
+use layoutOfType, conversionKindOf from "../verify"
 use describeIrType from "../print"
 use memberInValue, derivedKindOf, generatedKindOf from "../witness"
 use generatedFunctionOf from "./derive"
@@ -374,7 +375,8 @@ fn lowerNativeCall(
         return unsupportedSlot lowering, builder, destination, what, at
       }
       const target = valueSlot lowering, builder, destination, annotation
-      emitIntrinsic lowering, builder, Some(target), intrinsic.operation, intrinsic.kind, operands, at
+      const kind = sourceKindOf lowering, builder, intrinsic, operands
+      emitIntrinsic lowering, builder, Some(target), intrinsic.operation, kind, operands, at
       target
     }
     // The runtime's own conventions - an out parameter, an element by address - are a generated wrapper (`native.trb`)
@@ -586,7 +588,7 @@ public fn lowerArgumentSlots(
       continue
     }
     if references.get(position) ?? false {
-      const path = match referenceArgumentAt(lowering, builder, arguments[index].value, signature, position) {
+      const path = match referenceArgumentAt(lowering, builder, arguments[index].value, signature, position, mapping) {
         Some(found) => found
         None => {
           return CallOperands([], [])
@@ -637,15 +639,36 @@ fn referenceArgumentAt(
   value: Expression,
   signature: Signature,
   position: Int,
+  mapping: Map<ParameterId, TypeId> = [:],
 ): PlacePath? {
-  const annotation = match parameterTypeAt(lowering, signature, position) {
+  const annotation = match parameterTypeAt(lowering, signature, position, mapping) {
     Some(found) => found
     None => {
       reportUnsupported lowering, "a `var` parameter without a type", value.span
       return None
     }
   }
-  argumentReference lowering, builder, value, annotation, "a `var` argument"
+  const path = match argumentReference(lowering, builder, value, annotation, "a `var` argument") {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  /*
+   * A place is **not** a value, so nothing can coerce one: where the storage the caller names is a concrete type and the
+   * parameter asks for the trait type of it (`Source<Item, Failure>` for an `Iterating<…>`), there is no `TraitValue` to
+   * put in between - the callee would write through a box the caller does not have. The checker allows the coercion
+   * because it reads the argument as a value; here it is a clean finding, and it used to be two internal errors of the
+   * verifier ("its place is …") in `std/stream`.
+   */
+  if path.annotation != annotation {
+    const given = describeIrType lowering.program, path.annotation
+    const wanted = describeIrType lowering.program, annotation
+    const what = "a `var` argument of `{given}` where the parameter asks for `{wanted}`, which a place cannot become"
+    reportUnsupported lowering, what, value.span
+    return None
+  }
+  Some path
 }
 
 /**
@@ -685,7 +708,7 @@ fn lowerDefaults(
     const value = match written {
       Some(inner) => inner
       None => {
-        reportUnsupported lowering, "a parameter without an argument and without a default", expression.span
+        reportUnsupported lowering, missingArgument(signature, index), expression.span
         return CallOperands([], [])
       }
     }
@@ -706,6 +729,21 @@ fn lowerDefaults(
     }
   }
   CallOperands ordered, places
+}
+
+/**
+ * Why a parameter has nothing to take. A **variadic** one is the case that really happens: `Set.of()` writes no argument
+ * at all, and a variadic parameter has no default either - it is the empty *list*, which is what a variadic parameter is
+ * at the call site and therefore what the spread of the other row brings. Saying "without a default" for one named the
+ * wrong cause: twelve of them in the compiler are `Set.of()` and `List.of()`.
+ */
+fn missingArgument(signature: Signature, index: Int): String {
+  if const Some(parameter) = signature.form.parameters.get(index) {
+    if const .Variadic = parameter.mode {
+      return "a variadic parameter no argument was written for (milestone 5.7)"
+    }
+  }
+  "a parameter without an argument and without a default"
 }
 
 /**
@@ -1167,6 +1205,33 @@ public fn lowerOperator(
 }
 
 /**
+ * The numeric kind an intrinsic works on, which for a **conversion** is the operand's own type and not the manifest's.
+ *
+ * `Int64` implements `From<Int8>`, `From<Int16>`, `From<Int32>`, `From<UInt8>`, `From<UInt16>`, `From<UInt32>` and
+ * `From<Char>`, and the manifest is keyed by `owner.member`: there is one `Int64.from` entry for all seven. What the entry
+ * decides is the type the conversion arrives at (`Convert(Signed(64))`); where it *starts* is what the call hands over, so
+ * it is read off the operand - which is also what makes `Int.from('A')` work, because a `Char` is a `uint32_t` code point
+ * and therefore starts at `Unsigned(32)`.
+ *
+ * Every other intrinsic keeps the kind the manifest gave it: `Int8.add` is one entry per width on purpose.
+ */
+fn sourceKindOf(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  intrinsic: Intrinsic,
+  operands: List<Slot>,
+): NumericKind? {
+  if const .Convert(_) = intrinsic.operation {
+    if const Some(slot) = operands.first() {
+      if const Some(found) = conversionKindOf(lowering.program, builder.typeOfSlot(slot)) {
+        return Some found
+      }
+    }
+  }
+  intrinsic.kind
+}
+
+/**
  * What the left operand of an operator is, as a checker type. An operator has no callee expression, so the dispatch is
  * what says it: an implementation names its own target, and everything else is a member of a concrete type already.
  */
@@ -1197,7 +1262,8 @@ fn lowerNativeOperator(
   match entry.target {
     .Intrinsic(intrinsic) => {
       const target = valueSlot lowering, builder, destination, annotation
-      emitIntrinsic lowering, builder, Some(target), intrinsic.operation, intrinsic.kind, operands, at
+      const kind = sourceKindOf lowering, builder, intrinsic, operands
+      emitIntrinsic lowering, builder, Some(target), intrinsic.operation, kind, operands, at
       target
     }
     .Runtime(function) => {

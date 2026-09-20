@@ -1,7 +1,7 @@
 use test, group from "std/test"
 use printStatic from "../src/ir/print"
 use loweredText from "../src/ir/lower/lower"
-use lowered, loweredWith from "./lower-harness"
+use lowered, loweredWith, irOf from "./lower-harness"
 
 /**
  * The compile-time constant evaluator: what is evaluable (decided gap 27 of docs/TYPECHECKER.md plus the arithmetic
@@ -205,10 +205,18 @@ group "What a constant may name" {
     assert(!text.contains("s_acme_x2f_app_main_second"))
   }
 
-  test "a function call is not a compile-time constant, and the lowering counts it" {
+  /**
+   * A `const` whose value is no static data is **no declaration of the back end at all**: it is lowered where it is
+   * read, the way a default is (BACKEND 1.6), so nothing is counted for it and nothing is stubbed.
+   */
+  test "a `const` that is not static data is lowered where it is read, and is no finding" {
     const source = r"""
       fn twice(value: Int): Int {
         value + value
+      }
+
+      fn read(): Int {
+        answer
       }
 
       const answer = twice(21)
@@ -218,15 +226,48 @@ group "What a constant may name" {
     for entry in found.unsupported {
       shown.add entry.what
     }
-    assert(shown == ["not supported by the back end yet: a `const` that is not compile-time evaluable"])
+    assert(shown == [])
+    const text = irOf source, "t_acme_x2f_app_main_read"
+    assert text.contains("call t_acme_x2f_app_main_twice")
   }
 
-  test "a list literal is not one either: a collection is built at runtime" {
-    var found = lowered "const items = [1, 2, 3]\n"
+  /**
+   * A collection is a counted heap block and a static value is immortal read-only data, so there is no C spelling for
+   * one: no static value is made at all, and the literal is built where it is read. That the *build* runs is
+   * `bootstrap/tests/native/constants.trb` - the miniature prelude of this harness has no collection to iterate.
+   */
+  test "a list literal is no static value: there is nothing to fold it into" {
+    const source = r"""
+      fn read(): List<Int> {
+        items
+      }
+
+      const items = [1, 2, 3]
+      """
+    const text = loweredText lowered(source)
+    assert(!text.contains("static s_acme_x2f_app_main_items"))
+  }
+
+  /** A `Boxed` layout is a counted block with a header, so a constant of one is built where it is read too. */
+  test "a case of a boxed variant type is not static data" {
+    const source = r"""
+      type Shape {
+        case Circle(label: String, radius: Int, width: Int, height: Int, depth: Int)
+      }
+
+      fn read(): Shape {
+        circle
+      }
+
+      const circle = Shape.Circle("one", 1, 2, 3, 4)
+      """
+    var found = lowered source
     var shown: List<String> = []
     for entry in found.unsupported {
       shown.add entry.what
     }
-    assert(shown == ["not supported by the back end yet: a `const` that is not compile-time evaluable"])
+    assert(shown == [])
+    const text = irOf source, "t_acme_x2f_app_main_read"
+    assert text.contains("construct T_acme_x2f_app_main_Shape.Circle")
   }
 }

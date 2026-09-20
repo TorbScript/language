@@ -4,6 +4,7 @@ use TypeId, ParameterId from "../../semantics/checker/type"
 use signatureOf from "../../semantics/checker/signature"
 use NativeEntry, NativeResult from "../../backend/c/natives"
 use IrType, IrTypeId, IrSignature, FunctionId, LayoutId, Slot, BlockId, LocationId from "../ir"
+use StaticContents from "../ir"
 use Reference, WitnessSource, Instruction, Terminator, Argument, borrowed, referenced from "../ir"
 use FunctionBuilder, newFunction, addTemporary, addBlock, emit, terminate, switchTo from "../build"
 use terminateBlock, finishFunction, setBlockLocation from "../build"
@@ -11,7 +12,7 @@ use layoutOfType from "../verify"
 use nativeWrapperName from "../mangle"
 use symbolPathOf from "../instantiate"
 use RuntimeShape, runtimeFunctionShaped, instanceArgumentsOf, irSignatureUnder from "../instances"
-use Lowering, reportUnsupported, locationOf, irTypeOfClosed from "./context"
+use Lowering, reportUnsupported, locationOf, irTypeOfClosed, internStatic from "./context"
 use variantLayoutOfType, variantNamed from "./match"
 
 /**
@@ -104,25 +105,80 @@ fn runtimeShapeOf(
   entry: NativeEntry,
 ): RuntimeShape {
   if const .Direct = entry.result {
-    return RuntimeShape entry.addressedParameters, None
+    return RuntimeShape entry.addressedParameters, []
   }
   const identifier = signatureOf lowering.checker, member
   const signature = lowering.checker.signature identifier
   const declared = irSignatureUnder lowering, signature, mapping
-  RuntimeShape entry.addressedParameters, payloadOfResult(lowering, declared.result)
+  var annotations: List<IrTypeId> = []
+  for out in outParametersOf(lowering, declared) {
+    annotations.add out.annotation
+  }
+  RuntimeShape entry.addressedParameters, annotations
 }
 
-/** The payload an `Option` or a `Result` carries in its successful case, which is what the out parameter holds. */
-fn payloadOfResult(var lowering: Lowering, result: IrTypeId): IrTypeId? {
-  const layout = variantLayoutOfType(lowering, result)?
-  const index = successVariantOf lowering, layout
-  if index < 0 {
-    return None
+/** One out parameter: what the runtime writes through it, and which field of the result it is. */
+type OutParameter {
+  /** The field of the failure type it fills, or `out` for the payload of the success case. */
+  name: String
+  annotation: IrTypeId
+}
+
+/**
+ * The out parameters of a `.Optional` or a `.Fallible` native, in the order the runtime takes them.
+ *
+ * 1. The **payload** of the success case - unless it is `Void`, which is no value the runtime could write:
+ *    `File.writeText` answers `Result<Void, IoError>` and its symbol takes no out for it.
+ * 2. One per field of the **failure** type that no parameter of the declaration names. That is exactly the `message`
+ *    of every `IoError` of `std/fs`: its `path` *is* the parameter `path`, and the reason is something only the
+ *    operating system knows. `Int.parse` needs none of them - `NumberParseError(text)` is the parameter `text`.
+ *
+ * An `Option` has no failure fields at all (`None` carries nothing), so for one this is the payload alone, which is
+ * what the first round of 5.7 built.
+ */
+fn outParametersOf(var lowering: Lowering, declared: IrSignature): List<OutParameter> {
+  var found: List<OutParameter> = []
+  const layout = match variantLayoutOfType(lowering, declared.result) {
+    Some(inner) => inner
+    None => {
+      return found
+    }
   }
   const shape = lowering.program.layoutAt layout
-  const fields = shape.fieldsOfVariant index
-  const first = fields.first()?
-  Some first.annotation
+  const success = successVariantOf lowering, layout
+  if success >= 0 {
+    if const Some(first) = shape.fieldsOfVariant(success).first() {
+      if !isVoidResult(lowering, first.annotation) {
+        found.add OutParameter("out", first.annotation)
+      }
+    }
+  }
+  const failure = failureVariantOf lowering, layout
+  if failure < 0 {
+    return found
+  }
+  const carried = match shape.fieldsOfVariant(failure).first() {
+    Some(inner) => inner
+    None => {
+      return found
+    }
+  }
+  const errorLayout = match layoutOfType(lowering.program, carried.annotation) {
+    Some(inner) => inner
+    None => {
+      return found
+    }
+  }
+  const errorShape = lowering.program.layoutAt errorLayout
+  if !errorShape.variants.isEmpty() {
+    return found
+  }
+  for field in errorShape.fields {
+    if parameterNamed(declared, field.name) < 0 {
+      found.add OutParameter(field.name, field.annotation)
+    }
+  }
+  found
 }
 
 /** `Some` of an `Option`, `Ok` of a `Result`. */
@@ -189,15 +245,13 @@ fn buildWrapper(
     reportUnsupported lowering, "`{entry.name}`, whose result has no success and no failure case", at
     return None
   }
-  const payload = match payloadOfResult(lowering, declared.result) {
-    Some(found) => found
-    None => {
-      reportUnsupported lowering, "`{entry.name}`, whose result carries no payload", at
-      return None
-    }
+  const outs = outParametersOf lowering, declared
+  var slots: List<Slot> = []
+  for out in outs {
+    const slot = addTemporary builder, out.annotation
+    slots.add slot
+    given.add referenced(Reference(slot, []))
   }
-  const out = addTemporary builder, payload
-  given.add referenced(Reference(out, []))
   const boolean = lowering.program.internType IrType.Boolean
   const answered = addTemporary builder, boolean
   const target = addTemporary builder, declared.result
@@ -207,10 +261,17 @@ fn buildWrapper(
   const done = addBlock builder, "done", Some(location)
   terminate builder, Terminator.Branch(answered, good, bad)
   switchTo builder, good
-  emit builder, Instruction.Construct(target, layout, success, [borrowed(out)])
+  const built = match successConstruct(lowering, builder, layout, success, outs, slots, location) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`{entry.name}`, whose result carries no payload", at
+      return None
+    }
+  }
+  emit builder, Instruction.Construct(target, layout, success, built)
   terminate builder, Terminator.Jump(done)
   switchTo builder, bad
-  if !failureConstruct(lowering, builder, declared, target, layout, failure, entry, at) {
+  if !failureConstruct(lowering, builder, declared, target, layout, failure, outs, slots, entry, at) {
     return None
   }
   terminate builder, Terminator.Jump(done)
@@ -270,6 +331,48 @@ fn isVoidResult(var lowering: Lowering, annotation: IrTypeId): Bool {
  * parameter of the same name**: `Int.parse(text)` fails with `NumberParseError(text)`. An error type with a field no
  * parameter names is a clean finding and no guess.
  */
+/**
+ * The successful case: the payload out where there is one, and the one value of `Void` where the declaration answers
+ * `Result<Void, _>` - a `Void` is no value the runtime writes, so the wrapper makes it.
+ */
+fn successConstruct(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  layout: LayoutId,
+  success: Int,
+  outs: List<OutParameter>,
+  slots: List<Slot>,
+  location: LocationId,
+): List<Argument>? {
+  const shape = lowering.program.layoutAt layout
+  const fields = shape.fieldsOfVariant success
+  if fields.isEmpty() {
+    return Some([])
+  }
+  const annotation = fields[0].annotation
+  if isVoidResult(lowering, annotation) {
+    const slot = addTemporary builder, annotation
+    const value = internStatic lowering, StaticContents.VoidValue, annotation
+    emit builder, Instruction.Constant(slot, value)
+    return Some([borrowed(slot)])
+  }
+  const at = outIndexOf outs, "out"
+  if at < 0 {
+    return None
+  }
+  Some([borrowed(slots[at])])
+}
+
+/** The out parameter of this name, or -1. */
+fn outIndexOf(outs: List<OutParameter>, name: String): Int {
+  for index in 0..outs.length() {
+    if outs[index].name == name {
+      return index
+    }
+  }
+  -1
+}
+
 fn failureConstruct(
   var lowering: Lowering,
   var builder: FunctionBuilder,
@@ -277,6 +380,8 @@ fn failureConstruct(
   target: Slot,
   layout: LayoutId,
   failure: Int,
+  outs: List<OutParameter>,
+  slots: List<Slot>,
   entry: NativeEntry,
   at: Span,
 ): Bool {
@@ -302,12 +407,18 @@ fn failureConstruct(
   var parts: List<Argument> = []
   for field in errorShape.fields {
     const found = parameterNamed declared, field.name
-    if found < 0 {
+    if found >= 0 {
+      parts.add borrowed(Slot(found))
+      continue
+    }
+    // What no parameter names is what the runtime wrote through an out parameter of its own: the `message`
+    const written = outIndexOf outs, field.name
+    if written < 0 {
       const what = "`{entry.name}`, whose failure needs a `{field.name}` the runtime does not answer"
       reportUnsupported lowering, what, at
       return false
     }
-    parts.add borrowed(Slot(found))
+    parts.add borrowed(slots[written])
   }
   const value = addTemporary builder, error
   emit builder, Instruction.Construct(value, errorLayout, 0, parts)

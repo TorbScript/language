@@ -209,6 +209,42 @@ fn sizeOfRuntime(kind: RuntimeKind): Int {
   }
 }
 
+/**
+ * Whether a constant of this layout can *be* static data, asked while the program is still being lowered.
+ *
+ * A static value is **immortal read-only data** with a C initializer, so only an `Inline` layout can hold one: a `Boxed`
+ * one is a counted heap block with a header, which no C initializer of the emitter writes. The catch is that the
+ * representation is a fixpoint over the whole layout table (`finishLayouts`), and the const evaluator runs long before
+ * it - a layout still says `Inline size 0` there. So this asks the two halves of the question that are already final:
+ * every field is a type whose size the fixpoint cannot change any more, and the packed size of those fields stays inside
+ * the inline limit. Everything else answers `false` and is lowered where it is read, which is never wrong and at worst
+ * one build per read (`lowerConstantInitializer` in `ir/lower/expression.trb`).
+ */
+public fn isStaticLayout(program: IrProgram, id: LayoutId): Bool {
+  const layout = program.layoutAt id
+  if isAlwaysBoxedKind(layout.kind) {
+    return false
+  }
+  // A case is a group of its own, and nothing folds one into a static value today
+  if !layout.variants.isEmpty() {
+    return false
+  }
+  for field in layout.fields {
+    if !hasFinalSize(program, field.annotation) {
+      return false
+    }
+  }
+  packedSize(program, layout).size <= inlineSizeLimit
+}
+
+/** A type whose size no later round of `finishLayouts` can change: the primitives and a text. */
+fn hasFinalSize(program: IrProgram, id: IrTypeId): Bool {
+  match program.typeAt(id) {
+    .Integer(_, _) | .Floating(_) | .Boolean | .Character | .VoidType | .Text => true
+    _ => false
+  }
+}
+
 fn sizeOfLayoutAsField(program: IrProgram, id: LayoutId): Int {
   const layout = program.layoutAt id
   match layout.representation {

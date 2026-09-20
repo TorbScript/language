@@ -1,9 +1,10 @@
 /*
  * platform.c - the only file in the runtime with an `#ifdef _WIN32`.
  *
- * Seven functions: what kind of thing a path is, the working directory, the entries of a directory, reading and
- * writing a whole file, a monotonic clock reading, and setting an environment variable (for `runtime/tests` only -
- * no native ever sets one). Everything above this file is portable.
+ * Nine functions: what kind of thing a path is, the working directory, the entries of a directory, creating a
+ * directory and everything above it, reading and writing a whole file, running a child process to its end, a monotonic
+ * clock reading, and setting an environment variable (for `runtime/tests` only - no native ever sets one). Everything
+ * above this file is portable.
  */
 
 #include "torb.h"
@@ -27,6 +28,7 @@
 #else
 #  include <dirent.h>
 #  include <sys/stat.h>
+#  include <sys/wait.h>
 #  include <time.h>
 #  include <unistd.h>
 #  define TORB_STAT struct stat
@@ -118,6 +120,48 @@ bool torb_platform_list_directory(const char *path, torb_list *out, const char *
 
 #endif
 
+/**
+ * `mkdir -p`: every directory of the path that is missing, and nothing where one is already there. The separator is
+ * both `/` and `\` on Windows, because a path that came through `absolutePath` is all forward slashes and one a user
+ * typed may not be.
+ */
+bool torb_platform_create_directory(const char *path, const char **message) {
+  size_t length = strlen(path);
+  char *buffer;
+  size_t index;
+  bool ok = true;
+  if (length == 0u) {
+    *message = "the path is empty";
+    return false;
+  }
+  buffer = (char *)torb_raw_allocate(length + 1u);
+  memcpy(buffer, path, length + 1u);
+  for (index = 1u; index <= length && ok; index++) {
+    const bool isSeparator = buffer[index] == '/' || buffer[index] == '\\';
+    if (index != length && !isSeparator) {
+      continue;
+    }
+    {
+      const char kept = buffer[index];
+      buffer[index] = '\0';
+      /* A drive letter (`C:`) is no directory anybody creates, and neither is one that is already there */
+      if (buffer[index - 1u] != ':' && torb_platform_path_kind(buffer) == TORB_PATH_MISSING) {
+#if defined(_WIN32)
+        if (_mkdir(buffer) != 0 && torb_platform_path_kind(buffer) != TORB_PATH_DIRECTORY) {
+#else
+        if (mkdir(buffer, 0777) != 0 && torb_platform_path_kind(buffer) != TORB_PATH_DIRECTORY) {
+#endif
+          *message = strerror(errno);
+          ok = false;
+        }
+      }
+      buffer[index] = kept;
+    }
+  }
+  torb_raw_free(buffer, length + 1u);
+  return ok;
+}
+
 bool torb_platform_read_file(const char *path, uint8_t **bytes, size_t *length, const char **message) {
   FILE *file = fopen(path, "rb");
   size_t capacity = 65536u;
@@ -169,6 +213,138 @@ bool torb_platform_write_file(const char *path, const uint8_t *bytes, size_t len
     *message = strerror(errno);
     return false;
   }
+  return true;
+}
+
+/**
+ * A child process, run to its end, with its two output streams collected.
+ *
+ * `popen` is what both platforms have, and it gives **one** stream - so the standard error of the child is redirected
+ * into the same pipe and both come back as one text. That is a real limitation and it is the one `torb build` can live
+ * with: what it needs to tell apart is "there is no C compiler" (no process at all) from "the C compiler said no" (an
+ * exit code plus its message), and it prints the message either way. `Process.start` with three real pipes is 7.3's, and
+ * it is what a program that has to keep them apart waits for.
+ *
+ * The arguments are **quoted** here and nowhere else: `popen` takes a command line and not a list, so a path with a
+ * space in it (`C:/Program Files/LLVM/bin/clang.exe`) has to survive the shell that runs it. Nothing else about them is
+ * interpreted - that is what "there is no shell" in `std/process` promises - so a quote inside an argument is escaped and
+ * everything else is passed through.
+ */
+static void torb_quote_argument(const char *argument, char **into, size_t *filled, size_t *capacity) {
+  size_t index;
+  const size_t length = strlen(argument);
+  /* Two quotes, a backslash before every quote of the argument, and one space in front of it */
+  const size_t needed = *filled + length * 2u + 4u;
+  if (needed > *capacity) {
+    size_t grown = *capacity * 2u;
+    char *buffer;
+    while (grown < needed) {
+      grown *= 2u;
+    }
+    buffer = (char *)torb_raw_allocate(grown);
+    memcpy(buffer, *into, *filled);
+    torb_raw_free(*into, *capacity);
+    *into = buffer;
+    *capacity = grown;
+  }
+  (*into)[(*filled)++] = ' ';
+  (*into)[(*filled)++] = '"';
+  for (index = 0u; index < length; index++) {
+    if (argument[index] == '"' || argument[index] == '\\') {
+      (*into)[(*filled)++] = '\\';
+    }
+    (*into)[(*filled)++] = argument[index];
+  }
+  (*into)[(*filled)++] = '"';
+  (*into)[*filled] = '\0';
+}
+
+bool torb_platform_run_process(
+  const char *command,
+  const char **arguments,
+  size_t count,
+  int64_t *code,
+  uint8_t **output,
+  size_t *length,
+  size_t *capacity,
+  const char **message
+) {
+  size_t lineCapacity = 512u;
+  size_t filled = 0u;
+  char *line = (char *)torb_raw_allocate(lineCapacity);
+  size_t index;
+  FILE *pipe;
+  size_t outputCapacity = 65536u;
+  size_t outputFilled = 0u;
+  uint8_t *buffer;
+  int status;
+  line[0] = '\0';
+  torb_quote_argument(command, &line, &filled, &lineCapacity);
+  for (index = 0u; index < count; index++) {
+    torb_quote_argument(arguments[index], &line, &filled, &lineCapacity);
+  }
+  /* Both streams into one pipe: `popen` has one, and 7.3's `Process.start` is what keeps them apart */
+  {
+    const char *tail = " 2>&1";
+    const size_t needed = filled + strlen(tail) + 1u;
+    if (needed > lineCapacity) {
+      char *grown = (char *)torb_raw_allocate(needed);
+      memcpy(grown, line, filled + 1u);
+      torb_raw_free(line, lineCapacity);
+      line = grown;
+      lineCapacity = needed;
+    }
+    memcpy(line + filled, tail, strlen(tail) + 1u);
+    filled += strlen(tail);
+  }
+#if defined(_WIN32)
+  pipe = _popen(line, "rb");
+#else
+  pipe = popen(line, "r");
+#endif
+  if (pipe == NULL) {
+    *message = strerror(errno);
+    torb_raw_free(line, lineCapacity);
+    return false;
+  }
+  buffer = (uint8_t *)torb_raw_allocate(outputCapacity);
+  for (;;) {
+    size_t read = fread(buffer + outputFilled, 1u, outputCapacity - outputFilled, pipe);
+    outputFilled += read;
+    if (outputFilled < outputCapacity) {
+      break;
+    }
+    {
+      uint8_t *grown = (uint8_t *)torb_raw_allocate(outputCapacity * 2u);
+      memcpy(grown, buffer, outputFilled);
+      torb_raw_free(buffer, outputCapacity);
+      buffer = grown;
+      outputCapacity *= 2u;
+    }
+  }
+#if defined(_WIN32)
+  status = _pclose(pipe);
+#else
+  status = pclose(pipe);
+  if (status != -1) {
+    /* The exit code is in the high byte of `wait`'s status, and a child killed by a signal has none at all */
+    if (WIFEXITED(status)) {
+      status = WEXITSTATUS(status);
+    } else {
+      status = 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+    }
+  }
+#endif
+  torb_raw_free(line, lineCapacity);
+  if (status == -1) {
+    *message = strerror(errno);
+    torb_raw_free(buffer, outputCapacity);
+    return false;
+  }
+  *code = (int64_t)status;
+  *output = buffer;
+  *length = outputFilled;
+  *capacity = outputCapacity;
   return true;
 }
 

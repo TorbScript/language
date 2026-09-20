@@ -3,7 +3,7 @@ use BlockId, Block, Instruction, Terminator, Argument, Reference from "./ir"
 use isManagedType, containsCountedType from "./layout"
 use isSharedStorage from "./capture"
 use usedSlots, definedSlot, successorsOf, reachableBlocks, typeOfReference from "./verify"
-use Counted, LiveSets, countedSlotsOf, livenessOf, filledFlags from "./liveness"
+use Counted, LiveSets, countedSlotsOf, holdsCountedValue, livenessOf, filledFlags from "./liveness"
 use SlotFacts, Operand, slotFactsOf, operandsOf, withOperands from "./operand"
 use NativeTarget, nativeEntries from "../backend/c/natives"
 
@@ -371,8 +371,10 @@ fn rewriteFunction(var program: IrProgram, index: Int) {
     return
   }
   const before = countedSlotsOf program, original
-  // Not one counted slot: the function is left exactly as the lowering wrote it, down to the bytes of its text
-  if before.isEmpty() {
+  // Not one counted value anywhere: the function is left exactly as the lowering wrote it, down to the bytes of its
+  // text. A frame that only *borrows* one is walked, because handing a borrowed value on to a position that keeps it
+  // needs a retain - which is what a closure that returns its own parameter does
+  if before.isEmpty() && !holdsCountedValue(program, original) {
     return
   }
   var function = prepared program, original, before

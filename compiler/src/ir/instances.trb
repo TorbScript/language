@@ -158,8 +158,12 @@ public fn runtimeFunctionOf(var lowering: Lowering, symbol: SymbolId, runtime: S
  */
 public type RuntimeShape {
   addressed: List<Int> = []
-  /** The payload the runtime writes through an out parameter. The result of the function is then `Bool`. */
-  out: IrTypeId? = None
+  /**
+   * What the runtime writes through **out parameters**, in the order it takes them: the payload of the success case,
+   * and one per field of the failure type that no parameter of the declaration names (the `message` of an `IoError`).
+   * The result of the function is then `Bool`, and `ir/lower/native.trb` builds the `Option` or the `Result`.
+   */
+  outs: List<IrTypeId> = []
 }
 
 /** The same for a native of a generic owner, whose parameters the caller has filled in. */
@@ -211,7 +215,7 @@ public fn runtimeFunctionShaped(
  * parameter is appended after the declared ones while the result becomes `Bool`.
  */
 fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: RuntimeShape): IrSignature {
-  if shape.addressed.isEmpty() && shape.out.isNone() {
+  if shape.addressed.isEmpty() && shape.outs.isEmpty() {
     return declared
   }
   var parameters: List<IrParameter> = []
@@ -223,13 +227,13 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
     }
     parameters.add parameter
   }
-  const payload = match shape.out {
-    Some(found) => found
-    None => {
-      return IrSignature parameters, declared.result
-    }
+  if shape.outs.isEmpty() {
+    return IrSignature parameters, declared.result
   }
-  parameters.add IrParameter("out", payload, true, Ownership.Borrowed, true, false)
+  for index in 0..shape.outs.length() {
+    const name = if index == 0 { "out" } else { "out{index}" }
+    parameters.add IrParameter(name, shape.outs[index], true, Ownership.Borrowed, true, false)
+  }
   const boolean = lowering.program.internType IrType.Boolean
   IrSignature parameters, boolean
 }

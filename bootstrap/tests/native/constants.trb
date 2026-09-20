@@ -1,0 +1,59 @@
+use Process from "std/process"
+
+/**
+ * Top-level `const`s of every shape, read from a function and from the top-level code.
+ *
+ * What is **static data** is what has an immortal C spelling: a number, a `Bool`, a `Char`, a text and an inline
+ * aggregate of those. Everything else a `const` may hold - a list, a map, a case of a counted variant type, a text built
+ * out of pieces - is a counted heap block, and there is no C initializer for one. Such a `const` is therefore no
+ * declaration of the back end at all: its initializer is lowered **where it is read**, the way a field default and a
+ * parameter default are lowered at the call site (BACKEND 1.6), so there is still no module initialization anywhere.
+ *
+ * Reading one twice builds it twice, which is the price and is not observable: a value has no identity. The leak gate of
+ * `native.rs` is what says the copies are counted right.
+ */
+
+/** A `Boxed` layout: five fields, so it is above the inline limit and its constant cannot be static data. */
+type Entry {
+  label: String
+  first: Int
+  second: Int
+  third: Int
+  fourth: Int
+}
+
+const folded = 2 * 21
+
+const greeting = "hello " + "world"
+
+const words: List<String> = ["one", "two", "three"]
+
+const entry = Entry "tag", 1, 2, 3, 4
+
+/** A `const` that names another `const`: the initializer of both is lowered here. */
+const twice = greeting + "!"
+
+fn readFromFunction(): Int {
+  var total = greeting.byteLength()
+  for word in words {
+    total = total + word.byteLength()
+  }
+  total + entry.label.byteLength() + entry.fourth + folded
+}
+
+/** Read twice in one body, so the second build is its own value and the first is released. */
+fn readTwice(): Int {
+  words.length() + words.length()
+}
+
+print greeting
+print twice
+print words
+print entry.label
+print folded
+
+const fromFunction = readFromFunction()
+print fromFunction
+print readTwice()
+
+Process.exit((fromFunction + readTwice()) % 251)

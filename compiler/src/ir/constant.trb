@@ -4,9 +4,10 @@ use SymbolId from "../semantics/symbols"
 use LiteralValue from "../semantics/checker/type"
 use bindingOfSite, resultOf from "../semantics/checker/signature"
 use integerLiteral from "../semantics/checker/lowering"
-use IrTypeId, StaticId, StaticContents from "./ir"
+use IrTypeId, LayoutId, StaticId, StaticContents from "./ir"
 use Lowering, irTypeOf, typeAtSpan, internStatic, namedStatic, reportProblem from "./lower/context"
 use numericKindOf, layoutOfType from "./verify"
+use isStaticLayout from "./layout"
 use describeIrType from "./print"
 use staticName from "./mangle"
 use symbolPathOf from "./instantiate"
@@ -426,6 +427,23 @@ fn namedConstant(var lowering: Lowering, expression: Expression, annotation: IrT
   }
 }
 
+/**
+ * The layout of an aggregate that can *be* static data, which is an inline one of fields the size model has settled.
+ *
+ * A counted heap block has a header and a static value is immortal read-only data, so there is no C initializer for one:
+ * a `Point` above the inline limit is no more foldable than a list is. Answering `None` here is what sends such a `const`
+ * to the one place that can build it - the use site (`lowerConstantInitializer`) - instead of to the emitter, which would
+ * report a finding for a static value nobody can write. Which layouts those are is `isStaticLayout` in `ir/layout.trb`,
+ * because the size model lives there and this question is that model asked before its fixpoint has run.
+ */
+fn staticLayoutOf(var lowering: Lowering, annotation: IrTypeId): LayoutId? {
+  const layout = layoutOfType(lowering.program, annotation)?
+  if !isStaticLayout(lowering.program, layout) {
+    return None
+  }
+  Some layout
+}
+
 /** `(1, "one")`: a tuple layout whose fields are static values of their own. */
 fn aggregateConstant(
   var lowering: Lowering,
@@ -433,7 +451,7 @@ fn aggregateConstant(
   annotation: IrTypeId,
   at: Span,
 ): ConstantValue? {
-  const layout = layoutOfType(lowering.program, annotation)?
+  const layout = staticLayoutOf(lowering, annotation)?
   const shape = lowering.program.layoutAt layout
   if shape.fields.length() != items.length() {
     return None
@@ -461,7 +479,7 @@ fn callConstant(
   const resolution = lowering.checker.resolutionAt(module, expression.span)?
   if const .Construct(_) = resolution {
     const targets = lowering.checker.argumentTargetsAt(module, expression.span)?
-    const layout = layoutOfType(lowering.program, annotation)?
+    const layout = staticLayoutOf(lowering, annotation)?
     const count = lowering.program.layoutAt(layout).fields.length()
     if targets.length() != count || arguments.length() != count {
       return None

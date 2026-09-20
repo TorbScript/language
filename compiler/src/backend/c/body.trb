@@ -1365,6 +1365,16 @@ fn intrinsicStatements(
     statements.addAll printPartsStatements(body, printed, arguments)
     return statements
   }
+  // `Process.exit` of the runtime, which flushes, reports the live blocks and leaves without running anything else
+  if const .ExitWithCode = intrinsic.operation {
+    const code = match arguments.first() {
+      Some(slot) => slotExpression body, slot
+      None => CExpression.Literal "0"
+    }
+    const call = CExpression.Call CExpression.Name("torb_process_exit"), [code]
+    statements.add CStatement.Evaluate(call)
+    return statements
+  }
   const expression = intrinsicExpression emission, program, body, intrinsic, arguments, at
   const found = match expression {
     Some(inner) => inner

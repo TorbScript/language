@@ -83,6 +83,25 @@ bool torb_file_write_text(torb_text path, torb_text text, torb_text *error) {
   return true;
 }
 
+/**
+ * `File.createDirectory`: the directory and every directory above it that is missing, and nothing where one is there.
+ *
+ * `torb build` has to create the directory it writes the C and the binary into, which is the reason this exists at all -
+ * a caller that only wants a place to write should not have to ask first, so "it is already there" is success.
+ */
+bool torb_file_create_directory(torb_text path, torb_text *error) {
+  size_t capacity = 0u;
+  char *name = torb_path_bytes(path, &capacity);
+  const char *message = NULL;
+  bool created = torb_platform_create_directory(name, &message);
+  torb_raw_free(name, capacity);
+  if (!created) {
+    *error = torb_io_error(path, message);
+    return false;
+  }
+  return true;
+}
+
 bool torb_file_exists(torb_text path) {
   size_t capacity = 0u;
   char *name = torb_path_bytes(path, &capacity);

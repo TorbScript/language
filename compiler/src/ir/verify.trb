@@ -1115,12 +1115,25 @@ fn verifyOperands(
   arguments: List<Slot>,
 ) {
   const isShift = isShiftOperation operation
+  const isConversion = isConversionOperation operation
   for index in 0..arguments.length() {
     if isShift && index == 1 {
       expectNumeric program, function, found, at, arguments[index], NumericKind.Signed(64), name
       continue
     }
+    // The operand of a conversion may be a `Char`, whose bits are an `UInt32`: `Int.from('A')` is the one that writes it
+    if isConversion {
+      expectConversionSource program, function, found, at, arguments[index], kind, name
+      continue
+    }
     expectNumeric program, function, found, at, arguments[index], kind, name
+  }
+}
+
+fn isConversionOperation(operation: IntrinsicOperation): Bool {
+  match operation {
+    .Convert(_) => true
+    _ => false
   }
 }
 
@@ -1168,7 +1181,7 @@ fn isTextPartsOperation(operation: IntrinsicOperation): Bool {
 /** Whether an operation answers nothing at all, which is what makes a target slot wrong rather than optional. */
 public fn producesNoValue(operation: IntrinsicOperation): Bool {
   match operation {
-    .PrintParts | .PrintErrorParts => true
+    .PrintParts | .PrintErrorParts | .ExitWithCode => true
     _ => false
   }
 }
@@ -1269,6 +1282,7 @@ public fn operandCountOf(operation: IntrinsicOperation): Int {
     .TextConcat => 0 - 1
     .PrintParts => 0 - 1
     .PrintErrorParts => 0 - 1
+    .ExitWithCode => 1
     _ => 2
   }
 }
@@ -1293,6 +1307,7 @@ fn allowsNumericKind(operation: IntrinsicOperation): Bool {
     .TextConcat => false
     .PrintParts => false
     .PrintErrorParts => false
+    .ExitWithCode => false
     .TextEqual => false
     .TextCompare => false
     .TextByteLength => false
@@ -1365,6 +1380,28 @@ fn expectManaged(
   found.add "{at}: `{what}` needs a value that is counted, and `{describeIrType(program, annotation)}` is not"
 }
 
+/** The operand of a conversion: the form the intrinsic names, and a `Char` where that form is its own `UInt32`. */
+fn expectConversionSource(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  slot: Slot,
+  kind: NumericKind,
+  name: String,
+) {
+  if !function.hasSlot(slot) {
+    found.add "{at}: there is no slot %{slot.value}"
+    return
+  }
+  const annotation = function.typeOfSlot slot
+  if conversionKindOf(program, annotation) == Some(kind) {
+    return
+  }
+  const wanted = describeNumericKind kind
+  found.add "{at}: `{name}` works on `{wanted}`, and %{slot.value} is `{describeIrType(program, annotation)}`"
+}
+
 /** A numeric operand or result: the type has to be exactly the form the intrinsic names. */
 fn expectNumeric(
   program: IrProgram,
@@ -1385,6 +1422,20 @@ fn expectNumeric(
   }
   const wanted = describeNumericKind kind
   found.add "{at}: `{name}` works on `{wanted}`, and %{slot.value} is `{describeIrType(program, annotation)}`"
+}
+
+/**
+ * What numeric type a **conversion** starts from, which is the one question a `Char` answers as well: it is a `uint32_t`
+ * code point (BACKEND 3.1), and `Int.from('A')` is the one conversion the language writes over one.
+ *
+ * It is not `numericKindOf`, and the difference is the point: a `Char` is not a number, so no arithmetic and no comparison
+ * intrinsic may name a kind for one (5.6's note) - only the width of the bits a conversion moves.
+ */
+public fn conversionKindOf(program: IrProgram, id: IrTypeId): NumericKind? {
+  if const .Character = program.typeAt(id) {
+    return Some NumericKind.Unsigned(32)
+  }
+  numericKindOf program, id
 }
 
 /** What numeric type a value has, if it has one at all. */

@@ -388,17 +388,149 @@ group "A destructuring binding" {
   }
 }
 
-group "What a pattern cannot reach yet" {
-  test "a list pattern waits for the collections of 5.7, and `if var` for the places of 5.9b" {
+/**
+ * A list pattern is three members of the prelude and nothing of its own: `length()` for every test, `at(index)` for
+ * every item, and `skip(index).toList()` for a rest. An item is **no step of a path** - a list has no layout, and
+ * reading from a `List<Item>` value is a call through its witness table.
+ *
+ * What is asserted is the calls, not a whole snapshot: a decision graph over lengths and items is forty lines of blocks
+ * whose numbering says nothing about the rule, and the shape of the graph itself is `decision.test.trb`'s. The **rest**
+ * is in `bootstrap/tests/native/list-patterns.trb` instead of here, because the miniature prelude of this harness has no
+ * `skip` and no `toList` - it is the real standard library that has to provide them.
+ */
+group "A list pattern" {
+  const lists = r"""
+    fn describe(words: List<String>): Int {
+      match words {
+        [] => 0
+        [only] => only.byteLength()
+        [first, second] => first.byteLength() + second.byteLength()
+        [first, ..., last] => first.byteLength() - last.byteLength()
+        _ => -1
+      }
+    }
+    """
+
+  test "every test is the length of the subject, and every item a call of `at`" {
+    assert(unsupportedIn(lists) == [])
+    const text = irOf lists, "t_acme_x2f_app_main_describe"
+    // One call of `length` per test of the graph: `[]` is `length == 0`, `[first, ..., last]` is `length >= 2`
+    assert text.contains("callWitness value %0 bound 0 member 0()")
+    assert text.contains("intrinsic equal.i64")
+    assert text.contains("intrinsic greaterOrEqual.i64")
+    // An item is `Indexed.at`, whose default body decides what an index out of range does - and none is ever out here
+    assert text.contains("callWitness value %0 bound 0 member 6(")
+  }
+
+  /** `[..., last]` counts from the back, which is `at(length() - 1 - index)` and nothing else. */
+  test "an item from the end is read at `length() - 1 - index`" {
     const source = r"""
-      fn firstOf(items: ArrayList<Int>): Int {
-        match items {
-          [first, ...rest] => first
-          [] => 0
+      fn lastOf(words: List<String>): String {
+        match words {
+          [..., last] => last
+          _ => ""
         }
       }
       """
-    assert(unsupportedIn(source) == ["not supported by the back end yet: a list pattern (milestone 5.7)"])
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_lastOf") == r"""
+        fn t_acme_x2f_app_main_lastOf(words: Object(List<String>) borrowed) -> String {
+          slot %0 parameter words: Object(List<String>)
+          slot %1 temporary: String
+          slot %2 local last: String
+          slot %3 temporary: Int64
+          slot %4 temporary: Int64
+          slot %5 temporary: Int64
+          slot %6 temporary: Int64
+          slot %7 temporary: Int64
+          slot %8 temporary: Bool
+        b0: # acme/app/src/main.trb:1 body
+          jump b6
+        b1: # acme/app/src/main.trb:2 arm
+          %1 = move %2
+          jump b3
+        b2: # acme/app/src/main.trb:2 arm
+          %1 = constant s_literal__String_
+          jump b3
+        b3: # acme/app/src/main.trb:2 join
+          return %1 owned last
+        b4: # acme/app/src/main.trb:2 bind
+          %3 = callWitness value %0 bound 0 member 0()
+          %4 = constant s_literal__Int64_1
+          %5 = intrinsic subtract.i64 %3, %4 at acme/app/src/main.trb:2:3
+          %2 = callWitness value %0 bound 0 member 6(%5 borrowed)
+          jump b1
+        b5: # acme/app/src/main.trb:2 bind
+          jump b2
+        b6: # acme/app/src/main.trb:2 test
+          %6 = callWitness value %0 bound 0 member 0()
+          %7 = constant s_literal__Int64_1
+          %8 = intrinsic greaterOrEqual.i64 %6, %7 at acme/app/src/main.trb:2:3
+          branch %8 then b4 else b5
+        }"""
+    )
+  }
+
+  /** A list inside another pattern would need the checker type halfway down a path, and a plan says nothing about one. */
+  test "a list inside another pattern is a clean finding" {
+    const source = r"""
+      type Wrapper {
+        case Words(items: List<String>)
+      }
+
+      fn firstOf(wrapper: Wrapper): Int {
+        match wrapper {
+          .Words([only]) => only.byteLength()
+          _ => 0
+        }
+      }
+      """
+    assert(
+      unsupportedIn(source) == ["not supported by the back end yet: a list pattern inside another pattern"]
+    )
+  }
+}
+
+/**
+ * `?` at the top level of an **entry file**: there is nothing above it to hand a failure to, so decided gap 9 decides
+ * what it does instead - `error: <the error through Show>` to stderr, and the program ends with exit code 1.
+ *
+ * Ending the program is `IntrinsicOperation.ExitWithCode` and not a call of `Process.exit`: an entry file that never
+ * imports `std/process` has no name for that function, and what happens here is the language's own behaviour, so both
+ * back ends read it out of the IR. That it really prints and really leaves with 1 is
+ * `bootstrap/tests/native/top-level-error.trb`.
+ */
+group "`?` at the top level of an entry file" {
+  test "the failure is reported through `Show` and the program ends with 1" {
+    const source = r"""
+      type ConfigError with Show {
+        key: String
+
+        fn show(self): String {
+          "no value for {key}"
+        }
+      }
+
+      fn valueOf(key: String): Result<String, ConfigError> {
+        Fail ConfigError(key)
+      }
+
+      const port = valueOf("port")?
+
+      print port
+      """
+    assert(unsupportedIn(source) == [])
+    const text = irOf source, "t_acme_x2f_app_main"
+    assert text.contains("constant s_literal__String_error_x3a__x20_")
+    assert text.contains("intrinsic textConcat")
+    assert text.contains("intrinsic printErrorParts")
+    assert text.contains("intrinsic exitWithCode")
+    assert text.contains("unreachable")
+  }
+}
+
+group "What a pattern cannot reach yet" {
+  test "`if var` waits for the places of 5.9b" {
     const other = r"""
       fn taken(value: Int?): Int {
         var current = value

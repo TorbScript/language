@@ -31,10 +31,43 @@ public native type Char with Equals, Compare, Hash, Show {
  * an `IoError`, and there is no replacement character anywhere in the language.
  */
 public native type String
-  with Equals, Compare, Hash, Show, Add, Slice
+  with Equals, Compare, Hash, Show, Add, Slice, From<Iterable<Char>>
 {
-  native fn chars(self): Iterable<Char>
-  native fn bytes(self): Iterable<UInt8>
+  /**
+   * `String.from(characters)`, `characters.to<String>()`.
+   *
+   * Ordinary TorbScript, and it **cannot** be a function of the runtime for the same reason `ArrayList.from` cannot be
+   * one: `value` is a trait-typed `Iterable` of the *program*, so reading it means calling `iterator` and `next` through
+   * a witness table, which C code cannot do. One `+` per character is what the language has for it; a builder that grows
+   * one buffer would need a mutable text, and the language has none - a `String` is a value.
+   */
+  fn from(value: Iterable<Char>): String {
+    var text = ""
+    for character in value {
+      text = text + character.show()
+    }
+    text
+  }
+
+  /** The characters, decoded one at a time: `for character in text.chars()`. Ordinary TorbScript, see [Characters]. */
+  fn chars(self): Iterable<Char> {
+    Characters self
+  }
+
+  /** The bytes of the UTF-8, in order. */
+  fn bytes(self): Iterable<UInt8> {
+    TextBytes self
+  }
+
+  /**
+   * The character that begins at this byte offset, or `None` at and past the end. Offsets come from searching
+   * (`indexOf`) and from `Char.byteLength()`, and an offset *inside* a character panics like every other bad offset.
+   */
+  native fn charAt(self, offset: Int): Char?
+
+  /** The byte at this offset, or `None` at and past the end. A byte is never inside anything, so this never panics. */
+  native fn byteAt(self, offset: Int): UInt8?
+
   native fn byteLength(self): Int
   native fn isEmpty(self): Bool
 
@@ -44,8 +77,21 @@ public native type String
   /**
    * `text[from..to]` with byte offsets. An offset on a UTF-8 continuation byte, an offset greater than
    * `byteLength()` and a start greater than the end each panic, with the offset and the length in the message.
+   *
+   * What an **open end** means is the receiver's decision (`std/core`'s `Range` says so), and for a text it is the start
+   * and the end of the text - so that decision is here, in TorbScript, and the native below takes the two offsets it
+   * arrived at. An inclusive range (`0..=3`) takes the byte *after* its end, which is the same arithmetic every other
+   * slice does.
    */
-  native fn slice(self, range: Range<Int>): String
+  fn slice(self, range: Range<Int>): String {
+    const from = range.start ?? 0
+    const written = range.end ?? byteLength()
+    const to = if range.inclusive { written + 1 } else { written }
+    sliceBytes(from, to)
+  }
+
+  /** The bytes from one offset to another. The one form the runtime has, and what `slice` decides its offsets for. */
+  native fn sliceBytes(self, from: Int, to: Int): String
 
   native fn contains(self, part: String): Bool
   native fn startsWith(self, prefix: String): Bool
@@ -77,9 +123,58 @@ public native type String
   }
 }
 
-/** `String.from(characters)`, `characters.to<String>()` */
-extend String with From<Iterable<Char>> {
-  native fn from(value: Iterable<Char>): String
+/**
+ * The characters of a text, and the cursor that walks them: a stage plus an iterator, the shape every `Iterable` of the
+ * standard library has (`ListIterator`, and the stages of `std/iteration`).
+ *
+ * Neither is exported, exactly as the stages of a pipeline are not: `chars()` answers an `Iterable<Char>` and which type
+ * carries it is nobody's business. The cursor holds the text **by value** and a byte offset, so a copy of it forks it and
+ * nothing can move it from outside; `charAt` decodes the character at the offset and `Char.byteLength()` says how far to
+ * move, so walking a text is O(1) per character and never a re-scan.
+ */
+type Characters with Iterable<Char> {
+  text: String
+
+  fn iterator(self): Iterator<Char> {
+    CharacterIterator text
+  }
+}
+
+type CharacterIterator with Iterator<Char> {
+  text: String
+  var offset: Int = 0
+
+  fn next(var self): Char? {
+    const found = text.charAt offset
+    if const Some(character) = found {
+      offset = offset + character.byteLength()
+      return Some character
+    }
+    None
+  }
+}
+
+/** The same for the bytes of the UTF-8. `Bytes` is the prelude's name for a chunk of them, so this one says `Text`. */
+type TextBytes with Iterable<UInt8> {
+  text: String
+
+  fn iterator(self): Iterator<UInt8> {
+    TextByteIterator text
+  }
+}
+
+type TextByteIterator with Iterator<UInt8> {
+  text: String
+  var offset: Int = 0
+
+  fn next(var self): UInt8? {
+    const found = text.byteAt offset
+    if const Some(byte) = found {
+      offset = offset + 1
+      return Some byte
+    }
+    None
+  }
 }
 
 // `Int.from('A')` is the other direction and belongs to `std/number`, which owns `Int64`: an implementation belongs to

@@ -1,0 +1,36 @@
+/**
+ * `?` at the top level of an entry file: decided gap 9's report.
+ *
+ * The value where there is one, and otherwise `error: <the error through Show>` to stderr plus exit code **1** - which is
+ * the one thing a top-level `?` can mean, because there is nothing above it to hand a failure to.
+ *
+ * The error is a type of the program and not an `IoError`, so that the line is the same on every machine: the message of
+ * an operating system is localized, and what is under test here is the *report* and not `strerror`. It is also a concrete
+ * type, which is why the report is one line - walking `cause()` needs the error as a trait-typed `Error` value, and an
+ * entry file has its own type in hand. The `?` return trace of the debug profile is planned and not here; it changes no
+ * error type and belongs in the same block.
+ *
+ * The first `?` succeeds and the second one fails, so what the program writes is one line of output and then the report.
+ */
+type ConfigError with Show {
+  key: String
+
+  fn show(self): String {
+    "there is no value for `{key}`"
+  }
+}
+
+fn valueOf(key: String): Result<String, ConfigError> {
+  if key == "port" {
+    return Ok "8080"
+  }
+  Fail ConfigError(key)
+}
+
+const port = valueOf("port")?
+
+print port
+
+const host = valueOf("host")?
+
+print host

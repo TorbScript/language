@@ -14,6 +14,7 @@ use lowerChecked, loweredText, loweredProblems, statisticsLines from "./ir/lower
 use BuildOptions, build from "./cli/build"
 use insertOwnership from "./ir/ownership"
 use verifyOwnedProgram from "./ir/ownership-verify"
+use nativeEntries, renderNativesHeader from "./backend/c/natives"
 use documentationOptionsOf, printDocumentationUsage from "./documentation/command"
 use runCheck, runIndex, runSkill, runBundle from "./documentation/command"
 
@@ -34,6 +35,8 @@ fn printUsage() {
   printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
   printError "                         --statistics: only the counts, without the IR itself"
   printError "                         --no-ownership: the IR the lowering writes, before the ownership pass"
+  printError "  torb natives --header   Write runtime/include/torb_natives.h from the manifest of natives"
+  printError "                         [path]: the runtime directory (default: ../runtime beside the compiler)"
   printError "  torb parse <path>...   Check the syntax of files or directories (recursively, *.trb)"
   printError "  torb tokens <file>     Print the tokens of a file"
   printError "  torb ast <file>        Print the syntax tree of a file"
@@ -244,6 +247,25 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions {
   BuildOptions given, onlyC, output
 }
 
+/**
+ * `torb natives --header [directory]`: the generated half of the contract between the lowering and the runtime
+ * (BACKEND 3.7). The header is a pure function of the manifest, so writing it is reading one table and one `writeText` -
+ * and `compiler/tests/natives.test.trb` asserts that the file on disk is what this writes, which is what keeps the two
+ * sides from drifting without a C compiler error.
+ */
+fn writeNativesHeader(directory: String): Result<Int, IoError> {
+  const path = "{directory}/include/torb_natives.h"
+  const rendered = renderNativesHeader nativeEntries()
+  const before = File.readText(path).ok() ?? ""
+  if before == rendered {
+    print "{path} is current"
+    return Ok 0
+  }
+  File.writeText(path, rendered)?
+  print "wrote {path}"
+  Ok 0
+}
+
 /** The errors of the program the lowering found: an overflow or a division by zero in a compile-time constant. */
 fn reportLoweredProblems(checked: Checked, tree: SourceTree, lowering: Lowering): Int {
   for problem in lowering.problems {
@@ -297,6 +319,13 @@ match Process.arguments() {
   }
   ["docs", "bundle", ...more] => {
     if runBundle(documentationOptionsOf(more))? > 0 {
+      Process.exit 1
+    }
+  }
+  ["natives", "--header", ...more] => {
+    const given = more.filter({ !_.startsWith("--") }).toList()
+    const directory = given.first() ?? "../runtime"
+    if writeNativesHeader(directory)? > 0 {
       Process.exit 1
     }
   }

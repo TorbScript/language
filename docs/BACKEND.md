@@ -833,13 +833,13 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
 | **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `bootstrap/tests/native/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
 | **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `bootstrap/tests/native/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
-| **5.7** | **The lists run.** The ABI of the containers, `var self` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterator`/`length`/`show` as TorbScript. **Still open:** the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention, which also blocks every map and set literal), index paths, variadics and the spread, list patterns, `String.chars`. **Gate: `bootstrap/tests/native/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `bootstrap/tests/native/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
+| **5.7** | **The lists run.** The ABI of the containers, `var self` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterator`/`length`/`show` as TorbScript. **Still open:** the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention, which also blocks every map and set literal), index paths, variadics and the spread. **Done in the long tail of 6.1:** list patterns, `String.chars`/`bytes`/`from` and `String.slice` (see the note at the end). **Gate: `bootstrap/tests/native/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `bootstrap/tests/native/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
 | **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `bootstrap/tests/native/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
 | **5.9a** | **Done.** `var` parameters and `var self` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
 | **5.10** | **Done, except what needs a collection.** Text: interpolation, `print`/`printError`, `Show` for every shape in the format of gap 23, float formatting in both back ends, `?.`. **Still open:** `describe`, derived `Encode`/`Decode` and the `std/json` natives, which all wait for 5.7 (see the note below) | `ir/lower/text.trb`, `ir/lower/match.trb`, `runtime/text.c`, `bootstrap/crates/torb-interpreter` | `compiler/tests/lower-text.test.trb` (19); `bootstrap/tests/native/{interpolation,floats,optional-chain}.trb` run natively, compared with stage 0, zero live blocks | 5.6, 5.7 |
 | **5.11** | `Expression<Value>`: static trees, captures, `assert`, `test`/`group` and `torb test` natively. **Gate: `compiler/tests/*.test.trb` run from the native binary** | `ir/lower/quote.trb`, `runtime/`, `cli/test.trb` | The compiler's own tests | 5.10 |
-| **5.12** | **Runtime half done.** The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
+| **5.12** | **Done for what the compiler needs** (`File.createDirectory`, `Process.run`, `Clock.milliseconds` and the `.Fallible` shape of `std/fs`, see the note of 6.1's long tail). **Runtime half done.** The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
 | **5.13** | The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir`, the `error:` report of a top-level `?` (it walks `cause()`) and `?` return traces in the debug profile | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE, an error chain of three prints three lines | 5.3 |
 | **5.14** | Conformance and determinism: one runner over stage 0 and the C back end, `--emit-c` twice byte identical for the whole workspace, no absolute path in the output, timing budget | `compiler/tests/backend.test.trb`, the runner | Everything above | 5.1-5.13 |
 | **6.1** | Compile `compiler/` with stage 1: every missing intrinsic, every crash, every construct the compiler uses and the lowering does not cover yet. **Gate: a `torb` binary exists** | wherever it hurts | `torb check ..` from the new binary gives the same output as stage 1 | 5.14 |
@@ -1019,6 +1019,8 @@ the code won and this is the list. Everything else is as written.
   and a `nan` compile errors at the expression, and those are `Diagnostic`s of the program. "This is not a constant at
   all" is a rule of the *checker* (gap 27, 4.9's) and would be a false positive here, so it is an unsupported construct
   like any other - which is what `const maximum: UInt64 = UInt64.minimum.bitwiseNot()` in the prelude is today.
+  **Superseded by 6.1's long tail below:** it is not counted either any more, because such a `const` is lowered where it
+  is *read* and is therefore no declaration of the back end at all.
 - **`torb ir` seeds every monomorphic declaration of the modules it was asked about**, not only what the entry file
   reaches. "Nothing unreachable is emitted" is `torb build`'s rule (5.13), and a progress bar must not depend on what
   one entry file happens to call. `lowerWorkspace` takes the choice as a flag.
@@ -1558,6 +1560,22 @@ parameters and `var self` receivers, which need nothing of 5.6 and 5.7 at all.
 - **A `native fn` with a `var` receiver stays a finding.** Every one of them is a member of a container (`ArrayList.add`,
   `Map.set`, `File.close`), the runtime's convention for one is a pointer plus its own out-parameter shapes (5.R1's
   list), and the wrapper belongs with the containers - so the message names milestone 5.7.
+- **The type of a `var` parameter is read with the *callee's* instance arguments.** Found through `using` over a
+  `shared type`, which produced three internal errors where one clean finding belongs:
+  `using<Resource: Close, Value>(var resource: Resource, ...)` declares its `var` parameter as a generic parameter, and
+  `parameterTypeAt` instantiated that annotation under the **caller's** substitution - which does not know `Resource`, so
+  the back end saw an unsubstituted parameter (one internal error), the temporary the place is formed over became a
+  `Void` slot (a second: used before it is defined), and the call then passed a place whose type was not the parameter's
+  (a third). It reads the mapping the dispatch decided, exactly as a `lazy` parameter (`lazyItemAt`) and a default
+  already do, and what is left of `using Connection() { ... }` is the C back end's one honest finding, "a release of a
+  `shared type` object (milestone 5.9b)". The rule is worth stating once for the whole lowering: **anything that comes
+  out of the callee's declaration is substituted with the callee's mapping, and only what comes out of the call site is
+  substituted with the caller's.**
+- **And therefore: a `var` argument that would have to be *coerced* is a clean finding.** With the parameter's type read
+  right, two more internal errors of the verifier came out of `std/stream` ("parameter 0 ... is `Object(Source<…>)` and its
+  place is `Shared(Iterating<…>)`"): a place is **not a value**, so nothing can put a `TraitValue` in between - the callee
+  would write through a box the caller does not have. The checker allows the coercion because it reads the argument as a
+  value; `referenceArgumentAt` compares the place's own type with the parameter's and says so instead.
 - **`if var` and `while var` are still a finding, and 5.9b's.** They do *not* fall out of this mechanism: a place here is
   formed at a call site and dies with the call, while a pattern binds a name that lives for a whole block - which needs
   the lowering to key a *binding* to a `Reference` instead of to a slot, and every read, every write and every argument
@@ -1895,6 +1913,18 @@ written.
     note) - so the signature in the type cannot answer it either. `summarizeParameters` skips every function a `Closure`
     instruction points at, which also covers a named function used as a value. `Iterable.joined` builds
     `separator + item` and was exactly that.
+  - **And therefore a closure that *hands on* its parameter needs a retain, which the pass used to walk past.** The
+    other half of the rule above, found by `torb ir ..` over the compiler itself and the one internal error it was left
+    with: `items.filterMap({ _ })` is a closure whose body answers its own borrowed parameter, so the frame owns no value
+    of its own at all - and `rewriteFunction` left a function without a single *owned* counted slot exactly as the
+    lowering wrote it, `return %0 borrowed` included. `verifyOwnedProgram` rejected that, rightly: a `return` keeps what
+    it is given. The early exit now asks `holdsCountedValue` (any slot whose *type* carries a count, whoever owns it)
+    instead of `countedSlotsOf` (the slots the frame owns), and everything after it is the ordinary rule for a borrowed
+    value at an `Owned` position: retain, and say `owned` without `last`. A frame that holds no counted value at all is
+    still not walked, so the arithmetic half of a program is byte for byte what the lowering wrote - and the three shapes
+    it took (answering the parameter, building it into a record, answering a capture) are pinned in
+    `lower-closures.test.trb` plus `bootstrap/tests/native/closure-counts.trb`, whose values are all built at run time
+    because the storage of a *literal* is immortal and would hide a missing retain.
   - **The out parameter of a `.Optional` wrapper is owned on one path only.** `torb_list_get` writes nothing past the end,
     so liveness released a slot the runtime never wrote - which for a trait-typed element is `NULL->drop`. Both the drop
     edges (`conditionalOutSlotsOf`) and the ownership verifier (`conditionalOutPositions`) know it now; the `true` path
@@ -2078,6 +2108,179 @@ or what the two back ends can *both* write, the code won and this is the list. E
   `fn empty<Item>(): List<Item>` built its element descriptor for the *parameter*). The top blockers on the merged tree
   are the rest of 5.7 and 5.9b: `for` over a collection (2113), `finish` of `std/stream` (658), a range as a value (579),
   "a receiver the back end cannot reach" (566) and `a[key]` (422).
+
+### What 6.1's long tail does differently
+
+Milestone 6.1 is "every construct the compiler uses and the lowering does not cover yet, wherever it hurts". The rows
+above are the plan; the list below is what the long tail of that row really decided, measured against
+`torb ir --statistics ../compiler` - the compiler lowering its own sources, which is the fixpoint's own gate.
+
+**A top-level `const` whose value is not static data is lowered where it is read** (35 findings: 31 reads plus 4
+declarations).
+
+- **What can *be* static data is what has an immortal C spelling:** a number, a `Bool`, a `Char`, a text, and an inline
+  aggregate of those. A collection is a counted heap block, a case of a `Boxed` variant type is a counted heap block, and
+  `"a" + "b"` is a call of `Add.add` - so `const knownFields: List<String> = [...]` (`documentation/schema.trb`),
+  `const nullPointer = CExpression.Literal "NULL"` (`backend/c/body.trb`) and a test's source built out of pieces have no
+  static value they could become, whatever an evaluator does.
+- **The answer is the one the language already gives for a default.** BACKEND 1.6: a field default and a parameter default
+  are lowered **at the call site**, at every call. A module `const` is the same kind of thing, so
+  `lowerConstantInitializer` lowers the initializer at the read, in the module it is written in. It is sound because the
+  checker's own rule (gap 27) keeps such an initializer **pure** - literals, the operators of the number types,
+  interpolation, collection literals, constructor calls and other constants, and never a function call - and because
+  values have no identity, so no reader can tell a rebuilt list from the one next to it. And it is what keeps the promise
+  of the table in 1.6: **there is no module initialization, ever**, not even for a list.
+- **A `const` that is not static data is therefore no declaration of the back end at all**, and `seedModule` counts
+  neither a `lowered` nor a `stubbed` for one. That is why the total of the statistics moved.
+- **The price, and what would remove it.** One build per read instead of one per program. The one place in the compiler
+  where that is measurable is `punctuationTable.find(...)` in the lexer: a list of 35 tuples per punctuation token. What
+  would remove it is an **immortal counted static** - a list storage in read-only data whose count is the immortal
+  sentinel, so that a retain and a release of it are no-ops and a write copies (which is what 2.1 already says about a
+  static) - and that is a new `StaticContents` case plus its C spelling plus the VM's. It is 6.3's measurement ("cut the
+  obvious waste"), and no program needs it to be correct.
+- **The foldable/not-foldable question has to be asked before `finishLayouts` has run**, which is the one subtlety.
+  Representations and sizes are a fixpoint over the whole layout table and the const evaluator runs long before it - a
+  layout still says `Inline size 0` there, so asking `representation == .Boxed` folded a 48-byte record into a static the
+  emitter then refused ("a constant of a counted type"). `isStaticLayout` in `ir/layout.trb` asks the two halves that
+  *are* final instead: every field is a type whose size no later round can change (a primitive or a text), and the packed
+  size of those fields stays inside the inline limit. Everything else is lowered at its use site, which is never wrong.
+- **In an entry file or a test file the checker's purity rule does not apply** (a top-level `const` is ordinary code
+  there), so an initializer with a **side effect** would run once per read where stage 0 runs it once. Every one in the
+  repository is a text or a list built out of literals, and a *call* is what would make it observable - which is exactly
+  what no module may write. Recorded rather than hidden; the shape that closes it is the immortal static above.
+- The gate is `bootstrap/tests/native/constants.trb`: a folded number, a concatenated text, a list, a `Boxed` record, a
+  `const` that names another `const`, each read from a function and from the top-level code, and one read twice in one
+  body. Compiled, run, compared with stage 0 byte for byte, `live blocks at exit: 0`.
+
+**`chars()`, `bytes()`, `String.from` and `slice` are ordinary TorbScript, over two new natives** (35 findings).
+
+- **What the language cannot express about a text is reading its raw storage.** There is no `text[i]` and no
+  `length()` - "say what you count" - so the two natives are `charAt(offset)` and `byteAt(offset)`, both `.Optional`
+  (`bool` plus one out parameter, the convention 5.7 built). Everything above them is TorbScript: `Characters` and
+  `CharacterIterator`, `TextBytes` and `TextByteIterator` in `std/text`, the stage-plus-cursor shape every `Iterable` of
+  the standard library has. Walking a text is **O(1) per character** - `charAt` decodes at an offset,
+  `Char.byteLength()` says how far to move - and nothing ever re-scans what it has walked.
+- **`String.from(Iterable<Char>)` cannot be a function of the runtime**, for exactly the reason `ArrayList.from` cannot
+  (5.7's fourth round): it walks a trait-typed value of the *program* through a witness table, which C cannot do. The
+  manifest's `.Planned` entry for it said "5.7" and was never going to come true. It is one `+` per character now, which
+  is O(n²) in the bytes for a long text and what the language has: a builder would need a mutable text, and a `String`
+  is a value.
+- **`slice` decides what an open end means, in TorbScript, and the native takes two offsets.** `Range` says the receiver
+  decides (`..10` is "from the start"), and the runtime's `torb_text_slice(text, from, to, at)` takes the two offsets it
+  arrived at - so the declaration is `sliceBytes(from, to)` and `slice(range)` is three lines above it. Before this,
+  `String.slice` was a native whose *declaration* took a `Range` and whose symbol took four parameters, which the
+  prototype match refused: **no program that slices a text could be emitted at all**, and nothing said so until a gate
+  program tried.
+- **A `Char` is a conversion source.** `Int.from('A')` is the one conversion the language writes over a `Char`, and a
+  `Char` is a `uint32_t` code point - so `conversionKindOf` answers `Unsigned(32)` for one where `numericKindOf` answers
+  nothing, the verifier accepts it as the operand of a `Convert`, and no arithmetic intrinsic may name a kind for a
+  `Char` (5.6's rule) because that one asks `numericKindOf`.
+- **The source kind of a conversion is the operand's own type and not the manifest's.** `Int64` implements `From<Int8>`,
+  `From<Int16>`, `From<Int32>`, `From<UInt8>`, `From<UInt16>`, `From<UInt32>` and `From<Char>`, and the manifest is keyed
+  by `owner.member`: one `Int64.from` for all seven. The entry decides where the conversion *arrives*; where it starts is
+  what the call hands over. That is what makes the second entry of a conversion (`Int64.fromChar`, `Float64.fromFloat32`)
+  unnecessary - they are the manifest's only two dead entries now, kept as a record of the shape that was tried.
+- **One record the checker did not have: a type that implements one trait several times.** `dispatchOf` resolved the
+  implementation by the trait's *symbol*, which for `From` on `Int64` names seven and therefore none - so the call came
+  out as `Dispatch.Direct` with the **trait's own requirement** as its member, which has no body anywhere, and the back
+  end had nothing to call (`Int.from(byte)` was the finding "`from`, which the natives manifest does not know"). The
+  applied **bound** is in hand at that point - every candidate of the overload set `traitMember` builds carries its own
+  `From<Char>` - so `resolveBound` answers it. It is one fallback where the answer used to be `Direct`, so nothing that
+  resolved before can change.
+- **`torb natives --header` exists now** (3.7 named the command, 5.13 owned it): it writes
+  `runtime/include/torb_natives.h` from the manifest, and `compiler/tests/natives.test.trb` asserts that the file on disk
+  is what the manifest renders - the byte-for-byte half that needed file IO from a test.
+- **The instance-count tripwire moved from 78/108/24/2 to 121/169/38/3** declarations/functions/tables/descriptors. Two
+  files that walk a text now reach `Characters`, `CharacterIterator`, their `Iterable<Char>` and `Iterator<Char>` tables
+  and the payload boxes of both - one set for the whole program, not one per call - which is the same trade 5.7 made when
+  `ArrayList.from` and `Range.iterator` became TorbScript. Its comment in `lower.test.trb` says so.
+- The gate is `bootstrap/tests/native/characters.trb`: every width of UTF-8 (one to four bytes) so that a cursor moving
+  by the wrong amount is a wrong character and not a slower loop, a cursor over a **slice** (which may not read the
+  storage in front of it), `charAt` past the end, `String.from`, and `Int.from(byte)`. Compiled, run, compared with stage
+  0 byte for byte, `live blocks at exit: 0`.
+- **One divergence this found and did not close:** `Char.toUpperCase` of a non-ASCII letter. Stage 0 answers Rust's full
+  Unicode mapping ('ä' to 'Ä'), the runtime's is ASCII only, and `runtime/README.md` promises "ASCII plus the letters of
+  Latin-1" for the *text* functions. It is one more entry on 5.14's list of "unify stage 0 and the binary", and the gate
+  program upper-cases an ASCII word so that it tests the cursor and not the table.
+
+**A list pattern is three members of the prelude and nothing of its own** (6 findings, and the compiler's own command
+line).
+
+- **`length()` for every test, `at(index)` for every item, `skip(index).toList()` for a rest.** `[]` is `length == 0`,
+  `[first, ...rest]` is `length >= 1`, `[..., last]` reads `at(length() - 1 - index)`. Nothing about a list pattern is a
+  new mechanism: an item is **no `PathStep`**, because a list has no layout at all - a `List<Item>` value is a trait-typed
+  one and reading from it is a call through its witness table, exactly as `a[key]` is. `Indexed.at` is the member, so
+  what an index out of range does is decided once in `std/core` and is the same everywhere; here none is ever out of
+  range, because the length was tested on the way into the block.
+- **A rest is a copy, and it cannot be anything else.** `Slice.slice` answers `Self`, so object safety keeps it out of the
+  witness table of a trait-typed value (5.6's rule) - there is no way to *share* the storage from a pattern. `skip` and
+  `toList` are ordinary members of `Iterable` and give a list of their own; a value has no identity, so only the cost is
+  observable, and it is the cost `toList()` has anywhere.
+- **Which trait declares the member is not the back end's business.** `boundDeclaring` walks the closure of the subject's
+  own traits and takes the first that declares `length`, `at`, `skip` or `toList`. `length` is `Length`'s in
+  `std/iteration` and the `List` trait's own in the miniature prelude of the compiler's tests, and a program may declare a
+  collection of its own - one walk answers all three, and a subject that declares none of them is a clean finding that
+  names the member.
+- **A list *inside* another pattern (`.Wrapped([first])`) is a clean finding.** The container's checker type is what the
+  bound is computed from, and a `MatchPlan` carries the type of the **subject** only - nothing says what a value halfway
+  down a path is, and for a list there is no layout to ask either. There is no such pattern in the repository.
+- The gate is `bootstrap/tests/native/list-patterns.trb` (every shape, a rest that is walked, and a recursion over one),
+  compiled, run, compared with stage 0 byte for byte, `live blocks at exit: 0`. With this, `compiler/src/main.trb` lowers
+  as far as the **top-level `?`** of 5.13, which is what its command line waited for.
+
+**The natives the compiler's own driver needs** (7 findings, and the whole of `std/fs` behind them).
+
+- **`.Fallible` got the shape it always needed: `bool`, one out for the payload, one more per field of the error the
+  parameters do not name.** `File.readText`, `writeText`, `absolutePath`, `list` and `createDirectory` all answer a
+  `Result<_, IoError>`, and an `IoError` is `(path, message)`: the `path` *is* the parameter of that name (the rule 5.7
+  wrote), and the `message` is something only the operating system knows - so the runtime writes it through one more out
+  parameter. A payload of **`Void`** takes no out at all (`writeText`), which is why `RuntimeShape.out` became
+  `RuntimeShape.outs`. Before this, every one of those five was a clean finding of the *emitter* ("the runtime answers
+  `bool` where the lowering expects `Result…`"), so **no program that read a file could be emitted** - and nothing said so
+  until a gate program tried, because `torb ir` never looks at a prototype.
+- **`Process.run` is TorbScript over one native.** `ProcessOutput` is a record of the program with three fields and the
+  convention writes one payload; so `runCollecting(command, arguments, var output, var failure): Int` is the native - the
+  exit code, or `-1` with the reason - and `run` builds the `ProcessOutput` and the `IoError` around it. Two things fell
+  out of it: the runtime collects **both output streams into one** (`popen` has one pipe; `standardError` is empty until
+  `Process.start` brings three, 7.3), and the arguments cross the boundary as the **concrete** `ArrayList<String>`,
+  because a trait-typed `List<String>` says nothing about which implementation carries the buffer.
+- **`Clock.milliseconds` is a runtime function of its own**, counted from the first reading of the process: an `Instant`
+  and a `Duration` would be the same number twice plus a subtraction, and `torb check --timings` reads it per pass.
+- **`mkdir -p` is the platform layer's**, like every other path operation (`runtime/platform.c`, nine functions now), and
+  "it is already there" is success - a caller that only wants a place to write should not have to ask first.
+- **What is still a finding, with the recipe:** a native whose result or argument is a **collection the runtime owns but
+  the declaration names as the trait type** - `File.list` and `String.split`, which is what `text.lines()` is. The
+  runtime answers a `torb_list` and the declared type is `Object([List<String>])`, so the wrapper has to build the
+  concrete `ArrayList<String>` (which is the default implementation `lowerListLiteral` already asks the prelude for) and
+  coerce it with `TraitValue` and the table of `(ArrayList<String>, List<String>)`. It is the same two steps for an
+  argument, the other way round. That is the next step of this row, and `text.lines()` is on the compiler's own critical
+  path, so it is the first thing to do after the driver.
+- The gate is `bootstrap/tests/native/files.trb`: a directory that is created twice, a file written and read, `exists`,
+  `isDirectory`, `absolutePath`, the environment, the clock, and a **child process** that really runs. Compiled, run,
+  compared with stage 0 byte for byte, `live blocks at exit: 0`. The C side is `runtime/tests/process_test.c` (four tests,
+  new) plus two more in `file_test.c` and one in `clock_test.c`: 91 runtime tests now.
+
+**The top-level `?` of 5.13: `error: <the error>` and exit code 1** (one finding, and it was the compiler's own entry
+function).
+
+- **The report is one line, because the error of an entry file is a concrete type.** Walking `cause()` needs the error as
+  a trait-typed `Error` value; what an entry file has in hand is its own error type, so there is nothing to walk - which
+  is what 5.3's note already said about it. A `?` whose error *is* the trait value gets the chain, and that is one loop
+  over `cause()` on top of this block (`Error` is object safe: `cause(self)` answers an `Error?` and mentions `Self`
+  nowhere). `Show` is what the line goes through, which is the same member an interpolation calls.
+- **Ending the program is an intrinsic, `IntrinsicOperation.ExitWithCode`.** Not a call of `Process.exit`: an entry file
+  that never imports `std/process` has no name for that function, while what happens here *is* the language's own
+  behaviour (decided gap 9), so both back ends read it out of the IR. The C emitter renders it as `torb_process_exit`,
+  which flushes, reports the live blocks and leaves without running anything else; the block that holds it ends
+  `unreachable`, exactly as a `Panic` does.
+- **The `?` return trace of the debug profile stays planned**, and is named here so nobody looks for it: it is a per-task
+  ring buffer of locations that the report prints under the chain, it needs the profiles the driver does not have yet, and
+  it changes no error type - so it belongs in exactly this block later.
+- **`?` on an `Option` at the top level reports the prefix alone** (`error: `), because a `None` carries nothing to show.
+- The gate is `bootstrap/tests/native/top-level-error.trb`, whose error is a type of the *program* and not an `IoError`:
+  the message of an operating system is localized, and what is under test is the report and not `strerror`. Compiled, run,
+  stdout and stderr and the exit code compared; `live blocks at exit: 0` checked by hand, because `native.rs` skips the
+  leak gate for a program with a `.stderr` file (a panic leaves nothing to count, and this one is not a panic).
 
 ### How the C emitter is written
 

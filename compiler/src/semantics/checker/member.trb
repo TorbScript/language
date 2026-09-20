@@ -7,7 +7,7 @@ use FieldSignature, CaseSignature, TypeSignature, Signature, SignatureId from ".
 use Checker, Resolution, Dispatch, Adaptation, Candidate, CandidateKind from "./context"
 use signatureOf, typeSignatureOf from "./signature"
 use substitute, substituteFunction, substituteBounds, sameType, hasVariable from "./unify"
-use resolveTrait, traitsOf, traitArgumentsOf from "./implementation"
+use resolveTrait, resolveBound, traitsOf, traitArgumentsOf from "./implementation"
 use inherentExtensionsOf, mappingOfImplementation, buildImplementations from "./implementation"
 use requireVisibleMember from "./declaration"
 
@@ -381,7 +381,20 @@ fn dispatchOf(var checker: Checker, receiver: TypeId, capability: SymbolId, boun
   match resolveTrait(checker, receiver, capability) {
     .Found(implementation, _) => Dispatch.Implementation implementation, []
     .Bounded(_) => Dispatch.Object bound, []
-    _ => Dispatch.Direct
+    /*
+     * A type may implement one trait **several times** - `extend Int64 with From<Int8>`, `From<Char>` and three more -
+     * and then the trait *symbol* names no implementation and `resolveTrait` answers `Ambiguous`. The applied **bound**
+     * does name one, and it is in hand here: every candidate of the overload set `traitMember` builds carries its own
+     * (`From<Char>`), so asking `resolveBound` is what tells `Int.from('A')` which implementation it reaches. Without it
+     * the call was `Direct` with the *trait's* requirement as its member, which has no body anywhere - and a back end
+     * then has nothing to call.
+     */
+    _ => {
+      if const .Found(implementation, _) = resolveBound(checker, receiver, bound) {
+        return Dispatch.Implementation implementation, []
+      }
+      Dispatch.Direct
+    }
   }
 }
 

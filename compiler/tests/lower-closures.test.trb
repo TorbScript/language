@@ -111,6 +111,32 @@ const closures = r"""
   fn twice(value: Int): Int {
     applied(value, doubled)
   }
+
+  fn chosen(word: String, choose: (String) => String): String {
+    choose word
+  }
+
+  fn wrapped(word: String, build: (String) => Kept): Kept {
+    build word
+  }
+
+  fn echoed(word: String): String {
+    chosen(word, { _ })
+  }
+
+  fn stored(word: String): Kept {
+    wrapped(word, { Kept _ })
+  }
+
+  fn keeper(word: String): () => String {
+    {
+      word
+    }
+  }
+
+  type Kept {
+    word: String
+  }
   """
 
 /** The three kinds of property command in one body: `.Assign`, `.Configure` and `.AssignClosure` (gap 15). */
@@ -475,6 +501,53 @@ group "The C of a closure" {
           s2 = ((int64_t (*)(torb_environment *))s1_measure.code)(s1_measure.environment);
           torb_environment_release(s1_measure.environment);
           return s2;
+        }"""
+    )
+  }
+}
+
+/**
+ * A closure body only ever *borrows* its parameters (5.7's fourth round: no call site of a closure value can read a
+ * summary), so a body that hands one on to a position that keeps it has to take a count of its own first. The frame owns
+ * no value of its own in any of these three, which is why the pass used to walk past them and leave the `return` of a
+ * borrowed value `borrowed` - an internal error of the verifier, and a double release in the C.
+ */
+group "A closure that keeps what it was lent" {
+  test "a closure that answers its own parameter retains it, because the caller keeps its own count" {
+    assert(
+      ownedIrOf(closures, "t_closure__t_acme_x2f_app_main_echoed_0") == r"""
+        fn t_closure__t_acme_x2f_app_main_echoed_0(String borrowed) -> String {
+          slot %0 parameter: String
+        b0: # acme/app/src/main.trb:52 closure
+          retain %0
+          return %0 owned
+        }"""
+    )
+  }
+
+  test "one that builds its parameter into a record retains it as well: `construct` keeps it" {
+    assert(
+      ownedIrOf(closures, "t_closure__t_acme_x2f_app_main_stored_0") == r"""
+        fn t_closure__t_acme_x2f_app_main_stored_0(String borrowed) -> Record(T_acme_x2f_app_main_Kept) {
+          slot %0 parameter: String
+          slot %1 temporary: Record(T_acme_x2f_app_main_Kept)
+        b0: # acme/app/src/main.trb:56 closure
+          retain %0
+          %1 = construct T_acme_x2f_app_main_Kept (%0 owned)
+          return %1 owned last
+        }"""
+    )
+  }
+
+  test "one that answers a capture retains what it read out of the environment" {
+    assert(
+      ownedIrOf(closures, "t_closure__t_acme_x2f_app_main_keeper_0") == r"""
+        fn t_closure__t_acme_x2f_app_main_keeper_0(environment: Record(T_environment__t_closure__t_acme_x2f_app_main_keeper_0) borrowed) -> String {
+          slot %0 parameter environment: Record(T_environment__t_closure__t_acme_x2f_app_main_keeper_0)
+          slot %1 local word: String
+        b0: # acme/app/src/main.trb:60 closure
+          %1 = read %0.word
+          return %1 owned last
         }"""
     )
   }

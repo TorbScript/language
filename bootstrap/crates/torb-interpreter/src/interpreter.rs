@@ -2015,7 +2015,13 @@ impl Interpreter {
                 let first = if range.has_start { range.start.to_string() } else { String::new() };
                 let dots = if range.inclusive { "..=" } else { ".." };
                 let last = match range.end {
-                    Some(end) => if range.inclusive { (end - 1).to_string() } else { end.to_string() },
+                    Some(end) => {
+                        if range.inclusive {
+                            (end - 1).to_string()
+                        } else {
+                            end.to_string()
+                        }
+                    }
                     None => String::new(),
                 };
                 format!("{first}{dots}{last}")

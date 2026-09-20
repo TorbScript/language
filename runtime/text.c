@@ -217,6 +217,28 @@ bool torb_text_next_char(torb_text text, uint32_t *offset, torb_char *character)
   return true;
 }
 
+bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out) {
+  const uint8_t *bytes = torb_text_data(text);
+  uint32_t width;
+  if (offset < 0 || offset >= (int64_t)text.length) {
+    return false;
+  }
+  width = torb_utf8_decode(bytes, (size_t)text.length, (size_t)offset, out);
+  if (width == 0u) {
+    /* An offset on a continuation byte, which is the one way a caller can get this wrong (decided gap 7). */
+    torb_panic_invalid_utf8(offset, torb_location_unknown);
+  }
+  return true;
+}
+
+bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out) {
+  if (offset < 0 || offset >= (int64_t)text.length) {
+    return false;
+  }
+  *out = torb_text_data(text)[offset];
+  return true;
+}
+
 torb_text torb_text_from_bytes(const uint8_t *bytes, size_t length, torb_location at) {
   size_t bad_offset = 0u;
   torb_text text;

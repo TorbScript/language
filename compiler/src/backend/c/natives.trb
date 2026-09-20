@@ -421,7 +421,7 @@ fn textEntries(var entries: List<NativeEntry>) {
   entries.add intrinsicOf("String.byteLength", IntrinsicOperation.TextByteLength)
   entries.add runtimeOf("String.isEmpty", "torb_text_is_empty", "bool torb_text_is_empty(torb_text text);")
   entries.add(runtimeOf(
-    "String.slice",
+    "String.sliceBytes",
     "torb_text_slice",
     "torb_text torb_text_slice(torb_text text, int64_t from, int64_t to, torb_location at);",
   ))
@@ -471,10 +471,23 @@ fn textEntries(var entries: List<NativeEntry>) {
     "torb_text_split",
     "torb_list torb_text_split(torb_text text, torb_text separator);",
   ))
-  // `chars()` and `bytes()` answer an `Iterable`, which is a trait-typed value over an iterator type: 5.7.
-  entries.add plannedRuntimeOf("String.chars", "torb_text_chars", "5.7")
-  entries.add plannedRuntimeOf("String.bytes", "torb_text_bytes", "5.7")
-  entries.add plannedRuntimeOf("String.from", "torb_text_from_chars", "5.7")
+  /*
+   * `chars()` and `bytes()` are ordinary TorbScript over these two (`Characters` and `TextBytes` in `std/text`), and
+   * `String.from(Iterable<Char>)` is TorbScript for the same reason `ArrayList.from` is: it walks a trait-typed value of
+   * the *program* through a witness table, which a C function cannot do. So none of the three is a native any more, and
+   * what is left is the one thing the language cannot express at all - reading raw storage, because a `String` has no
+   * index.
+   */
+  entries.add(optionalRuntimeOf(
+    "String.charAt",
+    "torb_text_char_at",
+    "bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out);",
+  ))
+  entries.add(optionalRuntimeOf(
+    "String.byteAt",
+    "torb_text_byte_at",
+    "bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out);",
+  ))
 
   entries.add derivedOf("Void.equals", DerivedKind.Identity)
   entries.add derivedOf("Void.hash", DerivedKind.Hash)
@@ -663,12 +676,17 @@ fn collectionEntries(var entries: List<NativeEntry>) {
 // --- The packages outside the prelude --------------------------------------------------------------------------------
 
 fn fileEntries(var entries: List<NativeEntry>) {
-  entries.add(runtimeOf(
+  /*
+   * The whole-file half of `std/fs`. Every one of them answers a `Result`, which is the `.Fallible` convention: the
+   * symbol answers `bool`, the payload of `Ok` comes through an out parameter (none where it is `Void`), and the
+   * `message` of the `IoError` through one more - its `path` *is* the parameter of that name.
+   */
+  entries.add(fallibleRuntimeOf(
     "File.readText",
     "torb_file_read_text",
     "bool torb_file_read_text(torb_text path, torb_text *out, torb_text *error);",
   ))
-  entries.add(runtimeOf(
+  entries.add(fallibleRuntimeOf(
     "File.writeText",
     "torb_file_write_text",
     "bool torb_file_write_text(torb_text path, torb_text text, torb_text *error);",
@@ -679,12 +697,12 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "torb_file_is_directory",
     "bool torb_file_is_directory(torb_text path);",
   ))
-  entries.add(runtimeOf(
+  entries.add(fallibleRuntimeOf(
     "File.list",
     "torb_file_list",
     "bool torb_file_list(torb_text path, torb_list *out, torb_text *error);",
   ))
-  entries.add(runtimeOf(
+  entries.add(fallibleRuntimeOf(
     "File.absolutePath",
     "torb_file_absolute_path",
     "bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);",
@@ -719,10 +737,13 @@ fn fileEntries(var entries: List<NativeEntry>) {
   entries.add plannedRuntimeOf("standardOutput", "torb_standard_output", "7.3")
   entries.add plannedRuntimeOf("standardError", "torb_standard_error", "7.3")
 
-  // `mkdir -p` as a native: `torb build` has to create the directory it writes the C and the binary into. The runtime
-  // has the whole platform layer for it (`runtime/platform.c`) and only the two functions on top are missing, which is
-  // the row `std/fs` sits in.
-  entries.add plannedRuntimeOf("File.createDirectory", "torb_file_create_directory", "5.12")
+  // `mkdir -p`: `torb build` has to create the directory it writes the C and the binary into, and "it is already
+  // there" is success - so a caller that only wants a place to write never has to ask first
+  entries.add(fallibleRuntimeOf(
+    "File.createDirectory",
+    "torb_file_create_directory",
+    "bool torb_file_create_directory(torb_text path, torb_text *error);",
+  ))
 
   entries.add(runtimeOf(
     "Process.arguments",
@@ -730,10 +751,17 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "torb_list torb_process_arguments(void);",
   ))
   entries.add runtimeOf("Process.exit", "torb_process_exit", "void torb_process_exit(int64_t code);")
-  // The driver runs the C compiler through this. It answers a `Result<ProcessOutput, IoError>`, so the runtime side is
-  // a function that answers `bool` plus out parameters and the wrapper the lowering builds around it - both of which
-  // arrive with the full driver.
-  entries.add plannedRuntimeOf("Process.run", "torb_process_run", "5.13")
+  /*
+   * The driver runs the C compiler through this. `ProcessOutput` is a record of the *program* with three fields, and the
+   * `.Fallible` convention writes the payload of `Ok` through **one** out parameter - so `run` is ordinary TorbScript
+   * over `runCollecting`, which answers the exit code and writes the output through a `var` parameter. What is native
+   * is starting a process and collecting what it wrote, and nothing else.
+   */
+  entries.add(runtimeOf(
+    "Process.runCollecting",
+    "torb_process_run",
+    "int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);",
+  ))
   // A child process whose pipes are read and written while it runs: the same `Source`/`Sink` objects a file has
   entries.add plannedRuntimeOf("Process.start", "torb_process_start", "7.3")
   entries.add plannedRuntimeOf("Child.input", "torb_child_input", "7.3")
@@ -810,6 +838,13 @@ fn timeEntries(var entries: List<NativeEntry>) {
     "torb_duration torb_duration_of_seconds(int64_t seconds, torb_location at);",
   ))
   entries.add runtimeOf("Clock.now", "torb_clock_now", "torb_instant torb_clock_now(void);")
+  // Monotonic milliseconds from the first reading: the form a tool that measures its own work wants, and two numbers
+  // (an `Instant` and a `Duration`) where one does
+  entries.add(runtimeOf(
+    "Clock.milliseconds",
+    "torb_clock_milliseconds",
+    "int64_t torb_clock_milliseconds(void);",
+  ))
   entries.add plannedRuntimeOf("sleep", "torb_sleep", "7.3")
 }
 

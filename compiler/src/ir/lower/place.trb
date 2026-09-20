@@ -1,6 +1,7 @@
 use Span from "../../syntax/source"
 use Expression from "../../syntax/ast"
-use Signature from "../../semantics/checker/type"
+use Signature, TypeId, ParameterId from "../../semantics/checker/type"
+use substitute from "../../semantics/checker/unify"
 use Place, PlaceRoot, PlaceStep, PropertyWriteKind, BindingId from "../../semantics/checker/context"
 use IrTypeId, Slot, LayoutId, Reference, PathStep, Instruction, borrowed from "../ir"
 use FunctionBuilder, addTemporary, emit from "../build"
@@ -8,7 +9,7 @@ use layoutOfType, typeOfReference from "../verify"
 use isManagedType from "../layout"
 use describeIrType from "../print"
 use isReferenceParameter from "../instances"
-use Lowering, reportUnsupported, irTypeOf, voidTypeOf from "./context"
+use Lowering, reportUnsupported, irTypeOf, irTypeOfClosed, voidTypeOf from "./context"
 use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf from "./expression"
 use bindingReferenceOf, emitClosureCall from "./closure"
 
@@ -56,14 +57,35 @@ public fn referenceParametersOf(signature: Signature): List<Bool> {
   found
 }
 
-/** The IR type of one parameter of a declaration, which is the type the place of a `var` argument has to end in. */
-public fn parameterTypeAt(var lowering: Lowering, signature: Signature, position: Int): IrTypeId? {
+/**
+ * The IR type of one parameter of a declaration, which is the type the place of a `var` argument has to end in.
+ *
+ * The arguments of the **callee's** instance go in and not the caller's, exactly as they do for a `lazy` parameter and
+ * for a default (`lazyItemAt` and `lowerDefaults` in `lower/call.trb`): the type is written in the callee's own
+ * declaration, so `using(var resource: Resource, ...)` reads `Resource` through the mapping the dispatch decided. With
+ * the caller's substitution instead, a generic `var` parameter reached the back end unsubstituted - an internal error -
+ * and the place was then formed over a `Void` slot, which is two more.
+ */
+public fn parameterTypeAt(
+  var lowering: Lowering,
+  signature: Signature,
+  position: Int,
+  mapping: Map<ParameterId, TypeId> = [:],
+): IrTypeId? {
   const parameter = signature.form.parameters.get(position)?
   const annotation = parameter.annotation
   if lowering.checker.isBroken(annotation) {
     return None
   }
-  Some irTypeOf(lowering, annotation)
+  if mapping.isEmpty() {
+    return Some irTypeOf(lowering, annotation)
+  }
+  // The mapping's own arguments are closed already (the dispatch substituted the caller's first), so this is the answer
+  const applied = substitute lowering.checker.types, annotation, mapping
+  if lowering.checker.isBroken(applied) {
+    return None
+  }
+  Some irTypeOfClosed(lowering, applied)
 }
 
 // --- From the checker's place to a reference -------------------------------------------------------------------------

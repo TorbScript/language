@@ -1,0 +1,76 @@
+use Process from "std/process"
+
+/**
+ * `chars()`, `bytes()` and `String.from(Iterable<Char>)`, all three ordinary TorbScript now.
+ *
+ * The one thing the language cannot express about a text is reading its raw storage - a `String` has no index - so
+ * `charAt` and `byteAt` are the two natives, and the cursors over them are `Characters` and `TextBytes` in `std/text`.
+ * Walking a text is therefore O(1) per character: `charAt` decodes at an offset and `Char.byteLength()` says how far to
+ * move, and nothing re-scans what it has already walked.
+ *
+ * Every character shape of UTF-8 is here (one, two, three and four bytes), because an offset that moves by the wrong
+ * width would come out as a different character or as a panic and not as a slower loop.
+ */
+fn countCharacters(text: String): Int {
+  var count = 0
+  for _ in text.chars() {
+    count = count + 1
+  }
+  count
+}
+
+fn countBytes(text: String): Int {
+  var count = 0
+  for _ in text.bytes() {
+    count = count + 1
+  }
+  count
+}
+
+/** The widths the cursor moves by, as a text of their own: 1, 2, 3 and 4 for the four shapes of UTF-8. */
+fn widthsOf(text: String): String {
+  var widths = ""
+  for character in text.chars() {
+    widths = widths + "{character.byteLength()}"
+  }
+  widths
+}
+
+fn upperCased(text: String): String {
+  var characters: List<Char> = []
+  for character in text.chars() {
+    characters.add character.toUpperCase()
+  }
+  String.from characters
+}
+
+/** A slice has an offset of its own, so a cursor over one may not read the storage in front of it. */
+fn tailOf(text: String, from: Int): String {
+  var characters: List<Char> = []
+  for character in text[from..].chars() {
+    characters.add character
+  }
+  String.from characters
+}
+
+const mixed = "aä€😀"
+
+print countCharacters(mixed)
+print countBytes(mixed)
+print widthsOf(mixed)
+print upperCased("stack")
+print tailOf("abcdef", 2)
+print mixed.chars().count()
+print mixed.charAt(0)
+print mixed.charAt(1)
+print mixed.charAt(99)
+print mixed.byteAt(0)
+print String.from("xyz".chars())
+
+var sum = 0
+for byte in "AB".bytes() {
+  sum = sum + Int.from(byte)
+}
+print sum
+
+Process.exit((countCharacters(mixed) + countBytes(mixed)) % 251)

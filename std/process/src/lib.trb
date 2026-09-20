@@ -1,4 +1,5 @@
 use IoError from "std/fs"
+use ArrayList from "std/collections"
 use Source, Sink, Bytes from "std/stream"
 
 /** What a program that was run to its end left behind. */
@@ -49,13 +50,41 @@ public native type Process {
   native fn exit(code: Int): Never
 
   /**
-   * Runs a program to its end and collects everything about it. The arguments are passed as they are - there is no
-   * shell, so nothing about them is interpreted and nothing has to be quoted.
+   * Runs a program to its end and collects everything about it. The arguments are passed as they are: nothing about
+   * them is interpreted and nothing has to be quoted.
    *
    * A program that could not be started at all is an `IoError`; a program that ran and failed is an exit code, which
    * is why `torb build` can tell "there is no C compiler" from "the C compiler said no".
+   *
+   * **Both output streams arrive in `standardOutput`, and `standardError` is empty**, until `Process.start` brings
+   * three real pipes (milestone 7.3): what a program writes is one stream in the order it wrote it, which is what a
+   * reader of a compiler's output wants anyway. Ordinary TorbScript over `runCollecting`, because `ProcessOutput` is a
+   * record of the program and a runtime function may not build one.
    */
-  native fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError>
+  fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError> {
+    var output = ""
+    var failure = ""
+    // The runtime has one list, and it takes it as the buffer it is: a trait-typed `List<String>` says nothing about
+    // which implementation carries it, so the concrete one is what crosses the boundary
+    const collected: ArrayList<String> = ArrayList.from arguments
+    const code = Process.runCollecting command, collected, output, failure
+    if code < 0 {
+      return Fail IoError(command, failure)
+    }
+    Ok ProcessOutput(code, output, "")
+  }
+
+  /**
+   * The exit code of the program, with everything it wrote in `output` - or **-1** where it could not be started at
+   * all, and then `failure` says why. The one shape a runtime function can have for this: a `Result` and a
+   * `ProcessOutput` are types of the program, and starting a process is the operating system.
+   */
+  native fn runCollecting(
+    command: String,
+    arguments: ArrayList<String>,
+    var output: String,
+    var failure: String,
+  ): Int
 
   /**
    * Starts a program and hands back its pipes, for output that is too big to collect or that has to be read while it

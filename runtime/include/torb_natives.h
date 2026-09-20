@@ -29,6 +29,8 @@ torb_char torb_char_to_lower_case(torb_char character);
 torb_char torb_char_to_upper_case(torb_char character);
 /* Char.tryFrom */
 bool torb_char_try_from_i64(int64_t value, torb_char *out);
+/* Clock.milliseconds */
+int64_t torb_clock_milliseconds(void);
 /* Clock.now */
 torb_instant torb_clock_now(void);
 /* Float64.compare */
@@ -53,6 +55,8 @@ bool torb_environment_get(torb_text name, torb_text *out);
 bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error);
 /* File.close */
 void torb_file_close(torb_file *self);
+/* File.createDirectory */
+bool torb_file_create_directory(torb_text path, torb_text *error);
 /* File.exists */
 bool torb_file_exists(torb_text path);
 /* File.isDirectory */
@@ -165,6 +169,8 @@ void torb_print_parts(const torb_text *parts, size_t count);
 torb_list torb_process_arguments(void);
 /* Process.exit */
 void torb_process_exit(int64_t code);
+/* Process.runCollecting */
+int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);
 /* readLine */
 bool torb_read_line(torb_text *out);
 /* Float64.round */
@@ -195,6 +201,10 @@ torb_text torb_show_u64(uint64_t value);
 torb_text torb_show_void(torb_void value);
 /* Float64.squareRoot */
 double torb_square_root_f64(double value);
+/* String.byteAt */
+bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out);
+/* String.charAt */
+bool torb_text_char_at(torb_text text, int64_t offset, torb_char *out);
 /* String.contains */
 bool torb_text_contains(torb_text text, torb_text part);
 /* String.endsWith */
@@ -211,7 +221,7 @@ torb_text torb_text_repeat(torb_text text, int64_t times, torb_location at);
 torb_text torb_text_replace(torb_text text, torb_text part, torb_text replacement);
 /* String.showNested */
 torb_text torb_text_show_nested(torb_text text);
-/* String.slice */
+/* String.sliceBytes */
 torb_text torb_text_slice(torb_text text, int64_t from, int64_t to, torb_location at);
 /* String.split */
 torb_list torb_text_split(torb_text text, torb_text separator);

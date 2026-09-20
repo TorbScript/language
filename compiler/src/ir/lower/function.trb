@@ -82,6 +82,7 @@ public fn beginFunction(var lowering: Lowering, module: ModuleId) {
   lowering.slots = [:]
   lowering.entryLocals = [:]
   lowering.hole = None
+  lowering.inlinedConstants = [:]
   lowering.inlinedThunks = [:]
   lowering.shownParts = [:]
   lowering.substitution = [:]
@@ -393,9 +394,13 @@ fn seedSymbol(var lowering: Lowering, symbol: SymbolId) {
         // only counted here and not named a second time as a construct the back end does not know
         if lowering.problems.length() > reported {
           lowering.stubbed = lowering.stubbed + 1
-          return
         }
-        countUnbuildable lowering, symbol, "a `const` that is not compile-time evaluable"
+        /*
+         * Everything else is a `const` whose value is no static data at all - a list, a counted block, a text built out
+         * of pieces. It is no declaration of the back end then: it is lowered where it is *read*
+         * (`lowerConstantInitializer`), like a default, so it is neither lowered nor stubbed here and the progress bar
+         * counts only what really becomes a function.
+         */
       }
     }
     _ => {}

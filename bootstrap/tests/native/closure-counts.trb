@@ -1,0 +1,69 @@
+use Process from "std/process"
+
+/**
+ * What a closure has to do with a count it was only lent.
+ *
+ * A closure's parameters are always **borrowed**: `CallClosure`'s callee is a slot, so no call site can read the
+ * summary of the function it will reach (BACKEND 5.7, fourth round). A closure body that answers its own parameter, or
+ * builds it into a record, therefore hands on a count nobody gave it - and has to take one of its own first. Without
+ * that retain the value is released twice, which is the one mistake that shows up as a crash and not as a wrong number,
+ * and `native.rs` asserts `live blocks at exit: 0` for the other direction.
+ *
+ * Every value here is built at run time (`repeated`), never a literal: the storage of a literal is immortal, so a
+ * retain and a release of one are both no-ops and a missing retain would not be observable at all.
+ */
+
+/** A record that keeps what a closure handed it: a `Construct` of a counted field is an `owned` position. */
+type Kept {
+  word: String
+}
+
+/** Applies a closure that may answer whatever it likes, including exactly what it was given. */
+fn chosen(word: String, choose: (String) => String): String {
+  choose word
+}
+
+/** The same for a closure that builds a record out of its parameter. */
+fn wrapped(word: String, build: (String) => Kept): Kept {
+  build word
+}
+
+/** A closure that captures a counted value and answers it: the environment lends it, the caller takes a count. */
+fn keeper(word: String): () => String {
+  {
+    word
+  }
+}
+
+fn size(text: String): Int {
+  text.byteLength()
+}
+
+/** A value the program builds, so that its storage is counted and not the immortal storage of a literal. */
+fn repeated(part: String, times: Int): String {
+  var total = ""
+  for _ in 0..times {
+    total = total + part
+  }
+  total
+}
+
+var total = 0
+
+const echoed = chosen(repeated("ab", 2), { _ })
+print echoed
+total = total + size(echoed)
+
+const kept = wrapped(repeated("cd", 3), { Kept _ })
+print kept.word
+total = total + size(kept.word)
+
+const held = keeper repeated("ef", 1)
+print "{held()} {held()}"
+total = total + size(held())
+
+const twice = chosen(repeated("gh", 2), { _ + _ })
+print twice
+total = total + size(twice)
+
+Process.exit(total % 251)

@@ -231,6 +231,12 @@ public type Lowering {
   var constants: Map<Int, StaticId> = [:]
   /** The constants whose initializer is being evaluated right now: a `const` in terms of itself is a cycle. */
   var evaluating: Map<Int, Bool> = [:]
+  /**
+   * The constants whose initializer is being lowered **at a use site** right now, by `SymbolId.value`: the same cycle
+   * one level further on. A `const` that is not static data has no static value to stop at, so the recursion needs its
+   * own guard - and a cycle is a diagnostic of the checker, so hitting this one is a clean finding and never a hang.
+   */
+  var inlinedConstants: Map<Int, Bool> = [:]
 }
 
 /** A lowering for one checked program. `paths` holds one path per module, in the order of `program.graph.modules`. */

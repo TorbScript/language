@@ -82,6 +82,24 @@ public fn countedSlotsOf(program: IrProgram, function: IrFunction): Counted {
   Counted indices, slots
 }
 
+/**
+ * Whether a frame has anything to do with a count at all: a slot whose *type* carries one, whoever owns it.
+ *
+ * `countedSlotsOf` answers the narrower question "which values does this frame own", and a borrowed parameter is not one
+ * of them - the caller keeps its count for the whole call. But a frame that only *borrows* a counted value can still
+ * have to retain it: a closure body that returns its parameter hands a count on that nobody gave it, and a closure's
+ * parameters are always borrowed (5.7's fourth round), so the closure has to take a count of its own first. So this is
+ * the question "walk this function at all", and `countedSlotsOf` stays the question "which slots have a last use".
+ */
+public fn holdsCountedValue(program: IrProgram, function: IrFunction): Bool {
+  for declaration in function.slots {
+    if containsCountedType(program, declaration.annotation) {
+      return true
+    }
+  }
+  false
+}
+
 fn isCountedSlot(program: IrProgram, function: IrFunction, index: Int, role: SlotRole): Bool {
   if !containsCountedType(program, function.slots[index].annotation) {
     return false

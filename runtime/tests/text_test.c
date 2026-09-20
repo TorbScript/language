@@ -127,6 +127,48 @@ TORB_TEST(the_characters_of_a_text_come_out_one_by_one) {
   torb_text_release(text);
 }
 
+/**
+ * `charAt` and `byteAt`, which is what the TorbScript cursors of `chars()` and `bytes()` pull from: one decode per
+ * character with no re-scan, false at and past the end, and a panic on an offset inside a character.
+ */
+TORB_TEST(a_character_and_a_byte_are_read_at_an_offset) {
+  torb_text text = text_of("a\xC3\xA4\xE2\x82\xAC");
+  torb_char character = 0u;
+  uint8_t byte = 0u;
+  TORB_CHECK(torb_text_char_at(text, 0, &character));
+  TORB_CHECK_INTEGER(character, 'a');
+  TORB_CHECK(torb_text_char_at(text, 1, &character));
+  TORB_CHECK_INTEGER(character, 0xE4);
+  TORB_CHECK(torb_text_char_at(text, 3, &character));
+  TORB_CHECK_INTEGER(character, 0x20AC);
+  TORB_CHECK(!torb_text_char_at(text, 6, &character));
+  TORB_CHECK(!torb_text_char_at(text, 7, &character));
+  TORB_CHECK(!torb_text_char_at(text, -1, &character));
+  TORB_CHECK(torb_text_byte_at(text, 0, &byte));
+  TORB_CHECK_INTEGER(byte, 'a');
+  TORB_CHECK(torb_text_byte_at(text, 1, &byte));
+  TORB_CHECK_INTEGER(byte, 0xC3);
+  TORB_CHECK(!torb_text_byte_at(text, 6, &byte));
+  TORB_EXPECT_PANIC(torb_text_char_at(text, 2, &character));
+  TORB_CHECK_PANIC_CONTAINS("the byte at offset 2 is not valid UTF-8");
+  torb_text_release(text);
+}
+
+/** A slice reads from its own offset, so a cursor over one never sees the storage in front of it. */
+TORB_TEST(a_character_of_a_slice_is_read_from_the_slice) {
+  torb_text text = text_of("abcdef");
+  torb_text tail = torb_text_slice(text, 2, 5, somewhere);
+  torb_char character = 0u;
+  uint8_t byte = 0u;
+  TORB_CHECK(torb_text_char_at(tail, 0, &character));
+  TORB_CHECK_INTEGER(character, 'c');
+  TORB_CHECK(torb_text_byte_at(tail, 2, &byte));
+  TORB_CHECK_INTEGER(byte, 'e');
+  TORB_CHECK(!torb_text_char_at(tail, 3, &character));
+  torb_text_release(tail);
+  torb_text_release(text);
+}
+
 TORB_TEST(concatenation_is_one_allocation) {
   torb_text parts[3];
   torb_text joined;
@@ -433,6 +475,8 @@ void torb_register_text_tests(void) {
   TORB_ADD(an_offset_inside_of_a_character_panics);
   TORB_ADD(utf8_validation_rejects_what_is_not_shortest_or_not_a_scalar_value);
   TORB_ADD(the_characters_of_a_text_come_out_one_by_one);
+  TORB_ADD(a_character_and_a_byte_are_read_at_an_offset);
+  TORB_ADD(a_character_of_a_slice_is_read_from_the_slice);
   TORB_ADD(concatenation_is_one_allocation);
   TORB_ADD(comparison_is_by_bytes_and_hashing_is_deterministic);
   TORB_ADD(searching_a_text);

@@ -479,14 +479,51 @@ fn text_method(interpreter: &mut Interpreter, receiver: &Value, name: &str, argu
     let text = receiver_text.as_str();
     let part = |index: usize, label: &str| -> Eval<String> { text_of(&arguments.required(index, label)?, label) };
     Ok(Some(match name {
+        // `chars()` and `bytes()` are TorbScript over `charAt`/`byteAt` in `std/text` now; stage 0 keeps its own fast
+        // answer because it runs the whole toolchain, and an interpreted cursor per character would show up in every run
         "chars" => Value::list(text.chars().map(Value::Char).collect()),
         "bytes" => Value::list(text.bytes().map(|byte| Value::Int(i64::from(byte))).collect()),
+        // The character that begins at a byte offset, and the byte at one: `None` at and past the end, a panic on an
+        // offset inside a character (decided gap 7)
+        "charAt" => {
+            let offset = int_of(&arguments.required(0, "offset")?, "offset")?;
+            let found = match usize::try_from(offset) {
+                Ok(offset) if offset < text.len() => match text.get(offset..) {
+                    Some(rest) => rest.chars().next().map(Value::Char),
+                    None => return Err(failure(format!("The offset {offset} is inside of a character"))),
+                },
+                _ => None,
+            };
+            Value::from_option(found)
+        }
+        "byteAt" => {
+            let offset = int_of(&arguments.required(0, "offset")?, "offset")?;
+            let found = match usize::try_from(offset) {
+                Ok(offset) => text.as_bytes().get(offset).map(|byte| Value::Int(i64::from(*byte))),
+                Err(_) => None,
+            };
+            Value::from_option(found)
+        }
         "byteLength" => Value::Int(text.len() as i64),
         "isEmpty" => Value::Bool(text.is_empty()),
         "isBlank" => Value::Bool(text.trim().is_empty()),
         "slice" => {
             let Value::Range(range) = arguments.required(0, "range")? else { return Err(failure("`range` must be a Range")) };
             let (from, to) = slice_bounds(range, text.len())?;
+            match receiver_text.slice(from, to) {
+                Some(slice) => Value::Text(slice),
+                None => return Err(failure(format!("The offsets {from}..{to} are inside of a character"))),
+            }
+        }
+        // `slice` is TorbScript over this in `std/text` now: what an open end means is the receiver's decision, so the
+        // native takes the two offsets it arrived at. Stage 0 keeps both, the way it keeps its own `chars`
+        "sliceBytes" => {
+            let from = int_of(&arguments.required(0, "from")?, "from")?;
+            let to = int_of(&arguments.required(1, "to")?, "to")?;
+            let (from, to) = (usize::try_from(from).unwrap_or(0), usize::try_from(to).unwrap_or(0));
+            if to > text.len() || from > to {
+                return Err(failure(format!("The offsets {from}..{to} are outside of a text of {} bytes", text.len())));
+            }
             match receiver_text.slice(from, to) {
                 Some(slice) => Value::Text(slice),
                 None => return Err(failure(format!("The offsets {from}..{to} are inside of a character"))),

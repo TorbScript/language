@@ -252,6 +252,61 @@ TORB_TEST(releasing_a_file_without_closing_it_still_closes_the_handle) {
   torb_text_release(error);
 }
 
+/**
+ * `createDirectory` is `mkdir -p`: two levels at once, and "it is already there" is success - which is what
+ * `torb build` needs of it before it writes the generated C into a directory nobody has made yet.
+ */
+TORB_TEST(creating_a_directory_makes_every_level_and_succeeds_twice) {
+  torb_text directory = temporary_directory();
+  torb_text outer = path_in(directory, "torb-runtime-test-made");
+  torb_text inner = path_in(outer, "one/two");
+  torb_text path = path_in(inner, "written.txt");
+  torb_text contents = torb_text_from_cstring("content");
+  torb_text error = torb_text_empty();
+
+  TORB_CHECK(torb_file_create_directory(inner, &error));
+  TORB_CHECK(torb_file_is_directory(inner));
+  /* Again: a directory that is there is not a failure, so a caller never has to ask first */
+  TORB_CHECK(torb_file_create_directory(inner, &error));
+  TORB_CHECK(torb_file_write_text(path, contents, &error));
+  TORB_CHECK(torb_file_exists(path));
+
+  remove_path(path);
+  remove_path(inner);
+  {
+    torb_text middle = path_in(outer, "one");
+    remove_path(middle);
+    torb_text_release(middle);
+  }
+  remove_path(outer);
+  torb_text_release(contents);
+  torb_text_release(path);
+  torb_text_release(inner);
+  torb_text_release(outer);
+  torb_text_release(directory);
+  torb_text_release(error);
+}
+
+/** A directory under a *file* cannot be created, and the failure carries the path and the libc message. */
+TORB_TEST(creating_a_directory_under_a_file_is_an_error_with_a_message) {
+  torb_text directory = temporary_directory();
+  torb_text path = path_in(directory, "torb-runtime-test-blocking.txt");
+  torb_text under = path_in(path, "inner");
+  torb_text contents = torb_text_from_cstring("content");
+  torb_text error = torb_text_empty();
+
+  TORB_CHECK(torb_file_write_text(path, contents, &error));
+  TORB_CHECK(!torb_file_create_directory(under, &error));
+  TORB_CHECK(torb_text_byte_length(error) > torb_text_byte_length(under));
+
+  remove_path(path);
+  torb_text_release(contents);
+  torb_text_release(under);
+  torb_text_release(path);
+  torb_text_release(directory);
+  torb_text_release(error);
+}
+
 void torb_register_file_tests(void) {
   TORB_ADD(writing_reading_and_listing_a_directory);
   TORB_ADD(reading_a_file_that_is_not_there_is_an_error_with_a_message);
@@ -260,4 +315,6 @@ void torb_register_file_tests(void) {
   TORB_ADD(opening_a_missing_file_is_an_error);
   TORB_ADD(opening_reading_and_double_closing_a_file);
   TORB_ADD(releasing_a_file_without_closing_it_still_closes_the_handle);
+  TORB_ADD(creating_a_directory_makes_every_level_and_succeeds_twice);
+  TORB_ADD(creating_a_directory_under_a_file_is_an_error_with_a_message);
 }

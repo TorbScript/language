@@ -1,0 +1,55 @@
+use Process from "std/process"
+
+/**
+ * List patterns: `[]`, `[only]`, `[first, second]`, `[first, ...rest]`, `[first, ..., last]` and a literal item.
+ *
+ * A list pattern is three members of the prelude and nothing of its own: `length()` for every test, `at(index)` for every
+ * item, and `skip(index).toList()` for a rest. An item is no step of a path - a list has no layout, and reading from a
+ * `List<Item>` value is a call through its witness table - which is also why a rest is a **copy**: `Slice.slice` answers
+ * `Self` and is therefore not in the table of a trait-typed value at all.
+ *
+ * `main.trb`'s command line is this shape, so this is the gate the compiler's own entry function waits for.
+ */
+fn describe(words: List<String>): String {
+  match words {
+    [] => "nothing"
+    [only] => "one: {only}"
+    ["check", ...more] => "check with {more.length()}"
+    [first, second] => "two: {first} {second}"
+    [first, ..., last] => "{first}...{last}"
+    _ => "more"
+  }
+}
+
+/** A rest that is walked, so that the copy the pattern makes really holds the items and not the storage of the whole. */
+fn rest(words: List<String>): String {
+  match words {
+    [_, ...more] => {
+      var joined = ""
+      for word in more {
+        joined = joined + word
+      }
+      joined
+    }
+    _ => "none"
+  }
+}
+
+fn counted(numbers: List<Int>): Int {
+  match numbers {
+    [] => 0
+    [only] => only
+    [first, ...more] => first + counted(more)
+  }
+}
+
+print describe([])
+print describe(["one"])
+print describe(["check", "a", "b"])
+print describe(["left", "right"])
+print describe(["first", "middle", "last"])
+print rest(["a", "b", "c"])
+print rest([])
+print counted([1, 2, 3, 4])
+
+Process.exit(counted([1, 2, 3, 4]) % 251)
