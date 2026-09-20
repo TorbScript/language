@@ -2462,3 +2462,27 @@ _Decision:_ accepted, and it is the **checker's** rule and not a `with` list in 
 table no branch of any generated member reaches. Asked **without** a bound (`resolveTrait(Never, Add)`, which is what
 an operator asks) the answer stays `Missing`: which arguments `Add` would have for a `Never` is nothing the question
 says, and `Never` absorbs the message anyway.
+
+**56. When exactly does an implicit closure parameter "shadow a name that is visible at the closure"?**
+CONCEPT ("Trailing Closures"): "The implicit parameter can be named by the *type of the function* … If such a name
+would shadow a name that is visible at the closure, it is a compile error (no silent shadowing)." 4.4 left the rule out
+and said why: read as "the expected function type names a parameter `value` and a `value` is visible", it rejects
+`any { _ == value }` in `std/collections` - four more sites like it - where the closure never names `value` as its
+parameter at all. Read that way the rule is about a *declaration* that was never written down.
+_Proposal:_ the rule fires at the **use**. A bare name inside a closure that declared no parameters, which resolves
+through the local scope chain while the same closure's expected function type names a parameter of that name, is the
+error - because there the local silently wins and nothing in the source says which of the two is meant. `_`, `_2`, … can
+collide with nothing. A closure that wrote its parameters down is an ordinary scope and may shadow, which CONCEPT says
+two sections earlier ("a nested block and a closure are scopes of their own"). A name that is not a local is not
+shadowed either: the implicit parameter comes *before* the file scope and the prelude in the lookup order (design 3.1),
+so there the implicit one wins and it wins visibly.
+_Reason:_ it is the reading under which the rule is about exactly the ambiguity it exists for, and it is the only one
+that can be decided where the name stands - 4.4's objection was that reporting it needs a look at the body before it is
+checked, and at the use there is no such need.
+
+_Decision:_ accepted. `namesImplicitParameter` in `closure.trb` asks the frames, `resolveName` reports before it hands
+the local back, and the message is the catalogue's minus the line of the shadowed name (a `Diagnostic` carries notes,
+not a second span). It found **five** ambiguous reads in the sources, and every one of them really was ambiguous -
+`any { _ == value }` in `Collection.contains`, `(0..count).map { value }` in `List.filled`,
+`indexed().find { _.1 == value }` in `List.indexOf`, `box.update { _.added value }` in `Queueing.add` and
+`indicators.any({ value.startsWith _ })` in the documentation's own index writer. All five name the parameter now.

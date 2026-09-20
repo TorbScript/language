@@ -356,6 +356,31 @@ public fn implicitParameterTarget(var checker: Checker, text: String, at: Span):
   None
 }
 
+/**
+ * Whether the closure that is being checked offers an implicit parameter of this name. CONCEPT ("Trailing Closures"):
+ * naming the implicit parameter after a name that is visible at the closure is a compile error, because otherwise the
+ * local silently wins and nothing in the source says which of the two `value` is meant.
+ *
+ * Only a *name* is asked about: `_` and `_2` cannot collide with anything, and a closure that wrote its parameters down
+ * is an ordinary scope that may shadow (CONCEPT: "a nested block and a closure are scopes of their own").
+ */
+public fn namesImplicitParameter(checker: Checker, text: String): Bool {
+  if isImplicitName(text) {
+    return false
+  }
+  var frame = checker.closureFrames.length() - 1
+  while frame >= 0 {
+    if !checker.closureFrames[frame].hasParameters {
+      const index = nameIndexOf checker.closureFrames[frame].implicit, text
+      if index >= 0 && index < checker.closureFrames[frame].types.length() {
+        return true
+      }
+    }
+    frame = frame - 1
+  }
+  false
+}
+
 fn nameIndexOf(implicit: List<String?>, text: String): Int {
   for index in 0..implicit.length() {
     if implicit[index] == Some(text) {

@@ -125,6 +125,41 @@ group "Implicit parameters" {
       + "fn take<Value>(value: Value): Value \{\n  value\n\}"
     assert problems(source).contains("The parameters of this closure need types: `\{ value: Int => ... \}`")
   }
+
+  test "an implicit name that would shadow a visible one is an error (CONCEPT, Trailing Closures)" {
+    // The local used to win, silently, and nothing in the source said which of the two `amount` was meant
+    const source = "fn probe(amount: Int): Int \{\n  increase \{ amount + 1 \}\n\}\n\n"
+      + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
+    assert(problems(source) == ["The implicit parameter `amount` would shadow `amount`"])
+    assert(
+      notes(source) == ["There is no silent shadowing: name the parameter of the closure (`\{ item => ... \}`)"]
+    )
+  }
+
+  test "a binding of the body around the closure shadows just as much" {
+    const source = "fn probe(): Int \{\n  const amount = 2\n  increase \{ amount + 1 \}\n\}\n\n"
+      + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
+    assert(problems(source) == ["The implicit parameter `amount` would shadow `amount`"])
+  }
+
+  test "naming the parameter of the closure is the fix, and then the local is reachable again" {
+    const source = "fn probe(amount: Int): Int \{\n  increase \{ item => item + amount \}\n\}\n\n"
+      + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "`_` collides with nothing, so it is the other fix" {
+    const source = "fn probe(amount: Int): Int \{\n  increase \{ _ + amount \}\n\}\n\n"
+      + "fn increase(transform: (other: Int) => Int): Int \{\n  transform(1)\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a name that is not a local is not shadowed: the implicit parameter comes before the file scope" {
+    const source = "const amount = 2\n\nfn probe(): Int \{\n  increase \{ amount + 1 \}\n\}\n\n"
+      + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
+    assert problems(source).isEmpty()
+    assert(probe(source).adaptationsOf("amount + 1") == [])
+  }
 }
 
 group "Captures" {

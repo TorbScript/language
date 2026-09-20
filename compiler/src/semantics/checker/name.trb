@@ -9,7 +9,7 @@ use constructorOf, memberNames, caseNamed from "./member"
 use isConcrete, hiddenExtensionOf from "./implementation"
 use signatureOf, aliasTargetOf, genericsOf, resultOf from "./signature"
 use substitute from "./unify"
-use implicitParameterTarget, isImplicitName from "./closure"
+use implicitParameterTarget, isImplicitName, namesImplicitParameter from "./closure"
 use noteRead, noteDeclaredRead, noteCapturedBinding from "./mutation"
 
 /**
@@ -96,6 +96,14 @@ public fn resolveName(
     }
   }
   if const Some(found) = checker.findLocal(text) {
+    // The local wins, and that is exactly the silent shadowing CONCEPT forbids: the closure around this name offers an
+    // implicit parameter of the same name, and nothing in the source says which of the two is meant
+    if namesImplicitParameter(checker, text) {
+      checker.reportHere(
+        Diagnostic.error("The implicit parameter `{text}` would shadow `{text}`", at)
+          .withNote("There is no silent shadowing: name the parameter of the closure (`\{ item => ... \}`)")
+      )
+    }
     return localTarget checker, found, text, at, expected, explicit
   }
   // `numbers.map { value * 2 }`, `{ _ * 3 }`: the parameters the expected function type names
