@@ -467,8 +467,22 @@ fn recordTraitCall(var checker: Checker, at: Span, receiver: TypeId, capability:
   }
 }
 
-/** `Meters * Meters` and `"a"[0..2]`: the type does not come with the trait the operator needs. */
+/**
+ * `Meters * Meters` and `"a"[0..2]`: the type does not come with the trait the operator needs.
+ *
+ * An operand whose type is a **generic parameter** gets the message the catalogue gives an unmet bound, because the fix
+ * is a bound and not another type: `fn total<Value>(a: Value, b: Value) { a + b }` used to fall through to the back end,
+ * and `a == b` on one said nothing at all.
+ */
 fn reportMissingOperator(var checker: Checker, receiver: TypeId, capability: String, written: String, at: Span) {
+  if const .Parameter(_) = checker.types.form(receiver) {
+    const name = checker.describe receiver
+    checker.reportHere(
+      Diagnostic.error("`{name}` is not `{capability}`, so `{written}` has no meaning for it", at)
+        .withNote("Add the bound to the declaration: `where {name}: {capability}`")
+    )
+    return
+  }
   if !isFullyKnown(checker, receiver) {
     return
   }
@@ -590,9 +604,9 @@ fn textLiteralType(var checker: Checker, segments: List<TextSegment>, expected: 
 }
 
 /**
- * `"{value}"` is `Show.show` on that part. A type that has no `Show` is not reported: the standard library has no
- * `Equals`/`Hash` for its collections yet and the derivation walks fields, so a message here would be about the
- * prelude and not about the source. Recording the witness is what milestone 5 needs either way.
+ * `"{value}"` is `Show.show` on that part, and the part has to have one. 4.3 recorded the witness and said nothing
+ * where it found none, because the standard library had no `Show` for its collections; `std/collections` has it for
+ * `List`, `Set` and `Map` now, so the message is the ordinary unmet bound.
  */
 fn recordShow(var checker: Checker, found: TypeId, at: Span) {
   if checker.absorbs(found) {
@@ -607,9 +621,30 @@ fn recordShow(var checker: Checker, found: TypeId, at: Span) {
   const bound = checker.nominal show, []
   const witness = witnessFor checker, found, bound
   if const .Unresolved = witness {
+    reportNotShowable checker, found, at
     return
   }
   checker.adapted at, Adaptation.ShowValue(witness)
+}
+
+/** A part of an interpolation that has no `Show`. A generic parameter is missing a bound, everything else the trait. */
+fn reportNotShowable(var checker: Checker, found: TypeId, at: Span) {
+  if const .Parameter(_) = checker.types.form(found) {
+    const name = checker.describe found
+    checker.reportHere(
+      Diagnostic.error("`{name}` is not `Show`, so it cannot be interpolated", at)
+        .withNote("Add the bound to the declaration: `where {name}: Show`")
+    )
+    return
+  }
+  if !isFullyKnown(checker, found) {
+    return
+  }
+  const shown = checker.describe found
+  checker.reportHere(
+    Diagnostic.error("`{shown}` does not implement `Show`, so it cannot be interpolated", at)
+      .withNote("`with Show` on the declaration derives it for a type all of whose fields are `Show`")
+  )
 }
 
 /** A `Bool` or a `Char` literal: only a literal type of the matching base makes it anything but its own type. */
@@ -1393,9 +1428,10 @@ fn isArithmetic(operator: InfixOperator): Bool {
 }
 
 /**
- * Which `equals` or `compare` a comparison runs. Whether the type has one at all is *not* reported here: the prelude
- * has no `Equals` for its collections yet, so a message would be about the standard library and not about the source
- * (see the open findings of 4.3).
+ * Which `equals` or `compare` a comparison runs, and that the type has one. 4.3 left the second half out because the
+ * prelude had no `Equals` and no `Hash` for its collections, which would have made the message one about the standard
+ * library; `std/collections` carries all three for `List`, `Set` and `Map` now, so an operator asks for its trait here
+ * exactly as `a + b` does.
  */
 fn recordComparison(var checker: Checker, operator: InfixOperator, found: TypeId, at: Span) {
   if checker.absorbs(found) {
@@ -1423,6 +1459,20 @@ fn recordComparison(var checker: Checker, operator: InfixOperator, found: TypeId
   }
   if traitArgumentsOf(checker, found, symbol).isSome() {
     recordTraitCall checker, at, found, symbol, member
+    return
+  }
+  const capabilityName = if isOrdering { "Compare" } else { "Equals" }
+  reportMissingOperator checker, found, capabilityName, comparisonOf(operator), at
+}
+
+fn comparisonOf(operator: InfixOperator): String {
+  match operator {
+    .Equal => "a == b"
+    .NotEqual => "a != b"
+    .Less => "a < b"
+    .LessOrEqual => "a <= b"
+    .Greater => "a > b"
+    _ => "a >= b"
   }
 }
 

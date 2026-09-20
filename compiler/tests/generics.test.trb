@@ -79,6 +79,75 @@ group "Generic functions" {
   }
 }
 
+/**
+ * What a generic parameter has is what the traits in its bounds declare, and the bounds stand at its declaration - no
+ * call site adds to that list. So a parameter is as *fully known* as a concrete type, and every operation that asks for
+ * a trait asks it here too. Before, an unbound parameter fell through to the back end, or to 4.10's "The checker did not
+ * work out the type of this expression", which is the message about a bug of the compiler.
+ */
+group "An unbound generic parameter" {
+  test "cannot be interpolated" {
+    const source = "fn render<Value>(value: Value): String \{\n  \"\{value\}\"\n\}"
+    assert(problems(source) == ["`Value` is not `Show`, so it cannot be interpolated"])
+    assert(notes(source) == ["Add the bound to the declaration: `where Value: Show`"])
+  }
+
+  test "cannot be compared" {
+    const source = "fn same<Value>(a: Value, b: Value): Bool \{\n  a == b\n\}"
+    assert(problems(source) == ["`Value` is not `Equals`, so `a == b` has no meaning for it"])
+    assert(notes(source) == ["Add the bound to the declaration: `where Value: Equals`"])
+  }
+
+  test "cannot be ordered" {
+    const source = "fn first<Value>(a: Value, b: Value): Bool \{\n  a < b\n\}"
+    assert(problems(source) == ["`Value` is not `Compare`, so `a < b` has no meaning for it"])
+  }
+
+  test "cannot be added, which used to be the internal placeholder" {
+    const source = "fn total<Value>(a: Value, b: Value): Value \{\n  a + b\n\}"
+    assert(problems(source) == ["`Value` is not `Add`, so `a + b` has no meaning for it"])
+  }
+
+  test "cannot be indexed, sliced or negated" {
+    assert(
+      problems("fn at<Value>(value: Value): Int \{\n  value[0]\n\}")
+        == ["`Value` is not `Indexed`, so `a[key]` has no meaning for it"]
+    )
+    assert(
+      problems("fn part<Value>(value: Value): Value \{\n  value[0..2]\n\}")
+        == ["`Value` is not `Slice`, so `a[from..to]` has no meaning for it"]
+    )
+    assert(
+      problems("fn flip<Value>(value: Value): Value \{\n  -value\n\}")
+        == ["`Value` is not `Negate`, so `-a` has no meaning for it"]
+    )
+  }
+
+  test "cannot be walked by `for`" {
+    const source = "fn each<Items>(items: Items) \{\n  for value in items \{\n    print value\n  \}\n\}"
+    assert(problems(source) == ["`Items` is not `Iterable`, so `for` cannot walk it"])
+    assert(notes(source) == ["Add the bound to the declaration: `where Items: Iterable<Item>`"])
+  }
+
+  test "has no members of its own" {
+    const source = "fn reach<Value>(value: Value): Int \{\n  value.length()\n\}"
+    assert(problems(source) == ["`Value` has no member `length`"])
+    assert(
+      notes(source)
+        == ["What a generic parameter has comes from its bounds: add the trait that declares `length` (`<Value: Length>`)"]
+    )
+  }
+
+  test "and the bound is the whole fix" {
+    const source = "fn render<Value: Show>(value: Value): String \{\n  \"\{value\}\"\n\}\n\n"
+      + "fn same<Value: Equals>(a: Value, b: Value): Bool \{\n  a == b\n\}\n\n"
+      + "fn total<Value: Add>(a: Value, b: Value): Value \{\n  a + b\n\}\n\n"
+      + "fn each<Items: Iterable<Int>>(items: Items) \{\n  for value in items \{\n    print value\n  \}\n\}\n\n"
+      + "fn reach<Value: Length>(value: Value): Int \{\n  value.length()\n\}"
+    assert problems(source).isEmpty()
+  }
+}
+
 group "Generic types and methods" {
   test "a constructor of a generic type infers its arguments from the fields" {
     const source = inBody "  const holder = Holder(1)"

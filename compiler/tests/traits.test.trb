@@ -250,6 +250,33 @@ group "Operators through their traits" {
     const source = "type Amount \{\n  value: Int\n\}\n\n" + inBody("  const a = Amount(1)\n  print a[0]")
     assert(problems(source) == ["`Amount` does not implement `Indexed`, so `a[key]` has no meaning for it"])
   }
+
+  test "a comparison asks for its trait like every other operator" {
+    // 4.3 recorded the witness and said nothing where it found none, because the prelude had no `Equals` for its
+    // collections; `std/collections` carries `Equals`, `Hash` and `Show` for `List`, `Set` and `Map` now
+    const source = "type Button \{\n  handler: (Int) => Int\n\}\n\n"
+      + "fn probe(a: Button, b: Button): Bool \{\n  a == b\n\}"
+    assert(problems(source) == ["`Button` does not implement `Equals`, so `a == b` has no meaning for it"])
+    assert(notes(source) == ["Operators are traits: a type has the ones it comes `with`, and nothing else"])
+  }
+
+  test "an order is a decision, so no `type` gets a derived `Compare`" {
+    const source = "type Amount \{\n  value: Int\n\}\n\n"
+      + "fn probe(a: Amount, b: Amount): Bool \{\n  a < b\n\}"
+    assert(problems(source) == ["`Amount` does not implement `Compare`, so `a < b` has no meaning for it"])
+  }
+
+  test "a derived `Equals` is enough, and every spelling of the comparison finds it" {
+    const source = "type Amount \{\n  value: Int\n\}\n\n"
+      + "fn probe(a: Amount, b: Amount): Bool \{\n  a == b || a != b\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a `shared type` has no derived `Equals`, so it has to write one" {
+    const source = "shared type Session \{\n  var name: String = \"\"\n\}\n\n"
+      + "fn probe(a: Session, b: Session): Bool \{\n  a == b\n\}"
+    assert(problems(source) == ["`Session` does not implement `Equals`, so `a == b` has no meaning for it"])
+  }
 }
 
 group "Interpolation and iteration" {
@@ -291,6 +318,17 @@ group "Interpolation and iteration" {
     const source = "type Amount \{\n  value: Int\n\}\n\n"
       + inBody("  const a = Amount(1)\n  for part in a \{\n    print (part)\n  \}")
     assert(problems(source) == ["`Amount` is not `Iterable`, so `for` cannot walk it"])
+  }
+
+  test "an interpolated part has to be `Show`" {
+    // `Show` is derived for every type all of whose fields are `Show`, and a field that is a trait-typed value of
+    // another trait is not one: nothing about an `Equals` says how to render it
+    const source = "type Holder \{\n  item: Equals\n\}\n\n"
+      + "fn probe(holder: Holder): String \{\n  \"\{holder\}\"\n\}"
+    assert(problems(source) == ["`Holder` does not implement `Show`, so it cannot be interpolated"])
+    assert(
+      notes(source) == ["`with Show` on the declaration derives it for a type all of whose fields are `Show`"]
+    )
   }
 }
 

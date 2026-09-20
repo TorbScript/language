@@ -474,8 +474,8 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
 }
 
 /**
- * `a.b` where `b` is not there. Answers whether it said anything: what a generic parameter or a trait-typed value has
- * depends on bounds a call site solves, so nothing is said about those.
+ * `a.b` where `b` is not there. Answers whether it said anything: a type that still holds an unsolved variable says
+ * nothing about what it has, so nothing is said about it either.
  */
 public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: String, at: Span): Bool {
   if !isFullyKnown(checker, receiver) {
@@ -483,6 +483,13 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
   }
   const shown = checker.describe receiver
   var problem = Diagnostic.error "`{shown}` has no member `{text}`", at
+  // A generic parameter has exactly what the traits in its bounds declare, and the bounds stand at its declaration
+  if const .Parameter(_) = checker.types.form(receiver) {
+    problem = problem.withNote(
+      "What a generic parameter has comes from its bounds: add the trait that declares `{text}`"
+        + " (`<{shown}: Length>`)"
+    )
+  }
   // `level .Debug` lexes as `level.Debug`: whitespace never changes what a token sequence means, so `.` is one of the
   // tokens a first command argument must not start with (gap 42)
   if caseNamed(checker, receiver, text).isSome() {
@@ -511,25 +518,28 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
 }
 
 /**
- * Whether every member of a type is visible: a concrete type has the members of its body, of every extension of it
- * and of every trait it implements. A generic parameter does not, and a type that still holds an unsolved variable says
- * nothing either.
+ * Whether every member of a type is visible, which is what every message about a missing one asks first. A type that
+ * still holds an unsolved variable says nothing, and neither does anything that is broken already.
  *
- * A **trait-typed value does**: `Shape` has the members of its bounds, their defaults, their supertraits and every
- * `extend Shape` visible here, and no call site adds to that list. So `shape.perimeter()` is as reportable as
- * `square.perimeter()` - before, it was silently unchecked and only `reportUnchecked` had anything to say about it.
+ * Three forms *are* fully known, and two of them were not before:
+ *
+ * - a **concrete nominal type**, a tuple, and a literal type (which carries `parse`, `show`, `equals`, `hash`,
+ *   `encode`, `decode` and `into` without declaring any of them - since 4.10 all seven are generated),
+ * - a **trait-typed value**: `Shape` has the members of its bounds, their defaults, their supertraits and every
+ *   `extend Shape` visible here, and no call site adds to that list,
+ * - a **generic parameter**: what it has is its bounds, and those stand at its declaration. `value.length()` on an
+ *   unbound `Value` used to be silently unchecked, so the only thing said about it was 4.10's "The checker did not work
+ *   out the type of this expression" - the message about a bug of the compiler.
  */
 public fn isFullyKnown(var checker: Checker, of: TypeId): Bool {
   if checker.absorbs(of) {
     return false
   }
-  // A literal type carries `parse`, `show`, `equals`, `hash`, `encode`, `decode` and `into` without declaring any of
-  // them, and since 4.10 all seven are generated - so a member it does not have is as reportable as any other
-  const isNamed = match checker.types.form(of) {
-    .Nominal(_, _) | .Tuple(_) | .Literals(_, _) | .Traits(_) => true
+  match checker.types.form(of) {
+    .Parameter(_) => true
+    .Nominal(_, _) | .Tuple(_) | .Literals(_, _) | .Traits(_) => isConcrete checker, of
     _ => false
   }
-  isNamed && isConcrete(checker, of)
 }
 
 /** A member of the type that is at most two edits away from what was written. */

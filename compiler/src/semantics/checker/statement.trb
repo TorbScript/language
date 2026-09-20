@@ -258,10 +258,16 @@ fn reportNotIterable(var checker: Checker, subject: TypeId, at: Span) {
     return
   }
   const shown = checker.describe subject
-  checker.reportHere(
-    Diagnostic.error("`{shown}` is not `Iterable`, so `for` cannot walk it", at)
-      .withNote("`for x in xs` needs an `Iterable<Item>`: a collection, a range, a pipeline, or a type that implements it")
-  )
+  var problem = Diagnostic.error "`{shown}` is not `Iterable`, so `for` cannot walk it", at
+  // A generic parameter iterates what its bounds say it iterates, and the fix stands at its declaration
+  if const .Parameter(_) = checker.types.form(subject) {
+    problem = problem.withNote "Add the bound to the declaration: `where {shown}: Iterable<Item>`"
+  } else {
+    problem = problem.withNote(
+      "`for x in xs` needs an `Iterable<Item>`: a collection, a range, a pipeline, or a type that implements it"
+    )
+  }
+  checker.reportHere problem
 }
 
 /** `return e` is checked against the declared result; without one it *is* the result, so it is collected. */
