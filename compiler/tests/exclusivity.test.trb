@@ -79,6 +79,32 @@ group "Two `var` accesses of one call" {
       + "fn probe(var samples: List<Int>) \{\n  fill(samples[0..4], samples[7])\n\}"
     assert(problems(source) == ["`samples[...]` is being changed by `fill` right now"])
   }
+
+  test "a top-level `var` is a root like any other, from a function" {
+    // `rootKey` gives a declaration a negative number so that it can never collide with a local, and `overlaps` used to
+    // read every negative number as "this path leads nowhere" - so the rule said nothing about a script's own values
+    const source = "{report}{swap}var entry = Report()\n\nfn probe() \{\n  swap(entry, entry)\n\}\n\nprobe()\nprint entry.title"
+    assert(problems(source) == ["`entry` is being changed by `swap` right now"])
+    assert(notes(source) == ["While a `var` access runs, the same path cannot be reached a second time"])
+  }
+
+  test "and straight at the top level, which is where a script writes it" {
+    const source = "{report}{swap}var entry = Report()\nswap(entry, entry)\nprint entry.title"
+    assert(problems(source) == ["`entry` is being changed by `swap` right now"])
+  }
+
+  test "two indexes of a top-level collection cannot be told apart either" {
+    const source = "{report}{swap}var entries = [Report(), Report()]\nswap(entries[0], entries[0])\n"
+      + "print entries.length()"
+    assert(problems(source) == ["`entries[...]` is being changed by `swap` right now"])
+    assert(notes(source) == ["`items[i]` and `items[j]` cannot be told apart. Use `items.swapAt(i, j)`"])
+  }
+
+  test "two top-level declarations are two different places" {
+    const source = "{report}{swap}var first = Report()\nvar second = Report()\nswap(first, second)\n"
+      + "print first.title, second.title"
+    assert problems(source).isEmpty()
+  }
 }
 
 group "What the arguments read has ended before the access begins" {

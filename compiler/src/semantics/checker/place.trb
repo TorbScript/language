@@ -664,7 +664,7 @@ public fn openArgumentAccess(
 
 public fn openAccess(var checker: Checker, place: Place, changedBy: String, at: Span, call: Int = 0) {
   // A path that leads nowhere cannot be reached a second time either, so it is not worth a place on the stack
-  if rootKey(place.root) != -1 {
+  if rootKey(place.root) != noRoot {
     const depth = checker.runningClosures
     checker.accesses.add Access(place, changedBy, at, call, depth)
   }
@@ -731,7 +731,9 @@ public fn checkAccess(var checker: Checker, place: Place, at: Span): Bool {
  */
 fn overlaps(first: Place, second: Place): Bool {
   const root = rootKey first.root
-  if root < 0 || root != rootKey(second.root) {
+  // `-1` is a root that leads nowhere and overlaps nothing, not "every negative number": a top-level `var` is a
+  // *symbol*, and `rootKey` gives it a negative number of its own so that it can never collide with a local
+  if root == noRoot || root != rootKey(second.root) {
     return false
   }
   var shorter = first.steps.length()
@@ -746,12 +748,15 @@ fn overlaps(first: Place, second: Place): Bool {
   true
 }
 
+/** A path that leads nowhere: a temporary, or one a message was already given about. It overlaps nothing. */
+const noRoot = -1
+
 /** One number per root, so that two places are compared without building a key. Locals and symbols never collide. */
 fn rootKey(root: PlaceRoot): Int {
   match root {
     .Local(binding) => binding.value
     .Declared(symbol) => -2 - symbol.value
-    _ => -1
+    _ => noRoot
   }
 }
 
@@ -857,7 +862,7 @@ fn checkReads(var checker: Checker, expression: Expression) {
   match expression.kind {
     .Name(_) | .Member(_, _, _) | .Index(_, _) => {
       const place = placeOf checker, expression
-      if rootKey(place.root) != -1 {
+      if rootKey(place.root) != noRoot {
         const _ = checkAccess checker, place, expression.span
         // The key of an index is an expression of its own and reads whatever it reads
         if const .Index(_, index) = expression.kind {
@@ -938,7 +943,7 @@ public fn requireSharedSource(var checker: Checker, value: Expression, annotatio
     return
   }
   const place = placeOf checker, value
-  if rootKey(place.root) != -1 {
+  if rootKey(place.root) != noRoot {
     if isMutable(checker, place) {
       return
     }
