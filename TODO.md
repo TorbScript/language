@@ -1154,3 +1154,17 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Läuft (zwei Opus-Agents parallel):** "Collection-Kern" (Index-Pfade, Map-/Set-Cursor, `sort`/`slice`,
     Varargs/Spread → `print`-Sonderfall weg) und "langer Schwanz" (interner Fehler, Konstanten, `String.chars`,
     Listen-Patterns, CLI-Natives 5.12, Treiber 5.13, quotierte Ausdrücke 5.11).
+
+- (Patterns und Schreibweise, 2026-09-21) **Entschieden (Nutzer):** Die Schreibweise wird Sprachregel. Typen, Traits,
+  Cases und Typparameter beginnen mit einem Großbuchstaben; Funktionen, Methoden, Felder, Parameter, Locals und
+  Konstanten beginnen klein (kein MACRO_CASE) - alles andere ist ein Compile-Fehler an der Deklaration. Damit ist die
+  Pattern-Regel "groß = Case, klein = Bindung" keine Konvention mehr, sondern vom Compiler garantiert. Betroffen ist
+  ohnehin nur EINE Stelle: der einzelne nackte Name ohne Klammern und ohne Punkt (`None`, `Active`); `Name(...)` und
+  `.Name` sind an Klammer bzw. Punkt eindeutig, und einen nackten Typnamen gibt es in Patterns nicht (kein Typtest).
+  - **Dazu (ich):** Eine ungenutzte Bindung in einem `match`-Arm wird ein Fehler ("schreib `_`", oder `_name`, wenn
+    der Name dokumentieren soll) - das schließt `limit =>`, das still eine sichtbare Konstante überdeckt.
+  - **Offen (Nutzer):** Bezeichner auf ASCII beschränken? Meine Empfehlung: ja, ohne Mathe-Whitelist (Analyse im
+    Chat: Homoglyphen/UTS 39, Normalisierung, zwei Lexer + C-Runtime müssten dieselben Unicode-Tabellen tragen -
+    `torb_char_is_letter` ist oberhalb von ASCII heute nur genähert, das wäre eine Fixpunkt-Abweichung; `Δt` wäre nach
+    der Schreibregel ein Typ). Öffnen geht später ohne Bruch, Schließen nicht.
+  - Umsetzung: kleine Checker-/Lexer-Runde nach den beiden Back-End-Merges.
