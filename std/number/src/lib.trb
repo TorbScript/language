@@ -210,12 +210,15 @@ extend Float64 {
   /**
    * Floats are compared with a tolerance: `assert(length.isCloseTo(1.0))`
    *
-   * The three exact comparisons a float has are deliberately different from each other, because IEEE-754 equality is
-   * not an equivalence relation and there is no total order with `nan` in it:
+   * The exact comparisons a float has are deliberately different from each other, because IEEE-754 equality is not an
+   * equivalence relation and IEEE-754 ordering is not a total order:
    *
-   * - `==` is IEEE-754: `nan != nan`, and `0.0 == -0.0`.
+   * - **Every operator is IEEE-754**: `==`, `<`, `<=`, `>` and `>=`. `nan != nan`, every comparison with a `nan` on
+   *   either side is `false`, and `0.0 == -0.0`.
    * - `compare` is a **total** order: `nan` is above everything, and `-0.0` compares equal to `0.0`. So `sorted`
    *   terminates whatever pivot it picks, whatever is in the list.
+   * - A float is therefore the one type where an operator and the member behind it disagree, which is why everything
+   *   that *orders* values calls `compare` and never writes `<=`: an IEEE `<=` would leave a `nan` where it started.
    * - `Float32` and `Float64` are not `Hash`, so a float is never a `Map` key and the `nan` key does not exist.
    */
   fn isCloseTo(self, other: Float64, tolerance: Float64 = 0.000001): Bool {

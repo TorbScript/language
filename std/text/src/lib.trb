@@ -21,18 +21,29 @@ use Iterable, Length, concatenated from "std/iteration"
  * - [String] - text made of many of them.
  */
 public native type Char with Equals, Compare, Hash, Show {
-  /** Whether the character is a decimal digit (`0`-`9` and their Unicode equivalents). */
+  /** Whether the character is a decimal digit: `0` to `9`, and nothing else. */
   native fn isDigit(self): Bool
-  /** Whether the character is a letter, in any script. */
+  /** Whether the character is a letter. Exact for ASCII, and by the division Latin-1 itself makes above it. */
   native fn isLetter(self): Bool
-  /** Whether the character is whitespace: space, tab, newline and their Unicode equivalents. */
+  /** Whether the character is whitespace: the ASCII ones, plus the `White_Space` code points a text really carries. */
   native fn isWhitespace(self): Bool
 
   /** The number of bytes of the character in UTF-8 (1 to 4): what it adds to an offset into a `String`. */
   native fn byteLength(self): Int
-  /** The same character in upper case, or itself where the script has no case. */
+  /**
+   * The same character in upper case, or itself where there is no single upper-case code point for it.
+   *
+   * This is the **simple** case mapping: one code point in, one code point out, over ASCII, over the letters of
+   * Latin-1 and over the one pair that reaches out of it (`ÿ` to `Ÿ`). So `ß` is answered unchanged - its upper case is
+   * `SS`, which is two code points and does not fit a `Char` - and so is every code point the mapping does not cover.
+   *
+   * # Pitfalls
+   *
+   * Upper-casing a text character by character is therefore not the same as a full Unicode mapping, and is what
+   * [String.toUpperCase] does today.
+   */
   native fn toUpperCase(self): Char
-  /** The same character in lower case, or itself where the script has no case. */
+  /** The same character in lower case, or itself where there is none. The mirror of [Char.toUpperCase]. */
   native fn toLowerCase(self): Char
 
   /** `'A'`: inside of another value a character is written in single quotes, with escapes. */
@@ -144,9 +155,15 @@ public native type String
 
   /** The text with leading and trailing whitespace removed. */
   native fn trim(self): String
-  /** The text in upper case. */
+  /**
+   * The text in upper case: [Char.toUpperCase] for every character, and nothing more.
+   *
+   * Every pair of that mapping needs as many bytes as the character it came from, so the result is exactly as long as
+   * the text. A full Unicode mapping may make a text *longer* (`ß` becomes `SS`), and this one therefore leaves such a
+   * character alone.
+   */
   native fn toUpperCase(self): String
-  /** The text in lower case. */
+  /** The text in lower case: [Char.toLowerCase] for every character. The mirror of [String.toUpperCase]. */
   native fn toLowerCase(self): String
   /** Every occurrence of `part`, replaced with `replacement`. */
   native fn replace(self, part: String, replacement: String): String

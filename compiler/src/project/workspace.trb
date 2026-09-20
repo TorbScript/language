@@ -122,6 +122,11 @@ fn packageAt(tree: SourceTree, directory: String): Package {
   const manifest = manifestOf tree, directory
   var files = tree.below joinPath(directory, "src")
   for file in tree.below(joinPath(directory, manifest.testInput)) {
+    // A `project.trb` is never an ordinary module, whatever `test { input }` sweeps in: it declares the package and
+    // its scope is "the prelude, and nothing else", so it is a receiver script or it is nothing
+    if pathName(file) == "project.trb" {
+      continue
+    }
     if !files.contains(file) {
       files.add file
     }

@@ -21,7 +21,23 @@ pub enum Flow {
     Failure(Box<Failure>),
 }
 
+/// What a failure is, which decides the report and the exit code. The conformance suite compares all three.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum FailureKind {
+    /// The language's panic: `panic: <message>`, the site, exit code 101. The compiled back end prints the same
+    /// two lines, so a conformance program compares them byte for byte.
+    Panic,
+    /// A top-level `?` that failed: `error: <the error through Show>`, one `  caused by:` line per link of the
+    /// `cause()` chain, exit code 1. Not a panic - there is nothing above an entry file to hand a failure to.
+    Error,
+    /// What only the untyped interpreter runs into: a name that is nowhere, a method a value does not have, a `var`
+    /// path that was moved out. The type checker of stage 1 rejects every program that reaches one, so a compiled
+    /// program has no counterpart for it - and it keeps the interpreter's own report, with the calls it came through.
+    Interpreter,
+}
+
 pub struct Failure {
+    pub kind: FailureKind,
     pub message: String,
     pub location: Option<String>,
     pub trace: Vec<String>,
@@ -29,9 +45,112 @@ pub struct Failure {
 
 pub type Eval<T = Value> = Result<T, Flow>;
 
-/// A failure without a location. The nearest call site adds it.
+/// A failure of the interpreter itself, without a location. The nearest call site adds it.
 pub fn failure(message: impl Into<String>) -> Flow {
-    Flow::Failure(Box::new(Failure { message: message.into(), location: None, trace: Vec::new() }))
+    of_kind(FailureKind::Interpreter, message)
+}
+
+/// The language's panic, at the site the nearest call adds: what `panic`, an overflow and a division by zero do.
+pub fn panicked(message: impl Into<String>) -> Flow {
+    of_kind(FailureKind::Panic, message)
+}
+
+/// The language's panic inside a body of `std/` that a native answers here.
+///
+/// The site is that file and nothing more: stage 0 does not load `std/`, so there is no line to name. The conformance
+/// runner reads the position of a `std/` frame as `_:_` on both sides, which is what makes the two agree on the file.
+pub fn library_panic(message: impl Into<String>, file: &str) -> Flow {
+    let mut flow = of_kind(FailureKind::Panic, message);
+    if let Flow::Failure(failure) = &mut flow {
+        failure.location = Some(file.to_string());
+    }
+    flow
+}
+
+fn of_kind(kind: FailureKind, message: impl Into<String>) -> Flow {
+    Flow::Failure(Box::new(Failure { kind, message: message.into(), location: None, trace: Vec::new() }))
+}
+
+/// `torb_panic_overflow` in `runtime/panic.c`, to the character: the message of an arithmetic overflow is the
+/// language's and not a diagnostic of one implementation.
+pub fn overflow_message(operation: &str) -> String {
+    format!("arithmetic overflow in `{operation}`")
+}
+
+/// `torb_panic_division_by_zero` in `runtime/panic.c`, to the character.
+pub fn division_by_zero_message(operation: &str) -> String {
+    format!("division by zero in `{operation}`")
+}
+
+/// `torb_panic_index_out_of_bounds` in `runtime/panic.c`, to the character.
+pub fn out_of_bounds_message(index: i64, length: usize) -> String {
+    format!("index {index} is out of bounds for a length of {length}")
+}
+
+/// `torb_panic_range_reversed` in `runtime/panic.c`, to the character.
+pub fn reversed_range_message(from: i64, to: i64) -> String {
+    format!("the range {from}..{to} starts after it ends")
+}
+
+/// `torb_panic_offset_past_end` in `runtime/panic.c`, to the character.
+pub fn past_end_message(offset: i64, length: usize) -> String {
+    format!("the offset {offset} is past the end of a text of {length} bytes")
+}
+
+/// `torb_panic_offset_inside_character` in `runtime/panic.c`, to the character.
+pub fn inside_character_message(offset: i64, length: usize) -> String {
+    format!("the offset {offset} is inside of a character of a text of {length} bytes")
+}
+
+/// What `Indexed.at` expects, and therefore what `a[key]` past the end of a list and a missing key of a map panic with.
+pub const MISSING_KEY: &str = "Key does not exist";
+
+/// Which of the two offsets of a slice fell inside of a character, the way `torb_text_slice` tests them: the start
+/// first, and only then the end.
+pub fn inside_offset(text: &str, from: usize, to: usize) -> i64 {
+    let offset = if text.is_char_boundary(from) { to } else { from };
+    offset as i64
+}
+
+// The files of `std/` whose bodies a native answers here, for the site of the panic one of them writes. A panic of the
+// standard library is at the line of `std/` that writes it, and stage 0 loads no `std/` - so it names the file and no
+// position. The conformance runner reads a position in a `std/` frame as `_:_` on both sides, which is what makes the
+// two reports agree on the file without pinning a line that a comment above it moves.
+pub const OPTION_FILE: &str = "std/core/src/option.trb";
+pub const RESULT_FILE: &str = "std/core/src/result.trb";
+pub const LIST_FILE: &str = "std/collections/src/list.trb";
+pub const TEXT_FILE: &str = "std/text/src/lib.trb";
+
+/// The two operands of a comparison as floats, where a float is on either side: without a type checker an `Int` next
+/// to a `Float` is a `Float` (`bootstrap/README.md`), and the comparison is the float one.
+fn float_pair(left: &Value, right: &Value) -> Option<(f64, f64)> {
+    match (left, right) {
+        (Value::Float(a), Value::Float(b)) => Some((*a, *b)),
+        (Value::Float(a), Value::Int(b)) => Some((*a, *b as f64)),
+        (Value::Int(a), Value::Float(b)) => Some((*a as f64, *b)),
+        _ => None,
+    }
+}
+
+/// Whether a panic prints the calls it came through, which `TORB_FRAMES=1` asks for.
+///
+/// A panic of the language is two lines and no more (CONCEPT, "A panic is output"), and that is what the conformance
+/// suite compares - so the frames are off, the way they are in the release profile of a compiled program. They are what
+/// a panic inside the toolchain is debugged with, and a failure of the interpreter itself always has them.
+pub fn wants_frames() -> bool {
+    static WANTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *WANTED.get_or_init(|| std::env::var("TORB_FRAMES").is_ok_and(|value| !value.is_empty() && value != "0"))
+}
+
+/// How an operator is written, for the message of an overflow.
+fn written_operator(operator: BinaryOperator) -> &'static str {
+    match operator {
+        BinaryOperator::Add => "+",
+        BinaryOperator::Subtract => "-",
+        BinaryOperator::Multiply => "*",
+        BinaryOperator::Divide => "/",
+        _ => "%",
+    }
 }
 
 /// Evaluated arguments of a call to something that is not a declared function.
@@ -166,18 +285,44 @@ impl Interpreter {
             Ok(_) | Err(Flow::Break | Flow::Continue) => Ok(()),
             Err(Flow::Return(Value::Result(Err(error)))) => {
                 let message = self.show(&error, true).unwrap_or_else(|_| "an error".to_string());
-                Err(Failure { message, location: None, trace: Vec::new() })
+                let trace = self.causes_of(&error);
+                Err(Failure { kind: FailureKind::Error, message, location: None, trace })
             }
             Err(Flow::Return(_)) => Ok(()),
             Err(Flow::Failure(failure)) => Err(*failure),
         }
     }
 
+    /// One `caused by: <the error through Show>` line per link of an error's `cause()` chain, for the report of a
+    /// top-level `?`. An error that does not carry `Error` has no `cause`, and the chain is then empty.
+    fn causes_of(&mut self, error: &Value) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut current = error.clone();
+        // A chain that loops back on itself would never end, and an error value cannot be inspected for that here
+        while lines.len() < 32 {
+            let Value::Object(object) = &current else { break };
+            if !object.info.methods.borrow().contains_key("cause") {
+                break;
+            }
+            let Ok(Value::Option(Some(cause))) = self.call_method_by_name(&current, "cause", Vec::new()) else { break };
+            let Ok(shown) = self.show(&cause, true) else { break };
+            lines.push(format!("caused by: {shown}"));
+            current = (*cause).clone();
+        }
+        lines
+    }
+
     fn located<T>(&self, result: Eval<T>, environment: &Environment, span: Span) -> Eval<T> {
         result.map_err(|flow| match flow {
             Flow::Failure(mut failure) => {
-                if failure.location.is_none() {
-                    failure.location = Some(environment.module.location(span));
+                match &failure.location {
+                    None => failure.location = Some(environment.module.location(span)),
+                    // A panic a native answers for a body of `std/` names that file and has no line. Where the frames
+                    // are asked for, the site in the program is the line under it
+                    Some(_) if wants_frames() && failure.trace.is_empty() => {
+                        failure.trace.push(format!("at {}", environment.module.location(span)));
+                    }
+                    Some(_) => {}
                 }
                 Flow::Failure(failure)
             }
@@ -778,24 +923,27 @@ impl Interpreter {
 
     fn index(&mut self, target: &Value, index: &Value) -> Eval {
         match (target, index) {
+            // `a[key]` is `Indexed.at`, whose default is `get(key).expect("Key does not exist")` - so a list and a map
+            // that are read past what they hold panic with one message, at the line of `expect`
             (Value::List(items), Value::Int(position)) => match usize::try_from(*position).ok().and_then(|position| items.get(position)) {
                 Some(item) => Ok(item.clone()),
-                None => Err(failure(format!("Index {position} is out of bounds (the length is {})", items.len()))),
+                None => Err(library_panic(MISSING_KEY, OPTION_FILE)),
             },
             (Value::List(items), Value::Range(range)) => {
-                let (from, to) = slice_bounds(*range, items.len())?;
+                let (from, to) = list_slice_bounds(*range, items.len())?;
                 Ok(Value::list(items[from..to].to_vec()))
             }
             (Value::Text(text), Value::Range(range)) => {
-                let (from, to) = slice_bounds(*range, text.as_str().len())?;
+                let length = text.as_str().len();
+                let (from, to) = text_slice_bounds(*range, length)?;
                 match text.slice(from, to) {
                     Some(slice) => Ok(Value::Text(slice)),
-                    None => Err(failure(format!("The offsets {from}..{to} are inside of a character"))),
+                    None => Err(library_panic(inside_character_message(inside_offset(text.as_str(), from, to), length), TEXT_FILE)),
                 }
             }
             (Value::Map(table), key) => match table.get(key) {
                 Some(value) => Ok(value.clone()),
-                None => Err(failure(format!("There is no entry for {}", self.describe(key)))),
+                None => Err(library_panic(MISSING_KEY, OPTION_FILE)),
             },
             (Value::Object(object), _) => {
                 let method = object.info.methods.borrow().get("at").or(object.info.methods.borrow().get("get")).cloned();
@@ -819,7 +967,9 @@ impl Interpreter {
 
     fn unary(&mut self, operator: UnaryOperator, value: Value) -> Eval {
         match (operator, &value) {
-            (UnaryOperator::Negate, Value::Int(number)) => number.checked_neg().map(Value::Int).ok_or_else(|| failure("Integer overflow")),
+            (UnaryOperator::Negate, Value::Int(number)) => {
+                number.checked_neg().map(Value::Int).ok_or_else(|| panicked(overflow_message("-")))
+            }
             (UnaryOperator::Negate, Value::Float(number)) => Ok(Value::Float(-number)),
             (UnaryOperator::Negate, Value::Object(_)) => self.call_method_by_name(&value, "negate", Vec::new()),
             (UnaryOperator::Not, Value::Bool(flag)) => Ok(Value::Bool(!flag)),
@@ -876,7 +1026,16 @@ impl Interpreter {
             Equal => return Ok(Value::Bool(left == right)),
             NotEqual => return Ok(Value::Bool(left != right)),
             Less | LessOrEqual | Greater | GreaterOrEqual => {
-                let ordering = self.compare(&left, &right)?;
+                // On a float the four operators are IEEE-754, the way `==` is: every one of them is `false` where a
+                // `nan` is on either side. Only `compare` is the total order that puts `nan` above everything, which
+                // is what `torb_compare_f64` implements and what `sorted` uses
+                let ordering = match float_pair(&left, &right) {
+                    Some((a, b)) => match a.partial_cmp(&b) {
+                        Some(ordering) => ordering,
+                        None => return Ok(Value::Bool(false)),
+                    },
+                    None => self.compare(&left, &right)?,
+                };
                 return Ok(Value::Bool(match operator {
                     Less => ordering.is_lt(),
                     LessOrEqual => ordering.is_le(),
@@ -898,12 +1057,12 @@ impl Interpreter {
                     Add => a.checked_add(*b),
                     Subtract => a.checked_sub(*b),
                     Multiply => a.checked_mul(*b),
-                    Divide if *b == 0 => return Err(failure("Division by zero")),
-                    Remainder if *b == 0 => return Err(failure("Division by zero")),
+                    Divide if *b == 0 => return Err(panicked(division_by_zero_message("/"))),
+                    Remainder if *b == 0 => return Err(panicked(division_by_zero_message("%"))),
                     Divide => a.checked_div(*b),
                     _ => a.checked_rem(*b),
                 };
-                result.map(Value::Int).ok_or_else(|| failure("Integer overflow"))
+                result.map(Value::Int).ok_or_else(|| panicked(overflow_message(written_operator(operator))))
             }
             (Value::Float(a), Value::Float(b)) => Ok(Value::Float(match operator {
                 Add => a + b,
@@ -1265,7 +1424,7 @@ impl Interpreter {
                             // A slice of a string is a value, not a path
                             _ => return Ok(None),
                         };
-                        let bounds = slice_bounds(range, length);
+                        let bounds = list_slice_bounds(range, length);
                         let (from, to) = self.located(bounds, environment, index.span)?;
                         Step::Slice(from, to)
                     }
@@ -2307,20 +2466,42 @@ fn wrap(name: &str, mut arguments: Vec<Value>) -> Eval {
     })
 }
 
-pub fn slice_bounds(range: Range, length: usize) -> Eval<(usize, usize)> {
-    let from = usize::try_from(range.start).ok();
-    let to = match range.end {
-        Some(end) => usize::try_from(end).ok(),
-        None => Some(length),
-    };
-    match (from, to) {
-        (Some(from), Some(to)) if from <= to && to <= length => Ok((from, to)),
-        _ => Err(failure(format!(
-            "The range {}..{} is out of bounds (the length is {length})",
-            range.start,
-            range.end.map_or(String::new(), |end| end.to_string())
-        ))),
+/// The two offsets of `a[from..to]` on a list, and the two panics `List.slice` writes for a range that does not fit.
+///
+/// `Range.end` is exclusive here already, which is the number `std/collections/src/list.trb` calls `last` and prints.
+pub fn list_slice_bounds(range: Range, length: usize) -> Eval<(usize, usize)> {
+    let count = length as i64;
+    let from = range.start;
+    let last = range.end.unwrap_or(count);
+    if from < 0 || last > count {
+        let shown = if from < 0 { from } else { last };
+        return Err(library_panic(out_of_bounds_message(shown, length), LIST_FILE));
     }
+    if from > last {
+        return Err(library_panic(reversed_range_message(from, last), LIST_FILE));
+    }
+    Ok((from as usize, last as usize))
+}
+
+/// The two offsets of `text[from..to]`, and the panics `torb_text_slice` writes for offsets that do not fit.
+///
+/// A byte offset is not a character offset, so the slice of a text has three ways to be wrong where a list has two:
+/// past the end, reversed, and in the middle of a character. The third one is the caller's, because only it has the
+/// bytes.
+pub fn text_slice_bounds(range: Range, length: usize) -> Eval<(usize, usize)> {
+    let count = length as i64;
+    let from = range.start;
+    let to = range.end.unwrap_or(count);
+    if from < 0 {
+        return Err(library_panic(past_end_message(from, length), TEXT_FILE));
+    }
+    if to < 0 || to > count {
+        return Err(library_panic(past_end_message(to, length), TEXT_FILE));
+    }
+    if from > to {
+        return Err(library_panic(reversed_range_message(from, to), TEXT_FILE));
+    }
+    Ok((from as usize, to as usize))
 }
 
 /// Walks down a path for writing. Storage that is shared is copied on the way (`Rc::make_mut`).
@@ -2347,12 +2528,14 @@ fn navigate<'value>(mut current: &'value mut Value, steps: &[Step]) -> Eval<&'va
                 let length = items.len();
                 match usize::try_from(*index).ok().filter(|position| *position < length) {
                     Some(position) => &mut Rc::make_mut(items)[position],
-                    None => return Err(failure(format!("Index {index} is out of bounds (the length is {length})"))),
+                    None => return Err(library_panic(out_of_bounds_message(*index, length), LIST_FILE)),
                 }
             }
+            // `groups[key].add(value)` takes the entry out and puts it back, and a key that is not there is the same
+            // panic the read of one is
             (Step::Index(key), Value::Map(table)) => match Rc::make_mut(table).get_mut(key) {
                 Some(value) => value,
-                None => return Err(failure("There is no entry for this key")),
+                None => return Err(library_panic(MISSING_KEY, OPTION_FILE)),
             },
             _ => return Err(failure("This path cannot be changed")),
         };

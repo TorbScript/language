@@ -841,7 +841,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.11** | `Expression<Value>`: static trees, captures, `assert`, `test`/`group` and `torb test` natively. **Gate: `compiler/tests/*.test.trb` run from the native binary** | `ir/lower/quote.trb`, `runtime/`, `cli/test.trb` | The compiler's own tests | 5.10 |
 | **5.12** | **Done for what the compiler needs** (`File.createDirectory`, `Process.run`, `Clock.milliseconds` and the `.Fallible` shape of `std/fs`, see the note of 6.1's long tail). **Runtime half done.** The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
 | **5.13** | The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir`, the `error:` report of a top-level `?` (it walks `cause()`) and `?` return traces in the debug profile | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE, an error chain of three prints three lines | 5.3 |
-| **5.14** | Conformance and determinism: one runner over stage 0 and the C back end, `--emit-c` twice byte identical for the whole workspace, no absolute path in the output, timing budget | `compiler/tests/backend.test.trb`, the runner | Everything above | 5.1-5.13 |
+| **5.14** | **Done.** Conformance: one runner over stage 0 and the C back end that compares standard output, standard error and the exit code with nothing exempt; the panic format and every recorded divergence closed; `--emit-c` twice byte identical; no absolute path in the output | `bootstrap/crates/torb-interpreter`, `runtime/text.c`, `bootstrap/tests/native/`, the runner | **57 gate programs**, each run twice and compared byte for byte (`cargo test --release --test native`) | 5.1-5.13 |
 | **6.1** | Compile `compiler/` with stage 1: every missing intrinsic, every crash, every construct the compiler uses and the lowering does not cover yet. **Gate: a `torb` binary exists** | wherever it hurts | `torb check ..` from the new binary gives the same output as stage 1 | 5.14 |
 | **6.2** | **Done.** The fixpoint: stage 2 compiles `compiler/` again, the two C files are compared byte for byte, stage 3 emits a third one. `bootstrap/` frozen | `std/iteration/src/concatenate.trb`, `runtime/platform.c`, `bootstrap/crates/torb-cli/tests/fixpoint.rs` | **The fixpoint gate** (`cargo test --release --test fixpoint -- --ignored`) | 6.1 |
 | **6.3** | **Measured, and one third of it done** (see "What 6.3 measured"): the flags stay, the translation unit is **not** sharded (4.3x faster to compile, 2.3x slower a binary), one witness thunk per member instead of per table entry (-13.3% of the C, -22% of the gcc), the module `const` of the lexer read once per file. **Left:** the mangled names (62.5% of the file), the element-type-blind collection defaults, `R_`/`D_` keyed on a layout's shape, `#line` behind a profile, the immortal counted static for a module `const`, a budget for `torb build` of the workspace | `backend/c/emit.trb`, `syntax/lexer.trb` | A timing test in the suite | 6.2 |
@@ -2230,6 +2230,8 @@ or what the two back ends can *both* write, the code won and this is the list. E
   to fix on the C side; changing the *interpreter* touches every diagnostic of `torb test` and of the compiler's own
   output, and it is already the first entry on 5.14's list ("Unifying stage 0 and the binary is 5.14's"). `native.rs`
   therefore still knows about exactly this one difference: for a program that panics, stage 0 only has to fail.
+  **Closed by 5.14** ("What 5.14 decided", below): the interpreter has three kinds of failure now, and nothing about a
+  panic is exempt from the comparison any more.
 - **One escape table, in three languages.** A nested `String` and `Char` are escaped the way a literal writes them:
   `\n`, `\r`, `\t`, `\\`, the quote, and `\u{h}` below `0x20` and at `0x7F`. It is `torb_escape_char` in
   `runtime/text.c`, `escape_char` in `bootstrap/crates/torb-interpreter/src/interpreter.rs` and `escaped` in
@@ -2403,7 +2405,7 @@ declarations).
   by the wrong amount is a wrong character and not a slower loop, a cursor over a **slice** (which may not read the
   storage in front of it), `charAt` past the end, `String.from`, and `Int.from(byte)`. Compiled, run, compared with stage
   0 byte for byte, `live blocks at exit: 0`.
-- **One divergence this found and did not close:** `Char.toUpperCase` of a non-ASCII letter. Stage 0 answers Rust's full
+- **One divergence this found and did not close** (5.14 did): `Char.toUpperCase` of a non-ASCII letter. Stage 0 answers Rust's full
   Unicode mapping ('ä' to 'Ä'), the runtime's is ASCII only, and `runtime/README.md` promises "ASCII plus the letters of
   Latin-1" for the *text* functions. It is one more entry on 5.14's list of "unify stage 0 and the binary", and the gate
   program upper-cases an ASCII word so that it tests the cursor and not the table.
@@ -2755,7 +2757,7 @@ own, because peak working set is the one number a second process in the same run
    immortal counted static above) and the instance count.
 
 **Two more entries for 5.14's list of differences between stage 0 and the binary**, both found by a gate program of this
-round and neither fixed:
+round and neither fixed (the first one is closed by 5.14, below; the second waits for 7.3):
 
 - **Stage 0 refuses to compare a `nan` at all** ("the Float NaN and the Float 1.5 cannot be compared"), where the language
   says `nan` is above everything (decided gap 5) and `torb_compare_f64` implements that. So no program can compare the two
@@ -2975,6 +2977,126 @@ test module plus a generated entry that runs them in order is roughly the size o
 already takes a **list** of entry modules (`lowerWorkspace ... modules`); what is missing is an entry that calls each
 module's entry function with the file's name printed in front of it, and `emitProgram` taking more than one entry name.
 The counts of the summary line belong in `runtime/` next to `test` itself, so that both back ends print one format.
+
+### What 5.14 decided: one observable behaviour
+
+**The conformance suite compares everything a program can be observed doing, and nothing is exempt.** Before this
+sub-milestone `native.rs` knew about one allowed difference - a program that panicked only had to *fail* on stage 0 - and
+that hole is closed: standard output, standard error and the exit code are compared byte for byte for all 57 programs of
+`bootstrap/tests/native/`, and a program with no `.stderr` file promises to write nothing there at all. `bootstrap/tests/native/README.md` is the contract, and it names which program pins which
+behaviour.
+
+**The one thing read loosely is the position inside a frame of `std/`.** A `.stderr` file writes
+`  at std/core/src/option.trb:_:_`, because a line of the standard library moves whenever a comment above it is edited
+and what a program promises is *which file* panicked. Stage 0 answers those bodies with a native and has no line for one
+at all, so it writes the file without a position, which reads the same way. That is a position nothing promises, not a
+behaviour.
+
+**A program ends in one of three ways, and the interpreter now says which.** `Failure` carries a `FailureKind`:
+
+| | Report | Exit code | Compared |
+|---|--------|-----------|----------|
+| `Panic` - `panic`, overflow, division by zero, an index out of range, `expect` | `panic: <message>` and `  at <path>:<line>:<column>` | **101** | yes |
+| `Error` - a top-level `?` that failed | `error: <the error through Show>` and one `  caused by:` per link of `cause()` | 1 | the first line and the code; the chain waits for the back end |
+| `Interpreter` - a name that is nowhere, a method a value does not have, a `var` path that was moved out | `error: <message>`, the site, and `  in <function>` per call | 1 | no counterpart |
+
+The third kind is why the interpreter did not simply start printing `panic:` for every failure: stage 1's type checker
+rejects every program that reaches one, so a compiled program has nothing to compare against it, and its frames are what
+a crash of the toolchain is debugged with. **A panic prints two lines and no more**, the way the release profile of a
+compiled program does; `TORB_FRAMES=1` adds the frames and, under a panic whose site is a file of `std/`, the site in the
+program.
+
+**A runtime location is the stable path,** `torbscript/compiler/src/ir/print.trb`: the package's name plus the file below
+the package's directory, which is exactly what `pathsOfModules` of the lowering interns. Stage 0 has no workspace, so the
+loader walks up to the nearest `project.trb` and reads its `name "..."` statically - 30 lines in `program.rs`, cached per
+directory. A problem of *loading* keeps the path of the machine, because it is editor-facing rather than compared.
+
+**Every divergence that was recorded is closed, and the side that was wrong was not always stage 0.**
+
+| What differed | Which side was wrong | How it is pinned |
+|---------------|----------------------|------------------|
+| The panic report and the exit code (`error:` and 1 against `panic:` and 101) | stage 0 | every `.stderr` of the suite |
+| `Integer overflow` against ``arithmetic overflow in `*` ``, with the operator in it | stage 0 | `overflow.trb`, `negate-overflow.trb` |
+| `Division by zero` against ``division by zero in `/` `` | stage 0 | `division-by-zero.trb`, `remainder-by-zero.trb` |
+| An index out of range: stage 0's own message against `Indexed.at`'s `Key does not exist` | stage 0 | `collection-index.trb` |
+| A slice out of range and a reversed one | stage 0 | `slice-out-of-range.trb`, `slice-reversed.trb` |
+| A text sliced past its end, and an offset inside a character | stage 0 | `text-slice-past-end.trb` |
+| `expect` on `None` and on a `Fail`: the message, and which file of `std/core` the frame names | stage 0 | `expect-none.trb`, `expect-failure.trb` |
+| An absolute path, with Windows' verbatim `\\?\` prefix, in the site of a failure | stage 0 | every `.stderr` with a frame of the program |
+| Stage 0 refused to compare a `nan` at all | stage 0 | `float-order.trb` |
+| `sorted` put a `nan` where it started, because `List.sort` compared with `<=` | **`std/collections`** | `float-order.trb` |
+| `Char.toUpperCase` of a non-ASCII letter: Rust's full Unicode against ASCII only, and `'ß'` became `'S'` | **both** | `character-case.trb` |
+| `String.toUpperCase`: Rust's full Unicode against a byte-wise ASCII loop | **both** | `character-case.trb` |
+| `Char.isDigit`/`isLetter`/`isWhitespace`: Rust's tables against the runtime's approximation | stage 0 | `character-case.trb` |
+| A `project.trb` was an ordinary module wherever `test { input "." }` swept it in, so it was reported as a syntax error | the front end | `torb check tests/native` |
+| A top-level `?` walked `cause()` in neither back end, though CONCEPT shows the chain | stage 0 (fixed), the back end (open) | `stage-0-only/error-chain.trb` |
+
+**What still differs, and why.**
+
+- **`Show` of a function value.** The owner decided the source spelling of its type (`(Int64) => Int64`); stage 0 prints
+  `<function>` and the back end reports "not supported by the back end yet: a generated `show` of `Closure(...)`". Both
+  halves are real work - stage 0 has no types and would have to spell one from the declaration's annotations, including
+  `Int` to `Int64` - and neither is on the way to anything. No gate program can exist until the back end can emit one, so
+  this is the one entry that moves to 6.3's list rather than being closed here.
+- **A top-level `?` whose error carries `Error` walks `cause()` on stage 0 and not in the binary.** CONCEPT shows the
+  `  caused by:` lines and the interpreter writes them now; `reportFailure` in `ir/lower/match.trb` writes the first line
+  and exits, and says at the function that the loop over `cause()` is one loop on top of it. Found by a gate program
+  written for this milestone, so the program waits in `bootstrap/tests/native/stage-0-only/error-chain.trb` - run and
+  compared on stage 0, and it moves up one directory the day the loop exists. **That subdirectory is the waiting room,
+  not an exception**: the runner has a second test for it and the README says what is in it and why.
+- **A range of anything but `Int`.** Stage 0's `Range` holds two integers, so `"a".."c"` is a value it cannot build.
+  `ranges.trb` says so.
+- **A tuple has a `compare` *member* on stage 0 and none in the checker.** The checker gives a tuple the operators and
+  nothing else, which is the language's answer; stage 0 answering one more member is a thing no valid program can
+  observe, because a program that calls it does not type check. Recorded in `tuple-compare.trb`, not a divergence a gate
+  program can pin.
+- **A `?` that converts its error through a generated `From`.** Stage 0 hands the error on unchanged, so a program that
+  needs the conversion cannot be compared. `errors.trb` says so, and `lower-match.test.trb` pins the back end's half.
+- **`Process.run` of a program that does not exist** is an `IoError` in the interpreter and on Windows, and the shell's
+  own exit code on POSIX, where the child still goes through `popen`. `fork` plus `execvp` is `Process.start`'s job at
+  7.3, and `runtime/README.md` records the difference.
+- **`tls(port == 8443)` in `dsl.trb`** is written `tls true`, because stage 0 reads the parenthesized form as a call of
+  the field. A limitation of stage 0's parser-free property commands, and the program says so.
+
+**Three language decisions this needed** - each of them a question the language had not answered, decided the simplest
+consistent way and written into CONCEPT:
+
+1. **On a float every *operator* is IEEE-754, and only `compare` is the total order.** `<`, `<=`, `>` and `>=` join
+   `==`: all of them `false` next to a `nan`. It is what the intrinsic already emitted, what C, Rust and Java all do, and
+   it keeps a float comparison branch-free. The price is that a float is the one type where the operator and the member
+   behind it disagree - so **everything that orders values calls `compare`**, and `List.sort`, `minBy` and `maxBy` were
+   changed to. An IEEE `<=` in a merge leaves a `nan` wherever it started, which is the bug `float-order.trb` found.
+2. **Case mapping is the simple one-to-one mapping of one code point, over ASCII and the letters of Latin-1.** A `Char`
+   holds one code point, so `'ß'.toUpperCase()` is `'ß'`: its upper case is `SS`, answering `'S'` would be wrong, and
+   answering a `String` would make the type of the result depend on the value. `'ÿ'` to `'Ÿ'` is the one pair that
+   reaches out of Latin-1; `×` and `÷` are symbols. `String.toUpperCase` is that mapping per character, so a mapped text
+   is exactly as many bytes as it was. `runtime/text.c` and
+   `bootstrap/crates/torb-interpreter/src/characters.rs` are the same five functions in two languages, and each says so.
+3. **A failure of the *interpreter* is its own kind of ending,** neither a panic nor a top-level `?`, and it keeps stage
+   0's own report with the calls it came through. Without the third kind, making stage 0 conform would have meant either
+   printing `panic:` for every crash of the toolchain (and leaving with 101) or losing the frames.
+
+**`language.trb` type checks again, and both test workspaces are under a check gate.** It was a stage-0 script the
+checker rightly rejected in 11 places; repairing it was worth more than replacing it, because a 280-line program that
+exercises traits, delegation, patterns, receiver closures and value semantics in one run is a different kind of test from
+57 small ones. What it needed: `.toList()` on four pipelines that were printed, `sort({ _ })` instead of `sort()`, a `fn`
+inside a block turned into a top-level function with parameters (a `fn` in a block is not a closure), a map built with a
+loop instead of a `toMap` that does not exist, a closure that no longer captures `var self`, and the three hand-written
+operator traits deleted in favour of the prelude's - which is why `Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`,
+`Negate` and `Compare` are in stage 0's `prelude.trb` now: `a + b` means the *prelude's* `Add`, and a script that
+declares a trait of its own name does not get the operator. `bootstrap/tests/scripts/` and `bootstrap/tests/native/` are
+each a workspace of their own, and `torb run ../compiler check tests/native tests/scripts` is the second `check` of the
+gate list. The only TorbScript left outside a `check` is `tests/parser-cases/`, `tests/lexer-cases/` (deliberate errors)
+and `.vscode/extensions/torbscript/samples/tokens.trb`, which is not a program at all and only has to parse.
+
+**15 gate programs were added for behaviour that had none**, chosen by reading the language reference for rules with
+observable run-time behaviour: `copies.trb` (a value has no identity, so a second name is a second value),
+`closure-captures.trb` (a captured `var` binding is one shared box, one closure per turn of a loop), `integer-division.trb` (truncation towards
+zero, the remainder's sign, `(a / b) * b + a % b == a` over eight pairs), `sort-stability.trb`, `match-order.trb` (the
+first arm wins, a false guard falls through, a guard runs only for its own arm), `character-case.trb`, `float-order.trb`,
+and seven panics: `negate-overflow.trb`, `remainder-by-zero.trb`, `expect-none.trb`, `expect-failure.trb`,
+`slice-out-of-range.trb`, `slice-reversed.trb`, `text-slice-past-end.trb`. The fifteenth, `error-chain.trb`, found a divergence
+nobody had recorded and waits in `stage-0-only/` - which is what a gate program is for.
 
 ### How the C emitter is written
 

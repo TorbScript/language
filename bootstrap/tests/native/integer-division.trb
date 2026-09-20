@@ -1,0 +1,29 @@
+use Process from "std/process"
+
+/**
+ * **Integer division truncates towards zero and the remainder takes the sign of the dividend**, so
+ * `(a / b) * b + a % b` is `a` for every pair - which is the identity `std/core`'s `Remainder` promises and the one thing
+ * a language has to choose here (Python floors instead, and then `-7 % 2` is `1`).
+ *
+ * The operands come through a function so that nothing is folded: what is under test is the instruction the back end
+ * emits and the branch the interpreter takes, not the constant evaluator.
+ */
+fn divided(left: Int, right: Int): Int {
+  left / right
+}
+
+fn remaining(left: Int, right: Int): Int {
+  left % right
+}
+
+fn identity(left: Int, right: Int): Bool {
+  divided(left, right) * right + remaining(left, right) == left
+}
+
+const pairs = [(7, 2), (-7, 2), (7, -2), (-7, -2), (1, 3), (-1, 3), (6, 3), (-6, 3)]
+
+for pair in pairs {
+  print divided(pair.0, pair.1), remaining(pair.0, pair.1), identity(pair.0, pair.1)
+}
+
+Process.exit 0

@@ -1,15 +1,16 @@
-//! The end to end test of the C back end: every program in `bootstrap/tests/native/` is compiled to a native binary,
-//! run, and compared with the same program on stage 0.
+//! The conformance runner: every program in `bootstrap/tests/native/` is compiled to a native binary, run, and
+//! compared with the same program on stage 0.
 //!
-//! This is the seed of the conformance runner of milestone 5.14. What it compares is what a program can be observed
-//! doing: its standard output, its exit code and - where a `.stderr` file says so - the panic it prints.
+//! **Everything a program can be observed doing is compared, and nothing is exempt**: its standard output, its
+//! standard error, and its exit code. A program that panics is compared like every other one - the same two lines and
+//! the same 101 - which is what milestone 5.14 is. The one thing that is read loosely is the *position* inside a frame
+//! of `std/`, because a line of the standard library moves whenever a comment above it is edited and what a program
+//! promises is which file panicked; `without_library_positions` below says exactly how.
 //!
-//! Stage 0 and the compiled binary do not agree about a **panic** yet: the interpreter prints `error: <message>` with
-//! an absolute path and leaves with exit code 1, while the language says `panic: <message>` with a path relative to the
-//! workspace root and exit code 101 (decided gap 9); the messages of the checked arithmetic differ as well
-//! (`Integer overflow` against ``arithmetic overflow in `*```). So for a program that panics, stage 0 only has to fail,
-//! and what it prints is compared against the binary's `.stderr` alone. Unifying the two is 5.14's, and it is the one
-//! difference this test is allowed to know about.
+//! `bootstrap/tests/native/README.md` is the contract this test enforces, and how a program is added to it. The one
+//! subdirectory, `stage-0-only/`, is a waiting room rather than an exception: a program lands there when the back end
+//! cannot produce the behaviour yet and stage 0 already answers what the language says, and the second test below runs
+//! those on stage 0 alone.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -143,33 +144,28 @@ fn every_native_program_behaves_like_it_does_on_stage_0() {
         if let Some(expected) = expected_file(file, "exit") {
             assert!(code.to_string() == expected.trim(), "the binary of {name} left with {code}, expected {}", expected.trim());
         }
-        let panics = expected_file(file, "stderr");
-        if let Some(expected) = &panics {
-            let reported = without_library_positions(&text(&native.stderr));
-            assert!(reported == *expected, "unexpected stderr of the binary of {name}:\n{reported}");
+        let reported = without_library_positions(&text(&native.stderr));
+        match expected_file(file, "stderr") {
+            Some(expected) => assert!(reported == expected, "unexpected stderr of the binary of {name}:\n{reported}"),
+            // A program without a `.stderr` file promises to write nothing there at all
+            None => assert!(reported.is_empty(), "the binary of {name} writes to stderr and has no `.stderr` file:\n{reported}"),
         }
 
-        // And the same program on stage 0: the same output, and the same exit code unless it panics
+        // And the same program on stage 0: the same three observations, and nothing is exempt
         let interpreted = torb(&["run", program]);
+        let interpreted_code = interpreted.status.code().expect("an exit code");
         assert!(
             text(&interpreted.stdout) == text(&native.stdout),
             "stage 0 and the binary of {name} print differently:\n{}\n{}",
             text(&interpreted.stdout),
             text(&native.stdout)
         );
-        match panics {
-            None => {
-                let interpreted_code = interpreted.status.code().expect("an exit code");
-                assert!(interpreted_code == code, "stage 0 left {name} with {interpreted_code}, the binary with {code}");
-            }
-            Some(_) => {
-                assert!(
-                    !interpreted.status.success(),
-                    "stage 0 does not report the panic of {name} at all:\n{}",
-                    text(&interpreted.stderr)
-                );
-            }
-        }
+        assert!(
+            without_library_positions(&text(&interpreted.stderr)) == reported,
+            "stage 0 and the binary of {name} report differently:\n{}\n{reported}",
+            without_library_positions(&text(&interpreted.stderr))
+        );
+        assert!(interpreted_code == code, "stage 0 left {name} with {interpreted_code}, the binary with {code}");
     }
 
     // Nothing here is read after the loop, and a temporary directory per process would otherwise pile up
@@ -177,26 +173,71 @@ fn every_native_program_behaves_like_it_does_on_stage_0() {
     let _ = std::fs::remove_dir_all(&twice);
 }
 
+/// The programs of `bootstrap/tests/native/stage-0-only/`, which are run and compared on stage 0 alone.
+///
+/// A program lands there when the C back end cannot produce the behaviour *yet* and stage 0 already answers what the
+/// language says - so there is nothing to compare, and the program still pins the answer instead of waiting. Each one
+/// says in its doc comment why it is there and what has to exist for it to move up one directory. The three
+/// expectation files are read exactly as they are above.
+#[test]
+fn every_stage_0_only_program_matches_its_expectations() {
+    let directory = repository().join("bootstrap/tests/native/stage-0-only");
+    let files = programs(&directory);
+    assert!(!files.is_empty(), "expected the programs that only stage 0 can run");
+    for file in &files {
+        let name = file.file_stem().expect("a file name").to_str().expect("UTF-8 name").to_string();
+        let interpreted = torb(&["run", file.to_str().expect("UTF-8 path")]);
+        let code = interpreted.status.code().expect("an exit code");
+        if let Some(expected) = expected_file(file, "expected") {
+            assert!(text(&interpreted.stdout) == expected, "unexpected output of {name}:\n{}", text(&interpreted.stdout));
+        }
+        if let Some(expected) = expected_file(file, "exit") {
+            assert!(code.to_string() == expected.trim(), "{name} left with {code}, expected {}", expected.trim());
+        }
+        let reported = without_library_positions(&text(&interpreted.stderr));
+        match expected_file(file, "stderr") {
+            Some(expected) => assert!(reported == expected, "unexpected stderr of {name}:\n{reported}"),
+            None => assert!(reported.is_empty(), "{name} writes to stderr and has no `.stderr` file:\n{reported}"),
+        }
+    }
+}
+
 /// A panic inside the standard library names a line of `std/`, and that line moves whenever a comment above it is
 /// edited. What a program promises is *which file* of the library panics, so the position in a `std/` frame reads
 /// `_:_` in a `.stderr` file; a frame of the program itself keeps its position.
+///
+/// Stage 0 answers those bodies with a native and has no line for one at all, so it writes the file alone
+/// (`at std/core/src/option.trb`) - which reads as `_:_` here as well. That is the one thing about a panic the two
+/// implementations do not have to agree on, and it is a position that nothing promises rather than a behaviour.
 fn without_library_positions(stderr: &str) -> String {
     let mut result = String::new();
     for line in stderr.split_inclusive('\n') {
         let body = line.trim_end_matches(['\r', '\n']);
         let ending = &line[body.len()..];
-        let mut parts = body.rsplitn(3, ':');
-        let (column, row, path) = (parts.next(), parts.next(), parts.next());
-        let is_position =
-            |part: Option<&str>| part.is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()));
-        match path {
-            Some(path) if path.trim_start().starts_with("at std/") && is_position(row) && is_position(column) => {
+        match library_frame(body) {
+            Some(path) => {
                 result.push_str(path);
                 result.push_str(":_:_");
             }
-            _ => result.push_str(body),
+            None => result.push_str(body),
         }
         result.push_str(ending);
     }
     result
+}
+
+/// `  at std/core/src/option.trb` of a line that is a frame of the standard library, with or without a position.
+fn library_frame(body: &str) -> Option<&str> {
+    let is_position =
+        |part: Option<&str>| part.is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()));
+    if !body.trim_start().starts_with("at std/") {
+        return None;
+    }
+    let mut parts = body.rsplitn(3, ':');
+    let (column, row, path) = (parts.next(), parts.next(), parts.next());
+    match path {
+        Some(path) if is_position(row) && is_position(column) => Some(path),
+        // The file alone, the way stage 0 writes a frame of a body it answers natively
+        _ => Some(body),
+    }
 }

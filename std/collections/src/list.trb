@@ -119,13 +119,15 @@ public trait List<Item>
         var right = middle
         var at = start
         while at < end {
-          // `<=` and not `<` is what makes the sort stable: a tie goes to the left run, which is the earlier one
+          // `compare` and not `<=`: only the total order is an order at all, and a float is the type where the two
+          // differ - `<=` is IEEE-754 and is `false` next to a `nan`, which would leave a `nan` where it started.
+          // "Not greater" and not "less" is what makes the sort stable: a tie goes to the left run, the earlier one
           const takesLeft = if left >= middle {
             false
           } else if right >= end {
             true
           } else {
-            by(self[left]) <= by(self[right])
+            by(self[left]).compare(by(self[right])) != .Greater
           }
           if takesLeft {
             buffer[at] = self[left]

@@ -1,0 +1,71 @@
+use Process from "std/process"
+
+/**
+ * **A value has no identity, so a second name for it is a second value.** Every line here would be a shared reference in
+ * a language with objects, and the language promises it is a copy.
+ *
+ * What it pins: a record bound to a second name, a record in a field, a list and a map handed to a function by value, a
+ * record inside a list, and a copy taken *before* a write and read after it. The back end is allowed to share the storage
+ * of any of them - copy on write is what makes a copy cheap - but nothing a program can observe may say so.
+ */
+type Counter {
+  var count: Int = 0
+
+  fn increment(var self) {
+    count = count + 1
+  }
+}
+
+type Pair {
+  var left: Counter = Counter()
+  var right: Counter = Counter()
+}
+
+/** A list taken by value: what the caller holds is untouched, whatever this does to it. */
+fn emptied(numbers: List<Int>): Int {
+  var own = numbers
+  own.clear()
+  own.length()
+}
+
+fn records() {
+  var first = Counter 1
+  var second = first
+  second.increment()
+  print first.count, second.count
+  var pair = Pair()
+  var taken = pair.left
+  taken.increment()
+  pair.right.increment()
+  print pair.left.count, pair.right.count, taken.count
+}
+
+fn collections() {
+  var numbers = [1, 2, 3]
+  print emptied(numbers), numbers.length()
+  const before = numbers
+  numbers.add 4
+  print before.length(), numbers.length()
+  var byName = ["a": 1]
+  const snapshot = byName
+  byName.set "b", 2
+  print snapshot.length(), byName.length()
+}
+
+fn insideLists() {
+  var counters = [Counter(), Counter()]
+  var lifted = counters[0]
+  lifted.increment()
+  lifted.increment()
+  counters[1].increment()
+  print lifted.count, counters[0].count, counters[1].count
+  const frozen = counters
+  counters[0].increment()
+  print frozen[0].count, counters[0].count
+}
+
+records()
+collections()
+insideLists()
+
+Process.exit 0

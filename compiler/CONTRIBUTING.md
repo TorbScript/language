@@ -10,6 +10,7 @@ cargo build --release                                   # Stage 0. Rebuild after
 cargo run --release -q -- test ../compiler/tests        # The TorbScript tests of the compiler (one process per file)
 cargo run --release -q -- test ../compiler/tests --jobs 1   # ...one after another, when output order of a crash matters
 cargo run --release -q -- run ../compiler check ..      # The compiler checks the whole repository: "no problems"
+cargo run --release -q -- run ../compiler check tests/native tests/scripts   # ...and the two test workspaces of stage 0
 cargo run --release -q -- run ../compiler check --statistics ..    # Every expression has a type: "0 deferred"
 cargo run --release -q -- run ../compiler check --timings ..       # The wall time of every pass, in the order they ran
 cargo fmt --check
@@ -166,7 +167,10 @@ have come. It becomes a mandatory gate when they are done, and from then on it i
 
 ## Traps of Stage 0
 
-Stage 0 has no type checker: a mistake is found when the line runs, so **every function must be run by a test**.
+Stage 0 has no type checker: a mistake is found when the line runs, so **every function must be run by a test**. What it
+prints when that happens is in [bootstrap/README.md](../bootstrap/README.md) ("How a Program Ends"): a failure of the
+interpreter carries the calls it came through, and a **panic** prints two lines and no more unless `TORB_FRAMES=1` asks
+for them - which is what to set when a panic inside the toolchain has to be found.
 
 1. **A `var` argument is taken before the other arguments are evaluated.** `f(checker, checker.something)`,
    `f(checker, g(checker, x))` and `checker.method(g(checker, x))` read a place that was moved out, and fail far away

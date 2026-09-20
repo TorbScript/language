@@ -65,7 +65,8 @@ Where the language lets types decide, the interpreter uses what it sees at runti
 | Lazy pipelines                                        | Stages are eager and return lists. No infinite sources except `for x in 0..` |
 | User-defined `equals`/`hash`                          | `==` and map keys are always structural                          |
 | Exclusivity, dead changes, exhaustiveness, visibility | Not checked. `const`, fields without `var` and temporaries are checked when a change reaches them |
-| All integer types                                     | One 64 bit integer. Overflow panics                              |
+| All integer types                                     | One 64 bit integer. Overflow panics, with the language's message  |
+| `Bits` (`shiftedLeft`, `bitwiseAnd`, ...)              | Not available: nothing the compiler runs on stage 0 needs one     |
 | `shared type`, tasks, sandbox, `foreign`, `Expression<Value>` trees | Not available. `assert` shows the source of its condition and the values of both sides |
 | `std/`, packages, workspaces                          | Not loaded. `natives.rs` and `prelude.trb` implement what the compiler uses, imports of packages are ignored |
 | Visibility of `extend`                                | Every `extend` of every loaded module applies everywhere |
@@ -77,10 +78,47 @@ to tell "there is no such program" from "it said no"), `File.createDirectory` (`
 the binary go into) and `Environment.get` (`$TORB_CC`, `$TORB_RUNTIME`). `ProcessOutput` is in `prelude.trb`, with the
 field order `std/process` declares - the natives build it positionally.
 
-`bootstrap/tests/native/` holds the programs of the end-to-end test of the C back end
-(`crates/torb-cli/tests/native.rs`): every one of them is compiled to a native binary, run, and compared with itself on
-stage 0. It is a workspace of its own whose only member is `std/`, so `torb check ..` over the repository does not look
-at it, and it is the seed of the conformance runner of milestone 5.14.
+## How a Program Ends
+
+The three ways a program can stop are three reports, and the first two are the language's - a compiled binary writes the
+same bytes and leaves with the same code, which is what the conformance suite compares.
+
+| | Report | Exit code |
+|---|--------|-----------|
+| A **panic** - `panic`, an overflow, a division by zero, an index out of range, `expect` on `None` | `panic: <message>`, then `  at <path>:<line>:<column>` | **101** |
+| A top-level **`?`** that failed | `error: <the error through Show>`, then one `  caused by: <...>` per link of `cause()` | 1 |
+| A failure of the **interpreter** - a name that is nowhere, a method a value does not have, a `var` path that was moved out | `error: <message>`, the site, and `  in <function>` for the calls it came through | 1 |
+
+The third has no counterpart in a compiled program: the type checker of stage 1 rejects every program that reaches one.
+Two things follow from the split.
+
+- **A path of a runtime location is the stable one**, `torbscript/compiler/src/ir/print.trb`: the package's name plus the
+  file below the package's directory, which is what `pathsOfModules` of the lowering interns and what a `#line` of the
+  generated C carries. No working directory and no machine reaches the output, so the two reports can be compared byte
+  for byte. A problem of *loading* - a syntax error, an import that is nowhere - keeps the path of the machine instead,
+  because it is editor-facing.
+- **A panic prints two lines and no more**, the way the release profile of a compiled program does. `TORB_FRAMES=1` adds
+  the calls it came through, and the site in the program under a panic whose site is a file of `std/`; that is how a
+  panic inside the toolchain is debugged. A failure of the interpreter always has its frames.
+
+A panic that a native answers for a body of `std/` names that file and no position (`at std/core/src/option.trb`), since
+stage 0 does not load `std/` and has no line for it. The conformance runner reads a position in a `std/` frame as `_:_`
+on both sides, so the two agree on the file without pinning a line that a comment above it moves.
+
+## The Conformance Suite
+
+`bootstrap/tests/native/` is the conformance suite (`crates/torb-cli/tests/native.rs`): one small program per
+behaviour, compiled to a native binary, run, and compared with itself on stage 0 - standard output, standard error and
+exit code, byte for byte, with nothing about what a program does exempt. It is a workspace of its own whose only members
+are `std/`, so `torb check ..` over the repository does not look at it; `torb run ../compiler check tests/native`
+checks it, and that is a gate. **`bootstrap/tests/native/README.md` is the contract**: what is compared, what is not and
+why, how a program is added, and which program pins which behaviour. Its one subdirectory, `stage-0-only/`, is a waiting
+room: a program lands there when the back end cannot produce the behaviour yet and stage 0 already answers what the
+language says, and the runner compares it on stage 0 alone until it can move up one directory.
+
+`bootstrap/tests/scripts/` is the other half: long programs that run on stage 0 alone and are compared with their
+`.expected` by `crates/torb-cli/tests/self_hosted.rs`. A behaviour both back ends have to agree on belongs in
+`tests/native/` instead. It is a workspace of its own too, and it is checked by the same second `check`.
 
 ## Performance
 

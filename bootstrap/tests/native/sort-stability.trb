@@ -1,0 +1,49 @@
+use Process from "std/process"
+
+/**
+ * **`sort` and `sorted` are stable:** two items whose keys compare equal come out in the order they went in.
+ *
+ * Stability is observable and therefore part of the language, not of an implementation - a caller that sorts by one field
+ * and then by another relies on it, and an unstable sort would make the second pass throw the first one away. The keys
+ * here repeat on purpose, and the labels say which of the equal items was first.
+ */
+type Row {
+  key: Int
+  label: String
+}
+
+const rows = [
+  Row(2, "a"),
+  Row(1, "b"),
+  Row(2, "c"),
+  Row(1, "d"),
+  Row(2, "e"),
+  Row(1, "f"),
+]
+
+fn labels(sorted: List<Row>): String {
+  var result = ""
+  for row in sorted {
+    result = result + row.label
+  }
+  result
+}
+
+print labels(rows.sorted({ _.key }).toList())
+
+var inPlace = rows
+inPlace.sort({ _.key })
+print labels(inPlace)
+
+// Sorting twice by the same key changes nothing, which is what stability means for a repeated pass
+var twice = inPlace
+twice.sort({ _.key })
+print(labels(twice) == labels(inPlace))
+
+// A sort by a second key keeps the order of the first where the second is equal
+var byLabel = rows
+byLabel.sort({ _.label })
+byLabel.sort({ _.key })
+print labels(byLabel)
+
+Process.exit 0

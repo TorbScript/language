@@ -27,6 +27,16 @@ What does not belong here: anything a user of the language needs. That is in [th
 and in [the toolchain pages](../tooling/index.md). This section is marked `skill: omit`, because an agent writing
 TorbScript has no use for the internals of the compiler that compiles it.
 
+## What holds the two implementations to one behaviour
+
+The language must be interpretable **and** compilable, and that is a design goal rather than a fact about a
+code base - so there is a test that holds both implementations to it. The **conformance suite** in
+`bootstrap/tests/native/` is one small program per behaviour, run by the interpreter and as a compiled binary, with the
+standard output, the standard error and the exit code compared byte for byte. `bootstrap/tests/native/README.md` states
+that contract, says how a program is added, and names what each program pins; nothing about what a program *does* is
+exempt from it. A rule of the language reference that has observable run-time behaviour and no program in that suite is
+a rule nothing holds either side to.
+
 <!-- torb:index:begin -->
 
 ## Design documents

@@ -357,10 +357,20 @@ const emptyMap: Map<String, Int> = [:]
   `addedWrapping` and `multipliedWrapping`, the only arithmetic in the language that does not panic on overflow -
   a hash function cannot be written without it. Methods need no precedence rules and no new tokens, and keeping the
   wrapping pair off the signed types keeps "overflow panics" true everywhere a `+` is written.
-- **On a `Float`, `==` is IEEE-754 and `compare` is a total order.** `nan != nan` and `0.0 == -0.0`, while `compare`
-  puts `nan` above everything and treats `-0.0` as equal to `0.0`, so `sorted` terminates whatever pivot it picks.
-  `Float32` and `Float64` are deliberately not `Hash`, so a float can never be a `Map` key and the `nan` key does not
-  exist. Where a tolerance is meant, `isCloseTo` says so.
+- **On a `Float`, the operators are IEEE-754 and `compare` is a total order.** `==`, `<`, `<=`, `>` and `>=` are the
+  hardware's: `nan != nan`, every comparison with a `nan` on either side is `false`, and `0.0 == -0.0`. `compare` puts
+  `nan` above everything and treats `-0.0` as equal to `0.0`, so `sorted` terminates whatever pivot it picks. **A float
+  is the one type where an operator and the member behind it disagree,** and it is why anything that *orders* values -
+  `sort`, `sorted`, `minBy`, `maxBy` - calls `compare` and never writes `<=`: only a total order is an order at all, and
+  an IEEE `<=` would leave a `nan` wherever it started. `Float32` and `Float64` are deliberately not `Hash`, so a float
+  can never be a `Map` key and the `nan` key does not exist. Where a tolerance is meant, `isCloseTo` says so.
+- **Case mapping and character classification are one code point at a time, over ASCII and the letters of Latin-1.** A
+  `Char` is one code point and `toUpperCase` answers one, so only a mapping that is one-to-one applies: `'ß'`
+  upper-cased is `'ß'`, because its uppercase is `SS` and that is two code points, and `'ÿ'` is the one Latin-1 letter
+  whose partner lies above Latin-1 (`'Ÿ'`). Every code point the mapping does not cover is answered unchanged, and
+  `String.toUpperCase` is the same mapping per character - so a mapped text is exactly as many bytes as it was. The full
+  Unicode tables, and with them a `String.toUpperCase` that may grow a text, are milestone 8; until then both back ends
+  answer the same small closed table and the conformance suite compares them.
 - **A label is not part of the type of a tuple.** `(lowest: Int, highest: Int)`, `(highest: Int, lowest: Int)` and
   `(Int, Int)` are one type, and a labeled tuple may be used where an unlabeled one is expected and back. A label at
   a position where the expected type has a different one is an error, so a swap cannot happen silently.
@@ -2679,9 +2689,14 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `Show` of a `Float` is the shortest decimal that parses back to the same value, with `.0` appended when it has
   neither `.` nor `e`. Two implementations are compared through `Show`, and `printf("%.17g")` is neither shortest nor
   the same across libcs, so the runtime carries its own conversion.
-- On floats, `==` stays IEEE-754 and `compare` is a total order with `nan` on top and `-0.0` equal to `0.0`. A "fixed"
-  equality would make `==` disagree with `<`, and `sorted` must not depend on the pivot. Floats are not `Hash`, so a
-  `nan` key cannot happen.
+- On floats, every *operator* stays IEEE-754 - `==`, `<`, `<=`, `>`, `>=`, all of them `false` next to a `nan` - and
+  `compare` is a total order with `nan` on top and `-0.0` equal to `0.0`. A "fixed" equality would make `==` disagree
+  with `<`, and `sorted` must not depend on the pivot. It is the one type where the operator and the member behind it
+  disagree, so everything that orders values calls `compare`. Floats are not `Hash`, so a `nan` key cannot happen.
+- `Char.toUpperCase` and `Char.toLowerCase` are the *simple* case mapping - one code point in, one code point out -
+  over ASCII and the letters of Latin-1, and every other code point is answered unchanged. A `Char` cannot hold the `SS`
+  that `ß` upper-cases to, so answering `'S'` would be wrong and answering a `String` would make the type of the result
+  depend on the value. Full Unicode tables are milestone 8, and a compiled program would have to carry them.
 - `Map` and `Set` iterate in insertion order, in every implementation. The order reaches the output through `Show`, so
   it is language, not implementation - and it is the only order a reader can predict. It costs an index vector.
 - A panic prints `panic: <message>` and the site to stderr and exits with 101; nothing else runs (no destructor, no

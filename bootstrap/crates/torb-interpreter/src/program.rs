@@ -45,6 +45,8 @@ pub type Names<Value> = HashMap<&'static str, Value, BuildHasherDefault<NameHash
 
 pub struct Module {
     pub path: PathBuf,
+    /// The path a location of this module is written as: `torbscript/compiler/src/ir/print.trb`. See `stable_path`.
+    pub stable: String,
     pub source: &'static str,
     pub file: &'static ast::File,
     pub scope: RefCell<Names<Item>>,
@@ -57,9 +59,11 @@ impl Module {
         self.top_level.borrow().clone().expect("the top-level scope is created with the module")
     }
 
+    /// Where something happened while the program ran, as a panic and a failure of the interpreter write it. The path
+    /// is the stable one, so that a panic of stage 0 is the panic of a compiled program to the byte.
     pub fn location(&self, span: Span) -> String {
         let (line, column) = LineIndex::new(self.source).line_and_column(span.start);
-        format!("{}:{line}:{column}", display_path(&self.path))
+        format!("{}:{line}:{column}", self.stable)
     }
 }
 
@@ -70,6 +74,28 @@ pub fn display_path(path: &Path) -> String {
         Some(stripped) => stripped.to_string(),
         None => text,
     }
+}
+
+/// The name of a package, as its `project.trb` writes it, and the directory that file stands in.
+struct PackageOf {
+    name: String,
+    directory: PathBuf,
+}
+
+/// The name in `name "torbscript/compiler"`, from the first line of a `project.trb` that carries one.
+///
+/// A `project.trb` is read statically and not evaluated (`docs/BACKEND.md`), so a line is all there is to find. Stage 0
+/// loads no workspace at all, and this is the one thing about a project it has to know.
+fn package_name_in(source: &str) -> Option<String> {
+    for line in source.lines() {
+        let Some(rest) = line.trim_start().strip_prefix("name") else { continue };
+        let Some(rest) = rest.strip_prefix([' ', '\t']) else { continue };
+        let Some(quoted) = rest.trim_start().strip_prefix('"') else { continue };
+        if let Some((name, _)) = quoted.split_once('"') {
+            return Some(name.to_string());
+        }
+    }
+    None
 }
 
 #[derive(Clone)]
@@ -264,10 +290,12 @@ struct Loader {
     modules: HashMap<PathBuf, Rc<Module>>,
     order: Vec<Rc<Module>>,
     problems: Vec<String>,
+    /// The package a directory belongs to, remembered per directory: every module of a package walks the same way up.
+    packages: HashMap<PathBuf, Option<Rc<PackageOf>>>,
 }
 
 pub fn load(entry: &Path) -> Result<Program, Vec<String>> {
-    let mut loader = Loader { modules: HashMap::new(), order: Vec::new(), problems: Vec::new() };
+    let mut loader = Loader { modules: HashMap::new(), order: Vec::new(), problems: Vec::new(), packages: HashMap::new() };
     let prelude = loader.add_module(PathBuf::from("<prelude>"), PRELUDE.to_string());
     let entry = match loader.load_file(entry) {
         Some(entry) => entry,
@@ -302,6 +330,42 @@ pub fn load(entry: &Path) -> Result<Program, Vec<String>> {
 }
 
 impl Loader {
+    /// How a location of this file is written while the program runs: the package's name plus the file below the
+    /// package's directory (`torbscript/compiler/src/ir/print.trb`), with forward slashes.
+    ///
+    /// This is `pathsOfModules` of `compiler/src/ir/lower/lower.trb`, character for character, so that a panic of
+    /// stage 0 names the file a compiled program names: no working directory and no machine ever reaches the output,
+    /// which is what lets the conformance suite compare the two reports byte for byte. The package is the nearest
+    /// directory above the file that holds a `project.trb`; a file that belongs to no project is its own name and
+    /// nothing else, the way a script is.
+    fn stable_path(&mut self, path: &Path) -> String {
+        let name = |path: &Path| path.file_name().map_or(String::new(), |name| name.to_string_lossy().to_string());
+        let Some(package) = self.package_of(path.parent()) else { return name(path) };
+        let Ok(relative) = path.strip_prefix(&package.directory) else { return name(path) };
+        let relative = relative.components().map(|part| part.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
+        if package.name.is_empty() {
+            return relative;
+        }
+        format!("{}/{relative}", package.name)
+    }
+
+    /// The nearest package above a directory, or `None` where there is none up to the root.
+    fn package_of(&mut self, directory: Option<&Path>) -> Option<Rc<PackageOf>> {
+        let directory = directory?;
+        if let Some(found) = self.packages.get(directory) {
+            return found.clone();
+        }
+        let manifest = directory.join("project.trb");
+        let found = match std::fs::read_to_string(&manifest) {
+            Ok(source) => {
+                Some(Rc::new(PackageOf { name: package_name_in(&source).unwrap_or_default(), directory: directory.to_path_buf() }))
+            }
+            Err(_) => self.package_of(directory.parent()),
+        };
+        self.packages.insert(directory.to_path_buf(), found.clone());
+        found
+    }
+
     fn load_file(&mut self, path: &Path) -> Option<Rc<Module>> {
         let path = match path.canonicalize() {
             Ok(path) => path,
@@ -328,7 +392,11 @@ impl Loader {
             let UseSource::Module(path) = &usage.source else { continue };
             if let Some(target) = import_path(&module.path, path) {
                 if self.load_file(&target).is_none() {
-                    self.problems.push(format!("{}: cannot import \"{path}\"", module.location(statement.span)));
+                    // A problem of loading is editor-facing and keeps the path of the machine, unlike a location
+                    // something that *ran* is at
+                    let (line, column) = LineIndex::new(module.source).line_and_column(statement.span.start);
+                    let where_it_is = format!("{}:{line}:{column}", display_path(&module.path));
+                    self.problems.push(format!("{where_it_is}: cannot import \"{path}\""));
                 }
             }
         }
@@ -344,8 +412,15 @@ impl Loader {
             self.problems.push(format!("{}:{line}:{column}: {}", display_path(&path), diagnostic.message));
         }
         let file: &'static ast::File = Box::leak(Box::new(parsed.file));
-        let module =
-            Rc::new(Module { path: path.clone(), source, file, scope: RefCell::new(Names::default()), top_level: RefCell::new(None) });
+        let stable = self.stable_path(&path);
+        let module = Rc::new(Module {
+            path: path.clone(),
+            stable,
+            source,
+            file,
+            scope: RefCell::new(Names::default()),
+            top_level: RefCell::new(None),
+        });
         *module.top_level.borrow_mut() = Some(Environment::root(module.clone()));
         self.modules.insert(path, module.clone());
         self.order.push(module.clone());

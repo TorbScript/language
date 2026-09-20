@@ -122,7 +122,8 @@ const configured = server {
   }
   route "/health"
   route "/users"
-  onStart { "started on {port}" }
+  // A closure that a field keeps outlives the call, so it may not capture the receiver: a reference is second-class
+  onStart { "started" }
 }
 print configured.port, configured.database, configured.routes, configured.onStart()
 
@@ -140,11 +141,11 @@ var first = counters[0]
 first.increment()
 counters[1].increment()
 counters[1].increment()
-print first.count, counters.map({ _.count })
+print first.count, counters.map({ _.count }).toList()
 
 var samples = [5, 3, 9, 1, 7]
-samples[1..4].sort()
-print samples, samples[..2], samples.sorted({ 0 - _ })
+samples[1..4].sort({ _ })
+print samples, samples[..2], samples.sorted({ 0 - _ }).toList()
 
 fn fill(var target: List<Int>, amount: Int) {
   for index in 0..amount {
@@ -163,8 +164,8 @@ fn classify(values: List<Int>): String {
   match values {
     [] => "empty"
     [only] => "one: {only}"
-    [first, ...rest] if rest.length() > 2 => "many, starting with {first}"
-    [first, ..., last] => "from {first} to {last}"
+    [first, ..., last] if last - first > 2 => "from {first} to {last}"
+    [first, ...rest] => "many, starting with {first} and {rest.length()} more"
   }
 }
 
@@ -174,18 +175,19 @@ const (quotient, remainder) = (7 / 2, 7 % 2)
 const range = (lowest: 1, highest: 9)
 print quotient, remainder, range.lowest, range.1, range
 
-// Local functions are hoisted and capture their scope
+// A `fn` inside of a block is hoisted and sees its parameters and the file, not the bindings around it: what it needs
+// from the caller is a parameter, and a list it fills is a `var` one
 fn outer(limit: Int): List<Int> {
   var seen: List<Int> = []
-  visit 0
-
-  fn visit(value: Int) {
-    if value < limit {
-      seen.add value
-      visit(value + 1)
-    }
-  }
+  visit seen, 0, limit
   seen
+}
+
+fn visit(var seen: List<Int>, value: Int, limit: Int) {
+  if value < limit {
+    seen.add value
+    visit(seen, value + 1, limit)
+  }
 }
 
 print outer(4)
@@ -194,8 +196,11 @@ print outer(4)
 var tags = Set.of "b", "a", "b", "c"
 tags.remove "a"
 print tags, tags.contains("c"), tags.union(["z"]).length()
-const lengths = ["one", "three"].map({ (_, _.byteLength()) }).toMap()
-print lengths, lengths.keys(), lengths["three"]
+var lengths: Map<String, Int> = [:]
+for word in ["one", "three"] {
+  lengths.set word, word.byteLength()
+}
+print lengths, lengths.keys().toList(), lengths["three"]
 
 // Cases: `.Case` where the type is known, `Type.Case` everywhere, or imported by name
 type Signal {
@@ -264,23 +269,8 @@ const pattern = r"""
 print pattern
 
 // `by` binds to one element of the `with` list, and the element may be an `&` group: `Add` and `Subtract` are
-// delegated together to `value`, `Compare` is delegated on its own, `max` (a default member) stays the trait's
-trait Add {
-  fn add(self, other: Self): Self
-}
-
-trait Subtract {
-  fn subtract(self, other: Self): Self
-}
-
-trait Compare {
-  fn compare(self, other: Self): Ordering
-
-  fn max(self, other: Self): Self {
-    if compare(other) == .Greater { self } else { other }
-  }
-}
-
+// delegated together to `value`, `Compare` is delegated on its own, `max` (a default member of the trait) stays the
+// trait's. The three traits are the prelude's, which is what makes `a + b` and `a > b` mean them
 type Seconds with Add & Subtract by value, Compare by value {
   value: Int
 }

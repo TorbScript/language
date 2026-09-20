@@ -204,10 +204,16 @@ file - which an OS that locks open files (Windows) would refuse if the handle we
 
 ## What is deliberately approximate
 
-- **Case mapping and character classification are ASCII plus the letters of Latin-1.** `toUpperCase`, `toLowerCase`,
-  `isLetter`, `isDigit` and `isWhitespace` are exact for ASCII; above it, `isWhitespace` knows the common
-  `White_Space` code points and `isLetter` answers true for everything that is not Latin-1 punctuation or a symbol.
-  Full Unicode tables are milestone 8. The compiler's own identifiers and keywords are ASCII.
+- **Case mapping and character classification are ASCII plus the letters of Latin-1.** `toUpperCase` and `toLowerCase`
+  are the *simple* mapping of one code point to one code point over ASCII, over the letters of Latin-1 (`ä` to `Ä`,
+  without `×` and `÷`, which are symbols) and over the one pair that reaches out of Latin-1 (`ÿ` to `Ÿ`); every other
+  code point is answered unchanged, `ß` included, because its uppercase is `SS` and a `Char` holds one code point.
+  `torb_text_to_upper_case` is that mapping per character, so a mapped text is exactly as many bytes as it was.
+  `isDigit` is ASCII `0`-`9`; above ASCII `isWhitespace` knows the common `White_Space` code points and `isLetter`
+  answers true for everything that is not Latin-1 punctuation or a symbol. Full Unicode tables are milestone 8, and
+  with them a `String.toUpperCase` that may make a text longer. **The same five functions are
+  `bootstrap/crates/torb-interpreter/src/characters.rs` in Rust, and the conformance suite compares them**, so a change
+  to one is a change to the other. The compiler's own identifiers and keywords are ASCII.
 - **The heap is libc's `malloc`.** The bump allocator with size-class free lists of BACKEND 2.5 is a replacement
   behind `torb_allocate` and changes nothing above it. Per-task heaps and channel transfer arrive with 7.7.
 - **No small-string optimization**, on purpose: it doubles the code path of every string operation for a win the

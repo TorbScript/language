@@ -242,7 +242,7 @@ impl PartialEq for Value {
 pub fn compare_values(left: &Value, right: &Value) -> Option<Ordering> {
     match (left, right) {
         (Value::Int(a), Value::Int(b)) => Some(a.cmp(b)),
-        (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
+        (Value::Float(a), Value::Float(b)) => Some(compare_floats(*a, *b)),
         (Value::Char(a), Value::Char(b)) => Some(a.cmp(b)),
         (Value::Bool(a), Value::Bool(b)) => Some(a.cmp(b)),
         (Value::Text(a), Value::Text(b)) => Some(a.as_str().cmp(b.as_str())),
@@ -255,6 +255,23 @@ pub fn compare_values(left: &Value, right: &Value) -> Option<Ordering> {
             (Some(a), Some(b)) => compare_values(a, b),
         },
         _ => None,
+    }
+}
+
+/// The total order of a float: `nan` above everything, `-0.0` equal to `0.0`.
+///
+/// `torb_compare_f64` in `runtime/number.c` is the same order, and `sorted` terminates on any list because of it. The
+/// operators `<`, `<=`, `>` and `>=` are *not* this: on a float they are IEEE-754, the way `==` is, so every one of them
+/// is `false` next to a `nan` (`std/number`, `Float64.isCloseTo`).
+pub fn compare_floats(left: f64, right: f64) -> Ordering {
+    match left.partial_cmp(&right) {
+        Some(ordering) => ordering,
+        // Only a `nan` is unordered against anything, and two of them compare equal
+        None => match (left.is_nan(), right.is_nan()) {
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            _ => Ordering::Equal,
+        },
     }
 }
 

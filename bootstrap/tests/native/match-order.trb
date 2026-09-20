@@ -1,0 +1,50 @@
+use Process from "std/process"
+
+/**
+ * **The arms of a `match` are tried in the order they are written, and the first one that matches wins.**
+ *
+ * A decision tree may test whatever it likes in whatever order, but the *answer* has to be the answer of the first arm -
+ * so an arm that overlaps an earlier one is dead, and a guard that is false falls through to the next arm instead of
+ * failing the `match`. A guard is evaluated only for the arm it belongs to, and only when that arm's pattern matched,
+ * which is what the line `isLong` prints shows.
+ */
+type Signal {
+  case Red
+  case Amber(seconds: Int)
+  case Green
+}
+
+/** A guard that says it ran: a guard is an ordinary expression, and when it runs is observable. */
+fn isLong(seconds: Int): Bool {
+  print "asked about {seconds}"
+  seconds > 5
+}
+
+fn named(signal: Signal): String {
+  match signal {
+    .Amber(seconds) if isLong(seconds) => "long amber"
+    .Amber(seconds) if seconds > 0 => "amber for {seconds}"
+    .Amber(_) => "amber, no time"
+    .Red => "red"
+    _ => "green"
+  }
+}
+
+fn classified(value: Int): String {
+  match value {
+    0 => "zero"
+    1 | 2 => "small"
+    3..10 => "a handful"
+    _ if value < 0 => "below zero"
+    _ => "many"
+  }
+}
+
+print named(Signal.Amber(9))
+print named(Signal.Amber(3))
+print named(Signal.Amber(0))
+print named(Signal.Red)
+print named(Signal.Green)
+print classified(0), classified(2), classified(7), classified(-1), classified(99)
+
+Process.exit 0

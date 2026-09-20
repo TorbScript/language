@@ -63,6 +63,17 @@ text[from..to]                           a slice by byte offset, O(1), shares st
 6. **`substringBefore` and `substringAfter` return `Option<String>`, `None` when the part is not found.** Most code
    that wants "everything after this marker" never sees a byte offset at all.
 
+7. **Case mapping is one code point at a time, over ASCII and the letters of Latin-1.** `Char.toUpperCase` answers
+   one code point, so a character whose upper case is *two* of them is answered unchanged - `'ß'.toUpperCase()` is `'ß'`.
+   `String.toUpperCase` is that mapping per character, which is why a mapped text has exactly as many bytes as the text
+   it came from. Every code point the mapping does not cover is left alone; the full Unicode tables, and with them a
+   `String.toUpperCase` that may make a text longer, are still to come.
+
+   ```trb check
+   print "Grüße".toUpperCase()
+   print 'ä'.toUpperCase(), 'ß'.toUpperCase()
+   ```
+
 ## What this is not
 
 **A `String` does not have `length()`.** The method a reader reaches for from another language is not here on

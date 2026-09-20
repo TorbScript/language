@@ -1728,3 +1728,80 @@ Wenn nicht, was bedeutet, bewirkt es?
     String-Bastelei). Kandidat für später: String-LITERALE passen sich an einen erwarteten `Path` an (Literal-Traits),
     Variablen müssten dann bewusst konvertiert werden.
   - Kurzes Design-Dokument wie `LINEAR.md`, dann Umsetzung.
+
+
+- (**Erledigt: Meilenstein 5.14 - zwei Implementierungen, ein beobachtbares Verhalten**, 2026-09-20)
+  **Die Konformitäts-Suite vergleicht jetzt alles, was ein Programm beobachtbar tut, und nichts ist ausgenommen**:
+  Standardausgabe, Standardfehler und Exit-Code aller **57 Gate-Programme** in `bootstrap/tests/native/` (plus eins in `stage-0-only/`), auf Stage 0
+  und im kompilierten Binary, Byte für Byte. Die eine erlaubte Ausnahme ("ein Programm, das paniert, muss auf Stage 0
+  nur *scheitern*") ist weg. `bootstrap/tests/native/README.md` ist der Vertrag: was verglichen wird, was nicht und
+  warum, wie man ein Programm hinzufügt, und welches Programm welches Verhalten festnagelt.
+  - **Ein Programm endet auf drei Arten, und Stage 0 sagt jetzt welche.** `Failure` trägt eine `FailureKind`: ein
+    **Panic** druckt `panic: <message>` plus `  at <Pfad>:<Zeile>:<Spalte>` und endet mit **101**; ein **Top-Level-`?`**
+    druckt `error: <Fehler über Show>` plus eine `  caused by:`-Zeile pro Glied von `cause()` und endet mit 1; ein
+    **Fehler des Interpreters** (ein Name, den es nirgends gibt, eine Methode, die ein Wert nicht hat) behält Stage 0s
+    eigenen Bericht mit den Aufrufen, durch die er kam, und endet mit 1. Die dritte Art hat im kompilierten Programm
+    kein Gegenstück - der Typprüfer von Stufe 1 lehnt jedes Programm ab, das eine erreicht - und ohne sie hätte
+    "Stage 0 soll sich anpassen" bedeutet, jeden Absturz des Compilers mit `panic:` und 101 zu melden oder die Frames
+    zu verlieren. **Ein Panic druckt zwei Zeilen und nicht mehr**, wie das Release-Profil eines kompilierten Programms;
+    `TORB_FRAMES=1` holt die Frames zurück.
+  - **Ein Laufzeit-Ort ist der stabile Pfad**, `torbscript/compiler/src/ir/print.trb`: Paketname plus Datei unter dem
+    Paketverzeichnis, genau was `pathsOfModules` des Lowerings interniert. Stage 0 hat keinen Workspace, also läuft der
+    Loader bis zur nächsten `project.trb` hoch und liest ihr `name "..."` statisch (30 Zeilen in `program.rs`, pro
+    Verzeichnis gecacht). Kein Arbeitsverzeichnis und keine Maschine kommt mehr in die Ausgabe - auch Windows'
+    verbatim `\\?\` nicht mehr. Ein Problem beim *Laden* behält den Maschinenpfad, weil es für den Editor ist.
+  - **Alle notierten Abweichungen sind geschlossen** - und die falsche Seite war nicht immer Stage 0:
+    Panic-Format und Exit-Code (Stage 0), ``arithmetic overflow in `*` `` mit Operator (Stage 0),
+    ``division by zero in `/` `` und `%` (Stage 0), Index/Slice/Text-Slice außerhalb (Stage 0), `expect` auf `None`
+    und auf `Fail` samt der `std/`-Datei im Frame (Stage 0), `nan` überhaupt vergleichen (Stage 0),
+    `Char`/`String`-Case-Mapping (**beide**), `Char.isDigit`/`isLetter`/`isWhitespace` (Stage 0), und
+    **`sorted` ließ ein `nan` stehen, weil `List.sort` mit `<=` verglich (`std/collections`, echter Bug im
+    kompilierten Build)**. Dazu: eine `project.trb` war überall ein gewöhnliches Modul, wo `test { input "." }` sie
+    einsammelte, und wurde als Syntaxfehler gemeldet (Front-End).
+  - **Entschieden (ich, zur Durchsicht):**
+    1. **Auf einem Float ist jeder *Operator* IEEE-754, und nur `compare` ist die Totalordnung.** `<`, `<=`, `>`, `>=`
+       kommen zu `==`: alle `false`, wenn auf einer Seite ein `nan` steht. Das ist, was die Intrinsic ohnehin emittiert
+       und was C, Rust und Java alle tun, und ein Float-Vergleich bleibt verzweigungsfrei. Preis: ein Float ist der
+       **eine** Typ, bei dem Operator und Member auseinandergehen - also ruft **alles, was ordnet, `compare`**, und
+       `List.sort`, `minBy` und `maxBy` sind umgestellt.
+    2. **Case-Mapping ist die *einfache* 1:1-Abbildung eines Codepoints, über ASCII und die Buchstaben von Latin-1.**
+       Ein `Char` hält einen Codepoint, also ist `'ß'.toUpperCase()` gleich `'ß'`: Großschreibung ist `SS`, `'S'` wäre
+       falsch, und ein `String` zurückzugeben würde den *Typ* des Ergebnisses vom Wert abhängig machen. `'ÿ'` zu `'Ÿ'`
+       ist das eine Paar, das aus Latin-1 hinausreicht; `×` und `÷` sind Symbole. `String.toUpperCase` ist dieselbe
+       Abbildung pro Zeichen, ein abgebildeter Text hat also genau so viele Bytes wie vorher. Volle Unicode-Tabellen
+       bleiben Meilenstein 8. `runtime/text.c` und `bootstrap/crates/torb-interpreter/src/characters.rs` sind dieselben
+       fünf Funktionen in zwei Sprachen und sagen es beide.
+    3. **Ein Fehler des *Interpreters* ist eine eigene Art zu enden** (siehe oben), weder Panic noch Top-Level-`?`.
+  - **`language.trb` typprüft wieder** (repariert, nicht ersetzt: ein 280-Zeilen-Programm, das Traits, Delegation,
+    Patterns, Receiver-Closures und Wertsemantik in einem Lauf durchgeht, ist eine andere Art Test als 57 kleine).
+    Nötig war: `.toList()` auf vier gedruckten Pipelines, `sort({ _ })` statt `sort()`, ein `fn` im Block zu einer
+    Top-Level-Funktion mit Parametern (ein `fn` im Block ist keine Closure), eine Map per Schleife statt eines `toMap`,
+    das es nicht gibt, eine Closure, die nicht mehr `var self` fängt, und die drei handgeschriebenen Operator-Traits
+    gelöscht zugunsten der Prelude-Traits - darum stehen `Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Negate`
+    und `Compare` jetzt in Stage 0s `prelude.trb`: `a + b` meint das `Add` der Prelude, und ein Skript, das ein
+    eigenes Trait gleichen Namens deklariert, bekommt den Operator nicht.
+  - **Zweites `check` im Gate** (`compiler/CONTRIBUTING.md`): `torb run ../compiler check tests/native tests/scripts`,
+    61 Dateien. Beide Stage-0-Testverzeichnisse sind eigene Workspaces. Draußen bleiben nur `tests/parser-cases/`,
+    `tests/lexer-cases/` (absichtliche Fehler) und `.vscode/.../samples/tokens.trb`, das kein Programm ist und nur
+    parsen muss - steht jetzt in seinem eigenen Kopfkommentar.
+  - **15 neue Gate-Programme** für Verhalten, das keines hatte (gesucht in den Referenzordnern unter `docs/language/`):
+    `copies.trb`, `closure-captures.trb`, `integer-division.trb`, `sort-stability.trb`, `match-order.trb`,
+    `character-case.trb`, `float-order.trb` und sieben Panics (`negate-overflow`, `remainder-by-zero`, `expect-none`,
+    `expect-failure`, `slice-out-of-range`, `slice-reversed`, `text-slice-past-end`). Das fünfzehnte, `error-chain.trb`, hat eine
+    **nicht notierte Abweichung gefunden**: CONCEPT zeigt die `  caused by:`-Zeilen eines Top-Level-`?`, Stage 0 schreibt
+    sie jetzt, das Back-End schreibt nur die erste Zeile (`reportFailure` in `ir/lower/match.trb` sagt selbst, dass die
+    Schleife über `cause()` noch fehlt - fremdes Agenten-Verzeichnis, darum nicht angefasst). Das Programm wartet in
+    `bootstrap/tests/native/stage-0-only/`, wird dort auf Stage 0 gelaufen und verglichen, und zieht ein Verzeichnis
+    hoch, sobald die Schleife existiert.
+  - **Was noch abweichen darf** (in `docs/BACKEND.md`, Abschnitt "What 5.14 decided", mit Begründung):
+    `Show` eines Funktionswerts (Stage 0 druckt `<function>`, das Back-End kann `show` eines `Closure(...)` noch nicht
+    emittieren - beide Hälften sind echte Arbeit, und Stage 0 hat keine Typen, um `(Int64) => Int64` zu buchstabieren;
+    **das ist der eine Punkt, der auf 6.3s Liste weiterwandert**), ein `Range` von etwas anderem als `Int` auf Stage 0,
+    das `compare`-*Member* eines Tupels auf Stage 0 (kein gültiges Programm kann es sehen), ein `?`, das seinen Fehler
+    über ein generiertes `From` konvertiert, `Process.run` eines fehlenden Programms unter POSIX (`popen`, bis 7.3),
+    und `tls true` statt `tls(port == 8443)` in `dsl.trb`.
+  - **Gates:** `cargo build --release`, `check ..` 280 Dateien "no problems", `check tests/native tests/scripts`
+    62 Dateien, `check --statistics ..` 178847/178847 getypt und **0 deferred**, `canon --check` 0 von 344 Dateien,
+    `docs check` 219 Seiten / 895 Snippets, `docs index --check` 24 Indizes, `cargo fmt --check`,
+    `cargo clippy --all-targets -- -D warnings`, `sh runtime/build.sh` 96 Tests, `torb test ../compiler/tests`,
+    volle `cargo test --release`.

@@ -247,6 +247,16 @@ TORB_TEST(trim_upper_lower_replace_and_repeat) {
   TORB_CHECK_TEXT(trimmed, "hi");
   TORB_CHECK_TEXT(upper, "HI");
   TORB_CHECK_TEXT(lower, "hi");
+  {
+    /* A text is mapped character by character, so a letter above ASCII is mapped and the result is as long as the text
+     * it came from. `ü` upper-cases to `Ü`; `ß` has no single uppercase code point and stays, so the text keeps it. */
+    torb_text mixed = text_of("grüß");
+    torb_text loud = torb_text_to_upper_case(mixed);
+    TORB_CHECK_TEXT(loud, "GRÜß");
+    TORB_CHECK_INTEGER(loud.length, mixed.length);
+    torb_text_release(mixed);
+    torb_text_release(loud);
+  }
   TORB_CHECK_TEXT(replaced, "a__b__c");
   TORB_CHECK_TEXT(repeated, "---");
   torb_text_release(padded);
@@ -335,6 +345,18 @@ TORB_TEST(character_classification) {
   TORB_CHECK(!torb_char_is_whitespace('x'));
   TORB_CHECK_INTEGER(torb_char_to_upper_case('a'), 'A');
   TORB_CHECK_INTEGER(torb_char_to_lower_case('A'), 'a');
+  /* The simple case mapping, over ASCII and the letters of Latin-1: one code point in, one out, and a code point
+   * whose partner is not a single one (0xDF, which upper-cases to "SS") is answered unchanged. The same table is
+   * `bootstrap/crates/torb-interpreter/src/characters.rs`, and the conformance suite compares the two. */
+  TORB_CHECK_INTEGER(torb_char_to_upper_case(0xE4u), 0xC4u);
+  TORB_CHECK_INTEGER(torb_char_to_lower_case(0xC4u), 0xE4u);
+  TORB_CHECK_INTEGER(torb_char_to_upper_case(0xFEu), 0xDEu);
+  TORB_CHECK_INTEGER(torb_char_to_upper_case(0xFFu), 0x178u);
+  TORB_CHECK_INTEGER(torb_char_to_lower_case(0x178u), 0xFFu);
+  TORB_CHECK_INTEGER(torb_char_to_upper_case(0xDFu), 0xDFu);
+  TORB_CHECK_INTEGER(torb_char_to_upper_case(0xF7u), 0xF7u);
+  TORB_CHECK_INTEGER(torb_char_to_lower_case(0xD7u), 0xD7u);
+  TORB_CHECK_INTEGER(torb_char_to_upper_case(0x3B1u), 0x3B1u);
   {
     torb_char character = 0u;
     torb_text message = torb_text_empty();

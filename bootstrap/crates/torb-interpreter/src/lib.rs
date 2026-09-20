@@ -4,6 +4,7 @@
 //! compiler can compile itself. It walks the syntax tree, has no type checker, and implements the parts of the
 //! standard library it needs natively. What it deliberately does not do is listed in `bootstrap/README.md`.
 
+mod characters;
 mod interpreter;
 mod natives;
 mod profile;
@@ -12,7 +13,11 @@ mod value;
 
 use std::path::Path;
 
-pub use interpreter::{Failure, TestReport};
+pub use interpreter::{wants_frames, Failure, FailureKind, TestReport};
+
+/// What a process that panicked leaves with (CONCEPT, "A panic is output"). `TORB_PANIC_EXIT_CODE` in `runtime/torb.h`
+/// is the same number, because both back ends have to agree on it.
+pub const PANIC_EXIT_CODE: u8 = 101;
 
 pub enum Outcome {
     Finished(TestReport),

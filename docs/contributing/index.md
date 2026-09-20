@@ -20,6 +20,12 @@ What does not belong here: anything about the language itself, which is in `lang
 internals, which is in `internals/`. A page here is marked `skill: omit`, because an agent writing TorbScript has no use
 for the rules of the documentation that describes it.
 
+A page that states a rule with observable run-time behaviour has a second gate besides `torb docs check`: the
+**conformance suite** in `bootstrap/tests/native/`, one small program per behaviour, run by the interpreter and as a
+compiled binary and compared byte for byte. `bootstrap/tests/native/README.md` says what each program pins and how to
+add one. A rule that a page states and no program pins is a rule that will drift, so a page that decides something new
+about what a program *does* comes with a program there.
+
 <!-- torb:index:begin -->
 
 ## Pages

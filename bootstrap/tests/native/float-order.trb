@@ -1,0 +1,36 @@
+use Process from "std/process"
+
+/**
+ * **On a float the operators are IEEE-754 and `compare` is a total order**, and the two disagree about exactly one
+ * value.
+ *
+ * `==`, `<`, `<=`, `>` and `>=` are the hardware's: every one of them is `false` where a `nan` stands on either side,
+ * and `-0.0 == 0.0`. `compare` puts `nan` above everything and calls `-0.0` equal to `0.0`, which is what makes `sorted`
+ * terminate whatever pivot it picks and whatever is in the list. A float is deliberately not `Hash`, so the `nan` key
+ * does not exist.
+ */
+fn notANumber(): Float {
+  0.0 / 0.0
+}
+
+fn compared(left: Float, right: Float): String {
+  match left.compare(right) {
+    .Less => "less"
+    .Equal => "equal"
+    .Greater => "greater"
+  }
+}
+
+const bad = notANumber()
+
+print(bad, bad == bad, bad != bad)
+print(bad < 1.5, bad > 1.5, bad <= 1.5, bad >= 1.5)
+print(1.5 < bad, 1.5 > bad)
+print compared(bad, 1.5), compared(1.5, bad), compared(bad, bad)
+print(compared(-0.0, 0.0), -0.0 == 0.0)
+print compared(1.0 / 0.0, bad), compared(0.0 - 1.0 / 0.0, 1.0)
+const mixed = [1.5, bad, 0.5, 0.0 - 1.0 / 0.0]
+
+print mixed.sorted({ _ }).toList()
+
+Process.exit 0

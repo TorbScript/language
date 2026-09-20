@@ -136,11 +136,15 @@ fn the_compiler_resolves_the_names_of_the_whole_repository() {
 }
 
 /// `bootstrap/tests/scripts/*.trb` with their expected output: the behavior of the interpreter itself.
+///
+/// The directory is a workspace of its own, so that the checker reaches these scripts too - and its `project.trb`
+/// declares the package instead of being a script, so it has no expected output and is not one of them.
 #[test]
 fn scripts_print_what_they_should() {
     let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/scripts");
     let mut files = Vec::new();
     collect(&scripts, &mut files);
+    files.retain(|file| file.file_name().is_some_and(|name| name != "project.trb"));
     assert!(!files.is_empty());
     files.sort();
     let problems = for_each_in_parallel(&files, |file| {

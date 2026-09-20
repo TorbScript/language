@@ -447,20 +447,36 @@ torb_text torb_text_trim(torb_text text) {
   return result;
 }
 
+/*
+ * A text with every character mapped, which is `torb_char_to_upper_case` per code point and nothing more.
+ *
+ * The mapping never changes how many bytes a character needs - every pair of it is ASCII to ASCII or two bytes to two
+ * bytes - so the result is exactly as long as the text, and a byte that is not the start of a character is copied.
+ */
 static torb_text torb_text_mapped_case(torb_text text, bool upper) {
   uint8_t *data;
   torb_text result = torb_text_allocate(text.length, &data);
   const uint8_t *bytes = torb_text_data(text);
-  uint32_t index;
-  for (index = 0u; index < text.length; index += 1u) {
-    uint8_t byte = bytes[index];
-    if (upper && byte >= 'a' && byte <= 'z') {
-      data[index] = (uint8_t)(byte - ('a' - 'A'));
-    } else if (!upper && byte >= 'A' && byte <= 'Z') {
-      data[index] = (uint8_t)(byte + ('a' - 'A'));
-    } else {
-      data[index] = byte;
+  uint32_t index = 0u;
+  while (index < text.length) {
+    torb_char character;
+    uint32_t width = torb_utf8_decode(bytes, (size_t)text.length, (size_t)index, &character);
+    if (width == 0u) {
+      data[index] = bytes[index];
+      index += 1u;
+      continue;
     }
+    {
+      torb_char mapped = upper ? torb_char_to_upper_case(character) : torb_char_to_lower_case(character);
+      uint8_t encoded[4];
+      uint32_t written = torb_utf8_encode(mapped, encoded);
+      if (written != width) {
+        memcpy(data + index, bytes + index, (size_t)width);
+      } else {
+        memcpy(data + index, encoded, (size_t)written);
+      }
+    }
+    index += width;
   }
   return result;
 }
@@ -598,9 +614,24 @@ bool torb_char_is_whitespace(torb_char character) {
          || character == 0x202Fu || character == 0x205Fu || character == 0x3000u;
 }
 
+/*
+ * The simple case mapping of one code point, over ASCII and the letters of Latin-1.
+ *
+ * A `Char` is one code point and answers one, so only a mapping that is one-to-one applies: `ß` has no single uppercase
+ * code point (its uppercase is `SS`) and is answered unchanged, and so is every code point the mapping does not cover.
+ * `ÿ` is the one Latin-1 letter whose partner lies above Latin-1 (`Ÿ`, U+0178). `×` and `÷` are symbols and not
+ * letters. `bootstrap/crates/torb-interpreter/src/characters.rs` is the same mapping in Rust, and a change to one is a
+ * change to the other - `Char.toUpperCase` is compared by the conformance suite.
+ */
 torb_char torb_char_to_upper_case(torb_char character) {
   if (character >= 'a' && character <= 'z') {
     return character - ('a' - 'A');
+  }
+  if (character >= 0xE0u && character <= 0xFEu && character != 0xF7u) {
+    return character - 0x20u;
+  }
+  if (character == 0xFFu) {
+    return 0x178u;
   }
   return character;
 }
@@ -608,6 +639,12 @@ torb_char torb_char_to_upper_case(torb_char character) {
 torb_char torb_char_to_lower_case(torb_char character) {
   if (character >= 'A' && character <= 'Z') {
     return character + ('a' - 'A');
+  }
+  if (character >= 0xC0u && character <= 0xDEu && character != 0xD7u) {
+    return character + 0x20u;
+  }
+  if (character == 0x178u) {
+    return 0xFFu;
   }
   return character;
 }

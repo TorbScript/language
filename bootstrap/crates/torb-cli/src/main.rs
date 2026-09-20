@@ -187,7 +187,16 @@ fn counts_of(text: &str) -> Option<(&str, usize, usize)> {
     Some((body, passed, failed))
 }
 
+/// What a program that ended leaves behind, in the three forms the language has (CONCEPT, "A panic is output").
+///
+/// A **panic** is `panic: <message>` and the site, and the process leaves with 101 - the two lines a compiled binary
+/// writes, which is what lets the conformance suite compare the two byte for byte. A top-level **`?`** that failed is
+/// `error: <the error through Show>` plus one `  caused by:` line per link of the chain, and 1. A failure of the
+/// **interpreter** - a name that is nowhere, a method a value does not have - is `error:` too, with the calls it came
+/// through, and 1: the type checker of stage 1 rejects every program that reaches one, so a compiled program has
+/// nothing to compare against it.
 fn report(outcome: torb_interpreter::Outcome) -> ExitCode {
+    use torb_interpreter::FailureKind;
     match outcome {
         torb_interpreter::Outcome::Finished(_) => ExitCode::SUCCESS,
         torb_interpreter::Outcome::NotLoaded(problems) => {
@@ -197,12 +206,20 @@ fn report(outcome: torb_interpreter::Outcome) -> ExitCode {
             ExitCode::from(2)
         }
         torb_interpreter::Outcome::Failed(failure) => {
-            eprintln!("error: {}", failure.message);
+            let is_panic = failure.kind == FailureKind::Panic;
+            eprintln!("{}: {}", if is_panic { "panic" } else { "error" }, failure.message);
             if let Some(location) = &failure.location {
                 eprintln!("  at {location}");
             }
-            for entry in &failure.trace {
-                eprintln!("  {entry}");
+            // A panic is two lines and no more, the way the release profile of a compiled program prints it. The calls
+            // it came through are what `TORB_FRAMES=1` adds, and a failure of the interpreter always has them
+            if !is_panic || torb_interpreter::wants_frames() {
+                for entry in &failure.trace {
+                    eprintln!("  {entry}");
+                }
+            }
+            if is_panic {
+                return ExitCode::from(torb_interpreter::PANIC_EXIT_CODE);
             }
             ExitCode::FAILURE
         }

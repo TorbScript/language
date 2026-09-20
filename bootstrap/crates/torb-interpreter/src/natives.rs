@@ -7,7 +7,11 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::rc::Rc;
 
-use crate::interpreter::{failure, slice_bounds, Arguments, Eval, Flow, Interpreter};
+use crate::characters;
+use crate::interpreter::{failure, library_panic, list_slice_bounds, panicked, text_slice_bounds, Arguments, Eval, Flow, Interpreter};
+use crate::interpreter::{
+    inside_character_message, inside_offset, out_of_bounds_message, overflow_message, LIST_FILE, OPTION_FILE, RESULT_FILE, TEXT_FILE,
+};
 use crate::program::Item;
 use crate::value::{Function, Key, Object, Range, Table, Value};
 
@@ -84,6 +88,32 @@ fn position_of(value: &Value, what: &str) -> Eval<usize> {
     usize::try_from(int_of(value, what)?).map_err(|_| failure(format!("`{what}` must not be negative")))
 }
 
+/// A place in a list that a write names, or the panic `std/collections/src/list.trb` writes for one that is not there.
+/// `past` allows the end itself, which is where `insert` may put a value.
+fn list_index(index: i64, length: usize, past: bool) -> Eval<usize> {
+    let limit = if past { length as i64 } else { length as i64 - 1 };
+    if index < 0 || index > limit {
+        return Err(library_panic(out_of_bounds_message(index, length), LIST_FILE));
+    }
+    Ok(index as usize)
+}
+
+/// The two byte offsets `String.sliceBytes` was given, tested the way `torb_text_slice` tests them: past the end
+/// first, both ends, and only then reversed.
+fn bytes_bounds(from: i64, to: i64, length: usize) -> Eval<(usize, usize)> {
+    let count = length as i64;
+    if from < 0 {
+        return Err(panicked(crate::interpreter::past_end_message(from, length)));
+    }
+    if to < 0 || to > count {
+        return Err(panicked(crate::interpreter::past_end_message(to, length)));
+    }
+    if from > to {
+        return Err(panicked(crate::interpreter::reversed_range_message(from, to)));
+    }
+    Ok((from as usize, to as usize))
+}
+
 fn prelude_object(interpreter: &Interpreter, name: &str, fields: Vec<Value>) -> Value {
     let item = interpreter.program.prelude.scope.borrow().get(name).cloned();
     match item {
@@ -140,7 +170,7 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
         }
         ("", "panic") => {
             let message = arguments.required(0, "message")?;
-            Err(failure(format!("panic: {}", interpreter.show(&message, true)?)))
+            Err(panicked(interpreter.show(&message, true)?))
         }
         ("", "do") => interpreter.call_function(&arguments.required(0, "body")?, Vec::new()),
         ("", "describe") => Ok(Value::text(&interpreter.show(&arguments.required(0, "value")?, false)?)),
@@ -439,7 +469,7 @@ fn common_method(interpreter: &mut Interpreter, receiver: &Value, name: &str, ar
 
 fn number_method(receiver: &Value, name: &str, arguments: &Arguments) -> Eval<Option<Value>> {
     Ok(Some(match (receiver, name) {
-        (Value::Int(value), "absolute") => Value::Int(value.checked_abs().ok_or_else(|| failure("Integer overflow"))?),
+        (Value::Int(value), "absolute") => Value::Int(value.checked_abs().ok_or_else(|| panicked(overflow_message("-")))?),
         (Value::Float(value), "absolute") => Value::Float(value.abs()),
         (Value::Float(value), "squareRoot") => Value::Float(value.sqrt()),
         (Value::Float(value), "floor") => Value::Float(value.floor()),
@@ -464,11 +494,11 @@ fn number_method(receiver: &Value, name: &str, arguments: &Arguments) -> Eval<Op
 
 fn char_method(character: char, name: &str) -> Eval<Option<Value>> {
     Ok(Some(match name {
-        "isDigit" => Value::Bool(character.is_numeric()),
-        "isLetter" => Value::Bool(character.is_alphabetic()),
-        "isWhitespace" => Value::Bool(character.is_whitespace()),
-        "toUpperCase" => Value::Char(character.to_uppercase().next().unwrap_or(character)),
-        "toLowerCase" => Value::Char(character.to_lowercase().next().unwrap_or(character)),
+        "isDigit" => Value::Bool(characters::is_digit(character)),
+        "isLetter" => Value::Bool(characters::is_letter(character)),
+        "isWhitespace" => Value::Bool(characters::is_whitespace(character)),
+        "toUpperCase" => Value::Char(characters::to_upper_case(character)),
+        "toLowerCase" => Value::Char(characters::to_lower_case(character)),
         "byteLength" => Value::Int(character.len_utf8() as i64),
         _ => return Ok(None),
     }))
@@ -490,7 +520,7 @@ fn text_method(interpreter: &mut Interpreter, receiver: &Value, name: &str, argu
             let found = match usize::try_from(offset) {
                 Ok(offset) if offset < text.len() => match text.get(offset..) {
                     Some(rest) => rest.chars().next().map(Value::Char),
-                    None => return Err(failure(format!("The offset {offset} is inside of a character"))),
+                    None => return Err(panicked(inside_character_message(offset as i64, text.len()))),
                 },
                 _ => None,
             };
@@ -509,24 +539,22 @@ fn text_method(interpreter: &mut Interpreter, receiver: &Value, name: &str, argu
         "isBlank" => Value::Bool(text.trim().is_empty()),
         "slice" => {
             let Value::Range(range) = arguments.required(0, "range")? else { return Err(failure("`range` must be a Range")) };
-            let (from, to) = slice_bounds(range, text.len())?;
+            let (from, to) = text_slice_bounds(range, text.len())?;
             match receiver_text.slice(from, to) {
                 Some(slice) => Value::Text(slice),
-                None => return Err(failure(format!("The offsets {from}..{to} are inside of a character"))),
+                None => return Err(library_panic(inside_character_message(inside_offset(text, from, to), text.len()), TEXT_FILE)),
             }
         }
         // `slice` is TorbScript over this in `std/text` now: what an open end means is the receiver's decision, so the
-        // native takes the two offsets it arrived at. Stage 0 keeps both, the way it keeps its own `chars`
+        // native takes the two offsets it arrived at. Stage 0 keeps both, the way it keeps its own `chars`. It is the
+        // one the *program* called, so its panic is at the line of the program and not at a line of `std/`
         "sliceBytes" => {
             let from = int_of(&arguments.required(0, "from")?, "from")?;
             let to = int_of(&arguments.required(1, "to")?, "to")?;
-            let (from, to) = (usize::try_from(from).unwrap_or(0), usize::try_from(to).unwrap_or(0));
-            if to > text.len() || from > to {
-                return Err(failure(format!("The offsets {from}..{to} are outside of a text of {} bytes", text.len())));
-            }
+            let (from, to) = bytes_bounds(from, to, text.len())?;
             match receiver_text.slice(from, to) {
                 Some(slice) => Value::Text(slice),
-                None => return Err(failure(format!("The offsets {from}..{to} are inside of a character"))),
+                None => return Err(panicked(inside_character_message(inside_offset(text, from, to), text.len()))),
             }
         }
         "contains" => Value::Bool(text.contains(&part(0, "part")?)),
@@ -543,8 +571,8 @@ fn text_method(interpreter: &mut Interpreter, receiver: &Value, name: &str, argu
             Value::from_option(found.and_then(|position| receiver_text.slice(position + part.len(), text.len())).map(Value::Text))
         }
         "trim" => Value::text(text.trim()),
-        "toUpperCase" => Value::text(&text.to_uppercase()),
-        "toLowerCase" => Value::text(&text.to_lowercase()),
+        "toUpperCase" => Value::text(&characters::mapped_case(text, true)),
+        "toLowerCase" => Value::text(&characters::mapped_case(text, false)),
         "replace" => Value::text(&text.replace(&part(0, "part")?, &part(1, "replacement")?)),
         "split" => Value::list(text.split(&part(0, "separator")?).map(Value::text).collect()),
         "lines" => Value::list(text.split('\n').map(Value::text).collect()),
@@ -589,7 +617,7 @@ fn list_method(interpreter: &mut Interpreter, receiver: &mut Value, name: &str, 
         }
         "slice" => {
             let Value::Range(range) = arguments.required(0, "range")? else { return Err(failure("`range` must be a Range")) };
-            let (from, to) = slice_bounds(range, items.len())?;
+            let (from, to) = list_slice_bounds(range, items.len())?;
             Value::list(items[from..to].to_vec())
         }
         "add" => {
@@ -601,19 +629,15 @@ fn list_method(interpreter: &mut Interpreter, receiver: &mut Value, name: &str, 
             Value::Void
         }
         "insert" => {
-            let index = position_of(&arguments.required(0, "index")?, "index")?;
-            if index > items.len() {
-                return Err(failure(format!("Index {index} is out of bounds (the length is {})", items.len())));
-            }
-            Rc::make_mut(items).insert(index, arguments.required(1, "value")?);
+            let index = int_of(&arguments.required(0, "index")?, "index")?;
+            let place = list_index(index, items.len(), true)?;
+            Rc::make_mut(items).insert(place, arguments.required(1, "value")?);
             Value::Void
         }
         "set" => {
-            let index = position_of(&arguments.required(0, "index")?, "index")?;
-            if index >= items.len() {
-                return Err(failure(format!("Index {index} is out of bounds (the length is {})", items.len())));
-            }
-            Rc::make_mut(items)[index] = arguments.required(1, "value")?;
+            let index = int_of(&arguments.required(0, "index")?, "index")?;
+            let place = list_index(index, items.len(), false)?;
+            Rc::make_mut(items)[place] = arguments.required(1, "value")?;
             Value::Void
         }
         "remove" => {
@@ -643,11 +667,9 @@ fn list_method(interpreter: &mut Interpreter, receiver: &mut Value, name: &str, 
             Value::Void
         }
         "swapAt" => {
-            let first = position_of(&arguments.required(0, "first")?, "first")?;
-            let second = position_of(&arguments.required(1, "second")?, "second")?;
-            if first >= items.len() || second >= items.len() {
-                return Err(failure(format!("Index out of bounds (the length is {})", items.len())));
-            }
+            let first = int_of(&arguments.required(0, "first")?, "first")?;
+            let second = int_of(&arguments.required(1, "second")?, "second")?;
+            let (first, second) = (list_index(first, items.len(), false)?, list_index(second, items.len(), false)?);
             Rc::make_mut(items).swap(first, second);
             Value::Void
         }
@@ -850,13 +872,19 @@ fn wrapper_method(interpreter: &mut Interpreter, receiver: &Value, name: &str, a
             Some(inner) => Value::ok(inner),
             None => Value::error(arguments.required(0, "error")?),
         },
+        // `Option.expect` panics with the message alone, `Result.expect` with the message and the error behind it -
+        // and each one at the line of its own file, which is what the two `.stderr` of the suite name
         "expect" => match (inner, problem) {
             (Some(inner), _) => inner,
             (None, Some(problem)) => {
                 let message = interpreter.show(&arguments.required(0, "message")?, true)?;
-                return Err(failure(format!("panic: {message}: {}", interpreter.show(&problem, true)?)));
+                let shown = interpreter.show(&problem, true)?;
+                return Err(library_panic(format!("{message}: {shown}"), RESULT_FILE));
             }
-            (None, None) => return Err(failure(format!("panic: {}", interpreter.show(&arguments.required(0, "message")?, true)?))),
+            (None, None) => {
+                let message = interpreter.show(&arguments.required(0, "message")?, true)?;
+                return Err(library_panic(message, OPTION_FILE));
+            }
         },
         _ => return Ok(None),
     }))
@@ -1013,7 +1041,7 @@ fn iterable_method(interpreter: &mut Interpreter, items: Vec<Value>, name: &str,
             let mut total = Value::Int(0);
             for item in items {
                 total = match (&total, &item) {
-                    (Value::Int(a), Value::Int(b)) => Value::Int(a.checked_add(*b).ok_or_else(|| failure("Integer overflow"))?),
+                    (Value::Int(a), Value::Int(b)) => Value::Int(a.checked_add(*b).ok_or_else(|| panicked(overflow_message("+")))?),
                     (Value::Int(a), Value::Float(b)) => Value::Float(*a as f64 + b),
                     (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
                     (Value::Float(a), Value::Int(b)) => Value::Float(a + *b as f64),

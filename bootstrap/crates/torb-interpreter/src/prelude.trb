@@ -17,6 +17,63 @@ public type Ordering {
   }
 }
 
+/**
+ * The traits the operators go through, as `std/core/src/operators.trb` and `std/core/src/compare.trb` declare them and
+ * as `std/prelude` re-exports them: a type that writes `with Add` has `+`, and a type that does not has no `+` at all.
+ *
+ * They are here because a program may name them - `type Seconds with Add & Subtract by value` delegates through them -
+ * and because the checker of stage 1 resolves the same names in the prelude. The interpreter itself dispatches an
+ * operator by the *method* name (`add`, `compare`), so nothing here is what makes `+` work; what it does is let a
+ * program that is valid TorbScript run unchanged on stage 0.
+ */
+public trait Add {
+  fn add(self, other: Self): Self
+}
+
+public trait Subtract {
+  fn subtract(self, other: Self): Self
+}
+
+public trait Multiply {
+  fn multiply(self, other: Self): Self
+}
+
+public trait Divide {
+  fn divide(self, other: Self): Self
+}
+
+public trait Remainder {
+  fn remainder(self, other: Self): Self
+}
+
+public trait Negate {
+  fn negate(self): Self
+}
+
+public trait Compare {
+  fn compare(self, other: Self): Ordering
+
+  fn lessThan(self, other: Self): Bool {
+    compare(other) == .Less
+  }
+
+  fn greaterThan(self, other: Self): Bool {
+    compare(other) == .Greater
+  }
+
+  fn min(self, other: Self): Self {
+    if lessThan(other) { self } else { other }
+  }
+
+  fn max(self, other: Self): Self {
+    if greaterThan(other) { self } else { other }
+  }
+
+  fn clamp(self, low: Self, high: Self): Self {
+    max(low).min(high)
+  }
+}
+
 public type NumberParseError {
   text: String
 }

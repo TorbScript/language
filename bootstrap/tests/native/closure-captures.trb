@@ -1,0 +1,97 @@
+use Process from "std/process"
+
+/**
+ * **A captured `var` binding is one shared box, and everything else a closure captures is a copy.** That box is the one
+ * place in the language where a variable is shared, so it is the one thing about a closure a program can observe.
+ *
+ * What it pins: the closure sees a write the scope made after the closure was built, the scope sees a write the closure
+ * made, two closures over the same binding see each other, a closure that a function *returns* keeps the box alive, the
+ * binding of a `for` is fresh every turn (so a closure built in a turn keeps that turn's value), and a closure that
+ * captures a `const` keeps a value nothing can reach any more.
+ *
+ * A closure that has to change something the *caller* holds does not capture it at all: it takes a `var` parameter,
+ * which the last function shows. A reference is second-class, and a closure that a field keeps may not hold one.
+ */
+fn sharedWithTheScope(): Int {
+  var count = 1
+  const read = { count }
+  count = 10
+  read()
+}
+
+fn sharedWithTheClosure(): Int {
+  var count = 0
+  const step = { count = count + 5 }
+  step()
+  step()
+  count
+}
+
+fn sharedBetweenTwo(): Int {
+  var count = 0
+  const step = { count = count + 1 }
+  const read = { count * 100 }
+  step()
+  step()
+  step()
+  read()
+}
+
+/** A box that outlives the call that made it: a closure a function returns keeps counting where it left off. */
+fn counter(): () => Int {
+  var count = 0
+  { count = count + 1
+    count }
+}
+
+/** The binding of a `for` is a new one every turn, so a closure built in one turn keeps that turn's value. */
+fn perTurn(): List<Int> {
+  var made: List<() => Int> = []
+  for index in 0..3 {
+    made.add({ index * 2 })
+  }
+  var result: List<Int> = []
+  for closure in made {
+    result.add closure()
+  }
+  result
+}
+
+type Point {
+  x: Int
+  y: Int
+}
+
+/** A `const` capture is a copy, and the closure still has it where the scope that made it is gone. */
+fn ofAConstant(): () => Int {
+  const point = Point 3, 4
+  const numbers = [1, 2, 3]
+  { point.x + point.y + numbers.length() }
+}
+
+/** What a closure may not capture, it takes: a `var` parameter is how a step changes what the caller holds. */
+fn addedTo(var target: List<Int>, step: (Int) => Int) {
+  for index in 0..3 {
+    target.add step(index)
+  }
+}
+
+print sharedWithTheScope()
+print sharedWithTheClosure()
+print sharedBetweenTwo()
+
+const next = counter()
+
+print next(), next(), next()
+print perTurn()
+
+const read = ofAConstant()
+
+print read(), read()
+
+var collected: List<Int> = []
+
+addedTo collected, { _ + 100 }
+print collected
+
+Process.exit 0
