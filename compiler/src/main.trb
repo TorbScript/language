@@ -1,3 +1,10 @@
+/**
+ * The `torb` command line: one `match` over `Process.arguments()` at the bottom of this file, and one function per
+ * subcommand above it - `check`, `build`, `ir`, `natives --header`, `parse`, `tokens`, `ast`, and the `docs`
+ * family from `./documentation`. This file has no exported declarations: it is the entry point of the toolchain
+ * itself, run today by the bootstrap interpreter (`torb run compiler <subcommand> ...`) until it can compile itself.
+ */
+
 use File, IoError from "std/fs"
 use Process from "std/process"
 use SourceText, LineIndex from "./syntax/source"
@@ -19,10 +26,7 @@ use documentationOptionsOf, printDocumentationUsage from "./documentation/comman
 use runCheck, runIndex, runSkill, runBundle from "./documentation/command"
 use sourceOptionsOf, runSource from "./documentation/source"
 
-/**
- * The TorbScript toolchain, written in TorbScript. Until it can compile itself it is run by the bootstrap
- * interpreter: `torb run compiler tokens <file>`.
- */
+/** What `torb` prints when it is called with no subcommand, or one it does not recognize. */
 fn printUsage() {
   printError "torb - the TorbScript toolchain (self-hosted)"
   printError ""
@@ -91,8 +95,8 @@ fn checkSyntax(paths: List<String>): Result<Int, IoError> {
 }
 
 /**
- * Modules, imports, visibility and every name in a type position. Names in expressions are not resolved yet: what
- * they mean depends on types (see docs/ARCHITECTURE.md, milestone 4). Returns the number of problems.
+ * Modules, imports, visibility and every name in a type position. Names in expressions are not resolved here: what
+ * they mean depends on types, so the type checker resolves and checks them together. Returns the number of problems.
  */
 fn checkProjects(paths: List<String>, withStatistics: Bool, withTimings: Bool): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
@@ -129,8 +133,8 @@ fn checkProjects(paths: List<String>, withStatistics: Bool, withTimings: Bool): 
 }
 
 /**
- * How far the type checker has come, per module: how many expressions have a type and how many wait for a later
- * sub-milestone (a generic call, a trait member, a closure body). That is what makes the progress of milestone 4
+ * How far the type checker has come, per module: how many expressions have a type and how many are still deferred
+ * (a generic call, a trait member, a closure body). `--statistics` is what makes "does everything have a type"
  * measurable instead of a feeling.
  */
 fn printStatistics(checked: Checked, tree: SourceTree) {
@@ -163,7 +167,7 @@ fn printTimings(checked: Checked) {
 
 /**
  * The typed IR of what the back end lowers today, in the deterministic text format of docs/BACKEND.md 1.7, plus the
- * list of the constructs a later sub-milestone has to replace. Returns the number of problems.
+ * list of the constructs the back end does not support yet. Returns the number of problems.
  */
 fn printIr(paths: List<String>, onlyStatistics: Bool, withOwnership: Bool): Result<Int, IoError> {
   const tree = readSourceTree(paths)?
@@ -220,8 +224,8 @@ fn irProblems(lowering: Lowering, withOwnership: Bool): List<String> {
 }
 
 /**
- * `torb build [path] [--emit-c] [--output <file>]`. The profiles, the cache and the output path of `project.trb` are
- * milestone 5.13's, so this is the whole command line for now.
+ * `torb build [path] [--emit-c] [--output <file>]`. Profiles, a cache and an output path read from `project.trb`
+ * are not implemented yet, so this is the whole command line for now.
  */
 fn buildOptionsOf(arguments: List<String>): BuildOptions {
   var paths: List<String> = []

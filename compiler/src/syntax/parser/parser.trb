@@ -1,3 +1,15 @@
+/**
+ * Recursive descent over the tokens of the lexer: [parse] turns one file into a [SourceFile], and [Parser] is the
+ * cursor its grammar shares. It always produces a tree; a problem becomes a diagnostic and an `Invalid` node instead
+ * of stopping the parse.
+ *
+ * The grammar itself lives next to this file, one part of the language per module (`./declarations`,
+ * `./expressions`, `./patterns`, `./statements`, `./types`), each a set of functions that take a `var parser:
+ * Parser`. Generic arguments, closure parameter lists and command calls are decided by speculation instead of a
+ * lookahead table: `Parser` is a plain value, so trying a parse is "keep a copy, try, and assign the copy back if it
+ * did not work out" - there is no checkpoint type, and nothing to forget to restore.
+ */
+
 use Span, SourceText from "../source"
 use Diagnostic from "../diagnostic"
 use Token, TokenKind, Keyword, DocComment from "../token"
@@ -11,12 +23,7 @@ public type Parsed {
   diagnostics: List<Diagnostic>
 }
 
-/**
- * Recursive descent parser. It always produces a tree; problems become diagnostics and `Invalid` nodes.
- *
- * The grammar lives in functions that take a `var parser: Parser` (`parseExpression`, `parsePattern`, ...), one file
- * per part of the language. This type is only the cursor they share.
- */
+/** Lexes and parses one file, from its first token to `EndOfFile`, with the diagnostics of both in source order. */
 public fn parse(source: SourceText): Parsed {
   const lexed = lex source
   var parser = Parser source, lexed.tokens, docs: lexed.docs

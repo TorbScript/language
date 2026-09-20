@@ -1,23 +1,32 @@
+/**
+ * What the lexer produces: [Token], its [TokenKind], and [Keyword] for the reserved words. A doc comment
+ * ([DocComment]) is lexed alongside the tokens but is not one itself - the parser attaches it to the declaration
+ * that follows.
+ */
+
 use Span from "./source"
 
+/** One token of the source: its kind and the span it occupies. */
 public type Token {
   kind: TokenKind
   span: Span
 }
 
-/** A doc comment. Doc comments are not tokens: the parser attaches them to the declaration that follows them. */
+/** Everything a doc comment block held, kept aside so the parser can attach it to the declaration that follows. */
 public type DocComment {
   /** Without the comment markers and the margin of stars. Markdown. */
   text: String
   span: Span
 }
 
+/** One piece of a `TokenKind.TextLiteral`: either literal text or the span of an interpolated expression. */
 public type TextPart {
   case Literal(text: String)
   /** The source range between `{` and `}`. The parser parses it. */
   case Expression(span: Span)
 }
 
+/** Every kind of token the lexer produces. */
 public type TokenKind {
   case Identifier
   case Reserved(keyword: Keyword)
@@ -138,6 +147,7 @@ public type TokenKind {
   }
 }
 
+/** Every reserved word of the language. `from`, `as` and `by` are not among them; see [Keyword.fromText]. */
 public type Keyword {
   case Const
   case Var
@@ -159,7 +169,7 @@ public type Keyword {
   case For
   case In
   case While
-  /** `loop { ... }`: the endless loop. Without a `break` its type is `Never`. */
+  /** The endless loop, `loop { }`. Without a `break` that targets it, its type is `Never`. */
   case Loop
   case Break
   case Continue

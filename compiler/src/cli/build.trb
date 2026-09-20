@@ -1,3 +1,14 @@
+/**
+ * `torb build`: a checked program to a native binary, through one C file and whatever C compiler is on the machine.
+ *
+ * This is the minimum path: one profile, no cache, no `project.trb` output path. Profiles, a content-hash cache,
+ * `torb run` as build-and-execute and `torb test` are additions on top of it, never a rewrite of it.
+ *
+ * Nothing is compiled that the back end cannot emit yet: a construct the lowering does not support becomes a
+ * finding, and `torb build` reports every finding and refuses to produce a binary. A C compiler error, on the other
+ * hand, is an internal error of the compiler - never the user's fault.
+ */
+
 use File, IoError from "std/fs"
 use Environment from "std/environment"
 use Process from "std/process"
@@ -16,22 +27,10 @@ use emitProgram from "../backend/c/emit"
 use emittedText from "../backend/c/emission"
 use renderDiagnostic from "./render"
 
-/**
- * `torb build`: from a checked program to a native binary, through one C file and whatever C compiler is on the
- * machine (BACKEND 4).
- *
- * This is the **minimum path** of milestone 5.3: one profile, no cache, no `project.trb` output path. The profiles, the
- * content-hash cache, `torb run` as build-and-execute and `torb test` are milestone 5.13's, and everything here is
- * written so that they are additions and not a rewrite.
- *
- * Nothing is compiled that the back end cannot emit: a construct a later sub-milestone lowers is a **finding** with the
- * milestone in it, and `torb build` reports the findings and refuses. A C compiler error, on the other hand, is an
- * internal error of the compiler - never the user's fault.
- */
-
 /** What the profile is called until `--profile` exists. It is the `{target}` of an output path. */
 public const buildTarget = "release"
 
+/** What `torb build` needs from the command line. */
 public type BuildOptions {
   paths: List<String>
   /** `--emit-c`: write the C and stop. It needs no C compiler at all, which is what keeps CI able to diff the C. */
@@ -40,9 +39,11 @@ public type BuildOptions {
   output: String = ""
 }
 
-/** Exit codes of `torb build`, the way BACKEND 4 fixes them. */
+/** Exit codes of `torb build`. */
 public const buildFailedCode = 1
+/** No C compiler, and no C runtime either: `torb build --emit-c` still works without either. */
 public const noCompilerCode = 3
+/** A bug of the compiler itself: the generated C did not compile, or the verifier found a malformed program. */
 public const internalErrorCode = 70
 
 /** The exit code of the whole command: zero when a binary (or, with `--emit-c`, a C file) came out. */
@@ -118,9 +119,9 @@ fn reportChecked(checked: Checked): Int {
 }
 
 /**
- * Everything the lowering found: an error of the program, a construct a later sub-milestone lowers, a `native type` the
- * runtime does not represent yet, and anything the verifier says - which is an internal error, because a malformed body
- * is a bug of the compiler.
+ * Everything the lowering found: an error of the program, a construct the back end does not lower yet, a `native type`
+ * the runtime does not represent yet, and anything the verifier says - which is an internal error, because a malformed
+ * body is a bug of the compiler.
  */
 fn reportLowering(checked: Checked, tree: SourceTree, lowering: Lowering, entry: String): Int {
   var found = 0
@@ -167,7 +168,7 @@ fn hasEntryFunction(lowering: Lowering, entry: String): Bool {
 
 /**
  * The entry file: the one requested module, or the `build { input }` of the project that was named. A workspace with
- * several members has no single entry, and building every member in dependency order is milestone 5.13's.
+ * several members has no single entry, and building every member in dependency order is not implemented yet.
  */
 fn entryModuleOf(checked: Checked): ModuleId? {
   if const [only] = checked.requested {
@@ -185,7 +186,7 @@ fn entryModuleOf(checked: Checked): ModuleId? {
 
 /**
  * `<project>/build/<target>/<name>`, or whatever `--output` says. Reading `build { output "build/{target}/torb" }` out
- * of the manifest is milestone 5.13's; the shape of the default path is already that one.
+ * of the manifest is not implemented yet; the shape of the default path already matches what it would produce.
  */
 fn outputPathOf(checked: Checked, module: ModuleId, options: BuildOptions): String {
   if !options.output.isEmpty() {

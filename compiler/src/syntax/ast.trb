@@ -1,13 +1,19 @@
+/**
+ * The syntax tree: [SourceFile] down to every statement, expression and pattern. It mirrors the source exactly -
+ * nothing is resolved, desugared or checked here - and every node a diagnostic can point to carries its [Span].
+ *
+ * The parser (`./parser`) builds this tree from the tokens of the lexer, `dump.trb` prints it for the differential
+ * tests against stage 0, and every later pass - name resolution, the type checker, the lowering to IR - starts here.
+ */
+
 use Span from "./source"
 
-/**
- * The syntax tree. It mirrors the source: nothing is resolved, desugared or checked here.
- * Every node that a message can point to carries its span.
- */
+/** One file: its top-level statements, in the order they were written. */
 public type SourceFile {
   statements: List<Statement>
 }
 
+/** An identifier as written in the source: its text and the span it occupies. */
 public type Name {
   text: String
   span: Span
@@ -15,6 +21,7 @@ public type Name {
 
 // --- Declarations -------------------------------------------------------------------------------------------------------
 
+/** Who may see a declaration or a member. */
 public type Visibility {
   /** Members: public. Top-level declarations: private to the file. */
   case Default
@@ -24,12 +31,14 @@ public type Visibility {
   case PrivateVar
 }
 
+/** The modifiers a declaration or a member can carry, besides its kind: `public`, `native`, `shared`. */
 public type Modifiers {
   visibility: Visibility = Visibility.Default
   isNative: Bool = false
   isShared: Bool = false
 }
 
+/** One top-level construct of a file: what it is ([DeclarationKind]), its modifiers, and its doc comment. */
 public type Declaration {
   /** The doc comment in front of the declaration */
   doc: String?
@@ -38,6 +47,7 @@ public type Declaration {
   span: Span
 }
 
+/** The seven things a top-level declaration can be. */
 public type DeclarationKind {
   case Use(declaration: UseDeclaration)
   case Function(declaration: FunctionDeclaration)
@@ -53,11 +63,13 @@ public type DeclarationKind {
   case Constant(binding: Binding)
 }
 
+/** `use <items> from <source>`: what is imported, and where it comes from. */
 public type UseDeclaration {
   items: UseItems
   source: UseSource
 }
 
+/** Where a `use` reads its items from. */
 public type UseSource {
   /** `from "./file"`, `from "std/fs"` */
   case Module(path: String)
@@ -85,12 +97,14 @@ public type UseItem {
   }
 }
 
+/** What a `use` names: a list of items, or `*` for everything a module exports. */
 public type UseItems {
   case Names(items: List<UseItem>)
   /** `use * as http from "..."` */
   case All(alias: Name)
 }
 
+/** One `<Name>` between the angle brackets of a generic declaration. */
 public type GenericParameter {
   /** `<const Size: Int>`: a value instead of a type. Its type is the only item of `bounds`. */
   isConst: Bool
@@ -99,11 +113,13 @@ public type GenericParameter {
   default: TypeReference?
 }
 
+/** One clause of a `where` list: `where Item: Hash & Compare`. */
 public type WhereClause {
   subject: TypeReference
   bounds: List<TypeReference>
 }
 
+/** A `fn`: its name, its generics, its parameters and result, and the body it runs. */
 public type FunctionDeclaration {
   name: Name
   generics: List<GenericParameter>
@@ -114,6 +130,7 @@ public type FunctionDeclaration {
   body: Block?
 }
 
+/** One parameter of a function: `self`, `var self`, or a name with its type and an optional default. */
 public type Parameter {
   doc: String?
   name: Name
@@ -125,6 +142,7 @@ public type Parameter {
   default: Expression?
 }
 
+/** A `type`: its name, its generics, the traits it comes `with`, and its members. */
 public type TypeDeclaration {
   name: Name
   generics: List<GenericParameter>
@@ -143,12 +161,14 @@ public type TraitClause {
   delegate: Name?
 }
 
+/** `type Name<Generics> = target`: a name for another type. */
 public type AliasDeclaration {
   name: Name
   generics: List<GenericParameter>
   target: TypeReference
 }
 
+/** A `trait`: its name, the traits it requires (`supertraits`), and its members. */
 public type TraitDeclaration {
   name: Name
   generics: List<GenericParameter>
@@ -156,6 +176,7 @@ public type TraitDeclaration {
   members: List<Member>
 }
 
+/** `extend Target with Trait { ... }`: members added to a type that already exists. */
 public type ExtendDeclaration {
   generics: List<GenericParameter>
   target: TypeReference
@@ -164,11 +185,13 @@ public type ExtendDeclaration {
   members: List<Member>
 }
 
+/** `foreign "library" { ... }`: declarations implemented outside of TorbScript. */
 public type ForeignDeclaration {
   library: String
   members: List<Member>
 }
 
+/** One member of a `type`, a `trait`, an `extend` or a `foreign` block. */
 public type Member {
   doc: String?
   modifiers: Modifiers
@@ -176,6 +199,7 @@ public type Member {
   span: Span
 }
 
+/** The four things a member can be. */
 public type MemberKind {
   case Field(field: Field)
   case Constant(binding: Binding)
@@ -183,6 +207,7 @@ public type MemberKind {
   case Case(declaration: CaseDeclaration)
 }
 
+/** One field of a `type` or of a `case`: its name, its type, and a default if it has one. */
 public type Field {
   /** Only for the fields of a case. The doc comment of a field of a type belongs to its `Member`. */
   doc: String?
@@ -192,6 +217,7 @@ public type Field {
   default: Expression?
 }
 
+/** One `case Name(fields)` of a `type`. */
 public type CaseDeclaration {
   name: Name
   fields: List<Field>
@@ -199,11 +225,13 @@ public type CaseDeclaration {
 
 // --- Types --------------------------------------------------------------------------------------------------------------
 
+/** A type as it is written in the source: what it is ([TypeKind]) and where it stands. */
 public type TypeReference {
   kind: TypeKind
   span: Span
 }
 
+/** The shapes a written type can take. */
 public type TypeKind {
   /** `List<Item>`, `http.Response`, `Self` */
   case Named(path: List<Name>, arguments: List<TypeReference>)
@@ -221,11 +249,13 @@ public type TypeKind {
   case Invalid
 }
 
+/** One field of `TypeKind.TupleType`, labeled or not. */
 public type TupleTypeField {
   label: Name?
   annotation: TypeReference
 }
 
+/** One parameter of `TypeKind.FunctionType`: named or not, `var` or not. */
 public type FunctionTypeParameter {
   name: Name?
   isVar: Bool
@@ -234,23 +264,26 @@ public type FunctionTypeParameter {
 
 // --- Statements ---------------------------------------------------------------------------------------------------------
 
+/** `{ ... }`: a sequence of statements between braces, the body of a function, an `if`, a loop or a `match` arm. */
 public type Block {
   statements: List<Statement>
   span: Span
 }
 
+/** One line of a [Block]: what it does ([StatementKind]) and where it stands. */
 public type Statement {
   kind: StatementKind
   span: Span
 }
 
+/** The things a statement can be. */
 public type StatementKind {
   case Declare(declaration: Declaration)
   case Bind(binding: Binding)
   case Assign(target: Expression, value: Expression)
   case For(pattern: Pattern, iterable: Expression, body: Block)
   case While(condition: Condition, body: Block)
-  /** `loop { ... }`: the endless loop. Without a `break` that targets it nothing after it is reached. */
+  /** The endless loop, with no condition of its own: nothing after it runs unless a `break` targets it. */
   case Loop(body: Block)
   case Return(value: Expression?)
   case Break
@@ -280,11 +313,13 @@ public type Condition {
 
 // --- Expressions --------------------------------------------------------------------------------------------------------
 
+/** An expression: what it computes ([ExpressionKind]) and where it stands. */
 public type Expression {
   kind: ExpressionKind
   span: Span
 }
 
+/** Every shape an expression can take, from a literal to a `match`. */
 public type ExpressionKind {
   case IntegerLiteral(text: String)
   case FloatLiteral(text: String)
@@ -319,11 +354,13 @@ public type ExpressionKind {
   case Invalid
 }
 
+/** One piece of a string literal: literal text, or `{expression}` between the braces. */
 public type TextSegment {
   case Literal(text: String)
   case Interpolated(expression: Expression)
 }
 
+/** Whether a call was written in parentheses or as a command. The formatter canon decides which one a call gets. */
 public type CallStyle {
   /** `f(a, b)`, possibly with a trailing closure */
   case Parentheses
@@ -331,6 +368,7 @@ public type CallStyle {
   case Command
 }
 
+/** One argument of a call: its label if it has one, and whether it spreads a collection. */
 public type Argument {
   label: Name?
   /** `...items` */
@@ -338,27 +376,32 @@ public type Argument {
   value: Expression
 }
 
+/** `{ parameters => body }`: a closure literal. */
 public type Closure {
   parameters: List<ClosureParameter>
   body: Block
 }
 
+/** One parameter of a [Closure]: a pattern, with an annotation where one is written. */
 public type ClosureParameter {
   pattern: Pattern
   annotation: TypeReference?
 }
 
+/** One `pattern => body` of a `match`, with its optional `if` guard. */
 public type MatchArm {
   pattern: Pattern
   guard: Expression?
   body: Expression
 }
 
+/** A unary operator: `-value` or `!condition`. */
 public type PrefixOperator {
   case Negate
   case Not
 }
 
+/** A binary operator between two expressions. */
 public type InfixOperator {
   case Add
   case Subtract
@@ -379,11 +422,13 @@ public type InfixOperator {
 
 // --- Patterns -----------------------------------------------------------------------------------------------------------
 
+/** A pattern: what it matches ([PatternKind]) and where it stands. */
 public type Pattern {
   kind: PatternKind
   span: Span
 }
 
+/** Every shape a pattern can take, from a bare wildcard to a case with fields. */
 public type PatternKind {
   case Wildcard
   /** A bare name always binds. Cases are written `.Case` or `Type.Case`. */
@@ -402,6 +447,7 @@ public type PatternKind {
   case Invalid
 }
 
+/** `...rest` inside of `ListPattern`: how many patterns come before it, and the name it binds if any. */
 public type RestPattern {
   /** Number of patterns in front of the rest */
   position: Int

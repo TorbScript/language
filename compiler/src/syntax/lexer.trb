@@ -1,3 +1,14 @@
+/**
+ * Source text to tokens: [lex] and [Lexed]. The lexer never fails - what it does not understand becomes a
+ * diagnostic and is skipped - and it resolves the one context rule that lives below the parser: which line breaks
+ * end a statement ([removeInsignificantNewlines]) and which `.` inside of a `match` starts an arm.
+ *
+ * It is a hand-written scanner over `SourceText.characters`, kept a character behind a Pratt parser's needs: no
+ * lookahead table, just `peek`/`peekAt` and a position that only moves forward. `compiler/src/syntax` is tested
+ * character for character and token for token against the lexer of `bootstrap/`, which this port has to keep
+ * agreeing with.
+ */
+
 use Span, SourceText from "./source"
 use Diagnostic from "./diagnostic"
 use Token, TokenKind, TextPart, Keyword, DocComment from "./token"
@@ -11,6 +22,7 @@ public type Lexed {
   diagnostics: List<Diagnostic>
 }
 
+/** Lexes a whole file, from its first character to its last. */
 public fn lex(source: SourceText): Lexed {
   lexRange source, Span(0, source.text.byteLength())
 }
@@ -576,10 +588,9 @@ type Lexer {
    * The first entry of the punctuation table whose text stands at the position - the longest match, because that is the
    * order the table is written in.
    *
-   * It is a loop and not `punctuationTable.find({ (text, _) => isAt text })` because that closure captures `var self`,
-   * which is `Capture.Place` of milestone 5.9b: an environment field that holds a *place* rather than a value (see the
-   * note of 6.1 in docs/BACKEND.md). This is the only site in the compiler that needed it, and the fixpoint matters
-   * more than the feature.
+   * It is a loop and not `punctuationTable.find({ (text, _) => isAt text })` because that closure captures `var self`
+   * as a place rather than a value (`Capture.Place`, see the note of 6.1 in docs/BACKEND.md), and this is the only
+   * site in the compiler that needs it.
    */
   fn punctuationAt(self): (String, TokenKind)? {
     for entry in punctuationTable {
