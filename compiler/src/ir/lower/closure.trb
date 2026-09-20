@@ -1,3 +1,22 @@
+/**
+ * Closures: a closure becomes a function plus an environment, and so does everything that is one underneath - a named
+ * function used as a value, the thunk of a `lazy` argument, a receiver closure, and the two property commands that
+ * take one.
+ *
+ * **The closure conversion is here and not in a back end** (BACKEND 0): which values the environment holds, whether the
+ * closure may outlive its call, and what the code pointer points at are decided once, so the C back end and the VM read
+ * one answer. What is left to a back end is how the environment block is written and nothing else.
+ *
+ * Three things fall out of making the environment an ordinary **layout** (`ir/capture.trb`): the captures are `Owned`
+ * positions of the `Closure` instruction, so the ownership pass retains them with the rule it already has; the drop of
+ * the environment is the `D_` helper every counted block gets; and a capture that is itself counted - a `String`, a list,
+ * a trait-typed value - needs no rule of its own.
+ *
+ * A captured `const` binding is a **copy** in the environment; a captured `var` binding is a shared **box** that the
+ * frame and every closure hold together, which is the one place where a variable is shared in this language
+ * (docs/TYPECHECKER.md, A captured `var` binding is a reference that escapes).
+ */
+
 use Span from "../../syntax/source"
 use Statement, Block, Expression, Condition, Argument, MatchArm, Closure from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
@@ -20,24 +39,6 @@ use lowerValue, lowerExpression, valueSlot, unsupportedSlot, abandonedSlot, void
 use lowerBody from "./function"
 use lowerPatternBinding from "./match"
 use argumentReference, putBackElements, TakenElement from "./place"
-
-/**
- * Closures: a closure becomes a function plus an environment, and so does everything that is one underneath - a named
- * function used as a value, the thunk of a `lazy` argument, a receiver closure, and the two property commands that take
- * one (milestone 5.8).
- *
- * **The closure conversion is here and not in a back end** (BACKEND 0): which values the environment holds, whether the
- * closure may outlive its call, and what the code pointer points at are decided once, so the C back end and the VM read
- * one answer. What is left to a back end is how the environment block is written and nothing else.
- *
- * Three things fall out of making the environment an ordinary **layout** (`ir/capture.trb`): the captures are `Owned`
- * positions of the `Closure` instruction, so the ownership pass retains them with the rule it already has; the drop of
- * the environment is the `D_` helper every counted block gets; and a capture that is itself counted - a `String`, a list,
- * a trait-typed value - needs no rule of its own.
- *
- * A captured `const` binding is a **copy** in the environment; a captured `var` binding is a shared **box** that the
- * frame and every closure hold together, which is the one place where a variable is shared in this language (gap 19).
- */
 
 // --- Which `var` bindings become boxes ------------------------------------------------------------------------------
 
@@ -683,8 +684,9 @@ fn closureValueOf(
 }
 
 /**
- * Whether the checker decided the closure may outlive the call it stands in (BACKEND gap 14). It is in the IR so that a
- * back end can put the environment of a closure that cannot escape on the stack; both of them heap-allocate it today.
+ * Whether the checker decided the closure may outlive the call it stands in (docs/BACKEND.md, A closure that
+ * captures a `var` reference may not escape, and nobody records it). It is in the IR so that a back end can put the
+ * environment of a closure that cannot escape on the stack; both of them heap-allocate it today.
  */
 fn escapesAt(var lowering: Lowering, at: Span): Bool {
   const module = lowering.module

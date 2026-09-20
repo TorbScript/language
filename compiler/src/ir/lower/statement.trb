@@ -1,3 +1,12 @@
+/**
+ * Statements, blocks and the two loops. A block is a value where its last statement is an expression, which is the
+ * same rule the checker follows - so `const x = \{ ... value \}` needs nothing of its own here.
+ *
+ * `for` is lowered **without an iterator** where the subject is written as a range with both ends: a counter, a
+ * comparison and an increment, which is what "only if it needs no trait dispatch" means. Every other `for` needs
+ * `Iterable.iterator()` and the `Option` its `next()` answers (`lowerForIterable`).
+ */
+
 use Span from "../../syntax/source"
 use Statement, Block, Binding, Condition, Expression, Pattern from "../../syntax/ast"
 use resultOf from "../../semantics/checker/signature"
@@ -18,15 +27,6 @@ use isClosedType from "../instances"
 use dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
 use iterableBoundOf, iteratorBoundOf from "./collection"
-
-/**
- * Statements, blocks and the two loops. A block is a value where its last statement is an expression, which is the
- * same rule the checker follows - so `const x = \{ ... value \}` needs nothing of its own here.
- *
- * `for` is lowered **without an iterator** where the subject is written as a range with both ends: a counter, a
- * comparison and an increment, which is what "only if it needs no trait dispatch" means. Every other `for` needs
- * `Iterable.iterator()` and the `Option` its `next()` answers, so it waits for 5.5 and 5.6.
- */
 
 /**
  * Every statement of a block, and the value of the block where somebody takes one. Nothing is emitted after a
@@ -65,8 +65,9 @@ fn lowerStatements(
     if index == last {
       if const .Evaluate(expression) = statement.kind {
         // The value of a block that is used as a statement is `Void`, and its last expression may still *have* one:
-        // `{ errorHere "..."  bump() }` as a `match` arm discards the `Token` that `bump` answers (gap 18). Producing it
-        // into the arm's own slot would put a `Token` in a `Void` slot, which is what the verifier catches
+        // `{ errorHere "..."  bump() }` as a `match` arm discards the `Token` that `bump` answers (docs/TYPECHECKER.md,
+        // Which discarded values are errors?). Producing it into the arm's own slot would put a `Token` in a `Void`
+        // slot, which is what the verifier catches
         if discardsLastValue(lowering, builder, expression, destination) {
           const _ = lowerExpression lowering, builder, expression, None
           return None
@@ -104,6 +105,7 @@ fn discardsLastValue(
   !isVoidType(lowering, annotation) && !isNeverType(lowering, annotation)
 }
 
+/** One statement, dispatched on its kind. A `Declare` is reached through the worklist and emits nothing here. */
 public fn lowerStatement(var lowering: Lowering, var builder: FunctionBuilder, statement: Statement) {
   if !lowering.isSupported {
     return
@@ -154,7 +156,8 @@ fn lowerBinding(var lowering: Lowering, var builder: FunctionBuilder, binding: B
       return
     }
   }
-  // A `var` binding some closure captures is a shared box, not a slot: from here on it is a place (gap 19)
+  // A `var` binding some closure captures is a shared box, not a slot: from here on it is a place (docs/TYPECHECKER.md,
+  // A captured `var` binding is a reference that escapes)
   if isCapturedVariable(lowering, declared) {
     lowerBoxedBinding lowering, builder, declared, name, annotation, binding.value
     return
@@ -276,8 +279,8 @@ fn lowerAssignment(
 
 /**
  * The value of an assignment, into the slot the target names. A **counted** local is written *through* rather than
- * stored into, because a write releases what was there first and a store would leak it - which is the one thing
- * `a = b` between two counted locals used to get wrong.
+ * stored into, because a write releases what was there first and a store would leak it - exactly what a plain copy
+ * between two counted locals would get wrong.
  */
 fn assignedInto(var lowering: Lowering, var builder: FunctionBuilder, slot: Slot, value: Expression) {
   const annotation = builder.typeOfSlot slot
@@ -393,7 +396,8 @@ fn lowerLoop(var lowering: Lowering, var builder: FunctionBuilder, body: Block, 
 
 /**
  * `for index in 0..count`: a counter, a comparison and an increment. Both ends are evaluated once, in source order,
- * into slots of their own - a `for` evaluates its subject once (gap 40), and the end must not change with the body.
+ * into slots of their own - a `for` evaluates its subject once (docs/TYPECHECKER.md, Does `for` over a `var` path
+ * iterate the original or a copy?), and the end must not change with the body.
  *
  * Everything else - a collection, a pipeline, an inclusive range, a range without both ends - goes through
  * `Iterable.iterator()` and the `Option` that `next()` answers (`lowerForIterable`).
@@ -497,7 +501,8 @@ fn lowerFor(
  *   box unique before the write (5.7's note).
  * - **The cursor holds the subject by value.** `ListIterator` keeps the list, so changing the collection inside the body
  *   does not change what the loop walks. That is what a value *is*, and nothing here has to arrange it.
- * - **The subject is evaluated exactly once** (gap 40), which is what putting it into a slot before the loop says.
+ * - **The subject is evaluated exactly once** (docs/TYPECHECKER.md, Does `for` over a `var` path iterate the
+ *   original or a copy?), which is what putting it into a slot before the loop says.
  *
  * `continue` jumps to the head, where the next value is pulled; `break` leaves to the block after it. So neither needs a
  * step block of its own, unlike the counter of a range.

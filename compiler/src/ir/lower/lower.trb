@@ -1,3 +1,11 @@
+/**
+ * From a checked program to the IR, in the order the worklist finds it.
+ *
+ * `torb build` seeds the entry function alone - nothing unreachable is emitted - but `torb ir` seeds every
+ * monomorphic declaration of every module it was asked about as well, because the share of them that lowers is the
+ * progress bar `statisticsLines` reports, and a progress bar must not depend on what one entry file happens to call.
+ */
+
 use ModuleId from "../../semantics/module"
 use Checker from "../../semantics/checker/context"
 use Checked from "../../semantics/check"
@@ -10,14 +18,6 @@ use printProgram from "../print"
 use Lowering, newLowering from "./context"
 use lowerEntryFunction, lowerInstance, seedModule from "./function"
 use lowerGenerated from "./derive"
-
-/**
- * From a checked program to the IR, in the order the worklist finds it.
- *
- * `torb build` will seed the entry function alone - nothing unreachable is emitted (5.13) - but `torb ir` seeds every
- * monomorphic declaration of every module it was asked about as well, because the share of them that lowers is the
- * progress bar of milestone 5 and a progress bar must not depend on what one entry file happens to call.
- */
 
 /** The whole lowering of a checked workspace: the entry functions first, then everything the worklist reaches. */
 public fn lowerWorkspace(
@@ -98,8 +98,9 @@ fn dropUncountedMakeUnique(var program: IrProgram) {
  * `examples/encoding-lab`, which overrides defaults of `Iterable` for types of its own, took the instance count of
  * `source.trb`'s program from 121 declarations to 192 without a line of the program changing.
  *
- * The unit is the **package** and not the module, because that is the unit of coherence (gap 29) and of what a project
- * declares it depends on: an implementation is visible to a program exactly where its package is.
+ * The unit is the **package** and not the module, because that is the unit of coherence
+ * (docs/language/traits/coherence.md) and of what a project declares it depends on: an implementation is visible to
+ * a program exactly where its package is.
  */
 fn programPackagesOf(checker: Checker, modules: List<ModuleId>): Map<Int, Bool> {
   const workspace = checker.program.workspace
@@ -153,8 +154,8 @@ fn packageIndexNamed(workspace: Workspace, name: String): Int {
  * one. So neither `torb ir` nor `torb build` lowers it, and the property command its receiver applies is not a finding of
  * the back end any more because **the file is not part of the program**, not because anything was hidden.
  *
- * Every other receiver script stays: a file a `Sandbox.load` names is code the program runs, and milestone 7.4 compiles
- * it like any other body.
+ * Every other receiver script stays: a file a `Sandbox.load` names is code the program runs, and it lowers like any
+ * other body.
  */
 fn programModules(checker: Checker, modules: List<ModuleId>): List<ModuleId> {
   var found: List<ModuleId> = []
@@ -181,8 +182,8 @@ public fn lowerChecked(checked: Checked): Lowering {
  *
  * The path is the package's name plus the file below the package's directory (`torbscript/compiler/src/ir/print.trb`),
  * **not** the way the path was typed on the command line. A location of the IR reaches the generated C as a `#line`
- * directive and the fixpoint of milestone 6 compares two C files byte for byte, so no working directory and no machine
- * may ever leak into one.
+ * directive and the fixpoint compares two C files byte for byte, so no working directory and no machine may ever leak
+ * into one.
  */
 public fn pathsOfModules(checked: Checked): List<String> {
   var paths: List<String> = []
@@ -262,7 +263,7 @@ public fn statisticsLines(lowering: Lowering): List<String> {
     lines.add "  {entry.count}  {entry.what} (first at {entry.at})"
   }
   // A `native type` the runtime does not represent yet belongs here and not among the internal errors: it is a
-  // declaration of `std/` that waits for a milestone, exactly like a `native fn` the manifest marks as planned
+  // declaration of `std/` that is not implemented yet, exactly like a `native fn` the manifest marks as planned
   var planned = lowering.program.planned
   planned.sort({ _ })
   for what in planned {

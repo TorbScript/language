@@ -1,3 +1,17 @@
+/**
+ * Patterns: `match`, `if const`, `while const`, a destructuring binding, and `?`.
+ *
+ * Every one of them is the same three steps. The checker's `MatchPlan` says what has to hold and what is bound
+ * (TYPECHECKER 4.5), `ir/decision.trb` turns that into a decision graph, and this file emits the graph as blocks: one
+ * block per node, one per arm body, and one join. Nothing here decides which arm wins or whether the arms are
+ * exhaustive - both were settled by the checker, which is why a value no arm matches is `unreachable` and not a panic.
+ *
+ * **A path is read where it is safe to read it.** The tests of a branch come outermost first, so by the time a block
+ * reads `subject.Circle.radius` every test that says the value *is* a `Circle` has already held on the way in. A read is
+ * repeated per block rather than shared across blocks, because a slot has to be defined on every path that reads it -
+ * and a `Read` of a counted field hands the frame a count, which the ownership pass releases at its last use.
+ */
+
 use Span from "../../syntax/source"
 use Expression, Block, MatchArm, Pattern from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
@@ -22,20 +36,6 @@ use lowerExpression, lowerValue, valueSlot, unsupportedSlot, abandonedSlot, void
 use constantSlot, emitIntrinsic, intrinsicSlot, integerSlot from "./expression"
 use lowerBlockInto from "./statement"
 use showSlot from "./text"
-
-/**
- * Patterns: `match`, `if const`, `while const`, a destructuring binding, and `?`.
- *
- * Every one of them is the same three steps. The checker's `MatchPlan` says what has to hold and what is bound
- * (TYPECHECKER 4.5), `ir/decision.trb` turns that into a decision graph, and this file emits the graph as blocks: one
- * block per node, one per arm body, and one join. Nothing here decides which arm wins or whether the arms are
- * exhaustive - both were settled by the checker, which is why a value no arm matches is `unreachable` and not a panic.
- *
- * **A path is read where it is safe to read it.** The tests of a branch come outermost first, so by the time a block
- * reads `subject.Circle.radius` every test that says the value *is* a `Circle` has already held on the way in. A read is
- * repeated per block rather than shared across blocks, because a slot has to be defined on every path that reads it -
- * and a `Read` of a counted field hands the frame a count, which the ownership pass releases at its last use.
- */
 
 /** Everything one walk of a decision graph needs, so that no function of it takes ten parameters. */
 type Walk {
@@ -458,14 +458,15 @@ fn emitNode(var lowering: Lowering, var builder: FunctionBuilder, walk: Walk, no
     .Fail => {
       match walk.failBlock {
         Some(found) => finishBlock lowering, builder, Terminator.Jump(found)
-        // After the checker no value reaches here, so nothing is emitted and nothing has to be released (gap 9)
+        // After the checker no value reaches here, so nothing is emitted and nothing has to be released: there are
+        // no cleanup edges and no landing pads (docs/BACKEND.md, Instructions and terminators)
         None => finishBlock lowering, builder, Terminator.Unreachable
       }
     }
   }
 }
 
-/** A literal, a range or a length, as a `Bool` and a branch. Lists are milestone 5.7's, so is every length test. */
+/** A literal, a range or a length, as a `Bool` and a branch. A list pattern is not lowered yet, nor is any length test of one. */
 fn emitCheck(
   var lowering: Lowering,
   var builder: FunctionBuilder,
@@ -1036,8 +1037,9 @@ public fn lowerTry(
   }
   const result = builder.function.signature.result
   /*
-   * At the top level of an entry file there is nothing to hand a failure to, so the failure is **reported**: decided
-   * gap 9 says `error: <the error through Show>` to stderr and exit code 1, and that is what `lowerTopLevelTry` emits.
+   * At the top level of an entry file there is nothing to hand a failure to, so the failure is **reported**:
+   * `error: <the error through Show>` to stderr and exit code 1 (docs/BACKEND.md, What a panic prints, what it runs,
+   * and the exit code), and that is what `lowerTopLevelTry` emits.
    */
   const resultLayout = match variantLayoutOfType(lowering, result) {
     Some(found) => found
@@ -1070,8 +1072,9 @@ public fn lowerTry(
 }
 
 /**
- * `e?` at the top level of an **entry file**: the value where there is one, and otherwise the report of decided gap 9 -
- * `error: <the error through Show>` to stderr, and the program ends with exit code **1**.
+ * `e?` at the top level of an **entry file**: the value where there is one, and otherwise the report
+ * (docs/BACKEND.md, What a panic prints, what it runs, and the exit code) - `error: <the error through Show>` to
+ * stderr, and the program ends with exit code **1**.
  *
  * Three decisions are written into this shape:
  *
@@ -1296,10 +1299,11 @@ fn wrappingVariantOf(var lowering: Lowering, wanted: IrTypeId, given: IrTypeId):
 /**
  * `a ?? b`: the value of the `Option` or of the `Result`, and only where there is none the fallback.
  *
- * The checker records it as `orElse` with a `lazy` argument (gap 13). A thunk is a closure, and closures are milestone
- * 5.8's - so the lowering **inlines** the thunk as the control flow it stands for: the fallback is lowered into the arm
- * that needs it, which short circuits exactly as decided gap 1 asks and allocates nothing. Both back ends still read one
- * IR, so neither of them can disagree about what `??` does.
+ * The checker records it as `orElse` with a `lazy` argument (docs/TYPECHECKER.md, `??` on a `Result`). A thunk is
+ * ordinarily a closure (`ir/lower/closure.trb`), but here the lowering **inlines** it as the control flow it stands
+ * for instead: the fallback is lowered into the arm that needs it, which short circuits exactly as evaluation order
+ * asks (docs/BACKEND.md, Evaluation order is only half specified) and allocates nothing. Both back ends still read
+ * one IR, so neither of them can disagree about what `??` does.
  */
 public fn lowerCoalesce(
   var lowering: Lowering,
@@ -1355,10 +1359,11 @@ public fn lowerCoalesce(
 /**
  * `a?.m` and `a?.m(...)`: the member on the payload of the `Option`, or `None` without touching the member at all.
  *
- * The checker resolves it to `Option.map`, or to `flatMap` where the member answers an `Option` of its own so that `?.`
- * never nests one (gap 12) - but there is no closure in the source to lower, so the lowering emits the control flow the
- * two stand for, the way `??` inlines its thunk. Which of the two it is is `Tables.flattenedOptionals` at the span of the
- * member, because the wrapping happens *inside* the function type the checker gives the member and nothing else says it.
+ * The checker resolves it to `Option.map`, or to `flatMap` where the member answers an `Option` of its own so that
+ * `?.` never nests one (docs/TYPECHECKER.md, `?.` on a member that returns an `Option`) - but there is no closure in
+ * the source to lower, so the lowering emits the control flow the two stand for, the way `??` inlines its thunk.
+ * Which of the two it is is `Tables.flattenedOptionals` at the span of the member, because the wrapping happens
+ * *inside* the function type the checker gives the member and nothing else says it.
  *
  * The member itself is lowered by the ordinary machinery: `Lowering.optionalReceivers` puts the payload in place of the
  * base for exactly one expression, so `lowerCall` and `lowerFieldRead` need no case of their own and a `?.` on a trait
@@ -1467,6 +1472,7 @@ fn payloadTypeOf(var lowering: Lowering, layout: LayoutId, variant: Int): IrType
 
 // --- Variant layouts ------------------------------------------------------------------------------------------------
 
+/** The layout of a type, where it is a variant layout at all: `None` for anything else, `Option` and `Result` included. */
 public fn variantLayoutOfType(var lowering: Lowering, annotation: IrTypeId): LayoutId? {
   if !lowering.program.hasType(annotation) {
     return None

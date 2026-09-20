@@ -1,3 +1,19 @@
+/**
+ * Calls, constructors and operators: which function a call reaches, and in which order its arguments are evaluated.
+ *
+ * A call is one of four things, and the checker decided which: a call of a known function (monomorphized here, with the
+ * type arguments of the enclosing instance filled in), an intrinsic, a function of the runtime, or a member of the
+ * witness table a trait-typed value carries. A `var` argument is the path itself (`ir/lower/place.trb`), a variadic
+ * list is built at the call site (`ir/lower/collection.trb`), and a closure argument is converted by
+ * `ir/lower/closure.trb` - each through its own file, so this one stays about which function is reached and in what
+ * order the arguments run.
+ *
+ * The argument plan is the checker's: `argumentTargets` says which parameter every *written* argument fills, and the
+ * adaptations say which parameters take their default. Written arguments are evaluated in written order - source
+ * order, whatever the declaration order is - and the defaults afterwards, in declaration order, **at the call site**
+ * (docs/BACKEND.md, Parameter defaults have no evaluation rule).
+ */
+
 use Span from "../../syntax/source"
 use Expression, Argument, FunctionDeclaration, Field from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
@@ -32,19 +48,9 @@ use printOperationOf, lowerPrint from "./text"
 use lowerItemList, listBoundFor from "./collection"
 
 /**
- * Calls, constructors and operators: which function a call reaches, and in which order its arguments are evaluated.
- *
- * A call is one of four things, and the checker decided which: a call of a known function (monomorphized here, with the
- * type arguments of the enclosing instance filled in), an intrinsic, a function of the runtime, or a member of the
- * witness table a trait-typed value carries. A `var` argument, a variadic list and a closure each still fail cleanly with
- * the construct named, so 5.7 to 5.9 replace them one by one.
- *
- * The argument plan is the checker's: `argumentTargets` says which parameter every *written* argument fills, and the
- * adaptations say which parameters take their default. Written arguments are evaluated in written order - source
- * order, whatever the declaration order is - and the defaults afterwards, in declaration order, **at the call site**
- * (decided gap 13).
+ * `f(x)`, `Point(1, 2)`, `p.copy(y: 3)`, `a.Circle`: every call syntax lowers to one of a handful of shapes, chosen by
+ * what the checker's `Resolution` at this span says the callee is.
  */
-
 public fn lowerCall(
   var lowering: Lowering,
   var builder: FunctionBuilder,
@@ -135,7 +141,8 @@ fn lowerCallable(
 ): Slot {
   const receiver = receiverTypeOf lowering, callee
   const at = expression.span
-  // `print` and `printError` are variadic, and a variadic list is milestone 5.7's: the parts are shown here instead
+  // `print` and `printError` are variadic, but a variadic call ordinarily builds a list (`ir/lower/collection.trb`);
+  // the parts are shown here instead, on the fast path `ir/lower/text.trb` explains
   if const Some(operation) = printOperationOf(lowering, symbol) {
     return lowerPrint lowering, builder, destination, expression, arguments, operation
   }
@@ -480,7 +487,10 @@ fn generatedMemberOf(
   generatedFunctionOf lowering, kind, member, subject, bound, mapping, at
 }
 
-/** `panic "unreachable"`: an instruction of its own, and nothing after it in the block is reachable (gap 9). */
+/**
+ * `panic "unreachable"`: an instruction of its own, and nothing after it in the block is reachable (docs/BACKEND.md,
+ * What a panic prints, what it runs, and the exit code).
+ */
 fn lowerPanic(
   var lowering: Lowering,
   var builder: FunctionBuilder,
@@ -744,8 +754,8 @@ fn referenceArgumentAt(
    * A place is **not** a value, so nothing can coerce one: where the storage the caller names is a concrete type and the
    * parameter asks for the trait type of it (`Source<Item, Failure>` for an `Iterating<…>`), there is no `TraitValue` to
    * put in between - the callee would write through a box the caller does not have. The checker allows the coercion
-   * because it reads the argument as a value; here it is a clean finding, and it used to be two internal errors of the
-   * verifier ("its place is …") in `std/stream`.
+   * because it reads the argument as a value; here it is a clean finding instead of the two internal errors of the
+   * verifier ("its place is …") a body in `std/stream` would otherwise produce.
    */
   if path.annotation != annotation {
     const given = describeIrType lowering.program, path.annotation
@@ -759,9 +769,9 @@ fn referenceArgumentAt(
 
 /**
  * The parameters that were not written take their default, lowered **at the call site**, at every call, in the scope
- * of the declaration - so the tables that are read for it are the callee's module's (decided gap 13), and the
- * substitution in scope for it is the **callee's** instance mapping and not the caller's: a default of a generic
- * declaration is written in terms of that declaration's own parameters.
+ * of the declaration - so the tables that are read for it are the callee's module's (docs/BACKEND.md, Parameter
+ * defaults have no evaluation rule), and the substitution in scope for it is the **callee's** instance mapping and
+ * not the caller's: a default of a generic declaration is written in terms of that declaration's own parameters.
  */
 fn lowerDefaults(
   var lowering: Lowering,

@@ -1,3 +1,18 @@
+/**
+ * `[1, 2, 3]` and `["a": 1]`: the two container literals of the language.
+ *
+ * The **type of a literal is a trait-typed value.** The checker gives `[1, 2, 3]` the type `List<Int>`, which in a type
+ * position is `Traits([List<Int>])` and therefore an `Object` of the IR (5.6's note) - it does *not* name the
+ * implementation. So a literal is three things in a row: build the default implementation empty over the element
+ * descriptors of its type arguments (`ContainerNew`), fill it through the ordinary `add`/`set` of that implementation,
+ * and coerce the result to the trait-typed value the literal's type is.
+ *
+ * Which implementation is the default is written in `std/collections`: `List.from` answers an `ArrayList` and `Map.from`
+ * a `TrieMap`. The lowering has to know the same thing, because a literal is not a call of `from` - and a wrong answer
+ * would be a *different container* and not a slower one, so it is asked of the prelude by name and is a clean finding
+ * where the name is not there.
+ */
+
 use Span from "../../syntax/source"
 use Expression, Argument from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
@@ -19,21 +34,6 @@ use valueSlot, unsupportedSlot, abandonedSlot from "./expression"
 use lowerValue from "./expression"
 use lowerTraitValue, dispatchedMember, dispatchedOn, resultTypeOf, preludeType from "./generic"
 use lowerDispatched from "./call"
-
-/**
- * `[1, 2, 3]` and `["a": 1]`: the two container literals of the language (milestone 5.7).
- *
- * The **type of a literal is a trait-typed value.** The checker gives `[1, 2, 3]` the type `List<Int>`, which in a type
- * position is `Traits([List<Int>])` and therefore an `Object` of the IR (5.6's note) - it does *not* name the
- * implementation. So a literal is three things in a row: build the default implementation empty over the element
- * descriptors of its type arguments (`ContainerNew`), fill it through the ordinary `add`/`set` of that implementation,
- * and coerce the result to the trait-typed value the literal's type is.
- *
- * Which implementation is the default is written in `std/collections`: `List.from` answers an `ArrayList` and `Map.from`
- * a `TrieMap`. The lowering has to know the same thing, because a literal is not a call of `from` - and a wrong answer
- * would be a *different container* and not a slower one, so it is asked of the prelude by name and is a clean finding
- * where the name is not there.
- */
 
 /** `[1, 2, 3]`: an `ArrayList<Item>` filled in written order, then coerced to the `List<Item>` the literal is. */
 public fn lowerListLiteral(
@@ -261,13 +261,14 @@ public fn listBoundFor(var lowering: Lowering, item: TypeId, at: Span): TypeId? 
 }
 
 /**
- * Whether a literal is built **directly** as the collection its own type names, which is `CollectionLiteral.Default` and
- * the only one of the three shapes 5.7 lowers. The checker decided which of the three it is (gap 51, TYPECHECKER 8) and
- * recorded it at the literal's span, so the back end reads that decision instead of asking the expected type a second
- * time and answering it differently.
+ * Whether a literal is built **directly** as the collection its own type names, which is `CollectionLiteral.Default`
+ * and the only one of the three shapes the lowering translates today. The checker decided which of the three it is
+ * (docs/TYPECHECKER.md, What does a collection literal become, and which types may one adapt to?) and recorded it at
+ * the literal's span, so the back end reads that decision instead of asking the expected type a second time and
+ * answering it differently.
  *
- * - **`InlineArray`** writes the items straight into the inline slots of an `Array<Item, Size>`. That is a `FixedArray`
- *   and therefore milestone 5.9b's, together with its interior paths.
+ * - **`InlineArray`** writes the items straight into the inline slots of an `Array<Item, Size>`. That is a
+ *   `FixedArray`, and filling one this way is not lowered yet, together with its interior paths.
  * - **`FromIterable`** builds the default list and hands it to the `from` of the target (`Set<String>`, `Queue<Int>`).
  *   The `from` to call is `memberOfImplementation` of the `witness` the checker recorded, so the *call* is ordinary - but
  *   every one of those bottoms out in `TrieSet.from` or `ArrayQueue.from`, which are the same `.Planned` natives as
@@ -413,7 +414,8 @@ fn appliedBoundOf(var lowering: Lowering, subject: TypeId, name: String, at: Spa
  * same in every back end - which is exactly what design principle 5 asks for.
  *
  * The receiver is read as a **value**, because `at` takes `self`. A `var` path *through* an index
- * (`enemies[0].health = 5`) is `TakeOut`/`PutBack` and milestone 5.9b's; this is the read alone.
+ * (`enemies[0].health = 5`) is `TakeOut`/`PutBack`, in `lowerIndexAssignment` (`ir/lower/place.trb`); this is the
+ * read alone.
  */
 public fn lowerIndexRead(
   var lowering: Lowering,
@@ -445,7 +447,8 @@ public fn lowerIndexRead(
       return abandonedSlot lowering, builder, destination
     }
   }
-  // Source order: what stands in front of the bracket first, then what is in it (decided gap 1)
+  // Source order: what stands in front of the bracket first, then what is in it (docs/BACKEND.md, Evaluation order
+  // is only half specified)
   const base = lowerValue lowering, builder, target
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination

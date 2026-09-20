@@ -1,3 +1,20 @@
+/**
+ * Text: string interpolation, and the two calls that write one - `print` and `printError`.
+ *
+ * `"{name}: {count + 1}"` is one `Intrinsic.TextConcat` over the literal pieces and the shown parts (BACKEND 1.6), so a
+ * text of *n* parts is one allocation and never a chain of `String.add`: building the long text of a loop stays linear.
+ * Each interpolated part goes through `Show.show` - statically where its type is known, through the witness table the
+ * value carries where it is trait typed - which is the very same function a derived `Show` calls per field, so a value
+ * that is interpolated and one that is nested inside another value run the same code.
+ *
+ * `showNested` is *not* what interpolation uses: `"{name}"` is the text itself and `["a"]` is quoted, which is exactly
+ * the difference the generated `Show` format draws between the two members (docs/TYPECHECKER.md, The generated
+ * `Show` format is not specified).
+ *
+ * The literal pieces need nothing: escapes, `\{`, a raw string and the dedenting of a `"""` block are all the lexer's,
+ * so a `TextSegment.Literal` already carries the bytes the program has to produce.
+ */
+
 use Span from "../../syntax/source"
 use Expression, Argument, TextSegment from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
@@ -12,24 +29,9 @@ use boundsOfTraitValue from "./generic"
 use valueSlot, unsupportedSlot, abandonedSlot, voidSlot, lowerUncoercedValue from "./expression"
 
 /**
- * Text: string interpolation, and the two calls that write one - `print` and `printError`.
- *
- * `"{name}: {count + 1}"` is one `Intrinsic.TextConcat` over the literal pieces and the shown parts (BACKEND 1.6), so a
- * text of *n* parts is one allocation and never a chain of `String.add`: building the long text of a loop stays linear.
- * Each interpolated part goes through `Show.show` - statically where its type is known, through the witness table the
- * value carries where it is trait typed - which is the very same function a derived `Show` calls per field, so a value
- * that is interpolated and one that is nested inside another value run the same code.
- *
- * `showNested` is *not* what interpolation uses: `"{name}"` is the text itself and `["a"]` is quoted, which is exactly
- * the difference decided gap 23 gives the two members.
- *
- * The literal pieces need nothing: escapes, `\{`, a raw string and the dedenting of a `"""` block are all the lexer's,
- * so a `TextSegment.Literal` already carries the bytes the program has to produce.
- */
-
-/**
  * `"{a} and {b}"`. The parts are evaluated in source order - a part is an ordinary expression and may call anything -
- * and only then concatenated, which is what keeps evaluation order the order a reader sees (decided gap 1).
+ * and only then concatenated, which is what keeps evaluation order the order a reader sees (docs/BACKEND.md,
+ * Evaluation order is only half specified).
  *
  * An empty literal piece is left out: it is no bytes, and one operand fewer is one array entry fewer in the C.
  */
@@ -181,20 +183,19 @@ public fn showsHere(lowering: Lowering, at: Span): Bool {
 /**
  * `print a, b` writes the shown parts separated by one space and one `\n` (`runtime/console.c`).
  *
- * `print` is `print(...values: Show)`, and a variadic parameter is a **list** at the call site - which is milestone
- * 5.7's and not here. So a call of the two well-known natives is lowered directly: every argument is shown, and the
- * parts become the operands of `Intrinsic.PrintParts`, whose operand list is as long as the call is - the same
- * variable-arity shape `TextConcat` already has. The join stays in the runtime, so the two back ends cannot disagree
- * about the format (5.R1), and nothing about `print` is special *after* the lowering: it is one instruction the VM gets
- * as one opcode.
+ * `print` is declared `print(...values: Show)`, so an ordinary variadic call builds a **list** at the call site
+ * (`ir/lower/collection.trb`). The two well-known natives take a fast path instead: every argument is shown, and the
+ * parts become the operands of `Intrinsic.PrintParts` directly, whose operand list is as long as the call is - the
+ * same variable-arity shape `TextConcat` already has. The join stays in the runtime, so the two back ends cannot
+ * disagree about the format, and nothing about `print` is special *after* the lowering: it is one instruction the VM
+ * gets as one opcode.
  *
- * **5.7 builds the list now, and this stays** - the two lines that recognize the name are the definition of `print` and no
- * longer a placeholder. A `List<Show>` at the call site would have the **runtime** call `show` through a witness table,
- * which a C function cannot do (which is why `ArrayList.from` is TorbScript for the same reason), so `print` would have to
- * become TorbScript over a new `printText` native - and that moves the one space and the one `\n` out of
- * `runtime/console.c`, where 5.R1 put them on purpose, and costs a list plus a concatenation at every call. What 5.7
- * changed is that this is a **fast path** and not the only path: a variadic call of anything else builds its list
- * (`ir/lower/collection.trb`), so nothing of the language waits for it any more.
+ * Building a `List<Show>` and calling a `printText` native instead is not an improvement: the **runtime** would have
+ * to call `show` through a witness table, which a C function cannot do (the same reason `ArrayList.from` is written
+ * in TorbScript instead of as a native), so `print` would need to become TorbScript over a new native - moving the
+ * one space and the one `\n` out of `runtime/console.c` and costing a list plus a concatenation at every call. This
+ * fast path sits on top of the general variadic lowering, not in place of it: a variadic call of anything else still
+ * builds its list.
  */
 public fn printOperationOf(var lowering: Lowering, symbol: SymbolId): IntrinsicOperation? {
   const known = lowering.checker.wellKnown

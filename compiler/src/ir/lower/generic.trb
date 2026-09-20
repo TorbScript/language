@@ -1,3 +1,13 @@
+/**
+ * Generics in the lowering: which instance a call reaches, and when a call goes through a witness table instead.
+ *
+ * The checker already decided which is which (TYPECHECKER 4.4) and nothing here re-decides it. What this file adds is
+ * the step the checker cannot take: **substituting the type arguments of the instance that is being lowered**. A
+ * `Dispatch.Forwarded` inside `fn describe<Value: Show>(value: Value)` is a call on a generic parameter; once `Value`
+ * stands for `Point` it is an ordinary call of `Point.show`, and once it stands for `Show` it is a call through the table
+ * the value carries. One file for both, because it is one question.
+ */
+
 use Span from "../../syntax/source"
 use SymbolId from "../../semantics/symbols"
 use TypeId, TypeForm, ParameterId, ImplementationId from "../../semantics/checker/type"
@@ -17,16 +27,6 @@ use providerOfMember from "../witness"
 use narrowingPathOf from "../witness"
 use isClosedType from "../instances"
 use Lowering, reportUnsupported, substituted, irTypeOfClosed from "./context"
-
-/**
- * Generics in the lowering: which instance a call reaches, and when a call goes through a witness table instead.
- *
- * The checker already decided which is which (TYPECHECKER 4.4) and nothing here re-decides it. What this file adds is
- * the step the checker cannot take: **substituting the type arguments of the instance that is being lowered**. A
- * `Dispatch.Forwarded` inside `fn describe<Value: Show>(value: Value)` is a call on a generic parameter; once `Value`
- * stands for `Point` it is an ordinary call of `Point.show`, and once it stands for `Show` it is a call through the table
- * the value carries. One file for both, because it is one question.
- */
 
 /** How a call reaches its member, once the arguments of the caller's own instance are filled in. */
 public type Dispatched {
@@ -595,7 +595,7 @@ public fn objectTypeOf(var lowering: Lowering, bounds: List<TypeId>): IrTypeId {
  * A bound that is not is a **finding** and not an internal error: `Iterable.filter` coerces its `Filtered` stage to
  * `Iterable<Item>`, and the `Item` the checker recorded there belongs to the *stage's* parameter list rather than to the
  * instance's, so nothing has a value for it. Closing that is a record of the checker, and a body that hits it is blocked
- * for a reason of its own anyway (every stage takes a closure, milestone 5.8).
+ * for a reason of its own anyway: every stage takes a closure.
  */
 public fn closedBounds(var lowering: Lowering, bounds: List<TypeId>, at: Span): Bool {
   for bound in bounds {

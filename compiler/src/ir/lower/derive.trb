@@ -1,3 +1,17 @@
+/**
+ * The members no source declares, generated from the layout: what a **derived** implementation does, and the wrapper a
+ * witness table needs around an intrinsic.
+ *
+ * `Show`, `Equals` and `Hash` are structural - field by field, case by case - and the format of a generated `Show` is
+ * decided in docs/TYPECHECKER.md, The generated `Show` format is not specified: `Type(field: value, ...)`, a case as
+ * `Case(field: value)` or as its bare name, with everything nested going through `showNested`. `Compare` is generated
+ * only for the `native` types whose manifest entry says so and for the tuples the checker derives it for, because an
+ * order over a `type` is a decision and not a structure (TYPECHECKER 4.4).
+ *
+ * A generated body is built by the **worklist**, exactly like a body of the source: the stub is added where the member is
+ * first needed and filled in when the worklist reaches it, so that a derived `Show` of a recursive type terminates.
+ */
+
 use Span from "../../syntax/source"
 use ModuleId from "../../semantics/module"
 use SymbolId from "../../semantics/symbols"
@@ -19,20 +33,6 @@ use memberOfType from "../witness"
 use elementFor from "../element"
 use Lowering, Generated, GeneratedRequest, reportUnsupported, locationOf from "./context"
 use irTypeOfClosed, internStatic, booleanTypeOf from "./context"
-
-/**
- * The members no source declares, generated from the layout: what a **derived** implementation does, and the wrapper a
- * witness table needs around an intrinsic.
- *
- * `Show`, `Equals` and `Hash` are structural - field by field, case by case - and the format of a generated `Show` is
- * decided gap 23 of docs/TYPECHECKER.md: `Type(field: value, ...)`, a case as `Case(field: value)` or as its bare name,
- * with everything nested going through `showNested`. `Compare` is generated only for the `native` types whose manifest
- * entry says so and for the tuples the checker derives it for, because an order over a `type` is a decision and not a
- * structure (TYPECHECKER 4.4).
- *
- * A generated body is built by the **worklist**, exactly like a body of the source: the stub is added where the member is
- * first needed and filled in when the worklist reaches it, so that a derived `Show` of a recursive type terminates.
- */
 
 /** A generated member, added to the worklist the first time it is needed. One body per member per target type. */
 public fn generatedFunctionOf(
@@ -65,8 +65,8 @@ public fn generatedFunctionOf(
 }
 
 /**
- * One generated body. The function is already in the program as an `unreachable` stub, so a body that needs something
- * this sub-milestone does not do keeps exactly that stub - as a body of the source does.
+ * One generated body. The function is already in the program as an `unreachable` stub, so a body that needs a
+ * construct the lowering does not translate yet keeps exactly that stub - as a body of the source does.
  */
 public fn lowerGenerated(var lowering: Lowering, request: GeneratedRequest) {
   const stub = lowering.program.functionAt request.function
@@ -573,7 +573,8 @@ fn fieldEquality(
  *
  * It is written with the bit intrinsics and not with `combineHashes`, which the runtime provides from 5.7 on - and it
  * does not have to agree with anything else, because a hash value is not part of the language: `Show` of a `Map` is
- * insertion order (decided gap 6), so nothing a program can observe depends on one.
+ * insertion order (docs/BACKEND.md, The iteration order of `Map` and `Set` is unspecified, and it is observable), so
+ * nothing a program can observe depends on one.
  */
 fn hashBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
   const integer = lowering.program.internType IrType.Integer(64, true)
@@ -806,8 +807,9 @@ fn isTupleType(var lowering: Lowering, subject: TypeId): Bool {
  * compiler's own passes do at three places.
  *
  * Every field goes through **its own `Compare`**, never through a comparison intrinsic: the order of a `String` is the
- * runtime's byte order, the order of a `Float64` puts `nan` above everything (decided gap 5), and a field that is itself
- * a tuple recurses into this very body. Deciding any of that a second time here is how two back ends start to disagree.
+ * runtime's byte order, the order of a `Float64` puts `nan` above everything (docs/BACKEND.md, `==` and `compare` on
+ * floats contradict each other), and a field that is itself a tuple recurses into this very body. Deciding any of
+ * that a second time here is how two back ends start to disagree.
  */
 fn compareTupleBody(
   var lowering: Lowering,
@@ -946,8 +948,9 @@ fn answerOrdering(
 // --- `Show` -----------------------------------------------------------------------------------------------------------
 
 /**
- * `Type(field: value, ...)`, a case as `Case(field: value)` or as its bare name (gap 23). One `TextConcat` per shape, so
- * that nothing is built up with repeated concatenations.
+ * `Type(field: value, ...)`, a case as `Case(field: value)` or as its bare name (docs/TYPECHECKER.md, The generated
+ * `Show` format is not specified). One `TextConcat` per shape, so that nothing is built up with repeated
+ * concatenations.
  *
  * `showNested` differs from `show` for `String` and `Char` alone, and both of those are `native` and in the manifest - so
  * a *generated* `showNested` is the same body as `show`, and it is generated rather than inherited so that a table has a
@@ -973,8 +976,9 @@ fn showBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeI
     showVariantBody lowering, builder, subject, layout, at
     return
   }
-  // A tuple has no name and no labels: gap 17 took the labels out of type identity, so `(lowest: Int, highest: Int)` and
-  // `(Int, Int)` are one layout and the label is not in it. `(a, b)` is therefore the only form both back ends can write
+  // A tuple has no name and no labels: labels are not part of type identity (docs/TYPECHECKER.md, Named tuples and
+  // type identity), so `(lowest: Int, highest: Int)` and `(Int, Int)` are one layout and the label is not in it.
+  // `(a, b)` is therefore the only form both back ends can write
   const isTuple = shape.origin.isNone()
   const name = shownNameOf lowering, shape
   if shape.fields.isEmpty() {
@@ -1052,7 +1056,8 @@ fn showVariantBody(
 
 /**
  * The parts of one shape: the opening text with the first label in it, then one shown field and one separator each, then
- * the closing bracket. Every field goes through `showNested`, which is what keeps `["a", "b"]` readable (gap 23).
+ * the closing bracket. Every field goes through `showNested`, which is what keeps `["a", "b"]` readable
+ * (docs/TYPECHECKER.md, The generated `Show` format is not specified).
  */
 fn addShownFields(
   var lowering: Lowering,

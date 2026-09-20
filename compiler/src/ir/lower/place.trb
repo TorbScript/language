@@ -1,3 +1,24 @@
+/**
+ * `var` paths: how the path the checker wrote down becomes a `Reference` of the IR, and what a call, an assignment and a
+ * property command do with one.
+ *
+ * **The checker already walked the expression.** 4.6 decided that the path leads somewhere, that a change may go through
+ * every step of it, and that no second access to it is open, and recorded the answer as a `Place` under the span of the
+ * argument, the receiver or the target (TYPECHECKER 5.1). So nothing here reads the syntax tree a second time: a root
+ * becomes a slot, a step becomes a `PathStep`, and the type of every step comes out of the layout the IR already has.
+ * That is also what keeps the two halves honest - a path this file forms is exactly the path exclusivity was checked for.
+ *
+ * A place is **never counted and never escapes** (BACKEND 2.3): the caller holds the base live across the call, and
+ * `MakeUnique` in front of the call - one per counted owner of the path, which the ownership pass inserts - is what makes
+ * the storage safe to write through. So a `var` parameter costs a pointer and nothing else.
+ *
+ * An **index** on the path (`a[key]`) is the one step that is not a `PathStep`: it takes the element out of its
+ * container into a slot of the frame, runs the access against that slot and puts it back afterwards (`TakenElement`).
+ *
+ * What is not here: a slice as a window, a `shared type` object and a `FixedArray`. Each of them is a clean finding
+ * instead of a wrong answer.
+ */
+
 use Span from "../../syntax/source"
 use Expression from "../../syntax/ast"
 use Signature, TypeId, ParameterId from "../../semantics/checker/type"
@@ -17,27 +38,6 @@ use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf from "./e
 use bindingReferenceOf, emitClosureCall from "./closure"
 use Dispatched, dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
-
-/**
- * `var` paths: how the path the checker wrote down becomes a `Reference` of the IR, and what a call, an assignment and a
- * property command do with one (milestone 5.9a).
- *
- * **The checker already walked the expression.** 4.6 decided that the path leads somewhere, that a change may go through
- * every step of it, and that no second access to it is open, and recorded the answer as a `Place` under the span of the
- * argument, the receiver or the target (TYPECHECKER 5.1). So nothing here reads the syntax tree a second time: a root
- * becomes a slot, a step becomes a `PathStep`, and the type of every step comes out of the layout the IR already has.
- * That is also what keeps the two halves honest - a path this file forms is exactly the path exclusivity was checked for.
- *
- * A place is **never counted and never escapes** (BACKEND 2.3): the caller holds the base live across the call, and
- * `MakeUnique` in front of the call - one per counted owner of the path, which the ownership pass inserts - is what makes
- * the storage safe to write through. So a `var` parameter costs a pointer and nothing else.
- *
- * An **index** on the path (`a[key]`) is the one step that is not a `PathStep`: it takes the element out of its
- * container into a slot of the frame, runs the access against that slot and puts it back afterwards (`TakenElement`).
- *
- * What is not here: a slice as a window, a `shared type` object and a `FixedArray`. Each of them is a clean finding that
- * names its milestone.
- */
 
 /**
  * A place of the IR: the path, the type it ends in - which is what a write through it has to produce - and the elements
@@ -179,7 +179,10 @@ public fn placeRecordedAt(var lowering: Lowering, at: Span): Place? {
   lowering.checker.placeAt module, at
 }
 
-/** Whether the path under a span is a temporary: a valid *argument* of a `var` parameter and nothing else (gap 2). */
+/**
+ * Whether the path under a span is a temporary: a valid *argument* of a `var` parameter and nothing else
+ * (docs/TYPECHECKER.md, `using` passes a temporary to a `var` parameter).
+ */
 fn isTemporaryPlace(var lowering: Lowering, at: Span): Bool {
   match placeRecordedAt(lowering, at) {
     Some(place) => {
@@ -615,8 +618,9 @@ fn receiverPlaceOf(expression: Expression): Expression {
 
 /**
  * One argument that fills a `var` parameter. A **temporary** is one of them: the callee is its only owner, so "copy in,
- * copy out" is exact and nothing is written back anywhere (gap 2) - it is lowered into a slot of its own, in the position
- * it was written, and the callee gets the address of that slot.
+ * copy out" is exact and nothing is written back anywhere (docs/TYPECHECKER.md, `using` passes a temporary to a `var`
+ * parameter) - it is lowered into a slot of its own, in the position it was written, and the callee gets the address
+ * of that slot.
  */
 public fn argumentReference(
   var lowering: Lowering,
@@ -706,8 +710,8 @@ fn isIndexedTarget(place: Place): Bool {
  * ordinary place, which is what makes the nested case fall out of nothing: `grid[y]` is taken out and put back around the
  * `set`, by the very machinery a `var` argument uses.
  *
- * The order is what decided gap 1 asks for: the place's own subexpressions first - every key, in source order, before the
- * access begins - then the value, then the write.
+ * The order is what evaluation order asks for (docs/BACKEND.md, Evaluation order is only half specified): the place's
+ * own subexpressions first - every key, in source order, before the access begins - then the value, then the write.
  */
 fn lowerIndexAssignment(
   var lowering: Lowering,
@@ -784,9 +788,9 @@ fn writtenPlace(var lowering: Lowering, var builder: FunctionBuilder, path: Plac
 }
 
 /**
- * `port 8080`, `onStart { ... }`, `database { ... }`: a property command writes the field it names (gap 15), so it is an
- * assignment written another way and the checker recorded the very same place for it - the path to the *field*, under the
- * span of the callee.
+ * `port 8080`, `onStart { ... }`, `database { ... }`: a property command writes the field it names (docs/TYPECHECKER.md,
+ * Property commands with parentheses), so it is an assignment written another way and the checker recorded the very
+ * same place for it - the path to the *field*, under the span of the callee.
  *
  * `.Assign` and `.AssignClosure` are therefore **one** lowering: whether the value is `8080` or a closure changes what is
  * evaluated and nothing about the write. `.Configure` is the other one: the closure is a *receiver* closure and the
@@ -884,7 +888,8 @@ public fn makeOwnersUnique(var lowering: Lowering, var builder: FunctionBuilder,
   for count in 0..place.steps.length() {
     const prefix = Reference place.base, place.steps[0..count]
     if const Some(annotation) = typeOfReference(lowering.program, builder.function, ignored, "", prefix) {
-      // A box and a `lazy` cell are shared on purpose: copying one is exactly what must not happen (gap 19)
+      // A box and a `lazy` cell are shared on purpose: copying one is exactly what must not happen (docs/TYPECHECKER.md,
+      // A captured `var` binding is a reference that escapes)
       if isSharedStorage(lowering.program, annotation) {
         continue
       }

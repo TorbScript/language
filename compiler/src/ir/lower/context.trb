@@ -1,3 +1,16 @@
+/**
+ * What the lowering from the checked syntax tree to the IR threads through itself: the program it builds, the tables
+ * the type checker filled, and the little bookkeeping one function body needs.
+ *
+ * It is one `var lowering: Lowering` for the same reason the grammar has one `var parser: Parser` and the checker one
+ * `var checker: Checker` - every program-wide table lives in exactly one owner and is never held twice, because a
+ * second live copy across a write is O(n) on stage 0.
+ *
+ * The **builder** of the function that is being lowered is deliberately *not* a field of this value: a lowering
+ * function takes `var lowering: Lowering` and `var builder: FunctionBuilder` side by side, so that emitting an
+ * instruction never has to read a field of the same place that was just taken out.
+ */
+
 use Span, LineIndex from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use ModuleId from "../../semantics/module"
@@ -13,20 +26,7 @@ use Instantiation, newInstantiation, instantiateType from "../instantiate"
 use canonicalType, canonicalLiteral, escapedComponent, mangledName from "../mangle"
 use FunctionBuilder, terminate, switchTo from "../build"
 
-/**
- * What the lowering from the checked syntax tree to the IR threads through itself: the program it builds, the tables
- * the type checker filled, and the little bookkeeping one function body needs.
- *
- * It is one `var lowering: Lowering` for the same reason the grammar has one `var parser: Parser` and the checker one
- * `var checker: Checker` - every program-wide table lives in exactly one owner and is never held twice, because a
- * second live copy across a write is O(n) on stage 0.
- *
- * The **builder** of the function that is being lowered is deliberately *not* a field of this value: a lowering
- * function takes `var lowering: Lowering` and `var builder: FunctionBuilder` side by side, so that emitting an
- * instruction never has to read a field of the same place that was just taken out.
- */
-
-/** One construct milestone 5.2 does not lower yet, with where it was first seen and how often it blocked a function. */
+/** One construct the lowering does not translate yet, with where it was first seen and how often it blocked a function. */
 public type Unsupported {
   what: String
   /** `path:line:column` of the first occurrence. */
@@ -37,7 +37,8 @@ public type Unsupported {
 /**
  * One error of the *program* the lowering found, with the module it belongs to so that it can be rendered like any
  * other diagnostic. The only ones there are come from the constant evaluator: overflow, a division by zero and a `nan`
- * in a compile-time constant are compile errors at that expression (decided gap 11).
+ * in a compile-time constant are compile errors at that expression (docs/BACKEND.md, Overflow and division by zero in
+ * a compile-time constant).
  */
 public type LoweredProblem {
   module: ModuleId
@@ -59,7 +60,10 @@ public type Generated {
   case Operation(intrinsic: Intrinsic)
   /** The same for a function of the runtime: `Int64.show`. */
   case RuntimeCall(symbol: String)
-  /** `Type(field: value, ...)`, a case as `Case(field: value)` or as its bare name (gap 23). */
+  /**
+   * `Type(field: value, ...)`, a case as `Case(field: value)` or as its bare name (docs/TYPECHECKER.md, The
+   * generated `Show` format is not specified).
+   */
   case Show
   /** The same, with a `String` quoted and a `Char` in single quotes: what everything nested calls. */
   case ShowNested
@@ -94,6 +98,10 @@ public type GeneratedRequest {
   mapping: Map<ParameterId, TypeId>
 }
 
+/**
+ * The one value every lowering function threads through itself (see the module comment): the program under
+ * construction, the checker's tables, and the bookkeeping the function currently being lowered needs.
+ */
 public type Lowering {
   var program: IrProgram
   var checker: Checker
@@ -121,8 +129,9 @@ public type Lowering {
   var closureCount: Int = 0
   /**
    * The `var` bindings of the body that some closure captures, by the span they are declared under. A captured `var`
-   * binding is a shared box (gap 19), and it has to *become* one where it is declared - so the whole body is walked
-   * once before it is lowered (`ir/lower/closure.trb`).
+   * binding is a shared box (docs/TYPECHECKER.md, A captured `var` binding is a reference that escapes), and it has
+   * to *become* one where it is declared - so the whole body is walked once before it is lowered
+   * (`ir/lower/closure.trb`).
    */
   var capturedVariables: Map<Span, Bool> = [:]
   /** The slot that holds the shared box of such a binding, by the same span: every read and every write goes through it. */
@@ -266,9 +275,9 @@ public fn newLowering(checker: Checker, paths: List<String>): Lowering {
 // --- What the back end does not do yet ------------------------------------------------------------------------------
 
 /**
- * One construct outside of this sub-milestone. The function that is being lowered becomes an `unreachable` stub, so
- * a later sub-milestone replaces it without anything else changing, and the counts are the progress bar of
- * milestone 5.
+ * Records a construct the lowering does not translate yet. The function being lowered becomes an `unreachable`
+ * stub, so a real body can replace it later without anything else changing, and the counts are the progress bar
+ * `statisticsLines` (`ir/lower/lower.trb`) reports.
  *
  * Only the *first* one per function is recorded: everything after it walks a body whose slots were abandoned, and one
  * root cause gets one message - the same rule the checker's diagnostics follow.
@@ -292,7 +301,7 @@ public fn reportUnsupported(var lowering: Lowering, what: String, at: Span) {
 
 /**
  * An error of the program, at the expression that caused it. Not an internal error - those go to
- * `IrProgram.problems` - and not a construct that waits for a later sub-milestone.
+ * `IrProgram.problems` - and not a construct the lowering does not translate yet (`reportUnsupported`).
  */
 public fn reportProblem(var lowering: Lowering, message: String, at: Span) {
   const module = lowering.module
@@ -366,12 +375,11 @@ public fn substituted(var lowering: Lowering, id: TypeId): TypeId {
 /**
  * The IR type of the expression at `at`, or `None` where the checker recorded nothing or something broken.
  *
- * A `native type` whose representation a later milestone writes has **none at all** here: `instantiateType` answers
+ * A `native type` whose representation is not implemented yet has **none at all** here: `instantiateType` answers
  * `VoidType` for one so that a layout it sits in can still be built, and a *value* of it is then a slot nothing ever
  * defines - `Clock.now()` answers an `Instant`, the call writes no target because its result looks like `Void`, and the
- * expression around it reads a slot that was never assigned. That was two internal errors of the verifier in the tour.
- * So the body is abandoned here with the clean finding the milestone already has, exactly as every other construct of a
- * later sub-milestone abandons it.
+ * expression around it reads a slot that was never assigned. That would be two internal errors of the verifier, so the
+ * body is abandoned here with the same clean finding as every other unsupported construct (`reportUnsupported`).
  */
 public fn typeAtSpan(var lowering: Lowering, at: Span): IrTypeId? {
   const module = lowering.module
@@ -389,14 +397,17 @@ public fn typeAtSpan(var lowering: Lowering, at: Span): IrTypeId? {
   Some built
 }
 
+/** The IR's `Void` type, interned once. */
 public fn voidTypeOf(var lowering: Lowering): IrTypeId {
   lowering.program.internType IrType.VoidType
 }
 
+/** The IR's `Bool` type, interned once. */
 public fn booleanTypeOf(var lowering: Lowering): IrTypeId {
   lowering.program.internType IrType.Boolean
 }
 
+/** Whether an IR type is `Void`. */
 public fn isVoidType(lowering: Lowering, id: IrTypeId): Bool {
   match lowering.program.typeAt(id) {
     .VoidType => true
@@ -406,9 +417,10 @@ public fn isVoidType(lowering: Lowering, id: IrTypeId): Bool {
 
 /**
  * Whether a type is a `Task<Value>`. A function that answers one has a body that produces the `Value` (concept,
- * Concurrency), so its body and its signature disagree by design and the state-machine transformation of milestone 7.3
- * is what closes the gap. Until then such a body is a clean finding: without it the verifier reported "the function
- * returns `Task(...)` and `return` carries `...`", which is an internal error about a program that is correct.
+ * Concurrency), so its body and its signature disagree by design; the state-machine transformation that closes the
+ * gap (docs/BACKEND.md, Tasks) is not lowered yet, and such a body is a clean finding here instead - without it the
+ * verifier would report "the function returns `Task(...)` and `return` carries `...`" about a program that is
+ * correct.
  */
 public fn isTaskType(lowering: Lowering, id: IrTypeId): Bool {
   if const .Runtime(kind, _) = lowering.program.typeAt(id) {
@@ -419,6 +431,7 @@ public fn isTaskType(lowering: Lowering, id: IrTypeId): Bool {
   false
 }
 
+/** Whether an IR type is `Never`. */
 public fn isNeverType(lowering: Lowering, id: IrTypeId): Bool {
   match lowering.program.typeAt(id) {
     .NeverType => true
@@ -479,12 +492,13 @@ fn spellingOfContents(lowering: Lowering, contents: StaticContents): String {
 }
 
 /**
- * Every operand of a call and every field of a `Construct`, as `Borrowed`. Which position takes the count is what the
- * ownership pass of 5.4 decides out of the body this sub-milestone writes, so phase one writes one thing everywhere.
+ * Every operand of a call and every field of a `Construct`, as `Borrowed`. Which position takes the count is decided
+ * afterwards, out of the body written here, by the ownership pass (docs/BACKEND.md, Ownership in the IR) - so this
+ * phase writes one thing everywhere.
  *
  * `places` names the positions that are `var` parameters: such an argument is the path itself and not a value, and it
- * stays borrowed whatever the ownership pass decides, because a reference carries no count (BACKEND 2.3). A list that is
- * not as long as `slots` means the callee has no `var` parameter at all.
+ * stays borrowed whatever the ownership pass decides, because a reference carries no count (docs/BACKEND.md, Why
+ * `var` paths need no counting). A list that is not as long as `slots` means the callee has no `var` parameter at all.
  */
 public fn borrowedArguments(slots: List<Slot>, places: List<Reference?> = []): List<Argument> {
   var given: List<Argument> = []
@@ -531,6 +545,7 @@ public fn continueIn(var lowering: Lowering, var builder: FunctionBuilder, block
 
 // --- Loops ----------------------------------------------------------------------------------------------------------
 
+/** Opens a new loop: where its `break` and its `continue` jump to, and a fresh flag for whether it ever broke. */
 public fn enterLoop(var lowering: Lowering, exit: BlockId, step: BlockId) {
   lowering.breakTargets.add exit
   lowering.continueTargets.add step
@@ -555,10 +570,12 @@ public fn markBreak(var lowering: Lowering) {
   }
 }
 
+/** Where a `break` of the innermost loop jumps to. */
 public fn breakTarget(lowering: Lowering): BlockId? {
   lowering.breakTargets.last()
 }
 
+/** Where a `continue` of the innermost loop jumps to. */
 public fn continueTarget(lowering: Lowering): BlockId? {
   lowering.continueTargets.last()
 }

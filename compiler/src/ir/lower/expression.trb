@@ -1,3 +1,17 @@
+/**
+ * Every expression of the monomorphic part of the language, as instructions over numbered slots.
+ *
+ * `destination` is a hint and not a contract: where the caller already has a slot for the value - a local it is bound
+ * to, the result of the `if` both arms produce - the value is computed *into* that slot, and only a value that is
+ * already somewhere else is copied. That is what keeps one value to one defining slot, which is what the ownership
+ * pass needs, and it is why the arms of an `if` need no phi node and no join instruction.
+ *
+ * Evaluation order is source order, always (docs/BACKEND.md, Evaluation order is only half specified): the receiver
+ * first, then the arguments in written order, then the defaults. Nothing here reorders anything -
+ * `Adaptation.Reorder` is replayed by moving finished slots into their parameter positions, never by evaluating out
+ * of order.
+ */
+
 use Span from "../../syntax/source"
 use Expression, Argument, TextSegment, Condition, Block from "../../syntax/ast"
 use PrefixOperator, InfixOperator from "../../syntax/ast"
@@ -23,18 +37,7 @@ use lowerClosureValue, lowerNamedFunctionValue, lowerForcedRead, bindingReferenc
 use lowerConstructorValue from "./closure"
 use lowerTextLiteral, showsHere from "./text"
 
-/**
- * Every expression of the monomorphic part of the language, as instructions over numbered slots.
- *
- * `destination` is a hint and not a contract: where the caller already has a slot for the value - a local it is bound
- * to, the result of the `if` both arms produce - the value is computed *into* that slot, and only a value that is
- * already somewhere else is copied. That is what keeps one value to one defining slot, which is what the ownership
- * pass of 5.4 needs, and it is why the arms of an `if` need no phi node and no join instruction.
- *
- * Evaluation order is source order, always (decided gap 1): the receiver first, then the arguments in written order,
- * then the defaults. Nothing here reorders anything - `Adaptation.Reorder` is replayed by moving finished slots into
- * their parameter positions, never by evaluating out of order.
- */
+/** One expression, lowered into `destination` where the caller has a slot for it, or into a fresh one otherwise. */
 public fn lowerExpression(
   var lowering: Lowering,
   var builder: FunctionBuilder,
@@ -271,7 +274,7 @@ public fn copiedInto(var builder: FunctionBuilder, destination: Slot?, source: S
   source
 }
 
-/** A construct outside of this sub-milestone: reported once, and the function becomes an `unreachable` stub. */
+/** A construct the lowering does not translate yet: reported once, and the function becomes an `unreachable` stub. */
 public fn unsupportedSlot(
   var lowering: Lowering,
   var builder: FunctionBuilder,
@@ -304,7 +307,7 @@ public fn abandonedSlot(var lowering: Lowering, var builder: FunctionBuilder, de
 
 /**
  * Whether every adaptation the checker recorded for this expression can be replayed here. The ones that cannot are
- * named one by one rather than as "an adaptation", because each of them is a different later sub-milestone.
+ * named one by one rather than as "an adaptation", because each of them is unsupported for a different reason.
  */
 fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
   const at = expression.span
@@ -574,7 +577,8 @@ fn lowerConstantReference(
  * default are lowered at the *call site*, at every call): the initializer is lowered here, in the module it is written
  * in. It is sound because a `const` of a module is **pure** by the checker's own rule - literals, the operators of the
  * number types, interpolation, collection literals, constructor calls and other constants, and never a function call
- * (gap 27) - and because values have no identity, so a reader cannot tell one list from an equal one. And it keeps the
+ * (docs/TYPECHECKER.md, What exactly is "compile-time evaluable"?) - and because values have no identity, so a reader
+ * cannot tell one list from an equal one. And it keeps the
  * promise of the table in 1.6: *there is no module initialization, ever*, not even for a list.
  *
  * What it costs is one build per read rather than one per program, which for `punctuationTable.find(...)` in the lexer is
@@ -639,7 +643,7 @@ public fn isVarBinding(var lowering: Lowering, symbol: SymbolId): Bool {
 
 /**
  * `p.x`, and a field of `self` that was written without it. A field of a field is two reads rather than one path:
- * an interior projection is a place, and places are milestone 5.9's.
+ * an interior projection as a place is `ir/lower/place.trb`'s concern for a `var` mutation, not for a plain read.
  */
 fn lowerFieldRead(
   var lowering: Lowering,
@@ -1223,6 +1227,7 @@ public fn intrinsicSlot(
   target
 }
 
+/** One `Instruction.Intrinsic`, at the location of the expression it came from. Every arithmetic op goes through this. */
 public fn emitIntrinsic(
   var lowering: Lowering,
   var builder: FunctionBuilder,

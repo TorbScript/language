@@ -1,3 +1,12 @@
+/**
+ * One function body, from the first block to the last terminator, plus the entry function of a module.
+ *
+ * A body that turns out to need a construct the back end does not translate yet is **thrown away**: the
+ * `unreachable` stub the worklist already added stays, the construct is counted, and every caller keeps a well typed
+ * `Call`. That is what lets a still-unsupported construct be finished later as a plain replacement rather than a
+ * rewrite.
+ */
+
 use Statement, Block, Binding, FunctionDeclaration, Declaration, ExtendDeclaration from "../../syntax/ast"
 use ModuleId from "../../semantics/module"
 use SymbolId from "../../semantics/symbols"
@@ -14,14 +23,6 @@ use finishBlock, voidTypeOf from "./context"
 use lowerBlockInto, lowerBlockValue, lowerStatement from "./statement"
 use capturedVariablesOf, capturedVariablesIn from "./closure"
 use staticOfConstant from "../constant"
-
-/**
- * One function body, from the first block to the last terminator, plus the entry function of a module.
- *
- * A body that turns out to need a construct of a later sub-milestone is **thrown away**: the `unreachable` stub the
- * worklist already added stays, the construct is counted, and every caller keeps a well typed `Call`. That is what
- * makes the sub-milestones after this one a sequence of replacements rather than a rewrite.
- */
 
 /** The body of one instance. The stub is replaced only where everything in it could be lowered. */
 public fn lowerInstance(var lowering: Lowering, instance: Instance) {
@@ -385,9 +386,9 @@ fn seedSymbol(var lowering: Lowering, symbol: SymbolId) {
        * A **generic** declaration is a template and no function of the back end: monomorphization gives it one instance
        * per argument list, each counted where the worklist reaches it, and none at all where nothing calls it. So asking
        * for its instance *without* arguments could only ever fail, and counting that as a construct the back end does not
-       * support said "cannot build an instance of" about code it builds a dozen of - the same answer 6.1's long tail gave
-       * for a `const` whose value is no static data. `commaSeparated<Item>` and `withTrailingClosures<Output>` of the
-       * parser are the compiler's only two.
+       * support would say "cannot build an instance of" about code it builds a dozen of - the same pitfall the
+       * `.Constant` case below avoids for a `const` whose value is no static data. `commaSeparated<Item>` and
+       * `withTrailingClosures<Output>` of the parser are the compiler's only two.
        *
        * A `native fn` is a callee and not a function of the program either: it becomes one where it is called, or not at
        * all.
