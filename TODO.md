@@ -1188,3 +1188,18 @@ Wenn nicht, was bedeutet, bewirkt es?
     (`public use Int64.seconds from "std/time"`).
   - Nur Sichtbarkeit von Namen; Kohärenz und Dispatch bleiben. **Wird gelöst:** Checker-Runde NACH der
     Schreibregel-Runde (gleiche Dateien).
+
+- (Schleifen und `?`-Operatoren, 2026-09-21)
+  - **Zurückgestellt (Nutzer):** kein `for await`, kein Präfix-`await`. `while const Some(x) = source.next().await()?`
+    bleibt; mittelfristig kommt eine Schleifenform für Sources (offene Frage dabei: wo bleibt das `?` sichtbar).
+  - **Entschieden (Nutzer wünscht, ich halte es für sinnvoll):** `loop { ... }` für Endlosschleifen. Ohne `break` hat
+    es den Typ `Never`, mit `break` ist es `Void`; kein `break value` (lässt sich später ohne Bruch ergänzen). Es
+    ersetzt den Sonderfall im Checker, der heute das LITERAL `while true` als divergierend erkennt - damit ist
+    "endet nie" eine Eigenschaft der Syntax und nicht einer Bedingung. Eine Schreibweise: `while true` wird ein Fehler
+    ("schreib `loop`"), die 24 Stellen im Repository stellt `torb canon` um. `loop` ist als Name nirgends belegt.
+  - **Meine Empfehlung zu `?`, `?.`, `??` als Traits (Antwort im Chat):** Kriterium "ein Operator ist genau dann ein
+    Trait, wenn er ein Methodenaufruf ist". `??` IST `orElse` → Trait `OrElse<Value>` (billig, konsistent mit
+    "Operatoren fragen nach ihrem Trait"). `?.` wählt je nach Ergebnistyp zwischen `map` und `flatMap` und bräuchte
+    `Self<Output>` - das ist die Higher-Kinded-Form, die CONCEPT ausschließt → bleibt `Option`. `?` verlässt die
+    umgebende Funktion, das kann keine Methode; Rusts `Try`-Trait ist seit 2016 instabil (Residual-Typen, Kollision
+    mit Blanket-`From`) → bleibt `Option`/`Result`, kann später ohne Bruch geöffnet werden.
