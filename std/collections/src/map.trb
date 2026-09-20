@@ -20,7 +20,7 @@ use Collection from "./collection"
  * implementation.
  */
 public trait Map<Key, Value>
-  with Collection<(Key, Value)>, MutableIndexed<Key, Value>
+  with Collection<(key: Key, value: Value)>, MutableIndexed<Key, Value>
 {
   /** `Map.of(("a", 1), ("b", 2))` */
   fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash {
@@ -31,8 +31,8 @@ public trait Map<Key, Value>
 
   fn remove(var self, key: Key): Value?
 
-  fn add(var self, entry: (Key, Value)) {
-    set entry.0, entry.1
+  fn add(var self, entry: (key: Key, value: Value)) {
+    set entry.key, entry.value
   }
 
   fn merge(var self, other: Iterable<(Key, Value)>) {
@@ -77,15 +77,15 @@ public trait Map<Key, Value>
   }
 
   fn keys(self): Iterable<Key> {
-    map { entry => entry.0 }
+    map { entry => entry.key }
   }
 
   fn values(self): Iterable<Value> {
-    map { entry => entry.1 }
+    map { entry => entry.value }
   }
 
   fn mapValues<Output>(self, transform: (value: Value) => Output): Map<Key, Output> where Key: Hash {
-    Map.from(map { entry => (entry.0, transform(entry.1)) })
+    Map.from(map { entry => (entry.key, transform(entry.value)) })
   }
 }
 
@@ -101,7 +101,7 @@ extend<Key: Show, Value: Show> Map<Key, Value> with Show {
     if isEmpty() {
       return "[:]"
     }
-    const parts = map { entry => "{entry.0.showNested()}: {entry.1.showNested()}" }
+    const parts = map { entry => "{entry.key.showNested()}: {entry.value.showNested()}" }
     "[{parts.joined(separator: ", ")}]"
   }
 }
@@ -110,8 +110,8 @@ extend<Key: Show, Value: Show> Map<Key, Value> with Show {
 extend<Key, Value: Equals> Map<Key, Value> with Equals {
   fn equals(self, other: Self): Bool {
     length() == other.length() && all { entry =>
-      match other.get(entry.0) {
-        Some(value) => value == entry.1
+      match other.get(entry.key) {
+        Some(value) => value == entry.value
         None => false
       }
     }
@@ -127,7 +127,7 @@ extend<Key, Value: Equals> Map<Key, Value> with Equals {
  */
 extend<Key: Hash, Value: Hash> Map<Key, Value> with Hash {
   fn hash(self): Int {
-    fold 0 { seed, entry => seed.bitwiseExclusiveOr combineHashes(entry.0.hash(), entry.1.hash()) }
+    fold 0 { seed, entry => seed.bitwiseExclusiveOr combineHashes(entry.key.hash(), entry.value.hash()) }
   }
 }
 
@@ -144,11 +144,11 @@ extend<Key: Hash, Value: Hash> Map<Key, Value> with Hash {
  * what a value is. [HashMapIterator] is the same twenty lines for the other name of the same table: two `native type`s
  * name it until the trie exists (gap 18), and a value of one is not a value of the other.
  */
-public type MapIterator<Key: Hash, Value> with Iterator<(Key, Value)> {
+public type MapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Value)> {
   entries: TrieMap<Key, Value>
   var position: Int = 0
 
-  fn next(var self): (Key, Value)? {
+  fn next(var self): (key: Key, value: Value)? {
     // The position travels through a local because stage 0 takes a `var` argument before it evaluates the receiver
     var found = position
     const entry = entries.entryAfter found
@@ -158,11 +158,11 @@ public type MapIterator<Key: Hash, Value> with Iterator<(Key, Value)> {
 }
 
 /** The cursor of [HashMap]: see [MapIterator]. */
-public type HashMapIterator<Key: Hash, Value> with Iterator<(Key, Value)> {
+public type HashMapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Value)> {
   entries: HashMap<Key, Value>
   var position: Int = 0
 
-  fn next(var self): (Key, Value)? {
+  fn next(var self): (key: Key, value: Value)? {
     var found = position
     const entry = entries.entryAfter found
     position = found
@@ -198,7 +198,7 @@ public native type TrieMap<Key: Hash, Value>
   native fn get(self, key: Key): Value?
 
   /** Ordinary TorbScript over `entryAfter`: see [MapIterator]. */
-  fn iterator(self): Iterator<(Key, Value)> {
+  fn iterator(self): Iterator<(key: Key, value: Value)> {
     MapIterator self
   }
 
@@ -207,7 +207,7 @@ public native type TrieMap<Key: Hash, Value>
    * table needs beyond `get` and `set`: the tombstones a removal leaves are the storage's business and nothing else can
    * skip them.
    */
-  native fn entryAfter(self, var cursor: Int): (Key, Value)?
+  native fn entryAfter(self, var cursor: Int): (key: Key, value: Value)?
 
   native fn set(var self, key: Key, value: Value)
   native fn remove(var self, key: Key): Value?
@@ -232,11 +232,11 @@ public native type HashMap<Key: Hash, Value>
   native fn length(self): Int
   native fn get(self, key: Key): Value?
 
-  fn iterator(self): Iterator<(Key, Value)> {
+  fn iterator(self): Iterator<(key: Key, value: Value)> {
     HashMapIterator self
   }
 
-  native fn entryAfter(self, var cursor: Int): (Key, Value)?
+  native fn entryAfter(self, var cursor: Int): (key: Key, value: Value)?
 
   native fn set(var self, key: Key, value: Value)
   native fn remove(var self, key: Key): Value?

@@ -166,10 +166,21 @@ group "`??`" {
     assert(problems(source) == ["Expected `Int64`, found `String`"])
   }
 
-  test "`??` on something that is neither an `Option` nor a `Result`" {
+  test "`??` asks for its trait, like every other operator" {
     const source = "fn probe() \{\n  const value = 1 ?? 0\n\}"
-    assert(problems(source) == ["`??` needs an `Option` or a `Result`, and `Int64` is not one"])
-    assert(notes(source) == ["`a ?? b` is `orElse`: it gives back the value, or the fallback"])
+    assert(problems(source) == ["`Int64` does not implement `OrElse`, so `a ?? b` has no meaning for it"])
+    assert(notes(source) == ["Operators are traits: a type has the ones it comes `with`, and nothing else"])
+    // A type of a program that says `with OrElse<Value>` gets `??`, and the fallback is its `Value`
+    const own = "type Box \{\n  value: Int\n\}\n\nextend Box with OrElse<Int> \{\n  fn orElse(self, fallback: lazy Int): Int \{\n    value\n  \}\n\}\n\n"
+      + "fn probe(box: Box) \{\n  const found = box ?? 0\n\}"
+    assert problems(own).isEmpty()
+    assert(probe(own).typeOf("box ?? 0") == "Int64")
+  }
+
+  test "an unbound type parameter is told to add the bound, not to change the type" {
+    const source = "fn probe<Value>(value: Value) \{\n  const found = value ?? value\n\}"
+    assert(problems(source) == ["`Value` is not `OrElse`, so `a ?? b` has no meaning for it"])
+    assert(notes(source) == ["Add the bound to the declaration: `where Value: OrElse`"])
   }
 }
 

@@ -843,8 +843,8 @@ const initialized = do {
 }
 ```
 
-`if`, `match`, `for`, `while` are built in. Their heads are parsed without trailing closures, the `{` starts the body.
-`if` and `match` are expressions.
+`if`, `match`, `for`, `while`, `loop` are built in. Their heads are parsed without trailing closures, the `{` starts the
+body. `if` and `match` are expressions.
 
 ```trb
 const aOrB = if something { a } else { b }
@@ -852,6 +852,22 @@ const aOrB = if something { a } else { b }
 for number in numbers { print number }
 for i in 0..10 { print i }
 while queue.isNotEmpty() { ... }     // `break` and `continue` work as expected
+```
+
+**`loop { ... }` is the endless loop, and it is the only way to write one.** Without a `break` that targets it its type
+is `Never`, so nothing after it is reached and a function that consists of one needs no other result; with a `break` it
+is `Void`. There is no `break value`. `continue` works as in a `while`. `while true` is an error that says
+`A loop that never ends is written `loop``, so "never ends" is a property of the syntax and not of a condition - which is
+what lets the checker and both back ends see it without evaluating anything.
+
+```trb
+loop {
+  const line = readLine()
+  if line.isEmpty() {
+    break
+  }
+  print line
+}
 ```
 
 Anything that does not bind names can be a library function:
@@ -1445,13 +1461,25 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   when the package owns the trait. Two implementations of one trait may never overlap. Disjointness is proved by
   different target heads, or by bounds on the same subject that no type can satisfy together - so two blanket
   implementations of one trait always overlap, whatever their bounds say.
-- **`extend` without a trait:** for a type of your own package it is simply a part of the type, in whatever file it
-  is written, and visible wherever the type is. For a type of another package (`extend String { fn shout(self) ... }`)
-  it is visible in every file that imports the module it is declared in - no matter what it imports from it. A
-  module that only consists of extensions is imported without names: `use "./text-extensions"`. If two imported
-  modules bring a method of the same name for the same type, calling it is a compile error; a namespace import
-  (`use * as text from "./text-extensions"`, `text.shout(value)`) says which one is meant. Nothing runs when a
-  module is imported, this is purely a rule about which names are visible.
+- **An extension member is named where it is used.** A member is part of a type everywhere if the package of the *type*
+  attached it - `type Circle with Shape`, an `extend` in that package, in whatever file it is written - and so is one
+  the *using* package wrote itself, because a file sees what its own package declares. Everything else the file names:
+  - **`extend` without a trait on a foreign type** (`extend String { fn shout(self) ... }` in `acme/text`) is imported
+    by path, the same form as a case: `use String.shout, String.slug from "acme/text"`,
+    `use Int64.seconds from "std/time"`. A generic target is named by its head (`use List.totalArea from "..."`), and
+    constants and static functions of an `extend` are imported the same way. `as` renames the member
+    (`use String.shout as yell from "acme/text"` makes it `"x".yell()`), which is how a conflict is resolved: two
+    imported members of one name for one type stay a compile error at the *use*, and the message says to rename one.
+  - **The members a trait puts on a type it does not own** (`extend String with Slug` in the package of `Slug`, blanket
+    implementations included) are visible where the trait itself is a name of the file: imported
+    (`use Slug from "acme/slug"`), from the prelude, declared in the file, or because the static type says so (a bound
+    `Item: Slug`, a trait-typed value). Milder than Rust: what the type's own package brings needs no import at all.
+  - A `use` **without names is not a thing**: nothing runs when a module is imported, so `use "./text-extensions"` would
+    mean nothing and is a parse error that names the form to write instead.
+  - The prelude re-exports members by name (`public use Int64.seconds from "std/time"`), so `2.seconds()` is everywhere.
+
+  This is purely a rule about which *names* are visible; coherence and dispatch are untouched, and so are the operators,
+  `for`, string interpolation, `?`/`??` and `into()`, which go through traits of the prelude.
 - **An `extend` adds constants and functions, nothing else.** A field or a `case` in an `extend` is an error
   ("fields and cases belong to the declaration of the type"), because exhaustiveness and the generated constructor
   have to be decidable from the declaration alone.
@@ -1491,9 +1519,14 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   trait itself.** That is what makes `List.from(...)` and `Map.from(...)` work, where `from` comes from
   `extend<Key: Hash, Value> Map<Key, Value> with From<Iterable<(Key, Value)>>`. Two such implementations are an
   ambiguity error, and the fix is to name a type (`TrieMap.from(...)`).
-- Operators are traits: `+` is `Add.add`, `==` is `Equals.equals`, `<` is `Compare.compare`, `a[i]` is `Indexed.at`,
-  `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`, `a[from..to] = v` is `MutableSlice.replace`,
-  string interpolation is `Show.show`.
+- **An operator is a trait exactly when it is a method call.** `+` is `Add.add`, `==` is `Equals.equals`, `<` is
+  `Compare.compare`, `a[i]` is `Indexed.at`, `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`,
+  `a[from..to] = v` is `MutableSlice.replace`, `a ?? b` is `OrElse.orElse`, string interpolation is `Show.show`. The
+  three that are **not** traits are the three that are no method call: `?.` chooses between `map` and `flatMap` by the
+  type of the result, which would need the `Self<Output>` that
+  ["One Vocabulary"](#one-vocabulary-instead-of-higher-kinded-types) rules out, so it stays `Option`; `?` leaves the
+  *enclosing function*, which no method can do, so it stays `Option`/`Result`; `&&`, `||` and `!` short-circuit. Both
+  can be opened later without a break.
 - `&&`, `||` and `!` are the exception: they are built in on `Bool`, they short-circuit, and they cannot be
   overloaded. A trait method evaluates its argument, so a trait would mean something else.
 - There are no bit operators and therefore no traits for them: shifting and masking are native methods of the integer
@@ -1611,8 +1644,10 @@ panic "unreachable"                                      // Bugs. Not catchable,
 - **`?.` is `Option.map`, and `Option.flatMap` when the member's result is itself an `Option`.** So `?.` never
   produces a nested Option: `first()?.position()` is a `Vector2?`, whatever `position()` returns. It is not
   defined on `Result`.
-- **`??` is `orElse`, on `Option` and on `Result` alike.** The right side is `lazy` and is checked against the
-  `Value`, so `Status.parse(text) ?? "offline"` needs no `.ok()` in between.
+- **`??` is `OrElse.orElse`, on `Option` and on `Result` alike.** The right side is `lazy` and is checked against the
+  `Value`, so `Status.parse(text) ?? "offline"` needs no `.ok()` in between. It is the trait that decides, not the two
+  types: a type of a program that comes `with OrElse<Value>` gets `??`, and one that does not hears "`X` does not
+  implement `OrElse`, so `a ?? b` has no meaning for it".
 - **A panic is output, so its format is part of the language:** to standard error, `panic: <message>`, then
   `  at src/file.trb:12:5` for the panic site and, in the debug profile, the frames of the task. The exit code is
   **101**, and both back ends agree on the text to the character because the conformance suite compares it.
@@ -1981,6 +2016,7 @@ use Vector2 from "./math/vector2"                    // Relative import, no file
 use * as math from "std/math"                        // Namespace import
 use IoError as FileProblem, File from "std/fs"           // Any name of the list may get a local name of its own
 use Option, Option.Some, Option.None from "./option"     // A case of a type, by its path
+use String.shout as yell from "acme/text"                // A member another package attaches to a type, renamed
 use Shape.Circle                                         // Without `from`: the path is resolved in this file's scope
 public use Stack, ArrayStack from "./collections/stack"      // Re-export
 ```
@@ -1989,11 +2025,16 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
 - A path that starts with `./` or `../` is a file. Everything else starts with the name of a package:
   `"owner/name"` is its `src/lib.trb`, `"owner/name/path"` is `src/path.trb` of it. Only `public` declarations can
   be imported from another package, and only packages that `project.trb` lists as dependencies.
-- **After `from` there is always a module.** A case is imported through the type it belongs to
-  (`use Option.Some from "./option"`), and only a case: a method, a constant or a field stays `Type.member`. Without
-  `from` the path is resolved in the file's own scope (`use Shape.Circle`), which is what a file that declares the type
-  itself writes. There is no `use Option.*` - it is the one import form under which a file would change because a
-  dependency gained a case - and no brace group.
+- **After `from` there is always a module.** A path names a case of the type it belongs to
+  (`use Option.Some from "./option"`) or a member another package attaches to it with an `extend`
+  (`use Int64.seconds from "std/time"`, see [Traits](#traits)); a method, a constant or a field of the type's own body
+  stays `Type.member`. The type in front of the dot is a name of the **importing** file - `String` comes from the
+  prelude, not from `acme/text` - and the `from` names the package the member has to come from. Without `from` the path
+  is resolved in the file's own scope (`use Shape.Circle`), which is what a file that declares the type itself writes.
+  There is no `use Option.*` - it is the one import form under which a file would change because a dependency gained a
+  case - and no brace group.
+- **A `use` always names what it imports.** `use "./text-extensions"` is a parse error: nothing runs when a module is
+  imported, so a `use` without names would mean nothing at all.
 - **`as` renames an import.** Any item of a `use` list may take a local name of its own (`use Option.None as Nothing
   from "./option"` works for a case too), and `public use X as Y from "..."` re-exports it under the new name. From
   there on the local name is the only one the file has: it is what shadows, what collides with a second import, and
@@ -2010,7 +2051,8 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
   library, and neither is better than a cycle nobody can observe.
 - **The prelude is a package of re-exports.** `Project` has the default `prelude "std/prelude"`: the public names of
   that package (`Option`, `Result`, `List`, `Map`, `print`, `do`, ...) are in scope in every file of the project.
-  `std/prelude` **declares nothing of its own** - its `src/lib.trb` is nothing but `public use ... from "std/..."` -
+  `std/prelude` **declares nothing of its own** - its `src/lib.trb` is nothing but `public use ... from "std/..."`,
+  including the members other packages attach to a type (`public use Int64.seconds from "std/time"`) -
   so every name in it can be imported directly as well, and that file is where "what one always needs" is decided.
   A project can name another one (a teaching subset, the vocabulary of an embedded DSL); a sandbox gives its scripts
   the prelude of the host plus the receiver.
@@ -2120,9 +2162,9 @@ script.apply(config)?                                           // The body of t
   failures aborted the host would not be a sandbox - and the panic that can be recovered from is exactly the one that
   happens inside an interpreter with a heap of its own.
 - The path of `Sandbox.load` is relative to the **directory of the project**, not to the file that loads it: that is
-  where the program runs, and where a `config.trb` next to `project.trb` sits. `use "./x"` is the other way round - an
-  import is relative to the *file*, because that is a question about the source tree and not about the working
-  directory.
+  where the program runs, and where a `config.trb` next to `project.trb` sits. `use Name from "./x"` is the other way
+  round - an import is relative to the *file*, because that is a question about the source tree and not about the
+  working directory.
 - The script is checked as the body of `(var self: ServerConfig) => Void`, with the file scope "the prelude, and
   nothing else". The type argument is the whitelist. There is no purity analysis behind that: the prelude has no IO
   to begin with, and what a script may reach beyond it is the **module allowlist** below (`modules "std/text"`).
@@ -2322,6 +2364,22 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 
 ## Decision Log
 
+- **An extension member is named where it is used.** Nothing a foreign package attaches is implicitly visible: a member
+  belongs to the type everywhere when the package of the *type* attached it, and everywhere else the file writes
+  `use String.shout from "acme/text"` or names the trait the member comes from. The earlier rule - "visible in every file
+  that imports the module it is declared in, whatever it imports from it" - made a name appear because of an import that
+  said nothing about it, which is the one thing an import should never do. Rust's answer is a trait per bundle; this is
+  milder in two places, because what the type's own package brings needs no import at all and a single member can be
+  named on its own. `as` renames a member, which replaces the namespace call form (`text.shout(value)`) - that form was
+  UFCS in disguise and is gone. A `use` without names goes with it: nothing runs at an import, so it meant nothing.
+- **`loop { ... }` is the endless loop, and `while true` is an error.** "Never ends" becomes a property of the syntax
+  instead of a property of a condition the checker has to recognise as a literal, which is what the special case in the
+  checker was. Without a `break` its type is `Never`, with one `Void`; no `break value`, which can be added later without
+  a break. `torb canon --rule loops` rewrites the old spelling.
+- **An operator is a trait exactly when it is a method call**, so `a ?? b` is `OrElse.orElse` and the trait is
+  `public trait OrElse<Value>` in `std/core`, in the prelude, implemented by `Option` and `Result`. `?.` and `?` stay
+  what they are: the first would need `Self<Output>`, the second leaves the enclosing function. Rust's `Try` has been
+  unstable since 2016 for exactly the second reason, and both can be opened later without a break.
 - **`Result` is `Ok` or `Fail`** (was: `Error`): `Error` is the trait every error type implements, and `return Fail
   problem` reads as what it does. The field keeps its name (`case Fail(error: Failure)`), and so do `isError` and
   `mapError`, which are about the error the case carries.
@@ -2491,8 +2549,8 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Doc comments on every declaration (parameters, fields, cases) instead of `@param` tags or YAML front matter;
   Markdown with conventional headings; examples are run by `torb test`. A tag language would be annotations through
   the back door.
-- Extensions of foreign types follow the import of their module (Swift), extensions of own types are part of the
-  type (Rust). `use "./module"` without names exists for modules that consist of extensions.
+- Extensions of a foreign type are named where they are used - one member per `use` line, or the trait they come with
+  (Rust's model, milder) - and extensions of an own type are part of the type.
 - Keywords are ordinary names after `.` and as labels
 - Standard streams are functions: `print`, `printError` (prelude), `readLine()` (`std/io`)
 - The test API stays `test`, `group`, `assert`. Shared setup is a `const` in the group or a function, an async test

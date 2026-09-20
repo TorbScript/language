@@ -66,6 +66,18 @@ fn f(): Never { ... }                    a function that never returns normally
 3. **`Never` is the type of an expression that does not return: `panic`, `return`, `break`, `continue`.** It has no
    value at all, which is why an expression of type `Never` fits into any context that expects a value.
 
+   A **`loop` without a `break`** is the one *statement* with that type: nothing after it is reached, and a function
+   whose whole body is one needs no other result. With a `break` it is `Void` like every other loop. See
+   [Loops](../execution/loops.md).
+
+   ```trb check
+   fn serve(): Int {
+     loop {
+       print "waiting"
+     }
+   }
+   ```
+
 4. **`Never` converts to every type.** `values.first() ?? fail("empty")` type checks as the element type of
    `values`, because `fail`'s `Never` result converts to whatever the other side of `??` needs.
 
@@ -106,5 +118,6 @@ it returns when it does, not by `Never`.
 ## Related
 
 - [Bindings](bindings.md) - the expression-statement rule `Void`/`Never` decides.
+- [Loops](../execution/loops.md) - the `loop` whose type is `Never`, and the `break` that makes it `Void`.
 - [Option](option.md) - the type for a value that may be absent.
 - [Result](../errors/result.md) - `Ok`/`Fail`, for a call that fails instead of panicking.

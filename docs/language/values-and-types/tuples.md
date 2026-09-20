@@ -68,7 +68,28 @@ value.lowest                             access by label
    // error: This position is `lowest`, not `highest`
    ```
 
-4. **Tuples compare and print structurally.** Two tuples are equal when every position is, and a tuple's `Show` text
+4. **A position is not a name.** `.0` and `.1` always stand behind a dot - `entry.0`, `_.0`, `self.0` - and a bare `0`
+   is always the number. So a closure over a tuple writes `{ _.0 * 2 }` and never `{ 0 * 2 }`, and inside a method a
+   position of `self` is `self.0`, not `0`: a receiver makes the *members* of a type implicit, and a position is not one.
+
+   ```trb check
+   const pairs = [(1, "one"), (2, "two")]
+   print pairs.map({ _.0 }).toList()
+   ```
+
+5. **A labelled tuple is how a pair gets names without a type.** `Map.iterator` answers
+   `Iterator<(key: Key, value: Value)>`, so an entry reads as `entry.key` and `entry.value`. The labels cost nothing -
+   they are not part of the type - and the positional forms keep working.
+
+   ```trb check
+   const ages = ["Ada": 36, "Alan": 41]
+   print ages.all({ entry => entry.value > 0 })
+   for (name, age) in ages {
+     print "{name} is {age}"
+   }
+   ```
+
+6. **Tuples compare and print structurally.** Two tuples are equal when every position is, and a tuple's `Show` text
    lists its positions in order, without labels: `(lowest: 1, highest: 9)` shows as `(1, 9)`, because a label is not
    part of the type and so is not part of what identifies the value.
 
@@ -103,3 +124,4 @@ fn bounds(): (lowest: Int, highest: Int) {
 - [Built-in types](built-in-types.md) - tuples next to every other type that needs no import.
 - [Bindings](bindings.md) - `const (a, b) = pair`, the pattern a binding shares with `match`.
 - [Cases and match](../pattern-matching/cases-and-match.md) - `(a, b)` as a pattern inside a `match`.
+- [Closures](../functions/closures.md) - `_`, `_2` and why a bare name in a closure is never a position.

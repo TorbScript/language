@@ -55,6 +55,18 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
    rest.** The order reaches the output through `Show`: an empty `Map` shows as `[:]`, an empty `Set` as `{}` - which
    is why the order is a rule of the language and not of the implementation.
 
+   **A `Map` iterates as a labelled pair:** `Map.iterator` answers `Iterator<(key: Key, value: Value)>`, so an entry
+   reads as `entry.key` and `entry.value`. A label is not part of the type, so the positional forms mean exactly the
+   same thing and a `(Key, Value)` pair goes into `Map.from` unchanged.
+
+   ```trb check
+   const ages = ["Ada": 36, "Alan": 41]
+   print ages.all({ entry => entry.value > 0 })
+   for (name, age) in ages {
+     print "{name} is {age}"
+   }
+   ```
+
 3. **Equality and hashing ignore insertion order, unlike a `List`.** Two maps with the same entries added in a
    different order are equal and hash the same, because both combine their entries with `bitwiseExclusiveOr` instead
    of folding them in sequence.

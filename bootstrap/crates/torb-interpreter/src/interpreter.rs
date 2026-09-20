@@ -273,6 +273,16 @@ impl Interpreter {
                     Err(other) => return Err(other),
                 }
             },
+            StatementKind::Loop { body } => loop {
+                let scope = self.scope(environment);
+                let outcome = self.exec_statements(&body.statements, &scope);
+                self.release(scope);
+                match outcome {
+                    Err(Flow::Break) => break,
+                    Ok(_) | Err(Flow::Continue) => {}
+                    Err(other) => return Err(other),
+                }
+            },
             StatementKind::Return(value) => {
                 let value = match value {
                     Some(value) => self.eval(value, environment)?,
@@ -2189,6 +2199,7 @@ fn statement_kind(kind: &StatementKind) -> &'static str {
         StatementKind::Assignment { .. } => "exec.Assignment",
         StatementKind::For { .. } => "exec.For",
         StatementKind::While { .. } => "exec.While",
+        StatementKind::Loop { .. } => "exec.Loop",
         StatementKind::Return(_) => "exec.Return",
         StatementKind::Break => "exec.Break",
         StatementKind::Continue => "exec.Continue",

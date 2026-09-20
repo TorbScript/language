@@ -1,6 +1,6 @@
 ---
 title: Operators are traits
-summary: Every operator except &&, || and ! is a trait method, so writing an operator on your own type means implementing the trait it stands for.
+summary: An operator is a trait exactly when it is a method call, so writing one on your own type means implementing the trait it stands for - and the three that are no method call are the three that are not traits.
 kind: reference
 status: stable
 order: 80
@@ -55,14 +55,21 @@ a % b        Remainder.remainder(a, b)   -a      Negate.negate(a)
 a == b       Equals.equals(a, b)         a < b   Compare.compare(a, b) == .Less
 a[i]         Indexed.at(a, i)            a[i] = v    MutableIndexed.set(a, i, v)
 a[from..to]  Slice.slice(a, from..to)    a[from..to] = v   MutableSlice.replace(a, from..to, v)
-"{a}"        Show.show(a)
+a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
 ```
 
 ## Rules
 
-1. **Every operator except `&&`, `||` and `!` is one trait's method.** `+` is `Add.add`, `-` is `Subtract.subtract`,
+1. **An operator is a trait exactly when it is a method call.** `+` is `Add.add`, `-` is `Subtract.subtract`,
    `*` is `Multiply.multiply`, `/` is `Divide.divide`, `%` is `Remainder.remainder`, unary `-` is `Negate.negate`,
-   `==` is `Equals.equals`, `<`/`<=`/`>`/`>=` go through `Compare.compare`, and string interpolation is `Show.show`.
+   `==` is `Equals.equals`, `<`/`<=`/`>`/`>=` go through `Compare.compare`, `a ?? b` is `OrElse.orElse`, and string
+   interpolation is `Show.show`. A type that does not come with the trait hears so at the operator:
+
+   ```trb error
+   const value = 1 ?? 0
+   print value
+   // error: `Int64` does not implement `OrElse`, so `a ?? b` has no meaning for it
+   ```
 
 2. **A binary operator's trait has a default `Other` and a default `Output`, both `Self`**
    (`trait Add<Other = Self, Output = Self>`), so `with Add` alone means "adds to itself, returns itself". Writing
@@ -79,8 +86,26 @@ a[from..to]  Slice.slice(a, from..to)    a[from..to] = v   MutableSlice.replace(
    `a[from..to] = v` needs `MutableSlice`, a supertrait of `Slice`, and also makes the range a `var` path:
    `samples[0..100].sort()` works on that part of `samples` in place.
 
-6. **`&&`, `||` and `!` are built into `Bool` and cannot be overloaded.** They short-circuit their second operand,
-   which a trait method - which always evaluates its argument - cannot do.
+6. **`a ?? b` is `OrElse.orElse`, whose fallback is `lazy`.** `Option<Value>` and `Result<Value, Failure>` come with
+   it, and so can a type of your own:
+
+   ```trb check
+   type Setting with OrElse<String> {
+     written: String
+
+     fn orElse(self, fallback: lazy String): String {
+       if written.isEmpty() { fallback } else { written }
+     }
+   }
+
+   print(Setting("") ?? "default")
+   ```
+
+7. **Three operators are no method call, and therefore no trait.** `&&`, `||` and `!` are built into `Bool` and
+   short-circuit their second operand, which a trait method - which always evaluates its argument - cannot do. `?.` is
+   `Option.map`, or `flatMap` when the member answers an `Option`, so which method it is depends on the *result* type; a
+   trait for it would need `Self<Output>`, the higher-kinded form this language does not have. And `?` leaves the
+   **enclosing function**, which is something no method can do at all.
 
    ```trb error
    type Flag {
@@ -115,3 +140,4 @@ print mixed
 - [Traits](traits.md) - `with` at the declaration, and default members.
 - [Trait intersections](intersections.md) - the other job of `&`, unrelated to arithmetic.
 - [Declaring a type](../types/declaring-a-type.md) - what `==` does without a hand-written `Equals`.
+- [Optional chaining](../errors/option-chaining.md) - `??` and `?.` in full, and where `?.` does not apply.

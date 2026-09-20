@@ -7,11 +7,52 @@ use ModuleId, Module from "./module"
 use SymbolId, SymbolKind, Symbol, Symbols, Definition, declareModule from "./symbols"
 use Graph, resolveImport from "./graph"
 
+/**
+ * `use String.shout from "acme/text"`: a member another package attaches to a type it does not own.
+ *
+ * Such a member is an import like any other, but it lives in the namespace of its type and not in the file's own - two
+ * types may well have a member of the same name - so it is kept apart from `ModuleScope.names`. The **owner** is
+ * resolved in the scope of the importing file (`String` comes from the prelude, not from `acme/text`), and the `from`
+ * names the package the member has to come from.
+ */
+public type MemberImport {
+  /** The type or trait the member hangs on */
+  owner: SymbolId
+  /** The name the member is declared under: `use String.shout as yell` imports `shout` under the name `yell` */
+  name: String
+  /** The package the `from` pointed at */
+  package: Int
+  /** The path that was written, for the message about a member that is not there */
+  path: String
+  /** The span of the item, which is what a message about this import points at */
+  span: Span
+}
+
+/** `"{owner}.{local name}"`: how an imported member is kept, because the name alone belongs to no namespace. */
+public fn memberImportKey(owner: SymbolId, name: String): String {
+  "{owner.value}.{name}"
+}
+
+/** The first letter decides what a segment of a `use` path is: a case starts uppercase, a member lowercase. */
+fn startsUpperCase(text: String): Bool {
+  match text.chars().first() {
+    Some(first) => first >= 'A' && first <= 'Z'
+    None => false
+  }
+}
+
 /** The names of one module: everything it can see, and the part of that other modules may import. */
 public type ModuleScope {
   var names: Map<String, SymbolId> = [:]
   /** The `public` declarations and everything a `public use` re-exports */
   var exported: Map<String, SymbolId> = [:]
+  /**
+   * The members of foreign types this file named, by `memberImportKey`. A list, because two imports of one name for one
+   * type are an ambiguity **at the use** and not at the import - which is where `as` is the fix.
+   */
+  var members: Map<String, List<MemberImport>> = [:]
+  /** What a `public use` of a member hands on, so that a prelude can re-export one */
+  var exportedMembers: Map<String, List<MemberImport>> = [:]
 }
 
 /**
@@ -46,6 +87,23 @@ public type Program {
       return Some symbol
     }
     builtins.get name
+  }
+
+  /** What `use String.shout from "acme/text"` brought into this file for `owner` under the name `name`. */
+  fn memberImportsOf(self, id: ModuleId, owner: SymbolId, name: String): List<MemberImport> {
+    scopes[id.value].members.get(memberImportKey(owner, name)) ?? []
+  }
+
+  /** Whether this file named any member of `owner` that comes from `package`. */
+  fn importsMemberFrom(self, id: ModuleId, owner: SymbolId, package: Int): Bool {
+    for (_, entries) in scopes[id.value].members {
+      for entry in entries {
+        if entry.owner == owner && entry.package == package {
+          return true
+        }
+      }
+    }
+    false
   }
 }
 
@@ -126,12 +184,29 @@ type Binder {
    */
   fn addPreludes(var self) {
     for index in 0..scopes.length() {
-      const prelude = preludeNamesOf ModuleId(index)
+      // The fields are read directly: two calls of a `self` method inside one `var self` method are trap 2 of stage 0
+      const package = graph.at(ModuleId(index)).package
+      const source = match preludeModules[package] {
+        Some(prelude) => scopes[prelude.value]
+        None => {
+          continue
+        }
+      }
       var scope = scopes[index]
-      for (name, symbol) in prelude {
+      for (name, symbol) in source.exported {
         if !scope.names.containsKey(name) {
           scope.names.set name, symbol
         }
+      }
+      // `public use Int64.seconds from "std/time"`: what the prelude re-exports is named in every file of the package
+      for (key, entries) in source.exportedMembers {
+        var here = scope.members.get(key) ?? []
+        for entry in entries {
+          if !here.any({ _.package == entry.package && _.name == entry.name }) {
+            here.add entry
+          }
+        }
+        scope.members.set key, here
       }
       scopes.set index, scope
     }
@@ -182,6 +257,63 @@ type Binder {
     }
   }
 
+  /** An imported member, if it is not there yet. The key keeps the type apart, so only the pair decides. */
+  fn bindMember(var self, id: ModuleId, key: String, entry: MemberImport, isPublic: Bool) {
+    var scope = scopes[id.value]
+    var hasChanged = false
+    var here = scope.members.get(key) ?? []
+    if !here.any({ _.package == entry.package && _.name == entry.name }) {
+      here.add entry
+      scope.members.set key, here
+      hasChanged = true
+    }
+    if isPublic {
+      var exported = scope.exportedMembers.get(key) ?? []
+      if !exported.any({ _.package == entry.package && _.name == entry.name }) {
+        exported.add entry
+        scope.exportedMembers.set key, exported
+        hasChanged = true
+      }
+    }
+    if hasChanged {
+      scopes.set id.value, scope
+      isChanged = true
+    }
+  }
+
+  /**
+   * `use String.shout from "acme/text"`: the path names no case and no export, so it names a **member** that the
+   * package of the module attaches to the type. The type is resolved in the scope of the importing file - `String`
+   * comes from the prelude, not from `acme/text` - and a module that re-exports such an import hands its entries on.
+   */
+  fn bindMemberImport(var self, id: ModuleId, target: ModuleId, path: String, item: UseItem, isPublic: Bool) {
+    if item.path.length() < 2 {
+      return
+    }
+    // The first letter decides which of the two a path names: a case starts uppercase, a member lowercase. So
+    // `use Option.Maybe from "std/core"` stays "`Option` has no case `Maybe`" and never becomes a missing member
+    if startsUpperCase(item.name().text) {
+      return
+    }
+    const owner = match ownerOfPath(id, item.path) {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    const key = memberImportKey owner, item.localName().text
+    // A re-export chain: `use Int64.seconds from "std/prelude"` hands on what the prelude itself imported
+    const handedOn = scopes[target.value].exportedMembers.get(memberImportKey(owner, item.name().text)) ?? []
+    if !handedOn.isEmpty() {
+      for entry in handedOn {
+        bindMember id, key, entry.copy(span: item.name().span), isPublic
+      }
+      return
+    }
+    const package = graph.at(target).package
+    bindMember id, key, MemberImport(owner, item.name().text, package, path, item.name().span), isPublic
+  }
+
   fn bindOne(var self, id: ModuleId, usage: UseDeclaration, isPublic: Bool) {
     match usage.source {
       .Module(path) => {
@@ -192,7 +324,9 @@ type Binder {
                 const start = scopes[target.value].exported.get(item.path[0].text)
                 if const Some(symbol) = walkPath(start, item.path) {
                   bind id, item.localName().text, symbol, isPublic
+                  continue
                 }
+                bindMemberImport id, target, path, item, isPublic
               }
             }
             .All(alias) => {
@@ -201,8 +335,6 @@ type Binder {
                 bind id, alias.text, symbol, isPublic
               }
             }
-            // `use "./text-extensions"`: only what the module adds to types with `extend`, so no name at all
-            .OnlyExtensions => {}
           }
         }
       }
@@ -217,6 +349,21 @@ type Binder {
           }
         }
       }
+    }
+  }
+
+  /**
+   * `String` of `use String.shout from "..."`: every segment but the last, resolved in the scope of the importing file.
+   * `None` when it does not name a type or a trait, because nothing else has members.
+   */
+  fn ownerOfPath(self, id: ModuleId, path: List<Name>): SymbolId? {
+    var current = visibleName(id, path[0].text)?
+    for index in 1..path.length() - 1 {
+      current = stepInto(current, path[index].text)?
+    }
+    match symbols.at(current).kind {
+      .Type | .Trait => Some current
+      _ => None
     }
   }
 
@@ -316,6 +463,11 @@ fn checkImport(
       match usage.items {
         .Names(items) => {
           for item in items {
+            // `use String.shout from "acme/text"`: the type is a name of *this* file, so what the module exports says
+            // nothing about it. Whether the package really attaches such a member is the checker's question
+            if isMemberImport(program, id, path, item) {
+              continue
+            }
             // What is missing is the *export*, so this message names it and points at it even under an alias
             const first = item.path[0]
             if !program.scopes[target.value].exported.containsKey(first.text) {
@@ -331,7 +483,6 @@ fn checkImport(
           }
         }
         .All(alias) => reportDuplicate alias, declared, imported, diagnostics
-        .OnlyExtensions => {}
       }
     }
     // `use Shape.Circle`: the first segment is a name of this file, the rest are steps into it
@@ -349,6 +500,35 @@ fn checkImport(
       }
     }
   }
+}
+
+/**
+ * Whether the binder took this item as a member import: it named a type of this file and the last segment is no case of
+ * it. What that member is, and whether the package really has one, is a question about the types and belongs to the
+ * checker - here it only says that nothing about the *export* is wrong.
+ */
+fn isMemberImport(program: Program, id: ModuleId, path: String, item: UseItem): Bool {
+  memberImportOf(program.scopes[id.value].members, path, item).isSome()
+}
+
+/**
+ * The entry the binder recorded for one `use` item. A module's map also holds what its prelude re-exported, whose spans
+ * are spans of *another* file, so the written path and the imported name decide along with the span.
+ */
+public fn memberImportOf(members: Map<String, List<MemberImport>>, path: String, item: UseItem): MemberImport? {
+  if item.path.length() < 2 {
+    return None
+  }
+  const at = item.name().span
+  const name = item.name().text
+  for (_, entries) in members {
+    for entry in entries {
+      if entry.span == at && entry.path == path && entry.name == name {
+        return Some entry
+      }
+    }
+  }
+  None
 }
 
 /**

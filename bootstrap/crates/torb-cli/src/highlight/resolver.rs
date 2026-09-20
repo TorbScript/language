@@ -126,6 +126,7 @@ impl FileScope {
                 self.collect_condition(condition);
                 self.collect_statements(&body.statements, false);
             }
+            StatementKind::Loop { body } => self.collect_statements(&body.statements, false),
             StatementKind::Return(Some(expression)) | StatementKind::Expression(expression) => self.collect_expression(expression),
             StatementKind::Return(None) | StatementKind::Break | StatementKind::Continue => {}
         }
@@ -270,7 +271,6 @@ impl FileScope {
             UseItems::All { alias } => {
                 self.namespaces.insert(alias.text.clone(), ());
             }
-            UseItems::OnlyExtensions => {}
             UseItems::Names(items) => {
                 for item in items {
                     let local_name = item.local_name().text.clone();
@@ -484,6 +484,11 @@ impl Resolver {
                 self.scopes.pop();
             }
             StatementKind::While { condition, body } => self.condition_and_block(condition, body),
+            StatementKind::Loop { body } => {
+                self.scopes.push(Scope::new());
+                self.block_contents(body);
+                self.scopes.pop();
+            }
             StatementKind::Return(Some(expression)) | StatementKind::Expression(expression) => self.expression(expression),
             StatementKind::Return(None) | StatementKind::Break | StatementKind::Continue => {}
         }

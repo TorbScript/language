@@ -138,6 +138,7 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
       false
     }
     .While(condition, body) => {
+      requireLoopKeyword checker, condition, statement.span
       // `while const Some(x) = next()` binds for the body of the loop and for nothing after it
       checker.openScope()
       // The condition runs again after every round, so its reads belong to the loop: `while isChanged` is what keeps
@@ -153,7 +154,18 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
       // A change the next round reads again is alive, whatever stands after the loop (design 5.3)
       settleLoop checker, uses
       checker.closeScope()
-      neverEnds condition, body
+      false
+    }
+    // `loop { ... }` without a `break` never ends, so nothing after it is reached
+    .Loop(body) => {
+      checker.openScope()
+      const uses = checker.valueUses.length()
+      checker.loopDepth = checker.loopDepth + 1
+      const _ = checkBlock checker, body, Expectation.Statement
+      checker.loopDepth = checker.loopDepth - 1
+      settleLoop checker, uses
+      checker.closeScope()
+      !hasBreak(body.statements)
     }
     .Return(value) => {
       checkReturn checker, value, statement.span
@@ -279,7 +291,7 @@ fn checkReturn(var checker: Checker, value: Expression?, at: Span) {
     Some(found) => found
     None => {
       // A bare `return` says the function produces nothing, so an inferred result hears `Void` from it:
-      // `while true { ... return ... }` would otherwise infer `Never` from the loop that never ends
+      // `loop { ... return ... }` would otherwise infer `Never` from the loop that never ends
       if checker.isResultInferred {
         const nothing = checker.voidType
         checker.returnTypes.add nothing
@@ -307,16 +319,18 @@ fn checkReturn(var checker: Checker, value: Expression?, at: Span) {
 }
 
 /**
- * `while true { ... }` without a `break` never ends, so the statement after it is never reached and a function that
- * consists of one needs no other result. Every other loop may run zero times, so nothing follows from it.
+ * `while true` has one spelling in this language, and it is `loop`. An endless loop is then a property of the syntax
+ * and not of a condition, which is what lets the checker and the back end see it without evaluating anything.
  */
-fn neverEnds(condition: Condition, body: Block): Bool {
+fn requireLoopKeyword(var checker: Checker, condition: Condition, at: Span) {
   if const .Test(expression) = condition {
     if const .BoolLiteral(true) = expression.kind {
-      return !hasBreak(body.statements)
+      checker.reportHere(
+        Diagnostic.error("A loop that never ends is written `loop`", at)
+          .withNote("`loop \{ ... \}` has the type `Never` without a `break` and `Void` with one")
+      )
     }
   }
-  false
 }
 
 /** A `break` of *this* loop: a nested loop and a closure have their own, so neither is walked into. */
@@ -375,7 +389,7 @@ fn requireLoop(var checker: Checker, keyword: String, at: Span) {
     return
   }
   checker.reportHere(
-    Diagnostic.error("`{keyword}` is only allowed inside of a `for` or a `while`", at)
+    Diagnostic.error("`{keyword}` is only allowed inside of a `for`, a `while` or a `loop`", at)
       .withNote("A closure is a function, not a block: `{keyword}` cannot leave one, and `do \{ \}` is not a loop either")
   )
 }

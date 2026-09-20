@@ -6,6 +6,8 @@
  */
 
 use Sandbox, SandboxError from "std/sandbox"
+// `16.megabytes()` is a member `std/sandbox` adds to `Int64`, which `std/number` owns - so this file names it
+use Int64.megabytes from "std/sandbox"
 use Environment from "std/environment"
 use ServerConfig, ConfigError from "./server-config"
 
@@ -33,7 +35,7 @@ fn loadConfig(): Result<ServerConfig, StartupError> {
   // that is only known while the program runs is checked by the sandbox instead, when it loads the file.
   //
   // What a script can do is decided here, where it is loaded. Without the block it could not do any IO at all;
-  // this one may read files below ./config. The limits guard against `while true {}`.
+  // this one may read files below ./config. The limits guard against `loop {}`.
   const script = Sandbox.load<ServerConfig>("./config.trb") {
     files readOnly: "./config"
     limits steps: 1_000_000, memory: 16.megabytes()

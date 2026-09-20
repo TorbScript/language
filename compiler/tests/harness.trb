@@ -161,7 +161,7 @@ public const preludeSource = r"""
   public type Int = Int64
   public type Float = Float64
 
-  public type Option<Value> {
+  public type Option<Value> with OrElse<Value> {
     case Some(value: Value)
     case None
 
@@ -187,7 +187,7 @@ public const preludeSource = r"""
     }
   }
 
-  public type Result<Value, Failure> {
+  public type Result<Value, Failure> with OrElse<Value> {
     case Ok(value: Value)
     case Fail(error: Failure)
 
@@ -381,6 +381,11 @@ public const preludeSource = r"""
       value
     }
   }
+
+  /** As in `std/core`: `a ?? b` is `a.orElse(b)`, so it is a trait like every other operator. */
+  public trait OrElse<Value> {
+    fn orElse(self, fallback: lazy Value): Value
+  }
   """
 
 public const workspace = [
@@ -395,7 +400,7 @@ public const workspace = [
   "std/prelude/src/lib.trb": r"""
     public use Show, Equals, Compare, Hash, Negate, Iterable, Iterator from "./types"
     public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
-    public use MutableIndexed, MutableSlice from "./types"
+    public use MutableIndexed, MutableSlice, OrElse from "./types"
     public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
     public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
     public use Set, TrieSet, TrieMap, TrieList from "./types"

@@ -98,8 +98,6 @@ pub enum UseItems {
     All {
         alias: Name,
     },
-    /// `use "./text-extensions"`: only what the module adds to types with `extend`
-    OnlyExtensions,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -283,9 +281,23 @@ pub struct Statement {
 pub enum StatementKind {
     Declaration(Declaration),
     Binding(Binding),
-    Assignment { target: Expression, value: Expression },
-    For { pattern: Pattern, iterable: Expression, body: Block },
-    While { condition: Condition, body: Block },
+    Assignment {
+        target: Expression,
+        value: Expression,
+    },
+    For {
+        pattern: Pattern,
+        iterable: Expression,
+        body: Block,
+    },
+    While {
+        condition: Condition,
+        body: Block,
+    },
+    /// `loop { ... }`: the endless loop. Without a `break` that targets it nothing after it is reached.
+    Loop {
+        body: Block,
+    },
     Return(Option<Expression>),
     Break,
     Continue,

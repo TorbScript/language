@@ -60,7 +60,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `guide/a-small-program.md` - **Put it together** (guide): One small program - a type with cases, a function that can fail, and a pipeline - that uses everything this path taught.
 - `guide/cases-and-matching.md` - **Cases and matching** (guide): How to declare a type with more than one shape, and take it apart with a match that has to cover every case.
 - `guide/collections-and-pipelines.md` - **Collections and pipelines** (guide): How to build a list, map and set, change one in place or get a changed copy, and pull values through a lazy pipeline.
-- `guide/control-flow-and-dsls.md` - **Control flow and your own constructs** (guide): if, for and while as you would expect, and why unless is an ordinary function you could have written yourself.
+- `guide/control-flow-and-dsls.md` - **Control flow and your own constructs** (guide): if, for, while and loop as you would expect, and why unless is an ordinary function you could have written yourself.
 - `guide/errors.md` - **Errors** (guide): How a function says it can fail with Result, and how a caller handles that with match or the question mark operator.
 - `guide/functions-and-closures.md` - **Functions and closures** (guide): How to declare a function, when it must spell out its return type, and the one closure form the language has.
 - `guide/index.md` - **Learn TorbScript** (index): The learning path from nothing to a working program, in order, one step per page.
@@ -120,7 +120,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 
 - `language/errors/error-types.md` - **Declaring an error type** (reference): An error type is a type with cases like any other; a case that wraps one value of a type no other case wraps gets From generated, which is what makes ? convert on its own.
 - `language/errors/index.md` - **Errors** (index): How a function says it can fail, how a caller handles it, and what a panic is for.
-- `language/errors/option-chaining.md` - **Optional chaining** (reference): `?.` is Option.map, or Option.flatMap when the member itself answers an Option, so chaining never nests. `??` gives a lazy fallback for an absent Option or a failed Result.
+- `language/errors/option-chaining.md` - **Optional chaining** (reference): `?.` is Option.map, or Option.flatMap when the member itself answers an Option, so chaining never nests. `??` is the trait OrElse, which gives a lazy fallback for an absent Option, a failed Result or any type that comes with it.
 - `language/errors/panic.md` - **panic** (reference): panic prints panic, the message and the site to standard error, exits with 101, and runs nothing else on the way out - it is for bugs, never for an expected failure.
 - `language/errors/question-mark.md` - **The question mark operator** (reference): A postfix ? unwraps an Ok or a Some and returns the Fail or None from the surrounding function early, converting the error type through From when they differ.
 - `language/errors/result.md` - **Result** (reference): A function that can fail answers Result<Value, Failure>, whose cases are Ok and Fail. The postfix question mark unwraps an Ok or returns the Fail from the surrounding function.
@@ -132,6 +132,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `language/execution/copies.md` - **What a copy costs** (reference): A copy always behaves the same way, but what it costs depends on the shape of the type - inline for a small fixed-size value, copy-on-write for heap-backed storage, and never for a shared type.
 - `language/execution/evaluation-order.md` - **Evaluation order** (reference): Evaluation order is source order - the receiver first, then the arguments as they are written, then the parameter defaults - so a side effect in an argument is exactly as predictable as reading the line.
 - `language/execution/index.md` - **Execution** (index): The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and why there are no destructors.
+- `language/execution/loops.md` - **Loops** (reference): for walks an Iterable, while repeats while a condition holds, and loop is the endless one - with the type Never until a break gives it a Void. while true is an error, because never ending is a property of the syntax here.
 - `language/execution/no-destructors.md` - **There are no destructors** (reference): Close is an ordinary method and using is an ordinary function, so the nesting of using blocks is the only destruction order the language ever promises - a value going out of scope runs no code at all.
 - `language/execution/tail-calls.md` - **Tail calls and the frame limit** (reference): Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call counts against a per-task frame limit of 100000 that panics with stack overflow when it is reached.
 
@@ -169,7 +170,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `language/modules-and-packages/packages.md` - **Packages** (reference): A package is a directory with a project.trb and a src/, named owner/name, and it can only be reached by a project that lists it as a dependency.
 - `language/modules-and-packages/the-prelude.md` - **The prelude** (reference): The prelude is the package whose public names are in scope in every file without an import, and it holds only the pure part of the standard library.
 - `language/modules-and-packages/top-level-code.md` - **Top-level code** (reference): A statement outside every declaration is only allowed in an entry file, a script or a test file, and a top-level const of a module has to be known at compile time.
-- `language/modules-and-packages/use.md` - **use** (reference): use brings names into scope from a package or a file. Everything after from names a module, and a case comes in through the type it belongs to.
+- `language/modules-and-packages/use.md` - **use** (reference): use brings names into scope from a package or a file. Everything after from names a module; a path brings in a case of a type or a member another package attaches to it, and a use without names is an error.
 - `language/modules-and-packages/visibility.md` - **Visibility** (reference): A top-level declaration is private to its file unless marked public, and a public declaration may not expose a type that is private to its own file.
 - `language/modules-and-packages/workspaces.md` - **Workspaces** (reference): A workspace is one root project.trb naming several member projects, sharing one project.lock.trb so they can never resolve their dependencies apart.
 
@@ -207,11 +208,11 @@ Every page of the reference, with what it answers. Open the one page that answer
 
 - `language/traits/coherence.md` - **Coherence and blanket implementations** (reference): A package may implement a trait for a type only if it owns the type or the trait, and two implementations of one trait may never overlap.
 - `language/traits/delegation.md` - **Delegation with by** (reference): by forwards a trait's required members to the one field of a single-field type, binding only to the trait or & group written directly in front of it.
-- `language/traits/extend.md` - **extend** (reference): extend adds constants and functions to a type after its declaration, with a trait or without one, and never adds a field or a case.
+- `language/traits/extend.md` - **extend** (reference): extend adds constants and functions to a type after its declaration, with a trait or without one, never adds a field or a case, and is named by the file that uses it when it targets a type of another package.
 - `language/traits/index.md` - **Traits** (index): How a capability is declared, how a type comes with one, and how a trait is used as a type.
 - `language/traits/intersections.md` - **Trait intersections** (reference): The & operator combines two or more traits into one type, in a parameter, a field or a bound, and only traits can be combined this way.
 - `language/traits/object-safety.md` - **Object safety** (reference): A member that mentions Self in a parameter or its result, or that has no self, cannot be called on a trait-typed value, even though the trait stays a legal type.
-- `language/traits/operators.md` - **Operators are traits** (reference): Every operator except &&, || and ! is a trait method, so writing an operator on your own type means implementing the trait it stands for.
+- `language/traits/operators.md` - **Operators are traits** (reference): An operator is a trait exactly when it is a method call, so writing one on your own type means implementing the trait it stands for - and the three that are no method call are the three that are not traits.
 - `language/traits/supertraits.md` - **Supertraits** (reference): A trait declared with a supertrait requires every implementing type to also implement that supertrait, and a default member can call the supertrait's members directly.
 - `language/traits/trait-types.md` - **Traits as types** (reference): A trait can stand wherever a type can, a value coerces to it automatically, and that coercion is the only subtyping the language has, with no variance for the types built from it.
 - `language/traits/traits.md` - **Traits** (reference): A trait is a capability a type comes with. A single-method trait is named after its method, there is no inheritance, and operators are traits.
@@ -283,6 +284,7 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `tooling/torb-build.md` - **torb build** (tooling): torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
 - `tooling/torb-canon.md` - **torb canon** (tooling): torb canon rewrites sources into the formatter canon over the syntax tree, checks every edit against a second parse, and drops anything that would change what the program means.
 - `tooling/torb-check.md` - **torb check** (tooling): torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
+- `tooling/torb-docs-source.md` - **torb docs source** (tooling): torb docs source checks the doc comments of the code itself - a module comment on every file, a comment on every construct that needs one, six headings, links that resolve, and examples that compile.
 - `tooling/torb-run.md` - **torb run** (tooling): torb run executes a file directly, or src/main.trb of a project directory, and passes the rest of the command line to the program as Process.arguments().
 - `tooling/torb-test.md` - **torb test** (tooling): torb test runs every *.test.trb file below a directory, one process per file by default, and prints ok or FAILED for every test call it sees.
 - `tooling/verifying-your-work.md` - **Verify your work** (tooling): The commands that decide whether TorbScript you wrote is correct and in the formatter canon, in the order to run them.

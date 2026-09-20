@@ -153,6 +153,14 @@ public type Parser {
     diagnostics.add Diagnostic.error(message, at)
   }
 
+  /** The same, with the line to write instead. A parse error rarely has one; a form that was removed always does. */
+  fn errorWithNote(var self, message: String, note: String, at: Span) {
+    if diagnostics.last()?.span == Some(at) {
+      return
+    }
+    diagnostics.add Diagnostic.error(message, at).withNote(note)
+  }
+
   /** Did something go wrong since this copy of the parser was taken? */
   fn hasFailedSince(self, earlier: Parser): Bool {
     diagnostics.length() > earlier.diagnostics.length()
@@ -216,7 +224,7 @@ public type Parser {
   /** Skips the rest of a broken statement. Balanced braces are skipped as a whole. */
   fn recoverToLineEnd(var self) {
     var depth = 0
-    while true {
+    loop {
       match kind() {
         .EndOfFile => {
           return

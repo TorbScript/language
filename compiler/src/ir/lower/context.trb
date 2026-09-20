@@ -187,7 +187,7 @@ public type Lowering {
   /** Where a `break` and a `continue` of the innermost loop go, innermost last. */
   var breakTargets: List<BlockId> = []
   var continueTargets: List<BlockId> = []
-  /** Whether anything in the loop wrote a `break`: `while true` without one never ends. */
+  /** Whether anything in the loop wrote a `break`: a `loop` without one never ends. */
   var loopBroke: List<Bool> = []
   var unsupported: List<Unsupported> = []
   var unsupportedIndex: Map<String, Int> = [:]
@@ -496,7 +496,7 @@ public fn enterLoop(var lowering: Lowering, exit: BlockId, step: BlockId) {
   lowering.loopBroke.add false
 }
 
-/** Answers whether anything in the loop wrote a `break`, which is what says `while true` can be left at all. */
+/** Answers whether anything in the loop wrote a `break`, which is what says a `loop` can be left at all. */
 public fn leaveLoop(var lowering: Lowering): Bool {
   const last = lowering.breakTargets.length() - 1
   const _ = lowering.breakTargets.removeAt last
@@ -506,7 +506,7 @@ public fn leaveLoop(var lowering: Lowering): Bool {
   lowering.loopBroke.removeAt(index) ?? false
 }
 
-/** A `break` of the innermost loop, so that the block after a `while true` is reachable. */
+/** A `break` of the innermost loop, so that the block after a `loop` is reachable. */
 public fn markBreak(var lowering: Lowering) {
   const index = lowering.loopBroke.length() - 1
   if index >= 0 {

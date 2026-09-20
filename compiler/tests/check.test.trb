@@ -208,8 +208,35 @@ group "Modules" {
     )
   }
 
-  test "a module without names brings only its extensions" {
-    assert messages(["app/src/extra.trb": r"extend Int {}", "app/src/main.trb": "use \"./extra\""]).isEmpty()
+  test "a `use` without names is gone: nothing runs at an import, so it would mean nothing" {
+    const files = ["app/src/extra.trb": r"extend Int {}", "app/src/main.trb": "use \"./extra\""]
+    assert(messages(files) == ["A `use` names what it imports"])
+  }
+
+  test "a member of a foreign type is imported by its path, and `as` renames it" {
+    const extension = "extend Text \{\n  fn shout(self): Text \{\n    self\n  \}\n\}"
+    const named = [
+      "app/src/text.trb": extension,
+      "app/src/main.trb": "use Text.shout from \"./text\"\n\nfn probe(value: Text): Text \{\n  value.shout()\n\}",
+    ]
+    assert messages(named).isEmpty()
+    const renamed = [
+      "app/src/text.trb": extension,
+      "app/src/main.trb": "use Text.shout as yell from \"./text\"\n\nfn probe(value: Text): Text \{\n  value.yell()\n\}",
+    ]
+    assert messages(renamed).isEmpty()
+  }
+
+  test "an import of a member the package does not add is reported at the `use` line" {
+    const files = [
+      "app/src/text.trb": "extend Text \{\n  fn shout(self): Text \{\n    self\n  \}\n\}",
+      "app/src/main.trb": "use Text.whisper from \"./text\"\n",
+    ]
+    assert(messages(files) == ["`./text` adds no member `whisper` to `Text`"])
+    assert(
+      notes(files)
+        == ["A path in a `use` names a case of a type or a member an `extend` of that package adds to it"]
+    )
   }
 }
 

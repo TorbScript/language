@@ -19,7 +19,7 @@ rules, then what the construct is not.
 
 ## Pages
 
-- **[use](use.md)** - use brings names into scope from a package or a file. Everything after from names a module, and a case comes in through the type it belongs to.
+- **[use](use.md)** - use brings names into scope from a package or a file. Everything after from names a module; a path brings in a case of a type or a member another package attaches to it, and a use without names is an error.
 - **[Visibility](visibility.md)** - A top-level declaration is private to its file unless marked public, and a public declaration may not expose a type that is private to its own file.
 - **[The prelude](the-prelude.md)** - The prelude is the package whose public names are in scope in every file without an import, and it holds only the pure part of the standard library.
 - **[Packages](packages.md)** - A package is a directory with a project.trb and a src/, named owner/name, and it can only be reached by a project that lists it as a dependency.

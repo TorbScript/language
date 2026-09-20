@@ -30,6 +30,10 @@ produce TorbScript that parses and does not compile, or compiles and means somet
 | `Shape::Circle(r)` | `Shape.Circle r` | `.` for everything, and a command call |
 | `Circle(r)` after `use Shape::*` | `use Shape.Circle`, then `Circle r` | there is no glob import of cases |
 | `impl Trait for Type { }` | `extend Type with Trait { }` | `with` is the only word for "implements" |
+| `use acme::Shout` to reach a method | `use String.shout from "acme/text"` | the member is named by its own path; only what a trait attaches needs the trait |
+| `loop { ... }` | `loop { ... }` | the same word, and `while true` is an error that names it |
+| `let n = loop { break 1 }` | a `var` written before the loop | a `break` carries no value |
+| `a.unwrap_or_else(\|\| b)` | `a ?? b` | `??` is the trait `OrElse`, whose fallback is `lazy` |
 | `struct`, `enum` | `type` | one keyword for all data |
 | `trait Hashable` | `trait Hash` | a single-method trait is named after its method |
 | `#[derive(Clone, PartialEq, Hash, Debug)]` | nothing to write | `Equals`, `Hash`, `Show` and `copy` are generated |
@@ -187,12 +191,49 @@ print Square(2.0)
 afterwards, and `extend Type { ... }` without a trait adds plain members. The orphan rule is the same: your package has to
 own the type or the trait.
 
+### A trait in scope becomes a member in scope
+
+Rust hides an inherent-looking method behind the trait that carries it: `text.shout()` compiles once `use acme::Shout` is
+in the file, and the error says which trait to import. TorbScript is milder, because a member does not need a trait at
+all. A trait-less `extend` of somebody else's type is named one member at a time, by its path, the same form a case import
+takes - `use String.shout from "acme/text"`, `use Int64.seconds from "std/time"` - and `as` renames it
+(`use String.shout as yell from "acme/text"`). What the package of the *type* attached, and what this package's own
+`extend` adds, needs no import in any file.
+
+The trait is only asked for where a trait does the attaching: `extend String with Slug`, written in the package of
+`Slug`, puts `slug` on every `String`, and a file that calls it has `Slug` as a name of its own - imported, from the
+prelude, declared here, or named by a bound (`Item: Slug`) or a trait-typed value. That is the one half of Rust's rule
+that stays, and it is why the operators, `for`, interpolation, `?`, `??` and `into()` work without an import: their
+traits are in the prelude.
+
+### `loop` is the same word, and `break` carries no value
+
+`loop { ... }` is the endless loop here too, and its type is Rust's: `Never` while no `break` targets it, so a function
+whose body is one needs no other result and nothing after it is reached, and `Void` once one does. What is missing is the
+value Rust breaks with - `let n = loop { break 1 }` has no counterpart, and a `var` written before the loop carries the
+answer out instead.
+
+```trb check
+var count = 0
+loop {
+  count = count + 1
+  if count == 3 {
+    break
+  }
+}
+print count
+```
+
+`while true` is not the spelling to fall back on: it is the error "A loop that never ends is written `loop`", because
+divergence is a property of the syntax rather than of a condition the checker has to recognise as a literal. `while false`
+is left alone.
+
 ### Generics stay declarative
 
 `<Item: Hash>` and `where Item: Hash & Equals` work as they do in Rust, and inference works the same way. What is missing is
 associated types and anything higher-kinded: `Option`, `Result`, `Task` and `Iterable` share the names `map`, `flatMap`,
-`filter`, `forEach` and `orElse` by convention, and `traverse` is a collection target
-(`to<Result<List<Int>, ParseError>>()`).
+`filter` and `forEach` by convention, `orElse` is the one of those that is a trait (`OrElse`, what `a ?? b` calls), and
+`traverse` is a collection target (`to<Result<List<Int>, ParseError>>()`).
 
 ## Habits to unlearn
 
@@ -228,6 +269,9 @@ comparison.
 - **`.iter()`, `.into_iter()`, `.iter_mut()`.** There is one pipeline. `for x in xs` works on anything `Iterable`, the
   stages are lazy, and a terminal operation (`toList()`, `fold`, `count`, `to<Target>()`) pulls the values through. To change
   elements in place, use the path (`items[index].x = 1`) or `items.update(index) { ... }`.
+- **`Try`, and `?` for a type of your own.** `?` leaves the *enclosing function*, which no method can do, so it stays
+  `Option` and `Result` - the reason Rust's own `Try` has been unstable since 2016. `??` is open to every type instead,
+  because `a ?? b` is the ordinary method call `a.orElse(b)` and therefore a trait, `OrElse`.
 - **Semicolons, and `;` as an expression terminator.** A statement ends at the end of its line. The distinction Rust makes
   with a trailing `;` is made here by the rule that an expression statement has to be `Void` or `Never` unless the call has
   a `var` receiver or a `var` argument.
@@ -239,4 +283,6 @@ comparison.
 - [Result](../language/errors/result.md) - `Ok`, `Fail` and `?`.
 - [Cases and match](../language/pattern-matching/cases-and-match.md) - how a case is spelled.
 - [Traits](../language/traits/traits.md) - `with`, `extend` and the trait names.
+- [extend](../language/traits/extend.md) - where a member of a foreign type is visible, and where it is named.
+- [Loops](../language/execution/loops.md) - `for`, `while` and `loop`, and what each one produces.
 - [Syntax cheat sheet](../language/syntax/cheat-sheet.md) - every form in one place.

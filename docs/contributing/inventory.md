@@ -169,6 +169,7 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | `language/pattern-matching/exhaustiveness.md` | Exhaustiveness | reference | Why every `match` covers everything, and unreachable arms | `CONCEPT.md#algebraic-data-types-and-pattern-matching` |
 | `language/pattern-matching/importing-cases.md` | Importing cases | reference | `use Option.Some from "std/core"` and what changes | `CONCEPT.md#modules-and-packages` |
 | `language/pattern-matching/patterns-in-bindings.md` | Patterns in bindings and conditions | reference | `const Point(x, y) =`, `if const`, `while const` | `CONCEPT.md#algebraic-data-types-and-pattern-matching` |
+| `language/execution/loops.md` | Loops | reference | `for`, `while`, `loop`, `break`, `continue`, and why `while true` is an error | `CONCEPT.md#blocks-and-control-flow` |
 | `language/pattern-matching/if-var.md` | if var | reference | Binding into a place instead of into a copy | `CONCEPT.md#algebraic-data-types-and-pattern-matching` |
 | `language/errors/result.md` | Result | reference | `Ok`, `Fail`, and the vocabulary on them | done |
 | `language/errors/option-chaining.md` | Optional chaining | reference | What `?.` and `??` are, and where they do not apply | `CONCEPT.md#error-handling` |

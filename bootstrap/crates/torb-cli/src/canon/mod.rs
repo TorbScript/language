@@ -6,7 +6,7 @@
 //! purpose: it only moves parentheses and indentation, and it never reprints a file.
 //!
 //! ```text
-//! torb canon [--check] [--rule calls|strings|imported-case-patterns]... <path>...
+//! torb canon [--check] [--rule calls|strings|imported-case-patterns|unused-bindings|loops]... <path>...
 //! ```
 //!
 //! `calls` and `strings` run by default; `--rule` picks a set instead. `--check` writes nothing and leaves with a
@@ -23,6 +23,7 @@
 mod bindings;
 mod calls;
 mod edit;
+mod loops;
 mod patterns;
 mod strings;
 mod walk;
@@ -46,6 +47,7 @@ Rules (`calls` and `strings` by default):
   strings                  A multi-line `\"\"\"` string is indented one level deeper than the line it starts on
   imported-case-patterns   `.None` becomes `None` for a case a `use` imported (changes the tree, off by default)
   unused-bindings          A binding of a refutable pattern that nobody reads becomes `_` (changes the tree, off by default)
+  loops                    `while true {` becomes `loop {` (changes the tree, off by default)
 
   --check   Write nothing, list what would change, leave with a non-zero code
 ";
@@ -56,6 +58,7 @@ pub enum Rule {
     Strings,
     ImportedCasePatterns,
     UnusedBindings,
+    Loops,
 }
 
 impl Rule {
@@ -65,6 +68,7 @@ impl Rule {
             "strings" => Some(Rule::Strings),
             "imported-case-patterns" => Some(Rule::ImportedCasePatterns),
             "unused-bindings" => Some(Rule::UnusedBindings),
+            "loops" => Some(Rule::Loops),
             _ => None,
         }
     }
@@ -165,6 +169,7 @@ struct Report {
     strings: usize,
     patterns: usize,
     bindings: usize,
+    endless: usize,
     dropped: Vec<String>,
     skipped: Vec<String>,
 }
@@ -177,6 +182,7 @@ impl Report {
             EditKind::IndentedString => self.strings += count,
             EditKind::CasePattern => self.patterns += count,
             EditKind::UnusedBinding => self.bindings += count,
+            EditKind::EndlessLoop => self.endless += count,
         }
     }
 
@@ -192,7 +198,7 @@ impl Report {
         }
         let verb = if check { "would change" } else { "changed" };
         println!(
-            "\n{} of {} files {verb}: {} calls became commands, {} got parentheses, {} strings were indented, {} case patterns, {} unread bindings",
+            "\n{} of {} files {verb}: {} calls became commands, {} got parentheses, {} strings were indented, {} case patterns, {} unread bindings, {} endless loops",
             self.changed.len(),
             self.files,
             self.to_command,
@@ -200,6 +206,7 @@ impl Report {
             self.strings,
             self.patterns,
             self.bindings,
+            self.endless,
         );
         if !self.dropped.is_empty() {
             println!("{} edits were dropped by the safety net", self.dropped.len());
@@ -248,6 +255,9 @@ fn rewrite(source: &str, rules: &[Rule]) -> Outcome {
     }
     if rules.contains(&Rule::UnusedBindings) {
         edits.extend(bindings::edits(source, &sites.bindings));
+    }
+    if rules.contains(&Rule::Loops) {
+        edits.extend(loops::edits(source, &sites.endless));
     }
 
     let mut document = Document::new(source);

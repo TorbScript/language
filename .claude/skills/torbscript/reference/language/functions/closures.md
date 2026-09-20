@@ -54,6 +54,14 @@ print add(2, 3)
    a closure of one parameter, `{ _ + _2 }` of two. Naming even one parameter switches the whole closure to named
    parameters; `_` and a name cannot mix in the same closure.
 
+   A tuple position of such a parameter is still written behind a dot: `{ _.0 }`, never `{ 0 }`, because a bare `0` is
+   the number and nothing else.
+
+   ```trb check
+   const pairs = [(1, "one"), (2, "two")]
+   print pairs.map({ _.0 }).toList()
+   ```
+
 4. **The result type is always inferred, never annotated.** A closure that needs a written result type is a local
    `fn` instead, because `fn` is a declaration and can carry a return type (see
    [Declaring a function](declaring-a-function.md)); a `fn` declared by name can be passed exactly where a closure is

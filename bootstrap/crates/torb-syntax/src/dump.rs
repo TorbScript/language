@@ -60,7 +60,6 @@ fn declaration(declaration: &Declaration) -> String {
             let items = match &usage.items {
                 UseItems::Names(items) => format!("Names(items: {})", list(items, use_item)),
                 UseItems::All { alias } => format!("All(alias: {})", name(alias)),
-                UseItems::OnlyExtensions => "OnlyExtensions".to_string(),
             };
             let source = match &usage.source {
                 UseSource::Module(path) => format!("Module(path: {})", text(path)),
@@ -226,6 +225,7 @@ fn statement(statement: &Statement) -> String {
             format!("For(pattern: {}, iterable: {}, body: {})", pattern(binding), expression(iterable), block(body))
         }
         StatementKind::While { condition: head, body } => format!("While(condition: {}, body: {})", condition(head), block(body)),
+        StatementKind::Loop { body } => format!("Loop(body: {})", block(body)),
         StatementKind::Return(value) => format!("Return(value: {})", option(value, expression)),
         StatementKind::Break => "Break".to_string(),
         StatementKind::Continue => "Continue".to_string(),

@@ -103,9 +103,10 @@ fn sum<Item: Add>(values: List<Item>)       a bound
 6. **Coherence: you may write `extend X with Trait` only if your package owns `X` or owns `Trait`.** Two implementations
    of one trait may never overlap.
 
-7. **`extend` without a trait is part of the type** when the type belongs to your package, in whatever file it is written.
-   For a type of another package it is visible in every file that imports the module it is declared in, which is what
-   `use "./text-extensions"` without names is for.
+7. **`extend` without a trait is part of the type** when the type belongs to your package - or to this one - in
+   whatever file it is written. For a type of another package the file that uses the member names it,
+   `use String.shout from "acme/text"`, the same form a case import takes; and what a *trait* puts on a type it does not
+   own is visible where the trait itself is a name of the file. See [extend](extend.md) for both halves.
 
 8. **A trait can be used as a type.** Whether the call is dispatched statically or dynamically is the implementation's
    business and is not observable. `&` intersects traits in a type position, and only traits can be combined - `&` is to
@@ -203,9 +204,8 @@ type Money with Hashable {
 **`with` does not mean "and also these type parameters".** `with` introduces traits. Type parameters go in angle
 brackets, and bounds go after `where` or inline.
 
-**An `extend` is not a monkey patch.** For a type of another package it is only visible where its module is imported, and
-two imported modules that add a member of the same name to the same type make calling it an error until a namespace import
-says which one is meant.
+**An `extend` is not a monkey patch.** For a type of another package the file that uses the member names it, and two
+members of one name for one type make calling it an error until `as` renames one of them where it is imported.
 
 **A blanket implementation is not a fallback.** `extend<Source, Target> Source with Into<Target> where Target:
 From<Source>` covers every type, is allowed only for a trait the package owns, and can never coexist with a second

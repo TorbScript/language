@@ -1,6 +1,6 @@
 ---
 title: extend
-summary: extend adds constants and functions to a type after its declaration, with a trait or without one, and never adds a field or a case.
+summary: extend adds constants and functions to a type after its declaration, with a trait or without one, never adds a field or a case, and is named by the file that uses it when it targets a type of another package.
 kind: reference
 status: stable
 order: 20
@@ -76,13 +76,35 @@ extend<<parameters>> <Name><<arguments>> [with <Trait>] [where <bounds>] { ... }
 3. **An `extend` of your own type is part of the type, wherever it is written.** It is visible everywhere the type is,
    in every file of the package, exactly as if it had been written inside the declaration.
 
-4. **An `extend` of a type from another package is visible only where its module is imported**, no matter what that
-   import names. `use "./text-extensions"` with no names imports a module purely for the extensions it adds.
+4. **An `extend` of a type from another package is named by the file that uses it**, by the path of the member - the
+   same form a case import takes. `use Int64.seconds from "std/time"` makes `2.seconds()` work in that file and nowhere
+   else. A generic target is named by its head (`use List.totalArea from "acme/shapes"`), and a constant or a static
+   function of the `extend` is imported the same way. A member the file never names is a message that writes the line:
 
-5. **Two imported modules that add a member of the same name to the same type make calling it an error**, until a
-   namespace import says which one is meant: `use * as text from "./text-extensions"`, then `text.shout(value)`.
+   ```text
+   error: `std/time` adds `seconds` to `Int64`, and this file does not name it
+     = Write `use Int64.seconds from "std/time"` at the top of the file
+   ```
 
-6. **`extend` takes its own type parameters and its own `where` clause**, separate from the type it targets; see
+   An `extend` that this package wrote itself needs nothing, whichever of its files it stands in: a file sees what its
+   own package declares.
+
+5. **`as` renames an imported member, and that is how a conflict is resolved.**
+   `use String.shout as yell from "acme/text"` makes it `"x".yell()`, and the declared name is no longer in this file.
+   Two members of one name for one type stay an error at the *use*:
+
+   ```text
+   error: `shout` comes from `acme/one` and from `acme/two`
+     = A member is renamed where it is imported: `use ... as another from "acme/two"`
+   ```
+
+6. **What a trait puts on a type it does not own is visible where the trait is.** `extend String with Slug` in the
+   package of `Slug` adds `slug` to every `String`, but only a file that has `Slug` as a name - imported, from the
+   prelude, declared here - can call it; a bound `Item: Slug` and a trait-typed value name it already. What the type's
+   own package attaches (`type Circle with Shape`, `extend Circle with Shape` there) stays visible everywhere, which is
+   what keeps the operators, `for`, interpolation, `?`/`??` and `into()` working without a single import.
+
+7. **`extend` takes its own type parameters and its own `where` clause**, separate from the type it targets; see
    [Type parameters](../generics/type-parameters.md) for where else they can stand. A condition on an `extend`
    applies only to the types that satisfy it.
 
@@ -148,3 +170,4 @@ declaration, and two implementations of one trait may never overlap, even inside
 - [Traits](traits.md) - what a trait is, and `with` at the declaration.
 - [Coherence and blanket implementations](coherence.md) - which package may write an `extend`.
 - [Declaring a type](../types/declaring-a-type.md) - fields and cases, which only the declaration can add.
+- [use](../modules-and-packages/use.md) - every form of an import, including the path of a member.

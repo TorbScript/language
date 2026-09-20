@@ -99,6 +99,8 @@ pub enum Keyword {
     For,
     In,
     While,
+    /// `loop { ... }`: the endless loop. Without a `break` its type is `Never`.
+    Loop,
     Break,
     Continue,
     Return,
@@ -136,6 +138,7 @@ impl Keyword {
             "for" => Keyword::For,
             "in" => Keyword::In,
             "while" => Keyword::While,
+            "loop" => Keyword::Loop,
             "break" => Keyword::Break,
             "continue" => Keyword::Continue,
             "return" => Keyword::Return,

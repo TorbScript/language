@@ -6,7 +6,7 @@
 // lexer, keywords only in the positions this list's caller already restricts them to).
 
 const KEYWORDS = new Set([
-  'if', 'else', 'match', 'for', 'in', 'while', 'break', 'continue', 'return',
+  'if', 'else', 'match', 'for', 'in', 'while', 'loop', 'break', 'continue', 'return',
   'const', 'var', 'fn', 'type', 'trait', 'extend', 'foreign', 'case', 'use', 'from', 'as',
   'public', 'private', 'native', 'shared', 'lazy', 'with', 'where', 'by',
 ]);

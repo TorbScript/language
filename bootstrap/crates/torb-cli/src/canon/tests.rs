@@ -443,6 +443,100 @@ fn an_irrefutable_binding_is_not_part_of_the_rule() {
     leaves("fn f(value: Int) {\n  stop()\n}");
 }
 
+// --- `while true` becomes `loop` ------------------------------------------------------------------------------------
+
+#[test]
+fn an_endless_while_becomes_a_loop() {
+    let rules = [Rule::Loops];
+    assert_eq!(
+        apply(
+            "fn f() {
+  while true {
+    step()
+  }
+}",
+            &rules
+        ),
+        "fn f() {
+  loop {
+    step()
+  }
+}"
+    );
+    // The body is rewritten too, however deep it sits
+    assert_eq!(
+        apply(
+            "fn f() {
+  loop {
+    while true {
+      step()
+    }
+  }
+}",
+            &rules
+        ),
+        "fn f() {
+  loop {
+    loop {
+      step()
+    }
+  }
+}"
+    );
+    // Everything from the `{` on stays byte-identical, comments and line endings included
+    assert_eq!(
+        apply(
+            "fn f() {
+  while true { // forever
+    step()
+  }
+}
+",
+            &rules
+        ),
+        "fn f() {
+  loop { // forever
+    step()
+  }
+}
+"
+    );
+}
+
+#[test]
+fn every_other_loop_is_left_alone() {
+    let rules = [Rule::Loops];
+    let leaves = |source: &str| assert_eq!(apply(source, &rules), source);
+    leaves(
+        "fn f() {
+  while false {
+    step()
+  }
+}",
+    );
+    leaves(
+        "fn f() {
+  while goes_on {
+    step()
+  }
+}",
+    );
+    leaves(
+        "fn f() {
+  while const Some(item) = next() {
+    step(item)
+  }
+}",
+    );
+    leaves(
+        "fn f() {
+  loop {
+    step()
+  }
+}",
+    );
+}
+
 // --- The safety net -------------------------------------------------------------------------------------------------
 
 #[test]

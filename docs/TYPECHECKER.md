@@ -19,7 +19,7 @@ depends on the type of the parameter the closure is passed to, so resolving and 
 | Which `add` is meant                                 | `Resolution` per call span: symbol, generic arguments, dispatch           |
 | Whether to monomorphize or pass a dictionary         | `Dispatch` and a `Witness` tree per call                                 |
 | What `1` is                                          | `Adaptation.Literal` with the adapted type                               |
-| What `?`, `??`, `?.`, `into()`, interpolation mean    | The resolved `From`/`orElse`/`map`/`show` implementation                  |
+| What `?`, `??`, `?.`, `into()`, interpolation mean    | The resolved `From`/`OrElse`/`map`/`show` implementation                  |
 | Implicit `self`, `_`, named closure parameters        | `Adaptation.ImplicitSelf`, `.ImplicitParameter`                           |
 | Default arguments, argument order, spread, `lazy`     | `Adaptation.DefaultArgument`, `.Reorder`, `.Spread`, `.Lazy`              |
 | `port 8080`, `database { ... }`                      | `Resolution.PropertyWrite` with the kind of write                        |
@@ -338,7 +338,7 @@ public fn inferExpression(var checker: Checker, expression: Expression): TypeId
 | Interpolation `"{e}"`             | `None`, then `e` must be `Show`                                           |
 | `a == b`, `a < b`                 | The left side infers, the right side is checked against it                |
 | `a + b`, `-a`                     | An expected *numeric* type, into an operand that is made of numeric literals; a name keeps the type it has |
-| `a ?? b`                          | `b` is checked against the `Value` of the left side                       |
+| `a ?? b`                          | `b` is checked against the `Value` the type's `OrElse<Value>` names        |
 | `.Case`                           | Required. The expected type names the type the case belongs to            |
 | Empty `[]`, `[:]`                 | Required                                                                  |
 | Numeric literal                   | Adapts, see 2.3                                                           |
@@ -462,7 +462,7 @@ gap 4 decided it.)
 Shadowing: a nested scope may shadow, the same scope may not redeclare ("`x` is declared twice in this scope").
 Shadowing a prelude name is allowed. An implicit parameter name from a function type that would shadow a visible name
 is an error. Two visible extensions that bring the same member for the same type are an error _at the use_, with the
-two modules named and the namespace import offered as the fix.
+two modules named and `as` offered as the fix.
 
 A name that is not found gets the best available note: a member of an outer receiver ("`count` is a field of
 `Report`; only the innermost receiver is implicit"), a case written bare ("A case is written `.Circle` or
@@ -527,7 +527,7 @@ For a receiver of type `T` and a name `n`:
 
 | `T`                | Order                                                                                                  |
 |--------------------|--------------------------------------------------------------------------------------------------------|
-| `Nominal`          | 1. fields 2. constants and methods of the body 3. members from `extend T` in the same package 4. members from `extend T` in another package whose declaring module this file imports 5. members of the traits `T` implements (required, then default, then supertraits, then delegated through `by`) 6. generated members (`copy`, the members of derived implementations) |
+| `Nominal`          | 1. fields 2. constants and methods of the body 3. members from `extend T` in the package of `T` or in this one 4. members from `extend T` in another package that this file named (`use T.n from "..."`) 5. members of the traits `T` implements (required, then default, then supertraits, then delegated through `by`), as far as the trait is a name of this file 6. generated members (`copy`, the members of derived implementations) |
 | `Parameter`        | Members of the traits in its bounds only (plus supertraits)                                             |
 | `Traits`           | Members of the bounds and their supertraits, plus `extend Trait` members visible here                  |
 | `Tuple`            | `.0`, `.1`, …, labels. No extensions (a tuple has no nominal head)                                      |
@@ -535,10 +535,27 @@ For a receiver of type `T` and a name `n`:
 | `Literals`         | The members of the base type, plus the generated `parse`/`show`/`into`                                  |
 | `Void`, `Never`    | Nothing; `Never` absorbs the access without a message                                                   |
 
-Two candidates in the same step are an ambiguity error. Steps 3 and 4 are the `extend` visibility rule: an extension
-of a type of your own package is part of the type everywhere; an extension of a foreign type is visible in every file
-that imports the module it is declared in, whatever it imports from it (`use "./text-extensions"` imports nothing but
-the extensions).
+Two candidates in the same step are an ambiguity error, and the fix is to rename one with `as` where it is imported.
+
+Steps 3, 4 and 5 are the visibility rule of an extension member: **a member is named where it is used.**
+
+- An `extend` of a type of its own package is part of the type everywhere, and so is one this package wrote itself -
+  a file sees what its own package declares.
+- Everything else a **trait-less** `extend` adds is reached only where the file wrote `use String.shout from "acme/text"`
+  (`scope.trb`'s `MemberImport`, keyed by owner symbol plus local name; `as` maps the local name to the declared one).
+  The `from` names the package the member has to come from, and the type in front of the dot is resolved in the scope of
+  the *importing* file.
+- The members a **trait** puts on a type it does not own - the implementation's package is neither the type's nor this
+  one - are reached only where the trait itself is a name of the file (`isNamedHere`), which a bound `Item: Slug` and a
+  trait-typed receiver satisfy by themselves.
+
+The two messages carry the rule: ``  `std/time` adds `seconds` to `Int64`, and this file does not name it `` with the note
+``  Write `use Int64.seconds from "std/time"` at the top of the file ``, and ``  `slug` comes from `Slug`, which is not a
+name in this file ``. An import that names a member the package does not add is reported at the `use` line itself
+(``  `acme/text` adds no member `whisper` to `String` ``).
+
+None of this touches the operators, `for`, interpolation, `?`/`??` or `into()`: those resolve through traits of the
+prelude, which is a name of every file.
 
 `isVarSelf` on the resolved member turns the receiver into a `var` access (section 5). A member that needs a `var`
 and does not get one reports the participle if one exists by name ("`add` needs a `var`. Did you mean `added`?").
@@ -656,7 +673,7 @@ This resolves the open question in CONCEPT.md ("generic methods on a trait-typed
 | `for x in xs`              | `Iterable.iterator`                            | The subject is evaluated once into a temporary        |
 | `...e`                     | `Iterable`                                     |                                                      |
 | `e?`                       | `Result`/`Option`, plus `From` for the error   | Section 4.6                                           |
-| `a ?? b`                   | `Option.orElse` / `Result.orElse`, `b` is lazy |                                                      |
+| `a ?? b`                   | `OrElse.orElse`, `b` is lazy                   | A trait, because it is a method call                  |
 | `a?.m`                     | `Option.map`, or `flatMap` if `m` returns an `Option` | Never a nested `Option` (gap 12)               |
 | `e.into()`, `e.to<T>()`    | `Into`/`From`                                  | The target comes from the expectation                 |
 | `using r { }`, `Close`     | Ordinary functions and traits                  | No special rule                                       |
@@ -876,8 +893,13 @@ The catalogue (the ~40 that matter):
 | `.Case` before a `?` | ``` `.Missing` needs its type here: nothing expects one before the `?` ``` - _Write it out: `ConfigError.Missing(...)`. The `?` only decides the failure type once the argument has been read_ |
 | An expression the checker could not type | ``` The checker did not work out the type of this expression ``` - _This is a bug of the compiler, not of this file. Please report it with the line it points at_ |
 | Unknown member | ``` `Point` has no member `aera`. Did you mean `area`? ``` |
-| Ambiguous extension | ``` `shout` comes from `./text-extensions` and from `./html-extensions`. A namespace import says which one: `use * as text from "./text-extensions"` ``` |
-| Extension not imported | ``` `shout` is declared in `./text-extensions`, which this file does not import ``` |
+| Ambiguous extension | ``` `shout` comes from `acme/one` and from `acme/two` ``` - _A member is renamed where it is imported: `use ... as another from "acme/two"`_ |
+| Extension not named | ``` `std/time` adds `seconds` to `Int64`, and this file does not name it ``` - _Write `use Int64.seconds from "std/time"` at the top of the file_ |
+| Trait not named | ``` `slug` comes from `Slug`, which is not a name in this file ``` - _Write `use Slug from "acme/slug"`: the members a trait puts on a foreign type need the trait_ |
+| Member import that is not there | ``` `./text` adds no member `whisper` to `String` ``` |
+| `use` without names | ``` A `use` names what it imports ``` |
+| `while true` | ``` A loop that never ends is written `loop` ``` |
+| `??` without the trait | ``` `Int64` does not implement `OrElse`, so `a ?? b` has no meaning for it ``` |
 | Type mismatch | ``Expected `Int64`, found `String` `` |
 | Numeric mismatch | ``Expected `Int64`, found `Float64`. There are no implicit conversions: `Int.tryFrom(value)?` `` |
 | Literal type | ``` `2` is not one of `0 \| 1 \| 3` ``` |
@@ -1154,9 +1176,10 @@ list. Everything else is as written.
 - **`BlockResult` says whether the block ends in an expression.** A body that does gets the message about that
   expression (`Expected `Float64`, found `Void``), one that does not gets "This function has to return a `Float64`" at
   its closing brace. One root cause, one message.
-- **`while true` without a `break` diverges**, so a function whose body is one needs no other result. Every other loop
-  may run zero times.
-- **`break` outside a loop reads "`break` is only allowed inside of a `for` or a `while`"**, with the note about
+- **`loop { ... }` without a `break` diverges**, so a function whose body is one needs no other result. Every other loop
+  may run zero times, so nothing follows from one. `while true` is the error "A loop that never ends is written `loop`":
+  divergence is a property of the syntax, not of a condition the checker has to recognise as a literal.
+- **`break` outside a loop reads "`break` is only allowed inside of a `for`, a `while` or a `loop`"**, with the note about
   closures the catalogue asks for. The catalogue's "`break` cannot leave a closure" needs a checked closure body, which
   is 4.4.
 - **The body of a function is a scope of its own**, so a `const` of it may shadow a parameter. Only two declarations of
@@ -1823,6 +1846,10 @@ What the round changed, by root cause rather than by finding:
 - **An operator asks for its trait like every other member.** 4.3 recorded the witness of `==`, `<` and `"{x}"` and
   said nothing where it found none, because the prelude had no `Equals`, `Hash` or `Show` for its collections;
   `std/collections` carries all three now, and the messages are on. That uncovered gap 55 (`Never`).
+  **`??` joined them:** an operator is a trait exactly when it is a method call, and `a ?? b` *is* `a.orElse(b)`, so
+  `std/core` declares `OrElse<Value>` and the checker resolves `??` through it instead of hard-coding `Option` and
+  `Result`. `?.` and `?` stay what they are - the first would need `Self<Output>`, the second leaves the enclosing
+  function, and no method can do either.
 - **A rule that was only asked in one of two places.** A bound on a *function's* type parameter was checked at every
   call and the same bound on a *type's* was checked nowhere (`HashMap<Float, String>`); `noteArgumentClosures` was
   called for the arguments of a call and not for the block of a property command; a spread was checked against the
@@ -2314,7 +2341,7 @@ safety is untouched: what a trait value may *call* is decided per call (gap 7), 
 checked there - witnessing a bound is not a call.
 
 **44. What a bare `return` contributes to an inferred result.**
-Section 5.4 says a body without a declared result *is* the result, and 5.5 that `while true` without a `break` never
+Section 5.4 says a body without a declared result *is* the result, and 5.5 that a `loop` without a `break` never
 ends - so a function whose whole body is such a loop infers `Never`. Nothing said what a `return` **without a value**
 inside that loop contributes: `returnTypes` only ever collected the types of valued returns, so it stayed empty and
 the `Never` of the loop won. `Parser.recoverToLineEnd` in the compiler is exactly that function, and the back end had

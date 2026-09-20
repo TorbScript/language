@@ -37,6 +37,9 @@ enum cases never need an import, and its protocols can grow an associated type t
 | `.success(value)` / `.failure(error)` | `Ok(value)` / `Fail(error)` | `Error` is the name of the trait, so the case is `Fail` |
 | `protocol Shape { func area() -> Double }` | `trait Shape { fn area(self): Float }` | one word, `trait`, replaces `protocol` |
 | `extension Square: Area { }` | `extend Square with Area { }` | `with` is the only word for "implements" |
+| `import AcmeText`, and its extensions come along | `use String.shout from "acme/text"` | a member of a foreign type is named one at a time |
+| `while true { ... }` | `loop { ... }` | the endless loop has a word of its own, and `while true` is an error |
+| `a ?? b` on an `Optional` | `a ?? b` through the trait `OrElse` | an operator is a trait, so a `Result` and a type of your own have it too |
 | `protocol Hashable` | `trait Hash` | a single-method trait is named after its method |
 | `willSet` / `didSet` | nothing to write | a change is already visible at the one place it happens: the verb |
 | `associatedtype Item` inside a protocol | `trait Container<Item> { }` | a type parameter on the trait, never an associated type |
@@ -168,6 +171,21 @@ const shape = Circle(2.0)
 `use Shape.Circle` at the top of the file is what makes `Circle 2.0` legal - one line, and only for that one case,
 never for a whole type at once. See [Importing cases](../language/pattern-matching/importing-cases.md).
 
+### An extension is named where it is used, not brought in with its module
+
+`import AcmeText` in Swift hands a file every extension that module declares, on every type, with nothing at the use site
+to say where `shout` came from. Here the type in front of the dot decides who owes an import. A member the package of the
+*type* attached - `type Circle with Shape`, an `extend` written where `Circle` lives - is part of the type everywhere, and
+so is an `extend` this package wrote itself. A trait-less `extend` of somebody else's type is named one member at a time,
+by its path: `use String.shout from "acme/text"` makes `"x".shout()` legal in that file and nowhere else, and
+`use String.shout as yell from "acme/text"` gives it a local name, which is how two packages that both add `shout` to
+`String` are told apart.
+
+The exception is the one Swift has no equivalent of: what a *trait* puts on a foreign type (`extend String with Slug`,
+written in the package of `Slug`) is visible where `Slug` is a name of the file - imported, from the prelude, declared
+here, or named by a bound (`Item: Slug`) or a trait-typed value. Their traits being in the prelude is why `??`, `for`,
+interpolation and `into()` ask for nothing.
+
 ### Protocols become traits, and an associated type becomes a type parameter
 
 A Swift `associatedtype` inside a `protocol` is why `any Shape` gets awkward the moment a member reads or returns
@@ -225,6 +243,12 @@ lists what carries over would be an advertisement.
 - **Five access levels.** `private`, `fileprivate`, `internal`, `public` and `open` become two: unmarked, which is
   public, and `private`, which reaches every file of the same package through `extend` - there is nothing between
   file-private and open, and nothing above public.
+- **`while true` as the endless loop.** The word for it is `loop { ... }`, and `while true` is the error "A loop that
+  never ends is written `loop`". Its type is `Never` while no `break` targets it - so a function whose body is one needs
+  no other result - and `Void` once one does; a `break` carries no value, and `continue` reads as it does in a `while`.
+- **`??` as an operator the compiler knows about for `Optional`.** `a ?? b` is `a.orElse(b)`, so it is the trait `OrElse`
+  and `Result` and a type of your own can come with it. `?.` stays `Option`-only, because it chooses between `map` and
+  `flatMap` by the type of the result and a trait cannot say that without a type constructor with a hole in it.
 - **Guard statements as a shape of their own.** `guard let x = opt else { return }` is exactly what `?` already does
   at the end of an expression; a function that returns `Option` or `Result` never needs a separate early-exit
   keyword. See [The question mark operator](../language/errors/question-mark.md).
@@ -237,4 +261,5 @@ lists what carries over would be an advertisement.
   behavior survives.
 - [Cases and match](../language/pattern-matching/cases-and-match.md) - why a case is never bare unless imported.
 - [Traits](../language/traits/traits.md) - `with` and `extend`, and the trait names.
+- [extend](../language/traits/extend.md) - where a member of a foreign type is visible, and where it is named.
 - [Coming from Rust](coming-from-rust.md) - the other value-semantics relative, without classes at all.

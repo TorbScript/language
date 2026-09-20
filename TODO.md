@@ -1188,6 +1188,23 @@ Wenn nicht, was bedeutet, bewirkt es?
     (`public use Int64.seconds from "std/time"`).
   - Nur Sichtbarkeit von Namen; Kohärenz und Dispatch bleiben. **Wird gelöst:** Checker-Runde NACH der
     Schreibregel-Runde (gleiche Dateien).
+  - **Erledigt (2026-09-22).** Ein Member-Import ist ein eigener Eintrag im Modul-Scope (`MemberImport` in
+    `scope.trb`, Schlüssel = Typ-Symbol + lokaler Name), der Fixpunkt bindet ihn wie jeden anderen Namen und das
+    Prelude reicht ihn über `public use` weiter. Zwei Entscheidungen, die die Regel so nicht abdeckte:
+    - **Das eigene Paket braucht keinen Import.** `extend Int64 { fn megabytes }` in `std/sandbox` in derselben
+      Datei zu importieren wäre absurd, also gilt: sichtbar sind die Extensions des Pakets des TYPS **und** die des
+      benutzenden Pakets. Alles andere wird benannt.
+    - **Der erste Buchstabe entscheidet, ob ein Pfadsegment einen Case oder einen Member meint** (groß = Case).
+      Sonst würde `use Option.Maybe from "std/core"` "kein Member `Maybe`" melden statt "kein Case `Maybe`".
+    - `as` benennt auch einen Member des eigenen Pakets um - sonst hätte ein Konflikt innerhalb eines Pakets keinen
+      Ausweg.
+    - Ein `use`, das einen Member nennt, den das Paket nicht anbringt, wird an der `use`-Zeile gemeldet
+      (`` `./text` adds no member `whisper` to `String` ``), nicht erst am Gebrauch.
+    - Im Repository brach das genau **zwei** Stellen: `2.seconds()` (Prelude-Re-Export) und `16.megabytes()` in
+      `examples/config-dsl` (`use Int64.megabytes from "std/sandbox"`). Die Trait-Hälfte brach nichts, weil jeder
+      Trait, den die std auf einen fremden Typ legt (`Encode`, `Decode`, `Show`, `From`, `Into`), im Prelude steht.
+    - Stage 0 akzeptiert die Form und setzt den `as`-Alias um (global - mehr geht in einem untypisierten Stage 0
+      nicht, und es ist dokumentiert).
 
 - (Schleifen und `?`-Operatoren, 2026-09-21)
   - **Zurückgestellt (Nutzer):** kein `for await`, kein Präfix-`await`. `while const Some(x) = source.next().await()?`
@@ -1206,6 +1223,17 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Entschieden (Nutzer, 2026-09-21):** so wie empfohlen - `??` wird der Trait `OrElse<Value>`, `?.` bleibt
     `Option`, `?` bleibt `Option`/`Result`. **Wird gelöst:** zusammen mit `loop` und der Extension-Sichtbarkeit in der
     nächsten Checker-Runde (nach der Schreibregel-Runde).
+  - **Erledigt (2026-09-22), `loop`:** `StatementKind.Loop(body)` in beiden Parsern, Stage-0-Interpreter, Checker
+    (`while true` ist der Fehler "A loop that never ends is written `loop`"), IR-Lowering (ein Block, der auf sich
+    selbst zurückspringt - ohne Bedingung und damit eine Instruktion weniger als `while true`), `torb highlight`,
+    TextMate-Grammatik, VS-Code-Erweiterung. `torb canon --rule loops` ist da und im Gate von CONTRIBUTING; der
+    Sweep sind **17 Stellen in 11 Dateien** (die 24 aus der Zählung enthielten Test-Strings und Kommentare) und
+    liegt als letzter, rein maschineller Commit. `loop` war als Name doch belegt: zwei Locals in
+    `compiler/tests/ir.test.trb` und `quotations.test.trb`, umbenannt zu `again`/`repeated`.
+  - **Erledigt (2026-09-22), `??`:** `public trait OrElse<Value>` in `std/core/src/operators.trb`, im Prelude, von
+    `Option` und `Result` über ihr bestehendes `orElse` getragen. Der Checker fragt `traitArgumentsOf` und meldet
+    "`X` does not implement `OrElse`, so `a ?? b` has no meaning for it"; die Auflösung ist ein `recordTraitCall`
+    wie bei `==` und `<`, das Lowering von `??` ändert sich dadurch nicht.
 
 - (std/ecs und die Engine-Bibliotheken, 2026-09-21) **Wunsch (Nutzer), eingeplant für Meilenstein 10:** `std/ecs` auf
   Unity-/Godot-Niveau, mit einer trb-basierten Szenen-DSL (wie Prefabs/`.tscn`), losgelöst von der Grafik (Web Canvas,
@@ -1429,3 +1457,20 @@ Wenn nicht, was bedeutet, bewirkt es?
   gefragt statt über das Programm. **Entschieden (ich):** die geschlossene Welt ist das Programm (die vom
   Wurzelmodul aus erreichbaren Module), nie ein Paket, von dem es nicht abhängt - ein Nachbarpaket darf dein Binary
   nicht verändern. Liegt als erster Punkt bei "Schwanz 2".
+
+- (Sichtbarkeit, `loop`, `??`, Kleinigkeiten, 2026-09-22) **Erledigt, im Zweig grün** (1446 Tests, `check ..` ohne
+  Probleme, `docs check`/`docs index --check` grün). Die vier Regeln stehen in CONCEPT (Entscheidungslog),
+  `docs/TYPECHECKER.md` (Lookup-Reihenfolge, Operatoren) und in den Doku-Seiten; neu ist
+  `docs/language/execution/loops.md`, weil es für `while`/`loop` überhaupt keine Referenzseite gab.
+  - **Kleinigkeit 1 erledigt:** `const None = x` / `const Some(y) = x` melden jetzt den gewöhnlichen
+    Refutable-Pattern-Fehler. Zwei Ursachen: der Schreibregel-Pass beanspruchte den nackten Großbuchstaben-Namen als
+    falsch geschriebene Konstante und verschluckte damit den Befund (`reportHere` lässt nur einen pro Span), und eine
+    Top-Level-Bindung, die keinen Namen deklariert, hat ihr Pattern nie geprüft. Nebenbei gefunden und geschlossen:
+    ein nackter Case-Name gegen einen Typ **ohne** Cases (`const None = 1`, `match 1 { None => ... }`) war ganz
+    stumm, weil die Meldung dafür in einem Zweig lebt, der Cases voraussetzt.
+  - **Kleinigkeit 3 erledigt:** `Map.iterator` liefert `Iterator<(key: Key, value: Value)>`. Die Labels überleben die
+    Inferenz durch `map`, `all`, `for` und Destructuring - geprüft; `for (name, age) in ages` und `Map.from(pairs)`
+    bleiben unverändert, weil ein Label nicht zum Typ gehört. In std und Beispielen sind die drei Stellen mit
+    `entry.0`/`entry.1` auf `entry.key`/`entry.value` umgestellt.
+  - **Aufgefallen, nicht angefasst:** `indexed()` liefert weiter `Iterable<(Int, Item)>` ohne Labels
+    (`(index:, item:)` würde sich gleich gut lesen) - gehört in eine eigene kleine Runde, wenn gewünscht.

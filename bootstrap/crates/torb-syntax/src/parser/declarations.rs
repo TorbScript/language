@@ -64,10 +64,20 @@ impl Parser<'_> {
     /// `use A, B from "./file"`, `use Option.Some from "./option"`, `use Shape.Circle`, `use * as http from "std/http"`
     fn use_declaration(&mut self) -> DeclarationKind {
         self.bump();
-        // `use "./text-extensions"`
+        // `use "acme/text"`: nothing runs when a module is imported, so a `use` without names would mean nothing
         if matches!(self.kind(), TokenKind::Text(_)) {
+            let start = self.span();
             let source = UseSource::Module(self.plain_text("the path of a module"));
-            return DeclarationKind::Use(UseDeclaration { items: UseItems::OnlyExtensions, source });
+            let path = match &source {
+                UseSource::Module(path) => path.clone(),
+                UseSource::Local => String::new(),
+            };
+            self.error_with_note(
+                "A `use` names what it imports",
+                format!("Write the names: `use Name from \"{path}\"`, a member of a type `use String.shout from \"{path}\"`"),
+                start.to(self.previous_span()),
+            );
+            return DeclarationKind::Use(UseDeclaration { items: UseItems::Names(Vec::new()), source });
         }
         let items = if self.eat(TokenKind::Star) {
             if !self.at_word("as") {

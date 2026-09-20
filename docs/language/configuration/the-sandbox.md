@@ -26,6 +26,7 @@ script itself.
 
 ```trb check
 use Sandbox from "std/sandbox"
+use Int64.megabytes from "std/sandbox"
 
 type ServerConfig {
   var host: String = "localhost"
@@ -40,6 +41,10 @@ fn loadConfig(path: String) {
   }
 }
 ```
+
+`megabytes` is a member `std/sandbox` adds to `Int64`, a type it does not own, so a file that writes `64.megabytes()`
+names where it comes from: `use Int64.megabytes from "std/sandbox"`. `2.seconds()` needs nothing, because the prelude
+re-exports that one.
 
 ## Syntax
 

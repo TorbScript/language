@@ -82,8 +82,8 @@ Fail(error)    Fail problem     the failure case
 4. **A call in command position writes its argument without parentheses**, which is why `Ok value` and
    `return Fail problem` are the canonical forms, and `Ok Some(x)` has parentheses on the inner call only.
 
-5. **`??` is `orElse`, on `Option` and on `Result` alike.** The right side is `lazy`, so it is evaluated only when it is
-   needed, and it is checked against the `Value` rather than against the whole `Result`.
+5. **`??` is `OrElse.orElse`, and `Option` and `Result` both come with that trait.** The right side is `lazy`, so it is
+   evaluated only when it is needed, and it is checked against the `Value` rather than against the whole `Result`.
 
    ```trb
    fn parseOr(text: String, fallback: Int): Int {

@@ -1001,8 +1001,9 @@ the code won and this is the list. Everything else is as written.
   an integer item becomes a counter, a `less` and an `add`; an inclusive range, a range without both ends and every
   other subject need `Iterable.iterator()` and the `Option` its `next()` answers, so they are counted and wait for 5.5
   and 5.6. `continue` jumps to the increment block, which is why the increment is a block of its own.
-- **`while true` without a `break` diverges, tracked per loop.** The block after it stays an empty `unreachable`
-  marker, and nothing is emitted into it - the verifier rejects a block that nothing reaches and is not one.
+- **`loop { ... }` without a `break` diverges, tracked per loop.** It is one block that jumps back to itself, with no
+  condition to evaluate; the block after it stays an empty `unreachable` marker, and nothing is emitted into it - the
+  verifier rejects a block that nothing reaches and is not one.
 - **An irrefutable tuple pattern binds here, not in 5.5.** `const (line, column) = lines.lineAndColumn(offset)` is one
   `Read` of a `TupleField` step per position, which needs no decision tree at all; every pattern that decides which
   *case* a value is waits for 5.5.
@@ -1581,7 +1582,7 @@ parameters and `var self` receivers, which need nothing of 5.6 and 5.7 at all.
   the lowering to key a *binding* to a `Reference` instead of to a slot, and every read, every write and every argument
   of such a name to go through it. That is a second mechanism, not this one.
 - **A body whose result the checker inferred as `Never` and that does `return` is a finding.** `Parser.recoverToLineEnd`
-  is `while true { ... return ... }`: the checker infers `Never` from a body that never *ends*, although the bare
+  was `loop { ... return ... }`: the checker infers `Never` from a body that never *ends*, although the bare
   `return`s inside the loop do leave the function. The IR would then carry a `Return` out of a `_Noreturn` function,
   which the verifier rejects - so it is one clean finding (exactly one function in the repository). Closing it is a rule
   of the checker's inference: a bare `return` should make an inferred result `Void`.

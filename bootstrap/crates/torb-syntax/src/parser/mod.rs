@@ -142,6 +142,14 @@ impl<'source> Parser<'source> {
         self.diagnostics.push(Diagnostic::error(message, span));
     }
 
+    /// The same, with the line to write instead. A parse error rarely has one; a form that was removed always does.
+    fn error_with_note(&mut self, message: impl Into<String>, note: impl Into<String>, span: Span) {
+        if self.diagnostics.last().is_some_and(|last| last.span == span) {
+            return;
+        }
+        self.diagnostics.push(Diagnostic::error(message, span).with_note(note));
+    }
+
     fn checkpoint(&self) -> Checkpoint {
         Checkpoint { position: self.position, next_doc: self.next_doc, diagnostics: self.diagnostics.len() }
     }
@@ -279,6 +287,10 @@ impl<'source> Parser<'source> {
                 self.bump();
                 let condition = self.condition();
                 StatementKind::While { condition, body: self.block() }
+            }
+            TokenKind::Keyword(Keyword::Loop) => {
+                self.bump();
+                StatementKind::Loop { body: self.block() }
             }
             TokenKind::Keyword(Keyword::Return) => {
                 self.bump();

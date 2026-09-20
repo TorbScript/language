@@ -150,7 +150,7 @@ fn parseBinary(var parser: Parser, minimum: Int): Expression {
   const start = parser.span()
   // `..end`: a range without a start
   var left = if isAtRange(parser, minimum) { parseRange parser, start, None } else { parseUnary parser }
-  while true {
+  loop {
     if isAtRange(parser, minimum) {
       left = parseRange parser, start, Some(left)
       continue
@@ -206,7 +206,7 @@ fn parseUnary(var parser: Parser): Expression {
 fn parsePostfix(var parser: Parser): Expression {
   const start = parser.span()
   var expression = parsePrimaryExpression parser
-  while true {
+  loop {
     const kind = match parser.kind() {
       .Dot | .QuestionDot => {
         const isOptional = parser.isAt TokenKind.QuestionDot
@@ -444,7 +444,7 @@ public fn parseClosure(var parser: Parser): Expression {
 fn parseClosureParameters(var parser: Parser): List<ClosureParameter>? {
   const beforeParameters = parser
   var parameters: List<ClosureParameter> = []
-  while true {
+  loop {
     const pattern = parsePattern parser
     const annotation = if parser.eat(TokenKind.Colon) { Some parseType(parser) } else { None }
     parameters.add ClosureParameter(pattern, annotation)
@@ -479,7 +479,7 @@ fn parseMatch(var parser: Parser): ExpressionKind {
   if !parser.expect(TokenKind.BraceOpen) {
     return ExpressionKind.Match subject, arms
   }
-  while true {
+  loop {
     parser.skipNewlines()
     if parser.isAt(TokenKind.BraceClose) || parser.isAt(TokenKind.EndOfFile) {
       break

@@ -31,7 +31,7 @@ public fn parseDeclaration(var parser: Parser): Declaration {
 
 fn parseModifiers(var parser: Parser): Modifiers {
   var modifiers = Modifiers()
-  while true {
+  loop {
     match parser.kind() {
       .Reserved(.Public) => {
         modifiers = modifiers.copy visibility: Visibility.Public
@@ -78,10 +78,13 @@ fn parseConstant(var parser: Parser, modifiers: Modifiers): DeclarationKind {
 /** `use A, B from "./file"`, `use Option.Some from "./option"`, `use Shape.Circle`, `use * as http from "std/http"` */
 fn parseUse(var parser: Parser): DeclarationKind {
   parser.bump()
-  // `use "./text-extensions"`
+  // `use "acme/text"`: nothing runs when a module is imported, so a `use` without names would mean nothing
   if const .TextLiteral(_) = parser.kind() {
-    const source = UseSource.Module parsePlainText(parser, "the path of a module")
-    return DeclarationKind.Use UseDeclaration(UseItems.OnlyExtensions, source)
+    const start = parser.span()
+    const path = parsePlainText parser, "the path of a module"
+    const note = "Write the names: `use Name from \"{path}\"`, a member of a type `use String.shout from \"{path}\"`"
+    parser.errorWithNote "A `use` names what it imports", note, start.to(parser.previousSpan())
+    return DeclarationKind.Use UseDeclaration(UseItems.Names([]), UseSource.Module(path))
   }
   const items = if parser.eat(TokenKind.Star) {
     if parser.isAtWord("as") {
@@ -240,7 +243,7 @@ fn parseWhereClauses(var parser: Parser): List<WhereClause> {
   if !parser.eatKeyword(Keyword.Where) {
     return clauses
   }
-  while true {
+  loop {
     const subject = parseType parser
     parser.expect TokenKind.Colon
     clauses.add WhereClause(subject, parseBounds(parser))
@@ -341,7 +344,7 @@ fn parseMembers(var parser: Parser): List<Member> {
   if !parser.eat(TokenKind.BraceOpen) {
     return members
   }
-  while true {
+  loop {
     parser.skipNewlines()
     if parser.isAt(TokenKind.BraceClose) || parser.isAt(TokenKind.EndOfFile) {
       break

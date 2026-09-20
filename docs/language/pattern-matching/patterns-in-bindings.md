@@ -67,6 +67,19 @@ while const <pattern> = <expression> { ... }     re-evaluates and re-matches bef
    // error: The pattern of a binding has to match every value, and `[]` does not
    ```
 
+   A bare **case name** is such a pattern too, and it looks the most like a declaration: `const None = value` is the
+   pattern `None`, not a constant called `None`, and it can fail.
+
+   ```trb error
+   fn probe(value: Int?) {
+     const None = value
+   }
+   // error: The pattern of a binding has to match every value, and `.Some(_)` does not
+   ```
+
+   A name that is no case in scope *is* the constant it looks like, and then the finding is about its spelling
+   (`A constant starts with a lowercase letter: write `limit``), because a constant starts with a lowercase letter.
+
 3. **A tuple has exactly one shape, so a tuple pattern is irrefutable there, and a case pattern is irrefutable for a
    type with exactly one constructor.** Both bind directly after `const`/`var`, without a `match`:
 

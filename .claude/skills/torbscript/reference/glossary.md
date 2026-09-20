@@ -161,6 +161,12 @@ fields and cases included, and its text is Markdown with the conventional headin
 The half of the generated `Decode`/`Encode` pair that describes a value to a format's `Encoder`, generated for every
 type whose fields are all `Encode`. See [Encode and Decode](language/reflection/encode-and-decode.md).
 
+### Endless loop
+
+`loop { ... }`, the one loop without a condition: its type is `Never` while no `break` targets it and `Void` once one
+does, and a `break` never carries a value. `while true` is an error that names it. See
+[Loops](language/execution/loops.md).
+
 ### Entry file
 
 The one file `torb run` interprets or `torb build` compiles - named directly, or reached as `src/main.trb` of a
@@ -181,6 +187,12 @@ call begins once all of its arguments have been evaluated. See [Exclusivity](lan
 Said of a `match`, a binding, a `for` loop or a closure parameter whose pattern or arms cover every value of the
 subject's type, which the checker proves before the program runs. See
 [Exhaustiveness](language/pattern-matching/exhaustiveness.md).
+
+### Extension member
+
+A constant or function an `extend` adds to a type instead of its declaration. It belongs to the type everywhere when the
+type's own package attached it, and otherwise the file that uses it names it. See
+[extend](language/traits/extend.md).
 
 ### Field
 
@@ -246,6 +258,12 @@ The settings of a [`project.trb`](tooling/project-trb.md) the toolchain reads to
 `workspace { members }`, and the `input` of `build` and `test` - read from its syntax tree rather than by running the
 file. A setting outside that list type checks but is not consulted by any command yet.
 
+### Member import
+
+A `use` whose path names a member of a type - `use String.shout from "acme/text"` - which is how a file names an
+[extension member](#extension-member) another package attached, `as` renaming it where two of one name meet. A case
+import has the same shape.
+
 ### Method
 
 A member of a type that declares `self`. Structurally it is a constant of the type that holds a receiver closure, which is
@@ -278,6 +296,12 @@ parameter or its result, or that has no `self`, cannot be. See [Object safety](l
 
 A value that may be absent, `Some(value)` or `None`; `Value?` is sugar for `Option<Value>`. There is no `null` and no
 implicit `Some`: a value never wraps itself into one. See [Option](language/values-and-types/option.md).
+
+### OrElse
+
+The trait behind `a ?? b`, `fn orElse(self, fallback: lazy Value): Value`, in the prelude and implemented by `Option` and
+`Result`. A type that does not come with it hears so at the operator. See
+[Optional chaining](language/errors/option-chaining.md).
 
 ### Package
 
@@ -312,8 +336,8 @@ A source, zero or more lazy stages (`map`, `filter`, `take`, `sorted`), and one 
 
 ### Prelude
 
-The package whose public names are in scope in every file, `std/prelude` by default. It holds the pure part of the
-standard library; what a program can touch stays an explicit import. See
+The package whose public names - the members it re-exports by path included - are in scope in every file, `std/prelude`
+by default. It holds the pure part of the standard library; what a program can touch stays an explicit import. See
 [The prelude](language/modules-and-packages/the-prelude.md).
 
 ### Property command

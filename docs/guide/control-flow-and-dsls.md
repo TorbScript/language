@@ -1,6 +1,6 @@
 ---
 title: Control flow and your own constructs
-summary: if, for and while as you would expect, and why unless is an ordinary function you could have written yourself.
+summary: if, for, while and loop as you would expect, and why unless is an ordinary function you could have written yourself.
 kind: guide
 status: stable
 order: 90
@@ -10,6 +10,7 @@ keywords:
   - if
   - for
   - while
+  - loop
   - receiver closure
   - property command
 source:
@@ -19,8 +20,8 @@ source:
   - examples/tour/src/09-dsl.trb
 ---
 
-`if`, `for` and `while` look the way they look everywhere. What is different here is what happens once you run out of
-built-in ones: a new control structure is a function, not a new piece of syntax.
+`if`, `for`, `while` and `loop` look the way they look everywhere. What is different here is what happens once you run
+out of built-in ones: a new control structure is a function, not a new piece of syntax.
 
 ## Goal
 
@@ -45,7 +46,7 @@ print feeling
 
 Every branch of an `if` used this way has to produce a value of the same type, exactly as every arm of a `match` does.
 
-## Loops: for and while
+## Loops: for, while and loop
 
 ```trb
 for i in 0..3 {
@@ -64,6 +65,24 @@ while attempts < 10 {
 
 `continue` and `break` work as expected inside both. `0..3` is a [range](../language/values-and-types/ranges.md); the
 end is excluded, so this prints `0`, `1` and `2`.
+
+The third one is `loop`, for a loop that does not end by itself - a server, a read loop, a state machine:
+
+```trb
+var line = "first"
+loop {
+  print line
+  line = ""
+  if line.isEmpty() {
+    break
+  }
+}
+```
+
+`while true` is a compile error that says `A loop that never ends is written `loop``, so there is exactly one spelling
+for it. Without a `break` a `loop` has the type `Never`, which is what lets a function whose whole body is one get away
+without a result; with a `break` it is `Void` like any other loop. There is no `break value`. See
+[Loops](../language/execution/loops.md).
 
 ## A control structure is a function
 

@@ -70,6 +70,7 @@ private var field: Int = 0                   invisible outside its type
 private(var) field: Int = 0                  read by everyone, written by the type only
 use Name from "std/core"                     an import
 use Type.Case from "./module"                a case, by its path
+use Type.member from "acme/text"             a member another package's `extend` adds
 use * as math from "std/math"                a namespace import
 use Name as Other from "./module"            an import under a local name
 public use Name from "./module"              a re-export
@@ -93,7 +94,7 @@ Case(field)                                  a case that the file imports
 value.member                                 a method reference, bound to `value`
 Type.member                                  the member itself: `(self: Type) => ...`
 value?                                       unwrap an `Ok` or a `Some`, or return early
-value ?? fallback                            the value, or a lazy fallback
+value ?? fallback                            `OrElse.orElse`: the value, or a lazy fallback
 value?.member                                `Option.map`, or `flatMap` for an optional member
 value.into()                                 a conversion chosen by the expected type
 value.to<Target>()                           a conversion with the target written out
@@ -154,6 +155,7 @@ return value                                 an early return
 for item in items { ... }                     over anything `Iterable`
 for (key, value) in table { ... }             destructuring in a loop
 while condition { ... }                      `break` and `continue` work
+loop { ... }                                 endless: `Never` without a `break`, `Void` with one
 if const Some(user) = find(id) { ... }        a pattern in a condition
 if var Some(cursor) = current { ... }         binds into the place, not into a copy
 place = value                                 a statement, never an expression
@@ -184,6 +186,11 @@ panic "message"                               aborts with exit code 101
     fields.
 14. **A `var` that is changed and never read afterwards is a compile error**, and so is the discarded result of a method
     that takes `self`.
+15. **An endless loop is `loop`.** `loop { ... }` has the type `Never` without a `break` that targets it and `Void` with
+    one, a `break` carries no value, and `while true` is an error that names `loop`.
+16. **A `use` names what it imports, and a member of a foreign `extend` is one of those names.**
+    `use String.shout from "acme/text"` is the same form as a case import; what the type's own package attaches to it
+    needs no import, and what a trait puts on a foreign type needs the trait.
 
 ## What this is not
 
@@ -204,6 +211,10 @@ The forms that look right and are not:
 | `x as Int` | `Int.from(x)` | there are no casts |
 | `const MAX_SIZE = 1` | `const maxSize = 1` | there is no MACRO_CASE |
 | `Some(value) => 0` | `Some(_) => 0` | an arm binding nothing reads is an error |
+| `while true { ... }` | `loop { ... }` | an endless loop says so in the word |
+| `break 42` | a `var` written before the loop | a `break` carries no value |
+| `use "./text-extensions"` | `use String.shout from "./text-extensions"` | a `use` names what it imports |
+| `1 ?? 0` | an `Option` or a `Result` on the left | `??` is the trait `OrElse` |
 | `class`, `interface`, `enum`, `struct` | `type`, `trait` | one keyword for data, one for capability |
 | `impl Trait for Type` | `extend Type with Trait` | `with` is the only word for it |
 | `Hashable`, `Comparable` | `Hash`, `Compare` | a single-method trait is its method |
@@ -219,5 +230,7 @@ The forms that look right and are not:
 - [Cases and match](../pattern-matching/cases-and-match.md) - how a case is spelled and matched.
 - [Result](../errors/result.md) - `Ok`, `Fail` and `?`.
 - [Traits](../traits/traits.md) - `with`, `extend` and the trait names.
+- [use](../modules-and-packages/use.md) - every form of an import, the path of a member included.
+- [Loops](../execution/loops.md) - `for`, `while` and `loop`, and what each one produces.
 - [What a model trained on other languages gets wrong](../../explanation/mistakes-models-make.md) - the same table with
   the diagnostics.

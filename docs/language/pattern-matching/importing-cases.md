@@ -44,9 +44,13 @@ public use <Type>.<Case> from "<path>"               re-exported under the same 
 
 ## Rules
 
-1. **A case is imported through the type it belongs to, and only a case can be.** `use Option.Some from "std/core"`
-   imports the case; a method, a constant or a field of a type is never imported this way and stays written
-   `Type.member`.
+1. **A case is imported through the type it belongs to.** `use Option.Some from "std/core"` imports the case; a method,
+   a constant or a field of the type's own body is never imported this way and stays written `Type.member`.
+
+   The **first letter** decides which of the two a path names: a segment that starts uppercase is a case, a lowercase one
+   is a member another package attaches to the type with an `extend` (`use Int64.seconds from "std/time"`, see
+   [extend](../traits/extend.md)). So `use Option.Maybe from "std/core"` is still "`Option` has no case `Maybe`" and
+   never a message about a missing member.
 
 2. **`from "<path>"` names a module: a package (`"std/core"`), a public module of one (`"acme/http/routing"`), or a
    relative file (`"./option"`, no extension).** Everything after it in the list is imported from that one module,

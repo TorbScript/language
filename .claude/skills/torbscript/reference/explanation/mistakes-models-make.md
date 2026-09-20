@@ -21,10 +21,11 @@ right line first and the wrong one after it.
 
 ## The decision
 
-Read this list before writing TorbScript, and check your work against it afterwards. Fifteen mistakes cover nearly
+Read this list before writing TorbScript, and check your work against it afterwards. Eighteen mistakes cover nearly
 everything: the call form, a bare case, `Err` instead of `Fail`, semicolons, `let`, taking a copy out of a collection,
 string length, bit operators, casts, an implicit `Some`, a trait name ending in `-able`, a `match` with a `default`, a
-`MAX_SIZE` constant, a name that is not ASCII, and an arm binding nothing reads.
+`MAX_SIZE` constant, a name that is not ASCII, an arm binding nothing reads, a `use` without names, `while true`, and an
+extension member the file never names.
 
 ## Why
 
@@ -315,7 +316,7 @@ fn describe(value: Bool): String {
 
 `_` is the wildcard. Every arm is one arm, a `match` is an expression, it must be exhaustive, and an arm that can never be
 reached is an error. A `default` arm parses: `default` starts with a lowercase letter, so it is a **binding** that
-matches everything. It no longer compiles, because nothing reads it (mistake 15), but the message is about the binding
+matches everything. It does not compile, because nothing reads it (mistake 15), but the message is about the binding
 and not about a keyword that does not exist.
 
 ### 13. A constant is `maxSize`, never `MAX_SIZE`
@@ -383,6 +384,67 @@ binds and never compares, so `limit =>` matches every value instead of comparing
 where nothing needs the value and `_reason` where the name is the documentation. An unused `const`, `for` binding or
 parameter is not part of the rule.
 
+### 16. A `use` names what it imports
+
+```trb
+use String.shout from "./text-extensions"
+
+print "hello".shout()
+```
+
+```trb error
+use "./text-extensions"
+// error: A `use` names what it imports
+```
+
+Nothing runs when a module is imported, so a path on its own would bring in nothing at all. Every `use` carries names: a
+declaration by its name, a case or a member of a type by its path, and `as` for a local name of this file's choosing.
+
+### 17. An endless loop is `loop`, and a `break` carries no value
+
+```trb check
+var count = 0
+loop {
+  count = count + 1
+  if count == 3 {
+    break
+  }
+}
+print count
+```
+
+```trb error
+var count = 0
+while true {
+  count = count + 1
+  print count
+}
+// error: A loop that never ends is written `loop`
+```
+
+`loop { ... }` has the type `Never` while no `break` targets it - so nothing after it is reached, and a function whose
+body is one needs no other result - and `Void` once one does. There is no `break value`: what Rust carries out of a loop
+is a `var` written before it. `continue` works as in a `while`, and `while false` is left alone.
+
+### 18. A member another package adds is named in this file
+
+```trb check
+use Int64.megabytes from "std/sandbox"
+
+print 64.megabytes()
+```
+
+```trb error
+print 64.megabytes()
+// error: `std/sandbox` adds `megabytes` to `Int64`, and this file does not name it
+```
+
+A member belongs to the type everywhere when the package of the *type* attached it, and so does an `extend` this package
+wrote itself. Everything else the file names, by the path of the member, which is the form a case import takes; `as`
+renames it, and two members of one name for one type stay an error at the use. What a trait puts on a type it does not
+own needs the trait as a name of the file instead of the member (`use Slug from "acme/slug"`), which is why the
+operators, `for`, interpolation, `?`, `??` and `into()` need no import: their traits are in the prelude.
+
 ### The rest, in one table
 
 | Do not write | Write | Why |
@@ -423,5 +485,8 @@ which is where mistake 1 shows up. See [Verify your work](../tooling/verifying-y
 - [Cases and match](../language/pattern-matching/cases-and-match.md) - the rules behind mistakes 2, 12 and 15.
 - [Naming](../language/syntax/naming.md) - the rules behind mistakes 13 and 14.
 - [Result](../language/errors/result.md) - the rules behind mistake 3.
+- [use](../language/modules-and-packages/use.md) - the rules behind mistakes 16 and 18.
+- [Loops](../language/execution/loops.md) - the rule behind mistake 17.
+- [extend](../language/traits/extend.md) - where a member of a foreign type is visible, and where it is named.
 - [Coming from Rust](coming-from-rust.md) - the same ground for one language in detail.
 - [Verify your work](../tooling/verifying-your-work.md) - the commands that decide.

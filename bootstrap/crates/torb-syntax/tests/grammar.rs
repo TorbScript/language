@@ -259,3 +259,17 @@ fn literal_types_const_parameters_tuples_and_intersections() {
     // Still a comparison
     parse_ok("const small = count < 16\nconst between = 0 < index && index < 16");
 }
+
+#[test]
+fn loop_is_a_statement_of_its_own_and_a_reserved_word() {
+    let file = parse_ok("fn f() {\n  loop {\n    step()\n  }\n}");
+    let StatementKind::Declaration(Declaration { kind: DeclarationKind::Function(function), .. }) = &file.statements[0].kind else {
+        panic!()
+    };
+    let body = function.body.as_ref().expect("a body");
+    assert!(matches!(body.statements[0].kind, StatementKind::Loop { .. }));
+
+    // A reserved word is no name, in a binding and in a parameter alike
+    assert!(first_error("const loop = 1").contains("Expected a pattern"));
+    assert!(first_error("fn f(loop: Int) {}").contains("keyword"));
+}

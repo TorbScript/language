@@ -307,17 +307,22 @@ fn isCaseOfSubject(var checker: Checker, name: Name, subject: TypeId): Bool {
     }
   }
   // The matched type has no case of that name at all: "`X` has no case `Fail`" is the clearer message, and
-  // `variantPattern` reports it
+  // `variantPattern` reports it - but only where the matched type has cases at all, because a type without any (an
+  // `Int64`, a record) gets no message there and `const None = 1` would then say nothing whatsoever
   const declared = declaredCaseName checker, name.text
-  if caseNamed(checker, subject, declared).isNone() {
+  if caseNamed(checker, subject, declared).isNone() && hasCases(checker, subject) {
     return true
   }
   const ownerName = checker.symbolAt(owner).name
   const shown = checker.describe subject
-  checker.reportHere(
-    Diagnostic.error("`{name.text}` is the case `{ownerName}.{name.text}`, and the value matched is a `{shown}`", name.span)
-      .withNote("Write `.{name.text}` for the case of `{shown}`")
+  var problem = Diagnostic.error(
+    "`{name.text}` is the case `{ownerName}.{name.text}`, and the value matched is a `{shown}`",
+    name.span,
   )
+  if hasCases(checker, subject) {
+    problem = problem.withNote "Write `.{name.text}` for the case of `{shown}`"
+  }
+  checker.reportHere problem
   false
 }
 

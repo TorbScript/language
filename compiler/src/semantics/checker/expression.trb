@@ -1527,18 +1527,27 @@ fn comparisonOf(operator: InfixOperator): String {
 }
 
 
-/** `a ?? b`: the `Value` of the left side, with the fallback checked against it and evaluated only when needed. */
+/**
+ * `a ?? b`: the `Value` the trait `OrElse` names, with the fallback checked against it and evaluated only when needed.
+ *
+ * An operator is a trait exactly when it is a method call, and `a ?? b` *is* `a.orElse(b)` - so this asks the type for
+ * `OrElse<Value>` the way `a + b` asks for `Add`. `Option` and `Result` come with it, and a type of a program that
+ * wants `??` says so.
+ */
 fn coalesceType(var checker: Checker, left: Expression, right: Expression, at: Span): TypeId {
   const found = inferExpression checker, left
-  const value = match valueOfOptionOrResult(checker, found) {
+  const capability = match checker.wellKnown.orElse {
     Some(inner) => inner
     None => {
+      deferExpression checker, right
+      return checker.deferredType
+    }
+  }
+  const value = match traitArgumentsOf(checker, found, capability) {
+    Some(arguments) => arguments.get(0) ?? checker.deferredType
+    None => {
       if isFullyKnown(checker, found) {
-        const shown = checker.describe found
-        checker.reportHere(
-          Diagnostic.error("`??` needs an `Option` or a `Result`, and `{shown}` is not one", at)
-            .withNote("`a ?? b` is `orElse`: it gives back the value, or the fallback")
-        )
+        reportMissingOperator checker, found, "OrElse", "a ?? b", at
         deferExpression checker, right
         return checker.invalidType
       }
@@ -1553,25 +1562,12 @@ fn coalesceType(var checker: Checker, left: Expression, right: Expression, at: S
   openThunk checker, right.span
   const _ = checkExpression checker, right, inner
   closeThunk checker, right.span
-  // `orElse` is an ordinary member of `Option` and of `Result`, so the call is direct
-  recordMemberCall checker, at, found, "orElse"
+  // `??` reaches `orElse` through `OrElse`, so the implementation is what it records - like every other operator
+  recordTraitCall checker, at, found, capability, "orElse"
   value
 }
 
-/** The member a construct of the language stands for, where it is a member of the type and not of a trait. */
-fn recordMemberCall(var checker: Checker, at: Span, receiver: TypeId, name: String) {
-  const candidate = match lookupMember(checker, receiver, name) {
-    Some(found) => found
-    None => {
-      return
-    }
-  }
-  if const .Method(_, symbol) = candidate.kind {
-    checker.resolved at, Resolution.Callable(symbol, [], candidate.dispatch)
-  }
-}
-
-/** The `Value` of an `Option<Value>` or of a `Result<Value, Failure>`: what `?` unwraps and what `??` produces. */
+/** The `Value` of an `Option<Value>` or of a `Result<Value, Failure>`: what `?` unwraps. */
 fn valueOfOptionOrResult(checker: Checker, annotation: TypeId): TypeId? {
   if const Some(value) = optionValueOf(checker, annotation) {
     return Some value
@@ -2288,6 +2284,7 @@ fn deferStatement(var checker: Checker, statement: Statement) {
       deferCondition checker, condition
       deferBlock checker, body
     }
+    .Loop(body) => deferBlock checker, body
     .Return(value) => {
       if const Some(expression) = value {
         deferExpression checker, expression

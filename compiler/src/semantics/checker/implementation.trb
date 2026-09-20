@@ -1,10 +1,12 @@
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
-use Declaration, ExtendDeclaration, Visibility from "../../syntax/ast"
+use Declaration, ExtendDeclaration, Visibility, UseItem from "../../syntax/ast"
 use FunctionDeclaration, TypeReference from "../../syntax/ast"
 use ModuleId from "../module"
 use SymbolId from "../symbols"
 use resolveImport from "../graph"
+use memberImportOf from "../scope"
+use joinPath from "../../project/path"
 use TypeId, ParameterId, FunctionForm from "./type"
 use Implementation, ImplementationId, ImplementationOrigin, TargetShape, DerivedImplementation from "./type"
 use Resolved, Witness, describeType from "./type"
@@ -1277,6 +1279,153 @@ public fn packageOfType(checker: Checker, annotation: TypeId): Int {
   }
 }
 
+/**
+ * `use String.shout from "acme/text"` where `acme/text` attaches no such member: an import is a promise about another
+ * package, and one that is not kept is reported at the line that made it rather than at every use of the name.
+ */
+public fn checkMemberImports(var checker: Checker, module: ModuleId) {
+  const statements = checker.program.graph.at(module).file.statements
+  for statement in statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(usage) = declaration.kind {
+        if const .Module(path) = usage.source {
+          if const .Names(items) = usage.items {
+            for item in items {
+              checkOneMemberImport checker, module, path, item
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+fn checkOneMemberImport(var checker: Checker, module: ModuleId, path: String, item: UseItem) {
+  const members = checker.program.scopes[module.value].members
+  const entry = match memberImportOf(members, path, item) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const at = item.name().span
+  buildImplementations checker
+  const candidates = checker.implementations.inherentOf Some(entry.owner)
+  for index in candidates {
+    const implementation = checker.implementations.all[index]
+    if implementation.package == entry.package && implementation.members.containsKey(entry.name) {
+      return
+    }
+  }
+  const owner = checker.symbolAt(entry.owner).name
+  checker.report(
+    module,
+    Diagnostic.error("`{entry.path}` adds no member `{entry.name}` to `{owner}`", at)
+      .withNote("A path in a `use` names a case of a type or a member an `extend` of that package adds to it")
+  )
+}
+
+/**
+ * Whether the members a trait puts on a type have to be *named* in the file that uses them.
+ *
+ * They do when the implementation comes from another package than the type: `extend String with Slug` in `acme` is the
+ * trait's package attaching itself to a type it does not own, so `Slug` says where those members come from. What the
+ * type's own package attaches - `type Circle with Shape`, `extend Circle with Shape` there - is part of the type
+ * everywhere, and so is an implementation this package wrote itself.
+ *
+ * A type parameter (`Item: Slug`) and a trait-typed value carry the trait in their own type, so they name it already.
+ */
+public fn requiresTraitName(var checker: Checker, receiver: TypeId, bound: TypeId): Bool {
+  if const .Parameter(_) = checker.types.form(receiver) {
+    return false
+  }
+  if const .Traits(_) = checker.types.form(receiver) {
+    return false
+  }
+  const owner = packageOfType checker, receiver
+  const here = checker.program.graph.at(checker.module).package
+  if const .Found(identifier, _) = resolveBound(checker, receiver, bound) {
+    const package = checker.implementations.at(identifier).package
+    return package != owner && package != here
+  }
+  false
+}
+
+/** Whether the file being checked has this symbol as a name: its own declarations, its imports and its prelude. */
+public fn isNamedHere(var checker: Checker, symbol: SymbolId): Bool {
+  // Stage 0 takes the `var` argument first, so the module has to be read before the call (CONTRIBUTING, trap 1)
+  const module = checker.module
+  const known = visibleSymbolsOf checker, module
+  known.containsKey symbol.value
+}
+
+fn visibleSymbolsOf(var checker: Checker, module: ModuleId): Map<Int, Bool> {
+  if const Some(known) = checker.visibleSymbols.get(module.value) {
+    return known
+  }
+  var found: Map<Int, Bool> = [:]
+  for (_, symbol) in checker.program.scopes[module.value].names {
+    found.set symbol.value, true
+  }
+  for (_, symbol) in checker.program.builtins {
+    found.set symbol.value, true
+  }
+  checker.visibleSymbols.set module.value, found
+  found
+}
+
+/**
+ * A trait that puts `name` on this type although the file does not name the trait: the trait's name and where it is
+ * declared, which is what the message about it offers as a `use` line.
+ */
+public fn hiddenTraitMemberOf(var checker: Checker, annotation: TypeId, name: String): (String, ModuleId)? {
+  for bound in traitsOf(checker, annotation) {
+    const symbol = match checker.types.form(bound) {
+      .Nominal(found, _) => found
+      _ => {
+        continue
+      }
+    }
+    const identifier = typeSignatureOf checker, symbol
+    if !checker.typeSignature(identifier).members.containsKey(name) {
+      continue
+    }
+    if isNamedHere(checker, symbol) {
+      continue
+    }
+    if !requiresTraitName(checker, annotation, bound) {
+      continue
+    }
+    const declared = checker.symbolAt symbol
+    if const Some(module) = declared.module {
+      const found = (declared.name, module)
+      return Some found
+    }
+  }
+  None
+}
+
+/**
+ * How a module is written in a `use`: `"std/time"` for the `src/lib.trb` of that package, `"std/time/zone"` for its
+ * `src/zone.trb`. Every message that offers a `use` line needs this - a file path would not be one.
+ */
+public fn importPathOf(checker: Checker, module: ModuleId): String {
+  const found = checker.program.graph.at module
+  const package = checker.program.workspace.packages[found.package]
+  const prefix = joinPath package.directory, "src"
+  var relative = found.path
+  if relative.startsWith("{prefix}/") {
+    relative = relative.slice(prefix.byteLength() + 1..relative.byteLength())
+  }
+  if relative.endsWith(".trb") {
+    relative = relative.slice(0..relative.byteLength() - 4)
+  }
+  if relative == "lib" || relative.isEmpty() {
+    return package.name
+  }
+  "{package.name}/{relative}"
+}
+
 public fn packageOfSymbol(checker: Checker, symbol: SymbolId): Int {
   match checker.symbolAt(symbol).module {
     Some(module) => checker.program.graph.at(module).package
@@ -1285,8 +1434,12 @@ public fn packageOfSymbol(checker: Checker, symbol: SymbolId): Int {
 }
 
 /**
- * The inherent extensions of a type that this file may use: `extend Int64 { ... }` of the package that declares
- * `Int64` everywhere, one of another package only where its module is imported.
+ * The inherent extensions of a type that this file may use.
+ *
+ * A member is visible everywhere if the package of the **type** attached it - `extend Int64 { ... }` in `std/number` is
+ * part of `Int64` for everybody, and so is an `extend` in the package that wrote it, because a file sees what its own
+ * package declares. Everything else is *named*: `use Int64.seconds from "std/time"` says where the member comes from,
+ * and only the files that write that line have it.
  */
 public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<Int> {
   buildImplementations checker
@@ -1297,7 +1450,7 @@ public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<I
   const head = headSymbolOf checker, annotation
   const candidates = checker.implementations.inherentOf head
   const owner = packageOfType checker, annotation
-  const module = checker.module
+  const here = checker.program.graph.at(checker.module).package
   var found: List<Int> = []
   for index in candidates {
     const implementation = checker.implementations.all[index]
@@ -1308,7 +1461,7 @@ public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<I
     if !boundsHold(checker, implementation, mapping) {
       continue
     }
-    if implementation.package != owner && !isVisibleModule(checker, module, implementation.module) {
+    if !isExtensionNamedHere(checker, implementation.package, owner, here, head) {
       continue
     }
     found.add index
@@ -1317,19 +1470,62 @@ public fn inherentExtensionsOf(var checker: Checker, annotation: TypeId): List<I
   found
 }
 
-/** The same, but without the import rule: what a "declared in a module this file does not import" note needs. */
+/**
+ * Whether an `extend` of `package` reaches this file: the package of the type attached it, this package attached it, or
+ * this file named a member of the type that comes from there.
+ */
+fn isExtensionNamedHere(var checker: Checker, package: Int, owner: Int, here: Int, head: SymbolId?): Bool {
+  if package == owner || package == here {
+    return true
+  }
+  const symbol = match head {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  checker.program.importsMemberFrom checker.module, symbol, package
+}
+
+/**
+ * Which member symbol `name` reaches in one extension. For an extension of the type's own package (or of this one) that
+ * is the name itself; for a foreign one it is what the `use` line named, which `as` may have renamed
+ * (`use String.shout as yell` makes `yell` the member `shout`).
+ */
+public fn extensionMemberOf(var checker: Checker, index: Int, annotation: TypeId, name: String): SymbolId? {
+  const implementation = checker.implementations.all[index]
+  const owner = packageOfType checker, annotation
+  const here = checker.program.graph.at(checker.module).package
+  if implementation.package == owner || implementation.package == here {
+    if const Some(found) = implementation.members.get(name) {
+      return Some found
+    }
+  }
+  const symbol = headSymbolOf(checker, annotation)?
+  for entry in checker.program.memberImportsOf(checker.module, symbol, name) {
+    if entry.package != implementation.package {
+      continue
+    }
+    if const Some(found) = implementation.members.get(entry.name) {
+      return Some found
+    }
+  }
+  None
+}
+
+/** The same, but without the import rule: what a "this file does not import it" message needs. */
 public fn hiddenExtensionOf(var checker: Checker, annotation: TypeId, name: String): ModuleId? {
   buildImplementations checker
   const head = headSymbolOf checker, annotation
   const candidates = checker.implementations.inherentOf head
   const owner = packageOfType checker, annotation
-  const module = checker.module
+  const here = checker.program.graph.at(checker.module).package
   for index in candidates {
     const implementation = checker.implementations.all[index]
     if !implementation.members.containsKey(name) {
       continue
     }
-    if implementation.package == owner || isVisibleModule(checker, module, implementation.module) {
+    if isExtensionNamedHere(checker, implementation.package, owner, here, head) {
       continue
     }
     var mapping: Map<ParameterId, TypeId> = [:]

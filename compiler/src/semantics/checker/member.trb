@@ -8,7 +8,9 @@ use Checker, Resolution, Dispatch, Adaptation, Candidate, CandidateKind from "./
 use signatureOf, typeSignatureOf from "./signature"
 use substitute, substituteFunction, substituteBounds, sameType, hasVariable from "./unify"
 use resolveTrait, resolveBound, traitsOf, traitArgumentsOf from "./implementation"
-use inherentExtensionsOf, mappingOfImplementation, buildImplementations from "./implementation"
+use requiresTraitName, isNamedHere from "./implementation"
+use inherentExtensionsOf, extensionMemberOf, mappingOfImplementation, buildImplementations from "./implementation"
+use importPathOf from "./implementation"
 use requireVisibleMember from "./declaration"
 
 /**
@@ -254,7 +256,7 @@ fn nominalMember(
 
 /**
  * `extend Int64 { ... }`, `extend<Item> List<Item> where Item: Shape { ... }`: a member without a trait. Two visible
- * extensions that bring the same member are an ambiguity, and the fix is a namespace import.
+ * extensions that bring the same member are an ambiguity, and the fix is to rename one with `as`.
  */
 fn extensionMember(var checker: Checker, receiver: TypeId, name: String, isStatic: Bool, at: Span?): Candidate? {
   const extensions = inherentExtensionsOf checker, receiver
@@ -262,7 +264,7 @@ fn extensionMember(var checker: Checker, receiver: TypeId, name: String, isStati
   var first: ModuleId? = None
   var second: ModuleId? = None
   for index in extensions {
-    const member = match checker.implementations.all[index].members.get(name) {
+    const member = match extensionMemberOf(checker, index, receiver, name) {
       Some(symbol) => symbol
       None => {
         continue
@@ -291,11 +293,11 @@ fn extensionMember(var checker: Checker, receiver: TypeId, name: String, isStati
 }
 
 fn reportAmbiguousExtension(var checker: Checker, name: String, first: ModuleId, second: ModuleId, at: Span) {
-  const one = checker.program.graph.at(first).path
-  const other = checker.program.graph.at(second).path
+  const one = importPathOf checker, first
+  const other = importPathOf checker, second
   checker.reportHere(
     Diagnostic.error("`{name}` comes from `{one}` and from `{other}`", at)
-      .withNote("A namespace import says which one is meant: `use * as text from \"{one}\"`")
+      .withNote("A member is renamed where it is imported: `use ... as another from \"{other}\"`")
   )
 }
 
@@ -356,6 +358,12 @@ fn memberOfTrait(
   const identifier = typeSignatureOf checker, symbol
   const shape = checker.typeSignature identifier
   const member = shape.members.get(name)?
+  // What the package of a *trait* puts on a type it does not own is visible where the trait is a name of the file
+  if !isNamedHere(checker, symbol) {
+    if requiresTraitName(checker, receiver, bound) {
+      return None
+    }
+  }
   var mapping = argumentMapping shape.generics, arguments
   // Inside a trait `Self` is its own parameter; here it stands for the type the member was reached through
   if const .Parameter(parameter) = checker.types.form(shape.own) {
@@ -723,16 +731,23 @@ public fn memberNames(var checker: Checker, of: TypeId): List<String> {
   }
   const extensions = inherentExtensionsOf checker, of
   for index in extensions {
-    for (name, _) in checker.implementations.all[index].members {
-      names.add name
+    const members = checker.implementations.all[index].members
+    for (name, _) in members {
+      // A foreign extension only offers what this file named, so nothing unreachable is suggested
+      if extensionMemberOf(checker, index, of, name).isSome() {
+        names.add name
+      }
     }
   }
   const bounds = traitsOf checker, of
   for bound in bounds {
     if const .Nominal(symbol, _) = checker.types.form(bound) {
-      const identifier = typeSignatureOf checker, symbol
-      for (name, _) in checker.typeSignature(identifier).members {
-        names.add name
+      const isVisible = isNamedHere(checker, symbol) || !requiresTraitName(checker, of, bound)
+      if isVisible {
+        const identifier = typeSignatureOf checker, symbol
+        for (name, _) in checker.typeSignature(identifier).members {
+          names.add name
+        }
       }
     }
   }

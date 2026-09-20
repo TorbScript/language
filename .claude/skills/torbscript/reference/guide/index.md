@@ -35,7 +35,7 @@ isolation, which is a [how-to](../how-to/index.md); and the argument for a desig
 - **[Traits](traits.md)** - How to declare a capability, give it to a type, and use the trait itself as a type that hides which concrete type it is.
 - **[Errors](errors.md)** - How a function says it can fail with Result, and how a caller handles that with match or the question mark operator.
 - **[Collections and pipelines](collections-and-pipelines.md)** - How to build a list, map and set, change one in place or get a changed copy, and pull values through a lazy pipeline.
-- **[Control flow and your own constructs](control-flow-and-dsls.md)** - if, for and while as you would expect, and why unless is an ordinary function you could have written yourself.
+- **[Control flow and your own constructs](control-flow-and-dsls.md)** - if, for, while and loop as you would expect, and why unless is an ordinary function you could have written yourself.
 - **[Modules and packages](modules-and-packages.md)** - How use brings a name in from another file or the standard library, and what public means for a top-level declaration.
 - **[Tests and the toolchain](tests-and-tooling.md)** - How to write a test with test, group and assert, and the two commands that check whether what you wrote is correct.
 - **[Put it together](a-small-program.md)** - One small program - a type with cases, a function that can fail, and a pipeline - that uses everything this path taught.

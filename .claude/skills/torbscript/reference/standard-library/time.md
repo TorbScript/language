@@ -30,6 +30,10 @@ const wait = 2.seconds()
 print wait.seconds()
 ```
 
+`2.seconds()` is a member `std/time` adds to `Int64`, which `std/number` owns, so a file names where it comes from -
+except that the prelude already does (`public use Int64.seconds from "std/time"`), which is why the snippet above needs
+no `use` at all. `Duration.seconds` is a member of the type itself and needs nothing either way.
+
 ## Declarations
 
 <!-- torb:declarations:begin -->
@@ -52,7 +56,8 @@ public native type Duration with Compare, Show {
 ```
 
 The span between two `Instant`s, or a length of time asked for on its own. `2.seconds()` comes from
-`extend Int64 { fn seconds(self): Duration }`, mainly for sandbox and task limits.
+`extend Int64 { fn seconds(self): Duration }`, which the prelude re-exports by name
+(`public use Int64.seconds from "std/time"`); mainly for sandbox and task limits.
 
 ### Clock
 

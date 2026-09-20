@@ -13,9 +13,12 @@ use signatureOf, typeSignatureOf, aliasTargetOf from "./signature"
 use traitList, boundsOf, resultOf from "./signature"
 use typeFromReference from "./lowering"
 use checkBodyOf, checkInitializer, checkStatement from "./statement"
+use checkPattern from "./pattern"
+use requireIrrefutable from "./exhaustive"
 use deferBlock from "./expression"
 use settleChanges from "./mutation"
 use buildImplementations, checkCoherence, checkImplementations, extensionAt from "./implementation"
+use checkMemberImports from "./implementation"
 use scriptReceiverOf, checkReceiverScript from "./receiver"
 use checkShape from "./declaration"
 use checkSpelling from "./spelling"
@@ -131,6 +134,8 @@ public fn checkModule(var checker: Checker, module: ModuleId) {
   var clock = Stopwatch withTimings
   clock.start()
   checkShape checker, module
+  // `use String.shout from "acme/text"`: whether that package really adds such a member
+  checkMemberImports checker, module
   const spent = clock.taken()
   checker.shapeMilliseconds = checker.shapeMilliseconds + spent
   reportUnchecked checker, module
@@ -198,7 +203,16 @@ fn checkTopLevelBinding(var checker: Checker, scope: TypeScope, binding: Binding
   if const Some(reference) = binding.annotation {
     annotation = Some typeFromReference(checker, reference, scope.forType())
   }
-  const _ = checkInitializer checker, scope.module, binding.value, scope.selfType, annotation
+  const found = checkInitializer checker, scope.module, binding.value, scope.selfType, annotation
+  // `const None = value`, `const Some(x) = value`: a pattern that names a case declares no name, so nothing above
+  // asked for its type - and without this the binding would say nothing at all about a pattern that can fail
+  if boundNamesOf(binding.pattern).isEmpty() {
+    const bound = annotation ?? found
+    checker.openScope()
+    checkPattern checker, binding.pattern, bound, binding.isVar
+    requireIrrefutable checker, binding.pattern, bound, "The pattern of a binding", "value"
+    checker.closeScope()
+  }
 }
 
 /** One declaration, wherever it stands: at the top level of a file, in a block, or in the body of a type. */

@@ -92,7 +92,7 @@ when it runs.
 - **A field the file sets has to be `var`.** A `const` field is fixed after construction, so a configuration file cannot
   write it.
 - **`Sandbox.load` resolves its path against the project directory**, not against the file that calls it. An import
-  (`use "./x"`) is the other way round, because that is a question about the source tree.
+  (`use Name from "./x"`) is the other way round, because that is a question about the source tree.
 - **A field with an operator in its value needs parentheses.** `tls(port == 8443)` is the only way to write that, because
   an operator at the top level of an argument is one of the places the canon requires them.
 

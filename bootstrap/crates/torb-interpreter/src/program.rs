@@ -287,6 +287,9 @@ pub fn load(entry: &Path) -> Result<Program, Vec<String>> {
         loader.problems.extend(apply_extends(module, &prelude, &mut extensions));
     }
     for module in &loader.order {
+        apply_member_aliases(module, &prelude, &mut extensions);
+    }
+    for module in &loader.order {
         loader.problems.extend(apply_traits(module, &prelude));
     }
     for module in &loader.order {
@@ -378,7 +381,6 @@ impl Loader {
                             changed |= module.scope.borrow_mut().insert(name, Item::Value(Value::Module(target.clone()))).is_none();
                         }
                         // The extensions of every loaded module apply everywhere: the interpreter does not check visibility
-                        UseItems::OnlyExtensions => {}
                         UseItems::Names(items) => {
                             for item in items {
                                 let text: &'static str = &item.path[0].text;
@@ -389,6 +391,12 @@ impl Loader {
                                 }
                                 let found = target.scope.borrow().get(text).cloned();
                                 let Some(found) = found else {
+                                    // `use String.shout from "acme/text"`: the first segment is a type of *this*
+                                    // module, not an export of the target - and every `extend` applies everywhere
+                                    // here, so there is nothing to bind (`apply_member_aliases` does the `as` half).
+                                    if item.path.len() > 1 {
+                                        continue;
+                                    }
                                     unresolved
                                         .push(format!("{}: \"{path}\" does not declare `{text}`", module.location(item.path[0].span)));
                                     continue;
@@ -752,6 +760,54 @@ fn apply_extends(module: &Rc<Module>, prelude: &Rc<Module>, extensions: &mut Ext
         }
     }
     problems
+}
+
+/// `use String.shout as yell from "acme/text"`: stage 0 has no visibility rule - every `extend` of every loaded module
+/// applies everywhere - so an imported member needs nothing here. The `as` half does: the type gets the same member a
+/// second time, under the name the importing file wrote. That makes the alias global, which is as close as an untyped
+/// stage 0 gets to a per-file name.
+fn apply_member_aliases(module: &Rc<Module>, prelude: &Rc<Module>, extensions: &mut Extensions) {
+    for statement in &module.file.statements {
+        let StatementKind::Declaration(ast::Declaration { kind: DeclarationKind::Use(usage), .. }) = &statement.kind else {
+            continue;
+        };
+        let UseItems::Names(items) = &usage.items else { continue };
+        for item in items {
+            if item.path.len() < 2 {
+                continue;
+            }
+            let Some(alias) = &item.alias else { continue };
+            let alias: &'static str = &alias.text;
+            let declared: &str = &item.name().text;
+            let owner: &str = &item.path[item.path.len() - 2].text;
+            match lookup(module, prelude, owner) {
+                Some(Item::Value(Value::Type(info))) => {
+                    let method = info.methods.borrow().get(declared).cloned();
+                    if let Some(method) = method {
+                        info.remember(alias);
+                        info.methods.borrow_mut().insert(alias, method);
+                        continue;
+                    }
+                    let found = info.statics.borrow().get(declared).cloned();
+                    if let Some(found) = found {
+                        info.remember(alias);
+                        info.statics.borrow_mut().insert(alias, found);
+                    }
+                }
+                other => {
+                    let builtin = match other {
+                        Some(Item::Value(Value::Builtin(name))) => Some(name),
+                        _ => builtin_type(owner),
+                    };
+                    let Some(builtin) = builtin else { continue };
+                    let found = extensions.get(builtin).and_then(|members| members.get(declared)).cloned();
+                    if let Some(found) = found {
+                        extensions.entry(builtin).or_default().insert(alias, found);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// The trait names one element of a `with` list stands for: one for a plain name, several for an `&` group

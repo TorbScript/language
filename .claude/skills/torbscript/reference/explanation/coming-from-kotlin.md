@@ -29,13 +29,15 @@ has in the first place.
 | `val x = 1` / `var x = 1` | `const x = 1` / `var x = 1` | `val` freezes the binding only; `const` freezes what it reaches too |
 | `val list = mutableListOf(1)` | `var list = [1]` | Kotlin needs a second type, `MutableList`, for what a `var` binding already says here |
 | `String?` | `String?` (`Option<String>`) | the sugar matches; underneath, one is a compiler-tracked modifier and the other an ordinary generic type |
-| `x ?: fallback` | `x ?? fallback` | the same idea, and the right side is `lazy` on `Option` and `Result` alike |
+| `x ?: fallback` | `x ?? fallback` | the same idea, spelled as the trait `OrElse`, whose fallback is `lazy` |
 | `x?.length` | `x?.byteLength()` | `?.` is literally `Option.map`/`flatMap` here, not a null check the compiler special-cases per type |
 | `x!!` | nothing to write | there is no force-unwrap operator; `expect(message)` panics with a message you chose |
 | `data class Point(val x: Int, val y: Int)` | `type Point { x: Int; y: Int }` | every `type` gets `Equals`, `Hash`, `Show` and `copy`, not only ones marked `data` |
 | `sealed class Shape` plus subclasses | `type Shape { case Circle(radius: Float) }` | one type, cases instead of a subclass per variant |
 | `when (shape) { is Circle -> ... }` | `match shape { .Circle(radius) => ... }` | one keyword, and the compiler proves every arm is covered |
 | `fun Int.double() = this * 2` | `extend Int { fn double(self): Int { self * 2 } }` | `extend` always names the type; there is no bare receiver on a lone function |
+| `import acme.text.shout` | `use String.shout from "acme/text"` | the import carries the type the member hangs on |
+| `while (true) { ... }` | `loop { ... }` | the endless loop has a word of its own, and `while true` is an error |
 | `String.() -> Unit` | `(self: Receiver) => Void` | the receiver is a named, typed parameter, not a distinct function-type syntax |
 | `@DslMarker` | nothing to write | only the innermost receiver is ever implicit |
 | `interface Shape { fun area(): Double }` | `trait Shape { fn area(self): Float }` | one word, `trait`; a default method works the same way |
@@ -183,6 +185,13 @@ extend String {
 print "hello".shout()
 ```
 
+That `extend` stands in this file, so `shout` needs nothing further: a file sees what its own package declares, and what
+the package of the *type* attached is part of the type everywhere. The line Kotlin writes as `import acme.text.shout`
+carries the type here - `use String.shout from "acme/text"`, one member at a time, with `as` for a local name
+(`use String.shout as yell from "acme/text"`) where two packages both add `shout` to `String`. A member a *trait* puts on
+a foreign type (`extend String with Slug`, written where `Slug` lives) asks for the trait instead, which is why `??`,
+`for`, interpolation and `into()` ask for nothing at all: their traits are in the prelude.
+
 ## Habits to unlearn
 
 These are things Kotlin has that TorbScript deliberately does not, and what replaces them.
@@ -202,6 +211,12 @@ These are things Kotlin has that TorbScript deliberately does not, and what repl
   `status: planned`: it type checks today and no back end runs it yet. See [Tasks](../language/concurrency-and-streams/tasks.md).
 - **`object` singletons.** There is no keyword that hides an allocation behind a name. A `shared type` still needs
   someone to construct the one instance and hand it out; see [Shared types](../language/types/shared-types.md).
+- **`while (true)` as the endless loop.** `loop { ... }` is the word for one, and `while true` is the error "A loop that
+  never ends is written `loop`". Its type is `Never` while no `break` targets it - so a function whose body is one needs
+  no other result - and `Void` once one does; a `break` carries no value, and `continue` reads as it does in a `while`.
+- **`?:` as a built-in operator.** `a ?? b` is the method call `a.orElse(b)`, so it is the trait `OrElse`: `Option`,
+  `Result` and a type of your own come with it, and a type that does not hears so at the operator. See
+  [Operators](../language/traits/operators.md).
 - **An `else` branch to satisfy `when`'s exhaustiveness checker.** `match` on a `type` with cases is exhaustive by
   construction, checked against the declaration, not by falling back to a catch-all arm you added out of caution. An
   arm that can never run is an error, not dead code a linter might mention.
@@ -211,6 +226,7 @@ These are things Kotlin has that TorbScript deliberately does not, and what repl
 - [Optional chaining](../language/errors/option-chaining.md) - `?.` and `??` in full.
 - [Option](../language/values-and-types/option.md) - `Some`/`None`, and why nothing wraps into it implicitly.
 - [Receiver closures](../language/configuration/receiver-closures.md) - the one-implicit-receiver rule in full.
+- [extend](../language/traits/extend.md) - what an extension function becomes, and where its members are named.
 - [Copy and equality](../language/types/copy-and-equality.md) - what is generated for every `type`.
 - [Cases and match](../language/pattern-matching/cases-and-match.md) - cases instead of a `sealed class` hierarchy.
 - [Coming from Swift](coming-from-swift.md) - the other language whose enums and protocols read close to this one.

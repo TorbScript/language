@@ -116,8 +116,11 @@ public type Utf8Error with Show, Error {
 
 `Bytes` is an alias for `List<UInt8>`, not a type of its own, so every list operation already works on a chunk - and a
 chunk belongs to whoever received it, since a list is a value and there is no borrowed buffer to copy before the next
-`await`. `Utf8Error` is bytes that are not UTF-8, with the offset of the byte that broke it, counted from the start of
-the chunk being decoded; a `String` is never anything else.
+`await`. `Utf8Error` is bytes that are not UTF-8, with the offset of the byte that broke it; a `String` is never anything
+else. The offset is counted from the start of what was decoded, and which that is belongs to the stage that failed:
+`textOf` counts from the start of its chunk, `lines()` from the start of the line, and `decodedText()` from the start of
+the whole stream, because a chunk border is nobody's choice and an offset inside one would name a byte the caller cannot
+point at.
 
 ### `lines`, `decodedText`, `textOf`, `encodedText`
 
@@ -132,8 +135,9 @@ Bytes to lines, split at `\n` with a trailing `\r` dropped so CRLF files read li
 break is still a line. `decodedText` cuts at character borders instead, holding back a character split across two
 chunks. Both are resumable `Stage`s (see [std/iteration](iteration.md)) and work on any `Iterable<Bytes>` as well as on
 a `Source<Bytes, Failure>` - they need no `Task` themselves, only reading the `Source` they sit in front of does.
-`textOf` is the short form for a whole chunk that has already arrived; `encodedText` is the reverse, and needs no
-decision because a `String` already is UTF-8.
+A sequence that is still incomplete when the stream ends is reported as invalid UTF-8, at the offset it starts on - there
+is no more input coming to complete it. `textOf` is the short form for a whole chunk that has already arrived;
+`encodedText` is the reverse, and needs no decision because a `String` already is UTF-8.
 
 <!-- torb:declarations:end -->
 

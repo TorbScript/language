@@ -50,8 +50,12 @@ print connect("localhost")
 
 ## Rules
 
-1. **A doc comment belongs to the declaration written directly after it.** A blank line, another statement or the end
-   of the file between them means there is nothing to attach to, and the comment is an ordinary block comment instead.
+1. **A doc comment belongs to the declaration written directly after it.** Only code between them breaks that, not a
+   blank line: the comment attaches to the next declaration even when an empty line stands in between.
+
+   A file therefore starts with a **module comment** - the doc comment at the top, in front of the first `use`, which
+   says what the module is for. The parser attaches it to that import, which is what makes it belong to the file and to
+   no declaration of it.
 
 2. **Everything that can be declared can have one - a parameter and a field included.** `host` and `timeout` above
    each carry their own doc comment; so does a `case`.
@@ -68,20 +72,20 @@ print connect("localhost")
 3. **The text is Markdown, and nothing else.** There is no separate tag syntax (no `@param`, no `@returns`); a
    parameter is documented by attaching a comment to the parameter itself, as rule 2 shows.
 
-4. **Three headings carry what a tag language would carry elsewhere: `# Errors`, `# Panics`, `# Examples`.** `# Errors`
-   describes the `Fail` cases a `Result`-returning function can produce, `# Panics` describes when it panics instead
-   of failing, and `# Examples` holds a code block meant to run. The return value itself is described in the running
-   text, not under a heading of its own.
+4. **Six headings carry what a tag language would carry elsewhere, and there are no others.** `# Examples` holds code
+   that is meant to run, indented by four spaces; `# Errors` describes the `Fail` cases a `Result`-returning function
+   can produce; `# Panics` describes when it panics instead of failing; `# Pitfalls` names the mistake the construct
+   invites; `# Open` names a problem that is open, in the present tense; `# Related` links the constructs that belong
+   next to it. The return value itself is described in the running text, not under a heading of its own.
 
 5. **`/**/`, the four-character empty comment, is not a doc comment.** It starts like one, but a doc comment needs at
    least one more character after the opening `/**`; `/**/` is an ordinary block comment that attaches to nothing.
 
 ## What this is not
 
-**A doc comment is not verified by this documentation's toolchain today.** CONCEPT.md describes two things this page
-does not show working: that `torb test` compiles and runs the code under `# Examples`, and that `[List.add]` and
-`[Option]` are links resolved like names in the code. Neither is built yet - there is no command that reads a doc
-comment's text at all - so a doc comment is prose the reader has to trust, the same as a line comment.
+**A doc comment is not read by the type checker.** The compiler lexes it, attaches it to its declaration and carries it
+in the syntax tree; what the text says is nothing `torb check` decides. Both blocks below compile identically, although
+the second one spells its heading wrong:
 
 ```trb check
 /** Doubles a number. */
@@ -92,7 +96,7 @@ fn double(value: Int): Int {
 print double(21)
 ```
 
-```trb skip a heading spelled wrong is not rejected by anything today, so there is no diagnostic this block could show
+```trb check
 /**
  * Doubles a number.
  *
@@ -102,12 +106,16 @@ print double(21)
 fn double(value: Int): Int {
   value * 2
 }
+
+print double(4)
 ```
 
-The second block spells the heading `# Panic` instead of `# Panics`; nothing catches that today; both blocks compile
-identically because a doc comment's text is not read by the checker at all.
+The command that reads the text is [`torb docs source`](../../tooling/torb-docs-source.md): it decides the headings,
+the links, the examples and the module comment over a whole tree of sources. `torb test` running the code under
+`# Examples` as a test of the package is described in CONCEPT.md and does not exist yet.
 
 ## Related
 
 - [Lexical structure](lexical-structure.md) - the other two comment forms, and where a statement ends.
 - [Declaring a type](../types/declaring-a-type.md) - fields and cases, which a doc comment can attach to.
+- [torb docs source](../../tooling/torb-docs-source.md) - the gate that reads what a doc comment says.

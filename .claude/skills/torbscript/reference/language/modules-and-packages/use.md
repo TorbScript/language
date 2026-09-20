@@ -1,6 +1,6 @@
 ---
 title: use
-summary: use brings names into scope from a package or a file. Everything after from names a module, and a case comes in through the type it belongs to.
+summary: use brings names into scope from a package or a file. Everything after from names a module; a path brings in a case of a type or a member another package attaches to it, and a use without names is an error.
 kind: reference
 status: stable
 order: 10
@@ -40,6 +40,8 @@ use <Name> from "./<path>"                          a relative import: a file, n
 use * as <alias> from "<module>"                    a namespace import
 use <Name> as <Alias> from "<module>"               any name may take a local alias
 use <Type>.<Case> from "<module>"                   a case, imported through its type
+use <Type>.<member> from "<module>"                 a member an `extend` of that package adds to the type
+use <Type>.<member> as <name> from "<module>"       ...under a name of this file's choosing
 use <Type>.<Case>                                   without from: resolved in this file's own scope
 public use <Name> from "<module>"                   a re-export
 ```
@@ -59,13 +61,29 @@ public use <Name> from "<module>"                   a re-export
    // error: `Cats` is not exported by `std/core`
    ```
 
-3. **A case is imported through the type it belongs to, and only a case is.** A method, a constant or a field of a
-   type is never imported on its own; it stays `Type.member` at every use, and naming a case the type does not have
-   is an error too.
+3. **A path brings in a case of the type, or a member another package attaches to it with an `extend`.** A method, a
+   constant or a field of the type's *own body* is never imported: it stays `Type.member` at every use. Naming something
+   the type does not have is an error either way.
 
    ```trb error
    use Option.Maybe from "std/core"
    // error: `Option` has no case `Maybe`
+   ```
+
+   ```trb check
+   use Int64.seconds from "std/time"
+
+   print 2.seconds()
+   ```
+
+   `seconds` is a member `std/time` adds to `Int64`, which `std/number` owns - so the file that calls it names where it
+   comes from. See [extend](../traits/extend.md) for the rule and for what needs no import at all. The type in front of
+   the dot is a name of *this* file (`Int64` comes from the prelude, not from `std/time`), and the `from` names the
+   package the member has to come from:
+
+   ```trb error
+   use Int64.minutes from "std/time"
+   // error: `std/time` adds no member `minutes` to `Int64`
    ```
 
 4. **`as` gives an import a local name of its own, a case included.** From that line on the local name is the only
@@ -92,8 +110,18 @@ public use <Name> from "<module>"                   a re-export
 6. **There is no `use Option.*` and no brace group.** Every name a file uses is written out, one per item of the
    list after `use`, so a dependency gaining a case is never by itself a reason this file changes.
 
-7. **`public use` re-exports.** `public use Stack, ArrayStack from "./collections/stack"` makes both names part of
-   this file's own public surface, under their own name or, with `as`, under a new one.
+7. **A `use` always names what it imports.** Nothing runs when a module is imported, so a `use` with a path and no names
+   would mean nothing at all:
+
+   ```trb error
+   use "./text-extensions"
+   // error: A `use` names what it imports
+   ```
+
+8. **`public use` re-exports, members included.** `public use Stack, ArrayStack from "./collections/stack"` makes both
+   names part of this file's own public surface, under their own name or, with `as`, under a new one; and
+   `public use Int64.seconds from "std/time"` hands the member on, which is what [the prelude](the-prelude.md) does with
+   it.
 
 ## What this is not
 

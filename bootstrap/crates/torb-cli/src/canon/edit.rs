@@ -28,13 +28,15 @@ pub enum EditKind {
     CasePattern,
     /// A binding of a refutable pattern that nobody reads becomes `_`
     UnusedBinding,
+    /// `while true {` becomes `loop {`
+    EndlessLoop,
 }
 
 impl EditKind {
-    /// Whether the syntax tree has to come out the same (modulo spans and `CallStyle`). Two rules change the tree on
+    /// Whether the syntax tree has to come out the same (modulo spans and `CallStyle`). Three rules change the tree on
     /// purpose - that is the point of them - so those are checked by parsing alone.
     pub fn preserves_the_tree(self) -> bool {
-        !matches!(self, EditKind::CasePattern | EditKind::UnusedBinding)
+        !matches!(self, EditKind::CasePattern | EditKind::UnusedBinding | EditKind::EndlessLoop)
     }
 }
 

@@ -82,7 +82,8 @@ public native type SandboxCapabilities {
 
 `modules` names additional parts of the standard library the script may `use`. `files` names the file system roots the
 script may reach; a side left out stays closed. `environment` names the environment variable patterns the script may
-read. `limits` guards against a runaway script (`while true {}`), and `Int64.megabytes()` (`64.megabytes()`) is the
+read. `limits` guards against a runaway script (`loop {}`), and `Int64.megabytes()` (`64.megabytes()`, after
+`use Int64.megabytes from "std/sandbox"`) is the
 byte unit these limits are written in.
 
 ### SandboxError

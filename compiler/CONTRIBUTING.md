@@ -16,7 +16,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --release                                    # Everything, including the differential tests (minutes)
 sh ../runtime/build.sh                                  # The C runtime and its tests (gcc or clang)
-cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings ..
+cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings --rule loops ..
 cargo run --release -q -- canon ../std ../compiler ../examples ../bootstrap/tests    # ...write it (a minute)
 cargo run --release -q -- run ../compiler docs source ../std ../compiler ../examples   # The doc comments (not a gate yet)
 cargo run --release -q -- run ../compiler docs check ../docs         # The documentation: schema, links, every snippet

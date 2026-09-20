@@ -36,6 +36,14 @@ use <Name> from "std/prelude"    // Legal, but redundant for a name the prelude 
 1. **`std/prelude` declares nothing of its own.** Its `src/lib.trb` is nothing but `public use ... from "std/..."`
    lines, so every name it re-exports can also be imported straight from the package that declares it.
 
+   That includes members other packages attach to a type: `public use Int64.seconds from "std/time"` is why
+   `2.seconds()` works everywhere, although `std/time` does not own `Int64`. See [extend](../traits/extend.md) for why
+   such a member is named at all, and [use](use.md) for the form.
+
+   ```trb check
+   print 2.seconds()
+   ```
+
 2. **A project's prelude is `std/prelude` unless `project.trb` names another one.** The field is `prelude` on
    `Project`, so a teaching subset or the vocabulary of an embedded DSL can replace it for a whole project.
 

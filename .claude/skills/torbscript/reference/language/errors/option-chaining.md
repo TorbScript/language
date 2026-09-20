@@ -1,6 +1,6 @@
 ---
 title: Optional chaining
-summary: "`?.` is Option.map, or Option.flatMap when the member itself answers an Option, so chaining never nests. `??` gives a lazy fallback for an absent Option or a failed Result."
+summary: "`?.` is Option.map, or Option.flatMap when the member itself answers an Option, so chaining never nests. `??` is the trait OrElse, which gives a lazy fallback for an absent Option, a failed Result or any type that comes with it."
 kind: reference
 status: stable
 order: 20
@@ -14,7 +14,8 @@ source:
 ---
 
 `?.` and `??` exist so that reading through several `Option`s in a row does not need a `match` at every step. Neither
-is a new kind of value: both desugar to ordinary methods of `Option`.
+is a new kind of value: both are ordinary method calls. `??` is the one of the two that is a **trait**, because which
+method it calls never depends on anything but the receiver.
 
 ## Example
 
@@ -37,7 +38,9 @@ print "{managerName} {name}"
 
 ```text
 <option-expression>?.<member>          Option.map, or Option.flatMap if <member> itself answers an Option
-<option-or-result> ?? <fallback>       the value, or <fallback> (evaluated only if it is needed)
+<expression> ?? <fallback>             OrElse.orElse: the value, or <fallback> (evaluated only if it is needed)
+
+trait OrElse<Value> { fn orElse(self, fallback: lazy Value): Value }
 ```
 
 ## Rules
@@ -63,8 +66,15 @@ print "{managerName} {name}"
    // error: `?.` needs an `Option`, and `Result<Int64, String>` is not one
    ```
 
-4. **`??` is `orElse`, defined on `Option` and on `Result` alike.** `option ?? fallback` and `result ?? fallback` both
-   answer the `Value`, never the `Option` or the `Result` itself.
+4. **`??` is `OrElse.orElse`, and `Option` and `Result` both come with it.** `option ?? fallback` and
+   `result ?? fallback` both answer the `Value`, never the `Option` or the `Result` itself. It is the trait that decides,
+   not the two types: a type of your own that comes `with OrElse<Value>` gets `??`, and one that does not hears so.
+
+   ```trb error
+   const value = 1 ?? 0
+   print value
+   // error: `Int64` does not implement `OrElse`, so `a ?? b` has no meaning for it
+   ```
 
 5. **The right side of `??` is `lazy`: it is evaluated only when the left side is absent or failed.** A fallback that
    is expensive to compute, or that has a side effect, only runs when it is actually needed.
@@ -79,7 +89,14 @@ print "{managerName} {name}"
    ```
 
 6. **The right side of `??` is checked against the `Value`, not against the whole `Option` or `Result`.** `Int.parse(text)
-   ?? 0` needs a plain `Int` on the right, not a `Some(0)` or an `Ok(0)`.
+   ?? 0` needs a plain `Int` on the right, not a `Some(0)` or an `Ok(0)`. The `Value` is the argument of the receiver's
+   `OrElse<Value>`.
+
+7. **`?.` is a trait for nobody, and that is deliberate.** An operator is a trait exactly when it is a method call, and
+   `?.` is two: `map` when the member answers a plain value, `flatMap` when it answers an `Option`. A trait that covered
+   both would have to name `Self<Output>` - the higher-kinded form this language does not have - so `?.` stays defined on
+   `Option` alone. `?` is the same question with a different answer: it leaves the *enclosing function*, and no method can
+   do that. Both can be opened later without breaking anything.
 
 ## What this is not
 
@@ -125,3 +142,4 @@ value that only looks empty.
 - [Result](result.md) - `?`, and why `??` is defined the same way there.
 - [Option](../values-and-types/option.md) - `map`, `flatMap` and `orElse` themselves.
 - [The question mark operator](question-mark.md) - the other way to leave early instead of falling back.
+- [Operators are traits](../traits/operators.md) - which operator is which trait, and the three that are none.

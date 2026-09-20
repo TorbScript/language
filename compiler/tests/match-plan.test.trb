@@ -81,6 +81,34 @@ group "A pattern that has to match every value" {
     const source = inBody r"""  const 1 = 1"""
     assert(problems(source) == ["The pattern of a binding has to match every value, and `_` does not"])
   }
+
+  test "a bare case in scope is that case, not a constant that is spelled wrong" {
+    const source = inBody(r"""
+      const found: Int? = Some(1)
+      const None = found""")
+    assert(problems(source) == ["The pattern of a binding has to match every value, and `.Some(_)` does not"])
+    const written = inBody(r"""
+      const found: Int? = Some(1)
+      var None = found""")
+    assert(problems(written) == ["The pattern of a binding has to match every value, and `.Some(_)` does not"])
+  }
+
+  test "at the top level of a module, where the binding declares no name at all" {
+    const source = "fn find(): Int? \{\n  Some(1)\n\}\n\nconst None = find()\n"
+    assert(problems(source) == ["The pattern of a binding has to match every value, and `.Some(_)` does not"])
+    const bound = "fn find(): Int? \{\n  Some(1)\n\}\n\nconst Some(inner) = find()\n"
+    assert(problems(bound) == ["The pattern of a binding has to match every value, and `.None` does not"])
+  }
+
+  test "a name that is no case in scope is the constant it looks like, and its spelling is the finding" {
+    assert(problems(inBody("  const Limit = 10")) == ["A constant starts with a lowercase letter: write `limit`"])
+  }
+
+  test "a case of another type is named, even where the matched type has no cases at all" {
+    const source = inBody "  const None = 1"
+    assert(problems(source) == ["`None` is the case `Option.None`, and the value matched is a `Int64`"])
+    assert notes(source).isEmpty()
+  }
 }
 
 // --- `if const` and `while const` -----------------------------------------------------------------------------------

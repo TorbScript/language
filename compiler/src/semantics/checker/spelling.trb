@@ -168,6 +168,7 @@ fn spellStatement(var checker: Checker, module: ModuleId, statement: Statement) 
       spellCondition checker, module, condition
       spellBlock checker, module, body
     }
+    .Loop(body) => spellBlock checker, module, body
     .Return(value) => {
       if const Some(found) = value {
         spellExpression checker, module, found
@@ -186,7 +187,8 @@ fn spellBlock(var checker: Checker, module: ModuleId, block: Block) {
 /** `const` is a constant, `var` a binding: both lowercase, and neither is spelled `MAX_SIZE`. */
 fn spellBinding(var checker: Checker, module: ModuleId, binding: Binding) {
   const kind = if binding.isVar { "binding" } else { "constant" }
-  for name in declaredNames(binding.pattern) {
+  const names = declaredNames checker, module, binding.pattern
+  for name in names {
     requireLowerCase checker, module, kind, name
   }
   if const Some(reference) = binding.annotation {
@@ -200,14 +202,35 @@ fn spellBinding(var checker: Checker, module: ModuleId, binding: Binding) {
  * one more: `const Limit = 10` reads `Limit` as a **case** pattern, because an uppercase name in a pattern always is
  * one. Such a binding declares nothing at all, so a pattern that is nothing but a bare uppercase name is a constant
  * whose name is spelled wrong, and this is the rule that says so.
+ *
+ * Unless the name is a **case in scope**: `const None = value` is then the pattern it looks like, and what is wrong
+ * with it is that it can fail - which is the refutable-pattern error every other binding gets. Saying both would say
+ * neither, because two findings at one span are one finding.
  */
-fn declaredNames(pattern: Pattern): List<Name> {
+fn declaredNames(var checker: Checker, module: ModuleId, pattern: Pattern): List<Name> {
   if const .Variant(path, fields) = pattern.kind {
     if path.length() == 1 && fields.isEmpty() {
+      if namesACaseHere(checker, module, path[0].text) {
+        return []
+      }
       return [path[0]]
     }
   }
   boundNamesOf pattern
+}
+
+/** Whether a bare uppercase name in a pattern resolves to something a pattern can match: a case, a type, an alias. */
+fn namesACaseHere(var checker: Checker, module: ModuleId, text: String): Bool {
+  const symbol = match checker.program.lookUp(module, text) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  match checker.symbolAt(symbol).kind {
+    .Case(_) | .Type | .Alias | .Trait | .GenericParameter | .Builtin => true
+    _ => false
+  }
 }
 
 fn spellCondition(var checker: Checker, module: ModuleId, condition: Condition) {
@@ -270,7 +293,6 @@ fn spellUse(var checker: Checker, module: ModuleId, items: UseItems) {
       }
     }
     .All(alias) => requireLowerCase checker, module, "module alias", alias
-    .OnlyExtensions => {}
   }
 }
 

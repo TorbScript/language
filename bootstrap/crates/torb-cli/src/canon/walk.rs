@@ -30,6 +30,8 @@ pub struct Sites<'tree> {
     pub calls: Vec<CallSite<'tree>>,
     pub patterns: Vec<&'tree Pattern>,
     pub bindings: Vec<BindingSite<'tree>>,
+    /// Every `while true { ... }`: the statement the rule `loops` rewrites into a `loop { ... }`
+    pub endless: Vec<&'tree Statement>,
 }
 
 pub fn walk(file: &File) -> Sites<'_> {
@@ -66,11 +68,16 @@ impl<'tree> Walk<'tree> {
                 self.block(body);
             }
             StatementKind::While { condition, body } => {
+                // `while true { ... }` is written `loop { ... }`, which is the rule `loops`
+                if matches!(condition, Condition::Expression(test) if matches!(test.kind, ExpressionKind::Bool(true))) {
+                    self.sites.endless.push(item);
+                }
                 self.condition(condition);
                 // `while const Some(item) = next()`: the body is where the binding has to be used
                 self.refutable(condition, &[body.span]);
                 self.block(body);
             }
+            StatementKind::Loop { body } => self.block(body),
             StatementKind::Return(value) => {
                 if let Some(value) = value {
                     self.expression(value, true);

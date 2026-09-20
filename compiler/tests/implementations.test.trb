@@ -25,6 +25,31 @@ fn problemsIn(files: Map<String, String>): List<String> {
   found
 }
 
+/** The notes of all of them, in the same order. */
+fn notesIn(files: Map<String, String>): List<String> {
+  var found: List<String> = []
+  for file in check(workspaceWith(files), ["app"]).files {
+    for diagnostic in file.diagnostics {
+      found.addAll diagnostic.notes
+    }
+  }
+  found
+}
+
+/**
+ * A second package, so that "this package attached it" and "another package attached it" can be told apart. The
+ * `extend` goes into `other/src/lib.trb`, which is `"other/library"` in a `use`.
+ */
+fn withOtherPackage(library: String, main: String): Map<String, String> {
+  [
+    "project.trb": "name \"acme/all\"\nworkspace \{ members \"std/*\", \"app\", \"other\" \}\n",
+    "other/project.trb": "name \"other/library\"\n",
+    "other/src/lib.trb": library,
+    "app/project.trb": "name \"acme/app\"\ndependencies \{ runtime \"other/library\" \}\n",
+    "app/src/main.trb": main,
+  ]
+}
+
 group "What an implementation has to provide" {
   test "a required member that is nowhere is named, together with the signature the trait asks for" {
     const source = "trait Shape \{\n  fn name(self): String\n\}\n\ntype Square with Shape \{\n  side: Int\n\}"
@@ -291,27 +316,57 @@ group "The visibility of an `extend`" {
     assert problemsIn(files).isEmpty()
   }
 
-  test "an extension of a foreign type only reaches the files that import its module" {
-    const files = [
-      "app/src/text.trb": "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
-      "app/src/main.trb": "fn probe() \{\n  print \"a\".shout()\n\}",
-    ]
-    assert(
-      problemsIn(files) == ["`shout` is declared in `app/src/text.trb`, which this file does not import"]
+  test "an extension of a foreign type is named where it is used, and the message is the line to write" {
+    const files = withOtherPackage(
+      "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
+      "fn probe() \{\n  print \"a\".shout()\n\}",
     )
-    const imported = [
-      "app/src/text.trb": "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
-      "app/src/main.trb": "use \"./text\"\n\nfn probe() \{\n  print \"a\".shout()\n\}",
-    ]
-    assert problemsIn(imported).isEmpty()
+    assert(problemsIn(files) == ["`other/library` adds `shout` to `String`, and this file does not name it"])
+    assert(notesIn(files) == ["Write `use String.shout from \"other/library\"` at the top of the file"])
+    const named = withOtherPackage(
+      "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
+      "use String.shout from \"other/library\"\n\nfn probe() \{\n  print \"a\".shout()\n\}",
+    )
+    assert problemsIn(named).isEmpty()
   }
 
-  test "two imported extensions that bring the same member for the same type are an ambiguity at the use" {
+  test "two members of one name for one type are an ambiguity at the use, and `as` is the fix" {
     const files = [
       "app/src/one.trb": "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
       "app/src/two.trb": "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
-      "app/src/main.trb": "use \"./one\"\nuse \"./two\"\n\nfn probe() \{\n  print \"a\".shout()\n\}",
+      "app/src/main.trb": "fn probe() \{\n  print \"a\".shout()\n\}",
     ]
-    assert(problemsIn(files) == ["`shout` comes from `app/src/one.trb` and from `app/src/two.trb`"])
+    assert(problemsIn(files) == ["`shout` comes from `acme/app/one` and from `acme/app/two`"])
+    assert(
+      notesIn(files)
+        == ["A member is renamed where it is imported: `use ... as another from \"acme/app/two\"`"]
+    )
+  }
+
+  test "`as` renames a member of this package too, so a conflict has a way out" {
+    const files = [
+      "app/src/one.trb": "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
+      "app/src/main.trb": "use String.shout as yell from \"./one\"\n\nfn probe() \{\n  print \"a\".yell()\n\}",
+    ]
+    assert problemsIn(files).isEmpty()
+  }
+
+  test "what a trait puts on a type it does not own needs the trait to be a name of the file" {
+    const library = "public trait Slug \{\n  fn slug(self): String\n\}\n\n"
+      + "extend String with Slug \{\n  fn slug(self): String \{\n    self\n  \}\n\}"
+    const files = withOtherPackage library, "fn probe() \{\n  print \"a\".slug()\n\}"
+    assert(problemsIn(files) == ["`slug` comes from `Slug`, which is not a name in this file"])
+    assert(
+      notesIn(files)
+        == ["Write `use Slug from \"other/library\"`: the members a trait puts on a foreign type need the trait"]
+    )
+    const named = withOtherPackage library, "use Slug from \"other/library\"\n\nfn probe() \{\n  print \"a\".slug()\n\}"
+    assert problemsIn(named).isEmpty()
+    // A bound is the trait, so the member is reachable on a type parameter without a second thought
+    const bounded = withOtherPackage(
+      library,
+      "use Slug from \"other/library\"\n\npublic fn shown<Value: Slug>(value: Value): String \{\n  value.slug()\n\}",
+    )
+    assert problemsIn(bounded).isEmpty()
   }
 }

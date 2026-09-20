@@ -114,6 +114,7 @@ public fn lowerStatement(var lowering: Lowering, var builder: FunctionBuilder, s
     .Bind(binding) => lowerBinding lowering, builder, binding, statement.span
     .Assign(target, value) => lowerAssignment lowering, builder, target, value, statement.span
     .While(condition, body) => lowerWhile lowering, builder, condition, body, statement.span
+    .Loop(body) => lowerLoop lowering, builder, body, statement.span
     .For(pattern, iterable, body) => lowerFor lowering, builder, pattern, iterable, body, statement.span
     .Return(value) => lowerReturn lowering, builder, value, statement.span
     .Break => lowerBreak lowering, builder, statement.span
@@ -336,10 +337,7 @@ fn lowerContinue(var lowering: Lowering, var builder: FunctionBuilder, at: Span)
 
 // --- `while` --------------------------------------------------------------------------------------------------------
 
-/**
- * `while c { ... }`: the condition is a block of its own, because the back edge jumps to it. A `while true` without a
- * `break` never ends, so nothing after it is reachable - and the block after it stays an empty `unreachable` marker.
- */
+/** `while c { ... }`: the condition is a block of its own, because the back edge jumps to it. */
 fn lowerWhile(var lowering: Lowering, var builder: FunctionBuilder, condition: Condition, body: Block, at: Span) {
   const test = match condition {
     .Test(inner) => inner
@@ -362,22 +360,33 @@ fn lowerWhile(var lowering: Lowering, var builder: FunctionBuilder, condition: C
   continueIn lowering, builder, inner
   enterLoop lowering, done, check
   lowerBlockInto lowering, builder, body, None
-  const broke = leaveLoop lowering
+  const _ = leaveLoop lowering
   if !lowering.isDiverged {
     finishBlock lowering, builder, Terminator.Jump(check)
   }
   continueIn lowering, builder, done
-  if neverEnds(test) && !broke {
-    lowering.isDiverged = true
-  }
 }
 
-/** `while true` is the one loop whose end the checker knows nothing follows. */
-fn neverEnds(test: Expression): Bool {
-  if const .BoolLiteral(value) = test.kind {
-    return value
+/**
+ * `loop { ... }`: one block that jumps back to itself, with no condition to evaluate. Without a `break` nothing after
+ * it is reachable - and the block after it stays an empty `unreachable` marker.
+ */
+fn lowerLoop(var lowering: Lowering, var builder: FunctionBuilder, body: Block, at: Span) {
+  const location = locationOf lowering, at
+  const inner = addBlock builder, "loop", Some(location)
+  const done = addBlock builder, "done", Some(location)
+  finishBlock lowering, builder, Terminator.Jump(inner)
+  continueIn lowering, builder, inner
+  enterLoop lowering, done, inner
+  lowerBlockInto lowering, builder, body, None
+  const broke = leaveLoop lowering
+  if !lowering.isDiverged {
+    finishBlock lowering, builder, Terminator.Jump(inner)
   }
-  false
+  continueIn lowering, builder, done
+  if !broke {
+    lowering.isDiverged = true
+  }
 }
 
 // --- `for` over a range ---------------------------------------------------------------------------------------------

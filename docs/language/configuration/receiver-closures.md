@@ -58,6 +58,10 @@ print counter.value
    module.** A local binding always wins over a field of the same name, and a field of the receiver always wins over
    a top-level name of the module.
 
+   A **position is not a name**, so a receiver never makes one implicit: `.0` and `.1` always stand behind a dot
+   (`entry.0`, `_.0`, `self.0`), and a bare `0` is always the number. What a receiver makes implicit are the *members*
+   of a type, and a tuple position is not one.
+
 3. **Exactly one receiver is implicit at a time.** A method has exactly one `self`, and a receiver closure has
    exactly one receiver in scope this way - nesting one receiver closure inside another does not add the outer one
    to what a bare name can mean inside the inner one.

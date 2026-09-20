@@ -93,10 +93,20 @@ extend<Source, Target> Source with <Trait><Target> where <bounds> { ... }   a bl
    implementations of one trait are never disjoint this way, so a package may write at most one blanket
    implementation of a trait it owns, however its `where` clause is written.
 
+6. **Coherence decides which implementation exists; the file decides which member names it can write.** An
+   implementation is unique in the program either way, and nothing about dispatch depends on an import - but the members
+   a trait puts on a type it does not own are only *nameable* where the trait itself is a name of the file, and a
+   trait-less `extend` of a foreign type is nameable only where the file imported the member. See
+   [extend](extend.md) for both halves.
+
 ## What this is not
 
 **Coherence is not "last import wins".** There is no shadowing between implementations: a second implementation of a
 trait a type already has is a compile error at the `extend`, not a silent replacement.
+
+**And visibility is not coherence.** A member that this file cannot name still exists, is still the one implementation
+in the program, and is still what a generic function with the right bound calls. The import decides what *this* file may
+write, never what the program means.
 
 ```trb check
 trait Loud {

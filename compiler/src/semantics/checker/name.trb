@@ -5,8 +5,8 @@ use editDistance from "../resolve-types"
 use TypeId, TypeForm, FunctionForm, ParameterId, Bound from "./type"
 use Checker, Resolution, Dispatch, Adaptation, LocalKind, Candidate, BindingId, Capture from "./context"
 use lookupMember, lookupStaticMember, resolutionOfCandidate from "./member"
-use constructorOf, memberNames, caseNamed from "./member"
-use isConcrete, hiddenExtensionOf from "./implementation"
+use constructorOf, memberNames, caseNamed, typeNameOf from "./member"
+use isConcrete, hiddenExtensionOf, hiddenTraitMemberOf, importPathOf from "./implementation"
 use signatureOf, aliasTargetOf, genericsOf, resultOf from "./signature"
 use substitute from "./unify"
 use implicitParameterTarget, isImplicitName, namesImplicitParameter from "./closure"
@@ -515,12 +515,22 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
     )
     return true
   }
-  // An extension of a foreign type only reaches the files that import the module it is written in
+  // An `extend` of a foreign type is named where it is used, so the message is the `use` line to write
   if const Some(module) = hiddenExtensionOf(checker, receiver, text) {
-    const path = checker.program.graph.at(module).path
+    const path = importPathOf checker, module
+    const owner = typeNameOf(checker, receiver) ?? shown
     checker.reportHere(
-      Diagnostic.error("`{text}` is declared in `{path}`, which this file does not import", at)
-        .withNote("An extension of a type of another package is visible in every file that imports its module")
+      Diagnostic.error("`{path}` adds `{text}` to `{shown}`, and this file does not name it", at)
+        .withNote("Write `use {owner}.{text} from \"{path}\"` at the top of the file")
+    )
+    return true
+  }
+  // A trait another package puts on a type it does not own reaches the files where the trait itself is a name
+  if const Some((capability, module)) = hiddenTraitMemberOf(checker, receiver, text) {
+    const path = importPathOf checker, module
+    checker.reportHere(
+      Diagnostic.error("`{text}` comes from `{capability}`, which is not a name in this file", at)
+        .withNote("Write `use {capability} from \"{path}\"`: the members a trait puts on a foreign type need the trait")
     )
     return true
   }

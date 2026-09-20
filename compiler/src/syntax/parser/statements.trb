@@ -10,7 +10,7 @@ use parseExpression, parseCommandExpression from "./expressions"
 /** The statements of a file (up to `EndOfFile`) or of a block (up to `BraceClose`). */
 public fn parseStatementsUntil(var parser: Parser, end: TokenKind): List<Statement> {
   var statements: List<Statement> = []
-  while true {
+  loop {
     parser.skipNewlines()
     if parser.isAt(end) || parser.isAt(TokenKind.EndOfFile) {
       break
@@ -56,6 +56,10 @@ fn parseStatement(var parser: Parser): Statement {
       parser.bump()
       const condition = parseCondition parser
       StatementKind.While condition, parseBlock(parser)
+    }
+    .Reserved(.Loop) => {
+      parser.bump()
+      StatementKind.Loop parseBlock(parser)
     }
     .Reserved(.Return) => {
       parser.bump()

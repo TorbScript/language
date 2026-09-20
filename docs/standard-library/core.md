@@ -47,7 +47,8 @@ public type Option<Value> {
 ```
 
 A value that may be absent. `Value?` is sugar for `Option<Value>`. `map`, `flatMap`, `filter` and `forEach` mean the same
-as everywhere else and run immediately, because an Option is a value and not a pipeline. `orElse` is the `??` operator,
+as everywhere else and run immediately, because an Option is a value and not a pipeline. `orElse` is `OrElse`, the trait
+`??` goes through,
 `okOr` turns it into a `Result`, `toList()` brings it into the world of pipelines, and `expect(message)` panics where
 absence is a bug.
 
@@ -108,9 +109,11 @@ uses, and only `String` and `Char` override it. `LiteralParseError` is what a ge
 
 ### The operator traits
 
-`Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Negate`, `Indexed`, `MutableIndexed`, `Slice`, `MutableSlice`. Each
-one has a type parameter list with defaults, which is why `with Add` means `Add<Self, Self>`. `a[i]` is `Indexed.at`,
-`a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`, and `a[from..to] = v` is `MutableSlice.replace`.
+`Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`, `Negate`, `OrElse`, `Indexed`, `MutableIndexed`, `Slice`,
+`MutableSlice`. Each one has a type parameter list with defaults, which is why `with Add` means `Add<Self, Self>`. `a[i]`
+is `Indexed.at`, `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.slice`, `a[from..to] = v` is
+`MutableSlice.replace`, and `a ?? b` is `OrElse.orElse`, whose `fallback` is `lazy` so that it is only evaluated where
+there is nothing to give back.
 
 ### Range
 
