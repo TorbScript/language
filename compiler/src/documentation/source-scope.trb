@@ -1,0 +1,251 @@
+/**
+ * Where a link of a doc comment may point: the names a file can see, and the members that resolve through a type.
+ *
+ * A link is resolved the way a name in the code at that place is resolved - the file's own declarations, its imports,
+ * the prelude - and `Type.member` through the type. That is why this is an index over parsed files and not a text
+ * search: a link that resolves is a link a reader can follow to a declaration that exists.
+ *
+ * # Related
+ *
+ * - [NameIndex] - the index of every type and its members.
+ * - [Scope] - what one file can name.
+ */
+
+use SourceText from "../syntax/source"
+use parse from "../syntax/parser/parser"
+use SourceFile, Declaration, Member, TypeReference, Pattern from "../syntax/ast"
+use Visibility from "../syntax/ast"
+use SourceTree from "../project/source-tree"
+
+/** Every type, trait and extension of the tree, with the members that can be named through it. */
+public type NameIndex {
+  /** The name of a type or a trait, to the members that resolve through it */
+  members: Map<String, List<String>>
+  /** The names the prelude puts into every file */
+  prelude: List<String>
+
+  /** Is this a type the index knows? A name it does not know is not judged: it may come from a package nobody read. */
+  fn hasType(self, name: String): Bool {
+    members.containsKey name
+  }
+
+  fn hasMember(self, name: String, member: String): Bool {
+    (members.get(name) ?? []).contains(member)
+  }
+}
+
+/**
+ * The index of every file that was read, plus the names of the prelude.
+ *
+ * The files are parsed a second time here, once, and only their names are kept: a whole syntax tree per file of the
+ * repository at the same time is what a tree-walking stage 0 has no memory for.
+ */
+public fn buildNameIndex(tree: SourceTree, paths: List<String>): NameIndex {
+  var members: Map<String, List<String>> = [:]
+  var supertraits: Map<String, List<String>> = [:]
+  for path in paths {
+    const text = tree.text(path) ?? ""
+    const parsed = parse SourceText.of(text)
+    indexFile parsed.file, members, supertraits
+  }
+  const expanded = withInheritedMembers members, supertraits
+  NameIndex expanded, preludeNames(tree)
+}
+
+fn indexFile(file: SourceFile, var members: Map<String, List<String>>, var supertraits: Map<String, List<String>>) {
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      indexDeclaration declaration, members, supertraits
+    }
+  }
+}
+
+fn indexDeclaration(
+  declaration: Declaration,
+  var members: Map<String, List<String>>,
+  var supertraits: Map<String, List<String>>,
+) {
+  match declaration.kind {
+    .Type(declared) => {
+      addMembers members, declared.name.text, memberNames(declared.members)
+      addMembers supertraits, declared.name.text, declared.traits.map({ typeNameOf _.capability }).toList()
+    }
+    .Trait(declared) => {
+      addMembers members, declared.name.text, memberNames(declared.members)
+      addMembers supertraits, declared.name.text, declared.supertraits.map(typeNameOf).toList()
+    }
+    .Extend(extension) => {
+      const name = typeNameOf extension.target
+      addMembers members, name, memberNames(extension.members)
+      addMembers supertraits, name, extension.traits.map(typeNameOf).toList()
+    }
+    _ => {}
+  }
+}
+
+/** The name a `with` clause or an `extend` target names, without its type arguments. */
+public fn typeNameOf(reference: TypeReference): String {
+  match reference.kind {
+    .Named(path, _) => path[path.length() - 1].text
+    .Optional(inner) => typeNameOf inner
+    _ => ""
+  }
+}
+
+fn memberNames(members: List<Member>): List<String> {
+  var names: List<String> = []
+  for member in members {
+    match member.kind {
+      .Field(field) => names.add field.name.text
+      .Constant(binding) => names.addAll bindingNames(binding.pattern)
+      .Function(function) => names.add function.name.text
+      .Case(declared) => names.add declared.name.text
+    }
+  }
+  names
+}
+
+fn addMembers(var table: Map<String, List<String>>, name: String, names: List<String>) {
+  if name.isEmpty() {
+    return
+  }
+  var found = table.get(name) ?? []
+  found.addAll names
+  table.set name, found
+}
+
+/**
+ * A type can also be asked for what its traits declare: `[List.map]` is `Collection.map`, and a reader who follows the
+ * link finds it. One level is enough - the traits of a trait of a trait are not what a doc comment links to.
+ */
+fn withInheritedMembers(
+  members: Map<String, List<String>>,
+  supertraits: Map<String, List<String>>,
+): Map<String, List<String>> {
+  var expanded = members
+  for (name, capabilities) in supertraits {
+    var found = expanded.get(name) ?? []
+    for capability in capabilities {
+      found.addAll(members.get(capability) ?? [])
+    }
+    expanded.set name, found
+  }
+  expanded
+}
+
+/** What the prelude re-exports, read from `std/prelude`. Empty when the tree has no prelude. */
+fn preludeNames(tree: SourceTree): List<String> {
+  for path in tree.paths() {
+    if !path.endsWith("std/prelude/src/lib.trb") {
+      continue
+    }
+    const parsed = parse SourceText.of(tree.text(path) ?? "")
+    return importedNames parsed.file
+  }
+  []
+}
+
+/** The names a `use` brings into a file: the local name of every item, and the alias of a `use * as`. */
+public fn importedNames(file: SourceFile): List<String> {
+  var names: List<String> = []
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(used) = declaration.kind {
+        match used.items {
+          .Names(items) => names.addAll(items.map({ _.localName().text }).toList())
+          .All(alias) => names.add alias.text
+          .OnlyExtensions => {}
+        }
+      }
+    }
+  }
+  names
+}
+
+/** The names of a `use * as name`: everything behind the dot resolves in another package, so nothing is judged. */
+public fn namespaceNames(file: SourceFile): List<String> {
+  var names: List<String> = []
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(used) = declaration.kind {
+        if const .All(alias) = used.items {
+          names.add alias.text
+        }
+      }
+    }
+  }
+  names
+}
+
+/** What one file can name. */
+public type Scope {
+  names: List<String>
+  /** The aliases of a `use * as`, whose members are not judged */
+  namespaces: List<String>
+
+  fn has(self, name: String): Bool {
+    names.contains name
+  }
+
+  fn isNamespace(self, name: String): Bool {
+    namespaces.contains name
+  }
+}
+
+/** The file's own top-level declarations, what it imports, and the prelude. */
+public fn scopeOf(file: SourceFile, index: NameIndex): Scope {
+  var names = declaredNames file
+  names.addAll importedNames(file)
+  names.addAll index.prelude
+  Scope names, namespaceNames(file)
+}
+
+/** The names a file declares at its top level. */
+public fn declaredNames(file: SourceFile): List<String> {
+  var names: List<String> = []
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      names.addAll declarationNames(declaration)
+    }
+  }
+  names
+}
+
+fn declarationNames(declaration: Declaration): List<String> {
+  match declaration.kind {
+    .Function(function) => [function.name.text]
+    .Type(declared) => [declared.name.text]
+    .Trait(declared) => [declared.name.text]
+    .Alias(declared) => [declared.name.text]
+    .Constant(binding) => bindingNames binding.pattern
+    _ => []
+  }
+}
+
+/** The names a pattern binds. A top-level `const` binds one, a destructuring one several. */
+public fn bindingNames(pattern: Pattern): List<String> {
+  match pattern.kind {
+    .Binding(name) => [name]
+    .TuplePattern(items) => {
+      var names: List<String> = []
+      for item in items {
+        names.addAll bindingNames(item)
+      }
+      names
+    }
+    _ => []
+  }
+}
+
+/** The top-level declarations of a file that another file can import: what an example may use. */
+public fn publicNames(file: SourceFile): List<String> {
+  var names: List<String> = []
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if declaration.modifiers.visibility == Visibility.Public {
+        names.addAll declarationNames(declaration)
+      }
+    }
+  }
+  names
+}

@@ -262,12 +262,21 @@ type Shape {
 ```
 
 - The text is Markdown. There are no annotations and no second syntax inside of comments.
-- Conventional headings carry what tags carry elsewhere: `# Errors`, `# Panics`, `# Examples`. The return value is
+- **The first sentence says what the construct does, the sentences after it say what it is for** - when a reader reaches
+  for it. Everything is in the present tense and about the code as it is.
+- Six headings carry what tags carry elsewhere, and there are no others: `# Examples`, `# Errors`, `# Panics`,
+  `# Pitfalls`, `# Open` (a problem that is open, stated in the present tense), `# Related` (links). The return value is
   described in the text.
+- **A file starts with a module comment**: a doc comment at the top, in front of the first `use`, that says what the
+  module is for, which constructs are its main ones and how they relate.
+- **A comment never tells the history of its own code.** What something used to be, what changed and which plan a
+  change belonged to is in the log, not at the declaration.
 - **Examples are tests.** `torb test` compiles and runs the code under `# Examples`, so documentation cannot rot.
 - `[List.add]` and `[Option]` are links. They are resolved like names in the code at that place; a link that does not
   resolve is a warning.
 - The doc comment is part of the syntax tree. The language server, `torb doc` and the test runner read the same data.
+- A `//` comment inside a body is the rare exception, for a step that is not obvious from the code. What a caller or a
+  reader of the construct has to know belongs in the doc comment.
 
 ## Bindings
 

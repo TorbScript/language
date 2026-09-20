@@ -31,6 +31,7 @@ torb docs index [root]                     Write the generated part of every ind
     --check                                Report instead of writing, for the gate
 torb docs skill <root> <out>               Write the Agent Skill of the language
 torb docs bundle <root> <out>              Write llms.txt and llms-full.txt
+torb docs source <path>...                 Check the doc comments of the code itself
 ```
 
 Every command exits with 1 when it reports a problem and with 0 when it does not. From `bootstrap/`, where stage 0
@@ -40,6 +41,10 @@ lives:
 cargo run --release -q -- run ../compiler docs check ../docs
 cargo run --release -q -- run ../compiler docs index --check ../docs
 ```
+
+The first two are gates of every change. `docs source` is about the doc comments of `std/`, `compiler/` and `examples/`
+instead of about these pages, it has rules of its own, and it is not a gate yet - it has its own page,
+[torb docs source](../tooling/torb-docs-source.md).
 
 ## What it does
 

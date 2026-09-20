@@ -1,0 +1,356 @@
+/**
+ * The tests of `torb docs source`, the gate of the documentation that lives in the code.
+ *
+ * Every test judges one source file in memory, against a small prelude and a small library of its own: the whole gate
+ * is a function of a parsed file and a name index, so nothing here touches a disk.
+ */
+
+use test, group from "std/test"
+use SourceTree from "../src/project/source-tree"
+use NameIndex, buildNameIndex from "../src/documentation/source-scope"
+use Tree, readSource, sourceProblems from "../src/documentation/source"
+use exampleSyntaxProblems from "../src/documentation/source-examples"
+use CommentLine, commentLines, historyHits from "../src/documentation/comments"
+use SourceText, LineIndex from "../src/syntax/source"
+use lex from "../src/syntax/lexer"
+
+/** The names these tests resolve a link against, in the two places a name can come from. */
+const preludeModule = "public use Option, Result, Int, String, print from \"std/core\"\n"
+
+const libraryModule = r"""
+  public trait Iterator {
+    fn next(var self): Int?
+  }
+  """
+
+fn index(): NameIndex {
+  const files = ["std/prelude/src/lib.trb": preludeModule, "std/iteration/src/lib.trb": libraryModule]
+  buildNameIndex SourceTree.of(files), ["std/prelude/src/lib.trb", "std/iteration/src/lib.trb"]
+}
+
+/** The findings of one file of one tree, as a message shows them. */
+fn findings(text: String, tree: Tree): List<String> {
+  const read = readSource "std/a/src/a.trb", "std/a/src/a.trb", tree, text
+  const checked = sourceProblems read, index()
+  var messages: List<String> = []
+  for problem in checked.problems {
+    messages.add problem.show()
+  }
+  messages.addAll exampleSyntaxProblems(checked.examples).map({ _.show() }).toList()
+  messages
+}
+
+fn standard(text: String): List<String> {
+  findings text, Tree.Standard
+}
+
+/** One file that passes, which is what every test about a single broken rule starts from. */
+fn goodFile(): String {
+  r"""
+    /** What this module is for, and how its constructs relate. */
+
+    use Iterator from "std/iteration"
+
+    /** Counts what a cursor walks over. */
+    public fn counted(cursor: Iterator): Int {
+      0
+    }
+    """
+}
+
+/** The same file with a different doc comment on its function: what a test about one rule of a comment asks. */
+fn withComment(comment: String): String {
+  goodFile().replace("/** Counts what a cursor walks over. */", comment)
+}
+
+/** The same file with the sections behind the first sentence of its function's comment. */
+fn withSections(sections: String): String {
+  withComment "/**\n * Counts what a cursor walks over.\n *\n{sections} */"
+}
+
+group "the module comment" {
+  test "a file that does not start with a doc comment is a finding" {
+    const source = r"""
+      public fn counted(): Int {
+        0
+      }
+      """
+    const found = standard source
+    assert(found.length() == 2)
+    assert found[0].contains("has no module comment")
+  }
+
+  test "the doc comment a file starts with is the module comment" {
+    assert standard(goodFile()).isEmpty()
+  }
+
+  test "the module comment is not the comment of the first declaration" {
+    const source = r"""
+      /** What this module is for. */
+
+      public fn counted(): Int {
+        0
+      }
+      """
+    const found = standard source
+    assert(found.length() == 1)
+    assert found[0].contains("`fn counted` has no doc comment")
+  }
+
+  test "a comment behind the imports is not a module comment" {
+    const source = r"""
+      use Iterator from "std/iteration"
+
+      /** Counts what a cursor walks over. */
+      public fn counted(cursor: Iterator): Int {
+        0
+      }
+      """
+    const found = standard source
+    assert(found.length() == 1)
+    assert found[0].contains("has no module comment")
+  }
+}
+
+group "what needs a comment" {
+  test "std asks for every public declaration" {
+    const found = standard withComment("")
+    assert(found.length() == 1)
+    assert(found[0] == "std/a/src/a.trb:6: `fn counted` has no doc comment. Say what it does, then what it is for")
+  }
+
+  test "std asks for nothing of a declaration that is not public" {
+    const source = withComment("").replace("public fn counted", "fn counted")
+    assert standard(source).isEmpty()
+  }
+
+  test "std asks for the members of a public type" {
+    const source = r"""
+      /** What this module is for. */
+
+      /** Where something is. */
+      public type Point {
+        x: Int
+      }
+      """
+    const found = standard source
+    assert(found.length() == 1)
+    assert found[0].contains("`field x` has no doc comment")
+  }
+
+  test "std asks for nothing of a private member" {
+    const source = r"""
+      /** What this module is for. */
+
+      /** Where something is. */
+      public type Point {
+        private x: Int
+      }
+      """
+    assert standard(source).isEmpty()
+  }
+
+  test "the compiler asks for no members" {
+    const source = r"""
+      /** What this module is for. */
+
+      /** Where something is. */
+      public type Point {
+        x: Int
+      }
+      """
+    assert findings(source, Tree.Compiler).isEmpty()
+  }
+
+  test "an example asks for every top-level declaration" {
+    const source = r"""
+      /** What this file shows. */
+
+      fn counted(): Int {
+        0
+      }
+      """
+    const found = findings source, Tree.Examples
+    assert(found.length() == 1)
+    assert found[0].contains("`fn counted` has no doc comment")
+  }
+
+  test "a test file is asked for its file comment and for nothing else" {
+    const source = r"""
+      /** What these tests ask. */
+
+      fn counted(): Int {
+        0
+      }
+      """
+    assert findings(source, Tree.Tests).isEmpty()
+  }
+}
+
+group "the headings of a doc comment" {
+  test "a heading outside the vocabulary is a finding" {
+    const found = standard withSections(" * # Returns\n * A number.\n")
+    assert(found.length() == 1)
+    assert found[0].contains("`# Returns` is not a heading of a doc comment")
+  }
+
+  test "a heading of the wrong level is a finding" {
+    const found = standard withSections(" * ## Pitfalls\n * A cursor is pulled once.\n")
+    assert(found.length() == 1)
+    assert found[0].contains("is not a heading of a doc comment")
+  }
+
+  test "a section that says nothing is a finding" {
+    const found = standard withSections(" * # Pitfalls\n")
+    assert(found.length() == 1)
+    assert found[0].contains("`# Pitfalls` says nothing")
+  }
+
+  test "a section of the vocabulary with content is no finding" {
+    assert standard(withSections(" * # Pitfalls\n * A cursor is pulled once.\n")).isEmpty()
+  }
+}
+
+group "the links of a doc comment" {
+  test "a name the file can see resolves" {
+    assert standard(withComment("/** Counts. See [Iterator]. */")).isEmpty()
+  }
+
+  test "a name the file cannot see is a finding" {
+    const found = standard withComment("/** Counts. See [Collection]. */")
+    assert(found.length() == 1)
+    assert found[0].contains("`[Collection]` does not resolve here")
+  }
+
+  test "a member of a type resolves through the type" {
+    assert standard(withComment("/** Counts. See [Iterator.next]. */")).isEmpty()
+  }
+
+  test "a member the type does not have is a finding" {
+    const found = standard withComment("/** Counts. See [Iterator.previous]. */")
+    assert(found.length() == 1)
+    assert found[0].contains("`Iterator` has no member `previous`")
+  }
+
+  test "what stands in backticks is not a link" {
+    assert standard(withComment("/** Counts. Not a link: `[Collection]`. */")).isEmpty()
+  }
+
+  test "a link that names its own target is not a name of the code" {
+    assert standard(withComment("/** Counts. See [the concept](CONCEPT.md). */")).isEmpty()
+  }
+}
+
+group "the examples of a doc comment" {
+  test "an example that is not in the canon is a finding" {
+    const found = standard withSections(" * # Examples\n *\n *     print(\"one\")\n")
+    assert(found.length() == 1)
+    assert found[0].contains("A call is a command")
+  }
+
+  test "an example in the canon is no finding" {
+    assert standard(withSections(" * # Examples\n *\n *     print \"one\"\n")).isEmpty()
+  }
+
+  test "an example names the line it stands on" {
+    const found = standard withSections(" * # Examples\n *\n *     print(\"one\")\n")
+    assert found[0].startsWith("std/a/src/a.trb:10:")
+  }
+
+  test "a fragment is only lexed" {
+    assert standard(withSections(" * # Examples\n *\n *     // fragment\n *     fn counted(): Int\n")).isEmpty()
+  }
+
+  test "a skip is checked by nothing" {
+    const skipped = " * # Examples\n *\n *     // skip there is nothing to run here\n *     print(\"one\")\n"
+    assert standard(withSections(skipped)).isEmpty()
+  }
+
+  test "a skip needs a reason of its own" {
+    const found = standard withSections(" * # Examples\n *\n *     // skip later\n *     print(\"one\")\n")
+    assert(found.length() == 1)
+    assert found[0].contains("needs a reason of its own")
+  }
+
+  test "an example is indented and not fenced" {
+    const fenced = " * # Examples\n *\n * ```trb\n * print \"one\"\n * ```\n"
+    const found = standard withSections(fenced)
+    assert(found.length() == 1)
+    assert found[0].contains("indented by four spaces")
+  }
+}
+
+group "a comment that tells its own history" {
+  test "a word of the list is a finding" {
+    const found = standard withComment("/** Counts. It previously counted twice. */")
+    assert(found.length() == 1)
+    assert found[0].contains("`previously`: a comment says what the code does now")
+  }
+
+  test "a line comment counts as well" {
+    const source = goodFile().replace("  0\n", "  // This used to answer the length\n  0\n")
+    const found = standard source
+    assert(found.length() == 1)
+    assert found[0].contains("`used to`")
+  }
+
+  test "a plan number is a finding" {
+    const hits = historyHits comments("// gap 58 is what this answers\n")
+    assert(hits.length() == 1)
+    assert(hits[0].word == "gap <number>")
+  }
+
+  test "a round number is a finding" {
+    const hits = historyHits comments("// round four is where this belongs\n")
+    assert(hits.length() == 1)
+    assert(hits[0].word == "round <number>")
+  }
+
+  test "a word inside a string literal is no comment" {
+    assert historyHits(comments("const note = \"// previously counted\"\n")).isEmpty()
+  }
+
+  test "a word between backticks is quoted and not prose" {
+    assert historyHits(comments("// The word `previously` is one of the list\n")).isEmpty()
+  }
+
+  test "a word that only looks like one of the list is no finding" {
+    assert historyHits(comments("// The gap between two tokens\n")).isEmpty()
+  }
+}
+
+/** The comment lines of a source, the way the gate reads them. */
+fn comments(text: String): List<CommentLine> {
+  const source = SourceText.of text
+  commentLines source, LineIndex.of(text), lex(source).tokens
+}
+
+group "the first sentence" {
+  test "a sentence that only repeats the name is a finding" {
+    const source = r"""
+      /** What this module is for. */
+
+      /** The parser. */
+      public type Parser {
+        /** How far it got. */
+        position: Int
+      }
+      """
+    const found = standard source
+    assert(found.length() == 1)
+    assert found[0].contains("only repeats its name")
+  }
+
+  test "a sentence with a verb in it is no finding" {
+    const source = r"""
+      /** What this module is for. */
+
+      /** Reads a file into tokens. */
+      public type Parser {
+        /** How far it got. */
+        position: Int
+      }
+      """
+    assert standard(source).isEmpty()
+  }
+}

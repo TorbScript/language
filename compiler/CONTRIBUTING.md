@@ -18,6 +18,7 @@ cargo test --release                                    # Everything, including 
 sh ../runtime/build.sh                                  # The C runtime and its tests (gcc or clang)
 cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings ..
 cargo run --release -q -- canon ../std ../compiler ../examples ../bootstrap/tests    # ...write it (a minute)
+cargo run --release -q -- run ../compiler docs source ../std ../compiler ../examples   # The doc comments (not a gate yet)
 cargo run --release -q -- run ../compiler docs check ../docs         # The documentation: schema, links, every snippet
 cargo run --release -q -- run ../compiler docs index --check ../docs # Is the generated part of every index.md current?
 cargo run --release -q -- run ../compiler docs index ../docs         # ...write it
@@ -50,8 +51,8 @@ language *means* changes the page that says so - `docs check` names the page who
   (`assert(sum == 3)`), over several lines, and in the head of an `if`, `for`, `while` or `match`. A multi-line `"""`
   is indented two spaces deeper than the line it starts on, closing quotes aligned with the content. `torb canon`
   (above) writes both, over the syntax tree; milestone 8's `torb format` takes over from it.
-- `/** */` doc comments on public declarations that say **why**, not what. Block comments do not nest: never write a
-  slash-star or a star-slash inside of a comment (not even in a glob).
+- Doc comments follow **the documentation standard** below. Block comments do not nest: never write a slash-star or a
+  star-slash inside of a comment (not even in a glob).
 - Small values plus free functions that take a `var` parameter (`var parser: Parser`, `var checker: Checker`,
   `var program: IrProgram`). Values have no identity, so program-wide data lives in lists and is addressed by
   integer ids (`ModuleId`, `SymbolId`, `TypeId`, ...).
@@ -89,6 +90,67 @@ language *means* changes the page that says so - `docs check` names the page who
   and what a pass records in its tables is asserted at a span.
 - Write source files with an editor or a script that checks for exact matches. Never generate source through shell
   heredocs or PowerShell arrays; quotes and backslashes do not survive.
+
+## The Documentation Standard
+
+The documentation of this repository lives **at the code**, in the doc comments, for a human and for an agent at the
+same time: what a construct does now and what it is for, the smallest example that shows the use case, the constructs
+that belong next to it, and the pitfalls and the open problems where they bite. `torb docs source <path>...` is the gate
+that asks for all of it ([docs/tooling/torb-docs-source](../docs/tooling/torb-docs-source.md)).
+
+1. **The first sentence says what it does. The sentences after it say what it is for** - when a reader reaches for this
+   construct instead of another. Present tense, about the code as it is.
+2. **Six headings, and no others**: `# Examples` (the code indented by four spaces below it - it is parsed, canonized
+   and type checked), `# Errors` (the `Fail` cases), `# Panics`, `# Pitfalls`, `# Open` (a problem that is open, in the
+   present tense), `# Related` (links). Every heading that is written has something under it.
+3. **Links are names**: `[Iterator]`, `[List.add]`, `[Option.Some]`. They resolve like a name at that place in the code -
+   what the file declares, what it imports, the prelude - and `Type.member` through the type.
+4. **Every file starts with a module comment**: a doc comment at the top, in front of the first `use`. What the module
+   is for, its main constructs, how they relate. (The parser attaches it to that import, which is what makes it belong
+   to the file and to no declaration.)
+5. **What needs a comment.** In `std/`: every file, every `public` declaration, every `extend`, and every member, field
+   and case of a public type that is not `private` (the members of an `extend ... with Trait` are documented at the
+   trait). In `compiler/src`: every file and every `public` declaration. In `examples/`: every file and every top-level
+   declaration. A test file (`*.test.trb`, everything under `tests/`): the file comment, and nothing else.
+6. **No history.** A comment says what the code does now - never what it used to do, what changed, or which milestone,
+   round or gap a change belonged to. The gate flags those words in doc comments and in `//` comments alike; what stands
+   between backticks is quoted and not prose, so a comment about this rule may name them.
+7. **The canon holds in an example**: no semicolons, never a squeezed one-liner, a call is a command wherever the
+   grammar allows it.
+8. **A `//` comment inside a body is the rare exception**, for a step that is not obvious from the code - a pitfall at
+   the line it bites, an invariant the next lines rely on, why an order matters. Everything a caller or a reader of the
+   construct needs is in the doc comment, never only in a `//` comment.
+
+`std/core/src/option.trb` and `std/core/src/result.trb` are the reference: read one of them before writing
+documentation anywhere else. One comment in full:
+
+```trb
+/**
+ * The value, or the fallback if there is none. This is the `??` operator, and the way out of the type.
+ *
+ * The fallback is `lazy`, so it is only evaluated when it is needed: a fallback that reads a file or counts costs
+ * nothing while the value is there.
+ *
+ * # Examples
+ *
+ *     const missing: Int? = None
+ *     print missing.orElse(0)
+ *
+ * # Related
+ *
+ * - [Option.okOr] - the same step with a reason, for a caller that answers with a `Result`.
+ */
+fn orElse(self, fallback: lazy Value): Value { ... }
+```
+
+An example is checked as if it stood in a file next to the one it documents: it sees what that file imports and the
+file's own public declarations, and it is a script, so it may `print`. An example that cannot stand alone says so in its
+first line - `// fragment` for a signature or a shape that only has to lex, `// skip <reason>` for one that is checked
+by nothing and counted in the report.
+
+**`torb docs source` is not in the list above yet.** The repository does not pass it while the writing waves are
+running; `torb run ../compiler docs source ../std ../compiler ../examples --statistics` is what measures how far they
+have come. It becomes a mandatory gate when they are done, and from then on it is run like every other gate.
 
 ## Traps of Stage 0
 

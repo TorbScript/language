@@ -1,0 +1,701 @@
+/**
+ * `torb docs source <path>...`: the gate of the documentation that lives in the code.
+ *
+ * It reads the `.trb` files under the paths and asks the standard of `compiler/CONTRIBUTING.md` of every one of them:
+ * every file has a module comment, every construct the standard names has a doc comment, the headings are the six of
+ * the vocabulary, every link resolves, every example compiles, and no comment tells the history of its own code.
+ *
+ * The rules are one function per question, all of them over one parsed file, so a finding always names a file and a
+ * line: `sourceProblems` is the whole gate, `runSource` is only the walk over the paths and the report.
+ *
+ * # Pitfalls
+ *
+ * - The gate is not in the green-gate list yet. The repository does not pass it, and `--statistics` is what the
+ *   writers measure their progress with until it does.
+ *
+ * # Related
+ *
+ * - [Tree] - which rules a file is judged by.
+ * - [sectionHeadings] - the heading vocabulary.
+ * - [SourceExample] - how an example gets its context.
+ */
+
+use File, IoError from "std/fs"
+use Span, SourceText, LineIndex from "../syntax/source"
+use SourceFile, Declaration, Member, Visibility from "../syntax/ast"
+use lex from "../syntax/lexer"
+use parse from "../syntax/parser/parser"
+use collectSourceFiles from "../cli/files"
+use readSourceTree, absolutePaths from "../project/read"
+use normalizePath, parentPath, pathName from "../project/path"
+use SourceTree from "../project/source-tree"
+use DocumentationProblem from "./markdown"
+use CommentLine, DocumentationBlock, ExampleKind from "./comments"
+use commentLines, documentationBlocks, startsFile, sectionsOf, sectionHeadings from "./comments"
+use examplesOf, firstSentence, historyHits, linksOf, wordsOf from "./comments"
+use NameIndex, Scope, buildNameIndex, scopeOf, typeNameOf, importedNames, publicNames, bindingNames from "./source-scope"
+use SourceExample, exampleSyntaxProblems, exampleTypeProblems from "./source-examples"
+
+/**
+ * Which set of rules a file is judged by. The trees of this repository ask for different things, because they are read
+ * by different people: `std/` is the public library, `compiler/src` is the toolchain, `examples/` is teaching material.
+ */
+public type Tree {
+  /** `std/`: every `public` declaration, the members of a public type, and every file */
+  case Standard
+  /** `compiler/src`: every `public` declaration and every file */
+  case Compiler
+  /** `examples/`: every file and every top-level declaration */
+  case Examples
+  /** `*.test.trb` and everything under `tests/`: the file comment, and nothing else */
+  case Tests
+
+  /** The word the statistics print. */
+  fn name(self): String {
+    match self {
+      .Standard => "std"
+      .Compiler => "compiler"
+      .Examples => "examples"
+      .Tests => "tests"
+    }
+  }
+}
+
+/** Every tree, in the order the statistics print them. */
+public const trees: List<Tree> = [Tree.Standard, Tree.Compiler, Tree.Examples, Tree.Tests]
+
+/**
+ * Which rules a file is judged by, derived from its path: a test file first, then the tree it lies in. A file that
+ * lies in none of them is judged like the compiler: a doc comment on every `public` declaration and on every file.
+ */
+public fn treeOf(path: String): Tree {
+  const normalized = normalizePath path
+  if normalized.endsWith(".test.trb") || normalized.contains("/tests/") {
+    return Tree.Tests
+  }
+  if normalized.contains("/std/") {
+    return Tree.Standard
+  }
+  if normalized.contains("/examples/") {
+    return Tree.Examples
+  }
+  Tree.Compiler
+}
+
+/** The tree a `--tree` flag names, or `None` when it names nothing. */
+public fn treeNamed(name: String): Tree? {
+  for tree in trees {
+    if tree.name() == name {
+      return Some tree
+    }
+  }
+  None
+}
+
+/** One construct a doc comment stands in front of. */
+public type SourceItem {
+  /** The word a finding uses for it: `fn`, `type`, `trait`, `const`, `alias`, `extend`, `case`, `field` */
+  word: String
+  name: String
+  span: Span
+  /** The doc comment in front of it */
+  doc: String?
+  /** Whether the standard asks for a doc comment here */
+  isRequired: Bool
+}
+
+/** One file, read and parsed: everything the rules are asked of. */
+public type ReadSource {
+  /** The path as a message shows it */
+  path: String
+  /** The path in the source tree, which is where an example is put next to it */
+  module: String
+  tree: Tree
+  source: SourceText
+  lines: LineIndex
+  file: SourceFile
+  /** Every doc comment of the file, in the order they stand in it */
+  blocks: List<DocumentationBlock>
+  /** Every comment line of the file, doc comments and `//` comments alike */
+  comments: List<CommentLine>
+  /** The diagnostics of the parser: a file that does not parse is not judged */
+  isBroken: Bool
+}
+
+/** Reads and parses one file. */
+public fn readSource(path: String, module: String, tree: Tree, text: String): ReadSource {
+  const source = SourceText.of text
+  const lines = LineIndex.of text
+  const lexed = lex source
+  const parsed = parse source
+  ReadSource(
+    path,
+    module,
+    tree,
+    source,
+    lines,
+    parsed.file,
+    documentationBlocks(source, lines, lexed.docs),
+    commentLines(source, lines, lexed.tokens),
+    !parsed.diagnostics.isEmpty(),
+  )
+}
+
+/** What one file contributes to the report and to the statistics. */
+public type CheckedSource {
+  problems: List<DocumentationProblem>
+  hasModuleComment: Bool
+  /** How many doc comments the standard asks for in this file */
+  required: Int
+  /** How many of them are there */
+  documented: Int
+  examples: List<SourceExample>
+  /** How many comments of the file tell the history of their own code */
+  history: Int
+}
+
+/**
+ * Every rule of the standard, asked of one file.
+ *
+ * The examples are collected instead of checked: they are compiled in one run for the whole walk, because one run of
+ * the front end costs seconds and one run per example would cost minutes.
+ */
+public fn sourceProblems(read: ReadSource, index: NameIndex): CheckedSource {
+  if read.isBroken {
+    const note = "This file does not parse, so its comments are not judged. `torb parse` says what is wrong"
+    return CheckedSource([DocumentationProblem(read.path, 1, note)], false, 0, 0, [], 0)
+  }
+  var problems: List<DocumentationProblem> = []
+  const module = moduleStart read
+  if module < 0 {
+    const note = "This file has no module comment. Put a doc comment at the top, in front of the first `use`: what the module is for, its main constructs, how they relate"
+    problems.add DocumentationProblem(read.path, 1, note)
+  }
+  const items = itemsOf read.file, read.tree
+  var required = 0
+  var documented = 0
+  for item in items {
+    const block = blockBefore read.blocks, item.span.start
+    // The module comment belongs to the file, so the first construct of a file without imports does not borrow it
+    const isOwn = item.doc.isSome() && startOf(block) != module
+    if item.isRequired {
+      required = required + 1
+      if isOwn {
+        documented = documented + 1
+      } else {
+        const note = "`{item.word} {item.name}` has no doc comment. Say what it does, then what it is for"
+        problems.add DocumentationProblem(read.path, lineOf(read.lines, item.span.start), note)
+      }
+    }
+    if isOwn {
+      if const Some(found) = block {
+        problems.addAll repeatedNameProblems(read, item, found)
+      }
+    }
+  }
+  const scope = scopeOf read.file, index
+  var examples: List<SourceExample> = []
+  for block in read.blocks {
+    problems.addAll sectionProblems(read, block)
+    problems.addAll fenceProblems(read, block)
+    problems.addAll skipProblems(read, block)
+    problems.addAll linkProblems(read, block, scope, index)
+    collectExamples read, block, examples
+  }
+  const hits = historyHits read.comments
+  for hit in hits {
+    const note = "`{hit.word}`: a comment says what the code does now, not what it did before"
+    problems.add DocumentationProblem(read.path, hit.line, note)
+  }
+  CheckedSource(problems, module >= 0, required, documented, examples, hits.length())
+}
+
+/**
+ * Where the module comment of the file starts, or `-1` when the file has none.
+ *
+ * The module comment is the doc comment the file begins with. It stands in front of the first `use`, where the parser
+ * attaches it to that import - which is what makes it belong to the file and to no declaration.
+ */
+fn moduleStart(read: ReadSource): Int {
+  match read.blocks.first() {
+    Some(first) => if startsFile(read.source, first.span.start) { first.span.start } else { -1 }
+    None => -1
+  }
+}
+
+/** The doc comment a construct carries: the last one that ends in front of it. */
+fn blockBefore(blocks: List<DocumentationBlock>, start: Int): DocumentationBlock? {
+  var found: DocumentationBlock? = None
+  for block in blocks {
+    if block.span.end <= start {
+      found = Some block
+    }
+  }
+  found
+}
+
+fn startOf(block: DocumentationBlock?): Int {
+  match block {
+    Some(found) => found.span.start
+    None => -1
+  }
+}
+
+fn lineOf(lines: LineIndex, offset: Int): Int {
+  lines.lineAndColumn(offset).line
+}
+
+/**
+ * A first sentence that only says the name again ("The parser." on `type Parser`) says nothing at all. The rule is
+ * deliberately narrow: it asks whether the whole sentence is the name, so a sentence with a verb in it is never a hit.
+ */
+fn repeatedNameProblems(read: ReadSource, item: SourceItem, block: DocumentationBlock): List<DocumentationProblem> {
+  const sentence = firstSentence sectionsOf(block)
+  if !repeatsName(sentence, item.name) {
+    return []
+  }
+  const note = "The first sentence of `{item.name}` only repeats its name. Say what it does"
+  [DocumentationProblem(read.path, block.line, note)]
+}
+
+fn repeatsName(sentence: String, name: String): Bool {
+  const words = withoutArticle wordsOf(sentence)
+  if words.isEmpty() {
+    return false
+  }
+  words == wordsOf(spacedName(name))
+}
+
+fn withoutArticle(words: List<String>): List<String> {
+  if words.isEmpty() {
+    return words
+  }
+  const articles = ["the", "a", "an"]
+  if articles.contains(words[0]) {
+    return words[1..words.length()]
+  }
+  words
+}
+
+/** `documentationBlocks` becomes `documentation blocks`, so a sentence can be compared with a name. */
+fn spacedName(name: String): String {
+  var characters: List<Char> = []
+  for character in name.chars() {
+    if character.isLetter() && character == character.toUpperCase() {
+      characters.add ' '
+    }
+    characters.add character
+  }
+  String.from characters
+}
+
+/** The headings of one doc comment: the vocabulary, one level, and nothing empty. */
+fn sectionProblems(read: ReadSource, block: DocumentationBlock): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  const known = sectionHeadings.joined separator: ", # "
+  for section in sectionsOf(block).sections {
+    if section.level != 1 || !sectionHeadings.contains(section.heading) {
+      const note = "`# {section.heading}` is not a heading of a doc comment. One of: # {known}"
+      problems.add DocumentationProblem(read.path, section.line, note)
+      continue
+    }
+    if section.isEmpty() {
+      const note = "`# {section.heading}` says nothing. Write what belongs under it, or leave the heading out"
+      problems.add DocumentationProblem(read.path, section.line, note)
+    }
+  }
+  problems
+}
+
+/** Every link of one doc comment, resolved the way a name at that place in the code is resolved. */
+fn linkProblems(read: ReadSource, block: DocumentationBlock, scope: Scope, index: NameIndex): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for link in linksOf(block) {
+    const parts = link.target.split "."
+    const head = parts[0]
+    if !scope.has(head) {
+      const note = "`[{link.target}]` does not resolve here. Name what this file declares, imports or gets from the prelude"
+      problems.add DocumentationProblem(read.path, link.line, note)
+      continue
+    }
+    if parts.length() == 1 || scope.isNamespace(head) {
+      continue
+    }
+    const member = parts[1]
+    // A name whose declaration was not read is not judged: it may come from a package that is not part of this walk
+    if index.hasType(head) && !index.hasMember(head, member) {
+      const note = "`[{link.target}]`: `{head}` has no member `{member}`"
+      problems.add DocumentationProblem(read.path, link.line, note)
+    }
+  }
+  problems
+}
+
+/** The examples of one doc comment, with the context they are checked in. */
+fn collectExamples(read: ReadSource, block: DocumentationBlock, var examples: List<SourceExample>) {
+  const context = contextOf read
+  const name = moduleName read.module
+  const directory = parentPath read.module
+  for section in sectionsOf(block).sections {
+    if section.heading != "Examples" || section.level != 1 {
+      continue
+    }
+    const found = examplesOf section
+    for example in found.examples {
+      const number = examples.length() + 1
+      const module = "{directory}/{name}-example-{number}.trb"
+      examples.add SourceExample(read.path, example.line, example.kind, example.text, example.reason, context, module)
+    }
+  }
+}
+
+/** A `// skip` without a reason of its own: a skip that nobody can judge is a skip that hides. */
+fn skipProblems(read: ReadSource, block: DocumentationBlock): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for section in sectionsOf(block).sections {
+    if section.heading != "Examples" {
+      continue
+    }
+    for example in examplesOf(section).examples {
+      const isBare = example.kind == ExampleKind.Skipped && example.reason.byteLength() < 10
+      if isBare {
+        const note = "`// skip` needs a reason of its own behind it, so that a skip cannot hide"
+        problems.add DocumentationProblem(read.path, example.line, note)
+      }
+    }
+  }
+  problems
+}
+
+/** The fenced blocks of a doc comment: an example is indented by four spaces instead. */
+fn fenceProblems(read: ReadSource, block: DocumentationBlock): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for section in sectionsOf(block).sections {
+    if section.heading != "Examples" {
+      continue
+    }
+    // The opening fence is enough: the closing one is the same mistake, one line further down
+    if const Some(line) = examplesOf(section).fences.first() {
+      const note = "An example is indented by four spaces, not fenced with backticks"
+      problems.add DocumentationProblem(read.path, line, note)
+    }
+  }
+  problems
+}
+
+/**
+ * What an example is checked with: the `use` lines of the file it documents, and an import of that file's own public
+ * declarations. A file with top-level code cannot be imported, so there the imports are all an example gets.
+ */
+fn contextOf(read: ReadSource): String {
+  var lines: List<String> = []
+  for statement in read.file.statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Use(_) = declaration.kind {
+        lines.add withoutPublic(read.source.text[declaration.span.start..declaration.span.end])
+      }
+    }
+  }
+  const imported = importedNames read.file
+  const own = publicNames(read.file).filter({ !imported.contains(_) }).toList()
+  if !own.isEmpty() && !hasTopLevelCode(read.file) {
+    const names = own.joined separator: ", "
+    lines.add "use {names} from \"./{moduleName(read.module)}\""
+  }
+  lines.joined separator: "\n"
+}
+
+/** A re-export of the documented file would be one of the example, which says nothing about the example. */
+fn withoutPublic(text: String): String {
+  if text.startsWith("public ") {
+    return text[7..]
+  }
+  text
+}
+
+/** A file with a statement at its top level is a script, and a script is never imported. */
+fn hasTopLevelCode(file: SourceFile): Bool {
+  for statement in file.statements {
+    if const .Declare(_) = statement.kind {
+      continue
+    }
+    return true
+  }
+  false
+}
+
+/** The module name of a file: its name without the extension. */
+fn moduleName(path: String): String {
+  const name = pathName path
+  if name.endsWith(".trb") {
+    return name[0..(name.byteLength() - 4)]
+  }
+  name
+}
+
+/** Every construct of a file that a doc comment can stand in front of, in the order of the file. */
+public fn itemsOf(file: SourceFile, tree: Tree): List<SourceItem> {
+  var items: List<SourceItem> = []
+  for statement in file.statements {
+    if const .Declare(declaration) = statement.kind {
+      addDeclaration declaration, tree, items
+    }
+  }
+  items
+}
+
+fn addDeclaration(declaration: Declaration, tree: Tree, var items: List<SourceItem>) {
+  const isPublic = declaration.modifiers.visibility == Visibility.Public
+  const isNeeded = requiresDeclaration tree, isPublic
+  const doc = declaration.doc
+  const span = declaration.span
+  match declaration.kind {
+    .Use(_) => {}
+    .Function(function) => items.add SourceItem("fn", function.name.text, span, doc, isNeeded)
+    .Alias(declared) => items.add SourceItem("type", declared.name.text, span, doc, isNeeded)
+    .Constant(binding) => {
+      const name = bindingNames(binding.pattern).first() ?? ""
+      items.add SourceItem("const", name, span, doc, isNeeded)
+    }
+    .Type(declared) => {
+      items.add SourceItem("type", declared.name.text, span, doc, isNeeded)
+      addMembers declared.members, tree, isPublic, true, items
+    }
+    .Trait(declared) => {
+      items.add SourceItem("trait", declared.name.text, span, doc, isNeeded)
+      addMembers declared.members, tree, isPublic, true, items
+    }
+    .Extend(extension) => {
+      const name = typeNameOf extension.target
+      items.add SourceItem("extend", name, span, doc, requiresExtension(tree))
+      // The members of an `extend ... with Trait` implement the trait, and the trait is where they are documented
+      addMembers extension.members, tree, true, extension.traits.isEmpty(), items
+    }
+    .Foreign(library) => {
+      items.add SourceItem("foreign", library.library, span, doc, isNeeded)
+      addMembers library.members, tree, isPublic, true, items
+    }
+  }
+}
+
+fn addMembers(members: List<Member>, tree: Tree, isOwnerPublic: Bool, isAsked: Bool, var items: List<SourceItem>) {
+  for member in members {
+    const isPrivate = member.modifiers.visibility == Visibility.Private
+    const isNeeded = isAsked && isOwnerPublic && !isPrivate && requiresMembers(tree)
+    match member.kind {
+      .Field(field) => items.add SourceItem("field", field.name.text, member.span, member.doc, isNeeded)
+      .Case(declared) => items.add SourceItem("case", declared.name.text, member.span, member.doc, isNeeded)
+      .Function(function) => items.add SourceItem("fn", function.name.text, member.span, member.doc, isNeeded)
+      .Constant(binding) => {
+        const name = bindingNames(binding.pattern).first() ?? ""
+        items.add SourceItem("const", name, member.span, member.doc, isNeeded)
+      }
+    }
+  }
+}
+
+/** A top-level declaration: `public` in `std/` and in the compiler, everything in `examples/`, nothing in a test. */
+fn requiresDeclaration(tree: Tree, isPublic: Bool): Bool {
+  match tree {
+    .Standard => isPublic
+    .Compiler => isPublic
+    .Examples => true
+    .Tests => false
+  }
+}
+
+/** An `extend` adds to the public API of the type it extends, which is why `std/` asks for a comment on it. */
+fn requiresExtension(tree: Tree): Bool {
+  match tree {
+    .Standard => true
+    .Compiler => false
+    .Examples => true
+    .Tests => false
+  }
+}
+
+/** Only the public library documents its members: a caller of `std/` reads them, a caller of the compiler does not. */
+fn requiresMembers(tree: Tree): Bool {
+  tree == Tree.Standard
+}
+
+/** How far one tree has come: what the standard asks for, and what is there. */
+public type SourceStatistics {
+  tree: String
+  var files: Int = 0
+  var documentedFiles: Int = 0
+  var required: Int = 0
+  var documented: Int = 0
+  var examples: Int = 0
+  var skipped: Int = 0
+  var history: Int = 0
+
+  /** The line `--statistics` prints. */
+  fn show(self): String {
+    const share = if required == 0 { 100 } else { documented * 100 / required }
+    const declarations = "{documented} of {required} declarations ({share}%)"
+    const found = "{examples} examples ({skipped} skipped), {history} history words"
+    "{tree}: {documentedFiles} of {files} files, {declarations}, {found}"
+  }
+}
+
+/** `torb docs source` as it is called from the command line. */
+public type SourceOptions {
+  paths: List<String>
+  /** `--no-examples`: do not type check the examples, which is the slow part */
+  withoutExamples: Bool
+  /** `--statistics`: the coverage of every tree, which is what the writers measure progress with */
+  withStatistics: Bool
+  /** `--tree <name>`: judge every file by the rules of this tree instead of deriving them from the path */
+  tree: Tree?
+}
+
+/** The command line behind `torb docs source`. Everything that is not a flag is a path. */
+public fn sourceOptionsOf(arguments: List<String>): SourceOptions {
+  var paths: List<String> = []
+  var withoutExamples = false
+  var withStatistics = false
+  var tree: Tree? = None
+  var wantsTree = false
+  for argument in arguments {
+    if wantsTree {
+      tree = treeNamed argument
+      wantsTree = false
+      continue
+    }
+    if argument == "--tree" {
+      wantsTree = true
+      continue
+    }
+    if argument == "--no-examples" {
+      withoutExamples = true
+      continue
+    }
+    if argument == "--statistics" {
+      withStatistics = true
+      continue
+    }
+    paths.add argument
+  }
+  SourceOptions paths, withoutExamples, withStatistics, tree
+}
+
+/** `torb docs source <path>...`. Returns the number of problems. */
+public fn runSource(options: SourceOptions): Result<Int, IoError> {
+  const paths = if options.paths.isEmpty() { ["."] } else { options.paths }
+  const files = collectSourceFiles(paths)?
+  const tree = readSourceTree(paths)?
+  const index = buildNameIndex tree, indexPaths(tree, files)
+  var problems: List<DocumentationProblem> = []
+  var examples: List<SourceExample> = []
+  var statistics: Map<String, SourceStatistics> = [:]
+  var count = 0
+  var declarations = 0
+  for path in files {
+    if pathName(path) == "project.trb" {
+      continue
+    }
+    count = count + 1
+    const text = File.readText(path)?
+    const module = normalizePath(File.absolutePath(path)?)
+    const read = readSource path, module, treeFor(options, path), text
+    const checked = sourceProblems read, index
+    declarations = declarations + checked.required
+    problems.addAll checked.problems
+    examples.addAll checked.examples
+    record statistics, read.tree.name(), checked
+  }
+  if !options.withoutExamples {
+    problems.addAll exampleSyntaxProblems(examples)
+    const roots = absolutePaths(paths)?
+    problems.addAll exampleTypeProblems(tree, roots, examples)
+  }
+  if options.withStatistics {
+    for line in statisticsLines(statistics) {
+      print line
+    }
+  }
+  Ok reportSource(problems, count, declarations, examples)
+}
+
+/** The report: one line per finding, then the summary a gate is read by. */
+fn reportSource(
+  problems: List<DocumentationProblem>,
+  files: Int,
+  declarations: Int,
+  examples: List<SourceExample>,
+): Int {
+  var sorted = problems
+  sorted.sort({ (_.path, _.line, _.message) })
+  for problem in sorted {
+    printError problem.show()
+  }
+  if !sorted.isEmpty() {
+    printError ""
+    printError "{sorted.length()} problems in {files} files"
+    return sorted.length()
+  }
+  for example in examples {
+    if example.kind == ExampleKind.Skipped {
+      print "skipped: {example.path}:{example.line}: {example.reason}"
+    }
+  }
+  print "{files} files, {declarations} declarations, {examples.length()} examples, no problems"
+  0
+}
+
+/** The rules a file is judged by: what `--tree` says, or what its path says. */
+fn treeFor(options: SourceOptions, path: String): Tree {
+  match options.tree {
+    Some(named) => named
+    None => treeOf path
+  }
+}
+
+/**
+ * The files the name index is built from: the ones that are walked, and the standard library, whose types and prelude
+ * every file may name.
+ */
+fn indexPaths(tree: SourceTree, files: List<String>): List<String> {
+  var paths: List<String> = []
+  for path in tree.paths() {
+    if path.contains("/std/") {
+      paths.add path
+    }
+  }
+  for path in files {
+    const normalized = normalizePath path
+    if !paths.contains(normalized) && tree.exists(normalized) {
+      paths.add normalized
+    }
+  }
+  paths
+}
+
+fn record(var statistics: Map<String, SourceStatistics>, name: String, checked: CheckedSource) {
+  var found = statistics.get(name) ?? SourceStatistics(name)
+  found.files = found.files + 1
+  if checked.hasModuleComment {
+    found.documentedFiles = found.documentedFiles + 1
+  }
+  found.required = found.required + checked.required
+  found.documented = found.documented + checked.documented
+  found.examples = found.examples + checked.examples.length()
+  found.history = found.history + checked.history
+  for example in checked.examples {
+    if example.kind == ExampleKind.Skipped {
+      found.skipped = found.skipped + 1
+    }
+  }
+  statistics.set name, found
+}
+
+fn statisticsLines(statistics: Map<String, SourceStatistics>): List<String> {
+  var lines: List<String> = []
+  for tree in trees {
+    if const Some(found) = statistics.get(tree.name()) {
+      lines.add found.show()
+    }
+  }
+  lines
+}

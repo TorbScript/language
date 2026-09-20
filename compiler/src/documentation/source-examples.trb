@@ -1,0 +1,147 @@
+/**
+ * The examples of the doc comments, checked with the compiler's own front end.
+ *
+ * An example is checked as if it stood in a file next to the one it documents: it imports what that file imports and
+ * the file's own public declarations, and it is a script, so it may print. That is the context a reader assumes, and
+ * it is the only one in which `Some(3).orElse(0)` is a program at all.
+ *
+ * Every example that needs the type checker is checked in **one** run over the repository, the way `docs check` checks
+ * the snippets of the documentation pages: the standard library is resolved once for all of them.
+ *
+ * # Related
+ *
+ * - [SourceExample] - one example, with the context it is checked in.
+ * - [exampleWorkspace] - the tree the run sees.
+ */
+
+use SourceText from "../syntax/source"
+use lex from "../syntax/lexer"
+use parse from "../syntax/parser/parser"
+use SourceTree from "../project/source-tree"
+use check from "../semantics/check"
+use DocumentationProblem, linesOf from "./markdown"
+use ExampleKind from "./comments"
+use canonProblems from "./canon"
+use lineOfOffset from "./snippets"
+
+/** One example of a doc comment, with everything the check of it needs. */
+public type SourceExample {
+  /** The file the example stands in, as a message shows it */
+  path: String
+  /** The line the code starts on */
+  line: Int
+  kind: ExampleKind
+  /** The code, as it stands in the comment */
+  text: String
+  /** The reason of a `// skip` */
+  reason: String
+  /** The `use` lines of the documented file and an import of its own public declarations */
+  context: String
+  /** The module this example becomes: a script next to the file it documents */
+  module: String
+}
+
+/** Does this example ask for the type checker? A fragment and a skip do not. */
+public fn needsChecker(kind: ExampleKind): Bool {
+  kind == ExampleKind.Program
+}
+
+/** The text of the module one example becomes: its context, a blank line, and the example. */
+public fn moduleTextOf(example: SourceExample): String {
+  "{example.context}\n\n{example.text}"
+}
+
+/** The line of the documented file that a line of the module belongs to. */
+fn lineInFile(example: SourceExample, moduleLine: Int): Int {
+  const preamble = linesOf(example.context).length()
+  example.line + moduleLine - preamble - 2
+}
+
+/**
+ * What the parser and the canon say about every example. A fragment is only lexed: it is a signature or a shape and
+ * not a file, the same rule a `trb fragment` block of a documentation page follows.
+ */
+public fn exampleSyntaxProblems(examples: List<SourceExample>): List<DocumentationProblem> {
+  var problems: List<DocumentationProblem> = []
+  for example in examples {
+    problems.addAll syntaxProblemsOf(example)
+  }
+  problems
+}
+
+fn syntaxProblemsOf(example: SourceExample): List<DocumentationProblem> {
+  if example.kind == ExampleKind.Skipped {
+    return []
+  }
+  const source = SourceText.of example.text
+  var problems: List<DocumentationProblem> = []
+  if example.kind == ExampleKind.Fragment {
+    for diagnostic in lex(source).diagnostics {
+      const at = example.line + lineOfOffset(example.text, diagnostic.span.start) - 1
+      problems.add DocumentationProblem(example.path, at, diagnostic.message)
+    }
+    return problems
+  }
+  const parsed = parse source
+  for diagnostic in parsed.diagnostics {
+    const at = example.line + lineOfOffset(example.text, diagnostic.span.start) - 1
+    problems.add DocumentationProblem(example.path, at, diagnostic.message)
+  }
+  if !parsed.diagnostics.isEmpty() {
+    return problems
+  }
+  for problem in canonProblems(example.text, parsed.file) {
+    problems.add DocumentationProblem(example.path, example.line + problem.line - 1, problem.message)
+  }
+  problems
+}
+
+/**
+ * The repository as it is, plus one script per example next to the file it documents.
+ *
+ * A script is a file that nothing imports, so top-level code is allowed in it and the example may print - and because
+ * it is a file of the same package, the `use` lines of the documented file resolve in it unchanged.
+ */
+public fn exampleWorkspace(tree: SourceTree, examples: List<SourceExample>): SourceTree {
+  var files: Map<String, String> = [:]
+  for path in tree.paths() {
+    files.set(path, tree.text(path) ?? "")
+  }
+  for example in examples {
+    if needsChecker(example.kind) {
+      files.set example.module, moduleTextOf(example)
+    }
+  }
+  SourceTree.of files
+}
+
+/** The type problems of every example that asked for the checker. One run of the front end answers for all of them. */
+public fn exampleTypeProblems(
+  tree: SourceTree,
+  roots: List<String>,
+  examples: List<SourceExample>,
+): List<DocumentationProblem> {
+  const wanted = examples.filter({ needsChecker _.kind }).toList()
+  if wanted.isEmpty() {
+    return []
+  }
+  const workspace = exampleWorkspace tree, wanted
+  // Every example is asked for by name: `check` only reports what was requested, and a path of one file would leave
+  // the modules next to it out
+  var requested = roots
+  requested.addAll wanted.map({ _.module }).toList()
+  const checked = check workspace, requested
+  var problems: List<DocumentationProblem> = []
+  for example in wanted {
+    for file in checked.files {
+      if file.path != example.module {
+        continue
+      }
+      for diagnostic in file.diagnostics {
+        const moduleLine = lineOfOffset file.text, diagnostic.span.start
+        problems.add DocumentationProblem(example.path, lineInFile(example, moduleLine), diagnostic.message)
+      }
+    }
+  }
+  problems
+}

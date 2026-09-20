@@ -1,19 +1,68 @@
+/**
+ * Failure as a value: [Result], its two cases, and the vocabulary that works on the value of a successful one.
+ *
+ * There are no exceptions in the language. A function that can fail says so in its result type, `?` passes a failure
+ * up to the caller, and a failure that nobody handles is therefore impossible to overlook. `panic` is the other half
+ * of the story and belongs to bugs, not to failures a program can answer.
+ *
+ * # Related
+ *
+ * - [Option] - absence without a reason.
+ * - [Show] - what an error type implements so that [Result.expect] can print it.
+ */
+
 use Show, From from "./convert"
 use Iterable from "std/iteration"
 
 /**
- * The result of an operation that can fail.
+ * The result of an operation that can fail: `Ok` with the value, or `Fail` with the reason.
  *
- * The postfix `?` operator unwraps `Ok` or returns the `Fail` from the surrounding function.
- * If the error types differ, the error is converted with `From`.
+ * Reach for it wherever failure is part of the answer and not a bug: reading a file, parsing text, talking to a
+ * server. The postfix `?` unwraps an `Ok` and returns the `Fail` from the surrounding function, converting the error
+ * type through `From` on the way, so a chain of fallible steps reads like a chain of ordinary ones.
  *
- * `map`, `flatMap`, `forEach` mean the same as everywhere else (see "One Vocabulary" in CONCEPT.md) and work
- * on the `Ok` side. A Result is a value, not a pipeline: they run immediately.
+ * `map`, `flatMap` and `forEach` mean the same as everywhere else (see "One Vocabulary" in CONCEPT.md), work on the
+ * `Ok` side, and run immediately - a Result is a value, not a pipeline.
+ *
+ * `?` is what a caller writes instead of unwrapping the value: `quarter` below answers with the failure of the step
+ * that failed, and says nothing about it.
+ *
+ * # Examples
+ *
+ *     fn half(value: Int): Result<Int, String> {
+ *       if value % 2 == 0 { Ok(value / 2) } else { Fail "an odd number has no half" }
+ *     }
+ *
+ *     fn quarter(value: Int): Result<Int, String> {
+ *       const once = half(value)?
+ *       half once
+ *     }
+ *
+ *     print half(3)
+ *     print quarter(8)
+ *
+ * # Pitfalls
+ *
+ * - `?` needs a surrounding function whose result is a Result. At the top level of a script there is nothing to return
+ *   to, so a script answers a failure with [Result.orElse] or with a `match`.
+ *
+ * # Open
+ *
+ * There is no counterpart of [Result.flatMap] for the failing side: recovering from a `Fail` with another operation
+ * that can fail itself is written with a `match`.
+ *
+ * # Related
+ *
+ * - [Option] - the answer when the absence needs no reason. [Result.ok] converts one into the other.
+ * - [Result.mapError] - what a `?` between two error types does by itself.
  */
 public type Result<Value, Failure> {
+  /** The operation worked, and this is what it produced. */
   case Ok(value: Value)
+  /** The operation failed, and this is why. */
   case Fail(error: Failure)
 
+  /** Whether the operation worked. For the value itself, `match` or `?` instead. */
   fn isOk(self): Bool {
     match self {
       Ok(_) => true
@@ -21,10 +70,12 @@ public type Result<Value, Failure> {
     }
   }
 
+  /** Whether the operation failed. */
   fn isError(self): Bool {
     !isOk()
   }
 
+  /** Changes the value of an `Ok` and leaves a `Fail` alone: one more step on the way that worked. */
   fn map<Output>(self, transform: (value: Value) => Output): Result<Output, Failure> {
     match self {
       Ok(value) => .Ok(transform(value))
@@ -32,6 +83,17 @@ public type Result<Value, Failure> {
     }
   }
 
+  /**
+   * Changes the reason of a `Fail` and leaves an `Ok` alone: for a caller that answers with an error type of its own.
+   *
+   * `?` does this by itself wherever the two error types are connected by `From`. This is the way to write down what
+   * happened where they are not.
+   *
+   * # Examples
+   *
+   *     const parsed = Int.parse "nine"
+   *     print parsed.mapError({ _ => "nine is not a number" })
+   */
   fn mapError<OtherFailure>(self, transform: (error: Failure) => OtherFailure): Result<Value, OtherFailure> {
     match self {
       Ok(value) => Ok value
@@ -39,6 +101,7 @@ public type Result<Value, Failure> {
     }
   }
 
+  /** Continues with a step that can fail itself and keeps one level: the explicit form of what `?` does. */
   fn flatMap<Output>(self, transform: (value: Value) => Result<Output, Failure>): Result<Output, Failure> {
     match self {
       Ok(value) => transform value
@@ -46,16 +109,19 @@ public type Result<Value, Failure> {
     }
   }
 
+  /** Runs the action if the operation worked: the statement form of [Result.map]. */
   fn forEach(self, action: (value: Value) => Void) {
     if const Ok(value) = self {
       action value
     }
   }
 
+  /** Into the world of pipelines: a list with the value of an `Ok`, and an empty one for a `Fail`. */
   fn toList(self): List<Value> {
     ok().toList()
   }
 
+  /** The value as an [Option], which drops the reason: for a caller that only wants to know whether there is one. */
   fn ok(self): Value? {
     match self {
       Ok(value) => Some value
@@ -63,6 +129,16 @@ public type Result<Value, Failure> {
     }
   }
 
+  /**
+   * The value, or the fallback if the operation failed. The way out of the type where the reason does not matter.
+   *
+   * The fallback is `lazy`, so it is only evaluated when it is needed.
+   *
+   * # Examples
+   *
+   *     const parsed = Int.parse "nine"
+   *     print parsed.orElse(0)
+   */
   fn orElse(self, fallback: lazy Value): Value {
     match self {
       Ok(value) => value
@@ -70,6 +146,14 @@ public type Result<Value, Failure> {
     }
   }
 
+  /**
+   * The value, with the message and the reason if the operation failed. For a place where a failure is a bug.
+   *
+   * # Panics
+   *
+   * When the result is a `Fail`. The panic prints the message and the error, so the message says what was expected of
+   * the operation, not that it failed.
+   */
   fn expect(self, message: String): Value where Failure: Show {
     match self {
       Ok(value) => value
@@ -91,6 +175,11 @@ extend<Value: Show, Failure: Show> Result<Value, Failure> with Show {
 /**
  * All or the first error: `lines.map(Int.parse).to<Result<List<Int>, NumberParseError>>()`
  * Stops pulling at the first `Fail`. This is what `traverse`/`sequence` is in languages with higher-kinded types.
+ *
+ * # Errors
+ *
+ * The reason of the first `Fail` of the pipeline. Nothing behind it is pulled, so a step that fails early costs
+ * nothing more.
  */
 extend<Value, Failure, Target: From<Iterable<Value>>> Result<Target, Failure> with From<Iterable<Result<Value, Failure>>> {
   fn from(value: Iterable<Result<Value, Failure>>): Result<Target, Failure> {

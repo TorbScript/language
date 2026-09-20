@@ -31,6 +31,7 @@ design, which is in [internals](../internals/index.md). A page here is about wha
 - **[torb build](torb-build.md)** - torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
 - **[torb test](torb-test.md)** - torb test runs every *.test.trb file below a directory, one process per file by default, and prints ok or FAILED for every test call it sees.
 - **[torb canon](torb-canon.md)** - torb canon rewrites sources into the formatter canon over the syntax tree, checks every edit against a second parse, and drops anything that would change what the program means.
+- **[torb docs source](torb-docs-source.md)** - torb docs source checks the doc comments of the code itself - a module comment on every file, a comment on every construct that needs one, six headings, links that resolve, and examples that compile.
 - **[The formatter canon](the-formatter-canon.md)** - The one way every TorbScript source is written - a command wherever the grammar allows it, and a multi-line string indented two spaces deeper than the line it starts on.
 - **[project.trb](project-trb.md)** - The manifest of a project - name, dependencies, the workspace it belongs to, and what torb build and torb test read out of it today.
 - **[project.lock.trb](project-lock-trb.md)** _(planned)_ - The file that is specified to pin the exact version, content hash and registry of every dependency, direct or transitive - no command reads or writes it yet.

@@ -1,0 +1,535 @@
+/**
+ * The comments of a `.trb` file, read the way the documentation standard judges them: every comment line with the
+ * line it stands on, every doc comment split into its sections, and the examples under `# Examples`.
+ *
+ * This is the lexical half of `torb docs source`. It finds text and structure and decides nothing: [historyHits]
+ * names the words a comment must not contain, [sectionsOf] names the headings a doc comment is built from, and
+ * [examplesOf] names the code below `# Examples`. The rules that turn all of that into findings live in `source.trb`.
+ *
+ * # Related
+ *
+ * - [DocumentationBlock] - one doc comment, line by line.
+ * - [sectionHeadings] - the whole heading vocabulary.
+ */
+
+use Span, SourceText, LineIndex from "../syntax/source"
+use Token, DocComment from "../syntax/token"
+use linesOf from "./markdown"
+
+/** One line of a comment, with the line of the file it stands on. */
+public type CommentLine {
+  line: Int
+  /** Without the `//` and without the margin of a block comment. Never ends with a line break. */
+  text: String
+}
+
+/**
+ * Every comment of a file, line by line: `//` comments, block comments and doc comments alike.
+ *
+ * A comment can only stand between two tokens, so the gaps between the tokens are the only places that are looked at.
+ * That is what keeps a `//` inside a string literal out of the result without a second lexer.
+ */
+public fn commentLines(source: SourceText, lines: LineIndex, tokens: List<Token>): List<CommentLine> {
+  var found: List<CommentLine> = []
+  var after = 0
+  for token in tokens {
+    const start = token.span.start
+    collectComments found, source, lines, after, start
+    after = after.max token.span.end
+  }
+  collectComments found, source, lines, after, source.text.byteLength()
+  found
+}
+
+/** The comments between two tokens. Everything else in there is whitespace. */
+fn collectComments(var found: List<CommentLine>, source: SourceText, lines: LineIndex, from: Int, to: Int) {
+  if from >= to {
+    return
+  }
+  const characters = source.characters
+  const end = source.indexAt to
+  var index = source.indexAt(from)
+  while index < end {
+    const isLineComment = characters[index] == '/' && characters.get(index + 1) == Some('/')
+    if isLineComment {
+      var stop = index
+      while stop < end && characters[stop] != '\n' {
+        stop = stop + 1
+      }
+      const line = lineAt lines, source.offsets[index]
+      found.add CommentLine(line, source.slice(index + 2, stop))
+      index = stop
+      continue
+    }
+    const isBlockComment = characters[index] == '/' && characters.get(index + 1) == Some('*')
+    if isBlockComment {
+      var stop = index + 2
+      while stop < end {
+        if characters[stop] == '*' && characters.get(stop + 1) == Some('/') {
+          stop = stop + 2
+          break
+        }
+        stop = stop + 1
+      }
+      const line = lineAt lines, source.offsets[index]
+      const text = source.slice index, stop
+      var offset = 0
+      for content in linesOf(text) {
+        found.add CommentLine(line + offset, content)
+        offset = offset + 1
+      }
+      index = stop
+      continue
+    }
+    index = index + 1
+  }
+}
+
+fn lineAt(lines: LineIndex, offset: Int): Int {
+  lines.lineAndColumn(offset).line
+}
+
+/** One doc comment of a file, with the line of every line of its content. */
+public type DocumentationBlock {
+  span: Span
+  /** The line the `/**` stands on */
+  line: Int
+  /** The content, without the comment markers and without the margin of stars, one entry per line */
+  lines: List<CommentLine>
+
+  /** Everything the comment says, as Markdown. */
+  fn text(self): String {
+    lines.map({ _.text }).toList().joined(separator: "\n")
+  }
+}
+
+/**
+ * Every doc comment of a file, in the order they stand in it.
+ *
+ * The lexer already answers which block comments are doc comments; this reads their text a second time, line by line,
+ * because a finding about a heading or a link has to name the line it stands on.
+ */
+public fn documentationBlocks(source: SourceText, lines: LineIndex, docs: List<DocComment>): List<DocumentationBlock> {
+  var blocks: List<DocumentationBlock> = []
+  for doc in docs {
+    const raw = source.text[doc.span.start..doc.span.end]
+    const inner = raw[3..(raw.byteLength() - 2)]
+    const start = lineAt lines, doc.span.start
+    var content: List<CommentLine> = []
+    var offset = 0
+    for line in linesOf(inner) {
+      content.add CommentLine(start + offset, stripMargin(line))
+      offset = offset + 1
+    }
+    blocks.add DocumentationBlock(doc.span, start, content)
+  }
+  blocks
+}
+
+/** The `*` that every line of a doc comment is written with, and the space behind it. */
+fn stripMargin(line: String): String {
+  const trimmed = line.trim()
+  if !trimmed.startsWith("*") {
+    return line.trim()
+  }
+  if trimmed.startsWith("* ") {
+    return trimmed[2..]
+  }
+  trimmed[1..]
+}
+
+/** Is there nothing but whitespace in front of this offset? Then a doc comment there is the module comment. */
+public fn startsFile(source: SourceText, offset: Int): Bool {
+  source.text[0..offset].isBlank()
+}
+
+/**
+ * The headings a doc comment may carry, and no others. Everything else a construct has to say belongs in the
+ * sentences above them: what it does, and what it is for.
+ */
+public const sectionHeadings: List<String> = ["Examples", "Errors", "Panics", "Pitfalls", "Open", "Related"]
+
+/** One `# Heading` of a doc comment and everything below it. */
+public type DocumentationSection {
+  /** Without the `#`, trimmed */
+  heading: String
+  /** How many `#` were written: only one is a heading of a doc comment */
+  level: Int
+  line: Int
+  lines: List<CommentLine>
+
+  fn isEmpty(self): Bool {
+    lines.all({ _.text.isBlank() })
+  }
+}
+
+/** A doc comment as the standard describes it: sentences, then sections. */
+public type Sections {
+  /** Everything above the first heading */
+  summary: List<CommentLine>
+  sections: List<DocumentationSection>
+}
+
+/** Splits a doc comment at its headings. A heading starts at the beginning of a line, so indented code is never one. */
+public fn sectionsOf(block: DocumentationBlock): Sections {
+  var summary: List<CommentLine> = []
+  var sections: List<DocumentationSection> = []
+  var heading = ""
+  var level = 0
+  var line = 0
+  var body: List<CommentLine> = []
+  for content in block.lines {
+    if !content.text.startsWith("#") {
+      if level == 0 {
+        summary.add content
+      } else {
+        body.add content
+      }
+      continue
+    }
+    if level > 0 {
+      sections.add DocumentationSection(heading, level, line, body)
+    }
+    level = headingLevel content.text
+    heading = content.text[level..].trim()
+    line = content.line
+    body = []
+  }
+  if level > 0 {
+    sections.add DocumentationSection(heading, level, line, body)
+  }
+  Sections summary, sections
+}
+
+fn headingLevel(text: String): Int {
+  var level = 0
+  for character in text.chars() {
+    if character != '#' {
+      break
+    }
+    level = level + 1
+  }
+  level
+}
+
+/** The first sentence of a doc comment: what the construct does. */
+public fn firstSentence(sections: Sections): String {
+  var words = ""
+  for content in sections.summary {
+    if content.text.isBlank() {
+      if !words.isEmpty() {
+        break
+      }
+      continue
+    }
+    words = if words.isEmpty() { content.text } else { "{words} {content.text}" }
+    if words.contains(". ") || words.endsWith(".") {
+      break
+    }
+  }
+  match words.indexOf(". ") {
+    Some(stop) => words[0..stop]
+    None => if words.endsWith(".") { words[0..(words.byteLength() - 1)] } else { words }
+  }
+}
+
+/** How much of an example the tool can say something about. The spelling mirrors the markers of a documentation page. */
+public type ExampleKind {
+  /** The whole thing: it parses, it is in the canon and it type checks */
+  case Program
+  /** `// fragment`: a signature or a shape, so only the lexer can judge it */
+  case Fragment
+  /** `// skip <reason>`: nothing is checked, and the reason is counted in the report */
+  case Skipped
+}
+
+/** One code block below `# Examples`. */
+public type Example {
+  /** The line the code starts on */
+  line: Int
+  kind: ExampleKind
+  /** The code, without the four spaces that make it a code block. The marker line stays in it: it is a comment. */
+  text: String
+  /** The reason of a `// skip` */
+  reason: String
+}
+
+/** The examples of one section, and the lines that tried to be a code block in another way. */
+public type Examples {
+  examples: List<Example>
+  /** The lines of a ``` fence, which a doc comment does not use */
+  fences: List<Int>
+}
+
+/**
+ * The code blocks of a section: the lines that are indented by four spaces, as a doc comment writes an example.
+ *
+ * Prose between two blocks is allowed and separates them, so one `# Examples` can show one use case after another.
+ */
+public fn examplesOf(section: DocumentationSection): Examples {
+  var examples: List<Example> = []
+  var fences: List<Int> = []
+  var block: List<CommentLine> = []
+  for content in section.lines {
+    if content.text.startsWith("    ") {
+      block.add CommentLine(content.line, content.text[4..])
+      continue
+    }
+    if content.text.isBlank() {
+      if !block.isEmpty() {
+        block.add CommentLine(content.line, "")
+      }
+      continue
+    }
+    if content.text.trim().startsWith("```") {
+      fences.add content.line
+    }
+    addExample block, examples
+    block = []
+  }
+  addExample block, examples
+  Examples examples, fences
+}
+
+fn addExample(block: List<CommentLine>, var examples: List<Example>) {
+  var kept = block
+  while !kept.isEmpty() && kept[kept.length() - 1].text.isBlank() {
+    kept = kept[0..(kept.length() - 1)]
+  }
+  if kept.isEmpty() {
+    return
+  }
+  const text = kept.map({ _.text }).toList().joined(separator: "\n")
+  const marker = kept[0].text.trim()
+  if marker == "// fragment" {
+    examples.add Example(kept[0].line, ExampleKind.Fragment, text, "")
+    return
+  }
+  if marker.startsWith("// skip") {
+    const reason = marker[7..].trim()
+    examples.add Example(kept[0].line, ExampleKind.Skipped, text, reason)
+    return
+  }
+  examples.add Example(kept[0].line, ExampleKind.Program, text, "")
+}
+
+/** A link of a doc comment: `[Iterator]`, `[List.add]`, `[Option.Some]`. */
+public type DocumentationLink {
+  line: Int
+  /** Everything between the brackets */
+  target: String
+}
+
+/**
+ * The links of a doc comment. A link is a name in brackets, so what stands inside a pair of backticks is not one -
+ * `` `[1, 2]` `` is a list literal - and neither is the text of a Markdown link with a target of its own.
+ */
+public fn linksOf(block: DocumentationBlock): List<DocumentationLink> {
+  var links: List<DocumentationLink> = []
+  for content in block.lines {
+    addLinks content, links
+  }
+  links
+}
+
+fn addLinks(content: CommentLine, var links: List<DocumentationLink>) {
+  const characters = content.text.chars().toList()
+  var index = 0
+  var isCode = false
+  while index < characters.length() {
+    if characters[index] == '`' {
+      isCode = !isCode
+      index = index + 1
+      continue
+    }
+    if isCode || characters[index] != '[' {
+      index = index + 1
+      continue
+    }
+    var stop = index + 1
+    while stop < characters.length() && characters[stop] != ']' {
+      stop = stop + 1
+    }
+    if stop >= characters.length() {
+      return
+    }
+    const target = String.from characters[(index + 1)..stop]
+    // `[text](page.md)`: a link that names its own target, not a name of the code
+    const isInline = characters.get(stop + 1) == Some('(')
+    if !isInline && isName(target) {
+      links.add DocumentationLink(content.line, target)
+    }
+    index = stop + 1
+  }
+}
+
+/** `Iterator`, `List.add`: one name, or a name and one member. */
+fn isName(target: String): Bool {
+  const parts = target.split "."
+  if parts.length() > 2 {
+    return false
+  }
+  for part in parts {
+    if part.isEmpty() || !isWord(part) {
+      return false
+    }
+  }
+  const first = target.chars().first() ?? ' '
+  first.isLetter() || first == '_'
+}
+
+fn isWord(text: String): Bool {
+  text.chars().all({ _.isLetter() || _.isDigit() || _ == '_' })
+}
+
+/**
+ * The words that turn a comment into a history of itself. A comment says what the construct does now; what it did
+ * before is in the log, and a reader who has to subtract the past from the present reads twice.
+ */
+public const historyPhrases: List<String> = [
+  "used to",
+  "formerly",
+  "previously",
+  "originally",
+  "at first",
+  "no longer",
+  "legacy",
+  "was renamed",
+  "milestone",
+]
+
+/** The words a plan number follows: `gap 58`, `round four`. The number itself is what makes it a hit. */
+public const numberingWords: List<String> = ["gap", "round"]
+
+const numberWords: List<String> = [
+  "one",
+  "two",
+  "three",
+  "four",
+  "five",
+  "six",
+  "seven",
+  "eight",
+  "nine",
+  "ten",
+]
+
+/** A history word that was found, with the line it stands on. */
+public type HistoryHit {
+  line: Int
+  /** The word or the two words, as the list spells them */
+  word: String
+}
+
+/**
+ * Every history word of every comment of a file. The whole list is asked of every line, so nothing depends on order.
+ *
+ * What stands between backticks is quoted and not prose, so a comment about the rule - this module's own, for one -
+ * can name the words the rule forbids.
+ */
+public fn historyHits(comments: List<CommentLine>): List<HistoryHit> {
+  var hits: List<HistoryHit> = []
+  for comment in comments {
+    const words = wordsOf withoutCode(comment.text)
+    for phrase in historyPhrases {
+      if containsWords(words, phrase.split(" ")) {
+        hits.add HistoryHit(comment.line, phrase)
+      }
+    }
+    for word in numberingWords {
+      if isNumbered(words, word) {
+        hits.add HistoryHit(comment.line, "{word} <number>")
+      }
+    }
+  }
+  hits
+}
+
+/** A line without what stands between backticks: the prose of it. */
+fn withoutCode(text: String): String {
+  var characters: List<Char> = []
+  var isCode = false
+  for character in text.chars() {
+    if character == '`' {
+      isCode = !isCode
+      continue
+    }
+    if !isCode {
+      characters.add character
+    }
+  }
+  String.from characters
+}
+
+/**
+ * The letters and the digits of a text, as lowercase words. Everything else separates, and a run of digits is a word
+ * of its own, so a plan number is two words.
+ */
+public fn wordsOf(text: String): List<String> {
+  var words: List<String> = []
+  var current: List<Char> = []
+  var isDigits = false
+  for character in text.toLowerCase().chars() {
+    const isWord = character.isLetter() || character.isDigit()
+    if !isWord {
+      addWord current, words
+      current = []
+      continue
+    }
+    if !current.isEmpty() && character.isDigit() != isDigits {
+      addWord current, words
+      current = []
+    }
+    isDigits = character.isDigit()
+    current.add character
+  }
+  addWord current, words
+  words
+}
+
+fn addWord(characters: List<Char>, var words: List<String>) {
+  if !characters.isEmpty() {
+    words.add String.from(characters)
+  }
+}
+
+fn containsWords(words: List<String>, phrase: List<String>): Bool {
+  var start = 0
+  while start + phrase.length() <= words.length() {
+    if matchesAt(words, phrase, start) {
+      return true
+    }
+    start = start + 1
+  }
+  false
+}
+
+fn matchesAt(words: List<String>, phrase: List<String>, start: Int): Bool {
+  var offset = 0
+  for word in phrase {
+    if words[start + offset] != word {
+      return false
+    }
+    offset = offset + 1
+  }
+  true
+}
+
+/** `gap 58`, `round four`: the word, and a number behind it. */
+fn isNumbered(words: List<String>, word: String): Bool {
+  var index = 0
+  while index + 1 < words.length() {
+    if words[index] == word && isNumber(words[index + 1]) {
+      return true
+    }
+    index = index + 1
+  }
+  false
+}
+
+fn isNumber(word: String): Bool {
+  if numberWords.contains(word) {
+    return true
+  }
+  word.chars().all({ _.isDigit() })
+}

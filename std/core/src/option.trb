@@ -1,3 +1,16 @@
+/**
+ * Absence as a value: [Option], its two cases, and the vocabulary that works on the value that is there.
+ *
+ * `Value?` is the only absence in the language - there is no null and no uninitialized field - so a signature says
+ * whether a value can be missing, and the caller has to answer for it. The answers are `??` for a fallback, `?.` for a
+ * step that keeps the absence, and `match` for both ways at once.
+ *
+ * # Related
+ *
+ * - [Result] - absence with a reason, for an operation that can fail.
+ * - [Iterable] - the same vocabulary over many values instead of one.
+ */
+
 use Result from "./result"
 use From, Show from "./convert"
 use Iterable from "std/iteration"
@@ -5,13 +18,46 @@ use Iterable from "std/iteration"
 /**
  * A value that may be absent. `Value?` is sugar for `Option<Value>`.
  *
- * `map`, `flatMap`, `filter`, `forEach` mean the same as everywhere else (see "One Vocabulary" in CONCEPT.md).
- * An Option is a value, not a pipeline: they run immediately.
+ * Reach for it where nothing is a legitimate answer: a lookup that finds no entry, a list that has no first element, a
+ * field that is filled in later. `map`, `flatMap`, `filter` and `forEach` mean the same as everywhere else (see "One
+ * Vocabulary" in CONCEPT.md) and run immediately - an Option is a value, not a pipeline.
+ *
+ * # Examples
+ *
+ *     const first = [1, 2, 3].first()
+ *     print(first ?? 0)
+ *
+ * The two cases are what a `match` covers, and neither of them needs a type in front of it: the prelude imports both.
+ *
+ *     const found: Int? = None
+ *     const text = match found {
+ *       Some(value) => "{value}"
+ *       None => "nothing"
+ *     }
+ *     print text
+ *
+ * # Pitfalls
+ *
+ * - An `Option<Option<Value>>` is two questions and not one. [Option.flatMap] is what answers both at once, which is
+ *   also why a lookup that returns an Option is chained with `flatMap` and not with `map`.
+ *
+ * # Open
+ *
+ * There is no combinator that takes a second Option (`or`, `zip`): two of them are combined with [Option.flatMap] and
+ * a closure.
+ *
+ * # Related
+ *
+ * - [Option.orElse] - the `??` operator, and the only way to leave the type.
+ * - [Result] - what to return instead when the absence has a reason.
  */
 public type Option<Value> {
+  /** The value is there. */
   case Some(value: Value)
+  /** There is no value. */
   case None
 
+  /** Whether there is a value. For the value itself, `match` or `??` instead. */
   fn isSome(self): Bool {
     match self {
       Some(_) => true
@@ -19,10 +65,19 @@ public type Option<Value> {
     }
   }
 
+  /** Whether the value is absent. */
   fn isNone(self): Bool {
     !isSome()
   }
 
+  /**
+   * Changes the value if there is one, and keeps the absence if there is none.
+   *
+   * # Examples
+   *
+   *     const name: String? = Some "ada"
+   *     print name.map({ _.toUpperCase() })
+   */
   fn map<Output>(self, transform: (value: Value) => Output): Output? {
     match self {
       Some(value) => .Some(transform(value))
@@ -30,6 +85,15 @@ public type Option<Value> {
     }
   }
 
+  /**
+   * Changes the value into another Option and keeps one level: for a step that can answer with nothing itself.
+   *
+   * # Examples
+   *
+   *     const names = ["ada": "Ada Lovelace"]
+   *     const initial = names.get("ada").flatMap({ _.chars().first() })
+   *     print initial
+   */
   fn flatMap<Output>(self, transform: (value: Value) => Output?): Output? {
     match self {
       Some(value) => transform value
@@ -37,6 +101,7 @@ public type Option<Value> {
     }
   }
 
+  /** Keeps the value only if it answers the question, and turns it into `None` if it does not. */
   fn filter(self, predicate: (value: Value) => Bool): Value? {
     match self {
       Some(value) if predicate(value) => self
@@ -44,6 +109,7 @@ public type Option<Value> {
     }
   }
 
+  /** Runs the action if there is a value: the statement form of [Option.map], for a step that answers with nothing. */
   fn forEach(self, action: (value: Value) => Void) {
     if const Some(value) = self {
       action value
@@ -58,7 +124,17 @@ public type Option<Value> {
     }
   }
 
-  /** The `??` operator. The fallback is only evaluated when needed. */
+  /**
+   * The value, or the fallback if there is none. This is the `??` operator, and the way out of the type.
+   *
+   * The fallback is `lazy`, so it is only evaluated when it is needed: a fallback that reads a file or counts costs
+   * nothing while the value is there.
+   *
+   * # Examples
+   *
+   *     const missing: Int? = None
+   *     print missing.orElse(0)
+   */
   fn orElse(self, fallback: lazy Value): Value {
     match self {
       Some(value) => value
@@ -66,6 +142,14 @@ public type Option<Value> {
     }
   }
 
+  /**
+   * Gives the absence a reason and makes it a [Result], which is what a function that answers with `?` needs.
+   *
+   * # Examples
+   *
+   *     const found: Int? = None
+   *     print found.okOr("there is no number")
+   */
   fn okOr<Failure>(self, error: lazy Failure): Result<Value, Failure> {
     match self {
       Some(value) => Ok value
@@ -73,7 +157,14 @@ public type Option<Value> {
     }
   }
 
-  /** For cases where absence is a bug. */
+  /**
+   * The value, with the message as the reason if there is none. For a place where the absence is a bug.
+   *
+   * # Panics
+   *
+   * When there is no value. Nothing else runs after that, so [Option.orElse] or [Option.okOr] is what a program that
+   * has to carry on uses instead.
+   */
   fn expect(self, message: String): Value {
     match self {
       Some(value) => value
