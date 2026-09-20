@@ -22,6 +22,12 @@ gets a page instead, and keeps a one-line entry here that links it.
 The state of one run of a [collector](#collector), held in a `var`, with `add` and `finish`. Every `Collection` is an
 accumulator out of the box.
 
+### Backpressure
+
+The shape of a stream's protocol rather than a mechanism of its own: reading pulls, so nothing runs before something
+asks, and writing waits, so `add` finishes only once the target has taken the item. See
+[Streams](language/concurrency-and-streams/streams.md).
+
 ### Binding
 
 A name for a value, introduced by `const` or `var`. Never called a variable: the binding decides whether the value it
@@ -38,10 +44,21 @@ The one formatting a program is written in - most visibly that a call is a [comm
 grammar allows it. `torb canon` writes it and `torb canon --check` reports what is not in it. See
 [Command calls](language/syntax/command-calls.md).
 
+### Capability
+
+What a package or a sandboxed script may reach beyond the pure part of the language: the file system, the network,
+the clock, the environment, processes or foreign functions. Visible from the imports alone, because there is no
+reflection to grant one silently. See [The sandbox](language/configuration/the-sandbox.md).
+
 ### Case
 
 A variant of a `type`, declared with `case`. Never called a variant or an enum case. See
 [Cases and match](language/pattern-matching/cases-and-match.md).
+
+### Cause chain
+
+What `Error.cause()` walks: an error that wraps another one hands it out, so a report can print each link as
+`  caused by: <...>`. See [The Error trait](language/errors/the-error-trait.md).
 
 ### Closure
 
@@ -96,6 +113,12 @@ Taking a value out of a collection or a field produces a copy, so changing it ch
 rather than a silent bug. See
 [Why values instead of references](explanation/why-values-instead-of-references.md).
 
+### Cyclic import
+
+Two modules or packages that import each other. Harmless between modules, because nothing runs when a module is
+imported and their exports are computed to a fixpoint; still an error between the members of a workspace. See
+[Cyclic imports](language/modules-and-packages/cyclic-imports.md).
+
 ### Dead change
 
 A change that cannot have an effect: a `var` that is changed and never read afterwards, or the discarded result of a
@@ -117,20 +140,48 @@ A `/** ... */` comment that belongs to the declaration after it. Everything that
 fields and cases included, and its text is Markdown with the conventional headings `# Errors`, `# Panics` and
 `# Examples`.
 
+### Error trait
+
+The trait every failure can carry (`with Show`) so it fits into `Result<Value, Error>` for the layers that only need
+to report it, not match on it. See [The Error trait](language/errors/the-error-trait.md).
+
 ### Exclusivity
 
 The rule that while a `var` access to a path is running, the same path cannot be accessed another way. The access of a
 call begins once all of its arguments have been evaluated. See [Exclusivity](language/types/exclusivity.md).
+
+### Exhaustive
+
+Said of a `match`, a binding, a `for` loop or a closure parameter whose pattern or arms cover every value of the
+subject's type, which the checker proves before the program runs. See
+[Exhaustiveness](language/pattern-matching/exhaustiveness.md).
 
 ### Field
 
 A named piece of storage declared inside a `type`, `const` unless marked `var` and public unless marked `private` or
 `private(var)`. See [Fields](language/types/fields.md).
 
+### Foreign function
+
+A function of a C library, declared in a `foreign "library" { ... }` block with no body and the C ABI as its
+contract. Available to any package, unlike [native](#native); a sandboxed script can never be granted it. See
+[Foreign functions](language/extensibility/foreign-functions.md).
+
+### Format
+
+An implementation of `Encode`/`Decode`'s `Encoder` and `Decoder` for a whole document shape, such as `Json`, which
+never sees a type of its own. See [std/encoding](standard-library/encoding.md).
+
 ### Front matter
 
 The block between the two `---` lines at the top of a documentation page, in a written subset of YAML. See
 [The front matter](contributing/front-matter.md).
+
+### Guard
+
+A condition after `if` in a pattern (`n if n < 0`), which also has to hold for the arm to match. A guarded arm never
+counts towards exhaustiveness, because the guard could always be false. See
+[Pattern forms](language/pattern-matching/pattern-forms.md).
 
 ### Hoisting
 
@@ -168,6 +219,18 @@ there are no unions of types.
 A member of a type that declares `self`. Structurally it is a constant of the type that holds a receiver closure, which is
 why a field and a method cannot share a name. See [Methods and static functions](language/types/methods.md).
 
+### Module
+
+One file, or the `src/lib.trb` of a package: a set of declarations another file reaches with
+[`use`](language/modules-and-packages/use.md), never something that runs on its own. See
+[Top-level code](language/modules-and-packages/top-level-code.md) for what a module may not hold.
+
+### Native
+
+A declaration implemented by the compiler and its runtime instead of by TorbScript code, such as `Array`, `String`
+or a collection's storage. Only `std/` may declare one; see [Foreign functions](language/extensibility/foreign-functions.md)
+for the same idea applied to a C library instead of the runtime.
+
 ### Object safety
 
 Whether a trait's member can be called on a value known only through the trait: a member that mentions `Self` in a
@@ -176,12 +239,17 @@ parameter or its result, or that has no `self`, cannot be. See [Object safety](l
 ### Package
 
 A directory with a `project.trb` and a `src/`, named `owner/name`. `src/lib.trb` is what other packages import and
-`src/main.trb` is what `torb run` executes.
+`src/main.trb` is what `torb run` executes. See [Packages](language/modules-and-packages/packages.md).
 
 ### Page
 
 A `.md` file of this documentation that starts with [front matter](#front-matter). A `.md` file without front matter is a
 design document and is linked by an index rather than being a page.
+
+### Panic
+
+An unrecoverable stop for a bug rather than an expected failure: `panic: <message>` to standard error, then the site,
+exit code 101, and nothing else runs. See [panic](language/errors/panic.md).
 
 ### Participle
 
@@ -196,12 +264,19 @@ A source, zero or more lazy stages (`map`, `filter`, `take`, `sorted`), and one 
 ### Prelude
 
 The package whose public names are in scope in every file, `std/prelude` by default. It holds the pure part of the
-standard library; what a program can touch stays an explicit import.
+standard library; what a program can touch stays an explicit import. See
+[The prelude](language/modules-and-packages/the-prelude.md).
 
 ### Property command
 
 A [command call](#command-call) on a field, which writes the field rather than calling it. `port 8080` is `port = 8080`,
 and `database { ... }` configures the field's value in place.
+
+### Question mark operator
+
+The postfix `?`, which unwraps an `Ok` or a `Some` and returns the `Fail` or `None` from the surrounding function or
+script, converting the error type through `From` where they differ. See
+[The question mark operator](language/errors/question-mark.md).
 
 ### Quotation
 
@@ -217,17 +292,33 @@ somebody else's `var` path, but never through this one, and it cannot be widened
 
 A closure whose first parameter is called `self`, so names inside it resolve against that receiver. It is what a builder,
 a configuration block and a method all are. See
-[Write a configuration file](how-to/write-a-configuration-file.md).
+[Receiver closures](language/configuration/receiver-closures.md).
 
 ### Receiver script
 
 A `.trb` file loaded as the body of a [receiver closure](#receiver-closure), type checked against the receiver type.
-`project.trb` is one, with the receiver `Project`.
+`project.trb` is one, with the receiver `Project`. See [Receiver scripts](language/configuration/receiver-scripts.md).
+
+### Rest pattern
+
+The `...name` part of a list pattern, such as `[first, ...rest]`, which binds the items it does not name individually
+as a `List`. See [Pattern forms](language/pattern-matching/pattern-forms.md).
+
+### Sandbox
+
+Where a [receiver script](#receiver-script) runs: no IO, no network, no clock, no environment and no foreign
+functions by default, and every [capability](#capability) beyond that granted at the call site of
+`Sandbox.load`, never by the script itself. See [The sandbox](language/configuration/the-sandbox.md).
 
 ### Shared type
 
 A type declared `shared type`, which has an identity: assigning it does not copy, and everybody who holds it sees the same
 object. Handles to the outside world are shared types. See [Shared types](language/types/shared-types.md).
+
+### Sink
+
+The writing end of a stream, `Sink<Item, Failure>`, with `add` and `finish` in place of an `Accumulator`'s members of
+the same name, each answering a `Task`. See [Streams](language/concurrency-and-streams/streams.md).
 
 ### Skill
 
@@ -239,6 +330,16 @@ The Agent Skill derived from this documentation by `torb docs skill`: a folder w
 A fenced code block of this documentation. A `trb` snippet is verified by the compiler's own front end; the marker in the
 fence decides how hard. See [The docs commands](contributing/checks.md).
 
+### Source
+
+The reading end of a stream, `Source<Item, Failure>`, with `next` in place of an `Iterator`'s `next`, answering a
+`Task` instead of the value directly. See [Streams](language/concurrency-and-streams/streams.md).
+
+### Stage
+
+The synchronous middle of a pipeline, `Stage<Input, Output>`, written once and driven by both an `Iterable` and a
+`Source`. See [Pipelines](language/collections-and-iteration/pipelines.md).
+
 ### Stage 0
 
 The Rust interpreter in `bootstrap/` that runs the self-hosted toolchain until it can compile itself. It has no type
@@ -249,10 +350,26 @@ checker and is thrown away afterwards.
 A function declared on a `type` that does not take `self`, called as `Type.member(...)` rather than through an
 instance. See [Methods and static functions](language/types/methods.md).
 
+### Stream
+
+One flow in one direction, named by whichever end a signature holds - `Source` to read or `Sink` to write - never
+"the stream" itself, because a program holds one end at a time. See [std/stream](standard-library/stream.md).
+
 ### Supertrait
 
 A trait that another trait requires with `with` at its own declaration, such as `trait Compare with Equals`; every
 implementor of the smaller trait implements it too. See [Supertraits](language/traits/supertraits.md).
+
+### Tail call
+
+A call in tail position of a function that calls itself directly. Guaranteed not to grow the stack; every other call
+uses a stack frame and counts against the per-task frame limit. See
+[Tail calls and the frame limit](language/execution/tail-calls.md).
+
+### Task
+
+A computation that finishes later, `Task<Value>`; a function that answers one may call `await()`, the way a function
+that answers a `Result` may use `?`. See [Tasks](language/concurrency-and-streams/tasks.md).
 
 ### Trailing closure
 
@@ -286,7 +403,18 @@ spreads a collection into it with `...`. See [Variadic parameters](language/func
 A method that changes its receiver in place and declares `var self`, next to its [participle](#participle), which returns
 a changed copy. See [Verbs and participles](language/types/verbs-and-participles.md).
 
+### Wildcard
+
+The pattern `_`, which matches anything and binds nothing. The same underscore in an expression is the implicit
+closure parameter instead; the two positions never overlap. See
+[Pattern forms](language/pattern-matching/pattern-forms.md).
+
 ### Witness table
 
 What a trait-typed value carries to call a generic bound's members without knowing its concrete type - one function
 pointer per member of the trait. See [Witness tables](language/generics/witnesses.md).
+
+### Workspace
+
+A root `project.trb` naming several member projects, sharing one `project.lock.trb` so they resolve their
+dependencies together. See [Workspaces](language/modules-and-packages/workspaces.md).

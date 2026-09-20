@@ -144,7 +144,8 @@ that may change it is a `var` parameter, and that reference exists only for the 
 
 **Taking an element out of a collection is not a reference to it.** This is the copy trap. The first program below
 prints `1`, the second prints `1 0`: the copy changed and the list did not. Rule 8 makes a change that is never read a
-compile error, which is what would catch the second one; the compiler does not report it yet.
+compile error. The second program reads the copy in its last line, so there is nothing to report: a copy that is
+changed and then read is a legal program that does something else than was meant.
 
 ```trb check
 type Counter {

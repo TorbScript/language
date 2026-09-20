@@ -1,0 +1,109 @@
+---
+title: Streams
+summary: Source and Sink are the asynchronous siblings of Iterator and Accumulator, with the same verbs, the same Stage values in between, and a failure that stands in the type on both ends.
+kind: reference
+status: planned
+order: 30
+keywords:
+  - Source
+  - Sink
+  - Stage
+  - backpressure
+source:
+  - docs/STREAMS.md
+---
+
+> **Planned.** This feature is designed but not implemented. Nothing on this page works today.
+
+A stream is one flow, in one direction, with two ends. `Source<Item, Failure>` reads with `next`, exactly like
+`Iterator`; `Sink<Item, Failure>` writes with `add` and `finish`, exactly like `Accumulator` - the only difference is
+that every verb answers a `Task`. The example below type checks against the real `std/stream`; no back end runs it
+yet.
+
+## Example
+
+```trb check
+fn sumOf(var source: Source<Int, Never>): Task<Result<Int, Never>> {
+  source.collect(counting()).await()
+}
+
+const total = sumOf Channel<Int>(capacity: 1).source()
+print total.await().orElse(0)
+```
+
+## Syntax
+
+```text
+shared trait Source<Item, Failure> with Close {
+  fn next(var self): Task<Result<Item?, Failure>>
+}
+
+shared trait Sink<Item, Failure> with Close {
+  fn add(var self, item: Item): Task<Result<Void, Failure>>
+  fn finish(var self): Task<Result<Void, Failure>>
+}
+
+while const Some(item) = source.next().await()? { ... }
+```
+
+## Rules
+
+1. **`Ok(Some(item))` is the next item, `Ok(None)` is the end of the stream, `Fail(problem)` is a failure that ends
+   it.** After `Ok(None)` every further `next()` answers `Ok(None)` again; after a `Fail` the stream never delivers
+   another item.
+
+2. **Both ends are `shared type`s, so a source that is read from or a sink that is written to sits in a `var`
+   binding.** A `const` handle is the read-only view every shared object has, and it cannot be consumed - not even by
+   wrapping it in `map` or `filter`, because those hand the reading permission to a wrapper too.
+
+3. **There is deliberately no `for` over a `Source`.** A `for` head has no place for the `?` that a failing pull
+   needs, so the loop is a `while` that names both `await()` and `?`:
+
+   ```trb check
+   fn printAll(var source: Source<Int, Never>): Task<Void> {
+     while const Some(item) = source.next().await()? {
+       print item
+     }
+   }
+   ```
+
+4. **Backpressure is the shape of the protocol, not a mechanism.** Reading pulls: nothing happens until `next()` is
+   called. Writing waits: `add`'s `Task` finishes only once the target has taken the item, so a writer faster than its
+   target waits by itself.
+
+5. **The same `Stage` an `Iterable` uses drives a `Source` too, through `through(stage)`, `map`, `filter`, `take` and
+   the rest.** A stage is synchronous and never asks where its values come from, so `mapping`, `filtering` and every
+   other stage of [Pipelines](../collections-and-iteration/pipelines.md) work unchanged on both worlds.
+
+6. **`close()` releases what is above or below, synchronously and without failing; `finish()` is the graceful end of
+   a `Sink` and can fail.** A reader that stops early (`take`, a `find` that found it, an abandoned loop) closes what
+   it was reading from; a sink that is closed without being finished may have written less than it was given.
+
+## What this is not
+
+**A `Source` is not something a `for` loop can read.** Only `Iterable` works after `in`; a `Source` needs the `while`
+form because its pull can fail.
+
+```trb check
+fn printAll(var source: Source<Int, Never>): Task<Void> {
+  while const Some(item) = source.next().await()? {
+    print item
+  }
+}
+```
+
+```trb error
+fn printAll(source: Source<Int, Never>) {
+  for item in source {
+    print item
+  }
+}
+// error: The checker did not work out the type of this expression
+```
+
+## Related
+
+- [Channels](channels.md) - `Channel`, the one place a `Source` and a `Sink` are made from nothing else.
+- [Tasks](tasks.md) - `Task` and `await()`, which every verb of a stream answers with.
+- [Pipelines](../collections-and-iteration/pipelines.md) - the `Stage` values a stream reuses without change.
+- [Shared types](../types/shared-types.md) - why a `var self` method here may answer a `Task`.

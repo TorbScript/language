@@ -1048,3 +1048,17 @@ Wenn nicht, was bedeutet, bewirkt es?
     + `first.increment()` (Konzept: Compile-Fehler) → geht an den Checker. (2) `default => …` in einem `match` bindet
     still und macht es vollständig. **Frage an dich:** soll eine nie benutzte Bindung in einem Catch-all-Arm ein
     Fehler sein ("write `_`")? Passt zur Dead-Change-Philosophie; ich bin dafür.
+
+- (Stand, 2026-09-20 abends) Doku Phase 2, Welle 1 ist gemergt: **96 Seiten, 17 Ordner, 234 geprüfte Snippets**
+  (Syntax, Werte und Typen, Funktionen, Typen, Traits und Generics). Welle 2 läuft (Pattern Matching/Fehler,
+  Collections/Nebenläufigkeit/Streams, Module/Reflection/Konfiguration/Ausführung, Standardbibliothek).
+  - **Die Doku-Schreiber sind ein Konformitätstest für den Checker geworden.** Weil jede Behauptung als geprüftes
+    Snippet belegt werden muss, haben sie Stellen gefunden, an denen der Checker annimmt, was die Sprache verbietet:
+    eine Liste, wo ein `Int` erwartet wird; ein Trait-Wert, wo ein konkreter Typ erwartet wird; `swap(a, a)` ohne
+    Exklusivitäts-Fehler; `==`/`<` und `"{value}"` ohne `Equals`/`Compare`/`Show`-Prüfung bei ungebundenen
+    Typparametern; `HashMap<Float, String>` trotz `Key: Hash`; "This is a bug of the compiler" bei fehlendem Member
+    auf einem Trait-Wert; statische Funktion über eine Instanz aufrufbar; Feld und Methode gleichen Namens;
+    `const (a, b) = …` aus dem Konzept prüft nicht; kleinere (Alias-Namen in Meldungen, `Array`-Index außerhalb,
+    `extend` eines Literal-Typs, Default an `fn`-Typparametern, `NaN`/`nan`).
+  - **Wird gelöst:** "Checker-Konformitätsrunde 1" (Opus-Agent) reproduziert jede Stelle einzeln, behebt sie mit
+    Tests und exakten Meldungen und meldet, welche Doku-Sätze danach veraltet sind.
