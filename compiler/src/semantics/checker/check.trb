@@ -3,7 +3,7 @@ use Diagnostic from "../../syntax/diagnostic"
 use Statement, Binding, Declaration, Member from "../../syntax/ast"
 use FunctionDeclaration, ExtendDeclaration, Expression from "../../syntax/ast"
 use ModuleId from "../module"
-use SymbolId from "../symbols"
+use SymbolId, boundNamesOf from "../symbols"
 use Program from "../scope"
 use Clock from "std/time"
 use Checker, TypeScope, Statistics, Timing, newChecker from "./context"
@@ -176,6 +176,15 @@ fn checkTopLevelBinding(var checker: Checker, scope: TypeScope, binding: Binding
     if const Some(symbol) = checker.resolvedName(scope.module, binding.pattern.span) {
       const _ = resultOf checker, symbol
       return
+    }
+  } else {
+    // `const (quotient, remainder) = divide(7, 2)`: every name the pattern binds is a declaration of the file with a
+    // signature of its own, and asking for the first one of them checks the initializer they share
+    if const Some(first) = boundNamesOf(binding.pattern).first() {
+      if const Some(symbol) = checker.resolvedName(scope.module, first.span) {
+        const _ = resultOf checker, symbol
+        return
+      }
     }
   }
   var annotation: TypeId? = None

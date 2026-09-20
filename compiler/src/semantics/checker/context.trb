@@ -659,6 +659,11 @@ public type DeclarationSiteKind {
   case Owned(owner: TypeId?, generics: List<ParameterId>, member: Member)
   /** A top-level `const` of a module. */
   case Constant(binding: Binding)
+  /**
+   * One name of a top-level binding that destructures (`const (quotient, remainder) = divide(7, 2)`). Every name of it
+   * shares one initializer, so the binding is checked once and each name reads its own type back out of `patternTypes`.
+   */
+  case Destructured(binding: Binding)
 }
 
 /**
@@ -797,6 +802,12 @@ public type Checker {
   var hasVariables: Bool = false
   /** The declarations whose result is being inferred right now: naming one of them inside its own body is a cycle. */
   var inferringResults: Map<SymbolId, Bool> = [:]
+  /**
+   * The top-level bindings that destructure and have been checked, by module and by the start of their pattern. Every
+   * name such a binding declares has a signature of its own and all of them share the one initializer, so it is checked
+   * once - whichever name was asked about first.
+   */
+  var checkedDestructured: Map<(Int, Int), Bool> = [:]
   /**
    * The function type of a signature, by `SignatureId`. Reading a member builds one, interning it builds a key out of
    * every parameter, and the same member is read over and over - so the answer is kept.

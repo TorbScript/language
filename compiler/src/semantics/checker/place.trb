@@ -292,8 +292,15 @@ fn hasIdentityHere(var checker: Checker, at: Span): Bool {
 /** Whether a top-level binding was written `var`. Its symbol says nothing about that, its declaration site does. */
 public fn isDeclaredVar(checker: Checker, symbol: SymbolId): Bool {
   if const Some(site) = checker.siteOf(symbol) {
-    if const .Constant(binding) = site.kind {
-      return binding.isVar
+    match site.kind {
+      .Constant(binding) => {
+        return binding.isVar
+      }
+      // `var (first, second) = pair` at the top level: the `var` belongs to the binding, not to one of its names
+      .Destructured(binding) => {
+        return binding.isVar
+      }
+      _ => {}
     }
   }
   false

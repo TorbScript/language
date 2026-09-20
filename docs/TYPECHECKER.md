@@ -2486,3 +2486,28 @@ not a second span). It found **five** ambiguous reads in the sources, and every 
 `any { _ == value }` in `Collection.contains`, `(0..count).map { value }` in `List.filled`,
 `indexed().find { _.1 == value }` in `List.indexOf`, `box.update { _.added value }` in `Queueing.add` and
 `indicators.any({ value.startsWith _ })` in the documentation's own index writer. All five name the parameter now.
+
+**57. Does a binding that destructures work at the top level of a file?**
+CONCEPT's own examples of patterns in bindings are `const (quotient, remainder) = divide(7, 2)` and
+`const Point(x, y) = p`, and nothing says where they may stand. Inside a body they always worked. At the top level of a
+file they bound **nothing**: milestone 3 declares a name for a plain `.Binding` pattern and for nothing else, and
+`checkTopLevelBinding` asked for the type of that one name - so the pattern was never checked, no name existed, and the
+only symptom was "Cannot find `quotient`" wherever it was read. Stage 0 binds them and resolves them from a function of
+the module, so the runtime and the checker disagreed. Two things make the top level different from a body, though: a
+top-level `const` of a **module** is a compile-time constant that milestone 5 *folds*, and a `public` one is a name of
+the module's interface.
+_Proposal:_ a destructuring binding at the top level of a file declares one symbol per name it binds, exactly as a plain
+one declares one - so a function of the module reads it like any other declaration. It is allowed where the top level is
+ordinary code (an entry file, a script, a `tests/*.test.trb` file) and refused for a **module's** `const` and for an
+**exported** one, where one projection out of a pattern is neither foldable nor a name anybody can import.
+_Reason:_ it is the reading that makes CONCEPT's two examples work wherever a reader would write them, it is what stage 0
+already does, and the one restriction is the difference between a statement and a declaration that has to be folded or
+exported - not a rule about patterns.
+
+_Decision:_ accepted. `boundNamesOf` in `symbols.trb` is the walk (milestone 3 declares the names),
+`DeclarationSiteKind.Destructured(binding)` is the site every one of them shares, and `checkDestructuredBinding` checks
+the initializer and the pattern **once** - in a scope that is thrown away again, so the names stay declarations and do
+not also become locals of the statement sequence. Each name then reads its own type out of `patternTypes` at its own
+span, which is exactly what `checkPattern` recorded there. `requireSingleName` is the restriction, with one message per
+reason ("A module's `const` binds one name" / "An exported `const` binds one name"). A `var` pattern is one `var` for
+all of its names, which is what `isDeclaredVar` reads off the binding.

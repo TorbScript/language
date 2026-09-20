@@ -626,6 +626,48 @@ public fn checkInitializer(
   annotation ?? found
 }
 
+/**
+ * A top-level binding whose pattern destructures (`const (quotient, remainder) = divide(7, 2)`, `const Point(x, y) = p`
+ * - CONCEPT's own examples). Every name it binds is a declaration of the file with a signature of its own, and all of
+ * them share this one initializer, so it is checked exactly once: `checkDestructured` says whether that has happened.
+ *
+ * The pattern is checked in a scope that is thrown away again. What has to survive is `patternTypes` - that is where
+ * each name reads its own type - while the names themselves must **not** become locals of the statement sequence: they
+ * are declarations, and a function of the module reaches them through the file scope like any other.
+ */
+public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, binding: Binding) {
+  const key = (module.value, binding.pattern.span.start)
+  if checker.checkedDestructured.containsKey(key) {
+    return
+  }
+  checker.checkedDestructured.set key, true
+  const voidType = checker.voidType
+  const saved = checker.enterBody module, voidType, true, None
+  checker.openScope()
+  openInference checker
+  var annotation: TypeId? = None
+  if const Some(reference) = binding.annotation {
+    annotation = Some typeFromReference(checker, reference, TypeScope(module).forType())
+  }
+  const found = match annotation {
+    Some(wanted) => {
+      const inner = expectationOf checker, wanted
+      checkExpression checker, binding.value, inner
+    }
+    None => inferExpression checker, binding.value
+  }
+  var subject = annotation ?? found
+  if checker.absorbs(subject) {
+    subject = checker.deferredType
+  }
+  checkPattern checker, binding.pattern, subject, binding.isVar
+  requireIrrefutable checker, binding.pattern, subject, "The pattern of a binding", "value"
+  closeInference checker
+  settleChanges checker
+  checker.closeScope()
+  checker.leaveBody saved
+}
+
 public fn bodyExpectation(checker: Checker, result: TypeId, isInferred: Bool): Expectation {
   if isInferred {
     return Expectation.None

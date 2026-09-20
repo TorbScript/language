@@ -1,5 +1,5 @@
 use Span from "../syntax/source"
-use Name, Declaration, Visibility from "../syntax/ast"
+use Name, Declaration, Visibility, Pattern from "../syntax/ast"
 use ModuleId, Module from "./module"
 
 /** The index of a symbol in `Symbols`. A wrapper, so it can never be confused with a `ModuleId` or a count. */
@@ -103,14 +103,59 @@ public fn declareModule(var symbols: Symbols, module: Module): List<Definition> 
       // A plain top-level `const`/`var` without modifiers is always private to its file: `public const` parses as
       // a `Declaration` with `DeclarationKind.Constant` instead, and is handled in `declareOne`.
       .Bind(binding) => {
-        if const .Binding(name) = binding.pattern.kind {
-          define symbols, definitions, module.id, Name(name, binding.pattern.span), SymbolKind.Constant, false
+        for name in boundNamesOf(binding.pattern) {
+          define symbols, definitions, module.id, name, SymbolKind.Constant, false
         }
       }
       _ => {}
     }
   }
   definitions
+}
+
+/**
+ * The names a binding declares. Almost always one, and the pattern forms of CONCEPT's own examples
+ * (`const (quotient, remainder) = divide(7, 2)`, `const Point(x, y) = p`) declare several - a top-level one of those
+ * used to declare nothing at all, so the only symptom was "Cannot find `x`" wherever it was read.
+ */
+public fn boundNamesOf(pattern: Pattern): List<Name> {
+  var found: List<Name> = []
+  collectBoundNames pattern, found
+  found
+}
+
+fn collectBoundNames(pattern: Pattern, var found: List<Name>) {
+  match pattern.kind {
+    .Binding(name) => found.add Name(name, pattern.span)
+    .TuplePattern(items) => {
+      for item in items {
+        collectBoundNames item, found
+      }
+    }
+    .ListPattern(items, rest) => {
+      for item in items {
+        collectBoundNames item, found
+      }
+      if const Some(tail) = rest {
+        if const Some(name) = tail.name {
+          found.add name
+        }
+      }
+    }
+    .Variant(_, fields) | .ImplicitVariant(_, fields) => {
+      for field in fields {
+        collectBoundNames field.pattern, found
+      }
+    }
+    // An alternative is only irrefutable where one of its branches is a name, and every branch has to bind the same
+    // names anyway - so the first one is the whole list
+    .Alternatives(patterns) => {
+      if const Some(first) = patterns.first() {
+        collectBoundNames first, found
+      }
+    }
+    _ => {}
+  }
 }
 
 fn declareOne(var symbols: Symbols, var definitions: List<Definition>, module: ModuleId, declaration: Declaration) {
@@ -150,8 +195,8 @@ fn declareOne(var symbols: Symbols, var definitions: List<Definition>, module: M
     .Extend(_) => {}
     .Use(_) => {}
     .Constant(binding) => {
-      if const .Binding(name) = binding.pattern.kind {
-        define symbols, definitions, module, Name(name, binding.pattern.span), SymbolKind.Constant, isPublic
+      for name in boundNamesOf(binding.pattern) {
+        define symbols, definitions, module, name, SymbolKind.Constant, isPublic
       }
     }
   }

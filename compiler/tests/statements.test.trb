@@ -1,5 +1,5 @@
 use test, group from "std/test"
-use probe, problems, notes from "./harness"
+use probe, problems, notes, problemsOf, notesOf from "./harness"
 
 /**
  * Statements and blocks: bindings with irrefutable patterns, scopes and shadowing, assignment, the loops, `return`
@@ -44,6 +44,49 @@ group "Bindings" {
     const found = probe source
     assert(found.typeOf("(down)") == "Int64")
     assert problems(source).isEmpty()
+  }
+
+  test "a destructuring binding at the top level of a file declares every name it binds" {
+    // `checkTopLevelBinding` only looked at a plain name, so a top-level pattern declared nothing at all and the only
+    // symptom was "Cannot find `quotient`" wherever it was read - inside a function body it always worked
+    const source = "type Point \{\n  x: Int\n  y: Int\n\}\n\nconst Point(across, down) = Point(3, 4)\n"
+      + "const (quotient, remainder) = divide(7, 2)\n\n"
+      + "fn divide(a: Int, b: Int): (Int, Int) \{\n  (a / b, a % b)\n\}\n\n"
+      + "fn fromAFunction(): Int \{\n  across + down\n\}\n\nconst shown = (quotient)\n"
+      + "print shown, remainder, fromAFunction()"
+    assert problems(source).isEmpty()
+    const found = probe source
+    // The names are declarations of the file and not locals of its statement sequence, which is what lets a function
+    // of the module read one
+    assert(found.patternTypeOf("(quotient, remainder)") == "(Int64, Int64)")
+    assert(found.typeOf("(quotient)") == "Int64")
+    assert(found.resolutionOf("(quotient)") == "constant quotient")
+    assert(found.typeOf("across + down") == "Int64")
+  }
+
+  test "a top-level `var` pattern binds mutable names" {
+    const source = "var (left, right) = (1, 2)\nleft = left + right\nprint left"
+    assert problems(source).isEmpty()
+  }
+
+  test "a module's `const` binds one name, because it is folded and it is exported by name" {
+    const files = [
+      "app/src/helper.trb": "const (first, second) = (1, 2)\n\npublic fn total(): Int \{\n  first + second\n\}",
+      "app/src/main.trb": "use total from \"./helper\"\n\nprint total()",
+    ]
+    assert(problemsOf(files) == ["A module's `const` binds one name"])
+    assert(
+      notesOf(files)
+        == [
+          "Bind the value and take it apart afterwards (`const shape = size()`, `const rows = shape.0`): a compile-time"
+            + " constant is folded, and one that is exported is a name of the module",
+        ]
+    )
+  }
+
+  test "and neither does an exported one, wherever it stands" {
+    const source = "public const (first, second) = (1, 2)\n\nprint first, second"
+    assert(problems(source) == ["An exported `const` binds one name"])
   }
 
   test "a label in a pattern has to name the field at that position" {

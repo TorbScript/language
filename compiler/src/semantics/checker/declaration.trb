@@ -342,6 +342,7 @@ public fn checkShape(var checker: Checker, module: ModuleId) {
         if !isCode {
           checkModuleBinding checker, module, binding
         }
+        requireSingleName checker, module, binding, isExported: false
       }
       _ => {
         if !isCode {
@@ -522,12 +523,38 @@ fn checkTopLevelDeclaration(var checker: Checker, module: ModuleId, declaration:
       if !isCode {
         checkModuleBinding checker, module, binding
       }
+      requireSingleName checker, module, binding, isExported: isPublic
       if isPublic {
         checkExposedConstant checker, module, binding
       }
     }
     .Use(_) => {}
   }
+}
+
+/**
+ * Where a top-level binding may destructure. In an entry file, a script or a test file the statements are ordinary code
+ * and `const (quotient, remainder) = divide(7, 2)` is the binding CONCEPT writes. A **module** is different twice over:
+ * its top-level `const` is a compile-time constant that milestone 5 *folds*, and a `public` one is a name of its
+ * interface - and neither a fold nor an export can be one projection out of a pattern.
+ */
+public fn requireSingleName(var checker: Checker, module: ModuleId, binding: Binding, isExported: Bool) {
+  if const .Binding(_) = binding.pattern.kind {
+    return
+  }
+  const isCode = allowsTopLevelCode checker, module
+  const what = if isExported { "An exported" } else { "A module's" }
+  if isCode && !isExported {
+    return
+  }
+  checker.report(
+    module,
+    Diagnostic.error("{what} `const` binds one name", binding.pattern.span)
+      .withNote(
+        "Bind the value and take it apart afterwards (`const shape = size()`, `const rows = shape.0`): a compile-time"
+          + " constant is folded, and one that is exported is a name of the module"
+      )
+  )
 }
 
 /** `private(var)` is a modifier of a field and of nothing else: on a member that has no `var` it has nothing to say. */

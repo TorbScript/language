@@ -4,7 +4,7 @@ use Name, Statement, Binding, Declaration, Visibility from "../../syntax/ast"
 use TypeReference, GenericParameter, WhereClause, TraitClause from "../../syntax/ast"
 use FunctionDeclaration, Parameter, Member, Field, CaseDeclaration from "../../syntax/ast"
 use ModuleId from "../module"
-use SymbolId, SymbolKind, Symbol from "../symbols"
+use SymbolId, SymbolKind, Symbol, boundNamesOf from "../symbols"
 use TypeId, TypeForm, FunctionForm, ParameterForm, ParameterMode from "./type"
 use ParameterId, ParameterDeclaration from "./type"
 use Bound, Signature, SignatureId, SignatureState, FieldSignature, CaseSignature, DelegatedTrait from "./type"
@@ -12,7 +12,7 @@ use TypeSignature, TypeSignatureId from "./type"
 use Checker, TypeScope, DeclarationSite, DeclarationSiteKind, ResultRule from "./context"
 use typeFromReference, traitsFromReference from "./lowering"
 use substituteFunction from "./unify"
-use checkFunctionBody, checkInitializer, taskValueOf from "./statement"
+use checkFunctionBody, checkInitializer, checkDestructuredBinding, taskValueOf from "./statement"
 use isSharedType, isSharedTrait from "./declaration"
 
 /**
@@ -277,6 +277,7 @@ public fn bindingOfSite(site: DeclarationSite): Binding? {
       }
       None
     }
+    .Destructured(binding) => Some binding
   }
 }
 
@@ -382,7 +383,26 @@ fn buildSignature(var checker: Checker, symbol: SymbolId, site: DeclarationSite)
       }
     }
     .Constant(binding) => constantSignature checker, symbol, site.module, binding, None
+    .Destructured(binding) => destructuredSignature checker, symbol, site.module, binding
   }
+}
+
+/**
+ * One name of a top-level binding that destructures. The names share one initializer, so the binding is checked exactly
+ * once - as the statement it is, in a scope of its own that is thrown away again - and every name reads the type
+ * `checkPattern` recorded at its own span back out. The names are declarations of the file and not locals of its
+ * statement sequence, which is what lets a function of the module read one.
+ */
+fn destructuredSignature(
+  var checker: Checker,
+  symbol: SymbolId,
+  module: ModuleId,
+  binding: Binding,
+): Signature {
+  checkDestructuredBinding checker, module, binding
+  const at = checker.symbolAt(symbol).span
+  const annotation = checker.patternType(module, at) ?? checker.invalidType
+  Signature symbol, [], FunctionForm([], annotation), [], None, false, false, true
 }
 
 /**
@@ -1076,14 +1096,28 @@ public fn declareSites(var checker: Checker, module: ModuleId, statements: List<
     match statement.kind {
       .Declare(declaration) => declareSite checker, module, declaration
       // A plain top-level `const` is a statement; `public const` is a `Declaration` and goes through `declareSite`
-      .Bind(binding) => {
-        if const .Binding(_) = binding.pattern.kind {
-          if const Some(symbol) = checker.resolvedName(module, binding.pattern.span) {
-            checker.addSite symbol, DeclarationSite(module, DeclarationSiteKind.Constant(binding))
-          }
-        }
-      }
+      .Bind(binding) => declareBindingSites checker, module, binding
       _ => {}
+    }
+  }
+}
+
+/**
+ * Where the names of one top-level binding come from. A plain name is a `Constant` site whose whole answer is the
+ * initializer; a pattern that destructures gives every name it binds a `Destructured` site, and those share the one
+ * initializer that stands in the binding.
+ */
+fn declareBindingSites(var checker: Checker, module: ModuleId, binding: Binding) {
+  if const .Binding(_) = binding.pattern.kind {
+    if const Some(symbol) = checker.resolvedName(module, binding.pattern.span) {
+      checker.addSite symbol, DeclarationSite(module, DeclarationSiteKind.Constant(binding))
+    }
+    return
+  }
+  const site = DeclarationSite module, DeclarationSiteKind.Destructured(binding)
+  for name in boundNamesOf(binding.pattern) {
+    if const Some(symbol) = checker.resolvedName(module, name.span) {
+      checker.addSite symbol, site
     }
   }
 }
@@ -1097,7 +1131,9 @@ fn declareSite(var checker: Checker, module: ModuleId, declaration: Declaration)
     .Constant(binding) => {
       if const .Binding(name) = binding.pattern.kind {
         declareNamed checker, module, Name(name, binding.pattern.span), declaration
+        return
       }
+      declareBindingSites checker, module, binding
     }
     // The functions of a `foreign` block are functions of the module, and their bodies are somewhere else entirely
     .Foreign(library) => {
