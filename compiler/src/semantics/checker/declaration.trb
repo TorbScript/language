@@ -8,11 +8,13 @@ use joinPath from "../../project/path"
 use ModuleId from "../module"
 use SymbolId from "../symbols"
 use resolveImport from "../graph"
-use TypeId, FunctionForm, FieldSignature from "./type"
+use TypeId, FunctionForm, FieldSignature, ParameterId from "./type"
 use Checker, Candidate from "./context"
 use Target from "./name"
 use signatureOf, typeSignatureOf, aliasTargetOf, resultOf from "./signature"
 use fieldsOf from "./member"
+use substitute from "./unify"
+use implementsBound from "./implementation"
 use checkConstantInitializer from "./constant"
 
 /**
@@ -346,6 +348,70 @@ public fn checkShape(var checker: Checker, module: ModuleId) {
           reportTopLevelCode checker, module, statement.span
         }
       }
+    }
+  }
+  checkTypeArgumentBounds checker, module
+}
+
+/**
+ * `HashMap<Float, String>`: the bound on a *type's* generic parameter (`type HashMap<Key: Hash, Value>`) held for
+ * nothing, while the identical bound on a function's parameter was checked at every call. The two are one rule.
+ *
+ * It runs here, over the type of every type position the module recorded, and not in `lowering.trb` where the arguments
+ * are built: bound resolution needs the implementation index and every signature of the program, and building a type is
+ * what happens *while* those are still being built (4.3). A nested argument is a type position of its own, so
+ * `List<HashMap<Float, String>>` is covered by the same walk.
+ */
+fn checkTypeArgumentBounds(var checker: Checker, module: ModuleId) {
+  const positions = checker.typePositions[module.value]
+  for (at, annotation) in positions {
+    checkAppliedBounds checker, module, annotation, at
+  }
+}
+
+fn checkAppliedBounds(var checker: Checker, module: ModuleId, annotation: TypeId, at: Span) {
+  // A trait type is one form around the `Nominal`s of its traits, and those have no span of their own: `Table<Float,
+  // String>` as an annotation is `Traits([Table<Float, String>])`, so the walk goes one step in
+  if const .Traits(bounds) = checker.types.form(annotation) {
+    for bound in bounds {
+      checkAppliedBounds checker, module, bound, at
+    }
+    return
+  }
+  const (symbol, arguments) = match checker.types.form(annotation) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return
+    }
+  }
+  if arguments.isEmpty() {
+    return
+  }
+  const identifier = typeSignatureOf checker, symbol
+  const bounds = checker.typeSignature(identifier).bounds
+  if bounds.isEmpty() {
+    return
+  }
+  const generics = checker.typeSignature(identifier).generics
+  var mapping: Map<ParameterId, TypeId> = [:]
+  for index in 0..generics.length().min(arguments.length()) {
+    mapping.set generics[index], arguments[index]
+  }
+  const owner = checker.symbolAt(symbol).name
+  for bound in bounds {
+    const subject = substitute checker.types, bound.subject, mapping
+    for capability in bound.traits {
+      const wanted = substitute checker.types, capability, mapping
+      if implementsBound(checker, subject, wanted) {
+        continue
+      }
+      const given = checker.describe subject
+      const shown = checker.describe wanted
+      checker.report(
+        module,
+        Diagnostic.error("`{given}` does not implement `{shown}`", at)
+          .withNote("`{owner}` asks for it: the bound on its type parameter holds wherever the type is named")
+      )
     }
   }
 }

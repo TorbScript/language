@@ -80,6 +80,47 @@ group "Generic functions" {
 }
 
 /**
+ * A bound on a *type's* generic parameter (`type Holder<Key: Hash>`) held for nothing, while the identical bound on a
+ * function's type parameter was checked at every call: `HashMap<Float, String>` checked although `Float64` is not
+ * `Hash`. It is checked over the type of every type position of a module, after its bodies - building a type is what
+ * happens while the signatures and the implementation index are still being built (4.3), so it cannot be asked there.
+ */
+group "A bound on a type's own generic parameter" {
+  test "is checked against an explicit type argument" {
+    const source = "type Holder<Key: Hash> \{\n  key: Key\n\}\n\n"
+      + "fn probe(holder: Holder<Float>): Float \{\n  holder.key\n\}"
+    assert(problems(source) == ["`Float64` does not implement `Hash`"])
+    assert(
+      notes(source) == ["`Holder` asks for it: the bound on its type parameter holds wherever the type is named"]
+    )
+  }
+
+  test "a nested argument is a type position of its own" {
+    const source = "type Holder<Key: Hash> \{\n  key: Key\n\}\n\n"
+      + "fn probe(all: List<Holder<Float>>): Int \{\n  all.length()\n\}"
+    assert(problems(source) == ["`Float64` does not implement `Hash`"])
+  }
+
+  test "a trait carries the bounds of its parameters the same way" {
+    const source = "trait Table<Key: Hash, Value> \{\n  fn at(self, key: Key): Value\n\}\n\n"
+      + "fn probe(table: Table<Float, String>): String \{\n  table.at(1.0)\n\}"
+    assert(problems(source) == ["`Float64` does not implement `Hash`"])
+  }
+
+  test "an argument that satisfies the bound says nothing" {
+    const source = "type Holder<Key: Hash> \{\n  key: Key\n\}\n\n"
+      + "fn probe(holder: Holder<Int>): Int \{\n  holder.key\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "and neither does one that is still a parameter: the call site decides that" {
+    const source = "type Holder<Key: Hash> \{\n  key: Key\n\}\n\n"
+      + "fn probe<Item: Hash>(holder: Holder<Item>): Item \{\n  holder.key\n\}"
+    assert problems(source).isEmpty()
+  }
+}
+
+/**
  * What a generic parameter has is what the traits in its bounds declare, and the bounds stand at its declaration - no
  * call site adds to that list. So a parameter is as *fully known* as a concrete type, and every operation that asks for
  * a trait asks it here too. Before, an unbound parameter fell through to the back end, or to 4.10's "The checker did not
