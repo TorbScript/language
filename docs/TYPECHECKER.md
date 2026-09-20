@@ -1769,6 +1769,64 @@ nothing told a back end how such a literal is built.
   type" (which has no single answer - `From` is the one trait a type implements several times) but "which of its `From`
   implementations takes an `Iterable`". That is what brings `const text: String = ['a', 'b']` back.
 
+### What the conformance round found (gaps 55 to 59)
+
+Eight documentation writers tested every claim of CONCEPT.md against `torb check` while they wrote the reference pages,
+and what they reported is a list of programs the checker **accepted**. That is the dangerous direction, so this round is
+its own slice. Two of the findings were not findings at all, and they are worth as much as the rest:
+
+- **Destructuring in a binding was never broken in a body.** `const (quotient, remainder) = divide(7, 2)` and
+  `const Point(x, y) = p` check inside a function and always did; what bound nothing was the **top level** of a file
+  (gap 57). Wave 1 read the second as the first.
+- **`swap(a, a)` was reported** - for a local. The documentation writes the rule with a top-level `var`, and `overlaps`
+  read every negative `rootKey` as "this path leads nowhere" while a `PlaceRoot.Declared` gets a negative number of its
+  own. One comparison.
+- **"A captured variable must implement `Encode`" does fire.** `assert(session.name == "a")` on a `shared type` reads
+  "`session` is captured here and `Session` is not `Encode`"; the writer's probe missed the path.
+
+What the round changed, by root cause rather than by finding:
+
+- **Three questions were asked of a type that says nothing about itself, and two of those types do say something.**
+  `isUndecided` (a mismatch), `isFullyKnown` (a missing member, a missing case, `?.`, `??`, an operator, a `for`
+  subject) and the operator messages all asked "is this type decided enough to report about". A **trait type** is
+  decided - the only thing that becomes one is a value that implements its bounds, and the coercion has been tried by
+  then - so `wantsSquare(shape)`, `takesInt(numbers)` (a `List<Item>` is a trait) and `shape.perimeter()` are ordinary
+  messages now. A **generic parameter** is decided too: what it has is its bounds, and those stand at its declaration.
+  Turning both on removed five uses of 4.10's "The checker did not work out the type of this expression" - the message
+  about a bug of the compiler - and cost nothing in the repository.
+- **An operator asks for its trait like every other member.** 4.3 recorded the witness of `==`, `<` and `"{x}"` and
+  said nothing where it found none, because the prelude had no `Equals`, `Hash` or `Show` for its collections;
+  `std/collections` carries all three now, and the messages are on. That uncovered gap 55 (`Never`).
+- **A rule that was only asked in one of two places.** A bound on a *function's* type parameter was checked at every
+  call and the same bound on a *type's* was checked nowhere (`HashMap<Float, String>`); `noteArgumentClosures` was
+  called for the arguments of a call and not for the block of a property command; a spread was checked against the
+  parameter's item type without asking whether the parameter is variadic at all; an aliased case was looked up by the
+  name that was *written* in both an expression and a pattern.
+- **Four rules of CONCEPT that nothing enforced:** `await()` (gap 58), `?` outside an `Option`/`Result` (gap 59), one
+  namespace of members, and a static function reached through a value. Plus the three small ones: a literal type cannot
+  be extended, a `fn` type parameter has no default, and an `Array` index that is written out is held against the size
+  in its type.
+- **Two things a closure did that it should not.** A closure whose body coerced into the expected result had its own
+  result read back out and was then reported a second time through a function type, which has no variance; and an
+  implicit parameter name that shadows a visible local was silently the local (gap 56, which reverses 4.4's note - the
+  rule fires at the *use*, and it found five genuinely ambiguous reads in the sources).
+
+What was deliberately left open, and why:
+
+- **`EntityId (Int64)` in a message.** 4.10 already named it: the alias has to survive out of the type, which is a side
+  table keyed by the span of the reference. Still true, still not in.
+- **A `?` in a body whose result is *inferred*.** `fn probe() { read()? }` produces `Void` and is accepted, because the
+  result is not settled when the `?` is checked. Closing it needs the question asked again after the body with the span
+  kept.
+- **Which closures a callee runs *as a task*.** Gap 58 enforces the half that is decidable and exempts every closure,
+  because `Source.produce { sink => ... }` runs one as a task and its parameter type says nothing about it. A way for a
+  signature to say so is milestone 7's.
+- **`Decimal` and `nan`.** `std/number`'s doc comment says using `Decimal` should be "a compile error that names the
+  milestone"; the checker is right and the doc comment is wrong - `Decimal` is a declared type with real signatures, and
+  a front end that refuses a type the standard library declares would have to refuse `Task` and `Channel` with it. What
+  is missing is a back end. And `Float`'s not-a-number value printing as `NaN` where CONCEPT writes `nan` is runtime
+  text (`runtime/`), so it belongs to 5.10 and not here.
+
 ---
 
 ## 9. Spec gaps
