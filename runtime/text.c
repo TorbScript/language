@@ -616,11 +616,13 @@ int64_t torb_char_byte_length_of(torb_char character) {
   return (int64_t)torb_char_byte_length(character);
 }
 
-bool torb_char_try_from_i64(int64_t value, torb_char *out) {
+bool torb_char_try_from_i64(int64_t value, torb_char *out, torb_text *message) {
   if (value < 0 || value > 0x10FFFF) {
+    *message = torb_show_i64(value);
     return false;
   }
   if (value >= 0xD800 && value <= 0xDFFF) {
+    *message = torb_show_i64(value);
     return false;
   }
   *out = (torb_char)value;

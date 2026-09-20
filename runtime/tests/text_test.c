@@ -337,11 +337,18 @@ TORB_TEST(character_classification) {
   TORB_CHECK_INTEGER(torb_char_to_lower_case('A'), 'a');
   {
     torb_char character = 0u;
-    TORB_CHECK(torb_char_try_from_i64(65, &character));
+    torb_text message = torb_text_empty();
+    TORB_CHECK(torb_char_try_from_i64(65, &character, &message));
     TORB_CHECK_INTEGER(character, 65);
-    TORB_CHECK(!torb_char_try_from_i64(0xD800, &character));
-    TORB_CHECK(!torb_char_try_from_i64(0x110000, &character));
-    TORB_CHECK(!torb_char_try_from_i64(-1, &character));
+    TORB_CHECK(!torb_char_try_from_i64(0xD800, &character, &message));
+    /* The `message` of the `NumberRangeError` is the value that went out of range, which only the runtime has */
+    TORB_CHECK_TEXT(message, "55296");
+    torb_text_release(message);
+    TORB_CHECK(!torb_char_try_from_i64(0x110000, &character, &message));
+    torb_text_release(message);
+    TORB_CHECK(!torb_char_try_from_i64(-1, &character, &message));
+    TORB_CHECK_TEXT(message, "-1");
+    torb_text_release(message);
   }
 }
 

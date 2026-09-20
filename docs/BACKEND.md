@@ -2487,6 +2487,159 @@ function).
   stdout and stderr and the exit code compared; `live blocks at exit: 0` checked by hand, because `native.rs` skips the
   leak gate for a program with a `.stderr` file (a panic leaves nothing to count, and this one is not a panic).
 
+### What the last mile of 6.1 decided
+
+**`torb build ../compiler` produces a binary, and that binary checks the whole repository with the answer stage 1 gives**
+- `266 files, no problems`, `168046 of 168046 expressions typed (100%), 0 deferred`, and the same `ir --statistics` to the
+byte, in 6.8 seconds where the interpreter takes minutes. This is the list of what was between the collection core and
+that binary, and of what the round found out on the way.
+
+**A native whose result or argument is a collection the runtime owns but the declaration names as the trait type.**
+
+- `String.split` (which is what `text.lines()` is), `File.list` and `Process.arguments` all answer a `torb_list` while the
+  declaration says `List<String>`, a trait-typed value. A function of `runtime/` cannot build one - that is a boxed payload
+  plus one witness pointer per bound, both layouts of the *program* - so the generated wrapper takes the storage and
+  coerces it with `TraitValue` and the table of `(ArrayList<String>, List<String>)`, which is the second half of what
+  `lowerListLiteral` does with a container it filled itself.
+- **The manifest says which entries these are (`coercedCollection`), and the flag cannot be derived.** A collection also
+  crosses the boundary as an **element** of another container, and an element is opaque (`const void *value`, `void *out`)
+  whatever it holds - so `ArrayList.add` of a `List<Int>` needs no coercion where `String.split` does, and nothing but the
+  runtime's own prototype tells the two apart. Deriving it instead produced 24 findings on the compiler about code that
+  was already correct.
+- **The argument direction is not built, and nothing `.Ready` needs it.** `Process.run` already declares the concrete
+  `ArrayList<String>` its symbol takes, and the two that would (`Process.start`, `Task.all`) are `.Planned` for 7.3.
+  Reading the storage back *out* of a trait-typed value is a step into its boxed payload, which is no `PathStep` the
+  emitter has - the first hop is a `.data` member and not a dereference.
+- The gate is `bootstrap/tests/native/collection-natives.trb`.
+
+**A case constructor whose field takes its default.** A case is a function from its fields to the type it belongs to, and
+what declares it is a `case` and not a `fn` - so looking for a `FunctionDeclaration` answered "no defaults at all" and a
+field that took its own became "a parameter without an argument and without a default" (ten of them in the compiler, all
+`CStatement.Declaration` of the C writer). The collection core arrived at the same answer independently; this branch's name
+for it gave way to master's. Gate: `case-defaults.trb`.
+
+**`Equals` and `Hash` for every collection, and `!=` that negates.**
+
+- A collection is `Equals` (and `Hash`) when its items are, and values compare structurally, as a tuple does. `List`, `Map`
+  and `Set` already said so; `Stack`, `Queue` and `Array` say it now - order-dependent like a `List`, because each of the
+  three iterates in one order and that order is all a reader of one can see. `ArrayList`, `ArrayStack` and `ArrayQueue`
+  need nothing of their own: a `type` generates both and a `native type` gets them derived from its layout.
+- What blocked `==` between two collections was the back end: an operator has no callee expression, so the subject was
+  known only for a `Dispatch.Implementation`, and `==` on a trait-typed value is `Dispatch.Object`. The left operand's type
+  goes along now, and the rest was already there - `equals(self, other: Self)` is not object safe, so the implementation of
+  the trait *for the trait-typed type* is a static call, the shape `"{list}"` already went through.
+- **`!=` was lowered as `==`** for every type whose equality is a *call* - a record, a case, a collection - because the
+  member is `Equals.equals` either way and the negation was dropped. `records.trb`, `derived.trb` and `collections.trb` all
+  compared with `==` only, which is why three rounds of gate programs missed it.
+- **What a gate program cannot cover, and why:** a `Stack`, a `Queue` and an `Array` are types **stage 0 does not have at
+  all** (its world is `builtin_type` plus `prelude.trb`), so no program can compare the two back ends on one; and a `Set`
+  or a `Map` compares by walking itself. Gate: `collection-equality.trb`.
+
+**A generic declaration is no declaration of the back end at all.** Monomorphization gives it one instance per argument
+list, each counted where the worklist reaches it, and none where nothing calls it - so asking for its instance *without*
+arguments could only fail, and counting that said "cannot build an instance of" about code the back end builds a dozen of.
+The same answer 6.1's long tail gave for a `const` whose value is no static data. 260 of them in the repository.
+
+**A `project.trb` is not program code.** It is a manifest, read *statically* by `compiler/src/project/`, so neither
+`torb ir` nor `torb build` lowers one. The finding about the property command its receiver applies is gone because **the
+file is not part of the program**, not because anything is hidden. Every other receiver script stays: a file a
+`Sandbox.load` names is code the program runs, and 7.4 compiles it like any other body.
+
+**A planned `native type` and a `Task` result abandon the body with a clean finding.** This is what took the internal
+errors of the whole repository to **zero**.
+
+- A `native type` whose representation a later milestone writes has **none at all**: `nominalType` answers `VoidType` for
+  one so that a layout it sits in can still be built, and a *value* of it is then a slot nothing ever defines.
+  `Clock.now()` answers an `Instant`, the call writes no target because its result looks like `Void`, and the expression
+  around it read a slot that was never assigned - two internal errors of the verifier in the tour, about a program that is
+  correct. `Instantiation` records which closed types **are or contain** one and `typeAtSpan` abandons there.
+- A function that answers a `Task<Value>` has a body that produces the `Value`, so the two disagree by design until 7.3's
+  state machine puts them back together. `Iterating.next` of `std/stream` was the third internal error.
+
+**Two natives whose shape the emitter refused, and the float remainder.**
+
+- `Char.tryFrom`, `Int32.tryFrom` and `Int64.tryFrom` answer a `Result<_, NumberRangeError>` whose `message` no parameter
+  names - what went out of range is something only the value knows - so the runtime writes it through one more out
+  parameter, which is the `.Fallible` convention the `message` of an `IoError` already uses. The whole `*_checked` family
+  of `torb_number.h` takes it, so the family stays one shape.
+- **`%` on a float is `torb_remainder_f64`/`_f32`,** `fmod`, and it is emitted whether or not a program writes one: every
+  `Float64` witness table carries `Numeric.remainder`. A remainder by zero answers `nan` and never panics, exactly as
+  `a / 0.0` answers an infinity - only the integers panic (decided gap 2).
+
+**An element descriptor's `equals`/`hash` thunk cast the wrong `const` away.** `const {spelling} *` is a pointer to a const
+`spelling`, and for a **boxed** item `spelling` is already `T *` - so the deref handed a `const T *` to a callee that takes
+a `T *` and gcc refused it under `-Werror`. What a table may not write is the **storage**, and for a boxed item the storage
+holds a pointer, so the const belongs to that pointer: `{spelling} const *`.
+
+**A copy of a boxed value saw a change made through the other one.** The one bug that made the first binary misparse
+itself, and the most important sentence of this round.
+
+- The lowering forms the path of a `var self` member of a trait-typed value **before the representations are decided** - a
+  representation is a fixpoint over the whole layout table that `finishProgram` settles - so `makeOwnersUnique` asked "is
+  this record counted" of a layout that still said `inline size 0` and left the box out of the `MakeUnique` chain. It was
+  the same trap `isStaticLayout` describes one section above, in a second place.
+- **The question has to be over-approximated where it cannot be decided.** Every record, variant and tuple on a path is a
+  possible owner now, and `dropUncountedMakeUnique` removes the ones that turned out inline after `finishProgram` - so the
+  verifier's rule ("a `makeUnique` needs a place that is counted") stays exact and an IR snapshot stays free of noise.
+  Asking the other way round loses the one that matters: a missing `MakeUnique` is a write a copy can see, and that is not
+  a slower program but a wrong one.
+- **How it showed.** `parseClosureParameters` backtracks by keeping a copy of the whole `Parser` and assigning it back, and
+  a `Parser` is a boxed record: the trial's own diagnostic went into the box the copy shared, so the restore restored the
+  error with everything else and `names.filter({ !_.startsWith("-") })` came out as "Expected a pattern, found `!`" from a
+  binary that had just compiled itself. **A compiler is the gate program that finds this class of bug**, because almost
+  nothing else copies a big value and throws the copy away. Gate: `boxed-copy.trb`.
+
+**The closed world of a closed-world question is the program, never the tree.**
+
+- "Does any implementation override this default" decides the member list of every witness table (5.7's fourth round), and
+  it was asked over every implementation the *checker* indexed - which is every file the `SourceTree` read, and
+  `readSourceTree` reads the whole workspace whatever is being built. Adding `examples/encoding-lab` to the repository took
+  the instance count of `source.trb`'s program from **121 declarations to 192** without a line of that program changing.
+- **Decided: a package next to yours in a workspace must not change your binary.** The world is the packages of the roots,
+  everything they depend on transitively, and the prelude each of them names (`programPackagesOf`). The unit is the
+  **package** and not the module, because that is the unit of coherence (gap 29) and of what a project declares it depends
+  on: an implementation is visible to a program exactly where its package is.
+- The tripwire is **115 declarations / 163 functions / 38 tables / 3 descriptors**. The six declarations below 121 are the
+  other examples of the repository, which were inflating it by the same fault before the lab made it obvious.
+- **Everything else that could have the fault does not have it.** `Checker.derived`, the element descriptors and the
+  instance memo are all demand-driven - they hold what something asked for, not what a tree contains - and the depth
+  backstop is per instance. The two closed-world tests of `lower.test.trb` lower one program twice, once alone and once
+  beside a package that overrides a default of the miniature prelude, and assert the IR text is identical; they fail when
+  the restriction is taken out.
+
+**What the VM of 7.x has to know from this round.**
+
+- A native whose result is a collection reaches a **wrapper of the program**, not the runtime symbol: the VM implements
+  `torb_text_split` and friends as answering a list storage, and the coercion is already in the IR.
+- `MakeUnique` on a place whose storage is not counted **cannot** reach a back end: it is removed after `finishProgram`.
+  A back end may assume every `MakeUnique` it sees names counted storage.
+- The member list of a witness table is a function of the **program's packages**, not of the workspace. A VM that loads a
+  module at runtime (7.4's sandbox) has to build that module's tables against the same world the host was built with, or a
+  table index means two things.
+- The `Ordering` of a tuple is a **generated function of the program**, lexicographic over each field's own `Compare` - not
+  an opcode, and not a comparison the VM may shortcut.
+
+**What is left, in the order it will bite.**
+
+1. **The fixpoint hangs.** The stage-1 binary `check`s and `ir --statistics`-es the repository byte for byte like stage 1
+   and in seconds, and then `build ../compiler` runs for **ten minutes on one core without writing a line of C**. It is
+   therefore not the front end, not the lowering and not `insertOwnership` - `ir --statistics` runs all three - so it is
+   `verifyOwnedProgram` or the emitter, and both are full of `while isChanged` fixpoints (the `R_`/`D_` demand sets closed
+   over the fields, `elementOrder`). A value that shares storage where it must not makes such a loop never settle, which is
+   the same family as the boxed-copy bug above and the first thing to look at. This is 6.2's whole distance.
+2. **Quoted expressions, 5.11** (58 findings, every one in `compiler/tests/`): `torb test` from the native binary. Nothing
+   of `compiler/src/` needs it, so it blocks no build - only the compiler's own tests running natively.
+3. **`Float64.compare` has no wrapper.** The one `.Runtime` comparison of the manifest answers `int32_t` where the
+   declaration answers `Ordering`, so a tuple with a float field cannot be emitted. It needs one `NativeResult` shape -
+   "an ordering out of a sign" - and `torb ir` never notices, because it never looks at a prototype.
+4. **Reading a collection back out of a trait-typed value** for a native argument, which `Process.start` and `Task.all`
+   will want at 7.3: the first hop into a boxed payload is a `.data` member and no `PathStep` the emitter has.
+
+**One divergence recorded for 5.14, not fixed:** a tuple has a `compare` **member** on stage 0 and none in the checker
+(which gives a tuple the operators and nothing else), so `pair.compare(other)` runs on stage 0 and is a type error in the
+front end. `==` on a tuple records no resolution at all for the same reason, which is why `lowerOperator` asks
+`dispatchedOn` for one.
+
 ### How the C emitter is written
 
 The emitter used to build its C by concatenating and interpolating strings: a statement, an expression, a struct member

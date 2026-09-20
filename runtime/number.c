@@ -19,8 +19,10 @@ uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second) {
 }
 
 #define TORB_NARROWING_FROM_I64(suffix, type, lowest, highest)                    \
-  bool torb_convert_i64_##suffix##_checked(int64_t value, type *out) {            \
+  bool torb_convert_i64_##suffix##_checked(int64_t value, type *out,             \
+                                          torb_text *message) {                 \
     if (value < (int64_t)(lowest) || value > (int64_t)(highest)) {                \
+      *message = torb_show_i64(value);                                          \
       return false;                                                              \
     }                                                                            \
     *out = (type)value;                                                          \
@@ -34,16 +36,18 @@ TORB_NARROWING_FROM_I64(u8, uint8_t, 0, UINT8_MAX)
 TORB_NARROWING_FROM_I64(u16, uint16_t, 0, UINT16_MAX)
 TORB_NARROWING_FROM_I64(u32, uint32_t, 0, UINT32_MAX)
 
-bool torb_convert_i64_u64_checked(int64_t value, uint64_t *out) {
+bool torb_convert_i64_u64_checked(int64_t value, uint64_t *out, torb_text *message) {
   if (value < 0) {
+    *message = torb_show_i64(value);
     return false;
   }
   *out = (uint64_t)value;
   return true;
 }
 
-bool torb_convert_u64_i64_checked(uint64_t value, int64_t *out) {
+bool torb_convert_u64_i64_checked(uint64_t value, int64_t *out, torb_text *message) {
   if (value > (uint64_t)INT64_MAX) {
+    *message = torb_show_u64(value);
     return false;
   }
   *out = (int64_t)value;
@@ -73,18 +77,28 @@ int32_t torb_compare_f32(float first, float second) {
   return torb_compare_f64((double)first, (double)second);
 }
 
-bool torb_convert_f64_i64_checked(double value, int64_t *out) {
+bool torb_convert_f64_i64_checked(double value, int64_t *out, torb_text *message) {
   double truncated;
   if (isnan(value) || isinf(value)) {
+    *message = torb_show_f64(value);
     return false;
   }
   truncated = value < 0.0 ? ceil(value) : floor(value);
   /* 2^63 is not representable as an `Int64`, and `(double)INT64_MAX` rounds up to it. */
   if (truncated < -9223372036854775808.0 || truncated >= 9223372036854775808.0) {
+    *message = torb_show_f64(value);
     return false;
   }
   *out = (int64_t)truncated;
   return true;
+}
+
+double torb_remainder_f64(double first, double second) {
+  return fmod(first, second);
+}
+
+float torb_remainder_f32(float first, float second) {
+  return fmodf(first, second);
 }
 
 double torb_square_root_f64(double value) {

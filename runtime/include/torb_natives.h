@@ -28,7 +28,7 @@ torb_char torb_char_to_lower_case(torb_char character);
 /* Char.toUpperCase */
 torb_char torb_char_to_upper_case(torb_char character);
 /* Char.tryFrom */
-bool torb_char_try_from_i64(int64_t value, torb_char *out);
+bool torb_char_try_from_i64(int64_t value, torb_char *out, torb_text *message);
 /* Clock.milliseconds */
 int64_t torb_clock_milliseconds(void);
 /* Clock.now */
@@ -36,9 +36,9 @@ torb_instant torb_clock_now(void);
 /* Float64.compare */
 int32_t torb_compare_f64(double first, double second);
 /* Int64.tryFrom */
-bool torb_convert_f64_i64_checked(double value, int64_t *out);
+bool torb_convert_f64_i64_checked(double value, int64_t *out, torb_text *message);
 /* Int32.tryFrom */
-bool torb_convert_i64_i32_checked(int64_t value, int32_t *out);
+bool torb_convert_i64_i32_checked(int64_t value, int32_t *out, torb_text *message);
 /* Duration.compare */
 int32_t torb_duration_compare(torb_duration first, torb_duration second);
 /* Duration.equals */

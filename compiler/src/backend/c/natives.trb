@@ -38,6 +38,14 @@ public type NativeEntry {
   addressedParameters: List<Int> = []
   /** What the lowering has to build around the result. */
   result: NativeResult = NativeResult.Direct
+  /**
+   * Whether the collection this native answers is **coerced** by the wrapper: the runtime owns the storage
+   * (`torb_list`) while the declaration names the trait type (`List<String>`), and a runtime function can carry no
+   * witness table. It is the result of `String.split` and `Process.arguments` and the payload of the out parameter of
+   * `File.list`, and nothing else - everywhere else a collection crosses the boundary as an **opaque element** of
+   * another container (`addressedParameters`, and the `void *out` of `torb_list_get`), which needs no coercion.
+   */
+  coercedCollection: Bool = false
   state: NativeState = NativeState.Ready
   /**
    * The C prototype of a `.Ready` `.Runtime` target, exactly as `torb_natives.h` writes it. Empty for every other
@@ -133,6 +141,31 @@ fn containerOf(name: String, kind: RuntimeKind): NativeEntry {
 
 fn runtimeOf(name: String, function: String, prototype: String): NativeEntry {
   NativeEntry name: name, target: NativeTarget.Runtime(function), prototype: prototype
+}
+
+/**
+ * A function of the runtime that builds a **collection** and answers its storage, while the declaration names the trait
+ * type: `String.split` and `Process.arguments`. The wrapper coerces it, exactly as a list literal coerces the container
+ * it filled itself.
+ */
+fn collectionRuntimeOf(name: String, function: String, prototype: String): NativeEntry {
+  NativeEntry(
+    name: name,
+    target: NativeTarget.Runtime(function),
+    prototype: prototype,
+    coercedCollection: true,
+  )
+}
+
+/** The same for a declaration that answers a `Result` whose payload is the collection (`File.list`). */
+fn fallibleCollectionOf(name: String, function: String, prototype: String): NativeEntry {
+  NativeEntry(
+    name: name,
+    target: NativeTarget.Runtime(function),
+    result: NativeResult.Fallible,
+    prototype: prototype,
+    coercedCollection: true,
+  )
 }
 
 fn ownedRuntimeOf(name: String, function: String, prototype: String, owned: List<Int>): NativeEntry {
@@ -329,15 +362,17 @@ fn conversionEntries(var entries: List<NativeEntry>) {
     IntrinsicOperation.Convert(NumericKind.Floating(64)),
     NumericKind.Floating(32),
   ))
-  entries.add(runtimeOf(
+  // A `NumberRangeError` carries a `message` and no parameter of `tryFrom` names it, so the runtime writes it through one
+  // more out parameter - the `.Fallible` convention, exactly as the `message` of an `IoError` arrives
+  entries.add(fallibleRuntimeOf(
     "Int32.tryFrom",
     "torb_convert_i64_i32_checked",
-    "bool torb_convert_i64_i32_checked(int64_t value, int32_t *out);",
+    "bool torb_convert_i64_i32_checked(int64_t value, int32_t *out, torb_text *message);",
   ))
-  entries.add(runtimeOf(
+  entries.add(fallibleRuntimeOf(
     "Int64.tryFrom",
     "torb_convert_f64_i64_checked",
-    "bool torb_convert_f64_i64_checked(double value, int64_t *out);",
+    "bool torb_convert_f64_i64_checked(double value, int64_t *out, torb_text *message);",
   ))
   entries.add(fallibleRuntimeOf(
     "Int64.parseDigits",
@@ -407,10 +442,10 @@ fn textEntries(var entries: List<NativeEntry>) {
     "torb_char_to_lower_case",
     "torb_char torb_char_to_lower_case(torb_char character);",
   ))
-  entries.add(runtimeOf(
+  entries.add(fallibleRuntimeOf(
     "Char.tryFrom",
     "torb_char_try_from_i64",
-    "bool torb_char_try_from_i64(int64_t value, torb_char *out);",
+    "bool torb_char_try_from_i64(int64_t value, torb_char *out, torb_text *message);",
   ))
   entries.add numericOf("Int64.fromChar", IntrinsicOperation.Convert(NumericKind.Signed(64)), NumericKind.Unsigned(32))
 
@@ -473,7 +508,9 @@ fn textEntries(var entries: List<NativeEntry>) {
     "torb_text_repeat",
     "torb_text torb_text_repeat(torb_text text, int64_t times, torb_location at);",
   ))
-  entries.add(runtimeOf(
+  // The runtime builds the list and answers its storage, which the wrapper coerces to the `List<String>` the declaration
+  // names: it cannot build a trait-typed value, because that is a boxed payload plus one witness pointer per bound
+  entries.add(collectionRuntimeOf(
     "String.split",
     "torb_text_split",
     "torb_list torb_text_split(torb_text text, torb_text separator);",
@@ -704,7 +741,7 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "torb_file_is_directory",
     "bool torb_file_is_directory(torb_text path);",
   ))
-  entries.add(fallibleRuntimeOf(
+  entries.add(fallibleCollectionOf(
     "File.list",
     "torb_file_list",
     "bool torb_file_list(torb_text path, torb_list *out, torb_text *error);",
@@ -752,7 +789,7 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "bool torb_file_create_directory(torb_text path, torb_text *error);",
   ))
 
-  entries.add(runtimeOf(
+  entries.add(collectionRuntimeOf(
     "Process.arguments",
     "torb_process_arguments",
     "torb_list torb_process_arguments(void);",

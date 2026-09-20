@@ -4,10 +4,11 @@ use Signature, TypeId, ParameterId from "../../semantics/checker/type"
 use substitute from "../../semantics/checker/unify"
 use traitArgumentsOf from "../../semantics/checker/implementation"
 use Place, PlaceRoot, PlaceStep, PropertyWriteKind, BindingId from "../../semantics/checker/context"
-use IrTypeId, Slot, LayoutId, Reference, PathStep, Instruction, borrowed from "../ir"
+use IrProgram, IrType, IrTypeId, Slot, LayoutId, Reference, PathStep, Instruction, borrowed from "../ir"
 use FunctionBuilder, addTemporary, emit from "../build"
 use layoutOfType, typeOfReference from "../verify"
 use isManagedType from "../layout"
+use isSharedStorage from "../capture"
 use describeIrType from "../print"
 use isReferenceParameter, isClosedType from "../instances"
 use Lowering, reportUnsupported, irTypeOf, irTypeOfClosed, voidTypeOf from "./context"
@@ -883,7 +884,11 @@ public fn makeOwnersUnique(var lowering: Lowering, var builder: FunctionBuilder,
   for count in 0..place.steps.length() {
     const prefix = Reference place.base, place.steps[0..count]
     if const Some(annotation) = typeOfReference(lowering.program, builder.function, ignored, "", prefix) {
-      if isManagedType(lowering.program, annotation) {
+      // A box and a `lazy` cell are shared on purpose: copying one is exactly what must not happen (gap 19)
+      if isSharedStorage(lowering.program, annotation) {
+        continue
+      }
+      if mayBeCountedOwner(lowering.program, annotation) {
         needed.add prefix
       }
     }
@@ -891,6 +896,30 @@ public fn makeOwnersUnique(var lowering: Lowering, var builder: FunctionBuilder,
   needed.add place
   for reference in needed {
     emit builder, Instruction.MakeUnique(reference)
+  }
+}
+
+/**
+ * Whether a prefix of a path **may** be a counted owner - asked while the representations are not final yet.
+ *
+ * `isManagedType` answers for a `Record`, a `Variant` and a `Tuple` by the layout's *representation*, and a
+ * representation is a fixpoint over the whole layout table that `finishLayouts` settles long after the lowering has run
+ * (the trap `isStaticLayout` describes in the note of 6.1). So all three count as owners here, and the answer is the safe
+ * one in both directions: a `MakeUnique` of a record that turns out to be **inline** emits nothing at all, while a
+ * missing one is a write that a *copy* of the value can see.
+ *
+ * It is what made the first native build of the compiler misparse itself. `parseClosureParameters` backtracks by keeping a
+ * copy of the whole `Parser` and assigning it back, and a `Parser` is a boxed record: the trial's `errorHere` wrote its
+ * diagnostic into the box the copy shared, so the restore restored the error along with everything else and
+ * `{ !imported.contains(_) }` came out as "Expected a pattern, found `!`".
+ */
+fn mayBeCountedOwner(program: IrProgram, id: IrTypeId): Bool {
+  if isManagedType(program, id) {
+    return true
+  }
+  match program.typeAt(id) {
+    .Record(_) | .Variant(_) | .Tuple(_) => true
+    _ => false
   }
 }
 

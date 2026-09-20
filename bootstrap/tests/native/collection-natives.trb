@@ -1,0 +1,59 @@
+use File, IoError from "std/fs"
+use Process from "std/process"
+
+/**
+ * A native whose result is a **collection the runtime owns** while the declaration names the trait type: `String.split`
+ * (which is what `text.lines()` is), `Process.arguments` and `File.list`.
+ *
+ * The runtime answers a `torb_list`, because it cannot build a trait-typed value of the program - that is a boxed payload
+ * plus one witness pointer per bound, and both are layouts the lowering emits. So the wrapper of the native builds the
+ * concrete `ArrayList<String>` the runtime handed over and coerces it, exactly as a list literal does. What this program
+ * asserts is that the coerced value really is a `List<String>`: it is shown, walked, indexed, measured and passed on to a
+ * function that takes the trait type.
+ *
+ * `Process.arguments()` is here because the compiler's own driver reads it, and because it is the one of the three whose
+ * list is built by the runtime before `main` runs anything.
+ */
+fn run(): Result<Int, IoError> {
+  const text = "one\ntwo\nthree"
+  const lines = text.lines()
+  print lines
+  print lines.length()
+  print lines[1]
+  print joined(lines)
+  // A separator that is not there at all, and one that ends the text: two lists whose length is easy to get wrong
+  print "one".split(",")
+  print "a,b,".split(",")
+  print "".split(",")
+  // The walk goes through the witness table of the trait-typed value, not through the storage
+  var count = 0
+  for line in text.lines() {
+    count = count + line.byteLength()
+  }
+  print count
+  print Process.arguments().length()
+  const directory = "build/native-collection-scratch"
+  File.createDirectory(directory)?
+  const _ = File.writeText("{directory}/one.txt", "1")?
+  const entries = File.list(directory)?
+  print entries.length()
+  print entries.contains("one.txt")
+  Ok lines.length()
+}
+
+/** The trait type is what a function declares, so this is the coercion seen from the other side. */
+fn joined(lines: List<String>): String {
+  var parts: List<String> = []
+  for line in lines {
+    parts.add line.toUpperCase()
+  }
+  parts.joined separator: "-"
+}
+
+match run() {
+  Ok(size) => Process.exit size
+  Fail(problem) => {
+    printError "error: {problem}"
+    Process.exit 1
+  }
+}

@@ -1,0 +1,51 @@
+/**
+ * A **case constructor whose field takes its default.** A case is a function from its fields to the type it belongs to,
+ * and what declares it is a `case` and not a `fn` - so the defaults are read off the `case` and lowered at the call site,
+ * at every call, which is the rule the language already has for a field default and for a parameter default (gaps 13 and
+ * 26).
+ *
+ * `CStatement.Declaration(annotation, name, value = None, count = 0)` of the compiler's own C writer is the shape: four
+ * fields, of which a call writes two or three. Here every mix is written out - none of the defaults taken, the last one,
+ * the last two, and one whose default is an `Option` and one whose default is an expression rather than a literal.
+ */
+type Statement {
+  case Declaration(annotation: String, name: String, value: String? = None, count: Int = 0)
+  /** A default that is not a literal: it is lowered at the call site like any other expression. */
+  case Label(name: String, comment: String = "" + "none", depth: Int = 1 + 2)
+  case Break
+
+  fn show(self): String {
+    match self {
+      .Declaration(annotation, name, value, count) => "{annotation} {name} = {value} x {count}"
+      .Label(name, comment, depth) => "{name}: {comment} at {depth}"
+      .Break => "break"
+    }
+  }
+}
+
+/** A record's field default is the other half of the same rule, and it belongs next to it. */
+type Slot {
+  name: String
+  index: Int = 0
+  spelled: Bool = true
+}
+
+print Statement.Declaration("int64_t", "x").show()
+print Statement.Declaration("int64_t", "y", Some("0")).show()
+print Statement.Declaration("int64_t", "z", Some("1"), 3).show()
+print Statement.Declaration("int64_t", "w", count: 7).show()
+print Statement.Label("b0").show()
+print Statement.Label("b1", "body").show()
+print Statement.Label("b2", "body", 4).show()
+print Statement.Break.show()
+print Slot("first")
+print Slot("second", 2)
+print Slot("third", 3, false)
+
+// A case built inside a generic function, where the default is lowered under that instance's substitution
+fn wrapped<Value: Show>(value: Value): String {
+  Statement.Declaration("{value}", "generic").show()
+}
+
+print wrapped(17)
+print wrapped(true)

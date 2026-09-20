@@ -143,22 +143,45 @@ TORB_TEST(the_narrowing_conversions_check_their_range) {
   int32_t narrow = 0;
   uint8_t byte = 0;
   int64_t whole = 0;
-  TORB_CHECK(torb_convert_i64_i32_checked(2147483647, &narrow));
+  torb_text message = torb_text_empty();
+  TORB_CHECK(torb_convert_i64_i32_checked(2147483647, &narrow, &message));
   TORB_CHECK_INTEGER(narrow, 2147483647);
-  TORB_CHECK(!torb_convert_i64_i32_checked(2147483648LL, &narrow));
-  TORB_CHECK(!torb_convert_i64_i32_checked(-2147483649LL, &narrow));
-  TORB_CHECK(torb_convert_i64_u8_checked(255, &byte));
-  TORB_CHECK(!torb_convert_i64_u8_checked(256, &byte));
-  TORB_CHECK(!torb_convert_i64_u8_checked(-1, &byte));
-  TORB_CHECK(torb_convert_f64_i64_checked(-2.9, &whole));
+  TORB_CHECK(!torb_convert_i64_i32_checked(2147483648LL, &narrow, &message));
+  /* The `message` of the `NumberRangeError`: what went out of range, which only the value knows */
+  TORB_CHECK_TEXT(message, "2147483648");
+  torb_text_release(message);
+  TORB_CHECK(!torb_convert_i64_i32_checked(-2147483649LL, &narrow, &message));
+  torb_text_release(message);
+  TORB_CHECK(torb_convert_i64_u8_checked(255, &byte, &message));
+  TORB_CHECK(!torb_convert_i64_u8_checked(256, &byte, &message));
+  torb_text_release(message);
+  TORB_CHECK(!torb_convert_i64_u8_checked(-1, &byte, &message));
+  torb_text_release(message);
+  TORB_CHECK(torb_convert_f64_i64_checked(-2.9, &whole, &message));
   TORB_CHECK_INTEGER(whole, -2);
-  TORB_CHECK(torb_convert_f64_i64_checked(2.9, &whole));
+  TORB_CHECK(torb_convert_f64_i64_checked(2.9, &whole, &message));
   TORB_CHECK_INTEGER(whole, 2);
-  TORB_CHECK(!torb_convert_f64_i64_checked(1.0e300, &whole));
-  TORB_CHECK(!torb_convert_f64_i64_checked(9223372036854775808.0, &whole));
+  TORB_CHECK(!torb_convert_f64_i64_checked(1.0e300, &whole, &message));
+  TORB_CHECK_TEXT(message, "1e300");
+  torb_text_release(message);
+  TORB_CHECK(!torb_convert_f64_i64_checked(9223372036854775808.0, &whole, &message));
+  torb_text_release(message);
   {
     double nothing = 0.0;
-    TORB_CHECK(!torb_convert_f64_i64_checked(nothing / nothing, &whole));
+    TORB_CHECK(!torb_convert_f64_i64_checked(nothing / nothing, &whole, &message));
+    TORB_CHECK_TEXT(message, "nan");
+    torb_text_release(message);
+  }
+}
+
+/** `a % b` on a float is `fmod`, and a remainder by zero is `nan` rather than a panic (decided gap 2). */
+TORB_TEST(the_remainder_of_two_floats_is_fmod) {
+  TORB_CHECK(torb_remainder_f64(7.5, 2.0) == 1.5);
+  TORB_CHECK(torb_remainder_f64(-7.5, 2.0) == -1.5);
+  TORB_CHECK(torb_remainder_f32(7.5f, 2.0f) == 1.5f);
+  {
+    double answered = torb_remainder_f64(1.0, 0.0);
+    TORB_CHECK(answered != answered);
   }
 }
 
@@ -247,6 +270,7 @@ void torb_register_number_tests(void) {
   TORB_ADD(a_shift_out_of_range_panics);
   TORB_ADD(the_wrapping_operations_of_uint64_do_not_panic);
   TORB_ADD(the_narrowing_conversions_check_their_range);
+  TORB_ADD(the_remainder_of_two_floats_is_fmod);
   TORB_ADD(the_total_order_of_floats_puts_nan_above_everything);
   TORB_ADD(parsing_integers_checks_the_range);
   TORB_ADD(math_functions_match_known_values);

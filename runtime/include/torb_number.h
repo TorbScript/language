@@ -262,17 +262,28 @@ uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);
  * The narrowing conversions of `TryFrom`. The runtime answers the check; the lowering builds the
  * `Result<Int32, NumberRangeError>` around it, because a `Result` is a layout of the program and not of the runtime.
  * Ordinary functions for the same reason as the wrapping pair above.
+ *
+ * `message` is the `.Fallible` convention of the manifest: a `NumberRangeError` carries a `message`, no parameter of
+ * `tryFrom` names it, and what went out of range is something only the value knows - so the runtime writes it, exactly
+ * as it writes the `message` of an `IoError`. It is set on failure alone and untouched on success.
  */
-bool torb_convert_i64_i8_checked(int64_t value, int8_t *out);
-bool torb_convert_i64_i16_checked(int64_t value, int16_t *out);
-bool torb_convert_i64_i32_checked(int64_t value, int32_t *out);
-bool torb_convert_i64_u8_checked(int64_t value, uint8_t *out);
-bool torb_convert_i64_u16_checked(int64_t value, uint16_t *out);
-bool torb_convert_i64_u32_checked(int64_t value, uint32_t *out);
-bool torb_convert_i64_u64_checked(int64_t value, uint64_t *out);
-bool torb_convert_u64_i64_checked(uint64_t value, int64_t *out);
+bool torb_convert_i64_i8_checked(int64_t value, int8_t *out, torb_text *message);
+bool torb_convert_i64_i16_checked(int64_t value, int16_t *out, torb_text *message);
+bool torb_convert_i64_i32_checked(int64_t value, int32_t *out, torb_text *message);
+bool torb_convert_i64_u8_checked(int64_t value, uint8_t *out, torb_text *message);
+bool torb_convert_i64_u16_checked(int64_t value, uint16_t *out, torb_text *message);
+bool torb_convert_i64_u32_checked(int64_t value, uint32_t *out, torb_text *message);
+bool torb_convert_i64_u64_checked(int64_t value, uint64_t *out, torb_text *message);
+bool torb_convert_u64_i64_checked(uint64_t value, int64_t *out, torb_text *message);
 /** `Int64.tryFrom(Float64)`: truncation toward zero. A `nan`, an infinity and anything out of range answer false. */
-bool torb_convert_f64_i64_checked(double value, int64_t *out);
+bool torb_convert_f64_i64_checked(double value, int64_t *out, torb_text *message);
+
+/**
+ * `a % b` on a float: `fmod`, the one arithmetic operator of a float that is not a C operator. A remainder by zero
+ * answers `nan` and never panics, exactly as `a / 0.0` answers an infinity - only the integers panic (decided gap 2).
+ */
+double torb_remainder_f64(double first, double second);
+float torb_remainder_f32(float first, float second);
 
 /* -------------------------------------------------------------------------------------------------- floats --- */
 

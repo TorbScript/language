@@ -8,8 +8,8 @@ use IrSignature, IrTypeId, Slot, BlockId, FunctionId, Instance, Terminator, borr
 use FunctionBuilder, newFunction, setBlockLocation, finishFunction from "../build"
 use moduleComponentOf from "../instantiate"
 use mangledName from "../mangle"
-use instanceOfSymbol, instanceKeyOf, functionDeclarationOf from "../instances"
-use Lowering, reportUnsupported, locationOf, isVoidType, isNeverType from "./context"
+use instanceOfSymbol, instanceKeyOf, functionDeclarationOf, isMonomorphic from "../instances"
+use Lowering, reportUnsupported, locationOf, isVoidType, isNeverType, isTaskType from "./context"
 use finishBlock, voidTypeOf from "./context"
 use lowerBlockInto, lowerBlockValue, lowerStatement from "./statement"
 use capturedVariablesOf, capturedVariablesIn from "./closure"
@@ -105,6 +105,13 @@ public fn beginFunction(var lowering: Lowering, module: ModuleId) {
  * *into* the slot the `return` carries, so the last expression of a body needs no move of its own.
  */
 public fn lowerBody(var lowering: Lowering, var builder: FunctionBuilder, body: Block, result: IrTypeId) {
+  // A function that answers a `Task<Value>` has a body that produces the `Value`, so the two disagree by design until
+  // the state-machine transformation of 7.3 puts them back together (`Iterating.next` of `std/stream` is the one in the
+  // repository). A clean finding rather than an internal error of the verifier about a program that is correct
+  if isTaskType(lowering, result) {
+    reportUnsupported lowering, "a body whose result is a `Task` (milestone 7.3)", body.span
+    return
+  }
   if isVoidType(lowering, result) {
     lowerBlockInto lowering, builder, body, None
     if !lowering.isDiverged {
@@ -374,9 +381,21 @@ fn seedSymbol(var lowering: Lowering, symbol: SymbolId) {
   const declared = lowering.checker.symbolAt symbol
   match declared.kind {
     .Function => {
-      // A `native fn` is a callee and not a function of the program: it becomes one where it is called, or not at all
-      if hasBody(lowering, symbol) && instanceOfSymbol(lowering, symbol).isNone() {
-        countUnbuildable lowering, symbol, "a declaration the back end cannot build an instance of"
+      /*
+       * A **generic** declaration is a template and no function of the back end: monomorphization gives it one instance
+       * per argument list, each counted where the worklist reaches it, and none at all where nothing calls it. So asking
+       * for its instance *without* arguments could only ever fail, and counting that as a construct the back end does not
+       * support said "cannot build an instance of" about code it builds a dozen of - the same answer 6.1's long tail gave
+       * for a `const` whose value is no static data. `commaSeparated<Item>` and `withTrailingClosures<Output>` of the
+       * parser are the compiler's only two.
+       *
+       * A `native fn` is a callee and not a function of the program either: it becomes one where it is called, or not at
+       * all.
+       */
+      if isMonomorphic(lowering, symbol) && hasBody(lowering, symbol) {
+        if instanceOfSymbol(lowering, symbol).isNone() {
+          countUnbuildable lowering, symbol, "a declaration the back end cannot build an instance of"
+        }
       }
     }
     .Constant => {

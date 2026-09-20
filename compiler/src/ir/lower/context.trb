@@ -227,6 +227,16 @@ public type Lowering {
    */
   var overriddenMembers: Map<String, Bool> = [:]
   var overriddenMembersAreKnown: Bool = false
+  /**
+   * Which packages the **program** consists of, by their index in `Workspace.packages`: the roots' own, everything they
+   * depend on and the prelude (`programPackagesOf` in `ir/lower/lower.trb`). Every closed-world question of the back end
+   * is asked over exactly these, because a package next to yours in a workspace must not change your binary - and
+   * `readSourceTree` reads the whole workspace whatever is being built.
+   *
+   * Empty means "no answer yet", which is every reader's cue to take the whole tree: a `Lowering` built by hand in a test
+   * has no roots to derive it from.
+   */
+  var programPackages: Map<Int, Bool> = [:]
   /** The static value of every module constant, by `SymbolId.value`. */
   var constants: Map<Int, StaticId> = [:]
   /** The constants whose initializer is being evaluated right now: a `const` in terms of itself is a cycle. */
@@ -353,14 +363,30 @@ public fn substituted(var lowering: Lowering, id: TypeId): TypeId {
   substitute lowering.checker.types, id, mapping
 }
 
-/** The IR type of the expression at `at`, or `None` where the checker recorded nothing or something broken. */
+/**
+ * The IR type of the expression at `at`, or `None` where the checker recorded nothing or something broken.
+ *
+ * A `native type` whose representation a later milestone writes has **none at all** here: `instantiateType` answers
+ * `VoidType` for one so that a layout it sits in can still be built, and a *value* of it is then a slot nothing ever
+ * defines - `Clock.now()` answers an `Instant`, the call writes no target because its result looks like `Void`, and the
+ * expression around it reads a slot that was never assigned. That was two internal errors of the verifier in the tour.
+ * So the body is abandoned here with the clean finding the milestone already has, exactly as every other construct of a
+ * later sub-milestone abandons it.
+ */
 public fn typeAtSpan(var lowering: Lowering, at: Span): IrTypeId? {
   const module = lowering.module
   const found = lowering.checker.expressionType(module, at)?
   if lowering.checker.isBroken(found) {
     return None
   }
-  Some irTypeOf(lowering, found)
+  lowering.instantiation.plannedWhat = ""
+  const built = irTypeOf lowering, found
+  const planned = lowering.instantiation.plannedWhat
+  if !planned.isEmpty() {
+    reportUnsupported lowering, planned, at
+    return None
+  }
+  Some built
 }
 
 public fn voidTypeOf(var lowering: Lowering): IrTypeId {
@@ -376,6 +402,21 @@ public fn isVoidType(lowering: Lowering, id: IrTypeId): Bool {
     .VoidType => true
     _ => false
   }
+}
+
+/**
+ * Whether a type is a `Task<Value>`. A function that answers one has a body that produces the `Value` (concept,
+ * Concurrency), so its body and its signature disagree by design and the state-machine transformation of milestone 7.3
+ * is what closes the gap. Until then such a body is a clean finding: without it the verifier reported "the function
+ * returns `Task(...)` and `return` carries `...`", which is an internal error about a program that is correct.
+ */
+public fn isTaskType(lowering: Lowering, id: IrTypeId): Bool {
+  if const .Runtime(kind, _) = lowering.program.typeAt(id) {
+    if const .TaskObject = kind {
+      return true
+    }
+  }
+  false
 }
 
 public fn isNeverType(lowering: Lowering, id: IrTypeId): Bool {

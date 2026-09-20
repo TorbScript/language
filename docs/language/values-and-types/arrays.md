@@ -65,6 +65,16 @@ type Name<const Size: Int> { ... }       declaring a const parameter of your own
 5. **A generic type or function can itself take a `const` parameter**, written `<const Name: Type>` alongside its
    ordinary type parameters, and it is checked for equality across calls the same way a type parameter is.
 
+6. **`Equals` and `Hash` follow the items, and both are order-dependent.** Two arrays are equal when the items at the
+   same index are; the length is part of the type, so two arrays that compare at all have the same one and there is
+   nothing to test about it.
+
+   ```trb check
+   const first: Array<Int, 2> = Array.of 1, 2
+   print(first == Array.of(1, 2))
+   print(first == Array.of(2, 1))
+   ```
+
 ## What this is not
 
 **An out-of-bounds index that is written out as a literal is caught by the checker, not only at run time.** `identity`

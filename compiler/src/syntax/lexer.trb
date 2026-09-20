@@ -572,8 +572,26 @@ type Lexer {
     }
   }
 
+  /**
+   * The first entry of the punctuation table whose text stands at the position - the longest match, because that is the
+   * order the table is written in.
+   *
+   * It is a loop and not `punctuationTable.find({ (text, _) => isAt text })` because that closure captures `var self`,
+   * which is `Capture.Place` of milestone 5.9b: an environment field that holds a *place* rather than a value (see the
+   * note of 6.1 in docs/BACKEND.md). This is the only site in the compiler that needed it, and the fixpoint matters
+   * more than the feature.
+   */
+  fn punctuationAt(self): (String, TokenKind)? {
+    for entry in punctuationTable {
+      if isAt(entry.0) {
+        return Some entry
+      }
+    }
+    None
+  }
+
   fn punctuation(var self, start: Int, character: Char) {
-    const (text, kind) = match punctuationTable.find({ (text, _) => isAt text }) {
+    const (text, kind) = match punctuationAt() {
       Some(entry) => entry
       None => {
         position = position + 1

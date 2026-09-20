@@ -1006,7 +1006,21 @@ fn lowerComparison(
   if !isEqualityOperation(operation) {
     return lowerOrderComparison lowering, builder, destination, operation, first, second, annotation, at, operand
   }
-  lowerOperator lowering, builder, destination, at, [first, second], annotation, operand
+  /*
+   * The member is `Equals.equals` for both operators - the language has no `notEquals` - so `!=` is that call and one
+   * `BooleanNot` on top of it, exactly as `lowerTextComparison` does it for two strings. Without this, `!=` on every type
+   * whose equality is a *call* (a record, a case, a collection) came out as `==`: three gate programs compared records
+   * and derived members and none of them wrote a `!=`.
+   */
+  if const .NotEqual = operation {
+    const equal = lowerOperator lowering, builder, None, at, [first, second], annotation, operand, "equals"
+    if !lowering.isSupported {
+      return abandonedSlot lowering, builder, destination
+    }
+    const negate = IntrinsicOperation.BooleanNot
+    return intrinsicSlot lowering, builder, destination, negate, None, [equal], annotation, at
+  }
+  lowerOperator lowering, builder, destination, at, [first, second], annotation, operand, "equals"
 }
 
 /**
@@ -1031,7 +1045,8 @@ fn lowerOrderComparison(
       return unsupportedSlot lowering, builder, destination, what, at
     }
   }
-  const order = lowerOperator lowering, builder, None, at, [first, second], ordering, operand
+  const operands = [first, second]
+  const order = lowerOperator lowering, builder, None, at, operands, ordering, operand, "compare"
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
   }

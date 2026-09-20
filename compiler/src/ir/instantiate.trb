@@ -44,6 +44,17 @@ public type Instantiation {
   primitives: Map<Int, PrimitiveKind> = [:]
   /** `TypeId.value` of a closed checker type to the IR type it became. */
   var memo: Map<Int, IrTypeId> = [:]
+  /**
+   * `TypeId.value` of every closed type that **is or contains** a `native type` whose representation a later milestone
+   * writes, to the reason a body that mentions one is a clean finding.
+   *
+   * Such a type has no representation at all: `nominalType` answers `VoidType` for one so that a layout it sits in can
+   * still be built, and a *value* of it is then a slot nothing ever defines. `Clock.now()` in the tour was two internal
+   * errors of the verifier because of it, so the lowering asks this table instead (`typeAtSpan`).
+   */
+  var plannedTypes: Map<Int, String> = [:]
+  /** What the type just instantiated needs, or empty: how `instantiateType` learns it from the recursion under it. */
+  var plannedWhat: String = ""
 }
 
 /** The declarations the *runtime* provides, looked up once, by the names `std/prelude` exports. */
@@ -99,10 +110,23 @@ public fn instantiateType(
 ): IrTypeId {
   const closed = substitute checker.types, id, mapping
   if const Some(found) = instantiation.memo.get(closed.value) {
+    if const Some(what) = instantiation.plannedTypes.get(closed.value) {
+      instantiation.plannedWhat = what
+    }
     return found
   }
+  // A planned `native type` anywhere under this type makes the whole type one: the recursion reports it upwards through
+  // `plannedWhat`, and a memoized answer above has to say the same thing as the one that built it
+  const outer = instantiation.plannedWhat
+  instantiation.plannedWhat = ""
   const built = buildType program, checker, instantiation, closed
   instantiation.memo.set closed.value, built
+  const found = instantiation.plannedWhat
+  if !found.isEmpty() {
+    instantiation.plannedTypes.set closed.value, found
+  } else {
+    instantiation.plannedWhat = outer
+  }
   built
 }
 
@@ -326,6 +350,8 @@ fn nominalType(
       program.reportProblem "The native type `{name}` has no representation in the back end"
     } else {
       program.reportPlanned "the type `{name}` is not supported yet (milestone {milestone})"
+      const what = "`{name}`, whose representation the back end has from milestone {milestone} on"
+      instantiation.plannedWhat = what
     }
     return program.internType IrType.VoidType
   }

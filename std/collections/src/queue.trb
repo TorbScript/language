@@ -1,3 +1,4 @@
+use Equals, Hash, combineHashes from "std/core"
 use From from "std/core"
 use Collection from "./collection"
 
@@ -46,6 +47,30 @@ public trait Queue<Item>
 extend<Item> Queue<Item> with From<Iterable<Item>> {
   fn from(items: Iterable<Item>): Queue<Item> {
     ArrayQueue.from items
+  }
+}
+
+/**
+ * Equal when they hold the same items in the same order, which for a queue is the order of `dequeue`.
+ *
+ * A collection is `Equals` when its items are, exactly as a tuple is: values compare structurally, and which
+ * implementation carries the items is nobody's business.
+ */
+extend<Item: Equals> Queue<Item> with Equals {
+  fn equals(self, other: Self): Bool {
+    length() == other.length() && zip(other).all { pair => pair.0 == pair.1 }
+  }
+}
+
+/**
+ * Order-dependent, like [List.hash] and unlike [Set.hash]: two queues with the same items in a different order are
+ * not equal, so they need not hash alike.
+ *
+ * `Hash` requires `Equals`, and the `Equals` implementation above satisfies that: `Item: Hash` implies `Item: Equals`.
+ */
+extend<Item: Hash> Queue<Item> with Hash {
+  fn hash(self): Int {
+    fold 0 { seed, item => combineHashes seed, item.hash() }
   }
 }
 

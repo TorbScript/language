@@ -26,7 +26,7 @@ use isNeverType, finishBlock, borrowedArguments from "./context"
 use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use variantIndexOf from "./match"
 use emitIntrinsic, receiverSlot from "./expression"
-use Dispatched, dispatchedMember from "./generic"
+use Dispatched, dispatchedMember, dispatchedOn, preludeType from "./generic"
 use lowerClosureCall, lowerLazyArgument, lazyParametersOf, lowerConstructorValue from "./closure"
 use printOperationOf, lowerPrint from "./text"
 use lowerItemList, listBoundFor from "./collection"
@@ -836,6 +836,11 @@ fn missingArgument(signature: Signature, index: Int): String {
 /**
  * The default expression of every parameter of a declaration, in the order of its *signature* - which skips the `self`
  * the parameter list of the source writes.
+ *
+ * A **case constructor** is a function from its fields to the type it belongs to (`caseSignature`), and what declares it
+ * is a `case` and not a `fn` - so looking for a `fn` answered "this declaration has no defaults at all" and a field that
+ * took its own default became "a parameter without an argument and without a default". `CStatement.Declaration` of the C
+ * writer is the one in the compiler: four fields, of which every call writes two or three.
  */
 fn declaredDefaults(var lowering: Lowering, symbol: SymbolId): List<Expression?> {
   var defaults: List<Expression?> = []
@@ -1256,12 +1261,14 @@ public fn lowerOperator(
   operands: List<Slot>,
   annotation: IrTypeId,
   operand: TypeId? = None,
+  memberName: String = "",
 ): Slot {
   const module = lowering.module
   const resolution = match lowering.checker.resolutionAt(module, at) {
     Some(found) => found
     None => {
-      return unsupportedSlot lowering, builder, destination, "an operator the checker did not resolve", at
+      const name = memberName
+      return structuralOperator lowering, builder, destination, at, operands, annotation, operand, name
     }
   }
   const (symbol, typeArguments, dispatch) = match resolution {
@@ -1339,8 +1346,66 @@ fn sourceKindOf(
 }
 
 /**
+ * An operator the checker accepted and recorded no **member** for. A tuple is the one case: `List<Item>` has
+ * `extend<Item: Equals> List<Item> with Equals` and therefore a symbol, while the `Equals` and the `Compare` of a tuple
+ * are *structural* and belong to no declaration at all - `lookupMember` finds nothing for one, so `recordTraitCall`
+ * records nothing, although `traitArgumentsOf` says the type has both and the comparison is accepted.
+ *
+ * The lowering asks the question its own `for` asks instead (`dispatchedOn`), which reaches the body `derive.trb`
+ * generates for that very tuple: `equalsBody` field by field, `compareTupleBody` lexicographically. Anything else that
+ * arrives here without a resolution stays the finding it was.
+ */
+fn structuralOperator(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  at: Span,
+  operands: List<Slot>,
+  annotation: IrTypeId,
+  operand: TypeId?,
+  memberName: String,
+): Slot {
+  const unresolved = "an operator the checker did not resolve"
+  const written = match operand {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, unresolved, at
+    }
+  }
+  const subject = substituted lowering, written
+  if memberName.isEmpty() || !isTupleOperand(lowering, subject) {
+    return unsupportedSlot lowering, builder, destination, unresolved, at
+  }
+  const capability = if memberName == "equals" { "Equals" } else { "Compare" }
+  const empty: List<TypeId> = []
+  const bound = match preludeType(lowering, capability, empty) {
+    Some(found) => found
+    None => {
+      const what = "an operator without `{capability}` in the prelude"
+      return unsupportedSlot lowering, builder, destination, what, at
+    }
+  }
+  const dispatched = match dispatchedOn(lowering, subject, bound, memberName, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const places: List<Reference?> = []
+  lowerDispatched lowering, builder, destination, at, dispatched, operands, places, annotation
+}
+
+fn isTupleOperand(var lowering: Lowering, subject: TypeId): Bool {
+  match lowering.checker.types.form(subject) {
+    .Tuple(_) => true
+    _ => false
+  }
+}
+
+/**
  * What the left operand of an operator is, as a checker type. An operator has no callee expression, so the dispatch is
- * what says it: an implementation names its own target, and everything else is a member of a concrete type already.
+ * what says it where it can: an implementation names its own target. Where it cannot - `Dispatch.Object`, which is what
+ * `==` between two trait-typed values is - the **written operand** answers, and a dispatch without one is a finding.
  */
 fn operandTypeOf(var lowering: Lowering, dispatch: Dispatch, operand: TypeId?): TypeId? {
   if const .Implementation(implementation, _) = dispatch {

@@ -176,7 +176,7 @@ public fn memberFunctionOf(
   // what the table points at - a second one around it would only be one call more (`ir/lower/native.trb`)
   if const Some(entry) = nativeNamed(lowering, owner, name) {
     if const .Runtime(symbol) = entry.target {
-      if needsNativeWrapper(entry) {
+      if needsNativeWrapper(lowering, provider, mapping, entry) {
         return nativeFunctionOf lowering, provider, mapping, entry, symbol, at
       }
     }
@@ -610,11 +610,28 @@ fn collectOverriddenMembers(var lowering: Lowering) {
   const total = lowering.checker.implementations.all.length()
   for index in 0..total {
     const implementation = lowering.checker.implementations.all[index]
+    if !isProgramPackage(lowering, implementation.package) {
+      continue
+    }
     for (name, _) in implementation.members {
       lowering.overriddenMembers.set name, true
     }
     addTargetMembers lowering, implementation.target
   }
+}
+
+/**
+ * Whether a package is part of the program. **The closed world of a closed-world question is the program**, never the
+ * whole `SourceTree` - and `readSourceTree` reads the entire workspace whatever is being lowered, so without this an
+ * unrelated package next to yours changes the member list of your witness tables and with it your binary. Adding
+ * `examples/encoding-lab`, which overrides defaults of `Iterable` for types of its own, took the instance count of
+ * `source.trb`'s program from 121 declarations to 192.
+ */
+fn isProgramPackage(var lowering: Lowering, package: Int): Bool {
+  if lowering.programPackages.isEmpty() {
+    return true
+  }
+  lowering.programPackages.containsKey package
 }
 
 /**

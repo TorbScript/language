@@ -494,6 +494,72 @@ public fn boundsOfTraitValue(var lowering: Lowering, id: TypeId): List<TypeId> {
 }
 
 /**
+ * A collection the runtime owns where the declaration names the trait type - `String.split`, `File.list`,
+ * `Process.arguments` - and what therefore crosses the boundary.
+ *
+ * A function of `runtime/` cannot build a trait-typed value: that is a boxed payload plus one witness pointer per bound,
+ * and both are layouts of the *program* (BACKEND 5.R1, the same reason a native whose result is an `Option` answers
+ * `bool` plus an out parameter). So what it hands over is the **storage** of one implementation, and the wrapper of the
+ * native coerces it - which is the second half of what `lowerListLiteral` does with a container it built itself.
+ */
+public type CollectionCrossing {
+  /** `Runtime(ListStorage, [Text])`: what the runtime's prototype spells, and the type of the wrapper's own slot. */
+  storage: IrTypeId
+  /** `ArrayList<String>`: the implementation that storage is, which is the type a witness table is built for. */
+  container: TypeId
+  /** The bounds of the trait-typed value, in the order of its witness pointers. */
+  bounds: List<TypeId>
+}
+
+/**
+ * Whether one declared type of a native is a trait-typed collection, and what the runtime passes for it.
+ *
+ * **Which implementation is the default is written in `std/collections`**, and the answer here is the same one a literal
+ * gets (`lowerListLiteral`): a `List` is an `ArrayList`, a `Map` a `TrieMap`, a `Set` a `TrieSet`. A wrong answer would be
+ * a *different container* and not a slower one, so it is asked of the prelude by name and is `None` where the name is not
+ * there.
+ */
+public fn collectionCrossingOf(var lowering: Lowering, declared: TypeId): CollectionCrossing? {
+  const bounds = boundsOfTraitValue lowering, declared
+  if bounds.length() != 1 {
+    return None
+  }
+  const (capability, arguments) = match lowering.checker.types.form(bounds[0]) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return None
+    }
+  }
+  const name = defaultImplementationName lowering, capability
+  if name.isEmpty() {
+    return None
+  }
+  const container = preludeType(lowering, name, arguments)?
+  Some CollectionCrossing(irTypeOfClosed(lowering, container), container, bounds)
+}
+
+/** The implementation a collection trait's storage is, or empty for a trait that is not one of the three. */
+fn defaultImplementationName(var lowering: Lowering, capability: SymbolId): String {
+  const found = Some capability
+  if lowering.checker.wellKnown.list == found {
+    return "ArrayList"
+  }
+  if lowering.checker.wellKnown.map == found {
+    return "TrieMap"
+  }
+  if lowering.checker.wellKnown.symbolNamed("Set") == found {
+    return "TrieSet"
+  }
+  ""
+}
+
+/** `ArrayList<Item>`, `TrieMap<Key, Value>`: a declaration of the prelude applied to these type arguments. */
+public fn preludeType(var lowering: Lowering, name: String, arguments: List<TypeId>): TypeId? {
+  const symbol = lowering.checker.wellKnown.symbolNamed(name)?
+  Some lowering.checker.nominal(symbol, arguments)
+}
+
+/**
  * The layout of the box a trait-typed value keeps its payload in: one field, always a counted block. Built here, because
  * the emitter needs a struct and the `R_`/`D_` pair for it and both fall out of an ordinary layout.
  */

@@ -1,7 +1,8 @@
 use Span from "../../syntax/source"
 use SymbolId from "../../semantics/symbols"
-use TypeId, ParameterId from "../../semantics/checker/type"
+use TypeId, ParameterId, Signature from "../../semantics/checker/type"
 use signatureOf from "../../semantics/checker/signature"
+use substitute from "../../semantics/checker/unify"
 use NativeEntry, NativeResult from "../../backend/c/natives"
 use IrType, IrTypeId, IrSignature, FunctionId, LayoutId, Slot, BlockId, LocationId from "../ir"
 use StaticContents from "../ir"
@@ -11,9 +12,10 @@ use terminateBlock, finishFunction, setBlockLocation from "../build"
 use layoutOfType from "../verify"
 use nativeWrapperName from "../mangle"
 use symbolPathOf from "../instantiate"
-use RuntimeShape, runtimeFunctionShaped, instanceArgumentsOf, irSignatureUnder from "../instances"
-use Lowering, reportUnsupported, locationOf, irTypeOfClosed, internStatic from "./context"
+use RuntimeShape, StoragePosition, runtimeFunctionShaped, instanceArgumentsOf, irSignatureUnder from "../instances"
+use Lowering, reportUnsupported, locationOf, irTypeOfClosed, internStatic, substituted from "./context"
 use variantLayoutOfType, variantNamed from "./match"
+use CollectionCrossing, collectionCrossingOf, lowerTraitValue from "./generic"
 
 /**
  * The two conventions of `runtime/`, and the wrapper the lowering builds around them.
@@ -48,9 +50,15 @@ public fn nativeFunctionOf(
   symbol: String,
   at: Span,
 ): FunctionId? {
-  const shape = runtimeShapeOf lowering, member, mapping, entry
-  if !needsWrapper(entry) {
+  const crossing = collectionOf lowering, member, mapping, entry
+  const shape = runtimeShapeOf lowering, member, mapping, entry, crossing
+  if !needsWrapper(entry, crossing) {
     return runtimeFunctionShaped lowering, member, symbol, mapping, shape
+  }
+  if entry.coercedCollection && crossing.isNone() {
+    const what = "`{entry.name}`, whose collection the back end cannot see as a `List`, a `Map` or a `Set`"
+    reportUnsupported lowering, what, at
+    return None
   }
   const arguments = match instanceArgumentsOf(lowering, member, mapping) {
     Some(found) => found
@@ -74,7 +82,7 @@ public fn nativeFunctionOf(
   const identifier = signatureOf lowering.checker, member
   const signature = lowering.checker.signature identifier
   const declared = irSignatureUnder lowering, signature, mapping
-  buildWrapper lowering, name, member, declared, raw, entry, at
+  buildWrapper lowering, name, member, declared, raw, entry, crossing, at
 }
 
 /**
@@ -82,13 +90,22 @@ public fn nativeFunctionOf(
  * function of the *program* (a wrapper, which a witness table may point at) or the bare runtime symbol (which it may not,
  * because a thunk calls a mangled name and a `FunctionKind.Runtime` has none in C).
  */
-public fn needsNativeWrapper(entry: NativeEntry): Bool {
-  needsWrapper entry
+public fn needsNativeWrapper(
+  var lowering: Lowering,
+  member: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+  entry: NativeEntry,
+): Bool {
+  const crossing = collectionOf lowering, member, mapping, entry
+  needsWrapper entry, crossing
 }
 
 /** Whether the runtime's own ABI differs from the declaration at all. */
-fn needsWrapper(entry: NativeEntry): Bool {
+fn needsWrapper(entry: NativeEntry, crossing: CollectionCrossing?): Bool {
   if !entry.addressedParameters.isEmpty() {
+    return true
+  }
+  if crossing.isSome() {
     return true
   }
   match entry.result {
@@ -97,24 +114,73 @@ fn needsWrapper(entry: NativeEntry): Bool {
   }
 }
 
+/**
+ * The collection the runtime hands over where the manifest says it does: the declared result (`String.split`,
+ * `Process.arguments`), or the payload of the success case where the declaration answers an `Option` or a `Result`
+ * (`File.list` writes a `torb_list` through the out parameter of the `.Fallible` convention).
+ *
+ * **The manifest says which entries these are, and the declaration says what the storage is.** The flag cannot be
+ * derived: a collection also crosses the boundary as an *element* of another container, and an element is opaque
+ * (`const void *value`, `void *out`) whatever it holds - so `ArrayList.add` of a `List<Int>` needs no coercion while
+ * `String.split` does, and nothing but the runtime's own prototype tells the two apart.
+ */
+fn collectionOf(
+  var lowering: Lowering,
+  member: SymbolId,
+  mapping: Map<ParameterId, TypeId>,
+  entry: NativeEntry,
+): CollectionCrossing? {
+  if !entry.coercedCollection {
+    return None
+  }
+  const identifier = signatureOf lowering.checker, member
+  const signature = lowering.checker.signature identifier
+  const result = substitute lowering.checker.types, signature.form.result, mapping
+  if const Some(found) = collectionCrossingOf(lowering, result) {
+    return Some found
+  }
+  const payload = successPayloadOf(lowering, result)?
+  collectionCrossingOf lowering, payload
+}
+
+/** The `Value` of an `Option<Value>` or of a `Result<Value, Failure>`, which is the type an out parameter carries. */
+fn successPayloadOf(var lowering: Lowering, result: TypeId): TypeId? {
+  const (capability, arguments) = match lowering.checker.types.form(result) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return None
+    }
+  }
+  const owner = Some capability
+  if lowering.checker.wellKnown.option != owner && lowering.checker.wellKnown.result != owner {
+    return None
+  }
+  arguments.first()
+}
+
 /** The shape the manifest gives one entry, with the out parameters read off the declared result. */
 fn runtimeShapeOf(
   var lowering: Lowering,
   member: SymbolId,
   mapping: Map<ParameterId, TypeId>,
   entry: NativeEntry,
+  crossing: CollectionCrossing?,
 ): RuntimeShape {
   if const .Direct = entry.result {
-    return RuntimeShape entry.addressedParameters, []
+    var storage: List<StoragePosition> = []
+    if const Some(found) = crossing {
+      storage.add StoragePosition(0 - 1, found.storage)
+    }
+    return RuntimeShape entry.addressedParameters, [], storage
   }
   const identifier = signatureOf lowering.checker, member
   const signature = lowering.checker.signature identifier
   const declared = irSignatureUnder lowering, signature, mapping
   var annotations: List<IrTypeId> = []
-  for out in outParametersOf(lowering, declared, isPartsResult(entry)) {
+  for out in outParametersOf(lowering, declared, crossing, isPartsResult(entry)) {
     annotations.add out.annotation
   }
-  RuntimeShape entry.addressedParameters, annotations
+  RuntimeShape entry.addressedParameters, annotations, []
 }
 
 /**
@@ -151,7 +217,12 @@ type OutParameter {
  * `isSplit` is the third convention: the payload is a **tuple** the runtime cannot write in one piece, so it takes one out
  * parameter per field of it and the wrapper builds the tuple (`torb_map_entry_after` writes a key and a value).
  */
-fn outParametersOf(var lowering: Lowering, declared: IrSignature, isSplit: Bool): List<OutParameter> {
+fn outParametersOf(
+  var lowering: Lowering,
+  declared: IrSignature,
+  crossing: CollectionCrossing?,
+  isSplit: Bool,
+): List<OutParameter> {
   var found: List<OutParameter> = []
   const layout = match variantLayoutOfType(lowering, declared.result) {
     Some(inner) => inner
@@ -167,7 +238,12 @@ fn outParametersOf(var lowering: Lowering, declared: IrSignature, isSplit: Bool)
         if isSplit {
           found.addAll payloadParametersOf(lowering, first.annotation)
         } else {
-          found.add OutParameter("out", first.annotation)
+          // The runtime writes the storage of a collection, not the trait-typed value the declaration names
+          var annotation = first.annotation
+          if const Some(inner) = crossing {
+            annotation = inner.storage
+          }
+          found.add OutParameter("out", annotation)
         }
       }
     }
@@ -229,6 +305,7 @@ fn buildWrapper(
   declared: IrSignature,
   raw: FunctionId,
   entry: NativeEntry,
+  crossing: CollectionCrossing?,
   at: Span,
 ): FunctionId? {
   var builder = newFunction name, Some(member), declared, "native wrapper"
@@ -246,7 +323,9 @@ fn buildWrapper(
   }
   const empty: List<WitnessSource> = []
   if const .Direct = entry.result {
-    directWrapperBody lowering, builder, declared, raw, given, location
+    if !directWrapperBody(lowering, builder, declared, raw, given, crossing, location, at) {
+      return None
+    }
     const direct = finishFunction lowering.program, builder
     lowering.nativeWrappers.set name, direct
     return Some direct
@@ -264,7 +343,7 @@ fn buildWrapper(
     reportUnsupported lowering, "`{entry.name}`, whose result has no success and no failure case", at
     return None
   }
-  const outs = outParametersOf lowering, declared, isPartsResult(entry)
+  const outs = outParametersOf lowering, declared, crossing, isPartsResult(entry)
   var slots: List<Slot> = []
   for out in outs {
     const slot = addTemporary builder, out.annotation
@@ -280,7 +359,7 @@ fn buildWrapper(
   const done = addBlock builder, "done", Some(location)
   terminate builder, Terminator.Branch(answered, good, bad)
   switchTo builder, good
-  const built = match successConstruct(lowering, builder, layout, success, outs, slots, location) {
+  const built = match successConstruct(lowering, builder, layout, success, outs, slots, crossing, location, at) {
     Some(found) => found
     None => {
       reportUnsupported lowering, "`{entry.name}`, whose result carries no payload", at
@@ -317,24 +396,58 @@ fn declarationLocationOf(var lowering: Lowering, member: SymbolId): LocationId {
   location
 }
 
-/** A wrapper that only has to pass an element by address: one call, and the result straight through. */
+/**
+ * A wrapper that only has to pass an element by address: one call, and the result straight through - or, where the
+ * runtime answers the storage of a collection, the `TraitValue` that makes the trait-typed value the declaration names.
+ */
 fn directWrapperBody(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   declared: IrSignature,
   raw: FunctionId,
   given: List<Argument>,
+  crossing: CollectionCrossing?,
   location: LocationId,
-) {
+  at: Span,
+): Bool {
   const empty: List<WitnessSource> = []
   if isVoidResult(lowering, declared.result) {
     emit builder, Instruction.Call(None, raw, given, empty, Some(location))
     terminate builder, Terminator.Return(None)
-    return
+    return true
+  }
+  if const Some(found) = crossing {
+    const storage = addTemporary builder, found.storage
+    emit builder, Instruction.Call(Some(storage), raw, given, empty, Some(location))
+    const value = addTemporary builder, declared.result
+    if !coerceStorage(lowering, builder, value, storage, found, at) {
+      return false
+    }
+    terminate builder, Terminator.Return(Some(borrowed(value)))
+    return true
   }
   const target = addTemporary builder, declared.result
   emit builder, Instruction.Call(Some(target), raw, given, empty, Some(location))
   terminate builder, Terminator.Return(Some(borrowed(target)))
+  true
+}
+
+/**
+ * The container the runtime handed over, boxed with one witness pointer per bound: the trait-typed value the declaration
+ * names. It is the same step `lowerListLiteral` takes with the container it filled itself, and the table it needs is the
+ * one of `(ArrayList<Item>, List<Item>)` - so a program that never writes a list literal still gets it from here.
+ */
+fn coerceStorage(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  target: Slot,
+  storage: Slot,
+  crossing: CollectionCrossing,
+  at: Span,
+): Bool {
+  const bounds = crossing.bounds
+  const container = crossing.container
+  lowerTraitValue lowering, builder, target, storage, bounds, container, at
 }
 
 fn isVoidResult(var lowering: Lowering, annotation: IrTypeId): Bool {
@@ -361,7 +474,9 @@ fn successConstruct(
   success: Int,
   outs: List<OutParameter>,
   slots: List<Slot>,
+  crossing: CollectionCrossing?,
   location: LocationId,
+  at: Span,
 ): List<Argument>? {
   const shape = lowering.program.layoutAt layout
   const fields = shape.fieldsOfVariant success
@@ -375,13 +490,22 @@ fn successConstruct(
     emit builder, Instruction.Constant(slot, value)
     return Some([borrowed(slot)])
   }
-  const at = outIndexOf outs, "out"
-  if at < 0 {
+  const written = outIndexOf outs, "out"
+  if written < 0 {
     // The runtime wrote the payload in pieces (`.OptionalParts`), so the **tuple** is built here: it is a layout of the
     // program, which is exactly why the runtime could not answer it
     return builtPayload lowering, builder, annotation, outs, slots
   }
-  Some([borrowed(slots[at])])
+  // The out parameter holds the storage of a collection where the declaration names the trait type, so `Ok` carries what
+  // the coercion makes of it and not what the runtime wrote
+  if const Some(found) = crossing {
+    const value = addTemporary builder, annotation
+    if !coerceStorage(lowering, builder, value, slots[written], found, at) {
+      return None
+    }
+    return Some([borrowed(value)])
+  }
+  Some([borrowed(slots[written])])
 }
 
 /** The payload of a `.OptionalParts` native: one `Construct` of the tuple out of the out parameters, in their order. */

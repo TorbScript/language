@@ -1,3 +1,4 @@
+use Equals, Hash, combineHashes from "std/core"
 use MutableIndexed from "std/core"
 use Iterable, Length from "std/iteration"
 
@@ -40,4 +41,24 @@ public native type Array<Item, const Size: Int>
 
   /** Same length, so the result is an Array again. */
   native fn mapped<Output>(self, transform: (value: Item) => Output): Array<Output, Size>
+}
+
+/**
+ * Equal when the items at the same index are equal. The length is part of the type, so two arrays that compare at all
+ * have the same one and there is nothing to test about it.
+ *
+ * A collection is `Equals` when its items are, exactly as a tuple is - and an `Array` is the collection that is most
+ * like a tuple: inline storage of a fixed width.
+ */
+extend<Item: Equals, const Size: Int> Array<Item, Size> with Equals {
+  fn equals(self, other: Self): Bool {
+    zip(other).all { pair => pair.0 == pair.1 }
+  }
+}
+
+/** Order-dependent, like [List.hash]: an `Array` is an ordered sequence. */
+extend<Item: Hash, const Size: Int> Array<Item, Size> with Hash {
+  fn hash(self): Int {
+    fold 0 { seed, item => combineHashes seed, item.hash() }
+  }
 }

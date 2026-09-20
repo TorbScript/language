@@ -715,8 +715,11 @@ fn emitElementHelpers(var emission: Emission, program: IrProgram, descriptor: El
   if const Some(function) = descriptor.equals {
     if program.hasFunction(function) {
       const head = elementHelperHead "E", "bool", descriptor, "const void *first, const void *second"
-      const left = CExpression.Dereference CExpression.Cast("const {spelling} *", CExpression.Name("first"))
-      const right = CExpression.Dereference CExpression.Cast("const {spelling} *", CExpression.Name("second"))
+      // `{spelling} const *` and not `const {spelling} *`: what the table may not write is the **storage**, and for a
+      // boxed item the storage holds a pointer - so the const belongs to that pointer and not to what it points at.
+      // Written the other way round, a boxed tuple came out as a `const T * *` and gcc refused the call (`-Werror`)
+      const left = CExpression.Dereference CExpression.Cast("{spelling} const *", CExpression.Name("first"))
+      const right = CExpression.Dereference CExpression.Cast("{spelling} const *", CExpression.Name("second"))
       const called = CExpression.Call CExpression.Name(program.functionAt(function).name), [left, right]
       write emission, CDeclaration.Definition("", head, [CStatement.Return(Some(called))])
     }
@@ -724,7 +727,7 @@ fn emitElementHelpers(var emission: Emission, program: IrProgram, descriptor: El
   if const Some(function) = descriptor.hash {
     if program.hasFunction(function) {
       const head = elementHelperHead "H", "uint64_t", descriptor, "const void *element"
-      const value = CExpression.Dereference CExpression.Cast("const {spelling} *", CExpression.Name("element"))
+      const value = CExpression.Dereference CExpression.Cast("{spelling} const *", CExpression.Name("element"))
       const called = CExpression.Call CExpression.Name(program.functionAt(function).name), [value]
       const converted = CExpression.Cast "uint64_t", called
       write emission, CDeclaration.Definition("", head, [CStatement.Return(Some(converted))])

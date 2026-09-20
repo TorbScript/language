@@ -166,6 +166,19 @@ public type RuntimeShape {
    * The result of the function is then `Bool`, and `ir/lower/native.trb` builds the `Option` or the `Result`.
    */
   outs: List<IrTypeId> = []
+  /**
+   * The positions where the runtime holds the **storage** of a collection although the declaration names the trait type
+   * (`String.split`, `File.list`, `Process.arguments`): a runtime function cannot carry a witness table, so what crosses
+   * the boundary is the one implementation. `ir/lower/native.trb` coerces it, the same way a list literal does.
+   */
+  storage: List<StoragePosition> = []
+}
+
+/** One position of a runtime ABI that holds a container's storage, and what that storage is. */
+public type StoragePosition {
+  /** The index of the declared parameter, or `-1` for the result. */
+  at: Int
+  annotation: IrTypeId
 }
 
 /** The same for a native of a generic owner, whose parameters the caller has filled in. */
@@ -217,12 +230,15 @@ public fn runtimeFunctionShaped(
  * parameter is appended after the declared ones while the result becomes `Bool`.
  */
 fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: RuntimeShape): IrSignature {
-  if shape.addressed.isEmpty() && shape.outs.isEmpty() {
+  if shape.addressed.isEmpty() && shape.outs.isEmpty() && shape.storage.isEmpty() {
     return declared
   }
   var parameters: List<IrParameter> = []
   for index in 0..declared.parameters.length() {
-    const parameter = declared.parameters[index]
+    var parameter = declared.parameters[index]
+    if const Some(found) = storageAt(shape, index) {
+      parameter = parameter.copy annotation: found
+    }
     if shape.addressed.contains(index) {
       parameters.add parameter.copy(isByAddress: true)
       continue
@@ -230,7 +246,8 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
     parameters.add parameter
   }
   if shape.outs.isEmpty() {
-    return IrSignature parameters, declared.result
+    const result = storageAt(shape, 0 - 1) ?? declared.result
+    return IrSignature parameters, result
   }
   // A name per out parameter, because several of them are several slots of the wrapper and a reader of the IR text has to
   // tell them apart
@@ -240,6 +257,16 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
   }
   const boolean = lowering.program.internType IrType.Boolean
   IrSignature parameters, boolean
+}
+
+/** The storage type of one position of a runtime ABI, or `None` where it holds what the declaration says. */
+fn storageAt(shape: RuntimeShape, at: Int): IrTypeId? {
+  for position in shape.storage {
+    if position.at == at {
+      return Some position.annotation
+    }
+  }
+  None
 }
 
 /** The mangled name of an instance: a pure function of where the declaration is written and of its arguments. */

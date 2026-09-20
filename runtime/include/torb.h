@@ -498,8 +498,12 @@ bool torb_char_is_whitespace(torb_char character);
 torb_char torb_char_to_upper_case(torb_char character);
 torb_char torb_char_to_lower_case(torb_char character);
 int64_t torb_char_byte_length_of(torb_char character);
-/** Not every number is a scalar value (the surrogates, everything above 0x10FFFF). */
-bool torb_char_try_from_i64(int64_t value, torb_char *out);
+/**
+ * Not every number is a scalar value (the surrogates, everything above 0x10FFFF). `message` is the `.Fallible`
+ * convention: the `NumberRangeError` of the failure carries one and no parameter names it, so the runtime writes the
+ * value that went out of range. It is set on failure alone.
+ */
+bool torb_char_try_from_i64(int64_t value, torb_char *out, torb_text *message);
 
 /* ------------------------------------------------------------------------------------------- Show, formatting --- */
 

@@ -1,0 +1,103 @@
+/**
+ * **A collection is `Equals` when its items are, and it compares structurally** - exactly as a tuple already does. The
+ * implementations are in `std/collections` (`extend<Item: Equals> List<Item> with Equals` and its siblings), so what this
+ * program gates is the back end: `==` between two trait-typed values is a **static** call of that implementation and no
+ * table lookup, because `equals(self, other: Self)` is not object safe and could never be in a witness table (gap 7).
+ *
+ * It also gates `!=`, which is the same member and one `BooleanNot`. Until this round the back end dropped the negation
+ * for every type whose equality is a *call* - a record, a case, a collection - and `records.trb`, `derived.trb` and
+ * `collections.trb` all compared with `==` only, so nothing said so.
+ *
+ * `Set`, `Map`, `Stack`, `Queue` and `Array` are **not** here, and each for its own reason: a `Set` or a `Map` compares by
+ * walking itself, which waits for the map and set cursor (and so does every witness table of a `Map`, so a map literal is
+ * blocked whatever is done with it); a `Stack`, a `Queue` and an `Array` are types stage 0 does not have at all (its
+ * prelude is `builtin_type` plus `prelude.trb`), so no gate program can compare the two back ends on one. A **tuple** is
+ * not here either: `==` on one is structural in the checker and records no resolution at all, which is its own row.
+ */
+type Point {
+  x: Int
+  y: Int
+}
+
+/** The shape of `JsonValue`: a case whose field is a collection, so the derived `equals` compares two `List` values. */
+type Node {
+  case Leaf(value: Int)
+  case Branch(children: List<Node>)
+
+  fn show(self): String {
+    match self {
+      .Leaf(value) => "{value}"
+      .Branch(children) => "({children.map({ _.show() }).joined(separator: " ")})"
+    }
+  }
+}
+
+fn lists() {
+  const numbers: List<Int> = [1, 2, 3]
+  print(numbers == [1, 2, 3])
+  print(numbers != [1, 2, 3])
+  print(numbers == [1, 2])
+  print(numbers != [1, 2])
+  print(numbers == [1, 2, 4])
+  print(numbers == [])
+  const empty: List<Int> = []
+  print(empty == [])
+  print(empty != [])
+  const words: List<String> = ["one", "two"]
+  print(words == ["one", "two"])
+  print(words != ["one", "three"])
+}
+
+fn nested() {
+  const rows: List<List<Int>> = [[1, 2], [3]]
+  print(rows == [[1, 2], [3]])
+  print(rows != [[1, 2], [4]])
+  print(rows == [[1, 2]])
+}
+
+fn hashes() {
+  const numbers: List<Int> = [1, 2, 3]
+  print(numbers.hash() == [1, 2, 3].hash())
+  print(numbers.hash() == [3, 2, 1].hash())
+  const rows: List<List<Int>> = [[1, 2], [3]]
+  print(rows.hash() == [[1, 2], [3]].hash())
+}
+
+fn inRecords() {
+  const first = Point 1, 2
+  print(first == Point(1, 2))
+  print(first != Point(1, 2))
+  print(first == Point(1, 3))
+  print(first != Point(1, 3))
+}
+
+fn inCases() {
+  const tree = Node.Branch([Node.Leaf(1), Node.Branch([Node.Leaf(2)])])
+  print tree.show()
+  print(tree == Node.Branch([Node.Leaf(1), Node.Branch([Node.Leaf(2)])]))
+  print(tree != Node.Branch([Node.Leaf(1), Node.Branch([Node.Leaf(3)])]))
+  print(tree == Node.Leaf(1))
+  print(Node.Leaf(1) == Node.Leaf(1))
+  print(Node.Leaf(1) != Node.Leaf(1))
+}
+
+/** A collection in a field of a record, which is the other half of the shape `Node` has in a case. */
+type Row {
+  cells: List<String>
+  width: Int
+}
+
+fn inFields() {
+  const row = Row(["a", "b"], 2)
+  print(row == Row(["a", "b"], 2))
+  print(row != Row(["a", "b"], 2))
+  print(row == Row(["a", "c"], 2))
+  print(row != Row(["a", "c"], 2))
+}
+
+lists()
+nested()
+hashes()
+inRecords()
+inCases()
+inFields()

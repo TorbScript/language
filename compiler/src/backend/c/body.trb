@@ -1525,7 +1525,8 @@ fn arithmeticExpression(
     }
   }
   if isFloatingKind(kind) {
-    return floatingExpression emission, intrinsic.operation, first, second
+    const suffix = suffixOfNumeric kind
+    return floatingExpression emission, intrinsic.operation, first, second, suffix
   }
   if isUnsignedKind(kind) {
     if const .Negate = intrinsic.operation {
@@ -1554,6 +1555,7 @@ fn floatingExpression(
   operation: IntrinsicOperation,
   first: CExpression,
   second: CExpression,
+  suffix: String,
 ): CExpression? {
   match operation {
     .Add => Some CExpression.Binary(first, "+", second)
@@ -1561,10 +1563,9 @@ fn floatingExpression(
     .Multiply => Some CExpression.Binary(first, "*", second)
     .Divide => Some CExpression.Binary(first, "/", second)
     .Negate => Some CExpression.Unary("-", first)
-    .Remainder => {
-      reportUnsupported emission, "the remainder of two floats (milestone 5.12)"
-      None
-    }
+    // The one arithmetic operator of a float that is not a C operator. A remainder by zero answers `nan` and never
+    // panics, exactly as `a / 0.0` answers an infinity - only the integers panic (decided gap 2)
+    .Remainder => Some CExpression.Call(CExpression.Name("torb_remainder_{suffix}"), [first, second])
     _ => {
       reportUnsupported emission, "a bit operation on a float"
       None

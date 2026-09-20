@@ -120,7 +120,7 @@ fn lowerGeneratedBody(
     .Absolute => absoluteBody lowering, builder, at
     .Equals => equalsBody lowering, builder, request.subject, at
     .Hash => hashBody lowering, builder, request.subject, at
-    .Compare => compareBody lowering, builder, at
+    .Compare => compareBody lowering, builder, request.subject, at
     .Show => showBody lowering, builder, request.subject, at
     .ShowNested => showBody lowering, builder, request.subject, at
     .Copy => reportUnsupported lowering, "a generated `copy`", at
@@ -704,7 +704,7 @@ fn mixInto(var lowering: Lowering, var builder: FunctionBuilder, accumulated: Sl
  * `Less`, `Greater` or `Equal`, from two comparisons. Only the `native` types whose manifest entry says `Compare` and the
  * tuples the checker derives it for get here: an order over a `type` is a decision and not a structure (4.4).
  */
-fn compareBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
+fn compareBody(var lowering: Lowering, var builder: FunctionBuilder, subject: TypeId, at: Span) {
   const ordering = builder.function.signature.result
   const layout = match layoutOfType(lowering.program, ordering) {
     Some(found) => found
@@ -714,6 +714,10 @@ fn compareBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
     }
   }
   const annotation = builder.function.signature.parameters[0].annotation
+  if isTupleType(lowering, subject) {
+    compareTupleBody lowering, builder, subject, annotation, layout, at
+    return
+  }
   const location = locationOf lowering, at
   const boolean = booleanTypeOf lowering
   const isLess = addTemporary builder, boolean
@@ -737,6 +741,103 @@ fn compareBody(var lowering: Lowering, var builder: FunctionBuilder, at: Span) {
   answerOrdering lowering, builder, layout, "Greater", at
   switchTo builder, equal
   answerOrdering lowering, builder, layout, "Equal", at
+}
+
+fn isTupleType(var lowering: Lowering, subject: TypeId): Bool {
+  match lowering.checker.types.form(subject) {
+    .Tuple(_) => true
+    _ => false
+  }
+}
+
+/**
+ * A tuple compares **lexicographically**: the first field whose order is not `Equal` decides, and two tuples that agree
+ * in every field are equal. It is the one structural order the language has - an order over a `type` is a decision and
+ * not a structure (4.4) - and it is what `sorted { (a, b) }` and `sort({ (_.length(), _) })` are built on, which the
+ * compiler's own passes do at three places.
+ *
+ * Every field goes through **its own `Compare`**, never through a comparison intrinsic: the order of a `String` is the
+ * runtime's byte order, the order of a `Float64` puts `nan` above everything (decided gap 5), and a field that is itself
+ * a tuple recurses into this very body. Deciding any of that a second time here is how two back ends start to disagree.
+ */
+fn compareTupleBody(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: TypeId,
+  annotation: IrTypeId,
+  ordering: LayoutId,
+  at: Span,
+) {
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated `compare` of a tuple without a layout", at
+      return
+    }
+  }
+  const fields = match derivedFieldsOf(lowering, subject, layout, -1) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a generated `compare` over fields the back end cannot line up", at
+      return
+    }
+  }
+  const equal = orderingVariantOf lowering, ordering, "Equal", at
+  if equal < 0 {
+    return
+  }
+  const location = locationOf lowering, at
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const boolean = booleanTypeOf lowering
+  const result = builder.function.signature.result
+  const empty: List<WitnessSource> = []
+  for field in fields {
+    const left = readField lowering, builder, Slot(0), field.step, field.annotation
+    const right = readField lowering, builder, Slot(1), field.step, field.annotation
+    const called = match traitMemberFunction(lowering, field.subject, "Compare", "compare", at) {
+      Some(found) => found
+      None => {
+        return
+      }
+    }
+    const order = addTemporary builder, result
+    const arguments = [borrowed(left), borrowed(right)]
+    emit builder, Instruction.Call(Some(order), called, arguments, empty, Some(location))
+    const tag = addTemporary builder, integer
+    emit builder, Instruction.Tag(tag, order)
+    const wanted = integerSlotOf lowering, builder, equal, integer
+    const isEqual = addTemporary builder, boolean
+    const intrinsic = Intrinsic IntrinsicOperation.Equal, Some(NumericKind.Signed(64))
+    emit builder, Instruction.Intrinsic(Some(isEqual), intrinsic, [tag, wanted], location)
+    const next = addBlock builder, "equal", Some(location)
+    const decided = addBlock builder, "decided", Some(location)
+    terminate builder, Terminator.Branch(isEqual, next, decided)
+    switchTo builder, decided
+    terminate builder, Terminator.Return(Some(borrowed(order)))
+    switchTo builder, next
+  }
+  answerOrdering lowering, builder, ordering, "Equal", at
+}
+
+/** One integer constant in a slot of its own: the variant index a tag is compared against. */
+fn integerSlotOf(var lowering: Lowering, var builder: FunctionBuilder, value: Int, annotation: IrTypeId): Slot {
+  const target = addTemporary builder, annotation
+  const contents = StaticContents.Literal LiteralValue.Integer(value)
+  const found = internStatic lowering, contents, annotation
+  emit builder, Instruction.Constant(target, found)
+  target
+}
+
+/** The index of the `Ordering` case of this name, or -1 with the finding that says which one is missing. */
+fn orderingVariantOf(var lowering: Lowering, layout: LayoutId, name: String, at: Span): Int {
+  const shape = lowering.program.layoutAt layout
+  for index in 0..shape.variants.length() {
+    if shape.variants[index].name == name {
+      return index
+    }
+  }
+  reportUnsupported lowering, "an `Ordering` without a `{name}` case", at
+  0 - 1
 }
 
 /** One of the two comparisons. A `String` is compared through the runtime's byte order against zero. */
@@ -782,15 +883,8 @@ fn answerOrdering(
   name: String,
   at: Span,
 ) {
-  const shape = lowering.program.layoutAt layout
-  var variant = -1
-  for index in 0..shape.variants.length() {
-    if shape.variants[index].name == name {
-      variant = index
-    }
-  }
+  const variant = orderingVariantOf lowering, layout, name, at
   if variant < 0 {
-    reportUnsupported lowering, "an `Ordering` without a `{name}` case", at
     return
   }
   const annotation = builder.function.signature.result

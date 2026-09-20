@@ -17,7 +17,7 @@ use isClosedType from "../instances"
 use variantLayoutOfType, variantNamed from "./match"
 use valueSlot, unsupportedSlot, abandonedSlot from "./expression"
 use lowerValue from "./expression"
-use lowerTraitValue, dispatchedMember, dispatchedOn, resultTypeOf from "./generic"
+use lowerTraitValue, dispatchedMember, dispatchedOn, resultTypeOf, preludeType from "./generic"
 use lowerDispatched from "./call"
 
 /**
@@ -515,14 +515,11 @@ fn implementationOf(
   arguments: List<TypeId>,
   at: Span,
 ): TypeId? {
-  const symbol = match lowering.checker.wellKnown.symbolNamed(name) {
-    Some(found) => found
-    None => {
-      reportUnsupported lowering, "a container literal without `{name}` in the prelude", at
-      return None
-    }
+  const found = preludeType lowering, name, arguments
+  if found.isNone() {
+    reportUnsupported lowering, "a container literal without `{name}` in the prelude", at
   }
-  Some lowering.checker.nominal(symbol, arguments)
+  found
 }
 
 /** The container, boxed with one witness pointer per bound: which is what the type of a literal is. */

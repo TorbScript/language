@@ -164,7 +164,7 @@ public trait Queue<Item>
 `Stack` is LIFO (`add` is `push`, and iterates from top to bottom); `Queue` is FIFO (`add` is `enqueue`, and iterates in
 the order of `dequeue`). `popped()`/`dequeued()` are the participle form for a `const` binding: the top or next element
 together with the rest, or `None` when empty. `ArrayStack` is a `List` underneath; `ArrayQueue` is a ring buffer that
-grows only when it is full.
+grows only when it is full. Both are `Equals` and `Hash` wherever `Item` is, order-dependent like a `List`.
 
 ### Array
 
@@ -185,7 +185,8 @@ A fixed number of items, and the number is part of the type (`Array<Float, 16>`)
 count, and copying it copies its items. `Size` is a const parameter - a literal, a named `const` or another const
 parameter - and there is no arithmetic over one, so an out-of-bounds index that the compiler can work out at the call
 site is a compile error rather than a panic. `Array.of(1, 2, 3, 4)` fixes `Size` from the number of arguments the
-compiler counts; `Array.from(iterable)` is the fallible runtime form and answers `Array<Item, Size>?`.
+compiler counts; `Array.from(iterable)` is the fallible runtime form and answers `Array<Item, Size>?`. It is `Equals` and
+`Hash` wherever `Item` is, by index and therefore order-dependent.
 
 <!-- torb:declarations:end -->
 

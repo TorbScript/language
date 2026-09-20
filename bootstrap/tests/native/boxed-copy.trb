@@ -1,0 +1,83 @@
+/**
+ * **A copy of a value whose layout is `Boxed` may not see a change made through the other one**, and the change may be a
+ * `var self` member of a field as much as an assignment to one.
+ *
+ * It is the bug the first native build of the compiler found out about itself. `parseClosureParameters` backtracks by
+ * keeping a copy of the whole `Parser` and assigning it back where the trial failed, and a `Parser` is a boxed record: the
+ * trial's own diagnostic went into the box the copy shared, so the restore restored the error with everything else and
+ * `names.filter({ !_.startsWith("-") })` came out as "Expected a pattern, found `!`" from a binary that had just compiled
+ * itself.
+ *
+ * The cause was that the lowering forms the path of a `var self` member before the **representations** are decided - a
+ * representation is a fixpoint over the whole layout table - so it asked "is this record counted" of a layout that still
+ * said `inline size 0` and left the box out of the `MakeUnique` chain. It treats every record, variant and tuple on a path
+ * as a possible owner now, and `dropUncountedMakeUnique` removes the ones that turned out inline.
+ *
+ * `Wide` is wide on purpose: a record only gets a box once it is past the inline limit, so a narrow one would test the
+ * other half of the same question and pass either way.
+ */
+type Wide {
+  var items: List<Int> = []
+  var first: String = ""
+  var second: String = ""
+  var third: String = ""
+  var fourth: String = ""
+  var fifth: String = ""
+  var sixth: String = ""
+  var position: Int = 0
+
+  fn grewSince(self, earlier: Wide): Bool {
+    items.length() > earlier.items.length()
+  }
+}
+
+/** A `var self` member of a field, an assignment to a field, and the whole value assigned back. */
+fn trial(var wide: Wide) {
+  const before = wide
+  wide.items.add 1
+  wide.position = 7
+  wide.first = "changed"
+  print before.items.length()
+  print before.position
+  print before.first
+  print wide.items.length()
+  print wide.grewSince(before)
+  wide = before
+  print wide.items.length()
+  print wide.position
+  print wide.first
+}
+
+fn started() {
+  var wide = Wide()
+  trial wide
+  print wide.items.length()
+  print wide.position
+}
+
+/** The same through a local, where no reference is involved at all. */
+fn locally() {
+  var wide = Wide()
+  const before = wide
+  wide.items.add 1
+  wide.items.add 2
+  print before.items.length()
+  print wide.items.length()
+}
+
+/** A narrow record is inline and has no box, so nothing is made unique above the list - the other half of the question. */
+type Narrow {
+  var items: List<Int> = []
+}
+
+fn narrow() {
+  var holder = Narrow()
+  const before = holder
+  holder.items.add 1
+  print before.items.length()
+  print holder.items.length()
+}
+
+started()
+locally()
+narrow()

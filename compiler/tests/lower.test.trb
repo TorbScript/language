@@ -4,8 +4,9 @@ use normalizePath, parentPath, pathDepth, joinPath from "../src/project/path"
 use readSourceTree from "../src/project/read"
 use check from "../src/semantics/check"
 use verifyProgram from "../src/ir/verify"
-use lowerChecked from "../src/ir/lower/lower"
+use lowerChecked, loweredText from "../src/ir/lower/lower"
 use irOf, textOf, unsupportedIn from "./lower-harness"
+use lowered from "./lower-harness"
 
 /**
  * From a checked program to the IR text of BACKEND 1.7: functions, slots, blocks, literals, locals, the arithmetic
@@ -494,9 +495,94 @@ group "What the back end does not lower yet" {
    * a declaration that is never called never gets any. It is counted as a declaration the back end cannot build an
    * instance of, which is what keeps the progress bar about declarations rather than about calls.
    */
-  test "a generic declaration nothing calls has no instance of its own" {
+  /**
+   * A generic declaration is a **template and no function of the back end**: monomorphization gives it one instance per
+   * argument list, each counted where the worklist reaches it, and none at all where nothing calls it. So asking for its
+   * instance without arguments could only fail, and counting that as a construct the back end does not support said
+   * "cannot build an instance of" about code it builds a dozen of. It is the same answer 6.1's long tail gave for a
+   * `const` whose value is no static data: no declaration of the back end, so neither lowered nor stubbed.
+   */
+  test "a generic declaration nothing calls is no declaration of the back end at all" {
     const found = unsupportedIn "fn identity<Value>(value: Value): Value \{\n  value\n\}"
-    assert(found == ["not supported by the back end yet: a declaration the back end cannot build an instance of"])
+    assert found.isEmpty()
+  }
+}
+
+group "The closed world is the program" {
+  /**
+   * **A package next to yours in a workspace must not change your binary.** Two questions of the back end are
+   * closed-world - "does any implementation override this default", which decides the member list of every witness table,
+   * and through it how many instances the worklist reaches - and both were asked over every file the `SourceTree` read.
+   * `readSourceTree` reads the whole workspace whatever is being built, so adding `examples/encoding-lab` to the
+   * repository took the instance count of `source.trb`'s program from 121 declarations to 192 without a line of that
+   * program changing.
+   *
+   * The lab below is the same shape in miniature: a member called `sort`, which is a **default of `List`** in the
+   * miniature prelude. Read as an override it puts `sort` into the table of every `List<Item>` of the program - and
+   * `acme/app` does not depend on `acme/lab` at all.
+   */
+  const lab = [
+    "project.trb": r"""
+      name "acme/all"
+      workspace { members "std/*", "app", "lab" }
+      """,
+    "lab/project.trb": r"""
+      name "acme/lab"
+      """,
+    "lab/src/main.trb": r"""
+      type Rows with Iterable<Int> {
+        var items: List<Int> = []
+
+        fn iterator(self): Iterator<Int> {
+          items.iterator()
+        }
+
+        fn sort(var self, by: (value: Int) => Int) {
+          items.sort by
+        }
+      }
+      """,
+  ]
+
+  const walking = r"""
+    fn total(numbers: List<Int>): Int {
+      var sum = 0
+      for value in numbers {
+        sum = sum + value
+      }
+      sum
+    }
+
+    fn used(): Int {
+      total([1, 2, 3])
+    }
+    """
+
+  test "an unrelated package of the workspace changes nothing about the program" {
+    var alone = lowered walking
+    var beside = lowered walking, lab
+    assert(alone.lowered + alone.stubbed == beside.lowered + beside.stubbed)
+    assert(alone.program.functions.length() == beside.program.functions.length())
+    assert(alone.program.witnessTables.length() == beside.program.witnessTables.length())
+    assert(alone.program.elements.length() == beside.program.elements.length())
+    // The bodies as well, not only how many of them there are: a table with one more slot is a different program
+    assert(loweredText(alone) == loweredText(beside))
+  }
+
+  test "the lab really is in the workspace, so the test above is not vacuous" {
+    const plain = r"""
+      fn used(): Int {
+        1
+      }
+      """
+    var beside = lowered plain, lab
+    assert beside.problems.isEmpty()
+    var names: List<String> = []
+    for function in beside.program.functions {
+      names.add function.name
+    }
+    // Nothing of `acme/lab` is lowered - `torb ir` seeds the requested modules - but the checker indexed it
+    assert(!names.any({ _.contains "lab" }))
   }
 }
 
@@ -543,8 +629,14 @@ group "Real code" {
     // Nine declarations of the two files, plus the instances and the generated members the worklist reached from them.
     // It went from 78 to 121 when `chars()` became ordinary TorbScript (6.1's long tail): a text is iterated through
     // `Characters` and `CharacterIterator` of `std/text` now, so the two files reach `Iterable<Char>`, `Iterator<Char>`
-    // and the payload boxes of both - one set for the whole program, and the same trade 5.7 made for `ArrayList.from`
-    assert(found.lowered + found.stubbed == 121)
+    // and the payload boxes of both - one set for the whole program, and the same trade 5.7 made for `ArrayList.from`.
+    //
+    // **It went from 121 to 115 when the closed world became the program.** "Does any implementation override this
+    // default" was asked over every file the `SourceTree` read, and `readSourceTree` reads the whole workspace - so the
+    // examples next to the compiler put members back into the tables of a program that does not depend on them. 192 with
+    // `examples/encoding-lab` in the tree, 121 without it, 115 now that the answer is a property of the *program*
+    // (`programPackagesOf`, and the test below this one)
+    assert(found.lowered + found.stubbed == 115)
     // **The instance-count tripwire** (BACKEND section 7, "The instance count"). Monomorphization with `List<Item>`
     // everywhere can multiply, and what multiplies it is the **element type**: a container literal builds the witness
     // table of `List<Item>`, and that table used to drag in every default member of `Iterable`, `Collection`,
@@ -553,7 +645,7 @@ group "Real code" {
     // functions / 20 tables to a *quarter* of that. They *are* the footprint - the functions, the tables and the
     // descriptors - and they are asserted exactly so that an explosion fails a test instead of being noticed as a
     // build time.
-    assert(found.program.functions.length() == 169)
+    assert(found.program.functions.length() == 163)
     assert(found.program.witnessTables.length() == 38)
     assert(found.program.elements.length() == 3)
     var blocked: List<String> = []

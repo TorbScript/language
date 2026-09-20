@@ -1,10 +1,11 @@
 use ModuleId from "../../semantics/module"
 use Checker from "../../semantics/checker/context"
 use Checked from "../../semantics/check"
-use Package from "../../project/workspace"
+use Package, Workspace from "../../project/workspace"
 use relativePath, pathName from "../../project/path"
-use finishProgram from "../layout"
-use verifyProgram from "../verify"
+use IrProgram, Instruction from "../ir"
+use finishProgram, isManagedType from "../layout"
+use verifyProgram, typeOfReference from "../verify"
 use printProgram from "../print"
 use Lowering, newLowering from "./context"
 use lowerEntryFunction, lowerInstance, seedModule from "./function"
@@ -26,18 +27,145 @@ public fn lowerWorkspace(
   seedsEverything: Bool,
 ): Lowering {
   var lowering = newLowering checker, paths
-  for module in modules {
+  lowering.programPackages = programPackagesOf checker, modules
+  const own = programModules checker, modules
+  for module in own {
     const _ = lowerEntryFunction lowering, module
     drainPending lowering
   }
   if seedsEverything {
-    for module in modules {
+    for module in own {
       seedModule lowering, module
       drainPending lowering
     }
   }
   finishProgram lowering.program
+  dropUncountedMakeUnique lowering.program
   lowering
+}
+
+/**
+ * Every `MakeUnique` of a place that turned out **not** to be counted, removed - the one thing the lowering could not
+ * decide while it ran.
+ *
+ * A representation is a fixpoint over the whole layout table that `finishProgram` settles, and the path of a `var self`
+ * member of a trait-typed value is formed long before that. So `makeOwnersUnique` treats every record, variant and tuple
+ * on the path as a possible owner: asking the other way round loses the one that matters, and a missing `MakeUnique` is a
+ * write a **copy** of the value can see - which is what made the first native build of the compiler misparse itself
+ * (`parseClosureParameters` backtracks by keeping a copy of the whole `Parser`, and a `Parser` is a boxed record).
+ *
+ * One that turned out inline carries no count and there is nothing to make unique, so it goes away here rather than being
+ * accepted by the verifier: the rule "a `makeUnique` needs a place that is counted" stays exact, an IR snapshot stays free
+ * of noise, and nothing after this point has to know that the question was ever open.
+ */
+fn dropUncountedMakeUnique(var program: IrProgram) {
+  for index in 0..program.functions.length() {
+    const function = program.functions[index]
+    for block in 0..function.blocks.length() {
+      const instructions = function.blocks[block].instructions
+      var kept: List<Instruction> = []
+      var isChanged = false
+      var ignored: List<String> = []
+      for instruction in instructions {
+        if const .MakeUnique(reference) = instruction {
+          const annotation = typeOfReference program, function, ignored, "", reference
+          const isCounted = match annotation {
+            Some(found) => isManagedType program, found
+            None => false
+          }
+          if !isCounted {
+            isChanged = true
+            continue
+          }
+        }
+        kept.add instruction
+      }
+      if isChanged {
+        program.functions[index].blocks[block].instructions = kept
+      }
+    }
+  }
+}
+
+/**
+ * The packages whose declarations are part of the **program**: the packages of the roots, everything they depend on
+ * (transitively, runtime and development alike) and the prelude each of them names.
+ *
+ * **A package next to yours in a workspace must not change your binary.** Two questions of the back end are
+ * *closed-world* - "does any implementation override this default" (`overridesAnyMember`, which decides the member list of
+ * every witness table) and, through it, how many instances the worklist reaches - and a closed world has to be the
+ * **program**. It was the whole `SourceTree` instead, and `readSourceTree` always reads the entire workspace: adding
+ * `examples/encoding-lab`, which overrides defaults of `Iterable` for types of its own, took the instance count of
+ * `source.trb`'s program from 121 declarations to 192 without a line of the program changing.
+ *
+ * The unit is the **package** and not the module, because that is the unit of coherence (gap 29) and of what a project
+ * declares it depends on: an implementation is visible to a program exactly where its package is.
+ */
+fn programPackagesOf(checker: Checker, modules: List<ModuleId>): Map<Int, Bool> {
+  const workspace = checker.program.workspace
+  var found: Map<Int, Bool> = [:]
+  var pending: List<Int> = []
+  for module in modules {
+    const index = checker.program.graph.at(module).package
+    if !found.containsKey(index) {
+      found.set index, true
+      pending.add index
+    }
+  }
+  var at = 0
+  while at < pending.length() {
+    const index = pending[at]
+    at = at + 1
+    if index < 0 || index >= workspace.packages.length() {
+      continue
+    }
+    const manifest = workspace.packages[index].manifest
+    var names = manifest.runtimeDependencies
+    names.addAll manifest.developmentDependencies
+    names.add manifest.prelude
+    for name in names {
+      const other = packageIndexNamed workspace, name
+      if other < 0 || found.containsKey(other) {
+        continue
+      }
+      found.set other, true
+      pending.add other
+    }
+  }
+  found
+}
+
+fn packageIndexNamed(workspace: Workspace, name: String): Int {
+  if name.isEmpty() {
+    return 0 - 1
+  }
+  for index in 0..workspace.packages.length() {
+    if workspace.packages[index].name == name {
+      return index
+    }
+  }
+  0 - 1
+}
+
+/**
+ * The modules that are **program code**. A `project.trb` is not one: it is a manifest, and it is read *statically* by
+ * `compiler/src/project/` - which is why the front end can check it as a receiver script while no back end ever compiles
+ * one. So neither `torb ir` nor `torb build` lowers it, and the property command its receiver applies is not a finding of
+ * the back end any more because **the file is not part of the program**, not because anything was hidden.
+ *
+ * Every other receiver script stays: a file a `Sandbox.load` names is code the program runs, and milestone 7.4 compiles
+ * it like any other body.
+ */
+fn programModules(checker: Checker, modules: List<ModuleId>): List<ModuleId> {
+  var found: List<ModuleId> = []
+  for module in modules {
+    const receiver = checker.program.graph.at(module).receiver
+    if const Some(.ProjectFile) = receiver {
+      continue
+    }
+    found.add module
+  }
+  found
 }
 
 /** What `torb ir` lowers: everything the requested modules declare. */
