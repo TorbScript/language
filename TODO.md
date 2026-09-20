@@ -1607,3 +1607,16 @@ Wenn nicht, was bedeutet, bewirkt es?
     `std/collections` hält Datenstrukturen AUF den Speicherprimitiven; der geplante Heap-Kern `Buffer<Item>` kommt
     aus demselben Grund neben `Array` nach `std/core`. Das Prelude exportiert `Array` weiter, für Programme ändert
     sich nichts. Der Agent der kleinen Runde zieht es mit um.
+
+- (`From`/`Into` und Kohärenz, 2026-09-23) **Anlass (Nutzer):** der Pitfall an `Into` ("implementiere `From`, nie
+  `Into`") ist doof; Wunsch: eines implementieren, das andere geschenkt bekommen, oder beide von Hand.
+  **Antwort:** beides scheitert - zwei gegenseitige Blankets sind zirkulär (jedes Paar wäre "konvertierbar", zur
+  Laufzeit Endlosrekursion), und beide von Hand heißt zwei Wahrheiten für EINE Konvertierung. **Aber dahinter steckte
+  ein echtes Loch:** den EIGENEN Typ in einen FREMDEN konvertieren ging gar nicht (`extend Float64 with
+  From<Celsius>`: weder Typ noch Trait gehört mir; `extend Celsius with Into<Float64>`: kollidiert mit dem Blanket) -
+  der Stand von Rust vor RFC 2451.
+  - **Entschieden (Nutzer: "mach a und b"):** (a) die Besitzregel zählt auch einen als TRAIT-ARGUMENT genannten
+    eigenen Typ (`extend X with Trait<Meins>`); eindeutig bleibt es, weil nur der Besitzer von `Celsius` die Regel
+    darüber erfüllt. (b) Wer einen Trait mit Blanket von Hand implementiert, bekommt eine gezielte Meldung, gebildet
+    aus der `where`-Klausel des Blankets ("`Into` comes from `From` ...: write `extend Float64 with From<Celsius>`");
+    der Pitfall im Docblock entfällt damit. **Wird gelöst:** in der laufenden kleinen Checker-Runde.
