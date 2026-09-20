@@ -1580,3 +1580,10 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Nächstes ("Schwanz 3"):** quotierte Ausdrücke 5.11 (`main.exe test`), 6.3 (Übersetzungseinheit aufteilen,
     Konstanten als unsterbliche gezählte Statics, Instanzzahl), Plan-Nummern aus den Back-End-Meldungen, Doku-Welle
     `ir/`+`backend/`. Danach wie geplant: `std/linear` + `std/geometry`, der Encoding-Umbau, 5.14 Konformität, 7.x VM.
+- (Läuft, 2026-09-23) Drei Opus-Agents und vier Sonnet-Schreiber parallel: **Schwanz 3** (quotierte Ausdrücke 5.11 →
+  `main.exe test`; 6.3: gcc/Übersetzungseinheit, Konstanten, Instanzzahl; zuletzt Plan-Nummern aus den Meldungen),
+  **Konformität 5.14** (Panic-Format und Exit-Code in Stage 0, alle notierten Abweichungen mit je einem
+  Gate-Programm, `language.trb`, der Konformitäts-Runner als benannter Vertrag), **`std/linear` + `std/geometry`**
+  (mit `docs/LINEAR.md`, Trait `Real`, `Fixed` als deterministischer Skalar - ausdrücklich auch als Härtetest: was die
+  Sprache nicht kann, wird mit Reproduktion gemeldet), **Doku-Welle 3** (`ir/`, `ir/lower`, `backend/c`,
+  `examples/encoding-lab`).
