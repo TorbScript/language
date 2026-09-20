@@ -1303,3 +1303,19 @@ Wenn nicht, was bedeutet, bewirkt es?
   Tabellen und Front Matter, Writer mit Round-Trip, HTML-Ausgabe als eigener Schritt. Es ist ein DOKUMENTformat,
   also eigene Traits neben `Encode`/`Decode` (so steht es in CONCEPT), und blockweise streambar über `Source`. Der
   Leser im Compiler wird danach durch das Paket ersetzt.
+
+- (Langer Schwanz, 2026-09-21) **Erledigt, gemergt, Gates grün** (1343 Tests, 0 zurückgestellt, 91 Runtime-Tests, volle
+  `cargo test` im Zweig): Compiler **7693 von 8112 (94 %), 0 interne Fehler** (vorher 93 %, 1). Nicht faltbare
+  Konstanten werden am Leseort gelowert (keine Modul-Initialisierung, nie); `chars`/`bytes`/`String.from`/`slice`
+  sind TorbScript über zwei Natives; Listen-Patterns; `.Fallible`-Natives mit mehreren Out-Parametern - vorher ließ
+  sich KEIN Programm bauen, das eine Datei liest; `Process.run`, `Clock.milliseconds`, `createDirectory`; das
+  Top-Level-`?` druckt `error: ...` und endet mit 1 (`ExitWithCode`); `using` über `shared type` ist jetzt ein
+  sauberer Befund. Sechs neue native Gate-Programme. `torb build ../compiler` kommt bis `main.trb:333` (Spread im
+  Listen-Literal - liegt beim Collection-Kern).
+  - **Entschieden (ich):** Collections sind `Equals` (und `Hash`), wenn ihre Items es sind - Werte vergleichen
+    strukturell, Tupel tun es schon (`extend<Item: Equals> List<Item> with Equals` und Geschwister). Ein
+    `project.trb` ist kein Programmcode: das Back-End lowert es nicht (es wird statisch gelesen).
+  - **Läuft (neuer Opus-Agent "Schwanz 2"):** Natives, die eine Collection liefern/nehmen (`String.split`,
+    `File.list`), Feld-Defaults von Case-Konstruktoren, `Equals` der Collections, Closure über `var self`,
+    `parser.trb:197`, quotierte Ausdrücke 5.11 (für `torb test` nativ), die drei internen Fehler außerhalb des
+    Compilers. Notiert für 5.14: `Char.toUpperCase` ist in der Runtime nur ASCII.
