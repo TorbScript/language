@@ -69,6 +69,11 @@ A parameter of a generic type or function whose argument is a value rather than 
 `String`. There is no arithmetic over one; the checker only compares const arguments for equality. See
 [Arrays and const parameters](language/values-and-types/arrays.md).
 
+### Constructor
+
+The one function that builds a value of a `type`, generated from its fields in declaration order and never
+containing logic. See [Construction](language/types/construction.md).
+
 ### Contextual keyword
 
 A word that reads as an ordinary name after a `.` or as an argument label, and as a keyword everywhere else - today
@@ -100,7 +105,12 @@ fields and cases included, and its text is Markdown with the conventional headin
 ### Exclusivity
 
 The rule that while a `var` access to a path is running, the same path cannot be accessed another way. The access of a
-call begins once all of its arguments have been evaluated.
+call begins once all of its arguments have been evaluated. See [Exclusivity](language/types/exclusivity.md).
+
+### Field
+
+A named piece of storage declared inside a `type`, `const` unless marked `var` and public unless marked `private` or
+`private(var)`. See [Fields](language/types/fields.md).
 
 ### Front matter
 
@@ -136,7 +146,7 @@ there are no unions of types.
 ### Method
 
 A member of a type that declares `self`. Structurally it is a constant of the type that holds a receiver closure, which is
-why a field and a method cannot share a name.
+why a field and a method cannot share a name. See [Methods and static functions](language/types/methods.md).
 
 ### Package
 
@@ -151,7 +161,7 @@ design document and is linked by an index rather than being a page.
 ### Participle
 
 The method that returns a changed copy, next to the [verb](#verb) that changes in place: `added` next to `add`, `sorted`
-next to `sort`.
+next to `sort`. See [Verbs and participles](language/types/verbs-and-participles.md).
 
 ### Pipeline
 
@@ -173,6 +183,11 @@ and `database { ... }` configures the field's value in place.
 The typed tree, source text and captured values an `Expression<Value>` parameter or binding hands over alongside the
 ordinary value. See [Quoted expressions](language/functions/quoted-expressions.md).
 
+### Read-only view
+
+A `const` binding, field or parameter that names a [shared type](#shared-type): the object can still change through
+somebody else's `var` path, but never through this one, and it cannot be widened back into a `var`.
+
 ### Receiver closure
 
 A closure whose first parameter is called `self`, so names inside it resolve against that receiver. It is what a builder,
@@ -187,7 +202,7 @@ A `.trb` file loaded as the body of a [receiver closure](#receiver-closure), typ
 ### Shared type
 
 A type declared `shared type`, which has an identity: assigning it does not copy, and everybody who holds it sees the same
-object. Handles to the outside world are shared types.
+object. Handles to the outside world are shared types. See [Shared types](language/types/shared-types.md).
 
 ### Skill
 
@@ -204,6 +219,11 @@ fence decides how hard. See [The docs commands](contributing/checks.md).
 The Rust interpreter in `bootstrap/` that runs the self-hosted toolchain until it can compile itself. It has no type
 checker and is thrown away afterwards.
 
+### Static function
+
+A function declared on a `type` that does not take `self`, called as `Type.member(...)` rather than through an
+instance. See [Methods and static functions](language/types/methods.md).
+
 ### Trailing closure
 
 A closure argument for a call's last parameter, written as a `{ ... }` after the call instead of inside its
@@ -218,7 +238,8 @@ required method is named after that method. See [Traits](language/traits/traits.
 ### Var path
 
 A path from a binding down to a value through which a change is legal: a `var` binding, `var` parameter or `var self`, then
-`var` fields, indices and ranges all the way. Without one, nothing changes.
+`var` fields, indices and ranges all the way. Without one, nothing changes. See
+[Mutation and var paths](language/types/var-paths.md).
 
 ### Variadic parameter
 
@@ -228,4 +249,4 @@ spreads a collection into it with `...`. See [Variadic parameters](language/func
 ### Verb
 
 A method that changes its receiver in place and declares `var self`, next to its [participle](#participle), which returns
-a changed copy.
+a changed copy. See [Verbs and participles](language/types/verbs-and-participles.md).
