@@ -91,7 +91,7 @@ print isRound(Shape.Circle(1))
 fn describe<Value>(value: Value): String {
   Value.show()
 }
-// error: The checker did not work out the type of this expression
+// error: `Value` has no member `show`
 ```
 
 `Value` is a type parameter: it names a type in `fn describe<Value>`, and a type is never a value to call a member

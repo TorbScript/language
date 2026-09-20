@@ -62,8 +62,8 @@ var <name>: <Type>                    a var path
    }
 
    var count = 0
-   increment(count)
-   increment(count)
+   increment count
+   increment count
    print count
    ```
 
@@ -82,7 +82,7 @@ var <name>: <Type>                    a var path
 
    fn server(configure: (var self: ServerConfig) => Void): ServerConfig {
      var config = ServerConfig()
-     configure(config)
+     configure config
      config
    }
 

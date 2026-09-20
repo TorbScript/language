@@ -71,6 +71,15 @@ shared type <Name> {
    so a `var` binding, field or argument may not be initialized from a `const` path to a shared object.
 
    ```trb error
+   shared type Connection {
+     url: String
+     private(var) sent: Int = 0
+
+     fn send(var self, message: String) {
+       sent = sent + 1
+     }
+   }
+
    fn widen(view: Connection): Connection {
      var writable = view
      writable

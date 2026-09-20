@@ -70,19 +70,21 @@ public use <Name> from "<module>"                   a re-export
 
 4. **`as` gives an import a local name of its own, a case included.** From that line on the local name is the only
    one the file has: it is what shadows an outer name, what a second `use` of the same name collides with, and what
-   a "did you mean" note offers.
+   a "did you mean" note offers, and it is also the name a pattern matches the case with.
 
    ```trb check
    use Option.Some as Present from "std/core"
 
    const value = Present 3
    print value
-   ```
 
-   `CONCEPT.md` says the renamed case also works bare in a pattern (`use Option.None as Nothing from "./option"`,
-   matched as `Nothing =>`); today's checker still requires the original name there
-   (`.Some(_) =>`/`Some(_) =>`, never `Present(_) =>`), which is a gap between the design and the checker rather
-   than a second way to write the pattern.
+   fn describe(value: Int?): String {
+     match value {
+       Present(found) => "there is {found}"
+       _ => "nothing"
+     }
+   }
+   ```
 
 5. **Without `from`, the path is resolved in the file's own scope.** `use Shape.Circle` is what a file that declares
    `Shape` itself writes to bring its own case into scope the same way an importer would.

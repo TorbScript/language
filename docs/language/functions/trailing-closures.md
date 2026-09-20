@@ -95,6 +95,36 @@ print total
 5. **A trailing closure is also the body of the head of `if`, `for`, `while` and `match` when the head is a command
    call**, for the same reason: a command's `{` is read as its body, exactly like the built-in statements.
 
+6. **Naming the implicit parameter is rejected when it would shadow a local that is already visible.** There is no
+   silent shadowing: if a parameter or a binding named `amount` is already in scope, `increase { amount + 1 }` is an
+   error instead of quietly reading the outer `amount`, because nothing in the source would say which one was meant.
+
+   ```trb error
+   fn probe(amount: Int): Int {
+     increase { amount + 1 }
+   }
+
+   fn increase(transform: (amount: Int) => Int): Int {
+     transform 1
+   }
+   // error: The implicit parameter `amount` would shadow `amount`
+   ```
+
+   Naming the closure's parameter something else is the fix, and then the outer `amount` is reachable again inside
+   the closure body.
+
+   ```trb check
+   fn probe(amount: Int): Int {
+     increase { item => item + amount }
+   }
+
+   fn increase(transform: (amount: Int) => Int): Int {
+     transform 1
+   }
+
+   print probe(5)
+   ```
+
 ## What this is not
 
 **A trailing closure is not the closure of an inner call written with parentheses.** Passing a closure to a call

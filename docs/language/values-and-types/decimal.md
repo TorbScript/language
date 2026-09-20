@@ -46,10 +46,8 @@ const price: Decimal = 19.99             a literal, adapted like any other numer
 3. **`Decimal` is `Hash`, unlike `Float32` and `Float64`.** Exact base-ten arithmetic has no `nan` and no `-0.0` to
    complicate equality, so a `Decimal` can be a `Map` key once the type has values to compare.
 
-4. **No back end gives `Decimal` a value.** `std/number`'s own doc comment says a `native` declaration the runtime is
-   missing is meant to be a compile error at the point of use rather than a silent gap or a link error; today the
-   type checker does not yet raise that error; a program that declares a `Decimal` binding type checks and cannot be
-   run to completion by any current back end.
+4. **No back end gives `Decimal` a value.** `Decimal` type-checks like any other numeric type; what is missing is a
+   back end that can run it, not a diagnostic. No compile error is planned for using it.
 
 ## What this is not
 

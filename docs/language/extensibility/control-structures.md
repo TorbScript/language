@@ -56,7 +56,7 @@ fn <name>(..., body: () => <Type>) { ... }     a control structure: a function w
      result
    }
 
-   const total = measured("sum") {
+   const total = measured "sum" {
      1 + 2 + 3
    }
 

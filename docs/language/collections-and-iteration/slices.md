@@ -75,7 +75,7 @@ value[from..to].compact()                gives the slice storage of its own, siz
    }
 
    var samples = [5, 3, 9, 1, 7, 2]
-   fillWithZeros(samples[0..2])
+   fillWithZeros samples[0..2]
    print samples
    ```
 

@@ -137,7 +137,7 @@ $ cargo run --release -q -- run ../compiler check --statistics ..
 ```
 
 Build a native binary, and look at the C first - see [torb build](torb-build.md) for what the back end does not
-lower yet, `print` included:
+lower yet:
 
 ```console
 $ cargo run --release -q -- run ../compiler build ../examples/tour/src/scratch.trb --emit-c --output ../build/dev/scratch

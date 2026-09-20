@@ -98,7 +98,7 @@ fn printAll(source: Source<Int, Never>) {
     print item
   }
 }
-// error: The checker did not work out the type of this expression
+// error: `Source<Int64, Never>` is not `Iterable`, so `for` cannot walk it
 ```
 
 ## Related

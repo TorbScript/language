@@ -62,13 +62,12 @@ print counter.value
    exactly one receiver in scope this way - nesting one receiver closure inside another does not add the outer one
    to what a bare name can mean inside the inner one.
 
-4. **`CONCEPT.md` specifies that naming a receiver closure's parameter is what reaches it from inside a nested
-   receiver closure**, the way `server { s => s.database { url "{s.host}/db" } }` reads `s.host` from inside the
-   nested `database` block. Today's checker rejects this: naming the parameter makes it an ordinary `var` parameter,
-   and a nested closure that reads it captures that `var` parameter, which the checker treats as possibly outliving
-   the call whether or not it actually does.
+4. **Naming a receiver closure's parameter is what reaches it from inside a nested receiver closure**, the way
+   `server { s => s.database { url "{s.host}/db" } }` reads `s.host` from inside the nested `database` block. Naming
+   the parameter makes it an ordinary `var` parameter, and a nested closure that only reads it and runs immediately -
+   never escaping the call it was passed to - does not capture it past that call.
 
-   ```trb error
+   ```trb check
    type DatabaseConfig {
      var url: String = ""
    }
@@ -87,13 +86,33 @@ print counter.value
    const config = server { s =>
      s.database { url "{s.host}/db" }
    }
+
+   print config.database.url
+   ```
+
+5. **A closure that stores the named parameter instead of reading it immediately is still rejected**, because storing
+   it - assigning it into a field, the way `onStart` below keeps a closure for later - is exactly the kind of outliving
+   the call that rule 4's nested closure avoids by running at once.
+
+   ```trb error
+   type ServerConfig {
+     var host: String = "localhost"
+     var onStart: () => Void = {}
+   }
+
+   fn server(configure: (var self: ServerConfig) => Void): ServerConfig {
+     var config = ServerConfig()
+     configure config
+     config
+   }
+
+   const config = server { s =>
+     s.onStart { print s.host }
+   }
    // error: This closure captures the `var` parameter `s` and may outlive the call
    ```
 
-   This is a gap between `CONCEPT.md` and the checker rather than a rule of the language: the design intends the
-   read above to be legal, because the nested closure runs immediately and never escapes the call it was passed to.
-
-5. **A receiver closure is an ordinary closure value, passed as an argument.** The receiver type never declares it,
+6. **A receiver closure is an ordinary closure value, passed as an argument.** The receiver type never declares it,
    so two functions that both take a `(var self: Counter) => Void` can build completely different things out of the
    same receiver - what a receiver closure does is decided by the function it is passed to, not by the receiver type.
 

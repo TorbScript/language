@@ -107,6 +107,19 @@ native type Expression<Value> {
    (a SQL driver binds it as a query parameter), so capturing anything else is a compile error at the capture, naming
    the parameter that required it.
 
+   ```trb error
+   use assert from "std/expression"
+
+   shared type Session {
+     name: String
+   }
+
+   fn check(session: Session) {
+     assert(session.name == "a")
+   }
+   // error: `session` is captured here and `Session` is not `Encode`
+   ```
+
 7. **The tree costs nothing when there is nothing captured, and one small allocation per evaluation when there is.**
    `assert` is in every test, which is why a quotation without captures is free and one with captures is not free but
    still cheap.

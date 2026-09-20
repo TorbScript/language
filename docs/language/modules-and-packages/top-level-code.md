@@ -70,7 +70,16 @@ const <name> = <compile-time expression>    a module's only top-level statement
    expression.** This is the same rule as for any other overflow written in the source: caught where it is written,
    rather than at the moment the module happens to be loaded.
 
-7. **`public const` exports the constant; there is no `public var` at the top level of a module.** A module has no
+7. **A module's top-level `const` binds one name, never a pattern.** `const (quotient, remainder) = divide(7, 2)`
+   destructures inside a function body or the top level of a script, but not here: `` A module's `const` binds one
+   name ``, and, for a `public const`, `` An exported `const` binds one name ``. A name another file imports has to be
+   one thing.
+
+   ```trb skip a module cannot be produced inside one snippet of this documentation, which is always checked as an unimported file; the real diagnostic is: A module's `const` binds one name
+   const (a, b) = (1, 2)
+   ```
+
+8. **`public const` exports the constant; there is no `public var` at the top level of a module.** A module has no
    mutable state, so nothing a top-level `var` could export exists in the first place - see
    [Visibility](visibility.md).
 

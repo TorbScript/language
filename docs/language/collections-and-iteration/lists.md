@@ -90,7 +90,7 @@ print combined
 ```trb error
 const numbers = [1, 2, 3]
 const combined = numbers + [4, 5]
-// error: The checker did not work out the type of this expression
+// error: `List<Int64>` does not implement `Add`, so `a + b` has no meaning for it
 ```
 
 ## Related

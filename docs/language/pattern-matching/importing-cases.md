@@ -73,6 +73,28 @@ public use <Type>.<Case> from "<path>"               re-exported under the same 
 6. **`public use` re-exports what it imports, case included.** `public use Stack.Empty from "./collections/stack"`
    makes `Empty` part of what this file's own importers can see, the same as any other re-exported name.
 
+7. **Renaming a case with `as` works exactly as it does for a type or a function, in an expression and in a
+   pattern.** `use Option.None as Nothing from "std/core"` makes `Nothing` the case's name in this file, everywhere
+   `None` would otherwise be written.
+
+   ```trb check
+   use Option.None as Nothing from "std/core"
+
+   fn empty(): Int? {
+     Nothing
+   }
+
+   fn describe(value: Int?): String {
+     match value {
+       Nothing => "nothing"
+       _ => "something"
+     }
+   }
+
+   print empty()
+   print describe(Nothing)
+   ```
+
 ## What this is not
 
 **Importing a case is not opening the type's namespace.** Importing `Option.Some` does not also make `None` bare, and
@@ -101,22 +123,6 @@ fn describe(value: Int?): String {
 print describe(None)
 // error: `Nome` is not a case in scope
 ```
-
-**Renaming a case with `as` is specified, but the checker does not carry the case identity across the alias yet.**
-CONCEPT.md says `use Option.None as Nothing from "./option"` works for a case exactly as it does for a type or a
-function; today the alias behaves as an ordinary name instead, and using it where a case is expected fails:
-
-```trb error
-use Option.None as Nothing from "std/core"
-
-fn empty(): Int? {
-  Nothing
-}
-print empty()
-// error: The checker did not work out the type of this expression
-```
-
-Until that is fixed, import a case under its own name where it is matched on or constructed.
 
 ## Related
 

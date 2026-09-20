@@ -23,7 +23,7 @@ it panics, and the test runner catches that per test.
 use test, group from "std/test"
 ```
 
-```trb skip the canon checker disagrees with itself on a command call with a positional argument and a multi-line trailing closure: it asks for parentheses in command style and asks to remove them once added (see the report)
+```trb check
 use test from "std/test"
 
 type Vector2 {

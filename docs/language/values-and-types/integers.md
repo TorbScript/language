@@ -70,12 +70,12 @@ Type.minimum  Type.maximum                the smallest and largest value of a ty
    ```trb error
    const whole: Int64 = 5
    const asFloat: Float = whole
-   // error: There are no implicit conversions
+   // error: Expected `Float64`, found `Int64`
    ```
 
    ```trb check
    const whole: Int64 = 5
-   const asFloat = Float.from(whole)
+   const asFloat = Float.from whole
    print asFloat
    ```
 
@@ -85,7 +85,7 @@ Type.minimum  Type.maximum                the smallest and largest value of a ty
 
    ```trb check
    const big: Int64 = 300
-   const narrowed = Int8.tryFrom(big)
+   const narrowed = Int8.tryFrom big
    match narrowed {
      Ok(value) => print value
      Fail(problem) => print problem
@@ -99,7 +99,7 @@ Type.minimum  Type.maximum                the smallest and largest value of a ty
    ```trb check
    const flags: UInt8 = 0xFF
    const masked = flags.bitwiseAnd 0x0F
-   const shifted = flags.shiftedLeft(by: 2)
+   const shifted = flags.shiftedLeft by: 2
    print "{masked} {shifted}"
    ```
 

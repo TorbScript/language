@@ -52,7 +52,8 @@ the part of the language the native back end already covers.
 
 6. **When it refuses, check what fraction of the program the back end can lower**, with `torb ir --statistics` on the
    same path. It answers a count and, below it, one line per reason, so a program that will not build says why before
-   `torb build` itself does.
+   `torb build` itself does. Run it rather than trust a number written down here - the count moves as the back end
+   grows.
 
    ```console
    $ cargo run --release -q -- run ../compiler ir --statistics ../examples/tour
@@ -61,18 +62,17 @@ the part of the language the native back end already covers.
 
 ## Pitfalls
 
-- **A variadic call is not lowered yet, and `print` is variadic.** A program that calls `print` or `printError`
-  refuses to build with exactly this diagnostic:
-
-  ```text
-  error: not supported by the back end yet: a variadic argument list (at my-project/src/main.trb:5:1)
-  ```
-
-  Until the back end lowers variadic calls, a program built this way reports through its exit code (`Process.exit`)
-  or through `std/fs` instead of `print`.
-- **String interpolation, `for` over anything but a range of integers, and a handful of other constructs are the same
-  kind of gap** - `torb build` reports each one as "not supported by the back end yet" with the construct named, and
-  refuses to build rather than emit something that does not do what the program says.
+- **`print`, `printError` and string interpolation build.** Both were the two most common reasons a program refused
+  to build; a program that only prints and interpolates strings is no longer a reason to reach for `--emit-c` just to
+  read the generated code.
+- **A `for` over a range that is not a literal at that line does not lower yet**, because `Range.iterator` is not
+  built into the back end: `for value in 0..n { ... }` builds, `for value in someRange { ... }` where `someRange` is
+  a `Range<Int>` value does not, with `` not supported by the back end yet: `Range.iterator` `` naming it.
+- **A handful of other constructs are the same kind of gap** - a variadic parameter of a function you declare
+  (`print`'s own variadic call is a back-end intrinsic and is not affected), map and set iteration, a write through
+  `a[key]`, a list pattern, `Array<Item, Size>`, a slice used as a window, a `shared type` object, `using`, a task or
+  a stream, and a quoted expression. `torb build` reports each one as "not supported by the back end yet" with the
+  construct named, and refuses to build rather than emit something that does not do what the program says.
 - **A refusal is not a bug in the program.** The message names what the back end cannot lower, not what is wrong with
   the code; the same program type checks and runs correctly under other backends, so `torb check` staying green is
   what tells the two apart.
@@ -82,17 +82,23 @@ the part of the language the native back end already covers.
 
 ## Full example
 
-A program built entirely from arithmetic and `Process.exit` stays inside what the back end lowers today, so it is the
-one shape of program this page can promise actually builds, not only type checks.
+A program that prints, interpolates strings, and loops over a literal range builds today.
 
 ```trb check
-use Process from "std/process"
-
-fn checksum(a: Int, b: Int): Int {
-  (a * 31 + b) % 256
+fn greeting(name: String): String {
+  "hello {name}"
 }
 
-Process.exit checksum(2, 3)
+fn sumTo(n: Int): Int {
+  var total = 0
+  for value in 0..n {
+    total = total + value
+  }
+  total
+}
+
+print greeting("world")
+print sumTo(5)
 ```
 
 ## Related

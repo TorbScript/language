@@ -66,9 +66,19 @@ value.copy(<field>: <value>, ...)
    // error: `Button` has no member `equals`
    ```
 
-   Today's checker still lets `a == b` type-check for a `Button`: the `==` operator always produces a `Bool`, whatever
-   the operand implements, and only the direct method call is checked against what was actually generated. That is a
-   gap between the design and the checker rather than a second way to compare a `Button`.
+   `a == b` is rejected too, for the same reason: `==` asks for `Equals` like any other operator asks for its trait.
+
+   ```trb error
+   type Button {
+     label: String
+     onClick: () => Void
+   }
+
+   const a = Button label: "OK", onClick: { print "clicked" }
+   const b = Button label: "OK", onClick: { print "clicked" }
+   print(a == b)
+   // error: `Button` does not implement `Equals`, so `a == b` has no meaning for it
+   ```
 
 3. **`copy` has the shape of the constructor, with every field optional.** `a.copy(y: 5)` answers a new value with `y`
    changed and every other field kept; a `private` field cannot be passed to `copy` from outside, for the same reason

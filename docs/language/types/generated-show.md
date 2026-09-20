@@ -70,7 +70,7 @@ value.show(): String
    itself with nothing added around it.
 
    ```trb
-   print("Ada")               // Ada
+   print "Ada"                // Ada
    print(["Ada", "Grace"])    // ["Ada", "Grace"]
    ```
 
@@ -78,9 +78,7 @@ value.show(): String
    and a pattern for it read the same way.
 
 6. **A `Float` always carries a decimal point or an exponent.** `1.0` shows as `1.0`, never `1`, so a reader can tell a
-   `Float` from an `Int` on sight. `-0.0` keeps its sign. Today's interpreter prints a division by zero as `inf`,
-   `-inf` or `NaN`; `CONCEPT.md` specifies the third one lowercase (`nan`), which is a drift between the design and
-   the running compiler rather than something this page can paper over.
+   `Float` from an `Int` on sight. `-0.0` keeps its sign, and a division by zero shows as `inf`, `-inf` or `nan`.
 
 ## What this is not
 

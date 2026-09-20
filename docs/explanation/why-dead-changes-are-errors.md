@@ -19,7 +19,8 @@ the compiler refuses to accept.
 
 ## The decision
 
-**A change that cannot have an effect is a compile error.** Two shapes of it are caught:
+**A change that cannot have an effect is a compile error, at the top level of a script exactly as inside a
+function.** Two shapes of it are caught:
 
 - A `var` binding that is changed and never read afterwards.
 - The discarded result of a method that takes `self` and returns a value - the call ran for its result, and nothing

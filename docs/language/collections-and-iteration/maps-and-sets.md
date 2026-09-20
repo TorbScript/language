@@ -62,7 +62,7 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
    ```trb check
    const first: Map<String, Int> = ["a": 1, "b": 2]
    const second: Map<String, Int> = ["b": 2, "a": 1]
-   print first == second
+   print(first == second)
    ```
 
 4. **The traits ask nothing of `Key` or `Item`; only a factory or an implementation that hashes it does.** `Map.of`,
@@ -76,11 +76,11 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
 
    ```trb check
    const ages: Map<String, Int> = ["Ada": 36]
-   const older = ages.updated("Ada", 37)
+   const older = ages.updated "Ada", 37
    print older
 
-   const primes = Set.of(2, 3, 5, 7)
-   const evenPrimes = primes.intersection(Set.of(2, 4, 6))
+   const primes = Set.of 2, 3, 5, 7
+   const evenPrimes = primes.intersection Set.of(2, 4, 6)
    print evenPrimes
    ```
 

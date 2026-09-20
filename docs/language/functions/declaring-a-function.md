@@ -71,27 +71,27 @@ fn <name>[<type parameters>](<parameters>) [: <ReturnType>] {
    public fn double(x: Int) {
      x * 2
    }
-   // error: A public declaration needs an explicit type
+   // error: A `public` function does not infer its result: declare it (`: Int64`)
    ```
 
 4. **The last expression of the body is the result, and `return` leaves early with a value.** A function whose body
    ends in a statement rather than an expression answers `void`, the one value of `Void`.
 
-5. **`fn` declarations are hoisted to the top of their scope.** A function may call another one declared later in the
-   same file, or in the same block, which is what makes mutual recursion possible without a forward declaration.
+5. **A top-level `fn` is hoisted to the top of its file.** A function may call another one declared later in the same
+   file, which is what makes mutual recursion possible there without a forward declaration. A local `fn`, nested
+   inside another function, is not hoisted this way: it sees only its own parameters and the top level of its file
+   (see [What this is not](#what-this-is-not)), not a sibling local `fn` declared next to it.
 
    ```trb check
-   fn outer(n: Int): Bool {
-     fn isOdd(k: Int): Bool {
-       if k == 0 { false } else { isEven(k - 1) }
-     }
-     fn isEven(k: Int): Bool {
-       if k == 0 { true } else { isOdd(k - 1) }
-     }
-     isOdd(n)
+   fn ping(n: Int): Int {
+     if n <= 0 { 0 } else { pong(n - 1) }
    }
 
-   print outer(7)
+   fn pong(n: Int): Int {
+     if n <= 0 { 0 } else { ping(n - 1) }
+   }
+
+   print ping(4)
    ```
 
 ## What this is not

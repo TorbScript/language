@@ -43,24 +43,25 @@ Only what the entry file reaches is emitted - a function nothing calls from `mai
 
 ### What the back end does not lower yet
 
-The native back end covers about 60% of the language's declarations today; everything else is a **finding**, not a
-miscompilation - `build` reports it and refuses, the same way it reports a type error. A variadic parameter is one of
-the constructs still missing, which is why even `print`, whose one parameter is `...values: Show`, cannot be built
-yet:
+Not every declaration `torb check` accepts lowers to C yet; `torb ir --statistics` on the same path answers what
+fraction does, as a count rather than a number written here that would only go stale. What is still missing is a
+**finding**, not a miscompilation - `build` reports it and refuses, the same way it reports a type error. A variadic
+parameter of a function you declare is one of the constructs still missing (`print`'s own variadic call is a
+back-end intrinsic and builds regardless):
 
 ```console
 $ cd bootstrap
-$ cargo run --release -q -- run ../compiler build ../examples/tour/src/scratch.trb --emit-c --output ../build/dev/scratch
-error: not supported by the back end yet: a variadic argument list (at torbscript/example-tour/src/scratch.trb:1:1)
+$ cargo run --release -q -- run ../compiler build ../my-project
+error: not supported by the back end yet: a variadic argument list (at my-project/src/main.trb:5:7)
 1 problems the back end cannot compile yet, nothing was built
 ```
 
-A program that only uses what the back end already lowers - functions, types, control flow, arithmetic, `Process.exit`
-- builds and runs like any other native binary:
+A program that only uses what the back end already lowers - functions, types, control flow, arithmetic, `print`,
+string interpolation, `Process.exit` - builds and runs like any other native binary:
 
 ```console
-$ cargo run --release -q -- run ../compiler build ../examples/tour/src/scratch.trb --output ../build/dev/scratch
-wrote ../build/dev/scratch.exe
+$ cargo run --release -q -- run ../compiler build ../my-project --output ../build/dev/my-project
+wrote ../build/dev/my-project.exe
 ```
 
 ### `--emit-c`

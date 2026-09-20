@@ -84,12 +84,13 @@ A call or a construction that writes the arguments out uses the same angle brack
    print([3, 1, 2].largest())
    ```
 
-4. **A `type` or `trait` parameter can have a default; a `fn` parameter cannot use one.**
+4. **A `type` or `trait` parameter can have a default; a `fn` parameter cannot declare one at all.**
    `trait Add<Other = Self, Output = Self>` means `with Add` is `Add<Self, Self>`, and nobody writes it out. A `fn`'s
-   type arguments always come from the call, so a default written on one is never consulted:
+   type arguments always come from the call, so a default on one would never be consulted, and the checker rejects the
+   declaration itself:
 
    ```trb check
-   fn empty<Item = String>(): List<Item> {
+   fn empty<Item>(): List<Item> {
      []
    }
 
@@ -101,14 +102,9 @@ A call or a construction that writes the arguments out uses the same angle brack
      []
    }
 
-   const y = empty()
-   print y
-   // error: Cannot infer `Item` of `empty`
+   const y: List<Bool> = empty()
+   // error: A type parameter of a `fn` has no default
    ```
-
-   `Item = String` parses on `empty`, but nothing ever reads it: the call above still needs `empty<String>()` or an
-   expected type to fall back on. CONCEPT.md says a `fn` "has no defaults"; today the compiler accepts the syntax and
-   silently ignores it rather than rejecting it.
 
 5. **`Self` is never declared as a type parameter.** Inside a `trait` or a `type`, `Self` already names the
    implementing type; a trait can use it as an ordinary type, including as an argument to another trait

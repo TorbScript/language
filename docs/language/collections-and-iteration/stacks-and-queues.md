@@ -90,7 +90,7 @@ print stack.toList()
 ```trb error
 const stack = Stack.of 1, 2, 3
 print stack[0]
-// error: The checker did not work out the type of this expression
+// error: `Stack<Int64>` does not implement `Indexed`, so `a[key]` has no meaning for it
 ```
 
 ## Related

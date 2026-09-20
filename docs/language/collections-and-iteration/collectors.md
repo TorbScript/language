@@ -73,7 +73,7 @@ source.collect(collector)
    ```trb check
    fn median<Item>(value: (value: Item) => Int): Collector<Item, Int?> {
      collector([], finish: { values: List<Int> => values.sorted { it => it }.skip(values.length() / 2).first() }) {
-       values, item => values.added(value(item))
+       values, item => values.added value(item)
      }
    }
 
@@ -93,11 +93,11 @@ source.collect(collector)
      fn add(var self, value: Item) {
        min = match min {
          Some(current) if current <= value => min
-         _ => Some(value)
+         _ => Some value
        }
        max = match max {
          Some(current) if current >= value => max
-         _ => Some(value)
+         _ => Some value
        }
      }
 
@@ -112,7 +112,7 @@ source.collect(collector)
      }
    }
 
-   print [5, 3, 9, 1].collect(ExtremesCollector<Int>())
+   print([5, 3, 9, 1].collect(ExtremesCollector<Int>()))
    ```
 
 ## What this is not

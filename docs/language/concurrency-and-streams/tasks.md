@@ -46,15 +46,18 @@ Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
 ## Rules
 
 1. **There is no `async` keyword.** A function's result type, `Task<Value>`, is the only marker that it may wait; a
-   caller sees that from the signature alone, the same way it sees that a function may fail from `Result`.
+   caller sees that from the signature alone, the same way it sees that a function may fail from `Result`. The body of
+   such a function produces `Value` directly, never `Task<Value>`: `fn asNumber(value: Int): Task<Int> { value }` is
+   the whole function, and the caller gets the `Task` from calling it, not from the body wrapping one.
 
 2. **A task starts running as soon as it is created**, whether that is `spawn { ... }` or a call to a function that
    returns a `Task`. `await()` does not start anything; it only waits for a result that is already on its way.
 
-3. **`await()` is specified to belong only in a function that returns a `Task`, in a closure passed to `spawn`, and
-   at the top level of an entry file or a script**, because a function that waits should say so in its own return
-   type - the same reasoning `?` follows for `Result`. Today's checker does not yet reject `await()` anywhere else;
-   see below.
+3. **`await()` belongs only in a function that returns a `Task`, in a closure passed directly to `spawn`, and at the
+   top level of an entry file or a script**, because a function that waits should say so in its own return type - the
+   same reasoning `?` follows for `Result`. The checker rejects it everywhere else: `` `await()` is only allowed in a
+   function that returns a `Task` ``. A closure of another shape that a library spawns on your behalf is not tracked
+   back to that task, so `await()` inside such a closure is still accepted; see below.
 
 4. **`spawn` gets a copy of everything its closure captures, and cannot capture a `var` binding.** Values are passed
    freely between tasks because a task never shares storage with the scope it was spawned from; only `Task` and
@@ -66,7 +69,7 @@ Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
 
    ```trb check
    fn asNumber(value: Int): Task<Int> {
-     spawn { value }
+     value
    }
 
    const (first, second) = all(asNumber(1), asNumber(2)).await()
@@ -79,9 +82,8 @@ Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
 
 ## What this is not
 
-**`await()` is not restricted to a `Task`-returning function by today's checker, even though the specification says
-it should be.** `CONCEPT.md` names exactly three places `await()` is allowed; a function that answers a plain `Int`
-and calls `await()` anyway is meant to be rejected, and is accepted instead.
+**`await()` is not legal in a function that does not return a `Task`.** `CONCEPT.md` names exactly three places
+`await()` is allowed; a function that answers a plain `Int` and calls `await()` anyway is rejected.
 
 ```trb check
 fn double(value: Int): Task<Int> {
@@ -91,9 +93,27 @@ fn double(value: Int): Task<Int> {
 print double(21).await()
 ```
 
-```trb skip the checker does not yet reject `await()` outside a Task-returning function, a spawn closure or a top-level script; see rule 3 above
+```trb error
 fn sum(a: Int, b: Int): Int {
   spawn { a }.await()
+}
+// error: `await()` is only allowed in a function that returns a `Task`
+```
+
+**A closure of another shape that a library spawns on your behalf is not tracked back to that task, so `await()`
+inside it is still accepted (TYPECHECKER gap 58).** `Source.produce`'s `body` parameter has type `(var sink:
+Sink<Item, Failure>) => Result<Void, Failure>` - not a function that returns a `Task`, and not the literal closure
+`spawn` is called with either, because `produce` wraps it in one of its own first. No signature can say "this closure
+runs inside a task later" yet, so the checker has nothing to check.
+
+```trb check
+use Source, Sink from "std/stream"
+
+fn ints(): Source<Int, Never> {
+  Source<Int, Never>.produce { sink =>
+    sink.add(1).await()?
+    Ok void
+  }
 }
 ```
 
