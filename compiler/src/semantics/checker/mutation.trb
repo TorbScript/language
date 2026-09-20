@@ -130,7 +130,17 @@ fn useRootOf(root: PlaceRoot): UseRoot? {
 fn isCountedRoot(var checker: Checker, root: UseRoot): Bool {
   match root {
     .Local(binding) => isCounted checker, binding
-    .Declared(symbol) => isCountedDeclaration checker, symbol
+    /**
+     * A change to a top-level `var` is only counted in the statements of its own file. Inside a function there is no
+     * "after it" to look at, and the statements that read it need not have been checked yet - a function is checked
+     * where it is declared, which may be above every line that reads what it wrote (gap 52).
+     */
+    .Declared(symbol) => {
+      if !checker.isTopLevel {
+        return false
+      }
+      isCountedDeclaration checker, symbol
+    }
   }
 }
 

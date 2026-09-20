@@ -2,14 +2,17 @@ use test, group from "std/test"
 use probe, problems, notes from "./harness"
 
 /**
- * Dead changes (design 5.3, rule 1): a change to a local `var` binding that nothing reads afterwards. With value
- * semantics that is always a mistake, and the classic one is the copy trap - a value taken out of a collection, changed,
- * and thrown away.
+ * Dead changes (design 5.3, rule 1): a change to a `var` value that nothing reads afterwards. With value semantics that
+ * is always a mistake, and the classic one is the copy trap - a value taken out of a collection, changed, and thrown
+ * away.
  *
  * The rule is flow-sensitive and simple: the reads and changes of one body in source order, plus one pass per loop that
  * marks a change the next round reads again as alive. There is no fixpoint beyond that. Exempt are a `var` parameter,
  * `var self`, the names an `if var` binds into its subject - all three write into a place of the caller - and a binding a
  * closure captures, which is a shared box whose read may be anywhere (gap 19).
+ *
+ * A **top-level `var`** is counted too, and it is the one value whose body is not the whole story: a function of the
+ * module reads the same declaration (gap 52).
  */
 const counter = "type Counter \{\n  var count: Int = 0\n\n"
   + "  fn increment(var self) \{\n    count = count + 1\n  \}\n\}\n\n"
@@ -133,6 +136,14 @@ group "Top-level `var` bindings" {
   test "a method of a type of the module reads it" {
     const source = "type Report \{\n  fn show(self) \{\n    print total\n  \}\n\}\n\nvar total = 0\ntotal = 1\n"
     assert problems(source).isEmpty()
+  }
+
+  test "a function that changes it says nothing, because a function has no `after it`" {
+    // `bump` is checked where it is declared, which is above every statement that could read what it wrote
+    const source = "var total = 0\n\nfn bump() \{\n  total = 1\n\}\n\nbump()\nprint total\n"
+    assert problems(source).isEmpty()
+    const alone = "var total = 0\n\nfn bump() \{\n  total = 1\n\}\n\nbump()\n"
+    assert problems(alone).isEmpty()
   }
 
   test "a top-level `const` is never changed, so it is never one" {
