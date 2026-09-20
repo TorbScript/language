@@ -38,6 +38,11 @@ grammar allows it. `torb canon` writes it and `torb canon --check` reports what 
 A variant of a `type`, declared with `case`. Never called a variant or an enum case. See
 [Cases and match](language/pattern-matching/cases-and-match.md).
 
+### Closure
+
+The one closure form, `{ ... }` in expression position, which captures a `const` binding as a copy and a `var`
+binding as a shared box. See [Closures](language/functions/closures.md).
+
 ### Coercion
 
 One of the four implicit conversions the language has, all of which apply only where a type is expected: a value to a
@@ -102,10 +107,26 @@ call begins once all of its arguments have been evaluated.
 The block between the two `---` lines at the top of a documentation page, in a written subset of YAML. See
 [The front matter](contributing/front-matter.md).
 
+### Hoisting
+
+A `fn` declaration is visible everywhere in its scope, including above the line it is written on, so two functions
+can call each other without a forward declaration. See
+[Declaring a function](language/functions/declaring-a-function.md).
+
 ### Kind
 
 What a documentation page is: `index`, `guide`, `reference`, `how-to`, `explanation`, `contrast`, `tooling`, `package` or
 `glossary`. The kind decides the required sections.
+
+### Label
+
+The name of a parameter, written before `:` in a call to fill it out of position. Every positional argument of a call
+comes before every labelled one. See [Arguments and labels](language/functions/arguments.md).
+
+### Lazy parameter
+
+A parameter written `lazy Type`, whose argument is evaluated at most once, the first time the parameter is read, and
+not at all if the parameter is never read. See [Parameter modes](language/functions/parameter-modes.md).
 
 ### Literal type
 
@@ -147,6 +168,11 @@ standard library; what a program can touch stays an explicit import.
 A [command call](#command-call) on a field, which writes the field rather than calling it. `port 8080` is `port = 8080`,
 and `database { ... }` configures the field's value in place.
 
+### Quotation
+
+The typed tree, source text and captured values an `Expression<Value>` parameter or binding hands over alongside the
+ordinary value. See [Quoted expressions](language/functions/quoted-expressions.md).
+
 ### Receiver closure
 
 A closure whose first parameter is called `self`, so names inside it resolve against that receiver. It is what a builder,
@@ -178,6 +204,12 @@ fence decides how hard. See [The docs commands](contributing/checks.md).
 The Rust interpreter in `bootstrap/` that runs the self-hosted toolchain until it can compile itself. It has no type
 checker and is thrown away afterwards.
 
+### Trailing closure
+
+A closure argument for a call's last parameter, written as a `{ ... }` after the call instead of inside its
+parentheses; it always belongs to the outermost command call of the statement. See
+[Trailing closures](language/functions/trailing-closures.md).
+
 ### Trait
 
 A list of members a type provides, given with `with` at the declaration or with `extend` afterwards. A trait with one
@@ -187,6 +219,11 @@ required method is named after that method. See [Traits](language/traits/traits.
 
 A path from a binding down to a value through which a change is legal: a `var` binding, `var` parameter or `var self`, then
 `var` fields, indices and ranges all the way. Without one, nothing changes.
+
+### Variadic parameter
+
+A parameter written `...name: Type`, which collects every remaining positional argument into a `List<Type>`; a caller
+spreads a collection into it with `...`. See [Variadic parameters](language/functions/variadics.md).
 
 ### Verb
 

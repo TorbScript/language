@@ -32,6 +32,7 @@ Where the compiler and [`CONCEPT.md`](../../CONCEPT.md) disagree, the compiler i
 - **[Syntax](syntax/index.md)** - How TorbScript is written: where a statement ends, how a call is spelled, and what a literal looks like.
 - **[Values and types](values-and-types/index.md)** - Bindings, the built-in types, and the type forms that are about values rather than about behaviour.
 - **[Types](types/index.md)** - Declaring a type, its fields, its methods, what is generated for it, and how one is changed.
+- **[Functions](functions/index.md)** - Declaring a function, its arguments and defaults, variadic parameters, closures, trailing closures, parameter modes and quoted expressions.
 - **[Traits](traits/index.md)** - How a capability is declared, how a type comes with one, and how a trait is used as a type.
 - **[Cases and pattern matching](pattern-matching/index.md)** - How a type with cases is declared, and every place a pattern can stand.
 - **[Errors](errors/index.md)** - How a function says it can fail, how a caller handles it, and what a panic is for.
