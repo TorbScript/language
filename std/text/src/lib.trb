@@ -1,21 +1,38 @@
 /**
- * UTF-8 text and the Unicode scalar value it is made of. `Bool` used to live here and is `std/core`'s: it is a
- * primitive of the language, not a thing about text.
+ * UTF-8 text and the Unicode scalar value it is made of: [Char], one Unicode scalar value, and [String], a sequence
+ * of them stored as UTF-8. `Bool` belongs to `std/core`, not here - it is a primitive of the language, not a fact
+ * about text.
  */
 
 use Equals, Compare, Hash, Show, From, TryFrom, Add from "std/core"
 use Int64, NumberRangeError from "std/number"
 use Iterable, Length from "std/iteration"
 
-/** A Unicode scalar value. */
+/**
+ * A Unicode scalar value: one character, decoded from UTF-8.
+ *
+ * # Examples
+ *
+ *     const letter = 'A'
+ *     print letter.toLowerCase()
+ *
+ * # Related
+ *
+ * - [String] - text made of many of them.
+ */
 public native type Char with Equals, Compare, Hash, Show {
+  /** Whether the character is a decimal digit (`0`-`9` and their Unicode equivalents). */
   native fn isDigit(self): Bool
+  /** Whether the character is a letter, in any script. */
   native fn isLetter(self): Bool
+  /** Whether the character is whitespace: space, tab, newline and their Unicode equivalents. */
   native fn isWhitespace(self): Bool
 
   /** The number of bytes of the character in UTF-8 (1 to 4): what it adds to an offset into a `String`. */
   native fn byteLength(self): Int
+  /** The same character in upper case, or itself where the script has no case. */
   native fn toUpperCase(self): Char
+  /** The same character in lower case, or itself where the script has no case. */
   native fn toLowerCase(self): Char
 
   /** `'A'`: inside of another value a character is written in single quotes, with escapes. */
@@ -29,6 +46,17 @@ public native type Char with Equals, Compare, Hash, Show {
  * **A `String` is always valid UTF-8.** The only ways in are literals, slices at character boundaries,
  * `String.from(Iterable<Char>)` and runtime functions that validate - so reading a file whose bytes are not UTF-8 is
  * an `IoError`, and there is no replacement character anywhere in the language.
+ *
+ * # Examples
+ *
+ *     const greeting = "Hello, World!"
+ *     print greeting.toUpperCase()
+ *     print greeting.split(", ")
+ *
+ * # Related
+ *
+ * - [Char] - one Unicode scalar value of the text.
+ * - [Show] - `show()` is the text unquoted, `showNested()` is quoted with escapes.
  */
 public native type String
   with Equals, Compare, Hash, Show, Add, Slice, From<Iterable<Char>>
@@ -68,7 +96,9 @@ public native type String
   /** The byte at this offset, or `None` at and past the end. A byte is never inside anything, so this never panics. */
   native fn byteAt(self, offset: Int): UInt8?
 
+  /** How many bytes the text takes up in UTF-8. There is no shortcut for the number of characters: that means decoding. */
   native fn byteLength(self): Int
+  /** Whether the text has no bytes at all. [String.isBlank] also treats pure whitespace as empty. */
   native fn isEmpty(self): Bool
 
   /** `"a\nb"`: inside of another value a string is quoted, with escapes. `show()` is the text itself. */
@@ -93,31 +123,44 @@ public native type String
   /** The bytes from one offset to another. The one form the runtime has, and what `slice` decides its offsets for. */
   native fn sliceBytes(self, from: Int, to: Int): String
 
+  /** Whether `part` occurs anywhere in the text. */
   native fn contains(self, part: String): Bool
+  /** Whether the text begins with `prefix`. */
   native fn startsWith(self, prefix: String): Bool
+  /** Whether the text ends with `suffix`. */
   native fn endsWith(self, suffix: String): Bool
+  /** The byte offset of the first occurrence of `part`, or `None` if it does not occur. */
   native fn indexOf(self, part: String): Int?
 
-
+  /** Everything before the first occurrence of `part`, or `None` if it does not occur. */
   fn substringBefore(self, part: String): String? {
     indexOf(part).map { self[0.._] }
   }
 
+  /** Everything after the first occurrence of `part`, or `None` if it does not occur. */
   fn substringAfter(self, part: String): String? {
     indexOf(part).map { self[(_ + part.byteLength())..] }
   }
 
+  /** The text with leading and trailing whitespace removed. */
   native fn trim(self): String
+  /** The text in upper case. */
   native fn toUpperCase(self): String
+  /** The text in lower case. */
   native fn toLowerCase(self): String
+  /** Every occurrence of `part`, replaced with `replacement`. */
   native fn replace(self, part: String, replacement: String): String
+  /** The text cut apart at every occurrence of `separator`, which is dropped. */
   native fn split(self, separator: String): List<String>
+  /** The text, written after itself `times` times: `"ab".repeat(3)` is `"ababab"`. */
   native fn repeat(self, times: Int): String
 
+  /** Whether the text is empty or holds nothing but whitespace. */
   fn isBlank(self): Bool {
     trim().isEmpty()
   }
 
+  /** The text cut apart at every `\n`. */
   fn lines(self): List<String> {
     split "\n"
   }

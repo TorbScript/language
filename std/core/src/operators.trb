@@ -1,15 +1,30 @@
-/** `a + b` */
+/**
+ * `Add`, `Subtract`, `Multiply`, `Divide`, `Remainder` and `Negate`, the traits the arithmetic operators go through,
+ * plus `OrElse` for `??` and `Indexed`/`MutableIndexed`/`Slice`/`MutableSlice` for `a[i]` and `a[from..to]`. Each type
+ * parameter list has defaults, which is why `with Add` alone means `Add<Self, Self>`.
+ */
+
+/**
+ * `a + b`
+ *
+ * # Examples
+ *
+ *     print(1 + 2)
+ */
 public trait Add<Other = Self, Output = Self> {
+  /** The sum of the two values. This is `+`. */
   fn add(self, other: Other): Output
 }
 
 /** `a - b` */
 public trait Subtract<Other = Self, Output = Self> {
+  /** The difference of the two values. This is `-`. */
   fn subtract(self, other: Other): Output
 }
 
 /** `a * b` */
 public trait Multiply<Other = Self, Output = Self> {
+  /** The product of the two values. This is `*`. */
   fn multiply(self, other: Other): Output
 }
 
@@ -20,6 +35,7 @@ public trait Multiply<Other = Self, Output = Self> {
  * the smallest value of a signed type divided by `-1` - an overflow like any other.
  */
 public trait Divide<Other = Self, Output = Self> {
+  /** The quotient of the two values. This is `/`. */
   fn divide(self, other: Other): Output
 }
 
@@ -30,11 +46,13 @@ public trait Divide<Other = Self, Output = Self> {
  * `(a / b) * b + a % b`. A remainder by zero panics.
  */
 public trait Remainder<Other = Self, Output = Self> {
+  /** What is left of `self` after dividing out as many `other` as fit. This is `%`. */
   fn remainder(self, other: Other): Output
 }
 
 /** `-a` */
 public trait Negate {
+  /** The value with its sign flipped. This is unary `-`. */
   fn negate(self): Self
 }
 
@@ -46,11 +64,13 @@ public trait Negate {
  * where the value is missing.
  */
 public trait OrElse<Value> {
+  /** The value, or the fallback where there is none. This is `??`. */
   fn orElse(self, fallback: lazy Value): Value
 }
 
 /** `a[key]` */
 public trait Indexed<Key, Value> {
+  /** The value at the key, or `None` if there is none. This is what `get` on a `Map` or a `List` calls. */
   fn get(self, key: Key): Value?
 
   /** `a[key]` panics if the key does not exist. Use `get` if absence is expected. */
@@ -64,19 +84,27 @@ public trait Indexed<Key, Value> {
  * take the element out, change it and put it back (without a copy).
  */
 public trait MutableIndexed<Key, Value> with Indexed<Key, Value> {
+  /** Puts the value at the key, replacing whatever was there. This is `a[key] = value`. */
   fn set(var self, key: Key, value: Value)
 }
 
 /** `a[from..to]`. The slice shares the storage and starts at index 0 again. */
 public trait Slice {
+  /** The part of the value the range covers. This is `a[from..to]`. */
   fn slice(self, range: Range<Int>): Self
 }
 
 /**
  * `a[from..to] = values`. It also makes `a[from..to]` a `var` path, which is what other languages need a
  * mutable span for: `samples[0..100].sort()` and `fill(samples[0..100])` work on this part in place.
+ *
+ * # Open
+ *
+ * Whether `values` may be a different length than the range it overwrites - growing or shrinking the receiver - is
+ * not decided by the trait. It is up to whatever implements it, and callers should check that type's own signature.
  */
 public trait MutableSlice with Slice {
+  /** Overwrites the part of the value the range covers with `values`. This is `a[from..to] = values`. */
   fn replace(var self, range: Range<Int>, values: Self)
 
   /**

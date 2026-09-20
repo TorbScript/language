@@ -1,3 +1,8 @@
+/**
+ * [Range], the two ends of `0..10`, `0..=10`, `0..` and `..10`, and what it takes to walk one: [RangeIterator] for a
+ * range of integers, which is the one kind of range that is also a sequence.
+ */
+
 use Equals, Compare, Hash from "./compare"
 use Show from "./convert"
 use Iterator, Iterable, Length from "std/iteration"
@@ -9,6 +14,17 @@ use Iterator, Iterable, Length from "std/iteration"
  *
  * Both ends are optional, because a range may be open on either side. What an open end means is decided by the
  * receiver: for a slice it is the start or the end of the value, for `for` it is a source without an end.
+ *
+ * # Examples
+ *
+ *     const bounded = 0..10
+ *     print bounded.contains(5)
+ *     const inclusive = 0..=10
+ *     print inclusive.contains(10)
+ *
+ * # Related
+ *
+ * - [RangeIterator] - what `for x in 0..10` pulls through.
  */
 public native type Range<Value> with Equals, Hash {
   /** `None` for a range that is open at the start: `..10` */
@@ -18,6 +34,7 @@ public native type Range<Value> with Equals, Hash {
   /** `0..=10` contains its end, `0..10` does not. An adjective, because it is data and not a question. */
   inclusive: Bool = false
 
+  /** Whether the value lies within the range's bounds. An open end never excludes anything on its side. */
   fn contains(self, value: Value): Bool where Value: Compare {
     if const Some(lowest) = start {
       if value < lowest {
@@ -59,10 +76,14 @@ extend Range<Int> with Iterable<Int>, Length {
  * few". A range without an end never stops, which is what `0..` means.
  */
 public type RangeIterator with Iterator<Int> {
+  /** The next value to hand out, one past the last one that was. */
   var current: Int
+  /** `None` for a range without an end, which is what makes `0..` iterate forever. */
   end: Int?
+  /** Whether `end` itself is still inside the range. */
   inclusive: Bool
 
+  /** The next value, or `None` once `current` has passed `end`. */
   fn next(var self): Int? {
     if const Some(highest) = end {
       const isDone = if inclusive { current > highest } else { current >= highest }
