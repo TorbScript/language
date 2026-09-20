@@ -833,11 +833,11 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
 | **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `bootstrap/tests/native/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
 | **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `bootstrap/tests/native/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
-| **5.7** | **Most of the way.** The ABI of the containers (the two conventions of `runtime/` as a generated wrapper), `var self` natives and `var self` members of a **trait-typed value** with the payload box made unique, the witness of a value as a *place*, `ArrayList.iterator` as TorbScript, element descriptors, `ContainerNew`, and the list and map **literals**. **Still open:** the `finish` provider lookup, `a[key]` reads, `for` over a collection, the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention), nested tables, index paths. **Gate: `language.trb` passes** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb` | `bootstrap/tests/native/{natives,reassignment,trait-values}.trb`, `compiler/tests/{lower-natives,ir-elements}.test.trb`; language.trb and `07-collections.trb` still blocked | 5.3, 5.6, 5.8 |
+| **5.7** | **Most of the way.** The ABI of the containers (the two conventions of `runtime/` as a generated wrapper), `var self` natives and `var self` members of a **trait-typed value** with the payload box made unique, the witness of a value as a *place*, `ArrayList.iterator` as TorbScript, element descriptors, `ContainerNew`, the list and map **literals**, the `finish` provider lookup, `a[key]` reads, `for` over a collection, and a range as a value. **Still open:** the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention), `ArrayList.from`, nested tables, index paths, `Range.iterator` (which waits for a bound on the instance set). **Gate: `language.trb` passes** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb` | `bootstrap/tests/native/{natives,reassignment,trait-values}.trb`, `compiler/tests/{lower-natives,ir-elements}.test.trb`; language.trb and `07-collections.trb` still blocked | 5.3, 5.6, 5.8 |
 | **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `bootstrap/tests/native/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
 | **5.9a** | **Done.** `var` parameters and `var self` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
-| **5.10** | Text and data: interpolation, `Show` for every shape in the format of gap 23, float formatting, `describe`, derived `Encode`/`Decode`, `std/json` | `runtime/text.c` (float), `ir/lower/derive.trb`, `std/json` natives | `11-data.trb`, the `Show` format is pinned by a table-driven test | 5.6, 5.7 |
+| **5.10** | **Done, except what needs a collection.** Text: interpolation, `print`/`printError`, `Show` for every shape in the format of gap 23, float formatting in both back ends, `?.`. **Still open:** `describe`, derived `Encode`/`Decode` and the `std/json` natives, which all wait for 5.7 (see the note below) | `ir/lower/text.trb`, `ir/lower/match.trb`, `runtime/text.c`, `bootstrap/crates/torb-interpreter` | `compiler/tests/lower-text.test.trb` (19); `bootstrap/tests/native/{interpolation,floats,optional-chain}.trb` run natively, compared with stage 0, zero live blocks | 5.6, 5.7 |
 | **5.11** | `Expression<Value>`: static trees, captures, `assert`, `test`/`group` and `torb test` natively. **Gate: `compiler/tests/*.test.trb` run from the native binary** | `ir/lower/quote.trb`, `runtime/`, `cli/test.trb` | The compiler's own tests | 5.10 |
 | **5.12** | **Runtime half done.** The remaining std natives: `std/fs`, `std/io`, `std/process`, `std/time`, `std/math`, `std/environment`. **Gate: the tour runs** (01-09, 11, 12; `10-async` waits for 7.3) | `runtime/file.c`, `clock.c`, `environment.c`, `number.c` | `.expected` files for every tour module, run on stage 0 and natively | 5.3 (parallel with 5.8-5.11) |
 | **5.13** | The full driver: profiles, the content-hash cache, `torb run` as build-and-execute, `torb test`, output paths from `project.trb`, ICE reporting, `--emit-ir`, the `error:` report of a top-level `?` (it walks `cause()`) and `?` return traces in the debug profile | `cli/build.trb`, `cli/run.trb`, `project/manifest.trb` | Cache hit and miss, a deliberately broken emitter reports an ICE, an error chain of three prints three lines | 5.3 |
@@ -1712,16 +1712,94 @@ yet is what its **table members** cannot do, and every one of them is a clean fi
 | finding | what it is | slice |
 |---|---|---|
 | a closure, a call of a closure value | the lazy stages of `Iterable` (`filter`, `take`, `sorted`, …) and `sort` | 5.8 |
-| `for` over anything but a range of integers | `Collection.addAll`, `Iterable.fold`, `find`, `forEach` | 5.7 (the `for` over a collection below) |
-| `a[key]` | `List.swapAt`, `List.first`, `Map.mapValues` | 5.7 |
-| a range as a value | `Iterable.indexed` is `Zipped(0.., self)` | 5.9b |
-| a receiver the back end cannot reach | `Iterable.joined` on a pipeline | 5.8 |
-| `finish`, which neither the source nor the natives manifest provides | `Accumulator.finish` is required by `Accumulator` and provided by the default of its **subtrait** `Collection`; `memberFunctionOf` only looks in the implementation of the trait that requires it and in that trait itself | 5.7 |
+| `for` over anything but a range of integers | `Collection.addAll`, `Iterable.fold`, `find`, `forEach` | 5.7, done in the third round |
+| `a[key]` | `List.swapAt`, `List.first`, `Map.mapValues` | 5.7, done in the third round |
+| a range as a value | `Iterable.indexed` is `Zipped(0.., self)` | 5.7, done in the third round - and `Iterable.indexed` is exactly what makes it diverge, below |
+| a receiver the back end cannot reach | not a receiver at all: a written type argument, and a static member of a trait type | 5.7, done in the third round |
+| `finish`, which neither the source nor the natives manifest provides | `Accumulator.finish` is required by `Accumulator` and provided by the default of its **subtrait** `Collection`; `memberFunctionOf` only looks in the implementation of the trait that requires it and in that trait itself | 5.7, done in the third round |
 | `TrieMap.iterator`, `TrieSet.iterator` | the ordered hash table's cursor has to skip tombstones, so it needs one new runtime function (`bool torb_map_entry_after(torb_map, int64_t *cursor, void *key, void *value)`) plus a third convention, `bool` plus **two** out parameters, whose wrapper builds the `(Key, Value)` tuple | 5.7 |
 
 So the next steps of this row, in order: the `finish` provider lookup, `a[key]` reads, `for` over a collection (which
 `ListIterator` now makes possible), the map and set cursor with its two-out convention, nested tables for the supertrait
 narrowing, and the index paths of 5.9b.
+
+**The third round: the provider lookup, `a[key]`, `for`, and a range as a value.** The four items the second round named
+first, plus the two findings that were hiding behind each other.
+
+- **A required member may be provided by a default of any trait of the implementing type's closure.**
+  `Accumulator.finish` is required by `Accumulator` and written with a body by its **subtrait** `Collection`, and
+  `checkRequirements` accepts exactly that (`hasDefaultInClosure`) - so a back end that looked only in the implementation
+  of the requiring trait and in that trait itself refused 602 functions of a program the checker had approved.
+  `defaultInClosureOf` in the checker answers the symbol `hasDefaultInClosure` only counted, and `providerOfMember` in
+  `ir/witness.trb` asks the three questions the requirement check asks, in its order: the implementation (which is
+  `providerOf` and therefore covers the target's own members, its fields and every other implementation of the same
+  target), the default of the requiring trait, then the default of any other trait of the closure.
+- **"A receiver the back end cannot reach" was two findings, and neither was a receiver.** `to<List<Item>>()` writes its
+  type arguments *between* the receiver and the call, so the callee is `.Generic(.Name("to"), …)` and never a `.Member` -
+  and `receiverSlot` asked for `Adaptation.ImplicitSelf` at the span of the whole `.Generic` node, where the checker
+  records nothing. Unwrapping `.Generic` then uncovered `Target.from self` in `Iterable.to`: a **static** member of a
+  generic parameter that turned out to be a trait type. There is no value there to erase, `Traits([List<Int>])` is a
+  closed type like any other and `witnessFor` names the one implementation of it, so `.Forwarded` goes dynamic only for a
+  member that takes `self` now. Object safety says the same thing from the other side: a static member is never in a
+  table.
+- **`a[key]` is `Indexed.at`, and the panic on a missing key is the language's own.** `at` is a *default* of `std/core`
+  whose body is `get(key).expect("Key does not exist")`, so what an index out of range does is decided once and is the
+  same in every back end - `lowerIndexRead` needs no rule for it at all. The tail of `lowerCallable` - which of the five
+  shapes a member is (`panic`, a table member, a native, a generated body, an instance of a source body) and the `Call`
+  for it - became `lowerDispatched`, so an index hands its two slots to the one place that knows those five shapes;
+  `lowerWitnessCall` and `lowerNativeCall` take a `Span` instead of an `Expression`, which is all they read out of one.
+- **`for` over a collection is BACKEND 1.6 exactly**, and three properties make it correct without a rule of the `for`:
+  the cursor is a **`var` local of the frame**, so `Iterator.next(var self)` is an ordinary place and a trait-typed cursor
+  has its payload box made unique first; the cursor holds the subject **by value**, so changing the collection inside the
+  body does not change what the loop walks; and a counted item is read into the same slot every round, which makes it
+  dead on the back edge and its drop an ordinary edge drop. `continue` jumps to the head, where the next value is pulled,
+  and `break` to the block after it - so neither needs the step block the counter of a range has. `dispatchedOn` in
+  `ir/lower/generic.trb` is the dispatch of a member the **lowering itself** calls, with no call site to read a
+  resolution from; it asks the very question a written call asks, so `xs.iterator()` reaches the same function either
+  way.
+- **A range as a value is one `Construct`.** A `Range` is the one `native type` that declares fields and is no
+  `RuntimeKind` (5.1's note), so `3..7` builds its three fields - an `Option` around each end, and `inclusive` as a
+  `Bool` - in source order. Nothing about *iterating* one is here.
+- **`Range<Int>.iterator` is deliberately still a `.Planned` native, and the reason is not the runtime: the instance set
+  diverges.** Writing it as `RangeIterator` in TorbScript (which is what "natives stay few" asks for, and which is two
+  dozen lines) makes `Iterable.indexed` reachable - and `indexed(self): Iterable<(Int, Item)>` is `Zipped(0.., self)`. So
+  the table of `Iterable<(Int, Item)>` for `Zipped<Int, Item>` holds `indexed` again, which needs
+  `Zipped<Int, (Int, Item)>`, which holds `indexed` again, and the worklist never ends: `torb ir ..` over
+  `compiler/src/syntax` alone does not finish in five minutes where the whole repository takes two. Every collection's
+  table holds `indexed`, and the only thing that kept it unreachable was that `0..` was not a value. **This is the
+  monomorphization risk of section 7 arriving as a non-termination and not as a build time**, and it has to be decided
+  before `Range.iterator` can be TorbScript: either the instance sharing the note above describes (a container whose
+  element is a counted pointer is one instance), or a bound on the depth of an instance's type arguments, or `indexed`
+  out of the table (which needs a reason object safety does not give). Milestone 6.3 owns the measurement; the
+  two entries stay `.Planned` until then, and the 705 functions that ask for one are the price.
+- **`Tables.collectionLiterals` is read, and only `Default` is lowered.** The checker decided which of the three shapes a
+  literal is (gap 51, TYPECHECKER 8) and recorded it at the literal's span, so the back end reads that decision instead
+  of asking the expected type a second time and answering it differently. `InlineArray` writes its items into the inline
+  slots of an `Array<Item, Size>`, which is a `FixedArray` and therefore 5.9b's; `FromIterable` builds the default list
+  and hands it to the `from` of the target, and the `from` to call is an ordinary member of the `witness` the checker
+  recorded - but every one of them bottoms out in `TrieSet.from` or `ArrayQueue.from`, the same `.Planned` natives as
+  `ArrayList.from`, so it waits for the same step and names its target meanwhile. There is **one** `FromIterable` in the
+  repository (`std/http`) and no `InlineArray` at all.
+- **Two bugs of the lowering that `for` made reachable, both older than this round.** A *destination is a hint*, and the
+  one `Void` slot of the function is the wrong hint for a value: an `if` used as a statement has the type `Void`, so both
+  of its arms produce into that slot - and an arm whose last expression answers a value nobody takes (`parser.bump()`,
+  whose `Token` is discarded) was a call of a `Token` into a `Void` slot. `valueSlot` refuses that one case and keeps
+  every other disagreement, because `?.` lowers its member into a slot of the *payload* type on purpose. And `last` on a
+  place argument is legal: it is about the **base**, whose own count dies at the call, which is what the `Release` after
+  it is for (5.10 found the same thing).
+- **`torb ir --statistics` over the repository: 7381 of 12511 before this round, 15257 of 17250 after** (58% to 88%; the
+  total grows by a third, because a `for` that lowers reaches every default of `Iterable` for every element type). The
+  `finish` (602), `a[key]` (382 plus what the table members behind it unlocked), `for` over anything but a range (1995,
+  which grew to 2614 as the other three unlocked bodies) and "a receiver the back end cannot reach" (536) findings are
+  all gone. The new top blockers are `Range.iterator` (705, above), "a declaration the back end cannot build an instance
+  of" (258), `TrieMap.iterator` (174, the map cursor), the index *paths* of 5.9b (149 + 140 + 34) and `ArrayList.from`
+  (140).
+- **`ArrayList.from` cannot be a function of the runtime at all**, which its `.Planned("5.7")` entry does not say:
+  `from(items: Iterable<Item>)` walks a trait-typed value of the *program* through a witness table, and a C function
+  cannot. It is `var result = ArrayList.withCapacity(0)  result.addAll(items)  result` in TorbScript, which every piece
+  of now exists - but `withCapacity` has no element descriptor in its declaration, so the wrapper has nowhere to get one
+  and `ContainerNew` is the instruction that does. Closing it is `ContainerNew` plus `addAll`, and it is the next step of
+  this row together with the map cursor.
 
 **The first round's chain, for the record.** The row of the table says 5.7 depends on 5.8, and this is why - the chain is
 longer than "the pipelines need closures":
@@ -1752,6 +1830,133 @@ repository stay the clean finding 5.6 wrote.
 
 - **`torb ir --statistics` over the repository, first round: 854 of 2662 lowered before, 867 of 2685 after** (32% to
   32%). That step was small on purpose - what it added is an *ABI* - and the second round above is where it paid.
+
+### What 5.10 does differently
+
+Sections 1 to 3 and decided gap 23 are the plan; where they did not fit what the checker records, what the IR can express
+or what the two back ends can *both* write, the code won and this is the list. Everything else is as written.
+
+- **One new file, and one new pair of intrinsics.** `ir/lower/text.trb` is interpolation, the `Show` of one value, and
+  `print`; `?.` went into `ir/lower/match.trb`, next to `?` and `??`, because it is the same shape of control flow over an
+  `Option`. Nothing else moved.
+- **An interpolated part goes through `show` and never through `showNested`.** That *is* gap 23 (`"{name}"` is the text
+  itself, `["a"]` is quoted), and it is why the two members exist at all. Static where the part's type is known, through
+  the table the value carries where it is trait typed - the same `memberOfType` a derived `Show` calls per field, so a
+  value that is interpolated and one that is nested in another value run the same code.
+- **`print` is lowered directly, as two intrinsics with a variable-length operand list.** `print(...values: Show)` is a
+  variadic parameter, which is a *list* at the call site and therefore 5.7's. So `Intrinsic.PrintParts` and
+  `PrintErrorParts` take the already shown parts, exactly as `TextConcat` does, and the **join stays in
+  `runtime/console.c`** - the one space and the one `\n` are one place in one file, which is what 5.R1's decision was
+  about. Recognizing the call is two lines (`printOperationOf` against the two symbols `std/prelude` exports), and once
+  5.7 builds the list those two lines can go: the argument list is then an ordinary `List<Show>`, and these two
+  instructions stay as the fast path of a call with a written argument list. Two consequences worth writing down: an
+  argument of `print` is **not** boxed (the coercion to `Show` the checker recorded is deliberately not replayed -
+  `lowerUncoercedValue` - because the type of the value already says which `show` runs), and `print` with no arguments is
+  one instruction with no operands and writes one empty line.
+- **The verifier learned that an intrinsic may answer nothing.** `producesNoValue` is the third state next to "takes a
+  target" and "may take one", and the three text-part operations check that *every* operand is a `String` rather than only
+  the first two - which is what `verifySameOperands` did for `TextConcat` before.
+- **`void`, not `Void` and not `()`.** Stage 0 printed the *type* name and the C runtime printed the empty tuple, which
+  the language does not have. Gap 23 does not mention `Void`; CONCEPT's Decision Log does ("The values of the built-in
+  types are lowercase literals (`true`, `false`, `void`), never their type name"), so both sides were wrong and both are
+  fixed. `torb_show_void` also takes the value now (`show(self)` passes it like any other receiver), which is what makes
+  its prototype the declaration's.
+- **A tuple shows as `(a, b)`, without labels - and that contradicts gap 23.** Gap 23 says "tuples as `(a, b)` with
+  labels when there are any"; gap 17 made labels **not part of type identity**, so `(lowest: Int, highest: Int)` and
+  `(Int, Int)` are one layout and the labels are not in it. A compiled back end therefore *cannot* write them, whatever
+  the format says, and the interpreter must not either - `Show` is the contract between two implementations. The
+  resolution is the one both can keep: no labels. Gap 23's sentence is superseded by gap 17 on this point, and
+  `bootstrap/tests/scripts/language.expected` changed with it (`(1, 9)` where it said `(lowest: 1, highest: 9)`).
+- **The panic format is the one divergence this sub-milestone did *not* close, and the binary is the right side.**
+  Decided gap 9 spells it out - `panic: <message>`, then `  at src/file.trb:12:5`, exit code **101** - and that is what the
+  binary does, while stage 0 prints `error: <message>` with an absolute path and leaves with 1 (and the messages of the
+  checked arithmetic differ besides). Nothing about it is a question any more, so there is nothing to decide and nothing
+  to fix on the C side; changing the *interpreter* touches every diagnostic of `torb test` and of the compiler's own
+  output, and it is already the first entry on 5.14's list ("Unifying stage 0 and the binary is 5.14's"). `native.rs`
+  therefore still knows about exactly this one difference: for a program that panics, stage 0 only has to fail.
+- **One escape table, in three languages.** A nested `String` and `Char` are escaped the way a literal writes them:
+  `\n`, `\r`, `\t`, `\\`, the quote, and `\u{h}` below `0x20` and at `0x7F`. It is `torb_escape_char` in
+  `runtime/text.c`, `escape_char` in `bootstrap/crates/torb-interpreter/src/interpreter.rs` and `escaped` in
+  `bootstrap/crates/torb-syntax/src/dump.rs` - the last one because the differential test of `docs/ARCHITECTURE.md`
+  compares the Rust dump with the one the generated `Show` produces, character by character.
+- **Stage 0's float formatting is the notation of gap 4 now, not Rust's `to_string`.** It printed `NaN`, never used the
+  exponent form (`1e21` came out with 21 zeros) and dropped the `.0` above `1e16`. Rust's `{:e}` already gives the
+  shortest round-tripping digits, so only the *notation* is decided in `show_float` - and it is decided the way
+  `torb_format_f64` decides it, against the same table of values. Two unit tests pin it: the table, and a round-trip
+  property over 20 000 pseudo-random bit patterns.
+- **`-0.0` lost its sign in the const evaluator.** `0.0 - value` is `+0.0` for zero; the negation of a float literal is
+  `-value`.
+- **A narrower integer of the same signedness may be passed to a wider runtime parameter.** There is one
+  `torb_show_i64` for every signed width and one `torb_show_u64` for every unsigned one, and widening an `int8_t` at the
+  call is what C does anyway. It is value preserving in exactly that direction, so `isWiderInteger` allows it one way and
+  not the other.
+- **`manifestOwnerOf` falls back to the implementation's target.** `Void` is `TypeForm.VoidType` and has no nominal name,
+  while its members are declared on the `native type Void` of the prelude - so `"{void}"` used to look `show` up under the
+  empty owner and find nothing.
+- **`?.` needed one record and no closure.** The checker resolves `a?.m` to `Option.map`, or to `flatMap` where the
+  member answers an `Option` of its own (gap 12), but the wrapping happens *inside* the function type it gives the member
+  - so `Tables.flattenedOptionals` at the span of the member's name is the one thing that says which of the two it was.
+  The lowering is then a `Tag`, a `Switch`, the member on the payload and a `Some` or a `None`. The **member itself is
+  lowered by the ordinary machinery**: `Lowering.optionalReceivers` puts the payload in place of the base for exactly one
+  expression and takes it out again, so a field, a method, a native and a `copy` behind a `?.` all work with no case of
+  their own, and the annotation of the wrapped expression is harmless because the destination slot decides the type.
+- **A member that is in none of a trait-typed value's tables is not always a dead end.** A trait the value does not carry
+  may be implemented **for its trait type**: `extend<Item: Show> List<Item> with Show` of the prelude is exactly that, so
+  `"{list}"` on a `List<Item>` value is a *static* call of that implementation. `dynamicDispatch` asks `witnessFor` before
+  it reports, which is 116 functions of the repository and turns "`show`, which is not in the witness table" into the
+  finding that names the real blocker (`iterator`, 5.7).
+- **Two latent bugs that interpolation made reachable, both internal errors of the verifier.** A block whose value is
+  discarded handed its destination to its last expression, so `{ errorHere "..."  bump() }` as a `match` arm put a `Token`
+  in a `Void` slot (gap 18 makes that statement legal, because the call has a `var` receiver). And `verifyCall` forbade
+  `last` on a place argument: `last` is about the *base* and not about the path, so `printGraph found.checker` as the last
+  use of `found` releases it after the call, which is the ordinary rule for a borrowed operand.
+- **The internal error 5.8 left is closed, and so is its twin.** A **field default** is lowered under the substitution of
+  the *constructed type* - the mapping `lowerFieldArguments` has in hand - instead of under the caller's, which is what
+  made the default of a field of a generic type of `std/http` report "the generic parameter `Item` was not substituted". A
+  **parameter default** gets the callee's instance mapping for the same reason: a default is written in terms of the
+  declaration's own parameters, never the caller's.
+- **Two shapes of the `Show` table are *not* settled, and neither is reachable yet.** A **function value** is a clean
+  finding (`a generated `show` of `Closure((Int64) -> Int64)`): CONCEPT asks for "its type" and nothing says how a type is
+  spelled, while stage 0 prints `<function>` - so the spelling is a decision and not an implementation, and the finding is
+  the honest state. A **`Range`** is worse, because the two sides already disagree and nothing catches it: stage 0 prints
+  `0..10`, and `native type Range<Value> with Equals, Hash, Show` declares no `show`, so the manifest's
+  `derivedOf("Range.show", DerivedKind.Show)` makes it structural - `Range(start: Some(0), end: Some(10), inclusive:
+  false)`. It is not observable while "a range as a value" is still a finding; **5.9b will make it observable**, and the
+  fix belongs in `std/core/src/range.trb` (a `show` of its own that writes `0..10`, `0..`, `0..=10`), not in a back end.
+- **`describe`, the derived `Encode`/`Decode` and the `std/json` natives wait for 5.7, not for 5.10.** Measured rather
+  than guessed: every member of `Encoder`, `SequenceEncoder`, `MapEncoder`, `RecordEncoder` and `Decoder` takes a
+  **`var self`**, which is what a witness table cannot hold until the payload box of a trait-typed value can be made
+  unique (step 5 of 5.7's chain). A derived `decode` needs one thing more that **no milestone plans yet**:
+  `Decoder.record<Output>` has a generic parameter of its own, so it is not object safe and can never be in a table at
+  all - either the trait hands the closure a *concrete* decoder, or `decode` takes its decoder as a generic parameter
+  instead of as a trait-typed value. The manifest's five `.Planned` entries (`describe`, `Json.encode`, `Json.decode`,
+  `Json.parse`, `Json.value`) name 5.7 now, and the derived-member finding names what is missing instead of a milestone.
+- **The top-level `?` names 5.13.** `Show` is what it was waiting for and `Show` is here; what is left is the *report* -
+  `error: <the error through Show>` to stderr, exit code 1, walking `cause()`, and the `?` return trace under the chain in
+  the debug profile - and that is on 5.13's row together with the profiles and the ICE report (5.3's note already put it
+  there).
+- **The gate is not `11-data.trb`.** Two of its eight functions were lowered on this branch, and 60 of its 93 (64%) with
+  5.7's collections merged in. What blocks the rest is not text: `Email` and `User` describe themselves to an `Encoder`
+  (`encoder.string`, `fields.field`) and `Json.encode`/`Json.value` drive one, which is the `var self` chain above; its
+  top-level code needs `for` over a collection, `a[key]` as a `var` argument and `a.keys().toSet().union(...)`, which is
+  the rest of 5.7; and its `const user = User(..., Email.parse(...)?)` is the top-level `?` of 5.13. One more thing it
+  shows and nothing else does: `a == b` on two `JsonValue`s records **no resolution at all**, because a `JsonValue`
+  carries a `List<JsonValue>` and a `Map<String, JsonValue>` and the standard library has no `Equals` for its collections
+  - which TYPECHECKER 4.3 deliberately does not report. That is a gap of `std/`, not of the back end. The gate of this
+  sub-milestone is therefore `bootstrap/tests/native/interpolation.trb` (every shape of gap 23,
+  nested quoting, escapes, a multi-line string, a long text built in a loop, `print` with several arguments and with
+  none), `floats.trb` (the table of `runtime/tests/text_test.c` plus what only a program can compute) and
+  `optional-chain.trb` (`map`, `flatMap`, a field, a method, a chain of two, `??` behind one). Each is compiled, run,
+  compared with stage 0 and asserted to leave zero live blocks - and these are the **first gate programs that print**,
+  which is what makes the `Show` format a comparison between the two back ends instead of a claim.
+- **`torb ir --statistics` over the repository: 1058 of 3086 lowered before, 1460 of 3317 on the same tree after, and
+  8191 of 13269 once 5.7's collections and the documentation system were merged in** (34% to 44% to 61%; the total grows
+  every time, because a text and a list unlock instances that were never reached at all). "String interpolation" (283)
+  and "`?.`" are gone, and so is the internal error - **twice**: the one 5.8 left, and the one the merge brought
+  (`boundsOfLiteral` read a literal's type without the substitution of the instance being lowered, so a `[]` inside
+  `fn empty<Item>(): List<Item>` built its element descriptor for the *parameter*). The top blockers on the merged tree
+  are the rest of 5.7 and 5.9b: `for` over a collection (2113), `finish` of `std/stream` (658), a range as a value (579),
+  "a receiver the back end cannot reach" (566) and `a[key]` (422).
 
 ### How the C emitter is written
 

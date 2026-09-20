@@ -251,8 +251,8 @@ TORB_TEST(show_of_the_primitives) {
   shown = torb_show_u64(UINT64_MAX);
   TORB_CHECK_TEXT(shown, "18446744073709551615");
   torb_text_release(shown);
-  shown = torb_show_void();
-  TORB_CHECK_TEXT(shown, "()");
+  shown = torb_show_void(0u);
+  TORB_CHECK_TEXT(shown, "void");
   torb_text_release(shown);
   shown = torb_show_char(0x20ACu);
   TORB_CHECK_TEXT(shown, "\xE2\x82\xAC");

@@ -4,7 +4,7 @@ use TypeId, ParameterId, Signature, ImplementationId from "../semantics/checker/
 use signatureOf, typeSignatureOf from "../semantics/checker/signature"
 use sameType from "../semantics/checker/unify"
 use witnessFor, supertraitsOfBound, memberOfImplementation, matchTypePattern from "../semantics/checker/implementation"
-use traitArgumentsOf from "../semantics/checker/implementation"
+use traitArgumentsOf, defaultInClosureOf from "../semantics/checker/implementation"
 use DerivedKind from "../backend/c/natives"
 use TraitId, FunctionId, Slot, Reference, WitnessTable, WitnessTableId from "./ir"
 use WitnessSource, WitnessRoot from "./ir"
@@ -111,7 +111,7 @@ public fn memberFunctionOf(
   at: Span,
 ): FunctionId? {
   const name = lowering.checker.symbolAt(member).name
-  const provider = memberOfImplementation(lowering.checker, implementation, name) ?? member
+  const provider = providerOfMember lowering, subject, implementation, member, name
   const mapping = memberMappingOf lowering, provider, subject, bound
   const identifier = signatureOf lowering.checker, provider
   const signature = lowering.checker.signature identifier
@@ -123,7 +123,7 @@ public fn memberFunctionOf(
     return built
   }
   // No body anywhere: the manifest says what the runtime provides, everything else is generated from the layout
-  const owner = manifestOwnerOf lowering, subject, provider
+  const owner = manifestOwnerOf lowering, subject, implementation, provider
   // A native whose ABI is not the declaration's already has a function of the program around it, and that wrapper *is*
   // what the table points at - a second one around it would only be one call more (`ir/lower/native.trb`)
   if const Some(entry) = nativeNamed(lowering, owner, name) {
@@ -138,15 +138,66 @@ public fn memberFunctionOf(
 }
 
 /**
+ * Which declaration really runs for one member of one table, in the order the checker's requirement check asks:
+ *
+ * 1. what the implementation provides under the name - its own member, a member of the target's body, a field, or a
+ *    member of another implementation of the same target (`memberOfImplementation` *is* `providerOf`),
+ * 2. the default of the trait that requires it,
+ * 3. the default of any **other** trait of the type's closure. `Accumulator.finish` is required by `Accumulator` and
+ *    written by its subtrait `Collection`, which `checkRequirements` accepts through `hasDefaultInClosure` - so without
+ *    this step the back end refuses a program the checker approved.
+ *
+ * Where none of the three has a body the member has no source at all and the manifest or a derived implementation
+ * answers for it, which is what the caller does next.
+ */
+fn providerOfMember(
+  var lowering: Lowering,
+  subject: TypeId,
+  implementation: ImplementationId,
+  member: SymbolId,
+  name: String,
+): SymbolId {
+  if const Some(found) = memberOfImplementation(lowering.checker, implementation, name) {
+    return found
+  }
+  const identifier = signatureOf lowering.checker, member
+  if lowering.checker.signature(identifier).hasBody {
+    return member
+  }
+  defaultInClosureOf(lowering.checker, subject, name) ?? member
+}
+
+/**
  * Which manifest entry a member belongs to: the **target** type of the implementation and not the type that declares the
  * member. `Int64.hash` is an entry although `hash` is written in `trait Hash`, and `native type Int64 with Signed {}`
  * declares nothing at all - the runtime provides every member of every trait it comes with (gap 22).
+ *
+ * The subject comes first, and the implementation's target stands in where the subject has no name of its own:
+ * `Void` is `TypeForm.VoidType` and not a nominal type, while its members are declared on the `native type Void` of the
+ * prelude - which is exactly what the implementation's target is (`WellKnown.declaredVoid`). Without it `"{void}"` would
+ * look up `Show.show` under the empty owner and find nothing.
  */
-public fn manifestOwnerOf(var lowering: Lowering, subject: TypeId, member: SymbolId): String {
-  if const .Nominal(symbol, _) = lowering.checker.types.form(subject) {
-    return lowering.checker.symbolAt(symbol).name
+public fn manifestOwnerOf(
+  var lowering: Lowering,
+  subject: TypeId,
+  implementation: ImplementationId,
+  member: SymbolId,
+): String {
+  if const Some(found) = manifestNameOf(lowering, subject) {
+    return found
+  }
+  const target = lowering.checker.implementations.at(implementation).target
+  if const Some(found) = manifestNameOf(lowering, target) {
+    return found
   }
   ownerNameOf lowering, member
+}
+
+fn manifestNameOf(var lowering: Lowering, id: TypeId): String? {
+  if const .Nominal(symbol, _) = lowering.checker.types.form(id) {
+    return Some lowering.checker.symbolAt(symbol).name
+  }
+  None
 }
 
 /**
@@ -222,7 +273,17 @@ public fn generatedKindOf(
   None
 }
 
-/** The members the language generates for a derived implementation. `Encode` and `Decode` arrive with 5.10. */
+/**
+ * The members the language generates for a derived implementation.
+ *
+ * **`Encode` and `Decode` are not among them, and they wait for 5.7 and not for 5.10.** A generated `encode` is
+ * `encoder.record("User") \{ fields => fields.field("name", name) \}`, and every member of `Encoder`, `RecordEncoder`,
+ * `SequenceEncoder` and `Decoder` takes a **`var self`** - which a witness table cannot hold until the payload box of a
+ * trait-typed value can be made unique (step 5 of the chain in BACKEND's note of 5.7). A derived `decode` needs one thing
+ * more that no milestone plans yet: `Decoder.record<Output>` has a generic parameter of its own, so it is not object safe
+ * and can never be in a table at all - the trait has to hand the closure a *concrete* decoder, or `decode` has to take
+ * one by generic parameter instead of as a trait-typed value.
+ */
 fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generated? {
   if name == "show" {
     return Some Generated.Show
@@ -239,7 +300,17 @@ fn generatedForDerived(var lowering: Lowering, name: String, at: Span): Generate
   if name == "compare" {
     return Some Generated.Compare
   }
-  reportUnsupported lowering, "a derived `{name}` (milestone 5.10)", at
+  if name == "encode" {
+    const what = "a derived `encode`, whose `Encoder` is all `var self` members (milestone 5.7)"
+    reportUnsupported lowering, what, at
+    return None
+  }
+  if name == "decode" {
+    const what = "a derived `decode`, whose `Decoder` has generic members no table can hold (milestone 5.7)"
+    reportUnsupported lowering, what, at
+    return None
+  }
+  reportUnsupported lowering, "a derived `{name}` the back end does not generate", at
   None
 }
 

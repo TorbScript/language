@@ -1,17 +1,23 @@
 use Span from "../../syntax/source"
 use Statement, Block, Binding, Condition, Expression, Pattern from "../../syntax/ast"
 use resultOf from "../../semantics/checker/signature"
-use IrTypeId, Slot, Terminator, IntrinsicOperation, Instruction, Reference, PathStep, borrowed from "../ir"
+use IrTypeId, IrType, Slot, Terminator, IntrinsicOperation, Instruction, Reference, PathStep, borrowed from "../ir"
 use FunctionBuilder, addLocal, addTemporary, addBlock, emit from "../build"
 use numericKindOf, layoutOfType from "../verify"
 use Lowering, reportUnsupported, locationOf, irTypeOf, booleanTypeOf from "./context"
-use isVoidType, finishBlock, continueIn from "./context"
+use substituted, irTypeOfClosed from "./context"
+use isVoidType, isNeverType, typeAtSpan, finishBlock, continueIn from "./context"
 use enterLoop, leaveLoop, breakTarget, continueTarget, markBreak from "./context"
 use lowerExpression, lowerValue, voidSlot, integerSlot, emitIntrinsic from "./expression"
-use lowerPatternBinding, lowerWhileBinding from "./match"
+use lowerPatternBinding, lowerWhileBinding, variantLayoutOfType, variantNamed from "./match"
 use lowerPlaceAssignment, lowerSlotAssignment, isReferenceSlot from "./place"
 use isCapturedVariable, lowerBoxedBinding, bindingReferenceOf from "./closure"
 use containsCountedType from "../layout"
+use TypeId from "../../semantics/checker/type"
+use isClosedType from "../instances"
+use dispatchedOn, resultTypeOf from "./generic"
+use lowerDispatched from "./call"
+use iterableBoundOf, iteratorBoundOf from "./collection"
 
 /**
  * Statements, blocks and the two loops. A block is a value where its last statement is an expression, which is the
@@ -58,12 +64,44 @@ fn lowerStatements(
     const statement = block.statements[index]
     if index == last {
       if const .Evaluate(expression) = statement.kind {
+        // The value of a block that is used as a statement is `Void`, and its last expression may still *have* one:
+        // `{ errorHere "..."  bump() }` as a `match` arm discards the `Token` that `bump` answers (gap 18). Producing it
+        // into the arm's own slot would put a `Token` in a `Void` slot, which is what the verifier catches
+        if discardsLastValue(lowering, builder, expression, destination) {
+          const _ = lowerExpression lowering, builder, expression, None
+          return None
+        }
         return Some lowerExpression(lowering, builder, expression, destination)
       }
     }
     lowerStatement lowering, builder, statement
   }
   None
+}
+
+/** Whether the slot the block produces into is `Void` while its last expression answers something else. */
+fn discardsLastValue(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  expression: Expression,
+  destination: Slot?,
+): Bool {
+  const slot = match destination {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  if !isVoidType(lowering, builder.typeOfSlot(slot)) {
+    return false
+  }
+  const annotation = match typeAtSpan(lowering, expression.span) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  !isVoidType(lowering, annotation) && !isNeverType(lowering, annotation)
 }
 
 public fn lowerStatement(var lowering: Lowering, var builder: FunctionBuilder, statement: Statement) {
@@ -349,36 +387,21 @@ fn neverEnds(test: Expression): Bool {
  * into slots of their own - a `for` evaluates its subject once (gap 40), and the end must not change with the body.
  *
  * Everything else - a collection, a pipeline, an inclusive range, a range without both ends - goes through
- * `Iterable.iterator()` and the `Option` that `next()` answers, which needs the witness tables of 5.6 and the decision
- * trees of 5.5.
+ * `Iterable.iterator()` and the `Option` that `next()` answers (`lowerForIterable`).
  */
-/** The two ends of a range that is written out. Everything else the `for` of 5.6 iterates through an `Iterable`. */
-fn rangeEndsOf(var lowering: Lowering, iterable: Expression, at: Span): (Expression, Expression)? {
+/** The two ends of a range that is written out. Everything else is iterated through its `Iterable`. */
+fn rangeEndsOf(iterable: Expression): (Expression, Expression)? {
   const (from, to, isInclusive) = match iterable.kind {
     .RangeLiteral(first, second, inclusive) => (first, second, inclusive)
     _ => {
-      reportUnsupported lowering, "`for` over anything but a range of integers", at
       return None
     }
   }
   if isInclusive {
-    reportUnsupported lowering, "`for` over an inclusive range", at
     return None
   }
-  const start = match from {
-    Some(found) => found
-    None => {
-      reportUnsupported lowering, "`for` over a range without both ends", at
-      return None
-    }
-  }
-  const end = match to {
-    Some(found) => found
-    None => {
-      reportUnsupported lowering, "`for` over a range without both ends", at
-      return None
-    }
-  }
+  const start = from?
+  const end = to?
   Some((start, end))
 }
 
@@ -390,9 +413,10 @@ fn lowerFor(
   body: Block,
   at: Span,
 ) {
-  const (start, end) = match rangeEndsOf(lowering, iterable, at) {
+  const (start, end) = match rangeEndsOf(iterable) {
     Some(found) => found
     None => {
+      lowerForIterable lowering, builder, pattern, iterable, body, at
       return
     }
   }
@@ -449,4 +473,165 @@ fn lowerFor(
   emitIntrinsic lowering, builder, Some(counter), IntrinsicOperation.Add, Some(kind), [counter, one], at
   finishBlock lowering, builder, Terminator.Jump(check)
   continueIn lowering, builder, done
+}
+
+// --- `for` over a collection ----------------------------------------------------------------------------------------
+
+/**
+ * `for value in values`: the subject once into a slot of its own, `Iterable.iterator()` on it, and a loop whose head
+ * pulls `next()` from the cursor and switches on the `Option` that comes back (BACKEND 1.6).
+ *
+ * Three properties make it correct, and not one of them is a rule of the `for`:
+ *
+ * - **The cursor is a `var` local of this frame.** `Iterator.next(var self)` changes it, so the receiver is a
+ *   `Reference` and goes through the ordinary place machinery - which for a trait-typed cursor is what makes its payload
+ *   box unique before the write (5.7's note).
+ * - **The cursor holds the subject by value.** `ListIterator` keeps the list, so changing the collection inside the body
+ *   does not change what the loop walks. That is what a value *is*, and nothing here has to arrange it.
+ * - **The subject is evaluated exactly once** (gap 40), which is what putting it into a slot before the loop says.
+ *
+ * `continue` jumps to the head, where the next value is pulled; `break` leaves to the block after it. So neither needs a
+ * step block of its own, unlike the counter of a range.
+ */
+fn lowerForIterable(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  pattern: Pattern,
+  iterable: Expression,
+  body: Block,
+  at: Span,
+) {
+  const module = lowering.module
+  const written = match lowering.checker.expressionType(module, iterable.span) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`for` over a subject the checker recorded no type for", at
+      return
+    }
+  }
+  const subjectType = substituted lowering, written
+  const iterableBound = match iterableBoundOf(lowering, subjectType, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const subject = lowerValue lowering, builder, iterable
+  if !lowering.isSupported {
+    return
+  }
+  const cursor = match lowerCursor(lowering, builder, subject, subjectType, iterableBound, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const iteratorBound = match iteratorBoundOf(lowering, cursor.annotation, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const pull = match dispatchedOn(lowering, cursor.annotation, iteratorBound, "next", at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const optionType = resultTypeOf lowering, pull
+  if !isClosedType(lowering, optionType) {
+    reportUnsupported lowering, "`for` whose item type the back end cannot close", at
+    return
+  }
+  const option = irTypeOfClosed lowering, optionType
+  const layout = match variantLayoutOfType(lowering, option) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`for` over an iterator whose `next` does not answer an `Option`", at
+      return
+    }
+  }
+  const some = variantNamed lowering, layout, "Some"
+  if some < 0 {
+    reportUnsupported lowering, "`for` over an iterator whose `next` does not answer an `Option`", at
+    return
+  }
+  const item = match patternTypeOf(lowering, pattern.span) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "`for` over a collection without an item type", at
+      return
+    }
+  }
+  const name = bindingNameOf(pattern) ?? ""
+  // A pattern that takes the item apart binds in the body, through the plan the checker recorded for it
+  const takesApart = !isWildcardPattern(pattern) && name.isEmpty()
+  const value = addLocal builder, item, name
+  if !name.isEmpty() {
+    lowering.slots.set pattern.span, value
+  }
+  const location = locationOf lowering, at
+  const check = addBlock builder, "for", Some(location)
+  const inner = addBlock builder, "body", Some(location)
+  const done = addBlock builder, "done", Some(location)
+  const pulled = addTemporary builder, option
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const tag = addTemporary builder, integer
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, check
+  const places = [Some(Reference(cursor.slot, []))]
+  const _ = lowerDispatched lowering, builder, Some(pulled), at, pull, [cursor.slot], places, option
+  if !lowering.isSupported {
+    return
+  }
+  emit builder, Instruction.Tag(tag, pulled)
+  finishBlock lowering, builder, Terminator.Switch(tag, [some], [inner], done)
+  continueIn lowering, builder, inner
+  emit builder, Instruction.Read(value, Reference(pulled, [PathStep.Variant(layout, some, 0)]))
+  enterLoop lowering, done, check
+  if takesApart {
+    lowerPatternBinding lowering, builder, pattern, value, pattern.span
+  }
+  lowerBlockInto lowering, builder, body, None
+  const _ = leaveLoop lowering
+  if !lowering.isDiverged {
+    finishBlock lowering, builder, Terminator.Jump(check)
+  }
+  continueIn lowering, builder, done
+}
+
+/** The cursor a loop pulls from: `xs.iterator()`, with the type it answered, which is what `next` is dispatched on. */
+fn lowerCursor(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  subject: Slot,
+  subjectType: TypeId,
+  iterableBound: TypeId,
+  at: Span,
+): Cursor? {
+  const made = match dispatchedOn(lowering, subjectType, iterableBound, "iterator", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const annotation = resultTypeOf lowering, made
+  if !isClosedType(lowering, annotation) {
+    reportUnsupported lowering, "`for` whose iterator type the back end cannot close", at
+    return None
+  }
+  const spelling = irTypeOfClosed lowering, annotation
+  const slot = addLocal builder, spelling, "iterator"
+  const places: List<Reference?> = []
+  const _ = lowerDispatched lowering, builder, Some(slot), at, made, [subject], places, spelling
+  if !lowering.isSupported {
+    return None
+  }
+  Some Cursor(slot, annotation)
+}
+
+/** The slot a cursor lives in, and its checker type. */
+type Cursor {
+  slot: Slot
+  annotation: TypeId
 }

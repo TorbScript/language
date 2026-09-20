@@ -194,7 +194,7 @@ torb_text torb_show_i64(int64_t value);
 /* UInt16.show, UInt32.show, UInt64.show, UInt8.show */
 torb_text torb_show_u64(uint64_t value);
 /* Void.show */
-torb_text torb_show_void(void);
+torb_text torb_show_void(torb_void value);
 /* Float64.squareRoot */
 double torb_square_root_f64(double value);
 /* String.contains */

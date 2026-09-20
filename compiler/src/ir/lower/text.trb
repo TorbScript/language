@@ -1,0 +1,246 @@
+use Span from "../../syntax/source"
+use Expression, Argument, TextSegment from "../../syntax/ast"
+use SymbolId from "../../semantics/symbols"
+use TypeId, LiteralValue from "../../semantics/checker/type"
+use IrTypeId, IrType, Slot, Instruction, StaticContents, WitnessSource, Reference from "../ir"
+use Intrinsic, IntrinsicOperation, borrowed from "../ir"
+use FunctionBuilder, addTemporary, emit from "../build"
+use memberOfType, memberInValue, traitMemberNamed from "../witness"
+use Lowering, reportUnsupported, locationOf, internStatic, substituted from "./context"
+use borrowedArguments from "./context"
+use boundsOfTraitValue from "./generic"
+use valueSlot, unsupportedSlot, abandonedSlot, voidSlot, lowerUncoercedValue from "./expression"
+
+/**
+ * Text: string interpolation, and the two calls that write one - `print` and `printError`.
+ *
+ * `"{name}: {count + 1}"` is one `Intrinsic.TextConcat` over the literal pieces and the shown parts (BACKEND 1.6), so a
+ * text of *n* parts is one allocation and never a chain of `String.add`: building the long text of a loop stays linear.
+ * Each interpolated part goes through `Show.show` - statically where its type is known, through the witness table the
+ * value carries where it is trait typed - which is the very same function a derived `Show` calls per field, so a value
+ * that is interpolated and one that is nested inside another value run the same code.
+ *
+ * `showNested` is *not* what interpolation uses: `"{name}"` is the text itself and `["a"]` is quoted, which is exactly
+ * the difference decided gap 23 gives the two members.
+ *
+ * The literal pieces need nothing: escapes, `\{`, a raw string and the dedenting of a `"""` block are all the lexer's,
+ * so a `TextSegment.Literal` already carries the bytes the program has to produce.
+ */
+
+/**
+ * `"{a} and {b}"`. The parts are evaluated in source order - a part is an ordinary expression and may call anything -
+ * and only then concatenated, which is what keeps evaluation order the order a reader sees (decided gap 1).
+ *
+ * An empty literal piece is left out: it is no bytes, and one operand fewer is one array entry fewer in the C.
+ */
+public fn lowerTextLiteral(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  segments: List<TextSegment>,
+  annotation: IrTypeId,
+): Slot {
+  var parts: List<Slot> = []
+  for segment in segments {
+    match segment {
+      .Literal(text) => {
+        if !text.isEmpty() {
+          parts.add textSlot(lowering, builder, text)
+        }
+      }
+      .Interpolated(inner) => {
+        const shown = shownSlotOf lowering, builder, inner
+        if !lowering.isSupported {
+          return abandonedSlot lowering, builder, destination
+        }
+        parts.add shown
+      }
+    }
+  }
+  const target = valueSlot lowering, builder, destination, annotation
+  concatenate lowering, builder, target, parts, expression.span
+  target
+}
+
+/** One static text in a slot of its own, which is what every literal piece of an interpolation is. */
+public fn textSlot(var lowering: Lowering, var builder: FunctionBuilder, value: String): Slot {
+  const text = lowering.program.internType IrType.Text
+  const target = addTemporary builder, text
+  const contents = StaticContents.Literal LiteralValue.Text(value)
+  const found = internStatic lowering, contents, text
+  emit builder, Instruction.Constant(target, found)
+  target
+}
+
+/** One concatenation of every part, never a chain of two-part additions. */
+fn concatenate(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  target: Slot,
+  parts: List<Slot>,
+  at: Span,
+) {
+  const location = locationOf lowering, at
+  const intrinsic = Intrinsic IntrinsicOperation.TextConcat, None
+  emit builder, Instruction.Intrinsic(Some(target), intrinsic, parts, location)
+}
+
+// --- `Show` of one value ----------------------------------------------------------------------------------------------
+
+/**
+ * One value, shown: the expression is lowered and `Show.show` is called on it.
+ *
+ * The coercion to a trait-typed value the checker recorded at an argument of `print` is deliberately **not** replayed
+ * (`lowerUncoercedValue`): boxing a value only to read its table back out of the box would cost one allocation per
+ * argument, and the type of the value itself already says which `show` runs. A value that is trait typed to begin with
+ * is unaffected - there the table is the only answer there is, and it is read out of the value.
+ */
+public fn shownSlotOf(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
+  const at = expression.span
+  const source = match lowering.checker.expressionType(lowering.module, at) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, None, "a shown value without a type", at
+    }
+  }
+  const subject = substituted lowering, source
+  lowering.shownParts.set at, true
+  const value = lowerUncoercedValue lowering, builder, expression
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, None
+  }
+  showSlot lowering, builder, value, subject, at
+}
+
+/** The same for a value that is already in a slot: what `print` and an interpolated part share. */
+public fn showSlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  value: Slot,
+  subject: TypeId,
+  at: Span,
+): Slot {
+  const bound = match showBoundOf(lowering) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, None, "`Show`, which the prelude does not declare", at
+    }
+  }
+  const text = lowering.program.internType IrType.Text
+  const target = addTemporary builder, text
+  const location = locationOf lowering, at
+  const bounds = boundsOfTraitValue lowering, subject
+  if !bounds.isEmpty() {
+    const member = match traitMemberNamed(lowering, bound, "show") {
+      Some(found) => found
+      None => {
+        return unsupportedSlot lowering, builder, None, "`Show.show`, which the prelude does not declare", at
+      }
+    }
+    const found = match memberInValue(lowering, bounds, subject, Reference(value, []), member) {
+      Some(inner) => inner
+      None => {
+        const what = "`show`, which is not in the witness table of a trait-typed value"
+        return unsupportedSlot lowering, builder, None, what, at
+      }
+    }
+    const none: List<Slot> = []
+    emit builder, Instruction.CallWitness(Some(target), found.source, found.member, borrowedArguments(none))
+    return target
+  }
+  const called = match memberOfType(lowering, subject, bound, "show", at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, None
+    }
+  }
+  const empty: List<WitnessSource> = []
+  emit builder, Instruction.Call(Some(target), called, [borrowed(value)], empty, Some(location))
+  target
+}
+
+/** `Show` as a bound, which is the trait every interpolated part and every argument of `print` is resolved against. */
+fn showBoundOf(var lowering: Lowering): TypeId? {
+  const symbol = lowering.checker.wellKnown.symbolNamed("Show")?
+  const empty: List<TypeId> = []
+  Some lowering.checker.nominal(symbol, empty)
+}
+
+/**
+ * Whether the `Adaptation.ShowValue` at a span is already being replayed, which is true for exactly the spans this file
+ * lowers: an interpolated part, and an argument of `print`. Everywhere else the adaptation is still a clean finding, so
+ * a `Show` the back end forgot to call cannot pass unnoticed.
+ */
+public fn showsHere(lowering: Lowering, at: Span): Bool {
+  lowering.shownParts.containsKey at
+}
+
+// --- `print` and `printError` -----------------------------------------------------------------------------------------
+
+/**
+ * `print a, b` writes the shown parts separated by one space and one `\n` (`runtime/console.c`).
+ *
+ * `print` is `print(...values: Show)`, and a variadic parameter is a **list** at the call site - which is milestone
+ * 5.7's and not here. So a call of the two well-known natives is lowered directly: every argument is shown, and the
+ * parts become the operands of `Intrinsic.PrintParts`, whose operand list is as long as the call is - the same
+ * variable-arity shape `TextConcat` already has. The join stays in the runtime, so the two back ends cannot disagree
+ * about the format (5.R1), and nothing about `print` is special *after* the lowering: it is one instruction the VM gets
+ * as one opcode.
+ *
+ * Once 5.7 builds the list, this becomes the ordinary path again by deleting the two lines that recognize the name:
+ * the argument list is then an ordinary `List<Show>`, the manifest's `torb_print_parts` is reached through the wrapper
+ * of `ir/lower/native.trb`, and the two instructions are the fast path a call with a written argument list keeps.
+ */
+public fn printOperationOf(var lowering: Lowering, symbol: SymbolId): IntrinsicOperation? {
+  const known = lowering.checker.wellKnown
+  if known.symbolNamed("print") == Some(symbol) {
+    return Some IntrinsicOperation.PrintParts
+  }
+  if known.symbolNamed("printError") == Some(symbol) {
+    return Some IntrinsicOperation.PrintErrorParts
+  }
+  None
+}
+
+/**
+ * The same for a whole call expression, which is what tells the variadic argument list of `print` from every other one:
+ * the list of any other variadic call is still the clean finding that names 5.7.
+ */
+public fn printCallOf(var lowering: Lowering, expression: Expression): IntrinsicOperation? {
+  const found = lowering.checker.resolutionAt(lowering.module, expression.span)?
+  if const .Callable(symbol, _, _) = found {
+    return printOperationOf lowering, symbol
+  }
+  None
+}
+
+/** Every argument shown, then the one instruction. `print` answers `Void`, so nobody takes a value from it. */
+public fn lowerPrint(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  arguments: List<Argument>,
+  operation: IntrinsicOperation,
+): Slot {
+  var parts: List<Slot> = []
+  for written in arguments {
+    if written.isSpread {
+      const what = "`...` in the argument list of `print` (milestone 5.7)"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+    const shown = shownSlotOf lowering, builder, written.value
+    if !lowering.isSupported {
+      return abandonedSlot lowering, builder, destination
+    }
+    parts.add shown
+  }
+  const location = locationOf lowering, expression.span
+  const intrinsic = Intrinsic operation, None
+  emit builder, Instruction.Intrinsic(None, intrinsic, parts, location)
+  match destination {
+    Some(_) => voidSlot lowering, builder, destination
+    None => abandonedSlot lowering, builder, destination
+  }
+}

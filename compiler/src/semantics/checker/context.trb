@@ -548,6 +548,15 @@ public type Tables {
   var closureKinds: Map<Span, ClosureKind> = [:]
   /** Per collection literal span: what the literal became, which the expected type alone does not say (gap 51). */
   var collectionLiterals: Map<Span, CollectionLiteral> = [:]
+  /**
+   * Per `?.` member span: whether the member answers an `Option` of its own.
+   *
+   * `a?.m` is `Option.map` when it does not and `Option.flatMap` when it does, so that `?.` never nests an `Option`
+   * (gap 12). The wrapping happens *inside* the function type the member is given, so nothing else in the tables says
+   * which of the two it was - and that is exactly what decides whether the arm of the lowering wraps its value or hands
+   * it on.
+   */
+  var flattenedOptionals: Map<Span, Bool> = [:]
 }
 
 /** No expected type, a type, or "a value is not wanted here". */
@@ -1169,6 +1178,15 @@ public type Checker {
 
   fn collectionLiteralAt(self, module: ModuleId, at: Span): CollectionLiteral? {
     tables[module.value].collectionLiterals.get(at)
+  }
+
+  /** `a?.m` where `m` answers an `Option` already: `flatMap` and not `map`, so the arm hands its value on (gap 12). */
+  fn recordFlattenedOptional(var self, at: Span, flattened: Bool) {
+    tables[module.value].flattenedOptionals.set(at, flattened)
+  }
+
+  fn flattenedOptionalAt(self, module: ModuleId, at: Span): Bool? {
+    tables[module.value].flattenedOptionals.get(at)
   }
 
   /** A variable that was solved: every table of the statement is walked once at its end, through these. */

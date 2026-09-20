@@ -1,0 +1,288 @@
+# The TorbScript documentation
+
+Every page of the reference, with what it answers. Open the one page that answers the question.
+
+## Contents
+
+- the root
+- explanation
+- guide
+- how-to
+- language
+- language/collections-and-iteration
+- language/concurrency-and-streams
+- language/configuration
+- language/errors
+- language/execution
+- language/extensibility
+- language/functions
+- language/generics
+- language/modules-and-packages
+- language/pattern-matching
+- language/reflection
+- language/syntax
+- language/traits
+- language/types
+- language/values-and-types
+- standard-library
+- tooling
+
+## The root
+
+- `glossary.md` - **Glossary** (glossary): Every term this documentation uses, one entry each, at most two sentences. The entry decides which word is correct.
+
+## explanation
+
+- `explanation/coming-from-kotlin.md` - **Coming from Kotlin** (contrast): What carries over from Kotlin - when expressions, extension functions, a nullable-looking ? - and the three places nullability, data classes and DSL receivers work on a different mechanism underneath.
+- `explanation/coming-from-rust.md` - **Coming from Rust** (contrast): What carries over from Rust, what looks the same and is not, and what Rust has that TorbScript deliberately does not.
+- `explanation/coming-from-swift.md` - **Coming from Swift** (contrast): What carries over from Swift - value types, enums with payloads, Optionals, protocols with default members - and what a Swift habit gets wrong here.
+- `explanation/coming-from-typescript.md` - **Coming from TypeScript** (contrast): What carries over from TypeScript - literal unions, structural-looking optional chaining, declarative generics - and the four places TypeScript's type-level programming has no counterpart at all.
+- `explanation/index.md` - **Why the language is like this** (index): The arguments behind the decisions, and the contrast pages for people and models arriving from Rust, Swift, Kotlin or TypeScript.
+- `explanation/mistakes-models-make.md` - **What a model trained on other languages gets wrong** (explanation): The mistakes a language model makes in TorbScript because it has read Rust, Swift, Kotlin and TypeScript, each with the wrong line, the right line and the diagnostic.
+- `explanation/why-cases-are-never-bare.md` - **Why a case is never bare** (explanation): Circle alone is a type, a function or a variable, exactly like every other name, so a case is written Shape.Circle, .Circle or imported by its path, and a misspelled case can never fall back to matching everything.
+- `explanation/why-commands.md` - **Why a call is written as a command** (explanation): A call is written without parentheses wherever the grammar allows it, so a control structure, a DSL and an ordinary call share one shape and no library gets special syntax the language itself does not have.
+- `explanation/why-dead-changes-are-errors.md` - **Why a change that cannot be seen is an error** (explanation): A var that is changed and never read again, or the discarded result of a method that takes self, is a compile error rather than a lint, because with value semantics such a change is always a mistake and never a defensive copy.
+- `explanation/why-exhaustive-matches.md` - **Why every match is exhaustive** (explanation): A public ADT is a promise about every case it has today, so a match must cover all of them and a new case is a breaking change, while a library that wants room to grow hides its ADT behind a type instead.
+- `explanation/why-no-bit-operators.md` - **Why there are no bit operators** (explanation): Both `&` and `|` already mean something else, so bitwise work is a method of the Bits trait instead of a symbol, and only UInt64 gets the wrapping arithmetic a hash function needs.
+- `explanation/why-no-exceptions.md` - **Why there are no exceptions** (explanation): A function that can fail says so in its result type, Result<Value, Failure>, and the caller handles it with match, ??, or the question mark operator, while panic stays reserved for bugs that cannot be recovered from.
+- `explanation/why-no-getters.md` - **Why there are no properties** (explanation): A field is storage and a method computes, so the parentheses tell a reader which one they are looking at, and private(var) replaces the getter-and-setter pair without hiding either fact.
+- `explanation/why-no-higher-kinded-types.md` - **Why there are no higher-kinded types** (explanation): Option, Result, Task and Iterable share method names by convention of the standard library rather than by a shared abstraction, because a kind system would cost local inference and readable errors for problems a script rarely has.
+- `explanation/why-no-macros.md` - **Why there are no macros** (explanation): Names are resolved with the help of types, which have to exist before resolution runs, so an AST macro generating code before that point cannot go together with the rest of the language - quoted expressions read code instead.
+- `explanation/why-no-null.md` - **Why there is no null** (explanation): Absence is Option<Value>, an ordinary case of an ordinary type, so a value is wrapped and unwrapped on purpose and nothing can be dereferenced without checking first.
+- `explanation/why-no-reflection.md` - **Why there is no reflection** (explanation): Types never flow as values, so nothing can inspect a type at runtime, and what reflection is reached for - serialization, config mapping, debug output - is covered by one generated trait pair, Encode and Decode, instead.
+- `explanation/why-one-member-namespace.md` - **Why a method is a constant** (explanation): A method is structurally a constant of the type that holds a receiver closure, so a field and a method live in one namespace and cannot share a name, which is what lets a command call on a field write it instead of needing a second rule.
+- `explanation/why-traits-instead-of-inheritance.md` - **Why traits instead of inheritance** (explanation): A type comes with a trait instead of extending a base class, so composition and delegation replace an inheritance hierarchy, and a value can still be typed by capability without carrying a class it did not ask for.
+- `explanation/why-values-instead-of-references.md` - **Why values instead of references** (explanation): Every type is a value and the binding decides about mutation, which removes every mutable-and-immutable type pair at the price of one local, lintable trap.
+- `explanation/why-verbs-and-participles.md` - **Why verbs and participles** (explanation): A method that changes in place and the method that returns a changed copy are different words, sort against sorted, because value semantics make one name for both ambiguous at the call site.
+
+## guide
+
+- `guide/a-small-program.md` - **Put it together** (guide): One small program - a type with cases, a function that can fail, and a pipeline - that uses everything this path taught.
+- `guide/cases-and-matching.md` - **Cases and matching** (guide): How to declare a type with more than one shape, and take it apart with a match that has to cover every case.
+- `guide/collections-and-pipelines.md` - **Collections and pipelines** (guide): How to build a list, map and set, change one in place or get a changed copy, and pull values through a lazy pipeline.
+- `guide/control-flow-and-dsls.md` - **Control flow and your own constructs** (guide): if, for and while as you would expect, and why unless is an ordinary function you could have written yourself.
+- `guide/errors.md` - **Errors** (guide): How a function says it can fail with Result, and how a caller handles that with match or the question mark operator.
+- `guide/functions-and-closures.md` - **Functions and closures** (guide): How to declare a function, when it must spell out its return type, and the one closure form the language has.
+- `guide/index.md` - **Learn TorbScript** (index): The learning path from nothing to a working program, in order, one step per page.
+- `guide/installing-and-running.md` - **Run your first program** (guide): Build the toolchain, run a single file, and create a project with a manifest, a source file and a test.
+- `guide/modules-and-packages.md` - **Modules and packages** (guide): How use brings a name in from another file or the standard library, and what public means for a top-level declaration.
+- `guide/tests-and-tooling.md` - **Tests and the toolchain** (guide): How to write a test with test, group and assert, and the two commands that check whether what you wrote is correct.
+- `guide/the-language-in-sixty-seconds.md` - **The language in sixty seconds** (guide): The mental model of TorbScript in one screen: values, bindings, no null, no exceptions, traits, and calls written as commands.
+- `guide/traits.md` - **Traits** (guide): How to declare a capability, give it to a type, and use the trait itself as a type that hides which concrete type it is.
+- `guide/types-and-methods.md` - **Types and methods** (guide): How to declare a type, add methods to it, and tell a verb that changes it from the participle that answers a copy.
+- `guide/values-and-bindings.md` - **Values and bindings** (guide): Why const and var are the whole mutation story, what a copy costs, and the one trap that catches everybody coming from a language with references.
+
+## how-to
+
+- `how-to/add-a-dependency.md` - **Add a dependency** (how-to): Declare the package in project.trb before importing from it, tell a runtime dependency from a development one, and read what the imports of everything you depend on say it can reach.
+- `how-to/build-a-native-binary.md` - **Build a native binary** (how-to): Point torb build at the entry file, look at the generated C with --emit-c first if a C compiler is not on the machine yet, and read what the back end does not lower yet before you debug the program instead.
+- `how-to/collect-a-pipeline.md` - **Collect a pipeline into what you need** (how-to): Reach for the named terminal operation when there is one - toList, sum, joined, groupBy - and fall back to collect with a Collector for anything else, including your own accumulator.
+- `how-to/convert-between-types.md` - **Convert between types** (how-to): Implement From when the conversion cannot fail, TryFrom when it can, Parse specifically for text, and call to<Target>() to collect a pipeline into any type built from one.
+- `how-to/define-an-error-type.md` - **Define an error type** (how-to): Declare a type with one case per distinct failure, add Show and Error where a layer above needs to hand it further up, and let the generated From do the conversion at every ?.
+- `how-to/index.md` - **Task recipes** (index): One page per task for somebody who already knows the language: the steps, the pitfalls, and one complete program that works.
+- `how-to/parse-text-into-a-type.md` - **Parse text into a type** (how-to): Give the type a private field nothing outside can set directly, and a static parse factory that validates the text and answers a Result instead of a bare value.
+- `how-to/read-a-file.md` - **Read a file** (how-to): Read a whole file or its lines, hand the failure to the caller with the question mark operator, and turn an IoError into your own error type.
+- `how-to/read-and-write-json.md` - **Read and write JSON** (how-to): Json.encode and Json.decode<T> work on any Encode/Decode type for free; write the pair by hand only for a type whose generated constructor cannot express what a document may contain.
+- `how-to/set-up-a-workspace.md` - **Set up a workspace** (how-to): Name the member directories in the root project.trb, give each one its own project.trb, and depend on a sibling by name alone - the workspace resolves it from source.
+- `how-to/sort-by-more-than-one-key.md` - **Sort by more than one key** (how-to): Sort by a tuple key instead of a single field - a tuple's Compare is generated lexicographically by position, which a type never gets because an order is a decision, not a structure.
+- `how-to/use-a-type-as-a-map-key.md` - **Use a type as a map key** (how-to): An ordinary type is already a legal key once every field is Hash, which the compiler generates for free; a field that cannot be Hash is the one thing that rules a type out.
+- `how-to/write-a-builder.md` - **Write a builder** (how-to): Write a function that creates a value, hands it to a receiver closure, and returns it - three lines that make every property command, nested block and method call in the closure statically typed.
+- `how-to/write-a-configuration-file.md` - **Write a configuration file** (how-to): Declare a type for the configuration, write the file as TorbScript against it, and load it through the sandbox with the capabilities you grant.
+- `how-to/write-a-test.md` - **Write a test** (how-to): Put a test in tests/*.test.trb, group related ones, and let assert show the source and the values instead of writing a matcher.
+
+## language
+
+- `language/index.md` - **The language reference** (index): One page per construct of TorbScript, grouped by area, with the exact rules and the mistakes each construct invites.
+
+## language/collections-and-iteration
+
+- `language/collections-and-iteration/collection-traits.md` - **The collection traits** (reference): Every kind of collection is a trait - List, Set, Map, Stack, Queue - so a signature names what a value can do, and only its construction names the data structure behind it.
+- `language/collections-and-iteration/collectors.md` - **Collectors** (reference): A Collector describes what to do with the values of a pipeline; start() makes a fresh, push-based Accumulator for one run, and every Collection is one without extra work.
+- `language/collections-and-iteration/index.md` - **Collections and iteration** (index): List, Map, Set, Stack and Queue as traits over a shared Iterable, plus slices, pipelines and collectors.
+- `language/collections-and-iteration/iterating.md` - **Iterating** (reference): for pulls from Iterator.next() through Iterable.iterator(), and the subject of a for is evaluated once into a temporary, so changing it inside the loop does not affect what is walked.
+- `language/collections-and-iteration/lists.md` - **Lists** (reference): List is the ordered, indexable sequence behind the literal [1, 2, 3], with ArrayList as the default implementation and a verb paired with a participle for every change.
+- `language/collections-and-iteration/maps-and-sets.md` - **Maps and sets** (reference): The literal ["a": 1] builds a Map, a Set is built from a list literal instead of having one of its own, and both iterate in insertion order while comparing regardless of it.
+- `language/collections-and-iteration/pipelines.md` - **Pipelines** (reference): A pipeline is a source, zero or more lazy stages and exactly one terminal operation, and nothing runs until the terminal operation pulls a value through.
+- `language/collections-and-iteration/slices.md` - **Slices** (reference): list[from..to] answers a List that shares storage and starts at index 0 again; as a var path the same expression is a window into the original instead.
+- `language/collections-and-iteration/stacks-and-queues.md` - **Stacks and queues** (reference): Stack is LIFO with push and pop, Queue is FIFO with enqueue and dequeue, and Collection.add reaches whichever end the kind chooses.
+
+## language/concurrency-and-streams
+
+- `language/concurrency-and-streams/index.md` - **Concurrency and streams** (index): Task, Channel, Source and Sink - asynchrony in the type system instead of a keyword - designed and type-checked today, but not yet run by any back end.
+
+## language/configuration
+
+- `language/configuration/builders.md` - **Builders and DSLs** (reference): A builder is a function that creates a value, hands it to a receiver closure to configure, and returns it, which is what makes a configuration block a statically typed value instead of a string to parse.
+- `language/configuration/index.md` - **Configuration** (index): Receiver closures, the builder function around one, and the receiver script and sandbox that let a whole file play the same role - statically typed configuration without a second language.
+- `language/configuration/receiver-closures.md` - **Receiver closures** (reference): A receiver closure is a closure whose first parameter is called self, so names inside it resolve against that receiver first, exactly as inside a method.
+
+## language/errors
+
+- `language/errors/error-types.md` - **Declaring an error type** (reference): An error type is a type with cases like any other; a case that wraps one value of a type no other case wraps gets From generated, which is what makes ? convert on its own.
+- `language/errors/index.md` - **Errors** (index): How a function says it can fail, how a caller handles it, and what a panic is for.
+- `language/errors/option-chaining.md` - **Optional chaining** (reference): `?.` is Option.map, or Option.flatMap when the member itself answers an Option, so chaining never nests. `??` gives a lazy fallback for an absent Option or a failed Result.
+- `language/errors/panic.md` - **panic** (reference): panic prints panic, the message and the site to standard error, exits with 101, and runs nothing else on the way out - it is for bugs, never for an expected failure.
+- `language/errors/question-mark.md` - **The question mark operator** (reference): A postfix ? unwraps an Ok or a Some and returns the Fail or None from the surrounding function early, converting the error type through From when they differ.
+- `language/errors/result.md` - **Result** (reference): A function that can fail answers Result<Value, Failure>, whose cases are Ok and Fail. The postfix question mark unwraps an Ok or returns the Fail from the surrounding function.
+- `language/errors/the-error-trait.md` - **The Error trait** (reference): Error is a trait, not a base type; a failure that implements it fits into Result<Value, Error> for the layers that only need to report it, and cause() gives the chain.
+- `language/errors/top-level-errors.md` - **Errors at the top level** (reference): A ? at the top level of an entry file or a script is not a panic; it is specified to print the error and exit with 1, walking cause() one line per link.
+
+## language/execution
+
+- `language/execution/copies.md` - **What a copy costs** (reference): A copy always behaves the same way, but what it costs depends on the shape of the type - inline for a small fixed-size value, copy-on-write for heap-backed storage, and never for a shared type.
+- `language/execution/evaluation-order.md` - **Evaluation order** (reference): Evaluation order is source order - the receiver first, then the arguments as they are written, then the parameter defaults - so a side effect in an argument is exactly as predictable as reading the line.
+- `language/execution/index.md` - **Execution** (index): The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and why there are no destructors.
+- `language/execution/no-destructors.md` - **There are no destructors** (reference): Close is an ordinary method and using is an ordinary function, so the nesting of using blocks is the only destruction order the language ever promises - a value going out of scope runs no code at all.
+- `language/execution/tail-calls.md` - **Tail calls and the frame limit** (reference): Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call counts against a per-task frame limit of 100000 that panics with stack overflow when it is reached.
+
+## language/extensibility
+
+- `language/extensibility/control-structures.md` - **Control structures are functions** (reference): do, unless, retry, using and test are ordinary functions with a closure or lazy parameter, so writing your own control structure is nothing more than writing a function that takes one and calling it with a trailing closure.
+- `language/extensibility/expression-trees.md` - **Reading code instead of running it** (reference): A query provider reads the typed tree of an Expression<Value> instead of running it, translates what it recognizes, and fails at its own runtime for a call it does not - the language cannot know in advance what a library can translate.
+- `language/extensibility/index.md` - **Extensibility** (index): The language is extended by writing functions, not macros or annotations - control structures, DSLs and query providers are all ordinary functions, closures and Expression<Value> parameters.
+
+## language/functions
+
+- `language/functions/arguments.md` - **Arguments and labels** (reference): An argument is passed positionally or by label, positional arguments always come first, and a label matches a parameter by name rather than by position.
+- `language/functions/closures.md` - **Closures** (reference): A brace in expression position is always a closure, its parameters are inferred from the expected type or written out, and it captures a const binding as a copy and a var binding as a box shared with its scope.
+- `language/functions/declaring-a-function.md` - **Declaring a function** (reference): fn declares a function with a mandatory parameter type on every parameter; the last expression of the body is the result, and a public function or a trait method must always spell out its return type.
+- `language/functions/default-values.md` - **Default values** (reference): A parameter default is an expression that runs at every call which omits the argument, in the scope of the declaration, without self and without the other parameters.
+- `language/functions/index.md` - **Functions** (index): Declaring a function, its arguments and defaults, variadic parameters, closures, trailing closures, parameter modes and quoted expressions.
+- `language/functions/parameter-modes.md` - **Parameter modes** (reference): A parameter is an ordinary value unless it says otherwise; var hands over a path to mutate, lazy defers evaluation once, a self-named closure resolves names against a receiver, and Expression also hands over the typed tree.
+- `language/functions/quoted-expressions.md` - **Quoted expressions** (reference): A parameter or binding typed Expression<Value> gets the ordinary value plus the typed tree of what was written, its source text and the values it captured, which is what assert and a query provider read instead of running the code twice.
+- `language/functions/trailing-closures.md` - **Trailing closures** (reference): When the last parameter of a call is a function, the closure argument can follow the call as a brace instead of sitting inside the parentheses, and it can name its parameter after the function type instead of using _.
+- `language/functions/variadics.md` - **Variadic parameters** (reference): A parameter written ...name collects every remaining positional argument into a List, and a collection is only unpacked into it when the call spreads it with the same three dots.
+
+## language/generics
+
+- `language/generics/bounds.md` - **Bounds** (reference): A bound restricts a type parameter to types that implement one or more traits, written inline or after where, and a member can carry a bound of its own that is not a requirement on every implementor.
+- `language/generics/index.md` - **Generics** (index): Type parameters, where they are declared, how a bound restricts them, what is inferred, and how a trait-typed value satisfies one at runtime.
+- `language/generics/inference.md` - **Inference** (reference): A type argument is inferred from a call's arguments or its expected type, a closure's parameter types follow the same rule, and a fn's own parameter types and a public fn's result are always written out.
+- `language/generics/no-higher-kinded-types.md` - **No higher-kinded types** (reference): Option, Result, Iterable and Task share method names with the same meaning as a convention of the standard library, not as a shared trait, because the language has no way to be generic over a type constructor.
+- `language/generics/type-parameters.md` - **Type parameters** (reference): A type parameter is declared in angle brackets after the name of a fn, type, trait or extend, and its name is written out like a type, never a single letter.
+- `language/generics/witnesses.md` - **Witness tables** (reference): A trait-typed value carries a witness table per trait it is known through, so a generic bound is satisfied by any trait the value's own traits require, even without knowing its concrete type.
+
+## language/modules-and-packages
+
+- `language/modules-and-packages/cyclic-imports.md` - **Cyclic imports** (reference): Two modules may import each other, because nothing runs when a module is imported and its exports are computed to a fixpoint, but the same cycle between top-level statements is an error.
+- `language/modules-and-packages/index.md` - **Modules and packages** (index): How a file brings in names from elsewhere, what a package is, and the two rules - visibility and top-level code - that decide what a module may contain.
+- `language/modules-and-packages/packages.md` - **Packages** (reference): A package is a directory with a project.trb and a src/, named owner/name, and it can only be reached by a project that lists it as a dependency.
+- `language/modules-and-packages/the-prelude.md` - **The prelude** (reference): The prelude is the package whose public names are in scope in every file without an import, and it holds only the pure part of the standard library.
+- `language/modules-and-packages/top-level-code.md` - **Top-level code** (reference): A statement outside every declaration is only allowed in an entry file, a script or a test file, and a top-level const of a module has to be known at compile time.
+- `language/modules-and-packages/use.md` - **use** (reference): use brings names into scope from a package or a file. Everything after from names a module, and a case comes in through the type it belongs to.
+- `language/modules-and-packages/visibility.md` - **Visibility** (reference): A top-level declaration is private to its file unless marked public, and a public declaration may not expose a type that is private to its own file.
+- `language/modules-and-packages/workspaces.md` - **Workspaces** (reference): A workspace is one root project.trb naming several member projects, sharing one project.lock.trb so they can never resolve their dependencies apart.
+
+## language/pattern-matching
+
+- `language/pattern-matching/cases-and-match.md` - **Cases and match** (reference): A case is a variant of a type, written Type.Case or .Case and bare only when it is imported. A match is an expression and must cover every case.
+- `language/pattern-matching/exhaustiveness.md` - **Exhaustiveness** (reference): A match has to cover every value of its subject, and an arm that no value can reach is a compile error, not a defensive line.
+- `language/pattern-matching/if-var.md` - **if var** (reference): if var P = place binds a pattern into the place itself, exactly like a var parameter, instead of copying the value out first.
+- `language/pattern-matching/importing-cases.md` - **Importing cases** (reference): A case is imported through the type it belongs to, and only a case can be; once imported it needs nothing in front of it, in an expression and in a pattern.
+- `language/pattern-matching/index.md` - **Cases and pattern matching** (index): How a type with cases is declared, and every place a pattern can stand.
+- `language/pattern-matching/pattern-forms.md` - **Pattern forms** (reference): Every pattern the language has, from a literal to a list pattern with a rest, one form per line.
+- `language/pattern-matching/patterns-in-bindings.md` - **Patterns in bindings and conditions** (reference): A pattern also stands after const and var, in the head of if and while, and in a for loop - the same vocabulary as a match arm, without the braces.
+
+## language/reflection
+
+- `language/reflection/encode-and-decode.md` - **Encode and Decode** (reference): Encode and Decode are generated the same way Equals and Show are, so a type describes itself to any format's Encoder and reads itself from its Decoder without a line of hand-written serialization code.
+- `language/reflection/encoders.md` - **Encoder and Decoder** (reference): Encoder and Decoder each name every scalar the language has - bool, int, unsigned, float, decimal, string, bytes - plus the four shapes a value can take, sequence, map, record and variant.
+- `language/reflection/index.md` - **Reflection** (index): Why there is no runtime reflection, the four syntactic bridges that connect a type to a value instead, and the generated Encode and Decode pair that covers serialization.
+- `language/reflection/no-reflection.md` - **There is no reflection** (reference): A type never flows as a value, so there is no Type type, no typeof and no Class.forName - only four syntactic bridges connect a type to a value, all resolved at compile time.
+
+## language/syntax
+
+- `language/syntax/cheat-sheet.md` - **Syntax cheat sheet** (reference): Every form of the language in one place: declarations, expressions, patterns, types and the call rules, with the exact spelling of each.
+- `language/syntax/command-calls.md` - **Command calls** (reference): A call is written without parentheses wherever the grammar allows it, and with parentheses everywhere else. This is the formatter canon and it is enforced, not preferred.
+- `language/syntax/doc-comments.md` - **Doc comments** (reference): A `/** */` comment attaches to the declaration written directly after it, and everything that can be declared - including a parameter, a field or a case - can have one.
+- `language/syntax/generics-or-comparison.md` - **Angle brackets or comparison** (reference): A `<` after a name starts a type argument list only if what follows parses as types up to a matching `>` that is itself followed by a token a comparison could not have.
+- `language/syntax/index.md` - **Syntax** (index): How TorbScript is written: where a statement ends, how a call is spelled, and what a literal looks like.
+- `language/syntax/lexical-structure.md` - **Lexical structure** (reference): A statement ends at the end of its line, a block comment ends at its first `*/`, and only three keywords are never reserved.
+- `language/syntax/literals.md` - **Literals** (reference): An integer, a decimal, a character and a string each have exactly one literal form, and a literal adapts to the type it is expected to have.
+- `language/syntax/multi-line-strings.md` - **Multi-line strings** (reference): A `\"\"\"` string is dedented by the indentation of its first line with content, so a block of text reads at the indentation of the code around it instead of jammed against the left margin.
+- `language/syntax/naming-conventions.md` - **Naming conventions** (reference): A type is UpperCamelCase and everything else is lowerCamelCase, a name is written out rather than abbreviated, and today nothing enforces either rule.
+- `language/syntax/string-interpolation.md` - **String interpolation** (reference): `{expression}` inside a string runs the expression and shows it, a literal brace is written `\{` or `\}`, and the expression inside the braces has to fit on one line.
+
+## language/traits
+
+- `language/traits/coherence.md` - **Coherence and blanket implementations** (reference): A package may implement a trait for a type only if it owns the type or the trait, and two implementations of one trait may never overlap.
+- `language/traits/delegation.md` - **Delegation with by** (reference): by forwards a trait's required members to the one field of a single-field type, binding only to the trait or & group written directly in front of it.
+- `language/traits/extend.md` - **extend** (reference): extend adds constants and functions to a type after its declaration, with a trait or without one, and never adds a field or a case.
+- `language/traits/index.md` - **Traits** (index): How a capability is declared, how a type comes with one, and how a trait is used as a type.
+- `language/traits/intersections.md` - **Trait intersections** (reference): The & operator combines two or more traits into one type, in a parameter, a field or a bound, and only traits can be combined this way.
+- `language/traits/object-safety.md` - **Object safety** (reference): A member that mentions Self in a parameter or its result, or that has no self, cannot be called on a trait-typed value, even though the trait stays a legal type.
+- `language/traits/operators.md` - **Operators are traits** (reference): Every operator except &&, || and ! is a trait method, so writing an operator on your own type means implementing the trait it stands for.
+- `language/traits/supertraits.md` - **Supertraits** (reference): A trait declared with a supertrait requires every implementing type to also implement that supertrait, and a default member can call the supertrait's members directly.
+- `language/traits/trait-types.md` - **Traits as types** (reference): A trait can stand wherever a type can, a value coerces to it automatically, and that coercion is the only subtyping the language has, with no variance for the types built from it.
+- `language/traits/traits.md` - **Traits** (reference): A trait is a capability a type comes with. A single-method trait is named after its method, there is no inheritance, and operators are traits.
+
+## language/types
+
+- `language/types/construction.md` - **Construction** (reference): Every type has exactly one constructor, generated from its fields in declaration order, and it never contains logic - validation and parsing are static factory functions instead.
+- `language/types/conversions.md` - **Conversions** (reference): From provides Into for free, TryFrom is for a conversion that can fail, Parse is for text, and the language has exactly four coercions that apply only where a type is expected.
+- `language/types/copy-and-equality.md` - **Copy and equality** (reference): Assigning, passing or capturing a value copies it, and Equals, Hash and copy are generated for a type without being written, each only if every field supports it.
+- `language/types/declaring-a-type.md` - **Declaring a type** (reference): One keyword declares every data type. Fields are const unless marked var, members are public unless marked private, and Equals, Hash, Show and copy are generated.
+- `language/types/exclusivity.md` - **Exclusivity** (reference): CONCEPT.md specifies that two var accesses of the same call may not target the same path, and today's checker accepts the textbook counter-example instead of rejecting it.
+- `language/types/fields.md` - **Fields** (reference): A field is const unless marked var, and private or private(var) decide who may read it and who may write it, independently of each other.
+- `language/types/generated-show.md` - **The generated Show** (reference): Show is generated for every type without being written, and its text is fixed so that two implementations of the language print the same thing for the same value.
+- `language/types/index.md` - **Types** (index): Declaring a type, its fields, its methods, what is generated for it, and how one is changed.
+- `language/types/methods.md` - **Methods and static functions** (reference): Declaring self makes a function a method instead of a static function, and a type has one namespace of members, so a field and a method can never share a name.
+- `language/types/property-commands.md` - **Property commands** (reference): A command call on a field writes it instead of calling it, which is what lets a configuration block read like plain data without a single hand-written setter.
+- `language/types/shared-types.md` - **Shared types** (reference): A shared type has an identity instead of a value, so assigning it never copies, isSame compares which object rather than which content, and Equals, Hash and copy are not generated for it.
+- `language/types/var-paths.md` - **Mutation and var paths** (reference): A change needs an unbroken var path from the binding down to the field being changed, and a var parameter or var self is a reference that cannot outlive the call it belongs to.
+- `language/types/verbs-and-participles.md` - **Verbs and participles** (reference): A verb changes its receiver in place and declares var self, and its participle answers a changed copy instead, so calling the verb through a const path names the participle in its error.
+
+## language/values-and-types
+
+- `language/values-and-types/arrays.md` - **Arrays and const parameters** (reference): Array<Item, const Size> carries its length in the type, a const parameter is a value rather than a type, and there is no arithmetic over one.
+- `language/values-and-types/bindings.md` - **Bindings** (reference): A const binding never changes and nothing below it changes; a var binding can be changed in place. That one rule replaces every mutable-and-immutable type pair.
+- `language/values-and-types/built-in-types.md` - **Built-in types** (reference): Every type a file has without an import - the sized numbers, Bool, Char, String, tuples, lists, maps, ranges, Option, function types, Void and Never.
+- `language/values-and-types/distinct-types.md` - **Distinct types** (reference): A distinct type is an ordinary single-field type, and `by` forwards specific traits to that field so the wrapper costs no boilerplate - there is no separate opaque-alias feature.
+- `language/values-and-types/floating-point.md` - **Floating-point numbers** (reference): On a Float, `==` is IEEE-754 and `compare` is a total order that disagrees with it on `nan` and `-0.0`, and neither Float type is Hash.
+- `language/values-and-types/index.md` - **Values and types** (index): Bindings, the built-in types, and the type forms that are about values rather than about behaviour.
+- `language/values-and-types/integers.md` - **Integers** (reference): Eight sized integer types with fixed ranges on every platform, an unannotated literal is always Int64, and overflow is a compile error when it is written and a panic when it happens at runtime.
+- `language/values-and-types/literal-types.md` - **Literal types** (reference): `"tcp" | "udp"` is a type made only of specific values of one base type; only literals combine with `|`, because there are no unions of types.
+- `language/values-and-types/option.md` - **Option** (reference): Absence is a value, Some(value) or None, and there is no null and no implicit Some - a value has to be wrapped and unwrapped on purpose.
+- `language/values-and-types/ranges.md` - **Ranges** (reference): A Range has two optional ends and an inclusive flag; an open end is only checked when something asks for it, so iterating a range without a start or measuring one without both ends panics instead of failing to compile.
+- `language/values-and-types/strings.md` - **Strings** (reference): A String has no length() and no text[i], because "length" and "the i-th character" each have three different answers and two of them are slow.
+- `language/values-and-types/tuples.md` - **Tuples** (reference): A tuple is positional and accessed by .0, .1; a label makes a position easier to read but is not part of the type, so a labelled and an unlabelled tuple of the same shape are the same type.
+- `language/values-and-types/type-aliases.md` - **Type aliases** (reference): `type Name = Other` names an existing type rather than declaring a new one, and the two names are freely interchangeable - there is no separate `alias` keyword.
+- `language/values-and-types/void-and-never.md` - **Void and Never** (reference): Void has exactly one value, the keyword literal void, the way true and false are the values of Bool; Never has no value at all and converts to every type, which is why panic fits into any expression.
+
+## standard-library
+
+- `standard-library/collections.md` - **std/collections** (package): The collection traits every signature talks about, and the implementations that only show up where one is built.
+- `standard-library/console.md` - **std/console** (package): print and printError, the two functions that write to the standard streams.
+- `standard-library/core.md` - **std/core** (package): The bottom of the standard library: Option, Result, Error, the operator and conversion traits, and the control structures that are functions.
+- `standard-library/encoding.md` - **std/encoding** (package): Encode and Decode, the Encoder and Decoder a format implements, and Format for the streaming side.
+- `standard-library/environment.md` - **std/environment** (package): Environment, the one type that reads a process environment variable.
+- `standard-library/expression.md` - **std/expression** (package): Expression and ExpressionNode, the typed tree a quoted parameter hands over, plus assert and nameOf.
+- `standard-library/fs.md` - **std/fs** (package): File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.
+- `standard-library/http.md` - **std/http** (package): A minimal HTTP client - get, post and request answer a Task, and a response body is a stream of any size.
+- `standard-library/index.md` - **The standard library** (index): One page per package of std, what each contains, and which of them are in scope everywhere without an import.
+- `standard-library/io.md` - **std/io** (package): Standard input and the streams every process is started with - readLine for the short form, Source and Sink for the rest.
+- `standard-library/iteration.md` - **std/iteration** (package): Iterable and Iterator, the lazy stages between them, and the collectors a pipeline ends in.
+- `standard-library/json.md` - **std/json** (package): Json for encoding and decoding, and JsonValue for the rare document whose shape is not known ahead of time.
+- `standard-library/math.md` - **std/math** (package): The functions on Float that read as an operation rather than a method, under the math namespace import.
+- `standard-library/number.md` - **std/number** (package): Every numeric type of the language, the traits their arithmetic and bit operations go through, and Bits.
+- `standard-library/prelude.md` - **std/prelude** (package): The package of re-exports that is in scope in every file of a project, unless project.trb names another one.
+- `standard-library/process.md` - **std/process** (package): Process for arguments and exiting, Child for a running program's pipes, and ProcessOutput for what it left behind.
+- `standard-library/project.md` - **std/project** (package): The receiver type of project.trb - Project, Dependencies, Build, Test and Workspace.
+- `standard-library/sandbox.md` - **std/sandbox** (package): Sandbox and Script, which load a .trb file as a type-checked, capability-limited receiver closure.
+- `standard-library/stream.md` - **std/stream** (package): Source and Sink, the asynchronous ends of a stream, plus Bytes, Utf8Error and the stages between bytes and text.
+- `standard-library/test.md` - **std/test** (package): test and group, the two functions a .test.trb file calls, with assert doing all of the checking.
+- `standard-library/text.md` - **std/text** (package): Char, a Unicode scalar value, and String, always-valid UTF-8 text with no length() and no indexing by character.
+- `standard-library/time.md` - **std/time** (package): Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.
+
+## tooling
+
+- `tooling/index.md` - **The toolchain** (index): The torb command, the project files, and how to verify that what you wrote is correct and in the formatter canon.
+- `tooling/project-trb.md` - **project.trb** (tooling): The manifest of a project - name, dependencies, the workspace it belongs to, and what torb build and torb test read out of it today.
+- `tooling/the-formatter-canon.md` - **The formatter canon** (tooling): The one way every TorbScript source is written - a command wherever the grammar allows it, and a multi-line string indented two spaces deeper than the line it starts on.
+- `tooling/the-torb-command.md` - **The torb command** (tooling): Every subcommand of the toolchain, what it does today, and which of them are still planned.
+- `tooling/torb-build.md` - **torb build** (tooling): torb build type checks a program, lowers it to C, and hands the C to whatever compiler it finds - one file in, one native binary out, nothing to configure.
+- `tooling/torb-canon.md` - **torb canon** (tooling): torb canon rewrites sources into the formatter canon over the syntax tree, checks every edit against a second parse, and drops anything that would change what the program means.
+- `tooling/torb-check.md` - **torb check** (tooling): torb check resolves every module, import and name in a type position, types every expression, and reports one block per diagnostic - the gate every other command trusts.
+- `tooling/torb-run.md` - **torb run** (tooling): torb run executes a file directly, or src/main.trb of a project directory, and passes the rest of the command line to the program as Process.arguments().
+- `tooling/torb-test.md` - **torb test** (tooling): torb test runs every *.test.trb file below a directory, one process per file by default, and prints ok or FAILED for every test call it sees.
+- `tooling/verifying-your-work.md` - **Verify your work** (tooling): The commands that decide whether TorbScript you wrote is correct and in the formatter canon, in the order to run them.

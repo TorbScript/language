@@ -8,11 +8,13 @@ use borrowed, referenced from "../ir"
 use FunctionBuilder, addTemporary, emit from "../build"
 use elementFor from "../element"
 use memberOfType from "../witness"
+use traitArgumentsOf from "../../semantics/checker/implementation"
 use locationOf from "./context"
-use Lowering, reportUnsupported, irTypeOfClosed from "./context"
+use Lowering, reportUnsupported, irTypeOfClosed, substituted from "./context"
 use valueSlot, unsupportedSlot, abandonedSlot from "./expression"
 use lowerValue from "./expression"
-use lowerTraitValue from "./generic"
+use lowerTraitValue, dispatchedMember from "./generic"
+use lowerDispatched from "./call"
 
 /**
  * `[1, 2, 3]` and `["a": 1]`: the two container literals of the language (milestone 5.7).
@@ -39,6 +41,9 @@ public fn lowerListLiteral(
   annotation: IrTypeId,
 ): Slot {
   const at = expression.span
+  if !isDefaultLiteral(lowering, at) {
+    return abandonedSlot lowering, builder, destination
+  }
   const bounds = boundsOfLiteral lowering, expression
   const bound = match bounds.first() {
     Some(found) => found
@@ -87,6 +92,43 @@ public fn lowerListLiteral(
   coerced lowering, builder, destination, storage, bounds, container, annotation, at
 }
 
+/**
+ * Whether a literal is built **directly** as the collection its own type names, which is `CollectionLiteral.Default` and
+ * the only one of the three shapes 5.7 lowers. The checker decided which of the three it is (gap 51, TYPECHECKER 8) and
+ * recorded it at the literal's span, so the back end reads that decision instead of asking the expected type a second
+ * time and answering it differently.
+ *
+ * - **`InlineArray`** writes the items straight into the inline slots of an `Array<Item, Size>`. That is a `FixedArray`
+ *   and therefore milestone 5.9b's, together with its interior paths.
+ * - **`FromIterable`** builds the default list and hands it to the `from` of the target (`Set<String>`, `Queue<Int>`).
+ *   The `from` to call is `memberOfImplementation` of the `witness` the checker recorded, so the *call* is ordinary - but
+ *   every one of those bottoms out in `TrieSet.from` or `ArrayQueue.from`, which are the same `.Planned` natives as
+ *   `ArrayList.from` and cannot be functions of the runtime at all (they walk an `Iterable` of the program). So it waits
+ *   for exactly the step `ArrayList.from` waits for, and naming the target is more use than half a chain.
+ */
+fn isDefaultLiteral(var lowering: Lowering, at: Span): Bool {
+  const module = lowering.module
+  const found = match lowering.checker.collectionLiteralAt(module, at) {
+    Some(inner) => inner
+    None => {
+      // A literal whose target the checker never decided is a program it reported on itself
+      return true
+    }
+  }
+  match found {
+    .Default => true
+    .InlineArray(_, size) => {
+      reportUnsupported lowering, "a literal that fills an `Array` of {size} items (milestone 5.9b)", at
+      false
+    }
+    .FromIterable(target, _, _) => {
+      const shown = lowering.checker.describe target
+      reportUnsupported lowering, "a literal that is built through the `from` of `{shown}`", at
+      false
+    }
+  }
+}
+
 /** `["a": 1]`: a `TrieMap<Key, Value>` filled in written order, then coerced to the `Map<Key, Value>` the literal is. */
 public fn lowerMapLiteral(
   var lowering: Lowering,
@@ -97,6 +139,9 @@ public fn lowerMapLiteral(
   annotation: IrTypeId,
 ): Slot {
   const at = expression.span
+  if !isDefaultLiteral(lowering, at) {
+    return abandonedSlot lowering, builder, destination
+  }
   const bounds = boundsOfLiteral lowering, expression
   const bound = match bounds.first() {
     Some(found) => found
@@ -152,6 +197,99 @@ public fn lowerMapLiteral(
   coerced lowering, builder, destination, storage, bounds, container, annotation, at
 }
 
+// --- The traits a `for` walks ---------------------------------------------------------------------------------------
+
+/**
+ * The `Iterable<Item>` a subject implements, with its arguments filled in - the very question `checkLoop` asked before it
+ * accepted the loop, so a `for` the checker let through is one the back end can dispatch.
+ */
+public fn iterableBoundOf(var lowering: Lowering, subject: TypeId, at: Span): TypeId? {
+  appliedBoundOf lowering, subject, "Iterable", at
+}
+
+/**
+ * The `Iterator<Item>` the cursor of a loop implements. It is asked of the cursor's own type rather than read off the
+ * declared result of `iterator`, so a cursor that is a concrete type and one that is the trait value both answer.
+ */
+public fn iteratorBoundOf(var lowering: Lowering, cursor: TypeId, at: Span): TypeId? {
+  appliedBoundOf lowering, cursor, "Iterator", at
+}
+
+/** One trait of the prelude, applied to the arguments the subject has for it. */
+fn appliedBoundOf(var lowering: Lowering, subject: TypeId, name: String, at: Span): TypeId? {
+  const capability = match lowering.checker.wellKnown.symbolNamed(name) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `for` without `{name}` in the prelude", at
+      return None
+    }
+  }
+  const arguments = match traitArgumentsOf(lowering.checker, subject, capability) {
+    Some(found) => found
+    None => {
+      const shown = lowering.checker.describe subject
+      reportUnsupported lowering, "`for` over `{shown}`, which the back end cannot see as an `{name}`", at
+      return None
+    }
+  }
+  Some lowering.checker.nominal(capability, arguments)
+}
+
+// --- Reading an element ---------------------------------------------------------------------------------------------
+
+/**
+ * `a[key]`: the `Indexed.at` the checker resolved at the span of the whole index expression.
+ *
+ * **The panic on a missing key is the language's own and no rule of the back end.** `at` is a default of `Indexed` whose
+ * body is `get(key).expect("Key does not exist")`, so what an index out of range does is decided in `std/core` and is the
+ * same in every back end - which is exactly what design principle 5 asks for.
+ *
+ * The receiver is read as a **value**, because `at` takes `self`. A `var` path *through* an index
+ * (`enemies[0].health = 5`) is `TakeOut`/`PutBack` and milestone 5.9b's; this is the read alone.
+ */
+public fn lowerIndexRead(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  target: Expression,
+  index: Expression,
+  annotation: IrTypeId,
+): Slot {
+  const at = expression.span
+  const module = lowering.module
+  const resolution = match lowering.checker.resolutionAt(module, at) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "`a[key]` the checker did not resolve", at
+    }
+  }
+  const (symbol, typeArguments, dispatch) = match resolution {
+    .Callable(found, given, how) => (found, given, how)
+    _ => {
+      return unsupportedSlot lowering, builder, destination, "`a[key]` the back end does not lower yet", at
+    }
+  }
+  const receiver = lowering.checker.expressionType module, target.span
+  const dispatched = match dispatchedMember(lowering, symbol, typeArguments, dispatch, receiver, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  // Source order: what stands in front of the bracket first, then what is in it (decided gap 1)
+  const base = lowerValue lowering, builder, target
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const key = lowerValue lowering, builder, index
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const places: List<Reference?> = []
+  lowerDispatched lowering, builder, destination, at, dispatched, [base, key], places, annotation
+}
+
 // --- The pieces both literals share ---------------------------------------------------------------------------------
 
 /** One `add` or `set` on the container under construction: the receiver is the temporary, which is a place. */
@@ -174,15 +312,20 @@ fn addInto(
 /**
  * The bounds of the trait-typed value a literal *is*. The checker built the type out (`Traits([List<Int>])`), so there is
  * no `Adaptation.ToTraitValue` at a literal and nothing has recorded the bounds anywhere else.
+ *
+ * The arguments of the instance that is being lowered go in first: a `[]` inside
+ * `fn empty<Item>(): List<Item>` is recorded as `Traits([List<Item>])`, and without substituting it the element
+ * descriptor would be built for the *parameter* - which reaches the back end as "`Item` was not substituted".
  */
 fn boundsOfLiteral(var lowering: Lowering, expression: Expression): List<TypeId> {
   const module = lowering.module
-  const found = match lowering.checker.expressionType(module, expression.span) {
+  const written = match lowering.checker.expressionType(module, expression.span) {
     Some(inner) => inner
     None => {
       return []
     }
   }
+  const found = substituted lowering, written
   match lowering.checker.types.form(found) {
     .Traits(bounds) => bounds
     _ => []

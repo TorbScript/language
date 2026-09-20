@@ -1,0 +1,99 @@
+---
+title: Top-level code
+summary: A statement outside every declaration is only allowed in an entry file, a script or a test file, and a top-level const of a module has to be known at compile time.
+kind: reference
+status: stable
+order: 60
+keywords:
+  - top-level
+  - entry file
+  - script
+  - compile-time constant
+source:
+  - CONCEPT.md#modules-and-packages
+---
+
+A file that nothing imports has no initialization order to protect, so it is free to run statements from top to
+bottom like any other program. A file that is imported is not: it only ever contributes declarations.
+
+## Example
+
+```trb check
+use File from "std/fs"
+
+const text = File.readText("project.trb")?
+print text.lines().length()
+```
+
+## Syntax
+
+```text
+const <name> = <compile-time expression>    a module's only top-level statement
+<any statement>                             legal in an entry file, a script, or a *.test.trb file
+```
+
+## Rules
+
+1. **Whether a file may have top-level code depends on being imported, not on its name.** `src/main.trb`, a receiver
+   script, and every file of `examples/tour` qualify because nothing imports them; `src/lib.trb` of a named package
+   never does, because it is what other packages import.
+
+2. **A `tests/*.test.trb` file consists of nothing but top-level `group` and `test` calls.** The test framework is
+   ordinary functions, so a test file is a script like any other.
+
+3. **In an entry file, a script or a test file, a top-level `?` ends the program with the error, printed and exited
+   the same way as any other top-level failure** (see [Result](../errors/result.md) for the exact text and exit
+   code).
+
+4. **`await()` is allowed at the top level of an entry file or a script**, exactly as it is inside a function that
+   returns a `Task`.
+
+   ```trb check
+   const created = spawn({ 1 + 1 })
+   print created.await()
+   ```
+
+5. **A top-level `const` of a module has to be known at compile time.** Literals, unary minus, the operators of the
+   built-in number types and of `Bool`, string interpolation of such, a tuple, list or map literal of such, and a
+   constructor or case-constructor call whose arguments are such all qualify. A function call does not, and neither
+   does a `native` call.
+
+   ```trb skip a module cannot be produced inside one snippet of this documentation, which is always checked as an unimported file; the real diagnostic is: The initializer of a top-level `const` has to be known at compile time
+   fn greeting(): String {
+     "hello"
+   }
+
+   const message = greeting()
+   ```
+
+6. **A constant expression that overflows, divides by zero, or produces `nan` is a compile error at that
+   expression.** This is the same rule as for any other overflow written in the source: caught where it is written,
+   rather than at the moment the module happens to be loaded.
+
+7. **`public const` exports the constant; there is no `public var` at the top level of a module.** A module has no
+   mutable state, so nothing a top-level `var` could export exists in the first place - see
+   [Visibility](visibility.md).
+
+## What this is not
+
+**Top-level code is not something a module can opt into.** Whether a file may hold a statement outside a declaration
+follows from whether anything imports it, and nothing in the file itself changes that.
+
+```trb check
+use File from "std/fs"
+
+const text = File.readText("project.trb")?
+print text
+```
+
+```trb skip a module's top-level statement can only be produced by a file something else imports, which this single-file gate cannot construct; the real diagnostic is: Top-level code is only allowed in entry files. `<path>` is imported
+type Config {}
+
+print "loading"
+```
+
+## Related
+
+- [Visibility](visibility.md) - `public` at the top level, the other half of what a file exports.
+- [Cyclic imports](cyclic-imports.md) - why a module having no initialization order is what makes a cycle harmless.
+- [Result](../errors/result.md) - what a top-level `?` prints and exits with.

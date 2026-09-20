@@ -11,14 +11,16 @@ use numericKindOf, layoutOfType from "../verify"
 use describeIrType from "../print"
 use evaluateConstant, staticOfConstant from "../constant"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
-use internStatic, isNeverType, finishBlock, continueIn, irTypeOfClosed from "./context"
+use internStatic, isNeverType, isVoidType, finishBlock, continueIn, irTypeOfClosed from "./context"
 use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue from "./call"
 use objectTypeOf, lowerTraitValue, closedBounds from "./generic"
 use lowerBlockInto from "./statement"
-use lowerListLiteral, lowerMapLiteral from "./collection"
-use lowerMatch, lowerIfBinding, lowerTry, lowerCoalesce from "./match"
+use lowerListLiteral, lowerMapLiteral, lowerIndexRead from "./collection"
+use lowerMatch, lowerIfBinding, lowerTry, lowerCoalesce, lowerOptionalMember from "./match"
+use variantLayoutOfType from "./match"
 use lowerClosureValue, lowerNamedFunctionValue, lowerForcedRead, bindingReferenceOf from "./closure"
 use lowerConstructorValue from "./closure"
+use lowerTextLiteral, showsHere, printCallOf from "./text"
 
 /**
  * Every expression of the monomorphic part of the language, as instructions over numbered slots.
@@ -76,6 +78,10 @@ fn lowerInnerExpression(
   if isLiteralExpression(expression) {
     return lowerLiteral lowering, builder, destination, expression
   }
+  // `a?.m` and `a?.m(...)` are control flow over the `Option`, and the member is lowered inside the arm that has a value
+  if const Some(chain) = optionalChainOf(lowering, expression) {
+    return lowerOptionalMember lowering, builder, destination, expression, chain.base, chain.member, annotation
+  }
   match expression.kind {
     .Name(_) | .Member(_, _, _) | .ImplicitMember(_) => {
       lowerReference lowering, builder, destination, expression, annotation
@@ -94,24 +100,94 @@ fn lowerInnerExpression(
       target
     }
     .TupleLiteral(items) => lowerTuple lowering, builder, destination, items, annotation, expression.span
-    .Index(_, _) => unsupportedSlot lowering, builder, destination, "`a[key]`", expression.span
+    .Index(target, index) => lowerIndexRead lowering, builder, destination, expression, target, index, annotation
     .ListLiteral(items) => lowerListLiteral lowering, builder, destination, expression, items, annotation
     .MapLiteral(entries) => lowerMapLiteral lowering, builder, destination, expression, entries, annotation
-    .RangeLiteral(_, _, _) => unsupportedSlot lowering, builder, destination, "a range as a value", expression.span
+    .RangeLiteral(from, to, isInclusive) => {
+      lowerRangeLiteral lowering, builder, destination, from, to, isInclusive, annotation, expression.span
+    }
     .Try(inner) => lowerTry lowering, builder, destination, expression, inner, annotation
     .Closure(closure) => {
       lowerClosureValue lowering, builder, destination, expression, closure, annotation
     }
     .Match(subject, arms) => lowerMatch lowering, builder, destination, expression, subject, arms, annotation
     .Generic(_, _) => unsupportedSlot lowering, builder, destination, "a generic call", expression.span
-    .TextLiteral(_) => unsupportedSlot lowering, builder, destination, "string interpolation", expression.span
+    .TextLiteral(segments) => {
+      lowerTextLiteral lowering, builder, destination, expression, segments, annotation
+    }
     _ => unsupportedSlot lowering, builder, destination, "an expression the front end rejected", expression.span
   }
+}
+
+/**
+ * The base and the member of a `?.`, where this expression is one and it has not been unwrapped yet. `a?.m` is the member
+ * itself, `a?.m(...)` the call around it, and both are lowered once - `lowerOptionalMember` puts the payload in place of
+ * the base and lowers the very same expression again, which is what the entry in `optionalReceivers` says.
+ */
+fn optionalChainOf(var lowering: Lowering, expression: Expression): OptionalChain? {
+  const member = match optionalMemberOf(expression) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  if lowering.optionalReceivers.containsKey(member.base.span) {
+    return None
+  }
+  Some member
+}
+
+/** `a?.m` written on its own, or as the callee of a call. */
+fn optionalMemberOf(expression: Expression): OptionalChain? {
+  if const .Member(base, name, isOptional) = expression.kind {
+    if isOptional {
+      return Some OptionalChain(base, name.span)
+    }
+    return None
+  }
+  if const .Call(callee, _, _) = expression.kind {
+    if const .Member(base, name, isOptional) = callee.kind {
+      if isOptional {
+        return Some OptionalChain(base, name.span)
+      }
+    }
+  }
+  None
+}
+
+type OptionalChain {
+  base: Expression
+  /** The span of the member's name, which is where the checker recorded whether it answers an `Option` already. */
+  member: Span
 }
 
 /** The value of an expression that nothing has a slot for yet. */
 public fn lowerValue(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
   lowerExpression lowering, builder, expression, None
+}
+
+/**
+ * The value of an expression **without** the coercion to a trait-typed value the checker recorded at it.
+ *
+ * One caller: an argument of `print`, whose declared parameter is `Show` and which is therefore coerced. Boxing the
+ * value only to read the table back out of the box would cost one allocation per argument, while the type of the value
+ * itself already says which `show` runs - so the shown parts of a `print` are free, and a value that is trait typed to
+ * begin with is unaffected (there the table is the only answer there is).
+ */
+public fn lowerUncoercedValue(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot {
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, None
+  }
+  const annotation = match typeAtSpan(lowering, expression.span) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, None, "an expression without a type", expression.span
+    }
+  }
+  if !canReplayAdaptations(lowering, expression) {
+    return abandonedSlot lowering, builder, None
+  }
+  lowerInnerExpression lowering, builder, expression, None, annotation
 }
 
 /** The bounds `Adaptation.ToTraitValue` recorded at an expression, or an empty list where it recorded none. */
@@ -167,11 +243,19 @@ public fn valueSlot(
   destination: Slot?,
   annotation: IrTypeId,
 ): Slot {
-  if const Some(slot) = destination {
-    return slot
-  }
   // `Never` has no values, so a slot may not have that type: the expression diverges and nothing reads this one
   const inner = if isNeverType(lowering, annotation) { voidTypeOf lowering } else { annotation }
+  if const Some(slot) = destination {
+    // The one `Void` slot of the function is the **wrong** hint for a value that is not `Void`. An `if` used as a
+    // statement has the type `Void`, so both of its arms produce into that one slot - and an arm whose last expression
+    // answers a value nobody takes (`parser.bump()`, whose `Token` is discarded) was then a call of a `Token` into a
+    // `Void` slot, which the verifier rejects. Every other disagreement is deliberate: `?.` lowers its member into a slot
+    // of the *payload* type while the expression it lowers is the `Option` around it.
+    if isVoidType(lowering, builder.typeOfSlot(slot)) && !isVoidType(lowering, inner) {
+      return addTemporary builder, inner
+    }
+    return slot
+  }
   addTemporary builder, inner
 }
 
@@ -228,15 +312,18 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
   // `?` converts the error out of the very adaptation this would refuse, and a `??` inlines the thunk of its fallback
   const convertsItself = isTryExpression expression
   const inlinesThunk = lowering.inlinedThunks.containsKey at
+  // An interpolated part and an argument of `print` are shown by `ir/lower/text.trb`, which records the span first
+  const isShown = showsHere lowering, at
+  const printsParts = printCallOf(lowering, expression).isSome()
   for adaptation in adaptations {
     const blocked = match adaptation {
       .Convert(_, _) => if convertsItself { "" } else { "a conversion through `From`" }
-      .ShowValue(_) => "string interpolation"
+      .ShowValue(_) => if isShown { "" } else { "a value shown outside of an interpolation" }
       .Delegate(_) => "`by` delegation"
       .Lazy => if inlinesThunk { "" } else { "a `lazy` argument" }
       .Quote(_) => "a quoted expression (milestone 5.11)"
       .Spread => "`...` in an argument list"
-      .Variadic(_, _) => "a variadic argument list"
+      .Variadic(_, _) => if printsParts { "" } else { "a variadic argument list" }
       _ => ""
     }
     if !blocked.isEmpty() {
@@ -584,18 +671,18 @@ fn isTupleLayout(var lowering: Lowering, owner: IrTypeId): Bool {
  * where the source left it out (`Adaptation.ImplicitSelf`).
  */
 public fn receiverSlot(var lowering: Lowering, var builder: FunctionBuilder, expression: Expression): Slot? {
+  // Written type arguments sit between the receiver and the call (`to<List<Item>>()`, `value.to<Set<Int>>()`), so the
+  // receiver is whatever is under them - and `Adaptation.ImplicitSelf` is recorded at that inner span
+  if const .Generic(target, _) = expression.kind {
+    return receiverSlot lowering, builder, target
+  }
   if const .Member(base, _, isOptional) = expression.kind {
+    // `a?.m`: the base of the member is the *payload* of the `Option`, which `lowerOptionalMember` unwrapped and put here
     if isOptional {
-      /*
-       * `a?.m` is control flow and not a closure: the `Option.map` the checker names has no closure in the source to
-       * lower at all (gap 12), so it would be a `Tag`, a `Switch` and the member on the payload - the way `??` is
-       * inlined.
-       *
-       * What is missing for it is one record. The checker wraps the member's own result into the `Option` *inside* the
-       * function type it gives the callee, so nothing says whether `m` answered an `Option` already - and that is what
-       * decides whether the arm wraps its value or hands it on. One flag at the span of the `?.` closes it.
-       */
-      const what = "`?.`, whose arm cannot say whether the member answers an `Option` already"
+      if const Some(payload) = lowering.optionalReceivers.get(base.span) {
+        return Some payload
+      }
+      const what = "`?.` the back end did not unwrap"
       reportUnsupported lowering, what, expression.span
       return None
     }
@@ -641,6 +728,96 @@ fn lowerTuple(
   const target = valueSlot lowering, builder, destination, annotation
   lowerConstruct lowering, builder, target, layout, 0, slots
   target
+}
+
+// --- Ranges ---------------------------------------------------------------------------------------------------------
+
+/**
+ * `0..10`, `0..=10`, `..10`, `0..`: **a `Range` is an ordinary record** (5.1's note - the one `native type` that declares
+ * fields and is not a `RuntimeKind`), so a range literal is one `Construct` of its three fields. The two ends are an
+ * `Option` each, `inclusive` is a `Bool`, and both ends are evaluated in source order before the record is built.
+ *
+ * Nothing about *iterating* a range is here: `for index in a..b` with both ends written out is still the counter of 5.2,
+ * and every other range walks `Range<Int>.iterator` like any other `Iterable`.
+ */
+fn lowerRangeLiteral(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  from: Expression?,
+  to: Expression?,
+  isInclusive: Bool,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const layout = match layoutOfType(lowering.program, annotation) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a range whose type has no layout", at
+    }
+  }
+  const fields = lowering.program.layoutAt(layout).fields
+  if fields.length() != 3 {
+    return unsupportedSlot lowering, builder, destination, "a range with other fields than the two ends", at
+  }
+  const first = match rangeEndSlot(lowering, builder, from, fields[0].annotation, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const second = match rangeEndSlot(lowering, builder, to, fields[1].annotation, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const contents = StaticContents.Literal LiteralValue.Boolean(isInclusive)
+  const flag = constantSlot lowering, builder, None, contents, fields[2].annotation
+  const target = valueSlot lowering, builder, destination, annotation
+  lowerConstruct lowering, builder, target, layout, 0, [first, second, flag]
+  target
+}
+
+/** One end of a range: `Some(value)` where it is written, and `None` where the range is open on that side. */
+fn rangeEndSlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  written: Expression?,
+  annotation: IrTypeId,
+  at: Span,
+): Slot? {
+  const layout = match variantLayoutOfType(lowering, annotation) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a range whose end is not an `Option`", at
+      return None
+    }
+  }
+  const target = addTemporary builder, annotation
+  const inner = match written {
+    Some(found) => found
+    None => {
+      const empty = variantNamed lowering, layout, "None"
+      if empty < 0 {
+        reportUnsupported lowering, "a range whose end has no `None`", at
+        return None
+      }
+      lowerConstruct lowering, builder, target, layout, empty, []
+      return Some target
+    }
+  }
+  const some = variantNamed lowering, layout, "Some"
+  if some < 0 {
+    reportUnsupported lowering, "a range whose end has no `Some`", at
+    return None
+  }
+  const value = lowerValue lowering, builder, inner
+  if !lowering.isSupported {
+    return None
+  }
+  lowerConstruct lowering, builder, target, layout, some, [value]
+  Some target
 }
 
 // --- Operators ------------------------------------------------------------------------------------------------------

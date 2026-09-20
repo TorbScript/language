@@ -135,6 +135,42 @@ group "Trait-typed values" {
         }"""
     )
   }
+
+  /**
+   * `Accumulator.finish` is *required* by `Accumulator` and written with a body by its **subtrait** `Collection`, which
+   * is what `checkRequirements` accepts (`hasDefaultInClosure`). So the table of the subtrait has to point at that
+   * default, or the back end refuses a program the checker approved.
+   */
+  test "a member a subtrait's default provides is the table entry of the trait that requires it" {
+    const source = r"""
+      trait Ends {
+        fn ending(self): Int
+      }
+
+      trait Counts with Ends {
+        fn ending(self): Int {
+          17
+        }
+      }
+
+      type Tally with Counts {}
+
+      fn endOf(value: Ends): Int {
+        value.ending()
+      }
+
+      fn used(): Int {
+        endOf(Tally())
+      }
+      """
+    assert(unsupportedIn(source) == [])
+    assert(
+      textOf(source).contains(
+        "witness w_acme_x2f_app_main_Ends__T_acme_x2f_app_main_Tally Ends for Record(T_acme_x2f_app_main_Tally)"
+          + " members(t_acme_x2f_app_main_Counts_ending__T_acme_x2f_app_main_Tally) nested()"
+      )
+    )
+  }
 }
 
 group "Monomorphization" {

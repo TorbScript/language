@@ -2,6 +2,7 @@ use Span from "../../syntax/source"
 use Expression, Block, MatchArm, Pattern from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
 use TypeId, LiteralValue from "../../semantics/checker/type"
+use optionValueOf from "../../semantics/checker/expression"
 use MatchPlan, PatternBranch, PatternCheck, PatternLiteral, PatternStep from "../../semantics/checker/exhaustive"
 use IrTypeId, IrType, Slot, BlockId, LocationId, Instruction, Terminator, Reference, PathStep from "../ir"
 use LayoutId, IntrinsicOperation, NumericKind, StaticContents, borrowed from "../ir"
@@ -723,9 +724,13 @@ public fn lowerTry(
   const resultLayout = match variantLayoutOfType(lowering, result) {
     Some(found) => found
     None => {
-      // At the top level of an entry file there is nothing to hand the failure to: `error: <the error through Show>`
-      // plus exit code 1 (decided gap 9) needs the `Show` of milestone 5.10
-      const what = "`?` in a body that returns neither an `Option` nor a `Result` (milestone 5.10)"
+      /*
+       * At the top level of an entry file there is nothing to hand the failure to. What it has to do instead is decided
+       * gap 9 - `error: <the error through Show>` to stderr and exit code 1 - and `Show` is here now, but the *report*
+       * belongs to the driver: it walks `cause()` and, in the debug profile, prints the `?` return trace under the chain
+       * (BACKEND's note of 5.3, on the list of milestone 5.13 together with the profiles and the ICE report).
+       */
+      const what = "`?` at the top level of an entry file, whose `error:` report is the driver's (milestone 5.13)"
       return unsupportedSlot lowering, builder, destination, what, expression.span
     }
   }
@@ -907,6 +912,121 @@ public fn lowerCoalesce(
   }
   continueIn lowering, builder, join
   target
+}
+
+// --- `?.` -----------------------------------------------------------------------------------------------------------
+
+/**
+ * `a?.m` and `a?.m(...)`: the member on the payload of the `Option`, or `None` without touching the member at all.
+ *
+ * The checker resolves it to `Option.map`, or to `flatMap` where the member answers an `Option` of its own so that `?.`
+ * never nests one (gap 12) - but there is no closure in the source to lower, so the lowering emits the control flow the
+ * two stand for, the way `??` inlines its thunk. Which of the two it is is `Tables.flattenedOptionals` at the span of the
+ * member, because the wrapping happens *inside* the function type the checker gives the member and nothing else says it.
+ *
+ * The member itself is lowered by the ordinary machinery: `Lowering.optionalReceivers` puts the payload in place of the
+ * base for exactly one expression, so `lowerCall` and `lowerFieldRead` need no case of their own and a `?.` on a trait
+ * member, a native or a `copy` works for free.
+ */
+public fn lowerOptionalMember(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  base: Expression,
+  member: Span,
+  annotation: IrTypeId,
+): Slot {
+  const flattened = match lowering.checker.flattenedOptionalAt(lowering.module, member) {
+    Some(found) => found
+    None => {
+      const what = "`?.` whose member the checker did not record"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  const subject = lowerValue lowering, builder, base
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const subjectLayout = match variantLayoutOfType(lowering, builder.typeOfSlot(subject)) {
+    Some(found) => found
+    None => {
+      const what = "`?.` on a value that is not an `Option`"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  const resultLayout = match variantLayoutOfType(lowering, annotation) {
+    Some(found) => found
+    None => {
+      const what = "`?.` whose result is not an `Option`"
+      return unsupportedSlot lowering, builder, destination, what, expression.span
+    }
+  }
+  const some = variantNamed lowering, subjectLayout, "Some"
+  const empty = variantNamed lowering, subjectLayout, "None"
+  const resultSome = variantNamed lowering, resultLayout, "Some"
+  const resultNone = variantNamed lowering, resultLayout, "None"
+  if some < 0 || empty < 0 || resultSome < 0 || resultNone < 0 {
+    const what = "`?.` between an `Option` and something that has no `Some` and no `None`"
+    return unsupportedSlot lowering, builder, destination, what, expression.span
+  }
+  const carried = payloadTypeOf lowering, resultLayout, resultSome
+  const inner = if flattened { annotation } else { carried }
+  const target = valueSlot lowering, builder, destination, annotation
+  const location = locationOf lowering, expression.span
+  const present = addBlock builder, "present", Some(location)
+  const absent = addBlock builder, "absent", Some(location)
+  const join = addBlock builder, "join", Some(location)
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const tag = addTemporary builder, integer
+  emit builder, Instruction.Tag(tag, subject)
+  finishBlock lowering, builder, Terminator.Switch(tag, [some], [present], absent)
+  continueIn lowering, builder, absent
+  emit builder, Instruction.Construct(target, resultLayout, resultNone, [])
+  finishBlock lowering, builder, Terminator.Jump(join)
+  continueIn lowering, builder, present
+  const payloadType = payloadTypeOf lowering, subjectLayout, some
+  const payload = addTemporary builder, payloadType
+  emit builder, Instruction.Read(payload, Reference(subject, [PathStep.Variant(subjectLayout, some, 0)]))
+  const answered = addTemporary builder, inner
+  // The base of the member is the payload for this one expression, and for nothing else
+  const at = base.span
+  const payloadValue = match lowering.checker.expressionType(lowering.module, at) {
+    Some(found) => optionValueOf(lowering.checker, found) ?? found
+    None => lowering.checker.invalidType
+  }
+  lowering.optionalReceivers.set at, payload
+  lowering.optionalReceiverTypes.set at, payloadValue
+  const _ = lowerExpression lowering, builder, expression, Some(answered)
+  const removed = lowering.optionalReceivers.remove at
+  const removedType = lowering.optionalReceiverTypes.remove at
+  if removed.isNone() || removedType.isNone() {
+    const what = "`?.` whose member lowered something else"
+    return unsupportedSlot lowering, builder, destination, what, expression.span
+  }
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  if flattened {
+    emit builder, Instruction.Copy(target, answered)
+  } else {
+    emit builder, Instruction.Construct(target, resultLayout, resultSome, [borrowed(answered)])
+  }
+  if !lowering.isDiverged {
+    finishBlock lowering, builder, Terminator.Jump(join)
+  }
+  continueIn lowering, builder, join
+  target
+}
+
+/** The one value the `Some` of an `Option` carries. */
+fn payloadTypeOf(var lowering: Lowering, layout: LayoutId, variant: Int): IrTypeId {
+  const shape = lowering.program.layoutAt layout
+  const fields = shape.fieldsOfVariant variant
+  match fields.first() {
+    Some(found) => found.annotation
+    None => lowering.program.internType IrType.VoidType
+  }
 }
 
 // --- Variant layouts ------------------------------------------------------------------------------------------------

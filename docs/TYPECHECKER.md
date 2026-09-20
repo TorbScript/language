@@ -2078,6 +2078,14 @@ quoting is a second member: `Show.showNested`, defaulting to `show()` and overri
 Generated `Show` implementations and the collection ones call it for everything they nest. An empty `Map` is `[:]`,
 as its literal.
 
+Two points of the format were settled while milestone 5.10 implemented it, and
+[docs/BACKEND.md](BACKEND.md) ("What 5.10 does differently") carries the reasons:
+**a tuple shows as `(a, b)` without labels** - gap 17 took the labels out of type identity, so they are not in the
+layout and a compiled back end cannot write them, which supersedes "with labels when there are any" above - and
+**`Show` of `void` is `void`**, the literal that writes it, because "the values of the built-in types are lowercase
+literals, never their type name" (CONCEPT, Decision Log). A nested `String` and `Char` are escaped with `\n`, `\r`,
+`\t`, `\\`, the quote and `\u{h}` below `0x20` and at `0x7F`.
+
 **24. `copy` has no written signature.**
 "Values": "`copy` is generated for every `type`" - with which parameters?
 _Proposal:_ `fn copy(self, <field>: <Type> = <the current value>, ...): Self`, all fields in declaration order, all

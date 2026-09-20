@@ -1,0 +1,72 @@
+/**
+ * `?.`, compiled to a native binary: the member on the payload of an `Option`, or `None` without touching the member.
+ *
+ * It is `Option.map` where the member answers an ordinary value and `Option.flatMap` where it answers an `Option` of its
+ * own, so that `?.` never nests one (gap 12) - and both of those are control flow here, not a closure. The two shapes of
+ * member are covered as well: a field, and a method with and without arguments.
+ */
+
+type Position {
+  x: Int
+  y: Int
+
+  fn moved(self, by: Int): Position {
+    Position(x + by, y + by)
+  }
+
+  fn label(self): String {
+    "({x}, {y})"
+  }
+
+  /** A member that answers an `Option` itself, which is what makes the chain flatten instead of nest. */
+  fn positive(self): Position? {
+    if x > 0 && y > 0 {
+      return Some self
+    }
+    None
+  }
+}
+
+type Entity {
+  position: Position
+  name: String
+}
+
+fn entityOf(present: Bool): Entity? {
+  if present {
+    return Some Entity(Position(1, 2), "ship")
+  }
+  None
+}
+
+// A field behind `?.`: the value itself becomes optional
+print "{entityOf(true)?.name} {entityOf(false)?.name}"
+print "{entityOf(true)?.position} {entityOf(false)?.position}"
+
+// A method with no arguments, and one with an argument
+const found = entityOf true
+const missing = entityOf false
+const here: Position? = Some Position(1, 2)
+const gone: Position? = None
+print "{here?.label()} {gone?.label()}"
+print "{here?.moved(by: 10)} {gone?.moved(by: 10)}"
+
+// A member that answers an `Option`: `flatMap`, so the result stays one level deep
+const positive: Position? = Some Position(3, 4)
+const negative: Position? = Some Position(0 - 1, 4)
+const nothing: Position? = None
+print "{positive?.positive()} {negative?.positive()} {nothing?.positive()}"
+
+// Chained twice, which is two arms and not a nested `Option`
+print "{positive?.positive()?.label()}"
+print "{negative?.positive()?.label()}"
+
+// `??` right after it, which is the ordinary way to get a value back out
+print "{missing?.name ?? "nobody"} {found?.name ?? "nobody"}"
+
+// A `String` field of the payload is counted, so the arm that has none must not release anything
+fn nameOf(present: Bool): String {
+  entityOf(present)?.name ?? "-"
+}
+
+print "{nameOf(true)} {nameOf(false)}"

@@ -1619,6 +1619,14 @@ fn checkRequirements(
 
 /** Whether any trait of the closure writes this member with a body, which makes it no requirement on the type. */
 fn hasDefaultInClosure(var checker: Checker, closure: List<TypeId>, name: String): Bool {
+  defaultOfClosure(checker, closure, name).isSome()
+}
+
+/**
+ * The member one of these traits writes with a body. `defaultInClosureOf` and the requirement check ask the same
+ * question, so the back end finds the very default that made the program legal.
+ */
+fn defaultOfClosure(var checker: Checker, closure: List<TypeId>, name: String): SymbolId? {
   for bound in closure {
     const capability = match headSymbolOf(checker, bound) {
       Some(found) => found
@@ -1635,10 +1643,22 @@ fn hasDefaultInClosure(var checker: Checker, closure: List<TypeId>, name: String
     }
     const signature = signatureOf checker, member
     if checker.signature(signature).hasBody {
-      return true
+      return Some member
     }
   }
-  false
+  None
+}
+
+/**
+ * The default that stands in for a member a *supertrait* requires and no implementation writes.
+ * `Accumulator.finish` is required by `Accumulator` and written with a body by its **subtrait** `Collection`, and
+ * `checkRequirements` accepts exactly that through `hasDefaultInClosure` - so a back end that looked only in the
+ * implementation of the requiring trait and in that trait itself would refuse a program the checker approved. The trait
+ * closure is walked in the order it was built, nearest the type first.
+ */
+public fn defaultInClosureOf(var checker: Checker, annotation: TypeId, name: String): SymbolId? {
+  const closure = traitsOf checker, annotation
+  defaultOfClosure checker, closure, name
 }
 
 /** A member with a `where` clause of its own exists only where the clause holds, so it is no requirement (gap 9). */

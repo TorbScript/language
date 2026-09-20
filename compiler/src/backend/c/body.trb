@@ -1345,6 +1345,11 @@ fn intrinsicStatements(
     statements.addAll concatenated
     return statements
   }
+  const printed = printSymbolOf intrinsic.operation
+  if !printed.isEmpty() {
+    statements.addAll printPartsStatements(body, printed, arguments)
+    return statements
+  }
   const expression = intrinsicExpression emission, program, body, intrinsic, arguments, at
   const found = match expression {
     Some(inner) => inner
@@ -1388,6 +1393,48 @@ fn textConcatStatements(body: Body, place: CExpression?, arguments: List<Slot>):
   ])
   // The array of the parts is a temporary of this one statement, so it lives in braces of its own
   [CStatement.Block([declaration, CStatement.Assignment(into, concatenated)])]
+}
+
+/** Which function of the runtime writes the parts, or empty where the operation is not one of the two. */
+fn printSymbolOf(operation: IntrinsicOperation): String {
+  match operation {
+    .PrintParts => "torb_print_parts"
+    .PrintErrorParts => "torb_print_error_parts"
+    _ => ""
+  }
+}
+
+/**
+ * `print a, b`: the shown parts as one array, handed to the runtime, which joins them with one space and one `\n`.
+ *
+ * It is the array of `textConcatStatements` and the same reason for it - the parts are a temporary of this one
+ * statement - and it is what keeps the *format* of `print` in `runtime/console.c` while the lowering decides what the
+ * parts are.
+ */
+fn printPartsStatements(body: Body, symbol: String, arguments: List<Slot>): List<CStatement> {
+  if arguments.isEmpty() {
+    const nothing = CExpression.Call(CExpression.Name(symbol), [
+      CExpression.Name("NULL"),
+      CExpression.Literal("0"),
+    ])
+    return [CStatement.Evaluate(nothing)]
+  }
+  var parts: List<CExpression> = []
+  for slot in arguments {
+    parts.add slotExpression(body, slot)
+  }
+  const count = parts.length()
+  const declaration = CStatement.Declaration(
+    "const torb_text",
+    "parts",
+    Some(CExpression.Initializer(parts)),
+    count,
+  )
+  const written = CExpression.Call(CExpression.Name(symbol), [
+    CExpression.Name("parts"),
+    CExpression.Literal("{count}"),
+  ])
+  [CStatement.Block([declaration, CStatement.Evaluate(written)])]
 }
 
 /** The expression of one intrinsic, or `None` where it was reported as a finding instead. */

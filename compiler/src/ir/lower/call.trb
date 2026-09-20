@@ -4,7 +4,7 @@ use SymbolId from "../../semantics/symbols"
 use TypeId, ParameterId, Signature, FieldSignature from "../../semantics/checker/type"
 use substitute from "../../semantics/checker/unify"
 use Resolution, Dispatch from "../../semantics/checker/context"
-use signatureOf from "../../semantics/checker/signature"
+use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use fieldsOf from "../../semantics/checker/member"
 use NativeEntry, DerivedKind from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
@@ -18,13 +18,14 @@ use memberInValue, derivedKindOf, generatedKindOf from "../witness"
 use generatedFunctionOf from "./derive"
 use instanceFor, needsReference, isMonomorphic from "../instances"
 use nativeFunctionOf from "./native"
-use Lowering, reportUnsupported, locationOf, nativeNamed, producesValue from "./context"
+use Lowering, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
 use isNeverType, finishBlock, borrowedArguments from "./context"
 use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use variantIndexOf from "./match"
 use emitIntrinsic, receiverSlot from "./expression"
 use Dispatched, dispatchedMember from "./generic"
 use lowerClosureCall, lowerLazyArgument, lazyParametersOf, lowerConstructorValue from "./closure"
+use printOperationOf, lowerPrint from "./text"
 
 /**
  * Calls, constructors and operators: which function a call reaches, and in which order its arguments are evaluated.
@@ -130,6 +131,10 @@ fn lowerCallable(
 ): Slot {
   const receiver = receiverTypeOf lowering, callee
   const at = expression.span
+  // `print` and `printError` are variadic, and a variadic list is milestone 5.7's: the parts are shown here instead
+  if const Some(operation) = printOperationOf(lowering, symbol) {
+    return lowerPrint lowering, builder, destination, expression, arguments, operation
+  }
   const dispatched = match dispatchedMember(lowering, symbol, typeArguments, dispatch, receiver, at) {
     Some(found) => found
     None => {
@@ -173,39 +178,43 @@ fn lowerCallable(
   }
   operands.addAll written.slots
   places.addAll written.places
+  lowerDispatched lowering, builder, destination, at, dispatched, operands, places, annotation
+}
+
+/**
+ * The half of a call that is the same wherever the operands came from: which of the five shapes the member really is -
+ * `panic`, a member of a witness table, a native, a generated body, or an instance of a source body - and the `Call` for
+ * it. `a[key]` and an operator have no callee expression and no argument list, so they hand their slots over here.
+ */
+public fn lowerDispatched(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  at: Span,
+  dispatched: Dispatched,
+  operands: List<Slot>,
+  places: List<Reference?>,
+  annotation: IrTypeId,
+): Slot {
+  const member = dispatched.member
+  const identifier = signatureOf lowering.checker, member
+  const signature = lowering.checker.signature identifier
+  const owner = dispatched.owner
+  const name = memberNameOf lowering, member
   // `native fn panic(message): Never` is the one native with an instruction of its own
   if owner.isEmpty() && name == "panic" {
-    return lowerPanic lowering, builder, destination, operands, expression.span
+    return lowerPanic lowering, builder, destination, operands, at
   }
   if dispatched.isDynamic {
-    return lowerWitnessCall(
-      lowering,
-      builder,
-      destination,
-      expression,
-      dispatched,
-      operands,
-      annotation,
-      places,
-    )
+    return lowerWitnessCall lowering, builder, destination, at, dispatched, operands, annotation, places
   }
   if !signature.hasBody {
     if const Some(entry) = nativeNamed(lowering, owner, name) {
-      return lowerNativeCall(
-        lowering,
-        builder,
-        destination,
-        expression,
-        operands,
-        annotation,
-        dispatched,
-        entry,
-        places,
-      )
+      return lowerNativeCall lowering, builder, destination, at, operands, annotation, dispatched, entry, places
     }
     // No body and no manifest entry: a member of a **derived** implementation, generated from the layout
-    if const Some(generated) = generatedMemberFor(lowering, dispatched, expression.span) {
-      return emitCall lowering, builder, destination, generated, operands, annotation, expression.span
+    if const Some(generated) = generatedMemberFor(lowering, dispatched, at) {
+      return emitCall lowering, builder, destination, generated, operands, annotation, at
     }
     if !lowering.isSupported {
       return abandonedSlot lowering, builder, destination
@@ -216,10 +225,10 @@ fn lowerCallable(
     Some(found) => found
     None => {
       const what = describeCallee lowering, member, signature
-      return unsupportedSlot lowering, builder, destination, what, expression.span
+      return unsupportedSlot lowering, builder, destination, what, at
     }
   }
-  emitCall lowering, builder, destination, function, operands, annotation, expression.span, places
+  emitCall lowering, builder, destination, function, operands, annotation, at, places
 }
 
 /**
@@ -229,6 +238,10 @@ fn lowerCallable(
 public fn receiverTypeOf(var lowering: Lowering, callee: Expression): TypeId? {
   const module = lowering.module
   if const .Member(base, _, _) = callee.kind {
+    // Behind a `?.` the member is looked up on the payload, so that is the receiver and not the `Option` around it
+    if const Some(payload) = lowering.optionalReceiverTypes.get(base.span) {
+      return Some payload
+    }
     return lowering.checker.expressionType module, base.span
   }
   const adaptations = lowering.checker.adaptationsAt module, callee.span
@@ -267,7 +280,7 @@ fn lowerWitnessCall(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   destination: Slot?,
-  expression: Expression,
+  at: Span,
   dispatched: Dispatched,
   operands: List<Slot>,
   annotation: IrTypeId,
@@ -277,7 +290,7 @@ fn lowerWitnessCall(
     Some(found) => found
     None => {
       const what = "a call on a trait-typed value without a receiver"
-      return unsupportedSlot lowering, builder, destination, what, expression.span
+      return unsupportedSlot lowering, builder, destination, what, at
     }
   }
   // The place the trait-typed value is at: the path of a `var self` receiver, and the slot alone for a read-only one.
@@ -296,7 +309,7 @@ fn lowerWitnessCall(
     Some(found) => found
     None => {
       const what = "a call on a trait-typed value of an unknown type"
-      return unsupportedSlot lowering, builder, destination, what, expression.span
+      return unsupportedSlot lowering, builder, destination, what, at
     }
   }
   const bounds = dispatched.bounds
@@ -306,7 +319,7 @@ fn lowerWitnessCall(
     None => {
       const name = memberNameOf lowering, member
       const what = "`{name}`, which is not in the witness table of a trait-typed value"
-      return unsupportedSlot lowering, builder, destination, what, expression.span
+      return unsupportedSlot lowering, builder, destination, what, at
     }
   }
   var rest: List<Slot> = []
@@ -340,7 +353,7 @@ fn lowerNativeCall(
   var lowering: Lowering,
   var builder: FunctionBuilder,
   destination: Slot?,
-  expression: Expression,
+  at: Span,
   operands: List<Slot>,
   annotation: IrTypeId,
   dispatched: Dispatched,
@@ -349,7 +362,7 @@ fn lowerNativeCall(
 ): Slot {
   if const .Planned(milestone) = entry.state {
     const what = "`{entry.name}`, which the runtime provides from milestone {milestone} on"
-    return unsupportedSlot lowering, builder, destination, what, expression.span
+    return unsupportedSlot lowering, builder, destination, what, at
   }
   const member = dispatched.member
   const mapping = dispatched.mapping
@@ -357,35 +370,35 @@ fn lowerNativeCall(
     .Intrinsic(intrinsic) => {
       if !producesValue(lowering, annotation) {
         const what = "`{entry.name}`, an intrinsic that produces no value"
-        return unsupportedSlot lowering, builder, destination, what, expression.span
+        return unsupportedSlot lowering, builder, destination, what, at
       }
       const target = valueSlot lowering, builder, destination, annotation
-      emitIntrinsic lowering, builder, Some(target), intrinsic.operation, intrinsic.kind, operands, expression.span
+      emitIntrinsic lowering, builder, Some(target), intrinsic.operation, intrinsic.kind, operands, at
       target
     }
     // The runtime's own conventions - an out parameter, an element by address - are a generated wrapper (`native.trb`)
     .Runtime(function) => {
-      const identifier = match nativeFunctionOf(lowering, member, mapping, entry, function, expression.span) {
+      const identifier = match nativeFunctionOf(lowering, member, mapping, entry, function, at) {
         Some(found) => found
         None => {
           if !lowering.isSupported {
             return abandonedSlot lowering, builder, destination
           }
           const what = "`{entry.name}`, whose declaration is not monomorphic"
-          return unsupportedSlot lowering, builder, destination, what, expression.span
+          return unsupportedSlot lowering, builder, destination, what, at
         }
       }
-      emitCall lowering, builder, destination, identifier, operands, annotation, expression.span, places
+      emitCall lowering, builder, destination, identifier, operands, annotation, at, places
     }
     // A member the language generates has no source anywhere: the body is built from the layout and called like any other
     .Derived(derived) => {
-      const generated = match generatedMemberOf(lowering, dispatched, derived, expression.span) {
+      const generated = match generatedMemberOf(lowering, dispatched, derived, at) {
         Some(found) => found
         None => {
           return abandonedSlot lowering, builder, destination
         }
       }
-      emitCall lowering, builder, destination, generated, operands, annotation, expression.span
+      emitCall lowering, builder, destination, generated, operands, annotation, at
     }
   }
 }
@@ -564,7 +577,7 @@ public fn lowerArgumentSlots(
     }
     filled.set position, Some(slot)
   }
-  lowerDefaults lowering, builder, expression, signature, filled, places, references
+  lowerDefaults lowering, builder, expression, signature, filled, places, references, mapping
 }
 
 /**
@@ -612,7 +625,9 @@ fn referenceArgumentAt(
 
 /**
  * The parameters that were not written take their default, lowered **at the call site**, at every call, in the scope
- * of the declaration - so the tables that are read for it are the callee's module's (decided gap 13).
+ * of the declaration - so the tables that are read for it are the callee's module's (decided gap 13), and the
+ * substitution in scope for it is the **callee's** instance mapping and not the caller's: a default of a generic
+ * declaration is written in terms of that declaration's own parameters.
  */
 fn lowerDefaults(
   var lowering: Lowering,
@@ -622,6 +637,7 @@ fn lowerDefaults(
   filled: List<Slot?>,
   places: List<Reference?>,
   references: List<Bool>,
+  mapping: Map<ParameterId, TypeId> = [:],
 ): CallOperands {
   var found = filled
   const lazies = lazyParametersOf signature
@@ -648,7 +664,7 @@ fn lowerDefaults(
         return CallOperands([], [])
       }
     }
-    const slot = lowerForeignExpression lowering, builder, signature.symbol, value
+    const slot = lowerForeignExpression lowering, builder, signature.symbol, value, mapping
     if !lowering.isSupported {
       return CallOperands([], [])
     }
@@ -716,13 +732,17 @@ public fn lowerForeignExpression(
   var builder: FunctionBuilder,
   symbol: SymbolId,
   value: Expression,
+  substitution: Map<ParameterId, TypeId> = [:],
 ): Slot {
   const outer = lowering.module
+  const outerSubstitution = lowering.substitution
   if const Some(site) = lowering.checker.siteOf(symbol) {
     lowering.module = site.module
   }
+  lowering.substitution = substitution
   const slot = lowerValue lowering, builder, value
   lowering.module = outer
+  lowering.substitution = outerSubstitution
   slot
 }
 
@@ -833,7 +853,29 @@ fn lowerFieldArguments(
     }
     filled.set position, Some(slot)
   }
-  completeFields lowering, builder, expression, fields, filled, receiver
+  const substitution = ownerSubstitutionOf lowering, owner
+  completeFields lowering, builder, expression, fields, filled, receiver, substitution
+}
+
+/**
+ * The generic parameters of the type that is being constructed, filled in from the arguments it is constructed with:
+ * `Request<Item>(...)` for an `Item` of `String` maps `Item` to `String`.
+ *
+ * A **field default** is written in terms of exactly these, and it is lowered in the module the field is declared in -
+ * so the caller's own substitution is the wrong one there, which is what made a default of a field of a generic type of
+ * `std/http` report "the generic parameter `Item` was not substituted". The mapping is only in hand here.
+ */
+fn ownerSubstitutionOf(var lowering: Lowering, owner: TypeId): Map<ParameterId, TypeId> {
+  var mapping: Map<ParameterId, TypeId> = [:]
+  const applied = substituted lowering, owner
+  if const .Nominal(symbol, given) = lowering.checker.types.form(applied) {
+    const identifier = typeSignatureOf lowering.checker, symbol
+    const shape = lowering.checker.typeSignature identifier
+    for index in 0..shape.generics.length().min(given.length()) {
+      mapping.set shape.generics[index], given[index]
+    }
+  }
+  mapping
 }
 
 fn completeFields(
@@ -843,6 +885,7 @@ fn completeFields(
   fields: List<FieldSignature>,
   filled: List<Slot?>,
   receiver: Slot?,
+  substitution: Map<ParameterId, TypeId> = [:],
 ): List<Slot> {
   var found = filled
   for index in 0..found.length() {
@@ -865,7 +908,7 @@ fn completeFields(
         return []
       }
     }
-    const slot = lowerForeignExpression lowering, builder, field.symbol, value
+    const slot = lowerForeignExpression lowering, builder, field.symbol, value, substitution
     if !lowering.isSupported {
       return []
     }

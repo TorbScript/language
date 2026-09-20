@@ -861,7 +861,10 @@ fn checkPlaceArgument(
     found.add "{at}: argument {index} of {callee} names %{argument.slot.value} and its place starts at %{place.base.value}"
     return
   }
-  if argument.ownership != Ownership.Borrowed || argument.isLastUse {
+  // A place carries no count, so it is never `owned`. `last` is about the *base* and not about the path: where the
+  // caller's own value dies at the call (`printGraph found.checker` as the last use of `found`) the ownership pass marks
+  // it and puts the `Release` after the instruction, which is the ordinary rule for a borrowed operand
+  if argument.ownership != Ownership.Borrowed {
     found.add "{at}: argument {index} of {callee} is a place, which carries no count and is therefore borrowed"
   }
   const annotation = match typeOfReference(program, function, found, at, place) {
@@ -1069,10 +1072,21 @@ fn verifyIntrinsic(
   if !allowsNumericKind(intrinsic.operation) && intrinsic.kind.isSome() {
     found.add "{at}: `{name}` has only one form, so it names no numeric type"
   }
-  match intrinsic.kind {
-    Some(kind) => verifyOperands program, function, found, at, name, intrinsic.operation, kind, arguments
-    // `==` on a `Bool`, a `Char` or `Void` names no numeric type, and then both sides have to be the same thing
-    None => verifySameOperands program, function, found, at, name, arguments
+  if isTextPartsOperation(intrinsic.operation) {
+    verifyTextOperands program, function, found, at, name, arguments
+  } else {
+    match intrinsic.kind {
+      Some(kind) => verifyOperands program, function, found, at, name, intrinsic.operation, kind, arguments
+      // `==` on a `Bool`, a `Char` or `Void` names no numeric type, and then both sides have to be the same thing
+      None => verifySameOperands program, function, found, at, name, arguments
+    }
+  }
+  // `print` writes its parts and answers nothing at all, so a target would be a slot nothing could ever be put in
+  if producesNoValue(intrinsic.operation) {
+    if target.isSome() {
+      found.add "{at}: `{name}` produces no value, and a slot was given for one"
+    }
+    return
   }
   match target {
     None => found.add "{at}: `{name}` produces a value and nothing takes it"
@@ -1140,6 +1154,38 @@ fn isShiftOperation(operation: IntrinsicOperation): Bool {
     .ShiftedLeft => true
     .ShiftedRight => true
     _ => false
+  }
+}
+
+/** The three operations whose operand list is a list of shown parts: every one of them is a `String`, however many. */
+fn isTextPartsOperation(operation: IntrinsicOperation): Bool {
+  match operation {
+    .TextConcat | .PrintParts | .PrintErrorParts => true
+    _ => false
+  }
+}
+
+/** Whether an operation answers nothing at all, which is what makes a target slot wrong rather than optional. */
+public fn producesNoValue(operation: IntrinsicOperation): Bool {
+  match operation {
+    .PrintParts | .PrintErrorParts => true
+    _ => false
+  }
+}
+
+fn verifyTextOperands(
+  program: IrProgram,
+  function: IrFunction,
+  var found: List<String>,
+  at: String,
+  name: String,
+  arguments: List<Slot>,
+) {
+  for slot in arguments {
+    const annotation = function.typeOfSlot slot
+    if !isTextType(program, annotation) {
+      found.add "{at}: `{name}` joins strings, and %{slot.value} is `{describeIrType(program, annotation)}`"
+    }
   }
 }
 
@@ -1211,7 +1257,7 @@ fn isBooleanOperation(operation: IntrinsicOperation): Bool {
   }
 }
 
-/** How many operands an operation takes. `-1` means "as many as there are parts", which only `TextConcat` is. */
+/** How many operands an operation takes. `-1` means "as many as there are parts": the three text-part operations. */
 public fn operandCountOf(operation: IntrinsicOperation): Int {
   match operation {
     .Negate => 1
@@ -1221,6 +1267,8 @@ public fn operandCountOf(operation: IntrinsicOperation): Int {
     .TextByteLength => 1
     .LazyForce => 1
     .TextConcat => 0 - 1
+    .PrintParts => 0 - 1
+    .PrintErrorParts => 0 - 1
     _ => 2
   }
 }
@@ -1243,6 +1291,8 @@ fn allowsNumericKind(operation: IntrinsicOperation): Bool {
   match operation {
     .BooleanNot => false
     .TextConcat => false
+    .PrintParts => false
+    .PrintErrorParts => false
     .TextEqual => false
     .TextCompare => false
     .TextByteLength => false

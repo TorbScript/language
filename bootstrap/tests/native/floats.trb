@@ -1,0 +1,57 @@
+/**
+ * `Show` of a `Float64`: the shortest decimal that parses back to the same bits, in the notation of decided gap 4.
+ *
+ * The interpreter and the binary use two completely different routines for it - Rust's `{:e}` in `interpreter.rs`, a
+ * `printf` search in `runtime/text.c` - so running this program in both and comparing the bytes is what keeps the
+ * *format* one format. The values are the table of `runtime/tests/text_test.c` plus the ones only a program can build.
+ */
+
+fn shown(value: Float): String {
+  "{value}"
+}
+
+// The plain notation, and the `.0` a whole number always carries
+print "{0.0} {1.0} {6.0} {100.0} {-1.5}"
+
+// The shortest round trip: neither 0.1 nor 0.1 + 0.2 has an exact binary form
+print "{0.1} {0.3} {0.1 + 0.2}"
+print "{3.141592653589793} {2.718281828459045} {123456789.125}"
+
+// The exponent notation begins below -6 and at 21 and above, and nowhere else
+print "{1e20} {1e21} {1e22} {1e-6} {1e-7}"
+print "{0.000025} {1e16}"
+
+// The extremes: the largest finite value, the smallest normal one, and a subnormal
+print "{1.7976931348623157e308} {2.2250738585072014e-308} {5e-324}"
+
+// A negative zero keeps its sign, and `nan`, `inf` and `-inf` are lowercase words
+const zero = 0.0
+const negativeZero = 0.0 - 0.0
+const nothing = zero / zero
+print "{negativeZero} {-0.0}"
+print "{nothing} {1.0 / zero} {-1.0 / zero}"
+
+// Nested inside another value, where `showNested` runs instead of `show` - for a `Float` they are the same
+type Sample {
+  value: Float
+  label: String
+}
+
+print "{Sample(0.5, "half")}"
+print "{Sample(nothing, "nan")}"
+
+// A float that was computed rather than written, so no literal folding can be behind the answer
+fn half(times: Int): Float {
+  var value = 1.0
+  for _ in 0..times {
+    value = value / 2.0
+  }
+  value
+}
+
+print "{half(1)} {half(10)} {half(60)}"
+print shown(half(1070))
+
+// Round trip through `parse`: the shown form is the one a reader can type back in
+const written = shown(0.1 + 0.2)
+print "{Float.parse(written) == Ok(0.1 + 0.2)}"

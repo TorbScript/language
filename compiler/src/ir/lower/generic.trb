@@ -4,6 +4,7 @@ use TypeId, TypeForm, ParameterId, ImplementationId from "../../semantics/checke
 use Dispatch from "../../semantics/checker/context"
 use signatureOf from "../../semantics/checker/signature"
 use traitArgumentsOf, witnessFor, matchTypePattern from "../../semantics/checker/implementation"
+use substitute from "../../semantics/checker/unify"
 use IrTypeId, IrType, Slot, TraitId, LayoutId, Instruction, WitnessSource, WitnessRoot, owned from "../ir"
 use Reference from "../ir"
 use LayoutKind, FieldLayout from "../layout"
@@ -88,7 +89,7 @@ public fn dispatchedMember(
       // The receiver of a forwarded call is the generic parameter itself, which the instance's arguments decide
       const own = lowering.checker.types.intern parameterFormOf(parameter)
       const found = substituted lowering, own
-      if isTraitValueType(lowering, found) {
+      if isTraitValueType(lowering, found) && takesSelf(lowering, symbol) {
         return dynamicDispatch lowering, symbol, typeArguments, applied, Some(found), at
       }
       resolvedDispatch lowering, symbol, typeArguments, found, applied, at
@@ -98,6 +99,18 @@ public fn dispatchedMember(
 
 fn parameterFormOf(parameter: ParameterId): TypeForm {
   TypeForm.Parameter parameter
+}
+
+/**
+ * Whether a member has a receiver at all. A **static** member of a generic parameter that turned out to be a trait type
+ * (`Target.from self` inside `fn to<Target: From<Iterable<Item>>>`) is no call on a *value*: there is no payload to
+ * erase, `Traits([List<Int>])` is a closed type like any other, and `witnessFor` names the one implementation of it. So
+ * such a call is an ordinary static one and not a dynamic call the table of a value would have to hold - which is what
+ * object safety says about it as well (a static member is never in a table).
+ */
+fn takesSelf(var lowering: Lowering, symbol: SymbolId): Bool {
+  const identifier = signatureOf lowering.checker, symbol
+  lowering.checker.signature(identifier).takesSelf
 }
 
 /**
@@ -253,12 +266,58 @@ fn dynamicDispatch(
   if !isDynamic {
     const identifier = signatureOf lowering.checker, member
     if !lowering.checker.signature(identifier).hasBody {
+      /*
+       * The member is in none of the value's own tables and there is no default body to instantiate either. That is not
+       * always a dead end: a trait the value does *not* carry may still be implemented **for the trait-typed type**, and
+       * `extend<Item: Show> List<Item> with Show` is exactly that - `"{list}"` on a `List<Item>` value is a static call of
+       * that implementation and not a table lookup. Only where no implementation covers it is it the finding.
+       */
+      if const .Implementation(found, _, _) = witnessFor(lowering.checker, target, bound) {
+        return memberOfImplementationDispatch lowering, symbol, typeArguments, found, Some(target), bound, at
+      }
       const what = "`{name}`, which is not in the witness table of a trait-typed value"
       reportUnsupported lowering, what, at
       return None
     }
   }
   Some Dispatched(member, mapping, bound, "", None, isDynamic, bounds, Some(target))
+}
+
+/**
+ * The dispatch of a member the **lowering itself** calls, where there is no call site in the source whose resolution
+ * could be read: `iterator` and `next` of a `for` over a collection.
+ *
+ * It asks exactly the question a written call asks - is the receiver a trait-typed value or a concrete type - so such a
+ * call reaches the very function the source `xs.iterator()` would reach, and the two can never disagree.
+ */
+public fn dispatchedOn(
+  var lowering: Lowering,
+  subject: TypeId,
+  bound: TypeId,
+  name: String,
+  at: Span,
+): Dispatched? {
+  const symbol = match traitMemberNamed(lowering, bound, name) {
+    Some(found) => found
+    None => {
+      const shown = lowering.checker.describe bound
+      reportUnsupported lowering, "`{shown}`, which declares no `{name}`", at
+      return None
+    }
+  }
+  const empty: List<TypeId> = []
+  if isTraitValueType(lowering, subject) {
+    return dynamicDispatch lowering, symbol, empty, bound, Some(subject), at
+  }
+  resolvedDispatch lowering, symbol, empty, subject, bound, at
+}
+
+/** The result of a dispatched member, with the substitution of its own instance applied. Still a checker type. */
+public fn resultTypeOf(var lowering: Lowering, dispatched: Dispatched): TypeId {
+  const identifier = signatureOf lowering.checker, dispatched.member
+  const result = lowering.checker.signature(identifier).form.result
+  const mapping = dispatched.mapping
+  substitute lowering.checker.types, result, mapping
 }
 
 /** What the member of an implementation is called, without reporting anything about visibility. */

@@ -291,12 +291,18 @@ fn optionalTarget(var checker: Checker, receiver: TypeId, text: String, at: Span
   }
   match target.form {
     Some(form) => {
+      // `flatMap` where the member answers an `Option` already, `map` where it does not. The wrapping is inside the
+      // function type, so this flag is the only thing that still says which of the two it was (milestone 5's `?.`)
+      checker.recordFlattenedOptional at, isOption(checker, form.result)
       const wrapped = optionalOf checker, form.result
       const inner = FunctionForm form.parameters, wrapped
       target.copy annotation: checker.functionType(inner), form: Some(inner)
     }
     // A field or a constant behind `?.`: the value itself becomes optional
-    None => target.copy annotation: optionalOf(checker, target.annotation)
+    None => {
+      checker.recordFlattenedOptional at, isOption(checker, target.annotation)
+      target.copy annotation: optionalOf(checker, target.annotation)
+    }
   }
 }
 

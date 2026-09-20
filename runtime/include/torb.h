@@ -496,7 +496,7 @@ torb_text torb_show_char(torb_char character);
 torb_text torb_show_char_nested(torb_char character);
 torb_text torb_show_i64(int64_t value);
 torb_text torb_show_u64(uint64_t value);
-torb_text torb_show_void(void);
+torb_text torb_show_void(torb_void value);
 
 /**
  * The shortest decimal string that parses back to the same `Float64` (decided gap 4), with `.0` appended when the

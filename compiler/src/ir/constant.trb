@@ -358,7 +358,8 @@ fn floatConstant(
   at: Span,
 ): ConstantValue? {
   const value = Float.parse(text).ok()?
-  Some(ConstantValue(StaticContents.Floating(if isNegative { 0.0 - value } else { value }), annotation))
+  // `-value` and not `0.0 - value`: the two differ for zero, and `-0.0` has to keep its sign (decided gap 4)
+  Some(ConstantValue(StaticContents.Floating(if isNegative { -value } else { value }), annotation))
 }
 
 /**

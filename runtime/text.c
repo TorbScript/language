@@ -620,8 +620,14 @@ torb_text torb_show_bool(bool value) {
   return torb_text_of_ascii(value ? "true" : "false", value ? 4u : 5u);
 }
 
-torb_text torb_show_void(void) {
-  return torb_text_of_ascii("()", 2u);
+/**
+ * `void`, which is the literal that writes the one value of `Void` - not `Void`, which is its *type*, and not `()`,
+ * which is the empty tuple the language does not have. "The values of the built-in types are lowercase literals
+ * (`true`, `false`, `void`), never their type name" (CONCEPT, Decision Log).
+ */
+torb_text torb_show_void(torb_void value) {
+  (void)value;
+  return torb_text_of_ascii("void", 4u);
 }
 
 torb_text torb_show_i64(int64_t value) {

@@ -201,6 +201,10 @@ fn resultSpellingOf(program: IrProgram, result: IrTypeId, declared: String): Str
  * - **The other signedness of one width.** `combineHashes(first: Int, second: Int)` against
  *   `torb_hash_combine(uint64_t, uint64_t)`: the bits are the hash either way, which is the same reason the *result* of
  *   `Hash.hash` is allowed to differ.
+ * - **A narrower integer of the same signedness.** There is one `torb_show_i64` for every signed width and one
+ *   `torb_show_u64` for every unsigned one - eight `show` functions for eight types would be eight copies of one
+ *   `snprintf` - and widening an `int8_t` to an `int64_t` is what C does at the call anyway. It is value preserving in
+ *   exactly this direction, which is why it is *narrower* and not "either way".
  */
 fn isSameParameter(wanted: String, declared: String, byPointer: Bool): Bool {
   if wanted == declared {
@@ -209,7 +213,32 @@ fn isSameParameter(wanted: String, declared: String, byPointer: Bool): Bool {
   if byPointer {
     return declared == "void *" || declared == "const void *"
   }
-  isSameWidthInteger wanted, declared
+  isSameWidthInteger(wanted, declared) || isWiderInteger(wanted, declared)
+}
+
+/** `int8_t` against `int64_t`: the runtime's parameter holds every value of the narrower one, and C widens it. */
+fn isWiderInteger(expected: String, actual: String): Bool {
+  const from = integerWidthOf expected
+  const to = integerWidthOf actual
+  if from <= 0 || to <= 0 {
+    return false
+  }
+  expected.startsWith("u") == actual.startsWith("u") && to > from
+}
+
+/** The width an `int8_t` ... `uint64_t` names, or `-1` for every other spelling. */
+fn integerWidthOf(spelling: String): Int {
+  const bare = withoutSign spelling
+  if !bare.startsWith("int") || !bare.endsWith("_t") {
+    return 0 - 1
+  }
+  match bare {
+    "int8_t" => 8
+    "int16_t" => 16
+    "int32_t" => 32
+    "int64_t" => 64
+    _ => 0 - 1
+  }
 }
 
 /** `int64_t` against `uint64_t`: two integers of one width, which differ in nothing a call has to wrap. */

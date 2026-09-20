@@ -1,0 +1,98 @@
+/**
+ * String interpolation and `print`, compiled to a native binary: every shape that can be shown without a collection.
+ *
+ * This is the first gate program that *prints* instead of answering through an exit code, which is what makes it a real
+ * comparison: `native.rs` runs it on stage 0 and as a binary and asserts that both write exactly the same bytes. So the
+ * `Show` format of decided gap 23 is pinned by the file next to it, and the two back ends cannot drift apart.
+ */
+
+type Point {
+  x: Int
+  y: Int
+}
+
+type Shape {
+  case Circle(radius: Int)
+  case Label(text: String, at: Point)
+  case Empty
+}
+
+type Wrapper {
+  inner: String
+  character: Char
+  flag: Bool
+  nothing: Void
+}
+
+/** A trait-typed value, so that the same `show` is reached through the witness table the value carries. */
+fn shownDynamically(value: Show): String {
+  "[{value}]"
+}
+
+const name = "Ada"
+const count = 41
+
+// A literal piece, an interpolated name, and an expression in between
+print "{name}: {count + 1}"
+
+// Every width of integer, each through its own `show` of the runtime
+const small: Int8 = 0 - 127
+const unsigned: UInt16 = 65535
+print "{small} {unsigned} {0 - 1} {9223372036854775807}"
+
+// `Bool`, `Char` and `String` at the top level: the text itself, the character itself
+print "{true} {false} {'ß'} {name}"
+
+// `void` is the one value of `Void`, and it shows as the literal that writes it
+print "{void}"
+
+// A record, a case with fields, a case without, and a nested value through `showNested`
+print "{Point(1, 2)}"
+print "{Shape.Circle(3)}"
+print "{Shape.Label("top", Point(4, 5))}"
+print "{Shape.Empty}"
+print "{Wrapper("a\"b", '\n', false, void)}"
+
+// An `Option` and a `Result` of the prelude
+const found: Int? = Some 7
+const missing: Int? = None
+const good: Result<Int, String> = Ok 1
+const bad: Result<Int, String> = Fail "no"
+print "{found} {missing} {good} {bad}"
+
+// A tuple, whose labels are not part of its type and therefore not part of its `Show`
+print "{(1, "two")}"
+
+// Through a witness table instead of statically
+print shownDynamically(Point(6, 7))
+print shownDynamically("plain")
+print shownDynamically(8)
+
+// `print` with several arguments joins them with one space; with none it writes one empty line
+print name, count, Point(8, 9), 'x', true
+print()
+
+// Escapes and a brace that is written literally
+print "a\tb\\c\{d}e"
+
+// A multi-line string, dedented by the lexer, with an interpolation in it
+print("""
+  line one
+    indented {count}
+  line three
+  """)
+
+// A long text built in a loop: one concatenation per round, which is what keeps it from being quadratic
+fn repeated(times: Int): String {
+  var text = ""
+  for index in 0..times {
+    text = "{text}{index},"
+  }
+  text
+}
+
+print "{repeated(12).byteLength()}"
+print repeated(6)
+
+// A nested interpolation: the inner literal is a text of its own
+print "outer {"inner {count}"} end"

@@ -913,8 +913,8 @@ p = p.copy(y: 30)              // `copy` is generated for every `type`
 - **The generated `Show` has a fixed format,** because two implementations of the language are compared through it
   (see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)): a type is `Type(field: value, ...)` with all fields in
   declaration order, a case is `Case(field: value)` or its bare name when it has none, a `List` is `[a, b]`, a `Map`
-  `["k": v]` (`[:]` when it is empty), a `Set` `{a, b}` (`{}` when it is empty), a tuple `(a, b)` with the labels where there are any, an
-  `Option` `Some(x)` or `None`. Inside such a value a `String` is quoted with escapes and a `Char` written in single
+  `["k": v]` (`[:]` when it is empty), a `Set` `{a, b}` (`{}` when it is empty), a tuple `(a, b)` without labels (a label is not part of
+  a tuple's type, so a compiled value does not carry one), `Void` is `void`, an `Option` `Some(x)` or `None`. Inside such a value a `String` is quoted with escapes and a `Char` written in single
   quotes. **A `Float` is the shortest decimal that parses back to the same value,** with `.0` appended when that text
   contains neither `.` nor `e` - so a `Float` always carries a decimal point or an exponent; the special values are
   `nan`, `inf` and `-inf`, and `-0.0` prints as `-0.0`. `"{name}"` is still the text itself: the nesting uses

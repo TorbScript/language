@@ -1,0 +1,138 @@
+---
+title: Receiver closures
+summary: A receiver closure is a closure whose first parameter is called self, so names inside it resolve against that receiver first, exactly as inside a method.
+kind: reference
+status: stable
+order: 10
+keywords:
+  - receiver closure
+  - self
+  - name resolution
+  - builder
+source:
+  - CONCEPT.md#configuration-dsl
+---
+
+Inside a method, a bare name can mean a field or another method of `self` without writing `self.` in front of it. A
+[receiver closure](../../glossary.md#receiver-closure) gets the same treatment: a closure whose first parameter is
+named `self` reads and writes that receiver the same way a method body does.
+
+## Example
+
+```trb check
+type Counter {
+  var value: Int = 0
+
+  fn add(var self, amount: Int) {
+    value = value + amount
+  }
+}
+
+fn build(configure: (var self: Counter) => Void): Counter {
+  var counter = Counter()
+  configure counter
+  counter
+}
+
+const counter = build {
+  add 3
+  add 4
+}
+
+print counter.value
+```
+
+## Syntax
+
+```text
+(self: <Receiver>) => <Type>          a receiver closure, read-only
+(var self: <Receiver>) => <Type>      a receiver closure that may change the receiver
+```
+
+## Rules
+
+1. **A closure whose function type names its first parameter `self` is a receiver closure.** `add 3` inside the
+   trailing closure above is `counter.add(3)`, reached the same way it would be inside a method of `Counter`.
+
+2. **Name resolution inside a closure or a method tries the local scope first, then the innermost receiver, then the
+   module.** A local binding always wins over a field of the same name, and a field of the receiver always wins over
+   a top-level name of the module.
+
+3. **Exactly one receiver is implicit at a time.** A method has exactly one `self`, and a receiver closure has
+   exactly one receiver in scope this way - nesting one receiver closure inside another does not add the outer one
+   to what a bare name can mean inside the inner one.
+
+4. **`CONCEPT.md` specifies that naming a receiver closure's parameter is what reaches it from inside a nested
+   receiver closure**, the way `server { s => s.database { url "{s.host}/db" } }` reads `s.host` from inside the
+   nested `database` block. Today's checker rejects this: naming the parameter makes it an ordinary `var` parameter,
+   and a nested closure that reads it captures that `var` parameter, which the checker treats as possibly outliving
+   the call whether or not it actually does.
+
+   ```trb error
+   type DatabaseConfig {
+     var url: String = ""
+   }
+
+   type ServerConfig {
+     var host: String = "localhost"
+     var database: DatabaseConfig = DatabaseConfig()
+   }
+
+   fn server(configure: (var self: ServerConfig) => Void): ServerConfig {
+     var config = ServerConfig()
+     configure config
+     config
+   }
+
+   const config = server { s =>
+     s.database { url "{s.host}/db" }
+   }
+   // error: This closure captures the `var` parameter `s` and may outlive the call
+   ```
+
+   This is a gap between `CONCEPT.md` and the checker rather than a rule of the language: the design intends the
+   read above to be legal, because the nested closure runs immediately and never escapes the call it was passed to.
+
+5. **A receiver closure is an ordinary closure value, passed as an argument.** The receiver type never declares it,
+   so two functions that both take a `(var self: Counter) => Void` can build completely different things out of the
+   same receiver - what a receiver closure does is decided by the function it is passed to, not by the receiver type.
+
+## What this is not
+
+**A receiver closure is not a method `Receiver` declares.** `Row` above has no member that looks like this closure;
+the closure exists only as a value at the call site of `grid`, and `Row` itself never changes because of it.
+
+```trb check
+type Row {
+  var cells: List<Int> = []
+
+  fn cell(var self, value: Int) {
+    cells.add value
+  }
+}
+
+fn describe(build: (var self: Row) => Void): Row {
+  var row = Row()
+  build row
+  row
+}
+
+const row = describe { cell 1 }
+print row
+```
+
+```trb error
+type Row {
+  var cells: List<Int> = []
+}
+
+var row = Row()
+row.build { cell 1 }
+// error: `Row` has no member `build`
+```
+
+## Related
+
+- [Parameter modes](../functions/parameter-modes.md) - a receiver closure as one of the shapes a parameter can take.
+- [Builders and DSLs](builders.md) - the function around a receiver closure that makes a configuration block work.
+- [Property commands](../types/property-commands.md) - what a command call does when the name is a field, not a method.

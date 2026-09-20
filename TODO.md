@@ -1062,3 +1062,53 @@ Wenn nicht, was bedeutet, bewirkt es?
     `extend` eines Literal-Typs, Default an `fn`-Typparametern, `NaN`/`nan`).
   - **Wird gelöst:** "Checker-Konformitätsrunde 1" (Opus-Agent) reproduziert jede Stelle einzeln, behebt sie mit
     Tests und exakten Meldungen und meldet, welche Doku-Sätze danach veraltet sind.
+
+- (Fund aus 5.10 und der Streams-Runde, 2026-09-20) Ein Member mit EIGENEN Typparametern kann nie in einer
+  Witness-Tabelle stehen: `Decoder.record<Output>`, `SequenceDecoder.next<Item>`, `RecordDecoder.field<Value>`,
+  `Stage.onto<Final>`. Der Checker nimmt den Aufruf auf einem Trait-Wert an, das native Back-End kann ihn nie bauen.
+  - **Entschieden (ich, Veto möglich):** kein zweites Übersetzungsmodell (geboxte Generics) - ein generischer Member
+    ist **nicht objekt-sicher** und auf einem Trait-Wert ein Compile-Fehler; die std wechselt an diesen Stellen auf
+    statischen Dispatch über gebundene Generics, wie serde: `fn decode<Chosen: Decoder>(var decoder: Chosen)`,
+    `fn encode<Chosen: Encoder>(self, var encoder: Chosen)`, `Json.encode<Value: Encode>(value: Value)`,
+    `through<Chosen: Stage<Item, Output>>(stage: Chosen)`; ein Format-Decoder implementiert alle vier Decoder-Traits
+    in einem Typ, und die Closures von `record`/`sequence`/`map` bekommen `var fields: Self` statt eines Trait-Werts
+    (ersetzt assoziierte Typen, die die Sprache nicht hat). Preis: keine heterogene `List<Encode>`.
+  - **Zeitpunkt:** eigener Auftrag "Encoding auf statischen Dispatch" (Checker-Regel + `std/encoding`, `std/json`,
+    `std/stream`/`std/iteration` `through`, Doku) nach 5.7 - der Compiler selbst benutzt weder `Encode` noch `Decode`,
+    es liegt also nicht auf dem Weg zum Fixpunkt.
+- (5.10, 2026-09-20) Format-Entscheidungen, die ich übernehme: `Void` zeigt sich als `void`; ein Tupel zeigt sich OHNE
+  Labels (`(1, 9)`), weil Labels nicht zum Typ gehören - CONCEPT ("with the labels where there are any") wird
+  angepasst; eine Escape-Tabelle in Runtime, Stage 0 und Dump; Floats nach dem kürzesten Round-Trip auf beiden Seiten.
+  Offen: `Show` eines Funktionswerts - CONCEPT sagt "its type"; ich lege fest: die Quellschreibweise des Typs,
+  `(Int64) => Int64`, Umsetzung mit 5.14 (Stage 0 druckt heute `<function>`).
+
+- (Stand, 2026-09-21) **Doku Phase 2 ist komplett gemergt: 217 Seiten, 24 Ordner, 595 geprüfte Snippets**, `docs check`
+  und `docs index --check` grün. Der **Agent Skill** ist erzeugt und committet: `.claude/skills/torbscript/`
+  (`SKILL.md` 323 Zeilen + `reference/` mit 195 Seiten und generiertem Index; geplante und Contributing-Seiten
+  bleiben draußen). Neu erzeugen: `torb run ../compiler docs skill ../docs ../build/skill/torbscript`, dann kopieren.
+  - **Offen (Doku-Pflegerunde, nach Konformitätsrunde + 5.7):** Sätze, die durch Compiler-Fortschritt veralten -
+    z. B. "`torb build` kann kein `print`" (seit 5.10 falsch), die "wird noch nicht gemeldet"-Hinweise, die die
+    Konformitätsrunde schließt; dazu Snippets in eingerückten Fences, die das Werkzeug bisher nicht sah. Danach Skill
+    neu erzeugen.
+  - Weitere Funde der Schreiber (Welle 3): `project.trb` wird statisch gelesen statt ausgewertet (`authors`,
+    `registry`, `build { target }` werden ignoriert), `project.lock.trb` und die Registry existieren nicht (geplant),
+    Stage 0 beendet einen Panic mit Exit-Code 1 statt 101, `Bool` hat kein `Compare`.
+
+- (5.7 Runde 3, 2026-09-21) Gemergt: `finish`-Lookup, `a[key]` lesen, `for` über Collections, Ranges als Wert,
+  `collectionLiterals` gelesen - **15257 von 17250 Deklarationen gelowert (88 %)**, kein interner Fehler.
+  - **Fund:** die Monomorphisierung terminiert nicht, sobald `Range.iterator` TorbScript ist: `Iterable.indexed` ist
+    `Zipped(0.., self)`; die Tabelle von `Iterable<(Int, Item)>` enthält wieder `indexed`, das `Zipped<Int, (Int, Item)>`
+    braucht, usw. (polymorphe Rekursion durch eifrig gebaute Witness-Tabellen).
+  - **Entschieden (ich):** wie Rust (`enumerate` ist `where Self: Sized` und steht nicht in der vtable): ein
+    **Default-Member, den keine Implementierung im Programm überschreibt, ist kein Tabellen-Slot**; er wird statisch
+    mit `Self` = Trait-Typ instanziiert (ein Default erreicht `self` nur über die Member des Traits - das Verhalten
+    ist identisch). Überschriebene Defaults bleiben Slots. Dazu eine Tiefengrenze als Notbremse mit sauberer Meldung
+    statt Hänger. Nebeneffekt: die Instanzzahl pro Elementtyp fällt stark.
+  - **Präzisierung der Objekt-Sicherheits-Entscheidung von oben:** ein generischer DEFAULT-Member (`map<Output>`) ist
+    auf einem Trait-Wert weiter aufrufbar (statisch auf dem gelöschten `Self`, so läuft es schon); nicht objekt-sicher
+    ist nur ein generischer Member, der VERLANGT ist (`Decoder.record<Output>`, `Stage.onto<Final>`).
+  - `Show` einer `Range` (entschieden): `extend<Value: Show> Range<Value> with Show`, druckt die Quellform `0..10`.
+  - **Lücke, die ich schließe:** drei Runden lang wurde kein natives Gate-Programm für Collections geschrieben - die
+    88 % sind gelowert, aber nie gelaufen. Runde 4 beginnt deshalb mit Gate-Programmen (inkl. Copy-on-Write-Beweis)
+    für alles, was schon lowert, und behebt, was sie finden; danach Instanzmengen-Entscheidung, `ArrayList.from`,
+    Map-/Set-Cursor, Index-Pfade, Varargs/Spread (dann fällt die `print`-Sonderbehandlung weg), Listen-Patterns.

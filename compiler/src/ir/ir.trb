@@ -499,6 +499,16 @@ public type IntrinsicOperation {
   case TextByteLength
   /** The first use of a `lazy` parameter runs its thunk and remembers the value. */
   case LazyForce
+  /**
+   * `print a, b` and `printError a, b`: the already shown parts, joined by the runtime with one space and one `\n`.
+   *
+   * They take as many operands as the call was written with, exactly as `TextConcat` does, and they produce nothing.
+   * `print(...values: Show)` is a variadic parameter and therefore a *list* at the call site, which is milestone 5.7's -
+   * so until then the lowering shows the arguments itself and hands the parts over as one instruction. The join stays
+   * in `runtime/console.c`, so the two back ends cannot disagree about the format.
+   */
+  case PrintParts
+  case PrintErrorParts
 }
 
 /**

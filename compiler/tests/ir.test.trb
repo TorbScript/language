@@ -623,10 +623,48 @@ group "The verifier" {
     finishProgram program
     assert(
       verifyFunction(program, program.functionAt(identifier))
-        == [
-          "t_main_join b0: `textConcat.i64` has only one form, so it names no numeric type",
-          "t_main_join b0: `textConcat.i64` works on `Int64`, and %0 is `String`",
-        ]
+        == ["t_main_join b0: `textConcat.i64` has only one form, so it names no numeric type"]
+    )
+  }
+
+  /** `textConcat`, `printParts` and `printErrorParts` take as many operands as there are parts, and each one is a text. */
+  test "a part of a concatenation that is not a text is reported, however many there are" {
+    var program = IrProgram()
+    const strings = program.internType IrType.Text
+    const integer = program.internType IrType.Integer(64, true)
+    const at = program.internLocation Location("src/text.trb", 5, 3)
+    const parameters = [IrParameter("text", strings), IrParameter("number", integer)]
+    var builder = newFunction "t_main_join", None, IrSignature(parameters, strings), "body"
+    const joined = addTemporary builder, strings
+    const concat = Intrinsic IntrinsicOperation.TextConcat, None
+    emit builder, Instruction.Intrinsic(Some(joined), concat, [Slot(0), Slot(1), Slot(0)], at)
+    const printed = Intrinsic IntrinsicOperation.PrintParts, None
+    emit builder, Instruction.Intrinsic(None, printed, [joined, Slot(1)], at)
+    terminate builder, Terminator.Return(Some(owned(joined)))
+    const identifier = finishFunction program, builder
+    finishProgram program
+    const reported = verifyFunction(program, program.functionAt(identifier)).joined(separator: "; ")
+    assert(
+      reported
+        == "t_main_join b0: `textConcat` joins strings, and %1 is `Int64`;"
+          + " t_main_join b0: `printParts` joins strings, and %1 is `Int64`"
+    )
+  }
+
+  /** `print` answers nothing at all, so a slot for its result is a mistake and not a choice. */
+  test "an instruction that produces nothing may not be given a slot for a result" {
+    var program = IrProgram()
+    const strings = program.internType IrType.Text
+    const at = program.internLocation Location("src/text.trb", 5, 3)
+    var builder = newFunction "t_main_write", None, IrSignature([IrParameter("text", strings)], strings), "body"
+    const printed = Intrinsic IntrinsicOperation.PrintParts, None
+    emit builder, Instruction.Intrinsic(Some(Slot(0)), printed, [Slot(0)], at)
+    terminate builder, Terminator.Return(Some(owned(Slot(0))))
+    const identifier = finishFunction program, builder
+    finishProgram program
+    assert(
+      verifyFunction(program, program.functionAt(identifier))
+        == ["t_main_write b0: `printParts` produces no value, and a slot was given for one"]
     )
   }
 

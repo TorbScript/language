@@ -456,14 +456,19 @@ group "What the back end does not lower yet" {
     )
   }
 
-  test "a list literal, an index and a top-level `?` each say which construct they are" {
+  /**
+   * `a[key]` itself is lowered since 5.7 (`lower-collections.test.trb`), and the `ArrayList` of the prelude of
+   * `harness.trb` provides neither `iterator` nor `get` - which is what these two report. The real chain over `std/` is
+   * what the repository-wide test below asserts, by what is *not* in its list of blocking constructs.
+   */
+  test "a list literal and a top-level `?` each say which construct they are" {
     assert(
       unsupportedIn("fn items(): Int \{\n  const found = [1, 2]\n  1\n\}")
         == ["not supported by the back end yet: `iterator`, which neither the source nor the natives manifest provides"]
     )
     assert(
       unsupportedIn("fn first(items: ArrayList<Int>): Int \{\n  items[0]\n\}")
-        == ["not supported by the back end yet: `a[key]`"]
+        == ["not supported by the back end yet: `at`, which neither the source nor the natives manifest provides"]
     )
     // A `?` in a *function* whose result is neither is now the checker's message ("`?` needs a function that returns an
     // `Option` or a `Result`"), so the one body that still reaches the back end's branch is the top level of an entry
@@ -471,8 +476,8 @@ group "What the back end does not lower yet" {
     assert(
       unsupportedIn("fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\nconst value = read()?\nprint value")
         == [
-          "not supported by the back end yet: `?` in a body that returns neither an `Option`"
-            + " nor a `Result` (milestone 5.10)",
+          "not supported by the back end yet: `?` at the top level of an entry file,"
+            + " whose `error:` report is the driver's (milestone 5.13)",
         ]
     )
   }
@@ -537,15 +542,15 @@ group "Real code" {
     assert found.program.problems.isEmpty()
     assert found.problems.isEmpty()
     // Nine declarations of the two files, plus the instances and the generated members the worklist reached from them
-    assert(found.lowered + found.stubbed == 186)
+    assert(found.lowered + found.stubbed == 208)
     // **The instance-count tripwire** (BACKEND section 7, "The instance count"). Monomorphization with `List<Item>`
     // everywhere can multiply, and what multiplies it is the **element type**: a container literal builds the witness
     // table of `List<Item>`, and that one table drags in every default member of `Iterable`, `Collection`,
     // `MutableIndexed`, `Length` and `Accumulator` for that one item type. These three numbers *are* the footprint - the
     // functions, the tables and the descriptors - and they are asserted exactly so that an explosion fails a test
     // instead of being noticed as a build time. What would bound them is in the note of 5.7.
-    assert(found.program.functions.length() == 228)
-    assert(found.program.witnessTables.length() == 18)
+    assert(found.program.functions.length() == 258)
+    assert(found.program.witnessTables.length() == 20)
     assert(found.program.elements.length() == 2)
     var blocked: List<String> = []
     for entry in found.unsupported {
@@ -553,15 +558,14 @@ group "Real code" {
     }
     blocked.sort({ _ })
     // A list literal is lowered since 5.7 and a closure since 5.8, so what is left is the **members of the table** a
-    // `List<Item>` carries: `swapAt` and `first` read `a[key]`, `sort` hands one on as a `var` argument, `addAll` is a
-    // `for` over a collection, and `indexed` needs a `Range` as a value
+    // `List<Item>` carries: `swapAt` writes through `a[key]`, `sort` hands one on as a `var` argument, `indexed` walks a
+    // `Range` and `Range.iterator` waits for a bound on the instance set, and `ArrayList.from` is the `.Planned` native
+    // that a function of the runtime cannot be at all (both in the note of 5.7)
     assert(blocked.joined(separator: "\n")
-      == "not supported by the back end yet: `String.chars`, which the runtime provides from milestone 5.7 on\n"
-        + "not supported by the back end yet: `a[key]`\n"
-        + "not supported by the back end yet: `finish`, which neither the source nor the natives manifest provides\n"
-        + "not supported by the back end yet: `for` over anything but a range of integers\n"
+      == "not supported by the back end yet: `ArrayList.from`, which the runtime provides from milestone 5.7 on\n"
+        + "not supported by the back end yet: `Range.iterator`, which the runtime provides from milestone 5.7 on\n"
+        + "not supported by the back end yet: `String.chars`, which the runtime provides from milestone 5.7 on\n"
         + "not supported by the back end yet: a `var` argument through `a[key]` (milestone 5.7/5.9b)\n"
-        + "not supported by the back end yet: a range as a value\n"
-        + "not supported by the back end yet: a receiver the back end cannot reach")
+        + "not supported by the back end yet: an assignment through `a[key]` (milestone 5.7/5.9b)")
   }
 }

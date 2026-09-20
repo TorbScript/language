@@ -1986,15 +1986,14 @@ impl Interpreter {
     pub fn show(&mut self, value: &Value, is_top_level: bool) -> Eval<String> {
         profile::count("show");
         Ok(match value {
-            Value::Void => "Void".to_string(),
+            Value::Void => "void".to_string(),
             Value::Bool(value) => value.to_string(),
             Value::Int(value) => value.to_string(),
-            Value::Float(value) if value.fract() == 0.0 && value.abs() < 1e16 => format!("{value:.1}"),
-            Value::Float(value) => value.to_string(),
+            Value::Float(value) => show_float(*value),
             Value::Char(value) if is_top_level => value.to_string(),
-            Value::Char(value) => format!("'{value}'"),
+            Value::Char(value) => format!("'{}'", escape_char(*value, '\'')),
             Value::Text(text) if is_top_level => text.as_str().to_string(),
-            Value::Text(text) => format!("\"{}\"", text.as_str().replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")),
+            Value::Text(text) => format!("\"{}\"", text.as_str().chars().map(|character| escape_char(character, '"')).collect::<String>()),
             Value::List(items) => format!("[{}]", self.show_all(items.iter())?),
             Value::Set(table) => format!("Set.of({})", self.show_all(table.keys())?),
             Value::Map(table) if table.is_empty() => "[:]".to_string(),
@@ -2005,14 +2004,9 @@ impl Interpreter {
                 }
                 format!("[{}]", entries.join(", "))
             }
-            Value::Tuple(tuple) => {
-                let mut items = Vec::new();
-                for (label, item) in tuple.labels.iter().zip(&tuple.items) {
-                    let shown = self.show(item, false)?;
-                    items.push(label.map_or(shown.clone(), |label| format!("{label}: {shown}")));
-                }
-                format!("({})", items.join(", "))
-            }
+            // A label is not part of a tuple's type (gap 17), so it is not in the layout the compiled back end shows
+            // from either: `(lowest: 1, highest: 9)` and `(1, 9)` are one type and therefore one shown form
+            Value::Tuple(tuple) => format!("({})", self.show_all(tuple.items.iter())?),
             Value::Range(Range { start, end: Some(end) }) => format!("{start}..{end}"),
             Value::Range(Range { start, end: None }) => format!("{start}.."),
             Value::Option(None) => "None".to_string(),
@@ -2080,6 +2074,63 @@ impl Interpreter {
             other => format!("a value of type {}", other.type_name()),
         }
     }
+}
+
+/// One character inside a quoted `String` or `Char`, in the spelling the language's literals use.
+///
+/// It is the same table as `torb_escape_char` in `runtime/text.c`, because the two back ends have to write the same
+/// bytes: `Show` is the contract between them (decided gap 23).
+fn escape_char(character: char, quote: char) -> String {
+    match character {
+        '\n' => "\\n".to_string(),
+        '\r' => "\\r".to_string(),
+        '\t' => "\\t".to_string(),
+        '\\' => "\\\\".to_string(),
+        _ if character == quote => format!("\\{quote}"),
+        _ if (character as u32) < 0x20 || character as u32 == 0x7F => format!("\\u{{{:x}}}", character as u32),
+        _ => character.to_string(),
+    }
+}
+
+/// The shortest decimal string that parses back to the same `Float64`, in the notation of decided gap 4.
+///
+/// Rust's `{:e}` is already the shortest round-tripping form, so only the notation is decided here, and it is decided
+/// the way `torb_format_f64` in `runtime/text.c` decides it: the exponent form below -6 and at 21 and above, the plain
+/// one in between, and `.0` where neither a `.` nor an `e` would be in the result. That is what makes a `Float` always
+/// carry a decimal point and what keeps the interpreter and the binary writing one format.
+fn show_float(value: f64) -> String {
+    if value.is_nan() {
+        return "nan".to_string();
+    }
+    if value.is_infinite() {
+        return if value < 0.0 { "-inf".to_string() } else { "inf".to_string() };
+    }
+    let scientific = format!("{value:e}");
+    let (mantissa, written) = scientific.split_once('e').expect("`{:e}` writes an exponent");
+    let exponent: i32 = written.parse().expect("`{:e}` writes a decimal exponent");
+    let negative = mantissa.starts_with('-');
+    let digits: String = mantissa.chars().filter(|character| character.is_ascii_digit()).collect();
+    let digits = digits.trim_end_matches('0');
+    let digits = if digits.is_empty() { "0" } else { digits };
+    let sign = if negative { "-" } else { "" };
+    if digits == "0" {
+        return format!("{sign}0.0");
+    }
+    if !(-6..21).contains(&exponent) {
+        let rest = &digits[1..];
+        let fraction = if rest.is_empty() { String::new() } else { format!(".{rest}") };
+        return format!("{sign}{}{fraction}e{exponent}", &digits[..1]);
+    }
+    if exponent >= 0 {
+        let integer_digits = exponent as usize + 1;
+        if digits.len() <= integer_digits {
+            let zeros = "0".repeat(integer_digits - digits.len());
+            return format!("{sign}{digits}{zeros}.0");
+        }
+        return format!("{sign}{}.{}", &digits[..integer_digits], &digits[integer_digits..]);
+    }
+    let zeros = "0".repeat((-exponent) as usize - 1);
+    format!("{sign}0.{zeros}{digits}")
 }
 
 /// The names the counters of `TORB_PROFILE` use for the nodes of the syntax tree.
@@ -2277,4 +2328,77 @@ fn navigate<'value>(mut current: &'value mut Value, steps: &[Step]) -> Eval<&'va
         };
     }
     Ok(current)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{escape_char, show_float};
+
+    /// The same table as `float_formatting_is_the_shortest_round_trip` in `runtime/tests/text_test.c`: the interpreter
+    /// and the compiled binary have to write one format, because `Show` is the contract between them (gap 23).
+    #[test]
+    fn a_float_is_shown_in_the_notation_of_gap_4() {
+        let cases: &[(f64, &str)] = &[
+            (0.0, "0.0"),
+            (1.0, "1.0"),
+            (6.0, "6.0"),
+            (-1.5, "-1.5"),
+            (0.1, "0.1"),
+            (0.3, "0.3"),
+            (0.1 + 0.2, "0.30000000000000004"),
+            (std::f64::consts::PI, "3.141592653589793"),
+            (std::f64::consts::E, "2.718281828459045"),
+            (123456789.125, "123456789.125"),
+            (1e21, "1e21"),
+            (1e22, "1e22"),
+            (1e-7, "1e-7"),
+            (2.5e-5, "0.000025"),
+            (5e-324, "5e-324"),
+            (1.7976931348623157e308, "1.7976931348623157e308"),
+            (2.2250738585072014e-308, "2.2250738585072014e-308"),
+            (9007199254740993.0, "9007199254740992.0"),
+            (1e16, "10000000000000000.0"),
+            (1e20, "100000000000000000000.0"),
+            (100.0, "100.0"),
+            (-1e-6, "-0.000001"),
+            (-0.0, "-0.0"),
+            (f64::NAN, "nan"),
+            (f64::INFINITY, "inf"),
+            (f64::NEG_INFINITY, "-inf"),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(&show_float(*value), expected, "the shown form of {value}");
+        }
+    }
+
+    /// Every shown float parses back to the identical bit pattern, which is what "shortest round trip" means.
+    #[test]
+    fn every_shown_float_parses_back_to_the_same_bits() {
+        let mut bits: u64 = 0x1234_5678_9ABC_DEF0;
+        for _ in 0..20000 {
+            bits = bits.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let value = f64::from_bits(bits);
+            if !value.is_finite() {
+                continue;
+            }
+            let shown = show_float(value);
+            let parsed: f64 = shown.parse().expect("a shown float parses");
+            assert_eq!(parsed.to_bits(), value.to_bits(), "{shown} does not parse back to the same float");
+        }
+    }
+
+    /// The same table as `torb_escape_char` in `runtime/text.c`.
+    #[test]
+    fn a_nested_character_is_escaped_the_way_a_literal_writes_it() {
+        assert_eq!(escape_char('\n', '"'), "\\n");
+        assert_eq!(escape_char('\r', '"'), "\\r");
+        assert_eq!(escape_char('\t', '"'), "\\t");
+        assert_eq!(escape_char('\\', '"'), "\\\\");
+        assert_eq!(escape_char('"', '"'), "\\\"");
+        assert_eq!(escape_char('"', '\''), "\"");
+        assert_eq!(escape_char('\'', '\''), "\\'");
+        assert_eq!(escape_char('\u{1}', '"'), "\\u{1}");
+        assert_eq!(escape_char('\u{7f}', '"'), "\\u{7f}");
+        assert_eq!(escape_char('ß', '"'), "ß");
+    }
 }

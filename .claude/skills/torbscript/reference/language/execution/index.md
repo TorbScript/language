@@ -1,0 +1,27 @@
+---
+title: Execution
+summary: The parts of running a program that are a rule of the language rather than an implementation detail - evaluation order, what a copy costs, the tail-call guarantee, and why there are no destructors.
+kind: index
+status: stable
+order: 110
+---
+
+The typed IR is one thing shared by the interpreter and the compiled binary; this section is what that sharing
+promises a reader: the order code runs in, what a copy costs, what recursion is guaranteed, and what cleanup is.
+
+## What belongs here
+
+What does not belong here: memory as a topic in general, which stays inside `CONCEPT.md`'s own execution model
+outside what a program can observe. Every page in this folder is a reference page: an example first, then the
+syntax, then numbered rules, then what the construct is not.
+
+<!-- torb:index:begin -->
+
+## Pages
+
+- **[Evaluation order](evaluation-order.md)** - Evaluation order is source order - the receiver first, then the arguments as they are written, then the parameter defaults - so a side effect in an argument is exactly as predictable as reading the line.
+- **[What a copy costs](copies.md)** - A copy always behaves the same way, but what it costs depends on the shape of the type - inline for a small fixed-size value, copy-on-write for heap-backed storage, and never for a shared type.
+- **[Tail calls and the frame limit](tail-calls.md)** - Direct self-recursion in tail position is guaranteed to run without growing the stack, and every other call counts against a per-task frame limit of 100000 that panics with stack overflow when it is reached.
+- **[There are no destructors](no-destructors.md)** - Close is an ordinary method and using is an ordinary function, so the nesting of using blocks is the only destruction order the language ever promises - a value going out of scope runs no code at all.
+
+<!-- torb:index:end -->

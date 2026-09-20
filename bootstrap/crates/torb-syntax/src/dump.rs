@@ -19,8 +19,23 @@ fn option<Item>(item: &Option<Item>, show: impl Fn(&Item) -> String) -> String {
     }
 }
 
+/// One character inside a quoted `String` or `Char`, exactly as `Show.showNested` writes it (decided gap 23). It is the
+/// same table as `escape_char` in `torb-interpreter` and `torb_escape_char` in `runtime/text.c`, because this dump is
+/// compared with the one the generated `Show` produces, character by character.
+fn escaped(character: char, quote: char) -> String {
+    match character {
+        '\n' => "\\n".to_string(),
+        '\r' => "\\r".to_string(),
+        '\t' => "\\t".to_string(),
+        '\\' => "\\\\".to_string(),
+        _ if character == quote => format!("\\{quote}"),
+        _ if (character as u32) < 0x20 || character as u32 == 0x7F => format!("\\u{{{:x}}}", character as u32),
+        _ => character.to_string(),
+    }
+}
+
 fn text(text: &str) -> String {
-    format!("\"{}\"", text.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n"))
+    format!("\"{}\"", text.chars().map(|character| escaped(character, '"')).collect::<String>())
 }
 
 fn span(span: &Span) -> String {
@@ -253,7 +268,7 @@ fn expression(node: &Expression) -> String {
         ExpressionKind::Float(value) => format!("FloatLiteral(text: {})", text(value)),
         ExpressionKind::Bool(value) => format!("BoolLiteral(value: {value})"),
         ExpressionKind::VoidLiteral => "VoidLiteral".to_string(),
-        ExpressionKind::Char(value) => format!("CharLiteral(value: '{value}')"),
+        ExpressionKind::Char(value) => format!("CharLiteral(value: '{}')", escaped(*value, '\'')),
         ExpressionKind::Text(segments) => format!(
             "TextLiteral(segments: {})",
             list(segments, |segment| match segment {

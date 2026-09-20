@@ -1,0 +1,324 @@
+use test, group from "std/test"
+use irOf, ownedIrOf, unsupportedIn from "./lower-harness"
+
+/**
+ * The containers from the source side (milestone 5.7): `a[key]`, and `for` over a collection.
+ *
+ * The literals and the element descriptors are pinned by hand-built IR in `ir-elements.test.trb`; what is asked here is
+ * the shape a *source* program produces - which member a bracket reaches, in which order its two operands are
+ * evaluated, and what a loop over an `Iterator` looks like.
+ *
+ * `a[key]` on the real `ArrayList` goes through the **default** of `Indexed` (`get(key).expect("Key does not exist")`),
+ * so what an index out of range does is decided in `std/core` and is the same in every back end - the back end has no
+ * rule of its own for it. The prelude of `harness.trb` is a simplification that declares `at` as required, so the tests
+ * here write the implementation out; that the real chain works is what the repository-wide test of `lower.test.trb`
+ * asserts, by no longer listing `a[key]` among the constructs that block a function.
+ */
+
+group "`a[key]`" {
+  test "an index is a call of the `at` the type provides, the receiver before the key" {
+    const source = r"""
+      type Grid with Indexed<Int, Int> {
+        base: Int
+
+        fn at(self, key: Int): Int {
+          base + key
+        }
+      }
+
+      fn cell(grid: Grid): Int {
+        grid[2]
+      }
+      """
+    assert(
+      irOf(source, "t_acme_x2f_app_main_cell") == r"""
+        fn t_acme_x2f_app_main_cell(grid: Record(T_acme_x2f_app_main_Grid) borrowed) -> Int64 {
+          slot %0 parameter grid: Record(T_acme_x2f_app_main_Grid)
+          slot %1 temporary: Int64
+          slot %2 temporary: Int64
+        b0: # acme/app/src/main.trb:9 body
+          %1 = constant s_literal__Int64_2
+          %2 = call t_acme_x2f_app_main_Grid_at(%0 borrowed, %1 borrowed) at acme/app/src/main.trb:10:3
+          return %2 borrowed
+        }"""
+    )
+  }
+
+  /** `at` mentions `Self` nowhere but as its receiver, so it is an ordinary member of the table of a trait-typed value. */
+  test "an index on a trait-typed value goes through the table it carries" {
+    const source = r"""
+      type Grid with Indexed<Int, Int> {
+        base: Int
+
+        fn at(self, key: Int): Int {
+          base + key
+        }
+      }
+
+      fn cell(grid: Indexed<Int, Int>): Int {
+        grid[2]
+      }
+
+      fn used(): Int {
+        cell(Grid(1))
+      }
+      """
+    assert(
+      irOf(source, "t_acme_x2f_app_main_cell") == r"""
+        fn t_acme_x2f_app_main_cell(grid: Object(Indexed<Int64, Int64>) borrowed) -> Int64 {
+          slot %0 parameter grid: Object(Indexed<Int64, Int64>)
+          slot %1 temporary: Int64
+          slot %2 temporary: Int64
+        b0: # acme/app/src/main.trb:9 body
+          %1 = constant s_literal__Int64_2
+          %2 = callWitness value %0 bound 0 member 0(%1 borrowed)
+          return %2 borrowed
+        }"""
+    )
+  }
+
+  /** A write through an index is a place, and `TakeOut`/`PutBack` are 5.9b's. Only the read is lowered here. */
+  test "a write through an index is still a finding, and it names the slice" {
+    const source = "fn write(var items: ArrayList<Int>) \{\n  items[0] = 1\n\}"
+    assert(
+      unsupportedIn(source)
+        == ["not supported by the back end yet: an assignment through `a[key]` (milestone 5.7/5.9b)"]
+    )
+  }
+}
+
+group "which of the three shapes a literal is" {
+  /**
+   * The checker decided it (gap 51) and recorded it at the literal's span, so the back end reads the decision. Only
+   * `Default` - the collection the literal's own type names, item by item - is lowered; the other two say what they wait
+   * for instead of building the wrong container.
+   */
+  test "a literal that fills an `Array` names 5.9b, and one that goes through `from` names its target" {
+    assert(
+      unsupportedIn("fn fixed(): Array<Int, 2> \{\n  [1, 2]\n\}")
+        == ["not supported by the back end yet: a literal that fills an `Array` of 2 items (milestone 5.9b)"]
+    )
+    assert(
+      unsupportedIn("fn names(): Set<Int> \{\n  [1, 2]\n\}")
+        == ["not supported by the back end yet: a literal that is built through the `from` of `Set<Int64>`"]
+    )
+  }
+}
+
+group "a range as a value" {
+  /**
+   * A `Range` is an ordinary record - the one `native type` that declares fields and is no `RuntimeKind` (5.1's note) -
+   * so a range literal is one `Construct` of its three fields, with an `Option` around each end.
+   */
+  test "a range with both ends is one `Construct` of two `Some` and the flag" {
+    const source = r"""
+      fn span(): Range<Int> {
+        3..7
+      }
+      """
+    assert(
+      irOf(source, "t_acme_x2f_app_main_span") == r"""
+        fn t_acme_x2f_app_main_span() -> Record(T_std_x2f_prelude_types_Range__Int64) {
+          slot %0 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %1 temporary: Int64
+          slot %2 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %3 temporary: Int64
+          slot %4 temporary: Bool
+          slot %5 temporary: Record(T_std_x2f_prelude_types_Range__Int64)
+        b0: # acme/app/src/main.trb:1 body
+          %1 = constant s_literal__Int64_3
+          %0 = construct T_std_x2f_prelude_types_Option__Int64.Some (%1 borrowed)
+          %3 = constant s_literal__Int64_7
+          %2 = construct T_std_x2f_prelude_types_Option__Int64.Some (%3 borrowed)
+          %4 = constant s_literal__Bool_false
+          %5 = construct T_std_x2f_prelude_types_Range__Int64 (%0 borrowed, %2 borrowed, %4 borrowed)
+          return %5 borrowed
+        }"""
+    )
+  }
+
+  /** An end that is not written is `None`, and `0..=10` sets the flag. */
+  test "an open end is `None` and an inclusive range sets the flag" {
+    const open = irOf "fn span(): Range<Int> \{\n  3..\n\}", "t_acme_x2f_app_main_span"
+    assert open.contains("construct T_std_x2f_prelude_types_Option__Int64.None ()")
+    assert open.contains("constant s_literal__Bool_false")
+    const closed = irOf "fn span(): Range<Int> \{\n  3..=7\n\}", "t_acme_x2f_app_main_span"
+    assert closed.contains("%4 = constant s_literal__Bool_true")
+  }
+}
+
+const walked = r"""
+  type Counting with Iterator<Int> {
+    var seen: Int = 0
+
+    fn next(var self): Int? {
+      seen = seen + 1
+      if seen > 3 { None } else { Some(seen) }
+    }
+  }
+
+  type Three with Iterable<Int> {
+    fn iterator(self): Iterator<Int> {
+      Counting()
+    }
+  }
+
+  fn total(values: Three): Int {
+    var sum = 0
+    for value in values {
+      sum = sum + value
+    }
+    sum
+  }
+  """
+
+group "`for` over a collection" {
+  /**
+   * The shape of BACKEND 1.6: the subject once into a slot, `iterator()` on it, and a loop head that pulls `next()` and
+   * switches on the `Option`. The cursor is a **local of this frame**, because `next(var self)` writes through it - so the
+   * receiver is a place and goes through the ordinary place machinery.
+   */
+  test "the subject is evaluated once, the cursor is a `var` local, and the head switches on the `Option`" {
+    assert(unsupportedIn(walked) == [])
+    assert(
+      irOf(walked, "t_acme_x2f_app_main_total") == r"""
+        fn t_acme_x2f_app_main_total(values: Record(T_acme_x2f_app_main_Three) borrowed) -> Int64 {
+          slot %0 parameter values: Record(T_acme_x2f_app_main_Three)
+          slot %1 local sum: Int64
+          slot %2 local iterator: Object(Iterator<Int64>)
+          slot %3 local value: Int64
+          slot %4 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %5 temporary: Int64
+        b0: # acme/app/src/main.trb:16 body
+          %1 = constant s_literal__Int64_0
+          %2 = call t_acme_x2f_app_main_Three_iterator(%0 borrowed) at acme/app/src/main.trb:18:3
+          jump b1
+        b1: # acme/app/src/main.trb:18 for
+          makeUnique %2
+          %4 = callWitness value %2 bound 0 member 0()
+          %5 = tag %4
+          switch %5 case 0 b2, otherwise b3
+        b2: # acme/app/src/main.trb:18 body
+          %3 = read %4.Some.value
+          %1 = intrinsic add.i64 %1, %3 at acme/app/src/main.trb:19:11
+          jump b1
+        b3: # acme/app/src/main.trb:18 done
+          return %1 borrowed
+        }"""
+    )
+  }
+
+  /** `continue` pulls the next value and `break` leaves, so neither needs a step block the way a counter does. */
+  test "`continue` jumps to the head and `break` to the block after the loop" {
+    const source = r"""
+      type Counting with Iterator<Int> {
+        var seen: Int = 0
+
+        fn next(var self): Int? {
+          seen = seen + 1
+          if seen > 3 { None } else { Some(seen) }
+        }
+      }
+
+      type Three with Iterable<Int> {
+        fn iterator(self): Iterator<Int> {
+          Counting()
+        }
+      }
+
+      fn total(values: Three): Int {
+        var sum = 0
+        for value in values {
+          if value == 2 {
+            continue
+          }
+          if value == 3 {
+            break
+          }
+          sum = sum + value
+        }
+        sum
+      }
+      """
+    // `continue` is `jump b1` - the head, where the next value is pulled - and `break` is `jump b3`, the block after it
+    assert(
+      irOf(source, "t_acme_x2f_app_main_total") == r"""
+        fn t_acme_x2f_app_main_total(values: Record(T_acme_x2f_app_main_Three) borrowed) -> Int64 {
+          slot %0 parameter values: Record(T_acme_x2f_app_main_Three)
+          slot %1 local sum: Int64
+          slot %2 local iterator: Object(Iterator<Int64>)
+          slot %3 local value: Int64
+          slot %4 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %5 temporary: Int64
+          slot %6 temporary: Int64
+          slot %7 temporary: Bool
+          slot %8 temporary: Void
+          slot %9 temporary: Int64
+          slot %10 temporary: Bool
+        b0: # acme/app/src/main.trb:16 body
+          %1 = constant s_literal__Int64_0
+          %2 = call t_acme_x2f_app_main_Three_iterator(%0 borrowed) at acme/app/src/main.trb:18:3
+          jump b1
+        b1: # acme/app/src/main.trb:18 for
+          makeUnique %2
+          %4 = callWitness value %2 bound 0 member 0()
+          %5 = tag %4
+          switch %5 case 0 b2, otherwise b3
+        b2: # acme/app/src/main.trb:18 body
+          %3 = read %4.Some.value
+          %6 = constant s_literal__Int64_2
+          %7 = intrinsic equal.i64 %3, %6 at acme/app/src/main.trb:19:8
+          branch %7 then b4 else b5
+        b3: # acme/app/src/main.trb:18 done
+          return %1 borrowed
+        b4: # acme/app/src/main.trb:19 then
+          jump b1
+        b5: # acme/app/src/main.trb:19 join
+          %9 = constant s_literal__Int64_3
+          %10 = intrinsic equal.i64 %3, %9 at acme/app/src/main.trb:22:8
+          branch %10 then b6 else b7
+        b6: # acme/app/src/main.trb:22 then
+          jump b3
+        b7: # acme/app/src/main.trb:22 join
+          %1 = intrinsic add.i64 %1, %3 at acme/app/src/main.trb:25:11
+          jump b1
+        }"""
+    )
+  }
+
+  /**
+   * A counted item is read into the same slot every round, so the round's own value has to die before the next `Read`
+   * overwrites it. Nothing in the `for` arranges that: the `Read` *defines* the slot at the head, so the item is not live
+   * on the back edge and the drop lands on it like any other edge drop (BACKEND 2.2 step 5).
+   */
+  test "a counted item is released on the back edge, and the cursor once after the loop" {
+    const source = r"""
+      type Texts with Iterator<String> {
+        var seen: Int = 0
+
+        fn next(var self): String? {
+          seen = seen + 1
+          if seen > 2 { None } else { Some("a") }
+        }
+      }
+
+      type Two with Iterable<String> {
+        fn iterator(self): Iterator<String> {
+          Texts()
+        }
+      }
+
+      fn lengths(values: Two): Int {
+        var total = 0
+        for text in values {
+          total = total + text.byteLength()
+        }
+        total
+      }
+      """
+    const shown = ownedIrOf source, "t_acme_x2f_app_main_lengths"
+    assert shown.contains("b2: # acme/app/src/main.trb:18 body")
+    assert shown.contains("release %3")
+    assert shown.contains("release %2")
+  }
+}

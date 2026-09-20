@@ -1,0 +1,365 @@
+use test, group from "std/test"
+use lowered, irOf, ownedIrOf, unsupportedIn, textOf from "./lower-harness"
+use insertOwnership from "../src/ir/ownership"
+use emittedProgramText from "../src/backend/c/emit"
+
+/**
+ * Text and data (milestone 5.10): string interpolation, `print`, and `?.` as the control flow it is.
+ *
+ * An interpolated text is one `Intrinsic.TextConcat` over its literal pieces and its shown parts, so a text of *n* parts
+ * is one allocation - which is what the snapshots here pin, together with the `Release` of every part the ownership pass
+ * adds. `print` is the same shape with `Intrinsic.PrintParts` instead, because a variadic list is milestone 5.7's.
+ *
+ * The prelude of `harness.trb` is a small one of its own, so every `show` here is
+ * `t_std_x2f_prelude_types_Show_show__<type>`; the format the two back ends have to agree on is pinned by
+ * `bootstrap/tests/native/interpolation.trb` instead, which runs on stage 0 and as a binary.
+ */
+
+/** The C of the **final** IR, which is what `torb build` emits: the retains and releases are the ownership pass's. */
+fn ownedCOf(source: String): String {
+  var found = lowered source
+  insertOwnership found.program
+  emittedProgramText found.program, "t_acme_x2f_app_main"
+}
+
+/** How often a piece of text is in another one, which is what "one concatenation per round" is asked with. */
+fn countOf(text: String, part: String): Int {
+  text.split(part).length() - 1
+}
+
+group "one concatenation per text" {
+  test "a literal piece, a name and an expression become one intrinsic" {
+    const source = r"""
+      fn label(count: Int): String {
+        "n = {count + 1}!"
+      }
+      """
+    assert(
+      irOf(source, "t_acme_x2f_app_main_label") == r"""
+        fn t_acme_x2f_app_main_label(count: Int64 borrowed) -> String {
+          slot %0 parameter count: Int64
+          slot %1 temporary: String
+          slot %2 temporary: Int64
+          slot %3 temporary: Int64
+          slot %4 temporary: String
+          slot %5 temporary: String
+          slot %6 temporary: String
+        b0: # acme/app/src/main.trb:1 body
+          %1 = constant s_literal__String_n_x20__x3d__x20_
+          %2 = constant s_literal__Int64_1
+          %3 = intrinsic add.i64 %0, %2 at acme/app/src/main.trb:2:9
+          %4 = call t_std_x2f_prelude_types_Show_show__Int64(%3 borrowed) at acme/app/src/main.trb:2:9
+          %5 = constant s_literal__String__x21_
+          %6 = intrinsic textConcat %1, %4, %5 at acme/app/src/main.trb:2:3
+          return %6 borrowed
+        }"""
+    )
+  }
+
+  /** Every shown part is a text the frame owns, so it is released once the concatenation has read it. */
+  test "the parts are released after the one intrinsic that reads them" {
+    const source = r"""
+      fn label(name: String, count: Int): String {
+        "{name}: {count}"
+      }
+      """
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_label") == r"""
+        fn t_acme_x2f_app_main_label(name: String owned, count: Int64 borrowed) -> String {
+          slot %0 parameter name: String
+          slot %1 parameter count: Int64
+          slot %2 temporary: String
+          slot %3 temporary: String
+          slot %4 temporary: String
+          slot %5 temporary: String
+        b0: # acme/app/src/main.trb:1 body
+          %2 = call t_std_x2f_prelude_types_Show_show__String(%0 owned last) at acme/app/src/main.trb:2:5
+          %3 = constant s_literal__String__x3a__x20_
+          %4 = call t_std_x2f_prelude_types_Show_show__Int64(%1 borrowed) at acme/app/src/main.trb:2:13
+          %5 = intrinsic textConcat %2, %3, %4 at acme/app/src/main.trb:2:3
+          release %2
+          release %3
+          release %4
+          return %5 owned last
+        }"""
+    )
+  }
+
+  test "a long text built in a loop is one concatenation per round and never a chain" {
+    const source = r"""
+      fn repeated(times: Int): String {
+        var text = ""
+        for index in 0..times {
+          text = "{text}{index},"
+        }
+        text
+      }
+      """
+    // One `textConcat` in the whole function: the round writes the new text through the slot, which releases the old one
+    assert(countOf(textOf(source), "intrinsic textConcat") == 1)
+  }
+
+  test "a plain text without a part is still one static value and no intrinsic" {
+    const source = r"""
+      fn greeting(): String {
+        "hello"
+      }
+      """
+    assert(!irOf(source, "t_acme_x2f_app_main_greeting").contains("textConcat"))
+  }
+
+  test "the C of an interpolation is one array of parts and one call" {
+    const source = r"""
+      fn label(count: Int): String {
+        "n = {count}"
+      }
+      """
+    const shown = ownedCOf source
+    assert shown.contains("    const torb_text parts[2] = \{ s1, s2 \};")
+    assert shown.contains("    s3 = torb_text_concat(parts, 2);")
+  }
+}
+
+group "`Show` of every shape" {
+  /** Each of these is a different kind of member: a runtime function per width, and a generated body for a `type`. */
+  test "a number, a `Bool`, a `Char` and `Void` each reach their own member of the manifest" {
+    const source = r"""
+      fn shown(number: Int, flag: Bool, character: Char, nothing: Void): String {
+        "{number} {flag} {character} {nothing}"
+      }
+      """
+    const shown = textOf source
+    assert shown.contains("runtime fn t_std_x2f_prelude_types_Show_show__Int64(self: Int64 borrowed)")
+    assert shown.contains("= torb_show_i64")
+    assert shown.contains("= torb_show_bool")
+    assert shown.contains("= torb_show_char")
+    assert shown.contains("= torb_show_void")
+  }
+
+  /** A `type` has no `show` anywhere, so the lowering generates one from the layout - the same body a `print` reaches. */
+  test "a record reaches the body the language generates from its layout" {
+    const source = r"""
+      type Wrapper {
+        inner: String
+      }
+
+      fn shown(text: String): String {
+        "{Wrapper(text)}"
+      }
+      """
+    const shown = textOf source
+    assert shown.contains("fn t_std_x2f_prelude_types_Show_show__T_acme_x2f_app_main_Wrapper(")
+    assert shown.contains("s_literal__String_Wrapper_x28_inner_x3a__x20_")
+  }
+
+  /** A tuple has no name and no labels: gap 17 took the labels out of type identity, so the layout has neither. */
+  test "a tuple shows as `(a, b)`" {
+    const source = r"""
+      fn shown(pair: (Int, String)): String {
+        "{pair}"
+      }
+      """
+    assert textOf(source).contains("static s_literal__String__x28_: String = \"(\"")
+  }
+
+  /**
+   * A trait the value does not carry may still be implemented **for its trait type**: `extend<Item: Show> List<Item> with
+   * Show` of the prelude. `"{list}"` on a `List<Item>` value is then a static call of that implementation, and the
+   * "not in the witness table" finding is for the case where no implementation covers it at all.
+   */
+  test "a trait-typed value is shown through the implementation of its own trait type" {
+    const source = r"""
+      fn shown(items: List<Int>): String {
+        "{items}"
+      }
+      """
+    assert(!unsupportedIn(source).contains("`show`, which is not in the witness table of a trait-typed value"))
+  }
+
+  test "a trait-typed value is shown through the table it carries" {
+    const source = r"""
+      fn shown(value: Show): String {
+        "{value}"
+      }
+      """
+    assert(
+      irOf(source, "t_acme_x2f_app_main_shown") == r"""
+        fn t_acme_x2f_app_main_shown(value: Object(Show) borrowed) -> String {
+          slot %0 parameter value: Object(Show)
+          slot %1 temporary: String
+          slot %2 temporary: String
+        b0: # acme/app/src/main.trb:1 body
+          %1 = callWitness value %0 bound 0 member 0()
+          %2 = intrinsic textConcat %1 at acme/app/src/main.trb:2:3
+          return %2 borrowed
+        }"""
+    )
+  }
+}
+
+group "`print` and `printError`" {
+  test "the arguments are shown and handed over as one instruction" {
+    const source = r"""
+      fn write(name: String, count: Int) {
+        print name, count
+      }
+      """
+    assert(
+      ownedIrOf(source, "t_acme_x2f_app_main_write") == r"""
+        fn t_acme_x2f_app_main_write(name: String owned, count: Int64 borrowed) -> Void {
+          slot %0 parameter name: String
+          slot %1 parameter count: Int64
+          slot %2 temporary: String
+          slot %3 temporary: String
+          slot %4 temporary: Void
+        b0: # acme/app/src/main.trb:1 body
+          %2 = call t_std_x2f_prelude_types_Show_show__String(%0 owned last) at acme/app/src/main.trb:2:9
+          %3 = call t_std_x2f_prelude_types_Show_show__Int64(%1 borrowed) at acme/app/src/main.trb:2:15
+          intrinsic printParts %2, %3 at acme/app/src/main.trb:2:3
+          release %2
+          release %3
+          return
+        }"""
+    )
+  }
+
+  test "`printError` is the same instruction with the other stream" {
+    const source = r"""
+      fn write(message: String) {
+        printError message
+      }
+      """
+    assert textOf(source).contains("intrinsic printErrorParts %1 at acme/app/src/main.trb:2:3")
+  }
+
+  test "a `print` without arguments writes one empty line and takes no parts" {
+    const source = r"""
+      fn write() {
+        print()
+      }
+      """
+    assert textOf(source).contains("intrinsic printParts  at acme/app/src/main.trb:2:3")
+  }
+
+  /** The join lives in `runtime/console.c`, so the C is the array of the shown parts and nothing else. */
+  test "the C hands the parts to the runtime, which joins them" {
+    const source = r"""
+      fn write(count: Int) {
+        print count, count
+      }
+      """
+    const shown = ownedCOf source
+    assert shown.contains("const torb_text parts[2] = \{")
+    assert shown.contains("torb_print_parts(parts, 2);")
+  }
+
+  /** A variadic argument list of anything else is still the clean finding that names 5.7. */
+  test "only `print` and `printError` are lowered without a list" {
+    const source = r"""
+      fn join(...parts: Int): Int {
+        1
+      }
+
+      fn probe(): Int {
+        join 1, 2
+      }
+      """
+    assert(
+      unsupportedIn(source)
+        == [
+          "not supported by the back end yet: a variadic parameter (milestone 5.7)",
+          "not supported by the back end yet: a variadic argument list",
+        ]
+    )
+  }
+}
+
+group "`?.` as control flow" {
+  /** `map`: the member answers an ordinary value, so the arm wraps it into a `Some` of its own. */
+  test "a field behind `?.` is read in the arm that has a value" {
+    const source = r"""
+      type User {
+        name: String
+      }
+
+      fn nameOf(user: User?): String? {
+        user?.name
+      }
+      """
+    assert(
+      irOf(source, "t_acme_x2f_app_main_nameOf") == r"""
+        fn t_acme_x2f_app_main_nameOf(user: Variant(T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_User) borrowed) -> Variant(T_std_x2f_prelude_types_Option__String) {
+          slot %0 parameter user: Variant(T_std_x2f_prelude_types_Option__T_acme_x2f_app_main_User)
+          slot %1 temporary: Variant(T_std_x2f_prelude_types_Option__String)
+          slot %2 temporary: Int64
+          slot %3 temporary: Record(T_acme_x2f_app_main_User)
+          slot %4 temporary: String
+        b0: # acme/app/src/main.trb:5 body
+          %2 = tag %0
+          switch %2 case 0 b1, otherwise b2
+        b1: # acme/app/src/main.trb:6 present
+          %3 = read %0.Some.value
+          %4 = read %3.name
+          %1 = construct T_std_x2f_prelude_types_Option__String.Some (%4 borrowed)
+          jump b3
+        b2: # acme/app/src/main.trb:6 absent
+          %1 = construct T_std_x2f_prelude_types_Option__String.None ()
+          jump b3
+        b3: # acme/app/src/main.trb:6 join
+          return %1 borrowed
+        }"""
+    )
+  }
+
+  /** `flatMap`: the member answers an `Option` already, so the arm hands it on and `?.` never nests one (gap 12). */
+  test "a member that answers an `Option` is handed on instead of wrapped" {
+    const source = r"""
+      type User {
+        nickname: String?
+      }
+
+      fn nicknameOf(user: User?): String? {
+        user?.nickname
+      }
+      """
+    const shown = irOf source, "t_acme_x2f_app_main_nicknameOf"
+    assert shown.contains("  %4 = read %3.nickname")
+    assert shown.contains("  %1 = copy %4")
+    assert(!shown.contains("Option__String.Some ("))
+  }
+
+  test "a method behind `?.` is an ordinary call on the payload" {
+    const source = r"""
+      type User {
+        name: String
+
+        fn label(self): String {
+          name
+        }
+      }
+
+      fn labelOf(user: User?): String? {
+        user?.label()
+      }
+      """
+    const shown = irOf source, "t_acme_x2f_app_main_labelOf"
+    assert shown.contains("t_acme_x2f_app_main_User_label(%3 borrowed)")
+    assert shown.contains("Option__String.None ()")
+  }
+
+  /** The arm without a value must not release what it never read, which is what the ownership verifier checks. */
+  test "the empty arm releases nothing and the whole body is verified" {
+    const source = r"""
+      type User {
+        name: String
+      }
+
+      fn nameOf(user: User?): String {
+        user?.name ?? "-"
+      }
+      """
+    const shown = ownedIrOf source, "t_acme_x2f_app_main_nameOf"
+    assert shown.contains("release")
+    assert(!shown.contains("used after it was moved out of"))
+  }
+}

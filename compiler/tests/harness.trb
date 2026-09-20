@@ -312,6 +312,8 @@ public const preludeSource = r"""
 
   public native fn print(...values: Show): Void
 
+  public native fn printError(...values: Show): Void
+
   public native fn panic(message: String): Never
 
   /** Only a `shared type` has an identity, so this is callable on one and on nothing else (BACKEND gap 15). */
@@ -380,7 +382,7 @@ public const workspace = [
     public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
     public use Set, TrieSet from "./types"
     public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
-    public use print, panic, using, do, assert, nameOf, Expression from "./types"
+    public use print, printError, panic, using, do, assert, nameOf, Expression from "./types"
     public use Void from "./types"
     public use isSame from "./types"
     public use Option.Some, Option.None from "./types"
@@ -475,6 +477,15 @@ public type Probed {
   fn dispatchOf(self, written: String): String {
     const at = spanOf written
     dispatchAt checker, module, at
+  }
+
+  /**
+   * Whether the `?.` whose member is written at the **last** occurrence of `written` answers an `Option` of its own:
+   * `flatMap` then, and `map` otherwise (gap 12). The last occurrence, because a member is declared before it is used.
+   */
+  fn flattensOptional(self, written: String): Bool {
+    const at = lastSpanOf written
+    checker.flattenedOptionalAt(module, at).expect("a `?.` whose member is `{written}`")
   }
 
   /** The adaptations of the expression at `written`, in the order they apply. */
