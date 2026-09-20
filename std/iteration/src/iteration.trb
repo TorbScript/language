@@ -1,3 +1,19 @@
+/**
+ * The pull side of a pipeline: [Iterator], a cursor with one method, and [Iterable], anything that can hand one out.
+ * `for`, the spread operator (`...`) and every lazy stage (`map`, `filter`, `take`, ...) are built on these two
+ * traits alone - a type takes part simply by implementing [Iterable].
+ *
+ * [Iterator] and [Iterable] are the synchronous half of the pipeline vocabulary: a [Collector] describes where the
+ * values of a pipeline end up, and a [Stage] is the reusable middle a pipeline is built from. [Source] and [Sink]
+ * carry the same two verbs (`next`, `add`/`finish`) asynchronously, for values that arrive over time instead of all
+ * being there already.
+ *
+ * # Related
+ *
+ * - [Length] - the `length()`/`isEmpty()` pair a sized collection carries next to `Iterable`.
+ * - [Source] - the asynchronous sibling of `Iterator`, for values that are not all there yet.
+ */
+
 use Compare, Hash from "std/core"
 use From, Show from "std/core"
 use Add from "std/core"
@@ -6,18 +22,44 @@ use Stage from "./stage"
 use Staged from "./staged"
 use Mapped, Filtered, FilterMapped, MappedWhile, FlatMapped, Taken, Skipped, TakenWhile, Zipped, Sorted from "./stages"
 
-/** A cursor over a sequence. Iterators are stateful values: whoever pulls from one holds it in a `var`. */
+/**
+ * A cursor over a sequence, with one method: `next`. Iterators are stateful values, so whoever pulls from one holds
+ * it in a `var` - copying one forks it into two independent cursors over the same remaining values.
+ *
+ * # Examples
+ *
+ *     var digits = [1, 2, 3].iterator()
+ *     print digits.next()
+ *     print digits.next()
+ *
+ * # Related
+ *
+ * - [Iterable] - anything that can hand out a fresh one.
+ */
 public trait Iterator<Item> {
+  /** The next value, or `None` once there is nothing left. */
   fn next(var self): Item?
 }
 
+/**
+ * The size of a collection, and the two questions built on it. Every collection type implements it, so
+ * `isEmpty()`/`isNotEmpty()` read the same everywhere.
+ *
+ * # Examples
+ *
+ *     const numbers: List<Int> = []
+ *     print numbers.isEmpty()
+ */
 public trait Length {
+  /** How many elements there are. */
   fn length(self): Int
 
+  /** Whether there are no elements. */
   fn isEmpty(self): Bool {
     length() == 0
   }
 
+  /** Whether there is at least one element. */
   fn isNotEmpty(self): Bool {
     !isEmpty()
   }
@@ -33,20 +75,36 @@ public trait Length {
  *
  * Stages are values (an `Iterable` again), so a pipeline can be passed around, extended and iterated more than once.
  * Where the values end up is decided by the terminal operation alone - usually `collect` with a `Collector`.
+ *
+ * # Examples
+ *
+ *     const numbers = [1, 2, 3, 4, 5, 6]
+ *     const evenSquares = numbers.filter { _ % 2 == 0 }.map { _ * _ }
+ *     print evenSquares.toList()
+ *
+ * # Related
+ *
+ * - [Length] - `length()`/`isEmpty()`, for a collection that knows its size up front.
+ * - [Collector] - what `collect()` describes; every other terminal operation is written in terms of it.
+ * - [Stage] - the reusable middle a `through(...)` puts in front of the values.
  */
 public trait Iterable<Item> {
+  /** A fresh cursor over the values, positioned before the first one. */
   fn iterator(self): Iterator<Item>
 
   // --- Lazy stages -----------------------------------------------------------------------------
 
+  /** Transforms every value into another one, in order. */
   fn map<Output>(self, transform: (value: Item) => Output): Iterable<Output> {
     Mapped self, transform
   }
 
+  /** Keeps every value that answers the predicate, and drops the rest. */
   fn filter(self, predicate: (value: Item) => Bool): Iterable<Item> {
     Filtered self, predicate
   }
 
+  /** Transforms every value into its own Iterable, and flattens all of them into one sequence. */
   fn flatMap<Output>(self, transform: (value: Item) => Iterable<Output>): Iterable<Output> {
     FlatMapped self, transform
   }
@@ -61,18 +119,22 @@ public trait Iterable<Item> {
     MappedWhile self, transform
   }
 
+  /** The first `amount` values. Ends the pipeline there, so a source that never runs out still finishes. */
   fn take(self, amount: Int): Iterable<Item> {
     Taken self, amount
   }
 
+  /** Every value after the first `amount`, which are read and thrown away. */
   fn skip(self, amount: Int): Iterable<Item> {
     Skipped self, amount
   }
 
+  /** Values up to, but not including, the first one that fails the predicate. */
   fn takeWhile(self, predicate: (value: Item) => Bool): Iterable<Item> {
     TakenWhile self, predicate
   }
 
+  /** Pairs each value with the one at the same position of `other`; stops at the shorter of the two. */
   fn zip<Output>(self, other: Iterable<Output>): Iterable<(Item, Output)> {
     Zipped self, other
   }
@@ -98,7 +160,7 @@ public trait Iterable<Item> {
   // --- Terminal operations ------------------------------------------------------------------------
 
   /**
-   * The general terminal operation. See `std/collectors`.
+   * The general terminal operation: pulls the values through a [Collector].
    *
    * `isDone()` is asked before the first value and after every `add`, so a collector that has seen enough (`taking`,
    * `first`) stops the pull instead of reading a source to its end.
@@ -125,10 +187,12 @@ public trait Iterable<Item> {
     Target.from self
   }
 
+  /** The values, collected into a `List`. */
   fn toList(self): List<Item> {
     to<List<Item>>()
   }
 
+  /** The values, collected into a `Set`, which drops the duplicates. */
   fn toSet(self): Set<Item> where Item: Hash {
     to<Set<Item>>()
   }
@@ -140,12 +204,14 @@ public trait Iterable<Item> {
     }
   }
 
+  /** Runs `action` once for every value, for a step that produces nothing itself. */
   fn forEach(self, action: (value: Item) => Void) {
     for value in self {
       action value
     }
   }
 
+  /** Combines every value into one, left to right, starting from `initial`. */
   fn fold<State>(self, initial: State, combine: (State, Item) => State): State {
     var state = initial
     for value in self {
@@ -154,7 +220,7 @@ public trait Iterable<Item> {
     state
   }
 
-  /** Stops pulling as soon as a value is found. */
+  /** The first value that answers the predicate, or `None`. Stops pulling as soon as one is found. */
   fn find(self, predicate: (value: Item) => Bool): Item? {
     for value in self {
       if predicate(value) {
@@ -164,23 +230,28 @@ public trait Iterable<Item> {
     None
   }
 
+  /** The first value, or `None` when there is none. */
   fn first(self): Item? {
     var cursor = iterator()              // `next` needs a `var` path, a temporary is not one
     cursor.next()
   }
 
+  /** Whether at least one value answers the predicate. Stops at the first one that does. */
   fn any(self, predicate: (value: Item) => Bool): Bool {
     find(predicate).isSome()
   }
 
+  /** Whether every value answers the predicate. Stops at the first one that does not. */
   fn all(self, predicate: (value: Item) => Bool): Bool {
     !any { !predicate(_) }
   }
 
+  /** How many values there are. Reads every one, even where nothing about them is kept. */
   fn count(self): Int {
     fold 0 { total, _ => total + 1 }
   }
 
+  /** Every value, added together, starting from zero. */
   fn sum(self): Item where Item: Add & From<Int> {
     fold Item.from(0) { a, b => a + b }
   }

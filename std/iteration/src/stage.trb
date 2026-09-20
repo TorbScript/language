@@ -1,23 +1,26 @@
 /**
- * A stage is the middle of a pipeline, written once for both worlds.
- *
- * A `Collector` says where values end up, an `Accumulator` is the state of one such run. A `Stage` sits in front of an
- * accumulator and hands it other values: it turns an `Accumulator<Output, Final>` into an `Accumulator<Input, Final>`.
- * That is all a stage is - a transducer, in Clojure's word, and exactly how Java's streams are built inside.
+ * A stage is the middle of a pipeline, written once for both worlds: it turns an `Accumulator<Output, Final>` into
+ * an `Accumulator<Input, Final>`, a transducer in Clojure's word.
  *
  *     const interesting = filtering<Event> { _.level >= .Warning }.then(mapping { _.message })
  *
  *     const fromList = events.through(interesting).toList()          // a list, synchronously
  *     const fromBody = response.body.through(interesting).toList()   // an HTTP body, asynchronously
  *
- * Because a stage never asks where its values come from, every stage exists **once**: the pull side (`Iterable`) and
- * the push side (`Source`, see `std/stream`) only differ in the two drivers that feed one. And because a stage is an
- * ordinary value, a pipeline is a value: it can be named, passed, stored in a field and applied more than once.
+ * Because a stage never asks where its values come from, every stage exists once: the pull side ([Iterable]) and the
+ * push side ([Source]) only differ in the two drivers that feed one. And because a stage is an ordinary value, a
+ * pipeline is a value: it can be named, passed, stored in a field and applied more than once.
  *
- * The per-stage iterators of `stages.trb` (`Mapped`, `Filtered`, ...) still carry `Iterable.map` and friends. They
- * become `Stage` values once the native back end compiles `list.map(...)` and a generic member reached through a
- * trait-typed value (`onto<Final>`); until then the two live next to each other and mean the same thing
- * (see `docs/STREAMS.md`, "What milestones 7 and 10 have to build").
+ * # Open
+ *
+ * The per-stage iterators of `stages.trb` (`Mapped`, `Filtered`, ...) still carry `Iterable.map` and friends of their
+ * own, next to the `Stage` values here that do the same job through `through(...)`. The two live side by side and
+ * mean the same thing.
+ *
+ * # Related
+ *
+ * - [Accumulator] - what a stage wraps and hands values to.
+ * - [Collector] - describes where a pipeline's values end up; `onto` is how a stage sits in front of one.
  */
 
 use Accumulator from "./collectors"
@@ -25,6 +28,12 @@ use Accumulator from "./collectors"
 /**
  * `onto` is the whole protocol, and it is the reason a stage composes: what it answers is an `Accumulator` again, so
  * the next stage can wrap that one. Nothing here is asynchronous - a stage computes, it never waits.
+ *
+ * # Examples
+ *
+ *     const evens: Stage<Int, Int> = filtering { _ % 2 == 0 }
+ *     const numbers = [1, 2, 3, 4, 5, 6]
+ *     print numbers.through(evens).toList()
  */
 public trait Stage<Input, Output> {
   /**
@@ -62,6 +71,7 @@ public fn mapping<Input, Output>(transform: (value: Input) => Output): Stage<Inp
   Mapping transform
 }
 
+/** Keeps every value that answers the predicate, and drops the rest. */
 public fn filtering<Item>(predicate: (value: Item) => Bool): Stage<Item, Item> {
   Filtering predicate
 }
@@ -76,6 +86,7 @@ public fn mappingWhile<Input, Output>(transform: (value: Input) => Output?): Sta
   MappingWhile transform
 }
 
+/** Transforms every value into its own Iterable, and flattens all of them into one sequence. */
 public fn flatMapping<Input, Output>(transform: (value: Input) => Iterable<Output>): Stage<Input, Output> {
   FlatMapping transform
 }
@@ -85,10 +96,12 @@ public fn taking<Item>(amount: Int): Stage<Item, Item> {
   Taking amount
 }
 
+/** Values up to, but not including, the first one that fails the predicate. */
 public fn takingWhile<Item>(predicate: (value: Item) => Bool): Stage<Item, Item> {
   TakingWhile predicate
 }
 
+/** Every value after the first `amount`, which are read and thrown away. */
 public fn skipping<Item>(amount: Int): Stage<Item, Item> {
   Skipping amount
 }

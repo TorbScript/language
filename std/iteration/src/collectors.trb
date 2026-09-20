@@ -5,16 +5,40 @@
  *     words.collect(joining(", "))
  *
  * A `Collector` is a description. `start()` creates a fresh `Accumulator` for one run (held in a `var`),
- * values are pushed into it one by one, `finish()` produces the result. Because values are pushed, the same
- * collectors work for everything that produces values over time: iterables, channels, event streams.
+ * values are pushed into it one by one, `finish()` produces the result. Because values are pushed, `Collector` and
+ * `Accumulator` are the synchronous counterpart of [Sink], which pushes the same way but may have to wait for the
+ * other end to keep up.
+ *
+ * # Examples
+ *
+ *     const words = ["pear", "kiwi", "plum", "fig"]
+ *     print words.collect(groupingBy { _.byteLength() })
  */
 
 use Compare, Hash from "std/core"
 use From from "std/core"
 use Add from "std/core"
 
+/**
+ * The push-based state of one run of a [Collector]: values arrive one at a time through `add`, and `finish` produces
+ * the result once they have all arrived. A `Collection` (`List`, `Set`, `Map`, `Stack`, `Queue`) is already an
+ * `Accumulator`, because `add` is the same verb and `finish` answers `self`.
+ *
+ * # Examples
+ *
+ *     var total = summing { value: Int => value }.start()
+ *     total.add 3
+ *     total.add 4
+ *     print total.finish()
+ *
+ * # Related
+ *
+ * - [Collector] - the reusable description that makes a fresh `Accumulator` for every run.
+ */
 public trait Accumulator<Item, Output> {
+  /** Pushes one more value in. */
   fn add(var self, value: Item)
+  /** The result, once every value has been pushed in. Called exactly once, after the last `add`. */
   fn finish(self): Output
 
   /**
@@ -30,22 +54,41 @@ public trait Accumulator<Item, Output> {
   }
 }
 
+/**
+ * What to do with the values of a pipeline: reusable and stateless, it only describes a run. `collect(collector)` is
+ * the general terminal operation of [Iterable] - `toList`, `count`, `fold` and the rest are all written on top of it.
+ *
+ * # Examples
+ *
+ *     const numbers = [1, 2, 3, 4, 5]
+ *     print numbers.collect(summing { value: Int => value })
+ *
+ * # Related
+ *
+ * - [Accumulator] - the state one run makes, through `start()`.
+ * - [groupingBy] - the one collector with a `then(downstream)` for a collector per group.
+ */
 public trait Collector<Item, Output> {
+  /** A fresh `Accumulator` for one run. Called once per `collect`. */
   fn start(self): Accumulator<Item, Output>
 }
 
 // --- Collecting into collections ------------------------------------------------------------------
 
 /**
- * Collects into any type that can be created from an Iterable (`From<Iterable<Item>>`, the `FromIterator` of Rust):
+ * Collects into any type that can be created from an Iterable (`From<Iterable<Item>>`). `Target` can be given on its
+ * own, the rest is inferred.
  *
- *     groupingBy { _.department }.then(into<Set<Employee>>())
+ * # Examples
+ *
+ *     const numbers = [3, 1, 2, 1]
+ *     print numbers.collect(into<Set<Int>>())
  */
-/** Type arguments can be given from the left, the rest is inferred: `into<Set<Employee>>()` */
 public fn into<Target: From<Iterable<Item>>, Item>(): Collector<Item, Target> {
   IntoCollector<Item, Target>()
 }
 
+/** Shorthand for `into<List<Item>>()`. */
 public fn listing<Item>(): Collector<Item, List<Item>> {
   into<List<Item>>()
 }
@@ -112,10 +155,12 @@ type FoldAccumulator<Item, State, Output> with Accumulator<Item, Output> {
 
 // --- Aggregates ------------------------------------------------------------------------------------------
 
+/** How many values there are. */
 public fn counting<Item>(): Collector<Item, Int> {
   collector(0, finish: { _ }) { count, _ => count + 1 }
 }
 
+/** Every value, added together, starting from zero. */
 public fn summing<Item, Total: Add & From<Int>>(value: (value: Item) => Total): Collector<Item, Total> {
   collector(Total.from(0), finish: { _ }) { sum, item => sum + value(item) }
 }
@@ -127,6 +172,7 @@ public fn averaging<Item>(value: (value: Item) => Float): Collector<Item, Float?
   }
 }
 
+/** The value with the smallest key, or `None` for an empty pipeline. Keeps the earlier of two equal keys. */
 public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, Item?> {
   const initial: Item? = None
   collector(initial, finish: { _ }) { best, item =>
@@ -137,6 +183,7 @@ public fn minBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, 
   }
 }
 
+/** The value with the largest key, or `None` for an empty pipeline. Keeps the earlier of two equal keys. */
 public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, Item?> {
   const initial: Item? = None
   collector(initial, finish: { _ }) { best, item =>
@@ -147,6 +194,7 @@ public fn maxBy<Item, Key: Compare>(key: (value: Item) => Key): Collector<Item, 
   }
 }
 
+/** Every value, joined into one `String`, with `separator` between values and `prefix`/`suffix` around all of them. */
 public fn joining(separator: String = "", prefix: String = "", suffix: String = ""): Collector<String, String> {
   const initial: String? = None
   collector(initial, finish: { text => prefix + (text ?? "") + suffix }) { text, part =>
@@ -176,13 +224,20 @@ public fn groupingBy<Item, Key: Hash>(key: (value: Item) => Key): Grouping<Item,
   Grouping key
 }
 
+/**
+ * The result of [groupingBy] before a downstream collector is chosen: a `Collector` on its own, into
+ * `Map<Key, List<Item>>`, and the place `then(downstream)` sits to collect each group differently.
+ */
 public type Grouping<Item, Key: Hash> with Collector<Item, Map<Key, List<Item>>> {
+  /** Picks the group a value belongs to. */
   key: (value: Item) => Key
 
+  /** Groups into a `List` per key, same as `then(listing())`. */
   fn start(self): Accumulator<Item, Map<Key, List<Item>>> {
     then(listing()).start()
   }
 
+  /** Runs `downstream` once per group instead of collecting each one into a `List`. */
   fn then<Output>(self, downstream: Collector<Item, Output>): Collector<Item, Map<Key, Output>> {
     GroupingInto key, downstream
   }

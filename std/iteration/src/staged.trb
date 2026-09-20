@@ -19,9 +19,15 @@ use Stage from "./stage"
  * `items.through(stage)` - an `Iterable` again, so a staged pipeline is a source for the next one and can be
  * iterated more than once (every iteration builds a fresh accumulator chain, exactly as `Mapped` builds a fresh
  * iterator).
+ *
+ * # Related
+ *
+ * - [Stage] - the reusable middle this type drives.
  */
 public type Staged<Input, Item> with Iterable<Item> {
+  /** Where the values come from before the stage sees them. */
   source: Iterable<Input>
+  /** What is put in front of `source`'s values. */
   stage: Stage<Input, Item>
 
   /**
@@ -48,6 +54,7 @@ public type Staged<Input, Item> with Iterable<Item> {
     source.through stage.then(other)
   }
 
+  /** The queued path: pushes one source value at a time into the stage and hands out what comes back out. */
   fn iterator(self): Iterator<Item> {
     var queue: Shared<List<Item>> = Shared([])
     StagedIterator source.iterator(), stage.onto(Queueing(queue)), queue
@@ -60,12 +67,15 @@ public type Staged<Input, Item> with Iterable<Item> {
  * and the driver would never see what arrived.
  */
 public type Queueing<Item> with Accumulator<Item, Void> {
+  /** Shared with the driver that reads it back out, one `next()` at a time. */
   var box: Shared<List<Item>>
 
+  /** Appends the value to the queue the driver reads from. */
   fn add(var self, value: Item) {
     box.update { items => items.added value }
   }
 
+  /** Nothing to do: the values are already in the box. */
   fn finish(self) {}
 }
 

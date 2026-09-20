@@ -10,10 +10,14 @@ use Iterable, Iterator from "./iteration"
 
 // --- map --------------------------------------------------------------------------------------
 
+/** The stage behind `Iterable.map`: one `transform`ed value out for every value of `source`. */
 public type Mapped<Item, Output> with Iterable<Output> {
+  /** The values before the transform. */
   source: Iterable<Item>
+  /** Applied to every value of `source`, in order. */
   transform: (value: Item) => Output
 
+  /** A cursor that pulls one value from `source` and answers it transformed. */
   fn iterator(self): Iterator<Output> {
     MappedIterator source.iterator(), transform
   }
@@ -30,10 +34,14 @@ type MappedIterator<Item, Output> with Iterator<Output> {
 
 // --- filter ------------------------------------------------------------------------------------
 
+/** The stage behind `Iterable.filter`: only the values of `source` that answer `predicate`. */
 public type Filtered<Item> with Iterable<Item> {
+  /** The values before the predicate is applied. */
   source: Iterable<Item>
+  /** Kept when it answers `true`. */
   predicate: (value: Item) => Bool
 
+  /** A cursor that reads from `source` until it finds a value `predicate` keeps, or `source` is exhausted. */
   fn iterator(self): Iterator<Item> {
     FilteredIterator source.iterator(), predicate
   }
@@ -55,10 +63,14 @@ type FilteredIterator<Item> with Iterator<Item> {
 
 // --- filterMap, mapWhile ----------------------------------------------------------------------------
 
+/** The stage behind `Iterable.filterMap`: the value of every `Some` that `transform` answers for `source`. */
 public type FilterMapped<Item, Output> with Iterable<Output> {
+  /** The values before the transform. */
   source: Iterable<Item>
+  /** Answers `None` to drop a value, `Some(output)` to keep one. */
   transform: (value: Item) => Output?
 
+  /** A cursor that reads from `source` until `transform` answers `Some`, or `source` is exhausted. */
   fn iterator(self): Iterator<Output> {
     FilterMappedIterator source.iterator(), transform
   }
@@ -78,10 +90,14 @@ type FilterMappedIterator<Item, Output> with Iterator<Output> {
   }
 }
 
+/** The stage behind `Iterable.mapWhile`: values from `transform`, up to and not including its first `None`. */
 public type MappedWhile<Item, Output> with Iterable<Output> {
+  /** The values before the transform. */
   source: Iterable<Item>
+  /** The first `None` ends the pipeline; `source` is never asked for a value again. */
   transform: (value: Item) => Output?
 
+  /** A cursor that stops for good the moment `transform` answers `None`. */
   fn iterator(self): Iterator<Output> {
     MappedWhileIterator source.iterator(), transform
   }
@@ -104,10 +120,14 @@ type MappedWhileIterator<Item, Output> with Iterator<Output> {
 
 // --- flatMap -----------------------------------------------------------------------------------
 
+/** The stage behind `Iterable.flatMap`: every value of every Iterable `transform` answers, one after another. */
 public type FlatMapped<Item, Output> with Iterable<Output> {
+  /** The values before the transform. */
   source: Iterable<Item>
+  /** Turns one value of `source` into an Iterable of its own, which is flattened into the result. */
   transform: (value: Item) => Iterable<Output>
 
+  /** A cursor that walks the Iterable `transform` produced for the current value, then moves to the next one. */
   fn iterator(self): Iterator<Output> {
     FlatMappedIterator source.iterator(), transform
   }
@@ -133,10 +153,14 @@ type FlatMappedIterator<Item, Output> with Iterator<Output> {
 
 // --- take, skip, takeWhile -----------------------------------------------------------------------
 
+/** The stage behind `Iterable.take`: the first `amount` values of `source`, and nothing behind them. */
 public type Taken<Item> with Iterable<Item> {
+  /** The values `amount` counts into. */
   source: Iterable<Item>
+  /** How many values to answer before ending the pipeline. */
   amount: Int
 
+  /** A cursor that never reads `source` again once `amount` values have come out - `source` can be infinite. */
   fn iterator(self): Iterator<Item> {
     TakenIterator source.iterator(), remaining: amount
   }
@@ -155,10 +179,14 @@ type TakenIterator<Item> with Iterator<Item> {
   }
 }
 
+/** The stage behind `Iterable.skip`: every value of `source` after the first `amount`. */
 public type Skipped<Item> with Iterable<Item> {
+  /** The values `amount` are read from and thrown away. */
   source: Iterable<Item>
+  /** How many values to read and discard before answering the rest. */
   amount: Int
 
+  /** A cursor already advanced past the first `amount` values of `source`. */
   fn iterator(self): Iterator<Item> {
     var iterator = source.iterator()
     for _ in 0..amount {
@@ -168,10 +196,14 @@ public type Skipped<Item> with Iterable<Item> {
   }
 }
 
+/** The stage behind `Iterable.takeWhile`: values of `source` up to, not including, the first one `predicate` rejects. */
 public type TakenWhile<Item> with Iterable<Item> {
+  /** The values before the predicate is applied. */
   source: Iterable<Item>
+  /** The first value that answers `false` ends the pipeline. */
   predicate: (value: Item) => Bool
 
+  /** A cursor that stops for good the moment `predicate` answers `false`. */
   fn iterator(self): Iterator<Item> {
     TakenWhileIterator source.iterator(), predicate
   }
@@ -197,10 +229,14 @@ type TakenWhileIterator<Item> with Iterator<Item> {
 
 // --- zip -------------------------------------------------------------------------------------------
 
+/** The stage behind `Iterable.zip`: pairs of values at the same position, one from `left` and one from `right`. */
 public type Zipped<Item, Output> with Iterable<(Item, Output)> {
+  /** The first half of every pair. */
   left: Iterable<Item>
+  /** The second half of every pair. */
   right: Iterable<Output>
 
+  /** A cursor that reads one value from each side and stops as soon as either one runs out. */
   fn iterator(self): Iterator<(Item, Output)> {
     ZippedIterator left.iterator(), right.iterator()
   }
@@ -217,8 +253,14 @@ type ZippedIterator<Item, Output> with Iterator<(Item, Output)> {
 
 // --- sorted ------------------------------------------------------------------------------------------
 
+/**
+ * The stage behind `Iterable.sorted`: `source`'s values, ordered by `key`. Lazy as a stage, but has to buffer every
+ * value the moment it is iterated - there is no first value before the last one has arrived.
+ */
 public type Sorted<Item, Key: Compare> with Iterable<Item> {
+  /** The values to sort. */
   source: Iterable<Item>
+  /** What to compare two values by. */
   key: (value: Item) => Key
 
   /** Sorting needs all values: the buffer is filled when the iteration starts, not when the stage is created. */
