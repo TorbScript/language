@@ -173,8 +173,8 @@ print "{first.count} {counters[0].count}"
 
 This is the copy trap: the second program prints `1 0`, because values are never aliased and `counters[0]` in a binding
 is a copy. Reach through the path instead: `counters[0].increment()`, `world.entities[id].health = 5`,
-`items.update(index) { ... }`. `CONCEPT.md` specifies a change that is never read afterwards as a compile error, which
-would catch the second program; the compiler does not report it yet.
+`items.update(index) { ... }`. A change that is never read afterwards is a compile error. The second program reads the
+copy in its last line, so the compiler reports nothing there: the mistake survives whenever the copy is used.
 
 ### 7. A `String` has no `length()` and no `text[i]`
 

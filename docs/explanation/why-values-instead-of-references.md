@@ -92,8 +92,8 @@ print "{first.count} {counters[0].count}"
 ```
 
 The rule that catches this is general: **a change that cannot have an effect is a compile error.** With value semantics
-such a change is always a mistake and never a defensive line, so it is not a lint. The compiler does not report it yet,
-so today the trap is silent. The fix is to reach through the path:
+such a change is always a mistake and never a defensive line, so it is not a lint. A copy that is changed and then read
+is not reported, because the change has an effect - on the copy. The fix is to reach through the path:
 
 ```trb check
 type Counter {

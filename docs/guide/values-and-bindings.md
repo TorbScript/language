@@ -115,9 +115,10 @@ print "{first.count} {counters[0].count}"
 ```
 
 That prints `1 0`. `var first = counters[0]` took a **copy** out of the list, so incrementing it left the list
-untouched. `CONCEPT.md` specifies a change that is never read afterwards as a compile error, which is what would catch
-this. The compiler does not report it yet, so today it is a silent bug rather than a compile error - the one place in this
-documentation where `CONCEPT.md` promises a diagnostic that does not exist. Reach through the path instead:
+untouched. A change that is never read afterwards is a compile error (`This change has no effect: `first` is never
+read again`, with the note that `first` is a copy and the path it came from). This program reads `first.count` in the
+last line, so the compiler has nothing to report: the copy is used, it is only not what was meant. Reach through the
+path instead:
 
 ```trb check
 type Counter {

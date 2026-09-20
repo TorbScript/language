@@ -88,8 +88,8 @@ first.increment()
 print "{first.count} {counters[0].count}"
 ```
 
-Write `counters[0].increment()`. `CONCEPT.md` specifies a change that is never read afterwards as a compile error,
-which would catch this; the compiler does not report it yet.
+Write `counters[0].increment()`. A change that is never read afterwards is a compile error, which catches this as long
+as the copy is not read again; a copy that is changed and then read is a legal program that does something else.
 
 ### `Err` becomes `Fail`
 
