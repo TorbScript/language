@@ -1232,3 +1232,5 @@ Wenn nicht, was bedeutet, bewirkt es?
     einen `Interpolate`-Trait trägt), `std/color`. Alle sind reine Werte-Bibliotheken ohne ECS- und ohne
     Grafik-Abhängigkeit; `std/ecs` und `std/render` benutzen sie, nicht umgekehrt. Sie prüfen vor allem Generics
     über Zahltypen, Operator-Traits, `Array<Item, Size>` und das Wert-Layout ohne Boxing.
+  - **Entschieden (Nutzer, 2026-09-21):** `std/linear` und `std/geometry` sind die ersten Pakete direkt nach dem
+    Fixpunkt (brauchen weder VM noch FFI), der Rest folgt dem Design-Dokument.
