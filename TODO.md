@@ -1369,3 +1369,14 @@ Wenn nicht, was bedeutet, bewirkt es?
     "in zehn Minuten erfundenes" Format als Test für "eigenes Format simpel einbringen". Dazu ein ehrliches
     "Wie fühlt es sich an" (Zeilen für Nutzer und Formatautor, Vergleich mit serde/kotlinx) und die Liste, was
     Sprache/Compiler dafür liefern müssen (u. a. statischer Dispatch: was wird aus `Encode` als Typ?).
+
+- (Dokumentation am Code, 2026-09-21) **Erledigt: Standard + Gate, gemergt, Gates grün** (1422 Tests). `torb docs
+  source <pfad>` prüft Docblocks (fehlend, fremde Überschrift, Link, Beispiel wird geparst + typgeprüft, Wörter der
+  Vergangenheit); `--statistics` zeigt die Abdeckung. Modul-Kommentar = der Docblock, mit dem die Datei BEGINNT (vor dem
+  ersten `use`; keine Parser-Änderung nötig). Vorlage: `std/core/src/option.trb` + `result.trb`. **Stand:** std 40 %
+  (360/897), Compiler 84 % (854/1009) aber 395 Vergangenheits-/Plan-Wörter ("milestone 5.13", "gap 14" - werden zu
+  `# Open` im Präsens, das ist echtes Umschreiben), Examples 6 % (10/156).
+  - **Läuft: Welle 1** (Sonnet-Schreiber, je eigener Worktree, Gate als Abnahme): `examples/` und die std-Pakete, die
+    gerade keine Code-Runde anfasst (stream, io, fs, iteration, http, task, process, environment, console, number,
+    math, time, test, expression, sandbox, project). `core`, `collections`, `prelude`, `text` nach den laufenden
+    Code-Runden; `encoding`, `json` nach dem Encoding-Design; Compiler = Welle 2.
