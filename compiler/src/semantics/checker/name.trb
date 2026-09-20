@@ -244,7 +244,7 @@ public fn symbolTarget(
     }
     // A trait is a namespace for its own members and for the ones an implementation of it provides (gap 31)
     .Trait => traitNamespaceTarget checker, symbol, text, at, expected, explicit
-    .Case(owner) => caseTarget checker, owner, text, at, expected, explicit
+    .Case(owner) => caseTarget checker, symbol, owner, text, at, expected, explicit
     .Namespace(target) => Target Resolution.Namespace(target), checker.voidType, name: text
     // `Target.from(self)`, `Item.from(0)`: a generic parameter is a namespace for the members of its bounds
     .GenericParameter => parameterNamespaceTarget checker, symbol, text
@@ -271,6 +271,7 @@ fn callableTarget(var checker: Checker, symbol: SymbolId, text: String, explicit
 /** A case that was imported by its path: `use Option.Some, Option.None`, then `Some(value)`. */
 fn caseTarget(
   var checker: Checker,
+  variant: SymbolId,
   owner: SymbolId,
   text: String,
   at: Span,
@@ -281,7 +282,10 @@ fn caseTarget(
   const wanted = headOf checker, owner, expected
   const arguments = argumentsFor checker, generics, explicit, wanted, text, at
   const own = checker.nominal owner, arguments
-  match lookupStaticMember(checker, own, text) {
+  // `use Option.None as Nothing`: the local name is the alias and the case is declared under its own, so the member is
+  // looked up by the declared one. CONCEPT says `as` works for a case too
+  const declared = checker.symbolAt(variant).name
+  match lookupStaticMember(checker, own, declared) {
     Some(candidate) => targetOfCandidate checker, candidate, text
     None => deferredTarget checker
   }

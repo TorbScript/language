@@ -119,6 +119,26 @@ group "Bindings" {
     assert problems(inBody("  const text = match Some(2) \{\n    Some(value) => \"one\"\n    None => \"none\"\n  \}")).isEmpty()
   }
 
+  test "an aliased case works in an expression and in a pattern (`use Option.Some as Present`)" {
+    // The local name is the alias and the case is declared under its own, and both positions looked it up by the name
+    // that was *written*: an expression said "The checker did not work out the type of this expression" and a pattern
+    // said "`Option<Int64>` has no case `Present`"
+    const source = "use Option.Some as Present, Option.None as Nothing\n\n"
+      + "fn one(): Int? \{\n  Present(1)\n\}\n\nfn empty(): Int? \{\n  Nothing\n\}\n\n"
+      + "fn read(value: Int?): Int \{\n  match value \{\n    Present(number) => number\n    Nothing => 0\n  \}\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("Present(1)") == "Option<Int64>")
+    assert(found.resolutionOf("Present(1)") == "case Option<Int64>.Some")
+    assert(found.patternTypeOf("Present(number)") == "Option<Int64>")
+  }
+
+  test "and it counts for exhaustiveness exactly as the declared name does" {
+    const source = "use Option.Some as Present, Option.None as Nothing\n\n"
+      + "fn read(value: Int?): Int \{\n  match value \{\n    Present(number) => number\n  \}\n\}"
+    assert(problems(source) == ["`match` does not handle `.None`"])
+  }
+
   test "an uppercase name that is no case in scope, instead of a catch-all binding" {
     const source = inBody "  const text = match Some(2) \{\n    Some(value) => \"one\"\n    Nome => \"none\"\n  \}"
     assert(problems(source) == ["`Nome` is not a case in scope"])

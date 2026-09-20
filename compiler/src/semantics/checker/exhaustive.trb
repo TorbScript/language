@@ -5,7 +5,7 @@ use SymbolId from "../symbols"
 use TypeId, LiteralValue, literalKey, describeLiteral from "./type"
 use Checker, BindingId from "./context"
 use caseNamed, fieldsOf, typeNameOf from "./member"
-use itemOfSubject from "./pattern"
+use itemOfSubject, declaredCaseName from "./pattern"
 use literalOf from "./lowering"
 use Normal, Constructor, Matrix, isUseful, missingValues, describeNormal from "./usefulness"
 
@@ -461,11 +461,14 @@ fn normalizedVariant(
 ): List<Normal> {
   var types: List<TypeId> = []
   var constructor = Constructor.Opaque at.start
-  if const Some(variant) = caseNamed(checker, subject, name) {
+  // `use Option.Some as Present`: the case is the one it was declared as, and the matrix names it that way so that two
+  // arms that reach the same case through different local names are one constructor
+  const declared = declaredCaseName checker, name
+  if const Some(variant) = caseNamed(checker, subject, declared) {
     for field in variant.fields {
       types.add field.annotation
     }
-    constructor = Constructor.Named name, ".{name}", types.length()
+    constructor = Constructor.Named declared, ".{declared}", types.length()
   } else if name == "Self" || typeNameOf(checker, subject) == Some(name) {
     for field in fieldsOf(checker, subject) {
       types.add field.annotation
@@ -747,7 +750,8 @@ fn variantBranches(
   path: List<PatternStep>,
 ): List<PatternBranch> {
   var branches: List<PatternBranch> = [PatternBranch([], [])]
-  if const Some(variant) = caseNamed(checker, subject, name) {
+  const declaredName = declaredCaseName checker, name
+  if const Some(variant) = caseNamed(checker, subject, declaredName) {
     const check = PatternCheck.IsCase subject, variant.symbol
     branches = [PatternBranch([PatternTest(path, check)], [])]
     for index in 0..fields.length() {

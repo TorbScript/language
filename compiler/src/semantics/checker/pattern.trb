@@ -278,7 +278,8 @@ fn isCaseOfSubject(var checker: Checker, name: Name, subject: TypeId): Bool {
   }
   // The matched type has no case of that name at all: "`X` has no case `Fail`" is the clearer message, and
   // `variantPattern` reports it
-  if caseNamed(checker, subject, name.text).isNone() {
+  const declared = declaredCaseName checker, name.text
+  if caseNamed(checker, subject, declared).isNone() {
     return true
   }
   const ownerName = checker.symbolAt(owner).name
@@ -288,6 +289,25 @@ fn isCaseOfSubject(var checker: Checker, name: Name, subject: TypeId): Bool {
       .withNote("Write `.{name.text}` for the case of `{shown}`")
   )
   false
+}
+
+/**
+ * The name the case a bare uppercase pattern name stands for is **declared** under. `use Option.Some as Present` binds
+ * the local name `Present`, and CONCEPT says `as` works for a case too - so a pattern has to look the case up by the
+ * name it was declared with and not by the one it was written as. Everything that is not an imported case is its own
+ * name.
+ */
+public fn declaredCaseName(var checker: Checker, text: String): String {
+  const found = match symbolInScope(checker, text) {
+    Some(symbol) => symbol
+    None => {
+      return text
+    }
+  }
+  if const .Case(_) = checker.symbolAt(found).kind {
+    return checker.symbolAt(found).name
+  }
+  text
 }
 
 /** The declaration a bare uppercase pattern name stands for: a local import first, then the module's scope. */
@@ -352,7 +372,10 @@ fn variantPattern(
   at: Span,
   isVar: Bool,
 ) {
-  if const Some(variant) = caseNamed(checker, subject, name.text) {
+  // `use Option.Some as Present`: the case is looked up by the name it was declared with, and the messages keep the one
+  // that was written
+  const declared = declaredCaseName checker, name.text
+  if const Some(variant) = caseNamed(checker, subject, declared) {
     // A private field cannot be read from outside the type, in a pattern as anywhere else (4.9)
     requireVisibleFields checker, subject, name.text, variant.fields, at
     checkFieldPatterns checker, name.text, fields, variant.fields, at, isVar
