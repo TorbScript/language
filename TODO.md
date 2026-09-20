@@ -1501,3 +1501,24 @@ Wenn nicht, was bedeutet, bewirkt es?
   Beispiele), Compiler `syntax`+`project`+`cli`, `semantics` in zwei Hälften, `documentation`, Datei-Kommentare und
   Vergangenheitswörter der Tests. `ir/`, `backend/` und `std/encoding`+`json` folgen nach Fixpunkt bzw.
   Encoding-Umbau.
+
+- (Dokumentation am Code, Welle 2, 2026-09-22) **Erledigt, gemergt (`7ce4445`), volle Gates grün** (1452 Tests, volle
+  `cargo test`): `std/core`+`prelude`+`text` 151/151 (19 Beispiele), `std/collections` 201/201 (17 Beispiele), Compiler
+  `syntax`+`project`+`cli` 105/105, beide Checker-Hälften (268 Plan-/Vergangenheitswörter → 0), `documentation`
+  140/140, alle 57 Testdateien mit Datei-Kommentar. **Das Gate meldet fürs ganze Repository noch 343 Probleme**
+  (Start: 1510) - das sind `compiler/src/ir`+`backend` (nach dem Fixpunkt), `std/encoding`+`json` (nach dem
+  Encoding-Umbau) und `examples/encoding-lab`.
+  - Neu am Code sichtbare Pitfalls: `Into` direkt implementieren kollidiert mit dem Blanket über `From`; nichts
+    erzwingt, dass `compare` und `equals` übereinstimmen; `MutableSlice.replace` lässt die Länge offen;
+    `counters[0].increment()` ändert an Ort und Stelle, `var first = counters[0]` kopiert; `Sandbox.load` erkennt nur
+    Pfad-LITERALE.
+  - Notiert: Gate hält `...` in Backticks für ein Satzende (Fehlalarm "wiederholt den Namen"); Back-End-Meldungen an
+    Nutzer tragen "(milestone 5.9b)" - Frage an den Nutzer gestellt, ob das raus soll; `mutation.trb:78` vermutlich
+    toter Schutz.
+- (UFCS und Überladung, 2026-09-22) **Antwort im Chat, Empfehlung: beides nicht.** UFCS braucht Überladung, weil freie
+  Funktionen EINEN Namensraum pro Modul haben (`first`, `length` gäbe es je einmal); ein `extend` ohne Trait IST die
+  über den ersten Parametertyp benannte Funktion. Ad-hoc-Überladung kollidiert mit der tragenden Eigenschaft der
+  Sprache: die Signatur des Aufgerufenen bestimmt, wie das Argument gelesen wird (`.Case`, `None`, Listen-Literal als
+  `Array`, `{ _ }`, `lazy`, `Expression<T>`, `var`-Platz, Receiver-Closure). Vorhanden und prinzipientreu sind zwei
+  Formen: Überladung nach dem EMPFÄNGER (Methoden/`extend`) und über TRAIT-PARAMETER (`From<Source>`,
+  `Multiply<Other, Output>`). Wartet auf die Rückmeldung des Nutzers, wo ihm Überladung konkret fehlt.
