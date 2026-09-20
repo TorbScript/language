@@ -1222,3 +1222,13 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Plan:** nach dem Fixpunkt ein Design-Dokument `docs/ECS.md` (Recherche Bevy/flecs/Unity DOTS/Godot, wie bei
     STREAMS.md), dann Paketschnitt (`std/ecs`, `std/scene`, `std/geometry`, `std/input`, `std/asset`, `std/render`
     als abstrakte Schicht, ...). Die Sandbox-DSL hängt an der VM (7.x).
+  - **Ergänzt (Nutzer, 2026-09-21):** dazu std-Pakete für Geometrie, Kollision, 2D, 3D, Matrizen, Transformationen,
+    Animationen, Pfade usw. **Vorläufiger Schnitt (ich, wird im Design-Dokument festgelegt):** `std/linear`
+    (`Vector2/3/4`, `Matrix3/4`, `Quaternion`, generisch über `Float32`/`Float64`), `std/geometry` (Formen 2D/3D:
+    `Rectangle`, `Circle`, `Box`, `Sphere`, `Ray`, `Plane`, Schnitt- und Abstandstests), `std/transform`
+    (`Transform2`/`Transform3`, Hierarchien, Koordinatenräume), `std/collision` (Broadphase, Narrowphase, Raycasts;
+    Physik baut darauf auf), `std/path` (Bezier, Splines, Polylinien, Tessellierung - dieselben Pfade für Canvas/SVG
+    und für Bewegung), `std/animation` (Easing, Keyframes, Tracks, Tweens, Zustandsautomat; interpoliert alles, was
+    einen `Interpolate`-Trait trägt), `std/color`. Alle sind reine Werte-Bibliotheken ohne ECS- und ohne
+    Grafik-Abhängigkeit; `std/ecs` und `std/render` benutzen sie, nicht umgekehrt. Sie prüfen vor allem Generics
+    über Zahltypen, Operator-Traits, `Array<Item, Size>` und das Wert-Layout ohne Boxing.
