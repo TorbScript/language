@@ -27,6 +27,11 @@ accumulator out of the box.
 A name for a value, introduced by `const` or `var`. Never called a variable: the binding decides whether the value it
 holds can be changed. See [Bindings](language/values-and-types/bindings.md).
 
+### Bound
+
+A restriction on a type parameter to types that implement one or more traits, written inline (`<Item: Hash>`) or
+after `where`. See [Bounds](language/generics/bounds.md).
+
 ### Canon
 
 The one formatting a program is written in - most visibly that a call is a [command call](#command-call) wherever the
@@ -47,6 +52,11 @@ binding as a shared box. See [Closures](language/functions/closures.md).
 
 One of the four implicit conversions the language has, all of which apply only where a type is expected: a value to a
 trait it implements, a trait value to fewer bounds, `Never` to anything, and a literal to a [literal type](#literal-type).
+
+### Coherence
+
+The rule that a package may write `extend X with Trait` only if it owns `X` or `Trait`, and that two implementations
+of one trait may never overlap. See [Coherence and blanket implementations](language/traits/coherence.md).
 
 ### Collector
 
@@ -91,6 +101,11 @@ rather than a silent bug. See
 A change that cannot have an effect: a `var` that is changed and never read afterwards, or the discarded result of a
 method that takes `self`. Both are compile errors, because with value semantics they are always mistakes.
 
+### Delegation
+
+Forwarding a trait's required members to the one field of a single-field type with `by`, such as
+`Add & Subtract by value`. See [Delegation with by](language/traits/delegation.md).
+
 ### Distinct type
 
 A `type` with a single field, used instead of an opaque alias; `by` forwards specific traits of that field one at a
@@ -123,6 +138,11 @@ A `fn` declaration is visible everywhere in its scope, including above the line 
 can call each other without a forward declaration. See
 [Declaring a function](language/functions/declaring-a-function.md).
 
+### Intersection
+
+`&` combining two or more traits into one type, such as `Show & Encode`; only traits can be combined this way. See
+[Trait intersections](language/traits/intersections.md).
+
 ### Kind
 
 What a documentation page is: `index`, `guide`, `reference`, `how-to`, `explanation`, `contrast`, `tooling`, `package` or
@@ -147,6 +167,11 @@ there are no unions of types.
 
 A member of a type that declares `self`. Structurally it is a constant of the type that holds a receiver closure, which is
 why a field and a method cannot share a name. See [Methods and static functions](language/types/methods.md).
+
+### Object safety
+
+Whether a trait's member can be called on a value known only through the trait: a member that mentions `Self` in a
+parameter or its result, or that has no `self`, cannot be. See [Object safety](language/traits/object-safety.md).
 
 ### Package
 
@@ -224,6 +249,11 @@ checker and is thrown away afterwards.
 A function declared on a `type` that does not take `self`, called as `Type.member(...)` rather than through an
 instance. See [Methods and static functions](language/types/methods.md).
 
+### Supertrait
+
+A trait that another trait requires with `with` at its own declaration, such as `trait Compare with Equals`; every
+implementor of the smaller trait implements it too. See [Supertraits](language/traits/supertraits.md).
+
 ### Trailing closure
 
 A closure argument for a call's last parameter, written as a `{ ... }` after the call instead of inside its
@@ -234,6 +264,11 @@ parentheses; it always belongs to the outermost command call of the statement. S
 
 A list of members a type provides, given with `with` at the declaration or with `extend` afterwards. A trait with one
 required method is named after that method. See [Traits](language/traits/traits.md).
+
+### Type parameter
+
+A name standing for a type, filled in at each use of a `fn`, `type`, `trait` or `extend`, written out like a type
+(`Item`, `Value`) rather than a single letter. See [Type parameters](language/generics/type-parameters.md).
 
 ### Var path
 
@@ -250,3 +285,8 @@ spreads a collection into it with `...`. See [Variadic parameters](language/func
 
 A method that changes its receiver in place and declares `var self`, next to its [participle](#participle), which returns
 a changed copy. See [Verbs and participles](language/types/verbs-and-participles.md).
+
+### Witness table
+
+What a trait-typed value carries to call a generic bound's members without knowing its concrete type - one function
+pointer per member of the trait. See [Witness tables](language/generics/witnesses.md).

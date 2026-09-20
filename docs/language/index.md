@@ -35,6 +35,7 @@ Where the compiler and [`CONCEPT.md`](../../CONCEPT.md) disagree, the compiler i
 - **[Functions](functions/index.md)** - Declaring a function, its arguments and defaults, variadic parameters, closures, trailing closures, parameter modes and quoted expressions.
 - **[Traits](traits/index.md)** - How a capability is declared, how a type comes with one, and how a trait is used as a type.
 - **[Cases and pattern matching](pattern-matching/index.md)** - How a type with cases is declared, and every place a pattern can stand.
+- **[Generics](generics/index.md)** - Type parameters, where they are declared, how a bound restricts them, what is inferred, and how a trait-typed value satisfies one at runtime.
 - **[Errors](errors/index.md)** - How a function says it can fail, how a caller handles it, and what a panic is for.
 
 <!-- torb:index:end -->
