@@ -1,3 +1,11 @@
+/**
+ * From a checked program to the IR text: functions, slots, blocks, literals, locals, the arithmetic intrinsics, `if`,
+ * `while`, `for`, `return`/`break`/`continue`, tuples, records and what is not supported yet.
+ *
+ * What every program here is checked against, and why every function is verified as well as compared, is in
+ * `lower-harness.trb`.
+ */
+
 use test, group from "std/test"
 use File from "std/fs"
 use normalizePath, parentPath, pathDepth, joinPath from "../src/project/path"
@@ -7,14 +15,6 @@ use verifyProgram from "../src/ir/verify"
 use lowerChecked, loweredText from "../src/ir/lower/lower"
 use irOf, textOf, unsupportedIn from "./lower-harness"
 use lowered from "./lower-harness"
-
-/**
- * From a checked program to the IR text of BACKEND 1.7: functions, slots, blocks, literals, locals, the arithmetic
- * intrinsics, `if`, `while`, `for`, `return`/`break`/`continue`, tuples, records and what is not supported yet.
- *
- * What every program here is checked against, and why every function is verified as well as compared, is in
- * `lower-harness.trb`.
- */
 
 group "Functions, slots and blocks" {
   test "the parameters are slots in declaration order, and the body is one block" {
@@ -394,7 +394,7 @@ group "The top level of a file" {
   /**
    * The top-level bindings of an entry file are locals of its entry function, which is what makes an assignment to a
    * top-level `var` ordinary code. A `const` of a module that runs nothing stays static data, and the test above pins
-   * that half. The `const total = counter` at the end is the read the dead-change rule asks for (gap 54).
+   * that half. The `const total = counter` at the end is the read the dead-change rule asks for.
    */
   test "the top-level bindings of an entry file are locals of the entry function, and a `var` can be assigned to" {
     const source = r"""
@@ -471,10 +471,9 @@ group "What the back end does not lower yet" {
       unsupportedIn("fn first(items: ArrayList<Int>): Int \{\n  items[0]\n\}")
         == ["not supported by the back end yet: `at`, which neither the source nor the natives manifest provides"]
     )
-    // A `?` at the top level of an entry file is lowered since 6.1's long tail: `error: <the error through Show>` and
-    // exit code 1, which is decided gap 9 (`lower-match.test.trb`, and `bootstrap/tests/native/top-level-error.trb`).
-    // In a *function* whose result is neither an `Option` nor a `Result` the checker reports it, so no body of one
-    // reaches the back end at all
+    // A `?` at the top level of an entry file is lowered to `error: <the error through Show>` and exit code 1
+    // (`lower-match.test.trb`, and `bootstrap/tests/native/top-level-error.trb`). In a *function* whose result is
+    // neither an `Option` nor a `Result` the checker reports it, so no body of one reaches the back end at all
     assert(
       unsupportedIn("fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\nconst value = read()?\nprint value") == []
     )
@@ -604,9 +603,9 @@ group "Real code" {
   }
 
   /**
-   * The two files milestone 4.2 was measured against, lowered: every function of them, or the construct that blocks
-   * each one. This is the progress bar of milestone 5 - a later sub-milestone that removes one of these constructs
-   * changes the list, and that is exactly what this test is here to notice.
+   * Two files of the checker itself, lowered: every function of them, or the construct that blocks each one. This is
+   * the progress bar of the lowering - removing one of these constructs from the block list changes the list, and
+   * that is exactly what this test is here to notice.
    */
   test "every function of `source.trb` and `diagnostic.trb` is lowered or blocked by a named construct" {
     const root = repositoryRoot().expect("the root of the repository above the working directory")
@@ -626,25 +625,22 @@ group "Real code" {
     assert verifyProgram(found.program).isEmpty()
     assert found.program.problems.isEmpty()
     assert found.problems.isEmpty()
-    // Nine declarations of the two files, plus the instances and the generated members the worklist reached from them.
-    // It went from 78 to 121 when `chars()` became ordinary TorbScript (6.1's long tail): a text is iterated through
-    // `Characters` and `CharacterIterator` of `std/text` now, so the two files reach `Iterable<Char>`, `Iterator<Char>`
-    // and the payload boxes of both - one set for the whole program, and the same trade 5.7 made for `ArrayList.from`.
+    // Nine declarations of the two files, plus the instances and the generated members the worklist reaches from
+    // them: a text is iterated through `Characters` and `CharacterIterator` of `std/text`, so the two files reach
+    // `Iterable<Char>`, `Iterator<Char>` and the payload boxes of both - one set for the whole program.
     //
-    // **It went from 121 to 115 when the closed world became the program.** "Does any implementation override this
-    // default" was asked over every file the `SourceTree` read, and `readSourceTree` reads the whole workspace - so the
-    // examples next to the compiler put members back into the tables of a program that does not depend on them. 192 with
-    // `examples/encoding-lab` in the tree, 121 without it, 115 now that the answer is a property of the *program*
-    // (`programPackagesOf`, and the test below this one)
+    // **The closed world is the whole program, not the two files.** "Does any implementation override this default"
+    // is asked over every file the `SourceTree` reads, and `readSourceTree` reads the whole workspace - so the
+    // examples next to the compiler put members back into the tables of a program that does not depend on them at
+    // all. What this asserts is therefore a property of the *program* (`programPackagesOf`, and the test below this
+    // one), with `examples/encoding-lab` in the tree.
     assert(found.lowered + found.stubbed == 115)
-    // **The instance-count tripwire** (BACKEND section 7, "The instance count"). Monomorphization with `List<Item>`
-    // everywhere can multiply, and what multiplies it is the **element type**: a container literal builds the witness
-    // table of `List<Item>`, and that table used to drag in every default member of `Iterable`, `Collection`,
-    // `MutableIndexed`, `Length` and `Accumulator` for that one item type. The fourth round of 5.7 keeps every default
-    // that nothing in the program overrides out of the tables, which took these numbers from 208 declarations / 258
-    // functions / 20 tables to a *quarter* of that. They *are* the footprint - the functions, the tables and the
-    // descriptors - and they are asserted exactly so that an explosion fails a test instead of being noticed as a
-    // build time.
+    // **The instance-count tripwire.** Monomorphization with `List<Item>` everywhere can multiply, and what
+    // multiplies it is the **element type**: a container literal builds the witness table of `List<Item>`, and that
+    // table carries only the default members of `Iterable`, `Collection`, `MutableIndexed`, `Length` and
+    // `Accumulator` that some implementation in the program actually overrides - never every default for every item
+    // type. They *are* the footprint - the functions, the tables and the descriptors - and they are asserted exactly
+    // so that an explosion fails a test instead of being noticed as a build time.
     assert(found.program.functions.length() == 163)
     assert(found.program.witnessTables.length() == 38)
     assert(found.program.elements.length() == 3)

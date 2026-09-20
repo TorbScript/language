@@ -1,3 +1,11 @@
+/**
+ * The analysis under the ownership pass: which slots a frame counts at all, in which order the blocks are walked, and
+ * what is live where.
+ *
+ * Every function here is built by hand, because the point is the *analysis* and not what a particular lowered program
+ * happens to look like. Where the answers end up in a body is pinned in `ownership.test.trb`.
+ */
+
 use test, group from "std/test"
 use IrProgram, IrType, IrTypeId, IrSignature, IrParameter, Ownership, LayoutId from "../src/ir/ir"
 use IrFunction, Slot, SlotRole, BlockId, Instruction, Terminator, borrowed from "../src/ir/ir"
@@ -6,14 +14,6 @@ use LayoutKind, FieldLayout, finishProgram from "../src/ir/layout"
 use FunctionBuilder, newFunction, addLocal, addTemporary, addBlock, openBlock from "../src/ir/build"
 use switchTo, emit, terminate, terminateBlock from "../src/ir/build"
 use Counted, LiveSets, countedSlotsOf, livenessOf, postorderOf, filledFlags from "../src/ir/liveness"
-
-/**
- * The analysis under the ownership pass: which slots a frame counts at all, in which order the blocks are walked, and
- * what is live where.
- *
- * Every function here is built by hand, because the point is the *analysis* and not what the lowering happens to write
- * today. Where the answers end up in a body is pinned in `ownership.test.trb`.
- */
 
 fn textType(var program: IrProgram): IrTypeId {
   program.internType IrType.Text

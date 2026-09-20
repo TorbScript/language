@@ -1,3 +1,12 @@
+/**
+ * Where the ownership pass puts every instruction it inserts, pinned as the IR text.
+ *
+ * Every snapshot here went through the **extended** verifier before it was compared (`ownedIrOf` in
+ * `lower-harness.trb`), so a body that matches the text and leaks a count cannot pass. What the verifier itself says
+ * about IR that is wrong on purpose is in `ownership-verify.test.trb`, and the analysis underneath is in
+ * `liveness.test.trb`.
+ */
+
 use test, group from "std/test"
 use File from "std/fs"
 use normalizePath, parentPath, pathDepth, joinPath from "../src/project/path"
@@ -14,15 +23,6 @@ use printFunction from "../src/ir/print"
 use insertOwnership from "../src/ir/ownership"
 use verifyOwnedProgram from "../src/ir/ownership-verify"
 use irOf, ownedIrOf from "./lower-harness"
-
-/**
- * Where the ownership pass of 5.4 puts every instruction it inserts, pinned as the IR text of BACKEND 1.7.
- *
- * Every snapshot here went through the **extended** verifier before it was compared (`ownedIrOf` in
- * `lower-harness.trb`), so a body that matches the text and leaks a count cannot pass. What the verifier itself says
- * about IR that is wrong on purpose is in `ownership-verify.test.trb`, and the analysis underneath is in
- * `liveness.test.trb`.
- */
 
 /**
  * One hand-built program, finished and owned.
@@ -564,10 +564,11 @@ group "Real code" {
   }
 
   /**
-   * The two files milestone 4.2 was measured against, lowered and then owned. The extended verifier has to be happy
-   * about every one of their bodies, and the whole thing has to answer the same text twice: determinism is what makes
-   * the fixpoint of milestone 6 a test about the compiler rather than about a `Map` iteration order, and this pass, which
-   * appends blocks and slots of its own, is the first thing after the lowering that could break it.
+   * Two files of the checker itself, lowered and then owned. The extended verifier has to be happy about every one of
+   * their bodies, and the whole thing has to answer the same text twice: determinism is what makes the fixpoint
+   * between stage 0 and the self-hosted front end a test about the compiler rather than about a `Map` iteration
+   * order, and this pass, which appends blocks and slots of its own, is the first thing after the lowering that
+   * could break it.
    */
   test "real code passes the extended verifier, and the pass answers the same thing twice" {
     const root = repositoryRoot().expect("the root of the repository above the working directory")

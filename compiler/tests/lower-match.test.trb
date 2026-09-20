@@ -1,15 +1,15 @@
-use test, group from "std/test"
-use irOf, ownedIrOf, unsupportedIn from "./lower-harness"
-
 /**
  * The IR of every construct that goes through a `MatchPlan`: `match`, `if const`, `while const`, a destructuring
  * binding, `?` and `??`.
  *
- * Every snapshot here is the **final** IR - after the ownership pass of 5.4 - and went through `verifyOwnedProgram`
- * before it was compared (`ownedIrOf` in `lower-harness.trb`), so a body that matches the text and leaks a count on one
- * arm cannot pass. The shape of the decision tree itself is pinned by `decision.test.trb`; what is pinned here is the
+ * Every snapshot here is the **final** IR - after the ownership pass - and went through `verifyOwnedProgram` before it
+ * was compared (`ownedIrOf` in `lower-harness.trb`), so a body that matches the text and leaks a count on one arm
+ * cannot pass. The shape of the decision tree itself is pinned by `decision.test.trb`; what is pinned here is the
  * blocks it becomes, where the names are read, and where the early exit of a `?` releases what it holds.
  */
+
+use test, group from "std/test"
+use irOf, ownedIrOf, unsupportedIn from "./lower-harness"
 
 const shapes = r"""
 
@@ -492,7 +492,7 @@ group "A list pattern" {
 }
 
 /**
- * `?` at the top level of an **entry file**: there is nothing above it to hand a failure to, so decided gap 9 decides
+ * `?` at the top level of an **entry file**: there is nothing above it to hand a failure to, so the language decides
  * what it does instead - `error: <the error through Show>` to stderr, and the program ends with exit code 1.
  *
  * Ending the program is `IntrinsicOperation.ExitWithCode` and not a call of `Process.exit`: an entry file that never

@@ -1,3 +1,12 @@
+/**
+ * One in-memory workspace for the tests of the type checker, and the questions they ask about it.
+ *
+ * The prelude here is a small one of its own: the checker looks the declarations the *language* refers to up in
+ * `std/prelude` by name (`Option` for `Item?`, `Int64` for an integer literal, `Add` for `+`, `List` for `[1, 2]`),
+ * so a test that talks about one of them has to bring it. It is the same shape as the real prelude and a fraction of
+ * its size, which is what keeps these tests fast and readable.
+ */
+
 use Span from "../src/syntax/source"
 use SourceTree from "../src/project/source-tree"
 use ModuleId from "../src/semantics/module"
@@ -8,14 +17,6 @@ use TypeId, Witness, describeLiteral from "../src/semantics/checker/type"
 use MatchPlan, MatchArmPlan, PatternBranch, PatternTest, PatternCheck from "../src/semantics/checker/exhaustive"
 use PatternLiteral, PatternStep from "../src/semantics/checker/exhaustive"
 
-/**
- * One in-memory workspace for the tests of the type checker, and the questions they ask about it.
- *
- * The prelude here is a small one of its own: the checker looks the declarations the *language* refers to up in
- * `std/prelude` by name (`Option` for `Item?`, `Int64` for an integer literal, `Add` for `+`, `List` for `[1, 2]`),
- * so a test that talks about one of them has to bring it. It is the same shape as the real prelude and a fraction of
- * its size, which is what keeps these tests fast and readable.
- */
 public const preludeSource = r"""
   public trait Show {
     fn show(self): String
@@ -504,7 +505,7 @@ public type Probed {
 
   /**
    * Whether the `?.` whose member is written at the **last** occurrence of `written` answers an `Option` of its own:
-   * `flatMap` then, and `map` otherwise (gap 12). The last occurrence, because a member is declared before it is used.
+   * `flatMap` then, and `map` otherwise. The last occurrence, because a member is declared before it is used.
    */
   fn flattensOptional(self, written: String): Bool {
     const at = lastSpanOf written
@@ -652,7 +653,7 @@ public type Probed {
     checker.collectionLiteralAt(module, at).isSome()
   }
 
-  /** Whether the closure at `written` may outlive the call it stands in (BACKEND gap 14). */
+  /** Whether the closure at `written` may outlive the call it stands in. */
   fn closureKindOf(self, written: String): String {
     const at = spanOf written
     match checker.closureKindAt(module, at) {
@@ -667,7 +668,7 @@ public type Probed {
   }
 }
 
-/** One line per arm of a `MatchPlan`, in the order milestone 5 lowers them. */
+/** One line per arm of a `MatchPlan`, in the order the lowering lowers them. */
 public fn describeArms(checker: Checker, plan: MatchPlan): List<String> {
   var lines: List<String> = []
   for arm in plan.arms {

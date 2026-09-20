@@ -1,3 +1,13 @@
+/**
+ * The hook `MakeUnique` hangs on: every *owner* along the path a write goes through is made unique before the write,
+ * outermost first, and only the owners that carry a count of their own. At runtime each of them is
+ * `if (count == 1) { } else { shallow copy, retain the children, release the old }`, so a write to a value nobody shares
+ * costs one comparison - which is the other half of what makes `list = list.added(x)` change in place.
+ *
+ * Every body here is built by hand rather than lowered from source, because the point is the ownership pass in
+ * isolation: what it inserts along a path, and nothing about what a particular source program happens to lower to.
+ */
+
 use test, group from "std/test"
 use IrProgram, IrType, IrSignature, IrParameter, FunctionId, LayoutId from "../src/ir/ir"
 use Slot, Instruction, Terminator, Reference, PathStep, borrowed from "../src/ir/ir"
@@ -6,16 +16,6 @@ use newFunction, emit, terminate, finishFunction from "../src/ir/build"
 use printFunction from "../src/ir/print"
 use insertOwnership from "../src/ir/ownership"
 use verifyOwnedProgram from "../src/ir/ownership-verify"
-
-/**
- * The hook `MakeUnique` hangs on: every *owner* along the path a write goes through is made unique before the write,
- * outermost first, and only the owners that carry a count of their own. At runtime each of them is
- * `if (count == 1) { } else { shallow copy, retain the children, release the old }`, so a write to a value nobody shares
- * costs one comparison - which is the other half of what makes `list = list.added(x)` change in place.
- *
- * Nothing the lowering writes today goes through a place - an assignment to one waits for 5.9 - so every body here is
- * built by hand. That is the point: 5.7 and 5.9 plug their writes in, and these tests say what they will get.
- */
 
 fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
   const reserved = program.reserveLayout name, LayoutKind.Record

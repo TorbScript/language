@@ -1,18 +1,19 @@
-use test, group from "std/test"
-use probe, problems, notes from "./harness"
-
 /**
- * Places and the mutation rules (milestone 4.6): what a valid path is, and what a change through it needs.
+ * Places and the mutation rules: what a valid path is, and what a change through it needs.
  *
  * Every rule of this file is one walk from the root of a path outwards - a `var` binding, then `var` fields, then
  * `MutableIndexed` and `MutableSlice` - plus the two rules that are about where a path may *not* start: a temporary is
- * never the base of one (and always a valid argument for a `var` parameter, gap 2) and a `const` path to a shared
- * object never widens into a `var` one (gap 20).
+ * never the base of one (and always a valid argument for a `var` parameter) and a `const` path to a shared object
+ * never widens into a `var` one.
  *
- * Both have the same exception, and it is the same reason: a **temporary with an identity** *is* a `var` path (gap 52).
- * The rule against a temporary protects values, where the change would be lost with the copy it was made in; an object
+ * Both have the same exception, and it is the same reason: a **temporary with an identity** *is* a `var` path. The
+ * rule against a temporary protects values, where the change would be lost with the copy it was made in; an object
  * has no copy, and nobody else holds a view of something that was just made.
  */
+
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
 const counter = "type Counter \{\n  var count: Int = 0\n  step: Int = 1\n\n"
   + "  fn increment(var self) \{\n    count = count + step\n  \}\n\n"
   + "  fn incremented(self): Counter \{\n    copy(count: count + 1)\n  \}\n\}\n\n"

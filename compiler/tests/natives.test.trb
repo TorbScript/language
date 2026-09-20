@@ -1,21 +1,19 @@
+/**
+ * The manifest of natives is the contract between the lowering and the runtime, so what is tested here is that it is a
+ * *table*: every name in it exactly once, every ready runtime symbol spelled `torb_`, every ready runtime entry
+ * carrying the prototype the generated header prints, and the header itself a pure function of the table.
+ *
+ * The C side of the check is `runtime/tests/natives_header_test.c`, which includes the generated header after
+ * `torb.h` so the C compiler compares the two declarations of every symbol. `torb natives --header` writes
+ * `runtime/include/torb_natives.h` from the same table, and reading that checked-in file back and comparing it
+ * byte-for-byte is what keeps the two sides from drifting without a C compiler error.
+ */
+
 use test, group from "std/test"
 use NativeEntry, NativeState, NativeTarget from "../src/backend/c/natives"
 use nativeEntries, findNative, renderNativesHeader, countNatives from "../src/backend/c/natives"
 use File from "std/fs"
 use normalizePath, parentPath, pathDepth, joinPath from "../src/project/path"
-
-/**
- * The manifest of natives is the contract between the lowering and the runtime (BACKEND 3.7), so what is tested here
- * is that it is a *table*: every name in it exactly once, every ready runtime symbol spelled `torb_`, every ready
- * runtime entry carrying the prototype the generated header prints, and the header itself a pure function of the
- * table.
- *
- * The C side of the check is `runtime/tests/natives_header_test.c`, which includes the generated header after
- * `torb.h` so the C compiler compares the two declarations of every symbol. The byte-for-byte comparison of the
- * checked-in `runtime/include/torb_natives.h` with what `renderNativesHeader` produces needs the file to be read,
- * which arrives with `torb natives --header` in 5.13; until then the two are kept in step by this test's snapshot of
- * the header's shape.
- */
 
 fn readyEntries(): List<NativeEntry> {
   var found: List<NativeEntry> = []

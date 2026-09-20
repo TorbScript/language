@@ -1,13 +1,13 @@
-use test, group from "std/test"
-use probe, problems, notes, problemsAt, workspaceWith from "./harness"
-use check from "../src/semantics/check"
-
 /**
  * What an implementation is, and every rule about one: coherence, overlap, the members it has to provide, the
  * supertraits it drags in, `by field`, the derived ones, and the visibility of an `extend`.
  *
  * What an implementation means for an *expression* is `traits.test.trb`.
  */
+
+use test, group from "std/test"
+use probe, problems, notes, problemsAt, workspaceWith from "./harness"
+use check from "../src/semantics/check"
 
 /** The source inside of a `fn probe()` body, so that an expression can be looked at without a declaration around it. */
 fn inBody(body: String): String {
@@ -97,7 +97,7 @@ group "What an implementation has to provide" {
   }
 
   test "a `native` type provides the members of its traits through the runtime (gap 22)" {
-    // Only a package of the standard library may declare `native` (gap 22, milestone 4.9), so `Pixel` lives in one
+    // Only a package of the standard library may declare `native`, so `Pixel` lives in one
     const files = [
       "std/graphics/project.trb": "name \"std/graphics\"\n",
       "std/graphics/src/lib.trb": "trait Shape \{\n  fn area(self): Int\n\}\n\npublic native type Pixel with Shape \{\}\n",
@@ -208,7 +208,7 @@ group "Delegation with `by`" {
     assert(found.typeOf("Seconds(3) - Seconds(1)") == "Seconds")
     assert(found.adaptationsOf("Seconds(1) + Seconds(2)") == ["delegate value"])
     assert(found.adaptationsOf("Seconds(3) - Seconds(1)") == ["delegate value"])
-    // `max` is a default member of `Compare`: not forwarded, so it is not `delegate value` (gap 14)
+    // `max` is a default member of `Compare`: not forwarded, so it is not `delegate value`
     assert(found.adaptationsOf("Seconds(1).max(Seconds(2))") == [])
     // `Named` is not delegated: `name` is the hand-written one, so it is not `delegate value` either
     assert(found.adaptationsOf("Seconds(1).name()") == [])
@@ -278,9 +278,9 @@ group "Derived implementations" {
 }
 
 /**
- * A bound on `Never` holds whatever the trait is (gap 55): no value of `Never` exists, so nothing can ever ask the
- * table for a member. `Source<Item, Never>` - the reading end of a channel, which cannot fail - is what needs it: the
- * generated `Show` of a `Result` asks its `Failure` for one.
+ * A bound on `Never` holds whatever the trait is: no value of `Never` exists, so nothing can ever ask the table for a
+ * member. `Source<Item, Never>` - the reading end of a channel, which cannot fail - is what needs it: the generated
+ * `Show` of a `Result` asks its `Failure` for one.
  */
 group "A bound on `Never`" {
   test "a `Result` that cannot fail is showable" {

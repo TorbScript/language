@@ -1,19 +1,19 @@
-use test, group from "std/test"
-use SourceTree from "../src/project/source-tree"
-use check from "../src/semantics/check"
-use Probed, probe, problems, notes, workspace from "./harness"
-
 /**
  * Receiver closures, the innermost-receiver rule, and receiver scripts.
  *
  * `(var self: Element) => Void` is an ordinary closure with one parameter that is not a value but the thing names
- * resolve against. Exactly one receiver is implicit - the innermost (gap 4) - and naming the parameter is what reaches
- * an outer one, so it makes nothing implicit inside the closure at all.
+ * resolve against. Exactly one receiver is implicit - the innermost - and naming the parameter is what reaches an
+ * outer one, so it makes nothing implicit inside the closure at all.
  *
  * A receiver *script* is a file that is such a body: `project.trb` against `Project`, and a configuration file against
- * whatever `Sandbox.load<Value>` was written with. It is checked with the file scope "the prelude, and nothing else"
- * (gap 34), which is why a `use` in one is an error.
+ * whatever `Sandbox.load<Value>` was written with. It is checked with the file scope "the prelude, and nothing else",
+ * which is why a `use` in one is an error.
  */
+
+use test, group from "std/test"
+use SourceTree from "../src/project/source-tree"
+use check from "../src/semantics/check"
+use Probed, probe, problems, notes, workspace from "./harness"
 
 const element = "\ntype Element \{\n  var tag: String = \"\"\n  private var texts: List<String> = []\n\n"
   + "  fn text(var self, content: String) \{\n    texts.add(content)\n  \}\n\n"
@@ -136,9 +136,9 @@ group "Only the innermost receiver is implicit (gap 4)" {
 
   test "the named receiver reaches into a nested block, which is what CONCEPT's own example does" {
     // The block of a `.Configure` property command is applied to the field *in place*, so it cannot outlive the command
-    // any more than the trailing closure of an ordinary call can (BACKEND gap 14). While it counted as escaping, every
-    // nested block that named its outer receiver was "This closure captures the `var` parameter `s` and may outlive the
-    // call" - and `server { s => s.database { url "{s.host}/db" } }` is the concept's own way to reach an outer one
+    // any more than the trailing closure of an ordinary call can, and a nested block that names its outer receiver is
+    // not reported as escaping either - `server { s => s.database { url "{s.host}/db" } }` is the concept's own way to
+    // reach an outer one
     const source = "type Database \{\n  var url: String = \"\"\n\}\n\n"
       + "type Server \{\n  var host: String = \"localhost\"\n  var database: Database = Database()\n\}\n\n"
       + "fn server(configure: (var self: Server) => Void): Server \{\n"

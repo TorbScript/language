@@ -1,16 +1,16 @@
-use test, group from "std/test"
-use probe, problems, notes from "./harness"
-
 /**
  * Closures, read from the type that is expected of them: the parameters the function type names, the implicit `_` and
  * `_2`, the result that comes out of the body, and the bindings the body reads from the scope around it.
  *
  * The captures are the reason this is recorded and not only checked: a captured `var` binding is a shared box and not a
- * copy (gap 19), and both back ends have to build one.
+ * copy, and every back end has to build one.
  *
  * The declaration comes *after* the body in most of these sources, so that a name of the closure is the first
  * occurrence of its text and the span the probe asks about is the one in the closure.
  */
+
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
 
 /** A function that takes a closure of a known type, which is what every test here reads its closure from. */
 const apply = "\nfn apply(transform: (value: Int) => String): String \{\n  transform(1)\n\}\n"
@@ -127,7 +127,7 @@ group "Implicit parameters" {
   }
 
   test "an implicit name that would shadow a visible one is an error (CONCEPT, Trailing Closures)" {
-    // The local used to win, silently, and nothing in the source said which of the two `amount` was meant
+    // Without this rule the local would win silently, and nothing in the source would say which `amount` was meant
     const source = "fn probe(amount: Int): Int \{\n  increase \{ amount + 1 \}\n\}\n\n"
       + "fn increase(transform: (amount: Int) => Int): Int \{\n  transform(1)\n\}"
     assert(problems(source) == ["The implicit parameter `amount` would shadow `amount`"])

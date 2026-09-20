@@ -1,3 +1,9 @@
+/**
+ * The projects of these tests only exist in memory, as in `check.test.trb`. The prelude here is a small one of its
+ * own: the checker looks up what the *language* refers to (`Option` for `Item?`, `String` for a text literal type,
+ * `Int64` for an integer one) in `std/prelude`, so a test that talks about those names has to bring them.
+ */
+
 use test, group from "std/test"
 use File from "std/fs"
 use Span from "../src/syntax/source"
@@ -12,12 +18,6 @@ use TypeId, ParameterId, Signature, describeFunction from "../src/semantics/chec
 use Checker from "../src/semantics/checker/context"
 use signatureOf, typeSignatureOf, instantiate from "../src/semantics/checker/signature"
 use sameType, substitute from "../src/semantics/checker/unify"
-
-/**
- * The projects of these tests only exist in memory, as in `check.test.trb`. The prelude here is a small one of its
- * own: the checker looks up what the *language* refers to (`Option` for `Item?`, `String` for a text literal type,
- * `Int64` for an integer one) in `std/prelude`, so a test that talks about those names has to bring them.
- */
 const workspace = [
   "project.trb": r"""
     name "acme/all"
@@ -534,9 +534,10 @@ group "The whole repository" {
   }
 
   /**
-   * The conformance assertion of milestone 4: **every** expression of the repository has a type. `Deferred` meant "a
-   * later sub-milestone decides" and there is no later one, so a single unchecked expression is a hole in the checker -
-   * and `checkModule` says so at the span since 4.10, which is why the message list above is the same assertion twice.
+   * The conformance assertion of the checker: **every** expression of the repository has a type. `Deferred` means
+   * "a later pass decides", and every expression the checker sees goes through one, so a single unchecked expression
+   * is a hole in the checker - and `checkModule` says so at the span, which is why the message list above is the
+   * same assertion twice.
    */
   test "every expression of the repository has a type, and every quotation and match recorded its tables" {
     const root = repositoryRoot().expect("the root of the repository above the working directory")

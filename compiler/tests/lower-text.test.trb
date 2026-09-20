@@ -1,19 +1,19 @@
-use test, group from "std/test"
-use lowered, irOf, ownedIrOf, unsupportedIn, textOf from "./lower-harness"
-use insertOwnership from "../src/ir/ownership"
-use emittedProgramText from "../src/backend/c/emit"
-
 /**
- * Text and data (milestone 5.10): string interpolation, `print`, and `?.` as the control flow it is.
+ * Text and data: string interpolation, `print`, and `?.` as the control flow it is.
  *
  * An interpolated text is one `Intrinsic.TextConcat` over its literal pieces and its shown parts, so a text of *n* parts
  * is one allocation - which is what the snapshots here pin, together with the `Release` of every part the ownership pass
- * adds. `print` is the same shape with `Intrinsic.PrintParts` instead, because a variadic list is milestone 5.7's.
+ * adds. `print` is the same shape with `Intrinsic.PrintParts` instead, because it takes its parts as a variadic list.
  *
  * The prelude of `harness.trb` is a small one of its own, so every `show` here is
  * `t_std_x2f_prelude_types_Show_show__<type>`; the format the two back ends have to agree on is pinned by
  * `bootstrap/tests/native/interpolation.trb` instead, which runs on stage 0 and as a binary.
  */
+
+use test, group from "std/test"
+use lowered, irOf, ownedIrOf, unsupportedIn, textOf from "./lower-harness"
+use insertOwnership from "../src/ir/ownership"
+use emittedProgramText from "../src/backend/c/emit"
 
 /** The C of the **final** IR, which is what `torb build` emits: the retains and releases are the ownership pass's. */
 fn ownedCOf(source: String): String {
@@ -152,7 +152,7 @@ group "`Show` of every shape" {
     assert shown.contains("s_literal__String_Wrapper_x28_inner_x3a__x20_")
   }
 
-  /** A tuple has no name and no labels: gap 17 took the labels out of type identity, so the layout has neither. */
+  /** A tuple has no name and no labels: labels play no part in a tuple's type identity, so the layout has neither. */
   test "a tuple shows as `(a, b)`" {
     const source = r"""
       fn shown(pair: (Int, String)): String {
@@ -324,7 +324,7 @@ group "`?.` as control flow" {
     )
   }
 
-  /** `flatMap`: the member answers an `Option` already, so the arm hands it on and `?.` never nests one (gap 12). */
+  /** `flatMap`: the member answers an `Option` already, so the arm hands it on and `?.` never nests one. */
   test "a member that answers an `Option` is handed on instead of wrapped" {
     const source = r"""
       type User {

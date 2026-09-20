@@ -1,3 +1,13 @@
+/**
+ * Element descriptors and `ContainerNew`: what the one C list and the one C hash table know about their items, and
+ * the one instruction the containers need of their own.
+ *
+ * The IR here is built by hand, because reaching a container literal from source needs the whole witness table of
+ * `List<Item>` and that table's `Iterable` stages need closures of their own. What is pinned is therefore exactly the
+ * two pieces this part of the lowering added: the descriptor as static data with its four function pointers, and the
+ * instruction that makes a container over it.
+ */
+
 use test, group from "std/test"
 use IrProgram, IrType, IrTypeId, IrSignature, IrParameter, Ownership, RuntimeKind from "../src/ir/ir"
 use Slot, Instruction, Terminator, ElementDescriptor, WitnessTable, borrowed, owned from "../src/ir/ir"
@@ -8,16 +18,6 @@ use verifyProgram, verifyFunction from "../src/ir/verify"
 use printFunction, printProgram from "../src/ir/print"
 use emittedProgramText from "../src/backend/c/emit"
 use elementName from "../src/ir/mangle"
-
-/**
- * Element descriptors and `ContainerNew` (milestone 5.7): what the one C list and the one C hash table know about their
- * items, and the one instruction the containers need of their own.
- *
- * The IR here is built by hand, because reaching a container literal from source needs the whole witness table of
- * `List<Item>` and that table's `Iterable` stages need closures (5.8). What is pinned is therefore exactly the two
- * pieces this sub-milestone added: the descriptor as static data with its four function pointers, and the instruction
- * that makes a container over it.
- */
 
 /** A program with one function that makes an empty `ArrayList<Int>` and answers it. */
 fn listProgram(): IrProgram {

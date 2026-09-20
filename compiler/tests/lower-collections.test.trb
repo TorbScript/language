@@ -1,8 +1,5 @@
-use test, group from "std/test"
-use irOf, ownedIrOf, unsupportedIn from "./lower-harness"
-
 /**
- * The containers from the source side (milestone 5.7): `a[key]`, and `for` over a collection.
+ * The containers from the source side: `a[key]`, and `for` over a collection.
  *
  * The literals and the element descriptors are pinned by hand-built IR in `ir-elements.test.trb`; what is asked here is
  * the shape a *source* program produces - which member a bracket reaches, in which order its two operands are
@@ -14,6 +11,9 @@ use irOf, ownedIrOf, unsupportedIn from "./lower-harness"
  * here write the implementation out; that the real chain works is what the repository-wide test of `lower.test.trb`
  * asserts, by no longer listing `a[key]` among the constructs that block a function.
  */
+
+use test, group from "std/test"
+use irOf, ownedIrOf, unsupportedIn from "./lower-harness"
 
 group "`a[key]`" {
   test "an index is a call of the `at` the type provides, the receiver before the key" {
@@ -80,7 +80,7 @@ group "`a[key]`" {
   /**
    * `a[key] = value` is a call of `MutableIndexed.set` and no `Write`: what a missing key does is then the container's own
    * answer - a list panics out of range and a map inserts - and no rule of the back end. The key is lowered before the
-   * value, which is the order decided gap 1 asks for (the place's own subexpressions first).
+   * value, because a place's own subexpressions are always lowered before the value that is written through it.
    */
   test "a write through an index is the `set` the container provides, the key before the value" {
     const source = "fn write(var items: ArrayList<Int>) \{\n  items[0] = 1\n\}"
@@ -261,9 +261,9 @@ group "a `var` path through `a[key]`" {
 
 group "which of the three shapes a literal is" {
   /**
-   * The checker decided it (gap 51) and recorded it at the literal's span, so the back end reads the decision. Only
-   * `Default` - the collection the literal's own type names, item by item - is lowered; the other two say what they wait
-   * for instead of building the wrong container.
+   * The checker decides it and records it at the literal's span, so the back end reads the decision. Only `Default` -
+   * the collection the literal's own type names, item by item - is lowered; the other two say what they wait for
+   * instead of building the wrong container.
    */
   test "a literal that fills an `Array` names 5.9b, and one that goes through `from` names its target" {
     assert(

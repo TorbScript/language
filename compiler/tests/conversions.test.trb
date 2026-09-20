@@ -1,10 +1,10 @@
-use test, group from "std/test"
-use probe, problems, notes from "./harness"
-
 /**
  * `?`, `??`, `?.` and `into()`: the four constructs that are nothing but calls, and whose meaning comes out of
  * `From`, `Option` and `Result` instead of out of a node of the syntax tree.
  */
+
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
 
 /** A body that returns a `Result<Int, AppError>`, with the two error types every test here uses. */
 fn inFunction(result: String, body: String): String {
@@ -43,7 +43,7 @@ group "`?` on a `Result`" {
   /**
    * `fn main(): Result<Void, Error>` of the standard library: the failure is a trait-typed value, and no `From` can
    * ever apply to one, because nobody extends a trait type. So `?` falls back to the coercion of a value to a
-   * trait-typed value (gap 8), which is what makes a precise error type fit a signature that only reports.
+   * trait-typed value, which is what makes a precise error type fit a signature that only reports.
    */
   const withTrait = "trait Problem with Show \{\n  fn cause(self): Problem? \{\n    None\n  \}\n\}\n\n"
     + "type IoError with Show, Problem \{\n  path: String\n\n  fn show(self): String \{\n    path\n  \}\n\}\n\n"
@@ -109,9 +109,9 @@ group "`?` on an `Option`" {
 }
 
 /**
- * `?` hands the failure back to the caller, so the enclosing function has to have a place for one. 4.3 said nothing
- * where the result was neither, because `fetchUser(id).await()?` stands in a function that answers a `Task` and where
- * `await()` is allowed is milestone 7's rule - the `Task` is the exemption, not everything.
+ * `?` hands the failure back to the caller, so the enclosing function has to have a place for one, and a `Task` is the
+ * one exemption: `fetchUser(id).await()?` stands in a function that answers a `Task`, and where `await()` itself is
+ * allowed is a rule of its own, not part of this one.
  */
 group "`?` needs a function that can carry the failure" {
   test "a declared result that is neither an `Option` nor a `Result` is a mistake" {
@@ -191,7 +191,7 @@ group "`?.`" {
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.typeOf("find()?.label()") == "Option<String>")
-    // The one record milestone 5 needs: the wrapping is inside the function type, so nothing else says `map` or `flatMap`
+    // The one record the lowering needs: the wrapping is inside the function type, so nothing else says `map` or `flatMap`
     assert(!found.flattensOptional("label"))
   }
 

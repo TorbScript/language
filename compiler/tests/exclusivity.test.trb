@@ -1,8 +1,5 @@
-use test, group from "std/test"
-use probe, problems, notes from "./harness"
-
 /**
- * Exclusivity (design 5.2, after the model of Swift): the `var` access of a call begins once **every argument has been
+ * Exclusivity, after the model of Swift: the `var` access of a call begins once **every argument has been
  * evaluated**. So everything the arguments read has ended before the access starts, and three conflicts are left: two
  * `var` accesses of the *same* call, a closure argument that reaches the place its own call is changing (it runs while
  * the access runs), and a write from inside such a closure.
@@ -10,6 +7,10 @@ use probe, problems, notes from "./harness"
  * Overlap is decided on the path: the same root and neither path leaving the other. Two fields with different names are
  * disjoint, two indexes only where both were written as different literals, and a window covers everything of its base.
  */
+
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
 const report = "type Report \{\n  var title: String = \"\"\n  var subtitle: String = \"\"\n\n"
   + "  fn rename(var self, text: String) \{\n    title = text\n  \}\n\n"
   + "  fn merge(var self, var other: Report) \{\n    title = other.title\n  \}\n\n"
@@ -81,8 +82,8 @@ group "Two `var` accesses of one call" {
   }
 
   test "a top-level `var` is a root like any other, from a function" {
-    // `rootKey` gives a declaration a negative number so that it can never collide with a local, and `overlaps` used to
-    // read every negative number as "this path leads nowhere" - so the rule said nothing about a script's own values
+    // `rootKey` gives a declaration a negative number so that it never collides with a local's root, and `overlaps`
+    // treats two different roots as always disjoint - a top-level `var` needs its own root for the rule to see it too
     const source = "{report}{swap}var entry = Report()\n\nfn probe() \{\n  swap(entry, entry)\n\}\n\nprobe()\nprint entry.title"
     assert(problems(source) == ["`entry` is being changed by `swap` right now"])
     assert(notes(source) == ["While a `var` access runs, the same path cannot be reached a second time"])

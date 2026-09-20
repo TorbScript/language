@@ -1,7 +1,3 @@
-use test, group from "std/test"
-use irOf, textOf, countsOf, unsupportedIn from "./lower-harness"
-use preludeSource from "./harness"
-
 /**
  * Calls: which function a call reaches, in which order its arguments are evaluated, and where the instance it reaches
  * came from.
@@ -10,6 +6,10 @@ use preludeSource from "./harness"
  * (the receiver first, then the written arguments in the order they are written, then the defaults in declaration
  * order) and **which target** - a function of the program, an intrinsic, or a function of the runtime.
  */
+
+use test, group from "std/test"
+use irOf, textOf, countsOf, unsupportedIn from "./lower-harness"
+use preludeSource from "./harness"
 
 const declarations = r"""
   fn connect(host: String, port: Int = 5432, retries: Int = 1): Int {
@@ -215,8 +215,8 @@ group "The worklist of instances" {
 }
 
 /**
- * A `native` belongs to a package of the standard library (gap 22), so a test about lowering one puts the declaration
- * in the test prelude instead of in `acme/app`.
+ * A `native` belongs to a package of the standard library, so a test about lowering one puts the declaration in the
+ * test prelude instead of in `acme/app`.
  */
 const withTrim = [
   "std/prelude/src/types.trb": "{preludeSource}\nextend String \{\n  native fn trim(self): String\n\}\n",
@@ -287,7 +287,7 @@ group "Operators and natives" {
 
 group "What a call cannot reach yet" {
 
-  /** `TrieList.from` waits for the trie itself (milestone 8): a planned entry is a finding and never a link error. */
+  /** `TrieList.from` waits for the trie itself: a planned entry is a finding and never a link error. */
   test "a native the runtime does not have yet names the milestone instead of failing to link" {
     const source = r"""
       fn collected(items: Iterable<Int>): TrieList<Int> {

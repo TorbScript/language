@@ -1,3 +1,16 @@
+/**
+ * `var` paths: a `var` parameter, a `var self` receiver, an interior projection, and what a write through one of them
+ * does with the count.
+ *
+ * The two questions these tests exist for are the ones a reader of a call has to be able to answer: **which storage** a
+ * position works on - `&%0.from.x` and never a copy - and **when it is made unique**, which is once per counted owner of
+ * the path and before the call, because that is where the `var` access begins.
+ *
+ * Every snapshot of the final IR goes through `verifyOwnedProgram`, so a text that matches and a body that leaks a count
+ * cannot pass together; the C snapshots are the same programs one step further, and that the C really runs is
+ * `bootstrap/tests/native/places.trb` and `place-counted.trb`.
+ */
+
 use test, group from "std/test"
 use lowered, irOf, ownedIrOf, unsupportedIn from "./lower-harness"
 use insertOwnership from "../src/ir/ownership"
@@ -7,19 +20,6 @@ use Slot, Instruction, Terminator, Argument, Reference, borrowed, referenced fro
 use finishProgram from "../src/ir/layout"
 use newFunction, emit, terminate, finishFunction from "../src/ir/build"
 use verifyFunction from "../src/ir/verify"
-
-/**
- * `var` paths (milestone 5.9a): a `var` parameter, a `var self` receiver, an interior projection, and what a write
- * through one of them does with the count.
- *
- * The two questions these tests exist for are the ones a reader of a call has to be able to answer: **which storage** a
- * position works on - `&%0.from.x` and never a copy - and **when it is made unique**, which is once per counted owner of
- * the path and before the call, because that is where the `var` access begins (BACKEND 2.3).
- *
- * Every snapshot of the final IR goes through `verifyOwnedProgram`, so a text that matches and a body that leaks a count
- * cannot pass together; the C snapshots are the same programs one step further, and that the C really runs is
- * `bootstrap/tests/native/places.trb` and `place-counted.trb`.
- */
 
 /** The entry function of `app/src/main.trb`, which is what the `main` of the program calls. */
 const entryName = "t_acme_x2f_app_main"

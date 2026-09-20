@@ -1,3 +1,12 @@
+/**
+ * Every operand position of every instruction, through the ownership pass.
+ *
+ * `operandsOf` and `withOperands` in `operand.trb` are the one place that knows the shape of an instruction, and only
+ * a fraction of the forms there are come out of a lowered source program - so the rest is built by hand here. Stage 0
+ * has no type checker: an arm nothing runs is an arm nobody knows about, so every form needs its own function here to
+ * be exercised at all.
+ */
+
 use test, group from "std/test"
 use SymbolId from "../src/semantics/symbols"
 use SymbolPath from "../src/ir/mangle"
@@ -9,14 +18,6 @@ use newFunction, addTemporary, emit, terminate, finishFunction from "../src/ir/b
 use printFunction from "../src/ir/print"
 use insertOwnership from "../src/ir/ownership"
 use verifyOwnedProgram from "../src/ir/ownership-verify"
-
-/**
- * Every operand position of every instruction, through the pass.
- *
- * `operandsOf` and `withOperands` in `operand.trb` are the one place that knows the shape of an instruction, and the
- * lowering of 5.2 writes only a third of the forms there are - so the rest is built by hand here. Stage 0 has no type
- * checker: an arm nothing runs is an arm nobody knows about, and 5.5 to 5.9 are the ones who would find out.
- */
 
 fn recordLayout(var program: IrProgram, name: String, fields: List<FieldLayout>): LayoutId {
   const reserved = program.reserveLayout name, LayoutKind.Record

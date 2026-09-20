@@ -1,6 +1,3 @@
-use test, group from "std/test"
-use probe, problems, notes from "./harness"
-
 /**
  * What a trait means for an expression: which member a name reaches, which implementation carries it, and what the
  * operators, `for`, indexing and string interpolation resolve to.
@@ -8,6 +5,9 @@ use probe, problems, notes from "./harness"
  * Bound resolution itself - the index, coherence, overlap, derivation, delegation - is `implementations.test.trb`, and
  * `?`, `??`, `?.` and `into()` are `conversions.test.trb`.
  */
+
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
 
 /** The source inside of a `fn probe()` body, so that an expression can be looked at without a declaration around it. */
 fn inBody(body: String): String {
@@ -125,10 +125,10 @@ group "Traits as a namespace" {
 }
 
 /**
- * An `extend` whose *target* is a trait type makes the trait-typed value the implementer (gap 53). Its **instance**
- * members reach a concrete implementer through the coercion of the receiver - that is what `extend<Item: Show>
- * List<Item> with Show` means by "every list is showable" - but it is not a blanket implementation *for* every
- * implementer: a member without `self` that answers `Self` would answer "some `List`" where an `ArrayList` is asked for.
+ * An `extend` whose *target* is a trait type makes the trait-typed value the implementer. Its **instance** members
+ * reach a concrete implementer through the coercion of the receiver - that is what `extend<Item: Show> List<Item>
+ * with Show` means by "every list is showable" - but it is not a blanket implementation *for* every implementer: a
+ * member without `self` that answers `Self` would answer "some `List`" where an `ArrayList` is asked for.
  */
 group "An `extend` of a trait type" {
   test "a static member that answers `Self` stays the trait's own: `ArrayList` has one candidate for `From`" {
@@ -172,8 +172,8 @@ group "An `extend` of a trait type" {
   }
 
   test "`From` is the one trait a type implements several times, and `From<Never>` never hides another one" {
-    // `String` has `From<Iterable<Char>>` of its own and the blanket `From<Never>` of gap 50: "the argument of `From`
-    // for a `String`" has two answers, and "which of them takes an `Iterable`" has one
+    // `String` has `From<Iterable<Char>>` of its own and the blanket `From<Never>` every type gets: "the argument of
+    // `From` for a `String`" has two answers, and "which of them takes an `Iterable`" has one
     const source = "fn probe(): String \{\n  const text: String = ['a', 'b']\n  text\n\}"
     assert problems(source).isEmpty()
     const found = probe source

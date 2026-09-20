@@ -1,19 +1,19 @@
-use test, group from "std/test"
-use probe, problems, notes from "./harness"
-
 /**
- * Dead changes (design 5.3, rule 1): a change to a `var` value that nothing reads afterwards. With value semantics that
- * is always a mistake, and the classic one is the copy trap - a value taken out of a collection, changed, and thrown
- * away.
+ * Dead changes: a change to a `var` value that nothing reads afterwards. With value semantics that is always a
+ * mistake, and the classic one is the copy trap - a value taken out of a collection, changed, and thrown away.
  *
  * The rule is flow-sensitive and simple: the reads and changes of one body in source order, plus one pass per loop that
  * marks a change the next round reads again as alive. There is no fixpoint beyond that. Exempt are a `var` parameter,
  * `var self`, the names an `if var` binds into its subject - all three write into a place of the caller - and a binding a
- * closure captures, which is a shared box whose read may be anywhere (gap 19).
+ * closure captures, which is a shared box whose read may be anywhere.
  *
  * A **top-level `var`** is counted too, and it is the one value whose body is not the whole story: a function of the
- * module reads the same declaration (gap 54).
+ * module reads the same declaration.
  */
+
+use test, group from "std/test"
+use probe, problems, notes from "./harness"
+
 const counter = "type Counter \{\n  var count: Int = 0\n\n"
   + "  fn increment(var self) \{\n    count = count + 1\n  \}\n\}\n\n"
 
@@ -99,7 +99,7 @@ group "Loops" {
 /**
  * The statements of an entry file or a script are a body like any other, but a top-level `var` is a *declaration* and
  * not a local: a function of the module reads the same one, and nothing says where that function is called. So the rule
- * is "no statement after it reads it, and nothing else in the module does either" (gap 54).
+ * is "no statement after it reads it, and nothing else in the module does either".
  */
 group "Top-level `var` bindings" {
   test "the copy trap at the top level of an entry file" {

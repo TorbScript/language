@@ -1,12 +1,6 @@
-use test, group from "std/test"
-use lowered, irOf, ownedIrOf, unsupportedIn from "./lower-harness"
-use insertOwnership from "../src/ir/ownership"
-use emittedProgramText from "../src/backend/c/emit"
-use loweredText from "../src/ir/lower/lower"
-
 /**
- * Closures (milestone 5.8): a closure as a function plus an environment, a captured `var` binding as a shared box, a
- * `lazy` argument as a thunk in a memo cell, a receiver closure applied to a place, and a function used as a value.
+ * Closures: a closure as a function plus an environment, a captured `var` binding as a shared box, a `lazy` argument
+ * as a thunk in a memo cell, a receiver closure applied to a place, and a function used as a value.
  *
  * The three questions these snapshots exist for are the ones nobody can answer by reading the C: **what is in the
  * environment** (a copy of a `const` capture, the box of a `var` one), **who owns it** - the captures are `Owned`
@@ -17,6 +11,12 @@ use loweredText from "../src/ir/lower/lower"
  * leaks a count cannot pass together. That the C really runs is `bootstrap/tests/native/closures.trb`,
  * `counted-closures.trb` and `dsl.trb`.
  */
+
+use test, group from "std/test"
+use lowered, irOf, ownedIrOf, unsupportedIn from "./lower-harness"
+use insertOwnership from "../src/ir/ownership"
+use emittedProgramText from "../src/backend/c/emit"
+use loweredText from "../src/ir/lower/lower"
 
 /** The entry function of `app/src/main.trb`, which is what the `main` of the program calls. */
 const entryName = "t_acme_x2f_app_main"
@@ -139,7 +139,7 @@ const closures = r"""
   }
   """
 
-/** The three kinds of property command in one body: `.Assign`, `.Configure` and `.AssignClosure` (gap 15). */
+/** The three kinds of property command in one body: `.Assign`, `.Configure` and `.AssignClosure`. */
 const commands = r"""
   type Limits {
     var maximum: Int = 0
@@ -507,10 +507,10 @@ group "The C of a closure" {
 }
 
 /**
- * A closure body only ever *borrows* its parameters (5.7's fourth round: no call site of a closure value can read a
- * summary), so a body that hands one on to a position that keeps it has to take a count of its own first. The frame owns
- * no value of its own in any of these three, which is why the pass used to walk past them and leave the `return` of a
- * borrowed value `borrowed` - an internal error of the verifier, and a double release in the C.
+ * A closure body only ever *borrows* its parameters, so a body that hands one on to a position that keeps it has to
+ * take a count of its own first. The frame owns no value of its own in any of these three, so the pass has to retain
+ * before handing the value on - skip that and the `return` of a borrowed value stays `borrowed`, an internal error of
+ * the verifier, and a double release in the C.
  */
 group "A closure that keeps what it was lent" {
   test "a closure that answers its own parameter retains it, because the caller keeps its own count" {
@@ -576,7 +576,7 @@ group "What a closure cannot do yet" {
     )
   }
 
-  /** It is not a closure and never was: milestone 5.10 lowers it as the control flow it is (`lower-text.test.trb`). */
+  /** It is not a closure and never was: the lowering lowers it as the control flow it is (`lower-text.test.trb`). */
   test "`?.` is control flow and not a closure, and needs none" {
     const source = r"""
       type Holder {
