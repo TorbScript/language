@@ -1,10 +1,3 @@
-use Span, SourceText from "../syntax/source"
-use Token, TokenKind, Keyword from "../syntax/token"
-use lex from "../syntax/lexer"
-use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "../syntax/ast"
-use FunctionDeclaration, Binding, Condition, Block, Expression, ExpressionKind, Argument, CallStyle from "../syntax/ast"
-use Pattern, PatternKind, TextSegment from "../syntax/ast"
-
 /**
  * The part of the formatter canon that a documentation snippet is checked against. `torb canon` writes the canon over
  * a whole file; here nothing is written, so this is the same decision asked as a question - which is what a fenced
@@ -18,10 +11,19 @@ use Pattern, PatternKind, TextSegment from "../syntax/ast"
  * - **strings**: a multi-line `"""` or `r"""` is indented two spaces deeper than the line its statement starts on,
  *   with a closing `"""` that stands alone aligned with the content.
  *
- * What it does **not** check is the layout the formatter of milestone 8 will own - line length, blank lines, where a
- * long call breaks. A snippet that passes here is in the canon of `torb canon`; the reverse is not promised, and
+ * What it does **not** check is the layout a future formatter will own - line length, blank lines, where a long call
+ * breaks. A snippet that passes here is in the canon of `torb canon`; the reverse is not promised, and
  * `docs/contributing/checks.md` says so.
+ *
+ * [canonProblems] is the entry point, called once per snippet with its already-parsed tree.
  */
+
+use Span, SourceText from "../syntax/source"
+use Token, TokenKind, Keyword from "../syntax/token"
+use lex from "../syntax/lexer"
+use SourceFile, Statement, StatementKind, Declaration, DeclarationKind, Member, MemberKind from "../syntax/ast"
+use FunctionDeclaration, Binding, Condition, Block, Expression, ExpressionKind, Argument, CallStyle from "../syntax/ast"
+use Pattern, PatternKind, TextSegment from "../syntax/ast"
 
 /** One place in a snippet where the canon says something else. `line` and `column` are inside the block. */
 public type CanonProblem {

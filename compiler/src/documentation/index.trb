@@ -1,18 +1,23 @@
+/**
+ * `torb docs index`: the body of an `index.md` between the two marker comments, generated from the `title`, the
+ * `summary` and the `order` of its children. Nobody maintains a list of links by hand, so an index can never be
+ * stale, and an agent navigates index to summary to page while loading almost nothing.
+ *
+ * Everything above the first marker is the author's: the front matter and an introduction that says what belongs in
+ * the folder. Below the closing marker nothing is allowed, so that the generated part is always the end of the file
+ * and a diff of it is one block.
+ *
+ * # Related
+ *
+ * - [writeIndexes] - writes every index whose body changed.
+ * - [staleIndexes] - what `docs index --check` reports instead of writing.
+ */
+
 use File, IoError from "std/fs"
 use normalizePath from "../project/path"
 use DocumentationProblem, linesOf from "./markdown"
 use Page, Folder, Documentation, joinDocumentationPath, fileName from "./tree"
 use indexBegin, indexEnd from "./schema"
-
-/**
- * The body of an `index.md` between the two marker comments is generated from the `title`, the `summary` and the
- * `order` of its children. Nobody maintains a list of links by hand, so an index can never be stale, and an agent
- * navigates index to summary to page while loading almost nothing.
- *
- * Everything above the first marker is the author's: the front matter and an introduction that says what belongs in
- * the folder. Below the closing marker nothing is allowed, so that the generated part is always the end of the file
- * and a diff of it is one block.
- */
 
 /** What `docs index` would write for one index page. */
 public type GeneratedIndex {
@@ -20,6 +25,7 @@ public type GeneratedIndex {
   text: String
 }
 
+/** Every index of the tree, generated, with the problems found along the way. */
 public type IndexResult {
   generated: List<GeneratedIndex>
   problems: List<DocumentationProblem>

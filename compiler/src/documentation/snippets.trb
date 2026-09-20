@@ -1,13 +1,3 @@
-use File, IoError from "std/fs"
-use SourceText from "../syntax/source"
-use lex from "../syntax/lexer"
-use parse from "../syntax/parser/parser"
-use SourceTree from "../project/source-tree"
-use check from "../semantics/check"
-use DocumentationProblem, CodeBlock, linesOf from "./markdown"
-use Page, Documentation from "./tree"
-use canonProblems from "./canon"
-
 /**
  * Every fenced code block of the documentation is verified with the compiler's own front end. A wrong example is the
  * worst thing a documentation for agents can contain: a model copies what it reads, and it cannot tell a typo from a
@@ -25,8 +15,26 @@ use canonProblems from "./canon"
  * The type check of every `trb check` and `trb error` block of the whole documentation happens in **one** run of the
  * front end: the standard library is read and resolved once, and every block is a package of a synthetic workspace
  * next to it. One run of the checker costs seconds, one per block would cost minutes.
+ *
+ * [collectSnippets] judges the info string of every block; [verifySyntax] and [verifyTypes] are the two checks that
+ * follow, syntax for every block and types for the ones that asked for it.
+ *
+ * # Related
+ *
+ * - [canonProblems] - the style rule a parsed snippet is also held to.
  */
 
+use File, IoError from "std/fs"
+use SourceText from "../syntax/source"
+use lex from "../syntax/lexer"
+use parse from "../syntax/parser/parser"
+use SourceTree from "../project/source-tree"
+use check from "../semantics/check"
+use DocumentationProblem, CodeBlock, linesOf from "./markdown"
+use Page, Documentation from "./tree"
+use canonProblems from "./canon"
+
+/** How hard a fenced block is checked, decided by its marker. The spelling mirrors the markers themselves. */
 public type SnippetKind {
   /** `trb` */
   case Program
@@ -40,6 +48,7 @@ public type SnippetKind {
   case Skipped
 }
 
+/** One fenced `trb` block, ready to be checked: its text, its [SnippetKind], and where it stands in the page. */
 public type Snippet {
   /** The page the block stands in, as a message shows it */
   path: String
@@ -63,6 +72,7 @@ public const knownLanguages: List<String> = ["trb", "text", "console", "json", "
 /** The markers of a `trb` fence. */
 public const knownMarkers: List<String> = ["check", "fragment", "error", "skip"]
 
+/** Every snippet of the tree, plus the problems found in an info string along the way. */
 public type CollectedSnippets {
   snippets: List<Snippet>
   problems: List<DocumentationProblem>
@@ -269,6 +279,7 @@ fn rootManifest(): String {
     """
 }
 
+/** Does this kind of block ask for the type checker? Only `trb check` and `trb error` do. */
 public fn needsTypeCheck(kind: SnippetKind): Bool {
   kind == SnippetKind.Checked || kind == SnippetKind.Failing
 }

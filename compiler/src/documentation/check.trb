@@ -1,3 +1,18 @@
+/**
+ * `torb docs check`: every rule of `docs/contributing` asked of a whole documentation tree at once. The order of the
+ * checks is the order of the report, and the report is sorted by path and line, so the same tree always produces the
+ * same output - a gate that reorders its own findings cannot be diffed.
+ *
+ * [checkDocumentation] runs everything except the type checker, and [checkSnippetTypes] runs that separately, because
+ * it needs the standard library on disk and is what a test of the other rules should not have to pay for.
+ *
+ * # Related
+ *
+ * - [schemaProblems] - the front matter and the headings of a page.
+ * - [linkProblems] - where a link resolves to.
+ * - [collectSnippets] - the `trb` blocks the type checker runs.
+ */
+
 use DocumentationProblem from "./markdown"
 use Documentation from "./tree"
 use schemaProblems, skillRoleProblems, nameProblems from "./schema"
@@ -5,12 +20,7 @@ use PathExists, linkProblems, shapeProblems from "./links"
 use Snippet, SnippetKind, collectSnippets, verifySyntax, verifyTypes from "./snippets"
 use generateIndexes, staleIndexes from "./index"
 
-/**
- * `torb docs check`: every rule of `docs/contributing` asked of a whole documentation tree at once. The order of the
- * checks is the order of the report, and the report is sorted by path and line, so the same tree always produces the
- * same output - a gate that reorders its own findings cannot be diffed.
- */
-
+/** What one run of `torb docs check` found and counted: the problems, and the numbers a green run prints. */
 public type CheckedDocumentation {
   problems: List<DocumentationProblem>
   /** How many pages, folders and blocks were looked at: the number a gate prints when it is green */

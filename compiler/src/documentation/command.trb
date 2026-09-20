@@ -1,3 +1,17 @@
+/**
+ * `torb docs <command>`: the commands that keep the documentation true. Every one of them is a gate that can be run
+ * from a script, so all of them answer with the number of problems and print nothing but problems when there are any.
+ *
+ * [runCheck], [runIndex], [runSkill] and [runBundle] are the command line behind `torb docs check`, `docs index`,
+ * `docs skill` and `docs bundle`; `docs source` is a command of its own in `source.trb`, because it reads `.trb`
+ * files instead of the pages.
+ *
+ * # Related
+ *
+ * - [checkDocumentation] - what `runCheck` asks of the tree.
+ * - [buildSkill] - what `runSkill` writes.
+ */
+
 use File, IoError from "std/fs"
 use DocumentationProblem from "./markdown"
 use Page, readDocumentation from "./tree"
@@ -8,11 +22,7 @@ use generateIndexes, writeIndexes, staleIndexes from "./index"
 use buildSkill, writeSkill, installationHint, skillName from "./skill"
 use bundleDocumentation, writeBundle from "./bundle"
 
-/**
- * `torb docs <command>`: the commands that keep the documentation true. Every one of them is a gate that can be run
- * from a script, so all of them answer with the number of problems and print nothing but problems when there are any.
- */
-
+/** The options every `torb docs` command is called with, parsed once by [documentationOptionsOf]. */
 public type DocumentationOptions {
   root: String
   /** Where `std/` is, for the type check of the snippets. Empty means `<root>/../std`. */
@@ -25,6 +35,7 @@ public type DocumentationOptions {
   out: String
 }
 
+/** Parses `torb docs`'s arguments. `--standard-library`, `--no-snippets` and `--check` are flags; everything else is a path. */
 public fn documentationOptionsOf(arguments: List<String>): DocumentationOptions {
   var paths: List<String> = []
   var standardLibrary = ""
@@ -168,6 +179,7 @@ fn summaryOf(page: Page?): String {
   }
 }
 
+/** The `torb docs` block of `torb --help`: one line per command, one per flag. */
 public fn printDocumentationUsage() {
   printError "  torb docs source <path>...     The doc comments of the code: the standard of compiler/CONTRIBUTING.md"
   printError "                         --statistics: how much of every tree is documented"

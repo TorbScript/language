@@ -1,19 +1,28 @@
+/**
+ * Where the links of a documentation page lead, and the shape the tree has to have. An internal link that does not
+ * resolve is an error and not a warning: the documentation is read by an agent that follows a path instead of
+ * guessing, and a path that is wrong sends it nowhere. External links are not followed at all - the gate has to be
+ * the same offline as online.
+ *
+ * [linkProblems] is the links of one page; [shapeProblems] is the tree around them - every folder has an index, and
+ * every plain Markdown file is named by one.
+ *
+ * # Related
+ *
+ * - [anchorsOf] - the headings a link's `#anchor` is checked against.
+ */
+
 use normalizePath, joinPath from "../project/path"
 use DocumentationProblem from "./markdown"
 use Page, Documentation, folderOf, joinDocumentationPath from "./tree"
 use anchorsOf from "./schema"
-
-/**
- * Where the links lead. An internal link that does not resolve is an error and not a warning: the documentation is
- * read by an agent that follows a path instead of guessing, and a path that is wrong sends it nowhere. External links
- * are not followed at all - the gate has to be the same offline as online.
- */
 
 /** Whether a path that leaves the documentation tree exists. The command passes `File.exists`, a test a list. */
 public type PathExists {
   probe: (path: String) => Bool
 }
 
+/** Every link problem of the whole tree: every page, checked against every other page and the paths outside it. */
 public fn linkProblems(documentation: Documentation, exists: PathExists): List<DocumentationProblem> {
   var problems: List<DocumentationProblem> = []
   for page in documentation.pages {
