@@ -63,7 +63,7 @@ source.through(stage)                          puts a Stage in front of the valu
    ```trb check
    const positive = [1, -2, 3, -4].filter { _ > 0 }
    print positive.toList()
-   print positive.map { _ * 10 }.toList()
+   print(positive.map { _ * 10 }.toList())
    ```
 
 3. **The catch of laziness: a stage with side effects does not run them until it is pulled.** Building `.map { ... }`

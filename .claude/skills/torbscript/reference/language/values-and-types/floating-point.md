@@ -76,21 +76,17 @@ Float64.pi  Float64.e                    the two named constants
 
 ## What this is not
 
-**`Float32`/`Float64` not being `Hash` is not enforced everywhere a bound is written on a type today.** A bound on a
-*function's* type parameter is checked, as rule 4 shows; the same bound written on a *type's* own parameter
-(`HashMap<Key: Hash, Value>`) is not yet checked against the type argument it is given, so this compiles today even
-though `Float` never satisfies `Hash`:
+**`Float32`/`Float64` not being `Hash` is enforced wherever a bound is written on a type, not only on a function.** A
+bound on a *function's* type parameter is checked, as rule 4 shows, and the same bound written on a *type's* own
+parameter (`HashMap<Key: Hash, Value>`) is checked against the type argument it is given too, so this is rejected:
 
-```trb check
+```trb error
 use HashMap from "std/collections"
 
 const table: HashMap<Float, String> = HashMap()
 print table.length()
+// error: `Float64` does not implement `Hash`
 ```
-
-This is a gap between what `std/collections` declares and what the checker enforces at a type annotation, not a
-change to the rule: a `Float` is still not `Hash`, and a use that actually needs the bound - a generic function call,
-as in rule 4 - still catches it.
 
 **Comparing for closeness is not the same question as comparing for order.** `isCloseTo` answers "close enough for
 this purpose", which needs a tolerance chosen by the caller; `compare` answers "which is greater", which needs an

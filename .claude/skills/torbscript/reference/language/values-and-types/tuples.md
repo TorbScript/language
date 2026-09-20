@@ -69,7 +69,13 @@ value.lowest                             access by label
    ```
 
 4. **Tuples compare and print structurally.** Two tuples are equal when every position is, and a tuple's `Show` text
-   lists its positions in order, labels included when the type has them.
+   lists its positions in order, without labels: `(lowest: 1, highest: 9)` shows as `(1, 9)`, because a label is not
+   part of the type and so is not part of what identifies the value.
+
+   ```trb check
+   const bounds = (lowest: 1, highest: 9)
+   print bounds
+   ```
 
 ## What this is not
 
@@ -92,12 +98,8 @@ fn bounds(): (lowest: Int, highest: Int) {
 // error: This position is `lowest`, not `highest`
 ```
 
-**A tuple destructured into named bindings (`const (a, b) = pair`) is not accepted today**, even though the pattern
-form exists for `match`. Read a tuple apart with `.0`/`.1` or a label until binding-position patterns are supported;
-see [Bindings](bindings.md) for exactly what does and does not destructure there yet.
-
 ## Related
 
 - [Built-in types](built-in-types.md) - tuples next to every other type that needs no import.
-- [Bindings](bindings.md) - what a binding's pattern accepts today.
+- [Bindings](bindings.md) - `const (a, b) = pair`, the pattern a binding shares with `match`.
 - [Cases and match](../pattern-matching/cases-and-match.md) - `(a, b)` as a pattern inside a `match`.

@@ -66,11 +66,9 @@ fn <name>(<parameters>): <Type> { ... }                    // A static function:
    data as far as `Equals`, `Hash` and `Encode` are concerned.
 
 5. **A type has one namespace of members.** A field and a method are both constants of the type, so nothing keeps two
-   members of the same name apart the way an overload set would - `CONCEPT.md` specifies that a field and a method
-   cannot share a name; today's compiler does not yet reject the case where they do, which is a gap between the
-   design and the checker rather than something this page can paper over.
+   members of the same name apart the way an overload set would - a field and a method cannot share a name.
 
-   ```trb skip the compiler does not yet reject a field and a method of the same name; see the note above
+   ```trb error
    type Counter {
      var count: Int = 0
 
@@ -78,6 +76,7 @@ fn <name>(<parameters>): <Type> { ... }                    // A static function:
        count
      }
    }
+   // error: `count` is already declared in `Counter`
    ```
 
 6. **Calling a function that a field holds always takes parentheses.** A field's value might itself be callable
@@ -86,11 +85,9 @@ fn <name>(<parameters>): <Type> { ... }                    // A static function:
 
 ## What this is not
 
-**A static function is not meant to be a method with an optional receiver.** `Rectangle.square(5)` never needs a
-`Rectangle` to work on - a function either declares `self` and needs one, or it does not and never gets one. Calling
-`rectangle.square(5)` on an actual value should be rejected for the same reason `rectangle.area` is not a static
-call; today's checker still accepts it and ignores the receiver, which is a gap between the design and the checker
-rather than a second, permitted form.
+**A static function is not a method with an optional receiver.** `Rectangle.square(5)` never needs a `Rectangle` to
+work on - a function either declares `self` and needs one, or it does not and never gets one. Calling
+`rectangle.square(5)` on an actual value is rejected for the same reason `rectangle.area` is not a static call.
 
 ```trb
 type Rectangle {
@@ -105,7 +102,7 @@ type Rectangle {
 print Rectangle.square(5)
 ```
 
-```trb skip the checker does not yet reject a static function called through an instance; see the note above
+```trb error
 type Rectangle {
   width: Int
   height: Int
@@ -117,6 +114,7 @@ type Rectangle {
 
 const rectangle = Rectangle 3, 4
 print rectangle.square(5)
+// error: `square` has no `self`, so it is reached through the type: `Rectangle.square(...)`
 ```
 
 ## Related

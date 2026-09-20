@@ -67,9 +67,9 @@ type Name<const Size: Int> { ... }       declaring a const parameter of your own
 
 ## What this is not
 
-**An out-of-bounds index that is known at compile time is not caught by the checker yet, even though CONCEPT.md's
-design and `std/collections`'s own doc comment say it should be.** `identity` below is `Array<Float, 4>`, so index
-`4` is out of range by one; the assignment type checks today.
+**An out-of-bounds index that is written out as a literal is caught by the checker, not only at run time.** `identity`
+below is `Array<Float, 4>`, so index `4` is out of range by one, and the assignment is rejected before the program
+runs.
 
 ```trb check
 var identity: Array<Float, 4> = Array.filled 0.0
@@ -77,15 +77,12 @@ identity[0] = 1.0
 print identity[0]
 ```
 
-```trb check
+```trb error
 var identity: Array<Float, 4> = Array.filled 0.0
 identity[4] = 1.0
 print identity[0]
+// error: `4` is out of bounds: an `Array<Float64, 4>` has 4 items
 ```
-
-Both blocks type check identically today. The second one is the exact example `std/collections/src/array.trb`'s own
-doc comment gives as a compile error; only a runtime bounds panic - not a compile-time one - protects it at the
-moment.
 
 **`Array` is not `List` with extra syntax.** `Array` never grows and never allocates on the heap; a collection whose
 size is not known ahead of time is a `List`, a different type entirely, not an `Array` used differently.

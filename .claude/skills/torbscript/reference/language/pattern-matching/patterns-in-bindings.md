@@ -106,12 +106,10 @@ while const <pattern> = <expression> { ... }     re-evaluates and re-matches bef
 
 ## What this is not
 
-**A pattern at the top level of an entry file or a script is not the same as one inside a function today.** Inside a
-function body, `const (a, b) = pair` and `const Point(x, y) = point` both declare their names exactly as rule 3 shows.
-Written directly at the top level of an entry file or a script, the checker accepts the same syntax but does not yet
-declare the names a tuple or a case pattern introduces there - a later use of one reports it as missing rather than as
-unsupported. Wrap top-level destructuring in a function until this is fixed; a plain name (`const total = ...`) is
-unaffected at either level.
+**A pattern at the top level of an entry file or a script is not different from one inside a function.** `const (a,
+b) = pair` and `const Point(x, y) = point` declare their names exactly as rule 3 shows, whether they stand inside a
+function body or directly at the top level of an entry file or a script. A module's own top level is the exception:
+its `const` binds one name, never a pattern (see [Top-level code](../modules-and-packages/top-level-code.md)).
 
 **`if const` is not `if let` used for control flow on its own; the condition still has to be a pattern that can fail.**
 A pattern that always matches belongs after a plain `const`, and the checker says so instead of accepting a binding
@@ -132,4 +130,4 @@ run()
 - [Pattern forms](pattern-forms.md) - every pattern this page reuses.
 - [Exhaustiveness](exhaustiveness.md) - the algorithm behind "has to match every value".
 - [if var](if-var.md) - binding into a place instead of into a copy.
-- [Bindings](../values-and-types/bindings.md) - `const` and `var` themselves, and the same top-level gap noted there.
+- [Bindings](../values-and-types/bindings.md) - `const` and `var` themselves, and the module exception noted there.

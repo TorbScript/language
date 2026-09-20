@@ -122,7 +122,7 @@ extend Pair with Encode {
     encoder.first
   }
 }
-// error: The checker did not work out the type of this expression
+// error: `Encoder` has no member `first`
 ```
 
 ## Related

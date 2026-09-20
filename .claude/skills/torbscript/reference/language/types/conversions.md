@@ -97,7 +97,7 @@ Target.parse(text)                    // Result<Target, Failure>, text specifica
 
    ```trb error
    const bad: Int? = 1
-   // error: Expected `Int?`, found `Int`
+   // error: Expected `Option<Int64>`, found `Int64`
    ```
 
 ## What this is not

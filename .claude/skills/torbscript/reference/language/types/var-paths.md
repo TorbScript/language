@@ -52,6 +52,19 @@ print counter.count
    changes `counter` itself; there is no marker at the call site, the parameter's own `var` is what promises it.
 
    ```trb error
+   type Counter {
+     var count: Int = 0
+
+     fn increment(var self) {
+       count = count + 1
+     }
+   }
+
+   fn incrementTwice(var target: Counter) {
+     target.increment()
+     target.increment()
+   }
+
    const frozen = Counter()
    incrementTwice frozen
    // error: `incrementTwice` changes `target`, and `frozen` is a `const`
@@ -83,6 +96,14 @@ print counter.count
    because the change would be thrown away the moment the call returns - the value has to be bound to a name first.
 
    ```trb error
+   type Counter {
+     var count: Int = 0
+
+     fn increment(var self) {
+       count = count + 1
+     }
+   }
+
    fn makeCounter(): Counter {
      Counter()
    }

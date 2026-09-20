@@ -1,8 +1,8 @@
 ---
 title: Exclusivity
-summary: CONCEPT.md specifies that two var accesses of the same call may not target the same path, and today's checker accepts the textbook counter-example instead of rejecting it.
+summary: Two var accesses of the same call may never target the same path, so swap(a, a) and two indices the checker cannot tell apart are both compile errors, and items.swapAt is the one access that is allowed instead.
 kind: reference
-status: draft
+status: stable
 order: 90
 keywords:
   - exclusivity
@@ -14,11 +14,9 @@ source:
   - std/collections/src/list.trb
 ---
 
-> **Draft.** This page is being written and may be wrong. Verify it against the compiler.
-
 `CONCEPT.md` describes a rule beyond the single-path checks of [var paths](var-paths.md): two `var` accesses are never
 allowed to run at the same time against the same path, even when they belong to one call rather than to two nested
-ones. Today's checker does not yet reject the textbook counter-example of that rule.
+ones. The checker enforces it, at the top level of a file included.
 
 ## Example
 
@@ -48,17 +46,29 @@ print items
    print items
    ```
 
-2. **`CONCEPT.md` specifies that two `var` accesses of the *same* call may not target the same path** - passing one
-   path to two `var` parameters of one call (`swap(a, a)`), or two indices of one collection that the compiler cannot
-   tell apart (`swap(items[i], items[j])`). `items.swapAt(i, j)` is the one `var self` access the standard library
-   offers instead of either.
+2. **Two `var` accesses of the *same* call may not target the same path.** Passing one path to two `var` parameters
+   of one call (`swap(a, a)`), or two indices of one collection that the checker cannot tell apart
+   (`swap(items[i], items[j])`), are both rejected. `items.swapAt(i, j)` is the one `var self` access the standard
+   library offers instead of either.
 
-3. **Today's checker accepts both of those calls without a diagnostic.** Verified directly: a two-parameter `swap`
-   function called as `swap(pair[0], pair[0])`, and the same call written as `swap(items[i], items[j])` with two
-   `const` indices, both type-check with no problem reported. This is a gap between the design and the checker, not a
-   change of the design - the rule may still be enforced by a later milestone.
+   ```trb error
+   fn swap<Value>(var first: Value, var second: Value) {
+     const value = first
+     first = second
+     second = value
+   }
 
-   ```trb check
+   var a = 1
+   swap(a, a)
+   print a
+   // error: `a` is being changed by `swap` right now
+   ```
+
+3. **Two indices of one collection are rejected even when nothing but their value tells them apart**, because the
+   checker never evaluates a `const` index to compare it: `items[i]` and `items[j]` overlap as far as it can tell,
+   whether or not `i` and `j` happen to differ at run time.
+
+   ```trb error
    fn swap<Value>(var first: Value, var second: Value) {
      const value = first
      first = second
@@ -68,13 +78,14 @@ print items
    var pair = [1, 2]
    swap(pair[0], pair[0])
    print pair
+   // error: `pair[...]` is being changed by `swap` right now
    ```
 
 ## What this is not
 
-**This gap is not a reason to write `swap(a, a)` on purpose.** The design still calls it undefined: which of the two
-`var` accesses "wins" is not specified anywhere, so a program that relies on it is relying on whatever one version of
-the checker and one back end happen to do today.
+**`items.swapAt(i, j)` is not the same call as `swap(items[i], items[j])`.** `swapAt` takes both indices as plain
+`Int` arguments and reaches into `items` itself, so there is only ever one `var` access - of `items`, not of two
+places inside it - and no overlap to reject.
 
 ```trb
 var items = [3, 1, 2]
@@ -84,20 +95,24 @@ items.swapAt i, j
 print items
 ```
 
-```trb skip the compiler does not yet reject this call; see rule 3 above
+```trb error
 fn swap<Value>(var first: Value, var second: Value) {
   const value = first
   first = second
   second = value
 }
 
-var pair = [1, 2]
-swap(pair[0], pair[0])
+var items = [3, 1, 2]
+const i = 0
+const j = 1
+swap(items[i], items[j])
+print items
+// error: `items[...]` is being changed by `swap` right now
 ```
 
 ## Related
 
-- [Mutation and var paths](var-paths.md) - the single-path rules that are enforced today.
+- [Mutation and var paths](var-paths.md) - the single-path rules that this rule builds on.
 - [Declaring a type](declaring-a-type.md) - `var self`, the receiver form this rule is meant to protect.
 - [Why values instead of references](../../explanation/why-values-instead-of-references.md) - the argument this rule
   serves.

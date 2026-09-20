@@ -73,6 +73,9 @@ fn f(): Never { ... }                    a function that never returns normally
    argument.** `setUp()` above is a statement because it returns `Void`; a call that returns something else and is
    never used is a compile error (see [Bindings](bindings.md), rule 8).
 
+6. **`Void`'s `Show` text is `void`, the same word the literal is written with.** `print setUp()` prints `void`, the
+   same as printing the literal directly would.
+
 ## What this is not
 
 **`Void` is not the absence of a value the way `Option.None` is.** `Void` always has its one value, `void`; there is

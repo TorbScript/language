@@ -74,9 +74,8 @@ fn f(mode: "tcp" | "udp" = "tcp") { ... } inline, in a signature
 
 ## What this is not
 
-**A literal type is not extendable, even though the compiler does not yet stop you at the `extend` block itself.**
-CONCEPT.md's design rejects `extend` on a literal type outright; today the declaration compiles without complaint,
-and the member it adds cannot be found on the type at all - the mistake surfaces at the call, not at the `extend`.
+**A literal type is not extendable.** `extend` is rejected at its own line, before the member it would have added is
+ever looked up.
 
 ```trb check
 type Status = "online" | "offline" | "away"
@@ -93,10 +92,7 @@ extend Status {
     "status"
   }
 }
-
-const status: Status = "online"
-print status.shout()
-// error: `"away" | "offline" | "online"` has no member `shout`
+// error: `"away" | "offline" | "online"` cannot be extended
 ```
 
 **A literal type is not a subtype of a smaller literal type, or the other way around.** `"online" | "offline"` and

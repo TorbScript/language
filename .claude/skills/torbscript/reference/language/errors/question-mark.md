@@ -155,12 +155,23 @@ print parseAll(["1", "x", "3"])
 `Option` is `ok()`; going the other way needs a value for the error, which is `okOr(error)`, and rule 6 above is the
 checker rejecting exactly the shortcut of skipping that step.
 
-**CONCEPT.md specifies that `?` is illegal in a function whose result is neither an `Option` nor a `Result`, but the
-checker does not yet enforce that when a `Result`-typed expression's `?` sits in such a function.** Given
-`fn total(values: List<String>): List<Int>`, writing `Int.parse(value)?` inside it type-checks today with no
-diagnostic at all, even though nothing in `total`'s signature can receive the returned failure. The restriction is
-real for the case rule 6 covers (an `Option` where a `Result` is expected); it is this one direction - a `Result`'s
-`?` in an unrelated result type - that is still open.
+**`?` is illegal in a function whose result is neither an `Option` nor a `Result`.** `fn total(values: List<String>):
+List<Int>` cannot receive the failure `Int.parse(value)?` would hand back, and the checker rejects it there:
+
+```trb error
+fn total(values: List<String>): List<Int> {
+  var result: List<Int> = []
+  for value in values {
+    result.add Int.parse(value)?
+  }
+  result
+}
+// error: `?` needs a function that returns an `Option` or a `Result`, and this one returns `List<Int64>`
+```
+
+This is only checked against a written result type: a function whose result is inferred - one that is not `public`
+and not a trait method, see [Declaring a function](../functions/declaring-a-function.md) - still accepts a `?` that
+has nowhere to go, because the checker has not yet decided the result type at the point it would need to reject it.
 
 ## Related
 

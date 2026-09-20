@@ -49,7 +49,7 @@ None                                     an absent value
    ```trb check
    const found: Int? = Some 3
    print found.map({ _ * 2 })
-   print found.flatMap({ value => if value > 0 { Some(value) } else { None } })
+   print found.flatMap({ value => if value > 0 { Some value } else { None } })
    print found.filter({ _ > 0 })
    ```
 

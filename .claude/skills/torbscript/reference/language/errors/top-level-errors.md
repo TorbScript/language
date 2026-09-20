@@ -86,10 +86,10 @@ describe()
 
 Both end the program; only the message, the exit code, and what a supervising process should conclude from it differ.
 
-**This page describes the specified format. The native back end does not print it yet.** `torb build` compiles a
-top-level `?` today, but the printing of `error: <the error through Show>` for the failing case is still open
-(milestone 5.10, which also carries the rest of `Show` and string interpolation for the native back end); `torb check`
-accepts every example on this page, which is what they are verified against.
+**This page describes the specified format. The native back end does not build it yet.** A top-level `?` in an entry
+file refuses to build (`` not supported by the back end yet: `?` at the top level of an entry file, whose `error:`
+report is the driver's `` - milestone 5.13); `torb check` accepts every example on this page, which is what they are
+verified against.
 
 ## Related
 

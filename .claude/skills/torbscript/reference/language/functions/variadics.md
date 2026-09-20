@@ -50,8 +50,21 @@ fn <name>(..., ...<name>: <Type>): <ReturnType> { ... }
      numbers.fold 0 { a, b => a + b }
    }
 
-   const someSet = Set.of(4, 5, 6)
+   const someSet = Set.of 4, 5, 6
    print sumAll(1, ...someSet)
+   ```
+
+   `...` only fills a variadic parameter: spreading into an ordinary one is rejected, naming the parameter it was
+   aimed at.
+
+   ```trb error
+   fn configure(port: Int) {
+     print port
+   }
+
+   const settings = [8080]
+   configure(...settings)
+   // error: `port` is not a variadic parameter, so `...` cannot spread into it
    ```
 
 3. **A variadic parameter that receives no argument becomes an empty list**, not a missing-argument error.

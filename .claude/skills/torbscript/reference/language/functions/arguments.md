@@ -94,6 +94,20 @@ print connect("localhost", port: 5432, timeout: 30)
 6. **The name a call uses is the parameter's name in the declaration, not the type.** Renaming a parameter changes
    every call site that labels it; there is no separate external name as in Swift.
 
+7. **A collection passed where a single value is expected is an ordinary type mismatch, not an arity error.** Only a
+   [variadic parameter](variadics.md) collects several arguments into one; an ordinary parameter's type is checked
+   exactly as any other argument's is.
+
+   ```trb error
+   fn takesInt(value: Int): Int {
+     value
+   }
+
+   const numbers = [1, 2, 3]
+   print takesInt(numbers)
+   // error: Expected `Int64`, found `List<Int64>`
+   ```
+
 ## What this is not
 
 **A label is not a keyword argument dictionary.** There is no way to bundle several labelled arguments into one `Map`
