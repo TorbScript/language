@@ -26,8 +26,9 @@ use Source from "./source"
  * - **`close()` is the abrupt end:** it releases the target and cannot fail, which is what `Close` and `using` need.
  *   A sink that is closed without `finish()` may have written less than it was given - that is the point of the two.
  * - **Buffering is never implicit.** `sink.buffered(capacity:)` says it, and `Buffered.flush()` is where it is forced.
- * - **Wrapping hands the sink over,** as on the reading end: `mapFailure` and `buffered` take `self`, because they
- *   write nothing themselves and the wrapper is what writes from then on.
+ * - **Whoever writes needs the permission - now or later.** `mapFailure` and `buffered` take `var self` as well,
+ *   because the wrapper keeps the sink in a `var` field and writes into it afterwards. A chain is still one
+ *   expression, because a freshly produced object is a `var` path.
  */
 public shared trait Sink<Item, Failure> with Close {
   /** Finishes when the target has taken the item. */
@@ -50,7 +51,7 @@ public shared trait Sink<Item, Failure> with Close {
   }
 
   /** A sink for the same items with a failure of another type: what `mapError` is on a `Result`. */
-  fn mapFailure<Other>(self, transform: (failure: Failure) => Other): Sink<Item, Other> {
+  fn mapFailure<Other>(var self, transform: (failure: Failure) => Other): Sink<Item, Other> {
     Remapped.of self, transform
   }
 
@@ -58,7 +59,7 @@ public shared trait Sink<Item, Failure> with Close {
    * Collects items and hands them on in groups of `capacity`, which is what makes many small writes one big one.
    * The answer is a `Buffered`, not a `Sink`, so that `flush()` stays reachable; `finish()` flushes.
    */
-  fn buffered(self, capacity: Int = 64): Buffered<Item, Failure> {
+  fn buffered(var self, capacity: Int = 64): Buffered<Item, Failure> {
     Buffered.of self, capacity: capacity
   }
 
@@ -127,7 +128,7 @@ shared type Remapped<Item, Failure, Other> with Sink<Item, Other> {
   private var downstream: Sink<Item, Failure>
   private transform: (failure: Failure) => Other
 
-  fn of(downstream: Sink<Item, Failure>, transform: (failure: Failure) => Other): Remapped<Item, Failure, Other> {
+  fn of(var downstream: Sink<Item, Failure>, transform: (failure: Failure) => Other): Remapped<Item, Failure, Other> {
     Remapped downstream, transform
   }
 
@@ -163,7 +164,7 @@ public shared type Buffered<Item, Failure> with Sink<Item, Failure> {
   private capacity: Int = 64
   private var pending: List<Item> = []
 
-  fn of(downstream: Sink<Item, Failure>, capacity: Int = 64): Buffered<Item, Failure> {
+  fn of(var downstream: Sink<Item, Failure>, capacity: Int = 64): Buffered<Item, Failure> {
     Buffered downstream, capacity.max(1)
   }
 

@@ -25,10 +25,11 @@ use Sink from "./sink"
  *   overlapping pulls are a bug, not a race the source has to defend against. A source may only be pulled by the task
  *   that made it - shared objects are confined to their task (CONCEPT, "Concurrency"), which is why nothing here spawns.
  * - **Backpressure is the pull.** Nothing is read before somebody asks for it.
- * - **Wrapping hands the source over.** `map`, `filter`, `through`, `then` and `checked` take `self` and not
- *   `var self`, because they read nothing: they give the source to the wrapper, and from then on the wrapper is the one
- *   that pulls. That is also what lets a pipeline be one expression - a `var self` would need every step of it to be a
- *   named `var` binding, since a temporary is no `var` path.
+ * - **Whoever reads needs the permission - now or later.** Reading takes `var self`, and so does wrapping (`map`,
+ *   `filter`, `through`, `then`, `checked`), because a wrapper keeps the source in a `var` field and pulls from it
+ *   afterwards. So a `const` source cannot be consumed by wrapping it either, which is what a read-only view
+ *   promised. A chain still reads as one expression, because a **freshly produced object is a `var` path**: nothing
+ *   is thrown away where there is no copy, and nobody else holds a view of something that was just made.
  * - **`close()` releases what is above.** A reader that stops early (`take`, an abandoned loop, a failure it handles)
  *   closes the source, and every source built here closes the one it reads from. `using` is the form that does not
  *   forget it. `close()` is synchronous, cannot fail and may be called after the stream ended; `finish()` on the other
@@ -38,51 +39,51 @@ public shared trait Source<Item, Failure> with Close {
   /** `Ok(Some(item))` for the next item, `Ok(None)` at the end, `Fail(problem)` for a failure that ends the stream. */
   fn next(var self): Task<Result<Item?, Failure>>
 
-  // --- Stages: handing the source on ----------------------------------------------------------------------------
+  // --- Stages: wrapping, which hands the pulling on -------------------------------------------------------------
 
   /**
    * The one place where a stage meets a stream. Everything below is this call with a name, and `Json.items<User>()`
    * or `lines()` are the same stage values an `Iterable` takes.
    */
-  fn through<Output>(self, stage: Stage<Item, Output>): Source<Output, Failure> {
+  fn through<Output>(var self, stage: Stage<Item, Output>): Source<Output, Failure> {
     Staged.of self, stage
   }
 
-  fn map<Output>(self, transform: (value: Item) => Output): Source<Output, Failure> {
+  fn map<Output>(var self, transform: (value: Item) => Output): Source<Output, Failure> {
     through mapping(transform)
   }
 
-  fn filter(self, predicate: (value: Item) => Bool): Source<Item, Failure> {
+  fn filter(var self, predicate: (value: Item) => Bool): Source<Item, Failure> {
     through filtering(predicate)
   }
 
-  fn filterMap<Output>(self, transform: (value: Item) => Output?): Source<Output, Failure> {
+  fn filterMap<Output>(var self, transform: (value: Item) => Output?): Source<Output, Failure> {
     through filterMapping(transform)
   }
 
-  fn mapWhile<Output>(self, transform: (value: Item) => Output?): Source<Output, Failure> {
+  fn mapWhile<Output>(var self, transform: (value: Item) => Output?): Source<Output, Failure> {
     through mappingWhile(transform)
   }
 
-  fn take(self, amount: Int): Source<Item, Failure> {
+  fn take(var self, amount: Int): Source<Item, Failure> {
     through taking(amount)
   }
 
-  fn takeWhile(self, predicate: (value: Item) => Bool): Source<Item, Failure> {
+  fn takeWhile(var self, predicate: (value: Item) => Bool): Source<Item, Failure> {
     through takingWhile(predicate)
   }
 
-  fn skip(self, amount: Int): Source<Item, Failure> {
+  fn skip(var self, amount: Int): Source<Item, Failure> {
     through skipping(amount)
   }
 
   /** `(0, first), (1, second), ...` */
-  fn indexed(self): Source<(Int, Item), Failure> {
+  fn indexed(var self): Source<(Int, Item), Failure> {
     through indexing()
   }
 
   /** Groups items into lists of at most `size`; the last group is what is left. */
-  fn chunked(self, size: Int): Source<List<Item>, Failure> {
+  fn chunked(var self, size: Int): Source<List<Item>, Failure> {
     through chunking(size)
   }
 
@@ -90,12 +91,12 @@ public shared trait Source<Item, Failure> with Close {
    * The only asynchronous stage there is: a step that has to wait for each item (a lookup, a request, a write). A
    * `Stage` cannot do this - it computes and never waits - so this is a method and not a stage value.
    */
-  fn then<Output>(self, step: (value: Item) => Task<Result<Output, Failure>>): Source<Output, Failure> {
+  fn then<Output>(var self, step: (value: Item) => Task<Result<Output, Failure>>): Source<Output, Failure> {
     Stepping.of self, step
   }
 
   /** A stream of the same items with a failure of another type: what `mapError` is on a `Result`. */
-  fn mapFailure<Other>(self, transform: (failure: Failure) => Other): Source<Item, Other> {
+  fn mapFailure<Other>(var self, transform: (failure: Failure) => Other): Source<Item, Other> {
     Remapped.of self, transform
   }
 
@@ -262,7 +263,7 @@ shared type Stepping<Input, Item, Failure> with Source<Item, Failure> {
   private step: (value: Input) => Task<Result<Item, Failure>>
 
   fn of(
-    upstream: Source<Input, Failure>,
+    var upstream: Source<Input, Failure>,
     step: (value: Input) => Task<Result<Item, Failure>>,
   ): Stepping<Input, Item, Failure> {
     Stepping upstream, step
@@ -286,7 +287,7 @@ shared type Remapped<Item, Failure, Other> with Source<Item, Other> {
   private var upstream: Source<Item, Failure>
   private transform: (failure: Failure) => Other
 
-  fn of(upstream: Source<Item, Failure>, transform: (failure: Failure) => Other): Remapped<Item, Failure, Other> {
+  fn of(var upstream: Source<Item, Failure>, transform: (failure: Failure) => Other): Remapped<Item, Failure, Other> {
     Remapped upstream, transform
   }
 
@@ -321,7 +322,7 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
   private var pushing: Accumulator<Input, Void>
   private var finished: Bool = false
 
-  fn of(upstream: Source<Input, Failure>, stage: Stage<Input, Item>): Staged<Input, Item, Failure> {
+  fn of(var upstream: Source<Input, Failure>, stage: Stage<Input, Item>): Staged<Input, Item, Failure> {
     var box: Shared<List<Item>> = Shared([])
     Staged upstream, stage, box, stage.onto(Queueing(box))
   }
@@ -354,7 +355,7 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
     }
   }
 
-  fn through<Output>(self, other: Stage<Item, Output>): Source<Output, Failure> {
+  fn through<Output>(var self, other: Stage<Item, Output>): Source<Output, Failure> {
     upstream.through stage.then(other)
   }
 
@@ -416,11 +417,10 @@ shared type Produced<Item, Failure> with Source<Item, Failure> {
  * knows nothing about the stream's failure. `checked()` is where those items become the stream's failure and end it -
  * the streaming counterpart of collecting an `Iterable<Result<...>>` into a `Result<List<...>, ...>`.
  *
- *     var users = body.through(Json.items<User>()).checked()
- *     const all = users.toList().await()?
+ *     const all = body.through(Json.items<User>()).checked().toList().await()?
  */
 extend<Item, Problem, Failure: From<Problem>> Source<Result<Item, Problem>, Failure> {
-  fn checked(self): Source<Item, Failure> {
+  fn checked(var self): Source<Item, Failure> {
     Checked.of self
   }
 }
@@ -428,7 +428,7 @@ extend<Item, Problem, Failure: From<Problem>> Source<Result<Item, Problem>, Fail
 shared type Checked<Item, Problem, Failure: From<Problem>> with Source<Item, Failure> {
   private var upstream: Source<Result<Item, Problem>, Failure>
 
-  fn of(upstream: Source<Result<Item, Problem>, Failure>): Checked<Item, Problem, Failure> {
+  fn of(var upstream: Source<Result<Item, Problem>, Failure>): Checked<Item, Problem, Failure> {
     Checked upstream
   }
 

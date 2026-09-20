@@ -88,15 +88,17 @@ extend ImportError with From<ChannelClosed> {
 // Nothing of the response is ever in memory: the body is pulled chunk by chunk and the file takes each chunk as it
 // arrives. `mapFailure` is where the two failure types meet, and it is written down instead of guessed.
 //
-// Wrapping a source (`mapFailure`, `through`, `filter`) takes it by value and hands it on. *Reading* one changes it,
-// so those members take a `var self` like `Iterator.next` - which is why a pipeline that gets read also gets a name.
+// Every member of a stream that reads or writes - now or later - takes a `var self`: `mapFailure` hands the pulling
+// on to its wrapper, so it needs the permission just as `next` does. A chain is still one expression, because what a
+// call just produced is a `var` path: nothing is thrown away where there is no copy.
 
 fn download(url: String, path: String): Task<Result<Void, ImportError>> {
   var response = http.get(url).await()?
   var file = File.create(path)?
-  var reading = response.body.mapFailure ImportError.requestFailed
-  var writing = file.mapFailure ImportError.fileFailed
-  const outcome = reading.into(writing).await()
+  const outcome = response.body
+    .mapFailure(ImportError.requestFailed)
+    .into(file.mapFailure(ImportError.fileFailed))
+    .await()
   file.close()
   outcome
 }
@@ -107,12 +109,13 @@ fn download(url: String, path: String): Task<Result<Void, ImportError>> {
 
 fn countActiveUsers(path: String): Task<Result<Int, ImportError>> {
   var file = File.open(path)?
-  var users = file.chunks()
+  const total = file.chunks()
     .mapFailure(ImportError.fileFailed)
     .through(Json.items<User>())
     .checked()
-    .filter { _.active }
-  const total = users.count().await()?
+    .filter({ _.active })
+    .count()
+    .await()?
   file.close()
   Ok total
 }
@@ -152,13 +155,15 @@ fn namesOf(users: List<User>): List<String> {
   users.through(activeNames).toList()
 }
 
-fn namesFrom(body: Body): Task<Result<List<String>, ImportError>> {
-  var names = body
+// `var body`, because reading it is what this does - a `const` body is a read-only view and cannot be consumed.
+fn namesFrom(var body: Body): Task<Result<List<String>, ImportError>> {
+  body
     .mapFailure(ImportError.requestFailed)
     .through(Json.items<User>())
     .checked()
     .through(activeNames)
-  names.toList().await()
+    .toList()
+    .await()
 }
 
 // --- 5. Text on a byte sink, and buffering that says where it flushes ------------------------------
@@ -177,6 +182,5 @@ fn writeReport(path: String, lines: Iterable<String>): Task<Result<Void, IoError
 // What the whole file is about, in four lines
 const sample = [User(1, "Ada", true), User(2, "Bob", false)]
 print namesOf(sample).joined(separator: ", ")
-var text = Body.from("a\nb\n").lines()
-print "lines of a text body: {text.count().await().isOk()}"
+print "lines of a text body: {Body.from("a\nb\n").lines().count().await().isOk()}"
 print "reports: {printReports(["north", "south"]).await().orElse(0)}"

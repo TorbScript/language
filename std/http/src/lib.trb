@@ -51,9 +51,8 @@ public shared type Response {
 /**
  * The bytes of a request or a response, as a stream that is read once.
  *
- *     var users = response.body.through(Json.items<User>()).checked()   // one at a time
- *     const all = users.toList().await()?
- *     const text = response.body.text().await()?                        // or all of it
+ *     const all = response.body.through(Json.items<User>()).checked().toList().await()?   // one at a time
+ *     const text = response.body.text().await()?                                          // or all of it
  *     File.write(path, response.body.mapFailure(IoError.from)).await()?  // or straight to disk
  *
  * The convenience methods come first on purpose - that is the lesson of `fetch` and Bun, where `await response.json()`
@@ -102,8 +101,16 @@ public shared type Body with Source<Bytes, HttpError> {
   }
 
   /** Lines of text, as a stream: a log, an event stream, a CSV of any size. */
-  fn lines(self): Source<String, HttpError> {
+  fn lines(var self): Source<String, HttpError> {
     through(streamLines()).checked()
+  }
+
+  /**
+   * A body of any size - what an upload or a proxy hands on. Not `Body.from(source)`: `From.from` takes its argument by
+   * value, and handing a stream over needs the permission to read it (`var`), because the `Body` reads it from now on.
+   */
+  fn of(var source: Source<Bytes, HttpError>): Body {
+    Body source
   }
 
   fn empty(): Body {
@@ -134,12 +141,7 @@ extend Body with From<Bytes> {
   }
 }
 
-/** `Body.from(source)` - a body of any size, which is what an upload or a proxy hands on. */
-extend Body with From<Source<Bytes, HttpError>> {
-  fn from(value: Source<Bytes, HttpError>): Body {
-    Body value
-  }
-}
+
 
 /**
  * What went wrong making a request. A single wrapper type, so new kinds of failure are never a breaking change

@@ -15,7 +15,7 @@ use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads from "./place"
 use noteArgumentClosures from "./mutation"
 use isQuotation, openThunk, closeThunk from "./quote"
-use checkConstruction, checkSharedIdentity from "./declaration"
+use checkConstruction, checkSharedIdentity, requireSharedFields from "./declaration"
 
 /**
  * Calls: which parameter every written argument fills, what the generic parameters of the callee turn out to be, and
@@ -105,6 +105,9 @@ public fn checkCall(
   const plan = matchArguments checker, target, inner, arguments, expression.span
   const calleeName = target.name
   checkArguments checker, inner, arguments, plan, calleeName, isDiscarded, call
+  // A `var` field with an identity needs a `var` path, wherever the constructor is called from (gap 20). After the
+  // arguments, because the paths it asks about are the ones checking them recorded
+  requireSharedFields checker, target, arguments
   // `Array.of(1, 2, 3, 4)` is an `Array<Int64, 4>`: the one call whose number of arguments solves a const parameter
   checkArrayOf checker, calleeName, inner, arguments, plan, expression.span
   checkCallReads checker, callee, arguments, plan.targets, inner.parameters, isVarReceiver

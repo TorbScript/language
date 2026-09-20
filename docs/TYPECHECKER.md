@@ -1751,9 +1751,9 @@ nothing told a back end how such a literal is built.
 - The `Array.of` message says "this **call** has 3" and the literal's says "this **literal** has 3": one
   `reportArraySize` with a word for the place.
 
-### What the follow-ups add (gaps 52 and 53)
+### What the follow-ups add (gaps 53 and 54)
 
-- **The dead-change rule reaches the top level of a file** (gap 52). A top-level `var` is a declaration, not a local, so
+- **The dead-change rule reaches the top level of a file** (gap 54). A top-level `var` is a declaration, not a local, so
   `BindingUse` became `ValueUse` with a `UseRoot` of `.Local(binding)` or `.Declared(symbol)`, `Checker.isTopLevel` says
   which body is the statement sequence of a file, and `Checker.readDeclarations` is every top-level `var` that a
   function, a closure or another top-level initializer reads. The message and its two notes are unchanged - the rule is
@@ -2342,37 +2342,44 @@ _Decision:_ accepted. Three points had to be decided beyond the proposal:
 - **Set literals are not touched**, because the parser has no set literal: `{a, b}` is in the concept and in no
   `ExpressionKind`. The rule is written so that adding one is `listLiteralType` with `Set` in place of `List`.
 
-**52. Does the dead-change rule reach the top level of a file?**
-Rule 5.3 reports a change no read follows, and `checkModule` settles the statements of a file like any other body - but a
-top-level `var` is a **declaration** and not a local, so `noteRead` and `noteChange` never saw one: `var counters = [...]`
-/ `var first = counters[0]` / `first.increment()` at the top level of `src/main.trb` checked silently while the very same
-lines inside a function were reported. Nothing says what the rule should be there either, because the statements of the
-file are not the whole life of the declaration: a function of the module reads the same one, and nothing says where that
-function is called.
-_Proposal:_ a top-level `var` is counted, and a change of one is dead when **no statement after it reads it and nothing
-else in the module does**. "Something else" is a function, a closure inside one, the initializer of a top-level `const` -
-every body other than the statement sequence of the file. An exported one is never counted, because a module that has not
-been checked yet may read it.
-_Reason:_ it is the same rule with the same justification (the change is thrown away), and the extra condition is what
-the difference between a local and a declaration actually is. Anything weaker leaves the most common shape of the copy
-trap - a script - unchecked.
+**52. Is a temporary with an identity a `var` path, and where does gap 20 hold?**
+Gap 2 settled that "a temporary is not a `var` path" (`iterator().next()`), with the reason that a change to something
+that is thrown away is always a mistake. That reason is about a **value**: the change would be lost with the copy the
+temporary is. An object with an identity has no copy, nothing is lost, and nobody else holds a view of something that was
+just produced - so the rule was protecting nothing there, while costing every chain over a stream its one-expression
+form (`file.lines().take(5).toList()` would have needed a `var` binding per step once the wrapping members took
+`var self`). The other half of the same question is gap 20 ("a read-only view cannot be widened"), which was enforced in
+one of its four places: a `var` binding of a named `shared type`. A `var` **field** filled by a generated constructor was
+not checked - the constructor's parameters are values, so the `var` argument rule never saw them - and a trait-typed value
+of a `shared trait` was not recognised as shared at all, because `place.trb` and `declaration.trb` both had a helper
+called `isSharedType` and only one of them knew about `.Traits`.
+_Proposal:_ a temporary whose type has an identity counts as a `var` path, for a `var self` receiver and for a `var`
+argument alike; a temporary value keeps the error it has. Gap 20 is then enforced in all four places - binding, field
+(including through the generated constructor, and inside the declaring type as well), argument, and trait-typed value of
+a `shared trait` - which needs the two helpers to become one.
+_Reason:_ both halves say the same thing, which is that the promise is about a **path** and not about a type: what a
+`const` withholds is what goes through that one binding, field or argument, and a value that was just made has no such
+path behind it. With the pair in place the standard library needs no exception: everything that reads a stream, now or one
+wrapper later, takes `var self`, and nothing can be read through a `const` handle.
 
-_Decision:_ accepted. `BindingUse` is `ValueUse` with a `UseRoot` of `.Local(binding)` or `.Declared(symbol)` (the two
-roots of a `Place` the rule counts), `Checker.isTopLevel` says which body is the statement sequence of the file, and
-`Checker.readDeclarations` collects every top-level `var` that something else reads. Three consequences:
-- **A read in the initializer of another top-level binding counts as "something else",** because that initializer is a
-  body of its own (`checkInitializer`) and is reached lazily through `resultOf`. So `var first = counters[0]` keeps
-  `counters` alive whatever follows. That is conservative in the safe direction - it never reports a change that is read -
-  and making it exact would mean checking a top-level initializer inside the statement body, where a read of it would be
-  discarded with that body's own uses instead of ordered against the statements.
-- **Order does not matter.** Every function of a module is walked before `settleChanges` runs at the end of
-  `checkModule`, so a function declared *above* the `var` it reads keeps it alive exactly as one below it does.
-- **`public var` needs no exception in practice**: gap 41 makes it illegal at top level, and the rule still says that an
-  exported value is not counted, so the two cannot drift apart.
+_Decision:_ accepted. `problemOfRoot` answers `Writable` for a temporary with an identity (`place.trb`), the single
+`isSharedType` lives in `declaration.trb` and answers precisely (a `shared type`, a trait-typed value whose every trait is
+a `shared trait`, a generic parameter with a shared bound - and `false` for a bare parameter, because the language has no
+bound that says "shared"), and `requireSharedFields` walks a constructor's arguments against its fields after they have
+been checked, since the paths it asks about are the ones checking them recorded. Tests in `compiler/tests/places.test.trb`.
 
-It found six real dead changes in `examples/tour` (`01-bindings-and-values.trb`, `03-types.trb` twice,
-`07-collections.trb` twice, `12-type-system.trb`), all of them a value that is changed to illustrate something and then
-never read - each is now followed by the `print` that shows the effect, which is what the example wanted to say anyway.
+**A result of a call is not a path.** `var writable = view()` is ordinary and stays legal, whatever `view()` answers: the
+read-only view is a property of the binding, the field or the argument it goes through, **not of the type**. There are no
+const types in this language, and adding one for shared objects would mean a second type for every shared type, an
+inference rule for where it appears and a coercion between the two. Whoever hands an object out of a function hands out
+the permission with it - that is what returning it means - and a function that wants to keep it to itself does not return
+it.
+
+The one thing that is left is that the language has no `move`: after `source.map(f)` the wrapper and the original both
+have a `var` path to the same object. That is not a hole in gap 20 (both are `var`) but the absence of linearity, and
+`docs/STREAMS.md` §2 says what the `Source` contract promises instead - one puller, consumed once. The narrower case of a
+**value that contains a shared object** (`Option<Close>` in a `var` field) is not reached by gap 20 either, for the same
+reason gap 20 does not look inside values; nothing in `std/` relies on it, and it is a follow-up rather than a decision.
 
 **53. What does an `extend` whose target is a *trait type* implement?**
 CONCEPT says `extend<Item> List<Item> with Show` "makes every list showable" and that
@@ -2405,3 +2412,34 @@ moment later. `Show`, `Equals`, `Hash` and `Encode` reach implementers; `From` a
   name `ArrayList<Int>`'s own `from`, that is no longer the reason - the reason is the one that was always first, that a
   literal knows its items and building the type that is asked for directly *is* the fast path the concept asks the
   compiler to find.
+**54. Does the dead-change rule reach the top level of a file?**
+Rule 5.3 reports a change no read follows, and `checkModule` settles the statements of a file like any other body - but a
+top-level `var` is a **declaration** and not a local, so `noteRead` and `noteChange` never saw one: `var counters = [...]`
+/ `var first = counters[0]` / `first.increment()` at the top level of `src/main.trb` checked silently while the very same
+lines inside a function were reported. Nothing says what the rule should be there either, because the statements of the
+file are not the whole life of the declaration: a function of the module reads the same one, and nothing says where that
+function is called.
+_Proposal:_ a top-level `var` is counted, and a change of one is dead when **no statement after it reads it and nothing
+else in the module does**. "Something else" is a function, a closure inside one, the initializer of a top-level `const` -
+every body other than the statement sequence of the file. An exported one is never counted, because a module that has not
+been checked yet may read it.
+_Reason:_ it is the same rule with the same justification (the change is thrown away), and the extra condition is what
+the difference between a local and a declaration actually is. Anything weaker leaves the most common shape of the copy
+trap - a script - unchecked.
+
+_Decision:_ accepted. `BindingUse` is `ValueUse` with a `UseRoot` of `.Local(binding)` or `.Declared(symbol)` (the two
+roots of a `Place` the rule counts), `Checker.isTopLevel` says which body is the statement sequence of the file, and
+`Checker.readDeclarations` collects every top-level `var` that something else reads. Three consequences:
+- **A read in the initializer of another top-level binding counts as "something else",** because that initializer is a
+  body of its own (`checkInitializer`) and is reached lazily through `resultOf`. So `var first = counters[0]` keeps
+  `counters` alive whatever follows. That is conservative in the safe direction - it never reports a change that is read -
+  and making it exact would mean checking a top-level initializer inside the statement body, where a read of it would be
+  discarded with that body's own uses instead of ordered against the statements.
+- **Order does not matter.** Every function of a module is walked before `settleChanges` runs at the end of
+  `checkModule`, so a function declared *above* the `var` it reads keeps it alive exactly as one below it does.
+- **`public var` needs no exception in practice**: gap 41 makes it illegal at top level, and the rule still says that an
+  exported value is not counted, so the two cannot drift apart.
+
+It found six real dead changes in `examples/tour` (`01-bindings-and-values.trb`, `03-types.trb` twice,
+`07-collections.trb` twice, `12-type-system.trb`), all of them a value that is changed to illustrate something and then
+never read - each is now followed by the `print` that shows the effect, which is what the example wanted to say anyway.

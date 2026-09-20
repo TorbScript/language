@@ -1023,6 +1023,17 @@ Wenn nicht, was bedeutet, bewirkt es?
     Stream liest, jetzt oder später, braucht die Berechtigung; Pipelines bleiben ein Ausdruck; eine `const`-Quelle lässt
     sich nicht mehr verbrauchen; die Regel wird an allen vier Stellen durchgesetzt. `var writable = view()` bleibt
     legal (ein Aufrufergebnis ist kein Pfad; die Nur-Lese-Sicht ist ein Pfad-Versprechen, kein Typ).
+  - **Erledigt:** Ein Temporary mit Identität ist ein `var`-Pfad (`problemOfRoot` in `place.trb`), ein Temporary-Wert
+    behält seinen Fehler; die beiden `isSharedType`-Helfer sind einer geworden (`declaration.trb`, jetzt präzise: ein
+    `shared type`, ein Trait-Wert, dessen Traits alle `shared` sind, ein Typparameter mit einer `shared`-Bound - und
+    `false` für einen nackten Parameter, weil die Sprache keine Bound "shared" hat). Gap 20 greift jetzt an allen vier
+    Stellen: Bindung, Feld (auch durch den generierten Konstruktor und innerhalb des Typs selbst, `requireSharedFields`),
+    Argument und Trait-Wert eines `shared trait`. Die Umwickel-Member nehmen `var self` (`through`, `map`, `filter`,
+    `then`, `mapFailure`, `checked`, `buffered`, `file.chunks`, `file.lines`), Pipelines bleiben ein Ausdruck. Das
+    Einzige, was im Repository auf einem Loch stand, war `extend Body with From<Source<...>>` - `From.from` kann keinen
+    `var`-Parameter deklarieren, also heißt es jetzt `Body.of(var source)`. `var writable = view()` bleibt legal und
+    steht als Begründung in `docs/TYPECHECKER.md` (Lücke 52, mit "es gibt keine const-Typen"); Tests in
+    `compiler/tests/places.test.trb`, Konzept und `docs/STREAMS.md` nachgezogen.
   - **Erledigt (Phase 1, gemergt `539f3c1`):** `docs/`-Baum (42 Seiten, 15 Ordner, 80 geprüfte Snippets), generierte
     Indexe, Frontmatter-Schema (`title`, `summary`, `kind`, `status` Pflicht), Fence-Marker (`trb`, `trb check`,
     `trb fragment`, `trb error` mit `// error:`-Kommentar, `trb skip <Grund>`), `torb docs check|index|skill|bundle`

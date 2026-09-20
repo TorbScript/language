@@ -95,20 +95,26 @@ fn next(var self): Task<Result<Item?, Failure>>
 
 `Ok(Some(item))` is the next item, `Ok(None)` the end of the stream, `Fail(problem)` a failure that ends it.
 
-**Reading takes `var self`, wrapping takes `self`.** `next`, `collect`, `toList`, `count`, `fold`, `forEach`, `find` and
-`into` consume items, so they need the permission. `through`, `map`, `filter`, `take`, `then`, `mapFailure` and `checked`
-read nothing: they **hand the source over** to a wrapper, which pulls from then on. That split is not only about what
-changes — a temporary is no `var` path, so if wrapping took `var self` no pipeline could be written as one expression at
-all. The price is the other way round: a pipeline that is read gets a name.
+**Whoever reads needs the permission — now or later.** `next`, `collect`, `toList`, `count`, `fold`, `forEach`, `find`
+and `into` read items, so they take `var self`. So do `through`, `map`, `filter`, `take`, `then`, `mapFailure` and
+`checked`: they hand the source to a wrapper that reads it from then on, which is the same permission one step later.
+One rule, no exceptions — and a `const` source cannot be consumed by wrapping it either, which is exactly what the
+read-only view of a shared object promises.
+
+A chain is still **one expression**, because a freshly produced object *is* a `var` path (gap 52): the rule against a
+temporary protects values, where the change would be lost with the copy it was made in, and an object has no copy —
+nobody else holds a view of something that was just made, so the full permission is the caller's to give.
 
 ```trb
-var users = body.through(Json.items<User>()).checked()   // wrapping: one expression
-const all = users.toList().await()?                      // reading: through a `var` path
+const all = body.through(Json.items<User>()).checked().toList().await()?
 ```
 
-Forgetting the name is the error "This is a temporary, and `toList` changes its receiver", which names the fix. The
-hand-over is a promise and not a proof: the language has no `move`, so reading a source after giving it away is a bug of
-the same kind as pulling from it twice at once (see section 13, open point 1).
+What needs a `var` binding is only what a `const` handle would have withheld anyway:
+
+```trb
+var response = http.get(url).await()?     // `response.body` is a `var` path through it
+const text = response.body.text().await()?
+```
 
 **The contract.**
 
@@ -186,9 +192,8 @@ worlds:
 ```trb
 const interesting = filtering<Event>({ _.level >= .Warning }).then(mapping { _.message })
 
-const fromList = events.through(interesting).toList()        // a list, synchronously
-var arriving = response.body.through(interesting)            // an HTTP body, asynchronously
-const fromBody = arriving.toList().await()?
+const fromList = events.through(interesting).toList()                    // a list, synchronously
+const fromBody = response.body.through(interesting).toList().await()?   // an HTTP body, asynchronously
 ```
 
 `Accumulator` gains one member for it:
@@ -317,10 +322,7 @@ mechanism, so streams use it and add nothing:
 
   ```trb
   var file = File.open(path)?
-  using file { open =>
-    var first = open.lines().take(5)
-    first.toList().await()
-  }
+  using file { open => open.lines().take(5).toList().await() }
   ```
 
 - **Closing a produced source ends its producer.** `Produced.close()` closes the relay channel, so the producer's next
@@ -453,7 +455,8 @@ Convenience first, which is the lesson of `fetch` and Bun (`await response.json(
 `body.bytes(limit:)`, `body.text(limit:)`, `body.json<Value>(limit:)`, `body.lines()`, all answering a `Task`. **Every
 one of them takes a limit**, defaulting to `Body.defaultLimit` = 16 MiB — a server that decides how much memory a client
 allocates is a denial of service, and streaming is the way past the limit rather than a bigger number. Making one is
-`Body.from(text)`, `Body.from(bytes)`, `Body.from(source)` (three `From` implementations, so one name),
+`Body.from(text)` and `Body.from(bytes)` (two `From` implementations, so one name), `Body.of(source)` (its own name,
+because `From.from` takes its argument by value and handing a stream over needs the permission to read it),
 `Body.jsonOf(value)` and `Body.empty()`. `Response.json<Value>()` is a `Task` now, which it always should have been: it
 was a plain `Result` only because the whole response had been read before anybody looked at it.
 
@@ -521,20 +524,21 @@ capability tables need.
 ## 13. Open points
 
 **1. The state of a shared object, and the hand-over.**
-_Decision:_ **a `var self` method of a `shared type` or a `shared trait` may answer a `Task`** (TYPECHECKER gap 49), so
-every stateful end here is an ordinary shared type with `var` fields: `Iterating` holds a cursor, `Staged` a queue and an
+_Decision:_ **a `var self` method of a `shared type` or a `shared trait` may answer a `Task`** (gap 49), so every
+stateful end here is an ordinary shared type with `var` fields: `Iterating` holds a cursor, `Staged` a queue and an
 accumulator chain, `Buffered` a list. `Pulling` and `Pushing` keep closures because a closure is what they are for. The
 reverse — a `var self` or a `var` parameter of a value on a function that answers a `Task` — is an error, because the
 copy back would happen before the task has run.
 
-What is left open is the **hand-over**. Wrapping takes the source by value (section 2), and the wrapper keeps it in a
-`var` field, so the permission to read travels with it; the language has no `move`, so nothing stops the old owner from
-pulling as well. Two holes in the checker make it reachable even from a read-only view: gap 20's rule ("a `var` binding,
-field or argument may not be initialised from a `const` path to a shared object") is enforced for a binding of a named
-`shared type` but **not** for a trait-typed value of a `shared trait`, and **not** for a field filled by a generated
-constructor. Closing either would make wrapping impossible to write without a `var` receiver, and that would cost the
-one-expression pipeline. **The owner's call:** leave it as a documented promise (what the `Source` contract already says:
-one puller, consumed once), or give the language a way to say "this argument is handed over".
+_Decision:_ and **the hand-over needs no new language feature** (gap 52). A freshly produced object is a `var` path, so
+every member that reads — now or one wrapper later — takes `var self`, and a chain is still one expression. With that the
+design rests on no hole: gap 20 is enforced in all four places (a `var` binding, a `var` field through a generated
+constructor, a `var` argument, and a trait-typed value of a `shared trait`, which needed the two `isSharedType` helpers
+of the checker to become one). A `const` source can no longer be consumed at all, not even by wrapping it.
+
+What remains true is that the language has no `move`: a `var` holder can hand its source to a wrapper and go on pulling
+from the original. The `Source` contract says what that is — one puller, consumed once — and it is the same class of bug
+as two overlapping pulls, which nothing here promises to catch.
 
 **2. `Stage.map` instead of `mapping`.** Section 4 has the reason the members do not work today. The rule that would
 make them work: *a type parameter of a namespace that the static member's signature does not mention need not be

@@ -23,7 +23,7 @@ use isDeclaredVar from "./place"
  * becomes the change - which is what makes `var total = 0` followed by `total = 1` and nothing else a dead change while
  * `x = 1` followed by `x.part = 2` and a read of `x` is fine.
  *
- * **A top-level `var` is counted too** (gap 52), and it is the one value whose body is not the whole story: the
+ * **A top-level `var` is counted too** (gap 54), and it is the one value whose body is not the whole story: the
  * statements of the file are one body, but a function of the module, a closure inside one and the initializer of a
  * top-level `const` read the same declaration. So a change of one is dead when no statement after it reads it **and**
  * nothing else in the module does (`Checker.readDeclarations`) **and** the declaration is not exported.
@@ -46,7 +46,7 @@ public fn noteRead(var checker: Checker, binding: BindingId, at: Span) {
 /**
  * Every read of a top-level `var`, which is a declaration and not a local. Inside the statements of its own file it is
  * one more use in source order; anywhere else - a function of the module, a closure, the initializer of a top-level
- * `const` - it is the answer "something else reads this" and the rule says nothing about it any more (gap 52).
+ * `const` - it is the answer "something else reads this" and the rule says nothing about it any more (gap 54).
  */
 public fn noteDeclaredRead(var checker: Checker, symbol: SymbolId, at: Span) {
   if !isCountedDeclaration(checker, symbol) {
@@ -133,7 +133,7 @@ fn isCountedRoot(var checker: Checker, root: UseRoot): Bool {
     /**
      * A change to a top-level `var` is only counted in the statements of its own file. Inside a function there is no
      * "after it" to look at, and the statements that read it need not have been checked yet - a function is checked
-     * where it is declared, which may be above every line that reads what it wrote (gap 52).
+     * where it is declared, which may be above every line that reads what it wrote (gap 54).
      */
     .Declared(symbol) => {
       if !checker.isTopLevel {
@@ -229,7 +229,7 @@ fn reportDeadChange(var checker: Checker, entry: ValueUse) {
       }
       checker.binding(binding).name
     }
-    // A function of the module reads the same declaration, and nothing says where it is called (gap 52)
+    // A function of the module reads the same declaration, and nothing says where it is called (gap 54)
     .Declared(symbol) => {
       if checker.readDeclarations.containsKey(symbol.value) {
         return

@@ -1,6 +1,7 @@
 use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Name, Modifiers, Visibility, Declaration, Member, Binding, Argument, Expression from "../../syntax/ast"
+use requireSharedSource from "./place"
 use FunctionDeclaration, TypeDeclaration, TraitDeclaration, ExtendDeclaration from "../../syntax/ast"
 use ForeignDeclaration, TypeReference, TraitClause from "../../syntax/ast"
 use joinPath from "../../project/path"
@@ -203,6 +204,59 @@ public fn checkConstruction(var checker: Checker, target: Target, arguments: Lis
     }
   }
   reportPrivateArguments checker, fields, arguments, shown
+}
+
+/**
+ * Gap 20 at a constructor: a `var` field whose type has an identity may not be filled from a `const` path, because a
+ * shared object is never copied and the field would hand on exactly the permission the `const` withheld.
+ *
+ * It needs a walk of its own, for two reasons. The parameters of a generated constructor are **values** - a `var` field
+ * of a value type is copied in and there is nothing to withhold - so the ordinary `var` argument rule does not see
+ * them. And unlike privacy this rule also holds *inside* the type, which is where the factories that build wrappers
+ * live (`Staged.of`, `Buffered.of`).
+ */
+public fn requireSharedFields(var checker: Checker, target: Target, arguments: List<Argument>) {
+  const owner = match target.resolution {
+    .Construct(found) => found
+    .CopyOf(found) => found
+    _ => {
+      return
+    }
+  }
+  const fields = fieldsOf checker, owner
+  if fields.isEmpty() {
+    return
+  }
+  var position = 0
+  for argument in arguments {
+    if argument.isSpread {
+      continue
+    }
+    var found: FieldSignature? = None
+    match argument.label {
+      Some(label) => {
+        found = fieldNamed fields, label.text
+      }
+      None => {
+        found = fields.get position
+        position = position + 1
+      }
+    }
+    if const Some(field) = found {
+      if field.isVar {
+        requireSharedSource checker, argument.value, field.annotation
+      }
+    }
+  }
+}
+
+fn fieldNamed(fields: List<FieldSignature>, name: String): FieldSignature? {
+  for field in fields {
+    if field.name == name {
+      return Some field
+    }
+  }
+  None
 }
 
 /** A private field with a default is still not passable from outside, positionally or by name. */
@@ -860,31 +914,63 @@ public fn checkSharedIdentity(var checker: Checker, target: Target, arguments: L
 }
 
 /**
- * Whether a type has an identity: a `shared type`, or a value of a `shared trait`. Gap 20 - a `var` binding, field or
- * argument may not be initialized from a `const` path to a shared object - is the same question about a *place*, which
- * is milestone 4.6's, and this is the predicate it asks.
+ * Whether a type has an identity: a `shared type`, a trait-typed value whose every trait is a `shared trait`, or a
+ * generic parameter one of whose bounds is one (`Self` inside a `shared trait`, `<Chosen: Source<...>>`).
+ *
+ * **This is the one predicate for it.** Gap 20 (a `var` place may not come from a `const` path to a shared object), the
+ * dead-change rule (5.3), "only a shared object may be changed by a task" (gap 49) and "a temporary with an identity is
+ * a `var` path" (gap 52) all ask the same question - and asking it in two places with two different answers is how the
+ * holes of gap 20 came about.
+ *
+ * A bare generic parameter answers `false`: it *could* be instantiated with a shared type, but the language has no
+ * bound that says "shared", so the checker cannot know and the rules that read this are about what is certain.
  */
 public fn isSharedType(var checker: Checker, annotation: TypeId): Bool {
-  if const .Traits(bounds) = checker.types.form(annotation) {
-    for bound in bounds {
-      if const Some(symbol) = headSymbolOf(checker, bound) {
-        if !isSharedTrait(checker, symbol) {
+  match checker.types.form(annotation) {
+    .Traits(bounds) => {
+      if bounds.isEmpty() {
+        return false
+      }
+      for bound in bounds {
+        if !isSharedBound(checker, bound) {
           return false
         }
       }
+      true
     }
-    return true
-  }
-  const symbol = match headSymbolOf(checker, annotation) {
-    Some(found) => found
-    None => {
-      return false
+    // One shared bound is enough: whatever fills the parameter carries that trait, so it is an object
+    .Parameter(parameter) => {
+      for bound in checker.parameterBounds.get(parameter.value) ?? [] {
+        if isSharedBound(checker, bound) {
+          return true
+        }
+      }
+      false
     }
+    .Nominal(symbol, _) => isSharedDeclaration checker, symbol
+    _ => false
   }
-  // A generic parameter or a tuple has no declaration that could say `shared`, and nothing is claimed about it
-  if const .Type = checker.symbolAt(symbol).kind {
-    const identifier = typeSignatureOf checker, symbol
-    return checker.typeSignature(identifier).isShared
+}
+
+/** A bound is shared when the trait it names is a `shared trait`. */
+fn isSharedBound(var checker: Checker, bound: TypeId): Bool {
+  match headSymbolOf(checker, bound) {
+    Some(symbol) => isSharedDeclaration checker, symbol
+    None => false
   }
-  true
+}
+
+/** `shared type X` or `shared trait X`, by the declaration the name stands for. */
+fn isSharedDeclaration(var checker: Checker, symbol: SymbolId): Bool {
+  match checker.symbolAt(symbol).kind {
+    .Type => {
+      const identifier = typeSignatureOf checker, symbol
+      checker.typeSignature(identifier).isShared
+    }
+    .Trait => {
+      const identifier = typeSignatureOf checker, symbol
+      checker.typeSignature(identifier).isShared
+    }
+    _ => false
+  }
 }

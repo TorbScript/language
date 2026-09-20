@@ -6,9 +6,10 @@ use TypeId, FieldSignature, ParameterForm from "./type"
 use Checker, Place, PlaceRoot, PlaceStep, Access from "./context"
 use isFullyKnown from "./name"
 use typeSignatureOf from "./signature"
+use resolveType from "./unify"
 use traitArgumentsOf from "./implementation"
 use noteChange, dropRead from "./mutation"
-use isInsideType from "./declaration"
+use isInsideType, isSharedType from "./declaration"
 
 /**
  * What a valid place is, whether a change may go through it, and what may run while one is running.
@@ -239,14 +240,14 @@ public fn requireMutable(var checker: Checker, place: Place, at: Span, cause: Mu
 
 /** The first reason the path cannot be written through, from the root outwards. */
 fn problemOf(var checker: Checker, place: Place): MutationProblem {
-  const found = problemOfRoot checker, place.root
+  const found = problemOfRoot checker, place.root, place.at
   if const .Writable = found {
     return problemOfSteps checker, place
   }
   found
 }
 
-fn problemOfRoot(var checker: Checker, root: PlaceRoot): MutationProblem {
+fn problemOfRoot(var checker: Checker, root: PlaceRoot, at: Span): MutationProblem {
   match root {
     .Local(binding) => {
       const found = checker.binding binding
@@ -263,9 +264,29 @@ fn problemOfRoot(var checker: Checker, root: PlaceRoot): MutationProblem {
       const name = checker.symbolAt(symbol).name
       MutationProblem.ConstantRoot name
     }
-    .Temporary => MutationProblem.TemporaryRoot
+    // A freshly produced object **is** a `var` path (gap 52). The rule against a temporary protects values: there the
+    // change would be lost with the copy it was made in. An object has no copy, so nothing is lost, and nobody else
+    // holds a view of something that was just made - so the full permission is the caller's to give
+    .Temporary => {
+      if hasIdentityHere(checker, at) {
+        return MutationProblem.Writable
+      }
+      MutationProblem.TemporaryRoot
+    }
     .Unknown => MutationProblem.Unknown
   }
+}
+
+/** Whether the expression a temporary came from produced something with an identity. */
+fn hasIdentityHere(var checker: Checker, at: Span): Bool {
+  const annotation = match checker.expressionTypeHere(at) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const resolved = resolveType checker, annotation
+  isSharedType checker, resolved
 }
 
 /** Whether a top-level binding was written `var`. Its symbol says nothing about that, its declaration site does. */
@@ -928,17 +949,6 @@ public fn requireSharedSource(var checker: Checker, value: Expression, annotatio
         .withNote("A shared object is never copied, so a `var` here would hand out what the `const` withheld")
     )
   }
-}
-
-fn isSharedType(var checker: Checker, annotation: TypeId): Bool {
-  const symbol = match checker.types.form(annotation) {
-    .Nominal(found, _) => found
-    _ => {
-      return false
-    }
-  }
-  const identifier = typeSignatureOf checker, symbol
-  checker.typeSignature(identifier).isShared
 }
 
 // --- `break` and `continue` -----------------------------------------------------------------------------------------

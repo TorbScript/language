@@ -965,6 +965,14 @@ it sees the same object. Typical cases are handles to the outside world (`File`,
 - **A read-only view cannot be widened again.** A `var` binding, `var` field or `var` argument may not be
   initialized from a `const` path to a shared object - there is no copy that would make it a different object, so
   `var writable = view` would hand out exactly what the `const` withheld. For a value it is simply a copy and fine.
+  It holds in all four places: a binding, a field (also through the generated constructor, and also inside the type
+  itself), an argument, and a trait-typed value of a `shared trait`.
+- **A freshly produced object *is* a `var` path.** `Counter().increment()` is an error because the change would be lost
+  with the temporary it was made in - that rule is about values. An object has no copy, nothing is lost, and nobody else
+  holds a view of something that was just made, so `File.open(path)?.lines()` and a whole chain of wrappers read as one
+  expression. The read-only view is a promise about a **path**, not a property of a type: a function that *hands out* an
+  object hands out the full permission (`var writable = view()` is ordinary), and what `const` withholds is only what
+  goes through that one binding, field or argument.
 - `Equals`, `Hash`, `copy` and `Encode` are not generated. `==` is about content and does not exist for objects;
   `isSame(a, b)` compares identity. `Show` is a `shared trait`, so objects can be printed.
 - **`isSame` only works on shared objects.** On a value the answer would expose whether the implementation shares
@@ -1840,15 +1848,14 @@ while const Some(line) = lines.next().await()? {
   object `var` is a permission and not an exclusive access ([Identity](#identity-shared-type)). So **a source that is
   read from sits in a `var` binding**, and a `const` handle is the read-only view every shared object has. A consequence
   worth knowing: a source belongs to the task that made it, because shared objects do not cross task boundaries.
-- **Reading takes `var self`, wrapping takes `self`.** `next`, `collect`, `toList`, `count`, `find` and `into` consume
-  items. `map`, `filter`, `through`, `then` and `checked` read nothing: they hand the source over to a wrapper, which
-  pulls from then on. That is also what keeps a pipeline one expression - a temporary is no `var` path, so a `var self`
-  on the wrapping side would need a name for every step. The price is on the other side: a pipeline that is read gets a
-  name, exactly as `var cursor = iterator()` does.
+- **Whoever reads needs the permission - now or later.** `next`, `collect`, `toList`, `count`, `find` and `into` read
+  items, and `map`, `filter`, `through`, `then` and `checked` hand the source to a wrapper that reads it from then on:
+  all of them take `var self`. One rule, so a `const` source cannot be consumed by wrapping it either - which is what
+  the read-only view promised. A chain is still one expression, because a freshly produced object is a `var` path
+  ([Identity](#identity-shared-type)).
 
   ```trb
-  var users = body.through(Json.items<User>()).checked()   // wrapping: one expression
-  const all = users.toList().await()?                      // reading: through a `var` path
+  const all = body.through(Json.items<User>()).checked().toList().await()?
   ```
 - **A failure ends the stream and stands in the type,** on both ends. An end that cannot fail is
   `Source<Item, Never>`. After a failure a source never delivers again, and after `Ok(None)` the end is final.
@@ -1880,9 +1887,8 @@ more than once:
 ```trb
 const activeNames: Stage<User, String> = filtering<User>({ _.active }).then(mapping { _.name })
 
-const fromList = users.through(activeNames).toList()            // a list
-var arriving = body.through(activeNames)                        // an HTTP body
-const fromBody = arriving.toList().await()?
+const fromList = users.through(activeNames).toList()                 // a list
+const fromBody = body.through(activeNames).toList().await()?         // an HTTP body
 ```
 
 - `Accumulator` has `fn isDone(self): Bool { false }` for it. A driver asks before the first value and after every
@@ -2357,6 +2363,13 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - **Every type can be made from a `Never`** (`extend<Target> Target with From<Never>` in `std/core`), so `?` works on a
   `Result<Value, Never>`. The conversion is total and its body is forced, and without it the infallible case - the
   reading end of a `Channel` - would be the awkward one.
+- **A freshly produced object is a `var` path, and there is no "handed over" modifier.** "A temporary is not a `var`
+  path" protects values: the change would be lost with the copy. An object has no copy and nobody else holds a view of
+  what was just made, so the full permission is the caller's to give - which is what lets every stream member that reads
+  take `var self` and a pipeline still be one expression. With that, "a read-only view cannot be widened" holds in all
+  four places (binding, field through the generated constructor, argument, trait-typed value of a `shared trait`) and
+  the standard library needs none of the gaps that were there before. The view stays a promise about a *path*: a
+  function that hands an object out hands out a `var`, because there are no const types.
 - `const` instead of `val` as it is clearer (reading many `val` with `var` in between lets you easily miss some)
 - `.trb` instead of `.scr` (`.scr` is an executable screensaver on Windows and blocked by mail filters/AV)
 - `//`, `/* */`, `/** */` for docs. Block comments do not nest (they did at first: a `/*` inside of a doc comment, as
@@ -2618,9 +2631,6 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `for` over a `Source`: there is no place in a `for` head for the `?` the pull needs, so v1 has
   `while const Some(item) = source.next().await()? { ... }`. Swift needs `for try await` for exactly this. Reconsider if
   a spelling turns up that keeps `await` and `?` visible without a keyword combination.
-- Handing a shared object over. Wrapping a source gives it to the wrapper, which reads it from then on, and nothing
-  stops the old owner from reading it as well: the language has no `move`. Either a way to say "this argument is handed
-  over", or it stays what the `Source` contract promises in prose. See `docs/STREAMS.md`, open point 1.
 - Registry protocol and the exact format of `project.lock.trb`
 - REPL: every input is a nested scope of the previous one (so redefining a name is ordinary shadowing). A type that
   is defined again shadows the old one, values of the old type keep it and show up as `Point#1`.

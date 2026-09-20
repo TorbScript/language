@@ -8,6 +8,10 @@ use probe, problems, notes from "./harness"
  * `MutableIndexed` and `MutableSlice` - plus the two rules that are about where a path may *not* start: a temporary is
  * never the base of one (and always a valid argument for a `var` parameter, gap 2) and a `const` path to a shared
  * object never widens into a `var` one (gap 20).
+ *
+ * Both have the same exception, and it is the same reason: a **temporary with an identity** *is* a `var` path (gap 52).
+ * The rule against a temporary protects values, where the change would be lost with the copy it was made in; an object
+ * has no copy, and nobody else holds a view of something that was just made.
  */
 const counter = "type Counter \{\n  var count: Int = 0\n  step: Int = 1\n\n"
   + "  fn increment(var self) \{\n    count = count + step\n  \}\n\n"
@@ -16,6 +20,16 @@ const counter = "type Counter \{\n  var count: Int = 0\n  step: Int = 1\n\n"
 const account = "type Account \{\n  private(var) balance: Int = 0\n  private var history: List<String> = []\n"
   + "  private(var) audits: List<String> = []\n\n"
   + "  fn deposit(var self, amount: Int) \{\n    balance = balance + amount\n  \}\n\}\n\n"
+
+/** A stream-shaped pair: a `shared trait` whose verbs change the object, and a wrapper that keeps one in a field. */
+const producer = "shared trait Producer with Close \{\n  fn next(var self): Task<Int?>\n\n"
+  + "  fn doubled(var self): Producer \{\n    Doubling self\n  \}\n\}\n\n"
+  + "shared type Doubling with Producer \{\n  var upstream: Producer\n\n"
+  + "  fn next(var self): Task<Int?> \{\n    upstream.next().await()\n  \}\n\n"
+  + "  fn close(var self) \{\n    upstream.close()\n  \}\n\}\n\n"
+  + "shared type Counting with Producer \{\n  var seen: Int = 0\n\n"
+  + "  fn next(var self): Task<Int?> \{\n    seen = seen + 1\n    Some(seen)\n  \}\n\n"
+  + "  fn close(var self) \{\n  \}\n\}\n\n"
 
 group "The root of a path" {
   test "a `var` binding can be changed, and the place is recorded" {
@@ -175,6 +189,24 @@ group "Temporaries" {
     )
   }
 
+  test "a temporary with an identity is a `var` path: nothing is thrown away where there is no copy (gap 52)" {
+    const source = "{producer}fn probe(): Task<Int?> \{\n  Counting().next().await()\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "and a whole chain of them is one expression" {
+    const source = "{producer}fn probe(): Task<Int?> \{\n  Counting().doubled().doubled().next().await()\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a temporary with an identity is also a `var` argument, and the place says it is a temporary" {
+    const source = "{producer}fn drain(var source: Producer) \{\n  source.close()\n\}\n\n"
+      + "fn probe() \{\n  drain(Counting())\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.placeOf("Counting()") == "temporary")
+  }
+
   test "a `const` argument for a `var` parameter says which parameter it is" {
     const source = "{counter}fn bump(var target: Counter) \{\n  target.increment()\n\}\n\n"
       + "fn probe(kept: Counter) \{\n  bump(kept)\n\}"
@@ -182,6 +214,19 @@ group "Temporaries" {
     assert(
       notes(source) == ["A `var` parameter works on the caller's value, so its argument has to be a `var` path"]
     )
+  }
+}
+
+group "A shared object from a call (gap 52)" {
+  test "a result is not a path, so a `var` binding of one is ordinary" {
+    const source = "{producer}fn probe() \{\n  var writable = Counting()\n  writable.close()\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "the read-only view is a promise about a *path*, so a function that hands one out hands out a `var`" {
+    const source = "{producer}fn view(): Producer \{\n  Counting()\n\}\n\n"
+      + "fn probe() \{\n  var writable = view()\n  writable.close()\n\}"
+    assert problems(source).isEmpty()
   }
 }
 
@@ -211,6 +256,7 @@ group "`if var` binds into the subject (gap 3)" {
 group "A shared object never widens (gap 20)" {
   const connection = "shared type Connection \{\n  url: String\n  private(var) sent: Int = 0\n\n"
     + "  fn send(var self) \{\n    sent = sent + 1\n  \}\n\}\n\n"
+  const holder = "type Holder \{\n  var held: Connection\n\}\n\n{connection}"
 
   test "a `var` binding may not be taken from a `const` path to a shared object" {
     const source = "{connection}fn probe(view: Connection) \{\n  var writable = view\n  writable.send()\n  print writable.url\n\}"
@@ -229,6 +275,60 @@ group "A shared object never widens (gap 20)" {
     const value = "type Point \{\n  var x: Int = 0\n\}\n\n"
       + "fn probe(place: Point) \{\n  var moved = place\n  moved.x = 1\n  print moved.x\n\}"
     assert problems(value).isEmpty()
+  }
+
+  /**
+   * The same rule where the `var` place is a **field**. The parameters of a generated constructor are values, so this
+   * needs a walk of its own - and it holds inside the type as well, which is where the factories of every wrapper live.
+   */
+  test "a `var` field with an identity may not be filled from a `const` path, inside the type either" {
+    const source = "{holder}fn probe(view: Connection): Holder \{\n  Holder view\n\}"
+    assert(
+      problems(source) == ["`view` is a read-only view of a shared `Connection`, so no `var` comes out of it"]
+    )
+    const inside = "shared type Wrapper \{\n  var held: Connection\n\n"
+      + "  fn of(held: Connection): Wrapper \{\n    Wrapper held\n  \}\n\}\n\n{connection}"
+    assert(
+      problems(inside) == ["`held` is a read-only view of a shared `Connection`, so no `var` comes out of it"]
+    )
+  }
+
+  test "a `var` path, a temporary and a labeled argument are all fine" {
+    const source = "{holder}fn probe(var handle: Connection): Holder \{\n  Holder handle\n\}"
+    assert problems(source).isEmpty()
+    const temporary = "{holder}fn probe(): Holder \{\n  Holder Connection(\"tcp://x\")\n\}"
+    assert problems(temporary).isEmpty()
+    const labeled = "{holder}fn probe(view: Connection): Holder \{\n  Holder(held: view)\n\}"
+    assert(
+      problems(labeled) == ["`view` is a read-only view of a shared `Connection`, so no `var` comes out of it"]
+    )
+  }
+
+  test "a `var` field of a *value* is copied in, so nothing is withheld" {
+    const source = "type Holder \{\n  var items: List<Int>\n\}\n\n"
+      + "fn probe(kept: List<Int>): Holder \{\n  Holder kept\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  /** The fourth place, and the one the streams design ran into: a trait-typed value of a `shared trait`. */
+  test "a trait-typed value of a `shared trait` is a shared object like any other" {
+    const source = "{producer}fn probe(view: Producer) \{\n  var writable = view\n  writable.close()\n\}"
+    assert(
+      problems(source) == ["`view` is a read-only view of a shared `Producer`, so no `var` comes out of it"]
+    )
+  }
+
+  test "and as a `var` argument it is the ordinary path rule" {
+    const source = "{producer}fn drain(var source: Producer) \{\n  source.close()\n\}\n\n"
+      + "fn probe(view: Producer) \{\n  drain(view)\n\}"
+    assert(problems(source) == ["`drain` changes `source`, and `view` is a `const`"])
+  }
+
+  test "`copy` follows the constructor" {
+    const source = "{holder}fn probe(var target: Holder, view: Connection): Holder \{\n  target.copy(held: view)\n\}"
+    assert(
+      problems(source) == ["`view` is a read-only view of a shared `Connection`, so no `var` comes out of it"]
+    )
   }
 }
 
