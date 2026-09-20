@@ -1620,3 +1620,11 @@ Wenn nicht, was bedeutet, bewirkt es?
     darüber erfüllt. (b) Wer einen Trait mit Blanket von Hand implementiert, bekommt eine gezielte Meldung, gebildet
     aus der `where`-Klausel des Blankets ("`Into` comes from `From` ...: write `extend Float64 with From<Celsius>`");
     der Pitfall im Docblock entfällt damit. **Wird gelöst:** in der laufenden kleinen Checker-Runde.
+  - **Ergänzt (Nutzerfrage "was ist mit `TryInto`? `Parse` streichen?", 2026-09-23) - Entschieden (Nutzer: "machen
+    wir so"):** `TryInto<Target, Failure>` kommt mit Blanket über `TryFrom` dazu (Symmetrie zu `Into`; man
+    implementiert `TryFrom`, nie `TryInto`; kein Blanket "jedes `From` ist ein `TryFrom`", das überlappte jedes
+    handgeschriebene). `Parse` bleibt ein eigener Trait: `From`/`TryFrom`/`Into`/`TryInto` konvertieren zwischen
+    WERTtypen, `Show`/`Parse` stehen zwischen einem Wert und seinem TEXT und sind Partner; Text wird IMMER über
+    `Parse` zum Wert, nie über `TryFrom<String>` (später als Lint). Der Vorschlag "`Parse: TryFrom` mit
+    Default-`parse`" ist nicht ausdrückbar: eine Funktion ohne `self` MIT Rumpf in einem Trait gehört dem Trait selbst
+    (`List.of`), sie ist kein Default der Implementierer; ein Blanket-Alias gäbe drei Schreibweisen für einen Aufruf.
