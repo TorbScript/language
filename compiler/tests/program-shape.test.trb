@@ -651,6 +651,124 @@ group "The parameters and the top level of a body are one scope" {
   }
 }
 
+/**
+ * "A type has **one namespace** of members" (CONCEPT.md, "Members"): a field, a `const`, a `fn` and a case all live in
+ * it. Two of them with one name left the second unreachable - whichever one the lookup order found first won.
+ */
+group "One namespace of members" {
+  test "a field and a method cannot share a name" {
+    const source = r"""
+      type Report {
+        title: String
+
+        fn title(self): String {
+          "untitled"
+        }
+      }
+      """
+    assert(problems(source) == ["`title` is already declared in `Report`"])
+    assert(
+      notes(source)
+        == ["A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name"]
+    )
+  }
+
+  test "two fields cannot either" {
+    const source = r"""
+      type Report {
+        title: String
+        title: Int
+      }
+      """
+    assert(problems(source) == ["`title` is already declared in `Report`"])
+  }
+
+  test "a `const` and a `fn` cannot either" {
+    const source = r"""
+      type Report {
+        const width = 2
+
+        fn width(self): Int {
+          3
+        }
+      }
+      """
+    assert(problems(source) == ["`width` is already declared in `Report`"])
+  }
+
+  test "and neither can two members of a trait" {
+    const source = r"""
+      trait Sized {
+        fn size(self): Int
+
+        fn size(self, unit: String): Int
+      }
+      """
+    assert(problems(source) == ["`size` is already declared in `Sized`"])
+  }
+
+  test "a field of a case is not a member of the type, so it may be named like one" {
+    const source = r"""
+      type Shape {
+        case Circle(radius: Int)
+        case Square(radius: Int)
+
+        fn radius(self): Int {
+          match self {
+            .Circle(value) => value
+            .Square(value) => value
+          }
+        }
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+}
+
+group "A static function is reached through the type" {
+  const rectangle = r"""
+    type Rectangle {
+      width: Int
+      height: Int
+
+      fn square(size: Int): Rectangle {
+        Rectangle(size, size)
+      }
+    }
+    """
+
+  test "an instance is not a way to it" {
+    const source = "{rectangle}\nfn probe(rectangle: Rectangle): Int \{\n  rectangle.square(5).width\n\}"
+    assert(problems(source) == ["`square` has no `self`, so it is reached through the type: `Rectangle.square(...)`"])
+    assert(
+      notes(source) == ["A static function is a constant of the type, and a value of it is not a way to that constant"]
+    )
+  }
+
+  test "the type is" {
+    const source = "{rectangle}\nfn probe(): Int \{\n  Rectangle.square(5).width\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a method is reached through the value as before" {
+    const source = r"""
+      type Rectangle {
+        width: Int
+        height: Int
+
+        fn area(self): Int {
+          width * height
+        }
+      }
+
+      fn probe(rectangle: Rectangle): Int {
+        rectangle.area()
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+}
+
 group "`foreign` declares functions of a C library" {
   test "with their result types, because the C ABI is the contract" {
     const source = r"""

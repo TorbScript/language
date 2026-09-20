@@ -567,6 +567,7 @@ fn checkTypeShape(
   for member in typeDeclaration.members {
     checkMemberShape checker, module, member, false, isNative
   }
+  requireOneNamespace checker, module, typeDeclaration.members, typeDeclaration.name.text
   if declaration.modifiers.isShared {
     requireSharedTraits checker, module, typeDeclaration.name, typeDeclaration.traits
   }
@@ -586,8 +587,48 @@ fn checkTraitShape(
   for member in traitDeclaration.members {
     checkMemberShape checker, module, member, true, isNative
   }
+  requireOneNamespace checker, module, traitDeclaration.members, traitDeclaration.name.text
   if isPublic {
     checkExposedTrait checker, module, traitDeclaration
+  }
+}
+
+/**
+ * **A type has one namespace of members** (CONCEPT.md, "Members"): a field, a `const`, a `fn` and a case all live in it,
+ * so two of them may not share a name. Without the rule the first one the lookup order reaches wins and the other is
+ * unreachable - `report.title` was the field and `report.title()` was nothing anybody could call.
+ */
+fn requireOneNamespace(var checker: Checker, module: ModuleId, members: List<Member>, owner: String) {
+  var declared: Map<String, Bool> = [:]
+  for member in members {
+    const name = memberNameOf member
+    if name.text.isEmpty() {
+      continue
+    }
+    if declared.containsKey(name.text) {
+      checker.report(
+        module,
+        Diagnostic.error("`{name.text}` is already declared in `{owner}`", name.span)
+          .withNote("A type has one namespace of members: a field, a `const`, a `fn` and a case cannot share a name")
+      )
+      continue
+    }
+    declared.set name.text, true
+  }
+}
+
+/** The name one member is known under. A `const` whose pattern is not a plain name has none the rule could compare. */
+fn memberNameOf(member: Member): Name {
+  match member.kind {
+    .Field(field) => field.name
+    .Constant(binding) => {
+      match binding.pattern.kind {
+        .Binding(text) => Name text, binding.pattern.span
+        _ => Name "", binding.pattern.span
+      }
+    }
+    .Function(function) => function.name
+    .Case(declaration) => declaration.name
   }
 }
 

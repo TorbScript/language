@@ -63,12 +63,16 @@ public fn recordDelegation(var checker: Checker, at: Span, candidate: Candidate)
  * a member without `self` (`Type.from`). Everything else keeps its meaning, so `List<Show & Hash>` stays a legal type
  * and `items.added(x)` stays a legal call - the result is a value of the same trait type.
  *
+ * The second half holds for **every** receiver, not only a trait-typed one: a static function is reached through the
+ * type and through nothing else (CONCEPT.md, "Types, Values and Reflection", names `Point.parse(...)` as the one
+ * bridge), so `rectangle.square(5)` is a mistake that used to resolve and silently throw the receiver away.
+ *
  * Using the trait as a *namespace* (`List.from(pairs)`, gap 31) is a different question and goes through the static
  * lookup, which never reaches this.
  */
 public fn requireObjectSafe(var checker: Checker, receiver: TypeId, candidate: Candidate, name: String, at: Span) {
+  const shown = checker.describe receiver
   if const .Traits(_) = checker.types.form(receiver) {
-    const shown = checker.describe receiver
     if candidate.takesSelfArgument {
       checker.reportHere(
         Diagnostic.error("`{name}` cannot be called on a `{shown}` value", at)
@@ -82,6 +86,13 @@ public fn requireObjectSafe(var checker: Checker, receiver: TypeId, candidate: C
           .withNote("A member without `self` belongs to a concrete type, and a trait value does not name one")
       )
     }
+    return
+  }
+  if !candidate.takesSelf && isMethod(candidate) {
+    checker.reportHere(
+      Diagnostic.error("`{name}` has no `self`, so it is reached through the type: `{shown}.{name}(...)`", at)
+        .withNote("A static function is a constant of the type, and a value of it is not a way to that constant")
+    )
   }
 }
 
