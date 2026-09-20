@@ -26,44 +26,67 @@ use Iterable, Length from "std/iteration"
 use Accumulator from "std/iteration"
 
 /**
- * Only `add`, `clear`, `length` and `iterator` are required.
+ * A finite number of values that can be filled. Only `add`, `clear`, `length` and `iterator` are required;
+ * `addAll`, `added`, `addedAll`, `contains` and `containsAll` are defaults built on top of them.
  *
  * A collection already is an `Accumulator`: it has `add`, and it is its own result. So every collection can be the
- * target of a collector, a channel or an event stream.
+ * target of a collector, a channel or an event stream, with the same `add`/`finish` vocabulary either way.
+ *
+ * # Examples
+ *
+ *     var numbers: List<Int> = []
+ *     numbers.addAll([1, 2, 3])
+ *     print numbers.contains(2)
+ *
+ * # Related
+ *
+ * - [List], [Map], [Set], [Stack], [Queue] - the traits built on top of it, one per kind.
+ * - [Iterable] - the pipeline vocabulary (`map`, `filter`, `fold`, ...) every `Collection` inherits.
  */
 public trait Collection<Item>
   with Iterable<Item>, Length, Accumulator<Item, Self>
 {
+  /** Adds a value. The one verb every other member of this trait is built from. Needs a `var` path. */
   fn add(var self, value: Item)
+
+  /** Removes every value, in place. */
   fn clear(var self)
 
+  /** Adds every value of `values`, in order. The default for a collection that only implements `add`. */
   fn addAll(var self, values: Iterable<Item>) {
     for value in values {
       add value
     }
   }
 
+  /** Adds a value and answers a changed copy: the participle of [Collection.add], for a `const` binding. */
   fn added(self, value: Item): Self {
     var result = self
     result.add value
     result
   }
 
+  /** Adds every value of `values` and answers a changed copy: the participle of [Collection.addAll]. */
   fn addedAll(self, values: Iterable<Item>): Self {
     var result = self
     result.addAll values
     result
   }
 
-  /** Linear by default. Sets and maps answer this without searching. */
+  /**
+   * Whether the value is present. Linear by default - a scan of every value - but a [Set] or a [Map] key answers
+   * this without searching.
+   */
   fn contains(self, value: Item): Bool where Item: Equals {
     any { item => item == value }
   }
 
+  /** Whether every value of `values` is present. */
   fn containsAll(self, values: Iterable<Item>): Bool where Item: Equals {
     values.all contains
   }
 
+  /** A collection is its own [Accumulator], so filling it and reading it back out are the same value. */
   fn finish(self): Self {
     self
   }

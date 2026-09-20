@@ -1,3 +1,12 @@
+/**
+ * Fixed-size, inline sequences: [Array], the one collection whose size is part of its type instead of its storage.
+ *
+ * # Related
+ *
+ * - [List] - the growable collection with the same `[index]` and `for` vocabulary; everything that can grow is a
+ *   `List`, never an `Array`.
+ */
+
 use Equals, Hash, combineHashes from "std/core"
 use MutableIndexed from "std/core"
 use Iterable, Length from "std/iteration"
@@ -6,40 +15,60 @@ use Iterable, Length from "std/iteration"
  * A fixed number of items, and the number is part of the type: `Array<Float, 16>`.
  *
  * An Array is a small value with a fixed layout. It lives inline (in a binding, in a field, in another Array), has no
- * storage on the heap and no reference count, and copying it copies its items. This is the type for vectors and
- * matrices, colors, hashes and foreign structs. Everything that grows is a `List`.
+ * storage on the heap and no reference count, and copying it copies its items. Reach for it for vectors and matrices,
+ * colors, hashes and foreign structs; everything that grows is a `List` instead.
+ *
+ * `Size` is a const parameter: a literal, a named `const` or another const parameter. There is no arithmetic over one,
+ * so an out-of-bounds index the compiler can work out at the call site is a compile error rather than a panic:
  *
  *     var identity: Array<Float, 4> = Array.filled(0.0)
  *     identity[0] = 1.0
- *     identity[4] = 1.0                 // Compile error: the index is known to be out of bounds
+ *     identity[4] = 1.0                 // compile error: the index is known to be out of bounds
  *
- * `Size` is a const parameter: a literal, a named `const` or another const parameter. There is no arithmetic in types.
+ * # Examples
+ *
+ *     var point: Array<Float, 3> = Array.of 1.0, 2.0, 3.0
+ *     point[0] = 0.0
+ *     print point[0]
+ *
+ * # Related
+ *
+ * - [List] - the growable collection with the same indexing and iteration.
  */
 public native type Array<Item, const Size: Int>
   with Iterable<Item>, Length, MutableIndexed<Int, Item>
 {
-  /** The length comes from the expected type: `const zeros: Array<Int, 8> = Array.filled(0)` */
+  /** Every item set to `value`, with the length taken from the expected type: `const zeros: Array<Int, 8> = Array.filled(0)` */
   native fn filled(value: Item): Array<Item, Size>
 
   /**
-   * `Array.of(1, 2, 3, 4)` is an `Array<Int, 4>`: the number of arguments is the `Size`, and the compiler works it out
-   * (there is no way to *write* that link down, and the language gets none). It is `native` and not
-   * `Array.from(items).expect(...)` because the items are written straight into the inline slots: no list is built, no
-   * iterator runs, and nothing can fail. `...items` may only be spread from another `Array`, whose size is known too.
+   * Builds an Array from its arguments. `Array.of(1, 2, 3, 4)` is an `Array<Int, 4>`: the number of arguments is the
+   * `Size`, and the compiler works it out (there is no way to *write* that link down, and the language gets none). It
+   * is `native` and not `Array.from(items).expect(...)` because the items are written straight into the inline slots:
+   * no list is built, no iterator runs, and nothing can fail. `...items` may only be spread from another `Array`,
+   * whose size is known too.
    */
   native fn of(...items: Item): Array<Item, Size>
 
-  /** `None` if the number of items is not `Size`. */
+  /** The Array built from `items`, or `None` if their count is not `Size`. The fallible, runtime-checked sibling of [Array.of]. */
   native fn from(items: Iterable<Item>): Array<Item, Size>?
 
+  /** How many items there are: always `Size`. */
   native fn length(self): Int
+
+  /** The item at `index`, or `None` if it is out of bounds. `array[index]` panics instead; see [Indexed.at]. */
   native fn get(self, index: Int): Item?
+
+  /** A cursor over the items, front to back. */
   native fn iterator(self): Iterator<Item>
 
+  /** Changes the item at `index` in place. Needs a `var` path; see [MutableIndexed.set]. */
   native fn set(var self, index: Int, value: Item)
+
+  /** Sets every item to `value`, in place. */
   native fn fill(var self, value: Item)
 
-  /** Same length, so the result is an Array again. */
+  /** Transforms every item into a new Array of the same length, so the result is an Array again. */
   native fn mapped<Output>(self, transform: (value: Item) => Output): Array<Output, Size>
 }
 

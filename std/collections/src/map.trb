@@ -1,3 +1,14 @@
+/**
+ * Keys mapped to values: [Map], its default implementation [TrieMap], and the flat [HashMap].
+ *
+ * `Map<Key, Value>` is the type of the literal `["a": 1, "b": 2]`; a [Set] is the same idea with no value at all.
+ * Both iterate in insertion order and compare regardless of it.
+ *
+ * # Related
+ *
+ * - [Set] - the same idea without a value, and no literal of its own.
+ */
+
 use Equals, Hash, combineHashes from "std/core"
 use MutableIndexed from "std/core"
 use From, Show from "std/core"
@@ -5,41 +16,80 @@ use Collection from "./collection"
 
 /**
  * Mapping from keys to values. This is the type of the literal `["a": 1, "b": 2]`.
- * As a collection it consists of `(key, value)` tuples, `add((key, value))` is `set(key, value)`.
  *
- *     var ages = ["Ada": 36]
- *     ages["Grace"] = 45                          // In place, needs `var`
- *     ages["Ada"].increment()                     // Values are changed through the path, not through a copy
- *     const older = ages.updated("Ada", 37)       // The participle returns a changed copy
- *
- * The trait asks nothing of `Key`. What a key has to be able to do is a matter of the implementation
- * (`TrieMap` and `HashMap` need `Hash`, a sorted map needs `Compare`), so only the factories carry a bound.
+ * As a collection it consists of `(key, value)` tuples: `add((key, value))` is `set(key, value)`. The trait asks
+ * nothing of `Key` - what a key has to be able to do is a matter of the implementation (`TrieMap` and `HashMap` need
+ * `Hash`, a sorted map would need `Compare`), so only the factories carry a bound.
  *
  * **Every implementation iterates in insertion order,** and removing an entry does not reorder the rest. The order
  * reaches the output through `Show` (an empty map shows as `[:]`), so it is a rule of the language and not of the
  * implementation.
+ *
+ * # Examples
+ *
+ *     var ages = ["Ada": 36]
+ *     ages["Grace"] = 45
+ *     for (name, age) in ages {
+ *       print "{name} is {age}"
+ *     }
+ *
+ * A verb needs a `var` path; its participle answers a changed copy and works on a `const` map too:
+ *
+ *     const ages: Map<String, Int> = ["Ada": 36]
+ *     const older = ages.updated "Ada", 37
+ *     print older
+ *
+ * `map[key]` is itself a `var` path, so a value is changed in place without reading it out first:
+ *
+ *     type Counter {
+ *       var count: Int = 0
+ *       fn increment(var self) {
+ *         count = count + 1
+ *       }
+ *     }
+ *
+ *     var scores: Map<String, Counter> = ["Ada": Counter()]
+ *     scores["Ada"].increment()
+ *     print scores["Ada"].count
+ *
+ * # Pitfalls
+ *
+ * - A binding read out of the map copies the value there and then: `var mine = scores["Ada"]` takes a copy of the
+ *   counter above, so changing `mine` afterward never touches `scores`. See [MutableIndexed] for the rule.
+ * - `map[key]` panics if the key is absent; `map.get(key)` answers an `Option` instead.
+ *
+ * # Related
+ *
+ * - [Set] - the same idea without a value.
+ * - [Collection] - `add`, `contains`, `length`, `iterator`, which `Map` builds on.
  */
 public trait Map<Key, Value>
   with Collection<(key: Key, value: Value)>, MutableIndexed<Key, Value>
 {
-  /** `Map.of(("a", 1), ("b", 2))` */
+  /** Builds a map from its arguments: `Map.of(("a", 1), ("b", 2))`. */
   fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash {
     TrieMap.from entries
   }
 
   // --- In place ------------------------------------------------------------------------------------
 
+  /** Removes the entry for `key` and answers its value, or `None` if there was none. */
   fn remove(var self, key: Key): Value?
 
+  /**
+   * Adds an entry: the same as `set(entry.key, entry.value)`. What lets a `Map` be filled by a collector or a
+   * channel like any other [Collection].
+   */
   fn add(var self, entry: (key: Key, value: Value)) {
     set entry.key, entry.value
   }
 
+  /** Adds every entry of `other`, in place; a repeated key is overwritten by the later entry. */
   fn merge(var self, other: Iterable<(Key, Value)>) {
     addAll other
   }
 
-  /** `cache.getOrSet(key) { expensive(key) }` */
+  /** The value for `key`, computing and storing it with `create` on a miss: `cache.getOrSet(key) { expensive(key) }`. */
   fn getOrSet(var self, key: Key, create: () => Value): Value {
     if const Some(existing) = get(key) {
       return existing
@@ -58,12 +108,14 @@ public trait Map<Key, Value>
     result
   }
 
+  /** The participle of [Map.remove]: a changed copy with the entry for `key` gone. */
   fn removed(self, key: Key): Self {
     var result = self
     result.remove key
     result
   }
 
+  /** The participle of [Map.merge]: a changed copy with every entry of `other` added. */
   fn merged(self, other: Iterable<(Key, Value)>): Self {
     var result = self
     result.merge other
@@ -72,23 +124,28 @@ public trait Map<Key, Value>
 
   // --- Reading -----------------------------------------------------------------------------------------
 
+  /** Whether there is an entry for `key`. */
   fn containsKey(self, key: Key): Bool {
     get(key).isSome()
   }
 
+  /** Every key, in insertion order. */
   fn keys(self): Iterable<Key> {
     map { entry => entry.key }
   }
 
+  /** Every value, in insertion order. */
   fn values(self): Iterable<Value> {
     map { entry => entry.value }
   }
 
+  /** Transforms every value, keeping the keys: `ages.mapValues { age => age + 1 }`. */
   fn mapValues<Output>(self, transform: (value: Value) => Output): Map<Key, Output> where Key: Hash {
     Map.from(map { entry => (entry.key, transform(entry.value)) })
   }
 }
 
+/** The factory picks the default implementation. This is what makes `Map.from` and the literal `["a": 1]` work. */
 extend<Key: Hash, Value> Map<Key, Value> with From<Iterable<(Key, Value)>> {
   fn from(entries: Iterable<(Key, Value)>): Map<Key, Value> {
     TrieMap.from entries
@@ -142,12 +199,15 @@ extend<Key: Hash, Value: Hash> Map<Key, Value> with Hash {
  *
  * It holds the map **by value**, so changing the map while iterating it does not change what the cursor walks, which is
  * what a value is. [HashMapIterator] is the same twenty lines for the other name of the same table: two `native type`s
- * name it until the trie exists (gap 18), and a value of one is not a value of the other.
+ * name it while the trie does not exist, and a value of one is not a value of the other.
  */
 public type MapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Value)> {
+  /** The map this cursor walks. Held by value, so a later change to the original map is never seen here. */
   entries: TrieMap<Key, Value>
+  /** The next position to read from the table's own storage. */
   var position: Int = 0
 
+  /** The next entry, or `None` once the table is exhausted. */
   fn next(var self): (key: Key, value: Value)? {
     // The position travels through a local because stage 0 takes a `var` argument before it evaluates the receiver
     var found = position
@@ -159,9 +219,12 @@ public type MapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Value)
 
 /** The cursor of [HashMap]: see [MapIterator]. */
 public type HashMapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Value)> {
+  /** Same as [MapIterator.entries]. */
   entries: HashMap<Key, Value>
+  /** Same as [MapIterator.position]. */
   var position: Int = 0
 
+  /** Same as [MapIterator.next]. */
   fn next(var self): (key: Key, value: Value)? {
     var found = position
     const entry = entries.entryAfter found
@@ -192,9 +255,13 @@ public native type TrieMap<Key: Hash, Value>
     result
   }
 
+  /** The empty table, with room for `capacity` entries before it has to grow again. */
   native fn withCapacity(capacity: Int): TrieMap<Key, Value>
 
+  /** How many entries there are. */
   native fn length(self): Int
+
+  /** The value for `key`, or `None` if there is none. `map[key]` panics instead; see [Indexed.at]. */
   native fn get(self, key: Key): Value?
 
   /** Ordinary TorbScript over `entryAfter`: see [MapIterator]. */
@@ -209,8 +276,16 @@ public native type TrieMap<Key: Hash, Value>
    */
   native fn entryAfter(self, var cursor: Int): (key: Key, value: Value)?
 
+  /**
+   * Changes the value for `key`, or adds a new entry if there was none, in place. `map[key] = value` goes through
+   * this; see [MutableIndexed.set].
+   */
   native fn set(var self, key: Key, value: Value)
+
+  /** Removes the entry for `key` and answers its value, or `None` if there was none. */
   native fn remove(var self, key: Key): Value?
+
+  /** Removes every entry, in place. */
   native fn clear(var self)
 }
 
@@ -221,24 +296,36 @@ public native type TrieMap<Key: Hash, Value>
 public native type HashMap<Key: Hash, Value>
   with Map<Key, Value>, From<Iterable<(Key, Value)>>
 {
+  /** Same as [TrieMap.from]. */
   fn from(entries: Iterable<(Key, Value)>): HashMap<Key, Value> {
     var result: HashMap<Key, Value> = HashMap.withCapacity 0
     result.addAll entries
     result
   }
 
+  /** Same as [TrieMap.withCapacity]. */
   native fn withCapacity(capacity: Int): HashMap<Key, Value>
 
+  /** Same as [TrieMap.length]. */
   native fn length(self): Int
+
+  /** Same as [TrieMap.get]. */
   native fn get(self, key: Key): Value?
 
+  /** A cursor over the entries, in insertion order; see [HashMapIterator]. */
   fn iterator(self): Iterator<(key: Key, value: Value)> {
     HashMapIterator self
   }
 
+  /** Same as [TrieMap.entryAfter]. */
   native fn entryAfter(self, var cursor: Int): (key: Key, value: Value)?
 
+  /** Same as [TrieMap.set]. */
   native fn set(var self, key: Key, value: Value)
+
+  /** Same as [TrieMap.remove]. */
   native fn remove(var self, key: Key): Value?
+
+  /** Same as [TrieMap.clear]. */
   native fn clear(var self)
 }

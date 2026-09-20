@@ -1,3 +1,15 @@
+/**
+ * FIFO: [Queue], with [ArrayQueue] as its only implementation.
+ *
+ * `enqueue` adds at the back and `dequeue` removes from the front, and `Collection.add` is `enqueue` - so `addAll`, a
+ * collector or a channel fill a `Queue` at the back. There is no index: the only way to see an item is to remove it
+ * or to iterate the whole queue.
+ *
+ * # Related
+ *
+ * - [Stack] - the LIFO sibling; `add` reaches the top instead of the back.
+ */
+
 use Equals, Hash, combineHashes from "std/core"
 use From from "std/core"
 use Collection from "./collection"
@@ -5,29 +17,49 @@ use Collection from "./collection"
 /**
  * FIFO queue. Iterates in the order of `dequeue`. `add` is `enqueue`.
  *
- *     var pending = Queue.of(firstJob)
- *     while const Some(job) = pending.dequeue() {
- *       pending.addAll(job.run())
+ * # Examples
+ *
+ *     var pending = Queue.of 1, 2, 3
+ *     pending.enqueue 4
+ *     print pending.dequeue()
+ *     print pending.toList()
+ *
+ * A `const` queue, or one whose old version is still needed, uses the participles instead:
+ *
+ *     const queue = Queue.of(1, 2).enqueued(3)
+ *     if const Some((next, rest)) = queue.dequeued() {
+ *       print "next: {next}, remaining: {rest.length()}"
  *     }
+ *
+ * # Related
+ *
+ * - [Stack] - the LIFO sibling, with the same `add`/`peek` shape.
+ * - [Collection] - `add`, `contains`, `length`, `iterator`, which `Queue` builds on.
  */
 public trait Queue<Item>
   with Collection<Item>
 {
+  /** Builds a queue from its arguments. The first item ends up at the front. */
   fn of(...items: Item): Queue<Item> {
     ArrayQueue.from items
   }
 
   // --- In place ------------------------------------------------------------------------------------
 
+  /** Adds an item at the back, in place. */
   fn enqueue(var self, value: Item)
+
+  /** Removes and answers the item at the front, or `None` if the queue is empty. */
   fn dequeue(var self): Item?
 
+  /** The same as `enqueue`; see [Collection.add]. */
   fn add(var self, value: Item) {
     enqueue value
   }
 
   // --- Changed copies --------------------------------------------------------------------------------
 
+  /** The participle of [Queue.enqueue]: a changed copy with the item added at the back. */
   fn enqueued(self, value: Item): Self {
     added value
   }
@@ -39,11 +71,13 @@ public trait Queue<Item>
     Some((next, rest))
   }
 
+  /** The item at the front without removing it, or `None` if the queue is empty. */
   fn peek(self): Item? {
     first()
   }
 }
 
+/** The factory picks the default implementation: what `Queue.of` and a pipeline's `to<Queue<Item>>()` build. */
 extend<Item> Queue<Item> with From<Iterable<Item>> {
   fn from(items: Iterable<Item>): Queue<Item> {
     ArrayQueue.from items
@@ -82,12 +116,14 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
   private var head: Int = 0
   private var count: Int = 0
 
+  /** Builds the queue from `items`, with the first one at the front. */
   fn from(items: Iterable<Item>): ArrayQueue<Item> {
     var queue = Self()
     queue.addAll items
     queue
   }
 
+  /** Adds `value` at the back, in place; grows the buffer first if it is full. */
   fn enqueue(var self, value: Item) {
     if count == slots.length() {
       grow()
@@ -96,6 +132,7 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
     count = count + 1
   }
 
+  /** Removes and answers the item at the front, or `None` if empty. */
   fn dequeue(var self): Item? {
     const next = slots[head]?            // Empty queue: the slot is `None`
     slots[head] = None                   // Release the value
@@ -104,16 +141,19 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
     Some next
   }
 
+  /** Removes every item, in place. */
   fn clear(var self) {
     slots = List.filled 16, None
     head = 0
     count = 0
   }
 
+  /** How many items there are. */
   fn length(self): Int {
     count
   }
 
+  /** A cursor from front to back: the order of `dequeue`. */
   fn iterator(self): Iterator<Item> {
     (0..count).filterMap { slots[slot(_)] }.iterator()
   }

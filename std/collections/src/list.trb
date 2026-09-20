@@ -1,3 +1,15 @@
+/**
+ * The ordered, indexable sequence: [List], its default implementation [ArrayList], and the trie-backed [TrieList].
+ *
+ * `List<Item>` is the type of the literal `[1, 2, 3]`. Every change has a verb that needs a `var` path plus a
+ * participle that answers a changed copy and works on a `const` list too, so the same operation is written the same
+ * way regardless of which kind of binding holds the list.
+ *
+ * # Related
+ *
+ * - [Array] - the fixed-size sibling; everything that grows is a `List` instead.
+ */
+
 use Equals, Compare, Hash, combineHashes from "std/core"
 use MutableIndexed, MutableSlice from "std/core"
 use From, Show from "std/core"
@@ -6,29 +18,70 @@ use Collection from "./collection"
 /**
  * An ordered sequence, addressable by index. This is the type of the literal `[1, 2, 3]`.
  *
+ * Every change has a verb that changes the list in place through a `var` path, and a participle that answers a
+ * changed copy and works on a `const` list too: `add`/`added`, `insert`/`inserted`, `remove`/`removed`,
+ * `removeAt`/`removedAt`, `sort`/`sorted`, `reverse`/`reversed`.
+ *
+ * # Examples
+ *
  *     var numbers = [3, 1, 2]
- *     numbers.add(4)                       // In place, needs `var`
+ *     numbers.add 4
  *     numbers[0] = 5
- *     numbers[1..3].sort()                 // A range is a path, too: sorts this part in place
- *     const more = numbers.added(6)        // The participle returns a changed copy
+ *     for number in numbers {
+ *       print number
+ *     }
+ *
+ * A verb needs a `var` path; its participle answers a changed copy and works on a `const` list too:
+ *
+ *     const numbers = [3, 1, 2]
+ *     const more = numbers.added 6
+ *     print more
+ *
+ * `list[index]` is itself a `var` path, so an element is changed in place without reading it out first:
+ *
+ *     type Counter {
+ *       var count: Int = 0
+ *       fn increment(var self) {
+ *         count = count + 1
+ *       }
+ *     }
+ *
+ *     var counters = [Counter(), Counter()]
+ *     counters[0].increment()
+ *     print counters[0].count
+ *
+ * # Pitfalls
+ *
+ * - A binding read out of the list copies the value there and then: `var first = counters[0]` takes a copy of the
+ *   element above, so changing `first` afterward never touches `counters`. See [MutableIndexed] for the rule.
+ *
+ * # Related
+ *
+ * - [Collection] - `add`, `contains`, `length`, `iterator`, which `List` builds on.
+ * - [Slice] and [MutableSlice] - `list[from..to]`, a `List` again, as a value and as a `var` path.
  */
 public trait List<Item>
   with Collection<Item>, MutableIndexed<Int, Item>, MutableSlice
 {
-  /** `List.of(1, 2, 3)` or, with a spread, `List.of(...anyIterable)` */
+  /** Builds a list from its arguments: `List.of(1, 2, 3)`, or with a spread, `List.of(...anyIterable)`. */
   fn of(...items: Item): List<Item> {
     items
   }
 
-  /** `List.filled(3, "-")` is `["-", "-", "-"]` */
+  /** Builds a list of `count` copies of `value`: `List.filled(3, "-")` is `["-", "-", "-"]`. */
   fn filled(count: Int, value: Item): List<Item> {
     (0..count).map { position => value }.toList()
   }
 
   // --- In place ------------------------------------------------------------------------------------
 
+  /** Inserts `value` at `index`, in place; shifts everything at or after it one position on. */
   fn insert(var self, index: Int, value: Item)
+
+  /** Removes the item at `index` and answers it, or `None` if `index` is out of range. */
   fn removeAt(var self, index: Int): Item?
+
+  /** Reverses the order, in place. */
   fn reverse(var self)
 
   /**
@@ -42,6 +95,12 @@ public trait List<Item>
    * value at all: a default nothing overrides is dispatched with `Self` bound to the trait type.
    *
    * Bottom-up merge sort: `n log n` comparisons, stable, no recursion, and one buffer that is copied once.
+   *
+   * # Examples
+   *
+   *     var names = ["Grace", "Ada", "Alan"]
+   *     names.sort { name => name.byteLength() }
+   *     print names
    */
   fn sort<Key: Compare>(var self, by: (value: Item) => Key) {
     const count = length()
@@ -89,6 +148,15 @@ public trait List<Item>
     }
   }
 
+  /**
+   * Removes the first `value` and answers whether one was found, in place.
+   *
+   * # Examples
+   *
+   *     var numbers = [1, 2, 3, 2]
+   *     numbers.remove 2
+   *     print numbers
+   */
   fn remove(var self, value: Item): Bool where Item: Equals {
     match indexOf(value) {
       Some(index) => {
@@ -108,7 +176,15 @@ public trait List<Item>
    * called on (`List<Item> & Show` would need a table the thunk has erased). So the shared default runs there, and it
    * costs one copy of the part - which is the price of not knowing the implementation, and not a different answer.
    *
-   * The two panics are the runtime's, word for word: a back end may not disagree with the other about a message.
+   * # Examples
+   *
+   *     const numbers = [1, 2, 3, 4, 5]
+   *     print numbers[1..3]
+   *
+   * # Panics
+   *
+   * If `range` reaches outside the list, or starts after it ends. The two messages are the runtime's, word for word:
+   * a back end may not disagree with the other about them.
    */
   fn slice(self, range: Range<Int>): Self {
     const count = length()
@@ -135,6 +211,7 @@ public trait List<Item>
     result
   }
 
+  /** Swaps the items at `first` and `second`, in place. */
   fn swapAt(var self, first: Int, second: Int) {
     const value = self[first]
     self[first] = self[second]
@@ -148,30 +225,35 @@ public trait List<Item>
 
   // --- Changed copies --------------------------------------------------------------------------------
 
+  /** The participle of [List.insert]: a changed copy with `value` inserted at `index`. */
   fn inserted(self, index: Int, value: Item): Self {
     var result = self
     result.insert index, value
     result
   }
 
+  /** The participle of `list[index] = value`: a changed copy with the item at `index` replaced. */
   fn updated(self, index: Int, value: Item): Self {
     var result = self
     result[index] = value
     result
   }
 
+  /** The participle of [List.removeAt]: a changed copy with the item at `index` gone. */
   fn removedAt(self, index: Int): Self {
     var result = self
     result.removeAt index
     result
   }
 
+  /** The participle of [List.remove]: a changed copy with the first `value` gone. */
   fn removed(self, value: Item): Self where Item: Equals {
     var result = self
     result.remove value
     result
   }
 
+  /** The participle of [List.reverse]: a reversed copy. */
   fn reversed(self): Self {
     var result = self
     result.reverse()
@@ -180,14 +262,17 @@ public trait List<Item>
 
   // --- Reading -----------------------------------------------------------------------------------------
 
+  /** The first item, or `None` if the list is empty. */
   fn first(self): Item? {
     get 0
   }
 
+  /** The last item, or `None` if the list is empty. */
   fn last(self): Item? {
     get(length() - 1)
   }
 
+  /** The index of the first `value`, or `None` if it is not present. */
   fn indexOf(self, value: Item): Int? where Item: Equals {
     indexed().find { pair => pair.1 == value }.map { _.0 }
   }
@@ -237,9 +322,12 @@ extend<Item: Hash> List<Item> with Hash {
  * does not change what the cursor walks - which is what a value is.
  */
 public type ListIterator<Item> with Iterator<Item> {
+  /** The list this cursor walks. Held by value, so a later change to the original list is never seen here. */
   items: ArrayList<Item>
+  /** The index of the next item to answer. */
   var index: Int = 0
 
+  /** The item at `index`, or `None` once it reaches the end. */
   fn next(var self): Item? {
     const found = items.get index
     index = index + 1
@@ -266,10 +354,19 @@ public native type ArrayList<Item>
     result
   }
 
+  /** An empty list, with room for `capacity` items before it has to grow again. */
   native fn withCapacity(capacity: Int): ArrayList<Item>
 
+  /** How many items there are. */
   native fn length(self): Int
+
+  /** The item at `index`, or `None` if it is out of bounds. `list[index]` panics instead; see [Indexed.at]. */
   native fn get(self, index: Int): Item?
+
+  /**
+   * The native, O(1) slice: shares storage with the receiver. See [List.slice] for the shared default a
+   * trait-typed `List` reaches instead.
+   */
   native fn slice(self, range: Range<Int>): ArrayList<Item>
 
   /** Ordinary TorbScript over `get`: see [ListIterator]. */
@@ -277,13 +374,31 @@ public native type ArrayList<Item>
     ListIterator self
   }
 
+  /** Adds an item at the end, in place. */
   native fn add(var self, value: Item)
+
+  /** Changes the item at `index` in place. `list[index] = value` goes through this; see [MutableIndexed.set]. */
   native fn set(var self, index: Int, value: Item)
+
+  /** Inserts `value` at `index`, in place; shifts everything at or after it one position on. */
   native fn insert(var self, index: Int, value: Item)
+
+  /** Removes the item at `index` and answers it, or `None` if `index` is out of range. */
   native fn removeAt(var self, index: Int): Item?
+
+  /**
+   * Replaces the items of `range` with `values`, in place; the two need not be the same length. What
+   * `list[from..to] = values` goes through; see [MutableSlice.replace].
+   */
   native fn replace(var self, range: Range<Int>, values: ArrayList<Item>)
+
+  /** Reverses the order, in place. */
   native fn reverse(var self)
+
+  /** Removes every item, in place. */
   native fn clear(var self)
+
+  /** Gives the list storage of its own, sized exactly to its length; see [MutableSlice.compact]. */
   native fn compact(var self)
 }
 
@@ -297,19 +412,42 @@ public native type ArrayList<Item>
 public native type TrieList<Item>
   with List<Item>, From<Iterable<Item>>
 {
+  /** Same as [ArrayList.from]. */
   native fn from(items: Iterable<Item>): TrieList<Item>
 
+  /** Same as [ArrayList.length]. */
   native fn length(self): Int
+
+  /** Same as [ArrayList.get]. */
   native fn get(self, index: Int): Item?
+
+  /** Same as [ArrayList.iterator]. */
   native fn iterator(self): Iterator<Item>
+
+  /** Same as [ArrayList.slice]. */
   native fn slice(self, range: Range<Int>): TrieList<Item>
 
+  /** Same as [ArrayList.add]. */
   native fn add(var self, value: Item)
+
+  /** Same as [ArrayList.set]. */
   native fn set(var self, index: Int, value: Item)
+
+  /** Same as [ArrayList.insert]. */
   native fn insert(var self, index: Int, value: Item)
+
+  /** Same as [ArrayList.removeAt]. */
   native fn removeAt(var self, index: Int): Item?
+
+  /** Same as [ArrayList.replace]. */
   native fn replace(var self, range: Range<Int>, values: TrieList<Item>)
+
+  /** Same as [ArrayList.reverse]. */
   native fn reverse(var self)
+
+  /** Same as [ArrayList.clear]. */
   native fn clear(var self)
+
+  /** Same as [ArrayList.compact]. */
   native fn compact(var self)
 }

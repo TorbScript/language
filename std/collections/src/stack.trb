@@ -1,3 +1,15 @@
+/**
+ * LIFO: [Stack], with [ArrayStack] as its only implementation.
+ *
+ * `push` and `pop` both work on the top, and `Collection.add` is `push` - so `addAll`, a collector or a channel fill
+ * a `Stack` from that same end. There is no index: the only way to see an item is to remove it or to iterate the
+ * whole stack.
+ *
+ * # Related
+ *
+ * - [Queue] - the FIFO sibling; `add` reaches the back instead of the top.
+ */
+
 use Equals, Hash, combineHashes from "std/core"
 use From from "std/core"
 use Collection from "./collection"
@@ -5,34 +17,49 @@ use Collection from "./collection"
 /**
  * LIFO stack. Iterates from top to bottom. `add` is `push`.
  *
- *     var pending = Stack.of(root)
- *     while const Some(node) = pending.pop() {
- *       pending.addAll(node.children)
+ * # Examples
+ *
+ *     var pending = Stack.of 1, 2, 3
+ *     pending.push 4
+ *     print pending.pop()
+ *     print pending.toList()
+ *
+ * A `const` stack, or one whose old version is still needed, uses the participles instead:
+ *
+ *     const stack = Stack.of(1, 2).pushed(3)
+ *     if const Some((top, rest)) = stack.popped() {
+ *       print "top: {top}, remaining: {rest.length()}"
  *     }
  *
- * In a `const` (or to keep the old version) use the participles:
+ * # Related
  *
- *     if const Some((top, rest)) = stack.popped() { ... }
+ * - [Queue] - the FIFO sibling, with the same `add`/`peek` shape.
+ * - [Collection] - `add`, `contains`, `length`, `iterator`, which `Stack` builds on.
  */
 public trait Stack<Item>
   with Collection<Item>
 {
-  /** The last item ends up on top. */
+  /** Builds a stack from its arguments. The last item ends up on top. */
   fn of(...items: Item): Stack<Item> {
     ArrayStack.from items
   }
 
   // --- In place ------------------------------------------------------------------------------------
 
+  /** Adds an item on top, in place. */
   fn push(var self, value: Item)
+
+  /** Removes and answers the top item, or `None` if the stack is empty. */
   fn pop(var self): Item?
 
+  /** The same as `push`; see [Collection.add]. */
   fn add(var self, value: Item) {
     push value
   }
 
   // --- Changed copies --------------------------------------------------------------------------------
 
+  /** The participle of [Stack.push]: a changed copy with the item on top. */
   fn pushed(self, value: Item): Self {
     added value
   }
@@ -44,11 +71,13 @@ public trait Stack<Item>
     Some((top, rest))
   }
 
+  /** The top item without removing it, or `None` if the stack is empty. */
   fn peek(self): Item? {
     first()
   }
 }
 
+/** The factory picks the default implementation: what `Stack.of` and a pipeline's `to<Stack<Item>>()` build. */
 extend<Item> Stack<Item> with From<Iterable<Item>> {
   fn from(items: Iterable<Item>): Stack<Item> {
     ArrayStack.from items
@@ -82,31 +111,40 @@ extend<Item: Hash> Stack<Item> with Hash {
 
 // --- Implementation, written in plain TorbScript ----------------------------------------------------------
 
-/** A value, because it consists of values: nothing had to be done for that. */
+/**
+ * The only implementation of [Stack]: a `List` used from the end. A value, because it consists of values - nothing
+ * had to be done for that.
+ */
 public type ArrayStack<Item> with Stack<Item>, From<Iterable<Item>> {
   private var items: List<Item> = []
 
+  /** Builds the stack from `items`, with the last one on top. */
   fn from(items: Iterable<Item>): ArrayStack<Item> {
     Self items.toList()
   }
 
+  /** Adds `value` on top, in place. */
   fn push(var self, value: Item) {
     items.add value
   }
 
+  /** Removes and answers the top item, or `None` if empty. */
   fn pop(var self): Item? {
     const last = items.length() - 1
     items.removeAt last
   }
 
+  /** Removes every item, in place. */
   fn clear(var self) {
     items.clear()
   }
 
+  /** How many items there are. */
   fn length(self): Int {
     items.length()
   }
 
+  /** A cursor from top to bottom: the reverse of insertion order. */
   fn iterator(self): Iterator<Item> {
     items.reversed().iterator()
   }
