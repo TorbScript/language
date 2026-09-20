@@ -2412,6 +2412,7 @@ moment later. `Show`, `Equals`, `Hash` and `Encode` reach implementers; `From` a
   name `ArrayList<Int>`'s own `from`, that is no longer the reason - the reason is the one that was always first, that a
   literal knows its items and building the type that is asked for directly *is* the fast path the concept asks the
   compiler to find.
+
 **54. Does the dead-change rule reach the top level of a file?**
 Rule 5.3 reports a change no read follows, and `checkModule` settles the statements of a file like any other body - but a
 top-level `var` is a **declaration** and not a local, so `noteRead` and `noteChange` never saw one: `var counters = [...]`
