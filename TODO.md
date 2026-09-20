@@ -1173,3 +1173,18 @@ Wenn nicht, was bedeutet, bewirkt es?
     volles Unicode. **Wird gelöst:** eine Runde (Opus-Agent) - beide Lexer, Schreibregel im Checker, Fehler für die
     ungenutzte Pattern-Bindung samt `torb canon --rule unused-bindings` für die Repo-Korrektur, CONCEPT, Doku, Skill,
     VS-Code-Grammatik.
+
+- (Extensions, 2026-09-21) **Entschieden (Nutzer):** Nichts Fremdes ist mehr implizit sichtbar. Grundsatz: ein Member
+  ist überall sichtbar, wenn das Paket des TYPS ihn angebracht hat (`type Circle with Shape`, `extend` auf den eigenen
+  Typ); sonst nennt die Datei beim Namen, woher er kommt.
+  - Einzelne Extension-Member per Pfad, dieselbe Form wie Cases: `use String.shout, String.slug from "acme/text"`,
+    `use Int64.seconds from "std/time"`. Konflikt: `as` (`use String.shout as yell from "..."` → `"x".yell()`); die
+    Namespace-Form `text.shout(value)` entfällt (war verkapptes UFCS).
+  - Ein Bündel ist ein Trait (Rust-Modell): die Member eines Traits, den das Paket des TRAITS auf einen fremden Typ
+    legt (`extend String with Slug`, auch Blanket-Implementierungen), sind dort sichtbar, wo der Trait sichtbar ist
+    (`use Slug from "acme/slug"`, Prelude, Bound `Item: Slug`, Trait-Typ). Milder als Rust: was der Typ selbst
+    mitbringt, braucht keinen Import.
+  - `use "modul"` ohne Namen entfällt (beim Import läuft nichts). Das Prelude re-exportiert namentlich
+    (`public use Int64.seconds from "std/time"`).
+  - Nur Sichtbarkeit von Namen; Kohärenz und Dispatch bleiben. **Wird gelöst:** Checker-Runde NACH der
+    Schreibregel-Runde (gleiche Dateien).
