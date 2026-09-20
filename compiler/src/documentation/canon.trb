@@ -402,7 +402,7 @@ fn callProblem(text: String, tokens: List<Token>, lines: Lines, site: CallSite):
     .Call(callee, arguments, style) => {
       match style {
         .Parentheses => shouldBeACommand text, tokens, lines, site, callee, arguments
-        .Command => shouldHaveParentheses text, lines, site, callee, arguments
+        .Command => shouldHaveParentheses text, tokens, lines, site, callee, arguments
       }
     }
     _ => None
@@ -473,20 +473,30 @@ fn shouldBeACommand(
   Some CanonProblem(line, "A call is a command wherever the grammar allows it. Write `{written} ...` without parentheses")
 }
 
-/** `f a, b` where a condition of the canon does not hold: the parentheses have to come back. */
+/**
+ * `f a, b` where a condition of the canon does not hold: the parentheses have to come back.
+ *
+ * A **trailing closure is not one of the arguments the parentheses would hold** - it stands behind the `)` either way -
+ * so neither "over several lines" nor "an operator at the top level of an argument" is asked of it. Without that,
+ * `values.fold(x) { ... }` over several lines was reported both ways: this half wanted the parentheses because the
+ * closure spans lines, and `shouldBeACommand` wanted them gone because the plain arguments do not. `torb canon` (the
+ * reference) restricts both halves to the plain arguments, and so does this one now.
+ */
 fn shouldHaveParentheses(
   text: String,
+  tokens: List<Token>,
   lines: Lines,
   site: CallSite,
   callee: Expression,
   arguments: List<Argument>,
 ): CanonProblem? {
-  if arguments.isEmpty() {
+  const plain = plainArgumentCount tokens, arguments, callee.span.end
+  if plain == 0 {
     return None
   }
-  const last = arguments[arguments.length() - 1]
+  const last = arguments[plain - 1]
   const overSeveralLines = text.slice(callee.span.end..last.value.span.end).contains("\n")
-  const hasOperator = arguments.any hasTopLevelOperator
+  const hasOperator = arguments.slice(0..plain).any(hasTopLevelOperator)
   if !site.isCommandPosition {
     // The parser only reads a command in command position, so this cannot happen from a parsed file
     return None
@@ -600,6 +610,12 @@ fn plainArgumentCount(tokens: List<Token>, arguments: List<Argument>, closeAt: I
   if last.value.span.start <= closeAt {
     return count
   }
+  // `f(a, { ... })`: a closure behind a comma is an ordinary argument and not the trailing closure, as in the reference
+  if const Some(index) = tokenBefore(tokens, last.value.span.start) {
+    if tokens[index].kind == TokenKind.Comma {
+      return count
+    }
+  }
   count - 1
 }
 
@@ -674,6 +690,20 @@ fn tokenAtOrAfter(tokens: List<Token>, offset: Int): Int? {
     index = index + 1
   }
   None
+}
+
+/** The last token that ends at or before the offset: `previous_token` of the reference tool. */
+fn tokenBefore(tokens: List<Token>, offset: Int): Int? {
+  var found: Int? = None
+  var index = 0
+  while index < tokens.length() {
+    if tokens[index].span.end > offset {
+      return found
+    }
+    found = Some index
+    index = index + 1
+  }
+  found
 }
 
 fn matchingParenthesis(tokens: List<Token>, open: Int): Int? {

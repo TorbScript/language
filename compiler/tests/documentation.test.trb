@@ -123,6 +123,13 @@ fn withGeneratedIndexes(files: Map<String, String>): Map<String, String> {
   written
 }
 
+/** The problems of a good tree whose one `trb` block was replaced by this source: what a test about the canon asks. */
+fn inPage(source: String): List<String> {
+  var files = goodTree()
+  files.set "language/bindings.md", referencePage("Bindings").replace("const answer = 42\nprint answer", source)
+  check files
+}
+
 /** One tree that passes, which is what every test about a single broken rule starts from. */
 fn goodTree(): Map<String, String> {
   [
@@ -504,6 +511,25 @@ group "the snippets" {
     files.set "language/bindings.md", referencePage("Bindings").replace("print answer", "print answer + 1")
     const found = check files
     assert(found.any({ _.contains "has an operator at the top level of an argument" }))
+  }
+
+  test "a multi-line trailing closure is not one of the arguments the parentheses would hold" {
+    // The two halves of the rule contradicted each other here: `shouldHaveParentheses` measured "over several lines"
+    // over the *trailing closure* as well, so `values.fold(0) { ... }` over several lines was reported whichever way it
+    // was written. `torb canon` restricts both halves to the plain arguments, and this one does too - so the canon has
+    // one answer, and it is the command
+    const command = "const total = values.fold 0 \{ sum, value =>\n  sum + value\n\}\nprint total"
+    assert inPage(command).isEmpty()
+    // The parenthesized form gets the one message that says so, and not the opposite one as well
+    const parenthesized = "const total = values.fold(0) \{ sum, value =>\n  sum + value\n\}\nprint total"
+    const found = inPage parenthesized
+    assert(found.any({ _.contains "Write `values.fold ...` without parentheses" }))
+    assert(!found.any({ _.contains "arguments over several lines" }))
+  }
+
+  test "a closure behind a comma is an ordinary argument, so it counts as one" {
+    const written = "const total = values.fold 0, \{ sum, value =>\n  sum + value\n\}\nprint total"
+    assert(inPage(written).any({ _.contains "has arguments over several lines" }))
   }
 
   test "a multi-line string that is not indented is reported" {
