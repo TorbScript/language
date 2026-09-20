@@ -252,6 +252,34 @@ group "Derived implementations" {
   }
 }
 
+/**
+ * A bound on `Never` holds whatever the trait is (gap 55): no value of `Never` exists, so nothing can ever ask the
+ * table for a member. `Source<Item, Never>` - the reading end of a channel, which cannot fail - is what needs it: the
+ * generated `Show` of a `Result` asks its `Failure` for one.
+ */
+group "A bound on `Never`" {
+  test "a `Result` that cannot fail is showable" {
+    const source = "fn probe(value: Result<Int, Never>): String \{\n  \"\{value\}\"\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(
+      found.lastAdaptationsOf("value") == ["show through Result<Value, Failure>: Show [Int64: Signed, object Never: Show]"]
+    )
+  }
+
+  test "and it holds for a bound of a call, too" {
+    const source = "fn render<Value: Show>(value: Value): String \{\n  \"\{value\}\"\n\}\n\n"
+      + "fn probe(value: Result<Int, Never>): String \{\n  render value\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a type that really has nothing is still reported" {
+    const source = "type Holder \{\n  item: Equals\n\}\n\n"
+      + "fn probe(value: Result<Int, Holder>): String \{\n  \"\{value\}\"\n\}"
+    assert(problems(source) == ["`Result<Int64, Holder>` does not implement `Show`, so it cannot be interpolated"])
+  }
+}
+
 group "The visibility of an `extend`" {
   test "an extension of a type of your own package is part of the type everywhere" {
     const files = [

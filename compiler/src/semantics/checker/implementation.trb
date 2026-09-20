@@ -359,6 +359,15 @@ public fn traitArgumentsOf(var checker: Checker, annotation: TypeId, capability:
 }
 
 fn resolveUncached(var checker: Checker, annotation: TypeId, capability: SymbolId, wanted: TypeId?): Resolved {
+  // A bound on `Never` holds, whatever the trait is (gap 55): there is no value of `Never`, so nothing can ever reach
+  // the member. That is what makes `Source<Item, Never>` - the reading end of a channel, which cannot fail - printable,
+  // because the generated `Show` of a `Result` asks its `Failure` for one. Asked *without* a bound the answer stays
+  // `Missing`: which arguments `Add` would have for a `Never` is nothing the question says
+  if const Some(bound) = wanted {
+    if const .NeverType = checker.types.form(annotation) {
+      return Resolved.Bounded appliedArgumentsOf(checker, bound)
+    }
+  }
   if checker.absorbs(annotation) {
     return Resolved.Missing
   }
@@ -413,6 +422,14 @@ fn declaredVoidOf(var checker: Checker, annotation: TypeId): TypeId? {
 }
 
 /** What the bounds of a trait-typed value or of a generic parameter say about one trait. */
+/** The arguments a bound was written with: `From<Iterable<Int>>` gives `[Iterable<Int>]`, a bare `Show` gives `[]`. */
+fn appliedArgumentsOf(checker: Checker, bound: TypeId): List<TypeId> {
+  match checker.types.form(bound) {
+    .Nominal(_, arguments) => arguments
+    _ => []
+  }
+}
+
 fn boundArgumentsOf(
   var checker: Checker,
   annotation: TypeId,

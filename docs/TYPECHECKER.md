@@ -2444,3 +2444,21 @@ roots of a `Place` the rule counts), `Checker.isTopLevel` says which body is the
 It found six real dead changes in `examples/tour` (`01-bindings-and-values.trb`, `03-types.trb` twice,
 `07-collections.trb` twice, `12-type-system.trb`), all of them a value that is changed to illustrate something and then
 never read - each is now followed by the `print` that shows the effect, which is what the example wanted to say anyway.
+**55. What does `Never` implement?**
+CONCEPT declares `Never` as "the type of expressions that do not return" and says it converts to every type; gap 1
+declares it as `public native type Never {}`, with no `with` list. So a bound on `Never` held for nothing, and
+`Source<Item, Never>` - the reading end of a channel, which the concept describes as the one that *cannot fail* - was
+not showable, because the generated `Show` of a `Result<Value, Failure>` asks its `Failure` for one. The same held for
+`Equals`, `Hash` and `Encode`, and for every user type parameterized by a failure type.
+_Proposal:_ a bound on `Never` holds, whatever the trait is. There is no value of `Never`, so nothing can ever reach
+the member: the requirement is vacuous, exactly as the coercion of `Never` into every type is.
+_Reason:_ it is the same argument that makes `Never` coerce to everything, read from the other side, and it is the only
+reading under which `Result<Value, Never>` - which gap 50 already blesses - is an ordinary type.
+
+_Decision:_ accepted, and it is the **checker's** rule and not a `with` list in the standard library: writing
+`native type Never with Show, Equals, Hash, Encode` would make the runtime owe four members that can never be called
+(gap 22) and would still be a fixed list, while the rule is about every trait. `resolveUncached` answers `Bounded` for a
+`NeverType` subject before the absorption check, which is what makes the witness a well-formed `Witness.Object` whose
+table no branch of any generated member reaches. Asked **without** a bound (`resolveTrait(Never, Add)`, which is what
+an operator asks) the answer stays `Missing`: which arguments `Add` would have for a `Never` is nothing the question
+says, and `Never` absorbs the message anyway.
