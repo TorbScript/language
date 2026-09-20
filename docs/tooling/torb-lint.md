@@ -1,12 +1,12 @@
 ---
 title: torb lint
-summary: torb lint will check the naming and style rules the type checker does not - full words instead of abbreviations, is/has for a computed question, an adjective for a Bool field - none of which is enforced today.
+summary: torb lint will check the style rules the type checker does not - full words instead of abbreviations, is/has for a computed question, an adjective for a Bool field, an unused irrefutable binding - none of which is enforced today.
 kind: tooling
 status: planned
 order: 130
 keywords:
   - torb lint
-  - naming conventions
+  - naming
   - style
   - lint --fix
 source:
@@ -17,7 +17,7 @@ source:
 > **Planned.** This feature is designed but not implemented. Nothing on this page works today.
 
 A program with an abbreviated name or a `Bool` field named as a question type checks exactly as well as one that
-follows [the naming conventions](../language/syntax/naming-conventions.md) - nothing today tells the two apart.
+follows [the conventions of a name](../language/syntax/naming.md) - nothing today tells the two apart.
 
 ## Synopsis
 
@@ -40,7 +40,7 @@ telling those two cases apart today is a person's judgement, with the fix left f
 
 Nothing checks this. `torb check` resolves and types every one of these calls without objecting to an unlabeled
 `false` or an abbreviated name, because neither is a type error - see
-[Naming conventions](../language/syntax/naming-conventions.md) for which of them the parser and the checker do
+[Naming](../language/syntax/naming.md) for which of them the parser and the checker do
 enforce today, and which are a convention only a person or, eventually, `torb lint` follows.
 
 ```trb check
@@ -60,7 +60,7 @@ None: there is no command line to run yet.
 
 ## Related
 
-- [Naming conventions](../language/syntax/naming-conventions.md) - which rules are conventions and which the parser
-  and the checker enforce.
+- [Naming](../language/syntax/naming.md) - which rules are conventions and which the parser and the checker
+  enforce.
 - [torb format](torb-format.md) - the other stage-8 tool, for layout instead of naming.
 - [The torb command](the-torb-command.md) - every subcommand, and which are still planned.

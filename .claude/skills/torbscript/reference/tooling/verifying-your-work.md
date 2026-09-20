@@ -126,7 +126,7 @@ cargo build --release
 cargo run --release -q -- run ../compiler check ..
 cargo run --release -q -- run ../compiler check --statistics ..
 cargo run --release -q -- test ../compiler/tests
-cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns ..
+cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings ..
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --release

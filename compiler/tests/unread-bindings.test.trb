@@ -1,0 +1,244 @@
+use test, group from "std/test"
+use problems, notes from "./harness"
+
+/**
+ * A binding of a **refutable** pattern that nobody reads is an error: an arm of a `match`, an `if const`/`if var`, a
+ * `while const`. A lowercase name in a pattern always binds and never compares, so `limit =>` is a catch-all that
+ * shadows the constant `limit`, and whether the binding is read is the only thing that tells the two apart.
+ *
+ * The irrefutable positions - `const`, destructuring, `for`, closure and function parameters - are deliberately not part
+ * of the rule; `torb lint` takes those. The last group pins that.
+ */
+fn inBody(body: String): String {
+  "fn probe() \{\n{body}\n\}"
+}
+
+const unreadValue = "`value` is never read: write `_`, or `_value` to keep the name"
+
+group "An arm of a `match`" {
+  test "a binding the body never reads is an error" {
+    const source = inBody "  const text = match Some(2) \{\n    Some(value) => \"one\"\n    None => \"none\"\n  \}"
+    assert(problems(source) == [unreadValue])
+    assert(
+      notes(source)
+        == ["A name in a pattern always binds and never compares, so a binding nobody reads hides what the pattern matches"]
+    )
+  }
+
+  test "a binding the body reads is fine" {
+    assert problems(inBody("  const text = match Some(2) \{\n    Some(value) => value\n    None => 0\n  \}")).isEmpty()
+  }
+
+  test "a read in the guard counts, and so does one in the body of a guarded arm" {
+    const inGuard = "  const text = match Some(2) \{\n    Some(value) if value > 1 => 0\n    _ => 1\n  \}"
+    assert problems(inBody(inGuard)).isEmpty()
+    // A guard that says nothing about the binding leaves the body as the only place it could be read
+    const guardOnly = "  const text = match Some(2) \{\n    Some(value) if true => 0\n    _ => 1\n  \}"
+    assert(problems(inBody(guardOnly)) == [unreadValue])
+  }
+
+  test "a bare name is the arm the rule is really about: it binds and matches everything" {
+    const source = "const limit = 10\n\nfn probe() \{\n  const text = match 1 \{\n    limit => \"any\"\n  \}\n\}"
+    assert(problems(source) == ["`limit` is never read: write `_`, or `_limit` to keep the name"])
+  }
+
+  test "a name that starts with `_` keeps the name as documentation and is exempt" {
+    assert problems(inBody("  const text = match Some(2) \{\n    Some(_reason) => \"one\"\n    None => \"none\"\n  \}")).isEmpty()
+    assert problems(inBody("  const text = match Some(2) \{\n    Some(_) => \"one\"\n    None => \"none\"\n  \}")).isEmpty()
+  }
+
+  test "of alternatives it is the one binding the body sees that counts" {
+    // Every alternative binds the same name and the body sees one binding whichever one matched, so there is one finding
+    // and not one per branch
+    const shapes = r"""
+      type Shape {
+        case Circle(radius: Int)
+        case Square(side: Int)
+      }
+
+      fn probe(shape: Shape): Int {
+        match shape {
+          .Circle(size) | .Square(size) => 0
+        }
+      }
+      """
+    assert(problems(shapes) == ["`size` is never read: write `_`, or `_size` to keep the name"])
+    const read = r"""
+      type Shape {
+        case Circle(radius: Int)
+        case Square(side: Int)
+      }
+
+      fn probe(shape: Shape): Int {
+        match shape {
+          .Circle(size) | .Square(size) => size
+        }
+      }
+      """
+    assert problems(read).isEmpty()
+  }
+
+  test "every arm is counted on its own" {
+    const source = "  const text = match Some(2) \{\n    Some(value) => value\n    None => \"none\"\n  \}"
+    assert problems(inBody(source)).isEmpty()
+  }
+
+  test "a binding of a nested pattern counts like any other" {
+    const source = r"""
+      type Wrapper {
+        case Inner(shape: Int?)
+      }
+
+      fn probe(value: Wrapper): Int {
+        match value {
+          .Inner(Some(number)) => 1
+          .Inner(None) => 0
+        }
+      }
+      """
+    assert(problems(source) == ["`number` is never read: write `_`, or `_number` to keep the name"])
+  }
+}
+
+group "The head of an `if` and of a `while`" {
+  test "`if const` binds for the body, so the body is where it has to be read" {
+    const unread = "  const maybe: Int? = None\n  if const Some(found) = maybe \{\n    print \"yes\"\n  \}"
+    assert(problems(inBody(unread)) == ["`found` is never read: write `_`, or `_found` to keep the name"])
+    const read = "  const maybe: Int? = None\n  if const Some(found) = maybe \{\n    print found\n  \}"
+    assert problems(inBody(read)).isEmpty()
+  }
+
+  test "the `else` is outside the binding's scope, so nothing there is a read of it" {
+    const source = "  const maybe: Int? = None\n  const found = 1\n"
+      + "  const value = if const Some(found) = maybe \{\n    2\n  \} else \{\n    found\n  \}"
+    assert(problems(inBody(source)) == ["`found` is never read: write `_`, or `_found` to keep the name"])
+  }
+
+  test "`if var` is the same rule: a change through the binding is a use of it" {
+    const source = r"""
+      fn probe(value: Int?): Int {
+        var current = value
+        if var Some(inner) = current {
+          inner = 3
+          return 1
+        }
+        0
+      }
+      """
+    assert problems(source).isEmpty()
+  }
+
+  test "`while const` binds for the body of the loop" {
+    const unread = r"""
+      fn next(): Int? {
+        None
+      }
+
+      fn probe(): Int {
+        var total = 0
+        while const Some(item) = next() {
+          total = total + 1
+        }
+        total
+      }
+      """
+    assert(problems(unread) == ["`item` is never read: write `_`, or `_item` to keep the name"])
+    const read = r"""
+      fn next(): Int? {
+        None
+      }
+
+      fn probe(): Int {
+        var total = 0
+        while const Some(item) = next() {
+          total = total + item
+        }
+        total
+      }
+      """
+    assert problems(read).isEmpty()
+  }
+}
+
+group "What counts as a read" {
+  test "an interpolation, a quotation, a nested closure, an assignment and a nested subject all count" {
+    // Every one of these goes through the one place a name resolves, so none of them is a false positive
+    const interpolated = r"""
+      fn probe(value: Int?): String {
+        match value {
+          Some(number) => "got {number}"
+          None => "nothing"
+        }
+      }
+      """
+    assert problems(interpolated).isEmpty()
+    // `assert` quotes its argument, and the quotation reads the resolution the ordinary check recorded
+    const quoted = r"""
+      fn probe(value: Int?) {
+        match value {
+          Some(number) => assert(number > 1)
+          None => {}
+        }
+      }
+      """
+    assert problems(quoted).isEmpty()
+    const captured = r"""
+      fn applied(body: (Int) => Int): Int {
+        body(2)
+      }
+
+      fn probe(value: Int?): Int {
+        match value {
+          Some(number) => applied({ other => other + number })
+          None => 0
+        }
+      }
+      """
+    assert problems(captured).isEmpty()
+    const assigned = r"""
+      fn probe(value: Int?): Int {
+        var current = value
+        if var Some(inner) = current {
+          inner = 4
+        }
+        1
+      }
+      """
+    assert problems(assigned).isEmpty()
+    const nested = r"""
+      fn probe(value: Int?): Int {
+        match value {
+          Some(number) => match number {
+            0 => 1
+            _ => 2
+          }
+          None => 0
+        }
+      }
+      """
+    assert problems(nested).isEmpty()
+  }
+}
+
+group "What the rule is not about" {
+  test "an irrefutable binding is nobody's business here" {
+    assert problems(inBody("  const value = 1")).isEmpty()
+    assert problems(inBody("  const (first, second) = (1, \"one\")")).isEmpty()
+    assert problems(inBody("  var total = 0\n  total = 1\n  print total")).isEmpty()
+  }
+
+  test "a `for` binding, a closure parameter and a function parameter are not part of it" {
+    assert problems(inBody("  for item in [1, 2, 3] \{\n    print \"tick\"\n  \}")).isEmpty()
+    const closure = r"""
+      fn applied(body: (Int) => Int): Int {
+        body(2)
+      }
+
+      fn probe(): Int {
+        applied({ value => 1 })
+      }
+      """
+    assert problems(closure).isEmpty()
+    assert problems("fn probe(value: Int): Int \{\n  1\n\}").isEmpty()
+  }
+}

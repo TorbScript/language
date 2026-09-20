@@ -1,0 +1,254 @@
+use test, group from "std/test"
+use problems, notes, problemsOf, notesOf from "./harness"
+
+/**
+ * How a name is spelled is a rule of the language and not a convention, and the checker says it at the declaration.
+ * `A` to `Z` is uppercase; `_` and `a` to `z` are lowercase. Both directions are tested for every kind, because a rule
+ * that only fires one way would leave the other spelling silently legal.
+ *
+ * A pattern binding is not in here and needs nothing: the parser reads an uppercase name in a pattern as a case, so a
+ * closure parameter, a `for` binding and an arm binding cannot be written uppercase at all. The last test of the second
+ * group pins that.
+ */
+
+group "The spelling of a type" {
+  test "a type starts with an uppercase letter" {
+    assert(problems("type point \{ x: Int = 0 \}") == ["A type starts with an uppercase letter: write `Point`"])
+    assert(problems("type Point \{ x: Int = 0 \}") == [])
+  }
+
+  test "a `shared type` is a type" {
+    const source = r"""
+      shared type counter {
+        var count: Int = 0
+      }
+      """
+    assert(problems(source) == ["A type starts with an uppercase letter: write `Counter`"])
+  }
+
+  test "a trait starts with an uppercase letter" {
+    assert(problems("trait show \{ fn show(self): String \}") == ["A trait starts with an uppercase letter: write `Show`"])
+    assert(problems("trait Render \{ fn render(self): String \}") == [])
+  }
+
+  test "a case starts with an uppercase letter" {
+    assert(problems("type Shape \{ case circle(radius: Int) \}") == ["A case starts with an uppercase letter: write `Circle`"])
+    assert(problems("type Shape \{ case Circle(radius: Int) \}") == [])
+  }
+
+  test "a type parameter starts with an uppercase letter" {
+    assert(problems("type Box<item> \{ value: item \}") == ["A type parameter starts with an uppercase letter: write `Item`"])
+    assert(problems("type Box<Item> \{ value: Item \}") == [])
+  }
+
+  test "a size parameter is a type parameter" {
+    const source = r"""
+      type Buffer<const size: Int> {
+        length: Int = 0
+      }
+      """
+    assert(problems(source) == ["A type parameter starts with an uppercase letter: write `Size`"])
+  }
+
+  test "a type alias starts with an uppercase letter" {
+    assert(problems("type bytes = Int") == ["A type alias starts with an uppercase letter: write `Bytes`"])
+    assert(problems("type Bytes = Int") == [])
+  }
+
+  test "a leading `_` has no uppercase form, so the name to write drops it" {
+    assert(problems("type _point \{ x: Int = 0 \}") == ["A type starts with an uppercase letter: write `Point`"])
+  }
+}
+
+group "The spelling of a value" {
+  test "a function starts with a lowercase letter" {
+    assert(problems("fn Twice(value: Int): Int \{ value * 2 \}") == ["A function starts with a lowercase letter: write `twice`"])
+    assert(problems("fn twice(value: Int): Int \{ value * 2 \}") == [])
+  }
+
+  test "a method and a static function are functions" {
+    const source = r"""
+      type Counter {
+        var count: Int = 0
+
+        fn Increment(var self) {
+          count = count + 1
+        }
+
+        fn Empty(): Counter {
+          Counter()
+        }
+      }
+      """
+    assert(
+      problems(source)
+        == [
+          "A function starts with a lowercase letter: write `increment`",
+          "A function starts with a lowercase letter: write `empty`",
+        ]
+    )
+  }
+
+  test "a field starts with a lowercase letter" {
+    assert(problems("type Point \{ X: Int = 0 \}") == ["A field starts with a lowercase letter: write `x`"])
+    assert(problems("type Point \{ x: Int = 0 \}") == [])
+  }
+
+  test "the field of a case is a field" {
+    assert(problems("type Shape \{ case Circle(Radius: Int) \}") == ["A field starts with a lowercase letter: write `radius`"])
+  }
+
+  test "a parameter starts with a lowercase letter" {
+    assert(problems("fn twice(Value: Int): Int \{ Value * 2 \}") == ["A parameter starts with a lowercase letter: write `value`"])
+  }
+
+  test "the parameter of a function type is a parameter, where it is documentation" {
+    const source = r"""
+      fn applied(twice: (Value: Int) => Int): Int {
+        twice(2)
+      }
+      """
+    assert(problems(source) == ["A parameter starts with a lowercase letter: write `value`"])
+  }
+
+  test "a constant starts with a lowercase letter" {
+    assert(problems("const Limit = 10") == ["A constant starts with a lowercase letter: write `limit`"])
+    assert(problems("var Total = 0") == ["A binding starts with a lowercase letter: write `total`"])
+    assert(problems("const limit = 10") == [])
+  }
+
+  test "there is no MACRO_CASE spelling, and the message says so" {
+    assert(
+      problems("const MAX_SIZE = 10")
+        == ["A constant starts with a lowercase letter: TorbScript has no `MAX_SIZE` spelling, write `maxSize`"]
+    )
+  }
+
+  test "a module constant is a constant" {
+    const files = ["app/src/limits.trb": "public const MAX_RETRIES = 3\n", "app/src/main.trb": "print 1\n"]
+    assert(
+      problemsOf(files)
+        == ["A constant starts with a lowercase letter: TorbScript has no `MAX_RETRIES` spelling, write `maxRetries`"]
+    )
+  }
+
+  test "a tuple label starts with a lowercase letter, in a type and in a literal" {
+    // Two declarations of the label, so two findings: the annotation names the fields and so does the literal
+    const message = "A tuple label starts with a lowercase letter: write `lowest`"
+    assert(problems("const bounds: (Lowest: Int, highest: Int) = (Lowest: 1, highest: 9)") == [message, message])
+    assert(problems("const bounds: (lowest: Int, highest: Int) = (lowest: 1, highest: 9)") == [])
+  }
+
+  test "the name of a `...rest` pattern starts with a lowercase letter" {
+    const source = r"""
+      const numbers = [1, 2, 3]
+      const first = match numbers {
+        [head, ...Rest] => head
+        _ => 0
+      }
+      print first
+      """
+    assert(problems(source) == ["A binding starts with a lowercase letter: write `rest`"])
+  }
+
+  test "a `for` binding cannot be uppercase at all: the parser reads it as a case" {
+    // The parser reads an uppercase name in a pattern as a case, so the rule is kept before the checker sees it - and
+    // what is reported is the case that is nowhere, with the note that says the rule
+    const source = r"""
+      for Item in [1, 2, 3] {
+        print Item
+      }
+      """
+    assert(problems(source) == ["`Item` is not a case in scope", "Cannot find `Item` here"])
+    assert(
+      notes(source)
+        == ["A name that starts with an uppercase letter is a case, never a binding: a binding starts lowercase"]
+    )
+  }
+
+  test "a closure parameter is the same: a pattern, so the parser already decided" {
+    const source = r"""
+      fn applied(body: (Int) => Int): Int {
+        body(2)
+      }
+
+      print applied({ Value => Value * 2 })
+      """
+    assert(problems(source) == ["`Value` is not a case in scope", "Cannot find `Value` here"])
+  }
+}
+
+const shapes = r"""
+  public type Shape {
+    case Circle(radius: Int)
+  }
+
+  public fn area(shape: Shape): Int {
+    match shape {
+      .Circle(radius) => radius
+    }
+  }
+
+  public const limit = 10
+  """
+
+fn withShapes(body: String): Map<String, String> {
+  ["app/src/shapes.trb": shapes, "app/src/main.trb": body]
+}
+
+group "The spelling of an `as` alias" {
+  test "an alias of a type starts with an uppercase letter" {
+    const source = r"""
+      use Shape as figure from "./shapes"
+
+      const size: figure? = None
+      print size.isSome()
+      """
+    assert(problemsOf(withShapes(source)) == ["A type, trait or case starts with an uppercase letter: write `Figure`"])
+    assert(notesOf(withShapes(source)) == ["An `as` alias is spelled like the name it renames"])
+  }
+
+  test "an alias of a case is one too" {
+    const source = r"""
+      use Shape.Circle as round from "./shapes"
+
+      print 1
+      """
+    assert(problemsOf(withShapes(source)) == ["A type, trait or case starts with an uppercase letter: write `Round`"])
+  }
+
+  test "an alias of a function or a constant starts with a lowercase letter" {
+    const source = r"""
+      use area as Surface, limit as Cap from "./shapes"
+
+      print Cap
+      """
+    assert(
+      problemsOf(withShapes(source))
+        == [
+          "A function or constant starts with a lowercase letter: write `surface`",
+          "A function or constant starts with a lowercase letter: write `cap`",
+        ]
+    )
+  }
+
+  test "an alias that is spelled like what it renames is fine" {
+    const source = r"""
+      use Shape as Figure, area as surface from "./shapes"
+
+      const size: Figure? = None
+      print size.isSome()
+      print surface(Figure.Circle(1))
+      """
+    assert(problemsOf(withShapes(source)) == [])
+  }
+
+  test "a module alias starts with a lowercase letter" {
+    const source = r"""
+      use * as Shapes from "./shapes"
+
+      print 1
+      """
+    assert(problemsOf(withShapes(source)) == ["A module alias starts with a lowercase letter: write `shapes`"])
+  }
+}

@@ -348,11 +348,10 @@ fn collect_pattern_names(pattern: &Pattern, names: &mut Vec<(String, Span)>) {
     }
 }
 
-/// "Uppercase" is "the character changes when it is lowercased" - the same rule `torb_syntax`'s parser uses to tell
-/// a pattern binding from a case.
+/// "Uppercase" is `A` to `Z` - the same rule `torb_syntax`'s parser uses to tell a pattern binding from a case, and
+/// the one the checker reports at every declaration. A name is ASCII, so there is nothing else it could be.
 fn starts_upper_case(text: &str) -> bool {
-    let Some(first) = text.chars().next() else { return false };
-    first.to_lowercase().next().unwrap_or(first) != first
+    text.starts_with(|first: char| first.is_ascii_uppercase())
 }
 
 // --- Local scope ------------------------------------------------------------------------------------------------

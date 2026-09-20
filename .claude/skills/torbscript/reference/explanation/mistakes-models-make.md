@@ -21,9 +21,10 @@ right line first and the wrong one after it.
 
 ## The decision
 
-Read this list before writing TorbScript, and check your work against it afterwards. Twelve mistakes cover nearly
+Read this list before writing TorbScript, and check your work against it afterwards. Fifteen mistakes cover nearly
 everything: the call form, a bare case, `Err` instead of `Fail`, semicolons, `let`, taking a copy out of a collection,
-string length, bit operators, casts, an implicit `Some`, a trait name ending in `-able`, and a `match` with a `default`.
+string length, bit operators, casts, an implicit `Some`, a trait name ending in `-able`, a `match` with a `default`, a
+`MAX_SIZE` constant, a name that is not ASCII, and an arm binding nothing reads.
 
 ## Why
 
@@ -313,8 +314,74 @@ fn describe(value: Bool): String {
 ```
 
 `_` is the wildcard. Every arm is one arm, a `match` is an expression, it must be exhaustive, and an arm that can never be
-reached is an error. A `default` arm is worse than a syntax error: `default` starts with a lowercase letter, so it is a
-**binding** that silently matches everything and the `match` compiles.
+reached is an error. A `default` arm parses: `default` starts with a lowercase letter, so it is a **binding** that
+matches everything. It no longer compiles, because nothing reads it (mistake 15), but the message is about the binding
+and not about a keyword that does not exist.
+
+### 13. A constant is `maxSize`, never `MAX_SIZE`
+
+```trb
+const maxSize = 1024
+
+print maxSize
+```
+
+```trb error
+const MAX_SIZE = 1024
+print MAX_SIZE
+// error: A constant starts with a lowercase letter: TorbScript has no `MAX_SIZE` spelling, write `maxSize`
+```
+
+There is no MACRO_CASE anywhere in this language, at module level or inside a type. How a name is spelled is a rule the
+checker reports at the declaration: `A` to `Z` starts a type, a trait, a case, a type parameter and a type alias, and
+everything else starts with a lowercase letter or `_`. See [Naming](../language/syntax/naming.md).
+
+### 14. A name is ASCII, and text is not
+
+```trb
+/** Grüßt zurück. 👋 */
+const greeting = "Grüße 👋"
+
+print greeting
+```
+
+```trb error
+const größe = 1
+// error: A name is written in ASCII letters, digits and `_`
+```
+
+An identifier is `[A-Za-z_][A-Za-z0-9_]*`. A string, a character literal, a comment and a doc comment may contain
+anything Unicode has - so a German doc comment is ordinary, and a German name is not.
+
+### 15. An arm binding that nothing reads is an error
+
+```trb
+fn describe(value: Int?): String {
+  match value {
+    Some(number) => "there is {number}"
+    None => "nothing"
+  }
+}
+
+print describe(Some(1))
+```
+
+```trb error
+fn describe(value: Int?): String {
+  match value {
+    Some(number) => "something"
+    None => "nothing"
+  }
+}
+print describe(Some(1))
+// error: `number` is never read: write `_`, or `_number` to keep the name
+```
+
+This is the habit from Rust, where `Some(_)` and `Some(x)` are both fine and only one of them warns. Here the arm of a
+`match`, an `if const`/`if var` and a `while const` are the positions where a lowercase name is a *choice*: it always
+binds and never compares, so `limit =>` matches every value instead of comparing with the constant `limit`. Write `_`
+where nothing needs the value and `_reason` where the name is the documentation. An unused `const`, `for` binding or
+parameter is not part of the rule.
 
 ### The rest, in one table
 
@@ -335,6 +402,7 @@ reached is an error. A `default` arm is worse than a syntax error: `default` sta
 | `abs`, `sqrt`, `Expr` | `absolute`, `squareRoot`, `Expression` | names are written out |
 | a `for` loop that mutates the element | `items[index].field = value` | the loop variable is a `const` copy |
 | a getter like `getName()` | the field `name`, or a method `name()` | there are no properties and no `get` prefix |
+| `type point`, `fn Distance` | `type Point`, `fn distance` | the first letter of a name is a rule, not a convention |
 
 ### How to check yourself
 
@@ -352,7 +420,8 @@ which is where mistake 1 shows up. See [Verify your work](../tooling/verifying-y
 
 - [Syntax cheat sheet](../language/syntax/cheat-sheet.md) - every form of the language in one place.
 - [Command calls](../language/syntax/command-calls.md) - the canon behind mistake 1.
-- [Cases and match](../language/pattern-matching/cases-and-match.md) - the rules behind mistakes 2 and 12.
+- [Cases and match](../language/pattern-matching/cases-and-match.md) - the rules behind mistakes 2, 12 and 15.
+- [Naming](../language/syntax/naming.md) - the rules behind mistakes 13 and 14.
 - [Result](../language/errors/result.md) - the rules behind mistake 3.
 - [Coming from Rust](coming-from-rust.md) - the same ground for one language in detail.
 - [Verify your work](../tooling/verifying-your-work.md) - the commands that decide.

@@ -257,6 +257,12 @@ One file, or the `src/lib.trb` of a package: a set of declarations another file 
 [`use`](language/modules-and-packages/use.md), never something that runs on its own. See
 [Top-level code](language/modules-and-packages/top-level-code.md) for what a module may not hold.
 
+### Name
+
+An identifier: `[A-Za-z_][A-Za-z0-9_]*`, ASCII where text is not, and its first letter is a rule the checker reports at
+the declaration - `A` to `Z` for a type, a trait, a case, a type parameter and a type alias, lowercase or `_` for
+everything else. See [Naming](language/syntax/naming.md).
+
 ### Native
 
 A declaration implemented by the compiler and its runtime instead of by TorbScript code, such as `Array`, `String`
@@ -292,6 +298,12 @@ exit code 101, and nothing else runs. See [panic](language/errors/panic.md).
 
 The method that returns a changed copy, next to the [verb](#verb) that changes in place: `added` next to `add`, `sorted`
 next to `sort`. See [Verbs and participles](language/types/verbs-and-participles.md).
+
+### Pattern binding
+
+The name a pattern gives a part of the value it matched. A lowercase first letter makes it a binding and an uppercase
+one a [case](#case), and in a refutable position - a `match` arm, `if const`/`if var`, `while const` - the guard or the
+body has to read it. See [Pattern forms](language/pattern-matching/pattern-forms.md).
 
 ### Pipeline
 

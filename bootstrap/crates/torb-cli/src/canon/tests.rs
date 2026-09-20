@@ -347,6 +347,102 @@ fn an_imported_payload_less_case_loses_its_dot() {
     );
 }
 
+#[test]
+fn unused_bindings_are_off_by_default() {
+    unchanged("fn f() {\n  match x {\n    Some(value) => true\n    _ => false\n  }\n}");
+}
+
+#[test]
+fn a_binding_of_a_refutable_pattern_that_is_nowhere_in_the_arm_becomes_a_wildcard() {
+    let rules = [Rule::UnusedBindings];
+    assert_eq!(
+        apply("fn f() {\n  match x {\n    Some(value) => true\n    _ => false\n  }\n}", &rules),
+        "fn f() {\n  match x {\n    Some(_) => true\n    _ => false\n  }\n}"
+    );
+    // A bare name binds and matches everything, which is the arm the rule is really about
+    assert_eq!(
+        apply("fn f() {\n  match x {\n    1 => 0\n    limit => 2\n  }\n}", &rules),
+        "fn f() {\n  match x {\n    1 => 0\n    _ => 2\n  }\n}"
+    );
+    // Every position of a tuple, a list and a case, as deep as they go
+    assert_eq!(
+        apply("fn f() {\n  match x {\n    (a, [b, Some(c)]) => 0\n    _ => 1\n  }\n}", &rules),
+        "fn f() {\n  match x {\n    (_, [_, Some(_)]) => 0\n    _ => 1\n  }\n}"
+    );
+}
+
+#[test]
+fn a_binding_the_arm_uses_is_left_exactly_as_it_is() {
+    let rules = [Rule::UnusedBindings];
+    let leaves = |source: &str| assert_eq!(apply(source, &rules), source);
+    // In the body, in a guard, and in the body of the arm a guard belongs to
+    leaves("fn f() {\n  match x {\n    Some(value) => value\n    _ => 0\n  }\n}");
+    leaves("fn f() {\n  match x {\n    Some(value) if value > 1 => 0\n    _ => 1\n  }\n}");
+    leaves("fn f() {\n  match x {\n    Some(value) if ready() => value\n    _ => 0\n  }\n}");
+    // The use may be anywhere in the body, however deep
+    leaves("fn f() {\n  match x {\n    Some(value) => {\n      print \"got {value}\"\n    }\n    _ => {}\n  }\n}");
+    // `_name` is the documented form and is never rewritten
+    leaves("fn f() {\n  match x {\n    Some(_reason) => true\n    _ => false\n  }\n}");
+    // A name that stands in a comment or a string counts as a use: the rule sees text, and the checker says the rest
+    leaves("fn f() {\n  match x {\n    Some(value) => {\n      // value is ignored here\n      0\n    }\n    _ => 1\n  }\n}");
+    // A longer name that only contains the binding's name is not a use of it
+    assert_eq!(
+        apply("fn f() {\n  match x {\n    Some(value) => values\n    _ => 0\n  }\n}", &rules),
+        "fn f() {\n  match x {\n    Some(_) => values\n    _ => 0\n  }\n}"
+    );
+}
+
+#[test]
+fn every_alternative_of_a_pattern_is_rewritten_together() {
+    let rules = [Rule::UnusedBindings];
+    // The language requires every alternative to bind the same names, so all of them have to change or none
+    assert_eq!(
+        apply("fn f() {\n  match x {\n    Some(value) | Ok(value) => true\n    _ => false\n  }\n}", &rules),
+        "fn f() {\n  match x {\n    Some(_) | Ok(_) => true\n    _ => false\n  }\n}"
+    );
+    assert_eq!(
+        apply("fn f() {\n  match x {\n    Some(value) | Ok(value) => value\n    _ => 0\n  }\n}", &rules),
+        "fn f() {\n  match x {\n    Some(value) | Ok(value) => value\n    _ => 0\n  }\n}"
+    );
+}
+
+#[test]
+fn the_head_of_an_if_and_of_a_while_are_refutable_too() {
+    let rules = [Rule::UnusedBindings];
+    assert_eq!(
+        apply("fn f() {\n  if const Some(user) = lookup() {\n    stop()\n  }\n}", &rules),
+        "fn f() {\n  if const Some(_) = lookup() {\n    stop()\n  }\n}"
+    );
+    assert_eq!(
+        apply("fn f() {\n  if var Some(user) = lookup() {\n    user.stop()\n  }\n}", &rules),
+        "fn f() {\n  if var Some(user) = lookup() {\n    user.stop()\n  }\n}"
+    );
+    // The `else` is outside the binding's scope, so a name that only stands there is no use of it
+    assert_eq!(
+        apply("fn f() {\n  const x = if const Some(user) = lookup() {\n    1\n  } else {\n    user\n  }\n}", &rules),
+        "fn f() {\n  const x = if const Some(_) = lookup() {\n    1\n  } else {\n    user\n  }\n}"
+    );
+    assert_eq!(
+        apply("fn f() {\n  while const Some(item) = next() {\n    count()\n  }\n}", &rules),
+        "fn f() {\n  while const Some(_) = next() {\n    count()\n  }\n}"
+    );
+    assert_eq!(
+        apply("fn f() {\n  while const Some(item) = next() {\n    count(item)\n  }\n}", &rules),
+        "fn f() {\n  while const Some(item) = next() {\n    count(item)\n  }\n}"
+    );
+}
+
+#[test]
+fn an_irrefutable_binding_is_not_part_of_the_rule() {
+    let rules = [Rule::UnusedBindings];
+    let leaves = |source: &str| assert_eq!(apply(source, &rules), source);
+    leaves("fn f() {\n  const value = 1\n}");
+    leaves("fn f() {\n  const (first, second) = pair\n}");
+    leaves("fn f() {\n  for item in items {\n    stop()\n  }\n}");
+    leaves("fn f() {\n  items.each({ item => stop() })\n}");
+    leaves("fn f(value: Int) {\n  stop()\n}");
+}
+
 // --- The safety net -------------------------------------------------------------------------------------------------
 
 #[test]

@@ -1,6 +1,6 @@
 ---
 title: Lexical structure
-summary: A statement ends at the end of its line, a block comment ends at its first `*/`, and only three keywords are never reserved.
+summary: A statement ends at the end of its line, a name is ASCII while text is not, a block comment ends at its first `*/`, and only three keywords are never reserved.
 kind: reference
 status: stable
 order: 1
@@ -9,6 +9,7 @@ keywords:
   - statement continuation
   - contextual keywords
   - reserved words
+  - ASCII
 source:
   - CONCEPT.md#lexical-structure
 ---
@@ -104,6 +105,24 @@ print "moved {move(from: 3, to: 10)}, total {total}"
    // error: `where` is a keyword and cannot be used as a name here
    ```
 
+8. **A name is `[A-Za-z_][A-Za-z0-9_]*`.** The lexer reads the whole word and reports one problem for it, whatever the
+   letters in it are, so a name written in another script is one diagnostic and not one per character.
+
+   ```trb error
+   const größe = 1
+   // error: A name is written in ASCII letters, digits and `_`
+   ```
+
+9. **Text is not.** A string, a character literal, a comment and a doc comment may contain anything Unicode has - only
+   names are limited, so an identifier is the same text in every editor, every terminal and every back end.
+
+   ```trb check
+   /** Grüßt zurück. 👋 */
+   const greeting = "Grüße 👋"
+
+   print greeting
+   ```
+
 ## What this is not
 
 **A block comment is not nestable, even though CONCEPT.md's own prose reads as if a keyword could label a real
@@ -129,5 +148,5 @@ depth for `/*`.
 
 - [Doc comments](doc-comments.md) - what the text of a `/** */` comment may contain and which headings it uses.
 - [Command calls](command-calls.md) - argument labels, and where a call needs no parentheses.
-- [Naming conventions](naming-conventions.md) - what is convention here, as opposed to what this page enforces.
+- [Naming](naming.md) - the other rule about a name: which case its first letter is, and what is only a convention.
 - [Bindings](../values-and-types/bindings.md) - `const` and `var`, the two keywords a statement most often starts with.

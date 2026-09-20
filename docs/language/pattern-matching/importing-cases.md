@@ -9,6 +9,7 @@ keywords:
   - import
   - from
   - re-export
+  - as
 source:
   - CONCEPT.md#modules-and-packages
   - CONCEPT.md#algebraic-data-types-and-pattern-matching
@@ -95,6 +96,20 @@ public use <Type>.<Case> from "<path>"               re-exported under the same 
    print describe(Nothing)
    ```
 
+8. **An alias is spelled like the name it renames.** A case starts with an uppercase letter, so an alias of one does
+   too; an alias of a function or a constant starts with a lowercase letter. The checker reports it at the alias - see
+   [Naming](../syntax/naming.md).
+
+   ```trb error
+   use Option.None as nothing from "std/core"
+
+   fn empty(): Int? {
+     nothing
+   }
+   print empty()
+   // error: A type, trait or case starts with an uppercase letter: write `Nothing`
+   ```
+
 ## What this is not
 
 **Importing a case is not opening the type's namespace.** Importing `Option.Some` does not also make `None` bare, and
@@ -129,3 +144,4 @@ print describe(None)
 - [Cases and match](cases-and-match.md) - what changes once a case is imported.
 - [The language reference](../index.md) - where the full grammar of `use` will live.
 - [std/core](../../standard-library/core.md) - `Option` and `Result`, whose cases the prelude imports this way.
+- [Naming](../syntax/naming.md) - how an alias is spelled, and why the first letter is a rule.

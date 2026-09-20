@@ -11,6 +11,7 @@ keywords:
   - rest pattern
   - tuple pattern
   - list pattern
+  - unread binding
 source:
   - CONCEPT.md#algebraic-data-types-and-pattern-matching
   - examples/tour/src/04-adts-and-matching.trb
@@ -42,7 +43,8 @@ print describe(7)
 <pattern> | <pattern> | ...       any of the alternatives; every alternative binds the same names, with the same types
 <low>..<high>                     a half-open range
 <low>..=<high>                    an inclusive range
-<name>                            binds the value; a lowercase first letter
+<name>                            binds the value; a lowercase first letter, and the arm has to read it
+_name                             binds and keeps the name as documentation; nothing has to read it
 <name> if <condition>             binds, and requires the guard to hold as well
 _                                  matches anything, binds nothing
 (<pattern>, <pattern>, ...)       a tuple, matched by position
@@ -130,11 +132,37 @@ Type(<field>: <pattern>, ...)     the same, with the field named; the label has 
    // error: `match` does not handle `_`
    ```
 
-5. **`_` matches anything and binds nothing.** It is the pattern form, not a name; the same underscore in an
+5. **A binding of a refutable pattern has to be read.** In an arm of a `match`, in an `if const`/`if var` and in a
+   `while const`, a name the guard or the body never reads is an error: write `_`, or `_name` to keep the name as
+   documentation. This is what makes rule 4's binding a choice instead of a trap - see "What this is not" below.
+
+   ```trb error
+   fn describe(value: Int?): String {
+     match value {
+       Some(number) => "something"
+       None => "nothing"
+     }
+   }
+   print describe(Some(1))
+   // error: `number` is never read: write `_`, or `_number` to keep the name
+   ```
+
+   ```trb check
+   fn describe(value: Int?): String {
+     match value {
+       Some(_reason) => "something"
+       None => "nothing"
+     }
+   }
+
+   print describe(Some(1))
+   ```
+
+6. **`_` matches anything and binds nothing.** It is the pattern form, not a name; the same underscore in an
    expression is the implicit closure parameter, and the two never overlap because a pattern and an expression are
    never the same position.
 
-6. **A tuple pattern `(p1, p2, ...)` matches a tuple position by position**, and the number of positions has to equal
+7. **A tuple pattern `(p1, p2, ...)` matches a tuple position by position**, and the number of positions has to equal
    the number of fields of the tuple's type.
 
    ```trb
@@ -149,11 +177,11 @@ Type(<field>: <pattern>, ...)     the same, with the field named; the label has 
    print quadrant((1, 1))
    ```
 
-7. **`Type(...)` matches a case of the matched type, or reads the one constructor of a type backwards**, matching its
+8. **`Type(...)` matches a case of the matched type, or reads the one constructor of a type backwards**, matching its
    fields by position exactly as [Cases and match](cases-and-match.md) describes for `.Case(...)`. A label in front of
    a field pattern has to name the field at that position; it never reorders anything.
 
-8. **A list pattern `[p1, p2, ...]` matches a list of exactly that many items.** `[p1, ...rest]` matches a list of at
+9. **A list pattern `[p1, p2, ...]` matches a list of exactly that many items.** `[p1, ...rest]` matches a list of at
    least that many, and `rest` binds everything from that position on as a `List` of the item type. An item can also
    follow the rest - `[first, ...middle, last]` - in which case it is matched counting from the back, and the pattern
    needs a `_` arm alongside it: the checker does not fold "at least this many, from both ends" into the exhaustiveness
@@ -176,7 +204,9 @@ Type(<field>: <pattern>, ...)     the same, with the field named; the label has 
 
 **A pattern is not resolved against the value it is compared with; it is resolved against the scope and the first
 letter of what is written.** A lowercase name always binds, however the value came to be, and an uppercase name is
-always a case or a type - never a comparison with a constant of that name:
+always a case or a type - never a comparison with a constant of that name. That first letter is not a convention a
+reader has to trust: the checker guarantees it at every declaration, so a type is spelled `Limit` and a constant
+`limit` wherever either was written - see [Naming](../syntax/naming.md):
 
 ```trb
 const limit = 10
@@ -201,12 +231,29 @@ fn describe(value: Int): String {
   }
 }
 print describe(10)
-// error: This arm is never reached
+// error: `limit` is never read: write `_`, or `_limit` to keep the name
 ```
 
 `limit` inside the pattern is a new binding that shadows the constant and matches every value, not a comparison with
-it - which is exactly why renaming a constant can never silently turn an arm into a catch-all. Compare with a guard
-instead: `n if n == limit => "at the limit"`.
+it - which is exactly why renaming a constant can never silently turn an arm into a catch-all. The arm above gets a
+second message for the same reason (`_ => "elsewhere"` is never reached), but the binding is reported **even when the
+arm is the last one** and nothing is unreachable:
+
+```trb error
+const limit = 10
+
+fn describe(value: Int): String {
+  match value {
+    0 => "zero"
+    limit => "at the limit"
+  }
+}
+print describe(10)
+// error: `limit` is never read: write `_`, or `_limit` to keep the name
+```
+
+That is rule 5 doing its job: the arm is a catch-all, and the only thing that would make the binding look deliberate
+is reading it. Compare with a guard instead: `n if n == limit => "at the limit"`.
 
 **A range pattern is not a container check.** `4..=9` in a pattern is unrelated to `4..=9` as a value: the pattern
 compares the matched value against the two ends, it does not ask whether the value is inside a `Range` object.
@@ -217,3 +264,4 @@ compares the matched value against the two ends, it does not ask whether the val
 - [Exhaustiveness](exhaustiveness.md) - why every `match` has to cover every value, and what counts.
 - [Patterns in bindings and conditions](patterns-in-bindings.md) - where else besides `match` a pattern stands.
 - [Ranges](../values-and-types/ranges.md) - `Range` as a value, as opposed to a range pattern.
+- [Naming](../syntax/naming.md) - the rule the first letter of a pattern name follows from.

@@ -184,8 +184,19 @@ Simple to use like npm, strict like Maven. The rules exist so that adding a depe
 - Statements end at the end of the line. A statement continues on the next line if the current line ends with an
   operator, `,` or an open bracket, or if the next line starts with `.`, `?.`, a binary operator, `with` or `where`.
   There are no semicolons.
-- Naming is convention, not grammar: `UpperCamelCase` for types, traits, type parameters and variants,
-  `lowerCamelCase` for everything else. The linter checks it, the compiler does not care.
+- **A name is ASCII**: `[A-Za-z_][A-Za-z0-9_]*`. A letter from another script where a name could stand is one lexer
+  error for the whole word ("A name is written in ASCII letters, digits and `_`"). Strings, char literals, comments and
+  doc comments are full Unicode - only names are limited, so an identifier is the same text in every editor, every
+  terminal and every back end, and there is no normalization question to answer.
+- **How a name is spelled is grammar, not convention.** "Uppercase" is `A` to `Z`; a name that starts with `_` or `a`
+  to `z` is lowercase. `UpperCamelCase` for a `type`, a `shared type`, a `trait`, a `case`, a type parameter (a size
+  parameter like `Size` too), a type alias and an `as` alias of one of those; `lowerCamelCase` for everything else - a
+  `fn`, a field, a parameter, a tuple label, a `const`/`var`, a module constant, a closure parameter, a module alias
+  and an `as` alias of a function or a constant. **There is no MACRO_CASE**: a module constant is `maxSize`, never
+  `MAX_SIZE`. The checker reports it once per declaration, at the name ("A type starts with an uppercase letter: write
+  `Point`"). The reason it is a rule and not a lint: the first letter of a name in a pattern already decides whether
+  the pattern binds or names a case, so it has to mean the same thing at every declaration. A pattern binding needs no
+  check of its own for exactly that reason - an uppercase name there *is* a case.
 - Keywords are reserved, except where they cannot be confused: after a `.` and as argument labels they are ordinary
   names (`query.where { ... }`, `move(from: a, to: b)`). A parameter cannot be named like a keyword (it would be
   unusable inside of the function). `from`, `as` and `by` are contextual and not reserved at all.
@@ -1321,8 +1332,8 @@ match (shape, position) {                  // Tuples
 
 match list {
   [] => "empty"
-  [only] => "one element"
-  [first, ...rest] => "many"
+  [only] => "one element: {only}"
+  [first, ...rest] => "{first} and {rest.length()} more"
 }
 ```
 
@@ -1355,12 +1366,24 @@ must be a `var` path, and the body runs inside a `var` access to it, so `iterato
 In a pattern `_` is the wildcard, in an expression `_` is the implicit closure parameter. The positions never overlap.
 
 **A binding in a pattern starts with a lowercase letter, and a name that starts with an uppercase one is never a
-binding.** An uppercase name is resolved through the scope: an imported case (`None`, `Some(value)`) or a type read
-backwards (`Point(x, y)`). A case that is not imported keeps its dot or its type (`.Circle`, `Shape.Circle`), and a
-constant is compared with a guard (`n if n == limit`). So the trap stays closed: a misspelled `Nome` is "`Nome` is not
-a case in scope", never a catch-all, and renaming a constant cannot turn an arm into one. What decides is the `use` at
-the top of the file, never the expected type. An uppercase binding is a compile error, not a lint (`_Found` and `_`
-keep their own rule and bind).
+binding.** "Uppercase" is `A` to `Z` - a name is ASCII, so there is nothing else it could be. An uppercase name is
+resolved through the scope: an imported case (`None`, `Some(value)`) or a type read backwards (`Point(x, y)`). A case
+that is not imported keeps its dot or its type (`.Circle`, `Shape.Circle`), and a constant is compared with a guard
+(`n if n == limit`). So the trap stays closed: a misspelled `Nome` is "`Nome` is not a case in scope", never a
+catch-all, and renaming a constant cannot turn an arm into one. What decides is the `use` at the top of the file, never
+the expected type. An uppercase binding is a compile error, not a lint (`_Found` and `_` keep their own rule and bind).
+This is the rule the spelling of *every* declaration follows from (see "Lexical Structure"): the first letter has to
+mean the same thing wherever a name is written, or reading a pattern would be guesswork.
+
+**A binding of a refutable pattern that is never read is an error.** That is an arm of a `match`, an `if const`/`if
+var` and a `while const` - the positions where the pattern may fail and a name is therefore a choice. A lowercase name
+always binds, so `limit =>` matches *every* value and shadows the constant `limit` instead of comparing with it; the
+one thing that tells that mistake from a binding somebody meant is whether the guard or the body reads it. So an
+unread one says "`limit` is never read: write `_`, or `_limit` to keep the name". A name that starts with `_` is
+exempt, which is what keeps `_reason` as documentation of what an arm ignores. For alternatives it is the one binding
+the body sees that counts. The irrefutable positions - `const x = ...`, destructuring, `for`, closure and function
+parameters - are not part of it: nothing there can be mistaken for a comparison, so an unused one is a lint
+(`torb lint`) and not an error.
 
 ## Traits
 
@@ -2614,6 +2637,22 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   `value`; an element may be an `&` group, so the group delegates together. The old form (`with A, B by field` for
   the whole list) is gone rather than kept as a shorthand, so that "which trait goes where" is always in the line
   and never implied by what the type happens to have.
+- **A name is ASCII** (`[A-Za-z_][A-Za-z0-9_]*`), while strings, char literals and comments stay full Unicode. An
+  identifier is then the same text everywhere - in an editor, in a terminal, in every back end's symbol table - and
+  there is no Unicode normalization question to answer about whether two names are the same name. A letter from
+  another script where a name could stand is one lexer error for the whole word, not one per character.
+- **How a name is spelled is a rule of the language, reported at the declaration**, and not a lint. It follows from a
+  rule that was there already: the first letter of a name in a pattern decides whether the pattern binds or names a
+  case. A first letter that means one thing in a pattern and nothing anywhere else would make reading a pattern
+  guesswork, so the checker says it once per declaration instead. **There is no MACRO_CASE**: a module constant is
+  `maxSize`, and the message about `MAX_SIZE` says that rather than only naming the first letter. A pattern binding
+  needs no check of its own, because the parser reads an uppercase name there as a case to begin with.
+- **A binding of a refutable pattern that is never read is an error** - in an arm of a `match`, in an `if const`/`if
+  var`, in a `while const`. A lowercase name in a pattern always binds, so `limit =>` matches every value and shadows
+  the constant `limit` instead of comparing with it, and whether the guard or the body reads the binding is the only
+  thing that tells that mistake from a binding somebody meant. `_` discards, `_limit` keeps the name as documentation.
+  The irrefutable positions are deliberately left out: nothing there can be mistaken for a comparison, so an unused
+  binding is `torb lint`'s business.
 
 ## Open Questions
 

@@ -26,13 +26,15 @@ pub enum EditKind {
     IndentedString,
     /// `.None` becomes `None`
     CasePattern,
+    /// A binding of a refutable pattern that nobody reads becomes `_`
+    UnusedBinding,
 }
 
 impl EditKind {
-    /// Whether the syntax tree has to come out the same (modulo spans and `CallStyle`). The case patterns of a `use`
-    /// change the tree on purpose - that is the point of the rule - so they are checked by parsing alone.
+    /// Whether the syntax tree has to come out the same (modulo spans and `CallStyle`). Two rules change the tree on
+    /// purpose - that is the point of them - so those are checked by parsing alone.
     pub fn preserves_the_tree(self) -> bool {
-        self != EditKind::CasePattern
+        !matches!(self, EditKind::CasePattern | EditKind::UnusedBinding)
     }
 }
 

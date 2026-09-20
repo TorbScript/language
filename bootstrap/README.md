@@ -18,11 +18,12 @@ cargo run --release -- highlight file.trb                     # Semantic tokens 
 cargo test                                                    # Includes the differential tests against compiler/
 ```
 
-`torb canon [--check] [--rule calls|strings|imported-case-patterns]... <path>...` writes TorbScript sources in the
-canon of the formatter (CONCEPT, "Formatter Canon"), over the syntax tree and never with a regular expression: `calls`
-puts a call in command form wherever the grammar allows it and in parentheses everywhere else, `strings` indents a
-multi-line `"""`. Both run by default; `imported-case-patterns` (`.None` becomes `None`) waits for a parser change and
-has to be asked for. It is listed in `torb help` like every other command - stage 0 has no hidden ones - and it is
+`torb canon [--check] [--rule calls|strings|imported-case-patterns|unused-bindings]... <path>...` writes TorbScript
+sources in the canon of the formatter (CONCEPT, "Formatter Canon"), over the syntax tree and never with a regular
+expression: `calls` puts a call in command form wherever the grammar allows it and in parentheses everywhere else,
+`strings` indents a multi-line `"""`. Both run by default; the two that change the syntax *tree* have to be asked for -
+`imported-case-patterns` (`.None` becomes `None`) and `unused-bindings` (a binding of a refutable pattern that the arm
+never mentions becomes `_`). It is listed in `torb help` like every other command - stage 0 has no hidden ones - and it is
 temporary: milestone 8's `torb format`, written in TorbScript, enforces the same canon, and this goes away with the rest
 of stage 0. Every edit is applied on its own and the file is parsed again; it only stays if the syntax tree is the one
 from before with every span and every `CallStyle` erased, so a run cannot change what a program means. A file that does

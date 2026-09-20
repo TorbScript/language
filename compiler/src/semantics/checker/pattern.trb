@@ -2,6 +2,7 @@ use Span from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use Pattern, FieldPattern, Name from "../../syntax/ast"
 use SymbolId from "../symbols"
+use BindingId from "./context"
 use editDistance from "../resolve-types"
 use TypeId, TypeForm, FieldSignature from "./type"
 use Checker, Expectation, LocalBinding from "./context"
@@ -172,6 +173,35 @@ public fn declareName(var checker: Checker, name: String, annotation: TypeId, at
     return
   }
   const _ = checker.declareBinding LocalBinding(name, annotation, isVar, at)
+}
+
+/**
+ * A binding of a **refutable** pattern that nobody reads is an error: an arm of a `match`, an `if const`/`if var`, a
+ * `while const`. A lowercase name in a pattern always binds and never compares, so `limit =>` is a catch-all that
+ * shadows the constant `limit` - and the only thing that tells a binding somebody meant from that mistake is whether it
+ * is read. A name that starts with `_` is exempt: `_reason` keeps the name as documentation.
+ *
+ * The caller takes `checker.bindingsHere()` right after the pattern was checked and calls this after the guard and the
+ * body, because a read anywhere in either counts. Irrefutable positions - `const x = ...`, destructuring, `for`,
+ * closure and function parameters - are not part of the rule; `torb lint` takes those.
+ */
+public fn requireReadBindings(var checker: Checker, bound: List<BindingId>) {
+  for binding in bound {
+    if checker.isBindingRead(binding) {
+      continue
+    }
+    const found = checker.binding binding
+    if found.name.startsWith("_") {
+      continue
+    }
+    checker.reportHere(
+      Diagnostic.error("`{found.name}` is never read: write `_`, or `_{found.name}` to keep the name", found.at)
+        .withNote(
+          "A name in a pattern always binds and never compares, so a binding nobody reads hides what the pattern"
+            + " matches"
+        )
+    )
+  }
 }
 
 /** The `Item` of the `Iterable<Item>` a list pattern matches, which is also the type of every column it opens. */

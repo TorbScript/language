@@ -18,6 +18,7 @@ use settleChanges from "./mutation"
 use buildImplementations, checkCoherence, checkImplementations, extensionAt from "./implementation"
 use scriptReceiverOf, checkReceiverScript from "./receiver"
 use checkShape from "./declaration"
+use checkSpelling from "./spelling"
 
 /**
  * Checks the declarations of the given modules: every type position becomes a type, every declaration a signature, and
@@ -97,6 +98,9 @@ public type Stopwatch {
  * scope in the next.
  */
 public fn checkModule(var checker: Checker, module: ModuleId) {
+  // How every name of the file is spelled: one walk over its syntax, before anything is resolved, and for a
+  // configuration script as well as for a module
+  checkSpelling checker, module
   // `project.trb` and a configuration file are bodies, not modules: they are checked against their receiver (4.7)
   if checker.program.graph.at(module).receiver.isSome() {
     if const Some(receiver) = scriptReceiverOf(checker, module) {

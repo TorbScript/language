@@ -124,6 +124,9 @@ impl Lexer<'_> {
         }
     }
 
+    /// A name is ASCII: `[A-Za-z_][A-Za-z0-9_]*`. The whole run of word characters is still read, so that a name with
+    /// letters from another script in it is **one** diagnostic and not one per character, and the token stays an
+    /// `Identifier` so that nothing else is reported about the line it stands in.
     fn word(&mut self, start: usize) {
         while let Some(character) = self.peek() {
             if character == '_' || character.is_alphanumeric() {
@@ -131,6 +134,14 @@ impl Lexer<'_> {
             } else {
                 break;
             }
+        }
+        let text = &self.source[start..self.position];
+        if !text.is_ascii() {
+            let span = Span::new(start, self.position);
+            self.diagnostics.push(
+                Diagnostic::error("A name is written in ASCII letters, digits and `_`", span)
+                    .with_note("Text is not: a string, a character literal and a comment may contain anything"),
+            );
         }
         let kind = match Keyword::from_text(&self.source[start..self.position]) {
             Some(keyword) => TokenKind::Keyword(keyword),
@@ -536,6 +547,25 @@ mod tests {
         assert_eq!(kinds("&"), [Ampersand, EndOfFile]);
         assert_eq!(kinds("&&"), [AndAnd, EndOfFile]);
         assert_eq!(kinds("A & B"), [Identifier, Ampersand, Identifier, EndOfFile]);
+    }
+
+    #[test]
+    fn a_name_is_written_in_ascii_letters_digits_and_underscore() {
+        const RULE: &str = "A name is written in ASCII letters, digits and `_`";
+        let messages = |source: &str| lex(source).diagnostics.into_iter().map(|problem| problem.message).collect::<Vec<_>>();
+        assert_eq!(messages("const größe = 1"), [RULE]);
+        // One diagnostic for the whole run, whatever the letters are and wherever they stand in the name
+        assert_eq!(messages("const Ünïcödé = 1"), [RULE]);
+        // A digit from another script counts too, and a name cannot begin with one anyway
+        assert_eq!(messages("const count٣ = 1"), [RULE]);
+        // ...and the token stays a name, so nothing else is reported about the line
+        let lexed = lex("größe");
+        assert_eq!(lexed.tokens.iter().map(|token| token.kind.clone()).collect::<Vec<_>>(), [TokenKind::Identifier, TokenKind::EndOfFile]);
+        assert_eq!(lexed.diagnostics[0].span, Span::new(0, 7));
+        assert_eq!(lexed.diagnostics[0].notes, ["Text is not: a string, a character literal and a comment may contain anything"]);
+        // Text, characters and comments stay full Unicode
+        assert!(messages("\"Grüße 👋\" // Übrigens").is_empty());
+        assert!(messages("'ß'").is_empty());
     }
 
     #[test]

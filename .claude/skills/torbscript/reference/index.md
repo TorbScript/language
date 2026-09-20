@@ -197,10 +197,10 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `language/syntax/doc-comments.md` - **Doc comments** (reference): A `/** */` comment attaches to the declaration written directly after it, and everything that can be declared - including a parameter, a field or a case - can have one.
 - `language/syntax/generics-or-comparison.md` - **Angle brackets or comparison** (reference): A `<` after a name starts a type argument list only if what follows parses as types up to a matching `>` that is itself followed by a token a comparison could not have.
 - `language/syntax/index.md` - **Syntax** (index): How TorbScript is written: where a statement ends, how a call is spelled, and what a literal looks like.
-- `language/syntax/lexical-structure.md` - **Lexical structure** (reference): A statement ends at the end of its line, a block comment ends at its first `*/`, and only three keywords are never reserved.
+- `language/syntax/lexical-structure.md` - **Lexical structure** (reference): A statement ends at the end of its line, a name is ASCII while text is not, a block comment ends at its first `*/`, and only three keywords are never reserved.
 - `language/syntax/literals.md` - **Literals** (reference): An integer, a decimal, a character and a string each have exactly one literal form, and a literal adapts to the type it is expected to have.
 - `language/syntax/multi-line-strings.md` - **Multi-line strings** (reference): A `\"\"\"` string is dedented by the indentation of its first line with content, so a block of text reads at the indentation of the code around it instead of jammed against the left margin.
-- `language/syntax/naming-conventions.md` - **Naming conventions** (reference): A type is UpperCamelCase and everything else is lowerCamelCase, a name is written out rather than abbreviated, and today nothing enforces either rule.
+- `language/syntax/naming.md` - **Naming** (reference): A name is written in ASCII letters, digits and `_`, a type starts with an uppercase letter and everything else with a lowercase one, and the compiler reports both at the declaration.
 - `language/syntax/string-interpolation.md` - **String interpolation** (reference): `{expression}` inside a string runs the expression and shows it, a literal brace is written `\{` or `\}`, and the expression inside the braces has to fit on one line.
 
 ## language/traits

@@ -103,20 +103,20 @@ group "Bindings" {
 
   test "a case of a type that is not there" {
     const source = "type Shape \{\n  case Circle(radius: Int)\n\}\n\n"
-      + "fn probe(shape: Shape) \{\n  match shape \{\n    .Square(size) => print \"square\"\n  \}\n\}"
+      + "fn probe(shape: Shape) \{\n  match shape \{\n    .Square(_) => print \"square\"\n  \}\n\}"
     assert(problems(source) == ["`Shape` has no case `Square`"])
   }
 
   test "a case that is given the wrong number of patterns" {
     const source = "type Shape \{\n  case Circle(radius: Int)\n\}\n\n"
-      + "fn probe(shape: Shape) \{\n  match shape \{\n    .Circle(radius, width) => print \"circle\"\n  \}\n\}"
+      + "fn probe(shape: Shape) \{\n  match shape \{\n    .Circle(_, _) => print \"circle\"\n  \}\n\}"
     assert(problems(source) == ["`Circle` has 1 field, 2 patterns were given"])
   }
 
   test "an imported case is bare in a pattern, with fields and without" {
-    const found = probe inBody("  const text = match Some(2) \{\n    Some(value) => \"one\"\n    None => \"none\"\n  \}")
+    const found = probe inBody("  const text = match Some(2) \{\n    Some(_) => \"one\"\n    None => \"none\"\n  \}")
     assert(found.patternTypeOf("None") == "Option<Int64>")
-    assert problems(inBody("  const text = match Some(2) \{\n    Some(value) => \"one\"\n    None => \"none\"\n  \}")).isEmpty()
+    assert problems(inBody("  const text = match Some(2) \{\n    Some(_) => \"one\"\n    None => \"none\"\n  \}")).isEmpty()
   }
 
   test "an aliased case works in an expression and in a pattern (`use Option.Some as Present`)" {
@@ -140,7 +140,7 @@ group "Bindings" {
   }
 
   test "an uppercase name that is no case in scope, instead of a catch-all binding" {
-    const source = inBody "  const text = match Some(2) \{\n    Some(value) => \"one\"\n    Nome => \"none\"\n  \}"
+    const source = inBody "  const text = match Some(2) \{\n    Some(_) => \"one\"\n    Nome => \"none\"\n  \}"
     assert(problems(source) == ["`Nome` is not a case in scope"])
     const rule = "A name that starts with an uppercase letter is a case, never a binding: a binding starts lowercase"
     assert(notes(source)[0] == rule)
@@ -169,7 +169,8 @@ group "Bindings" {
   }
 
   test "a binding starts with a lowercase letter, and an underscore keeps its own rule" {
-    assert problems(inBody("  const text = match 1 \{\n    found => \"one\"\n  \}")).isEmpty()
+    // `found` is read, because a binding of an arm nobody reads is an error of its own (milestone 4.10)
+    assert problems(inBody("  const text = match 1 \{\n    found => found\n  \}")).isEmpty()
     assert problems(inBody("  const text = match 1 \{\n    _found => \"one\"\n  \}")).isEmpty()
     // Even where nothing about the subject has cases, an uppercase name is not a binding
     assert(
@@ -205,14 +206,14 @@ group "Scopes" {
 
   test "the pattern of an `if const` binds for the body of the `if` only" {
     const source = inBody(
-      "  const maybe: Int? = None\n  if const Some(found) = maybe \{\n    print \"yes\"\n  \}\n  const value = found"
+      "  const maybe: Int? = None\n  if const Some(found) = maybe \{\n    print found\n  \}\n  const value = found"
     )
     assert(problems(source) == ["Cannot find `found` here"])
   }
 
   test "a `match` arm binds for its own body only" {
     const source = "type Shape \{\n  case Circle(radius: Int)\n  case Empty\n\}\n\n"
-      + "fn probe(shape: Shape) \{\n  match shape \{\n    .Circle(radius) => print \"circle\"\n    .Empty => print \"none\"\n  \}\n  const value = radius\n\}"
+      + "fn probe(shape: Shape) \{\n  match shape \{\n    .Circle(radius) => print radius\n    .Empty => print \"none\"\n  \}\n  const value = radius\n\}"
     assert(problems(source) == ["Cannot find `radius` here"])
   }
 }

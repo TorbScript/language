@@ -17,7 +17,7 @@ use isQuotation, isQuotationValue, checkQuotation, openThunk, closeThunk from ".
 use checkBlock, checkDiscarded, scopeHere, taskValueOf from "./statement"
 use checkSubject from "./place"
 use markReferenceBindings from "./mutation"
-use checkPattern from "./pattern"
+use checkPattern, requireReadBindings from "./pattern"
 use MatchArmPlan, armPlanOf, checkExhaustive, checkConditionPattern from "./exhaustive"
 use checkDeclaration from "./check"
 
@@ -1675,16 +1675,20 @@ fn ifType(
   // `if const Some(user) = lookup()` binds for the body of the `if` and for nothing after it
   checker.openScope()
   checkCondition checker, condition, false
+  // What the pattern in the head bound: every one of those names has to be read in the body (milestone 4.10)
+  const bound = checker.bindingsHere()
   const alternative = match otherwise {
     Some(found) => found
     // An `if` without an `else` has no value, so its body is checked as a block of statements
     None => {
       const _ = checkBlock checker, then, Expectation.Statement
+      requireReadBindings checker, bound
       checker.closeScope()
       return checker.voidType
     }
   }
   const first = checkBlock checker, then, expected
+  requireReadBindings checker, bound
   checker.closeScope()
   const second = checkExpression checker, alternative, expected
   if const Some(annotation) = expected.annotationOf() {
@@ -1733,6 +1737,8 @@ fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, ex
   for arm in arms {
     checker.openScope()
     checkPattern checker, arm.pattern, found, false
+    // The names this arm bound: the guard and the body are where they have to be read (milestone 4.10)
+    const bound = checker.bindingsHere()
     const plan = armPlanOf checker, arm, found
     plans.add plan
     if const Some(guard) = arm.guard {
@@ -1740,6 +1746,7 @@ fn matchType(var checker: Checker, subject: Expression, arms: List<MatchArm>, ex
       const _ = checkExpression checker, guard, Expectation.Type(boolean)
     }
     produced.add checkExpression(checker, arm.body, expected)
+    requireReadBindings checker, bound
     checker.closeScope()
   }
   const _ = checkExhaustive checker, found, arms, plans, subject.span

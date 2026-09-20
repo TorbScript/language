@@ -111,7 +111,8 @@ r"text"                                      a raw string: no escapes, no interp
 
 ```text
 _                                            the wildcard
-name                                         binds, because it starts lowercase
+name                                         binds, because it starts lowercase; a refutable arm has to read it
+_name                                        binds and keeps the name; nothing has to read it
 Case(field)                                  an imported case; never binds
 .Case(field)                                 a case of the type being matched
 Type.Case(field)                             a case written out
@@ -168,16 +169,20 @@ panic "message"                               aborts with exit code 101
 3. **A case is never bare unless the file imports it.** `Some`, `None`, `Ok` and `Fail` are bare because the prelude
    imports them.
 4. **In a pattern, a lowercase name binds and an uppercase name never does.** An uppercase binding is a compile error.
-5. **`const` is deep.** Through a `const` binding nothing changes.
-6. **A field is `const` unless marked `var`; a member is public unless marked `private`; a top-level declaration is
+5. **A binding of a refutable pattern has to be read.** In an arm of a `match`, an `if const`/`if var` and a
+   `while const`, a binding the guard and the body never read is an error: write `_`, or `_name` to keep the name.
+6. **A name is ASCII, and its first letter is a rule.** `[A-Za-z_][A-Za-z0-9_]*`; `A`-`Z` starts a type, a trait, a case,
+   a type parameter and a type alias, and everything else starts lowercase. There is no `MAX_SIZE`.
+7. **`const` is deep.** Through a `const` binding nothing changes.
+8. **A field is `const` unless marked `var`; a member is public unless marked `private`; a top-level declaration is
    private to its file unless marked `public`.**
-7. **A `public` function and a trait method never infer their result type.** Without one they answer `Void`.
-8. **`{` in expression position is always a closure**, never a block. `do { ... }` evaluates a block immediately.
-9. **A `match` is exhaustive, and an unreachable arm is an error.**
-10. **An expression statement has to be `Void` or `Never`**, unless the call has a `var` receiver or a `var` argument.
-11. **Mutation needs a `var` path from the binding down**: a `var` binding, `var` parameter or `var self`, then `var`
+9. **A `public` function and a trait method never infer their result type.** Without one they answer `Void`.
+10. **`{` in expression position is always a closure**, never a block. `do { ... }` evaluates a block immediately.
+11. **A `match` is exhaustive, and an unreachable arm is an error.**
+12. **An expression statement has to be `Void` or `Never`**, unless the call has a `var` receiver or a `var` argument.
+13. **Mutation needs a `var` path from the binding down**: a `var` binding, `var` parameter or `var self`, then `var`
     fields.
-12. **A `var` that is changed and never read afterwards is a compile error**, and so is the discarded result of a method
+14. **A `var` that is changed and never read afterwards is a compile error**, and so is the discarded result of a method
     that takes `self`.
 
 ## What this is not
@@ -197,6 +202,8 @@ The forms that look right and are not:
 | `list[i]` for a missing index | `list.get(i)` | `list[i]` panics out of bounds |
 | `a & b` on integers | `a.bitwiseAnd(b)` | there are no bit operators |
 | `x as Int` | `Int.from(x)` | there are no casts |
+| `const MAX_SIZE = 1` | `const maxSize = 1` | there is no MACRO_CASE |
+| `Some(value) => 0` | `Some(_) => 0` | an arm binding nothing reads is an error |
 | `class`, `interface`, `enum`, `struct` | `type`, `trait` | one keyword for data, one for capability |
 | `impl Trait for Type` | `extend Type with Trait` | `with` is the only word for it |
 | `Hashable`, `Comparable` | `Hash`, `Compare` | a single-method trait is its method |

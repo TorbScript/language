@@ -36,6 +36,6 @@ design, which is in [internals](../internals/index.md). A page here is about wha
 - **[project.lock.trb](project-lock-trb.md)** _(planned)_ - The file that is specified to pin the exact version, content hash and registry of every dependency, direct or transitive - no command reads or writes it yet.
 - **[torb doc](torb-doc.md)** _(planned)_ - torb doc will render every doc comment of a package into documentation, the same way the standard-library reference's Declarations sections are filled in by hand today.
 - **[torb format](torb-format.md)** _(planned)_ - torb format will take over the formatter canon from torb canon and own the layout the canon does not decide - line length, blank lines, and where a long call breaks.
-- **[torb lint](torb-lint.md)** _(planned)_ - torb lint will check the naming and style rules the type checker does not - full words instead of abbreviations, is/has for a computed question, an adjective for a Bool field - none of which is enforced today.
+- **[torb lint](torb-lint.md)** _(planned)_ - torb lint will check the style rules the type checker does not - full words instead of abbreviations, is/has for a computed question, an adjective for a Bool field, an unused irrefutable binding - none of which is enforced today.
 
 <!-- torb:index:end -->

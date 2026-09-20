@@ -782,7 +782,8 @@ value; `if` and `match` are expressions, and an `if` without an `else` has type 
 ### 5.5 Patterns, exhaustiveness and redundancy
 
 Patterns are checked against a type and bind names (a name that starts with a lowercase letter binds, never
-matches a constant; an uppercase one is resolved through the scope and is a case or a type, never a binding). Then
+matches a constant; an uppercase one - `A` to `Z`, and a name is ASCII - is resolved through the scope and is a case or
+a type, never a binding). Then
 exhaustiveness and reachability are decided with Maranget's usefulness algorithm over a pattern matrix, which gives
 both answers and a witness for free:
 
@@ -800,6 +801,16 @@ both answers and a witness for free:
 - An arm that is not useful: "This arm is never reached", with the arm that covers it as a note. An error, like every
   other dead code in the language (gap 25).
 - `MatchPlan` records the constructor test order and the bindings per arm, so the lowering does not repeat the work.
+- **A binding of a refutable pattern that nobody reads is an error**: "`limit` is never read: write `_`, or `_limit` to
+  keep the name". The refutable positions are an arm of a `match`, an `if const`/`if var` and a `while const` - the ones
+  where a name is a choice instead of the only way to name a part. A lowercase name always binds, so `limit =>` matches
+  every value and shadows the constant instead of comparing with it, and the read is the only thing that tells that
+  mistake from a binding somebody meant. "Read" is a name in an expression, which is one place in the checker
+  (`localTarget` in `name.trb`), so an assignment to the binding counts too. `Checker.bindingsHere()` gives the caller
+  the bindings the pattern just declared - for alternatives the one set the body sees - and `requireReadBindings` runs
+  after the guard and the body. A name that starts with `_` is exempt. The irrefutable positions (`const`,
+  destructuring, `for`, closure and function parameters) are `torb lint`'s, because nothing there can be mistaken for a
+  comparison.
 
 `if const Some(user) = e` and `while const Some(x) = e` check the pattern against the type of `e`, must be
 refutable-but-possible (an irrefutable pattern gets "This pattern always matches. Use `const`"), and bind for the
@@ -827,6 +838,17 @@ advances `current` (gap 3); the subject must then be a mutable place and the exc
   `Task<...>` or a closure passed to `spawn` (milestone 7 activates the rule; the checker has the hook).
 - `private(var)` is only valid on a field. `native` is only valid in a `std` package. `shared` on a trait means only
   `shared type`s may implement it and a value of it counts as shared.
+- **How a name is spelled is a rule of the language** (`spelling.trb`), reported once per declaration at the name's
+  span. `A` to `Z` is uppercase and `_`/`a` to `z` is lowercase; a name is ASCII, so there is no third answer. Uppercase:
+  `type`, `shared type`, `trait`, `case`, a type parameter (a size parameter too), a type alias, and an `as` alias of an
+  imported type, trait or case. Lowercase: `fn`, fields, parameters, tuple labels (in a type and in a literal),
+  `const`/`var`, module constants (**no MACRO_CASE**: "A constant starts with a lowercase letter: TorbScript has no
+  `MAX_SIZE` spelling, write `maxSize`"), closure parameters, the name of a `...rest` pattern, a module alias, and an
+  `as` alias of a function or a constant. It is **one syntactic walk** over the module's file, asks nothing of the types,
+  and therefore never sees a name the compiler generated itself. Two things follow from the parser and not from this
+  pass: a pattern binding cannot be uppercase at all (an uppercase name there is a case), and `const Limit = 10` parses
+  `Limit` as a case pattern - which used to declare nothing and report nothing, so a pattern that is a bare uppercase
+  name is read here as the constant it was meant to be.
 
 ---
 
@@ -920,13 +942,14 @@ compiler/src/semantics/checker/
 ├ call.trb            Arguments, labels, defaults, variadics, spread, trailing closures, lazy
 ├ expression.trb      check/infer for every ExpressionKind, operators, interpolation, `?`, `??`, `?.`
 ├ closure.trb         Closures from an expected function type, implicit parameters, receiver closures
-├ pattern.trb         Patterns and the names they bind
+├ pattern.trb         Patterns and the names they bind, and that a refutable binding has to be read
 ├ usefulness.trb      The pattern matrix: usefulness, specialization by constructor, the default matrix, witnesses
 ├ exhaustive.trb      Patterns to the matrix and back: refutability, the messages, the MatchPlan
 ├ place.trb           Places, mutability, exclusivity, `shared` paths
 ├ mutation.trb        Dead changes, and whether a closure may outlive its call
 ├ statement.trb       Statements, blocks, definite return, loops, assignment
 ├ declaration.trb     Types, traits, extends, functions: requirements, visibility, top-level rules
+├ spelling.trb        How every name of a file is spelled: uppercase for a type, lowercase for a value
 ├ quote.trb           Expression<Value>: what is quotable, the tree, the captures
 └ check.trb           The entry point
 ```
@@ -969,6 +992,9 @@ public fn checkExhaustive(var checker: Checker, subject: TypeId, arms: List<Matc
 public fn armPlanOf(var checker: Checker, arm: MatchArm, subject: TypeId): MatchArmPlan
 public fn checkConditionPattern(var checker: Checker, pattern: Pattern, subject: TypeId, isLoop: Bool)
 public fn requireIrrefutable(var checker: Checker, pattern: Pattern, subject: TypeId, what: String, kind: String)
+public fn requireReadBindings(var checker: Checker, bound: List<BindingId>)                       // pattern.trb
+
+public fn checkSpelling(var checker: Checker, module: ModuleId)                                   // spelling.trb
 ```
 
 ### 7.1 What the IR lowering reads
@@ -1826,6 +1852,27 @@ What was deliberately left open, and why:
   a front end that refuses a type the standard library declares would have to refuse `Task` and `Channel` with it. What
   is missing is a back end. And `Float`'s not-a-number value printing as `NaN` where CONCEPT writes `nan` is runtime
   text (`runtime/`), so it belongs to 5.10 and not here.
+
+### What the naming rules add
+
+Three decisions of the owner, and one slice, because all three are about the same thing: the first letter of a name
+already decided something (a pattern binds or names a case), and everything else about a name was a convention nothing
+read.
+
+- **A name is ASCII** (`[A-Za-z_][A-Za-z0-9_]*`). Both lexers read a word as the whole run of Unicode word characters
+  and report **one** diagnostic for it - "A name is written in ASCII letters, digits and `_`", with the note that text
+  and comments may contain anything - and keep the token an `Identifier`, so nothing else is reported about the line.
+  Reporting per character or dropping the token would both turn one mistake into a list. Strings, char literals,
+  comments and doc comments stay full Unicode.
+- **`startsUpperCase` is `A` to `Z`** in both parsers, where it used to be "the character changes when it is
+  lowercased". For ASCII the two agree, so nothing about an existing file changes; what goes away is the question what
+  the first letter of a name in another script means.
+- **The spelling of a name** is 5.6's new pass, and **an unread binding of a refutable pattern** is 5.5's new rule.
+- **What the repository had to be fixed for:** nothing. `check ..` over the whole workspace reports no problem of
+  either rule, and `torb canon --check --rule unused-bindings ..` changes 0 of 293 files. What did need fixing were the
+  **in-memory sources of the checker's own tests**, which are strings and out of the canon tool's reach: 14 test sources
+  in `exhaustive`, `statements`, `lower-match` and `check` bound names their arms never read, or used `fn Point()` to
+  show two declarations of one name.
 
 ---
 

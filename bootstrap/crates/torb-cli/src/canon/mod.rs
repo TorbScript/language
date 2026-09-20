@@ -20,6 +20,7 @@
 //! and are not even read. Nothing outside of an edited byte range is touched, so line endings and everything else stay
 //! byte-identical.
 
+mod bindings;
 mod calls;
 mod edit;
 mod patterns;
@@ -43,7 +44,8 @@ Usage:
 Rules (`calls` and `strings` by default):
   calls                    A call is a command where the grammar allows it, and has parentheses where it does not
   strings                  A multi-line `\"\"\"` string is indented one level deeper than the line it starts on
-  imported-case-patterns   `.None` becomes `None` for a case a `use` imported (needs a parser change, off by default)
+  imported-case-patterns   `.None` becomes `None` for a case a `use` imported (changes the tree, off by default)
+  unused-bindings          A binding of a refutable pattern that nobody reads becomes `_` (changes the tree, off by default)
 
   --check   Write nothing, list what would change, leave with a non-zero code
 ";
@@ -53,6 +55,7 @@ pub enum Rule {
     Calls,
     Strings,
     ImportedCasePatterns,
+    UnusedBindings,
 }
 
 impl Rule {
@@ -61,6 +64,7 @@ impl Rule {
             "calls" => Some(Rule::Calls),
             "strings" => Some(Rule::Strings),
             "imported-case-patterns" => Some(Rule::ImportedCasePatterns),
+            "unused-bindings" => Some(Rule::UnusedBindings),
             _ => None,
         }
     }
@@ -160,6 +164,7 @@ struct Report {
     to_parentheses: usize,
     strings: usize,
     patterns: usize,
+    bindings: usize,
     dropped: Vec<String>,
     skipped: Vec<String>,
 }
@@ -171,6 +176,7 @@ impl Report {
             EditKind::ToParentheses => self.to_parentheses += count,
             EditKind::IndentedString => self.strings += count,
             EditKind::CasePattern => self.patterns += count,
+            EditKind::UnusedBinding => self.bindings += count,
         }
     }
 
@@ -186,13 +192,14 @@ impl Report {
         }
         let verb = if check { "would change" } else { "changed" };
         println!(
-            "\n{} of {} files {verb}: {} calls became commands, {} got parentheses, {} strings were indented, {} case patterns",
+            "\n{} of {} files {verb}: {} calls became commands, {} got parentheses, {} strings were indented, {} case patterns, {} unread bindings",
             self.changed.len(),
             self.files,
             self.to_command,
             self.to_parentheses,
             self.strings,
             self.patterns,
+            self.bindings,
         );
         if !self.dropped.is_empty() {
             println!("{} edits were dropped by the safety net", self.dropped.len());
@@ -238,6 +245,9 @@ fn rewrite(source: &str, rules: &[Rule]) -> Outcome {
     // The rule that changes the tree comes last, so that it starts from a file the safety net has settled
     if rules.contains(&Rule::ImportedCasePatterns) {
         edits.extend(patterns::edits(source, &parsed.file, &sites.patterns));
+    }
+    if rules.contains(&Rule::UnusedBindings) {
+        edits.extend(bindings::edits(source, &sites.bindings));
     }
 
     let mut document = Document::new(source);

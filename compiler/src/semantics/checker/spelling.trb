@@ -1,0 +1,500 @@
+use Diagnostic from "../../syntax/diagnostic"
+use Name, Statement, Declaration, Member, Binding, Condition, Block from "../../syntax/ast"
+use UseItem, UseItems, GenericParameter, FunctionDeclaration, Parameter, Field from "../../syntax/ast"
+use TypeReference, WhereClause, Expression, Argument, Closure, Pattern from "../../syntax/ast"
+use ModuleId from "../module"
+use boundNamesOf from "../symbols"
+use Checker from "./context"
+
+/**
+ * How a name is spelled is a rule of the language, not a convention: the parser already decides between a pattern
+ * binding and a case by the first letter (`limit =>` binds, `Limit =>` is a case), so the first letter has to mean the
+ * same thing everywhere or reading a pattern would be guesswork. This pass says it at the **declaration**, where it can
+ * be fixed, instead of leaving it to the one place that happens to depend on it.
+ *
+ * "Uppercase" is `A` to `Z`; a name that starts with `_` or `a` to `z` is lowercase. A name is ASCII (the lexer says
+ * so), so there is no third possibility.
+ *
+ * - Uppercase: `type`, `shared type`, `trait`, `case`, a type parameter (a size parameter like `Size` too), a type
+ *   alias, and an `as` alias of an imported type, trait or case.
+ * - Lowercase: `fn`, fields, parameters, tuple labels, `const` and `var`, module constants (there is no MACRO_CASE
+ *   spelling), closure parameters, the name of a `...rest` pattern, a module alias, and an `as` alias of an imported
+ *   function or constant.
+ *
+ * A pattern binding needs nothing here: the parser reads an uppercase name as a case, so a binding that starts with an
+ * uppercase letter cannot be written at all. The one name in a pattern the parser takes as written is `...rest`.
+ *
+ * It is one walk over the syntax of one module and asks nothing of the types, which is why it runs before anything is
+ * resolved and reports at most one finding per declaration. Names the compiler generates never pass through it: it only
+ * ever sees what somebody wrote.
+ */
+public fn checkSpelling(var checker: Checker, module: ModuleId) {
+  const statements = checker.program.graph.at(module).file.statements
+  spellStatements checker, module, statements
+}
+
+// --- The rule itself ------------------------------------------------------------------------------------------------
+
+const aliasNote = "An `as` alias is spelled like the name it renames"
+
+fn requireUpperCase(var checker: Checker, module: ModuleId, kind: String, name: Name, note: String = "") {
+  if name.text.isEmpty() || startsUpperCase(name.text) {
+    return
+  }
+  const suggestion = upperCased name.text
+  var message = "A {kind} starts with an uppercase letter"
+  if !suggestion.isEmpty() {
+    message = "{message}: write `{suggestion}`"
+  }
+  var problem = Diagnostic.error message, name.span
+  if !note.isEmpty() {
+    problem = problem.withNote note
+  }
+  checker.report module, problem
+}
+
+fn requireLowerCase(var checker: Checker, module: ModuleId, kind: String, name: Name, note: String = "") {
+  if name.text.isEmpty() || !startsUpperCase(name.text) {
+    return
+  }
+  const suggestion = lowerCased name.text
+  // `MAX_SIZE` is not a spelling of this language at all, so the message says that and not only the first letter
+  var message = "A {kind} starts with a lowercase letter: write `{suggestion}`"
+  if isMacroCase(name.text) {
+    message = "A {kind} starts with a lowercase letter: TorbScript has no `{name.text}` spelling, write `{suggestion}`"
+  }
+  var problem = Diagnostic.error message, name.span
+  if !note.isEmpty() {
+    problem = problem.withNote note
+  }
+  checker.report module, problem
+}
+
+fn startsUpperCase(text: String): Bool {
+  match text.chars().first() {
+    Some(first) => first >= 'A' && first <= 'Z'
+    None => false
+  }
+}
+
+/** `point` becomes `Point`. A leading `_` has no uppercase form, so it is dropped instead of kept. */
+fn upperCased(text: String): String {
+  var characters: List<Char> = []
+  for character in text.chars() {
+    if characters.isEmpty() {
+      if character == '_' {
+        continue
+      }
+      characters.add character.toUpperCase()
+      continue
+    }
+    characters.add character
+  }
+  String.from characters
+}
+
+/** `Point` becomes `point`, and `MAX_SIZE` becomes `maxSize`. */
+fn lowerCased(text: String): String {
+  if isMacroCase(text) {
+    return camelCased text
+  }
+  var characters: List<Char> = []
+  for character in text.chars() {
+    if characters.isEmpty() {
+      characters.add character.toLowerCase()
+      continue
+    }
+    characters.add character
+  }
+  String.from characters
+}
+
+/** `MAX_SIZE`: no lowercase letter and at least one `_` - the spelling other languages give a constant. */
+fn isMacroCase(text: String): Bool {
+  var hasUnderscore = false
+  for character in text.chars() {
+    if character == '_' {
+      hasUnderscore = true
+      continue
+    }
+    if character.isLetter() && character.toUpperCase() != character {
+      return false
+    }
+  }
+  hasUnderscore
+}
+
+/** `MAX_SIZE` becomes `maxSize`: the `_` are word breaks and the letter after each one keeps its case. */
+fn camelCased(text: String): String {
+  var characters: List<Char> = []
+  var isAtWordStart = false
+  for character in text.chars() {
+    if character == '_' {
+      isAtWordStart = characters.isNotEmpty()
+      continue
+    }
+    if isAtWordStart {
+      characters.add character.toUpperCase()
+      isAtWordStart = false
+      continue
+    }
+    characters.add character.toLowerCase()
+  }
+  String.from characters
+}
+
+// --- The walk -------------------------------------------------------------------------------------------------------
+
+fn spellStatements(var checker: Checker, module: ModuleId, statements: List<Statement>) {
+  for statement in statements {
+    spellStatement checker, module, statement
+  }
+}
+
+fn spellStatement(var checker: Checker, module: ModuleId, statement: Statement) {
+  match statement.kind {
+    .Declare(declaration) => spellDeclaration checker, module, declaration
+    .Bind(binding) => spellBinding checker, module, binding
+    .Assign(target, value) => {
+      spellExpression checker, module, target
+      spellExpression checker, module, value
+    }
+    .For(pattern, iterable, body) => {
+      spellPattern checker, module, pattern
+      spellExpression checker, module, iterable
+      spellBlock checker, module, body
+    }
+    .While(condition, body) => {
+      spellCondition checker, module, condition
+      spellBlock checker, module, body
+    }
+    .Return(value) => {
+      if const Some(found) = value {
+        spellExpression checker, module, found
+      }
+    }
+    .Break => {}
+    .Continue => {}
+    .Evaluate(expression) => spellExpression checker, module, expression
+  }
+}
+
+fn spellBlock(var checker: Checker, module: ModuleId, block: Block) {
+  spellStatements checker, module, block.statements
+}
+
+/** `const` is a constant, `var` a binding: both lowercase, and neither is spelled `MAX_SIZE`. */
+fn spellBinding(var checker: Checker, module: ModuleId, binding: Binding) {
+  const kind = if binding.isVar { "binding" } else { "constant" }
+  for name in declaredNames(binding.pattern) {
+    requireLowerCase checker, module, kind, name
+  }
+  if const Some(reference) = binding.annotation {
+    spellType checker, module, reference
+  }
+  spellExpression checker, module, binding.value
+}
+
+/**
+ * The name a `const` or a `var` means to bind. `boundNamesOf` finds the ones the parser took as bindings, and there is
+ * one more: `const Limit = 10` reads `Limit` as a **case** pattern, because an uppercase name in a pattern always is
+ * one. Such a binding declares nothing at all, so a pattern that is nothing but a bare uppercase name is a constant
+ * whose name is spelled wrong, and this is the rule that says so.
+ */
+fn declaredNames(pattern: Pattern): List<Name> {
+  if const .Variant(path, fields) = pattern.kind {
+    if path.length() == 1 && fields.isEmpty() {
+      return [path[0]]
+    }
+  }
+  boundNamesOf pattern
+}
+
+fn spellCondition(var checker: Checker, module: ModuleId, condition: Condition) {
+  match condition {
+    .Test(expression) => spellExpression checker, module, expression
+    .Bind(_, pattern, value) => {
+      spellPattern checker, module, pattern
+      spellExpression checker, module, value
+    }
+  }
+}
+
+fn spellDeclaration(var checker: Checker, module: ModuleId, declaration: Declaration) {
+  match declaration.kind {
+    .Use(usage) => spellUse checker, module, usage.items
+    .Function(function) => spellFunction checker, module, function
+    .Type(typeDeclaration) => {
+      requireUpperCase checker, module, "type", typeDeclaration.name
+      spellGenerics checker, module, typeDeclaration.generics
+      spellWhereClauses checker, module, typeDeclaration.whereClauses
+      spellMembers checker, module, typeDeclaration.members
+    }
+    .Alias(alias) => {
+      requireUpperCase checker, module, "type alias", alias.name
+      spellGenerics checker, module, alias.generics
+      spellType checker, module, alias.target
+    }
+    .Trait(traitDeclaration) => {
+      requireUpperCase checker, module, "trait", traitDeclaration.name
+      spellGenerics checker, module, traitDeclaration.generics
+      for supertrait in traitDeclaration.supertraits {
+        spellType checker, module, supertrait
+      }
+      spellMembers checker, module, traitDeclaration.members
+    }
+    .Extend(extension) => {
+      spellGenerics checker, module, extension.generics
+      spellType checker, module, extension.target
+      spellWhereClauses checker, module, extension.whereClauses
+      for capability in extension.traits {
+        spellType checker, module, capability
+      }
+      spellMembers checker, module, extension.members
+    }
+    .Foreign(library) => spellMembers checker, module, library.members
+    .Constant(binding) => spellBinding checker, module, binding
+  }
+}
+
+/**
+ * `use Option.Some as Present`, `use makeRole as role`, `use * as http`: an alias is a declaration of the importing
+ * file, so the rule applies to it - and what it renames says which half of the rule. The *exported* name belongs to the
+ * module that declares it and is reported there.
+ */
+fn spellUse(var checker: Checker, module: ModuleId, items: UseItems) {
+  match items {
+    .Names(entries) => {
+      for item in entries {
+        spellUseItem checker, module, item
+      }
+    }
+    .All(alias) => requireLowerCase checker, module, "module alias", alias
+    .OnlyExtensions => {}
+  }
+}
+
+fn spellUseItem(var checker: Checker, module: ModuleId, item: UseItem) {
+  const alias = match item.alias {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if startsUpperCase(item.name().text) {
+    requireUpperCase checker, module, "type, trait or case", alias, aliasNote
+    return
+  }
+  requireLowerCase checker, module, "function or constant", alias, aliasNote
+}
+
+fn spellGenerics(var checker: Checker, module: ModuleId, generics: List<GenericParameter>) {
+  for parameter in generics {
+    requireUpperCase checker, module, "type parameter", parameter.name
+    for bound in parameter.bounds {
+      spellType checker, module, bound
+    }
+    if const Some(default) = parameter.default {
+      spellType checker, module, default
+    }
+  }
+}
+
+fn spellMembers(var checker: Checker, module: ModuleId, members: List<Member>) {
+  for member in members {
+    match member.kind {
+      .Field(field) => spellField checker, module, field
+      .Constant(binding) => spellBinding checker, module, binding
+      .Function(function) => spellFunction checker, module, function
+      .Case(caseDeclaration) => {
+        requireUpperCase checker, module, "case", caseDeclaration.name
+        for field in caseDeclaration.fields {
+          spellField checker, module, field
+        }
+      }
+    }
+  }
+}
+
+fn spellField(var checker: Checker, module: ModuleId, field: Field) {
+  requireLowerCase checker, module, "field", field.name
+  spellType checker, module, field.annotation
+  if const Some(default) = field.default {
+    spellExpression checker, module, default
+  }
+}
+
+fn spellFunction(var checker: Checker, module: ModuleId, function: FunctionDeclaration) {
+  requireLowerCase checker, module, "function", function.name
+  spellGenerics checker, module, function.generics
+  for parameter in function.parameters {
+    spellParameter checker, module, parameter
+  }
+  if const Some(returnType) = function.returnType {
+    spellType checker, module, returnType
+  }
+  spellWhereClauses checker, module, function.whereClauses
+  if const Some(body) = function.body {
+    spellBlock checker, module, body
+  }
+}
+
+fn spellWhereClauses(var checker: Checker, module: ModuleId, clauses: List<WhereClause>) {
+  for clause in clauses {
+    spellType checker, module, clause.subject
+    for bound in clause.bounds {
+      spellType checker, module, bound
+    }
+  }
+}
+
+fn spellParameter(var checker: Checker, module: ModuleId, parameter: Parameter) {
+  requireLowerCase checker, module, "parameter", parameter.name
+  if const Some(reference) = parameter.annotation {
+    spellType checker, module, reference
+  }
+  if const Some(default) = parameter.default {
+    spellExpression checker, module, default
+  }
+}
+
+/** A type reference declares two kinds of name: the label of a tuple field and the parameter of a function type. */
+fn spellType(var checker: Checker, module: ModuleId, reference: TypeReference) {
+  match reference.kind {
+    .Named(_, arguments) => {
+      for argument in arguments {
+        spellType checker, module, argument
+      }
+    }
+    .Optional(inner) => spellType checker, module, inner
+    .TupleType(fields) => {
+      for field in fields {
+        if const Some(label) = field.label {
+          requireLowerCase checker, module, "tuple label", label
+        }
+        spellType checker, module, field.annotation
+      }
+    }
+    .Literals(_) => {}
+    .Intersection(members) => {
+      for member in members {
+        spellType checker, module, member
+      }
+    }
+    .FunctionType(parameters, result) => {
+      for parameter in parameters {
+        if const Some(name) = parameter.name {
+          requireLowerCase checker, module, "parameter", name
+        }
+        spellType checker, module, parameter.annotation
+      }
+      spellType checker, module, result
+    }
+    .Lazy(inner) => spellType checker, module, inner
+    .Invalid => {}
+  }
+}
+
+/**
+ * The only name a pattern declares that the parser takes as written: `[first, ...rest]`. A bare name that starts with
+ * an uppercase letter is read as a case there, so it never reaches this pass as a binding.
+ */
+fn spellPattern(var checker: Checker, module: ModuleId, pattern: Pattern) {
+  for name in boundNamesOf(pattern) {
+    requireLowerCase checker, module, "binding", name
+  }
+}
+
+fn spellArguments(var checker: Checker, module: ModuleId, arguments: List<Argument>) {
+  for argument in arguments {
+    spellExpression checker, module, argument.value
+  }
+}
+
+fn spellClosure(var checker: Checker, module: ModuleId, closure: Closure) {
+  for parameter in closure.parameters {
+    spellPattern checker, module, parameter.pattern
+    if const Some(reference) = parameter.annotation {
+      spellType checker, module, reference
+    }
+  }
+  spellBlock checker, module, closure.body
+}
+
+fn spellExpression(var checker: Checker, module: ModuleId, expression: Expression) {
+  match expression.kind {
+    // `(lowest: 1, highest: 9)`: the labels of a tuple literal are where its fields get their names
+    .TupleLiteral(items) => {
+      for item in items {
+        if const Some(label) = item.label {
+          requireLowerCase checker, module, "tuple label", label
+        }
+        spellExpression checker, module, item.value
+      }
+    }
+    .ListLiteral(items) => spellArguments checker, module, items
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        spellExpression checker, module, key
+        spellExpression checker, module, value
+      }
+    }
+    .TextLiteral(segments) => {
+      for segment in segments {
+        if const .Interpolated(inner) = segment {
+          spellExpression checker, module, inner
+        }
+      }
+    }
+    .Generic(target, arguments) => {
+      spellExpression checker, module, target
+      for argument in arguments {
+        spellType checker, module, argument
+      }
+    }
+    .Member(target, _, _) => spellExpression checker, module, target
+    .Index(target, index) => {
+      spellExpression checker, module, target
+      spellExpression checker, module, index
+    }
+    // A call's labels name the parameters of the callee, which are reported where they are declared
+    .Call(callee, arguments, _) => {
+      spellExpression checker, module, callee
+      spellArguments checker, module, arguments
+    }
+    .Unary(_, operand) => spellExpression checker, module, operand
+    .Binary(_, left, right) => {
+      spellExpression checker, module, left
+      spellExpression checker, module, right
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(found) = start {
+        spellExpression checker, module, found
+      }
+      if const Some(found) = end {
+        spellExpression checker, module, found
+      }
+    }
+    .Try(inner) => spellExpression checker, module, inner
+    .Closure(closure) => spellClosure checker, module, closure
+    .If(condition, then, otherwise) => {
+      spellCondition checker, module, condition
+      spellBlock checker, module, then
+      if const Some(found) = otherwise {
+        spellExpression checker, module, found
+      }
+    }
+    .Match(subject, arms) => {
+      spellExpression checker, module, subject
+      for arm in arms {
+        spellPattern checker, module, arm.pattern
+        if const Some(guard) = arm.guard {
+          spellExpression checker, module, guard
+        }
+        spellExpression checker, module, arm.body
+      }
+    }
+    .Block(block) => spellBlock checker, module, block
+    _ => {}
+  }
+}

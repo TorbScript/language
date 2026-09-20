@@ -784,6 +784,13 @@ public type Checker {
   var readDeclarations: Map<Int, Bool> = [:]
   /** Every binding a closure captures, by `BindingId.value`: a captured binding is a shared box and never dead (gap 19). */
   var capturedBindings: Map<Int, Bool> = [:]
+  /**
+   * Every binding a name in an expression read, by `BindingId.value`. A binding of a *refutable* pattern - an arm of a
+   * `match`, `if const`/`if var`, `while const` - that nobody reads is an error: a lowercase name there always binds, so
+   * `limit =>` matches every value instead of comparing, and the read is what shows the binding was meant. Never
+   * cleared: a `BindingId` belongs to one body and one answer about it is enough.
+   */
+  var readBindings: Map<Int, Bool> = [:]
   /** The closures that stand straight as the argument of a call, by span: those are the ones that cannot escape. */
   var argumentClosures: Map<Span, Bool> = [:]
 
@@ -1461,6 +1468,31 @@ public type Checker {
   }
 
   /** Whether the *innermost* scope already has this name, which is the only redeclaration that is an error. */
+  /**
+   * The bindings the innermost scope has declared so far, in the order they were declared: right after a pattern was
+   * checked, exactly the names that pattern gave the body. For alternatives that is the one set the body sees, because
+   * `alternativePatterns` declares the names of the first branch once for the whole arm.
+   */
+  fn bindingsHere(self): List<BindingId> {
+    const start = scopeStarts.last() ?? 0
+    var found: List<BindingId> = []
+    for index in start..locals.length() {
+      if const .Bound(binding) = locals[index].kind {
+        found.add binding
+      }
+    }
+    found
+  }
+
+  /** Every name in an expression is a read of what it names, and that is all "read" means in the rule below. */
+  fn noteBindingRead(var self, binding: BindingId) {
+    readBindings.set binding.value, true
+  }
+
+  fn isBindingRead(self, binding: BindingId): Bool {
+    readBindings.containsKey binding.value
+  }
+
   fn isDeclaredHere(self, name: String): Bool {
     const start = scopeStarts.last() ?? 0
     var index = locals.length() - 1

@@ -93,7 +93,7 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | `language/syntax/literals.md` | Literals | reference | How to write a number, a string, a character | `CONCEPT.md#lexical-structure` |
 | `language/syntax/string-interpolation.md` | String interpolation | reference | What `{...}` in a string does and how to escape it | `CONCEPT.md#strings` |
 | `language/syntax/multi-line-strings.md` | Multi-line strings | reference | How `"""` is dedented, and the four rules of it | `CONCEPT.md#strings` |
-| `language/syntax/naming-conventions.md` | Naming conventions | reference | What is a convention and what the compiler enforces | `CONCEPT.md#lexical-structure` |
+| `language/syntax/naming.md` | Naming | reference | Which characters a name may contain, which case it starts with, and what is only a convention | `CONCEPT.md#lexical-structure` |
 | `language/syntax/generics-or-comparison.md` | Angle brackets or comparison | reference | How `f<T>(x)` is told from `a < b` | `CONCEPT.md#lexical-structure` |
 | `language/syntax/doc-comments.md` | Doc comments | reference | What `/** */` attaches to and which headings it uses | `CONCEPT.md#doc-comments` |
 | `language/values-and-types/bindings.md` | Bindings | reference | What `const` and `var` decide | done |

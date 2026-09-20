@@ -7,6 +7,7 @@
 //! next field by a comma, which a command would swallow - neither counts here.
 
 use torb_syntax::ast::*;
+use torb_syntax::span::Span;
 
 pub struct CallSite<'tree> {
     pub call: &'tree Expression,
@@ -17,10 +18,18 @@ pub struct CallSite<'tree> {
     pub callee_could_be_a_field: bool,
 }
 
+/// One **refutable** pattern and the text a use of what it binds may stand in: the guard and the body of a `match` arm,
+/// the body of an `if const`/`if var`, the body of a `while const`. Nothing else binds refutably.
+pub struct BindingSite<'tree> {
+    pub pattern: &'tree Pattern,
+    pub regions: Vec<Span>,
+}
+
 #[derive(Default)]
 pub struct Sites<'tree> {
     pub calls: Vec<CallSite<'tree>>,
     pub patterns: Vec<&'tree Pattern>,
+    pub bindings: Vec<BindingSite<'tree>>,
 }
 
 pub fn walk(file: &File) -> Sites<'_> {
@@ -58,6 +67,8 @@ impl<'tree> Walk<'tree> {
             }
             StatementKind::While { condition, body } => {
                 self.condition(condition);
+                // `while const Some(item) = next()`: the body is where the binding has to be used
+                self.refutable(condition, &[body.span]);
                 self.block(body);
             }
             StatementKind::Return(value) => {
@@ -137,6 +148,13 @@ impl<'tree> Walk<'tree> {
         self.statements(&item.statements);
     }
 
+    /// A pattern in the head of an `if` or a `while`, with the text its bindings may be used in.
+    fn refutable(&mut self, item: &'tree Condition, regions: &[Span]) {
+        if let Condition::Binding { pattern, .. } = item {
+            self.sites.bindings.push(BindingSite { pattern, regions: regions.to_vec() });
+        }
+    }
+
     fn arguments(&mut self, items: &'tree [Argument]) {
         for item in items {
             self.expression(&item.value, false);
@@ -200,6 +218,9 @@ impl<'tree> Walk<'tree> {
             }
             ExpressionKind::If { condition, then, otherwise } => {
                 self.condition(condition);
+                // `if const Some(user) = lookup()` binds for the body of the `if` and for nothing else, the `else`
+                // branch included
+                self.refutable(condition, &[then.span]);
                 self.block(then);
                 if let Some(otherwise) = otherwise {
                     self.expression(otherwise, false);
@@ -209,6 +230,8 @@ impl<'tree> Walk<'tree> {
                 self.expression(subject, false);
                 for arm in arms {
                     self.pattern(&arm.pattern);
+                    let regions = arm.guard.iter().map(|guard| guard.span).chain([arm.body.span]).collect();
+                    self.sites.bindings.push(BindingSite { pattern: &arm.pattern, regions });
                     if let Some(guard) = &arm.guard {
                         self.expression(guard, false);
                     }

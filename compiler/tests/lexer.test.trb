@@ -71,6 +71,23 @@ group "Lexer" {
     assert(messages("\"open") == ["This string is never closed"])
     assert(messages("§") == ["Unexpected character `§`"])
   }
+
+  test "a name is written in ASCII letters, digits and `_`" {
+    const nameRule = "A name is written in ASCII letters, digits and `_`"
+    assert(messages("const größe = 1") == [nameRule])
+    // One diagnostic for the whole run, whatever the letters are and wherever they stand in the name
+    assert(messages("const Ünïcödé = 1") == [nameRule])
+    // A digit from another script counts too, and a name cannot begin with one anyway
+    assert(messages("const count٣ = 1") == [nameRule])
+    // ...and the token stays a name, so nothing else is reported about the line
+    const lexed = lex SourceText.of("größe")
+    assert(lexed.tokens.map({ _.kind }).toList() == [.Identifier, .EndOfFile])
+    assert(lexed.diagnostics[0].span == Span(0, 7))
+    assert(lexed.diagnostics[0].notes == ["Text is not: a string, a character literal and a comment may contain anything"])
+    // Text, characters and comments stay full Unicode
+    assert(messages("\"Grüße 👋\" // Übrigens") == [])
+    assert(messages("'ß'") == [])
+  }
 }
 
 group "Multi-line strings" {

@@ -77,6 +77,20 @@ fn isWordPart(character: Char): Bool {
   character == '_' || character.isLetter() || character.isDigit()
 }
 
+fn isAsciiLetter(character: Char): Bool {
+  (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z')
+}
+
+/** A name is ASCII: `[A-Za-z_][A-Za-z0-9_]*`. Everything else is text, and text may contain anything. */
+fn isAsciiName(text: String): Bool {
+  for character in text.chars() {
+    if !isAsciiLetter(character) && !isAsciiDigit(character) && character != '_' {
+      return false
+    }
+  }
+  true
+}
+
 /** The text of a doc comment: without the comment markers and the star in front of every line. */
 fn docText(comment: String): String {
   const inner = comment[3..(comment.byteLength() - 2)]
@@ -187,6 +201,12 @@ type Lexer {
     diagnostics.add Diagnostic.error(message, Span(source.offsets[start], source.offsets[last]))
   }
 
+  fn errorWithNote(var self, message: String, note: String, start: Int) {
+    const last = position.max(start + 1).min(source.characters.length())
+    const problem = Diagnostic.error message, Span(source.offsets[start], source.offsets[last])
+    diagnostics.add problem.withNote(note)
+  }
+
   fn skipLineComment(var self) {
     while const Some(character) = peek() {
       if character == '\n' {
@@ -214,12 +234,25 @@ type Lexer {
     error "This comment is never closed", start
   }
 
+  /**
+   * A name is ASCII: `[A-Za-z_][A-Za-z0-9_]*`. The whole run of word characters is still read, so that a name with
+   * letters from another script in it is **one** diagnostic and not one per character, and the token stays an
+   * `Identifier` so that nothing else is reported about the line it stands in.
+   */
   fn word(var self, start: Int) {
     while const Some(character) = peek() {
       if !isWordPart(character) {
         break
       }
       position = position + 1
+    }
+    const text = source.slice start, position
+    if !isAsciiName(text) {
+      errorWithNote(
+        "A name is written in ASCII letters, digits and `_`",
+        "Text is not: a string, a character literal and a comment may contain anything",
+        start,
+      )
     }
     const kind = match Keyword.fromText(source.slice(start, position)) {
       Some(keyword) => TokenKind.Reserved keyword

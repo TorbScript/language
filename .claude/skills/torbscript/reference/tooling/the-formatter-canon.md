@@ -81,8 +81,10 @@ milestone 8's `torb format`, written in TorbScript, takes over the same two rule
 decides line length, blank lines or where a long call breaks - that is layout, and it is `torb format`'s alone; a
 file `torb canon --check` accepts can still be reflowed differently once `torb format` exists.
 
-A third rule, `imported-case-patterns` (`.None` becomes `None` for a case a `use` imported), exists in `torb canon`
-but is off by default, because it changes the syntax tree on purpose instead of only its formatting - see
+Two further rules exist in `torb canon` and are off by default, because they change the syntax tree on purpose instead
+of only its formatting: `imported-case-patterns` (`.None` becomes `None` for a case a `use` imported) and
+`unused-bindings` (a binding of a refutable pattern that the arm never mentions becomes `_`). Neither is part of the
+canon a file has to be in - they are sweeps for a rule of the *language*, and the checker is what enforces that. See
 [torb canon](torb-canon.md).
 
 ## Examples

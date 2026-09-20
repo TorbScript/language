@@ -16,7 +16,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test --release                                    # Everything, including the differential tests (minutes)
 sh ../runtime/build.sh                                  # The C runtime and its tests (gcc or clang)
-cargo run --release -q -- canon --check ..              # Is the whole repository in the formatter canon?
+cargo run --release -q -- canon --check --rule calls --rule strings --rule imported-case-patterns --rule unused-bindings ..
 cargo run --release -q -- canon ../std ../compiler ../examples ../bootstrap/tests    # ...write it (a minute)
 cargo run --release -q -- run ../compiler docs check ../docs         # The documentation: schema, links, every snippet
 cargo run --release -q -- run ../compiler docs index --check ../docs # Is the generated part of every index.md current?
@@ -35,6 +35,15 @@ language *means* changes the page that says so - `docs check` names the page who
 
 - Idiomatic TorbScript, in the style of the code that is there. Full words, no abbreviations (`declaration`, not
   `decl`). No semicolons, never several statements on one line.
+- **A name is ASCII** - `[A-Za-z_][A-Za-z0-9_]*`, and the lexer says so. Strings, characters, comments and
+  documentation stay full Unicode.
+- **How a name is spelled is a rule, not a convention**, and the checker reports it at the declaration. A `type`, a
+  `shared type`, a `trait`, a `case`, a type parameter (a size parameter too), a type alias and an `as` alias of one of
+  those start with `A`-`Z`. Everything else starts with `_` or `a`-`z`: `fn`, fields, parameters, tuple labels,
+  `const`/`var`, a module constant (there is no `MAX_SIZE` spelling - write `maxSize`), a module alias.
+- **A binding of a refutable pattern has to be read.** In an arm of a `match`, in an `if const`/`if var` and in a
+  `while const`, a name the guard or the body never reads is an error: write `_`, or `_name` to keep the name as
+  documentation. `torb canon --rule unused-bindings` does the mechanical half of a sweep.
 - **The formatter canon** (CONCEPT, "Formatter Canon"): a call is a command wherever the grammar allows it -
   `Ok value`, `return Fail problem`, `const role = Role name`, `names.map Role` - and has parentheses everywhere
   else: nested (`Ok Some(x)`), without arguments (`list.length()`), with an operator at the top level of an argument

@@ -96,6 +96,7 @@ erased, so a run cannot change what a program means.
 | `--rule calls` | Only the call form |
 | `--rule strings` | Only the indentation of multi-line strings |
 | `--rule imported-case-patterns` | `.None` becomes `None`. Has to be asked for |
+| `--rule unused-bindings` | A binding of a refutable pattern that nobody reads becomes `_`. Has to be asked for |
 
 `canon` is temporary. Milestone 8's `torb format`, written in TorbScript, enforces the same canon and goes away with the
 rest of stage 0.

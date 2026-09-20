@@ -95,6 +95,6 @@ print flag
 
 ## Related
 
-- [Naming conventions](naming-conventions.md) - why a type parameter is written out (`Value`), not abbreviated (`T`).
+- [Naming](naming.md) - why a type parameter is written out (`Value`), not abbreviated (`T`).
 - [Declaring a type](../types/declaring-a-type.md) - where the generic parameters of a type are declared.
 - [Syntax cheat sheet](cheat-sheet.md) - every declaration and expression form on one page.

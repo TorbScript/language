@@ -91,6 +91,12 @@ unless the file imports it (`use Option.Some from "std/core"`), and the prelude 
 for you. A `match` is an expression and must cover every case. See
 [Cases and match](../language/pattern-matching/cases-and-match.md).
 
+In a pattern the first letter decides: a lowercase name **binds**, an uppercase one is a case. That is why the first
+letter of every declaration is a rule the compiler reports (`type Point`, `fn distance`, `const maxSize` - there is no
+`MAX_SIZE`), and why a binding of a `match` arm, an `if const` or a `while const` that the arm never reads is an error:
+write `_`, or `_name` to keep the name. See [Naming](../language/syntax/naming.md) and
+[Pattern forms](../language/pattern-matching/pattern-forms.md).
+
 ## Capabilities are traits, and a type comes `with` them
 
 There is no inheritance. A trait with one required method is named after that method - `Hash`, `Equals`, `Compare`,
@@ -158,6 +164,8 @@ higher-kinded types. A closure is always `{ parameters => body }`, and `_`, `_2`
 | `;` at the end of a line | nothing |
 | `x.length` on a string | `text.chars().count()` or `text.byteLength()` |
 | a `for` loop that mutates elements | `items[index].field = value`, or `map` into a new collection |
+| `MAX_SIZE`, `type point`, `fn Distance` | `maxSize`, `type Point`, `fn distance` - the first letter is a rule |
+| `Some(_)` or `Some(x)`, whichever | `Some(x)` only where the arm reads `x`; `_` or `_x` otherwise |
 
 ## Next
 

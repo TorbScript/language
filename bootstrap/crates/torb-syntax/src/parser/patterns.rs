@@ -132,10 +132,8 @@ impl Parser<'_> {
     }
 }
 
-/// Whether a name starts with an uppercase letter, which is what decides between a binding and a case. "Uppercase" is
-/// "the character changes when it is lowercased" - the same rule as `Char.toLowerCase` of the standard library - so
-/// `_found` and `found` bind and `Found` does not.
+/// Whether a name starts with an uppercase letter, which is what decides between a binding and a case. A name is
+/// ASCII, so "uppercase" is `A` to `Z` and nothing else: `_found` and `found` bind and `Found` does not.
 fn starts_upper_case(text: &str) -> bool {
-    let Some(first) = text.chars().next() else { return false };
-    first.to_lowercase().next().unwrap_or(first) != first
+    text.starts_with(|first: char| first.is_ascii_uppercase())
 }

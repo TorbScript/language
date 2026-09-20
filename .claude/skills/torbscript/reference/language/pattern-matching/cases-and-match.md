@@ -10,6 +10,7 @@ keywords:
   - variant
   - exhaustive
   - imported case
+  - unread binding
 source:
   - CONCEPT.md#algebraic-data-types-and-pattern-matching
   - CONCEPT.md#modules-and-packages
@@ -96,10 +97,10 @@ match <subject> {
    print describe(None)
    ```
 
-5. **In a pattern the first letter decides.** A name that starts with a lowercase letter binds; a name that starts with an
-   uppercase letter never binds - it is an imported case or a type read backwards. An uppercase binding is a compile
-   error, so a misspelled case is reported instead of silently becoming a catch-all. `_` and a name starting with `_` keep
-   their own rule and bind.
+5. **In a pattern the first letter decides.** A name that starts with a lowercase letter (`_` counts as one) binds; a
+   name that starts with `A` to `Z` never binds - it is an imported case or a type read backwards. An uppercase binding
+   is a compile error, so a misspelled case is reported instead of silently becoming a catch-all. The first letter is
+   the same thing at every declaration, because the checker says so there too - see [Naming](../syntax/naming.md).
 
    ```trb error
    fn describe(value: Int?): String {
@@ -111,39 +112,54 @@ match <subject> {
    // error: `Nome` is not a case in scope
    ```
 
-6. **`match` is an expression and must be exhaustive.** There are no open or non-exhaustive types: a public type with
-   cases is a promise, and adding a case is a breaking change the compiler points out at every `match`.
+6. **A binding of an arm that the guard and the body never read is an error.** Write `_`, or `_name` to keep the name as
+   documentation. A lowercase name always binds and never compares, so this is what keeps an arm like `limit =>` from
+   quietly being a catch-all.
 
-7. **An arm that can never be reached is an error.** Like a dead change and a discarded value, an unreachable arm is
-   always a mistake rather than a defensive line.
-
-8. **Fields are matched by position, and a label that is present has to name the field at that position.**
-   `Point(y: 0, x: 1)` is an error, not a silent swap.
-
-9. **Directly inside the braces of a `match`, a line that starts with `.` starts an arm.** Everywhere else a leading `.`
-   continues the line above. So the value of an arm that spans a call chain goes into a block:
-
-   ```trb
-   type Shape {
-     case Circle(radius: Float)
-     case Empty
-   }
-
-   fn describe(shape: Shape): String {
-     match shape {
-       .Circle(radius) => {
-         [radius]
-           .map({ "{_}" })
-           .joined(separator: "")
-       }
-       .Empty => "empty"
+   ```trb error
+   fn describe(value: Int?): String {
+     match value {
+       Some(found) => "something"
+       None => "nothing"
      }
    }
-
-   print describe(Shape.Empty)
+   print describe(Some(3))
+   // error: `found` is never read: write `_`, or `_found` to keep the name
    ```
 
-10. **Every pattern form is available**: a literal, alternatives with `|`, a range, a binding with a guard, a wildcard, a
+7. **`match` is an expression and must be exhaustive.** There are no open or non-exhaustive types: a public type with
+   cases is a promise, and adding a case is a breaking change the compiler points out at every `match`.
+
+8. **An arm that can never be reached is an error.** Like a dead change and a discarded value, an unreachable arm is
+   always a mistake rather than a defensive line.
+
+9. **Fields are matched by position, and a label that is present has to name the field at that position.**
+   `Point(y: 0, x: 1)` is an error, not a silent swap.
+
+10. **Directly inside the braces of a `match`, a line that starts with `.` starts an arm.** Everywhere else a leading
+    `.` continues the line above. So the value of an arm that spans a call chain goes into a block:
+
+    ```trb
+    type Shape {
+      case Circle(radius: Float)
+      case Empty
+    }
+
+    fn describe(shape: Shape): String {
+      match shape {
+        .Circle(radius) => {
+          [radius]
+            .map({ "{_}" })
+            .joined(separator: "")
+        }
+        .Empty => "empty"
+      }
+    }
+
+    print describe(Shape.Empty)
+    ```
+
+11. **Every pattern form is available**: a literal, alternatives with `|`, a range, a binding with a guard, a wildcard, a
     tuple, a type read backwards, and a list pattern with a rest.
 
     ```trb
@@ -160,13 +176,13 @@ match <subject> {
     print describe(7)
     ```
 
-11. **Patterns also stand in bindings and conditions**: `const Point(x, y) = p`, `if const Some(user) = findUser(id)`,
+12. **Patterns also stand in bindings and conditions**: `const Point(x, y) = p`, `if const Some(user) = findUser(id)`,
     `while const Some(next) = queue.dequeue()`, and `for (key, value) in someMap`.
 
-12. **`if var P = place` binds into the place**, exactly like a `var` parameter, so the subject has to be a `var` path and
+13. **`if var P = place` binds into the place**, exactly like a `var` parameter, so the subject has to be a `var` path and
     the body runs inside a `var` access to it. A `var` pattern that bound a copy would be a dead change by construction.
 
-13. **A case that wraps exactly one value of a type no other case of the type wraps generates `From`.** That is what makes
+14. **A case that wraps exactly one value of a type no other case of the type wraps generates `From`.** That is what makes
     error types cheap: `?` converts on its own, and nobody writes the conversion.
 
     ```trb fragment
@@ -206,7 +222,8 @@ The fix is `Shape.Circle 2.0`, or `use Shape.Circle` at the top of the file and 
 
 **A pattern is not resolved by the expected type.** What a name in a pattern means hangs on the `use` at the top of the
 file and on its first letter, and on nothing else. That is what keeps renaming a constant from turning an arm into a
-catch-all.
+catch-all - and the unread-binding rule of rule 6 is what keeps the catch-all from being written by accident in the
+first place.
 
 **`match` has no `default` and no fallthrough.** `_` is the wildcard, every arm is one arm, and there is no `break`.
 

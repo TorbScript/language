@@ -9,7 +9,7 @@ use Checker, Expectation, LocalBinding, TypeScope, ResultRule from "./context"
 use checkExpression, inferExpression, checkCondition from "./expression"
 use expectationOf, isNested from "./expression"
 use isFullyKnown from "./name"
-use checkPattern from "./pattern"
+use checkPattern, requireReadBindings from "./pattern"
 use requireIrrefutable from "./exhaustive"
 use traitArgumentsOf from "./implementation"
 use openInference, closeInference, resolveType, unify from "./unify"
@@ -144,9 +144,12 @@ fn checkStatementIn(var checker: Checker, statement: Statement): Bool {
       // the `isChanged = false` at the top of the body alive
       const uses = checker.valueUses.length()
       checkCondition checker, condition, true
+      // `while const Some(item) = next()`: what the pattern bound has to be read in the body (milestone 4.10)
+      const bound = checker.bindingsHere()
       checker.loopDepth = checker.loopDepth + 1
       const _ = checkBlock checker, body, Expectation.Statement
       checker.loopDepth = checker.loopDepth - 1
+      requireReadBindings checker, bound
       // A change the next round reads again is alive, whatever stands after the loop (design 5.3)
       settleLoop checker, uses
       checker.closeScope()

@@ -1319,3 +1319,24 @@ Wenn nicht, was bedeutet, bewirkt es?
     `File.list`), Feld-Defaults von Case-Konstruktoren, `Equals` der Collections, Closure über `var self`,
     `parser.trb:197`, quotierte Ausdrücke 5.11 (für `torb test` nativ), die drei internen Fehler außerhalb des
     Compilers. Notiert für 5.14: `Char.toUpperCase` ist in der Runtime nur ASCII.
+
+- (Schreibregel, ASCII-Namen, ungelesene Pattern-Bindung, 2026-09-21)
+  - **Erledigt:** Beide Lexer lesen ein Wort als ganzen Lauf und melden **einen** Fehler dafür ("A name is written in
+    ASCII letters, digits and `_`"); das Token bleibt ein `Identifier`, damit über die Zeile nichts zweimal gemeldet
+    wird. `startsUpperCase` ist in beiden Parsern `A`-`Z`. Die Schreibregel ist ein eigener syntaktischer Pass
+    (`compiler/src/semantics/checker/spelling.trb`), eine Meldung pro Deklaration am Namen. Die ungenutzte Bindung ist
+    ein Fehler in den refutablen Positionen (`match`-Arm, `if const`/`if var`, `while const`), `_name` ist ausgenommen.
+    `torb canon --rule unused-bindings` ist da und im Gate von CONTRIBUTING.
+    - **Das Repository hatte keine einzige Verletzung** - weder Schreibweise noch nicht-ASCII noch ungelesene Bindung
+      (`check ..`: "no problems", der Sweep ändert 0 von 294 Dateien). Zu korrigieren waren nur die
+      *In-Memory-Quellen* der Checker-Tests (Strings, für das Canon-Werkzeug unerreichbar): 14 Stellen in
+      `exhaustive`, `statements`, `lower-match` und `check`.
+    - Zwei Punkte, die die Regel so nicht abdeckte, selbst entschieden: eine Pattern-Bindung braucht keine
+      Schreibprüfung (der Parser liest einen großen Namen dort als Case, also sind `for`-Bindung,
+      Closure-Parameter und Arm-Bindung gar nicht groß schreibbar), und `const Limit = 10` - wo `Limit` als
+      Case-Pattern geparst wird und deshalb bisher **gar nichts** deklarierte und **gar nichts** meldete - gilt jetzt
+      als die Konstante, die gemeint war.
+    - Die VS-Code-Grammatik und `torb highlight` akzeptierten schon nur ASCII (`[A-Za-z_][A-Za-z0-9_]*`, in
+      `extension.js` `[A-Za-z_]\w*` ohne `u`-Flag); geändert wurde dort nur `starts_upper_case` auf `A`-`Z`.
+    - `docs/language/syntax/naming-conventions.md` heißt jetzt `naming.md`: die Seite sagte "today nothing enforces
+      either rule", und zwei Drittel davon sind jetzt Diagnosen.
