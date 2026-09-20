@@ -1168,3 +1168,8 @@ Wenn nicht, was bedeutet, bewirkt es?
     `torb_char_is_letter` ist oberhalb von ASCII heute nur genähert, das wäre eine Fixpunkt-Abweichung; `Δt` wäre nach
     der Schreibregel ein Typ). Öffnen geht später ohne Bruch, Schließen nicht.
   - Umsetzung: kleine Checker-/Lexer-Runde nach den beiden Back-End-Merges.
+  - **Entschieden (Nutzer, 2026-09-21):** Bezeichner sind ASCII: `[A-Za-z_][A-Za-z0-9_]*`, keine Mathe-Whitelist.
+    "Groß" heißt `A`-`Z`; ein Name, der mit `_` beginnt, zählt als klein. Strings, Chars, Kommentare und Doku bleiben
+    volles Unicode. **Wird gelöst:** eine Runde (Opus-Agent) - beide Lexer, Schreibregel im Checker, Fehler für die
+    ungenutzte Pattern-Bindung samt `torb canon --rule unused-bindings` für die Repo-Korrektur, CONCEPT, Doku, Skill,
+    VS-Code-Grammatik.
