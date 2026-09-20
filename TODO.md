@@ -1360,3 +1360,12 @@ Wenn nicht, was bedeutet, bewirkt es?
     `XmlDecode` entfallen; Dokument-XML ist der Baum `XmlNode`. (4) `Encode`/`Decode` bleiben implizit (mein
     Vorschlag "ausdrücklich per `with`" ist damit zurückgezogen); die Fehlermeldung an der Aufrufstelle nennt die
     Feldkette. Umsetzung: Design-Dokument `docs/ENCODING.md`, zusammen mit "Encoding auf statischen Dispatch".
+  - **Entschieden (Nutzer, 2026-09-21):** Richtung angenommen ("finde das Konzept erst mal besser"), sauber mit
+    `Describe` durchplanen und mit ein paar Formaten durchtesten, ob es einfach und gut zu nutzen ist.
+    **Wird gelöst (Opus-Agent, nur Design + Labor, kein Eingriff in std/Compiler):** `docs/ENCODING.md` und
+    `examples/encoding-lab/` - die neuen Traits lokal, für Beispieltypen von Hand das, was der Compiler ableiten
+    WÜRDE, und dagegen sieben Formate: JSON, CSV, XML mit Mapping-DSL (verschachtelt!), ein Protobuf-artiges
+    Binärformat mit Feldnummern, SQL-DDL + Zeilenbindung, CLI-Argumente mit `--help` aus den Docblocks, und ein
+    "in zehn Minuten erfundenes" Format als Test für "eigenes Format simpel einbringen". Dazu ein ehrliches
+    "Wie fühlt es sich an" (Zeilen für Nutzer und Formatautor, Vergleich mit serde/kotlinx) und die Liste, was
+    Sprache/Compiler dafür liefern müssen (u. a. statischer Dispatch: was wird aus `Encode` als Typ?).
