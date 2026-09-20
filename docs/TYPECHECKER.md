@@ -2511,3 +2511,45 @@ not also become locals of the statement sequence. Each name then reads its own t
 span, which is exactly what `checkPattern` recorded there. `requireSingleName` is the restriction, with one message per
 reason ("A module's `const` binds one name" / "An exported `const` binds one name"). A `var` pattern is one `var` for
 all of its names, which is what `isDeclaredVar` reads off the binding.
+
+**58. Where is `await()` allowed, when a closure may be the body of a task?**
+CONCEPT ("Concurrency") is exact about it: "`await()` is allowed in functions that return a `Task`, in closures passed to
+`spawn`, and at the top level of entry files and scripts. Everywhere else it is a compile error: a function that waits
+says so in its return type." Nothing enforced it, so `fn sum(a: Int, b: Int): Int { spawn { a }.await() }` checked. The
+list has a hole, though: `Source.produce { sink => ... }` runs its closure as a task exactly as `spawn` does, and its
+parameter is an ordinary `(var sink: Sink<Item, Failure>) => Result<Void, Failure>` - `std/stream`'s own doc comment
+awaits inside one and `examples/tour/src/13-streams.trb` does too. There is no way to write down "this closure is run as
+a task", and a closure has no other way to know.
+_Proposal:_ enforce the half that is decidable. A body may wait when its declared result is a `Task<...>` or when it is
+the statement sequence of an entry file or a script; every **closure** may, because nothing in the language says which
+closures a callee runs as a task. A field default, a parameter default and a top-level `const` of a module may not - the
+first two are evaluated wherever the value is built, the third is folded at compile time.
+_Reason:_ the case the rule exists for is a *function* that waits without saying so, and that is exactly the half this
+covers. Turning a closure into an error would reject `Source.produce`, which is the API the concept itself describes, and
+narrowing the exemption to `spawn` by name would reject it too. The missing piece is a way for a signature to say
+"this closure is a task", and that is milestone 7's to design, not a rule to guess at here.
+
+_Decision:_ accepted. `Checker.awaitsTasks` carries the answer through `BodyState`, `checkFunctionBody` sets it from
+`taskValueOf(result)`, `checkModule` and `checkReceiverScript` set it for a file's statement sequence, `checkInitializer`
+takes it as a parameter (a top-level `const` of an entry file or a script gets it, a default does not), and
+`checkClosureBody` sets it to `true`. `requireAwaitAllowed` in `call.trb` recognizes the call by the member's name plus a
+receiver that is a `Task`, which is the one thing that makes it this call. The rule found nothing in the repository.
+
+**59. Is `?` legal in a function whose result is neither an `Option` nor a `Result`?**
+CONCEPT says it is not, and 4.3 said nothing about it on purpose: `fetchUser(id).await()?` stands in a function that
+returns a `Task<Result<...>>`, and where `await()` is allowed was milestone 7's. So a `?` in a function that returns a
+`List<Int>` checked, and the first thing to object was `ir/lower/match.trb` with "not supported by the back end yet"
+(milestone 5.10) - a message the docs gate never reaches.
+_Proposal:_ report it, with the `Task` as the one exemption: a result that is a `Task<Option<...>>` or a
+`Task<Result<...>>` stays silent, because there the `?` is about the value behind the task. The top level of an entry
+file keeps its own rule (the program ends with the error) and so does a body whose result is inferred, where nothing is
+decided yet.
+_Reason:_ `?` hands the failure back to the caller, so there has to be somewhere for it to go. That is not a rule about
+concurrency, and the `Task` shape is the only reason it was ever silent.
+
+_Decision:_ accepted (`requireTryResult` in `expression.trb`). One consequence for the back end: the branch of
+`ir/lower/match.trb` that reports a `?` in a body that returns neither is now reachable only from **the top level of an
+entry file**, where the program really does end with the error - inside a function the checker has already said so.
+What stays open is a body whose result is *inferred*: `fn probe() { read()? }` produces `Void` and is accepted, because
+the result is not settled when the `?` is checked. Closing it needs the question asked again after the body, with the
+span kept, and it is a message and not a hole in the types.

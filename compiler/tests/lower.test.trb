@@ -465,8 +465,11 @@ group "What the back end does not lower yet" {
       unsupportedIn("fn first(items: ArrayList<Int>): Int \{\n  items[0]\n\}")
         == ["not supported by the back end yet: `a[key]`"]
     )
+    // A `?` in a *function* whose result is neither is now the checker's message ("`?` needs a function that returns an
+    // `Option` or a `Result`"), so the one body that still reaches the back end's branch is the top level of an entry
+    // file: there the program ends with the error, which is what milestone 5.10 has to emit
     assert(
-      unsupportedIn("fn take(value: Int?): Int \{\n  value?\n\}")
+      unsupportedIn("fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\nconst value = read()?\nprint value")
         == [
           "not supported by the back end yet: `?` in a body that returns neither an `Option`"
             + " nor a `Result` (milestone 5.10)",

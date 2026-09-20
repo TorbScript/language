@@ -185,6 +185,7 @@ fn checkClosureBody(
   const savedDepth = checker.loopDepth
   const savedReceiverType = checker.receiverType
   const savedReceiverBinding = checker.receiverBinding
+  const savedAwaits = checker.awaitsTasks
   // The result is inferred whenever the expected one is not pinned down yet, which is the ordinary case at a call. It
   // still flows into the body: `flatMap { _.manager.toList() }` learns its `Output` from the `Iterable<Output>` the
   // closure has to produce, and that is a coercion and not a unification
@@ -206,6 +207,11 @@ fn checkClosureBody(
   }
   checker.resultType = produced
   checker.isResultInferred = isInferred
+  // `await()` inside a closure is not reported, and cannot be: `spawn { ... }` runs its closure *as* a task, and so
+  // does `Source.produce { sink => ... }` - whose body type is an ordinary `(var Sink) => Result<Void, Failure>`, so
+  // nothing in the language says which closures a callee runs that way. The half that is decidable is the body a
+  // closure is not in, and that is the half this enforces (gap 58)
+  checker.awaitsTasks = true
   checker.returnTypes = []
   checker.loopDepth = 0
   checker.openScope()
@@ -250,6 +256,7 @@ fn checkClosureBody(
   checker.loopDepth = savedDepth
   checker.receiverType = savedReceiverType
   checker.receiverBinding = savedReceiverBinding
+  checker.awaitsTasks = savedAwaits
   checker.recordCaptures at, captures
   // Whether the closure may outlive the call it stands in, and whether it may hold a reference (BACKEND gap 14)
   noteClosureKind checker, at, captures

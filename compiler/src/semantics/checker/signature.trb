@@ -13,7 +13,7 @@ use Checker, TypeScope, DeclarationSite, DeclarationSiteKind, ResultRule from ".
 use typeFromReference, traitsFromReference from "./lowering"
 use substituteFunction from "./unify"
 use checkFunctionBody, checkInitializer, checkDestructuredBinding, taskValueOf from "./statement"
-use isSharedType, isSharedTrait from "./declaration"
+use isSharedType, isSharedTrait, allowsTopLevelCode from "./declaration"
 
 /**
  * What a declaration is, as a type. A signature is built the first time somebody asks for it and kept afterwards,
@@ -447,6 +447,8 @@ fn constantSignature(
   owner: TypeId?,
 ): Signature {
   const scope = TypeScope module, selfType: owner
+  // A top-level `const` of an entry file or a script is ordinary code, so `await()` is allowed in its initializer
+  const awaits = owner.isNone() && allowsTopLevelCode(checker, module)
   // An annotated initializer is checked here too, and not where the declaration is walked: the annotation *is* the
   // signature, so nobody would ask for the value again - and a `const` that holds a receiver closure
   // (`const perimeter: (self: Rectangle) => Int`) would never have its body looked at
@@ -454,12 +456,12 @@ fn constantSignature(
     Some(reference) => {
       const built = typeFromReference checker, reference, scope.forType()
       checker.checkedBodies.set symbol, true
-      const _ = checkInitializer checker, module, binding.value, owner, Some(built)
+      const _ = checkInitializer checker, module, binding.value, owner, Some(built), awaitsTasks: awaits
       built
     }
     None => {
       checker.checkedBodies.set symbol, true
-      checkInitializer checker, module, binding.value, owner, None
+      checkInitializer checker, module, binding.value, owner, None, awaitsTasks: awaits
     }
   }
   Signature symbol, genericsOf(checker, symbol), FunctionForm([], annotation), [], owner, false, false, true

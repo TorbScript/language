@@ -19,7 +19,7 @@ use signatureOf, functionOfSite, declareSites from "./signature"
 use typeFromReference from "./lowering"
 use isQuotation from "./quote"
 use checkDeclaration from "./check"
-use requireDeclaredResult from "./declaration"
+use requireDeclaredResult, allowsTopLevelCode from "./declaration"
 
 /**
  * Statements, blocks and the bodies of declarations: what a block is worth, whether it returns for certain, and the
@@ -548,6 +548,8 @@ public fn checkFunctionBody(
   // value and `?` returns the error (concept, Concurrency). Where `await()` is allowed is milestone 7's rule
   const produced = taskValueOf(checker, result) ?? result
   const saved = checker.enterBody module, produced, isInferred, owner, rule
+  // `await()` is allowed in a function that answers a `Task` and says so in its result type (CONCEPT, "Concurrency")
+  checker.awaitsTasks = produced != result
   checker.openScope()
   declareGenerics checker, generics
   declareBindingsFor checker, function.parameters, parameters, takesSelf, isVarSelf, owner
@@ -606,9 +608,13 @@ public fn checkInitializer(
   value: Expression,
   owner: TypeId?,
   annotation: TypeId?,
+  awaitsTasks: Bool = false,
 ): TypeId {
   const voidType = checker.voidType
   const saved = checker.enterBody module, voidType, true, owner
+  // A top-level `const` of an entry file or a script is ordinary code, so `await()` is allowed in it; a field default
+  // and a parameter default are evaluated wherever the value is built and are not
+  checker.awaitsTasks = awaitsTasks
   checker.openScope()
   openInference checker
   var found = match annotation {
@@ -643,6 +649,7 @@ public fn checkDestructuredBinding(var checker: Checker, module: ModuleId, bindi
   checker.checkedDestructured.set key, true
   const voidType = checker.voidType
   const saved = checker.enterBody module, voidType, true, None
+  checker.awaitsTasks = allowsTopLevelCode checker, module
   checker.openScope()
   openInference checker
   var annotation: TypeId? = None

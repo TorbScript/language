@@ -769,6 +769,56 @@ group "A static function is reached through the type" {
   }
 }
 
+/**
+ * "`await()` is allowed in functions that return a `Task`, in closures passed to `spawn`, and at the top level of entry
+ * files and scripts. Everywhere else it is a compile error: a function that waits says so in its return type."
+ * (CONCEPT, "Concurrency"). A closure is exempt, because nothing in the language says which closures a callee runs *as*
+ * a task - `spawn { ... }` does and so does `Source.produce { sink => ... }`, whose body type says nothing about it
+ * (gap 58).
+ */
+group "Where `await()` is allowed" {
+  const task = "fn later(value: Int): Task<Int> \{\n  panic \"a task\"\n\}\n\n"
+
+  test "a function that does not answer a `Task` may not wait" {
+    const source = "{task}fn sum(a: Int, b: Int): Int \{\n  later(a).await() + b\n\}"
+    assert(problems(source) == ["`await()` is only allowed in a function that returns a `Task`"])
+    assert(
+      notes(source)
+        == [
+          "A function that waits says so in its result type. `spawn \{ ... \}` starts a task, and the top level of an"
+            + " entry file or a script may wait for one",
+        ]
+    )
+  }
+
+  test "one that does may" {
+    const source = "{task}fn sum(a: Int): Task<Int> \{\n  later(a).await()\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "the top level of an entry file may" {
+    const source = "{task}const total = later(1).await()\nprint total"
+    assert problems(source).isEmpty()
+  }
+
+  test "a closure is exempt, because its callee may be the one that runs it as a task" {
+    const source = "{task}fn run(body: () => Int): Int \{\n  body()\n\}\n\n"
+      + "fn sum(a: Int): Int \{\n  run \{ later(a).await() \}\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a `const` of a module may not wait: it is folded at compile time" {
+    const files = [
+      "app/src/helper.trb": "fn later(value: Int): Task<Int> \{\n  panic \"a task\"\n\}\n\n"
+        + "public const total = later(1).await()",
+      "app/src/main.trb": "use total from \"./helper\"\n\nprint total",
+    ]
+    assert(
+      problemsOf(files).contains("`await()` is only allowed in a function that returns a `Task`")
+    )
+  }
+}
+
 group "`foreign` declares functions of a C library" {
   test "with their result types, because the C ABI is the contract" {
     const source = r"""

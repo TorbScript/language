@@ -14,6 +14,7 @@ use witnessFor, isConcrete, traitArgumentsOf from "./implementation"
 use propertyWrite from "./command"
 use openReceiverAccess, openArgumentAccess, closeAccessesTo, checkCallReads from "./place"
 use noteArgumentClosures from "./mutation"
+use taskValueOf from "./statement"
 use isQuotation, openThunk, closeThunk from "./quote"
 use checkConstruction, checkSharedIdentity, requireSharedFields from "./declaration"
 
@@ -77,6 +78,8 @@ public fn checkCall(
       return checker.deferredType
     }
   }
+  // `await()` says where it stands: a function that waits declares a `Task` result (CONCEPT, "Concurrency")
+  requireAwaitAllowed checker, callee, target.name, expression.span
   const instantiation = instantiateTarget checker, target, form, expression.span
   const inner = instantiation.form
   checker.resolved callee.span, target.resolution
@@ -589,6 +592,42 @@ fn isClosureArgument(argument: Argument): Bool {
     .Closure(_) => true
     _ => false
   }
+}
+
+/**
+ * Where `await()` may stand (CONCEPT, "Concurrency"): in a function that returns a `Task<...>`, in a closure handed to
+ * `spawn`, at the top level of an entry file or a script, and inside a closure written in one of those - a closure runs
+ * where it stands. Everywhere else it is a mistake, because "a function that waits says so in its return type"; a
+ * blocking `await()` anywhere would need a stack per task in every back end.
+ *
+ * The member is found by its name plus a receiver that is a `Task`, which is the one thing that makes it this call.
+ */
+fn requireAwaitAllowed(var checker: Checker, callee: Expression, name: String, at: Span) {
+  if name != "await" || checker.awaitsTasks {
+    return
+  }
+  const base = match callee.kind {
+    .Member(inner, _, _) => inner
+    _ => {
+      return
+    }
+  }
+  const receiver = match checker.expressionTypeHere(base.span) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  if taskValueOf(checker, receiver).isNone() {
+    return
+  }
+  checker.reportHere(
+    Diagnostic.error("`await()` is only allowed in a function that returns a `Task`", at)
+      .withNote(
+        "A function that waits says so in its result type. `spawn \{ ... \}` starts a task, and the top level of an"
+          + " entry file or a script may wait for one"
+      )
+  )
 }
 
 /** `...expression` spreads any `Iterable<Item>` into a variadic parameter; a collection is never spread implicitly. */

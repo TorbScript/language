@@ -621,6 +621,8 @@ public type BodyState {
   runningClosures: Int = 0
   /** Whether the body is the statement sequence of a file, which is the one body a top-level `var` lives in (gap 54). */
   isTopLevel: Bool = false
+  /** Whether `await()` is allowed in this body (CONCEPT, "Concurrency"). */
+  awaitsTasks: Bool = false
 }
 
 /**
@@ -757,6 +759,13 @@ public type Checker {
   var valueUses: List<ValueUse> = []
   /** Whether the body that is being checked is the statement sequence of a file (gap 54). */
   var isTopLevel: Bool = false
+  /**
+   * Whether `await()` is allowed where the checker stands: in a body whose declared result is a `Task<...>`, at the top
+   * level of an entry file or a script, and inside every closure - a closure may be the body a callee runs *as* a task
+   * (`spawn { ... }`, `Source.produce { sink => ... }`) and nothing in the language says which ones (gap 58).
+   * Everywhere else a function that waits has to say so in its result type (CONCEPT, "Concurrency").
+   */
+  var awaitsTasks: Bool = false
   /**
    * Every top-level `var` that something other than the statements of its own file reads: a function of the module, a
    * closure inside one, the initializer of a top-level `const`. A top-level `var` is a declaration and not a local, so
@@ -1360,6 +1369,7 @@ public type Checker {
       resultRule,
       runningClosures,
       isTopLevel,
+      awaitsTasks,
     )
     module = inside
     locals = []
@@ -1380,6 +1390,7 @@ public type Checker {
     valueUses = []
     runningClosures = 0
     isTopLevel = false
+    awaitsTasks = false
     saved
   }
 
@@ -1403,6 +1414,7 @@ public type Checker {
     valueUses = saved.valueUses
     runningClosures = saved.runningClosures
     isTopLevel = saved.isTopLevel
+    awaitsTasks = saved.awaitsTasks
   }
 
   /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */

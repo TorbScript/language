@@ -108,6 +108,42 @@ group "`?` on an `Option`" {
   }
 }
 
+/**
+ * `?` hands the failure back to the caller, so the enclosing function has to have a place for one. 4.3 said nothing
+ * where the result was neither, because `fetchUser(id).await()?` stands in a function that answers a `Task` and where
+ * `await()` is allowed is milestone 7's rule - the `Task` is the exemption, not everything.
+ */
+group "`?` needs a function that can carry the failure" {
+  test "a declared result that is neither an `Option` nor a `Result` is a mistake" {
+    const source = "fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\n"
+      + "fn probe(): List<Int> \{\n  const value = read()?\n  [value]\n\}"
+    assert(
+      problems(source)
+        == ["`?` needs a function that returns an `Option` or a `Result`, and this one returns `List<Int64>`"]
+    )
+    assert(notes(source) == ["`?` hands the failure back to the caller, so there has to be somewhere for it to go"])
+  }
+
+  test "an `Option` subject in such a function is the same mistake" {
+    const source = "fn find(): Int? \{\n  Some(1)\n\}\n\nfn probe(): String \{\n  const value = find()?\n  \"\{value\}\"\n\}"
+    assert(
+      problems(source)
+        == ["`?` needs a function that returns an `Option` or a `Result`, and this one returns `String`"]
+    )
+  }
+
+  test "a `Task` of a `Result` is exempt: where `await()` is allowed is milestone 7's rule" {
+    const source = "fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\n"
+      + "fn probe(): Task<Result<Int, String>> \{\n  const value = read()?\n  Ok(value)\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "the top level of an entry file is exempt: the program ends with the error" {
+    const source = "fn read(): Result<Int, String> \{\n  Ok(1)\n\}\n\nconst value = read()?\nprint value"
+    assert problems(source).isEmpty()
+  }
+}
+
 group "`??`" {
   test "the fallback is checked against the `Value`, and it is `lazy` (gap 13)" {
     const source = "fn find(): Int? \{\n  Some(1)\n\}\n\nfn probe() \{\n  const value = find() ?? 0\n\}"

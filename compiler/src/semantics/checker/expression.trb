@@ -14,7 +14,7 @@ use sameType, unify, resolveType, resolveTypes, hasVariable, openVariableOf, sup
 use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
 use checkClosure from "./closure"
 use isQuotation, isQuotationValue, checkQuotation, openThunk, closeThunk from "./quote"
-use checkBlock, checkDiscarded, scopeHere from "./statement"
+use checkBlock, checkDiscarded, scopeHere, taskValueOf from "./statement"
 use checkSubject from "./place"
 use markReferenceBindings from "./mutation"
 use checkPattern from "./pattern"
@@ -1771,12 +1771,12 @@ fn tryType(var checker: Checker, inner: Expression, at: Span): TypeId {
     Some((_, error)) => Some error
     None => None
   }
-  // A body whose result is neither of the two says nothing here: `await()` inside a `Task<...>` is milestone 7's rule,
-  // and the design's one error is an `Option` in a function that returns a `Result`
   if const Some(error) = failure {
     if const Some((_, wanted)) = resultPartsOf(checker, result) {
       convertError checker, error, wanted, at
+      return value
     }
+    requireTryResult checker, result, at
     return value
   }
   if resultPartsOf(checker, result).isSome() {
@@ -1785,8 +1785,35 @@ fn tryType(var checker: Checker, inner: Expression, at: Span): TypeId {
       Diagnostic.error("`?` on an `Option` in a function that returns `{shown}`", at)
         .withNote("There is no error to return. Turn it into one first: `okOr(...)` gives the `Option` an error")
     )
+    return value
   }
+  requireTryResult checker, result, at
   value
+}
+
+/**
+ * `?` returns the failure from the enclosing function, so that function has to have a place for one: an `Option` or a
+ * `Result` (CONCEPT, "Errors"). The top level of an entry file and a body whose result is inferred are out of this
+ * already - there the result is not decided here - and a `Task<Result<...>>` stays exempt, because where `await()` is
+ * allowed is milestone 7's rule and the `?` in `fetchUser(id).await()?` is about the value behind the task.
+ */
+fn requireTryResult(var checker: Checker, result: TypeId, at: Span) {
+  if optionValueOf(checker, result).isSome() || resultPartsOf(checker, result).isSome() {
+    return
+  }
+  if const Some(inner) = taskValueOf(checker, result) {
+    if optionValueOf(checker, inner).isSome() || resultPartsOf(checker, inner).isSome() {
+      return
+    }
+  }
+  if !isFullyKnown(checker, result) {
+    return
+  }
+  const shown = checker.describe result
+  checker.reportHere(
+    Diagnostic.error("`?` needs a function that returns an `Option` or a `Result`, and this one returns `{shown}`", at)
+      .withNote("`?` hands the failure back to the caller, so there has to be somewhere for it to go")
+  )
 }
 
 /**
