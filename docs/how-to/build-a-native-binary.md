@@ -62,17 +62,15 @@ the part of the language the native back end already covers.
 
 ## Pitfalls
 
-- **`print`, `printError` and string interpolation build.** Both were the two most common reasons a program refused
-  to build; a program that only prints and interpolates strings is no longer a reason to reach for `--emit-c` just to
-  read the generated code.
-- **A `for` over a range that is not a literal at that line does not lower yet**, because `Range.iterator` is not
-  built into the back end: `for value in 0..n { ... }` builds, `for value in someRange { ... }` where `someRange` is
-  a `Range<Int>` value does not, with `` not supported by the back end yet: `Range.iterator` `` naming it.
-- **A handful of other constructs are the same kind of gap** - a variadic parameter of a function you declare
-  (`print`'s own variadic call is a back-end intrinsic and is not affected), map and set iteration, a write through
-  `a[key]`, a list pattern, `Array<Item, Size>`, a slice used as a window, a `shared type` object, `using`, a task or
-  a stream, and a quoted expression. `torb build` reports each one as "not supported by the back end yet" with the
-  construct named, and refuses to build rather than emit something that does not do what the program says.
+- **`print`, `printError`, string interpolation, and `for` over a range - a literal one or a `Range<Int>` value -
+  build.** These were the most common reasons a program refused to build; a program built from arithmetic, control
+  flow, functions and these no longer needs `--emit-c` just to read the generated code.
+- **A handful of other constructs are still a gap** - a variadic parameter of a function you declare (`print`'s own
+  variadic call is a back-end intrinsic and is not affected), reading or writing through `a[key]` on a `List`, a
+  `Map` or `Set` literal, a list pattern, `Array<Item, Size>`, a slice used as a window, a `shared type` object, a
+  task or a stream, and a quoted expression (`assert` included). `torb build` reports each one as "not supported by
+  the back end yet" with the construct named, and refuses to build rather than emit something that does not do what
+  the program says.
 - **A refusal is not a bug in the program.** The message names what the back end cannot lower, not what is wrong with
   the code; the same program type checks and runs correctly under other backends, so `torb check` staying green is
   what tells the two apart.
