@@ -2488,6 +2488,13 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - No uniform function call syntax. `value.f(x)` never means `f(value, x)`: it would turn every function name into a
   possible member, against "one namespace of members" and against the visibility rule of extensions, and it would be
   a second way next to `extend`. Who wants `parser.expression()` writes `extend Parser { fn expression(var self) ... }`.
+- No overloading by parameter type. A call has one signature, and that signature says how its arguments are read:
+  `.Case`, `None`, a list literal as an `Array`, `{ _ + 1 }`, a `lazy` or quoted parameter, a `var` place and the
+  receiver of a receiver closure all get their meaning from the one parameter they are passed to. With several
+  candidates the argument would decide the candidate and the candidate the argument. The language has the two forms
+  that stay coherent: a name per **receiver** (`List.first`, `Queue.first` - methods and `extend`) and a trait with a
+  **parameter** (`From<Source>`, `Multiply<Other, Output>`: `Int.from(small)`, `matrix * vector`, `matrix * 2.0`).
+  Arity is a default parameter, and a second constructor is a named static function (`Color.hex("...")`).
 - `native` bodies will be IR and stay reserved for `std/` until the IR format is stable, then become a capability like
   `foreign` (no second keyword for "unstable"). Natives stay few: a fast path of a back end is not a `native`.
 - One generic `Encode`/`Decode` instead of a pair per format (`JsonEncode`, `TomlEncode`, ...): a pair per format is

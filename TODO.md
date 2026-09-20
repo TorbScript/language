@@ -1522,3 +1522,8 @@ Wenn nicht, was bedeutet, bewirkt es?
   `Array`, `{ _ }`, `lazy`, `Expression<T>`, `var`-Platz, Receiver-Closure). Vorhanden und prinzipientreu sind zwei
   Formen: Überladung nach dem EMPFÄNGER (Methoden/`extend`) und über TRAIT-PARAMETER (`From<Source>`,
   `Multiply<Other, Output>`). Wartet auf die Rückmeldung des Nutzers, wo ihm Überladung konkret fehlt.
+  - **Entschieden (Nutzer, 2026-09-22): "wir machen das wie du sagst"** - kein UFCS, keine Überladung nach
+    Parametertyp; die zwei vorhandenen Formen (Empfänger, Trait-Parameter) sind die Antwort. Im Decision Log von
+    CONCEPT eingetragen; eine Erklärseite ("Where are my overloads?") kommt mit der nächsten Doku-Pflege. Ebenso
+    entschieden: die Plan-Nummern ("(milestone 5.9b)") kommen aus den Back-End-Meldungen an Nutzer heraus - zusammen
+    mit der Doku-Welle für `ir/`+`backend/` nach dem Fixpunkt (die Meldungen sind durch Tests festgenagelt).
