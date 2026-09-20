@@ -512,8 +512,12 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
 
 /**
  * Whether every member of a type is visible: a concrete type has the members of its body, of every extension of it
- * and of every trait it implements. A generic parameter and a trait-typed value do not, and a type that still holds an
- * unsolved variable says nothing either.
+ * and of every trait it implements. A generic parameter does not, and a type that still holds an unsolved variable says
+ * nothing either.
+ *
+ * A **trait-typed value does**: `Shape` has the members of its bounds, their defaults, their supertraits and every
+ * `extend Shape` visible here, and no call site adds to that list. So `shape.perimeter()` is as reportable as
+ * `square.perimeter()` - before, it was silently unchecked and only `reportUnchecked` had anything to say about it.
  */
 public fn isFullyKnown(var checker: Checker, of: TypeId): Bool {
   if checker.absorbs(of) {
@@ -522,7 +526,7 @@ public fn isFullyKnown(var checker: Checker, of: TypeId): Bool {
   // A literal type carries `parse`, `show`, `equals`, `hash`, `encode`, `decode` and `into` without declaring any of
   // them, and since 4.10 all seven are generated - so a member it does not have is as reportable as any other
   const isNamed = match checker.types.form(of) {
-    .Nominal(_, _) | .Tuple(_) | .Literals(_, _) => true
+    .Nominal(_, _) | .Tuple(_) | .Literals(_, _) | .Traits(_) => true
     _ => false
   }
   isNamed && isConcrete(checker, of)

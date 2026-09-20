@@ -195,6 +195,26 @@ group "Trait-typed values and object safety (gap 7)" {
     const found = probe source
     assert(found.adaptationsOf("Square(2)") == ["trait value Show"])
   }
+
+  test "every member of a trait value is known, so a member it has not is named" {
+    // The bounds, their defaults, their supertraits and every visible `extend Shape` are the whole list, and no call
+    // site adds to it - so this is the ordinary missing-member message and not something the checker stays quiet about
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + "fn probe(shape: Shape): Int \{\n  shape.perimeter()\n\}"
+    assert(problems(source) == ["`Shape` has no member `perimeter`"])
+  }
+
+  test "and a near miss gets the same note a concrete type gets" {
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + "fn probe(shape: Shape): Int \{\n  shape.aera()\n\}"
+    assert(problems(source) == ["`Shape` has no member `aera`"])
+    assert(notes(source) == ["Did you mean `area`?"])
+  }
+
+  test "an operator the bounds do not carry is reported on a trait value, too" {
+    const source = "fn probe(left: Show, right: Show): Show \{\n  left + right\n\}"
+    assert(problems(source) == ["`Show` does not implement `Add`, so `a + b` has no meaning for it"])
+  }
 }
 
 group "`using` and other generic functions of the prelude" {
