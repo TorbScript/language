@@ -329,6 +329,37 @@ group "Coercion to a trait type" {
       + "fn broken(): Shape \{\n  panic \"none\"\n\}"
     assert problems(source).isEmpty()
   }
+
+  test "the coercion runs one way only: a trait value is not a concrete type" {
+    // There is no coercion from a trait to a concrete type - the value behind a `Shape` may be a `Circle` - and a trait
+    // type is a *decided* type, so this is an ordinary mismatch and not something the checker may stay quiet about
+    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+      + "type Square with Shape \{\n  side: Int\n\n  fn area(self): Int \{\n    side\n  \}\n\}\n\n"
+      + "fn wantsSquare(square: Square): Int \{\n  square.side\n\}\n\n"
+      + "fn probe(shape: Shape): Int \{\n  wantsSquare shape\n\}"
+    assert(problems(source) == ["Expected `Square`, found `Shape`"])
+  }
+
+  test "a collection where a scalar is expected is the same mismatch, because `List<Item>` is a trait" {
+    const source = "fn takesInt(value: Int): Int \{\n  value\n\}\n\n"
+      + "fn probe(numbers: List<Int>): Int \{\n  takesInt numbers\n\}"
+    assert(problems(source) == ["Expected `Int64`, found `List<Int64>`"])
+  }
+
+  test "a map where a scalar is expected, too" {
+    const source = "fn takesInt(value: Int): Int \{\n  value\n\}\n\n"
+      + "fn probe(counts: Map<String, Int>): Int \{\n  takesInt counts\n\}"
+    assert(problems(source) == ["Expected `Int64`, found `Map<String, Int64>`"])
+  }
+
+  test "a closure that produces a `List` where an `Iterable` is wanted still coerces inside its body" {
+    // The closure's own result is the type that was asked for, because the body is what coerced: a function type has no
+    // variance, so reading the body's `List<Int64>` back out here would report the closure a second time
+    const source = "fn each<Item, Output>(items: List<Item>, transform: (value: Item) => Iterable<Output>): Int \{\n"
+      + "  1\n\}\n\nfn probe(numbers: List<Int>): Int \{\n  each(numbers, \{ [_, _] \})\n\}"
+    assert problems(source).isEmpty()
+    assert(probe(source).typeOf("\{ [_, _] \}") == "(value: Int64) => Iterable<Int64>")
+  }
 }
 
 /**

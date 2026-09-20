@@ -577,6 +577,13 @@ fn isReceiverArgument(mode: ParameterMode): Bool {
   }
 }
 
+fn isVariadicParameter(mode: ParameterMode): Bool {
+  match mode {
+    .Variadic => true
+    _ => false
+  }
+}
+
 fn isClosureArgument(argument: Argument): Bool {
   match argument.value.kind {
     .Closure(_) => true
@@ -589,6 +596,16 @@ fn checkSpread(var checker: Checker, argument: Argument, parameter: ParameterFor
   const given = inferExpression checker, argument.value
   checker.adapted argument.value.span, Adaptation.Spread
   if checker.absorbs(given) {
+    return
+  }
+  // Only a `...rest: Item` parameter takes the items of a collection one by one (design 3.4). Everything else takes one
+  // value, and handing it a collection is the mistake the reverse direction has always been
+  if !isVariadicParameter(parameter.mode) {
+    const named = parameter.name ?? "its parameter"
+    checker.reportHere(
+      Diagnostic.error("`{named}` is not a variadic parameter, so `...` cannot spread into it", argument.value.span)
+        .withNote("A `...` fills a `...rest: Item` parameter, and there is none here")
+    )
     return
   }
   const iterable = match checker.wellKnown.iterable {

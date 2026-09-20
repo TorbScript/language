@@ -1972,10 +1972,16 @@ fn matchedBound(var checker: Checker, found: TypeId, wanted: TypeId): TypeId {
   resolveType checker, wanted
 }
 
-/** Types that say nothing about what may arrive at them: a trait bound, a generic parameter, a variable, an error. */
+/**
+ * Types that say nothing about what may arrive at them: a generic parameter, an unsolved variable, an error.
+ *
+ * A **trait type is not one of them.** `Shape` is a decided type: the only thing that may become one is a value that
+ * implements its bounds, and `checkValue` has already tried that coercion by the time this is asked. So a `Shape` where
+ * a `Square` is wanted, and a `List<Int>` where an `Int64` is, are ordinary mismatches - there is no coercion from a
+ * trait to a concrete type and never was one (design 2.5).
+ */
 fn isUndecided(var checker: Checker, annotation: TypeId): Bool {
   match checker.types.form(annotation) {
-    .Traits(_) => true
     .Parameter(_) => true
     .Variable(_) => true
     // A type that carries one of these anywhere inside of it says as little as the type itself would

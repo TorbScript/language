@@ -87,6 +87,13 @@ group "Calling a function" {
     const found = probe "{largest}fn probe() \{\n  const most = largest(1)\n\}"
     assert(found.typeOf("largest(1)") == "Int64")
   }
+
+  test "only a variadic parameter takes a spread: an ordinary one takes one value" {
+    const source = "fn connect(host: String, port: Int) \{\n  print host, port\n\}\n\n"
+      + "fn probe(values: List<Int>) \{\n  connect(\"host\", ...values)\n\}"
+    assert(problems(source) == ["`port` is not a variadic parameter, so `...` cannot spread into it"])
+    assert(notes(source) == ["A `...` fills a `...rest: Item` parameter, and there is none here"])
+  }
 }
 
 group "Calling a member" {
