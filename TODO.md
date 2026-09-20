@@ -1206,3 +1206,19 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Entschieden (Nutzer, 2026-09-21):** so wie empfohlen - `??` wird der Trait `OrElse<Value>`, `?.` bleibt
     `Option`, `?` bleibt `Option`/`Result`. **Wird gelöst:** zusammen mit `loop` und der Extension-Sichtbarkeit in der
     nächsten Checker-Runde (nach der Schreibregel-Runde).
+
+- (std/ecs und die Engine-Bibliotheken, 2026-09-21) **Wunsch (Nutzer), eingeplant für Meilenstein 10:** `std/ecs` auf
+  Unity-/Godot-Niveau, mit einer trb-basierten Szenen-DSL (wie Prefabs/`.tscn`), losgelöst von der Grafik (Web Canvas,
+  DirectX, Metal, OpenGL, ... sind austauschbare Back-Ends). Teile davon werden eigene std-Pakete, sodass die std am
+  Ende eine vollständige Game-Engine tragen kann. Das ECS in `examples/game-engine` ist dafür zu statisch (eine
+  geschlossene `Component`-Summe, `Map<ComponentKind, Component>` pro Entity).
+  - **Zweck daneben:** Härtetest für die Sprache. Erwartete Lücken (meine Analyse, Details im Chat): (1) offene
+    Komponentenmenge ohne Reflection - Typschlüssel und typisierte Spalten ohne Downcast; (2) typisierte Queries über
+    mehrere Komponenten - braucht variadische Typparameter oder eine andere Antwort, Makros gibt es nicht; (3)
+    In-place-Mutation beim Iterieren (`var`-Closure-Parameter über dichten Spalten) und Exklusivität zweier Queries;
+    (4) parallele Systeme gegen "Werte über Task-Grenzen, Shared nie"; (5) Szenen-DSL = Receiver-Skript in der Sandbox,
+    aber SPEICHERN braucht trb als Datenformat (Encoder) und eine Registry Name → Decoder; (6) FFI für Grafik-APIs;
+    (7) Layout/Performance: `Float32`, SoA auf `Buffer<Item>`, keine Refcount-Prüfung in heißen Schleifen.
+  - **Plan:** nach dem Fixpunkt ein Design-Dokument `docs/ECS.md` (Recherche Bevy/flecs/Unity DOTS/Godot, wie bei
+    STREAMS.md), dann Paketschnitt (`std/ecs`, `std/scene`, `std/geometry`, `std/input`, `std/asset`, `std/render`
+    als abstrakte Schicht, ...). Die Sandbox-DSL hängt an der VM (7.x).
