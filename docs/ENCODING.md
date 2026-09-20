@@ -29,7 +29,7 @@ what is special about ONE type in ONE format  ──→  a mapping VALUE in that
 - **[12. Where this comes from](#12-where-this-comes-from)** — serde, Codable, kotlinx, autodocodec, scodec, tapir, Jackson, EF Core, Elm
 - **[13. What the language and the compiler must provide](#13-what-the-language-and-the-compiler-must-provide)**
 - **[14. Migration](#14-migration)** — slices that each land green
-- **[15. The owner's open questions](#15-the-owners-open-questions)**
+- **[15. What the owner decided](#15-what-the-owner-decided)**
 
 The lab that proves all of this is [`examples/encoding-lab`](../examples/encoding-lab): the vocabulary declared locally,
 four sample types with the code the compiler would derive written out by hand, and seven formats — JSON, CSV, XML with a
@@ -495,7 +495,8 @@ places, all of which are "a value whose type has already been left behind":
 - **a quotation's captures.** A SQL provider binds capture *i* as a parameter; `assert` shows it as text. Both read an
   `EncodedValue`, which is what they wanted from `Encode` in the first place.
 - **a field default in a schema** (`FieldDefault.Constant`), which a DDL statement and a `--help` line print.
-- **`describe(value)`**, which is `EncodedValue.of(value).show()`.
+- **`rendered(value)`** (today's free function `describe(value)`, renamed so that `describe` means one thing), which is
+  `EncodedValue.of(value).show()`.
 
 This is not the rejected `Data`/`ToData`/`FromData` design. That one made **every** value travel through a tree, built
 the document twice and lost precision. `EncodedValue` is one format among many — an `Encoder` that writes into memory —
@@ -798,8 +799,8 @@ checker tests with the exact messages.
 field's doc comment is embedded as a literal. Gate: checker tests, a back-end test per shape.
 
 **Slice 4 — `EncodedValue` and `Structure`.** Both in `std/encoding`, with the two `Describer`/`Encoder`
-implementations that build them (`Values`, `Structures`) and the shared `ValueDecoder`. `describe(value)` stops being a
-native. Gate: `torb test`, and one native fewer in `runtime/`.
+implementations that build them (`Values`, `Structures`) and the shared `ValueDecoder`. `describe(value)` becomes
+`rendered(value)` and stops being a native; the prelude exports `EncodedValue`. Gate: `torb test`, and one native fewer in `runtime/`.
 
 **Slice 5 — `Expression.captures()`.** It answers `List<EncodedValue>`; `assert` reads it; the "captured variables must
 be `Encode`" rule stays exactly as it is, because `EncodedValue.of` needs `Encode`. Gate: the expression tests.
@@ -834,29 +835,19 @@ are never written.
 `fn describe<Value: Encode>(value: Value): String`, written in TorbScript over `EncodedValue.show()`. Both call sites are
 unchanged.
 
-## 15. The owner's open questions
+## 15. What the owner decided
 
-Everything technical in this document is decided. These four are taste or direction.
+Everything technical in this document is decided by the design; these four were questions of taste or direction, and
+the owner answered them.
 
-1. **Is `Describe` the name?** The rule (a single-method trait is named like its method) gives `Describe` for a method
-   called `describe`. But `describe(value)` is already the free function that renders a value as text, so the package has
-   a `Describe` trait and a `describe` function that mean different things. The alternatives: rename the free function
-   (`shown(value)`, `rendered(value)`) and keep `Describe`; or name the trait after what it produces (`Structure`, with
-   a method `structure()`), which breaks the rule.
-
-2. **Does `EncodedValue` belong in the language's vocabulary at all, or only in `std/encoding`?** It is the answer to
-   "what replaces `Encode` as a type", so `assert`, quotations and every schema default depend on it. That makes it
-   prelude material — and it is also the closest thing to the "any value" type that CONCEPT says the language does not
-   have. The document's position is that it is an ordinary ADT built by an ordinary format, exactly like `JsonValue`.
-   Whether the prelude exports it is a direction question.
-
-3. **Should a format be allowed to reject an unknown field?** Every format in the lab ignores an input field no type
-   asked for, which is what a tolerant reader does and what `Decoder.field` makes natural. A strict mode ("this document
-   had a `discount` and nothing read it") is one extra `Decoder` method and catches a whole class of typo bug. It is a
-   format option if it exists at all, not part of the vocabulary — but it is a promise about behaviour, so it is worth
-   deciding once for the whole standard library rather than per format.
-
-4. **How much of the tabular machinery belongs in `std/encoding`?** "A record as a flat map of paths" is written three
-   times in the lab (CSV, SQL, the command line) almost identically, and every tabular, row-shaped or flag-shaped format
-   wants it. It is not vocabulary — it is a convenience next to `Structure`. Putting it in `std/encoding` makes the next
-   tabular format 40 lines shorter; leaving it out keeps `std/encoding` to the six traits and the two builders.
+1. **The trait is `Describe`.** The rule gives the name (a single-method trait is named like its method). The free
+   function that renders a value as text for a message is `rendered(value)`, so the package has no `describe` that
+   means two things.
+2. **`EncodedValue` is exported by the prelude.** `assert`, quotations and every schema default depend on it. It is an
+   ordinary ADT built by an ordinary format, exactly like `JsonValue`, and nothing goes through it unless a program
+   asks for a value without its type.
+3. **A format may reject an unknown field, as an option of the format, and the default is tolerant.** The rule is the
+   same for every format of the standard library: `strict: true` reports an input field no type asked for
+   ("this document had a `discount` and nothing read it"); without it the field is ignored.
+4. **"A record as a flat map of paths" lives in `std/encoding`**, as a convenience next to `Structure`, because every
+   tabular, row-shaped or flag-shaped format wants it. It is not vocabulary.

@@ -1412,3 +1412,20 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Offen:** drei Schwächen des Gates (Beispiele in Nicht-`lib.trb`-Dateien finden die freien Funktionen derselben
     Datei nicht; Plural `milestones` wird nicht erkannt; `no longer` schlägt auch harmlos an) und zu wenige Beispiele
     (16 auf 537 Deklarationen) - nach der Gate-Reparatur eine gezielte Beispiel-Runde für die Hauptkonstrukte.
+
+- (Encoding-Design, 2026-09-22) **Entschieden (Nutzer: "mach das erst mal alles so"), in `docs/ENCODING.md`
+  Abschnitt 15 eingetragen:** (1) der Trait heißt `Describe`, die freie Funktion `describe(value)` wird zu
+  `rendered(value)`; (2) `EncodedValue` kommt ins Prelude; (3) ein Format darf ein unbekanntes Feld ablehnen - als
+  Option `strict: true`, Standard bleibt tolerant, einheitlich für die ganze std; (4) "Record als flache Pfade" kommt
+  als Komfort neben `Structure` nach `std/encoding`. Umsetzung in den Scheiben des Migrationsplans NACH dem Fixpunkt
+  (Scheibe 1 braucht monomorphisierte generische Trait-Methoden im Back-End).
+- (Gate-Reparatur, 2026-09-22) **Erledigt, gemergt:** Beispiele sehen die `public`-Namen ihrer eigenen Datei (Ursache:
+  ein nicht-öffentliches Top-Level-`const` ließ das Gate die Datei für ein Skript halten); Plurale
+  (`milestones`, `gaps 12`); `no longer` nur vor einem Verb in der dritten Person; `Utf8Error` trägt bei
+  `decodedText()` den Offset ab Stream-Beginn; erster Test unter `std/` (`std/stream/tests/bytes.test.trb`).
+- (**Rot auf master, in Arbeit**, 2026-09-22) Zwei Tests (Instanzzahl-Stolperdraht, 121 → 192 Deklarationen) schlagen
+  fehl, seit `examples/encoding-lab` im Repository liegt. Ursache ist ein Entwurfsfehler im Back-End, kein Fehler des
+  Labors: "überschreibt irgendeine Implementierung diesen Default?" wird über ALLE gelesenen Dateien des Workspace
+  gefragt statt über das Programm. **Entschieden (ich):** die geschlossene Welt ist das Programm (die vom
+  Wurzelmodul aus erreichbaren Module), nie ein Paket, von dem es nicht abhängt - ein Nachbarpaket darf dein Binary
+  nicht verändern. Liegt als erster Punkt bei "Schwanz 2".
