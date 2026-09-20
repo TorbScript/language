@@ -1,6 +1,6 @@
 use FunctionDeclaration from "../syntax/ast"
 use SymbolId from "../semantics/symbols"
-use TypeId, ParameterId, ParameterForm, ParameterMode, Signature from "../semantics/checker/type"
+use TypeId, TypeForm, ParameterId, ParameterForm, ParameterMode, Signature from "../semantics/checker/type"
 use signatureOf, functionOfSite from "../semantics/checker/signature"
 use substitute from "../semantics/checker/unify"
 use IrFunction, IrSignature, IrParameter, IrType, IrTypeId, Ownership from "./ir"
@@ -159,8 +159,10 @@ public fn runtimeFunctionOf(var lowering: Lowering, symbol: SymbolId, runtime: S
 public type RuntimeShape {
   addressed: List<Int> = []
   /**
-   * What the runtime writes through **out parameters**, in the order it takes them: the payload of the success case,
-   * and one per field of the failure type that no parameter of the declaration names (the `message` of an `IoError`).
+   * What the runtime writes through **out parameters**, in the order it takes them: the payload of the success case, one
+   * per field of the failure type that no parameter of the declaration names (the `message` of an `IoError`), and one per
+   * **field of the payload** where that payload is a tuple the runtime cannot build in one piece
+   * (`torb_map_entry_after` writes a key and a value, and the wrapper makes the `(Key, Value)`).
    * The result of the function is then `Bool`, and `ir/lower/native.trb` builds the `Option` or the `Result`.
    */
   outs: List<IrTypeId> = []
@@ -230,6 +232,8 @@ fn shapedSignature(var lowering: Lowering, declared: IrSignature, shape: Runtime
   if shape.outs.isEmpty() {
     return IrSignature parameters, declared.result
   }
+  // A name per out parameter, because several of them are several slots of the wrapper and a reader of the IR text has to
+  // tell them apart
   for index in 0..shape.outs.length() {
     const name = if index == 0 { "out" } else { "out{index}" }
     parameters.add IrParameter(name, shape.outs[index], true, Ownership.Borrowed, true, false)
@@ -437,9 +441,29 @@ fn parameterTypeOf(
   const annotation = irTypeOfClosed lowering, applied
   match parameter.mode {
     .Lazy => cellTypeFor lowering, applied, annotation
-    .Variadic => lowering.program.internType IrType.Runtime(RuntimeKind.ListStorage, [annotation])
+    .Variadic => variadicTypeOf lowering, applied, annotation
     _ => annotation
   }
+}
+
+/**
+ * What a variadic parameter holds: the **`List<Item>` the body sees**, and not the buffer the call site fills. The checker
+ * declares the binding of `...values: Show` as `List<Show>`, which in a type position is a trait-typed value (5.6's note),
+ * so a signature that said `ArrayList<Item>` would have the body read a buffer through a pointer to an `Object`.
+ *
+ * Without `List` in the prelude there is nothing to box it with, and the buffer is the honest answer: a workspace with
+ * another prelude has to keep working, and nothing of the language reaches such a parameter there.
+ */
+fn variadicTypeOf(var lowering: Lowering, item: TypeId, buffer: IrTypeId): IrTypeId {
+  const symbol = match lowering.checker.wellKnown.list {
+    Some(found) => found
+    None => {
+      return lowering.program.internType IrType.Runtime(RuntimeKind.ListStorage, [buffer])
+    }
+  }
+  const bound = lowering.checker.nominal symbol, [item]
+  const traits = lowering.checker.types.intern TypeForm.Traits([bound])
+  irTypeOfClosed lowering, traits
 }
 
 /** The memo cell of a `lazy Value` parameter, which the whole back end sees as an ordinary counted record. */

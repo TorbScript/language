@@ -467,11 +467,12 @@ group "Places the source writes another way" {
 }
 
 group "What a place cannot be yet" {
-  test "an index and a slice each name the milestone that brings the container" {
-    assert(
-      unsupportedIn("fn first(var items: ArrayList<Int>) \{\n  items[0] = 1\n\}")
-        == ["not supported by the back end yet: an assignment through `a[key]` (milestone 5.7/5.9b)"]
-    )
+  /**
+   * An index is a path of its own now (`lower-collections.test.trb`): it takes the element out and puts it back. A
+   * **slice** is not, and cannot be one - it is a *window* into the base, so every element of it stays where it is and a
+   * write goes through an interior pointer, which is what 5.9b brings together with `Array<Item, Size>`.
+   */
+  test "a slice names the milestone that brings the window" {
     assert(
       unsupportedIn(
         "fn part(var items: ArrayList<Int>, var other: ArrayList<Int>) \{\n  items[0..1] = other\n\}"

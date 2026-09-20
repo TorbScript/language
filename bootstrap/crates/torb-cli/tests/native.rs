@@ -145,7 +145,8 @@ fn every_native_program_behaves_like_it_does_on_stage_0() {
         }
         let panics = expected_file(file, "stderr");
         if let Some(expected) = &panics {
-            assert!(text(&native.stderr) == *expected, "unexpected stderr of the binary of {name}:\n{}", text(&native.stderr));
+            let reported = without_library_positions(&text(&native.stderr));
+            assert!(reported == *expected, "unexpected stderr of the binary of {name}:\n{reported}");
         }
 
         // And the same program on stage 0: the same output, and the same exit code unless it panics
@@ -174,4 +175,28 @@ fn every_native_program_behaves_like_it_does_on_stage_0() {
     // Nothing here is read after the loop, and a temporary directory per process would otherwise pile up
     let _ = std::fs::remove_dir_all(&output);
     let _ = std::fs::remove_dir_all(&twice);
+}
+
+/// A panic inside the standard library names a line of `std/`, and that line moves whenever a comment above it is
+/// edited. What a program promises is *which file* of the library panics, so the position in a `std/` frame reads
+/// `_:_` in a `.stderr` file; a frame of the program itself keeps its position.
+fn without_library_positions(stderr: &str) -> String {
+    let mut result = String::new();
+    for line in stderr.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\r', '\n']);
+        let ending = &line[body.len()..];
+        let mut parts = body.rsplitn(3, ':');
+        let (column, row, path) = (parts.next(), parts.next(), parts.next());
+        let is_position =
+            |part: Option<&str>| part.is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()));
+        match path {
+            Some(path) if path.trim_start().starts_with("at std/") && is_position(row) && is_position(column) => {
+                result.push_str(path);
+                result.push_str(":_:_");
+            }
+            _ => result.push_str(body),
+        }
+        result.push_str(ending);
+    }
+    result
 }

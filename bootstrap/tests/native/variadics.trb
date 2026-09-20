@@ -1,0 +1,103 @@
+use Process from "std/process"
+
+/**
+ * Variadic parameters and arguments (milestone 5.7): `...items: Item` is **one** parameter that every positional argument
+ * from its position on fills, it is a `List<Item>` the call site builds, and inside the body it is the collection trait -
+ * so a body reads it with `for`, with `length()` and with every other member of `List<Item>`.
+ *
+ * `...values` spreads any `Iterable` into such a parameter, which is `Collection.addAll` and therefore works for a
+ * concrete list as well as for a trait-typed one.
+ *
+ * The factories of the standard library are the reason this matters beyond `print`: `List.of`, `Set.of` and `Map.of` are
+ * all variadic, and a set has no literal of its own at all.
+ */
+
+type Point with Show {
+  x: Int
+  y: Int
+}
+
+/** The body reads it as a collection: `for` over a `List<Int>`. */
+fn total(...numbers: Int): Int {
+  var sum = 0
+  for value in numbers {
+    sum = sum + value
+  }
+  sum
+}
+
+/** A variadic after an ordinary parameter, and a member of `Iterable` on it. */
+fn joined(separator: String, ...parts: String): String {
+  parts.joined separator: separator
+}
+
+/** A **trait-typed** element: every argument is coerced to `Show` where it is written. */
+fn described(...values: Show): String {
+  var shown = ""
+  for value in values {
+    shown = shown + "[{value}]"
+  }
+  shown
+}
+
+/** The list itself is the value: a variadic parameter is a `List<Item>` and answering it costs nothing. */
+fn collected(...items: Int): List<Int> {
+  items
+}
+
+fn counts() {
+  print total()
+  print total(1)
+  print total(1, 2, 3)
+  print joined("-")
+  print joined("-", "a", "bb", "ccc")
+  print described(1, "two", Point(3, 4))
+  print collected()
+  print collected(7, 8)
+}
+
+/** `...values`: the items of any `Iterable`, one by one, in the place the spread was written. */
+fn spreads() {
+  const numbers = [4, 5, 6]
+  print total(...numbers)
+  print total(1, ...numbers)
+  print total(...numbers, 7)
+  print total(1, ...numbers, 7, ...numbers)
+  const words = ["a", "bb"]
+  print joined("+", ...words)
+  print collected(...numbers)
+  // A spread of a pipeline, which is an `Iterable` and no list at all
+  print total(...numbers.map({ _ * 10 }))
+}
+
+/** A spread in a **literal**, which is the same `addAll`. */
+fn literals() {
+  const numbers = [2, 3]
+  const around = [1, ...numbers, 4]
+  print around
+  const twice: List<Int> = [...numbers, ...numbers]
+  print twice
+  const only: List<Int> = [...numbers]
+  print only
+}
+
+/** The factories: `of` is variadic on every collection of the standard library. */
+fn factories() {
+  print List.of(1, 2, 3)
+  print Set.of(1, 2, 2, 3)
+  const nothing: Set<Int> = Set.of()
+  print nothing
+  print Map.of(("a", 1), ("b", 2))
+  print List.filled(3, "-")
+}
+
+fn exitCode(): Int {
+  total(1, 2, 3) + collected(4).length()
+}
+
+counts()
+spreads()
+literals()
+factories()
+
+Process.exit exitCode()

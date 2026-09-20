@@ -155,6 +155,70 @@ fn functionOf(source: String, name: String): String {
   lines.joined separator: "\n"
 }
 
+/**
+ * `bool` plus **two** out parameters: the third convention, and the one the map and the set cursor need
+ * (`NativeResult.OptionalParts`). `torb_map_entry_after` answers the two halves of one entry separately, because the two
+ * live in two arrays of the table and because a tuple is a layout of the *program* - which is exactly what the runtime may
+ * not build. So the wrapper builds it.
+ */
+group "`bool` plus two out parameters" {
+  const cursor = r"""
+    fn firstEntry(entries: TrieMap<String, Int>): (String, Int)? {
+      var cursor = 0
+      entries.entryAfter cursor
+    }
+    """
+
+  test "the wrapper builds the tuple out of the two out parameters and the `Some` around it" {
+    assert(
+      irOf(cursor, "n_std_x2f_prelude_types_TrieMap_entryAfter__String_Int64") == r"""
+        fn n_std_x2f_prelude_types_TrieMap_entryAfter__String_Int64(self: Map(String, Int64) borrowed, var cursor: Int64 borrowed) -> Variant(T_std_x2f_prelude_types_Option__T_tuple__String_Int64) {
+          slot %0 parameter self: Map(String, Int64)
+          slot %1 parameter cursor: Int64
+          slot %2 temporary: String
+          slot %3 temporary: Int64
+          slot %4 temporary: Bool
+          slot %5 temporary: Variant(T_std_x2f_prelude_types_Option__T_tuple__String_Int64)
+          slot %6 temporary: Tuple(T_tuple__String_Int64)
+        b0: # std/prelude/src/types.trb:277 native wrapper
+          %4 = call t_std_x2f_prelude_types_TrieMap_entryAfter__String_Int64(%0 borrowed, &%1 borrowed, &%2 borrowed, &%3 borrowed) at std/prelude/src/types.trb:277:13
+          branch %4 then b1 else b2
+        b1: # std/prelude/src/types.trb:277 then
+          %6 = construct T_tuple__String_Int64 (%2 borrowed, %3 borrowed)
+          %5 = construct T_std_x2f_prelude_types_Option__T_tuple__String_Int64.Some (%6 borrowed)
+          jump b3
+        b2: # std/prelude/src/types.trb:277 else
+          %5 = construct T_std_x2f_prelude_types_Option__T_tuple__String_Int64.None ()
+          jump b3
+        b3: # std/prelude/src/types.trb:277 done
+          return %5 borrowed
+        }"""
+    )
+  }
+
+  /** The runtime function takes one out parameter per half, and the `var cursor` is an ordinary reference beside them. */
+  test "the runtime function carries both out parameters, named apart" {
+    const shown = textOf cursor
+    assert(
+      shown.contains(
+        "runtime fn t_std_x2f_prelude_types_TrieMap_entryAfter__String_Int64(self: Map(String, Int64) borrowed,"
+          + " var cursor: Int64 borrowed, out out: String borrowed, out out1: Int64 borrowed) -> Bool"
+          + " = torb_map_entry_after"
+      )
+    )
+  }
+
+  /**
+   * A counted half is owned on the `true` path and on neither the other one: the runtime writes nothing where it answers
+   * false, so a release there would free a `String` it never wrote (the conditional out parameter of 5.7's fourth round).
+   */
+  test "a counted half is owned where the runtime wrote it and released nowhere else" {
+    const shown = ownedIrOf cursor, "n_std_x2f_prelude_types_TrieMap_entryAfter__String_Int64"
+    assert shown.contains("%6 = construct T_tuple__String_Int64 (%2 owned last, %3 borrowed)")
+    assert(!shown.contains("release %2"))
+  }
+}
+
 group "the C of a wrapper" {
   test "an element goes to the runtime as the address of the slot that holds it" {
     const source = r"""

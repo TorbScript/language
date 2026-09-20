@@ -409,6 +409,42 @@ void torb_map_put_back(torb_map *map, const void *key, const void *value) {
   }
 }
 
+bool torb_map_entry_after(torb_map map, int64_t *cursor, void *key, void *value) {
+  torb_map_storage *storage = map.storage;
+  int64_t position = *cursor;
+  if (position < 0) {
+    position = 0;
+  }
+  while (position < (int64_t)storage->entry_count) {
+    uint32_t index = (uint32_t)position;
+    position += 1;
+    if (!torb_entry_alive(storage, index)) {
+      continue;
+    }
+    *cursor = position;
+    if (storage->key->size > 0u) {
+      memcpy(key, torb_entry_key(storage, index), (size_t)storage->key->size);
+    }
+    if (storage->key->retain != NULL) {
+      storage->key->retain(key);
+    }
+    if (storage->value->size > 0u) {
+      memcpy(value, torb_entry_value(storage, index), (size_t)storage->value->size);
+      if (storage->value->retain != NULL) {
+        storage->value->retain(value);
+      }
+    }
+    return true;
+  }
+  *cursor = position;
+  return false;
+}
+
+bool torb_set_item_after(torb_set set, int64_t *cursor, void *item) {
+  uint8_t nothing = 0u;
+  return torb_map_entry_after(set, cursor, item, &nothing);
+}
+
 bool torb_map_next(torb_map map, uint32_t *cursor, const void **key, const void **value) {
   torb_map_storage *storage = map.storage;
   while (*cursor < storage->entry_count) {

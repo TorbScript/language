@@ -77,12 +77,184 @@ group "`a[key]`" {
     )
   }
 
-  /** A write through an index is a place, and `TakeOut`/`PutBack` are 5.9b's. Only the read is lowered here. */
-  test "a write through an index is still a finding, and it names the slice" {
+  /**
+   * `a[key] = value` is a call of `MutableIndexed.set` and no `Write`: what a missing key does is then the container's own
+   * answer - a list panics out of range and a map inserts - and no rule of the back end. The key is lowered before the
+   * value, which is the order decided gap 1 asks for (the place's own subexpressions first).
+   */
+  test "a write through an index is the `set` the container provides, the key before the value" {
     const source = "fn write(var items: ArrayList<Int>) \{\n  items[0] = 1\n\}"
     assert(
-      unsupportedIn(source)
-        == ["not supported by the back end yet: an assignment through `a[key]` (milestone 5.7/5.9b)"]
+      irOf(source, "t_acme_x2f_app_main_write") == r"""
+        fn t_acme_x2f_app_main_write(var items: List(Int64) borrowed) -> Void {
+          slot %0 parameter items: List(Int64)
+          slot %1 temporary: Int64
+          slot %2 temporary: Int64
+          slot %3 temporary: Void
+        b0: # acme/app/src/main.trb:1 body
+          %1 = constant s_literal__Int64_0
+          %2 = constant s_literal__Int64_1
+          call n_std_x2f_prelude_types_MutableIndexed_set__List_Int64_Int64_Int64(&%0 borrowed, %1 borrowed, %2 borrowed) at acme/app/src/main.trb:2:3
+          return
+        }"""
+    )
+  }
+}
+
+/** The container these tests index into: `harness.trb` declares `at` as required and its `ArrayList` provides none. */
+const indexedContainer = r"""
+  type Cell {
+    var value: Int
+  }
+
+  type Row with MutableIndexed<Int, Cell> {
+    var only: Cell
+
+    fn at(self, key: Int): Cell {
+      only
+    }
+
+    fn set(var self, key: Int, value: Cell) {
+      only = value
+    }
+  }
+  """
+
+fn indexedProgram(body: String): String {
+  "{indexedContainer}\n{body}"
+}
+
+/**
+ * A `var` path **through** `a[key]`: `points[0].x = 100`, `counters[1].increment()` and `bumped items[0]` all change an
+ * element of a container, and the concept's own model of that is "take it out, change it, put it back" (`var` Paths).
+ *
+ * The two halves are two members the language already has - `Indexed.at` takes the element out and `MutableIndexed.set`
+ * puts it back - so nothing about an index path is a decision of the back end, and it works for a **trait-typed**
+ * container (`List<Int>`, `Map<String, Int>`), which is what the compiler itself is full of and what no
+ * `Instruction.TakeOut` could reach: a witness table says which members a value has and never that it is a `torb_list`.
+ */
+group "a `var` path through `a[key]`" {
+  /** The element is read out of the container into a slot of the frame, written there, and put back. */
+  test "a field of an element is a write to a slot of the frame, between the `at` and the `set`" {
+    const source = indexedProgram(r"""
+      fn writeField(var row: Row) {
+        row[0].value = 5
+      }
+      """)
+    assert(
+      irOf(source, "t_acme_x2f_app_main_writeField") == r"""
+        fn t_acme_x2f_app_main_writeField(var row: Record(T_acme_x2f_app_main_Row) borrowed) -> Void {
+          slot %0 parameter row: Record(T_acme_x2f_app_main_Row)
+          slot %1 temporary: Int64
+          slot %2 temporary: Record(T_acme_x2f_app_main_Row)
+          slot %3 temporary: Record(T_acme_x2f_app_main_Cell)
+          slot %4 temporary: Int64
+          slot %5 temporary: Void
+        b0: # acme/app/src/main.trb:17 body
+          %1 = constant s_literal__Int64_0
+          %2 = read %0
+          %3 = call t_acme_x2f_app_main_Row_at(%2 borrowed, %1 borrowed) at acme/app/src/main.trb:18:3
+          %4 = constant s_literal__Int64_5
+          write %3.value = %4 borrowed
+          call t_acme_x2f_app_main_Row_set(&%0 borrowed, %1 borrowed, %3 borrowed) at acme/app/src/main.trb:18:3
+          return
+        }"""
+    )
+  }
+
+  /**
+   * A `var` argument through an index: the callee gets the address of the element's own slot, which is what makes
+   * `List.update`'s `change self[index]` an ordinary place - and the put-back is what makes the change reach the list.
+   */
+  test "a `var` argument through an index is the address of the element the frame holds" {
+    const source = indexedProgram(r"""
+      fn bumped(var value: Int) {
+        value = value + 1
+      }
+
+      fn writeArgument(var row: Row) {
+        bumped row[0].value
+      }
+      """)
+    assert(
+      irOf(source, "t_acme_x2f_app_main_writeArgument") == r"""
+        fn t_acme_x2f_app_main_writeArgument(var row: Record(T_acme_x2f_app_main_Row) borrowed) -> Void {
+          slot %0 parameter row: Record(T_acme_x2f_app_main_Row)
+          slot %1 temporary: Int64
+          slot %2 temporary: Record(T_acme_x2f_app_main_Row)
+          slot %3 temporary: Record(T_acme_x2f_app_main_Cell)
+          slot %4 temporary: Void
+        b0: # acme/app/src/main.trb:21 body
+          %1 = constant s_literal__Int64_0
+          %2 = read %0
+          %3 = call t_acme_x2f_app_main_Row_at(%2 borrowed, %1 borrowed) at acme/app/src/main.trb:22:10
+          call t_acme_x2f_app_main_bumped(&%3.value borrowed) at acme/app/src/main.trb:22:3
+          call t_acme_x2f_app_main_Row_set(&%0 borrowed, %1 borrowed, %3 borrowed) at acme/app/src/main.trb:22:10
+          return
+        }"""
+    )
+  }
+
+  /**
+   * `grid[y][x] = v`: **both keys are lowered before the access begins**, in source order, and the put-backs run
+   * innermost first - the row has to be back in the sheet after the cell is back in the row, or the change would be lost.
+   */
+  test "the nested case evaluates every key first and puts the elements back innermost first" {
+    const source = r"""
+      type Cell {
+        var value: Int
+      }
+
+      type Row with MutableIndexed<Int, Cell> {
+        var only: Cell
+
+        fn at(self, key: Int): Cell {
+          only
+        }
+
+        fn set(var self, key: Int, value: Cell) {
+          only = value
+        }
+      }
+
+      type Sheet with MutableIndexed<Int, Row> {
+        var only: Row
+
+        fn at(self, key: Int): Row {
+          only
+        }
+
+        fn set(var self, key: Int, value: Row) {
+          only = value
+        }
+      }
+
+      fn write(var sheet: Sheet) {
+        sheet[1][2] = Cell(3)
+      }
+      """
+    assert(
+      irOf(source, "t_acme_x2f_app_main_write") == r"""
+        fn t_acme_x2f_app_main_write(var sheet: Record(T_acme_x2f_app_main_Sheet) borrowed) -> Void {
+          slot %0 parameter sheet: Record(T_acme_x2f_app_main_Sheet)
+          slot %1 temporary: Int64
+          slot %2 temporary: Int64
+          slot %3 temporary: Record(T_acme_x2f_app_main_Sheet)
+          slot %4 temporary: Record(T_acme_x2f_app_main_Row)
+          slot %5 temporary: Int64
+          slot %6 temporary: Record(T_acme_x2f_app_main_Cell)
+          slot %7 temporary: Void
+        b0: # acme/app/src/main.trb:29 body
+          %1 = constant s_literal__Int64_1
+          %2 = constant s_literal__Int64_2
+          %3 = read %0
+          %4 = call t_acme_x2f_app_main_Sheet_at(%3 borrowed, %1 borrowed) at acme/app/src/main.trb:30:3
+          %5 = constant s_literal__Int64_3
+          %6 = construct T_acme_x2f_app_main_Cell (%5 borrowed)
+          call t_acme_x2f_app_main_Row_set(&%4 borrowed, %2 borrowed, %6 borrowed) at acme/app/src/main.trb:30:3
+          call t_acme_x2f_app_main_Sheet_set(&%0 borrowed, %1 borrowed, %4 borrowed) at acme/app/src/main.trb:30:3
+          return
+        }"""
     )
   }
 }

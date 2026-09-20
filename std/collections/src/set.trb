@@ -105,6 +105,36 @@ extend<Item: Hash> Set<Item> with Hash {
 // --- Implementations -----------------------------------------------------------------------------------
 
 /**
+ * The cursor of a set, which is the ordered hash table with nothing on the value side: the items in insertion order,
+ * tombstones skipped. See [MapIterator] for why `itemAfter` is a native and why there are two of these.
+ */
+public type SetIterator<Item: Hash> with Iterator<Item> {
+  items: TrieSet<Item>
+  var position: Int = 0
+
+  fn next(var self): Item? {
+    // The position travels through a local because stage 0 takes a `var` argument before it evaluates the receiver
+    var found = position
+    const item = items.itemAfter found
+    position = found
+    item
+  }
+}
+
+/** The cursor of [HashSet]: see [SetIterator]. */
+public type HashSetIterator<Item: Hash> with Iterator<Item> {
+  items: HashSet<Item>
+  var position: Int = 0
+
+  fn next(var self): Item? {
+    var found = position
+    const item = items.itemAfter found
+    position = found
+    item
+  }
+}
+
+/**
  * Hash array mapped trie - the default. Cheap to keep in many versions. Iterates in insertion order.
  *
  * Until the trie exists, this name is a documented alias of [HashSet]. Only performance differs: iteration order and
@@ -113,11 +143,25 @@ extend<Item: Hash> Set<Item> with Hash {
 public native type TrieSet<Item: Hash>
   with Set<Item>, From<Iterable<Item>>
 {
-  native fn from(items: Iterable<Item>): TrieSet<Item>
+  /** TorbScript, because `items` is a trait-typed value of the *program*: see [TrieMap.from]. */
+  fn from(items: Iterable<Item>): TrieSet<Item> {
+    var result: TrieSet<Item> = TrieSet.withCapacity 0
+    result.addAll items
+    result
+  }
+
+  native fn withCapacity(capacity: Int): TrieSet<Item>
 
   native fn length(self): Int
-  native fn iterator(self): Iterator<Item>
   native fn contains(self, value: Item): Bool
+
+  /** Ordinary TorbScript over `itemAfter`: see [SetIterator]. */
+  fn iterator(self): Iterator<Item> {
+    SetIterator self
+  }
+
+  /** The item at or after `cursor` in insertion order, with `cursor` left one past it: see [TrieMap.entryAfter]. */
+  native fn itemAfter(self, var cursor: Int): Item?
 
   native fn add(var self, value: Item)
   native fn remove(var self, value: Item): Bool
@@ -131,11 +175,22 @@ public native type TrieSet<Item: Hash>
 public native type HashSet<Item: Hash>
   with Set<Item>, From<Iterable<Item>>
 {
-  native fn from(items: Iterable<Item>): HashSet<Item>
+  fn from(items: Iterable<Item>): HashSet<Item> {
+    var result: HashSet<Item> = HashSet.withCapacity 0
+    result.addAll items
+    result
+  }
+
+  native fn withCapacity(capacity: Int): HashSet<Item>
 
   native fn length(self): Int
-  native fn iterator(self): Iterator<Item>
   native fn contains(self, value: Item): Bool
+
+  fn iterator(self): Iterator<Item> {
+    HashSetIterator self
+  }
+
+  native fn itemAfter(self, var cursor: Int): Item?
 
   native fn add(var self, value: Item)
   native fn remove(var self, value: Item): Bool

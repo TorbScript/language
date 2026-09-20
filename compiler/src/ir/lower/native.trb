@@ -97,7 +97,7 @@ fn needsWrapper(entry: NativeEntry): Bool {
   }
 }
 
-/** The shape the manifest gives one entry, with the payload of an out parameter read off the declared result. */
+/** The shape the manifest gives one entry, with the out parameters read off the declared result. */
 fn runtimeShapeOf(
   var lowering: Lowering,
   member: SymbolId,
@@ -111,10 +111,22 @@ fn runtimeShapeOf(
   const signature = lowering.checker.signature identifier
   const declared = irSignatureUnder lowering, signature, mapping
   var annotations: List<IrTypeId> = []
-  for out in outParametersOf(lowering, declared) {
+  for out in outParametersOf(lowering, declared, isPartsResult(entry)) {
     annotations.add out.annotation
   }
   RuntimeShape entry.addressedParameters, annotations
+}
+
+/**
+ * Whether the runtime writes one out parameter **per field of the payload** instead of one for the payload itself: the
+ * third convention, which the map and the set cursor need. A `(Key, Value)` is a layout of the *program* and the two
+ * halves of an entry live in two arrays of the table, so nothing could write one in a single piece.
+ */
+fn isPartsResult(entry: NativeEntry): Bool {
+  if const .OptionalParts = entry.result {
+    return true
+  }
+  false
 }
 
 /** One out parameter: what the runtime writes through it, and which field of the result it is. */
@@ -135,8 +147,11 @@ type OutParameter {
  *
  * An `Option` has no failure fields at all (`None` carries nothing), so for one this is the payload alone, which is
  * what the first round of 5.7 built.
+ *
+ * `isSplit` is the third convention: the payload is a **tuple** the runtime cannot write in one piece, so it takes one out
+ * parameter per field of it and the wrapper builds the tuple (`torb_map_entry_after` writes a key and a value).
  */
-fn outParametersOf(var lowering: Lowering, declared: IrSignature): List<OutParameter> {
+fn outParametersOf(var lowering: Lowering, declared: IrSignature, isSplit: Bool): List<OutParameter> {
   var found: List<OutParameter> = []
   const layout = match variantLayoutOfType(lowering, declared.result) {
     Some(inner) => inner
@@ -149,7 +164,11 @@ fn outParametersOf(var lowering: Lowering, declared: IrSignature): List<OutParam
   if success >= 0 {
     if const Some(first) = shape.fieldsOfVariant(success).first() {
       if !isVoidResult(lowering, first.annotation) {
-        found.add OutParameter("out", first.annotation)
+        if isSplit {
+          found.addAll payloadParametersOf(lowering, first.annotation)
+        } else {
+          found.add OutParameter("out", first.annotation)
+        }
       }
     }
   }
@@ -245,7 +264,7 @@ fn buildWrapper(
     reportUnsupported lowering, "`{entry.name}`, whose result has no success and no failure case", at
     return None
   }
-  const outs = outParametersOf lowering, declared
+  const outs = outParametersOf lowering, declared, isPartsResult(entry)
   var slots: List<Slot> = []
   for out in outs {
     const slot = addTemporary builder, out.annotation
@@ -358,9 +377,53 @@ fn successConstruct(
   }
   const at = outIndexOf outs, "out"
   if at < 0 {
-    return None
+    // The runtime wrote the payload in pieces (`.OptionalParts`), so the **tuple** is built here: it is a layout of the
+    // program, which is exactly why the runtime could not answer it
+    return builtPayload lowering, builder, annotation, outs, slots
   }
   Some([borrowed(slots[at])])
+}
+
+/** The payload of a `.OptionalParts` native: one `Construct` of the tuple out of the out parameters, in their order. */
+fn builtPayload(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  payload: IrTypeId,
+  outs: List<OutParameter>,
+  slots: List<Slot>,
+): List<Argument>? {
+  const inner = layoutOfType(lowering.program, payload)?
+  var parts: List<Argument> = []
+  for index in 0..outs.length() {
+    if outs[index].name.startsWith("out") && outs[index].name != "out" {
+      parts.add borrowed(slots[index])
+    }
+  }
+  if parts.isEmpty() {
+    return None
+  }
+  const built = addTemporary builder, payload
+  emit builder, Instruction.Construct(built, inner, 0, parts)
+  Some([borrowed(built)])
+}
+
+/**
+ * One out parameter per field of a payload the runtime writes in pieces. They are named after the field's position, and
+ * `out0` is deliberately not `out`: `successConstruct` tells the two conventions apart by exactly that name.
+ */
+fn payloadParametersOf(var lowering: Lowering, payload: IrTypeId): List<OutParameter> {
+  var found: List<OutParameter> = []
+  const layout = match layoutOfType(lowering.program, payload) {
+    Some(inner) => inner
+    None => {
+      return found
+    }
+  }
+  const fields = lowering.program.layoutAt(layout).fields
+  for index in 0..fields.length() {
+    found.add OutParameter("out{index}", fields[index].annotation)
+  }
+  found
 }
 
 /** The out parameter of this name, or -1. */

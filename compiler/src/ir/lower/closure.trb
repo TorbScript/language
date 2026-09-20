@@ -19,7 +19,7 @@ use isVoidType, finishBlock, continueIn, producesValue, borrowedArguments from "
 use lowerValue, lowerExpression, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use lowerBody from "./function"
 use lowerPatternBinding from "./match"
-use argumentReference from "./place"
+use argumentReference, putBackElements, TakenElement from "./place"
 
 /**
  * Closures: a closure becomes a function plus an environment, and so does everything that is one underneath - a named
@@ -572,6 +572,8 @@ public fn lowerClosureCall(
   }
   var slots: List<Slot> = []
   var places: List<Reference?> = []
+  // What a `var` argument took out of a container and has to put back once the closure has run
+  var taken: List<TakenElement> = []
   for index in 0..arguments.length() {
     const value = arguments[index].value
     // `commaSeparated(closer, parse: (var Parser) => Item)`: a `var` parameter of a closure type takes a place, exactly
@@ -586,6 +588,7 @@ public fn lowerClosureCall(
       }
       slots.add path.reference.base
       places.add Some(path.reference)
+      taken.addAll path.taken
       continue
     }
     const slot = lowerValue lowering, builder, value
@@ -595,7 +598,9 @@ public fn lowerClosureCall(
     slots.add slot
     places.add None
   }
-  emitClosureCall lowering, builder, destination, holder, slots, places, annotation
+  const result = emitClosureCall lowering, builder, destination, holder, slots, places, annotation
+  putBackElements lowering, builder, taken
+  result
 }
 
 /** One `CallClosure`, with the result where it belongs and `Void` for a closure that answers nothing. */

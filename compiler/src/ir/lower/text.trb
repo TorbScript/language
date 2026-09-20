@@ -188,9 +188,13 @@ public fn showsHere(lowering: Lowering, at: Span): Bool {
  * about the format (5.R1), and nothing about `print` is special *after* the lowering: it is one instruction the VM gets
  * as one opcode.
  *
- * Once 5.7 builds the list, this becomes the ordinary path again by deleting the two lines that recognize the name:
- * the argument list is then an ordinary `List<Show>`, the manifest's `torb_print_parts` is reached through the wrapper
- * of `ir/lower/native.trb`, and the two instructions are the fast path a call with a written argument list keeps.
+ * **5.7 builds the list now, and this stays** - the two lines that recognize the name are the definition of `print` and no
+ * longer a placeholder. A `List<Show>` at the call site would have the **runtime** call `show` through a witness table,
+ * which a C function cannot do (which is why `ArrayList.from` is TorbScript for the same reason), so `print` would have to
+ * become TorbScript over a new `printText` native - and that moves the one space and the one `\n` out of
+ * `runtime/console.c`, where 5.R1 put them on purpose, and costs a list plus a concatenation at every call. What 5.7
+ * changed is that this is a **fast path** and not the only path: a variadic call of anything else builds its list
+ * (`ir/lower/collection.trb`), so nothing of the language waits for it any more.
  */
 public fn printOperationOf(var lowering: Lowering, symbol: SymbolId): IntrinsicOperation? {
   const known = lowering.checker.wellKnown
@@ -199,18 +203,6 @@ public fn printOperationOf(var lowering: Lowering, symbol: SymbolId): IntrinsicO
   }
   if known.symbolNamed("printError") == Some(symbol) {
     return Some IntrinsicOperation.PrintErrorParts
-  }
-  None
-}
-
-/**
- * The same for a whole call expression, which is what tells the variadic argument list of `print` from every other one:
- * the list of any other variadic call is still the clean finding that names 5.7.
- */
-public fn printCallOf(var lowering: Lowering, expression: Expression): IntrinsicOperation? {
-  const found = lowering.checker.resolutionAt(lowering.module, expression.span)?
-  if const .Callable(symbol, _, _) = found {
-    return printOperationOf lowering, symbol
   }
   None
 }
@@ -226,8 +218,9 @@ public fn lowerPrint(
 ): Slot {
   var parts: List<Slot> = []
   for written in arguments {
+    // `print(...parts)` is the one shape the fast path cannot take: the number of operands would be a runtime question
     if written.isSpread {
-      const what = "`...` in the argument list of `print` (milestone 5.7)"
+      const what = "`...` in the argument list of `print`, which the two instructions cannot take"
       return unsupportedSlot lowering, builder, destination, what, expression.span
     }
     const shown = shownSlotOf lowering, builder, written.value

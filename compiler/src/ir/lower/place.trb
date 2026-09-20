@@ -2,16 +2,20 @@ use Span from "../../syntax/source"
 use Expression from "../../syntax/ast"
 use Signature, TypeId, ParameterId from "../../semantics/checker/type"
 use substitute from "../../semantics/checker/unify"
+use traitArgumentsOf from "../../semantics/checker/implementation"
 use Place, PlaceRoot, PlaceStep, PropertyWriteKind, BindingId from "../../semantics/checker/context"
 use IrTypeId, Slot, LayoutId, Reference, PathStep, Instruction, borrowed from "../ir"
 use FunctionBuilder, addTemporary, emit from "../build"
 use layoutOfType, typeOfReference from "../verify"
 use isManagedType from "../layout"
 use describeIrType from "../print"
-use isReferenceParameter from "../instances"
+use isReferenceParameter, isClosedType from "../instances"
 use Lowering, reportUnsupported, irTypeOf, irTypeOfClosed, voidTypeOf from "./context"
+use substituted from "./context"
 use lowerExpression, lowerValue, voidSlot, abandonedSlot, fieldIndexOf from "./expression"
 use bindingReferenceOf, emitClosureCall from "./closure"
+use Dispatched, dispatchedOn, resultTypeOf from "./generic"
+use lowerDispatched from "./call"
 
 /**
  * `var` paths: how the path the checker wrote down becomes a `Reference` of the IR, and what a call, an assignment and a
@@ -27,14 +31,54 @@ use bindingReferenceOf, emitClosureCall from "./closure"
  * `MakeUnique` in front of the call - one per counted owner of the path, which the ownership pass inserts - is what makes
  * the storage safe to write through. So a `var` parameter costs a pointer and nothing else.
  *
- * What is not here: an index path into a `List` or a `Map` (`TakeOut`/`PutBack`, milestone 5.9b), a slice as a window, a
- * `shared type` object and a `FixedArray`. Each of them is a clean finding that names its milestone.
+ * An **index** on the path (`a[key]`) is the one step that is not a `PathStep`: it takes the element out of its
+ * container into a slot of the frame, runs the access against that slot and puts it back afterwards (`TakenElement`).
+ *
+ * What is not here: a slice as a window, a `shared type` object and a `FixedArray`. Each of them is a clean finding that
+ * names its milestone.
  */
 
-/** A place of the IR: the path, and the type it ends in - which is what a write through it has to produce. */
+/**
+ * A place of the IR: the path, the type it ends in - which is what a write through it has to produce - and the elements
+ * the path went through `a[key]` for, which the access has to put back when it has run.
+ */
 public type PlacePath {
   reference: Reference
   annotation: IrTypeId
+  /** Outermost first. `putBackElements` writes them back, and every caller of one of the two forms below calls it. */
+  taken: List<TakenElement> = []
+}
+
+/**
+ * One element a `var` path goes through `a[key]` for: taken out of its container before the access begins, put back
+ * after it has run.
+ *
+ * That is the concept's own model of an index path - "take it out, change it, put it back" (`var` Paths) - and the two
+ * halves are two members the language already has: **`Indexed.at`** takes the element out, which is why a missing key
+ * *panics* in the one place `std/core` decides it, and **`MutableIndexed.set`** puts it back, which is why a missing key
+ * of a map is an *insert* on `map[key] = value`. Neither half is a decision of the back end.
+ *
+ * **Why it is not `Instruction.TakeOut`/`PutBack`.** Those name a `RuntimeKind` and reach the runtime's own
+ * `torb_list_element_reference` / `torb_map_take_out` - and the container of a path is almost always a **trait-typed**
+ * value (`List<Int>`, `Map<String, Int>`) whose payload the back end may not index: a witness table says which members
+ * a value has and never that it is a `torb_list`, and `List<Item>` may be implemented by anything. So the two
+ * instructions stay for the contiguous shapes of 5.9b (`Array<Item, Size>` and a slice window), where the receiver is
+ * concrete, and the price of the general form is one copy of the element in and one out.
+ *
+ * The element lives in an ordinary slot of the frame in between, so the access is a change of a local: `MakeUnique`
+ * happens for a counted element for the same reason it happens for any other value, and copy on write follows from the
+ * count the container still holds.
+ */
+public type TakenElement {
+  /** The container it came out of: a place, because a container may itself be an element of another. */
+  container: Reference
+  /** The key, lowered exactly once and before the access began. */
+  key: Slot
+  /** The frame's own slot the element lives in while the access runs. */
+  element: Slot
+  /** `MutableIndexed.set` of the container's own type, which is what puts it back. */
+  setter: Dispatched
+  at: Span
 }
 
 /**
@@ -46,6 +90,8 @@ public type PlacePath {
 public type CallOperands {
   slots: List<Slot> = []
   places: List<Reference?> = []
+  /** What the places of these arguments took out of a container, in the order the arguments were written. */
+  taken: List<TakenElement> = []
 }
 
 /** Which positions of a signature are `var` parameters, in the order of the signature. `self` is not one of them. */
@@ -91,10 +137,19 @@ public fn parameterTypeAt(
 // --- From the checker's place to a reference -------------------------------------------------------------------------
 
 /**
- * The place the checker recorded at this span, as a `Reference`. `what` names the construct in every message, so that a
- * finding says whether it was an assignment, a receiver or an argument that could not form its path.
+ * The place the checker recorded under this expression, as a `Reference`. `what` names the construct in every message, so
+ * that a finding says whether it was an assignment, a receiver or an argument that could not form its path.
+ *
+ * The **expression** is taken and not only its span, because the key of an `a[key]` on the path is an expression that has
+ * to be lowered and the checker's `PlaceStep.Index` carries only its span.
  */
-public fn referenceAt(var lowering: Lowering, var builder: FunctionBuilder, at: Span, what: String): PlacePath? {
+public fn referenceAt(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  target: Expression,
+  what: String,
+): PlacePath? {
+  const at = target.span
   const place = match placeRecordedAt(lowering, at) {
     Some(found) => found
     None => {
@@ -102,7 +157,19 @@ public fn referenceAt(var lowering: Lowering, var builder: FunctionBuilder, at: 
       return None
     }
   }
-  pathOfPlace lowering, builder, place, what, at
+  const root = match rootReferenceOf(lowering, builder, place.root, what, at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const keys = match loweredKeys(lowering, builder, place.steps, indexKeysOf(target), what, at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  steppedFrom lowering, builder, root, place.steps, keys, what, at
 }
 
 /** The path the checker wrote down under a span, or `None` where it wrote none. */
@@ -124,23 +191,47 @@ fn isTemporaryPlace(var lowering: Lowering, at: Span): Bool {
   }
 }
 
-fn pathOfPlace(
+/**
+ * The path from a root that is already in hand, with the keys of its `a[key]` steps already in slots. Every `.Index` step
+ * takes its element out here, which is what makes the path of the *access* start at that element - `points[0].x` is a
+ * write to the `x` of a `Point` the frame holds, and the element goes back into the list afterwards.
+ */
+fn steppedFrom(
   var lowering: Lowering,
   var builder: FunctionBuilder,
-  place: Place,
+  root: PlacePath,
+  written: List<PlaceStep>,
+  keys: List<Slot>,
   what: String,
   at: Span,
 ): PlacePath? {
-  const root = match rootReferenceOf(lowering, builder, place.root, what, at) {
-    Some(found) => found
-    None => {
-      return None
-    }
-  }
-  const base = root.reference.base
+  var base = root.reference.base
   var steps = root.reference.steps
   var annotation = root.annotation
-  for step in place.steps {
+  var taken: List<TakenElement> = []
+  var position = 0
+  for step in written {
+    if const .Index(container, _, _) = step {
+      const key = match keys.get(position) {
+        Some(found) => found
+        None => {
+          reportUnsupported lowering, "{what} through `a[key]` without a key", at
+          return None
+        }
+      }
+      position = position + 1
+      const element = match takenElement(lowering, builder, Reference(base, steps), annotation, container, key, what, at) {
+        Some(found) => found
+        None => {
+          return None
+        }
+      }
+      taken.add element
+      base = element.element
+      steps = []
+      annotation = builder.typeOfSlot element.element
+      continue
+    }
     const next = match steppedPath(lowering, annotation, step, what, at) {
       Some(found) => found
       None => {
@@ -150,7 +241,7 @@ fn pathOfPlace(
     steps.add next.step
     annotation = next.annotation
   }
-  Some PlacePath(Reference(base, steps), annotation)
+  Some PlacePath(Reference(base, steps), annotation, taken)
 }
 
 /** One step of a path, and the type it leads to. */
@@ -264,8 +355,9 @@ fn steppedPath(
       }
       Some SteppedPath(PathStep.TupleField(layout, index), fieldTypeOf(lowering, layout, index))
     }
+    // An index takes its element out one level up, so the walk never asks this one about it
     .Index(_, _, _) => {
-      reportUnsupported lowering, "{what} through `a[key]` (milestone 5.7/5.9b)", at
+      reportUnsupported lowering, "{what} through `a[key]` the walk did not take out", at
       None
     }
     .Range(_, _) => {
@@ -288,6 +380,197 @@ fn typeOfPlace(var lowering: Lowering, var builder: FunctionBuilder, place: Refe
     }
   }
   annotation
+}
+
+// --- An index on the path --------------------------------------------------------------------------------------------
+
+/**
+ * The key expression of every `a[key]` on the path, from the root outwards - which is the order the steps of a place are
+ * in.
+ *
+ * The checker's `PlaceStep.Index` carries the **span** of the key and nothing else, and the lowering does not lower from
+ * spans: so the target expression is walked in step with the steps of its place. That is no second opinion about what a
+ * place is - the walk collects the expressions inside the brackets and nothing else, the path itself stays the one 4.6
+ * wrote down, and the target is still lowered *only* through its path and never also as a value (5.9a's rule).
+ */
+fn indexKeysOf(expression: Expression): List<Expression> {
+  var inwards: List<Expression> = []
+  var current = expression
+  var more = true
+  while more {
+    const kind = current.kind
+    match kind {
+      .Index(target, key) => {
+        inwards.add key
+        current = target
+      }
+      .Member(target, _, _) => {
+        current = target
+      }
+      .Generic(inner, _) => {
+        current = inner
+      }
+      _ => {
+        more = false
+      }
+    }
+  }
+  var keys: List<Expression> = []
+  for position in 0..inwards.length() {
+    keys.add inwards[inwards.length() - 1 - position]
+  }
+  keys
+}
+
+/**
+ * Every key of the path, lowered exactly once, in source order and **before** the access begins. That is the evaluation
+ * order of a `var` path (CONCEPT, `var` Paths, after the model of Swift): all keys and all arguments are evaluated first,
+ * and only then does the access - which the take-out below is already part of - begin.
+ *
+ * A path with no index needs none of it, so nothing walks anything for the ordinary field paths.
+ */
+fn loweredKeys(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  steps: List<PlaceStep>,
+  keys: List<Expression>,
+  what: String,
+  at: Span,
+): List<Slot>? {
+  var count = 0
+  for step in steps {
+    // A slice is a window into the base and needs the interior places of 5.9b, so nothing of the path is evaluated
+    if const .Range(_, _) = step {
+      reportUnsupported lowering, "{what} through a slice, which is a window (milestone 5.9b)", at
+      return None
+    }
+    if const .Index(_, _, _) = step {
+      count = count + 1
+    }
+  }
+  const empty: List<Slot> = []
+  if count == 0 {
+    return Some empty
+  }
+  if keys.length() != count {
+    reportUnsupported lowering, "{what} through `a[key]` the back end could not pair with its path", at
+    return None
+  }
+  var found: List<Slot> = []
+  for key in keys {
+    const slot = lowerValue lowering, builder, key
+    if !lowering.isSupported {
+      return None
+    }
+    found.add slot
+  }
+  Some found
+}
+
+/**
+ * One element on the path: the container as a value, `Indexed.at` to take the element out of it into a slot of the frame,
+ * and the `MutableIndexed.set` that will put it back once the access has run.
+ *
+ * The container is **read out of its place** first, because `at` takes `self` by value: a `Read` of a counted value hands
+ * the frame a count of its own, which dies at the call again and leaves the container's count untouched.
+ */
+fn takenElement(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  container: Reference,
+  annotation: IrTypeId,
+  written: TypeId,
+  key: Slot,
+  what: String,
+  at: Span,
+): TakenElement? {
+  const subject = substituted lowering, written
+  const reader = match indexedMemberOf(lowering, subject, false, "at", what, at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const setter = match indexedMemberOf(lowering, subject, true, "set", what, at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const elementType = resultTypeOf lowering, reader
+  if !isClosedType(lowering, elementType) {
+    reportUnsupported lowering, "{what} through `a[key]` whose element type the back end cannot close", at
+    return None
+  }
+  const spelling = irTypeOfClosed lowering, elementType
+  const receiver = addTemporary builder, annotation
+  emit builder, Instruction.Read(receiver, container)
+  const element = addTemporary builder, spelling
+  const places: List<Reference?> = []
+  const _ = lowerDispatched lowering, builder, Some(element), at, reader, [receiver, key], places, spelling
+  if !lowering.isSupported {
+    return None
+  }
+  Some TakenElement(container, key, element, setter, at)
+}
+
+/** `Indexed.at` and `MutableIndexed.set` of the container's own type: the two halves of an index path. */
+fn indexedMemberOf(
+  var lowering: Lowering,
+  container: TypeId,
+  isMutable: Bool,
+  name: String,
+  what: String,
+  at: Span,
+): Dispatched? {
+  const capability = if isMutable {
+    lowering.checker.wellKnown.mutableIndexed
+  } else {
+    lowering.checker.wellKnown.indexed
+  }
+  const symbol = match capability {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "{what} through `a[key]` without `Indexed` in the prelude", at
+      return None
+    }
+  }
+  const arguments = match traitArgumentsOf(lowering.checker, container, symbol) {
+    Some(found) => found
+    None => {
+      const shown = lowering.checker.describe container
+      reportUnsupported lowering, "{what} through `a[key]` on `{shown}`, which the back end cannot change by index", at
+      return None
+    }
+  }
+  const bound = lowering.checker.nominal symbol, arguments
+  dispatchedOn lowering, container, bound, name, at
+}
+
+/**
+ * The other half of every `a[key]` on a path: `MutableIndexed.set` puts the element back where it came from, **innermost
+ * first**, after the access has run - an element that is itself in a container has to be back in it before that container
+ * goes back into its own.
+ *
+ * It is what makes a change through `a[key]` a change of the container and not of a copy, and it is where copy on write
+ * happens: the access made the element unique (it had to, the container still held a count of it), and `set` releases
+ * what the container had there.
+ */
+public fn putBackElements(var lowering: Lowering, var builder: FunctionBuilder, taken: List<TakenElement>) {
+  if taken.isEmpty() || !lowering.isSupported || lowering.isDiverged {
+    return
+  }
+  const voidType = voidTypeOf lowering
+  for position in 0..taken.length() {
+    const entry = taken[taken.length() - 1 - position]
+    // One entry per operand, because that is how a call says which of its positions takes a place and which a value
+    const places: List<Reference?> = [Some(entry.container), None, None]
+    const operands = [entry.container.base, entry.key, entry.element]
+    const _ = lowerDispatched lowering, builder, None, entry.at, entry.setter, operands, places, voidType
+    if !lowering.isSupported {
+      return
+    }
+  }
 }
 
 /** Whether a slot is a `var` parameter of this frame: it holds a pointer into the caller's frame and not a value. */
@@ -316,15 +599,16 @@ public fn receiverReference(
   callee: Expression,
   what: String,
 ): PlacePath? {
-  const at = receiverPlaceSpanOf callee
-  referenceAt lowering, builder, at, what
+  const target = receiverPlaceOf callee
+  referenceAt lowering, builder, target, what
 }
 
-fn receiverPlaceSpanOf(expression: Expression): Span {
+/** What stands in front of the dot, or the callee itself where the member was written bare. */
+fn receiverPlaceOf(expression: Expression): Expression {
   match expression.kind {
-    .Member(base, _, _) => base.span
-    .Generic(inner, _) => receiverPlaceSpanOf inner
-    _ => expression.span
+    .Member(base, _, _) => base
+    .Generic(inner, _) => receiverPlaceOf inner
+    _ => expression
   }
 }
 
@@ -348,7 +632,7 @@ public fn argumentReference(
     }
     return Some PlacePath(Reference(slot, []), annotation)
   }
-  referenceAt lowering, builder, value.span, what
+  referenceAt lowering, builder, value, what
 }
 
 /**
@@ -387,13 +671,102 @@ public fn lowerPlaceAssignment(
   target: Expression,
   value: Expression,
 ) {
-  const path = match referenceAt(lowering, builder, target.span, "an assignment") {
+  // `a[key] = value` is `MutableIndexed.set` and not a `Write`, which is the whole difference between a write and an
+  // insert: what a missing key does is the container's own answer (`map[key] = value` adds it) and no rule of the back end
+  if const Some(place) = placeRecordedAt(lowering, target.span) {
+    if isIndexedTarget(place) {
+      lowerIndexAssignment lowering, builder, place, target, value
+      return
+    }
+  }
+  const path = match referenceAt(lowering, builder, target, "an assignment") {
     Some(found) => found
     None => {
       return
     }
   }
   writtenPlace lowering, builder, path, value
+  putBackElements lowering, builder, path.taken
+}
+
+/** Whether the *last* step of a path is an index, which is what makes an assignment through it a `set`. */
+fn isIndexedTarget(place: Place): Bool {
+  if const Some(last) = place.steps.last() {
+    if const .Index(_, _, _) = last {
+      return true
+    }
+  }
+  false
+}
+
+/**
+ * `numbers[0] = 5`, `map[key] = value`, `grid[y][x] = v`: the last step of the path is the index, so the assignment is a
+ * call of `MutableIndexed.set` on the container the rest of the path leads to. Everything in front of that index is an
+ * ordinary place, which is what makes the nested case fall out of nothing: `grid[y]` is taken out and put back around the
+ * `set`, by the very machinery a `var` argument uses.
+ *
+ * The order is what decided gap 1 asks for: the place's own subexpressions first - every key, in source order, before the
+ * access begins - then the value, then the write.
+ */
+fn lowerIndexAssignment(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  place: Place,
+  target: Expression,
+  value: Expression,
+) {
+  const what = "an assignment"
+  const at = target.span
+  const steps = place.steps
+  const last = steps.length() - 1
+  const container = match steps[last] {
+    .Index(found, _, _) => found
+    _ => {
+      reportUnsupported lowering, "an assignment through `a[key]` without a container", at
+      return
+    }
+  }
+  const root = match rootReferenceOf(lowering, builder, place.root, what, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const keys = match loweredKeys(lowering, builder, steps, indexKeysOf(target), what, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const key = match keys.last() {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "an assignment through `a[key]` without a key", at
+      return
+    }
+  }
+  const path = match steppedFrom(lowering, builder, root, steps[0..last], keys[0..keys.length() - 1], what, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const subject = substituted lowering, container
+  const setter = match indexedMemberOf(lowering, subject, true, "set", what, at) {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const written = lowerValue lowering, builder, value
+  if !lowering.isSupported {
+    return
+  }
+  const places: List<Reference?> = [Some(path.reference), None, None]
+  const operands = [path.reference.base, key, written]
+  const voidType = voidTypeOf lowering
+  const _ = lowerDispatched lowering, builder, None, at, setter, operands, places, voidType
+  putBackElements lowering, builder, path.taken
 }
 
 /**
@@ -429,7 +802,7 @@ public fn lowerPropertyWrite(
   if const .Configure = kind {
     return lowerConfigureCommand lowering, builder, destination, callee, value
   }
-  const path = match referenceAt(lowering, builder, callee.span, "a property command") {
+  const path = match referenceAt(lowering, builder, callee, "a property command") {
     Some(found) => found
     None => {
       return abandonedSlot lowering, builder, destination
@@ -462,7 +835,7 @@ fn lowerConfigureCommand(
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
   }
-  const path = match referenceAt(lowering, builder, callee.span, "a property command") {
+  const path = match referenceAt(lowering, builder, callee, "a property command") {
     Some(found) => found
     None => {
       return abandonedSlot lowering, builder, destination

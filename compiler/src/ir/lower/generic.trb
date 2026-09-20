@@ -4,6 +4,7 @@ use TypeId, TypeForm, ParameterId, ImplementationId from "../../semantics/checke
 use Dispatch from "../../semantics/checker/context"
 use signatureOf from "../../semantics/checker/signature"
 use traitArgumentsOf, witnessFor, matchTypePattern from "../../semantics/checker/implementation"
+use defaultInClosureOf from "../../semantics/checker/implementation"
 use substitute from "../../semantics/checker/unify"
 use IrTypeId, IrType, Slot, TraitId, LayoutId, Instruction, WitnessSource, WitnessRoot, owned from "../ir"
 use Reference from "../ir"
@@ -12,6 +13,7 @@ use FunctionBuilder, emit from "../build"
 use payloadLayoutName from "../mangle"
 use instantiateTrait from "../instantiate"
 use witnessTableOf, boundIndexOf, memberMappingOf, traitMemberNamed, ownerNameOf, isInTable from "../witness"
+use providerOfMember from "../witness"
 use narrowingPathOf from "../witness"
 use isClosedType from "../instances"
 use Lowering, reportUnsupported, substituted, irTypeOfClosed from "./context"
@@ -77,6 +79,17 @@ public fn dispatchedMember(
     }
     .Object(bound, _) => {
       const applied = substituted lowering, bound
+      // A **static** member of a trait-typed type is no call on a value: there is no payload to erase, object safety keeps
+      // such a member out of every table, and `Traits([Map<Key, Value>])` is a closed type `witnessFor` names the one
+      // implementation of. `Target.from self` inside `Iterable.to` is exactly that, and it is why the table of a
+      // collector's `Map` could not be reached. `.Forwarded` already asked the same question
+      if const Some(found) = subject {
+        if !takesSelf(lowering, symbol) {
+          if const .Implementation(one, _, _) = witnessFor(lowering.checker, found, applied) {
+            return memberOfImplementationDispatch lowering, symbol, typeArguments, one, Some(found), applied, at
+          }
+        }
+      }
       dynamicDispatch lowering, symbol, typeArguments, applied, subject, at
     }
     .Forwarded(parameter, bound, _) => {
@@ -228,7 +241,6 @@ fn memberOfImplementationDispatch(
     return None
   }
   const name = lowering.checker.symbolAt(symbol).name
-  const member = providerMember(lowering, implementation, name) ?? symbol
   const target = match subject {
     Some(inner) => inner
     None => {
@@ -236,6 +248,10 @@ fn memberOfImplementationDispatch(
       return None
     }
   }
+  // Which declaration really runs is the same question a witness table asks, and it has three answers and not one: the
+  // implementation, the default of the requiring trait, and the default of any **other** trait of the target's closure.
+  // `Map.add` is written by `Map` and required by `Collection`, so `TrieMap.from`'s `addAll` had nothing to call
+  const member = providerOfMember lowering, target, implementation, symbol, name
   var mapping = memberMappingOf lowering, member, target, bound
   addOwnArguments lowering, mapping, member, typeArguments
   const empty: List<TypeId> = []
@@ -292,7 +308,11 @@ fn dynamicDispatch(
     return None
   }
   const name = lowering.checker.symbolAt(symbol).name
-  const member = traitMemberNamed(lowering, bound, name) ?? symbol
+  // The bound a call resolved is the trait that *requires* the member, and another trait of the closure may be the one
+  // that writes it: `Slice.slice` is required and `List` gives it a body, exactly as `Collection.add` is required and
+  // `Map` gives it one. It is the third question `providerOfMember` asks, and a table asks it for the same reason
+  const declared = traitMemberNamed(lowering, bound, name) ?? symbol
+  const member = providedInClosure lowering, declared, target, name
   var mapping = memberMappingOf lowering, member, target, bound
   addOwnArguments lowering, mapping, member, typeArguments
   // A member the table cannot hold is a default the value cannot override: an instance of the default body then, with
@@ -316,6 +336,18 @@ fn dynamicDispatch(
     }
   }
   Some Dispatched(member, mapping, bound, "", None, isDynamic, bounds, Some(target))
+}
+
+/**
+ * The member with a body, where the one the bound declares has none and another trait of the target's closure writes it.
+ * Nothing changes for a member that is a requirement everywhere: the declaration is its own provider then.
+ */
+fn providedInClosure(var lowering: Lowering, declared: SymbolId, target: TypeId, name: String): SymbolId {
+  const identifier = signatureOf lowering.checker, declared
+  if lowering.checker.signature(identifier).hasBody {
+    return declared
+  }
+  defaultInClosureOf(lowering.checker, target, name) ?? declared
 }
 
 /**
@@ -353,12 +385,6 @@ public fn resultTypeOf(var lowering: Lowering, dispatched: Dispatched): TypeId {
   const result = lowering.checker.signature(identifier).form.result
   const mapping = dispatched.mapping
   substitute lowering.checker.types, result, mapping
-}
-
-/** What the member of an implementation is called, without reporting anything about visibility. */
-fn providerMember(var lowering: Lowering, implementation: ImplementationId, name: String): SymbolId? {
-  const found = lowering.checker.implementations.at implementation
-  found.members.get name
 }
 
 /** The trait an implementation provides, with its arguments as they are for the type it was reached on. */

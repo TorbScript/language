@@ -155,14 +155,6 @@ fn returnsAnywhere(builder: FunctionBuilder): Bool {
 fn declareParameterSlots(var lowering: Lowering, symbol: SymbolId, declaration: FunctionDeclaration) {
   const identifier = signatureOf lowering.checker, symbol
   const signature = lowering.checker.signature identifier
-  // `...numbers: Int` is a list at the call site and the *collection trait* inside the body, and the two shapes only
-  // agree once a list is a value of the back end - so a body with one is a finding and never IR that disagrees with itself
-  for parameter in signature.form.parameters {
-    if const .Variadic = parameter.mode {
-      reportUnsupported lowering, "a variadic parameter (milestone 5.7)", declaration.name.span
-      return
-    }
-  }
   var next = 0
   for parameter in declaration.parameters {
     if parameter.name.text == "self" && parameter.annotation.isNone() {

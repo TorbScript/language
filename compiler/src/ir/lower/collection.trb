@@ -3,17 +3,21 @@ use Expression, Argument from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
 use TypeId from "../../semantics/checker/type"
 use Adaptation from "../../semantics/checker/context"
-use IrTypeId, Slot, ElementId, RuntimeKind, Instruction, Reference, FunctionId from "../ir"
+use IrTypeId, IrType, Slot, ElementId, RuntimeKind, Instruction, Reference, FunctionId from "../ir"
+use LayoutId, PathStep, Terminator from "../ir"
 use borrowed, referenced from "../ir"
-use FunctionBuilder, addTemporary, emit from "../build"
+use FunctionBuilder, addTemporary, addLocal, addBlock, emit from "../build"
 use elementFor from "../element"
 use memberOfType from "../witness"
 use traitArgumentsOf from "../../semantics/checker/implementation"
 use locationOf from "./context"
-use Lowering, reportUnsupported, irTypeOfClosed, substituted from "./context"
+use Lowering, reportUnsupported, irTypeOfClosed, substituted, voidTypeOf from "./context"
+use finishBlock, continueIn from "./context"
+use isClosedType from "../instances"
+use variantLayoutOfType, variantNamed from "./match"
 use valueSlot, unsupportedSlot, abandonedSlot from "./expression"
 use lowerValue from "./expression"
-use lowerTraitValue, dispatchedMember from "./generic"
+use lowerTraitValue, dispatchedMember, dispatchedOn, resultTypeOf from "./generic"
 use lowerDispatched from "./call"
 
 /**
@@ -58,6 +62,33 @@ public fn lowerListLiteral(
       return unsupportedSlot lowering, builder, destination, "a list literal without an item type", at
     }
   }
+  lowerItemList lowering, builder, destination, items, item, bounds, annotation, at
+}
+
+/**
+ * The `List<Item>` that a literal and a **variadic argument list** are both made of: an `ArrayList<Item>` built empty over
+ * the element descriptor of its item type, filled in written order through the ordinary `add` - and through `addAll` for a
+ * `...spread` - and coerced to the trait-typed value a `List<Item>` is.
+ *
+ * `bounds` is what the result is boxed with: the bounds of the literal's own type, or `[List<Item>]` for a variadic
+ * parameter, whose declared type is what the body sees.
+ */
+public fn lowerItemList(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  items: List<Argument>,
+  item: TypeId,
+  bounds: List<TypeId>,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const bound = match bounds.first() {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a list of a type that is not a `List`", at
+    }
+  }
   const container = match implementationOf(lowering, "ArrayList", [item], at) {
     Some(found) => found
     None => {
@@ -80,8 +111,10 @@ public fn lowerListLiteral(
   }
   for written in items {
     if written.isSpread {
-      const what = "a spread in a list literal (milestone 5.8)"
-      return unsupportedSlot lowering, builder, destination, what, written.value.span
+      if !spreadInto(lowering, builder, storage, adder, written.value) {
+        return abandonedSlot lowering, builder, destination
+      }
+      continue
     }
     const value = lowerValue lowering, builder, written.value
     if !lowering.isSupported {
@@ -90,6 +123,141 @@ public fn lowerListLiteral(
     addInto lowering, builder, adder, storage, [value], written.value.span
   }
   coerced lowering, builder, destination, storage, bounds, container, annotation, at
+}
+
+/**
+ * `...values` in a list or in a variadic argument list: **one `add` per item**, which is what `Collection.addAll` means.
+ *
+ * It is written out here rather than called, and the reason is the fourth round's decision about the tables: a default no
+ * implementation overrides has **one** instance with `Self` bound to the *trait type*, so `Collection.addAll` takes an
+ * `Object(List<Item>)` place - and what is being filled here is the concrete buffer the literal builds. Boxing the buffer
+ * to call it would hand the callee a box of its own and the items would never reach this slot.
+ *
+ * So the spread is the loop BACKEND 1.6 describes for a `for`: the subject once into a slot, `iterator()` on it, and a
+ * head that pulls `next()` from a `var` local and switches on the `Option` - which is also why a spread of a *pipeline*
+ * works and not only one of a list.
+ */
+fn spreadInto(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  storage: Slot,
+  adder: FunctionId,
+  value: Expression,
+): Bool {
+  const at = value.span
+  const module = lowering.module
+  const written = match lowering.checker.expressionType(module, at) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `...` whose value the checker recorded no type for", at
+      return false
+    }
+  }
+  const subject = substituted lowering, written
+  const iterableBound = match iterableBoundOf(lowering, subject, at) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const source = lowerValue lowering, builder, value
+  if !lowering.isSupported {
+    return false
+  }
+  const made = match dispatchedOn(lowering, subject, iterableBound, "iterator", at) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const cursorType = resultTypeOf lowering, made
+  if !isClosedType(lowering, cursorType) {
+    reportUnsupported lowering, "a `...` whose iterator type the back end cannot close", at
+    return false
+  }
+  const cursorSpelling = irTypeOfClosed lowering, cursorType
+  const cursor = addLocal builder, cursorSpelling, "spread"
+  const noPlaces: List<Reference?> = []
+  const _ = lowerDispatched lowering, builder, Some(cursor), at, made, [source], noPlaces, cursorSpelling
+  if !lowering.isSupported {
+    return false
+  }
+  const iteratorBound = match iteratorBoundOf(lowering, cursorType, at) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const pull = match dispatchedOn(lowering, cursorType, iteratorBound, "next", at) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const optionType = resultTypeOf lowering, pull
+  if !isClosedType(lowering, optionType) {
+    reportUnsupported lowering, "a `...` whose item type the back end cannot close", at
+    return false
+  }
+  const option = irTypeOfClosed lowering, optionType
+  const layout = match variantLayoutOfType(lowering, option) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a `...` over an iterator whose `next` does not answer an `Option`", at
+      return false
+    }
+  }
+  const some = variantNamed lowering, layout, "Some"
+  if some < 0 {
+    reportUnsupported lowering, "a `...` over an iterator whose `next` does not answer an `Option`", at
+    return false
+  }
+  const payload = payloadTypeOf lowering, layout, some
+  const location = locationOf lowering, at
+  const check = addBlock builder, "spread", Some(location)
+  const inner = addBlock builder, "add", Some(location)
+  const done = addBlock builder, "spread done", Some(location)
+  const pulled = addTemporary builder, option
+  const integer = lowering.program.internType IrType.Integer(64, true)
+  const tag = addTemporary builder, integer
+  const held = addTemporary builder, payload
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, check
+  const places = [Some(Reference(cursor, []))]
+  const _ = lowerDispatched lowering, builder, Some(pulled), at, pull, [cursor], places, option
+  if !lowering.isSupported {
+    return false
+  }
+  emit builder, Instruction.Tag(tag, pulled)
+  finishBlock lowering, builder, Terminator.Switch(tag, [some], [inner], done)
+  continueIn lowering, builder, inner
+  emit builder, Instruction.Read(held, Reference(pulled, [PathStep.Variant(layout, some, 0)]))
+  addInto lowering, builder, adder, storage, [held], at
+  finishBlock lowering, builder, Terminator.Jump(check)
+  continueIn lowering, builder, done
+  lowering.isSupported
+}
+
+/** The type the successful case of the `Option` an iterator answers carries. */
+fn payloadTypeOf(var lowering: Lowering, layout: LayoutId, variant: Int): IrTypeId {
+  const shape = lowering.program.layoutAt layout
+  const fields = shape.fieldsOfVariant variant
+  match fields.first() {
+    Some(found) => found.annotation
+    None => voidTypeOf lowering
+  }
+}
+
+/** `List<Item>` of the prelude, applied to one item type: what a variadic parameter holds. */
+public fn listBoundFor(var lowering: Lowering, item: TypeId, at: Span): TypeId? {
+  const symbol = match lowering.checker.wellKnown.list {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a variadic parameter without `List` in the prelude", at
+      return None
+    }
+  }
+  Some lowering.checker.nominal(symbol, [item])
 }
 
 /**

@@ -68,6 +68,13 @@ public type NativeResult {
    * `NumberParseError(text)`. An error type whose fields no parameter names is a clean finding.
    */
   case Fallible
+  /**
+   * `bool` plus **two** out parameters, for a declaration that answers an `Option` of a **tuple** the runtime cannot
+   * build: `torb_map_entry_after(map, &cursor, &key, &value)` writes the two halves of one entry, and the wrapper makes
+   * the `(Key, Value)` and the `Some` around it. There is no layout of the program in `runtime/` (BACKEND 5.R1), and the
+   * two halves of an entry live in two arrays of the table anyway, so nothing could write a tuple in one piece.
+   */
+  case OptionalParts
 }
 
 public type NativeTarget {
@@ -572,27 +579,23 @@ fn listEntries(var entries: List<NativeEntry>, owner: String, hasIterator: Bool)
     "void torb_list_replace(torb_list *list, int64_t from, int64_t to, torb_list values, torb_location at);",
   ))
   entries.add runtimeOf("{owner}.reverse", "torb_list_reverse", "void torb_list_reverse(torb_list *list);")
-  entries.add(runtimeOf(
-    "{owner}.sort",
-    "torb_list_sort",
-    "void torb_list_sort(torb_list *list, torb_compare_function compare, void *context);",
-  ))
   entries.add runtimeOf("{owner}.clear", "torb_list_clear", "void torb_list_clear(torb_list *list);")
   entries.add runtimeOf("{owner}.compact", "torb_list_compact", "void torb_list_compact(torb_list *list);")
 }
 
-fn mapEntries(var entries: List<NativeEntry>, owner: String, hasCapacity: Bool) {
-  entries.add plannedRuntimeOf("{owner}.from", "torb_map_from_iterable", "5.7")
-  entries.add plannedRuntimeOf("{owner}.iterator", "torb_map_iterator", "5.7")
-  if hasCapacity {
-    entries.add(runtimeOf(
-      "{owner}.withCapacity",
-      "torb_map_with_capacity",
-      "torb_map torb_map_with_capacity(const torb_element *key, const torb_element *value, int64_t capacity, "
-        + "torb_location at);",
-    ))
-  }
+fn mapEntries(var entries: List<NativeEntry>, owner: String) {
+  // `from` and `iterator` are ordinary TorbScript, exactly as `ArrayList`'s are: `from` walks a trait-typed `Iterable` of
+  // the *program*, which a C function cannot, and the cursor is `MapIterator` over the one native below.
+  entries.add containerOf("{owner}.withCapacity", RuntimeKind.MapStorage)
   entries.add runtimeOf("{owner}.length", "torb_map_length", "int64_t torb_map_length(torb_map map);")
+  entries.add(containerRuntimeOf(
+    "{owner}.entryAfter",
+    "torb_map_entry_after",
+    "bool torb_map_entry_after(torb_map map, int64_t *cursor, void *key, void *value);",
+    [],
+    [],
+    NativeResult.OptionalParts,
+  ))
   entries.add(containerRuntimeOf(
     "{owner}.get",
     "torb_map_get",
@@ -621,9 +624,13 @@ fn mapEntries(var entries: List<NativeEntry>, owner: String, hasCapacity: Bool) 
 }
 
 fn setEntries(var entries: List<NativeEntry>, owner: String) {
-  entries.add plannedRuntimeOf("{owner}.from", "torb_set_from_iterable", "5.7")
-  entries.add plannedRuntimeOf("{owner}.iterator", "torb_set_iterator", "5.7")
+  entries.add containerOf("{owner}.withCapacity", RuntimeKind.SetStorage)
   entries.add runtimeOf("{owner}.length", "torb_set_length", "int64_t torb_set_length(torb_set set);")
+  entries.add(optionalRuntimeOf(
+    "{owner}.itemAfter",
+    "torb_set_item_after",
+    "bool torb_set_item_after(torb_set set, int64_t *cursor, void *item);",
+  ))
   entries.add(containerRuntimeOf(
     "{owner}.contains",
     "torb_set_contains",
@@ -654,8 +661,8 @@ fn setEntries(var entries: List<NativeEntry>, owner: String) {
 fn collectionEntries(var entries: List<NativeEntry>) {
   listEntries entries, "ArrayList", false
   listEntries entries, "TrieList", true
-  mapEntries entries, "HashMap", true
-  mapEntries entries, "TrieMap", false
+  mapEntries entries, "HashMap"
+  mapEntries entries, "TrieMap"
   setEntries entries, "HashSet"
   setEntries entries, "TrieSet"
 

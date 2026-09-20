@@ -155,8 +155,10 @@ fn containerBody(
     reportUnsupported lowering, "an empty container without an item type", at
     return
   }
-  // A key of the hash table is compared and hashed through its descriptor; nothing else needs those two members
-  const hashesFirst = arguments.length() > 1
+  // A key of the hash table is compared and hashed through its descriptor, and the one element of a **set** is such a
+  // key - `torb_set_new` is the table with nothing on the value side. A list asks for neither member, because an element
+  // that is not `Hash` may still be in a list
+  const hashesFirst = isKeyedContainer kind
   var elements: List<ElementId> = []
   for index in 0..arguments.length() {
     const wanted = hashesFirst && index == 0
@@ -172,6 +174,15 @@ fn containerBody(
   const target = addTemporary builder, result
   emit builder, Instruction.ContainerNew(target, kind, elements)
   terminate builder, Terminator.Return(Some(owned(target)))
+}
+
+/** Whether the first type argument of a container is a key of the hash table: the map's key, and the set's item. */
+fn isKeyedContainer(kind: RuntimeKind): Bool {
+  match kind {
+    .MapStorage => true
+    .SetStorage => true
+    _ => false
+  }
 }
 
 // --- The small bodies -------------------------------------------------------------------------------------------------

@@ -1998,7 +1998,9 @@ impl Interpreter {
             Value::Text(text) if is_top_level => text.as_str().to_string(),
             Value::Text(text) => format!("\"{}\"", text.as_str().chars().map(|character| escape_char(character, '"')).collect::<String>()),
             Value::List(items) => format!("[{}]", self.show_all(items.iter())?),
-            Value::Set(table) => format!("Set.of({})", self.show_all(table.keys())?),
+            // Braces are what `std/collections/src/set.trb` writes, and `Show` is the contract between the two
+            // implementations. A set has no literal of its own, so nothing about them is a spelling of the source
+            Value::Set(table) => format!("{{{}}}", self.show_all(table.keys())?),
             Value::Map(table) if table.is_empty() => "[:]".to_string(),
             Value::Map(table) => {
                 let mut entries = Vec::new();

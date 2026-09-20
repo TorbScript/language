@@ -1,7 +1,7 @@
 use Span from "../../syntax/source"
-use Expression, Argument, FunctionDeclaration from "../../syntax/ast"
+use Expression, Argument, FunctionDeclaration, Field from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
-use TypeId, ParameterId, Signature, FieldSignature from "../../semantics/checker/type"
+use TypeId, TypeForm, ParameterId, Signature, FieldSignature from "../../semantics/checker/type"
 use substitute from "../../semantics/checker/unify"
 use Resolution, Dispatch from "../../semantics/checker/context"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
@@ -10,9 +10,9 @@ use NativeEntry, DerivedKind from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
 use Intrinsic, NumericKind from "../ir"
 use RuntimeKind from "../ir"
-use CallOperands, PlacePath from "./place"
+use CallOperands, PlacePath, TakenElement from "./place"
 use referenceParametersOf, parameterTypeAt, receiverReference, argumentReference from "./place"
-use collidesWithPlace, writtenResult, lowerPropertyWrite, makeOwnersUnique from "./place"
+use collidesWithPlace, writtenResult, lowerPropertyWrite, makeOwnersUnique, putBackElements from "./place"
 use FunctionBuilder, emit from "../build"
 use layoutOfType, conversionKindOf from "../verify"
 use describeIrType from "../print"
@@ -21,6 +21,7 @@ use generatedFunctionOf from "./derive"
 use instanceFor, needsReference, isMonomorphic from "../instances"
 use nativeFunctionOf from "./native"
 use Lowering, Generated, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
+use irTypeOfClosed from "./context"
 use isNeverType, finishBlock, borrowedArguments from "./context"
 use lowerValue, valueSlot, unsupportedSlot, abandonedSlot, voidSlot from "./expression"
 use variantIndexOf from "./match"
@@ -28,6 +29,7 @@ use emitIntrinsic, receiverSlot from "./expression"
 use Dispatched, dispatchedMember from "./generic"
 use lowerClosureCall, lowerLazyArgument, lazyParametersOf, lowerConstructorValue from "./closure"
 use printOperationOf, lowerPrint from "./text"
+use lowerItemList, listBoundFor from "./collection"
 
 /**
  * Calls, constructors and operators: which function a call reaches, and in which order its arguments are evaluated.
@@ -151,6 +153,8 @@ fn lowerCallable(
   // The receiver comes first, because evaluation order is source order and the receiver is written first
   var operands: List<Slot> = []
   var places: List<Reference?> = []
+  // What a place of this call took out of a container and has to put back once the call has run
+  var taken: List<TakenElement> = []
   if signature.takesSelf {
     if signature.isVarSelf {
       const path = match receiverReference(lowering, builder, callee, "a `var` receiver") {
@@ -161,6 +165,7 @@ fn lowerCallable(
       }
       operands.add path.reference.base
       places.add Some(path.reference)
+      taken.addAll path.taken
     } else {
       const receiver = match receiverSlot(lowering, builder, callee) {
         Some(found) => found
@@ -180,7 +185,10 @@ fn lowerCallable(
   }
   operands.addAll written.slots
   places.addAll written.places
-  lowerDispatched lowering, builder, destination, at, dispatched, operands, places, annotation
+  taken.addAll written.taken
+  const result = lowerDispatched lowering, builder, destination, at, dispatched, operands, places, annotation
+  putBackElements lowering, builder, taken
+  result
 }
 
 /**
@@ -239,6 +247,12 @@ public fn lowerDispatched(
  */
 public fn receiverTypeOf(var lowering: Lowering, callee: Expression): TypeId? {
   const module = lowering.module
+  // `values.to<Map<Key, Value>>()` writes its type arguments *between* the receiver and the call, so the receiver is one
+  // node deeper. `receiverSlot` already unwraps it (5.7's third round) and this one has to as well, or such a call is
+  // dispatched without a receiver at all
+  if const .Generic(inner, _) = callee.kind {
+    return receiverTypeOf lowering, inner
+  }
   if const .Member(base, _, _) = callee.kind {
     // Behind a `?.` the member is looked up on the payload, so that is the receiver and not the `Option` around it
     if const Some(payload) = lowering.optionalReceiverTypes.get(base.span) {
@@ -563,17 +577,35 @@ public fn lowerArgumentSlots(
   }
   const references = referenceParametersOf signature
   const lazies = lazyParametersOf signature
+  const variadic = variadicParameterOf signature
   var filled: List<Slot?> = []
   var places: List<Reference?> = []
+  var taken: List<TakenElement> = []
   for _ in 0..count {
     filled.add None
     places.add None
+  }
+  // `...values: Show` is **one** parameter that every positional argument from its position on fills, so the list is built
+  // before the ordinary loop runs and in the place the first of those arguments stands: a variadic is written last, so
+  // that is also where a reader sees them evaluated
+  if variadic >= 0 {
+    const list = match lowerVariadicArgument(lowering, builder, expression, arguments, targets, signature, variadic, mapping) {
+      Some(found) => found
+      None => {
+        return CallOperands([], [])
+      }
+    }
+    filled.set variadic, Some(list)
   }
   for index in 0..arguments.length() {
     const position = targets.get(index) ?? -1
     if position < 0 || position >= count {
       reportUnsupported lowering, "an argument that fills no parameter", arguments[index].value.span
       return CallOperands([], [])
+    }
+    // Every one of them is already in the list
+    if position == variadic {
+      continue
     }
     // `lazy Value`: the argument is an expression, so what is handed over is a thunk in a one-shot memo cell
     if lazies.get(position) ?? false {
@@ -596,6 +628,7 @@ public fn lowerArgumentSlots(
       }
       filled.set position, Some(path.reference.base)
       places.set position, Some(path.reference)
+      taken.addAll path.taken
       continue
     }
     const slot = lowerValue lowering, builder, arguments[index].value
@@ -604,7 +637,60 @@ public fn lowerArgumentSlots(
     }
     filled.set position, Some(slot)
   }
-  lowerDefaults lowering, builder, expression, signature, filled, places, references, mapping
+  lowerDefaults lowering, builder, expression, signature, filled, places, taken, references, mapping
+}
+
+/** Which position of a signature is its variadic parameter, or -1. There is at most one and it is written last. */
+fn variadicParameterOf(signature: Signature): Int {
+  const parameters = signature.form.parameters
+  for index in 0..parameters.length() {
+    if const .Variadic = parameters[index].mode {
+      return index
+    }
+  }
+  0 - 1
+}
+
+/**
+ * The one argument a variadic parameter takes: the `List<Item>` of every positional argument that fills it, in written
+ * order, built at the call site (BACKEND 1.6) - and the **empty** list where nothing was written, which is what makes
+ * `print()` and `Set.of()` calls and not missing arguments.
+ *
+ * The item type comes from the callee's declaration under the callee's own instance mapping, exactly as a `lazy`
+ * parameter's does: the parameter is written in terms of the declaration's parameters and never the caller's.
+ */
+fn lowerVariadicArgument(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  expression: Expression,
+  arguments: List<Argument>,
+  targets: List<Int>,
+  signature: Signature,
+  position: Int,
+  mapping: Map<ParameterId, TypeId>,
+): Slot? {
+  const at = expression.span
+  const item = lazyItemAt lowering, signature, position, mapping, at
+  const bound = match listBoundFor(lowering, item, at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  var collected: List<Argument> = []
+  for index in 0..arguments.length() {
+    if targets.get(index) == Some(position) {
+      collected.add arguments[index]
+    }
+  }
+  // Stage 0 takes the `var lowering` of a call before it evaluates the other arguments, so the type is interned first
+  const traits = lowering.checker.types.intern TypeForm.Traits([bound])
+  const annotation = irTypeOfClosed lowering, traits
+  const slot = lowerItemList lowering, builder, None, collected, item, [bound], annotation, at
+  if !lowering.isSupported {
+    return None
+  }
+  Some slot
 }
 
 /**
@@ -684,6 +770,7 @@ fn lowerDefaults(
   signature: Signature,
   filled: List<Slot?>,
   places: List<Reference?>,
+  taken: List<TakenElement>,
   references: List<Bool>,
   mapping: Map<ParameterId, TypeId> = [:],
 ): CallOperands {
@@ -728,7 +815,7 @@ fn lowerDefaults(
       }
     }
   }
-  CallOperands ordered, places
+  CallOperands ordered, places, taken
 }
 
 /**
@@ -752,6 +839,14 @@ fn missingArgument(signature: Signature, index: Int): String {
  */
 fn declaredDefaults(var lowering: Lowering, symbol: SymbolId): List<Expression?> {
   var defaults: List<Expression?> = []
+  // A **case** is a function from its own fields, so the defaults of a `Call(target, callee, arguments, witnesses,
+  // at = None)` are the fields' and not a parameter list's
+  if const Some(fields) = caseFieldsOfDeclarationSite(lowering, symbol) {
+    for field in fields {
+      defaults.add field.default
+    }
+    return defaults
+  }
   const declared = match functionOfDeclarationSite(lowering, symbol) {
     Some(found) => found.parameters
     None => {
@@ -765,6 +860,17 @@ fn declaredDefaults(var lowering: Lowering, symbol: SymbolId): List<Expression?>
     defaults.add parameter.default
   }
   defaults
+}
+
+/** The fields of a case, where the symbol is one: what `caseSignature` made the parameters of its constructor. */
+fn caseFieldsOfDeclarationSite(var lowering: Lowering, symbol: SymbolId): List<Field>? {
+  const site = lowering.checker.siteOf(symbol)?
+  if const .Owned(_, _, member) = site.kind {
+    if const .Case(declaration) = member.kind {
+      return Some declaration.fields
+    }
+  }
+  None
 }
 
 fn functionOfDeclarationSite(var lowering: Lowering, symbol: SymbolId): FunctionDeclaration? {
@@ -1149,6 +1255,7 @@ public fn lowerOperator(
   at: Span,
   operands: List<Slot>,
   annotation: IrTypeId,
+  operand: TypeId? = None,
 ): Slot {
   const module = lowering.module
   const resolution = match lowering.checker.resolutionAt(module, at) {
@@ -1163,7 +1270,7 @@ public fn lowerOperator(
       return unsupportedSlot lowering, builder, destination, "an operator the back end does not lower yet", at
     }
   }
-  const receiver = operandTypeOf lowering, dispatch
+  const receiver = operandTypeOf lowering, dispatch, operand
   const dispatched = match dispatchedMember(lowering, symbol, typeArguments, dispatch, receiver, at) {
     Some(found) => found
     None => {
@@ -1235,10 +1342,17 @@ fn sourceKindOf(
  * What the left operand of an operator is, as a checker type. An operator has no callee expression, so the dispatch is
  * what says it: an implementation names its own target, and everything else is a member of a concrete type already.
  */
-fn operandTypeOf(var lowering: Lowering, dispatch: Dispatch): TypeId? {
+fn operandTypeOf(var lowering: Lowering, dispatch: Dispatch, operand: TypeId?): TypeId? {
   if const .Implementation(implementation, _) = dispatch {
     const found = lowering.checker.implementations.at implementation
     return Some found.target
+  }
+  // `a == b` on two `List<TypeId>`s: the member is reached on the **left operand**, which is the receiver an operator has.
+  // `Equals.equals` mentions `Self` as a parameter and is therefore in no table, so what this decides is not whether the
+  // call is dynamic but which type's `equals` runs - `dynamicDispatch` then finds the body and instantiates it statically
+  if const Some(found) = operand {
+    const applied = substituted lowering, found
+    return Some applied
   }
   None
 }

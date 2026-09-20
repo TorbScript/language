@@ -1952,6 +1952,210 @@ written.
   list patterns (8). The `print` interception of 5.10 therefore still stands, because a variadic parameter is still a
   finding.
 
+**The fifth round: the index paths, and what a `var` path through a container really is.** The fourth round's last
+sentence named `numbers[0] = 5` and `swapAt`'s `var` argument as the two findings between the back end and
+`examples/tour/src/07-collections.trb`. They were 178 of 483 on this tree, and closing them decided what an index on a
+path *is*.
+
+- **Decision: an index step of a path is a take-out and a put-back of two members the language already has, and not
+  `Instruction.TakeOut`/`PutBack`.** `points[0].x = 100` reads `points[0]` into a slot of the frame through
+  **`Indexed.at`**, writes the `x` of that slot, and puts the element back through **`MutableIndexed.set`**. That is
+  literally the concept's model of an index path ("take it out, change it, put it back", `var` Paths) with the two halves
+  spelled as the two members `std/core` declares - so what a *missing key* does is decided in `std/` and not in a back
+  end: a `var` access panics, because `at` is `get(key).expect("Key does not exist")`, and `map[key] = value` **inserts**,
+  because the assignment is `set` and nothing else.
+- **Why the two instructions could not serve.** They name a `RuntimeKind` and reach `torb_list_element_reference` /
+  `torb_map_take_out`, which needs the receiver to be a *concrete* container. The container of a path in this repository
+  is almost always a **trait-typed** value (`List<Int>`, `Map<String, Int>`, and `Self` inside a default member of
+  `List`), and a witness table says which members a value has and never that its payload is a `torb_list` -
+  `List<Item>` may be implemented by anything. So a trait-typed index path can only go through the trait, and the
+  member pair is the only form that serves both. The price is one copy of the element out and one in, which is not
+  observable (a value has no identity) and costs a retain plus a release for a counted element. `TakeOut`/`PutBack` stay
+  in the IR for the contiguous shapes of 5.9b - `Array<Item, Size>` and a slice window - where the receiver is concrete
+  and an interior pointer is the point.
+- **The lowering walks the target expression in step with the place's steps.** `PlaceStep.Index` carries only the *span*
+  of the key (4.6 had no reason to keep more), and the lowering does not lower from spans - so `indexKeysOf` walks the
+  target and collects the expression inside every bracket, from the root outwards, which is the order the steps of a place
+  are in. That does not break 5.9a's rule that the lowering never walks an expression twice: the walk collects key
+  expressions and nothing else, the path itself is still the one the checker wrote down, and the target is lowered **only**
+  through its path and never also as a value.
+- **Every key is lowered before the access begins,** in source order, into a slot of its own - which is the evaluation
+  order of a `var` path (CONCEPT, `var` Paths, after the model of Swift: all arguments and keys are evaluated first, and
+  only then does the access begin). The take-out is already part of the access, so `grid[y][x] = v` lowers `y`, then `x`,
+  then reads the row, then writes the cell. The **put-backs run innermost first**: the cell has to be back in the row
+  before the row goes back into the grid, or the change would be lost.
+- **`PlacePath` carries what has to be put back, and every caller of one emits it after its access.** A place is formed in
+  five places (a `var` receiver, a `var` argument of a call and of a closure call, an assignment, a property command), and
+  `putBackElements` is one call in each of them - which is why `CallOperands` grew a third list. Nothing on the
+  `Lowering` remembers a pending put-back: a place that is formed while another one is being formed would then put the
+  wrong element back.
+- **An assignment whose last step is an index is a `set` and no `Write`.** That is the whole difference between a write
+  and an insert, and it is what makes `grid[y][x] = v` fall out of nothing: everything in front of the last index is an
+  ordinary place, taken out and put back around the `set` by the very machinery a `var` argument uses.
+- **Copy on write needs no rule of its own,** which is the test of the design. The element the frame holds shares its
+  storage with the copy the container still has, so the access - a `Write` through the element's slot, or a `var self`
+  callee writing through the pointer it was handed - makes it unique for the ordinary reason, and `set` releases what the
+  container had there. `bootstrap/tests/native/collection-places.trb` proves it: the copy of a list taken before
+  `numbers[0] = 9` still reads `[1, 2, 3]`, and the same for a list of counted elements and for a nested one.
+- **The gate found nothing, and that is worth writing down**: the program was byte identical to stage 0 and left zero live
+  blocks the first time it ran, which is what building an index path out of ordinary calls buys - there is no new
+  instruction, no new emitter case, no new runtime function and no new ownership rule, so there was nothing new to get
+  wrong. The one bug of the round was found by the IR verifier instead: a `places` list has to be **as long as the operand
+  list**, because that is how a call says which of its positions takes a place (`borrowedArguments` falls back to
+  borrowing everything when the two lengths differ, and the verifier then reported "argument 0 has to be a place").
+- **`torb ir --statistics ../compiler`: 7471 of 7954 lowered before, 7691 of 7997 after** (93% to 96%). The three index
+  findings (139 `var` arguments, 34 `var` receivers, 5 assignments) are gone.
+
+**The map and the set cursor, which is what blocked every map and every set literal.** `iterator` is a *required* member of
+`Iterable`, so the witness table of `Map<Key, Value>` could not be built at all and `["a": 1]` did not lower - 130 findings
+that were all one missing cursor.
+
+- **One new runtime function, and it is a native for a reason the doc comment gives**: `torb_map_entry_after(map, &cursor,
+  &key, &value)` (plus `torb_set_item_after`, which is the same walk with nothing on the value side). A position is an index
+  into the storage's own **entry vector**, and a removal leaves a tombstone in it - so nothing written over `length` and
+  `get` can walk a table that has been removed from, which is exactly what "natives stay few" asks to check before adding
+  one. It hands out **retained copies**, because the cursor is a value of the program that may outlive a write to the map.
+  `torb_map_next` stays for the runtime's own C (borrowed pointers, no retains), and three tests in
+  `runtime/tests/map_test.c` pin the tombstone skip, the end of the walk and the retains.
+- **Decision: the third convention is `bool` plus one out parameter *per field* of the payload** (`NativeResult
+  .OptionalParts`), and not `bool` plus a pointer to the tuple. Two reasons, and both are the same reason: a `(Key, Value)`
+  is a layout of the **program**, which `runtime/` may not build (5.R1), and the two halves of an entry live in two arrays
+  of the table anyway, so nothing could write one in a single piece. `RuntimeShape.out` became `outs: List<IrTypeId>`, the
+  parameters are named `out0`/`out1` where there are several, and the wrapper constructs the tuple and then the `Some`.
+  Everything else was already there: the conditional out parameter of the fourth round makes a counted half `owned` on the
+  `true` path and releases it on neither other one, for two outs exactly as for one.
+- **`iterator` is TorbScript, and so are `from` and `withCapacity`'s replacement.** `MapIterator` holds the table by value
+  and an index, `SetIterator` the same; `TrieMap.from` is `withCapacity 0` plus `addAll`, exactly as `ArrayList.from` is;
+  and `withCapacity` is a `NativeTarget.Container(MapStorage)`, which is `Instruction.ContainerNew` - so
+  `torb_map_with_capacity` is out of the manifest and the element descriptors stay the lowering's business. The runtime has
+  **one** function more than before this round and five manifest entries fewer.
+- **Two cursors per kind, and the duplication is the price of gap 18.** `TrieMap` and `HashMap` are one hash table until
+  milestone 8, but they are two *types*, so a value of one is not a value of the other and one cursor cannot hold both.
+  Writing it generically (a bound `EntryAfter<Key, Value>` on a third parameter of the cursor) would put a trait nobody
+  needs into the public API of `std/collections`; twelve lines twice says the same thing and goes away with the trie.
+- **Three bugs the gate found, and two of them were older than this round.**
+  - **A set's element descriptor had no `equals` and no `hash`.** `containerBody` asked "are there several type arguments"
+    to decide which of them is a key, which is right for a map and wrong for a set: `torb_set_new` *is* the table with
+    nothing on the value side, so its one element is a key. It is `isKeyedContainer(kind)` now.
+  - **A member the implementation does not provide may be a default of another trait of the target's closure**, and only
+    the *witness table* asked that question (`providerOfMember`, the third round's finding). A direct call asked
+    `implementation.members` alone and fell back to the declaration - so `TrieMap.from`'s `addAll` had nothing to call,
+    because `add` is required by `Collection` and written with a body by `Map`. Both sides ask `providerOfMember` now.
+  - **`values.to<Map<Key, Value>>()` was dispatched without a receiver at all.** The type arguments stand *between* the
+    receiver and the call, so the callee is a `.Generic` node; `receiverSlot` unwrapped it since the third round and
+    `receiverTypeOf` did not, so the subject of the dispatch was `None`. With it, a **static** member of a trait-typed
+    type (`Target.from self`) is dispatched statically wherever `witnessFor` names an implementation - which is what
+    `.Forwarded` already did and what object safety says from the other side. `Set.of()` shows what is left: a static
+    member of the trait *itself* has no implementation to name, and the honest finding for it is its **variadic**
+    parameter.
+- **Stage 0 printed a set as `Set.of("a", "b")`,** and `std/collections/src/set.trb` writes `{"a", "b"}`. `Show` is the
+  contract between the two implementations (the `Range` of the fourth round was the same kind of divergence), a set has no
+  literal of its own so nothing about the braces is a spelling of the source, and the standard library is the side that
+  decides - so the interpreter changed, not the library.
+- **The gate is `bootstrap/tests/native/maps-and-sets.trb`**: the literals over number, `String` and record keys and over a
+  collection as the value, insertion order (including a key that is set again), `for (key, value) in map`, `keys()` and
+  `values()`, membership, a removal followed by a walk over the tombstone, `a[key]` as a value and as a path
+  (`counters["a"].increment()`), copy on write through two copies taken at different times, and `toSet`/`groupBy`/
+  `Map.from`. Byte identical to stage 0, `live blocks at exit: 0`.
+- **`torb ir --statistics ../compiler`: 7691 of 7997 lowered before, 11357 of 11553 after** (96% to 98%). The *total* grows
+  by 3556, because a map and a set that lower reach every default of `Iterable`, `Collection` and `Accumulator` for every
+  key and value type they are used with. `TrieMap.iterator` (130) and the "without a receiver" findings are gone.
+
+**`sort` is a default of `List` and written in TorbScript, and `slice` is the one that is still open.** Both were
+"`x`, which is not in the witness table of a trait-typed value" (27 + 11), and they are not the same problem at all.
+
+- **Decision: `sort` is a default member of `List` and no requirement of it.** A member with generic parameters of its own
+  is no slot of a witness table (its witnesses would have to be appended), so `sort<Key: Compare>` could not be reached on
+  a `List<Item>` value as a requirement - while a **default** nothing overrides is dispatched with `Self` bound to the
+  trait type (the fourth round's decision), which is exactly what a trait-typed receiver needs. So the answer to "how is
+  such a member reached" is: by not being a requirement.
+- **And its body is TorbScript, so `torb_list_sort` leaves the manifest.** The comparison is a **closure of the program**,
+  and a C function cannot call one: reaching `torb_list_sort(list, compare, context)` would need a fourth convention for
+  handing a closure to the runtime, and the closure ABI of the IR is a code pointer plus an environment and not
+  `(const void *, const void *, void *)`. One sort that every list shares is worth more than that convention - and it is
+  a *bottom-up merge sort over `a[key]`*, `n log n`, stable, no recursion, one buffer that is copied once. Which makes
+  `sort` the first real user of the index paths of the fifth round. The native fast path can come back when a closure can
+  be handed to the runtime; until then `ArrayList` and `TrieList` declare no `sort` at all.
+- **A bug of the ownership pass that `sort` uncovered seventeen times:** a function whose counted slots are all borrowed
+  parameters was left exactly as the lowering wrote it, and a `{ _ }` passed to `sort` is exactly that - a closure that
+  answers the value it was handed. Its `return` then gave away a count the frame never had ("`return` keeps %0, so the
+  operand has to be `owned`", which was the one internal error of `ir --statistics ../compiler` before this round and
+  became seventeen when `sort`'s callers started lowering). A closure body's parameter may never be `Owned` (no call site
+  can read the summary of the function a `CallClosure` will reach), so the count has to be made where the value is
+  answered: `answersBorrowedValue` in `ir/ownership.trb` makes the pass walk such a function, and `decideOperand` then
+  emits the one `Retain` in front of the `return` that it always would have. Nothing else about those functions changes.
+- **Decision: `slice` is a default of `List`, and a member whose result is `Self` stays out of every table.**
+  `Slice.slice(self, range: Range<Int>): Self` is a **required** member that mentions `Self` as its **result**, so no table
+  can hold it: the thunk of one would have to box that result, which it can do for *one* bound - its own - and not for a
+  value that carries several (`List<Item> & Show` calling `slice` would need the `Show` table of a type the thunk has
+  erased). `Self` as a **parameter** (`MutableSlice.replace(var self, range, values: Self)`) can never be in a table at
+  all, because a thunk would have to unbox an argument whose type it cannot check. So the answer is the same one `sort`
+  got: **write it in `std/collections` and let the trait type dispatch it statically.** `ArrayList` keeps its native, where
+  a slice is O(1) and shares the storage; a trait-typed `List<Item>` reaches the default, which is `var result = self`,
+  `result.clear()` and one `add` per item of the part - the only way a default can build a `Self` whose type it does not
+  know, and the price of not knowing it is one copy of the part. Nothing observable differs between the two, which is what
+  the gate asserts. **A `var` path *through* a slice is untouched** and still 5.9b's: a window is what an interior place
+  needs, and that is a different mechanism from a slice as a value.
+- **And the lookup a default needs was missing in `dynamicDispatch`.** The bound a call resolved is the trait that
+  *requires* a member, and another trait of the closure may be the one that writes it - `Slice.slice` is required and
+  `List` gives it a body, exactly as `Collection.add` is required and `Map` gives it one. `providerOfMember` asks that
+  third question for a witness table and `memberOfImplementationDispatch` asks it for a static call; the dynamic path
+  asked only the bound's own members and then reported. With `providedInClosure` in front of it, all 13 `slice` findings
+  are gone and **`torb build ../compiler` is down from 17 problems to 4** - a closure that captures a `var` parameter
+  (5.9b) and three generated `compare`s of a tuple (5.10), neither of them this row's.
+- **`torb ir --statistics ../compiler`: 11357 of 11553 lowered before, 11475 of 11647 after** (98% to 98%, and 172 findings
+  left). The 27 `sort` findings and every internal error are gone; three new ones are a **generated `compare` of a tuple**,
+  which the compiler sorts by and which 5.10 left as a finding (`Show`, `Equals` and `Hash` are structural, `compare` is
+  not generated) - they were unreachable while `sort` was.
+
+**Variadic parameters, variadic arguments and a spread - and why the `print` interception stays.** `...items: Item` is one
+parameter that every positional argument from its position on fills; it is a **`List<Item>` the call site builds** and the
+**collection trait inside the body**, and those are two different types of the same parameter.
+
+- **The signature says what the body sees, and the call site builds what the signature says.** The checker declares the
+  binding of `...values: Show` as `List<Show>`, which in a type position is a trait-typed value - so `parameterTypeOf`
+  answers `Object(List<Item>)` and no longer `Runtime(ListStorage, Item)`. Those two disagreed: a body would have read a
+  buffer through a pointer to an object. The call site then builds the buffer, fills it and boxes it, which is exactly what
+  a list literal does - one function does both (`lowerItemList`), so a variadic argument list and `[1, 2, 3]` can never
+  come out differently.
+- **A variadic that collects nothing is the empty list and no missing argument.** `print()`, `Set.of()` and
+  `List.of()` are calls, which is what the 11 findings of "a parameter without an argument and without a default" really
+  were: the list is built before the ordinary argument loop runs, so the position is always filled.
+- **Decision: a spread is one `add` per item, written out by the lowering, and not a call of `addAll`.** The fourth round
+  decided that a default no implementation overrides has **one** instance with `Self` bound to the trait type - so
+  `Collection.addAll` takes an `Object(List<Item>)` place, while what a literal fills is the concrete buffer. Boxing the
+  buffer to call it would hand the callee a box of its own and the items would never reach the slot. So `spreadInto` writes
+  the loop BACKEND 1.6 describes for a `for`: the subject into a slot, `iterator()`, a head that pulls `next()` from a
+  `var` local and switches on the `Option`. That is what makes `total(...numbers.map({ _ * 10 }))` work - a spread of a
+  **pipeline**, which is an `Iterable` and no list at all - and it is the same code for a spread in an argument list and one
+  in a literal (`[1, ...numbers, 4]`), which was a finding until now.
+- **An operator on a trait-typed value was dispatched without a receiver at all.** `operandTypeOf` answered `None` for
+  anything but an implementation dispatch, so `replaced == arguments` on two `List<TypeId>`s reported "a call on a
+  trait-typed value without a receiver" - all 10 of them. The type of the **left operand** is the receiver an operator has
+  (`a + b` is `a.add(b)`), and it is threaded from `lowerBinary`, which is the one place that still has the expressions.
+  `Equals.equals` mentions `Self` as a parameter and is in no table, so what this decides is not whether the call is
+  dynamic but whose `equals` runs.
+- **A case is a function from its own fields, so its defaults are the fields'.** `declaredDefaults` read a *function*
+  declaration and a case symbol is not one, so `Instruction.Call(target, callee, arguments, witnesses)` - four arguments
+  for a case whose fifth field has a default - was "a parameter without an argument and without a default". Nine findings,
+  all in the compiler's own tests, which build IR by hand.
+- **Decision: `print` keeps its two instructions, and that is no longer a placeholder.** 5.10 wrote that the interception
+  could go once 5.7 built the list. It cannot, and the reason is the same one that makes `ArrayList.from` TorbScript: a
+  `List<Show>` would have the **runtime** call `show` through a witness table, which a C function cannot do. `print` would
+  therefore have to become TorbScript over a new `printText` native - which moves the one space and the one `\n` out of
+  `runtime/console.c`, where 5.R1 put them on purpose, and costs a list plus a concatenation at every call. What this round
+  changed is that `PrintParts` is a **fast path** and not the only path: every other variadic call builds its list, so
+  nothing of the language waits for it. `print(...parts)` is the one shape the fast path cannot take (the number of
+  operands would be a run-time question) and is a clean finding.
+- **The gate is `bootstrap/tests/native/variadics.trb`**: a variadic read with `for` and with `joined`, a variadic after an
+  ordinary parameter, a trait-typed element (`...values: Show`, every argument coerced where it is written), the list
+  answered as a value, zero/one/many arguments, a spread alone and mixed with written arguments and twice in one call, a
+  spread of a pipeline, a spread in a literal, and `List.of`/`Set.of`/`Map.of`/`List.filled`. Byte identical to stage 0,
+  `live blocks at exit: 0`.
+- **`torb ir --statistics ../compiler`: 11475 of 11647 before, 11628 of 11780 after** (98% to 98%, 152 findings left). The
+  variadic findings (11 + 1), the 10 "without a receiver" and the 9 case defaults are gone; `examples/tour/src/07-collections.trb`
+  lowers except for one generic declaration nothing can build an instance of.
+
 **The first round's chain, for the record.** The row of the table says 5.7 depends on 5.8, and this is why - the chain is
 longer than "the pipelines need closures":
 

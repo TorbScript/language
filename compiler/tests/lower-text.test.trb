@@ -197,6 +197,12 @@ group "`Show` of every shape" {
   }
 }
 
+/** Whether a `print` is the two intrinsics and no list at all: the fast path 5.10 wrote and 5.7 kept. */
+fn printsWithoutList(source: String): Bool {
+  const shown = irOf source, "t_acme_x2f_app_main_probe"
+  shown.contains("printParts") && !shown.contains("containerNew")
+}
+
 group "`print` and `printError`" {
   test "the arguments are shown and handed over as one instruction" {
     const source = r"""
@@ -253,24 +259,31 @@ group "`print` and `printError`" {
     assert shown.contains("torb_print_parts(parts, 2);")
   }
 
-  /** A variadic argument list of anything else is still the clean finding that names 5.7. */
-  test "only `print` and `printError` are lowered without a list" {
+  /**
+   * Every other variadic call builds the list the language says it is (`lower-collections.test.trb`), and `print` keeps the
+   * two instructions: a `List<Show>` would have the **runtime** call `show` through a witness table, which a C function
+   * cannot do - so `print` would have to become TorbScript over a `printText` native, which moves the one space and the one
+   * `\n` out of `runtime/console.c` and costs a list plus a concatenation at every call. The interception is the
+   * definition now and no longer a placeholder.
+   */
+  test "`print` takes no list although every other variadic call builds one" {
     const source = r"""
       fn join(...parts: Int): Int {
-        1
+        parts.length()
       }
 
       fn probe(): Int {
         join 1, 2
       }
       """
+    // The list a variadic builds is the list a literal builds, so it blocks on exactly what a literal blocks on in this
+    // prelude: the `ArrayList` of `harness.trb` provides no `iterator`, which `lower.test.trb` asserts for `[1, 2]` too.
+    // That the real chain works is what `bootstrap/tests/native/variadics.trb` shows
     assert(
       unsupportedIn(source)
-        == [
-          "not supported by the back end yet: a variadic parameter (milestone 5.7)",
-          "not supported by the back end yet: a variadic argument list",
-        ]
+        == ["not supported by the back end yet: `iterator`, which neither the source nor the natives manifest provides"]
     )
+    assert printsWithoutList("fn probe() \{\n  print 1, 2\n\}")
   }
 }
 

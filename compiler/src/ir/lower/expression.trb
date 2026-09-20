@@ -21,7 +21,7 @@ use lowerMatch, lowerIfBinding, lowerTry, lowerCoalesce, lowerOptionalMember fro
 use variantLayoutOfType from "./match"
 use lowerClosureValue, lowerNamedFunctionValue, lowerForcedRead, bindingReferenceOf from "./closure"
 use lowerConstructorValue from "./closure"
-use lowerTextLiteral, showsHere, printCallOf from "./text"
+use lowerTextLiteral, showsHere from "./text"
 
 /**
  * Every expression of the monomorphic part of the language, as instructions over numbered slots.
@@ -315,7 +315,6 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
   const inlinesThunk = lowering.inlinedThunks.containsKey at
   // An interpolated part and an argument of `print` are shown by `ir/lower/text.trb`, which records the span first
   const isShown = showsHere lowering, at
-  const printsParts = printCallOf(lowering, expression).isSome()
   for adaptation in adaptations {
     const blocked = match adaptation {
       .Convert(_, _) => if convertsItself { "" } else { "a conversion through `From`" }
@@ -323,8 +322,8 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
       .Delegate(_) => "`by` delegation"
       .Lazy => if inlinesThunk { "" } else { "a `lazy` argument" }
       .Quote(_) => "a quoted expression (milestone 5.11)"
-      .Spread => "`...` in an argument list"
-      .Variadic(_, _) => if printsParts { "" } else { "a variadic argument list" }
+      .Spread => ""
+      .Variadic(_, _) => ""
       _ => ""
     }
     if !blocked.isEmpty() {
@@ -900,7 +899,8 @@ fn lowerUnary(
     const at = expression.span
     return intrinsicSlot lowering, builder, destination, IntrinsicOperation.Negate, Some(kind), [slot], annotation, at
   }
-  lowerOperator lowering, builder, destination, expression.span, [slot], annotation
+  const written = lowering.checker.expressionType lowering.module, operand.span
+  lowerOperator lowering, builder, destination, expression.span, [slot], annotation, written
 }
 
 fn lowerBinary(
@@ -919,10 +919,14 @@ fn lowerBinary(
     _ => {
       const first = lowerValue lowering, builder, left
       const second = lowerValue lowering, builder, right
+      // The type of the **left** operand, which is the receiver of the member an operator is (`a + b` is `a.add(b)`)
+      const operand = lowering.checker.expressionType lowering.module, left.span
       if isComparison(operator) {
-        return lowerComparison lowering, builder, destination, operator, first, second, annotation, expression.span
+        const at = expression.span
+        return lowerComparison lowering, builder, destination, operator, first, second, annotation, at, operand
       }
-      lowerArithmetic lowering, builder, destination, operator, first, second, annotation, expression.span
+      const at = expression.span
+      lowerArithmetic lowering, builder, destination, operator, first, second, annotation, at, operand
     }
   }
 }
@@ -986,6 +990,7 @@ fn lowerComparison(
   second: Slot,
   annotation: IrTypeId,
   at: Span,
+  operand: TypeId? = None,
 ): Slot {
   const operands = builder.typeOfSlot first
   const operation = comparisonOperation operator
@@ -999,9 +1004,9 @@ fn lowerComparison(
     return lowerTextComparison lowering, builder, destination, operation, first, second, annotation, at
   }
   if !isEqualityOperation(operation) {
-    return lowerOrderComparison lowering, builder, destination, operation, first, second, annotation, at
+    return lowerOrderComparison lowering, builder, destination, operation, first, second, annotation, at, operand
   }
-  lowerOperator lowering, builder, destination, at, [first, second], annotation
+  lowerOperator lowering, builder, destination, at, [first, second], annotation, operand
 }
 
 /**
@@ -1017,6 +1022,7 @@ fn lowerOrderComparison(
   second: Slot,
   annotation: IrTypeId,
   at: Span,
+  operand: TypeId? = None,
 ): Slot {
   const ordering = match orderingTypeOf(lowering) {
     Some(found) => found
@@ -1025,7 +1031,7 @@ fn lowerOrderComparison(
       return unsupportedSlot lowering, builder, destination, what, at
     }
   }
-  const order = lowerOperator lowering, builder, None, at, [first, second], ordering
+  const order = lowerOperator lowering, builder, None, at, [first, second], ordering, operand
   if !lowering.isSupported {
     return abandonedSlot lowering, builder, destination
   }
@@ -1160,6 +1166,7 @@ fn lowerArithmetic(
   second: Slot,
   annotation: IrTypeId,
   at: Span,
+  operand: TypeId? = None,
 ): Slot {
   const operands = builder.typeOfSlot first
   if const Some(kind) = numericKindOf(lowering.program, operands) {
@@ -1172,7 +1179,7 @@ fn lowerArithmetic(
       return intrinsicSlot lowering, builder, destination, concat, None, [first, second], annotation, at
     }
   }
-  lowerOperator lowering, builder, destination, at, [first, second], annotation
+  lowerOperator lowering, builder, destination, at, [first, second], annotation, operand
 }
 
 fn arithmeticOperation(operator: InfixOperator): IntrinsicOperation {

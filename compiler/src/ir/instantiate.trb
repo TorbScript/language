@@ -222,9 +222,30 @@ fn instantiateParameterType(
   const annotation = instantiateType program, checker, instantiation, empty, parameter.annotation
   match parameter.mode {
     .Lazy => cellType program, checker, instantiation, parameter.annotation, annotation
-    .Variadic => program.internType IrType.Runtime(RuntimeKind.ListStorage, [annotation])
+    // The `List<Item>` the body sees, exactly as `ir/instances.trb` builds it for a function's own signature
+    .Variadic => variadicType program, checker, instantiation, parameter.annotation, annotation
     _ => annotation
   }
+}
+
+/** A variadic parameter of a **closure** type: the same `List<Item>` a function's own signature says. */
+fn variadicType(
+  var program: IrProgram,
+  var checker: Checker,
+  var instantiation: Instantiation,
+  item: TypeId,
+  buffer: IrTypeId,
+): IrTypeId {
+  const symbol = match checker.wellKnown.list {
+    Some(found) => found
+    None => {
+      return program.internType IrType.Runtime(RuntimeKind.ListStorage, [buffer])
+    }
+  }
+  const bound = checker.nominal symbol, [item]
+  const empty: Map<ParameterId, TypeId> = [:]
+  const traits = checker.types.intern TypeForm.Traits([bound])
+  instantiateType program, checker, instantiation, empty, traits
 }
 
 /**

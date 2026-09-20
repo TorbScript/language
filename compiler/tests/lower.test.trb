@@ -479,11 +479,13 @@ group "What the back end does not lower yet" {
     )
   }
 
-  test "an index path and a trait-typed receiver are named one by one" {
-    // A `var` parameter and a path through fields are 5.9a's; what is left of a place needs a container of 5.7
+  test "a place the back end cannot form names the milestone that brings it" {
+    // A `var` parameter and a path through fields are 5.9a's, an index is 5.7's; a slice is a window and 5.9b's
     assert(
-      unsupportedIn("fn first(var items: ArrayList<Int>) \{\n  items[0] = 1\n\}")
-        == ["not supported by the back end yet: an assignment through `a[key]` (milestone 5.7/5.9b)"]
+      unsupportedIn(
+        "fn part(var items: ArrayList<Int>, var other: ArrayList<Int>) \{\n  items[0..1] = other\n\}"
+      )
+        == ["not supported by the back end yet: an assignment through a slice, which is a window (milestone 5.9b)"]
     )
   }
 
@@ -561,11 +563,9 @@ group "Real code" {
     blocked.sort({ _ })
     // A list literal is lowered since 5.7 and a closure since 5.8, the defaults nothing overrides are out of the tables
     // since the fourth round - so `swapAt`, `updated` and `indexed` are not instantiated at all any more - and
-    // `ArrayList.from`, `Range.iterator` and now `String.chars` are TorbScript. What is left is `sort`, which hands a
-    // place on as a `var` argument through `a[key]`
-    assert(
-      blocked.joined(separator: "\n")
-        == "not supported by the back end yet: a `var` argument through `a[key]` (milestone 5.7/5.9b)"
-    )
+    // `ArrayList.from`, `Range.iterator`, `String.chars` and `sort` are all TorbScript now, and the index paths `sort` is
+    // written over lower - so **nothing** of these two files is blocked any more, which is what this assertion is for:
+    // the next construct that stops being lowered is the next line of this list
+    assert blocked.isEmpty()
   }
 }

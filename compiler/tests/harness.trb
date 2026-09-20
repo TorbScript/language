@@ -221,7 +221,9 @@ public const preludeSource = r"""
     fn add(var self, value: Item)
     fn added(self, value: Item): Self
     fn removeAt(var self, index: Int): Item?
-    fn sort(var self, by: (value: Item) => Int)
+
+    /** A body, because the real one is a default of `std/collections` as well: a sort is TorbScript over `a[key]`. */
+    fn sort(var self, by: (value: Item) => Int) {}
 
     /** `List.of(1, 2)`: a factory of the trait itself, which is what a trait as a namespace means (gap 31). */
     fn of(...items: Item): List<Item> {
@@ -276,6 +278,22 @@ public const preludeSource = r"""
 
   public native type ArrayList<Item> with List<Item>, From<Iterable<Item>> {
     native fn from(items: Iterable<Item>): ArrayList<Item>
+  }
+
+  /** The trie, whose `from` waits for milestone 8: what a **planned** native looks like to the back end. */
+  public native type TrieList<Item> with List<Item>, From<Iterable<Item>> {
+    native fn from(items: Iterable<Item>): TrieList<Item>
+  }
+
+  /**
+   * The hash table, for the sake of its **cursor**: `entryAfter` is the one native of the manifest whose runtime function
+   * answers `bool` plus *two* out parameters, one per half of the entry it found (`NativeResult.OptionalParts`).
+   */
+  public native type TrieMap<Key: Hash, Value> with Map<Key, Value> {
+    native fn length(self): Int
+    native fn get(self, key: Key): Value?
+    native fn set(var self, key: Key, value: Value)
+    native fn entryAfter(self, var cursor: Int): (Key, Value)?
   }
 
   /** A set, so that a literal can be tested against a collection target that is not a `List` (gap 51). */
@@ -380,7 +398,7 @@ public const workspace = [
     public use MutableIndexed, MutableSlice from "./types"
     public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
     public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
-    public use Set, TrieSet from "./types"
+    public use Set, TrieSet, TrieMap, TrieList from "./types"
     public use From, Into, TryFrom, Encode, Length, Close, Task from "./types"
     public use print, printError, panic, using, do, assert, nameOf, Expression from "./types"
     public use Void from "./types"

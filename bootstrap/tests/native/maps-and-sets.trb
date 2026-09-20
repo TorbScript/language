@@ -1,0 +1,146 @@
+use Process from "std/process"
+
+/**
+ * The map and the set of the language, natively (milestone 5.7): the literals, insertion order, the cursor that skips
+ * the tombstones a removal leaves, `a[key]` as a value and as a path, and the copy on write that makes a table a value.
+ *
+ * Nothing of this ran before the cursor existed, and not because of the cursor alone: `iterator` is a **required** member
+ * of `Iterable`, so the witness table of `Map<Key, Value>` could not be built at all and `["a": 1]` did not lower.
+ *
+ * Everything printed here has to be byte for byte what stage 0 prints, and the program has to leave zero live blocks: a
+ * table is a counted buffer that owns every key and every value in it, so each of these lines is also a test of `Retain`,
+ * `Release` and `MakeUnique`.
+ */
+
+type Point with Show, Equals, Hash {
+  x: Int
+  y: Int
+}
+
+type Counter with Show {
+  var hits: Int
+
+  fn increment(var self) {
+    hits = hits + 1
+  }
+}
+
+/** The literals over every shape of key and value: a number, a `String`, a record, and a collection as the value. */
+fn literals() {
+  const ages = ["Ada": 36, "Grace": 45]
+  print ages
+  const byNumber = [1: "one", 2: "two"]
+  print byNumber
+  const byPoint = [Point(1, 2): "origin"]
+  print byPoint
+  const nested = ["odd": [1, 3], "even": [2]]
+  print nested
+  const empty: Map<String, Int> = [:]
+  print empty
+  print empty.length()
+  // A set has no literal of its own - `\{...\}` is a closure - so it is built out of an `Iterable` and shown as `\{a\}`
+  const names = ["a", "bb", "ccc"].toSet()
+  print names
+  const numbers = [3, 1, 2].toSet()
+  print numbers
+  const points = [Point(1, 2), Point(1, 2), Point(3, 4)].toSet()
+  print points
+  const nothing = Set.from empty.keys()
+  print nothing
+}
+
+/** Insertion order is the language's own (decided gap 6), and setting a key again keeps its place. */
+fn order() {
+  var ages = ["Ada": 36]
+  ages["Grace"] = 45
+  ages["Zoe"] = 7
+  ages["Ada"] = 37
+  print ages
+  for (name, age) in ages {
+    print "{name} is {age}"
+  }
+  print ages.keys().toList()
+  print ages.values().toList()
+  print ages.containsKey("Zoe")
+  print ages.containsKey("nobody")
+  print ages.get("Grace")
+  print ages.get("nobody")
+}
+
+/** A removal leaves a tombstone: the cursor has to skip it, and nothing else may move. */
+fn removals() {
+  var ages = ["a": 1, "b": 2, "c": 3, "d": 4]
+  print ages.remove("b")
+  print ages.remove("b")
+  print ages
+  print ages.length()
+  for (key, value) in ages {
+    print "{key}={value}"
+  }
+  var names = ["a", "bb", "ccc"].toSet()
+  print names.remove("bb")
+  print names
+  print names.contains("bb")
+  print names.contains("ccc")
+}
+
+/** `a[key]` on a map: as a value, and as a `var` path that changes the value in place. */
+fn paths() {
+  var counters = ["a": Counter(0), "b": Counter(0)]
+  counters["a"].increment()
+  counters["a"].increment()
+  counters["b"].hits = 9
+  print counters
+  print counters["a"]
+  var totals = ["a": 1]
+  const before = totals
+  totals["a"] = 2
+  totals["b"] = 3
+  print before
+  print totals
+}
+
+/** A table is a value: the copy taken before a write keeps what it had, however deep the change goes. */
+fn kept() {
+  var ages = ["Ada": 36]
+  const first = ages
+  ages["Grace"] = 45
+  const second = ages
+  ages.remove "Ada"
+  print first
+  print second
+  print ages
+  var names = ["a"].toSet()
+  const before = names
+  names.add "bb"
+  print before
+  print names
+}
+
+/** What a map and a set are built from anywhere else: `toMap`, `toSet`, `groupBy`, and the set operations. */
+fn collected() {
+  const words = ["alpha", "beta", "gamma", "beta"]
+  print words.toSet()
+  print words.groupBy({ _.byteLength() })
+  const pairs = [("a", 1), ("b", 2)]
+  print Map.from(pairs)
+  const first = [1, 2, 3].toSet()
+  const second = [3, 4].toSet()
+  print first.union(second)
+  print first.intersection(second)
+  print first.difference(second)
+}
+
+fn exitCode(): Int {
+  const ages = ["Ada": 36, "Grace": 45]
+  ages.length() + [1, 2, 3].toSet().length()
+}
+
+literals()
+order()
+removals()
+paths()
+kept()
+collected()
+
+Process.exit exitCode()

@@ -634,6 +634,18 @@ void torb_map_put_back(torb_map *map, const void *key, const void *value);
  */
 bool torb_map_next(torb_map map, uint32_t *cursor, const void **key, const void **value);
 
+/**
+ * The same walk in the compiler's own convention, which is what `MapIterator.next` reaches: `*cursor` is the entry to
+ * start at and is left one past the entry that was answered, and `key` and `value` receive **retained copies** the
+ * caller owns. `map` is borrowed.
+ *
+ * It is a native and not TorbScript because the entry vector and its tombstones are the storage's own business: a
+ * position in it is not a position in the map, so nothing an implementation of `Iterator` could compute from `length`
+ * and `get` walks a table with a hole in it.
+ */
+bool torb_map_entry_after(torb_map map, int64_t *cursor, void *key, void *value);
+bool torb_set_item_after(torb_set set, int64_t *cursor, void *item);
+
 /** A set is the table with `torb_element_unit` on the value side. */
 torb_set torb_set_new(const torb_element *item);
 torb_set torb_set_retained(torb_set set);

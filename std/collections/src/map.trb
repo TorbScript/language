@@ -134,6 +134,43 @@ extend<Key: Hash, Value: Hash> Map<Key, Value> with Hash {
 // --- Implementations -----------------------------------------------------------------------------------
 
 /**
+ * The cursor of the ordered hash table: the entries in insertion order, tombstones skipped.
+ *
+ * `entryAfter` is the **one** thing the table needs that `std/` cannot write, and this type is what keeps it one: a
+ * position is an index into the storage's own entry vector, and a removal leaves a hole in it - so nothing written over
+ * `length` and `get` can walk a table that has been removed from.
+ *
+ * It holds the map **by value**, so changing the map while iterating it does not change what the cursor walks, which is
+ * what a value is. [HashMapIterator] is the same twenty lines for the other name of the same table: two `native type`s
+ * name it until the trie exists (gap 18), and a value of one is not a value of the other.
+ */
+public type MapIterator<Key: Hash, Value> with Iterator<(Key, Value)> {
+  entries: TrieMap<Key, Value>
+  var position: Int = 0
+
+  fn next(var self): (Key, Value)? {
+    // The position travels through a local because stage 0 takes a `var` argument before it evaluates the receiver
+    var found = position
+    const entry = entries.entryAfter found
+    position = found
+    entry
+  }
+}
+
+/** The cursor of [HashMap]: see [MapIterator]. */
+public type HashMapIterator<Key: Hash, Value> with Iterator<(Key, Value)> {
+  entries: HashMap<Key, Value>
+  var position: Int = 0
+
+  fn next(var self): (Key, Value)? {
+    var found = position
+    const entry = entries.entryAfter found
+    position = found
+    entry
+  }
+}
+
+/**
  * Hash array mapped trie - the default. A write to a shared map copies one path (O(log n)), so keeping many
  * versions of a big map is cheap. Iterates in insertion order.
  *
@@ -143,11 +180,34 @@ extend<Key: Hash, Value: Hash> Map<Key, Value> with Hash {
 public native type TrieMap<Key: Hash, Value>
   with Map<Key, Value>, From<Iterable<(Key, Value)>>
 {
-  native fn from(entries: Iterable<(Key, Value)>): TrieMap<Key, Value>
+  /**
+   * Ordinary TorbScript, and it **cannot** be a function of the runtime: `entries` is a trait-typed value of the
+   * *program*, so reading it means calling `iterator` and `next` through a witness table. `withCapacity` builds the empty
+   * table, and it is the one native the lowering answers itself - the element descriptors a table needs are a function of
+   * the language and no declaration can name one.
+   */
+  fn from(entries: Iterable<(Key, Value)>): TrieMap<Key, Value> {
+    var result: TrieMap<Key, Value> = TrieMap.withCapacity 0
+    result.addAll entries
+    result
+  }
+
+  native fn withCapacity(capacity: Int): TrieMap<Key, Value>
 
   native fn length(self): Int
   native fn get(self, key: Key): Value?
-  native fn iterator(self): Iterator<(Key, Value)>
+
+  /** Ordinary TorbScript over `entryAfter`: see [MapIterator]. */
+  fn iterator(self): Iterator<(Key, Value)> {
+    MapIterator self
+  }
+
+  /**
+   * The entry at or after `cursor` in the storage's own insertion order, with `cursor` left one past it. The one native a
+   * table needs beyond `get` and `set`: the tombstones a removal leaves are the storage's business and nothing else can
+   * skip them.
+   */
+  native fn entryAfter(self, var cursor: Int): (Key, Value)?
 
   native fn set(var self, key: Key, value: Value)
   native fn remove(var self, key: Key): Value?
@@ -161,12 +221,22 @@ public native type TrieMap<Key: Hash, Value>
 public native type HashMap<Key: Hash, Value>
   with Map<Key, Value>, From<Iterable<(Key, Value)>>
 {
-  native fn from(entries: Iterable<(Key, Value)>): HashMap<Key, Value>
+  fn from(entries: Iterable<(Key, Value)>): HashMap<Key, Value> {
+    var result: HashMap<Key, Value> = HashMap.withCapacity 0
+    result.addAll entries
+    result
+  }
+
   native fn withCapacity(capacity: Int): HashMap<Key, Value>
 
   native fn length(self): Int
   native fn get(self, key: Key): Value?
-  native fn iterator(self): Iterator<(Key, Value)>
+
+  fn iterator(self): Iterator<(Key, Value)> {
+    HashMapIterator self
+  }
+
+  native fn entryAfter(self, var cursor: Int): (Key, Value)?
 
   native fn set(var self, key: Key, value: Value)
   native fn remove(var self, key: Key): Value?

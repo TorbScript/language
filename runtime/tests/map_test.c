@@ -335,6 +335,76 @@ TORB_TEST(a_set_is_the_table_with_nothing_on_the_value_side) {
   torb_set_release(set);
 }
 
+/**
+ * `torb_map_entry_after` is what `MapIterator.next` reaches, and it is the one shape of the walk that hands the caller
+ * **owned** copies: the retains it does are what makes a cursor of a map of strings safe to keep past a write to the map.
+ */
+TORB_TEST(the_entry_cursor_skips_tombstones_and_retains_what_it_answers) {
+  torb_map map = torb_map_new(&torb_element_text, &torb_element_int64);
+  int64_t cursor = 0;
+  torb_text key;
+  int64_t value = 0;
+  int64_t seen = 0;
+  set_text_to_whole(&map, "a", 1);
+  set_text_to_whole(&map, "b", 2);
+  set_text_to_whole(&map, "c", 3);
+  TORB_CHECK(remove_key(&map, "b", &value));
+  TORB_CHECK_INTEGER(value, 2);
+  /* The hole `b` left is skipped, and the rest keeps its order. */
+  TORB_CHECK(torb_map_entry_after(map, &cursor, &key, &value));
+  TORB_CHECK_TEXT(key, "a");
+  TORB_CHECK_INTEGER(value, 1);
+  torb_text_release(key);
+  seen += 1;
+  TORB_CHECK(torb_map_entry_after(map, &cursor, &key, &value));
+  TORB_CHECK_TEXT(key, "c");
+  TORB_CHECK_INTEGER(value, 3);
+  /* The key is a retained copy: releasing the map leaves it readable. */
+  torb_map_release(map);
+  TORB_CHECK_TEXT(key, "c");
+  torb_text_release(key);
+  seen += 1;
+  TORB_CHECK_INTEGER(seen, 2);
+}
+
+/** Past the end it answers false and leaves the cursor where nothing more can be found. */
+TORB_TEST(the_entry_cursor_ends_and_stays_ended) {
+  torb_map map = torb_map_new(&torb_element_int64, &torb_element_int64);
+  int64_t cursor = 0;
+  int64_t key = 0;
+  int64_t value = 0;
+  int64_t one = 1;
+  int64_t two = 2;
+  torb_map_set(&map, &one, &two);
+  TORB_CHECK(torb_map_entry_after(map, &cursor, &key, &value));
+  TORB_CHECK_INTEGER(key, 1);
+  TORB_CHECK_INTEGER(value, 2);
+  TORB_CHECK(!torb_map_entry_after(map, &cursor, &key, &value));
+  TORB_CHECK(!torb_map_entry_after(map, &cursor, &key, &value));
+  torb_map_release(map);
+}
+
+/** A set is the table with nothing on the value side, so its cursor writes one out parameter and no second one. */
+TORB_TEST(the_item_cursor_walks_a_set_in_insertion_order) {
+  torb_set set = torb_set_new(&torb_element_text);
+  const char *names[] = { "alpha", "beta" };
+  int64_t cursor = 0;
+  torb_text item;
+  size_t index;
+  int64_t seen = 0;
+  for (index = 0; index < 2u; index += 1) {
+    torb_text text = torb_text_from_cstring(names[index]);
+    torb_set_add(&set, &text);
+  }
+  while (torb_set_item_after(set, &cursor, &item)) {
+    TORB_CHECK_TEXT(item, names[(size_t)seen]);
+    torb_text_release(item);
+    seen += 1;
+  }
+  TORB_CHECK_INTEGER(seen, 2);
+  torb_set_release(set);
+}
+
 void torb_register_map_tests(void) {
   TORB_ADD(a_map_answers_what_was_put_in);
   TORB_ADD(setting_a_key_again_keeps_its_place_in_the_order);
@@ -345,4 +415,7 @@ void torb_register_map_tests(void) {
   TORB_ADD(clear_empties_a_map_without_touching_a_copy);
   TORB_ADD(a_map_from_string_to_list_releases_the_whole_tree);
   TORB_ADD(a_set_is_the_table_with_nothing_on_the_value_side);
+  TORB_ADD(the_entry_cursor_skips_tombstones_and_retains_what_it_answers);
+  TORB_ADD(the_entry_cursor_ends_and_stays_ended);
+  TORB_ADD(the_item_cursor_walks_a_set_in_insertion_order);
 }

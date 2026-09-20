@@ -113,10 +113,10 @@ void torb_list_reverse(torb_list *list);
 void torb_list_set(torb_list *list, int64_t index, const void *value, torb_location at);
 /* ArrayList.slice, TrieList.slice */
 torb_list torb_list_slice(torb_list list, int64_t from, int64_t to, torb_location at);
-/* ArrayList.sort, TrieList.sort */
-void torb_list_sort(torb_list *list, torb_compare_function compare, void *context);
 /* HashMap.clear, TrieMap.clear */
 void torb_map_clear(torb_map *map);
+/* HashMap.entryAfter, TrieMap.entryAfter */
+bool torb_map_entry_after(torb_map map, int64_t *cursor, void *key, void *value);
 /* HashMap.get, TrieMap.get */
 bool torb_map_get(torb_map map, const void *key, void *out);
 /* HashMap.length, TrieMap.length */
@@ -125,8 +125,6 @@ int64_t torb_map_length(torb_map map);
 bool torb_map_remove(torb_map *map, const void *key, void *out);
 /* HashMap.set, TrieMap.set */
 void torb_map_set(torb_map *map, const void *key, const void *value);
-/* HashMap.withCapacity */
-torb_map torb_map_with_capacity(const torb_element *key, const torb_element *value, int64_t capacity, torb_location at);
 /* arcCosine */
 double torb_math_arc_cosine(double value);
 /* arcSine */
@@ -181,6 +179,8 @@ void torb_set_add(torb_set *set, const void *item);
 void torb_set_clear(torb_set *set);
 /* HashSet.contains, TrieSet.contains */
 bool torb_set_contains(torb_set set, const void *item);
+/* HashSet.itemAfter, TrieSet.itemAfter */
+bool torb_set_item_after(torb_set set, int64_t *cursor, void *item);
 /* HashSet.length, TrieSet.length */
 int64_t torb_set_length(torb_set set);
 /* HashSet.remove, TrieSet.remove */
