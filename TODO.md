@@ -1566,3 +1566,17 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Offen, in der Reihenfolge:** quotierte Ausdrücke 5.11 (58 Befunde, alle in `compiler/tests/`; `torb test` nativ),
     eine Collection aus einem Trait-Wert lesen (7.3), und 6.3s Messungen - `joined` ist der Grund, dort nach mehr vom
     gleichen zu suchen (ein Build pro Lesen eines Modul-`const`, die Instanzzahl).
+
+- (**Meilenstein 6.2 erreicht: der Fixpunkt hält**, 2026-09-23) Gemergt, alle Gates grün (1453 Tests, 96 Runtime-Tests,
+  volle `cargo test`, 42 native Gate-Programme). **Von mir nachgeprüft** (`cargo test --release --test fixpoint --
+  --ignored --nocapture`): Stage 1 baut den Compiler in 245 s, Stage 2 in 114 s, beide erzeugen dieselben 65,7 MB C
+  Byte für Byte, Stage 3 emittiert es in 20 s ein drittes Mal identisch.
+  - Ursache des Hängers: `Iterable.joined` war quadratisch (ein `String` ist ein Wert, jeder Schritt kopierte den
+    ganzen Akkumulator); Stage 0 versteckte das hinter einem Rust-Native. Jetzt `concatenated` als Merge-Baum.
+    Neue Regel in CONTRIBUTING: eine Kostenfrage klärt nur ein KOMPILIERTER Probelauf.
+  - `Process.run` läuft unter Windows ohne Shell (`CreateProcess`) - vorher fand das Binary keinen C-Compiler.
+  - Stage 2 gegen Stage 1: `check ..` 7,2 s statt 47 s (216 MB statt 726 MB); den Build dominiert jetzt gcc
+    (96 von 114 s für EINE 65-MB-Datei) - das ist die 6.3-Frage "Übersetzungseinheit aufteilen".
+  - **Nächstes ("Schwanz 3"):** quotierte Ausdrücke 5.11 (`main.exe test`), 6.3 (Übersetzungseinheit aufteilen,
+    Konstanten als unsterbliche gezählte Statics, Instanzzahl), Plan-Nummern aus den Back-End-Meldungen, Doku-Welle
+    `ir/`+`backend/`. Danach wie geplant: `std/linear` + `std/geometry`, der Encoding-Umbau, 5.14 Konformität, 7.x VM.
