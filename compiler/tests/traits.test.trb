@@ -251,6 +251,18 @@ group "Operators through their traits" {
     assert(problems(source) == ["`Amount` does not implement `Indexed`, so `a[key]` has no meaning for it"])
   }
 
+  test "an index of an `Array` that is written out is held against the size in its type" {
+    // `std/collections/src/array.trb` documents exactly this as a compile error. Everything else - a `List`, a computed
+    // index, a const parameter as the size - is the runtime's question
+    const source = "fn probe(values: Array<Float, 4>): Float \{\n  values[4]\n\}"
+    assert(problems(source) == ["`4` is out of bounds: an `Array<Float64, 4>` has 4 items"])
+    assert(
+      notes(source) == ["The size of an `Array` is part of its type, so an index that is written out is checked here"]
+    )
+    assert problems("fn probe(values: Array<Float, 4>): Float \{\n  values[3]\n\}").isEmpty()
+    assert problems("fn probe(values: Array<Float, 4>, at: Int): Float \{\n  values[at]\n\}").isEmpty()
+  }
+
   test "a comparison asks for its trait like every other operator" {
     // 4.3 recorded the witness and said nothing where it found none, because the prelude had no `Equals` for its
     // collections; `std/collections` carries `Equals`, `Hash` and `Show` for `List`, `Set` and `Map` now

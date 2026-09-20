@@ -9,11 +9,12 @@ use ModuleId from "../module"
 use SymbolId from "../symbols"
 use resolveImport from "../graph"
 use TypeId, FunctionForm, FieldSignature, ParameterId from "./type"
-use Checker, Candidate from "./context"
+use Checker, Candidate, TypeScope from "./context"
 use Target from "./name"
 use signatureOf, typeSignatureOf, aliasTargetOf, resultOf from "./signature"
 use fieldsOf from "./member"
 use substitute from "./unify"
+use typeFromReference from "./lowering"
 use implementsBound from "./implementation"
 use checkConstantInitializer from "./constant"
 
@@ -610,6 +611,20 @@ fn checkFunctionShape(
   isTraitMember: Bool,
   ownerIsNative: Bool,
 ) {
+  // "`fn` has no defaults: its type arguments come from the call" (CONCEPT, "Traits"). One was parsed and then never
+  // consulted, so `fn empty<Item = String>()` promised something and the call still read "Cannot infer `Item`"
+  for parameter in function.generics {
+    if const Some(default) = parameter.default {
+      checker.report(
+        module,
+        Diagnostic.error("A type parameter of a `fn` has no default", default.span)
+          .withNote(
+            "The type arguments of a call come from the call: only a `type` and a `trait` fill a default in"
+              + " (`trait Add<Other = Self>`)"
+          )
+      )
+    }
+  }
   if function.body.isSome() || function.name.text.isEmpty() {
     return
   }
@@ -806,6 +821,7 @@ public fn isSharedTrait(var checker: Checker, symbol: SymbolId): Bool {
  */
 fn checkExtendShape(var checker: Checker, module: ModuleId, extension: ExtendDeclaration) {
   const isNative = false
+  requireExtendableTarget checker, module, extension.target
   for member in extension.members {
     match member.kind {
       .Field(field) => {
@@ -824,6 +840,26 @@ fn checkExtendShape(var checker: Checker, module: ModuleId, extension: ExtendDec
       }
       _ => checkMemberShape checker, module, member, false, isNative
     }
+  }
+}
+
+/**
+ * "A literal type has no owner and **cannot be extended**: `extend "tcp" | "udp"` is an error, with or without a trait.
+ * Only the generated members exist." (CONCEPT, "Literal Types"). Its identity is structural, so there is no declaration
+ * an `extend` could belong to - and it compiled silently, with the added member simply unreachable at every use.
+ */
+fn requireExtendableTarget(var checker: Checker, module: ModuleId, target: TypeReference) {
+  const annotation = typeFromReference checker, target, TypeScope(module).forType()
+  if const .Literals(_, _) = checker.types.form(annotation) {
+    const shown = checker.describe annotation
+    checker.report(
+      module,
+      Diagnostic.error("`{shown}` cannot be extended", target.span)
+        .withNote(
+          "A literal type is the same type wherever its members are written, so it has no declaration an `extend`"
+            + " could belong to. For behavior, declare a type with cases"
+        )
+    )
   }
 }
 

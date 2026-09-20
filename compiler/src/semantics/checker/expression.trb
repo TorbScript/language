@@ -439,6 +439,7 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
         return checker.deferredType
       }
       const _ = checkValue checker, key, arguments[0], index.span
+      requireIndexInBounds checker, receiver, index
       recordTraitCall checker, at, receiver, indexed, "at"
       arguments[1]
     }
@@ -447,6 +448,49 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
       checker.deferredType
     }
   }
+}
+
+/**
+ * `identity[4]` on an `Array<Float, 4>`: the size is part of the type and the index was written as a literal, so this is
+ * the one bounds check the checker can make - and `std/collections/src/array.trb` documents it as a compile error.
+ * Everything else (a `List`, a computed index, a const parameter as the size) is the runtime's.
+ */
+fn requireIndexInBounds(var checker: Checker, receiver: TypeId, index: Expression) {
+  const (symbol, arguments) = match checker.types.form(receiver) {
+    .Nominal(found, given) => (found, given)
+    _ => {
+      return
+    }
+  }
+  if checker.wellKnown.array != Some(symbol) || arguments.length() != 2 {
+    return
+  }
+  const size = match checker.types.form(arguments[1]) {
+    .Constant(.Integer(value), _) => value
+    _ => {
+      return
+    }
+  }
+  const written = match index.kind {
+    .IntegerLiteral(text) => text
+    _ => {
+      return
+    }
+  }
+  const at = match integerLiteral(written, false) {
+    Some(.Integer(value)) => value
+    _ => {
+      return
+    }
+  }
+  if at >= 0 && at < size {
+    return
+  }
+  const shown = checker.describe receiver
+  checker.reportHere(
+    Diagnostic.error("`{written}` is out of bounds: an `{shown}` has {size} items", index.span)
+      .withNote("The size of an `Array` is part of its type, so an index that is written out is checked here")
+  )
 }
 
 /**

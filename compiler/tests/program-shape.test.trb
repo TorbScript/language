@@ -279,6 +279,49 @@ group "An `extend` adds constants and functions (gap 39)" {
   }
 }
 
+group "What cannot be extended, and what has no default" {
+  test "a literal type cannot be extended, with or without a trait" {
+    // "That identity is structural, so a literal type has no owner and cannot be extended" (CONCEPT, "Literal Types").
+    // It compiled silently, and the member it added was simply unreachable at every use
+    const source = r"""
+      type Status = "online" | "offline"
+
+      extend Status {
+        fn label(self): String {
+          "a status"
+        }
+      }
+      """
+    assert(problems(source) == ["`\"offline\" | \"online\"` cannot be extended"])
+    assert(
+      notes(source)
+        == [
+          "A literal type is the same type wherever its members are written, so it has no declaration an `extend`"
+            + " could belong to. For behavior, declare a type with cases",
+        ]
+    )
+  }
+
+  test "a type parameter of a `fn` has no default" {
+    // "`fn` has no defaults: its type arguments come from the call" (CONCEPT, "Traits"). One was parsed and then never
+    // consulted, so the declaration promised something and the call still read "Cannot infer `Item`"
+    const source = "fn empty<Item = String>(): Int \{\n  1\n\}"
+    assert(problems(source) == ["A type parameter of a `fn` has no default"])
+    assert(
+      notes(source)
+        == [
+          "The type arguments of a call come from the call: only a `type` and a `trait` fill a default in"
+            + " (`trait Add<Other = Self>`)",
+        ]
+    )
+  }
+
+  test "a `type` and a `trait` keep theirs (gap 6)" {
+    assert problems("trait Combine<Other = Self> \{\n  fn combine(self, other: Other): Self\n\}").isEmpty()
+    assert problems("type Holder<Item = Int> \{\n  item: Item\n\}").isEmpty()
+  }
+}
+
 group "`native` belongs to the standard library (gap 22)" {
   test "a `native` function of an ordinary package" {
     const source = r"""
