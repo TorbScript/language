@@ -1,3 +1,9 @@
+/**
+ * The reading end of a stream: `Source`, the stages built from it (`map`, `take`, `through`, ...), the terminal
+ * operations that read it to a value (`toList`, `fold`, `into`, ...), and its three ways to make one (`from`,
+ * `pulling`, `produce`).
+ */
+
 use Shared from "std/core"
 use Stage, Collector, Accumulator, Queueing, collector, counting, listing from "std/iteration"
 use mapping, filtering, filterMapping, mappingWhile, taking, takingWhile, skipping, indexing, chunking from "std/iteration"
@@ -34,6 +40,11 @@ use Sink from "./sink"
  *   closes the source, and every source built here closes the one it reads from. `using` is the form that does not
  *   forget it. `close()` is synchronous, cannot fail and may be called after the stream ended; `finish()` on the other
  *   end is the graceful counterpart that can.
+ *
+ * # Related
+ *
+ * - [Sink] - the writing end, and `into`/`fill`'s other side.
+ * - [Stage] - what `through` wraps a source with.
  */
 public shared trait Source<Item, Failure> with Close {
   /** `Ok(Some(item))` for the next item, `Ok(None)` at the end, `Fail(problem)` for a failure that ends the stream. */
@@ -49,30 +60,37 @@ public shared trait Source<Item, Failure> with Close {
     Staged.of self, stage
   }
 
+  /** Transforms every item as it is read. */
   fn map<Output>(var self, transform: (value: Item) => Output): Source<Output, Failure> {
     through mapping(transform)
   }
 
+  /** Reads only the items that answer the question. */
   fn filter(var self, predicate: (value: Item) => Bool): Source<Item, Failure> {
     through filtering(predicate)
   }
 
+  /** Transforms every item and drops the ones that answer `None`. */
   fn filterMap<Output>(var self, transform: (value: Item) => Output?): Source<Output, Failure> {
     through filterMapping(transform)
   }
 
+  /** Transforms items until one answers `None`, and ends the stream there. */
   fn mapWhile<Output>(var self, transform: (value: Item) => Output?): Source<Output, Failure> {
     through mappingWhile(transform)
   }
 
+  /** Reads at most `amount` items, then ends the stream. */
   fn take(var self, amount: Int): Source<Item, Failure> {
     through taking(amount)
   }
 
+  /** Reads items while they answer the question, then ends the stream at the first one that does not. */
   fn takeWhile(var self, predicate: (value: Item) => Bool): Source<Item, Failure> {
     through takingWhile(predicate)
   }
 
+  /** Drops the first `amount` items, then reads the rest as they come. */
   fn skip(var self, amount: Int): Source<Item, Failure> {
     through skipping(amount)
   }
@@ -120,18 +138,22 @@ public shared trait Source<Item, Failure> with Close {
     Ok accumulator.finish()
   }
 
+  /** Every item, collected into a list. */
   fn toList(var self): Task<Result<List<Item>, Failure>> {
     collect listing()
   }
 
+  /** How many items the stream delivers. */
   fn count(var self): Task<Result<Int, Failure>> {
     collect counting()
   }
 
+  /** Combines every item into a running state, left to right, starting from `initial`. */
   fn fold<State>(var self, initial: State, combine: (State, Item) => State): Task<Result<State, Failure>> {
     collect(collector(initial, finish: { _ }, step: combine))
   }
 
+  /** Runs `action` on every item as it arrives. */
   fn forEach(var self, action: (value: Item) => Void): Task<Result<Void, Failure>> {
     while const Some(item) = next().await()? {
       action item
@@ -202,6 +224,7 @@ public shared trait Source<Item, Failure> with Close {
     Produced.of(relay, spawn({ produceInto relay, body }))
   }
 
+  /** A stream that ends immediately, without reading anything. */
   fn empty(): Source<Item, Failure> {
     const nothing: List<Item> = []
     Iterating.of nothing
@@ -224,14 +247,17 @@ public shared type Pulling<Item, Failure> with Source<Item, Failure> {
   private step: () => Task<Result<Item?, Failure>>
   private var above: Close? = None
 
+  /** Wraps `step` as a source, and `above` as what `close()` releases. */
   fn of(step: () => Task<Result<Item?, Failure>>, above: Close? = None): Pulling<Item, Failure> {
     Pulling step, above
   }
 
+  /** Calls `step` for the next item. */
   fn next(var self): Task<Result<Item?, Failure>> {
     step().await()
   }
 
+  /** Releases `above`, if there is one. */
   fn close(var self) {
     if var Some(upstream) = above {
       upstream.close()
@@ -322,11 +348,13 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
   private var pushing: Accumulator<Input, Void>
   private var finished: Bool = false
 
+  /** Wraps `upstream` with `stage`, and sets up the queue `next()` reads from. */
   fn of(var upstream: Source<Input, Failure>, stage: Stage<Input, Item>): Staged<Input, Item, Failure> {
     var box: Shared<List<Item>> = Shared([])
     Staged upstream, stage, box, stage.onto(Queueing(box))
   }
 
+  /** Pulls from `upstream` and pushes into the stage until the queue holds an item or the stage is done. */
   fn next(var self): Task<Result<Item?, Failure>> {
     while true {
       var waiting = queue.value
@@ -355,6 +383,7 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
     }
   }
 
+  /** Composes `other` onto this stage instead of stacking a second `Staged` on top. */
   fn through<Output>(var self, other: Stage<Item, Output>): Source<Output, Failure> {
     upstream.through stage.then(other)
   }
@@ -374,6 +403,7 @@ public shared type Staged<Input, Item, Failure> with Source<Item, Failure> {
     Ok accumulator.finish()
   }
 
+  /** Releases `upstream`. */
   fn close(var self) {
     upstream.close()
   }
@@ -420,6 +450,7 @@ shared type Produced<Item, Failure> with Source<Item, Failure> {
  *     const all = body.through(Json.items<User>()).checked().toList().await()?
  */
 extend<Item, Problem, Failure: From<Problem>> Source<Result<Item, Problem>, Failure> {
+  /** Turns every item's own failure into the stream's failure, and ends the stream at the first one. */
   fn checked(var self): Source<Item, Failure> {
     Checked.of self
   }

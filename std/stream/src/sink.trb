@@ -29,6 +29,11 @@ use Source from "./source"
  * - **Whoever writes needs the permission - now or later.** `mapFailure` and `buffered` take `var self` as well,
  *   because the wrapper keeps the sink in a `var` field and writes into it afterwards. A chain is still one
  *   expression, because a freshly produced object is a `var` path.
+ *
+ * # Related
+ *
+ * - [Source] - the reading end, and `into`/`fill`'s other side.
+ * - [Buffered] - what `buffered(capacity:)` answers.
  */
 public shared trait Sink<Item, Failure> with Close {
   /** Finishes when the target has taken the item. */
@@ -88,6 +93,7 @@ public shared type Pushing<Item, Failure> with Sink<Item, Failure> {
   private complete: () => Task<Result<Void, Failure>>
   private var below: Close? = None
 
+  /** Wraps `accept` and `complete` as a sink, and `below` as what `close()` releases. */
   fn of(
     accept: (item: Item) => Task<Result<Void, Failure>>,
     complete: () => Task<Result<Void, Failure>>,
@@ -96,14 +102,17 @@ public shared type Pushing<Item, Failure> with Sink<Item, Failure> {
     Pushing accept, complete, below
   }
 
+  /** Calls `accept` with the item. */
   fn add(var self, item: Item): Task<Result<Void, Failure>> {
     accept(item).await()
   }
 
+  /** Calls `complete`. */
   fn finish(var self): Task<Result<Void, Failure>> {
     complete().await()
   }
 
+  /** Releases `below`, if there is one. */
   fn close(var self) {
     if var Some(target) = below {
       target.close()
@@ -158,16 +167,27 @@ shared type Remapped<Item, Failure, Other> with Sink<Item, Other> {
  *
  * `close()` does **not** flush: it releases, and what was buffered is lost. That is the difference between abandoning
  * a sink and finishing it.
+ *
+ * # Pitfalls
+ *
+ * - If a write below fails partway through a flush, the items after it are dropped, not kept for a retry: a failed
+ *   sink is over, so there is nothing left to retry into.
+ *
+ * # Related
+ *
+ * - [Sink.buffered] - what answers a `Buffered`.
  */
 public shared type Buffered<Item, Failure> with Sink<Item, Failure> {
   private var downstream: Sink<Item, Failure>
   private capacity: Int = 64
   private var pending: List<Item> = []
 
+  /** Wraps `downstream` and buffers up to `capacity` items before writing a group. */
   fn of(var downstream: Sink<Item, Failure>, capacity: Int = 64): Buffered<Item, Failure> {
     Buffered downstream, capacity.max(1)
   }
 
+  /** Adds to the buffer, and flushes once it reaches `capacity`. */
   fn add(var self, item: Item): Task<Result<Void, Failure>> {
     pending.add item
     if pending.length() < capacity {
@@ -186,11 +206,13 @@ public shared type Buffered<Item, Failure> with Sink<Item, Failure> {
     Ok void
   }
 
+  /** Flushes, then finishes `downstream`. */
   fn finish(var self): Task<Result<Void, Failure>> {
     flush().await()?
     downstream.finish().await()
   }
 
+  /** Releases `downstream` without flushing - whatever is still buffered is lost. */
   fn close(var self) {
     downstream.close()
   }

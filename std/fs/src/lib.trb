@@ -1,5 +1,7 @@
 /**
- * Files. Whole-file helpers for what fits in memory, and streams for everything else (`docs/STREAMS.md`).
+ * The file system: `File`, which is both a stream's reading end and its writing end, and `IoError`, what every
+ * operation here fails with. The whole-file helpers (`readText`, `writeText`) are for what fits in memory; `chunks()`,
+ * `lines()` and the `Sink` side are for everything else (`docs/STREAMS.md`).
  */
 
 use Source, Sink, Bytes, Utf8Error from "std/stream"
@@ -7,9 +9,12 @@ use lines as streamLines from "std/stream"
 
 /** What went wrong with which path. */
 public type IoError with Show, Error {
+  /** The path the operation was about. */
   path: String
+  /** What went wrong, in the operating system's or the decoder's own words. */
   message: String
 
+  /** `{path}: {message}`. */
   fn show(self): String {
     "{path}: {message}"
   }
@@ -35,6 +40,11 @@ extend IoError with From<Utf8Error> {
  * An open file is both ends of a stream: `chunks()`/`lines()` read it, and the file *is* a `Sink<Bytes, IoError>` for
  * writing, so everything that writes into a sink writes into a file. Most code needs neither: the functions without
  * `self` read and write whole files.
+ *
+ * # Related
+ *
+ * - [Source] - what `chunks()` and `lines()` answer.
+ * - [Sink] - the trait a `File` implements for writing.
  */
 public native shared type File with Close, Sink<Bytes, IoError> {
   /** Opens an existing file for reading. */
@@ -43,7 +53,10 @@ public native shared type File with Close, Sink<Bytes, IoError> {
   /** Creates the file, or empties it if it is there. The counterpart of `open`, for the writing side. */
   native fn create(path: String): Result<File, IoError>
 
+  /** The rest of the file as text, from wherever the cursor is. Fails if the bytes are not UTF-8. */
   native fn readAll(var self): Result<String, IoError>
+
+  /** Releases the operating system handle. Synchronous and cannot fail, as every `Close` promises. */
   native fn close(var self)
 
   /**
@@ -53,8 +66,8 @@ public native shared type File with Close, Sink<Bytes, IoError> {
   native fn chunks(var self, size: Int = 65536): Source<Bytes, IoError>
 
   /**
-   * The lines of the file, as a stream. Unlike the old `File.lines(path)` this cannot swallow a read failure halfway
-   * through: a failure ends the stream and the reader sees it, because it is in the type.
+   * The lines of the file, as a stream. A read failure ends the stream and the reader sees it, because it is in the
+   * type - it can never be swallowed halfway through.
    */
   fn lines(var self): Source<String, IoError> {
     chunks().through(streamLines()).checked()
@@ -68,6 +81,8 @@ public native shared type File with Close, Sink<Bytes, IoError> {
 
   /** A `String` is always valid UTF-8, so bytes that are not are an `IoError` and never a replacement character. */
   native fn readText(path: String): Result<String, IoError>
+
+  /** Creates or empties `path` and writes `text` into it in one call - the writing counterpart of `readText`. */
   native fn writeText(path: String, text: String): Result<Void, IoError>
 
   /**
@@ -87,7 +102,10 @@ public native shared type File with Close, Sink<Bytes, IoError> {
    */
   native fn absolutePath(path: String): Result<String, IoError>
 
+  /** Whether something exists at `path`, file or directory. */
   native fn exists(path: String): Bool
+
+  /** Whether `path` is a directory rather than a file. */
   native fn isDirectory(path: String): Bool
 
   /**

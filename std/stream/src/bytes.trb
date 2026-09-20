@@ -16,6 +16,10 @@ use Sink from "./sink"
  *
  * **A chunk belongs to whoever produced it.** A source hands one out and does not keep it, so a reader may hold on to
  * it - there is no borrowed buffer that has to be copied before the next `await`, because a list is a value.
+ *
+ * # Related
+ *
+ * - [Sink.addText] - writing text into a byte sink.
  */
 public type Bytes = List<UInt8>
 
@@ -24,6 +28,7 @@ public type Utf8Error with Show, Error {
   /** Counted from the start of the chunk that was being decoded. */
   offset: Int
 
+  /** `invalid UTF-8 at byte {offset}` - what a caller prints or logs. */
   fn show(self): String {
     "invalid UTF-8 at byte {offset}"
   }
@@ -34,6 +39,7 @@ public type Utf8Error with Show, Error {
  * break itself is not part of the line, and a last line without one is still a line.
  *
  * Fallible, so the items are `Result`s; `source.through(lines()).checked()` turns them into the stream's own failure.
+ * The same stage works on a plain `Iterable<Bytes>`, with no `Source` and no `Task` involved.
  */
 public fn lines(): Stage<Bytes, Result<String, Utf8Error>> {
   Lines()
@@ -42,6 +48,11 @@ public fn lines(): Stage<Bytes, Result<String, Utf8Error>> {
 /**
  * Bytes to text, one chunk at a time and cut at character borders: what arrives is whatever was complete, and a
  * character split across two chunks is held back until the rest is there.
+ *
+ * # Pitfalls
+ *
+ * - A sequence that is still incomplete when the stream ends is reported as invalid UTF-8, not delivered as a partial
+ *   character: there is no more input coming to complete it.
  */
 public fn decodedText(): Stage<Bytes, Result<String, Utf8Error>> {
   DecodedText()
@@ -71,6 +82,7 @@ public fn encodedText(): Stage<String, Bytes> {
  * a file, standard output, a socket, the input of a child process - and nowhere else.
  */
 extend<Failure> Sink<Bytes, Failure> {
+  /** Encodes `text` as UTF-8 and writes it - the text form of `add`. */
   fn addText(var self, text: String): Task<Result<Void, Failure>> {
     add(text.bytes().toList()).await()
   }
