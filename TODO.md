@@ -1601,3 +1601,9 @@ Wenn nicht, was bedeutet, bewirkt es?
   **Wird gelöst:** kleine Runde zusammen mit den notierten Kleinigkeiten (`indexed()` mit Labels, `reportHere`
   verschluckt die zweite Meldung, Gate-Fehlalarm bei `...` in Backticks, toter Schutz in `mutation.trb`, Erklärseite
   "Where are my overloads?").
+  - **Ergänzt (Nutzerfrage "gehört Array eher in den core?", 2026-09-23) - Entschieden (ich): ja.** `std/core` hält,
+    was die Sprache selbst kennt (`Option` hinter `T?`, `Result` hinter `?`, `Range` hinter `a..b`) - und `Array` ist
+    das Inline-Speicherprimitiv, an das sich ein Listen-Literal anpasst (der Checker kennt es beim Namen).
+    `std/collections` hält Datenstrukturen AUF den Speicherprimitiven; der geplante Heap-Kern `Buffer<Item>` kommt
+    aus demselben Grund neben `Array` nach `std/core`. Das Prelude exportiert `Array` weiter, für Programme ändert
+    sich nichts. Der Agent der kleinen Runde zieht es mit um.
