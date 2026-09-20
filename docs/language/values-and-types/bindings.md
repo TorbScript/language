@@ -39,8 +39,11 @@ const <pattern> [: <Type>] = <expression>
 var   <pattern> [: <Type>] = <expression>
 ```
 
-A pattern may destructure, so `const (quotient, remainder) = divide(7, 2)` and `const Point(x, y) = p` are bindings too
-(see [Patterns in bindings and conditions](../pattern-matching/cases-and-match.md)).
+CONCEPT.md's design lets a pattern destructure here, so `const (quotient, remainder) = divide(7, 2)` and
+`const Point(x, y) = p` are meant to be bindings too. The checker does not accept a tuple or case pattern in this
+position yet - only a name and the wildcard `_` bind directly after `const`/`var` today; taking a value apart still
+needs `match`. See [Cases and match](../pattern-matching/cases-and-match.md) for the pattern vocabulary this binding
+form will use once it is accepted here.
 
 ## Rules
 

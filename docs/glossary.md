@@ -58,6 +58,18 @@ after `=>`, or as the default of a field. See [Command calls](language/syntax/co
 The five places a [command call](#command-call) is allowed. Nothing inside parentheses, brackets, an operator or an
 argument list is command position.
 
+### Const parameter
+
+A parameter of a generic type or function whose argument is a value rather than a type - `Int`, `Bool`, `Char` or
+`String`. There is no arithmetic over one; the checker only compares const arguments for equality. See
+[Arrays and const parameters](language/values-and-types/arrays.md).
+
+### Contextual keyword
+
+A word that reads as an ordinary name after a `.` or as an argument label, and as a keyword everywhere else - today
+only `from`, `as` and `by`, because nothing can be declared with any other keyword's spelling. See
+[Lexical structure](language/syntax/lexical-structure.md).
+
 ### Copy trap
 
 Taking a value out of a collection or a field produces a copy, so changing it changes nothing. It is a compile error
@@ -68,6 +80,11 @@ rather than a silent bug. See
 
 A change that cannot have an effect: a `var` that is changed and never read afterwards, or the discarded result of a
 method that takes `self`. Both are compile errors, because with value semantics they are always mistakes.
+
+### Distinct type
+
+A `type` with a single field, used instead of an opaque alias; `by` forwards specific traits of that field one at a
+time. See [Distinct types](language/values-and-types/distinct-types.md).
 
 ### Doc comment
 
