@@ -1234,3 +1234,16 @@ Wenn nicht, was bedeutet, bewirkt es?
     über Zahltypen, Operator-Traits, `Array<Item, Size>` und das Wert-Layout ohne Boxing.
   - **Entschieden (Nutzer, 2026-09-21):** `std/linear` und `std/geometry` sind die ersten Pakete direkt nach dem
     Fixpunkt (brauchen weder VM noch FFI), der Rest folgt dem Design-Dokument.
+  - **Ganzzahl-Vektoren und -Geometrie (Nutzerwunsch, 2026-09-21; pixelbasiert/deterministisch) - Entschieden (ich):**
+    EIN generischer Typ statt Zwillingstypen wie Godots `Vector2`/`Vector2i` (ohne Makros wären das von Hand
+    gepflegte Kopien, und `Vector2Int` wäre eine Abkürzung im Namen): `type Vector2<Scalar = Float> { x: Scalar,
+    y: Scalar }` - `Vector2` ist der Float-Vektor, `Vector2<Int>` der Pixel-Vektor. Die Methoden sind nach Bounds
+    geschichtet (bedingtes `extend`): über `Numeric` (gibt es schon in `std/number`) alles, was ohne Wurzel und
+    Winkel auskommt (`+ - *`, `dot`, `lengthSquared`, `scaled`, `min`/`max`, Manhattan-Länge, `Rectangle`-Schnitt,
+    Raster/Tilemap); über einen NEUEN Trait `Real` (`squareRoot`, `sine`, ..., für `Float32`/`Float64`) der Rest
+    (`length`, `normalized`, `rotated`, Kreise, Matrizen, Quaternionen). Übergänge nur ausdrücklich (`toFloat()`,
+    `rounded()`, `floored()`), wie überall in der Sprache. **Der eigentliche Gewinn für Determinismus:** ein
+    Festkomma-Typ (`Fixed`, Q-Format) trägt `Real` - dann läuft die GANZE Geometrie/Kollision bitgleich auf jeder
+    Plattform und in jedem Back-End (Lockstep, Replays), was Floats wegen `sin`/`cos` der jeweiligen libm und wegen
+    des JS-Back-Ends nie garantieren. Im Design-Dokument zu prüfen: Bound plus Default an einem Typparameter
+    (`Scalar: Numeric = Float`), `From` zwischen `Vector2<Source>` und `Vector2<Target>` gegen die Blanket-Regel.
