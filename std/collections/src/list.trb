@@ -136,6 +136,25 @@ extend<Item: Hash> List<Item> with Hash {
 // --- Implementations -----------------------------------------------------------------------------------
 
 /**
+ * The cursor over a contiguous list: the list it was made from, and the index of the next element.
+ *
+ * It is **TorbScript and not a runtime function**, because everything it needs already is one: `get` answers the element
+ * or `None` past the end, so `next` is two lines and the runtime keeps one function fewer (the rule of
+ * `compiler/CONTRIBUTING.md`, "natives stay few"). It holds the list by value, so changing the list while iterating it
+ * does not change what the cursor walks - which is what a value is.
+ */
+public type ListIterator<Item> with Iterator<Item> {
+  items: ArrayList<Item>
+  var index: Int = 0
+
+  fn next(var self): Item? {
+    const found = items.get index
+    index = index + 1
+    found
+  }
+}
+
+/**
  * Contiguous, growable buffer - the default. The buffer is shared between copies and slices and only copied when
  * somebody writes to it while it is shared. Nobody can observe the difference.
  */
@@ -147,8 +166,12 @@ public native type ArrayList<Item>
 
   native fn length(self): Int
   native fn get(self, index: Int): Item?
-  native fn iterator(self): Iterator<Item>
   native fn slice(self, range: Range<Int>): ArrayList<Item>
+
+  /** Ordinary TorbScript over `get`: see [ListIterator]. */
+  fn iterator(self): Iterator<Item> {
+    ListIterator self
+  }
 
   native fn add(var self, value: Item)
   native fn set(var self, index: Int, value: Item)

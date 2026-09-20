@@ -187,6 +187,13 @@ public type IrParameter {
    * ownership verifier that the base of such a place starts empty and owns a value afterwards.
    */
   isOut: Bool = false
+  /**
+   * An **element of a container**, handed over by address. It is an ordinary *value* position - the callee takes the
+   * count of it exactly as `ownership` says - and the address is only how the one C list and the one C hash table reach
+   * an element whose type they do not know (BACKEND 3.1). A `var` path is a different thing, which is why it is a
+   * different flag: a place carries no count, and this carries one.
+   */
+  isByAddress: Bool = false
 }
 
 /**
@@ -418,8 +425,14 @@ public type WitnessRoot {
   case Table(table: WitnessTableId)
   /** A table the caller appended after the declared parameters: the index among them. */
   case Parameter(index: Int)
-  /** One of the witness pointers inside a trait-typed value: which of its bounds. */
-  case Value(slot: Slot, bound: Int)
+  /**
+   * One of the witness pointers inside a trait-typed value: the place the value is at, and which of its bounds.
+   *
+   * A **place** and not a slot, because a `var self` member reached through a table writes through the value the table
+   * came from - `holder.items.add(x)` reads the table out of `holder.items` and hands the callee the payload inside
+   * exactly that box (milestone 5.7). A bare slot is `Reference(slot, [])`.
+   */
+  case Value(place: Reference, bound: Int)
 }
 
 /**
@@ -542,6 +555,17 @@ public type Instruction {
   case BoxNew(target: Slot, value: Argument)
   case TraitValue(target: Slot, value: Argument, tables: List<WitnessSource>)
 
+  /**
+   * An empty runtime container over its element descriptors: what a list and a map literal start from, and the one
+   * instruction the containers need of their own.
+   *
+   * It is an instruction and not a `native fn`, because `torb_list_new` takes an **element descriptor** and no
+   * declaration of `std/` can name one: the descriptors are the answer to "one C implementation for every element type"
+   * (BACKEND 3.1). `elements` holds one per type argument of the container - the item of a list, the key and the value of
+   * a map, the item of a set.
+   */
+  case ContainerNew(target: Slot, kind: RuntimeKind, elements: List<ElementId>)
+
   /** A `var` path through a container whose storage is not contiguous: take out, change, put back (BACKEND 2.3). */
   case TakeOut(target: Slot, container: Reference, key: Slot, kind: RuntimeKind)
   case PutBack(container: Reference, key: Slot, value: Slot, kind: RuntimeKind)
@@ -587,6 +611,8 @@ public type IrProgram {
   /** The mangled name of a witness table to its id: one table per applied trait and target type. */
   private var witnessTableIdentifiers: Map<String, WitnessTableId> = [:]
   var elements: List<ElementDescriptor> = []
+  /** The mangled name of an element descriptor to its id: one descriptor per element type. */
+  private var elementIdentifiers: Map<String, ElementId> = [:]
   var statics: List<StaticValue> = []
   var locations: List<Location> = []
   /** An instance key to the function it became: the memo of the monomorphization worklist. */
@@ -786,7 +812,17 @@ public type IrProgram {
 
   fn addElement(var self, descriptor: ElementDescriptor): ElementId {
     elements.add descriptor
+    elementIdentifiers.set descriptor.name, ElementId(elements.length() - 1)
     ElementId(elements.length() - 1)
+  }
+
+  /** One descriptor per element type, whatever container asks for it: its mangled name is its whole identity. */
+  fn elementNamed(self, name: String): ElementId? {
+    elementIdentifiers.get name
+  }
+
+  fn hasElement(self, id: ElementId): Bool {
+    id.value >= 0 && id.value < elements.length()
   }
 
   fn elementAt(self, id: ElementId): ElementDescriptor {
@@ -891,8 +927,9 @@ public fn keyOfSignature(signature: IrSignature): String {
   for parameter in signature.parameters {
     const reference = if parameter.isReference { "&" } else { "" }
     const out = if parameter.isOut { "!" } else { "" }
+    const address = if parameter.isByAddress { "@" } else { "" }
     const ownership = keyOfOwnership parameter.ownership
-    key = key + ";{reference}{out}{ownership}{parameter.annotation.value}"
+    key = key + ";{reference}{out}{address}{ownership}{parameter.annotation.value}"
   }
   var witnesses = ""
   for witness in signature.witnesses {

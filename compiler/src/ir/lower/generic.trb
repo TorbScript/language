@@ -5,6 +5,7 @@ use Dispatch from "../../semantics/checker/context"
 use signatureOf from "../../semantics/checker/signature"
 use traitArgumentsOf, witnessFor, matchTypePattern from "../../semantics/checker/implementation"
 use IrTypeId, IrType, Slot, TraitId, LayoutId, Instruction, WitnessSource, WitnessRoot, owned from "../ir"
+use Reference from "../ir"
 use LayoutKind, FieldLayout from "../layout"
 use FunctionBuilder, emit from "../build"
 use payloadLayoutName from "../mangle"
@@ -403,6 +404,26 @@ public fn objectTypeOf(var lowering: Lowering, bounds: List<TypeId>): IrTypeId {
 }
 
 /**
+ * Whether every bound of a coercion is closed after the arguments of the enclosing instance have been substituted.
+ *
+ * A bound that is not is a **finding** and not an internal error: `Iterable.filter` coerces its `Filtered` stage to
+ * `Iterable<Item>`, and the `Item` the checker recorded there belongs to the *stage's* parameter list rather than to the
+ * instance's, so nothing has a value for it. Closing that is a record of the checker, and a body that hits it is blocked
+ * for a reason of its own anyway (every stage takes a closure, milestone 5.8).
+ */
+public fn closedBounds(var lowering: Lowering, bounds: List<TypeId>, at: Span): Bool {
+  for bound in bounds {
+    const applied = substituted lowering, bound
+    if !isClosedType(lowering, applied) {
+      const shown = lowering.checker.describe bound
+      reportUnsupported lowering, "a trait-typed value whose bound `{shown}` the call site did not decide", at
+      return false
+    }
+  }
+  true
+}
+
+/**
  * `Adaptation.ToTraitValue`: the value is boxed and one witness pointer per bound goes with it. Where the value is
  * *already* trait typed - `Show & Hash` narrowed to `Show` - the tables come out of the value instead of the program.
  */
@@ -434,7 +455,7 @@ public fn lowerTraitValue(
         return false
       }
       const empty: List<Int> = []
-      tables.add WitnessSource(WitnessRoot.Value(value, found), empty)
+      tables.add WitnessSource(WitnessRoot.Value(Reference(value, []), found), empty)
       continue
     }
     const built = match witnessTableOf(lowering, subject, applied, at) {

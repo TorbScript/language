@@ -833,7 +833,7 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
 | **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `bootstrap/tests/native/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
 | **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `bootstrap/tests/native/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
-| **5.7** | **Half done.** The ABI of the containers: the two conventions of `runtime/` (`bool` plus an out parameter, an element by address) as a generated wrapper, `var self` natives, and the leak an assignment into a counted local was. **Still open:** element descriptors, the literals, `a[key]`, `for` over a collection, index paths, nested tables - all behind one chain that ends in "a `var self` witness member needs the payload box made unique" (see the note below). **Gate: `language.trb` passes** | `ir/lower/native.trb`, `backend/c/natives.trb`, `ir/instances.trb` | `bootstrap/tests/native/{natives,reassignment}.trb`, `compiler/tests/lower-natives.test.trb`; language.trb and `07-collections.trb` still blocked | 5.3, 5.6, 5.8 |
+| **5.7** | **Most of the way.** The ABI of the containers (the two conventions of `runtime/` as a generated wrapper), `var self` natives and `var self` members of a **trait-typed value** with the payload box made unique, the witness of a value as a *place*, `ArrayList.iterator` as TorbScript, element descriptors, `ContainerNew`, and the list and map **literals**. **Still open:** the `finish` provider lookup, `a[key]` reads, `for` over a collection, the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention), nested tables, index paths. **Gate: `language.trb` passes** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb` | `bootstrap/tests/native/{natives,reassignment,trait-values}.trb`, `compiler/tests/{lower-natives,ir-elements}.test.trb`; language.trb and `07-collections.trb` still blocked | 5.3, 5.6, 5.8 |
 | **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `bootstrap/tests/native/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
 | **5.9a** | **Done.** `var` parameters and `var self` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
@@ -1576,10 +1576,13 @@ parameters and `var self` receivers, which need nothing of 5.6 and 5.7 at all.
 
 ### What 5.7 does differently
 
-**5.7 is not finished.** What is here is the ABI the containers need - the two conventions of `runtime/` as a generated
-wrapper, and the leak an assignment used to be - plus the measurement that says what the rest of the row really waits
-for. The literals, `a[key]`, `for` over a collection, the element descriptors and the index paths are **not** here, and
-the reason is one chain that was not visible before and that the next session should start from.
+**5.7 is not finished, and it came in two rounds.** The first round is the ABI the containers need - the two conventions
+of `runtime/` as a generated wrapper, and the leak an assignment used to be - plus the measurement of what the rest of
+the row really waits for. The second round is that chain, walked as far as it goes without closures: a `var self` member
+of a trait-typed value, element descriptors, `ContainerNew`, and the container literals. What is still open is listed
+after both.
+
+**The first round: the two conventions of `runtime/`.**
 
 - **Two files, and the manifest carries the ABI.** `ir/lower/native.trb` (the wrapper) and the two new fields of
   `NativeEntry` in `backend/c/natives.trb` are the sub-milestone. Sections 3.7 and 5.R1 name the two conventions of the
@@ -1627,8 +1630,101 @@ the reason is one chain that was not visible before and that the next session sh
   sub-milestone. `closedReceiver` now answers `None` for a function type, and `staticDispatch`'s existing fallback (the
   target of the implementation) takes over.
 
-**What the rest of 5.7 really waits for, measured rather than guessed.** The row of the table says 5.7 depends on 5.8,
-and this is why - the chain is longer than "the pipelines need closures":
+**The second round of 5.7: a `var self` member of a trait-typed value, and what that made possible.**
+
+- **The witness table carries everything about the erased target that `torb_release` and `torb_make_unique` need.**
+  `{ drop, retainChildren, size, nested, members }`, and `MakeUnique` of an `Object` slot is
+  `value.data = torb_make_unique(value.data, w0->size, w0->retainChildren, w0->drop)`. Value semantics demand it: a
+  `Copy` of a trait-typed value retains the box its payload lives in, so a copy of a `List<Int>` would otherwise see an
+  `add` made through the other. Every bound of one value describes the same payload, so the **first** table answers; and
+  every trait-typed payload is boxed (5.6 pins `T_payload__X` to `Boxed`), so there is no inline-payload shape that could
+  skip the uniqueness.
+- **A `var self` member is in a table again.** Its thunk takes the **address** of the payload inside the box and the box
+  is not `const`. The erased receiver is `void *` in *every* thunk, including a read-only one, because a call site knows
+  the member's index and not its declaration - one spelling is what makes the cast back well defined C, and the `const`
+  of a read-only member is kept one line further in, on the box the thunk unwraps. A native whose ABI is not the
+  declaration's is pointed at directly, because the wrapper of `ir/lower/native.trb` already *is* a function of the
+  program (a thunk calls a mangled name, and a `FunctionKind.Runtime` has none in C).
+- **`WitnessRoot.Value` carries a `Reference` and not a `Slot`.** The table and the payload come out of the same place
+  expression, so `holder.items.add(x)` works and not only a bare local. `makeOwnersUnique` in `lower/place.trb` emits the
+  whole chain - one `MakeUnique` per counted owner *along* the path, outermost first, and the box at the end. 5.4's pass
+  only walks the proper *prefixes* of a place, because the storage a place names is normally the callee's business; for a
+  trait-typed receiver it is not, so the lowering takes both halves over, which 5.4 explicitly allows.
+- **`ArrayList.iterator` is ordinary TorbScript.** `ListIterator<Item>` in `std/collections/src/list.trb` holds the list
+  and an index and its `next` is `items.get(index)` - which the `.Optional` convention of the first round made callable.
+  So the runtime keeps one function fewer ("natives stay few"), and the cursor holds the list **by value**, which is what
+  makes changing a list while iterating it not change what the cursor walks. `TrieList.iterator` is `.Planned("8")`: its
+  cursor is the trie's, and nothing constructs a `TrieList` before the trie exists.
+- **Element descriptors are here, and the compiler fills in only what is a function of the language.** `ir/element.trb`
+  makes one per element type, memoized by its mangled name, and upgrades one that a list asked for first and a map key
+  needs afterwards. `size` and `alignment` are `finishProgram`'s. `retain` and `release` stay `None` in the IR and the
+  **emitter** writes them from `item` (`dR_X`, `dD_X`), exactly as it writes the `R_`/`D_` pair of a layout: they act on
+  one element in place through a `void *`, which is an ABI shape and not a signature the language has. `equals` and
+  `hash` *are* functions of the language and get a thunk (`dE_X`, `dH_X`) around them, so a key in a map and a `==` in
+  the source can never disagree. A list asks for neither, because an element that is not `Hash` may still be in a list.
+- **`Instruction.ContainerNew(target, kind, elements)` was added**, and it is the only instruction the containers need.
+  `torb_list_new` takes an element descriptor and no declaration of `std/` can name one, so this cannot be a `native fn`.
+- **`IrParameter.isByAddress` is a different flag from `isReference`.** An element the runtime takes by address is an
+  ordinary **value** position - the callee takes the count of it exactly as `ownership` says - and the address is only how
+  one C implementation reaches an element whose type it does not know. A place carries no count and this carries one, so
+  making them one flag made the ownership verifier reject every `add`.
+- **A container literal is lowered** (`ir/lower/collection.trb`): build the default implementation empty over the
+  descriptors of its type arguments, fill it through the ordinary `add`/`set` of that implementation, and coerce the
+  result to the trait-typed value the literal's type *is*. Which implementation is the default is written in
+  `std/collections` (`List.from` answers an `ArrayList`, `Map.from` a `TrieMap`) and the lowering asks the prelude for the
+  same name - a wrong answer would be a different container and not a slower one.
+- **`objectTypeOf` never substituted the arguments of the enclosing instance**, so a coercion to a *generic* trait inside
+  a generic body produced `Object(Iterable<Void>)` while the declared result was `Object(Iterable<Int64>)`. 5.6 never saw
+  it because `Show` has no arguments. A bound that is still open after the substitution is now a clean finding
+  (`closedBounds`) and no longer an internal error: `Iterable.filter` coerces its `Filtered` stage to `Iterable<Item>` and
+  the `Item` the checker recorded there belongs to the stage's parameter list, which nothing has a value for. Closing that
+  is a record of the checker; the bodies that hit it all need closures anyway.
+- **The struct of a trait-typed value is written before the layouts**, because a layout may hold one in a field. It needs
+  nothing but the ABI, so it comes first either way.
+- **A witness table demands both helpers of its payload box**, not only the drop function - the `R_` half is what
+  `torb_make_unique` calls on the copy, and without seeding the demand from the tables the C did not compile.
+- **`torb ir --statistics` over the repository: 869 of 2689 before this round, 5181 of 10200 after, and 7402 of 12543
+  once 5.8 was merged** (32% to 50% to 59%).
+
+**The instance count, and what would bound it.** The *instance count* is the number this sub-milestone really moved, and
+it is the monomorphization risk of section 7 arriving in practice. What drives it is the **element type**: a container
+literal builds the witness table of `List<Item>`, and that one table drags in every default member of `Iterable`,
+`Collection`, `MutableIndexed`, `Length` and `Accumulator` *for that one item type* - `map`, `filter`, `fold`, `find`,
+`joined`, `added`, `contains`, and so on down. Two small real files (`syntax/source.trb` and `syntax/diagnostic.trb`) with
+two element types cost 228 functions, 18 witness tables and 2 element descriptors, and `compiler/tests/lower.test.trb`
+asserts all three **exactly**, so an explosion fails a test instead of being noticed as a build time. It is deliberately
+not deferred to 5.14: the number to notice a regression against has to exist before the regression.
+
+What would bound it, written down and **not built**: **share the instances of a container whose element is pointer sized
+and counted.** `List<String>`, `List<Point>` where `Point` is `Boxed`, and `List<Show>` all move eight bytes and retain
+through one indirect call, so one instance keyed by `(the member, "a counted pointer")` could serve all of them - exactly
+the way per-bound sharing already serves the trait-typed arguments (section 1.4). The **element descriptor is the
+indirection that makes it sound**: the container already calls `retain`, `release`, `equals` and `hash` through it and
+never inlines them, so two element types that agree on size, alignment and "counted through one pointer" are
+indistinguishable to every body in the table. What would still have to be per type is the *descriptor itself* and any
+member that mentions the element by value in a way C can see - a `Construct` of it, an intrinsic over it - so the sharing
+is a property of the *body* and not of the container, and the honest first step is to measure which of the ~76 members per
+element type are pointer-shaped at all. Milestone 6.3 owns the measurement ("cut the obvious waste: instance count").
+
+**What is still open, and what a list literal now blocks on.** The literal itself lowers; what a `List<Item>` cannot do
+yet is what its **table members** cannot do, and every one of them is a clean finding:
+
+| finding | what it is | slice |
+|---|---|---|
+| a closure, a call of a closure value | the lazy stages of `Iterable` (`filter`, `take`, `sorted`, …) and `sort` | 5.8 |
+| `for` over anything but a range of integers | `Collection.addAll`, `Iterable.fold`, `find`, `forEach` | 5.7 (the `for` over a collection below) |
+| `a[key]` | `List.swapAt`, `List.first`, `Map.mapValues` | 5.7 |
+| a range as a value | `Iterable.indexed` is `Zipped(0.., self)` | 5.9b |
+| a receiver the back end cannot reach | `Iterable.joined` on a pipeline | 5.8 |
+| `finish`, which neither the source nor the natives manifest provides | `Accumulator.finish` is required by `Accumulator` and provided by the default of its **subtrait** `Collection`; `memberFunctionOf` only looks in the implementation of the trait that requires it and in that trait itself | 5.7 |
+| `TrieMap.iterator`, `TrieSet.iterator` | the ordered hash table's cursor has to skip tombstones, so it needs one new runtime function (`bool torb_map_entry_after(torb_map, int64_t *cursor, void *key, void *value)`) plus a third convention, `bool` plus **two** out parameters, whose wrapper builds the `(Key, Value)` tuple | 5.7 |
+
+So the next steps of this row, in order: the `finish` provider lookup, `a[key]` reads, `for` over a collection (which
+`ListIterator` now makes possible), the map and set cursor with its two-out convention, nested tables for the supertrait
+narrowing, and the index paths of 5.9b.
+
+**The first round's chain, for the record.** The row of the table says 5.7 depends on 5.8, and this is why - the chain is
+longer than "the pipelines need closures":
 
 1. **A list literal is a trait-typed value.** `[1, 2, 3]` has the checker type `Traits([List<Int>])` (5.6's note, "a
    trait name in a type position is an `Object`"), so lowering one means building an `ArrayList<Int>`, filling it, and
@@ -1644,26 +1740,18 @@ and this is why - the chain is longer than "the pipelines need closures":
 5. **And putting `var self` back into a table needs one thing the IR cannot express: making the payload box of a
    trait-typed value unique.** A `Copy` of an `Object` retains the box, so two copies share it; a write through a table
    without a `MakeUnique` of that box would change both, which is observable. The box's size and its `R_`/`D_` pair are a
-   property of the *target* type, which a trait-typed value has erased - so the **witness table has to carry them**
-   (`{ drop, retainChildren, size, members }` instead of `{ drop, members }`), and `MakeUnique` of an `Object` slot
-   becomes `value.data = torb_make_unique(value.data, value.w0->size, value.w0->retainChildren, value.w0->drop)`.
-   That is the next decision of this row, and it is the one that unlocks 4, 3, 2 and 1 in that order.
+   property of the *target* type, which a trait-typed value has erased - so the **witness table has to carry them**.
+   That was the decision the second round took, and it unlocked 4, 3, 2 and 1 in that order.
 
-**Nested witness tables are therefore not built either.** 5.6 left `WitnessTable.nested` empty and named `List<Item>` →
-`Iterable<Item>` as what needs it. The mechanism is clear - `nested[i]` is the table of the i-th direct supertrait, and a
-narrowing reads `value.w0->nested[i]` through `WitnessSource.steps`, whose indices are a static property of the *trait*
-and not of the erased target - but it is only useful once step 2 above can build a collection's table at all, so building
-it now would add a table nothing can fill. The two occurrences in the repository stay the clean finding 5.6 wrote.
+**Nested witness tables are still not built.** 5.6 left `WitnessTable.nested` empty and named `List<Item>` →
+`Iterable<Item>` as what needs it, and the field is in the emitted `torb_witness_table` now. The mechanism is settled -
+`nested[i]` is the table of the i-th direct supertrait, and a narrowing reads `value.w0->nested[i]` through
+`WitnessSource.steps`, whose indices are a static property of the *trait* and not of the erased target - and what is left
+is filling the list in `witnessTableOf` and walking the steps in `witnessExpression`. The two occurrences in the
+repository stay the clean finding 5.6 wrote.
 
-- **Element descriptors are still the finding 5.3 wrote** (`an element descriptor of a runtime container (milestone
-  5.7)`), because nothing creates one yet: the only thing that would is a container literal. When they arrive,
-  `ElementDescriptor.retain`/`release` should stay `None` and be generated by the emitter from `item` the way `R_`/`D_`
-  are - they are ABI helpers over `void *` and not functions of the language - while `equals` and `hash` are the real
-  `Equals`/`Hash` members with a thunk around them.
-- **`torb ir --statistics` over the repository: 854 of 2662 lowered before, 867 of 2685 after** (32% to 32%). The step is
-  small on purpose: what this sub-milestone added is an *ABI*, and the constructs that would use it in bulk (480 list
-  literals, 240 `a[key]`, 215 `for` over a collection, 69 map literals) all sit behind the chain above. The top blockers
-  are unchanged.
+- **`torb ir --statistics` over the repository, first round: 854 of 2662 lowered before, 867 of 2685 after** (32% to
+  32%). That step was small on purpose - what it added is an *ABI* - and the second round above is where it paid.
 
 ### How the C emitter is written
 
@@ -2034,7 +2122,9 @@ _Decision:_ accepted.
   an error. Mitigation: the IR text snapshots, an IR **verifier** (every slot defined before use, every block
   terminated, every managed slot released on every path) that runs in the debug profile of `torb build` and in the
   tests, and the live-block counter.
-- **The instance count.** Monomorphization over `compiler/` plus `std/` with `List<Item>` everywhere can multiply.
+- **The instance count.** Monomorphization over `compiler/` plus `std/` with `List<Item>` everywhere can multiply. It
+  **does**: the note of 5.7 has the numbers, the exact assertions that notice a regression, and the sharing that would
+  bound it.
   Mitigation: per-bound sharing (section 1.4), the element-descriptor design that keeps containers out of the
   instance set, and an asserted instance count in the conformance suite so an explosion fails a test.
 - **MSVC C11.** Flexible array members, `_Noreturn`, `<stdbool.h>` and designated initializers are fine from

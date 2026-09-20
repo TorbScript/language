@@ -5,7 +5,7 @@ use TypeId, ParameterId, LiteralValue from "../../semantics/checker/type"
 use signatureOf, typeSignatureOf from "../../semantics/checker/signature"
 use substitute from "../../semantics/checker/unify"
 use IrTypeId, IrType, FunctionId, Slot, BlockId, LayoutId, WitnessSource from "../ir"
-use Instruction, Terminator, Reference, PathStep, Argument, borrowed from "../ir"
+use Instruction, Terminator, Reference, PathStep, Argument, borrowed, referenced from "../ir"
 use Intrinsic, IntrinsicOperation, NumericKind, StaticContents from "../ir"
 use Layout, FieldLayout from "../layout"
 use FunctionBuilder, newFunction, addTemporary, addBlock, emit, terminate, switchTo from "../build"
@@ -168,7 +168,13 @@ fn runtimeCallBody(
     }
   }
   var given: List<Argument> = []
-  for index in 0..builder.function.signature.parameters.length() {
+  const parameters = builder.function.signature.parameters
+  for index in 0..parameters.length() {
+    // A `var self` native takes a pointer, and the wrapper's own parameter already *is* that place
+    if parameters[index].isReference {
+      given.add referenced(Reference(Slot(index), []))
+      continue
+    }
     given.add borrowed(Slot(index))
   }
   const result = builder.function.signature.result
@@ -929,7 +935,7 @@ fn readField(
  * The function that implements one member of one trait of the prelude for one concrete type. Every structural body needs
  * it: a field of a record is shown, compared and hashed through its own type's member, whatever shape that member has.
  */
-fn traitMemberFunction(
+public fn traitMemberFunction(
   var lowering: Lowering,
   subject: TypeId,
   capability: String,

@@ -461,6 +461,7 @@ public fn usedSlots(instruction: Instruction): List<Slot> {
       used.addAll slotsOfWitnesses(tables)
       used
     }
+    .ContainerNew(_, _, _) => []
     .TakeOut(_, container, key, _) => {
       var used = slotsOfReference container
       used.add key
@@ -493,6 +494,7 @@ public fn definedSlot(instruction: Instruction): Slot? {
     .Closure(target, _, _, _) => Some target
     .BoxNew(target, _) => Some target
     .TraitValue(target, _, _) => Some target
+    .ContainerNew(target, _, _) => Some target
     .TakeOut(target, _, _, _) => Some target
     _ => None
   }
@@ -543,8 +545,8 @@ fn slotsOfWitnesses(witnesses: List<WitnessSource>): List<Slot> {
 }
 
 fn slotsOfWitness(witness: WitnessSource): List<Slot> {
-  if const .Value(slot, _) = witness.root {
-    return [slot]
+  if const .Value(place, _) = witness.root {
+    return slotsOfReference place
   }
   []
 }
@@ -712,6 +714,34 @@ fn verifyInstruction(
           }
         }
         _ => found.add "{at}: %{target.value} is `{describeIrType(program, annotation)}` and not a trait-typed value"
+      }
+    }
+    // A fresh container: the target has to *be* that container, and one descriptor per type argument of it
+    .ContainerNew(target, kind, elements) => {
+      if !function.hasSlot(target) {
+        found.add "{at}: `new` needs a target slot that exists"
+        return
+      }
+      const annotation = function.typeOfSlot target
+      expectRuntime program, found, at, annotation, kind
+      const arguments = match program.typeAt(annotation) {
+        .Runtime(_, given) => given
+        _ => []
+      }
+      if elements.length() != arguments.length() {
+        found.add "{at}: `new` has {elements.length()} descriptors for {arguments.length()} type arguments"
+        return
+      }
+      for index in 0..elements.length() {
+        if !program.hasElement(elements[index]) {
+          found.add "{at}: `new` names an element descriptor that is not in the program"
+          continue
+        }
+        const descriptor = program.elementAt elements[index]
+        if descriptor.item != arguments[index] {
+          const wanted = describeIrType program, arguments[index]
+          found.add "{at}: the descriptor `{descriptor.name}` is not the one of `{wanted}`"
+        }
       }
     }
     .TakeOut(target, container, key, kind) => {
@@ -946,19 +976,27 @@ fn verifyWitness(program: IrProgram, function: IrFunction, var found: List<Strin
         found.add "{at}: the function has no witness parameter {index}"
       }
     }
-    .Value(slot, bound) => {
-      if !function.hasSlot(slot) {
-        found.add "{at}: there is no slot %{slot.value}"
+    .Value(place, bound) => {
+      if !function.hasSlot(place.base) {
+        found.add "{at}: there is no slot %{place.base.value}"
         return
       }
-      const annotation = function.typeOfSlot slot
+      const annotation = match typeOfReference(program, function, found, at, place) {
+        Some(inner) => inner
+        None => {
+          return
+        }
+      }
       match program.typeAt(annotation) {
         .Object(bounds) => {
           if bound < 0 || bound >= bounds.length() {
             found.add "{at}: `{describeIrType(program, annotation)}` has no bound {bound}"
           }
         }
-        _ => found.add "{at}: %{slot.value} is `{describeIrType(program, annotation)}` and carries no witness table"
+        _ => {
+          const shown = describeIrType program, annotation
+          found.add "{at}: the witness of %{place.base.value} is `{shown}` and carries no witness table"
+        }
       }
     }
   }

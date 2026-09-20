@@ -1,0 +1,123 @@
+use Process from "std/process"
+
+/**
+ * A **`var self`** member reached through a witness table, which 5.6 left out of a table and 5.7 put back.
+ *
+ * A trait-typed value is a value: a copy of one may not see a change made through the other. But a `Copy` of one retains
+ * the box its payload lives in rather than copying it, so a write through a table has to make that box unique first -
+ * and the size of the box and its two helpers are a property of the *target* type, which the value has erased. The
+ * witness table carries them, and this program is the proof: every `changed` function takes a copy before it writes and
+ * asserts that the copy kept what it had.
+ *
+ * The gate is the two numbers *and* `live blocks at exit: 0` under `TORB_REPORT_LEAKS=1`.
+ */
+
+trait Counter {
+  fn increment(var self)
+  fn count(self): Int
+}
+
+/** Eight bytes, so the payload of the box is trivial: `retain_children` and `drop` are `NULL`. */
+type Hits with Counter {
+  var hits: Int
+
+  fn increment(var self) {
+    hits = hits + 1
+  }
+
+  fn count(self): Int {
+    hits
+  }
+}
+
+/** A counted field, so the box really has an `R_`/`D_` pair that `torb_make_unique` runs on the copy. */
+type Labelled with Counter {
+  var label: String
+  var hits: Int
+
+  fn increment(var self) {
+    hits = hits + 1
+    label = label + "."
+  }
+
+  fn count(self): Int {
+    hits + label.byteLength()
+  }
+}
+
+/** The copy is taken **before** the write, so its count is two and the write has to copy the block. */
+fn changedAlone(start: Int): Int {
+  var counter: Counter = Hits start
+  const before = counter
+  counter.increment()
+  counter.increment()
+  // 2 changes on one side, none on the other
+  counter.count() - before.count()
+}
+
+/** The same where the payload owns a count of its own. */
+fn changedCounted(label: String): Int {
+  var counter: Counter = Labelled label, 0
+  const before = counter
+  counter.increment()
+  counter.count() - before.count()
+}
+
+/** Nobody else holds the box, so `MakeUnique` is one comparison and the write goes through in place. */
+fn changedAlonePath(start: Int): Int {
+  var counter: Counter = Hits start
+  counter.increment()
+  counter.increment()
+  counter.increment()
+  counter.count()
+}
+
+/** A `var self` member through a `var` parameter: the place is the parameter, and the box behind it is made unique. */
+fn bumped(var counter: Counter) {
+  counter.increment()
+}
+
+fn throughParameter(start: Int): Int {
+  var counter: Counter = Hits start
+  const before = counter
+  bumped counter
+  bumped counter
+  counter.count() + before.count()
+}
+
+/** The receiver is a **path**: the table and the payload come out of `holder.counter`, and both owners are made unique. */
+type Holder {
+  var counter: Counter
+  weight: Int
+}
+
+fn throughField(start: Int): Int {
+  var holder = Holder Hits(start), 1
+  const before = holder
+  holder.counter.increment()
+  holder.counter.increment()
+  holder.counter.count() - before.counter.count() + holder.weight
+}
+
+/** The same one level deeper, and through a counted payload. */
+type Outer {
+  var inner: Holder
+}
+
+fn throughTwoFields(label: String): Int {
+  var outer = Outer Holder(Labelled(label, 0), 2)
+  const before = outer
+  outer.inner.counter.increment()
+  outer.inner.counter.count() - before.inner.counter.count()
+}
+
+var total = 0
+
+total = total + changedAlone(10)
+total = total + changedCounted("ab")
+total = total + changedAlonePath(4)
+total = total + throughParameter(5)
+total = total + throughField(7)
+total = total + throughTwoFields("cd")
+
+Process.exit(total % 200)

@@ -4,7 +4,8 @@ use Signature from "../../semantics/checker/type"
 use Place, PlaceRoot, PlaceStep, PropertyWriteKind, BindingId from "../../semantics/checker/context"
 use IrTypeId, Slot, LayoutId, Reference, PathStep, Instruction, borrowed from "../ir"
 use FunctionBuilder, addTemporary, emit from "../build"
-use layoutOfType from "../verify"
+use layoutOfType, typeOfReference from "../verify"
+use isManagedType from "../layout"
 use describeIrType from "../print"
 use isReferenceParameter from "../instances"
 use Lowering, reportUnsupported, irTypeOf, voidTypeOf from "./context"
@@ -468,6 +469,34 @@ public fn lowerSlotAssignment(
 ) {
   const annotation = builder.typeOfSlot slot
   writtenPlace lowering, builder, PlacePath(Reference(slot, []), annotation), value
+}
+
+/**
+ * Every `MakeUnique` a write through a path needs: one per counted owner along it, **outermost first**, the place itself
+ * last.
+ *
+ * The ownership pass of 5.4 does exactly this for a `Write`, a `TakeOut` and a `var` argument, but only for the *proper
+ * prefixes* - the storage the place itself names is the callee's business there. A `var self` member of a **trait-typed
+ * value** is the one call where it is not: the callee is handed the payload inside the box, so the box at the end of the
+ * path has to be unique too, and only the lowering knows that the call writes. 5.4 lets the lowering take the decision
+ * over (a `MakeUnique` directly in front of an instruction says "already made unique"), which is why both halves are
+ * emitted here and the pass adds nothing.
+ */
+public fn makeOwnersUnique(var lowering: Lowering, var builder: FunctionBuilder, place: Reference) {
+  var needed: List<Reference> = []
+  var ignored: List<String> = []
+  for count in 0..place.steps.length() {
+    const prefix = Reference place.base, place.steps[0..count]
+    if const Some(annotation) = typeOfReference(lowering.program, builder.function, ignored, "", prefix) {
+      if isManagedType(lowering.program, annotation) {
+        needed.add prefix
+      }
+    }
+  }
+  needed.add place
+  for reference in needed {
+    emit builder, Instruction.MakeUnique(reference)
+  }
 }
 
 /**

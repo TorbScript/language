@@ -20,7 +20,7 @@ group "an element the runtime takes by address" {
     assert(unsupportedIn("fn push(var items: ArrayList<Int>) \{\n  items.add(1)\n\}") == [])
   }
 
-  test "the wrapper hands the receiver and the element over as places" {
+  test "the wrapper hands the receiver over as a place and the element as a value" {
     const source = r"""
       fn push(var items: ArrayList<Int>) {
         items.add(1)
@@ -32,7 +32,7 @@ group "an element the runtime takes by address" {
           slot %0 parameter self: List(Int64)
           slot %1 parameter value: Int64
         b0: # std/prelude/src/types.trb:202 native wrapper
-          call t_std_x2f_prelude_types_List_add__List_Int64_Int64(&%0 borrowed, &%1 borrowed) at std/prelude/src/types.trb:202:6
+          call t_std_x2f_prelude_types_List_add__List_Int64_Int64(&%0 borrowed, %1 borrowed) at std/prelude/src/types.trb:202:6
           return
         }"""
     )
@@ -52,7 +52,7 @@ group "an element the runtime takes by address" {
     )
   }
 
-  test "the runtime function itself takes the addressed parameter by reference" {
+  test "the runtime function itself takes the addressed parameter by address" {
     const source = r"""
       fn push(var items: ArrayList<Int>) {
         items.add(1)
@@ -61,7 +61,7 @@ group "an element the runtime takes by address" {
     const shown = textOf source
     assert(
       shown.contains(
-        "runtime fn t_std_x2f_prelude_types_List_add__List_Int64_Int64(var self: List(Int64) borrowed, var value: Int64 borrowed) -> Void = torb_list_add"
+        "runtime fn t_std_x2f_prelude_types_List_add__List_Int64_Int64(var self: List(Int64) borrowed, byAddress value: Int64 borrowed) -> Void = torb_list_add"
       )
     )
   }

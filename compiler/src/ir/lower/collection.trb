@@ -1,0 +1,233 @@
+use Span from "../../syntax/source"
+use Expression, Argument from "../../syntax/ast"
+use SymbolId from "../../semantics/symbols"
+use TypeId from "../../semantics/checker/type"
+use Adaptation from "../../semantics/checker/context"
+use IrTypeId, Slot, ElementId, RuntimeKind, Instruction, Reference, FunctionId from "../ir"
+use borrowed, referenced from "../ir"
+use FunctionBuilder, addTemporary, emit from "../build"
+use elementFor from "../element"
+use memberOfType from "../witness"
+use locationOf from "./context"
+use Lowering, reportUnsupported, irTypeOfClosed from "./context"
+use valueSlot, unsupportedSlot, abandonedSlot from "./expression"
+use lowerValue from "./expression"
+use lowerTraitValue from "./generic"
+
+/**
+ * `[1, 2, 3]` and `["a": 1]`: the two container literals of the language (milestone 5.7).
+ *
+ * The **type of a literal is a trait-typed value.** The checker gives `[1, 2, 3]` the type `List<Int>`, which in a type
+ * position is `Traits([List<Int>])` and therefore an `Object` of the IR (5.6's note) - it does *not* name the
+ * implementation. So a literal is three things in a row: build the default implementation empty over the element
+ * descriptors of its type arguments (`ContainerNew`), fill it through the ordinary `add`/`set` of that implementation,
+ * and coerce the result to the trait-typed value the literal's type is.
+ *
+ * Which implementation is the default is written in `std/collections`: `List.from` answers an `ArrayList` and `Map.from`
+ * a `TrieMap`. The lowering has to know the same thing, because a literal is not a call of `from` - and a wrong answer
+ * would be a *different container* and not a slower one, so it is asked of the prelude by name and is a clean finding
+ * where the name is not there.
+ */
+
+/** `[1, 2, 3]`: an `ArrayList<Item>` filled in written order, then coerced to the `List<Item>` the literal is. */
+public fn lowerListLiteral(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  items: List<Argument>,
+  annotation: IrTypeId,
+): Slot {
+  const at = expression.span
+  const bounds = boundsOfLiteral lowering, expression
+  const bound = match bounds.first() {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a list literal of a type that is not a `List`", at
+    }
+  }
+  const arguments = traitArgumentsOfBound lowering, bound
+  const item = match arguments.first() {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a list literal without an item type", at
+    }
+  }
+  const container = match implementationOf(lowering, "ArrayList", [item], at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const element = match elementFor(lowering, item, false, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const storage = addTemporary builder, irTypeOfClosed(lowering, container)
+  emit builder, Instruction.ContainerNew(storage, RuntimeKind.ListStorage, [element])
+  const adder = match memberOfType(lowering, container, bound, "add", at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  for written in items {
+    if written.isSpread {
+      const what = "a spread in a list literal (milestone 5.8)"
+      return unsupportedSlot lowering, builder, destination, what, written.value.span
+    }
+    const value = lowerValue lowering, builder, written.value
+    if !lowering.isSupported {
+      return abandonedSlot lowering, builder, destination
+    }
+    addInto lowering, builder, adder, storage, [value], written.value.span
+  }
+  coerced lowering, builder, destination, storage, bounds, container, annotation, at
+}
+
+/** `["a": 1]`: a `TrieMap<Key, Value>` filled in written order, then coerced to the `Map<Key, Value>` the literal is. */
+public fn lowerMapLiteral(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  entries: List<(Expression, Expression)>,
+  annotation: IrTypeId,
+): Slot {
+  const at = expression.span
+  const bounds = boundsOfLiteral lowering, expression
+  const bound = match bounds.first() {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "a map literal of a type that is not a `Map`", at
+    }
+  }
+  const arguments = traitArgumentsOfBound lowering, bound
+  if arguments.length() < 2 {
+    const what = "a map literal without a key and a value type"
+    return unsupportedSlot lowering, builder, destination, what, at
+  }
+  const key = arguments[0]
+  const value = arguments[1]
+  const container = match implementationOf(lowering, "TrieMap", [key, value], at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  // A key of the hash table is compared and hashed through its descriptor, so this one carries both members
+  const keyElement = match elementFor(lowering, key, true, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const valueElement = match elementFor(lowering, value, false, at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  const storage = addTemporary builder, irTypeOfClosed(lowering, container)
+  emit builder, Instruction.ContainerNew(storage, RuntimeKind.MapStorage, [keyElement, valueElement])
+  const setter = match memberOfType(lowering, container, bound, "set", at) {
+    Some(found) => found
+    None => {
+      return abandonedSlot lowering, builder, destination
+    }
+  }
+  for (written, given) in entries {
+    const first = lowerValue lowering, builder, written
+    if !lowering.isSupported {
+      return abandonedSlot lowering, builder, destination
+    }
+    const second = lowerValue lowering, builder, given
+    if !lowering.isSupported {
+      return abandonedSlot lowering, builder, destination
+    }
+    addInto lowering, builder, setter, storage, [first, second], written.span
+  }
+  coerced lowering, builder, destination, storage, bounds, container, annotation, at
+}
+
+// --- The pieces both literals share ---------------------------------------------------------------------------------
+
+/** One `add` or `set` on the container under construction: the receiver is the temporary, which is a place. */
+fn addInto(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  member: FunctionId,
+  storage: Slot,
+  values: List<Slot>,
+  at: Span,
+) {
+  var given = [referenced(Reference(storage, []))]
+  for value in values {
+    given.add borrowed(value)
+  }
+  const location = locationOf lowering, at
+  emit builder, Instruction.Call(None, member, given, [], Some(location))
+}
+
+/**
+ * The bounds of the trait-typed value a literal *is*. The checker built the type out (`Traits([List<Int>])`), so there is
+ * no `Adaptation.ToTraitValue` at a literal and nothing has recorded the bounds anywhere else.
+ */
+fn boundsOfLiteral(var lowering: Lowering, expression: Expression): List<TypeId> {
+  const module = lowering.module
+  const found = match lowering.checker.expressionType(module, expression.span) {
+    Some(inner) => inner
+    None => {
+      return []
+    }
+  }
+  match lowering.checker.types.form(found) {
+    .Traits(bounds) => bounds
+    _ => []
+  }
+}
+
+/** `List<Int>` as a bound: its own type arguments, which are the type arguments of the container. */
+fn traitArgumentsOfBound(var lowering: Lowering, bound: TypeId): List<TypeId> {
+  match lowering.checker.types.form(bound) {
+    .Nominal(_, arguments) => arguments
+    _ => []
+  }
+}
+
+/** `ArrayList<Item>`, `TrieMap<Key, Value>`: the implementation a literal builds, asked of the prelude by name. */
+fn implementationOf(
+  var lowering: Lowering,
+  name: String,
+  arguments: List<TypeId>,
+  at: Span,
+): TypeId? {
+  const symbol = match lowering.checker.wellKnown.symbolNamed(name) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a container literal without `{name}` in the prelude", at
+      return None
+    }
+  }
+  Some lowering.checker.nominal(symbol, arguments)
+}
+
+/** The container, boxed with one witness pointer per bound: which is what the type of a literal is. */
+fn coerced(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  storage: Slot,
+  bounds: List<TypeId>,
+  container: TypeId,
+  annotation: IrTypeId,
+  at: Span,
+): Slot {
+  const target = valueSlot lowering, builder, destination, annotation
+  if !lowerTraitValue(lowering, builder, target, storage, bounds, container, at) {
+    return abandonedSlot lowering, builder, destination
+  }
+  target
+}

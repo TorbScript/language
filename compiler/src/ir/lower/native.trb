@@ -76,6 +76,15 @@ public fn nativeFunctionOf(
   buildWrapper lowering, name, member, declared, raw, entry, at
 }
 
+/**
+ * Whether the runtime's own ABI differs from the declaration at all - and therefore whether `nativeFunctionOf` answers a
+ * function of the *program* (a wrapper, which a witness table may point at) or the bare runtime symbol (which it may not,
+ * because a thunk calls a mangled name and a `FunctionKind.Runtime` has none in C).
+ */
+public fn needsNativeWrapper(entry: NativeEntry): Bool {
+  needsWrapper entry
+}
+
 /** Whether the runtime's own ABI differs from the declaration at all. */
 fn needsWrapper(entry: NativeEntry): Bool {
   if !entry.addressedParameters.isEmpty() {
@@ -152,7 +161,9 @@ fn buildWrapper(
   setBlockLocation builder, BlockId(0), Some(location)
   var given: List<Argument> = []
   for index in 0..declared.parameters.length() {
-    if declared.parameters[index].isReference || entry.addressedParameters.contains(index) {
+    // A `var self` is a place; an element the runtime takes by address stays an ordinary value operand, and the emitter
+    // takes its address off the callee's signature - it carries a count and a place does not
+    if declared.parameters[index].isReference {
       given.add referenced(Reference(Slot(index), []))
       continue
     }

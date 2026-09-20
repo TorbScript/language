@@ -96,7 +96,15 @@ fn printParameters(program: IrProgram, signature: IrSignature): String {
 }
 
 fn printParameter(program: IrProgram, parameter: IrParameter): String {
-  const reference = if parameter.isOut { "out " } else if parameter.isReference { "var " } else { "" }
+  const reference = if parameter.isOut {
+    "out "
+  } else if parameter.isReference {
+    "var "
+  } else if parameter.isByAddress {
+    "byAddress "
+  } else {
+    ""
+  }
   const name = if parameter.name.isEmpty() { "" } else { "{parameter.name}: " }
   "{reference}{name}{describeIrType(program, parameter.annotation)} {printOwnership(parameter.ownership)}"
 }
@@ -193,6 +201,13 @@ public fn printInstruction(program: IrProgram, function: IrFunction, instruction
       }
       "{printTarget(target)}traitValue {printArgument(program, value)} tables({parts.joined(separator: ", ")})"
     }
+    .ContainerNew(target, kind, elements) => {
+      var names: List<String> = []
+      for element in elements {
+        names.add program.elementAt(element).name
+      }
+      "%{target.value} = new {describeRuntimeKind(kind)}({names.joined(separator: ", ")})"
+    }
     .TakeOut(target, container, key, kind) => {
       const place = printReference program, container
       "{printTarget(target)}takeOut {place}[%{key.value}] {describeRuntimeKind(kind)}"
@@ -282,7 +297,7 @@ fn printWitnessSource(program: IrProgram, witness: WitnessSource): String {
   var head = match witness.root {
     .Table(table) => "table {program.witnessTableAt(table).name}"
     .Parameter(index) => "parameter {index}"
-    .Value(slot, bound) => "value %{slot.value} bound {bound}"
+    .Value(place, bound) => "value {printReference(program, place)} bound {bound}"
   }
   for step in witness.steps {
     head = head + ".{step}"

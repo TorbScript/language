@@ -108,8 +108,17 @@ group "The translation unit" {
         #include "torb_natives.h"
 
         /*
-         * A witness table: the drop function of the boxed payload of a trait-typed value, then one function pointer per
-         * member the ABI can reach, in the order the lowering decided (docs/BACKEND.md 1.4 and the note of 5.6).
+         * A witness table: everything about the *target* type that a trait-typed value has erased, then one function
+         * pointer per member the ABI can reach, in the order the lowering decided (docs/BACKEND.md 1.4, the notes of 5.6
+         * and 5.7).
+         *
+         * `drop`, `retain_children` and `size` are what `torb_release` and `torb_make_unique` need for the boxed payload.
+         * A trait-typed value is a value, so a copy of one must not see a change made through the other: a `var self`
+         * member therefore makes the payload block unique first, and the size and the two helpers of that block are a
+         * property of the target type, which only the table still knows.
+         *
+         * `nested` is the table of each supertrait of this one, in declaration order, so that narrowing a trait-typed value
+         * to a supertrait is one indirection and needs no knowledge of the erased target.
          *
          * The members are an array of an erased function type and every one of them is a thunk with the erased signature,
          * so a call through a table converts the pointer back to the type the function really has - which is what C allows
@@ -119,6 +128,9 @@ group "The translation unit" {
 
         typedef struct torb_witness_table {
           void (*drop)(void *);
+          void (*retain_children)(void *);
+          size_t size;
+          const struct torb_witness_table *const *nested;
           const torb_witness_member *members;
         } torb_witness_table;
 
@@ -726,7 +738,7 @@ group "Trait-typed values" {
     const text = cOf source
     assert(
       text.contains(r"""
-        static int64_t W_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_0(const void *self) {
+        static int64_t W_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_0(void *self) {
           const T_payload__T_acme_x2f_app_main_Small *box = (const T_payload__T_acme_x2f_app_main_Small *)self;
           return t_acme_x2f_app_main_Small_size(box->f_value);
         }""")
@@ -740,14 +752,15 @@ group "Trait-typed values" {
     assert(
       text.contains(
         "static const torb_witness_table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small ="
-          + " \{ NULL, w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_members \};"
+          + " \{ NULL, NULL, sizeof(T_payload__T_acme_x2f_app_main_Small), NULL,"
+          + " w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Small_members \};"
       )
     )
   }
 
   test "a dynamic call reads the member out of the table and the payload out of the same slot" {
     const text = cOf source
-    assert text.contains("s1 = ((int64_t (*)(const void *))s0_value.w0->members[0])(s0_value.data);")
+    assert text.contains("s1 = ((int64_t (*)(void *))s0_value.w0->members[0])(s0_value.data);")
   }
 
   /** The coercion: one allocation of the box, the payload into it, then the data pointer and the table. */
@@ -793,7 +806,8 @@ group "Trait-typed values" {
     assert(
       text.contains(
         "static const torb_witness_table w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Tagged = \{"
-          + " D_T_payload__T_acme_x2f_app_main_Tagged,"
+          + " D_T_payload__T_acme_x2f_app_main_Tagged, R_T_payload__T_acme_x2f_app_main_Tagged,"
+          + " sizeof(T_payload__T_acme_x2f_app_main_Tagged), NULL,"
           + " w_acme_x2f_app_main_Sized__T_acme_x2f_app_main_Tagged_members \};"
       )
     )

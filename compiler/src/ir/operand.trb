@@ -146,6 +146,8 @@ public fn operandsOf(program: IrProgram, facts: SlotFacts, instruction: Instruct
       found.addAll borrowedOperands(witnessSlotsOf(tables))
       found
     }
+    // A fresh container reads nothing: its descriptors are static data
+    .ContainerNew(_, _, _) => []
     .TakeOut(_, container, key, _) => {
       var found = borrowedOperands placeSlotsOf(container)
       found.add borrowedOperand(key)
@@ -237,8 +239,8 @@ public fn placeSlotsOf(reference: Reference): List<Slot> {
 fn witnessSlotsOf(witnesses: List<WitnessSource>): List<Slot> {
   var found: List<Slot> = []
   for witness in witnesses {
-    if const .Value(slot, _) = witness.root {
-      found.add slot
+    if const .Value(place, _) = witness.root {
+      found.addAll placeSlotsOf(place)
     }
   }
   found
@@ -333,6 +335,7 @@ public fn withOperands(instruction: Instruction, decided: List<Argument>): Instr
     .Closure(_, _, _, _) => instruction
     .BoxNew(target, _) => Instruction.BoxNew target, decidedAt(decided, 0)
     .TraitValue(target, _, tables) => Instruction.TraitValue target, decidedAt(decided, 0), tables
+    .ContainerNew(_, _, _) => instruction
     .TakeOut(target, container, _, kind) => {
       const count = placeSlotsOf(container).length()
       const place = withPlace container, decided, 0

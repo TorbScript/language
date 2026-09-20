@@ -10,7 +10,7 @@ use NativeEntry, DerivedKind from "../../backend/c/natives"
 use IrTypeId, Slot, Instruction, Terminator, FunctionId, LayoutId, Reference, PathStep, borrowed from "../ir"
 use CallOperands, PlacePath from "./place"
 use referenceParametersOf, parameterTypeAt, receiverReference, argumentReference from "./place"
-use collidesWithPlace, writtenResult, lowerPropertyWrite from "./place"
+use collidesWithPlace, writtenResult, lowerPropertyWrite, makeOwnersUnique from "./place"
 use FunctionBuilder, emit from "../build"
 use layoutOfType from "../verify"
 use describeIrType from "../print"
@@ -178,7 +178,16 @@ fn lowerCallable(
     return lowerPanic lowering, builder, destination, operands, expression.span
   }
   if dispatched.isDynamic {
-    return lowerWitnessCall lowering, builder, destination, expression, dispatched, operands, annotation
+    return lowerWitnessCall(
+      lowering,
+      builder,
+      destination,
+      expression,
+      dispatched,
+      operands,
+      annotation,
+      places,
+    )
   }
   if !signature.hasBody {
     if const Some(entry) = nativeNamed(lowering, owner, name) {
@@ -262,13 +271,26 @@ fn lowerWitnessCall(
   dispatched: Dispatched,
   operands: List<Slot>,
   annotation: IrTypeId,
+  places: List<Reference?> = [],
 ): Slot {
-  const receiver = match operands.first() {
+  const base = match operands.first() {
     Some(found) => found
     None => {
       const what = "a call on a trait-typed value without a receiver"
       return unsupportedSlot lowering, builder, destination, what, expression.span
     }
+  }
+  // The place the trait-typed value is at: the path of a `var self` receiver, and the slot alone for a read-only one.
+  // `WitnessRoot.Value` carries it, so the table and the payload come out of the same expression however deep it is
+  const receiver = match places.first() {
+    Some(Some(found)) => found
+    _ => Reference base, []
+  }
+  // A `var self` member writes through the payload, so the box has to be made unique first - a trait-typed value is a
+  // value, and a copy of one may not see a change made through the other. The owners *above* it on the path are the
+  // ownership pass's business, exactly as they are for a `var` argument
+  if const Some(Some(place)) = places.first() {
+    makeOwnersUnique lowering, builder, place
   }
   const subject = match dispatched.subject {
     Some(found) => found

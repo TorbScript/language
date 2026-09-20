@@ -1,0 +1,78 @@
+use Span from "../syntax/source"
+use TypeId from "../semantics/checker/type"
+use IrTypeId, ElementId, ElementDescriptor from "./ir"
+use elementName from "./mangle"
+use Lowering, reportUnsupported, irTypeOfClosed from "./lower/context"
+use traitMemberFunction from "./lower/derive"
+
+/**
+ * The element descriptors of the runtime containers: what the **one** C list and the **one** C hash table know about
+ * their items (BACKEND 3.1).
+ *
+ * `ArrayList<Item>` has to store `Item` inline and the runtime is hand-written C that must not be generated, so there is
+ * one implementation per container parameterized by a static descriptor per element type. One descriptor serves every
+ * container that has that element, whatever the container is, which is why it is named after the element type alone.
+ *
+ * **What the compiler fills in and what the emitter generates.** `size` and `alignment` are `finishProgram`'s: they
+ * follow from the layout, and a layout is only final once the last instance is lowered. `retain` and `release` stay
+ * `None` here and the C emitter writes them from `item`, exactly as it writes the `R_`/`D_` pair of a layout - they are
+ * ABI helpers over `void *` and not functions of the language, so there is no signature the IR could give them.
+ * `equals` and `hash` *are* functions of the language - the `Equals` and `Hash` of the element - and a thunk over
+ * `const void *` around them is the emitter's.
+ *
+ * They are only needed for a **map key or a set item**, so a list asks for none: an element type that is not `Hash` can
+ * still be in a list, which is what `needsKeyOperations` is for.
+ */
+public fn elementFor(
+  var lowering: Lowering,
+  item: TypeId,
+  needsKeyOperations: Bool,
+  at: Span,
+): ElementId? {
+  const annotation = irTypeOfClosed lowering, item
+  const name = elementName lowering.program, annotation
+  if const Some(found) = lowering.program.elementNamed(name) {
+    if !needsKeyOperations {
+      return Some found
+    }
+    // A descriptor made for a list first and needed as a key afterwards learns the two members it was missing
+    const known = lowering.program.elementAt found
+    if known.equals.isSome() {
+      return Some found
+    }
+    const filled = keyOperationsOf(lowering, known, item, at)?
+    lowering.program.setElement found, filled
+    return Some found
+  }
+  var descriptor = ElementDescriptor name, annotation, 0, 0
+  if needsKeyOperations {
+    descriptor = keyOperationsOf(lowering, descriptor, item, at)?
+  }
+  Some lowering.program.addElement(descriptor)
+}
+
+/**
+ * The `Equals` and the `Hash` of one element type. A key of the ordered hash table needs both, and the table calls them
+ * through the descriptor - so the very same functions a `==` on the element reaches, which is what keeps a key in a map
+ * and a comparison in the source from ever disagreeing.
+ */
+fn keyOperationsOf(
+  var lowering: Lowering,
+  descriptor: ElementDescriptor,
+  item: TypeId,
+  at: Span,
+): ElementDescriptor? {
+  const equals = match traitMemberFunction(lowering, item, "Equals", "equals", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  const hash = match traitMemberFunction(lowering, item, "Hash", "hash", at) {
+    Some(found) => found
+    None => {
+      return None
+    }
+  }
+  Some descriptor.copy(equals: Some(equals), hash: Some(hash))
+}

@@ -152,9 +152,9 @@ public fn matchPrototype(
   }
   for index in 0..declared {
     const expected = cTypeOf program, signature.parameters[index].annotation
-    const isReference = signature.parameters[index].isReference
-    const wanted = if isReference { "{expected} *" } else { expected }
-    if !isSameParameter(wanted, prototype.parameters[index], isReference) {
+    const byPointer = signature.parameters[index].isReference || signature.parameters[index].isByAddress
+    const wanted = if byPointer { "{expected} *" } else { expected }
+    if !isSameParameter(wanted, prototype.parameters[index], byPointer) {
       return PrototypeMatch.Mismatch(
         "`{name}`: parameter {index + 1} of the runtime is a `{prototype.parameters[index]}`"
           + " where the lowering passes a `{wanted}`"
@@ -202,11 +202,11 @@ fn resultSpellingOf(program: IrProgram, result: IrTypeId, declared: String): Str
  *   `torb_hash_combine(uint64_t, uint64_t)`: the bits are the hash either way, which is the same reason the *result* of
  *   `Hash.hash` is allowed to differ.
  */
-fn isSameParameter(wanted: String, declared: String, isReference: Bool): Bool {
+fn isSameParameter(wanted: String, declared: String, byPointer: Bool): Bool {
   if wanted == declared {
     return true
   }
-  if isReference {
+  if byPointer {
     return declared == "void *" || declared == "const void *"
   }
   isSameWidthInteger wanted, declared

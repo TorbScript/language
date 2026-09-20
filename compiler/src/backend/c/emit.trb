@@ -1,6 +1,7 @@
 use LiteralValue from "../../semantics/checker/type"
 use IrProgram, IrFunction, IrTypeId, LayoutId, StaticId, StaticValue, FunctionId from "../../ir/ir"
 use Slot, Instruction, WitnessTable, WitnessTableId from "../../ir/ir"
+use ElementId, ElementDescriptor from "../../ir/ir"
 use Layout, FieldLayout, containsCountedType from "../../ir/layout"
 use typeOfReference from "../../ir/verify"
 use hexDigits, objectTypeName, payloadLayoutName from "../../ir/mangle"
@@ -11,6 +12,7 @@ use cTypeOf, whyNoCType, hasStructDefinition, memberNameOf, variantMemberNameOf 
 use structDeclarationOf, layoutDefinitionOrder, objectDeclarationOf from "./type"
 use bodyOf, bodyStatements, signatureHeadOf, valueTypeOf, emptyNicheExpression, resultTypeOf from "./body"
 use dropFunctionOf, pointerTo, closureThunkNameOf, environmentLayoutOfFunction from "./body"
+use retainChildrenFunctionOf from "./body"
 use variantInitializerParts, boxedLayoutOf, countedFormOf, inlineCountedLayoutOf from "./body"
 use retainStatement, releaseStatement, describeCounted from "./body"
 
@@ -41,7 +43,9 @@ public fn emitProgram(program: IrProgram, entry: String): Emission {
   emitCountedHelpers emission, program, functions, layouts
   emitStaticData emission, program, functions
   emitPrototypes emission, program, functions
-  // The tables come between the prototypes and the bodies: their initializers name the thunks, and a body names a table
+  // The descriptors and the tables come between the prototypes and the bodies: their initializers name a thunk, and a
+  // body names one of them
+  emitElementDescriptors emission, program
   emitWitnessTables emission, program
   emitClosureThunks emission, program, functions
   emitDefinitions emission, program, functions, prototypes
@@ -89,8 +93,17 @@ fn emitHeader(var emission: Emission) {
     #include "torb_natives.h"
 
     /*
-     * A witness table: the drop function of the boxed payload of a trait-typed value, then one function pointer per
-     * member the ABI can reach, in the order the lowering decided (docs/BACKEND.md 1.4 and the note of 5.6).
+     * A witness table: everything about the *target* type that a trait-typed value has erased, then one function
+     * pointer per member the ABI can reach, in the order the lowering decided (docs/BACKEND.md 1.4, the notes of 5.6
+     * and 5.7).
+     *
+     * `drop`, `retain_children` and `size` are what `torb_release` and `torb_make_unique` need for the boxed payload.
+     * A trait-typed value is a value, so a copy of one must not see a change made through the other: a `var self`
+     * member therefore makes the payload block unique first, and the size and the two helpers of that block are a
+     * property of the target type, which only the table still knows.
+     *
+     * `nested` is the table of each supertrait of this one, in declaration order, so that narrowing a trait-typed value
+     * to a supertrait is one indirection and needs no knowledge of the erased target.
      *
      * The members are an array of an erased function type and every one of them is a thunk with the erased signature,
      * so a call through a table converts the pointer back to the type the function really has - which is what C allows
@@ -100,6 +113,9 @@ fn emitHeader(var emission: Emission) {
 
     typedef struct torb_witness_table {
       void (*drop)(void *);
+      void (*retain_children)(void *);
+      size_t size;
+      const struct torb_witness_table *const *nested;
       const torb_witness_member *members;
     } torb_witness_table;
     """))
@@ -251,14 +267,31 @@ fn thunkHeadOf(var emission: Emission, program: IrProgram, table: WitnessTable, 
     reportUnsupported emission, "a witness table member without a receiver"
     return None
   }
-  var parameters = ["const void *self"]
+  // The erased receiver is `void *` in **every** thunk, whether the member reads the payload or writes it: a call site
+  // knows the member's index and not its declaration, so one spelling is what makes the cast back well defined C. The
+  // `const` of a read-only member is kept one line further in, on the box the thunk unwraps.
+  var parameters = ["void *self"]
   for position in 1..signature.parameters.length() {
     const spelling = valueTypeOf program, signature.parameters[position].annotation
-    parameters.add declarationOf(spelling, "a{position}")
+    const written = if signature.parameters[position].isReference { pointerTo spelling } else { spelling }
+    parameters.add declarationOf(written, "a{position}")
   }
   const result = resultTypeOf program, signature.result
   const written = parameters.joined separator: ", "
   Some "static {declarationOf(result, "{thunkNameOf(table, index)}({written})")}"
+}
+
+/** Whether the member the thunk wraps writes through its receiver, which is what makes the box mutable. */
+fn isVarSelfMember(program: IrProgram, table: WitnessTable, index: Int): Bool {
+  const member = table.members[index]
+  if !program.hasFunction(member) {
+    return false
+  }
+  const parameters = program.functionAt(member).signature.parameters
+  match parameters.first() {
+    Some(first) => first.isReference
+    None => false
+  }
 }
 
 fn emitThunks(var emission: Emission, program: IrProgram, table: WitnessTable) {
@@ -272,15 +305,18 @@ fn emitThunks(var emission: Emission, program: IrProgram, table: WitnessTable) {
     const member = table.members[index]
     const function = program.functionAt member
     const payload = payloadLayoutOfTable program, table
+    // A `var self` member writes through the payload, so neither the box nor the pointer it hands on may be `const`
+    const writes = isVarSelfMember program, table, index
+    const qualifier = if writes { "" } else { "const " }
     const spelling = match payload {
-      Some(found) => "const {program.layoutAt(found).name} *"
-      None => "const void *"
+      Some(found) => "{qualifier}{program.layoutAt(found).name} *"
+      None => "{qualifier}void *"
     }
     const unwrapped = match payload {
       Some(found) => payloadFieldOf program, found
       None => CExpression.Name "box"
     }
-    var given = [unwrapped]
+    var given = [if writes { CExpression.AddressOf unwrapped } else { unwrapped }]
     for position in 1..function.signature.parameters.length() {
       given.add CExpression.Name("a{position}")
     }
@@ -328,16 +364,44 @@ fn emitWitnessTable(var emission: Emission, program: IrProgram, table: WitnessTa
     const array = "{arrayName}[{members.length()}]"
     write emission, CDeclaration.StaticData(annotation, array, CExpression.Initializer(members))
   }
-  const drop = match payloadLayoutOfTable(program, table) {
+  var nested: List<CExpression> = []
+  for inner in table.nested {
+    if !program.hasWitnessTable(inner) {
+      reportUnsupported emission, "a nested witness table that is not in the program"
+      continue
+    }
+    nested.add CExpression.AddressOf(CExpression.Name(program.witnessTableAt(inner).name))
+  }
+  const nestedName = "{table.name}_nested"
+  if !nested.isEmpty() {
+    const annotation = "static const torb_witness_table *const"
+    const array = "{nestedName}[{nested.length()}]"
+    write emission, CDeclaration.StaticData(annotation, array, CExpression.Initializer(nested))
+  }
+  const payload = payloadLayoutOfTable program, table
+  const drop = match payload {
     Some(found) => dropFunctionOf program, found
     None => CExpression.Literal "NULL"
+  }
+  const retain = match payload {
+    Some(found) => retainChildrenFunctionOf program, found
+    None => CExpression.Literal "NULL"
+  }
+  const size = match payload {
+    Some(found) => CExpression.Call CExpression.Name("sizeof"), [CExpression.Name(program.layoutAt(found).name)]
+    None => CExpression.Literal "0"
   }
   const array = if members.isEmpty() {
     CExpression.Literal "NULL"
   } else {
     CExpression.Name arrayName
   }
-  const initializer = CExpression.Initializer([drop, array])
+  const inner = if nested.isEmpty() {
+    CExpression.Literal "NULL"
+  } else {
+    CExpression.Name nestedName
+  }
+  const initializer = CExpression.Initializer([drop, retain, size, inner, array])
   write emission, CDeclaration.StaticData("static const torb_witness_table", table.name, initializer)
 }
 
@@ -482,8 +546,127 @@ fn checkProgramTypes(var emission: Emission, program: IrProgram, functions: List
       reportUnsupported emission, "a function whose body is a state machine over `Task` (milestone 7.3)"
     }
   }
-  if !program.elements.isEmpty() {
-    reportUnsupported emission, "an element descriptor of a runtime container (milestone 5.7)"
+  for descriptor in program.elements {
+    checkType emission, program, descriptor.item
+  }
+}
+
+// --- Element descriptors ----------------------------------------------------------------------------------------------
+
+/**
+ * One `torb_element` per element type of the program, sorted by name (BACKEND 3.1): the size and the alignment the
+ * layout model decided, and the four function pointers the one C list and the one C hash table call through.
+ *
+ * `retain` and `release` are written here and are not functions of the IR: they act on **one element in place** through a
+ * `void *`, which is an ABI shape and not a signature the language has - exactly like the `R_`/`D_` pair of a layout, and
+ * they are `NULL` where the element carries no count at all so that the container skips the indirect call. `equals` and
+ * `hash` *are* functions of the language and get a thunk over `const void *` around them, so that a key in a map and a
+ * `==` in the source can never disagree.
+ */
+fn emitElementDescriptors(var emission: Emission, program: IrProgram) {
+  const order = elementOrder program
+  if order.isEmpty() {
+    return
+  }
+  write emission, CDeclaration.Comment("The element descriptors of the runtime containers (docs/BACKEND.md 3.1).")
+  for id in order {
+    emitElementHelpers emission, program, program.elementAt(id)
+  }
+  for id in order {
+    emitElementDescriptor emission, program, program.elementAt(id)
+  }
+}
+
+/** The descriptors sorted by their mangled name, so the file is a function of the *set* and never of the lowering. */
+fn elementOrder(program: IrProgram): List<ElementId> {
+  var names: List<String> = []
+  var byName: Map<String, Int> = [:]
+  for index in 0..program.elements.length() {
+    const name = program.elements[index].name
+    if !byName.containsKey(name) {
+      byName.set name, index
+      names.add name
+    }
+  }
+  var sorted = names
+  sorted.sort({ _ })
+  var order: List<ElementId> = []
+  for name in sorted {
+    if const Some(index) = byName.get(name) {
+      order.add ElementId(index)
+    }
+  }
+  order
+}
+
+/** `dR_Int64`, `dD_Int64`, `dE_Int64`, `dH_Int64`: the four helpers of one descriptor, whose name is `d_Int64`. */
+fn elementHelperName(prefix: String, descriptor: ElementDescriptor): String {
+  "d{prefix}_{descriptor.name[2..descriptor.name.byteLength()]}"
+}
+
+fn elementHelperHead(prefix: String, result: String, descriptor: ElementDescriptor, parameters: String): String {
+  "static {result} {elementHelperName(prefix, descriptor)}({parameters})"
+}
+
+fn emitElementHelpers(var emission: Emission, program: IrProgram, descriptor: ElementDescriptor) {
+  const item = descriptor.item
+  const spelling = valueTypeOf program, item
+  if containsCountedType(program, item) {
+    const place = CExpression.Dereference CExpression.Cast("{spelling} *", CExpression.Name("element"))
+    if const Some(statement) = retainStatement(program, item, place) {
+      const head = elementHelperHead "R", "void", descriptor, "void *element"
+      write emission, CDeclaration.Definition("", head, [statement])
+    }
+    if const Some(statement) = releaseStatement(program, item, place) {
+      const head = elementHelperHead "D", "void", descriptor, "void *element"
+      write emission, CDeclaration.Definition("", head, [statement])
+    }
+  }
+  if const Some(function) = descriptor.equals {
+    if program.hasFunction(function) {
+      const head = elementHelperHead "E", "bool", descriptor, "const void *first, const void *second"
+      const left = CExpression.Dereference CExpression.Cast("const {spelling} *", CExpression.Name("first"))
+      const right = CExpression.Dereference CExpression.Cast("const {spelling} *", CExpression.Name("second"))
+      const called = CExpression.Call CExpression.Name(program.functionAt(function).name), [left, right]
+      write emission, CDeclaration.Definition("", head, [CStatement.Return(Some(called))])
+    }
+  }
+  if const Some(function) = descriptor.hash {
+    if program.hasFunction(function) {
+      const head = elementHelperHead "H", "uint64_t", descriptor, "const void *element"
+      const value = CExpression.Dereference CExpression.Cast("const {spelling} *", CExpression.Name("element"))
+      const called = CExpression.Call CExpression.Name(program.functionAt(function).name), [value]
+      const converted = CExpression.Cast "uint64_t", called
+      write emission, CDeclaration.Definition("", head, [CStatement.Return(Some(converted))])
+    }
+  }
+}
+
+fn emitElementDescriptor(var emission: Emission, program: IrProgram, descriptor: ElementDescriptor) {
+  const item = descriptor.item
+  var parts = [CExpression.Literal("{descriptor.size}"), CExpression.Literal("{descriptor.alignment}")]
+  const counted = containsCountedType program, item
+  const retains = counted && retainStatement(program, item, CExpression.Name("element")).isSome()
+  const releases = counted && releaseStatement(program, item, CExpression.Name("element")).isSome()
+  parts.add elementPointer(retains, "R", descriptor)
+  parts.add elementPointer(releases, "D", descriptor)
+  parts.add elementPointer(isThere(program, descriptor.equals), "E", descriptor)
+  parts.add elementPointer(isThere(program, descriptor.hash), "H", descriptor)
+  const annotation = "static const torb_element"
+  write emission, CDeclaration.StaticData(annotation, descriptor.name, CExpression.Initializer(parts))
+}
+
+fn elementPointer(isThere: Bool, prefix: String, descriptor: ElementDescriptor): CExpression {
+  if !isThere {
+    return CExpression.Literal "NULL"
+  }
+  CExpression.Name elementHelperName(prefix, descriptor)
+}
+
+fn isThere(program: IrProgram, function: FunctionId?): Bool {
+  match function {
+    Some(found) => program.hasFunction found
+    None => false
   }
 }
 
@@ -765,10 +948,18 @@ fn helperDemandOf(program: IrProgram, functions: List<IrFunction>, layouts: List
       }
     }
   }
-  // A witness table names the drop function of the box its target is kept in, so that a release of an erased value works
+  // An element descriptor's `retain` and `release` act per element, and for an inline aggregate that is the `R_`/`D_`
+  // pair of its layout
+  for descriptor in program.elements {
+    markLayoutOfHelper program, retains, descriptor.item
+    markLayoutOfHelper program, drops, descriptor.item
+  }
+  // A witness table names **both** helpers of the box its target is kept in: the drop function so that a release of an
+  // erased value works, and the retain-children function so that making the payload of one unique works (5.7's note)
   for table in program.witnessTables {
     if const Some(found) = program.layoutNamed(payloadLayoutName(program, table.target)) {
       markLayoutFlag program, drops, found
+      markLayoutFlag program, retains, found
     }
   }
   closeHelperDemand program, retains, drops
@@ -1256,4 +1447,14 @@ public fn runtimePrototypes(): Map<String, String> {
     }
   }
   found
+}
+
+/** The layout of a type whose `R_`/`D_` pair something outside a function body calls: an element of a container. */
+fn markLayoutOfHelper(program: IrProgram, var flags: List<Bool>, id: IrTypeId) {
+  if !program.hasType(id) {
+    return
+  }
+  if const Some(layout) = inlineCountedLayoutOf(program, countedFormOf(program, id)) {
+    markLayoutFlag program, flags, layout
+  }
 }

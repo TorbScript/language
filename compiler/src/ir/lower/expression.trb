@@ -13,8 +13,9 @@ use evaluateConstant, staticOfConstant from "../constant"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
 use internStatic, isNeverType, finishBlock, continueIn, irTypeOfClosed from "./context"
 use lowerCall, lowerOperator, lowerConstruct, lowerCaseValue from "./call"
-use objectTypeOf, lowerTraitValue from "./generic"
+use objectTypeOf, lowerTraitValue, closedBounds from "./generic"
 use lowerBlockInto from "./statement"
+use lowerListLiteral, lowerMapLiteral from "./collection"
 use lowerMatch, lowerIfBinding, lowerTry, lowerCoalesce from "./match"
 use lowerClosureValue, lowerNamedFunctionValue, lowerForcedRead, bindingReferenceOf from "./closure"
 use lowerConstructorValue from "./closure"
@@ -52,6 +53,9 @@ public fn lowerExpression(
   // `Adaptation.ToTraitValue`: the value is computed first and then boxed with one witness pointer per bound
   const bounds = traitValueBoundsOf lowering, expression
   if !bounds.isEmpty() {
+    if !closedBounds(lowering, bounds, expression.span) {
+      return abandonedSlot lowering, builder, destination
+    }
     return lowerCoercedValue lowering, builder, destination, expression, annotation, bounds
   }
   lowerInnerExpression lowering, builder, expression, destination, annotation
@@ -91,8 +95,8 @@ fn lowerInnerExpression(
     }
     .TupleLiteral(items) => lowerTuple lowering, builder, destination, items, annotation, expression.span
     .Index(_, _) => unsupportedSlot lowering, builder, destination, "`a[key]`", expression.span
-    .ListLiteral(_) => unsupportedSlot lowering, builder, destination, "a list literal", expression.span
-    .MapLiteral(_) => unsupportedSlot lowering, builder, destination, "a map literal", expression.span
+    .ListLiteral(items) => lowerListLiteral lowering, builder, destination, expression, items, annotation
+    .MapLiteral(entries) => lowerMapLiteral lowering, builder, destination, expression, entries, annotation
     .RangeLiteral(_, _, _) => unsupportedSlot lowering, builder, destination, "a range as a value", expression.span
     .Try(inner) => lowerTry lowering, builder, destination, expression, inner, annotation
     .Closure(closure) => {

@@ -489,9 +489,13 @@ fn consoleEntries(var entries: List<NativeEntry>) {
  * `ArrayList` and `TrieList` are the same implementation until milestone 8, which is observable only through
  * performance: iteration order and `Show` are the same either way (decided gap 18).
  */
-fn listEntries(var entries: List<NativeEntry>, owner: String) {
+fn listEntries(var entries: List<NativeEntry>, owner: String, hasIterator: Bool) {
   entries.add plannedRuntimeOf("{owner}.from", "torb_list_from_iterable", "5.7")
-  entries.add plannedRuntimeOf("{owner}.iterator", "torb_list_iterator", "5.7")
+  // `ArrayList.iterator` is ordinary TorbScript over `get` since 5.7 (`ListIterator`), so it is no `native` at all.
+  // `TrieList` has none yet: its cursor is the trie's, and nothing constructs one before the trie exists (milestone 8).
+  if hasIterator {
+    entries.add plannedRuntimeOf("{owner}.iterator", "torb_list_iterator", "8")
+  }
   entries.add(runtimeOf(
     "{owner}.withCapacity",
     "torb_list_with_capacity",
@@ -623,8 +627,8 @@ fn setEntries(var entries: List<NativeEntry>, owner: String) {
 }
 
 fn collectionEntries(var entries: List<NativeEntry>) {
-  listEntries entries, "ArrayList"
-  listEntries entries, "TrieList"
+  listEntries entries, "ArrayList", false
+  listEntries entries, "TrieList", true
   mapEntries entries, "HashMap", true
   mapEntries entries, "TrieMap", false
   setEntries entries, "HashSet"

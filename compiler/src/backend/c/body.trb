@@ -1,6 +1,7 @@
 use IrProgram, IrFunction, IrSignature, IrTypeId, LayoutId, FunctionId from "../../ir/ir"
 use Slot, SlotDeclaration, BlockId, Instruction, Terminator, Argument, WitnessSource from "../../ir/ir"
 use Reference, LocationId, RuntimeKind, WitnessRoot, WitnessTableId, Capture from "../../ir/ir"
+use ElementId, IrParameter from "../../ir/ir"
 use Intrinsic, IntrinsicOperation, NumericKind from "../../ir/ir"
 use Layout, isManagedType, containsCountedType from "../../ir/layout"
 use isEnvironmentLayout from "../../ir/capture"
@@ -81,8 +82,8 @@ fn markArguments(var reads: List<Bool>, arguments: List<Argument>) {
 
 /** A witness that comes out of a value is a read of that value: the payload of the call comes out of the same slot. */
 fn markWitness(var reads: List<Bool>, witness: WitnessSource) {
-  if const .Value(slot, _) = witness.root {
-    markRead reads, slot
+  if const .Value(place, _) = witness.root {
+    markReference reads, place
   }
 }
 
@@ -141,6 +142,8 @@ fn markReadSlots(var reads: List<Bool>, instruction: Instruction) {
         markWitness reads, table
       }
     }
+    // A fresh container reads nothing: its descriptors are static data
+    .ContainerNew(_, _, _) => {}
     .TakeOut(_, container, key, _) => {
       markReference reads, container
       markRead reads, key
@@ -434,6 +437,9 @@ fn instructionStatements(
     .BoxNew(_, _) => reported emission, "a box built by an instruction instead of by a `construct`"
     .TraitValue(target, value, tables) => {
       traitValueStatements emission, program, body, target, value, tables
+    }
+    .ContainerNew(target, kind, elements) => {
+      containerStatements emission, program, body, target, kind, elements
     }
     .TakeOut(_, _, _, _) => reported emission, "a `var` path through a map (milestone 5.9b)"
     .PutBack(_, _, _, _) => reported emission, "a `var` path through a map (milestone 5.9b)"
@@ -747,10 +753,80 @@ fn makeUniqueStatements(
     const made = CExpression.Call CExpression.Name("torb_list_make_unique"), [CExpression.AddressOf(place)]
     return [CStatement.Evaluate(made)]
   }
+  if isObjectType(program, annotation) {
+    return objectMadeUnique emission, program, annotation, place
+  }
   if !isManagedType(program, annotation) {
     return []
   }
   reported emission, "making a value of this type unique (milestone 5.9b)"
+}
+
+/**
+ * Make the boxed payload of a trait-typed value unique. A trait-typed value is a **value**, so a copy of one may not see
+ * a change made through the other - and a `Copy` of one retains the box rather than copying it, so a `var self` member
+ * reached through a table has to make that box unique first, exactly as a write through any other counted owner does.
+ *
+ * The size of the box and its two helpers are a property of the *target* type, which the value has erased: the witness
+ * table carries them (`emitHeader`). Every bound of one value describes the same payload, so the first table answers.
+ */
+fn objectMadeUnique(
+  var emission: Emission,
+  program: IrProgram,
+  annotation: IrTypeId,
+  place: CExpression,
+): List<CStatement> {
+  const bounds = match program.typeAt(annotation) {
+    .Object(found) => found
+    _ => {
+      return reported emission, "making a value of this type unique"
+    }
+  }
+  if bounds.isEmpty() {
+    return reported emission, "making a trait-typed value without bounds unique"
+  }
+  const table = CExpression.Member place, witnessMemberNameOf(0)
+  const data = CExpression.Member place, "data"
+  const made = CExpression.Call(CExpression.Name("torb_make_unique"), [
+    data,
+    CExpression.PointerMember(table, "size"),
+    CExpression.PointerMember(table, "retain_children"),
+    CExpression.PointerMember(table, "drop"),
+  ])
+  [CStatement.Assignment(data, CExpression.Cast("torb_object *", made))]
+}
+
+/**
+ * An empty runtime container over its element descriptors. There is one C list and one C hash table for every element
+ * type (BACKEND 3.1), so the only thing a fresh container needs is the address of the static descriptor of each of its
+ * type arguments - which is what makes this an instruction and not a `native fn` of `std/`.
+ */
+fn containerStatements(
+  var emission: Emission,
+  program: IrProgram,
+  body: Body,
+  target: Slot,
+  kind: RuntimeKind,
+  elements: List<ElementId>,
+): List<CStatement> {
+  var given: List<CExpression> = []
+  for element in elements {
+    if !program.hasElement(element) {
+      return reported emission, "a container over an element descriptor that is not in the program"
+    }
+    given.add CExpression.AddressOf(CExpression.Name(program.elementAt(element).name))
+  }
+  const symbol = match kind {
+    .ListStorage => "torb_list_new"
+    .MapStorage => "torb_map_new"
+    .SetStorage => "torb_set_new"
+    _ => ""
+  }
+  if symbol.isEmpty() {
+    return reported emission, "an empty container of this kind"
+  }
+  const place = slotExpression body, target
+  [CStatement.Assignment(place, CExpression.Call(CExpression.Name(symbol), given))]
 }
 
 fn sizeOf(name: String): CExpression {
@@ -851,9 +927,22 @@ fn argumentsOf(
       written.add referenceExpression(emission, program, body, arguments[index])
       continue
     }
-    written.add slotExpression(body, arguments[index].slot)
+    const place = slotExpression body, arguments[index].slot
+    // An element of a container goes over as its address, because one C implementation serves every element type
+    if isByAddressParameter(parameter) {
+      written.add CExpression.AddressOf(place)
+      continue
+    }
+    written.add place
   }
   written
+}
+
+fn isByAddressParameter(parameter: IrParameter?): Bool {
+  match parameter {
+    Some(found) => found.isByAddress
+    None => false
+  }
 }
 
 /**
@@ -1173,7 +1262,7 @@ fn witnessCallStatements(
   arguments: List<Argument>,
 ): List<CStatement> {
   const receiver = match witness.root {
-    .Value(slot, _) => slot
+    .Value(place, _) => place
     _ => {
       return reported emission, "a call through a witness table that does not belong to a value"
     }
@@ -1186,8 +1275,11 @@ fn witnessCallStatements(
     Some(slot) => valueTypeOf program, typeOfSlot(body, slot)
     None => "void"
   }
-  var spellings = ["const void *"]
-  var given = [CExpression.Member(slotExpression(body, receiver), "data")]
+  // Every thunk takes `void *self`: a call site knows the member's index and not its declaration, so one spelling is
+  // what makes the cast back well defined C (see `thunkHeadOf`)
+  var spellings = ["void *"]
+  const value = placeExpression emission, program, body, receiver
+  var given = [CExpression.Member(value, "data")]
   for argument in arguments {
     spellings.add valueTypeOf(program, typeOfSlot(body, argument.slot))
     given.add slotExpression(body, argument.slot)
@@ -1211,8 +1303,9 @@ fn witnessExpression(
   witness: WitnessSource,
 ): CExpression {
   match witness.root {
-    .Value(slot, bound) => {
-      CExpression.Member slotExpression(body, slot), witnessMemberNameOf(bound)
+    .Value(place, bound) => {
+      const value = placeExpression emission, program, body, place
+      CExpression.Member value, witnessMemberNameOf(bound)
     }
     .Table(table) => {
       if !program.hasWitnessTable(table) {

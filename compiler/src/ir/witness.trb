@@ -6,13 +6,14 @@ use sameType from "../semantics/checker/unify"
 use witnessFor, supertraitsOfBound, memberOfImplementation, matchTypePattern from "../semantics/checker/implementation"
 use traitArgumentsOf from "../semantics/checker/implementation"
 use DerivedKind from "../backend/c/natives"
-use TraitId, FunctionId, Slot, WitnessTable, WitnessTableId from "./ir"
+use TraitId, FunctionId, Slot, Reference, WitnessTable, WitnessTableId from "./ir"
 use WitnessSource, WitnessRoot from "./ir"
 use witnessTableName from "./mangle"
 use instantiateTrait from "./instantiate"
 use instanceFor, isClosedType from "./instances"
 use Lowering, Generated, reportUnsupported, irTypeOfClosed, nativeNamed from "./lower/context"
 use generatedFunctionOf from "./lower/derive"
+use nativeFunctionOf, needsNativeWrapper from "./lower/native"
 
 /**
  * Witness tables: what a trait-typed value and a dynamic call go through.
@@ -123,6 +124,15 @@ public fn memberFunctionOf(
   }
   // No body anywhere: the manifest says what the runtime provides, everything else is generated from the layout
   const owner = manifestOwnerOf lowering, subject, provider
+  // A native whose ABI is not the declaration's already has a function of the program around it, and that wrapper *is*
+  // what the table points at - a second one around it would only be one call more (`ir/lower/native.trb`)
+  if const Some(entry) = nativeNamed(lowering, owner, name) {
+    if const .Runtime(symbol) = entry.target {
+      if needsNativeWrapper(entry) {
+        return nativeFunctionOf lowering, provider, mapping, entry, symbol, at
+      }
+    }
+  }
   const kind = generatedKindOf(lowering, provider, owner, implementation, at)?
   generatedFunctionOf lowering, kind, provider, subject, bound, mapping, at
 }
@@ -355,6 +365,11 @@ public type TableMember {
  * and one with generic parameters of its own, whose call would need witnesses appended. A call of one through a table is
  * therefore a clean "the member is not in the table" finding and never a wrong call.
  *
+ * A **`var self`** member *is* in a table (5.6 left it out): its thunk takes the address of the payload inside the box,
+ * and the caller makes that box unique first - which is what the `size` and the two helpers in the table are for
+ * (milestone 5.7). Without it `List.add`, `Map.set`, `Set.add` and `Iterator.next` would be unreachable on a
+ * trait-typed value, and every collection of the language is one.
+ *
  * A **default** member is in the table, which BACKEND 1.4 does not say: an implementation may override one, and which of
  * the two a trait-typed value reaches is only known at run time. The entry is the override where there is one and an
  * instance of the default body for the target type otherwise - so `by` still forwards the required members only, because
@@ -420,9 +435,6 @@ fn isTableMember(var lowering: Lowering, member: SymbolId, inherited: Int): Bool
     }
     // A member with generic parameters or a `where` clause of its own is conditionally available (4.3)
     if signature.generics.length() > inherited || !signature.bounds.isEmpty() {
-      return false
-    }
-    if signature.isVarSelf {
       return false
     }
     const owner = match signature.owner {
@@ -517,7 +529,7 @@ public fn memberInValue(
   var lowering: Lowering,
   bounds: List<TypeId>,
   subject: TypeId,
-  slot: Slot,
+  place: Reference,
   member: SymbolId,
 ): MemberInValue? {
   const name = lowering.checker.symbolAt(member).name
@@ -526,7 +538,7 @@ public fn memberInValue(
     for position in 0..members.length() {
       if lowering.checker.symbolAt(members[position].member).name == name {
         const empty: List<Int> = []
-        return Some MemberInValue(WitnessSource(WitnessRoot.Value(slot, index), empty), position)
+        return Some MemberInValue(WitnessSource(WitnessRoot.Value(place, index), empty), position)
       }
     }
   }
@@ -540,7 +552,7 @@ public fn isInTable(
   subject: TypeId,
   member: SymbolId,
 ): Bool {
-  memberInValue(lowering, bounds, subject, Slot(0), member).isSome()
+  memberInValue(lowering, bounds, subject, Reference(Slot(0), []), member).isSome()
 }
 
 /** Whether one of the bounds of a trait-typed value is exactly this trait, which a narrowing coercion asks. */
