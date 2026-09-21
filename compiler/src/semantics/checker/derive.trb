@@ -8,6 +8,9 @@
  * `Expression` contains a `List<Statement>` that contains an `Expression` again. So while the question "can this be
  * derived" is being answered it is *assumed* to hold, which is the only sound reading - a structural implementation of
  * a recursive type is well defined, it just recurses at run time as the value does.
+ *
+ * The second thing is the **capsule**: a type whose constructor is closed from outside has no field list a caller
+ * could be handed, so `Encode` and `Decode` are derived through its one conversion pair instead ([conversionPairOf]).
  */
 
 use Visibility from "../../syntax/ast"
@@ -16,7 +19,7 @@ use TypeId, ParameterId, FieldSignature from "./type"
 use Checker from "./context"
 use typeSignatureOf from "./signature"
 use substitute, sameType from "./unify"
-use implementsBound, literalConversionBound from "./implementation"
+use implementsBound, isConcrete, literalConversionBound, writtenTraitsOf from "./implementation"
 
 /** The members a derived implementation of `capability` for `target` would generate, or `None`. */
 public fn derivableMembers(
@@ -147,8 +150,15 @@ fn canDerive(
       if shape.isShared && name != "Show" {
         return false
       }
-      if name == "Decode" && !isConstructible(checker, shape.fields) {
-        return false
+      // A capsule: nothing outside can call the constructor, so there is no field list a caller could be handed, and
+      // the one conversion pair takes its place (`docs/language/types/data-or-capsule.md`)
+      if isEncoding(name) && !isConstructible(checker, shape.fields) {
+        if derivesThroughPair(checker, target, name) {
+          return true
+        }
+        // Without a pair the way **in** is refused, because the closed constructor is what protects the invariant,
+        // and the way **out** stays what it is for every type: the fields, which is the form `Show` takes too
+        return name == "Encode" && everyFieldImplements(checker, target, capability, wanted)
       }
       everyFieldImplements checker, target, capability, wanted
     }
@@ -185,8 +195,11 @@ fn isTrait(checker: Checker, symbol: SymbolId): Bool {
   }
 }
 
-/** `Decode` needs the constructor from outside, so a private field without a default rules it out. */
-fn isConstructible(checker: Checker, fields: List<FieldSignature>): Bool {
+/**
+ * Whether the generated constructor can be called from outside the type. A `private` field without a default cannot
+ * be left out and cannot be passed, so one of them closes the constructor and makes the type a **capsule**.
+ */
+public fn isConstructible(checker: Checker, fields: List<FieldSignature>): Bool {
   for field in fields {
     const isHidden = field.visibility == Visibility.Private
     if isHidden && !field.hasDefault {
@@ -194,6 +207,117 @@ fn isConstructible(checker: Checker, fields: List<FieldSignature>): Bool {
     }
   }
   true
+}
+
+/** The two traits a capsule derives through its conversion pair instead of through its fields. */
+fn isEncoding(name: String): Bool {
+  name == "Encode" || name == "Decode"
+}
+
+/**
+ * The one conversion pair of a capsule: the type a value of it is read from and written as, and how it is read.
+ *
+ * `Path` pairs with `String`, because `Path` has `From<String>` and `String` has `From<Path>`. That one type is
+ * everything the generated `encode` and `decode` need: they hand the work to it and convert on the way through.
+ */
+public type ConversionPair {
+  /** The `Source` of the pair: `String` for `Path`. */
+  source: TypeId
+  /** Whether the way in is the fallible `Self.tryFrom(source)` rather than the total `Self.from(source)`. */
+  fallible: Bool
+}
+
+/** The conversion pair of `target`, and `None` where it has no pair or more than one. */
+public fn conversionPairOf(var checker: Checker, target: TypeId): ConversionPair? {
+  const found = conversionSourcesOf checker, target
+  if found.length() != 1 {
+    return None
+  }
+  Some found[0]
+}
+
+/**
+ * Every type `target` converts into **and** back out of, in the order the implementations are written, the fallible
+ * way in first. `TryFrom<Source, Failure>` or `From<Source>` is the way in and `From<Self>` on the `Source` is the way
+ * out; a type that has both ways to the same `Source` is read through `tryFrom`, which is the one that can refuse.
+ *
+ * The reflexive `From<Self>` every type has never counts, and neither does `From<Never>`: both hold for every type at
+ * all, so a pair made of one would be no decision of the type's own.
+ */
+public fn conversionSourcesOf(var checker: Checker, target: TypeId): List<ConversionPair> {
+  const conversion = match checker.wellKnown.from {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  var pairs: List<ConversionPair> = []
+  if const Some(tryFrom) = checker.wellKnown.tryFrom {
+    const fallible = writtenTraitsOf checker, target, tryFrom
+    for bound in fallible {
+      addConversionSource checker, pairs, target, bound, conversion, fallible: true
+    }
+  }
+  const total = writtenTraitsOf checker, target, conversion
+  for bound in total {
+    addConversionSource checker, pairs, target, bound, conversion, fallible: false
+  }
+  pairs
+}
+
+/** One candidate, kept when the way back exists and the same `Source` is not there already. */
+fn addConversionSource(
+  var checker: Checker,
+  var pairs: List<ConversionPair>,
+  target: TypeId,
+  bound: TypeId,
+  conversion: SymbolId,
+  fallible: Bool,
+) {
+  const arguments = match checker.types.form(bound) {
+    .Nominal(_, given) => given
+    _ => {
+      return
+    }
+  }
+  if arguments.isEmpty() {
+    return
+  }
+  const source = arguments[0]
+  if sameType(checker.types, source, target) || source == checker.neverType || !isConcrete(checker, source) {
+    return
+  }
+  for known in pairs {
+    if sameType(checker.types, known.source, source) {
+      return
+    }
+  }
+  const back = checker.nominal conversion, [target]
+  if !implementsBound(checker, source, back) {
+    return
+  }
+  pairs.add ConversionPair(source, fallible)
+}
+
+/**
+ * Whether a capsule's `Encode` or `Decode` can be generated. It takes exactly one conversion pair, and the `Source`
+ * of that pair has to carry the trait itself: the generated body writes and reads that value and nothing else.
+ */
+fn derivesThroughPair(var checker: Checker, target: TypeId, name: String): Bool {
+  const pair = match conversionPairOf(checker, target) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const capability = match checker.wellKnown.symbolNamed(name) {
+    Some(found) => found
+    None => {
+      return false
+    }
+  }
+  const bound = checker.nominal capability, []
+  implementsBound checker, pair.source, bound
 }
 
 /** Every field of the type and of every one of its cases has to have the trait itself. */
@@ -325,4 +449,96 @@ fn isIntoBase(var checker: Checker, target: TypeId, wanted: TypeId?): Bool {
     return sameType checker.types, base, into
   }
   false
+}
+
+/**
+ * Why a capsule carries no `Decode`, as the notes of the message that asked for one: the rule first, then the one
+ * thing that is wrong about this type. Empty for everything else, so a type that lacks the trait for the ordinary
+ * reason keeps the ordinary message.
+ */
+public fn capsuleNotesOf(var checker: Checker, target: TypeId, bound: TypeId): List<String> {
+  const name = match capabilityNameOf(checker, bound) {
+    Some(found) => found
+    None => {
+      return []
+    }
+  }
+  if name != "Decode" {
+    return []
+  }
+  const symbol = match checker.types.form(target) {
+    .Nominal(found, _) => found
+    _ => {
+      return []
+    }
+  }
+  if isTrait(checker, symbol) {
+    return []
+  }
+  const identifier = typeSignatureOf checker, symbol
+  const shape = checker.typeSignature identifier
+  if shape.isNative || shape.isShared || isConstructible(checker, shape.fields) {
+    return []
+  }
+  const shown = checker.describe target
+  const closing = closedFieldOf shape.fields
+  var notes = [
+    "`{shown}` is a capsule: `{closing}` is private and has no default, so nothing outside can call the constructor"
+      + " and `{name}` comes from `{shown}`'s one conversion pair instead of from its fields",
+  ]
+  const sources = conversionSourcesOf checker, target
+  if sources.isEmpty() {
+    notes.add(
+      "`{shown}` has no pair. Write `From<Source>` or `TryFrom<Source, Failure>` for `{shown}`, and `From<{shown}>`"
+        + " for that `Source`"
+    )
+    return notes
+  }
+  if sources.length() > 1 {
+    var shownSources: List<String> = []
+    for pair in sources {
+      shownSources.add "`{checker.describe(pair.source)}`"
+    }
+    notes.add "`{shown}` converts both ways with {listedNames(shownSources)}. Exactly one type may"
+    return notes
+  }
+  const pair = sources[0]
+  const how = if pair.fallible { "tryFrom" } else { "from" }
+  const source = checker.describe pair.source
+  notes.add "`{shown}` pairs with `{source}` through `{how}`, and that type is not `{name}` itself"
+  notes
+}
+
+/** `a`, `b` and `c`: a list a sentence can hold, with the last one joined by a word instead of a comma. */
+fn listedNames(parts: List<String>): String {
+  if parts.length() < 2 {
+    return parts.joined separator: ""
+  }
+  const front = parts.take(parts.length() - 1).toList()
+  "{front.joined(separator: ", ")} and {parts[parts.length() - 1]}"
+}
+
+/** The first `private` field without a default: the one that closed the constructor, and the one a message names. */
+fn closedFieldOf(fields: List<FieldSignature>): String {
+  for field in fields {
+    if field.visibility == Visibility.Private && !field.hasDefault {
+      return field.name
+    }
+  }
+  ""
+}
+
+/** The name of the trait a bound asks for, but only where it is the prelude's trait of that name. */
+fn capabilityNameOf(var checker: Checker, bound: TypeId): String? {
+  const symbol = match checker.types.form(bound) {
+    .Nominal(found, _) => found
+    _ => {
+      return None
+    }
+  }
+  const name = derivedTraitName checker, symbol
+  if name.isEmpty() {
+    return None
+  }
+  Some name
 }

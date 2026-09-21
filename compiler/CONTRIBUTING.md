@@ -91,6 +91,14 @@ language *means* changes the page that says so - `docs check` names the page who
   type parameter (`flags.set key, true`, `Some(true)`, `list.add(None)`). Labeled arguments follow the positional ones,
   so options are declared last. The same goes for a number literal whose meaning the call does not show
   (`connect("localhost", timeout: 10)`); that half is judgement, the `Bool`/`None` half will be a lint with a fix.
+- **A capsule names its field for the storage and its method for the answer.** A type whose constructor is closed from
+  outside - a `private` field without a default - reads through accessors, and a field and a method never share a name,
+  so the field takes `stored` in front of the accessor's name: `private storedComponents: List<String>` next to
+  `fn components(): List<String>`, `private storedRoot` next to `fn root()`. The prefix is on the field and never on
+  the method, because the method is what every caller writes. Where the two say different things the accessor keeps
+  its own word instead (`private storedDegrees` answered by `degrees()`, but `private kind` answered by
+  `isSyntaxError()`). The four parts of a capsule and the conversion pair its `Encode`/`Decode` come from are
+  [docs/language/types/data-or-capsule](../docs/language/types/data-or-capsule.md).
 - A case name must not shadow a prelude type (`TupleType`, `Floating`, `VoidType`, not `Tuple`, `Float`, `Void`).
 - `type`, `trait`, `where`, `shared` are keywords and cannot be names (`annotation`, `capability`, ...).
 - **A `public` function and a trait method never infer their result.** Without a result type they produce `Void`, which

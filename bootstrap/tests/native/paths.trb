@@ -1,7 +1,7 @@
 /**
  * `std/path` compiled to a native binary: every row of `docs/PATH.md` section 2's parse table, every member of
- * section 3, `resolved(inside:)` in each of its outcomes, and the ten call-site rewrites of section 4 with
- * synthetic data that stands in for `compiler/src`'s own paths.
+ * section 3 including the two accessors of the capsule, `resolved(inside:)` in each of its outcomes, and the ten
+ * call-site rewrites of section 4 with synthetic data that stands in for `compiler/src`'s own paths.
  *
  * The module is imported by path, because the interpreter resolves no package import at all.
  */
@@ -22,8 +22,10 @@ print Path.from("C:")
 print Path.from("C:foo")
 print Path.from("//server/share/x")
 
-// The members of section 3
+// The members of section 3, the two accessors of the capsule first
 const module = Path.from "std/path/src/lib.trb"
+print "{module.root()} {module.components()}"
+print "{Path.from("C:/x").root()} {Path.from("C:/x").components()}"
 print "{module.name()} {module.nameWithoutExtension()} {module.extension()}"
 print "{module.parent()} {module.joined(Path.from("deeper"))} {module.joined(Path.from("/etc/passwd"))}"
 print "{module.withExtension("c")} {module.withName("other.trb")}"
@@ -69,7 +71,7 @@ print paths.filter({ _.name() == Some("project.trb") }).filterMap({ _.parent() }
 
 const pattern = "std/*"
 const repository = Path.from "/repository"
-print repository.joined(Path.from(pattern).parent() ?? Path())   // 7: workspace.trb:103
+print repository.joined(Path.from(pattern).parent() ?? Path.from(""))   // 7: workspace.trb:103
 
 const manifests = [Path.from("/repository"), Path.from("/repository/std/fs")]
 const owned = Path.from "/repository/std/fs/src"

@@ -30,7 +30,7 @@ page is written to stand alone and the index it belongs to is generated.
 | 1 | `guide/` | 13 | The reference for the links, so write it late or link forward |
 | 2 | `language/syntax/`, `language/values-and-types/` | 22 | Nothing |
 | 3 | `language/functions/` | 8 | Nothing |
-| 4 | `language/types/` | 12 | Nothing |
+| 4 | `language/types/` | 13 | Nothing |
 | 5 | `language/traits/`, `language/generics/` | 14 | Nothing |
 | 6 | `language/pattern-matching/`, `language/errors/` | 13 | Nothing |
 | 7 | `language/collections-and-iteration/`, `language/concurrency-and-streams/` | 11 | `docs/STREAMS.md` for the streams pages |
@@ -131,6 +131,7 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | `language/types/declaring-a-type.md` | Declaring a type | reference | Fields, methods, and what is generated | done |
 | `language/types/fields.md` | Fields | reference | `var`, `private`, `private(var)`, and the table of four | `CONCEPT.md#visibility-and-encapsulation` |
 | `language/types/construction.md` | Construction | reference | The one generated constructor, and where logic goes | `CONCEPT.md#construction` |
+| `language/types/data-or-capsule.md` | Data or capsule | reference | What a `private` field without a default closes, and the factory, accessors and conversion pair that take its place | `CONCEPT.md#construction` |
 | `language/types/copy-and-equality.md` | Copy and equality | reference | What `copy`, `==` and `hash` do without being written | `CONCEPT.md#values` |
 | `language/types/generated-show.md` | The generated Show | reference | The exact text a value prints as | `CONCEPT.md#values` |
 | `language/types/methods.md` | Methods and `static fn`s | reference | `static` and `var fn`, and the one member namespace | `CONCEPT.md#members-a-method-is-a-constant-that-holds-a-closure` |

@@ -18,6 +18,7 @@ what is special about ONE type in ONE format  ──→  a mapping VALUE in that
 - **[1. The principle](#1-the-principle)**
 - **[2. The three traits](#2-the-three-traits)** — final signatures
 - **[3. Derivation](#3-derivation)** — the exact rule, as a table
+- **[3a. A capsule is written as its source type](#3a-a-capsule-is-written-as-its-source-type)** — the conversion pair
 - **[4. The vocabulary](#4-the-vocabulary)** — scalars and four shapes, and what is removed against today
 - **[5. `Describe` in full](#5-describe-in-full)**
 - **[6. Mappings](#6-mappings)** — the contract between a format and its DSL, type names, the decode side
@@ -60,9 +61,10 @@ has to be tested per type, it is a property of the rule.
 it is not part of any of the three forms. A cache, a memo, a derived summary: they stay out, and the type already said
 so with `private`.
 
-**A validated type opts out of all three at once.** `Email` has a `private value: String` with no default, so the
-constructor is not usable from outside, so nothing is derived, so a decoded `Email` cannot skip `Email.tryFrom`. The
-invariant is not protected by a rule about decoding; it is protected by the same rule that protects construction.
+**A validated type does not get its fields written or read.** `Email` has a `private value: String` with no default, so
+the constructor is not usable from outside, so no field list is derived and a decoded `Email` cannot skip
+`Email.tryFrom`. The invariant is not protected by a rule about decoding; it is protected by the same rule that
+protects construction. What such a type gets instead is section 3a.
 
 ## 2. The three traits
 
@@ -133,7 +135,7 @@ the field — so a `private(var)` field **is** part of all three forms.
 | The type | Derived | Why |
 |----------|---------|-----|
 | `type` whose every `private` field has a default, and whose passable parameters all carry the trait | all three | the constructor is usable, over its parameters |
-| `type` with a `private` field without a default (`Email`) | none | the constructor is not usable from outside; write the three by hand, or delegate (step 3 of the ladder) |
+| `type` with a `private` field without a default (`Email`) — a **capsule** | through its conversion pair, section 3a | the constructor is not usable from outside, so the fields are not the parameter list |
 | `type` with a `private` field **with** a default (a cache) | all three, **without that field** | it is not a parameter from outside. No annotation said so |
 | `type` with a `private(var)` field | all three, **with** that field | publicly readable, publicly constructible |
 | a passable parameter whose type lacks the trait | none, and the error at the call site names the chain | |
@@ -155,6 +157,73 @@ present must not pay for one.
 **The order is the declaration order**, everywhere: the fields of a record, the columns of a table, the positions of a
 tuple, the options of a `--help` text, the default field numbers of a wire format. It is the one ordering a type
 already has.
+
+## 3a. A capsule is written as its source type
+
+A type whose constructor is closed from outside is a **capsule**
+([the language page](language/types/data-or-capsule.md)): private fields, a `static fn` factory that is the only way
+in, accessors, and one conversion pair. Its fields are not a parameter list a caller could be handed, so the pair takes
+their place — and the pair is exactly the two functions the type already had to write.
+
+**The pair is the one type `Source` for which both directions exist.** `Self` has `TryFrom<Source, Failure>` or
+`From<Source>`, and `Source` has `From<Self>`. The reflexive `From<Self>` that every type carries never counts, and
+neither does `From<Never>`: both hold for every type at all, so a pair built from one would be no decision of the
+type's own.
+
+```trb
+type Title {
+  text: String
+}
+
+type Slug with From<Title> {
+  private storedText: String
+
+  static fn from(value: Title): Slug {
+    Self value.text.toLowerCase().replace(" ", "-")
+  }
+
+  fn text(): String {
+    storedText
+  }
+}
+
+extend Title with From<Slug> {
+  static fn from(value: Slug): Title {
+    Title value.text()
+  }
+}
+
+print Slug.from(Title("Data Or Capsule")).text()
+```
+
+That is the whole declaration, and these two are derived from it:
+
+```text
+extend Slug with Encode, Decode {
+  fn encode(var encoder: Encoder) {
+    Title.from(self).encode(encoder)          // the way back, then that value's own `encode`
+  }
+
+  static fn decode(var decoder: Decoder): Result<Slug, DecodeError> {
+    Ok(Slug.from(Title.decode(decoder)?))     // the source, then the way in
+  }
+}
+```
+
+**A fallible way in becomes a `DecodeError`.** Where the pair is a `TryFrom<Source, Failure>`, the derived `decode`
+answers `DecodeError(failure.show())` for a `Fail`, so the check the factory exists to force also runs for a value that
+came out of a document. Where both a `TryFrom` and a `From` reach the same `Source`, the `TryFrom` is used: it is the
+one that can refuse.
+
+**With no pair, or with more than one, there is no `Decode`,** and the message names the rule and what is missing (rule
+6 of the language page lists both texts). The way **out** is different, and deliberately: it cannot break an invariant,
+it is what `describe(value)` and a failing `assert` show, and the generated `Show` of the same type prints its private
+fields too — so without a pair `Encode` stays the field-wise one, exactly as it is for every other type.
+
+**What this costs.** A capsule is written *as* its source, with no `record(typeName)` around it, so no type name
+reaches the format and a mapping keyed by one (section 6) cannot pick a capsule out. That is the trade the rule makes:
+a `Path` in a JSON document is its text and not an object, which is what a reader of that document expects, and a type
+that needs the name writes its own `encode`.
 
 ## 4. The vocabulary
 

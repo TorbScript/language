@@ -1628,9 +1628,14 @@ extend User with Encode, Decode {
 - **No dynamically typed island.** There is no "any value" type in the language. Who wants to look at a document
   without knowing its type uses a library type (`JsonValue` of `std/json` is an ordinary ADT, and `Encode`/`Decode` itself).
 - `Encode` is generated for every `type` whose fields are all `Encode`.
-- `Decode` is only generated if the constructor is usable from outside (see [Construction](#construction)).
-  A type with a private constructor has invariants, so it writes `decode` by hand and the invariant holds for
-  decoded values, too (`Email.decode` calls `Email.tryFrom`).
+- **A type whose constructor is closed from outside is a capsule, and its `Encode`/`Decode` come from its one
+  conversion pair** instead of from its fields (see [Construction](#construction)). The pair is the one type `Source`
+  for which both directions exist: `Self` has `TryFrom<Source, Failure>` or `From<Source>`, and `Source` has
+  `From<Self>`; the reflexive `From<Self>` never counts. A value is written as its `Source` and read by decoding a
+  `Source` and handing it to the way in, so the check the factory exists to force runs for a decoded value too, and a
+  `TryFrom` that refuses becomes a `DecodeError` that carries its `show()`. With no pair or with several candidates
+  there is no `Decode`, and the message names the rule and the candidates; the way out stays the field-wise one, which
+  cannot break an invariant and is what a message shows.
 - Different field names, skipped fields, versioning: write the two functions by hand, there are no annotations.
   What is a convention of the format and not of the type is an option of the format (`Json.encode(user, naming: .SnakeCase)`).
 - **`Encode`/`Decode` are data binding, for every format whose model is "values, sequences, maps, records"**: JSON,
@@ -2790,6 +2795,20 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   thing that tells that mistake from a binding somebody meant. `_` discards, `_limit` keeps the name as documentation.
   The irrefutable positions are deliberately left out: nothing there can be mistaken for a comparison, so an unused
   binding is `torb lint`'s business.
+- **A capsule is a standard and not a construct, and one rule makes it affordable.** A constructor stays generated,
+  total and free of code - `static fn new` as an overridable constructor was weighed and refused, because a
+  constructor that may contain logic is a constructor that has to be read. What a type with an invariant writes
+  instead is four ordinary things: `private` fields without a default, which close the constructor from outside, a
+  `static fn` factory, accessors, and one conversion pair. The rule is that the pair then *is* the type's
+  `Encode`/`Decode`: the one `Source` for which `Self` has `TryFrom<Source, Failure>` or `From<Source>` and `Source`
+  has `From<Self>` - reflexive `From<Self>` and `From<Never>` excluded, because they hold for every type and would
+  be no decision of this one. Without it a capsule paid for its invariant by leaving every format, which is why
+  `std/path` kept a public constructor and a documented pitfall until this rule existed; with it, `Path` is a capsule
+  whose component list cannot be handed in wholesale and whose text form is what a JSON document holds. No pair or several is no
+  `Decode` and a message that names the rule and the candidates. The way out is not refused with it: `Encode`
+  cannot break an invariant, it is what `describe(value)` and a failing `assert` show, and the generated `Show` of
+  the same type already prints private fields - so without a pair it stays the field-wise one. The price of the rule
+  is that a capsule reaches a format without a type name, so a mapping keyed by one cannot pick it out.
 
 ## Open Questions
 

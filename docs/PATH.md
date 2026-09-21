@@ -6,16 +6,16 @@ accident, and one text form is what a path shows on every platform while the ope
 one place that talks to it.
 
 ```text
-                    ┌── Root?  ─────  None | Unix | Drive('C') | Share(server, share)
-      Path ─────────┤
-                    └── List<String>  the components between the separators
+                    ┌── root()        ─────  None | Unix | Drive('C') | Share(server, share)
+      Path ─────────┤   (both private, both read through an accessor: Path is a capsule)
+                    └── components()   ─────  the components between the separators
 
   a String ──→ From<String>, infallible ──→ Path ──→ show(), always with `/`  ──→ a message, a diagnostic, a Map key
-                                              │
+                                              │           = String.from(path), the other half of the pair
                                               └──→ systemPath(), in `std/fs` ──→ the bytes the operating system gets
 ```
 
-- **[1. The type](#1-the-type)** — the fields, the roots, and what `==` means
+- **[1. The type](#1-the-type)** — the capsule, the roots, and what `==` means
 - **[2. Parsing](#2-parsing)** — the separators, the empty string, `.` and `..`
 - **[3. The members](#3-the-members)** — every signature, and `PathError`
 - **[4. `joined` with an absolute argument](#4-joined-with-an-absolute-argument)** — three options weighed, one chosen
@@ -48,10 +48,13 @@ public type Root with Show, Equals, Hash {
 
 /** A file path: where it starts, and the components between the separators. */
 public type Path with Show, Equals, Hash, Compare {
-  /** Where the path starts, and `None` for a relative path. */
-  root: Root? = None
-  /** The components between the separators, outermost first. */
-  components: List<String> = []
+  /** Where the path starts, and `None` for a relative path. [Path.root] reads it. */
+  private storedRoot: Root?
+  /** The components between the separators, outermost first. [Path.components] reads them. */
+  private storedComponents: List<String>
+
+  fn root(): Root?
+  fn components(): List<String>
 }
 ```
 
@@ -72,13 +75,17 @@ fields), then component by component, then by the number of components. It is ha
 `Equals` and `Hash` but not `Compare`, and because comparing `show()` would order `a.b` before `a/b` — a text order is
 not a path order.
 
-**The constructor is public, and a hand-written component may be empty, `.` or `..`.** `From<String>` and every member
-of the package produce components that are none of those, `normalized()` removes them, and a `Path` written out by hand
-with `Path(None, ["", "src"])` is the one way to get a value whose `show()` has a doubled separator. That is the type's
-one pitfall, and the alternative costs more than it buys: a `private` field without a default would make the
-constructor unusable from outside, and with it `copy`, `Encode` and `Decode` — which a path in a configuration file or
-in a JSON document needs (`docs/ENCODING.md` section 3). Validation would protect against nobody except a caller who
-wrote the list out by hand.
+**`Path` is a capsule, so `From<String>` is the one way in.** Both fields are `private` and neither has a default, so
+nothing outside `std/path` can call the constructor and no caller can hand in a component list of its own — which is
+what used to make `Path(None, ["", "src"])` a value whose `show()` had a doubled separator. The two fields are read
+through [`root()`](#3-the-members) and `components()`, and the accessor is what every caller writes.
+
+**The capsule costs nothing here, because `Path` has a conversion pair.** `Path` has `From<String>` and `String` has
+`From<Path>` — the same text `show()` answers — so `Encode` and `Decode` are derived through that pair
+(`docs/ENCODING.md` section 3a): a path in a configuration file or in a JSON document is its text, which is what a
+reader of that document expects and what a hand-written `encode` would have had to write anyway. `copy` and a `Path`
+pattern are closed with the constructor, and neither was part of this type's vocabulary: every member that changes a
+path answers a new one.
 
 ## 2. Parsing
 
@@ -94,25 +101,25 @@ so a parse that answered a `Result` would answer `Ok` for everything and cost a 
 
 **Both `/` and `\` separate, on every platform.** Not `\` on Windows only. The reason is determinism: the same program
 has to behave the same on stage 0 and in a compiled binary, and ideally on every platform, so `Path.from("a\\b")` must
-be one value and not two. The cost is stated as a pitfall: a POSIX file whose name literally contains a backslash
-cannot be named through `From<String>`, and is named with `Path(None, ["a\\b"])` or `joined` instead. The opposite cost
-— a program that reads a configuration file on Linux and splits it differently on Windows — is the one the language
-refuses to pay.
+be one value and not two. The cost is stated as a pitfall, and the capsule sharpens it: a POSIX file whose name
+literally contains a backslash cannot be named as a `Path` at all, because `From<String>` is the one way in, and the
+file is reached through `std/fs` with its text. The opposite cost — a program that reads a configuration file on Linux
+and splits it differently on Windows — is the one the language refuses to pay.
 
-| Input | Value | Shows as |
+| Input | `root()`, `components()` | Shows as |
 |-------|-------|----------|
-| `""` | `Path()` | `.` |
-| `"."` | `Path()` | `.` |
-| `"src/"` | `Path(None, ["src"])` | `src` |
-| `"src//main.trb"` | `Path(None, ["src", "main.trb"])` | `src/main.trb` |
-| `"./src/./x"` | `Path(None, ["src", "x"])` | `src/x` |
-| `"../src"` | `Path(None, ["..", "src"])` | `../src` |
-| `"/"` | `Path(Some(.Unix))` | `/` |
-| `"/usr/bin"` | `Path(Some(.Unix), ["usr", "bin"])` | `/usr/bin` |
-| `"c:\\x"` | `Path(Some(.Drive('C')), ["x"])` | `C:/x` |
-| `"C:"` | `Path(Some(.Drive('C')))` | `C:/` |
-| `"C:foo"` | `Path(Some(.Drive('C')), ["foo"])` | `C:/foo` |
-| `"//server/share/x"` | `Path(Some(.Share("server", "share")), ["x"])` | `//server/share/x` |
+| `""` | no root, no components | `.` |
+| `"."` | no root, no components | `.` |
+| `"src/"` | `None`, `["src"]` | `src` |
+| `"src//main.trb"` | `None`, `["src", "main.trb"]` | `src/main.trb` |
+| `"./src/./x"` | `None`, `["src", "x"]` | `src/x` |
+| `"../src"` | `None`, `["..", "src"]` | `../src` |
+| `"/"` | `Some(.Unix)`, `[]` | `/` |
+| `"/usr/bin"` | `Some(.Unix)`, `["usr", "bin"]` | `/usr/bin` |
+| `"c:\\x"` | `Some(.Drive('C'))`, `["x"]` | `C:/x` |
+| `"C:"` | `Some(.Drive('C'))`, `[]` | `C:/` |
+| `"C:foo"` | `Some(.Drive('C'))`, `["foo"]` | `C:/foo` |
+| `"//server/share/x"` | `Some(.Share("server", "share"))`, `["x"]` | `//server/share/x` |
 
 **Empty components and `.` are dropped at construction, `..` is kept.** The split is not a matter of taste: `a/./b` and
 `a/b` name the same file on every file system, whatever links are on the way, because `.` always resolves to the
@@ -143,8 +150,14 @@ asks for and never something a construction does.
 
 ```trb
 public type Path with Show, Equals, Hash, Compare {
-  root: Root? = None
-  components: List<String> = []
+  private storedRoot: Root?
+  private storedComponents: List<String>
+
+  /** Where the path starts, and `None` for a relative path. */
+  fn root(): Root?
+
+  /** The components between the separators, outermost first. */
+  fn components(): List<String>
 
   /** Whether the path starts at a root. Its opposite is [Path.isRelative]. */
   fn isAbsolute(): Bool
@@ -201,8 +214,9 @@ public type PathError with Show, Error {
 }
 ```
 
-**`components` is the field and there is no method of that name**, so `path.components` is the list and nothing has to
-be called. It is data (CONCEPT: a field is a promise about data), and so is `root`.
+**`components()` is a method and the field behind it is `storedComponents`**, which is the naming a capsule takes: a
+field and a method never share a name, so the field says what it stores and the method what it answers. `path.root()`
+and `path.components()` are the two reads, and both are total.
 
 **No member panics**, as the std rule requires: what can be absent answers an `Option`, what can be refused answers a
 `Result<_, PathError>`, and everything else is total.
@@ -289,7 +303,7 @@ var directories = tree.paths().filter({ _.name() == Some("project.trb") }).filte
 
 // project/workspace.trb:103 - the `std/*` member pattern, with the byte slicing gone
 const parent = joinPath root, pattern[0..(pattern.byteLength() - 2)]
-const parent = root.joined(Path.from(pattern).parent() ?? Path())
+const parent = root.joined(Path.from(pattern).parent() ?? Path.from(""))
 
 // project/workspace.trb:52 - "which manifests own this directory"
 const owners = manifests.filter({ isInside directory, _ }).toList().reversed()

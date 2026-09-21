@@ -21,6 +21,7 @@ an example first, then the syntax, then numbered rules, then what the construct 
 - **[Declaring a type](declaring-a-type.md)** - One keyword declares every data type. Fields are const unless marked var, members are public unless marked private, and Equals, Hash, Show and copy are generated.
 - **[Fields](fields.md)** - A field is const unless marked var, and private or private(var) decide who may read it and who may write it, independently of each other.
 - **[Construction](construction.md)** - Every type has exactly one constructor, generated from its fields in declaration order, and it never contains logic - validation and parsing are static factory functions instead.
+- **[Data or capsule](data-or-capsule.md)** - A type is data, whose constructor is the way in, or a capsule, whose constructor a private field without a default closes - and then a factory, accessors and one conversion pair take its place.
 - **[Copy and equality](copy-and-equality.md)** - Assigning, passing or capturing a value copies it, and Equals, Hash and copy are generated for a type without being written, each only if every field supports it.
 - **[The generated Show](generated-show.md)** - Show is generated for every type without being written, and its text is fixed so that two implementations of the language print the same thing for the same value.
 - **[Methods and `static fn`s](methods.md)** - A member says what it is with two words - static belongs to the type, var may change - and a type has one namespace of members, so a field and a method can never share a name.

@@ -3,11 +3,12 @@
  * out by hand so a reader can see what derivation means. Nothing here is clever: it is the constructor, three times.
  *
  * Every implementation below is marked `DERIVED` or `BY HAND`. `DERIVED` means "the compiler writes exactly this";
- * `BY HAND` means the type derives nothing (`Email` has a private constructor) and says so itself.
+ * `BY HAND` means the type derives nothing and says so itself, which is `Email`: its constructor is closed and it has
+ * no conversion pair. [Slug] is the capsule that has one, and its three forms are derived through it.
  *
- * Three places where stage 0 cannot run what the compiler would write, so the lab writes the same call with the one
- * lookup spelled out. All three are listed in `docs/ENCODING.md` under "What the language and the compiler must
- * provide", and all three type check in the form the compiler uses - only running them needs types at run time:
+ * Four places where stage 0 cannot run what the compiler would write, so the lab writes the same call with the one
+ * lookup spelled out. All of them type check in the form the compiler uses - only running them needs types at run
+ * time:
  *
  * 1. A scalar field: the compiler writes `Int64.describe target` and `String.decode source`, a static trait member of
  *    an `extend` on a built-in type. Stage 0 answers "the bootstrap interpreter does not know `String.decode`", so the
@@ -17,6 +18,8 @@
  *    bound. The lab calls `decodeSequence`/`decodeOptional` and hands the element's own `decode` in.
  * 3. A generic type's `decode` and `describe` (`Page<Item>`): written here as the compiler writes them, and exercised
  *    through the monomorphized form in `main.trb`, which is what a back end emits.
+ * 4. A capsule's way out: the compiler writes `String.from(self)`, and `String` carries `From<Iterable<Char>>` as
+ *    well, so that name picks the other one. The lab writes the accessor the way back is written in terms of.
  */
 
 use Decode, DecodeError, Describe, Describer, Decoder, Encode, Encoder from "./vocabulary"
@@ -63,9 +66,12 @@ extend Price with Encode, Decode, Describe {
 }
 
 /**
- * An address that has been checked. The field is `private` and has no default, so the constructor is not usable from
- * outside and **none of the three forms is derived**: an `Email` that came out of a decoder would otherwise skip the
- * check that `tryFrom` exists to force.
+ * An address that has been checked. The field is `private` and has no default, so the constructor is closed from
+ * outside: `Email` is a **capsule**, and an `Email` that came out of a decoder would otherwise skip the check that
+ * `tryFrom` exists to force.
+ *
+ * It has no conversion pair - nothing converts an `Email` back into a `String` - so **none of the three forms is
+ * derived** and all three are written below. [Slug] is the capsule that has one.
  */
 public type Email with TryFrom<String, String> {
   private value: String
@@ -112,6 +118,59 @@ extend Email with Encode, Decode, Describe {
     }
     target.string()
     target.finish()
+  }
+}
+
+/**
+ * A title in lower case and without spaces. It is a **capsule** with a conversion pair: `From<String>` is the way in,
+ * `From<Slug>` on `String` is the way back, and the normalization happens on the way in, so nothing outside can hold
+ * a `Slug` that skipped it.
+ */
+public type Slug with From<String> {
+  private storedText: String
+
+  static fn from(value: String): Slug {
+    Self value.toLowerCase().replace(" ", "-")
+  }
+
+  fn text(): String {
+    storedText
+  }
+}
+
+/** The way back out, and with [Slug.from] the pair the three forms below are derived through. */
+extend String with From<Slug> {
+  static fn from(value: Slug): String {
+    value.text()
+  }
+}
+
+/**
+ * DERIVED for a **capsule**: the constructor is closed from outside, so there is no field list to write or to read,
+ * and all three forms go through the one conversion pair instead. Writing is what the way back gives, reading is the
+ * source value handed to the way in, and describing is the source's structure.
+ *
+ * The compiler writes `String.from(self)` where this body writes `text()`. They are the same value - the way back is
+ * written in terms of the accessor - and `String.from` is a name stage 0 answers with a native of its own, which is
+ * the fourth place in this file where the lab writes the same call with the one lookup spelled out.
+ *
+ * There is no `record` around it, and that is the point: a capsule is written **as** its source, so a `Slug` in a
+ * document is the text and nothing else. The cost is that no type name reaches the format, so a mapping keyed by one
+ * (`docs/ENCODING.md` section 6) cannot pick a capsule out - which is why `Email`, whose pair does not exist, keeps
+ * its hand-written wrapper.
+ */
+extend Slug with Encode, Decode, Describe {
+  fn encode<Target: Encoder>(var target: Target) {
+    encoded text(), target
+  }
+
+  static fn decode<Source: Decoder>(var source: Source): Result<Slug, DecodeError> {
+    const text = source.string()?
+    Ok Slug.from(text)
+  }
+
+  static fn describe<Target: Describer>(var target: Target) {
+    target.string()
   }
 }
 

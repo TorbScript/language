@@ -1107,6 +1107,43 @@ public fn appliedTraitsOf(var checker: Checker, annotation: TypeId, capability: 
 }
 
 /**
+ * Every applied bound of one trait that an implementation **writes** for a type, in declaration order: what
+ * `extend Path with From<String>` and `type Path with Compare` say, and nothing the language generated. It is the
+ * question the conversion pair of a capsule is decided from, where an answer that depends on which derived
+ * implementation happened to exist already would make the pair depend on the order the files were checked in.
+ */
+public fn writtenTraitsOf(var checker: Checker, annotation: TypeId, capability: SymbolId): List<TypeId> {
+  buildImplementations checker
+  const head = headSymbolOf checker, annotation
+  const candidates = checker.implementations.declaredFor head
+  var found: List<TypeId> = []
+  for index in candidates {
+    const implementation = checker.implementations.all[index]
+    if isGenerated(implementation) {
+      continue
+    }
+    const declared = match implementation.capability {
+      Some(inner) => inner
+      None => {
+        continue
+      }
+    }
+    var mapping: Map<ParameterId, TypeId> = [:]
+    if !matchTarget(checker, implementation, annotation, mapping) {
+      continue
+    }
+    if !boundsHold(checker, implementation, mapping) {
+      continue
+    }
+    const applied = substitute checker.types, declared, mapping
+    if hasHead(checker, applied, capability) && !found.contains(applied) {
+      found.add applied
+    }
+  }
+  found
+}
+
+/**
  * One blanket implementation, for one type: `extend<World: Query> World with Pairs` gives `Pairs` to every type that
  * has `Query`, so `game.doubled()` is a member of `Game` like any other. A blanket whose own arguments the type does
  * not decide (`extend<Source, Target> Source with Into<Target>`) is **not** added: it would put `Into<Target>` with an

@@ -12,7 +12,7 @@ use Logfmt from "../src/logfmt"
 use Packed from "../src/packed"
 use ColumnType, Sql from "../src/sql"
 use Xml from "../src/xml"
-use Category, Email, Order, Page, Price, Shipment, Status from "../src/samples"
+use Category, Email, Order, Page, Price, Shipment, Slug, Status from "../src/samples"
 
 /** The one `Order` every test in this file that needs a record with a nested type, a variant and a default reaches for. */
 fn anOrder(): Order {
@@ -107,6 +107,25 @@ group "a: json" {
     match json.decode(Order.decode, broken) {
       Ok(_) => assert false
       Fail(problem) => assert(problem.show() == "price.currency: a value is needed")
+    }
+  }
+
+  test "a capsule with a conversion pair is written as its source and read back through the way in" {
+    const json = Json()
+    const slug = Slug.from "Data Or Capsule"
+    assert(json.encode(slug) == "\"data-or-capsule\"")
+    match json.decode(Slug.decode, "\"Data Or Capsule\"") {
+      Ok(back) => assert(back == slug)
+      Fail(_) => assert false
+    }
+  }
+
+  test "the round trip goes through the way in, so a decoded capsule is normalized like every other one" {
+    const json = Json()
+    const text = json.encode Slug.from("A B")
+    match json.decode(Slug.decode, text) {
+      Ok(back) => assert(json.encode(back) == text)
+      Fail(_) => assert false
     }
   }
 }

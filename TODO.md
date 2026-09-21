@@ -2924,6 +2924,55 @@ Wenn nicht, was bedeutet, bewirkt es?
     Abschnitt in `docs/ENCODING.md`. **Wird gelöst - Runde "Kapsel", startet sobald die Umstellung auf
     `static`/`var fn` gelandet ist** (die fasst gerade jede `.trb`-Datei an; ein paralleler Zweig in alter Syntax
     wäre ein einziger Konflikt). Parallel dazu dann die Runde "Konstruktor-Bugs + `...` im Pattern".
+  - **Erledigt:** die Regel ist eingebaut, `std/path` ist eine Kapsel, alles grün.
+    **Der Typprüfer** (`compiler/src/semantics/checker/derive.trb`): ein `private` Feld ohne Default schließt den
+    Konstruktor, dann werden `Encode`/`Decode` über das EINE Konversionspaar abgeleitet. Das Paar sucht
+    `conversionSourcesOf` über die GESCHRIEBENEN Implementierungen (`writtenTraitsOf` in `implementation.trb`,
+    abgeleitete werden übersprungen) - sonst hinge das Paar davon ab, welche Ableitung zufällig schon existierte;
+    `TryFrom` vor `From` zum selben `Source` (das ist die, die ablehnen kann), reflexives `From<Self>` und
+    `From<Never>` zählen nie, und der `Source` muss die Trait selbst tragen. Zwei Meldungen als NOTIZEN an der
+    bestehenden Zeile "`X` does not implement `Decode`" (Aufrufstelle und Trait-Wert-Coercion): erst die Regel mit
+    dem Feld, das schließt, dann "hat kein Paar. Schreib `From<Source>` oder `TryFrom<Source, Failure>` ..." bzw.
+    "konvertiert in beide Richtungen mit `A` und `B`. Exactly one type may".
+    **EINE Abweichung von deiner Formulierung, bewusst und gemessen:** "kein Paar -> nichts abgeleitet" gilt bei mir
+    nur für `Decode`; `Encode` bleibt ohne Paar das feldweise wie bisher. Strikt gebaut ergab `check ..` **493
+    Fehler in 24 Dateien**, alle aus `assert`: eine Quotation verlangt `Encode` für jeden Capture, und über
+    `Probed -> Checker -> Program -> Graph` (`private byPath`) verliert der halbe eigene Testbestand des Compilers
+    seine Debug-Form (allein 452 Zeilen). Mein Argument: `Encode` ist die Richtung HINAUS, kann keine Invariante
+    brechen, ist was `describe(value)` und ein fehlgeschlagenes `assert` zeigen - und dein Punkt 3 sagt schon, dass
+    das generierte `Show` private Felder druckt. Geschützt werden muss die Richtung HINEIN, und die ist zu. Die
+    Rundreise-Eigenschaft bleibt heil: mit Paar gehen beide Richtungen durchs Paar, ohne Paar gibt es nichts zu
+    lesen. Wenn du es trotzdem strikt willst, sag es - dann brauchen `Graph`, `SourceTree` und `LineIndex` je ein
+    Paar oder Defaults, und das schwächt genau die drei Kapseln des Compilers.
+    **`std/path` ist die Kapsel:** `private storedRoot: Root?` / `private storedComponents: List<String>` ohne
+    Default, Accessoren `root()` / `components()`. Die Feldnamen tragen `stored`, weil ein privates Feld nicht wie
+    eine Methode heißen darf (dein Punkt 4) - das ist jetzt die Konvention in `compiler/CONTRIBUTING.md`. Das Paar
+    ist `String`: `From<String>` gab es schon, neu ist `extend String with From<Path>` (`value.show()`). Der
+    `==`-Pitfall ist weg, `Path()` von außen ist ein Fehler. 59 Tests grün (vorher 57; die Parse-Tabelle prüft
+    jetzt `root()`/`components()` statt einen Konstruktoraufruf, dazu zwei neue über das Paar).
+    **Tests:** sieben Typprüfer-Tests in `compiler/tests/implementations.test.trb` (Paar über `TryFrom`, über
+    `From`, kein Paar mit wörtlichen Notizen, mehrere mit der Aufzählung, reflexiv zählt nicht, nur-öffentlicher Typ
+    unverändert, privates Feld MIT Default unverändert); `Decode` und zwei `extend`s dafür im Harness-Prelude, ganz
+    am Ende, damit keine IR-Zeilennummer wandert. Ein Auswertungstest in `examples/encoding-lab` (neuer Sample-Typ
+    `Slug`, Kapsel mit Paar, Rundreise durch das JSON des Labs). Ein natives Programm
+    `bootstrap/tests/native/capsule.trb` (Standard in vier Teilen, beide Paar-Formen, `==`/Map-Key/`Show`), und
+    `paths.trb` prüft zusätzlich die beiden Accessoren.
+    **Doku:** neue Seite `docs/language/types/data-or-capsule.md` (plus Inventar und Index), Abschnitt 3a in
+    `docs/ENCODING.md`, ein Decision-Log-Eintrag und die Ableitungsregel in `CONCEPT.md`, die Benennungskonvention
+    in `compiler/CONTRIBUTING.md`, `docs/PATH.md` auf die Kapsel umgeschrieben (Abschnitt 1, die Parse-Tabelle,
+    Abschnitt 3, das Diagramm).
+    **Was ich NICHT bauen konnte, und warum:** die abgeleiteten Rümpfe laufen nirgends - und das liegt nicht an
+    dieser Runde. Sonde: schon ein HANDgeschriebenes `encode` ist nativ nicht baubar (``a `var` argument of
+    `Record(...)` where the parameter asks for `Object(Encoder)`, which a place cannot become``), `describe` und alle
+    vier `Json`-Mitglieder stehen als `.Planned("5.7")` im C-Manifest, und Stage 0 kennt `Json` überhaupt nicht. Es
+    gibt also heute KEIN Encoding, das auf einem der beiden Back-Ends läuft; einen IR-Rumpf zu erzeugen, den kein
+    Test erreichen kann, habe ich gelassen (CONTRIBUTING: jede Funktion braucht einen Test). Die Regel ist damit
+    Typprüfer-Ebene, genau wie `Encode`/`Decode` es heute schon sind.
+    **Zwei Lücken gefunden:** (1) `String.from(kapsel)` löst NICHT auf, weil `String` schon `From<Iterable<Char>>`
+    trägt - über einen Bound (`where String: From<Value>`) geht es, direkt nicht (das ist Lücke 53, `From` ist die
+    eine Trait, die ein Typ mehrfach hat); deshalb steht in den Tests ein `textOf`-Helfer. (2) Eine Kapsel erreicht
+    ein Format OHNE Typnamen (kein `record(typeName)` mehr), also kann ein Mapping, das nach dem Namen schlägt
+    (`docs/ENCODING.md` Abschnitt 6), eine Kapsel nicht mehr herausgreifen. Beides steht in der Doku.
 
 - (`project.trb` - Umgebung und Lock, 2026-09-22) **Entschieden (Nutzer), korrigiert `docs/PROJECT.md` Abschnitt 8:**
   1. **`project.trb` darf Umgebungsvariablen lesen** ("natürlich") - neben dem lesenden Dateizugriff unterhalb des

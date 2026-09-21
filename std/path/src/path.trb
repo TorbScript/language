@@ -5,6 +5,9 @@
  * Everything else follows from the type: [Path.joined] cannot be given a root, [Path.parent] cannot fall off the
  * top, and `..` is only ever resolved on purpose, by [Path.normalized] or [Path.resolved]. `show()` is the one text
  * form, always with `/`; the operating system's own form is `std/fs`'s business, not this package's.
+ *
+ * `Path` is a **capsule**: its fields are private and without a default, so the only way in from outside the package
+ * is [Path.from], and the way out is [Path.show]. [Path.root] and [Path.components] read what a value holds.
  */
 
 use Show, Equals, Hash, Compare, Ordering, From from "std/core"
@@ -20,6 +23,11 @@ use PathError from "./error"
  * three lexical and case sensitive on every platform: two paths that differ only in case are two different values,
  * because whether they name the same file is a question for a file system and not for this type.
  *
+ * It is a **capsule**: both fields are private and neither has a default, so nothing outside this package reaches the
+ * constructor and [Path.from] is the one way in. A component list can therefore not be handed in wholesale, and a
+ * parsed path never shows with a doubled separator. `Encode` and `Decode` come from the one conversion pair with
+ * `String`, so a path in a configuration file or in a JSON document is its text.
+ *
  * # Examples
  *
  *     const module = Path.from "std/path/src/lib.trb"
@@ -27,34 +35,43 @@ use PathError from "./error"
  *
  * # Pitfalls
  *
- * - The constructor is public and a hand-written component may be empty, `.` or `..` - `Path(None, ["", "src"])`
- *   shows with a doubled separator. [Path.from] and every other member of this package only ever produce a
- *   component that is none of those; [Path.normalized] removes them from a value built by hand.
+ * - `..` is a component like any other, because dropping it would be a guess: `Path.from("a/../b")` keeps both, and
+ *   [Path.normalized] is where a caller asks for it to be resolved as text.
  *
  * # Related
  *
- * - [Root] - what `root` can be.
+ * - [Root] - what [Path.root] can be.
  * - [PathError] - what [Path.resolved] refuses.
  */
 public type Path with Show, Equals, Hash, Compare {
+  /** Where the path starts, and `None` for a relative path. [Path.root] reads it. */
+  private storedRoot: Root?
+  /** The components between the separators, outermost first. [Path.components] reads them. */
+  private storedComponents: List<String>
+
   /** Where the path starts, and `None` for a relative path. */
-  root: Root? = None
-  /** The components between the separators, outermost first. */
-  components: List<String> = []
+  fn root(): Root? {
+    storedRoot
+  }
+
+  /** The components between the separators, outermost first. A parsed path has neither an empty one nor a `.`. */
+  fn components(): List<String> {
+    storedComponents
+  }
 
   /** Whether the path starts at a root. Its opposite is [Path.isRelative]. */
   fn isAbsolute(): Bool {
-    root.isSome()
+    storedRoot.isSome()
   }
 
   /** Whether the path has no root, so that it means something only against a base. */
   fn isRelative(): Bool {
-    root.isNone()
+    storedRoot.isNone()
   }
 
   /** The last component: the name of the file or of the directory. `None` for a root and for the empty path. */
   fn name(): String? {
-    components.last()
+    storedComponents.last()
   }
 
   /**
@@ -85,15 +102,15 @@ public type Path with Show, Equals, Hash, Compare {
 
   /** The path one component up. `None` at a root and for the empty path: there is nothing above them. */
   fn parent(): Path? {
-    if components.isEmpty() {
+    if storedComponents.isEmpty() {
       return None
     }
-    Some Path(root, components.take(components.length() - 1).toList())
+    Some Path(storedRoot, storedComponents.take(storedComponents.length() - 1).toList())
   }
 
   /** `relative` below this path. The root of `relative` is dropped, so the result never leaves `self`. */
   fn joined(relative: Path): Path {
-    Path root, components.addedAll(relative.components)
+    Path storedRoot, storedComponents.addedAll(relative.storedComponents)
   }
 
   /** The same path with its last component replaced. `None` where there is no name to replace. */
@@ -113,11 +130,11 @@ public type Path with Show, Equals, Hash, Compare {
 
   /** Whether this path starts at the same root and with the same components as `prefix`. */
   fn startsWith(prefix: Path): Bool {
-    if root != prefix.root || prefix.components.length() > components.length() {
+    if storedRoot != prefix.storedRoot || prefix.storedComponents.length() > storedComponents.length() {
       return false
     }
-    for index in 0..prefix.components.length() {
-      if components[index] != prefix.components[index] {
+    for index in 0..prefix.storedComponents.length() {
+      if storedComponents[index] != prefix.storedComponents[index] {
         return false
       }
     }
@@ -130,20 +147,20 @@ public type Path with Show, Equals, Hash, Compare {
    * guessing for it.
    */
   fn relativeTo(base: Path): Path? {
-    if root != base.root {
+    if storedRoot != base.storedRoot {
       return None
     }
     var common = 0
-    while common < base.components.length() && common < components.length()
-      && base.components[common] == components[common] {
+    while common < base.storedComponents.length() && common < storedComponents.length()
+      && base.storedComponents[common] == storedComponents[common] {
       common = common + 1
     }
     var walked: List<String> = []
-    for _ in common..base.components.length() {
+    for _ in common..base.storedComponents.length() {
       walked.add ".."
     }
-    for index in common..components.length() {
-      walked.add components[index]
+    for index in common..storedComponents.length() {
+      walked.add storedComponents[index]
     }
     Some Path(None, walked)
   }
@@ -155,7 +172,7 @@ public type Path with Show, Equals, Hash, Compare {
    */
   fn normalized(): Path {
     var kept: List<String> = []
-    for component in components {
+    for component in storedComponents {
       if component.isEmpty() || component == "." {
         continue
       }
@@ -168,11 +185,11 @@ public type Path with Show, Equals, Hash, Compare {
         kept.removeAt(kept.length() - 1)
         continue
       }
-      if root.isNone() {
+      if storedRoot.isNone() {
         kept.add ".."
       }
     }
-    Path root, kept
+    Path storedRoot, kept
   }
 
   /**
@@ -206,8 +223,8 @@ public type Path with Show, Equals, Hash, Compare {
 
   /** The path with `/` as the separator, on every platform. `.` for the empty path. */
   fn show(): String {
-    const body = components.joined separator: "/"
-    match root {
+    const body = storedComponents.joined separator: "/"
+    match storedRoot {
       Some(found) => if body.isEmpty() { found.show() } else { "{found}{body}" }
       None => if body.isEmpty() { "." } else { body }
     }
@@ -215,26 +232,26 @@ public type Path with Show, Equals, Hash, Compare {
 
   /** Root first, then component by component, then by the number of components. Case sensitive everywhere. */
   fn compare(other: Path): Ordering {
-    const here = rankOf root
-    const there = rankOf other.root
+    const here = rankOf storedRoot
+    const there = rankOf other.storedRoot
     if here != there {
       return here.compare there
     }
-    if const Some(found) = root {
-      const answer = found.show().compare(other.root?.show() ?? "")
+    if const Some(found) = storedRoot {
+      const answer = found.show().compare(other.storedRoot?.show() ?? "")
       if answer != .Equal {
         return answer
       }
     }
     var index = 0
-    while index < components.length() && index < other.components.length() {
-      const answer = components[index].compare(other.components[index])
+    while index < storedComponents.length() && index < other.storedComponents.length() {
+      const answer = storedComponents[index].compare(other.storedComponents[index])
       if answer != .Equal {
         return answer
       }
       index = index + 1
     }
-    components.length().compare(other.components.length())
+    storedComponents.length().compare(other.storedComponents.length())
   }
 }
 
@@ -254,7 +271,12 @@ public type Path with Show, Equals, Hash, Compare {
  * # Pitfalls
  *
  * - A POSIX file name that literally contains a backslash cannot be named through this conversion, because `\` is a
- *   separator on every platform here. Name it with `Path(None, ["a\\b"])` or [Path.joined] instead.
+ *   separator on every platform here, and a capsule has no second way in: such a name cannot be written down as a
+ *   `Path` at all, and the file it names is reached through `std/fs` with its text.
+ *
+ * # Related
+ *
+ * - [Path.show] - the way back out, and the other half of the conversion pair `Encode` and `Decode` go through.
  */
 extend Path with From<String> {
   static fn from(value: String): Path {
@@ -270,6 +292,34 @@ extend Path with From<String> {
       return Path Some(Root.Unix), componentsOf(slashed)
     }
     Path None, componentsOf(slashed)
+  }
+}
+
+/**
+ * The way back out of [Path], and with [Path.from] it is the conversion pair of the capsule: `Path` has
+ * `From<String>` and `String` has `From<Path>`, so the derived `Encode` writes a path as its text and the derived
+ * `Decode` reads a text and hands it to [Path.from].
+ *
+ * # Examples
+ *
+ *     fn textOf<Value>(value: Value): String where String: From<Value> {
+ *       String.from value
+ *     }
+ *
+ *     print textOf(Path.from("std/path"))
+ *
+ * # Pitfalls
+ *
+ * - `String.from(path)` written out picks `From<Iterable<Char>>`, which `String` carries as well, and reports that
+ *   `Path` does not implement it. Ask for the conversion through a bound, as the example does, or write `show()`.
+ *
+ * # Related
+ *
+ * - [Path.show] - the same text, and what this conversion is written in terms of.
+ */
+extend String with From<Path> {
+  static fn from(value: Path): String {
+    value.show()
   }
 }
 

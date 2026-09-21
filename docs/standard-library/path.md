@@ -44,8 +44,11 @@ print module.joined(Path.from("deeper"))
 
 ```trb fragment
 public type Path with Show, Equals, Hash, Compare {
-  root: Root? = None
-  components: List<String> = []
+  private storedRoot: Root?
+  private storedComponents: List<String>
+
+  fn root(): Root?
+  fn components(): List<String>
 }
 ```
 
@@ -54,6 +57,11 @@ fails - there is no text a file system is guaranteed to reject - and `show()` re
 platform. `Path` is `Equals`, `Hash` and `Compare`, and all three are lexical and case sensitive everywhere: two paths
 that differ only in case are two different values, because whether they name the same file is a question for a file
 system and not for this type.
+
+`Path` is a [capsule](../language/types/data-or-capsule.md): both fields are `private` and neither has a default, so
+`Path.from` is the one way to a value and `root()` and `components()` are the two reads. Its conversion pair is
+`String` - `Path` has `From<String>` and `String` has `From<Path>`, which answers the same text as `show()` - so
+`Encode` and `Decode` are derived through that pair and a path in a document is its text.
 
 Every member that is defined for every path answers a value: `isAbsolute`, `isRelative`, `joined`, `startsWith`,
 `normalized`, `show`, `compare`. `name`, `nameWithoutExtension`, `extension`, `parent`, `withName`, `withExtension`
@@ -100,9 +108,12 @@ normalized.
 
 ## Pitfalls
 
-- **A POSIX file name that literally contains a backslash cannot be named through `Path.from`.** Both `/` and `\`
+- **A POSIX file name that literally contains a backslash cannot be named as a `Path` at all.** Both `/` and `\`
   separate on every platform, so that the same program behaves the same on stage 0, in a compiled binary and on every
-  platform. Name such a file with `Path(None, ["a\\b"])` or `joined` instead.
+  platform, and `Path.from` is the one way in. Reach such a file through `std/fs` with its text.
+- **`String.from(path)` written out does not resolve.** `String` carries `From<Iterable<Char>>` as well, so that name
+  picks the other implementation and reports that `Path` does not implement it. Write `path.show()`, or ask for the
+  conversion through a bound (`fn textOf<Value>(value: Value): String where String: From<Value>`).
 - **Comparison is lexical and case sensitive, on every platform, always.** `Path.from("A") == Path.from("a")` is
   `false` everywhere, including on a case-insensitive mount - a case-insensitive `==` would make a `Map<Path, _>`
   answer differently on two platforms, and it would still be wrong, because case folding is a property of the mount

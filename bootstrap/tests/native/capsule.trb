@@ -1,0 +1,154 @@
+use Process from "std/process"
+
+/**
+ * A **capsule** compiled to a native binary: private fields with no default, a `static fn` factory, accessors, and the
+ * one conversion pair that is the way in and the way out. It is a standard of the language and not a construct of it -
+ * nothing here is a keyword - so what it pins is that the four parts work together and that both implementations agree
+ * about every one of them.
+ *
+ * The two shapes a pair can have are both here: `Celsius` is read with `tryFrom` and can refuse, `Slug` is read with
+ * `from` and cannot. Both are written with `From<Self>` on the source type, which is the direction the derived
+ * `Encode` of a capsule takes, and both sources are ordinary data types - a pair whose source is `String` is
+ * `std/path`'s (`paths.trb`), and a call of `String.from` cannot stand in a program of this suite, because stage 0
+ * answers that name with a native of its own.
+ *
+ * The generated `Show` prints the private field, exactly as it does for a public one: `Show` is the debug form, and a
+ * type with a secret writes its own.
+ *
+ * `print` is `print(...values: Show)`, a variadic list of trait-typed values, so the checks compare the text
+ * themselves and the program leaves with a code that names the one that failed.
+ */
+
+/** The data a `Celsius` is read from and written as. */
+type Reading {
+  degrees: Int
+}
+
+/** A temperature that is above absolute zero, because nothing else can be built. */
+type Celsius with TryFrom<Reading, String> {
+  private storedDegrees: Int
+
+  static fn tryFrom(value: Reading): Result<Celsius, String> {
+    if value.degrees < -273 {
+      return Fail "{value.degrees} is below absolute zero"
+    }
+    Ok Self(value.degrees)
+  }
+
+  /** The accessor. It cannot be called `storedDegrees`, and the field cannot be called `degrees`. */
+  fn degrees(): Int {
+    storedDegrees
+  }
+}
+
+extend Reading with From<Celsius> {
+  static fn from(value: Celsius): Reading {
+    Reading value.degrees()
+  }
+}
+
+/** The data a `Slug` is read from and written as. */
+type Title {
+  text: String
+}
+
+/** A title in lower case and without spaces: a normalization nothing outside can skip. */
+type Slug {
+  private storedText: String
+
+  fn text(): String {
+    storedText
+  }
+}
+
+extend Slug with From<Title> {
+  static fn from(value: Title): Slug {
+    Self value.text.toLowerCase().replace(" ", "-")
+  }
+}
+
+extend Title with From<Slug> {
+  static fn from(value: Slug): Title {
+    Title value.text()
+  }
+}
+
+fn shown<Value: Show>(value: Value): String {
+  value.show()
+}
+
+/** The factory refuses what the invariant forbids, and nothing else can build the value. */
+fn refuses(): Bool {
+  match Celsius.tryFrom(Reading(-300)) {
+    Ok(_) => false
+    Fail(reason) => reason == "-300 is below absolute zero"
+  }
+}
+
+fn accepts(): Bool {
+  match Celsius.tryFrom(Reading(21)) {
+    Ok(warm) => warm.degrees() == 21
+    Fail(_) => false
+  }
+}
+
+/** The pair: a `Reading` in through `tryFrom`, a `Reading` out through `From<Celsius>`, and the two agree. */
+fn roundTripsThroughReading(): Bool {
+  const warm = Celsius.tryFrom(Reading(21)).expect("a temperature")
+  const back = Reading.from warm
+  back == Reading(21) && Celsius.tryFrom(back) == Ok(warm)
+}
+
+/** The same pair without a failure on the way in, and with a normalization the way in performs. */
+fn roundTripsTotally(): Bool {
+  const slug = Slug.from Title("Data Or Capsule")
+  const back = Title.from slug
+  slug.text() == "data-or-capsule" && back == Title("data-or-capsule") && Slug.from(back) == slug
+}
+
+/** A capsule is a value: `==`, `Hash` and `Show` read the fields, private ones included. */
+fn comparesByValue(): Bool {
+  const first = Slug.from Title("One Two")
+  const second = Slug.from Title("one two")
+  const other = Slug.from Title("Three")
+  first == second && first != other
+}
+
+fn worksAsKey(): Bool {
+  const slug = Slug.from Title("One Two")
+  const seen: Map<Slug, Int> = [slug: 1]
+  seen.get(Slug.from(Title("ONE TWO"))) == Some(1)
+}
+
+fn showsItsField(): Bool {
+  shown(Celsius.tryFrom(Reading(21)).expect("a temperature")) == "Celsius(storedDegrees: 21)"
+}
+
+/** Which of the checks failed, or zero. The first failure wins, so the code names exactly one of them. */
+fn failure(): Int {
+  if !refuses() {
+    return 1
+  }
+  if !accepts() {
+    return 2
+  }
+  if !roundTripsThroughReading() {
+    return 3
+  }
+  if !roundTripsTotally() {
+    return 4
+  }
+  if !comparesByValue() {
+    return 5
+  }
+  if !worksAsKey() {
+    return 6
+  }
+  if !showsItsField() {
+    return 7
+  }
+  0
+}
+
+print "a capsule is a standard, not a construct"
+Process.exit failure()

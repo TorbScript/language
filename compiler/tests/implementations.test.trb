@@ -348,6 +348,109 @@ group "Derived implementations" {
 }
 
 /**
+ * A **capsule** is a type whose generated constructor is closed from outside, because a `private` field has no
+ * default. There is no field list a caller could be handed, so `Encode` and `Decode` are derived through the type's one
+ * conversion pair: the `Source` it is read from and written as. Without a pair the way in is refused and the way out
+ * stays the fields, exactly as `Show` does.
+ */
+group "A capsule's `Encode` and `Decode`" {
+  /** The one thing that needs a `Decode`, so that the derivation is asked for where a test can see the answer. */
+  const reader = "fn read<Value: Decode>(): Int \{\n  1\n\}\n\n"
+
+  const writer = "fn write(value: Encode): Int \{\n  1\n\}\n\n"
+
+  test "the pair may be written with `TryFrom`, and then `Decode` is derived" {
+    const source = "type Email with TryFrom<String, String> \{\n  private storedAddress: String\n\n"
+      + "  static fn tryFrom(value: String): Result<Email, String> \{\n    Ok Self(value)\n  \}\n\n"
+      + "  fn address(): String \{\n    storedAddress\n  \}\n\}\n\n"
+      + "extend String with From<Email> \{\n"
+      + "  static fn from(value: Email): String \{\n    value.address()\n  \}\n\}\n\n"
+      + reader + inBody("  print read<Email>()\n  const _ = Email.decode(\"ada@example.test\")")
+    assert problems(source).isEmpty()
+  }
+
+  test "the pair may be written with `From`, and then `Decode` is derived too" {
+    const source = "type Title \{\n  text: String\n\}\n\ntype Slug \{\n  private storedText: String\n\n"
+      + "  fn text(): String \{\n    storedText\n  \}\n\}\n\n"
+      + "extend Slug with From<Title> \{\n"
+      + "  static fn from(value: Title): Slug \{\n    Self value.text\n  \}\n\}\n\n"
+      + "extend Title with From<Slug> \{\n"
+      + "  static fn from(value: Slug): Title \{\n    Title value.text()\n  \}\n\}\n\n"
+      + reader + inBody("  print read<Slug>()")
+    assert problems(source).isEmpty()
+  }
+
+  /** One direction is not a pair: the way out has to exist as well, or nothing can be written. */
+  test "a way in without a way back is no pair, and the reflexive `From<Self>` never counts as one" {
+    const source = "type Email with TryFrom<String, String> \{\n  private storedAddress: String\n\n"
+      + "  static fn tryFrom(value: String): Result<Email, String> \{\n    Ok Self(value)\n  \}\n\}\n\n"
+      + reader + inBody("  print read<Email>()")
+    assert(problems(source) == ["`Email` does not implement `Decode`"])
+    assert(
+      notes(source) == [
+        "`read` asks for it",
+        "`Email` is a capsule: `storedAddress` is private and has no default, so nothing outside can call the"
+          + " constructor and `Decode` comes from `Email`'s one conversion pair instead of from its fields",
+        "`Email` has no pair. Write `From<Source>` or `TryFrom<Source, Failure>` for `Email`, and `From<Email>` for"
+          + " that `Source`",
+      ]
+    )
+  }
+
+  test "two types that convert both ways are two pairs, and the message lists them" {
+    const source = "type Title \{\n  text: String\n\}\n\ntype Slug \{\n  private storedText: String\n\n"
+      + "  fn text(): String \{\n    storedText\n  \}\n\}\n\n"
+      + "extend Slug with From<Title> \{\n"
+      + "  static fn from(value: Title): Slug \{\n    Self value.text\n  \}\n\}\n\n"
+      + "extend Title with From<Slug> \{\n"
+      + "  static fn from(value: Slug): Title \{\n    Title value.text()\n  \}\n\}\n\n"
+      + "extend Slug with TryFrom<String, String> \{\n"
+      + "  static fn tryFrom(value: String): Result<Slug, String> \{\n    Ok Self(value)\n  \}\n\}\n\n"
+      + "extend String with From<Slug> \{\n"
+      + "  static fn from(value: Slug): String \{\n    value.text()\n  \}\n\}\n\n"
+      + reader + inBody("  print read<Slug>()")
+    assert(problems(source) == ["`Slug` does not implement `Decode`"])
+    assert(
+      notes(source)[2] == "`Slug` converts both ways with `String` and `Title`. Exactly one type may"
+    )
+  }
+
+  /** The generated body reads the `Source` and nothing else, so a `Source` without the trait is no pair either. */
+  test "a pair whose source is not `Decode` itself derives nothing, and the message names it" {
+    const source = "type Weight \{\n  private storedGrams: Float\n\}\n\n"
+      + "extend Weight with From<Float> \{\n"
+      + "  static fn from(value: Float): Weight \{\n    Self value\n  \}\n\}\n\n"
+      + "extend Float with From<Weight> \{\n"
+      + "  static fn from(value: Weight): Float \{\n    0.0\n  \}\n\}\n\n"
+      + reader + inBody("  print read<Weight>()")
+    assert(problems(source) == ["`Weight` does not implement `Decode`"])
+    assert(
+      notes(source)[2] == "`Weight` pairs with `Float64` through `from`, and that type is not `Decode` itself"
+    )
+  }
+
+  /** The way out cannot break an invariant, so a capsule without a pair is still a value a message can show. */
+  test "without a pair the way out stays the fields, because that is what `Show` does as well" {
+    const source = "type Email with TryFrom<String, String> \{\n  private storedAddress: String\n\n"
+      + "  static fn tryFrom(value: String): Result<Email, String> \{\n    Ok Self(value)\n  \}\n\}\n\n"
+      + writer + "fn probe(address: Email): Int \{\n  write address\n\}"
+    assert problems(source).isEmpty()
+  }
+
+  test "a type whose fields are all public is unchanged: `Decode` comes from the fields" {
+    const source = "type Amount \{\n  value: Int\n  label: String = \"\"\n\}\n\n"
+      + reader + inBody("  print read<Amount>()")
+    assert problems(source).isEmpty()
+  }
+
+  test "a `private` field with a default leaves the constructor open, so the fields decide as before" {
+    const source = "type Session \{\n  token: String\n  private hits: Int = 0\n\}\n\n"
+      + reader + inBody("  print read<Session>()")
+    assert problems(source).isEmpty()
+  }
+}
+
+/**
  * A bound on `Never` holds whatever the trait is: no value of `Never` exists, so nothing can ever ask the table for a
  * member. `Source<Item, Never>` - the reading end of a channel, which cannot fail - is what needs it: the generated
  * `Show` of a `Result` asks its `Failure` for one.

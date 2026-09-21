@@ -168,17 +168,18 @@ expectation files. The leak gate does not run on them, because every one of them
 | `generics.trb` | A generic type with methods, a generic function with a bound, a generic `extend` |
 | `generic-operators.trb` | Every operator on a generic type is the member of its trait, for `Int`, `Float` and `Fixed`, and inside a generic body as well |
 | `derived.trb` | The generated `Show`, `Equals` and `Hash` of a record, a case and a tuple |
+| `capsule.trb` | The capsule standard: private fields with no default, a `static fn` factory, accessors, and the one conversion pair in both directions |
 | `case-defaults.trb` | A case constructor whose field takes its default |
 | `constants.trb` | Top-level `const`s of every shape, from a function and from the top level, and the mutated copy of one |
 | `generic-constants.trb` | A `const` of a generic type is one value per type argument, named after the arguments the read decided |
 | `show-compound.trb` | `Show` of everything compound, and of a type whose field carries the name of a member |
 | `tuple-compare.trb` | The generated `compare` of a tuple: lexicographic, each field through its own `Compare` |
 
-**Paths** - `std/path`'s `Path`: a root and a list of components, never a string, and nothing about a disk.
+**Paths** - `std/path`'s `Path`: a capsule over a root and a list of components, never a string, and nothing about a disk.
 
 | Program | What it pins |
 |---------|--------------|
-| `paths.trb` | Every row of the parse table, every member, `resolved(inside:)` in each of its outcomes, and the ten call-site rewrites of `docs/PATH.md` section 4 |
+| `paths.trb` | Every row of the parse table, every member including the two accessors of the capsule, `resolved(inside:)` in each of its outcomes, and the ten call-site rewrites of `docs/PATH.md` section 4 |
 
 **Tests** - `test` and `group` of `std/test`, whose report both implementations write from the same place.
 

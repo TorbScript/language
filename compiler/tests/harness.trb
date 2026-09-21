@@ -465,6 +465,27 @@ public const preludeSource = r"""
 
   /** As in `std/task`: the closure it takes may capture no `var` binding (CONCEPT, "Concurrency"). */
   public native fn spawn<Value>(body: () => Value): Task<Value>
+
+  /**
+   * As in `std/encoding`: the way back in, shortened to the one thing derivation looks at, which is its name. The real
+   * one takes a `var decoder: Decoder` and fails with a `DecodeError`, and neither is a question the checker asks.
+   */
+  public trait Decode {
+    static fn decode(text: String): Result<Self, String>
+  }
+
+  /** The two scalars a test of derivation reads back, so that a field of one of them does not stop it. */
+  extend Int64 with Decode {
+    static fn decode(text: String): Result<Int64, String> {
+      Fail text
+    }
+  }
+
+  extend String with Decode {
+    static fn decode(text: String): Result<String, String> {
+      Ok text
+    }
+  }
   """
 
 public const workspace = [
@@ -484,7 +505,7 @@ public const workspace = [
     public use Bool, Char, String, Int, Float, Option, Result, List, ArrayList, Map, Array from "./types"
     public use Range, RangeFrom, RangeTo, Bounds from "./types"
     public use Set, TrieSet, TrieMap, TrieList from "./types"
-    public use From, Into, TryFrom, TryInto, Encode, Length, Close, Task from "./types"
+    public use From, Into, TryFrom, TryInto, Encode, Decode, Length, Close, Task from "./types"
     public use print, printError, panic, using, do, assert, nameOf, Expression, spawn from "./types"
     public use Void from "./types"
     public use isSame from "./types"

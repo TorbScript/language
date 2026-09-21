@@ -28,6 +28,7 @@ use noteArgumentClosures from "./mutation"
 use taskValueOf from "./statement"
 use isQuotation, openThunk, closeThunk from "./quote"
 use checkConstruction, checkSharedIdentity, requireSharedFields from "./declaration"
+use capsuleNotesOf from "./derive"
 
 /** Which parameter every written argument fills, and what the call adds to what was written. */
 public type ArgumentPlan {
@@ -876,6 +877,10 @@ fn reportUnmetBound(var checker: Checker, subject: TypeId, wanted: TypeId, owner
   var problem = Diagnostic.error "`{given}` does not implement `{shown}`", at
   if !owner.isEmpty() {
     problem = problem.withNote "`{owner}` asks for it"
+  }
+  // A capsule says why it has no `Decode`: the rule that closed it, and the one thing its conversions are missing
+  for note in capsuleNotesOf(checker, subject, wanted) {
+    problem = problem.withNote note
   }
   checker.reportHere problem
 }
