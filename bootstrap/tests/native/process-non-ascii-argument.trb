@@ -1,0 +1,75 @@
+/**
+ * **A name that is not ASCII is the same name in two processes.** A file called `日本.txt` under a directory called `grüße`
+ * is handed to a child process, which answers in its exit code that it is there; then the child writes a second file of
+ * its own, and this program reads it back.
+ *
+ * Both directions cross the boundary to the operating system as text, and on Windows the arguments of a child cross it as
+ * **one command line** rather than as a list - so one conversion decides all of it (`docs/PATH.md`, section 6). Where that
+ * conversion is a narrow call, `ü` becomes a different character and `日` has no byte at all: the child looks for a file
+ * nobody wrote, and the file the child wrote is one this program cannot open. The second direction is the one that cannot
+ * be papered over, because the child is not this implementation and names the file as the operating system really has it.
+ *
+ * Nothing the child *wrote to its output* is compared beyond one word of ASCII. What a program writes is encoded in the
+ * code page of its console and not in UTF-8, and the two implementations do not even collect the two streams the same way
+ * - this one has both of them in `standardOutput` and the interpreter keeps them apart. An exit code is one integer on
+ * both, which is why it carries the first answer.
+ *
+ * The scratch directory is under `build/`, which git ignores. There is no `delete` in `std/fs`, so the two files stay
+ * where they are and a second run writes them again.
+ */
+use File, IoError from "std/fs"
+use Process from "std/process"
+use Environment from "std/environment"
+
+fn run(): Result<Int, IoError> {
+  const directory = "build/native-process-argument/grüße"
+  File.createDirectory(directory)?
+  const path = "{directory}/日本.txt"
+  const _ = File.writeText(path, "torb\n")?
+  const outcome = Process.run(askProgram(), askArguments(path))?
+  print(outcome.exitCode == 7)
+  print outcome.standardOutput.isEmpty()
+  // And the other direction: the child writes the file and this program opens it by the same name
+  const written = "{directory}/勝手.txt"
+  const writing = Process.run(writeProgram(), writeArguments(written))?
+  print(writing.exitCode == 0)
+  print File.exists(written)
+  const text = File.readText(written)?
+  print text.trim()
+  Ok outcome.exitCode
+}
+
+/** `COMSPEC` is what says this is a Windows machine, and it is the one thing this program asks about it. */
+fn onWindows(): Bool {
+  Environment.get("COMSPEC").isSome()
+}
+
+/** The program that answers whether a path is a file. Both of these are on every machine of their platform. */
+fn askProgram(): String {
+  if onWindows() { "cmd" } else { "sh" }
+}
+
+/**
+ * Seven is the answer for a file that is there, on both platforms, so the two runs print the same line. A file that is not
+ * there leaves `cmd` with zero and `sh` with one, and neither is seven.
+ */
+fn askArguments(path: String): List<String> {
+  if onWindows() { ["/c", "if exist {path} exit 7"] } else { ["-c", "test -f $0 && exit 7", path] }
+}
+
+/** The program that writes one word into a path of its own, which is a shell on both platforms. */
+fn writeProgram(): String {
+  if onWindows() { "cmd" } else { "sh" }
+}
+
+fn writeArguments(path: String): List<String> {
+  if onWindows() { ["/c", "echo torb>{path}"] } else { ["-c", "echo torb>$0", path] }
+}
+
+match run() {
+  Ok(code) => Process.exit code
+  Fail(problem) => {
+    printError "error: {problem}"
+    Process.exit 1
+  }
+}

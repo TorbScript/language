@@ -1,10 +1,26 @@
 /*
  * platform.c - the only file in the runtime with an `#ifdef _WIN32`.
  *
- * Nine functions: what kind of thing a path is, the working directory, the entries of a directory, creating a
- * directory and everything above it, reading and writing a whole file, running a child process to its end, a monotonic
- * clock reading, and setting an environment variable (for `runtime/tests` only - no native ever sets one). Everything
- * above this file is portable.
+ * Thirteen functions: what kind of thing a path is, the working directory, the entries of a directory, creating one
+ * directory and everything above it, opening a file, removing one, reading and writing a whole file, running a child
+ * process to its end, a monotonic clock reading, the program's own arguments, and reading and setting an environment
+ * variable. Everything above this file is portable, and what it hands out and takes in is always UTF-8.
+ *
+ * On Windows that last sentence is the whole point of the file. A `String` of the language is UTF-8, every call of the
+ * operating system comes in a narrow and a wide form, and the narrow one reads the **code page of the machine** (1252 on
+ * a German one, 932 on a Japanese one) - so `grüße.txt` handed to `fopen` creates a file that is called `grÃ¼ÃŸe.txt`,
+ * and a path over `MAX_PATH` cannot be opened at all whatever it is called.
+ *
+ * The first of those is worth being precise about, because it is the one that looks harmless: where the code page has a
+ * character for every byte, the mangling is a **bijection**, so a program that creates its own files and reads them back
+ * never notices - and neither does a child process it starts, because the command line was mangled the same way. It is
+ * still wrong for everybody else, which is everybody: the name on the disk is not the name the program meant, so a file
+ * that `git checkout` wrote cannot be opened, and what the file manager shows is mojibake. On a code page where the
+ * mapping loses (932 has no character for most byte pairs) it fails outright.
+ *
+ * The whole Windows half therefore goes through the wide API, with one pair of helpers converting at the boundary
+ * (`torb_platform_wide`, `torb_platform_utf8`) and one function deciding what form a path is handed over in
+ * (`torb_platform_system_path`). The POSIX half needs none of it: a path is bytes there and a UTF-8 `String` is bytes.
  */
 
 #include "torb.h"
@@ -17,33 +33,452 @@
 #if defined(_WIN32)
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+/* `CommandLineToArgvW`, which `WIN32_LEAN_AND_MEAN` leaves out of `windows.h`. It lives in shell32, which every
+   Windows C compiler links by default (the MSVC family through the directive below, the GCC family through its own
+   default libraries) - so no build has to name a library for it. */
+#  include <shellapi.h>
+#  if defined(_MSC_VER)
+#    pragma comment(lib, "shell32.lib")
+#  endif
 #  include <direct.h>
 #  include <io.h>
-#  include <sys/stat.h>
-#  define TORB_STAT struct _stat
-#  define TORB_STAT_CALL _stat
-#  define TORB_DIRECTORY_BIT _S_IFDIR
-#  define TORB_FILE_TYPE_MASK _S_IFMT
-#  define TORB_GET_WORKING_DIRECTORY _getcwd
+#  include <wchar.h>
 #else
 #  include <dirent.h>
 #  include <sys/stat.h>
 #  include <sys/wait.h>
 #  include <time.h>
 #  include <unistd.h>
-#  define TORB_STAT struct stat
-#  define TORB_STAT_CALL stat
-#  define TORB_DIRECTORY_BIT S_IFDIR
-#  define TORB_FILE_TYPE_MASK S_IFMT
-#  define TORB_GET_WORKING_DIRECTORY getcwd
 #endif
 
+/* =============================================================== the boundary to Windows: UTF-8 and UTF-16 ====== */
+
+#if defined(_WIN32)
+
+/**
+ * A path is handed over in its **extended-length form** (`\\?\C:\...`) from this length on, and in the plain form below
+ * it. `MAX_PATH - 12` is the length a directory may have for the operating system to still create files inside it, so
+ * it is the one threshold that works for a path that is opened and for a path that is created in.
+ */
+#define TORB_PLAIN_PATH_LIMIT (MAX_PATH - 12)
+
+/**
+ * UTF-8 to UTF-16, NUL terminated. Result owned, freed with `torb_raw_free(result, *capacity)` - `*capacity` is the
+ * size in bytes, not the number of characters. `NULL` where the text is not valid UTF-8, which for a path is the same
+ * answer as a name that is not there (`MB_ERR_INVALID_CHARS` is what makes the call say so instead of inventing a
+ * replacement character).
+ */
+wchar_t *torb_platform_wide(const char *text, size_t *capacity) {
+  const int length = (int)strlen(text);
+  int count = 0;
+  wchar_t *wide;
+  if (length > 0) {
+    count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, length, NULL, 0);
+    if (count <= 0) {
+      *capacity = 0u;
+      return NULL;
+    }
+  }
+  *capacity = ((size_t)count + 1u) * sizeof(wchar_t);
+  wide = (wchar_t *)torb_raw_allocate(*capacity);
+  if (count > 0 && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, length, wide, count) != count) {
+    torb_raw_free(wide, *capacity);
+    *capacity = 0u;
+    return NULL;
+  }
+  wide[count] = L'\0';
+  return wide;
+}
+
+/**
+ * UTF-16 back to UTF-8, NUL terminated. Result owned, freed with `torb_raw_free(result, *length + 1)`; `*length` is the
+ * byte length without the NUL. `NULL` where the UTF-16 is not well formed - a name made of an unpaired surrogate has no
+ * UTF-8 spelling, and a `String` is always valid UTF-8, so there is no value for such a name (`docs/PATH.md`).
+ */
+char *torb_platform_utf8(const wchar_t *wide, size_t *length) {
+  const int count = (int)wcslen(wide);
+  int bytes = 0;
+  char *text;
+  if (count > 0) {
+    bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, count, NULL, 0, NULL, NULL);
+    if (bytes <= 0) {
+      *length = 0u;
+      return NULL;
+    }
+  }
+  text = (char *)torb_raw_allocate((size_t)bytes + 1u);
+  if (count > 0
+      && WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, count, text, bytes, NULL, NULL) != bytes) {
+    torb_raw_free(text, (size_t)bytes + 1u);
+    *length = 0u;
+    return NULL;
+  }
+  text[bytes] = '\0';
+  *length = (size_t)bytes;
+  return text;
+}
+
+/**
+ * The form of a path an operating system call gets: every `/` becomes `\`, and a path whose fully qualified form is
+ * longer than `MAX_PATH - 13` characters is handed over as `\\?\C:\...` (or `\\?\UNC\server\share\...`), which is the
+ * only form over that length any call accepts.
+ *
+ * **Only above the limit, not always.** `\\?\` does not merely lift a limit, it switches the whole path off the
+ * operating system's own parsing: nothing is normalised any more, `..` and a trailing dot or space are literal name
+ * parts, `NUL` and `CON` stop naming devices, and a relative path is impossible. Adding it everywhere would mean every
+ * path a program opens is one *this file* resolved rather than the one the caller wrote - a relative path is resolved
+ * against a current directory the operating system keeps **per drive**, and `C:file` names a file in C:'s own. So the
+ * plain form stays the normal case, where the behaviour is the operating system's to the letter, and the extended form
+ * appears where the plain one cannot work at all.
+ *
+ * The extended form exists only inside this function and never reaches a value of the program: what a program sees is
+ * the `/` form of `File.absolutePath` (`docs/PATH.md`, section 6).
+ *
+ * Result owned like `torb_platform_wide`'s, and `NULL` for the same reason.
+ */
+wchar_t *torb_platform_system_path(const char *path, size_t *capacity) {
+  size_t plain_capacity = 0u;
+  wchar_t *plain = torb_platform_wide(path, &plain_capacity);
+  size_t index;
+  DWORD needed;
+  DWORD written;
+  size_t full_capacity;
+  wchar_t *full;
+  const wchar_t *prefix;
+  size_t prefix_length;
+  size_t replaced;
+  wchar_t *result;
+
+  if (plain == NULL) {
+    *capacity = 0u;
+    return NULL;
+  }
+  for (index = 0u; plain[index] != L'\0'; index += 1u) {
+    if (plain[index] == L'/') {
+      plain[index] = L'\\';
+    }
+  }
+  /* A path that is already extended was normalised by whoever wrote it, and normalising it again would be wrong */
+  if (wcsncmp(plain, L"\\\\?\\", 4u) == 0) {
+    *capacity = plain_capacity;
+    return plain;
+  }
+  /* The length of the fully qualified form, with the NUL - text arithmetic, so it touches no disk and no network */
+  needed = GetFullPathNameW(plain, 0u, NULL, NULL);
+  if (needed == 0u || needed <= (DWORD)TORB_PLAIN_PATH_LIMIT) {
+    *capacity = plain_capacity;
+    return plain;
+  }
+  full_capacity = (size_t)needed * sizeof(wchar_t);
+  full = (wchar_t *)torb_raw_allocate(full_capacity);
+  written = GetFullPathNameW(plain, needed, full, NULL);
+  if (written == 0u || written >= needed) {
+    torb_raw_free(full, full_capacity);
+    *capacity = plain_capacity;
+    return plain;
+  }
+  /* `\\server\share` becomes `\\?\UNC\server\share`: the prefix takes the place of the two leading separators */
+  replaced = full[0] == L'\\' && full[1] == L'\\' ? 2u : 0u;
+  prefix = replaced == 2u ? L"\\\\?\\UNC\\" : L"\\\\?\\";
+  prefix_length = wcslen(prefix);
+  *capacity = (prefix_length + (size_t)written - replaced + 1u) * sizeof(wchar_t);
+  result = (wchar_t *)torb_raw_allocate(*capacity);
+  memcpy(result, prefix, prefix_length * sizeof(wchar_t));
+  memcpy(result + prefix_length, full + replaced, ((size_t)written - replaced + 1u) * sizeof(wchar_t));
+  torb_raw_free(full, full_capacity);
+  torb_raw_free(plain, plain_capacity);
+  return result;
+}
+
+/**
+ * What an `IoError` says about a call of the Windows API, in the words `strerror` uses for the same thing - so the
+ * message of a failure does not depend on which call inside this file produced it. Borrowed, static.
+ */
+static const char *torb_windows_message(DWORD code) {
+  switch (code) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+    case ERROR_INVALID_NAME:
+    case ERROR_BAD_NETPATH:
+    case ERROR_BAD_PATHNAME:
+      return "No such file or directory";
+    case ERROR_ACCESS_DENIED:
+    case ERROR_SHARING_VIOLATION:
+      return "Permission denied";
+    case ERROR_DIRECTORY:
+      return "Not a directory";
+    case ERROR_FILENAME_EXCED_RANGE:
+      return "File name too long";
+    case ERROR_NOT_ENOUGH_MEMORY:
+    case ERROR_OUTOFMEMORY:
+      return "Not enough space";
+    case ERROR_DISK_FULL:
+      return "No space left on device";
+    default:
+      return "the operating system refused the operation";
+  }
+}
+
+#endif
+
+/* ============================================================================================ Windows ========== */
+
+#if defined(_WIN32)
+
 torb_path_kind torb_platform_path_kind(const char *path) {
-  TORB_STAT information;
-  if (TORB_STAT_CALL(path, &information) != 0) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  DWORD attributes;
+  if (wide == NULL) {
     return TORB_PATH_MISSING;
   }
-  if ((information.st_mode & (unsigned)TORB_FILE_TYPE_MASK) == (unsigned)TORB_DIRECTORY_BIT) {
+  attributes = GetFileAttributesW(wide);
+  torb_raw_free(wide, capacity);
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    return TORB_PATH_MISSING;
+  }
+  return (attributes & (DWORD)FILE_ATTRIBUTE_DIRECTORY) != 0u ? TORB_PATH_DIRECTORY : TORB_PATH_FILE;
+}
+
+char *torb_platform_working_directory(size_t *length) {
+  /* With the NUL, which is what the second call wants and what the first one answers */
+  const DWORD needed = GetCurrentDirectoryW(0u, NULL);
+  size_t capacity;
+  wchar_t *wide;
+  char *text;
+  if (needed == 0u) {
+    return NULL;
+  }
+  capacity = (size_t)needed * sizeof(wchar_t);
+  wide = (wchar_t *)torb_raw_allocate(capacity);
+  if (GetCurrentDirectoryW(needed, wide) == 0u) {
+    torb_raw_free(wide, capacity);
+    return NULL;
+  }
+  text = torb_platform_utf8(wide, length);
+  torb_raw_free(wide, capacity);
+  return text;
+}
+
+bool torb_platform_list_directory(const char *path, torb_list *out, const char **message) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  size_t length;
+  size_t pattern_capacity;
+  wchar_t *pattern;
+  WIN32_FIND_DATAW entry;
+  HANDLE handle;
+  bool ok = true;
+  if (wide == NULL) {
+    *message = "No such file or directory";
+    return false;
+  }
+  /* `<path>\*`, and no second separator where the path is a root and already ends in one - in the extended form
+     nothing collapses a doubled separator any more */
+  length = wcslen(wide);
+  pattern_capacity = (length + 3u) * sizeof(wchar_t);
+  pattern = (wchar_t *)torb_raw_allocate(pattern_capacity);
+  memcpy(pattern, wide, length * sizeof(wchar_t));
+  torb_raw_free(wide, capacity);
+  if (length > 0u && pattern[length - 1u] != L'\\') {
+    pattern[length] = L'\\';
+    length += 1u;
+  }
+  pattern[length] = L'*';
+  pattern[length + 1u] = L'\0';
+  handle = FindFirstFileW(pattern, &entry);
+  torb_raw_free(pattern, pattern_capacity);
+  if (handle == INVALID_HANDLE_VALUE) {
+    *message = torb_windows_message(GetLastError());
+    return false;
+  }
+  do {
+    size_t name_length = 0u;
+    char *name;
+    if (wcscmp(entry.cFileName, L".") == 0 || wcscmp(entry.cFileName, L"..") == 0) {
+      continue;
+    }
+    name = torb_platform_utf8(entry.cFileName, &name_length);
+    if (name == NULL) {
+      *message = "a name in this directory is not valid Unicode";
+      ok = false;
+      break;
+    }
+    {
+      torb_text text = torb_text_from_cstring(name);
+      torb_raw_free(name, name_length + 1u);
+      torb_list_add(out, &text);
+    }
+  } while (FindNextFileW(handle, &entry) != 0);
+  FindClose(handle);
+  return ok;
+}
+
+/** One directory, where everything above it is already there. False with a message, also where it is already there. */
+static bool torb_make_one_directory(const char *path, const char **message) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  bool made;
+  if (wide == NULL) {
+    *message = "No such file or directory";
+    return false;
+  }
+  made = _wmkdir(wide) == 0;
+  if (!made) {
+    *message = strerror(errno);
+  }
+  torb_raw_free(wide, capacity);
+  return made;
+}
+
+void *torb_platform_open_file(const char *path, bool writing, const char **message) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  FILE *file;
+  if (wide == NULL) {
+    *message = "No such file or directory";
+    return NULL;
+  }
+  file = _wfopen(wide, writing ? L"wb" : L"rb");
+  if (file == NULL) {
+    *message = strerror(errno);
+  }
+  torb_raw_free(wide, capacity);
+  return file;
+}
+
+bool torb_platform_remove(const char *path) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_system_path(path, &capacity);
+  DWORD attributes;
+  bool removed;
+  if (wide == NULL) {
+    return false;
+  }
+  attributes = GetFileAttributesW(wide);
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    torb_raw_free(wide, capacity);
+    return false;
+  }
+  /* Two calls, because a directory is not a file to this platform: `DeleteFileW` refuses one */
+  removed = (attributes & (DWORD)FILE_ATTRIBUTE_DIRECTORY) != 0u ? RemoveDirectoryW(wide) != 0 : DeleteFileW(wide) != 0;
+  torb_raw_free(wide, capacity);
+  return removed;
+}
+
+int64_t torb_platform_monotonic_nanoseconds(void) {
+  static LARGE_INTEGER frequency;
+  static bool have_frequency = false;
+  LARGE_INTEGER counter;
+  int64_t seconds;
+  int64_t remainder_nanoseconds;
+  if (!have_frequency) {
+    QueryPerformanceFrequency(&frequency);
+    have_frequency = true;
+  }
+  QueryPerformanceCounter(&counter);
+  /* Split into whole seconds and a remainder before multiplying by a billion, so a counter that has run for years
+     does not overflow the way `counter.QuadPart * 1000000000` would. */
+  seconds = counter.QuadPart / frequency.QuadPart;
+  remainder_nanoseconds = (counter.QuadPart % frequency.QuadPart) * 1000000000LL / frequency.QuadPart;
+  return seconds * 1000000000LL + remainder_nanoseconds;
+}
+
+/**
+ * The program's own arguments, from `GetCommandLineW` - because the `argv` of `main` is **not** UTF-8 on this platform.
+ * The C runtime builds it from the wide command line through the code page of the machine, which turns `ü` into one
+ * byte 0xFC (not UTF-8 at all) and `日` into a question mark (measured on a machine with code page 1252). The wide
+ * command line is what the operating system really has, so that is what is read, and `CommandLineToArgvW` splits it by
+ * exactly the rule `torb_append_windows_argument` below writes.
+ *
+ * A command line that is not well formed UTF-16 answers false **before adding anything**, and the caller falls back to
+ * `argv` - degraded text rather than a program that cannot start, and no new error kind for a case a command line
+ * cannot really be in. That is why the arguments are all converted first and added afterwards.
+ */
+bool torb_platform_arguments(torb_list *out) {
+  int count = 0;
+  wchar_t **wide = CommandLineToArgvW(GetCommandLineW(), &count);
+  /* The first one is the program's own name, which `Process.arguments()` does not answer */
+  const size_t given = wide == NULL || count < 1 ? 0u : (size_t)count - 1u;
+  size_t texts_capacity = given * sizeof(char *);
+  size_t lengths_capacity = given * sizeof(size_t);
+  char **texts;
+  size_t *lengths;
+  size_t index;
+  bool ok = true;
+  if (wide == NULL) {
+    return false;
+  }
+  /* Zeroed, because a conversion that fails leaves every later slot at `NULL` and the loop below reads them all */
+  texts = given == 0u ? NULL : (char **)torb_raw_allocate_zeroed(texts_capacity);
+  lengths = given == 0u ? NULL : (size_t *)torb_raw_allocate_zeroed(lengths_capacity);
+  for (index = 0u; index < given; index += 1u) {
+    texts[index] = torb_platform_utf8(wide[index + 1u], &lengths[index]);
+    if (texts[index] == NULL) {
+      ok = false;
+      break;
+    }
+  }
+  LocalFree(wide);
+  for (index = 0u; index < given; index += 1u) {
+    if (texts[index] == NULL) {
+      continue;
+    }
+    if (ok) {
+      torb_text argument = torb_text_from_cstring(texts[index]);
+      torb_list_add(out, &argument);
+    }
+    torb_raw_free(texts[index], lengths[index] + 1u);
+  }
+  if (given != 0u) {
+    torb_raw_free(texts, texts_capacity);
+    torb_raw_free(lengths, lengths_capacity);
+  }
+  return ok;
+}
+
+bool torb_platform_environment_variable(const char *name, char **value, size_t *length) {
+  size_t capacity = 0u;
+  wchar_t *wide = torb_platform_wide(name, &capacity);
+  const wchar_t *found;
+  if (wide == NULL) {
+    return false;
+  }
+  found = _wgetenv(wide);
+  torb_raw_free(wide, capacity);
+  if (found == NULL) {
+    return false;
+  }
+  *value = torb_platform_utf8(found, length);
+  return *value != NULL;
+}
+
+bool torb_platform_set_environment_variable(const char *name, const char *value) {
+  size_t name_capacity = 0u;
+  size_t value_capacity = 0u;
+  wchar_t *wide_name = torb_platform_wide(name, &name_capacity);
+  wchar_t *wide_value = wide_name == NULL ? NULL : torb_platform_wide(value, &value_capacity);
+  bool set = false;
+  if (wide_value != NULL) {
+    set = _wputenv_s(wide_name, wide_value) == 0;
+    torb_raw_free(wide_value, value_capacity);
+  }
+  if (wide_name != NULL) {
+    torb_raw_free(wide_name, name_capacity);
+  }
+  return set;
+}
+
+/* ============================================================================================== POSIX ========== */
+
+#else
+
+torb_path_kind torb_platform_path_kind(const char *path) {
+  struct stat information;
+  if (stat(path, &information) != 0) {
+    return TORB_PATH_MISSING;
+  }
+  if ((information.st_mode & (unsigned)S_IFMT) == (unsigned)S_IFDIR) {
     return TORB_PATH_DIRECTORY;
   }
   return TORB_PATH_FILE;
@@ -53,7 +488,7 @@ char *torb_platform_working_directory(size_t *length) {
   size_t capacity = 512u;
   for (;;) {
     char *buffer = (char *)torb_raw_allocate(capacity);
-    if (TORB_GET_WORKING_DIRECTORY(buffer, (int)capacity) != NULL) {
+    if (getcwd(buffer, capacity) != NULL) {
       *length = strlen(buffer);
       return buffer;
     }
@@ -64,39 +499,6 @@ char *torb_platform_working_directory(size_t *length) {
     capacity *= 2u;
   }
 }
-
-#if defined(_WIN32)
-
-bool torb_platform_list_directory(const char *path, torb_list *out, const char **message) {
-  size_t length = strlen(path);
-  size_t capacity = length + 3u;
-  char *pattern = (char *)torb_raw_allocate(capacity);
-  struct _finddata_t entry;
-  intptr_t handle;
-  memcpy(pattern, path, length);
-  pattern[length] = '\\';
-  pattern[length + 1u] = '*';
-  pattern[length + 2u] = '\0';
-  handle = _findfirst(pattern, &entry);
-  torb_raw_free(pattern, capacity);
-  if (handle == -1) {
-    *message = strerror(errno);
-    return false;
-  }
-  do {
-    if (strcmp(entry.name, ".") == 0 || strcmp(entry.name, "..") == 0) {
-      continue;
-    }
-    {
-      torb_text name = torb_text_from_cstring(entry.name);
-      torb_list_add(out, &name);
-    }
-  } while (_findnext(handle, &entry) == 0);
-  _findclose(handle);
-  return true;
-}
-
-#else
 
 bool torb_platform_list_directory(const char *path, torb_list *out, const char **message) {
   DIR *directory = opendir(path);
@@ -118,12 +520,62 @@ bool torb_platform_list_directory(const char *path, torb_list *out, const char *
   return true;
 }
 
+/** One directory, where everything above it is already there. False with a message, also where it is already there. */
+static bool torb_make_one_directory(const char *path, const char **message) {
+  if (mkdir(path, 0777) == 0) {
+    return true;
+  }
+  *message = strerror(errno);
+  return false;
+}
+
+void *torb_platform_open_file(const char *path, bool writing, const char **message) {
+  FILE *file = fopen(path, writing ? "wb" : "rb");
+  if (file == NULL) {
+    *message = strerror(errno);
+  }
+  return file;
+}
+
+bool torb_platform_remove(const char *path) {
+  return remove(path) == 0;
+}
+
+int64_t torb_platform_monotonic_nanoseconds(void) {
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (int64_t)now.tv_sec * 1000000000LL + (int64_t)now.tv_nsec;
+}
+
+/** The `argv` of `main` is what there is here, and it is bytes - which is what a path and a `String` both are. */
+bool torb_platform_arguments(torb_list *out) {
+  (void)out;
+  return false;
+}
+
+bool torb_platform_environment_variable(const char *name, char **value, size_t *length) {
+  const char *found = getenv(name);
+  if (found == NULL) {
+    return false;
+  }
+  *length = strlen(found);
+  *value = (char *)torb_raw_allocate(*length + 1u);
+  memcpy(*value, found, *length + 1u);
+  return true;
+}
+
+bool torb_platform_set_environment_variable(const char *name, const char *value) {
+  return setenv(name, value, 1) == 0;
+}
+
 #endif
+
+/* ============================================================================ the same on both platforms ======== */
 
 /**
  * `mkdir -p`: every directory of the path that is missing, and nothing where one is already there. The separator is
  * both `/` and `\` on Windows, because a path that came through `absolutePath` is all forward slashes and one a user
- * typed may not be.
+ * typed may not be - and neither byte can be part of a UTF-8 sequence, so splitting the text on them is safe.
  */
 bool torb_platform_create_directory(const char *path, const char **message) {
   size_t length = strlen(path);
@@ -146,12 +598,9 @@ bool torb_platform_create_directory(const char *path, const char **message) {
       buffer[index] = '\0';
       /* A drive letter (`C:`) is no directory anybody creates, and neither is one that is already there */
       if (buffer[index - 1u] != ':' && torb_platform_path_kind(buffer) == TORB_PATH_MISSING) {
-#if defined(_WIN32)
-        if (_mkdir(buffer) != 0 && torb_platform_path_kind(buffer) != TORB_PATH_DIRECTORY) {
-#else
-        if (mkdir(buffer, 0777) != 0 && torb_platform_path_kind(buffer) != TORB_PATH_DIRECTORY) {
-#endif
-          *message = strerror(errno);
+        const char *failure = NULL;
+        if (!torb_make_one_directory(buffer, &failure) && torb_platform_path_kind(buffer) != TORB_PATH_DIRECTORY) {
+          *message = failure;
           ok = false;
         }
       }
@@ -163,12 +612,11 @@ bool torb_platform_create_directory(const char *path, const char **message) {
 }
 
 bool torb_platform_read_file(const char *path, uint8_t **bytes, size_t *length, const char **message) {
-  FILE *file = fopen(path, "rb");
+  FILE *file = (FILE *)torb_platform_open_file(path, false, message);
   size_t capacity = 65536u;
   size_t filled = 0u;
   uint8_t *buffer;
   if (file == NULL) {
-    *message = strerror(errno);
     return false;
   }
   buffer = (uint8_t *)torb_raw_allocate(capacity);
@@ -199,9 +647,8 @@ bool torb_platform_read_file(const char *path, uint8_t **bytes, size_t *length, 
 }
 
 bool torb_platform_write_file(const char *path, const uint8_t *bytes, size_t length, const char **message) {
-  FILE *file = fopen(path, "wb");
+  FILE *file = (FILE *)torb_platform_open_file(path, true, message);
   if (file == NULL) {
-    *message = strerror(errno);
     return false;
   }
   if (length > 0u && fwrite(bytes, 1u, length, file) != length) {
@@ -235,6 +682,8 @@ static void torb_reserve_line(size_t needed, char **into, size_t filled, size_t 
   *capacity = grown;
 }
 
+/* ================================================================================== running a child process ===== */
+
 #if defined(_WIN32)
 
 /**
@@ -246,6 +695,8 @@ static void torb_reserve_line(size_t needed, char **into, size_t filled, size_t 
  * last argument would otherwise end as `C:\Program Files\"` and swallow the quote.
  *
  * An argument that needs no quoting is written bare, which keeps a command line readable in a debugger.
+ *
+ * The line is built in UTF-8 like everything else in the runtime and converted once, at the call.
  */
 static void torb_append_windows_argument(const char *argument, char **into, size_t *filled, size_t *capacity) {
   const size_t length = strlen(argument);
@@ -296,7 +747,7 @@ static void torb_append_windows_argument(const char *argument, char **into, size
 }
 
 /**
- * A child process, run to its end, with its two output streams collected - through `CreateProcess` and a pipe, and
+ * A child process, run to its end, with its two output streams collected - through `CreateProcessW` and a pipe, and
  * through **no shell at all**.
  *
  * `_popen` would be four lines instead of forty, and it was what this did. It cannot work: `_popen` runs `cmd.exe /c`
@@ -310,6 +761,9 @@ static void torb_append_windows_argument(const char *argument, char **into, size
  * What that buys, beyond the bug: **"there is no shell" in `std/process` is now true on this platform**, and a program
  * that cannot be started at all is a failure again instead of `cmd`'s own exit code 1 - which is the difference
  * `findCompiler` reads and what the interpreter answers.
+ *
+ * The **wide** call is what carries the command line, so a program name and an argument may hold any character a
+ * `String` can - the narrow one would hand them to the code page of the machine and lose them.
  *
  * Both output streams still go into **one** pipe, because a `ProcessOutput` is what a caller gets and `Process.start`
  * with three real pipes is 7.3's.
@@ -327,12 +781,14 @@ bool torb_platform_run_process(
   size_t lineCapacity = 512u;
   size_t filled = 0u;
   char *line = (char *)torb_raw_allocate(lineCapacity);
+  size_t wideCapacity = 0u;
+  wchar_t *wideLine;
   size_t index;
   size_t outputCapacity = 65536u;
   size_t outputFilled = 0u;
   uint8_t *buffer;
   SECURITY_ATTRIBUTES inheritable;
-  STARTUPINFOA startup;
+  STARTUPINFOW startup;
   PROCESS_INFORMATION child;
   HANDLE readEnd = NULL;
   HANDLE writeEnd = NULL;
@@ -342,12 +798,18 @@ bool torb_platform_run_process(
   for (index = 0u; index < count; index++) {
     torb_append_windows_argument(arguments[index], &line, &filled, &lineCapacity);
   }
+  wideLine = torb_platform_wide(line, &wideCapacity);
+  torb_raw_free(line, lineCapacity);
+  if (wideLine == NULL) {
+    *message = "the program could not be started";
+    return false;
+  }
   inheritable.nLength = (DWORD)sizeof(inheritable);
   inheritable.lpSecurityDescriptor = NULL;
   inheritable.bInheritHandle = TRUE;
   if (!CreatePipe(&readEnd, &writeEnd, &inheritable, 0u)) {
     *message = "the pipe for the output of the child process could not be created";
-    torb_raw_free(line, lineCapacity);
+    torb_raw_free(wideLine, wideCapacity);
     return false;
   }
   /* Our end of the pipe must not reach the child, or the read below never sees the pipe close */
@@ -365,14 +827,14 @@ bool torb_platform_run_process(
   startup.hStdOutput = writeEnd;
   startup.hStdError = writeEnd;
   /* No application name, so Windows searches PATH and appends `.exe` to a name without an extension */
-  if (!CreateProcessA(NULL, line, NULL, NULL, TRUE, 0u, NULL, NULL, &startup, &child)) {
+  if (!CreateProcessW(NULL, wideLine, NULL, NULL, TRUE, 0u, NULL, NULL, &startup, &child)) {
     *message = "the program could not be started";
     CloseHandle(readEnd);
     CloseHandle(writeEnd);
-    torb_raw_free(line, lineCapacity);
+    torb_raw_free(wideLine, wideCapacity);
     return false;
   }
-  torb_raw_free(line, lineCapacity);
+  torb_raw_free(wideLine, wideCapacity);
   /* And our copy of the write end has to go too, for the same reason */
   CloseHandle(writeEnd);
   buffer = (uint8_t *)torb_raw_allocate(outputCapacity);
@@ -509,44 +971,6 @@ bool torb_platform_run_process(
   *length = outputFilled;
   *capacity = outputCapacity;
   return true;
-}
-
-#endif
-
-#if defined(_WIN32)
-
-int64_t torb_platform_monotonic_nanoseconds(void) {
-  static LARGE_INTEGER frequency;
-  static bool have_frequency = false;
-  LARGE_INTEGER counter;
-  int64_t seconds;
-  int64_t remainder_nanoseconds;
-  if (!have_frequency) {
-    QueryPerformanceFrequency(&frequency);
-    have_frequency = true;
-  }
-  QueryPerformanceCounter(&counter);
-  /* Split into whole seconds and a remainder before multiplying by a billion, so a counter that has run for years
-     does not overflow the way `counter.QuadPart * 1000000000` would. */
-  seconds = counter.QuadPart / frequency.QuadPart;
-  remainder_nanoseconds = (counter.QuadPart % frequency.QuadPart) * 1000000000LL / frequency.QuadPart;
-  return seconds * 1000000000LL + remainder_nanoseconds;
-}
-
-bool torb_platform_set_environment_variable(const char *name, const char *value) {
-  return _putenv_s(name, value) == 0;
-}
-
-#else
-
-int64_t torb_platform_monotonic_nanoseconds(void) {
-  struct timespec now;
-  clock_gettime(CLOCK_MONOTONIC, &now);
-  return (int64_t)now.tv_sec * 1000000000LL + (int64_t)now.tv_nsec;
-}
-
-bool torb_platform_set_environment_variable(const char *name, const char *value) {
-  return setenv(name, value, 1) == 0;
 }
 
 #endif

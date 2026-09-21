@@ -3396,6 +3396,57 @@ won. Everything else is as written. The one-page version of the ABI is [runtime/
   This is the one place where the runtime is knowingly incomplete rather than unimplemented, and
   `runtime/README.md` says so next to it.
 
+### What the boundary to the operating system decided: UTF-8 above it, the platform's own form below it
+
+**Everything crosses `runtime/platform.c` as UTF-8, and the Windows half converts.** A `String` is UTF-8 and the narrow
+half of the Windows API is the code page of the machine, which is a different text: on a machine with code page 1252,
+`grüße.txt` handed to `fopen` names a file called `grÃ¼ÃŸe.txt`, and `日本.txt` names one that spells `日` in bytes that
+code page reads as three other characters. Where that code page has a character for every byte the mangling is a
+bijection, so a program that writes its own files and reads them back never notices - and it is wrong all the same,
+because the name on the disk is not the name the program meant: a file `git checkout` wrote cannot be opened, what the
+file manager shows is mojibake, and a code page that loses (932 has no character for most byte pairs) fails outright.
+So the Windows half calls the
+wide API throughout (`_wfopen`, `_wmkdir`, `GetFileAttributesW`, `FindFirstFileW`, `CreateProcessW`, `_wgetenv`,
+`GetCurrentDirectoryW`, `DeleteFileW`, `RemoveDirectoryW`), and two helpers convert at the boundary:
+`torb_platform_wide` (UTF-8 to UTF-16, with `MB_ERR_INVALID_CHARS`) and `torb_platform_utf8` (back, with
+`WC_ERR_INVALID_CHARS`). **A conversion that fails is the answer the call gives for a name that is not there** - there is
+no new error kind for text that cannot be a name. The POSIX half converts nothing: a path is bytes there and a UTF-8
+`String` is bytes.
+
+**A path is handed over in its extended-length form above the limit and in the plain form below it.**
+`torb_platform_system_path` turns every `/` into `\` and, where the fully qualified path is longer than `MAX_PATH - 13`
+characters, hands over `\\?\C:\...` (a share becomes `\\?\UNC\server\share\...`), normalised through
+`GetFullPathNameW` because that form allows no `.`, no `..` and nothing relative. Not always, because the prefix does not
+merely lift a limit: it switches the path off the operating system's own parsing, where `..` and a trailing dot are
+literal name parts, `NUL` and `CON` stop naming devices, and a relative path is impossible - which would make every
+ordinary path one this file resolved instead of the one the caller wrote. `MAX_PATH - 12` is the threshold because it is
+the length a directory may have for files to be creatable inside it, so one number serves a path that is opened and a
+path that is created in. The extended form exists inside that one function and reaches no value of a program.
+
+**The program's own arguments come from `GetCommandLineW`.** The `argv` of `main` is not UTF-8 on Windows: the C runtime
+builds it from the wide command line through the code page of the machine, which on a 1252 machine turns `ü` into one
+byte 0xFC - not UTF-8 at all - and `日` into a question mark, which nothing can undo. `torb_platform_arguments` reads the
+wide command line and splits it with `CommandLineToArgvW`, by exactly the rule `torb_append_windows_argument` writes when
+it builds a command line for a child; POSIX has no source of its own and `argv` is what `Process.arguments()` answers
+there.
+
+**`File.absolutePath` answers one form in both implementations**: forward slashes, an upper-cased drive letter, `.` and
+`..` resolved as text, no prefix of the operating system's own. `torb_file_absolute_path` is the definition and
+`absolute_path_of` in `bootstrap/crates/torb-interpreter/src/natives.rs` mirrors it; nothing in Rust's `std::path`
+answers it, because `absolute` keeps `..` on POSIX, keeps the separators of the platform and spells the drive letter the
+way the working directory happens to, and `canonicalize` needs the file to exist and answers `\\?\`.
+
+**A directory entry whose name has no UTF-8 spelling is an `IoError`** that names the directory, on both sides: a
+`String` is always valid UTF-8, so there is no value for such a name and no replacement character is invented.
+
+**Standard output is raw bytes and no code page is set.** `print` writes the UTF-8 bytes of a `String` as they are, which
+is what the conformance suite compares through a pipe; how a console renders them is the code page of that console, which
+belongs to the terminal and not to a program that may be writing to a file.
+
+`bootstrap/tests/native/non-ascii-paths.trb`, `long-paths.trb`, `absolute-path-form.trb` and
+`process-non-ascii-argument.trb` are what hold the two implementations to all of it, and
+`runtime/tests/platform_test.c` is what holds the two conversions and the one threshold.
+
 ---
 
 ## 7. Risks and spec gaps

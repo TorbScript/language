@@ -46,9 +46,20 @@ void torb_process_finish(void) {
   }
 }
 
+/**
+ * `Process.arguments()`: a fresh `List<String>`, without the program's own name.
+ *
+ * The platform layer is asked first, because on Windows the `argv` of `main` is **not** UTF-8 - the C runtime builds it
+ * from the wide command line through the code page of the machine, which loses every character that code page has no
+ * byte for. Where a platform has no source of its own (POSIX, where `argv` is bytes and a UTF-8 `String` is bytes),
+ * `argv` is what there is.
+ */
 torb_list torb_process_arguments(void) {
   torb_list arguments = torb_list_new(&torb_element_text);
   int index;
+  if (torb_platform_arguments(&arguments)) {
+    return arguments;
+  }
   for (index = 1; index < torb_argument_count; index += 1) {
     torb_text argument = torb_text_from_cstring(torb_argument_values[index]);
     torb_list_add(&arguments, &argument);

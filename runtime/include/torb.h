@@ -770,7 +770,13 @@ void torb_file_drop(void *block);
 
 /* ---------------------------------------------------------------------------------------- the platform layer --- */
 
-/** Windows and POSIX behind nine functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32`. */
+/**
+ * Windows and POSIX behind thirteen functions. `runtime/platform.c` is the only file with an `#ifdef _WIN32`.
+ *
+ * Every path and every text here is **UTF-8**, on both platforms. On Windows the file converts to UTF-16 and calls the
+ * wide API, because the narrow one reads the code page of the machine and a `String` is UTF-8 (`docs/PATH.md`,
+ * section 6); on POSIX a path is bytes and there is nothing to convert.
+ */
 
 typedef enum torb_path_kind {
   TORB_PATH_MISSING = 0,
@@ -784,9 +790,22 @@ torb_path_kind torb_platform_path_kind(const char *path);
 char *torb_platform_working_directory(size_t *length);
 /**
  * Every entry of a directory, appended to `*out` as texts, unsorted. False on failure with a libc message in
- * `*message` (borrowed, static).
+ * `*message` (borrowed, static) - including for an entry whose name has no UTF-8 spelling at all, because a `String`
+ * always has one.
  */
 bool torb_platform_list_directory(const char *path, torb_list *out, const char **message);
+/**
+ * A file opened for reading, or created for writing where `writing` is true. The result is a `FILE *`, as `void *` so
+ * that no caller of this header has to have `<stdio.h>`; `NULL` on failure with a libc message in `*message`.
+ */
+void *torb_platform_open_file(const char *path, bool writing, const char **message);
+/**
+ * One file, or one directory that is empty, removed. Only `runtime/tests` calls this: `std/fs` has no `delete` and
+ * `docs/PATH.md` does not give it one, so there is no native above the platform layer to route it through. It is here
+ * because a test that writes a file with a non-ASCII name cannot remove it with `remove` from `<stdio.h>` - that is the
+ * narrow call, and the whole point of this layer is that the narrow calls are gone.
+ */
+bool torb_platform_remove(const char *path);
 /** Read a whole file. `*bytes` owned (`torb_raw_free`). False on failure with a libc message in `*message`. */
 bool torb_platform_read_file(const char *path, uint8_t **bytes, size_t *length, const char **message);
 bool torb_platform_write_file(const char *path, const uint8_t *bytes, size_t length, const char **message);
@@ -812,10 +831,38 @@ bool torb_platform_run_process(
 /** A monotonic clock reading, in nanoseconds, from an unspecified origin. Never goes backwards within one process. */
 int64_t torb_platform_monotonic_nanoseconds(void);
 /**
+ * The program's own arguments, without the program's name, appended to `*out` as texts - where the platform has a
+ * source for them of its own. False where it has none and the `argv` of `main` is what there is, and then **nothing was
+ * added**. Windows has one (the wide command line), POSIX has not.
+ */
+bool torb_platform_arguments(torb_list *out);
+/**
+ * One environment variable. `*value` owned, freed with `torb_raw_free(*value, *length + 1)`. False where the variable is
+ * not set (and then nothing is allocated).
+ */
+bool torb_platform_environment_variable(const char *name, char **value, size_t *length);
+/**
  * `name` and `value` borrowed, NUL terminated. Only `runtime/tests` calls this - no native sets an environment
  * variable, so there is nothing above the platform layer to route it through. False on failure.
  */
 bool torb_platform_set_environment_variable(const char *name, const char *value);
+
+#if defined(_WIN32)
+
+/**
+ * The three functions of the boundary to Windows. They are in the header because `runtime/tests/platform_test.c` reads
+ * them: what they answer is a decision of `docs/PATH.md` and not an implementation detail, so it is tested directly.
+ * Nothing above `runtime/platform.c` calls them.
+ */
+
+/** UTF-8 to UTF-16, NUL terminated. Owned, `torb_raw_free(result, *capacity)`. `NULL` for text that is not UTF-8. */
+wchar_t *torb_platform_wide(const char *text, size_t *capacity);
+/** UTF-16 to UTF-8, NUL terminated. Owned, `torb_raw_free(result, *length + 1)`. `NULL` for ill-formed UTF-16. */
+char *torb_platform_utf8(const wchar_t *wide, size_t *length);
+/** The form of a path a Windows call gets: backslashes, and `\\?\` where the plain form would be too long. */
+wchar_t *torb_platform_system_path(const char *path, size_t *capacity);
+
+#endif
 
 /* ------------------------------------------------------------------------------------------------------- time --- */
 

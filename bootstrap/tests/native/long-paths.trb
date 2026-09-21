@@ -1,0 +1,44 @@
+/**
+ * **A path over 260 bytes is a path like any other.** Two directory components of 120 characters each are created below a
+ * scratch directory, a file is written in the deepest one, and it is asked about, listed and read back - through a path
+ * that is 271 bytes before the working directory is even in front of it.
+ *
+ * 260 is `MAX_PATH`, the limit of the plain form of a Windows path, and a program has no business knowing about it: the
+ * boundary to the operating system hands a path over in whatever form that platform needs, which above the limit is the
+ * extended-length form (`docs/PATH.md`, section 6). What the program sees is the path it wrote. On POSIX there is nothing
+ * to do, which is exactly why the two implementations are compared here - the limit exists on one platform only, and the
+ * answers may not.
+ *
+ * The scratch directory is under `build/`, which git ignores. There is no `delete` in `std/fs`, so what it leaves behind
+ * is the tree it made, and a second run writes the same names again.
+ */
+use File, IoError from "std/fs"
+use Process from "std/process"
+
+fn run(): Result<Int, IoError> {
+  const component = "d".repeat(120)
+  const directory = "build/native-long/{component}/{component}"
+  File.createDirectory(directory)?
+  const path = "{directory}/written.txt"
+  print path.byteLength()
+  print(path.byteLength() > 260)
+  const _ = File.writeText(path, "tief\n")?
+  print File.exists(path)
+  print File.isDirectory(directory)
+  print File.isDirectory(path)
+  const text = File.readText(path)?
+  print text.trim()
+  const entries = File.list(directory)?
+  print entries
+  // Every level of the tree is there, which is what `mkdir -p` over a long path has to have done
+  print File.isDirectory("build/native-long/{component}")
+  Ok entries.length()
+}
+
+match run() {
+  Ok(count) => Process.exit count
+  Fail(problem) => {
+    printError "error: {problem}"
+    Process.exit 1
+  }
+}

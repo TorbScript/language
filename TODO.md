@@ -1757,6 +1757,38 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Wird gelöst (mit den Slices):** `File.list` und `File.absolutePath` weichen zwischen Stage 0 und C-Runtime ab
     (lossy Namen bzw. Backslashes) - Slice 2 macht beide zu `Path`-Antworten mit EINER Form; `SandboxError` trägt
     keinen Pfad (Slice 3); `Process.run(workingDirectory:)` existiert noch nicht (Slice 3).
+  - **Erledigt:** Wide-Char-Runtime für Windows (die eigene Runde vor Slice 2). Die Windows-Hälfte von
+    `runtime/platform.c` ruft durchgehend die Wide-API (`_wfopen`, `_wmkdir`, `GetFileAttributesW`, `FindFirstFileW`,
+    `CreateProcessW`, `_wgetenv`, `GetCurrentDirectoryW`, `DeleteFileW`/`RemoveDirectoryW`), zwei Helfer konvertieren an
+    der Grenze (`torb_platform_wide`/`torb_platform_utf8`, mit `MB_ERR_INVALID_CHARS`/`WC_ERR_INVALID_CHARS`), und eine
+    fehlgeschlagene Konvertierung ist dieselbe Antwort wie ein Name, den es nicht gibt - keine neue Fehlerart. Ein Pfad,
+    dessen voll qualifizierte Form länger als `MAX_PATH - 13` Zeichen ist, geht als `\\?\C:\...` bzw.
+    `\\?\UNC\server\share\...` hinüber (vorher durch `GetFullPathNameW` normalisiert, weil die Form nichts Relatives und
+    kein `..` erlaubt), ein kürzerer in der schlichten Form: nicht immer, weil `\\?\` die Pfadauflösung des Systems ganz
+    abschaltet (`..` und ein Punkt am Ende werden Namensteile, `NUL`/`CON` sind keine Geräte mehr, relativ geht nicht) -
+    dann wäre jeder gewöhnliche Pfad einer, den diese Datei aufgelöst hat, und nicht der, den der Aufrufer geschrieben
+    hat. `Process.arguments()` kommt aus `GetCommandLineW`/`CommandLineToArgvW`, weil das `argv` von `main` auf Windows
+    die Codepage der Maschine ist. `File.absolutePath` hat in BEIDEN Implementierungen eine Form (Vorwärts-Schrägstriche,
+    großer Laufwerksbuchstabe, kein `\\?\`): Stage 0 rechnet sie wie die C-Runtime (`absolute_path_of` in `natives.rs`;
+    `std::path::absolute` kann sie nicht - es läßt `..` auf POSIX stehen und nimmt die Trenner der Plattform). Ein
+    Verzeichniseintrag ohne UTF-8-Schreibweise ist in beiden ein `IoError` (`to_string_lossy` ist weg). Dazu vier
+    Gate-Programme (`non-ascii-paths`, `long-paths`, `absolute-path-form`, `process-non-ascii-argument`), zehn C-Tests
+    (`runtime/tests/platform_test.c`, 106 statt 96) und ein Abschnitt in `docs/BACKEND.md`.
+    - **Gemessen, damit es nicht falsch im Kopf bleibt:** auf einer Maschine mit Codepage 1252 ist die schmale Umsetzung
+      eine BIJEKTION (UTF-8-Bytes ↔ 1252-Zeichen), also fällt sie einem Programm, das seine Dateien selbst anlegt und
+      selbst wieder liest, nicht auf - auch nicht über einen Kindprozess, weil `CreateProcessA` genauso verbogen hat.
+      Falsch war sie trotzdem: auf der Platte stand `grÃ¼ÃŸe`, also scheitert jeder Name, der von AUSSEN kommt
+      (`git checkout`, Explorer, ein anderes Programm), und auf einer DBCS-Codepage (932) ist die Abbildung
+      verlustbehaftet. Hart gescheitert ist die alte Runtime an zwei Dingen, und beide sind gegen sie gemessen: Pfade
+      über `MAX_PATH` (`long-paths` wird rot) und `argv` (`ü` kam als ein Byte 0xFC an, `日` als `?` - nicht mehr
+      umkehrbar).
+    - **Offen (bewußt nicht in dieser Runde):** `File.delete`/`File.rename` gibt es in `std/fs` nicht und
+      `docs/PATH.md` listet sie auch nicht, deshalb legen die Gate-Programme unter `build/` an und räumen nichts weg -
+      wie `files.trb` es schon tut. Die C-Tests räumen auf, weil die Plattformschicht dafür `torb_platform_remove` hat
+      (nur `runtime/tests` ruft es, wie bei `torb_platform_set_environment_variable`). Die Konsolen-Ausgabe bleibt rohe
+      UTF-8-Bytes: in eine Pipe ist das genau richtig (die Suite vergleicht Bytes), in einer Konsole mit Codepage 850
+      sieht Nicht-ASCII falsch aus - der Fix wäre `WriteConsoleW`, wenn das Handle eine Konsole ist (`console.c`, kleine
+      eigene Runde), nie eine globale Codepage-Umstellung.
 
 
 - (**Erledigt: Meilenstein 5.14 - zwei Implementierungen, ein beobachtbares Verhalten**, 2026-09-20)

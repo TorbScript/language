@@ -1,0 +1,51 @@
+/**
+ * **A path is UTF-8, and the file the program named is the file the operating system opens.** A directory called `grüße`
+ * with a file called `日本.txt` in it is created, written, asked about, listed and read back, and every answer is about
+ * that one file.
+ *
+ * A `String` is always valid UTF-8, and nothing above the boundary to the operating system converts it - so this is the
+ * program that pins the boundary itself (`docs/PATH.md`, section 6). A name that is handed to a narrow call there is read
+ * in the code page of the machine instead, and then `grüße` is a directory called `grÃ¼ÃŸe` on the disk, which is the
+ * name the *next* program sees. What this one can observe of that is every answer it gets back: what `exists` says about
+ * the path it wrote, what `list` answers about a directory, and which bytes come back out of the file. A code page that
+ * loses a character (932 has no byte for most of these) breaks them all.
+ *
+ * The scratch directory is under `build/`, which git ignores, so the program needs no path of any machine and nothing it
+ * writes can collide with anything else. There is no `delete` in `std/fs`, so what it leaves behind is one directory with
+ * one file in it, and a second run writes the same two names again.
+ */
+use File, IoError from "std/fs"
+use Process from "std/process"
+
+fn run(): Result<Int, IoError> {
+  const directory = "build/native-non-ascii/grüße"
+  File.createDirectory(directory)?
+  const path = "{directory}/日本.txt"
+  const _ = File.writeText(path, "grüße 日本\n")?
+  print File.exists(path)
+  print File.isDirectory(directory)
+  print File.isDirectory(path)
+  const text = File.readText(path)?
+  print text.trim()
+  print text.byteLength()
+  const entries = File.list(directory)?
+  print entries
+  print entries.contains("日本.txt")
+  // The same name with the non-ASCII characters spelled out is a **different** name, and no file is there
+  print File.exists("build/native-non-ascii/gruesse/nihon.txt")
+  // Writing the same path again replaces the file and adds no entry
+  const _ = File.writeText(path, "zwei")?
+  const again = File.readText(path)?
+  print again
+  const listed = File.list(directory)?
+  print listed.length()
+  Ok text.byteLength()
+}
+
+match run() {
+  Ok(size) => Process.exit size
+  Fail(problem) => {
+    printError "error: {problem}"
+    Process.exit 1
+  }
+}

@@ -181,6 +181,20 @@ TORB_TEST(absolute_paths_are_text_arithmetic) {
     torb_text_release(out);
     torb_text_release(climbing);
   }
+  /* An extended-length path loses its prefix: `\\?\` is what a *call* of Windows takes, never a form a path is shown
+     in - and one arrives from anything that canonicalized a path there. A drive keeps its upper case. */
+  {
+    torb_text extended = torb_text_from_cstring("\\\\?\\c:\\one\\two");
+    torb_text share = torb_text_from_cstring("\\\\?\\UNC\\server\\share\\file.txt");
+    TORB_CHECK(torb_file_absolute_path(extended, &out, &error));
+    TORB_CHECK_TEXT(out, "C:/one/two");
+    torb_text_release(out);
+    TORB_CHECK(torb_file_absolute_path(share, &out, &error));
+    TORB_CHECK_TEXT(out, "/server/share/file.txt");
+    torb_text_release(out);
+    torb_text_release(extended);
+    torb_text_release(share);
+  }
   torb_text_release(absolute);
   torb_text_release(expected);
   torb_text_release(relative);

@@ -38,7 +38,7 @@ deliberately panics says `TORB_IGNORE_LEAKS()`, because a panic runs nothing on 
 | `file.c`              | `readText`, `writeText`, `exists`, `isDirectory`, `list` (sorted), `absolutePath`, and the open handle (`File.open`/`readAll`/`close`) |
 | `clock.c`             | `std/time`: `Clock.now` and the arithmetic of `Instant` and `Duration`                     |
 | `environment.c`       | `std/environment`: `Environment.get`                                                       |
-| `platform.c`          | **The only file with an `#ifdef _WIN32`**: path kind, working directory, directory listing, whole-file read and write, running a child process, a monotonic clock reading, setting an environment variable (for `runtime/tests` only) |
+| `platform.c`          | **The only file with an `#ifdef _WIN32`**: path kind, working directory, directory listing, opening and removing a file, whole-file read and write, running a child process, a monotonic clock reading, the program's own arguments, reading an environment variable and setting one (for `runtime/tests` only). Everything crosses it as UTF-8; the Windows half converts to UTF-16 and calls the wide API, because the narrow one is the code page of the machine |
 | `tests/`              | `harness.h`/`harness.c` plus one `*_test.c` per area, one executable                       |
 
 Not here yet, by design: `task.c` (milestone 7.3), `collect.c` (the cycle collector, 7.7). `File.lines` is also still

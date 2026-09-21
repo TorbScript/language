@@ -290,8 +290,8 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
         }
         ("File", "absolutePath") => {
             let path = text_of(&arguments.required(0, "path")?, "path")?;
-            Ok(match std::path::absolute(&path) {
-                Ok(absolute) => Value::ok(Value::text(&crate::program::display_path(&absolute))),
+            Ok(match std::env::current_dir() {
+                Ok(working) => Value::ok(Value::text(&absolute_path_of(&path, &crate::program::display_path(&working)))),
                 Err(error) => Value::error(io_error(interpreter, &path, &error)),
             })
         }
@@ -302,7 +302,18 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
             let entries = std::fs::read_dir(&path).and_then(|entries| entries.collect::<Result<Vec<_>, _>>());
             Ok(match entries {
                 Ok(entries) => {
-                    let mut names: Vec<String> = entries.iter().map(|entry| entry.file_name().to_string_lossy().to_string()).collect();
+                    // A `String` is always valid UTF-8 and a name that is not has no `String`, so it is an `IoError`
+                    // naming the directory - never a replacement character (`docs/PATH.md`, section 6). The C runtime
+                    // answers the same way, because `WC_ERR_INVALID_CHARS` is what its conversion uses.
+                    let mut names: Vec<String> = Vec::with_capacity(entries.len());
+                    for entry in &entries {
+                        match entry.file_name().into_string() {
+                            Ok(name) => names.push(name),
+                            Err(_) => {
+                                return Ok(Value::error(io_failure(interpreter, &path, NAME_NOT_UNICODE)));
+                            }
+                        }
+                    }
                     names.sort();
                     Value::ok(Value::list(names.iter().map(|name| Value::text(name)).collect()))
                 }
@@ -364,7 +375,91 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
 }
 
 fn io_error(interpreter: &Interpreter, path: &str, error: &std::io::Error) -> Value {
-    prelude_object(interpreter, "IoError", vec![Value::text(path), Value::text(&error.to_string())])
+    io_failure(interpreter, path, &error.to_string())
+}
+
+/// An `IoError` whose message is this implementation's own and not the operating system's, so that both back ends can
+/// say the same thing about the same failure.
+fn io_failure(interpreter: &Interpreter, path: &str, message: &str) -> Value {
+    prelude_object(interpreter, "IoError", vec![Value::text(path), Value::text(message)])
+}
+
+/// What `File.list` says about an entry whose name has no `String`. `runtime/platform.c` writes the same sentence.
+const NAME_NOT_UNICODE: &str = "a name in this directory is not valid Unicode";
+
+/// Whether a path names its own root, which is a `/` or a `\` at the front or a drive letter - the same three shapes
+/// `torb_path_is_absolute` in `runtime/file.c` reads, because the two have to agree about every path.
+fn is_absolute_path(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    if matches!(bytes.first(), Some(b'/' | b'\\')) {
+        return true;
+    }
+    bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
+/// `File.absolutePath`: **one** form on both implementations - forward slashes, an upper-cased drive letter, no `\\?\`
+/// prefix, `.` and `..` resolved (`docs/PATH.md`, section 6).
+///
+/// Text arithmetic and not a lookup, line for line what `torb_file_absolute_path` in `runtime/file.c` does: the file
+/// does not have to exist, no link is followed, and a relative path is resolved against the working directory. Nothing
+/// in `std::path` answers this: `absolute` keeps `..` on POSIX, keeps the separators of the platform, and spells the
+/// drive letter the way the working directory happens to, and `canonicalize` needs the file to exist and answers
+/// `\\?\`.
+fn absolute_path_of(path: &str, working: &str) -> String {
+    let joined = if is_absolute_path(path) { path.to_string() } else { format!("{working}/{path}") };
+    let joined = joined.replace('\\', "/");
+    // An extended-length path (`\\?\C:\x`, `\\?\UNC\server\share`) loses that prefix: it is the form a *call* of the
+    // operating system takes and never a form a path is shown in, and one arrives from anything that canonicalized a
+    // path on Windows. `UNC\` takes the place of the two separators of a share, so putting them back is what undoes it.
+    let joined = match joined.strip_prefix("//?/") {
+        Some(rest) => match rest.strip_prefix("UNC/") {
+            Some(share) => format!("//{share}"),
+            None => rest.to_string(),
+        },
+        None => joined,
+    };
+    let bytes = joined.as_bytes();
+    let mut result = String::with_capacity(joined.len() + 1);
+    let mut position = 0usize;
+    if bytes.len() >= 2 && bytes[1] == b':' {
+        result.push(bytes[0].to_ascii_uppercase() as char);
+        result.push_str(":/");
+        position = if bytes.len() > 2 && bytes[2] == b'/' { 3 } else { 2 };
+    } else {
+        result.push('/');
+        while position < bytes.len() && bytes[position] == b'/' {
+            position += 1;
+        }
+    }
+    let root = result.len();
+    // Where every component written so far begins, so that `..` can drop the last one again
+    let mut starts: Vec<usize> = Vec::new();
+    while position < bytes.len() {
+        let start = position;
+        while position < bytes.len() && bytes[position] != b'/' {
+            position += 1;
+        }
+        let component = &joined[start..position];
+        while position < bytes.len() && bytes[position] == b'/' {
+            position += 1;
+        }
+        if component.is_empty() || component == "." {
+            continue;
+        }
+        if component == ".." {
+            if let Some(previous) = starts.pop() {
+                // The separator this component was written after goes with it
+                result.truncate(if previous > root { previous - 1 } else { previous });
+            }
+            continue;
+        }
+        if result.len() > root {
+            result.push('/');
+        }
+        starts.push(result.len());
+        result.push_str(component);
+    }
+    result
 }
 
 fn set_of(items: Vec<Value>) -> Value {

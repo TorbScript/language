@@ -176,3 +176,7 @@ exist for it to move up one directory, and moving it is the whole change.
 |---------|--------------|
 | `files.trb` | Make a directory, write a file, read it back, run a child process, ask the environment |
 | `natives.trb` | The two calling conventions of `runtime/`: a `bool` with an out parameter, and a value |
+| `non-ascii-paths.trb` | A path whose components are not ASCII (`grüße/日本.txt`), created, written, asked about, listed and read back - the boundary to the operating system converts, so both implementations name the same file |
+| `long-paths.trb` | The same steps through a path of 271 bytes, over the 260 of `MAX_PATH`, which one platform's plain path form cannot hold at all |
+| `absolute-path-form.trb` | `File.absolutePath` answers **one** form: forward slashes, an upper-cased drive letter, and no `.`, `..` or `\\?\` left in it |
+| `process-non-ascii-argument.trb` | An argument of a child process that is not ASCII arrives as the text that was passed, which the child answers in its exit code |

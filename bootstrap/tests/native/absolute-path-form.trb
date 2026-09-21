@@ -1,0 +1,42 @@
+/**
+ * **`File.absolutePath` answers one form on every platform and in every implementation:** forward slashes, an upper-cased
+ * drive letter where there is one, no `.` and no `..` left, and no prefix of the operating system's own. That is the
+ * decision of `docs/PATH.md` (section 6) - a path a program can compare, join and print, while the form a call of the
+ * operating system gets exists at the boundary and nowhere else.
+ *
+ * Everything printed here is position independent, because the answer holds the working directory of the machine: what is
+ * shown is that there is no backslash in it, that the relative path is at its end, that nothing of `.`, `..` or `\\?\`
+ * survived, and that two absolute paths of the same directory differ in exactly the part that differs.
+ *
+ * It is text arithmetic and not a lookup, so no file is created at all: a path answers for a file that is not there.
+ */
+use File, IoError from "std/fs"
+use Process from "std/process"
+
+fn run(): Result<Int, IoError> {
+  const absolute = File.absolutePath("build/native-absolute/one/../two/./three")?
+  print absolute.contains("\\")
+  print absolute.endsWith("build/native-absolute/two/three")
+  print absolute.contains("/./")
+  print absolute.contains("/../")
+  print absolute.contains("?")
+  print File.exists(absolute)
+  // The first byte is a drive letter on one platform and a separator on the other, and neither is a lower-case letter
+  const first = absolute.sliceBytes 0, 1
+  print(first == first.toUpperCase())
+  // A path that is absolute already is answered unchanged, so the form is a fixed point of the function
+  const twice = File.absolutePath(absolute)?
+  print(twice == absolute)
+  // Two paths below one directory differ in the last component and in nothing else
+  const parent = File.absolutePath("build/native-absolute/two")?
+  print absolute.startsWith("{parent}/")
+  Ok(absolute.byteLength() - parent.byteLength())
+}
+
+match run() {
+  Ok(size) => Process.exit size
+  Fail(problem) => {
+    printError "error: {problem}"
+    Process.exit 1
+  }
+}

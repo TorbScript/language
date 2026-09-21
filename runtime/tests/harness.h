@@ -40,6 +40,7 @@ void torb_register_file_tests(void);
 void torb_register_clock_tests(void);
 void torb_register_environment_tests(void);
 void torb_register_process_tests(void);
+void torb_register_platform_tests(void);
 
 #define TORB_CHECK(condition)                                        \
   do {                                                               \

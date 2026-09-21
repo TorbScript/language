@@ -201,6 +201,19 @@ bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error) {
       joined[position] = '/';
     }
   }
+  /* An extended-length path (`\\?\C:\x`, `\\?\UNC\server\share`) loses that prefix here: it is the form a *call* of
+     the operating system takes and never a form a path is shown in, and one can arrive from anything that canonicalized
+     a path on Windows. `UNC\` takes the place of the two separators of a share, so putting them back is what undoes it. */
+  if (joined_length >= 4u && memcmp(joined, "//?/", 4u) == 0) {
+    size_t skipped = 4u;
+    if (joined_length >= 8u && memcmp(joined + 4u, "UNC/", 4u) == 0) {
+      skipped = 6u;
+      joined[6] = '/';
+      joined[7] = '/';
+    }
+    joined_length -= skipped;
+    memmove(joined, joined + skipped, joined_length);
+  }
 
   result_capacity = joined_length + 2u;
   result = (char *)torb_raw_allocate(result_capacity);
@@ -273,10 +286,12 @@ bool torb_file_absolute_path(torb_text path, torb_text *out, torb_text *error) {
 bool torb_file_open(torb_text path, torb_file **out, torb_text *error) {
   size_t capacity = 0u;
   char *name = torb_path_bytes(path, &capacity);
-  FILE *handle = fopen(name, "rb");
+  const char *message = NULL;
+  /* Through the platform layer, so the path is handed to the operating system in that platform's own form */
+  FILE *handle = (FILE *)torb_platform_open_file(name, false, &message);
   torb_raw_free(name, capacity);
   if (handle == NULL) {
-    *error = torb_io_error(path, strerror(errno));
+    *error = torb_io_error(path, message);
     return false;
   }
   {
