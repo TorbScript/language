@@ -50,6 +50,8 @@ enum GlobalKind {
 #[derive(Debug, Clone, Copy)]
 struct FieldSymbol {
     is_var: bool,
+    /// A `static` value of the type, and not a field of every value
+    is_static: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -311,11 +313,11 @@ fn type_info_of(members: &[Member], kind: Option<GlobalKind>) -> TypeInfo {
     for member in members {
         match &member.kind {
             MemberKind::Field(field) => {
-                info.fields.insert(field.name.text.clone(), FieldSymbol { is_var: field.is_var });
+                info.fields.insert(field.name.text.clone(), FieldSymbol { is_var: field.is_var, is_static: false });
             }
             MemberKind::Constant(binding) => {
                 for (name, _) in pattern_names(&binding.pattern) {
-                    info.fields.insert(name, FieldSymbol { is_var: false });
+                    info.fields.insert(name, FieldSymbol { is_var: false, is_static: true });
                 }
             }
             MemberKind::Function(function) => {
@@ -698,7 +700,9 @@ impl Resolver {
                 if let Some(annotation) = &binding.annotation {
                     self.type_reference(annotation);
                 }
-                self.pattern_tokens_only(&binding.pattern, Role::Variable, false);
+                for (_, span) in pattern_names(&binding.pattern) {
+                    self.push(span, "property", &["declaration", "readonly", "static"]);
+                }
             }
             MemberKind::Function(function) => self.function_declaration(function, true, true),
             MemberKind::Case(case) => {
@@ -1066,7 +1070,7 @@ impl Resolver {
         }
         if let Some(info) = self.current_type_info() {
             if let Some(field) = info.fields.get(text) {
-                self.push(span, "property", &readonly_modifiers(field.is_var));
+                self.push(span, "property", &field_modifiers(field));
                 return;
             }
             if let Some(method) = info.methods.get(text) {
@@ -1123,7 +1127,7 @@ impl Resolver {
             MemberTargetKind::Type(type_name) => {
                 if let Some(info) = self.file_scope.types.get(&type_name) {
                     if let Some(field) = info.fields.get(&name.text) {
-                        self.push(name.span, "property", &readonly_modifiers(field.is_var));
+                        self.push(name.span, "property", &field_modifiers(field));
                         return;
                     }
                     if let Some(method) = info.methods.get(&name.text) {
@@ -1240,6 +1244,15 @@ fn method_modifiers(method: &MethodSymbol) -> Vec<&'static str> {
         true => vec!["mutable"],
         false => Vec::new(),
     }
+}
+
+/// What a use of a field says about it: `static` on top for a value that belongs to the type.
+fn field_modifiers(field: &FieldSymbol) -> Vec<&'static str> {
+    let mut modifiers = readonly_modifiers(field.is_var);
+    if field.is_static {
+        modifiers.push("static");
+    }
+    modifiers
 }
 
 fn readonly_modifiers(is_var: bool) -> Vec<&'static str> {
@@ -1432,6 +1445,25 @@ type Shape {
         let found = tokens(source);
         assert!(nth(&found, "grow", 0).modifiers.contains(&"mutable"));
         assert!(nth(&found, "grow", 1).modifiers.contains(&"mutable"));
+    }
+
+    #[test]
+    fn a_static_value_is_a_static_property_where_it_is_declared_and_where_it_is_read() {
+        let source = "type Point {
+  x: Int
+  static origin = Point(0)
+  fn isOrigin(): Bool { x == origin.x }
+}
+print Point.origin
+";
+        let found = tokens(source);
+        for index in 0..3 {
+            let token = nth(&found, "origin", index);
+            assert_eq!(token.kind, "property");
+            assert!(token.modifiers.contains(&"static") && token.modifiers.contains(&"readonly"), "{token:#?}");
+        }
+        assert!(nth(&found, "origin", 0).modifiers.contains(&"declaration"));
+        assert!(!nth(&found, "x", 0).modifiers.contains(&"static"));
     }
 
     // --- Parameters, locals, fields -----------------------------------------------------------------------------

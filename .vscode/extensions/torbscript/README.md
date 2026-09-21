@@ -95,8 +95,11 @@ Token types: `type`, `interface`, `typeParameter`, `enumMember`, `namespace`, `f
   difference from a
   `const`/non-`var` name of the same kind - too many colors was the complaint this design started from, so `var`
   vs. `const` is an underline, not a hue.
-- The standard modifiers `declaration`, `readonly` (a `const`/non-`var` name), `static` (a `static` member)
-  and `defaultLibrary` (`Some`/`None`/`Ok`/`Fail`, and the primitive types) are also set where they apply.
+- The standard modifiers `declaration`, `readonly` (a `const`/non-`var` name), `static` (a `static fn` and a
+  `static` value, where they are declared and where they are used) and `defaultLibrary`
+  (`Some`/`None`/`Ok`/`Fail`, and the primitive types) are also set where they apply. `static` is italic
+  (`"*.static:trb"` in `package.json`), so `Point.origin` reads differently from the field `point.x` without a
+  second hue; delete that rule to turn it off.
 
 ### The palette
 
