@@ -2554,3 +2554,48 @@ Wenn nicht, was bedeutet, bewirkt es?
   Loader sind ehrlich gesagt drei CONCEPT-Nicht-Ziele auf einmal (Build-Skript, ein Import der etwas ausführt,
   Typen aus laufendem Code) und haben das Node-Bundler-Versagen. Abschnitt 13 von `docs/PROJECT.md` hat alle
   drei mit Konsequenzen; nichts davon ist implementiert, die Migration steht dort in sieben Scheiben.
+
+- (Generierte Konstruktoren, 2026-09-22) **Anlass (Nutzer):** "keine Konstruktoren" - trägt das in allen Varianten?
+  **Untersucht:** 66 Proben-Pakete, jede dreifach (Stage 0, Typprüfer, natives Binary); die Proben liegen im
+  Session-Scratchpad `constructor-probes/`. **Ergebnis: das Design trägt** - zwölf Aufrufformen, Labels in beliebiger
+  Reihenfolge, Defaults, `copy`, Patterns, Cases, Generics, Parameter-Defaults, Trait- und Funktionsfelder, sogar ein
+  Trailing-Closure fürs letzte Feld fallen aus EINER Regel; die Auswertungsreihenfolge stimmt auf beiden Back-Ends
+  wörtlich mit dem Decision-Log, die Sichtbarkeits-Meldungen sind die besten im Repository, `Email`/`tryFrom`
+  funktioniert von Ende zu Ende (Konstruktor, `copy`, Pattern und `Decode` sind von außen zu). **Es trägt NICHT,**
+  wo ein Feld mehr ist als Speicher: Normalisierung, ein gecachtes/abgeleitetes Feld, "den generierten Konstruktor
+  verstecken" enden alle an derselben Wand - der einzige Hebel ist `private`, und der nimmt Konstruktor, `copy`,
+  `Encode`, `Decode` und Patterns auf einmal mit UND zwingt wegen des einen Namensraums zum Umbenennen des Felds
+  (`private items` neben `fn items(self)` geht nicht). `std/path` hat deshalb lieber einen dokumentierten Pitfall.
+  - **Wird gelöst - Bugs (technisch, von mir eingeplant):** (1) `copy` POSITIONAL prüft grün und läuft nativ
+    (`Order(1).copy(5)`), Stage 0 lehnt es richtig ab; (2) ein Typ, der sich selbst enthält (`next: Node`, oder ein
+    Default `inner: Loop = Loop()`), wird nie diagnostiziert - Stage 0 Stacküberlauf, Back-End interner Fehler;
+    (3) ein Bound wird am KONSTRUKTORAUFRUF nicht geprüft (`Heavy<Item: Weigh>` mit `Heavy(Feather())`, sogar
+    `Heavy<Feather>(...)`); (4) zwei "this is a bug of the compiler"-Pfade aus Alltagsfehlern (`Shape.Empty()`,
+    `Item()` im generischen Rumpf); (5) nativ: `const Point(x, y) = Point(1, 2)` auf Modulebene erzeugt ungültiges C
+    (nur `-Werror` fängt es), mit Defaults bricht der IR-Verifier; (6) nativ: ein Literal-Union-Feld
+    (`kind: "tcp" | "udp"`) killt das generierte `show`; (7) nativ: die Panic-Zeile erscheint VOR dem gepufferten
+    stdout; (8) die Aritätsmeldung widerspricht sich selbst, sobald positional ein Default übersprungen wird
+    ("takes 2 arguments, 2 were given"; unbekanntes Label erzeugt zwei Fehler und schlägt das falsche Feld vor) -
+    Stage 0 nennt das fehlende Feld und ist besser; (9) kleine Meldungsfehler ("1 pattern were given", "of a case"
+    bei einem Typ, `tryFrom`-Hinweis bei einem `shared type`, "inside of `Session`" im fremden `extend`);
+    (10) Stage 0 nimmt ein doppeltes Label und einen Spread in einen Konstruktor still an; (11) nativ: ein
+    Konstruktor als Funktionswert verliert seine Defaults (Labels gehen).
+  - **Entschieden (technisch):** ein Feld-Default darf eine Konstante des eigenen Typs mit bloßem Namen lesen
+    (nach `static` sähe das Verbot absurd aus; Stage 0 erlaubt es schon); positional füllt eine Argumentliste einen
+    PRÄFIX der Felder, ein Default in der Mitte wird nur per Label übersprungen - bleibt so, die Meldung sagt es
+    künftig; ein Case-Feld ist nie `private` (Parser-Meldung mit dem Wrapper-Hinweis); der Konstruktor ist ein
+    Funktionswert mit Labels und Defaults (`names.map(User)`) - wird dokumentiert; `Show` einer Funktion ist ihr
+    Typ (steht schon in CONCEPT; dass Stage 0 den Namen druckt, ist die Abweichung).
+  - **Deine Entscheidung (Sprache):** (a) Bleibt ein optionales Feld OHNE Default Pflicht (`Person("Ada")` ist ein
+    Fehler, man schreibt `None`)? Meine Empfehlung: ja, und aufschreiben. (b) Darf ein PATTERN Felder auslassen?
+    Heute muss es alle nennen - jede Feld-Ergänzung bricht jedes Pattern, während ein Konstruktoraufruf Defaults
+    auslassen darf ("ein Pattern spiegelt den Konstruktor" stimmt genau hier nicht). Meine Empfehlung: ein
+    ausdrückliches `...` wie im Listen-Pattern (`Config(host, ...)`), nicht stilles Auslassen. (c) Druckt das
+    generierte `Show` private Felder auch über die Paketgrenze (`Email(value: "...")`)? Meine Empfehlung: ja - `Show`
+    ist die Debug-Form, `Equals`/`Hash` lesen die Felder auch; ein Typ mit Geheimnis schreibt sein `Show` selbst.
+    (d) **Die zwei billigen Regeln gegen die Wand:** ein Feld-Default darf FRÜHERE Felder lesen (die Reihenfolge ist
+    über die Default-Auswertung ohnehin beobachtbar) - dann ist ein gecachtes Feld `private length: Int =
+    items.length()`: von außen nicht übergebbar, der Konstruktor bleibt offen; und ein `private` Feld darf heißen wie
+    eine Methode (`private items` neben `fn items()`), weil `()` sie überall unterscheidet. Beides sind Regeln, keine
+    Features. (e) Offen bleibt danach nur NORMALISIERUNG/VALIDIERUNG bei offenem Konstruktor - dazu mache ich dir
+    einen eigenen Vorschlag, wenn du (d) gesehen hast.
