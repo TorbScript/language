@@ -3148,3 +3148,12 @@ Wenn nicht, was bedeutet, bewirkt es?
     und ein IR-Test, der zeigt, dass kein `makeUnique` auf einer geteilten Zeile übrig bleibt.
   - **Idee, zurückgestellt:** Diagnose/Profiler-Hinweis "hier wird eine geteilte Liste beschrieben (O(n)-Kopie)" -
     die einzige echte Schwäche von Copy-on-Write ist, dass man die Kopie nicht sieht.
+- (Performance als Ziel, 2026-09-22) **Entschieden (Nutzer):** die Sprache soll performant und speicherschonend sein,
+  "fast auf dem Level einer Low-Level Language"; vermeidbare Arbeit im generierten Code soll gefunden, identifiziert
+  und optimiert werden; Zero-Cost-Abstractions wo möglich (z.B. ein-feldige Typen, die ganz verschwinden).
+  - **Wird gelöst - läuft:** Performance-Audit (Opus, ändert keinen Compiler-/Runtime-/std-Code): `docs/PERFORMANCE.md`
+    (Kostenmodell, Zero-Cost-Vertrag mit "hält / hält nicht" und Beleg, Befunde nach Gewinn/Aufwand, Plan in Runden,
+    dauerhafte Gates) und `benchmarks/` (TorbScript gegen handgeschriebenes C, `-O2`, Tabelle mit Verhältnis).
+  - Schon bekannt: verschachteltes Schreiben kopiert die innere Liste; jeder `List`-Zugriff ist ein `callWitness`
+    auf einem `traitValue`, obwohl `ArrayList` statisch feststeht (Devirtualisierung).
+  - Danach: die Befunde gehen als eigene Runden in die Warteschlange, VOR der VM (7.x), soweit sie die IR betreffen.
