@@ -2798,3 +2798,8 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Offen (Punkt 5, mein Vorschlag liegt beim Nutzer):** "Daten oder Kapsel" als ausdrückliche Zweiteilung, und
     `Encode`/`Decode` eines gekapselten Typs abgeleitet über sein EINES Konversionspaar (`TryFrom<Source>` hinein,
     `From<Typ>` am `Source` hinaus); `std/path` wird dann selbst eine Kapsel (Felder privat, `root()`/`components()`).
+  - **Verworfen (Nutzer, 2026-09-22): `static fn new` als überschreibbarer Konstruktor** - auch in der engen Form
+    (Parameter = Felder, Ergebnis `Self`, nie `Result`) "öffnet das wieder Logik". Der generierte Konstruktor bleibt
+    reine Daten: billig, total, ohne Code. Damit bleibt für Invarianten nur die Kapsel als STANDARD (kein neues
+    Konstrukt): private Felder, Factory (`from`/`tryFrom`), Accessoren. Offen ist allein noch die EINE neue Regel,
+    die die Kapsel bezahlbar macht: `Encode`/`Decode` über das Konversionspaar ableiten.
