@@ -364,6 +364,20 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
                 Err(error) => Value::error(io_error(interpreter, &command, &error)),
             })
         }
+        // `torb run` runs what it built through this one: the child is given this process's own three streams, so its
+        // output arrives while it is produced instead of at the end, and nothing is collected.
+        ("Process", "runPassingThrough") => {
+            let command = text_of(&arguments.required(0, "command")?, "command")?;
+            let given = items_of(&arguments.required(1, "arguments")?)?;
+            let mut parameters = Vec::new();
+            for value in &given {
+                parameters.push(text_of(value, "argument")?);
+            }
+            Ok(match std::process::Command::new(&command).args(&parameters).status() {
+                Ok(status) => Value::ok(Value::Int(status.code().unwrap_or(-1) as i64)),
+                Err(error) => Value::error(io_error(interpreter, &command, &error)),
+            })
+        }
         // The compiler times its own passes with this one (`torb check --timings`). Monotonic, in milliseconds, counted
         // from the first call: only differences between two readings are meaningful.
         ("Clock", "milliseconds") => {

@@ -9,6 +9,7 @@ documents:
   - ../ARCHITECTURE.md
   - ../TYPECHECKER.md
   - ../BACKEND.md
+  - ../RUST-EXIT.md
   - ../PERFORMANCE.md
   - ../STREAMS.md
   - ../ENCODING.md
@@ -21,9 +22,10 @@ documents:
   - ../RESOURCES.md
 ---
 
-The toolchain is written in TorbScript and lives in `compiler/`. Until it compiles itself it runs on stage 0, an untyped
-tree-walking interpreter written in Rust in `bootstrap/`. These are the design documents of that work, in plain Markdown
-without front matter, linked here where they are instead of being copied.
+The toolchain is written in TorbScript and lives in `compiler/`. It compiles itself; stage 0, the untyped tree-walking
+interpreter written in Rust in `bootstrap/`, is what ran it until it could, and
+[the exit of stage 0](../RUST-EXIT.md) is the plan for deleting it. These are the design documents of that work, in
+plain Markdown without front matter, linked here where they are instead of being copied.
 
 ## What belongs here
 
@@ -52,6 +54,7 @@ a rule nothing holds either side to.
 - **[TorbScript Implementation Architecture](../ARCHITECTURE.md)**
 - **[The Type Checker (Milestone 4)](../TYPECHECKER.md)**
 - **[The Back Ends (Milestones 5-7)](../BACKEND.md)**
+- **[The Exit of Stage 0](../RUST-EXIT.md)**
 - **[Performance](../PERFORMANCE.md)**
 - **[Streams](../STREAMS.md)**
 - **[Encoding](../ENCODING.md)**

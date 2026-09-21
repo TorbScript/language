@@ -3293,3 +3293,70 @@ Wenn nicht, was bedeutet, bewirkt es?
     5. 64 als Default-Chunk-Zahl (später nicht mehr änderbar, ohne aufgezeichnete `Float`-Ergebnisse zu ändern)?
     6. Soll `parallel()` je ungeordnet sein dürfen (PLINQ, rayon und Java machen es andersherum)? 7. Ist der Feld-Fall
     von ECS-Lücke 8 überhaupt gewollt? 8. Soll ein `Task` in v1 abbrechbar sein?
+- (Rust-Ausstieg, 2026-09-22) Inventar, Seed und der native Treiber - Scheibe 1 von 6. Ziel ist, dass
+  `bootstrap/crates` (14 435 Zeilen Rust in drei Crates) gelöscht werden kann; das C-Backend und die C-Laufzeit
+  bleiben, ein C-Compiler bleibt das eine externe Werkzeug. Das ganze Inventar mit Belegen steht in
+  `docs/RUST-EXIT.md`, im Index unter `docs/internals/` eingetragen.
+  - **Die Zahlen, die jede weitere Runde billiger machen:** `check ..` über das ganze Repository kostet auf Stage 0
+    **58,9 s** und mit der nativen Binärdatei **8,0 s** - Faktor **7,4**. Die 1538 Tests des Compilers kosten auf
+    Stage 0 **4 m 55 s** (ein Prozess pro Datei, alle Kerne) und nativ **3 m 24 s** - nur Faktor 1,4, und fast alles
+    davon ist der eine `gcc` über eine Übersetzungseinheit von 78 MiB; die Tests selbst laufen in Sekunden. Den
+    Compiler zu bauen kostet Stage 0 **4 m 49 s**. Das emittierte `program.c` ist 55,6 MiB groß, mit `gzip -9`
+    **3,2 MiB** - also kleiner als die 8,6-MiB-Binärdatei, die daraus entsteht.
+  - **Fünf Dinge blockieren den Ausstieg**, alles andere ist entweder schon ersetzt oder stirbt mit Stage 0:
+    `canon` (fünf Regeln, 1 341 Zeilen Rust plus 561 Zeilen Tests), `highlight` (1 850 Zeilen, davon 1 663 der
+    Resolver - die Editor-Erweiterung ist das Einzige außerhalb des Repositories, das Stage 0 aufruft), der
+    Konformanz-Runner `cargo test --test native` (74 Programme), die eine Lowering-Lücke
+    `bootstrap/tests/native/stage-0-only/error-chain.trb` (`reportFailure` läuft die `cause()`-Kette nicht ab), und
+    dass Stage 0 heute das erste `torb` erzeugt. `--test suite` und `--test self_hosted` sterben mit Stage 0: sie
+    vergleichen zwei Implementierungen, von denen eine verschwindet.
+  - **Der Compiler selbst hängt an keiner einzigen Lücke:** `torb ir --statistics compiler` sagt
+    **12 661 von 12 661 Funktionen (100%)**, `benchmarks` 88 von 88. Nur `examples` hat 35 Fundstellen von 19
+    Konstrukten, davon elf ein Rumpf mit `Task`-Ergebnis.
+  - **Alle Testpakete nativ gebaut:** `compiler/tests` **1538 bestanden, 0 gescheitert**, `std/geometry/tests` 71,
+    `std/linear/tests` 98. Vier bauen nicht: `std/path/tests` (ein **Fehler**, kein Loch - der Verifier meldet
+    `argument 0 is Object(Iterable<Char>) and %0 is Record(Path)`, ein `Path` wird nicht in seine Witness geboxt),
+    `std/stream/tests` (`onto` außerhalb der Witness-Tabelle), `examples/encoding-lab/tests` (`describe` als
+    Funktionswert), `examples/game-engine/tests` (Umwandlung über `From`). Keines davon blockiert den Ausstieg.
+  - **Seed-Entscheidung, getestet und bewiesen:** `seed/` liegt außerhalb von git (in `.gitignore`), darin eine
+    native `torb`-Binärdatei und daneben `program.c` als portables Artefakt für eine Plattform ohne Binärdatei.
+    `tools/bootstrap.sh` (POSIX sh, läuft in Git Bash) baut `torb` aus dem Seed und baut es dann mit sich selbst neu;
+    die beiden `program.c` werden Byte für Byte verglichen - derselbe Vergleich wie das Fixpunkt-Gate, eine Stufe
+    kürzer, weil ein Seed schon ein `torb` ist. Der Seed dieser Runde kam aus Stage 0, danach lief die Kette
+    Seed -> torb -> torb und **der Fixpunkt hält**.
+  - **Ein Syntaxbruch nach dem Ausstieg ist ein Zwei-Commit-Tanz:** erst akzeptiert der Compiler beide Formen und die
+    Migration kommt in `canon` (später `format`), ein neuer Seed entsteht daraus; dann wird das Repository migriert
+    und die alte Form aus dem Parser entfernt. Dasselbe gilt für **jeden neuen `native`**, weil das Manifest in die
+    Seed-Binärdatei einkompiliert ist - diese Runde ist ein Beispiel dafür, und Stage 0 hat den Tanz noch erspart.
+  - **Diese Runde gebaut:** `torb run <datei-oder-projekt> [argumente]` - Bauen nach `build/run/<schlüssel>/`, wobei
+    der Schlüssel ein Hash über jede gelesene Quelldatei ist, dann Ausführen mit durchgereichten Argumenten, Strömen
+    und Exit-Code (kalt 12,6 s, warm 0,17 s für ein kleines Skript; Stage 0 interpretiert es in 0,03 s, und das
+    bleibt so, bis die VM da ist). `torb test <pfade>...` läuft jetzt über **jedes** Testpaket und über mehrere auf
+    einmal, als eine Binärdatei und ein Bericht. Dazu `tools/bootstrap.sh`, `seed/` in `.gitignore` und die
+    Gate-Politik in `compiler/CONTRIBUTING.md`.
+  - **Ein neuer `native` war nötig:** `Process.runPassingThrough` über `Process.runInheriting`
+    (`torb_process_run_inheriting`) gibt dem Kindprozess die eigenen drei Ströme statt einer Pipe. Ohne das druckt
+    ein Programm unter `torb run` nichts, bis es fertig ist, die beiden Ströme kommen vermischt an, und wer von der
+    Tastatur liest, liest nichts. Die POSIX-Hälfte geht dabei über `fork`+`execvp` statt über `popen`, also zum
+    ersten Mal **ganz ohne Shell**.
+  - **Zwei Fehler gefunden, beide nicht von dieser Runde verursacht:**
+    (1) `Process.run` **und** die neue Durchreiche konnten unter Windows einen **relativen Pfad mit Schrägstrichen**
+    überhaupt nicht starten - `compiler/tests/build/release/tests.exe` scheiterte, `compiler\tests\...` lief, ein
+    absoluter Pfad lief ebenfalls. `CreateProcessW` ohne Anwendungsnamen parst den Namen selbst und kennt `/` nicht
+    als Trenner. Behoben in `runtime/platform.c`: der Programmname wird an der Grenze auf Backslashes umgeschrieben,
+    seine Argumente nicht.
+    (2) `torb ir --statistics std` (und damit über das ganze Repository) endet mit
+    `panic: arithmetic overflow in "-"` in `compiler/src/ir/mangle.trb:251` - `canonicalLiteral` schreibt
+    `minus{0 - inner}`, und der kleinste `Int64` hat kein positives Gegenstück. Einen Build trifft es nicht; gehört
+    in die Lowering-Folgerunde.
+  - **Die Scheiben bis zur Löschung:** (1) diese - Seed und nativer Treiber; (2) die Gates auf dem nativen Compiler,
+    ein Gate-Runner ersetzt die drei `cargo test`-Suiten, Konformanz vergleicht nur noch gegen
+    `.expected`/`.stderr`/`.exit`/`.leaks`; (3) `canon` portiert; (4) `highlight` portiert, die Erweiterung auf die
+    neue Binärdatei gezeigt; (5) die eine Lowering-Lücke; (6) `bootstrap/tests` nach `tests/`, `bootstrap/crates`
+    löschen, alle Verweise umschreiben. **Fünf Runden nach dieser**; 3 und 4 können parallel laufen.
+  - **Für dich zu entscheiden (nur Geschmack und Richtung):** (1) Soll `seed/torb` später ein **Release-Download**
+    werden - dann braucht es eine Release-Pipeline und einen Ort dafür - oder bleibt es "was du zuletzt gebaut
+    hast"? (2) Wie soll `bootstrap/tests/native/` nach dem Umzug heißen: `tests/conformance/`, oder `conformance/`
+    auf oberster Ebene, weil es keine Tests eines Pakets sind? (3) `torb run` liest und hasht bei jedem Start das
+    ganze Workspace (0,17 s warm). Ist das der richtige Handel, oder soll der Schlüssel später nur die wirklich
+    importierten Dateien umfassen und dafür einen Abhängigkeitsindex auf Platte pflegen?

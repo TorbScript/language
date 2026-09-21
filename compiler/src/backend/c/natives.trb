@@ -864,6 +864,16 @@ fn fileEntries(var entries: List<NativeEntry>) {
     "torb_process_run",
     "int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);",
   ))
+  /*
+   * And `torb run` runs what it built through this one, which hands the child the three streams this process holds
+   * instead of a pipe. Collecting is the wrong shape for a driver: the program would print nothing until it ended,
+   * its two streams would arrive merged, and a program that reads standard input would have nothing to read.
+   */
+  entries.add(runtimeOf(
+    "Process.runInheriting",
+    "torb_process_run_inheriting",
+    "int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb_text *failure);",
+  ))
   // A child process whose pipes are read and written while it runs: the same `Source`/`Sink` objects a file has
   entries.add plannedRuntimeOf("Process.start", "torb_process_start", "7.3")
   entries.add plannedRuntimeOf("Child.input", "torb_child_input", "7.3")

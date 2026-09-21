@@ -1,0 +1,132 @@
+/**
+ * `torb run`: a program compiled into a cache and executed, with the rest of the command line, its three streams and
+ * its exit code passed through.
+ *
+ * There is no interpreter behind this command. `run` is `build` into a directory named after the program's sources
+ * plus starting what came out, so the first run of a program costs a build and every run after it costs a process
+ * start - and what runs is the same binary `torb build` would have written, which is what keeps `run` from being a
+ * second implementation of the language.
+ *
+ * **Nothing of this command is on the program's output.** A build that succeeds says nothing, the binary is started
+ * with the console this process holds rather than a pipe, and the exit code is the binary's. What a user sees is
+ * exactly what the program wrote, which is what makes `torb run` usable inside a gate that compares output.
+ */
+
+use File, IoError from "std/fs"
+use Process from "std/process"
+use SourceTree from "../project/source-tree"
+use readSourceTree from "../project/read"
+use normalizePath, parentPath, joinPath, pathName, pathDepth from "../project/path"
+use BuildOptions, build, buildFailedCode, binaryNameOf from "./build"
+
+/** What `torb run` needs from the command line. */
+public type RunOptions {
+  /** The entry file, or a project directory, whose `build { input }` says which file that is. */
+  path: String
+  /**
+   * Everything written behind the path. `run` reads none of it: it is what the program reads back out of
+   * `Process.arguments()`, so `torb run tool.trb --verbose` hands `["--verbose"]` to `tool.trb`.
+   */
+  arguments: List<String> = []
+}
+
+/** The exit code of the whole command: the program's own, or what went wrong before it started. */
+public fn runProgram(options: RunOptions): Result<Int, IoError> {
+  if !File.exists(options.path) {
+    printError "error: `{options.path}` does not exist"
+    return Ok buildFailedCode
+  }
+  const entry = normalizePath(File.absolutePath(options.path)?)
+  const tree = readSourceTree([options.path])?
+  const directory = joinPath cacheDirectoryOf(entry), "{cacheKeyOf(tree, entry)}"
+  const output = joinPath directory, binaryNameOf(entry)
+  if const None = builtBinary(output) {
+    const built = build(BuildOptions([options.path], output: output, saysWhatItWrote: false))?
+    if built != 0 {
+      return Ok built
+    }
+  }
+  const binary = match builtBinary(output) {
+    Some(found) => found
+    None => {
+      printError "error: the build wrote no binary at `{output}`"
+      return Ok buildFailedCode
+    }
+  }
+  match Process.runPassingThrough(binary, options.arguments) {
+    Ok(code) => Ok code
+    Fail(problem) => {
+      printError "error: the program `{binary}` could not be started: {problem.message}"
+      Ok buildFailedCode
+    }
+  }
+}
+
+/**
+ * What the cache is keyed by: every file the front end would read, with its path and its text, and the entry that was
+ * named. A file that changed anywhere in the workspace is a different key and therefore a different directory, so a
+ * stale binary is never the one that is started.
+ *
+ * Reading more than the program reaches is deliberate and the same trade [readSourceTree] makes: an edit to a file the
+ * program does not import costs one rebuild, and in exchange "is this binary current" is a question about bytes that
+ * were read anyway rather than about a dependency graph that is only known after the check.
+ *
+ * # Pitfalls
+ *
+ * The key says nothing about the `torb` that builds. Inside this repository that is covered, because the compiler's
+ * own sources are files of the workspace; for a program somewhere else, a new toolchain over an unchanged program
+ * reuses the binary the old one built. The cache is `build/run/` and is thrown away by deleting it.
+ */
+fn cacheKeyOf(tree: SourceTree, entry: String): Int {
+  var seed = entry.hash()
+  for path in tree.paths() {
+    seed = combineHashes seed, path.hash()
+    const text = tree.text(path) ?? ""
+    seed = combineHashes seed, text.hash()
+  }
+  // A directory is named after the key, and a name that starts with `-` reads as a flag wherever the path is typed
+  seed.bitwiseAnd 0x7FFFFFFFFFFFFFFF
+}
+
+/**
+ * Where the cache goes: `build/run/` under the outermost directory above the entry that has a `project.trb`, which is
+ * the workspace root - so one checkout has one cache and a program outside of any project caches beside itself.
+ *
+ * The walk stops where [readSourceTree]'s does, at a hidden directory, `target` or `node_modules`: a checkout below
+ * `.claude/worktrees` is a workspace of its own and caches inside itself.
+ */
+fn cacheDirectoryOf(entry: String): String {
+  const start = if File.isDirectory(entry) { entry } else { parentPath entry }
+  var outermost = start
+  var current = start
+  loop {
+    if File.exists(joinPath(current, "project.trb")) {
+      outermost = current
+    }
+    if isSkippedDirectory(pathName(current)) {
+      break
+    }
+    const parent = parentPath current
+    if parent == current || pathDepth(parent) < 1 {
+      break
+    }
+    current = parent
+  }
+  joinPath outermost, "build/run"
+}
+
+fn isSkippedDirectory(name: String): Bool {
+  name.startsWith(".") || name == "target" || name == "node_modules"
+}
+
+/** A C compiler on Windows appends `.exe` to an output name without an extension, so both names are the binary. */
+fn builtBinary(output: String): String? {
+  if File.exists(output) {
+    return Some output
+  }
+  const executable = "{output}.exe"
+  if File.exists(executable) {
+    return Some executable
+  }
+  None
+}

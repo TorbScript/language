@@ -1,6 +1,6 @@
 ---
 title: torb test
-summary: torb test runs every *.test.trb file below a directory - one binary for all of them, or one process per file on stage 0 - and prints ok or FAILED for every test call it sees.
+summary: torb test runs every *.test.trb file below the paths it is given - one binary for all of them, or one process per file on stage 0 - and prints ok or FAILED for every test call it sees.
 kind: tooling
 status: stable
 order: 60
@@ -10,8 +10,8 @@ keywords:
   - jobs
   - assert
 source:
-  - bootstrap/crates/torb-cli/src/main.rs
   - compiler/src/cli/test.trb
+  - compiler/src/cli/build.trb
   - std/test/src/lib.trb
 ---
 
@@ -21,16 +21,21 @@ panics - there are no matchers to learn beyond [`assert`](../standard-library/ex
 ## Synopsis
 
 ```text
-torb test [path] [--jobs N]   Run every *.test.trb below path (default: tests)
+torb test [path]... [--jobs N]   Run every *.test.trb below the paths (default: tests)
 ```
 
 ## What it does
 
 ### Finding the tests
 
-Every file below `path` whose name ends in `.test.trb` is collected, recursively, sorted by path. `path` defaults to
+Every file below a `path` whose name ends in `.test.trb` is collected, recursively, sorted by path. `path` defaults to
 `tests`, the directory [`project.trb`](project-trb.md)'s `test { input "..." }` names by default, but `test` itself
-does not read `project.trb` - it only ever looks at the path you give it.
+does not read `project.trb` - it only ever looks at the paths you give it.
+
+**Several paths are one run**, and therefore one binary and one report over all of them, in the order the paths sort
+in: `torb test std/path/tests std/linear/tests` builds both packages together. Any test package works the same way -
+the standard library's, an example's, your own - because nothing about the command is particular to the compiler's own
+suite.
 
 ### Running them
 
@@ -79,10 +84,10 @@ a command line written for stage 0 still runs.
 
 ### What the run forwards
 
-The self-hosted `test` runs the binary as a child process and writes what it wrote. Until `Process.start` hands out the
-two pipes apart (milestone 7.3) that is one collected text, so it arrives when the run is over rather than while it
-happens, and a panic that escaped every recovery point - a file whose *top level* panicked - is written on standard
-output with the rest instead of on standard error. The exit code is the binary's.
+The self-hosted `test` runs the binary as a child process **with its own three streams**, so the report is the
+binary's own output and nothing on the way out touches it: every line appears while the suite runs rather than after
+it, a panic that escaped every recovery point - a file whose *top level* panicked - stays on standard error where the
+binary put it, and the exit code is the binary's.
 
 ### Coverage
 

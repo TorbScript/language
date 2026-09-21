@@ -23,7 +23,7 @@ the language server are all in it. That keeps a project's setup to one installat
 ## Synopsis
 
 ```text
-torb run [path]        Run src/main.trb of a project, or a single script file
+torb run <path> [...]  Build a file or a project into a cache and run it
 torb check [path]...   Check projects, workspaces or single files
 torb build [path]      Compile an entry file to a native binary through C
 torb ir <path>...      Print the typed IR the back end lowers
@@ -32,7 +32,7 @@ torb tokens <file>     Print the tokens of a file
 torb ast <file>        Print the syntax tree of a file
 torb docs <command>    Check, index, and derive the documentation
 torb canon [path]...   Write the formatter canon over the syntax tree
-torb test <path>       Run the *.test.trb files of a directory
+torb test [path]...    Run the *.test.trb files below the paths
 ```
 
 Until the compiler compiles itself, the self-hosted commands run through stage 0. From `bootstrap/`:
@@ -50,12 +50,16 @@ The first form runs a command **of the self-hosted toolchain**; `test` and `cano
 
 ### `run`
 
-Runs a file directly, or `src/main.trb` of a project directory, passing the rest of the command line to the program
-as `Process.arguments()`. There is no build step and no cache to manage: a script may hold top-level code because
-nothing imports it. `run` is the one command above that does not go through `run ../compiler`: until the compiler
-compiles itself, it is stage 0 itself, which has no type checker and does not load `std/` - see
-[torb run](torb-run.md) for what that means for a program that uses more of the standard library than the compiler
-itself does.
+Builds a file, or the `build { input }` of a project directory, into `build/run/<key>/` and runs it, passing the rest
+of the command line to the program as `Process.arguments()`. The key is a hash of every source file that was read, so
+an unchanged program is not rebuilt. A script may hold top-level code because nothing imports it.
+
+There is no second implementation of the language behind `run`: what it starts is the binary
+[`build`](torb-build.md) would have written, with the program's three streams and its exit code passed through.
+
+Stage 0 has a `run` of its own while it is there, which **interprets** the file - it has no type checker and does not
+load `std/` - and it is how the compiler is run before it has been compiled (`torb run ../compiler check ..`). See
+[torb run](torb-run.md) for the difference.
 
 ### `check`
 
@@ -103,8 +107,9 @@ rest of stage 0.
 
 ### `test`
 
-Runs every `*.test.trb` file of a directory. The output is the name of a file, then one line per test of it, then the
-next file - **in the order of the files**, which is the order their paths sort in - and at the end a blank line and
+Runs every `*.test.trb` file below the paths it is given - any test package, and several of them at once, which is
+still one binary and one report. The output is the name of a file, then one line per test of it, then the next file -
+**in the order of the files**, which is the order their paths sort in - and at the end a blank line and
 `N passed, M failed (K files)`. The command leaves with 0 where nothing failed and 1 otherwise.
 
 The two implementations get there differently, and that is the only thing that differs:

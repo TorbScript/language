@@ -1,8 +1,12 @@
 /**
  * The `torb` command line: one `match` over `Process.arguments()` at the bottom of this file, and one function per
- * subcommand above it - `check`, `build`, `ir`, `natives --header`, `parse`, `tokens`, `ast`, and the `docs`
- * family from `./documentation`. This file has no exported declarations: it is the entry point of the toolchain
- * itself, run today by the bootstrap interpreter (`torb run compiler <subcommand> ...`) until it can compile itself.
+ * subcommand above it - `check`, `build`, `run`, `test`, `ir`, `natives --header`, `parse`, `tokens`, `ast`, and the
+ * `docs` family from `./documentation`. This file has no exported declarations: it is the entry point of the
+ * toolchain itself.
+ *
+ * Compiled, this file **is** `torb`, and `run` and `test` are what make it the driver: a program is built into a cache
+ * and started, a test package is built into one binary and run. Stage 0 still runs the same file interpreted
+ * (`torb run compiler <subcommand> ...`) while it is there, and the two answer the same thing.
  */
 
 use File, IoError from "std/fs"
@@ -19,6 +23,7 @@ use check, Checked from "./semantics/check"
 use Lowering from "./ir/lower/context"
 use lowerChecked, loweredText, loweredProblems, statisticsLines from "./ir/lower/lower"
 use BuildOptions, build from "./cli/build"
+use RunOptions, runProgram from "./cli/run"
 use TestOptions, runTests from "./cli/test"
 use insertOwnership from "./ir/ownership"
 use verifyOwnedProgram from "./ir/ownership-verify"
@@ -38,7 +43,9 @@ fn printUsage() {
   printError "  torb build [path]      Compile an entry file to a native binary through C"
   printError "                         --emit-c: write the C and stop, which needs no C compiler"
   printError "                         --output <file>: where the binary goes (the C is written next to it)"
-  printError "  torb test [path]       Build every *.test.trb below the path into one binary and run it"
+  printError "  torb run <path> [...]  Build a file or a project into build/run/ and execute it"
+  printError "                         everything behind the path is the program's own Process.arguments()"
+  printError "  torb test [path]...    Build every *.test.trb below the paths into one binary and run it"
   printError "                         --jobs N: accepted and ignored - one binary is one process"
   printError "  torb ir <path>...      Print the typed IR of what the back end lowers, and what it does not yet"
   printError "                         --statistics: only the counts, without the IR itself"
@@ -256,8 +263,8 @@ fn buildOptionsOf(arguments: List<String>): BuildOptions {
 }
 
 /**
- * `torb test [path] [--jobs N]`. `--jobs` is the one flag stage 0 has that means nothing here: one binary holds every
- * test file, so there is one process whatever the number says. It is accepted so that a command line written for
+ * `torb test [path]... [--jobs N]`. `--jobs` is the one flag stage 0 has that means nothing here: one binary holds
+ * every test file, so there is one process whatever the number says. It is accepted so that a command line written for
  * stage 0 still runs, and ignored.
  */
 fn testOptionsOf(arguments: List<String>): TestOptions {
@@ -277,7 +284,7 @@ fn testOptionsOf(arguments: List<String>): TestOptions {
     }
     paths.add argument
   }
-  TestOptions(paths.first() ?? "tests")
+  TestOptions(if paths.isEmpty() { ["tests"] } else { paths })
 }
 
 /**
@@ -322,6 +329,14 @@ match Process.arguments() {
   }
   ["build", ...more] => {
     const code = build(buildOptionsOf(more))?
+    if code != 0 {
+      Process.exit code
+    }
+  }
+  // Everything behind the path is the program's, whatever it looks like: `torb run tool.trb --emit-c` passes
+  // `--emit-c` on rather than reading it here
+  ["run", path, ...more] => {
+    const code = runProgram(RunOptions(path, more))?
     if code != 0 {
       Process.exit code
     }

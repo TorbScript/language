@@ -113,6 +113,46 @@ public native type Process {
   ): Int
 
   /**
+   * Runs a program to its end with **this program's own three streams**, and answers its exit code. The arguments are
+   * passed as they are, like [Process.run]'s.
+   *
+   * This is what a driver runs a program with: nothing is collected, so what the child writes appears where this
+   * program's output appears *while* it writes it, its two streams stay apart and in their order, and a program that
+   * reads standard input reads the one the user is typing into. [Process.run] answers what a program wrote, which is
+   * the other question and needs a pipe for it.
+   *
+   * A program that could not be started at all is an `IoError`; a program that ran and failed is an exit code.
+   *
+   * # Examples
+   *
+   *     const code = Process.runPassingThrough("git", ["status", "--short"])?
+   *     Process.exit code
+   *
+   * # Errors
+   *
+   * - The program is not on `PATH`, or it is not a program at all.
+   *
+   * # Related
+   *
+   * - [Process.run] - the same run with everything it wrote collected into a [ProcessOutput].
+   */
+  static fn runPassingThrough(command: String, arguments: List<String>): Result<Int, IoError> {
+    var failure = ""
+    const collected: ArrayList<String> = ArrayList.from arguments
+    const code = Process.runInheriting command, collected, failure
+    if code < 0 {
+      return Fail IoError(command, failure)
+    }
+    Ok code
+  }
+
+  /**
+   * The exit code of the program, or **-1** where it could not be started at all, and then `failure` says why. The
+   * same shape [Process.runCollecting] has, without the output: there is none to answer with.
+   */
+  native static fn runInheriting(command: String, arguments: ArrayList<String>, var failure: String): Int
+
+  /**
    * Starts a program and hands back its pipes, for output that is too big to collect or that has to be read while it
    * arrives. `run` is the short form for everything else.
    */

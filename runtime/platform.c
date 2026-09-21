@@ -45,6 +45,7 @@
 #  include <wchar.h>
 #else
 #  include <dirent.h>
+#  include <fcntl.h>
 #  include <sys/stat.h>
 #  include <sys/wait.h>
 #  include <time.h>
@@ -747,6 +748,30 @@ static void torb_append_windows_argument(const char *argument, char **into, size
 }
 
 /**
+ * The program's own name, with every `/` written as `\`. Only the name, never an argument.
+ *
+ * `CreateProcessW` is called without an application name, so that it searches `PATH` and appends `.exe` the way a
+ * command line does - and then it parses the name out of the command line itself, by a rule that does not know that
+ * `/` separates directories. A **relative** path spelled with forward slashes therefore names nothing:
+ * `compiler/tests/build/release/tests.exe` could not be started at all while `compiler\tests\...` started. An absolute
+ * one works either way, which is what made it look like a path problem of one caller rather than of the layer.
+ *
+ * A `String` of this language spells a path with forward slashes everywhere (`normalizePath`, `File.absolutePath`), so
+ * the conversion belongs here, at the boundary, and nowhere above it.
+ */
+static char *torb_windows_command(const char *command, size_t *capacity) {
+  const size_t length = strlen(command);
+  size_t index;
+  char *copy = (char *)torb_raw_allocate(length + 1u);
+  for (index = 0u; index < length; index++) {
+    copy[index] = command[index] == '/' ? '\\' : command[index];
+  }
+  copy[length] = '\0';
+  *capacity = length + 1u;
+  return copy;
+}
+
+/**
  * A child process, run to its end, with its two output streams collected - through `CreateProcessW` and a pipe, and
  * through **no shell at all**.
  *
@@ -793,8 +818,11 @@ bool torb_platform_run_process(
   HANDLE readEnd = NULL;
   HANDLE writeEnd = NULL;
   DWORD status = 0u;
+  size_t nameCapacity = 0u;
+  char *name = torb_windows_command(command, &nameCapacity);
   line[0] = '\0';
-  torb_append_windows_argument(command, &line, &filled, &lineCapacity);
+  torb_append_windows_argument(name, &line, &filled, &lineCapacity);
+  torb_raw_free(name, nameCapacity);
   for (index = 0u; index < count; index++) {
     torb_append_windows_argument(arguments[index], &line, &filled, &lineCapacity);
   }
@@ -863,6 +891,65 @@ bool torb_platform_run_process(
   *output = buffer;
   *length = outputFilled;
   *capacity = outputCapacity;
+  return true;
+}
+
+/**
+ * The same child process, run to its end with **this process's own three streams** instead of a pipe: what it writes
+ * appears where this program's output appears, while it writes it, and what it reads comes from the same place.
+ *
+ * Without `STARTF_USESTDHANDLES` the child is given the handles this process holds, which is the whole difference. It
+ * is what a driver needs and what collecting cannot be: a program that runs for a minute prints nothing until it ends
+ * when its output is collected, the two streams arrive merged and in the wrong order, and a program that asks a
+ * question has nobody to ask.
+ */
+bool torb_platform_run_inheriting(
+  const char *command,
+  const char **arguments,
+  size_t count,
+  int64_t *code,
+  const char **message
+) {
+  size_t lineCapacity = 512u;
+  size_t filled = 0u;
+  char *line = (char *)torb_raw_allocate(lineCapacity);
+  size_t wideCapacity = 0u;
+  wchar_t *wideLine;
+  size_t index;
+  STARTUPINFOW startup;
+  PROCESS_INFORMATION child;
+  DWORD status = 0u;
+  size_t nameCapacity = 0u;
+  char *name = torb_windows_command(command, &nameCapacity);
+  line[0] = '\0';
+  torb_append_windows_argument(name, &line, &filled, &lineCapacity);
+  torb_raw_free(name, nameCapacity);
+  for (index = 0u; index < count; index++) {
+    torb_append_windows_argument(arguments[index], &line, &filled, &lineCapacity);
+  }
+  wideLine = torb_platform_wide(line, &wideCapacity);
+  torb_raw_free(line, lineCapacity);
+  if (wideLine == NULL) {
+    *message = "the program could not be started";
+    return false;
+  }
+  memset(&startup, 0, sizeof(startup));
+  memset(&child, 0, sizeof(child));
+  startup.cb = (DWORD)sizeof(startup);
+  /* No application name, so Windows searches PATH and appends `.exe` to a name without an extension */
+  if (!CreateProcessW(NULL, wideLine, NULL, NULL, TRUE, 0u, NULL, NULL, &startup, &child)) {
+    *message = "the program could not be started";
+    torb_raw_free(wideLine, wideCapacity);
+    return false;
+  }
+  torb_raw_free(wideLine, wideCapacity);
+  WaitForSingleObject(child.hProcess, INFINITE);
+  if (!GetExitCodeProcess(child.hProcess, &status)) {
+    status = (DWORD)-1;
+  }
+  CloseHandle(child.hProcess);
+  CloseHandle(child.hThread);
+  *code = (int64_t)(int32_t)status;
   return true;
 }
 
@@ -970,6 +1057,82 @@ bool torb_platform_run_process(
   *output = buffer;
   *length = outputFilled;
   *capacity = outputCapacity;
+  return true;
+}
+
+/**
+ * The same child process, run to its end with **this process's own three streams** instead of a pipe, and through
+ * **no shell at all**: `fork` plus `execvp` hands the arguments over as the array they are, so nothing about them is
+ * interpreted and nothing has to be quoted. That is the promise `std/process` makes and the one the collecting half
+ * above still keeps only in practice.
+ *
+ * A program that could not be started has to be told apart from one that ran and left with 127, and after `fork` the
+ * child cannot answer in a return value any more. So it answers through a pipe that is closed on a successful `exec`:
+ * bytes on it mean the `exec` failed and carry its `errno`, and end of file means the program is running.
+ */
+bool torb_platform_run_inheriting(
+  const char *command,
+  const char **arguments,
+  size_t count,
+  int64_t *code,
+  const char **message
+) {
+  const size_t argumentBytes = (count + 2u) * sizeof(char *);
+  char **argumentValues = (char **)torb_raw_allocate(argumentBytes);
+  int report[2];
+  pid_t child;
+  int status = 0;
+  int failed = 0;
+  ssize_t told;
+  size_t index;
+  argumentValues[0] = (char *)command;
+  for (index = 0u; index < count; index++) {
+    argumentValues[index + 1u] = (char *)arguments[index];
+  }
+  argumentValues[count + 1u] = NULL;
+  if (pipe(report) != 0) {
+    *message = strerror(errno);
+    torb_raw_free(argumentValues, argumentBytes);
+    return false;
+  }
+  (void)fcntl(report[1], F_SETFD, FD_CLOEXEC);
+  child = fork();
+  if (child < 0) {
+    *message = strerror(errno);
+    close(report[0]);
+    close(report[1]);
+    torb_raw_free(argumentValues, argumentBytes);
+    return false;
+  }
+  if (child == 0) {
+    close(report[0]);
+    execvp(command, argumentValues);
+    failed = errno;
+    (void)!write(report[1], &failed, sizeof(failed));
+    _exit(127);
+  }
+  close(report[1]);
+  torb_raw_free(argumentValues, argumentBytes);
+  do {
+    told = read(report[0], &failed, sizeof(failed));
+  } while (told < 0 && errno == EINTR);
+  close(report[0]);
+  while (waitpid(child, &status, 0) < 0) {
+    if (errno != EINTR) {
+      *message = strerror(errno);
+      return false;
+    }
+  }
+  if (told == (ssize_t)sizeof(failed)) {
+    *message = strerror(failed);
+    return false;
+  }
+  /* The exit code is in the high byte of `wait`'s status, and a child killed by a signal has none at all */
+  if (WIFEXITED(status)) {
+    *code = (int64_t)WEXITSTATUS(status);
+  } else {
+    *code = (int64_t)(128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0));
+  }
   return true;
 }
 

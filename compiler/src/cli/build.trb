@@ -1,8 +1,9 @@
 /**
  * `torb build`: a checked program to a native binary, through one C file and whatever C compiler is on the machine.
  *
- * This is the minimum path: one profile, no cache, no `project.trb` output path. Profiles, a content-hash cache,
- * `torb run` as build-and-execute and `torb test` are additions on top of it, never a rewrite of it.
+ * This is the minimum path: one profile, no cache of its own, no `project.trb` output path. `torb run` (build into a
+ * cache and execute) and `torb test` (every `*.test.trb` as one binary) are additions on top of it, never a rewrite of
+ * it, and profiles and a `build { output }` read from the manifest will be the same.
  *
  * Nothing is compiled that the back end cannot emit yet: a construct the lowering does not support becomes a
  * finding, and `torb build` reports every finding and refuses to produce a binary. A C compiler error, on the other
@@ -43,6 +44,11 @@ public type BuildOptions {
    * whole compiler, so it would be one C compile the size of the compiler's own per file (BACKEND 6.3).
    */
   isTestRun: Bool = false
+  /**
+   * Whether the path of what was written is printed. A command that **runs** what it built next says nothing about
+   * it: `torb run` and `torb test` put the program's own output on the console and nothing else.
+   */
+  saysWhatItWrote: Bool = true
 }
 
 /** Exit codes of `torb build`. */
@@ -95,12 +101,12 @@ public fn build(options: BuildOptions): Result<Int, IoError> {
   const text = emittedText emission
   File.writeText(source, text)?
   if options.onlyC {
-    print "wrote {source}"
+    if options.saysWhatItWrote {
+      print "wrote {source}"
+    }
     return Ok 0
   }
-  // A test run says nothing about the binary it built: its output is the report, and `torb test` compares that report
-  // with the other implementation's line by line
-  compile(source, binary, !options.isTestRun)
+  compile source, binary, options.saysWhatItWrote
 }
 
 // --- What was wrong with the program --------------------------------------------------------------------------------
@@ -279,7 +285,7 @@ fn outputPathOf(checked: Checked, module: ModuleId, options: BuildOptions): Stri
 }
 
 /** The name of the binary: the entry file without its extension. */
-fn binaryNameOf(path: String): String {
+public fn binaryNameOf(path: String): String {
   const name = pathName path
   if name.endsWith(".trb") {
     return name[0..name.byteLength() - 4]

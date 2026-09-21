@@ -169,6 +169,8 @@ torb_list torb_process_arguments(void);
 void torb_process_exit(int64_t code);
 /* Process.runCollecting */
 int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);
+/* Process.runInheriting */
+int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb_text *failure);
 /* readLine */
 bool torb_read_line(torb_text *out);
 /* Float64.round */

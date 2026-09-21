@@ -157,6 +157,48 @@ int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *outp
   return code;
 }
 
+/**
+ * `Process.runPassingThrough(command, arguments)`: the same arguments, the same platform layer, and no pipe - the
+ * child is handed this program's own three streams.
+ *
+ * Everything this program has buffered is written out first. Two processes share one console from the moment the
+ * child starts, so a line this one produced before the call has to be on the console before then, or it appears
+ * after output the child wrote later.
+ */
+int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb_text *failure) {
+  const int64_t count = torb_list_length(arguments);
+  int64_t code = -1;
+  size_t index;
+  size_t commandCapacity = 0u;
+  char *name = torb_argument_bytes(command, &commandCapacity);
+  char **given = count == 0 ? NULL : (char **)torb_raw_allocate((size_t)count * sizeof(char *));
+  size_t *capacities = count == 0 ? NULL : (size_t *)torb_raw_allocate((size_t)count * sizeof(size_t));
+  const char *message = NULL;
+  bool ran;
+  for (index = 0u; index < (size_t)count; index++) {
+    torb_text argument = { NULL, 0u, 0u };
+    (void)torb_list_get(arguments, (int64_t)index, &argument);
+    capacities[index] = 0u;
+    given[index] = torb_argument_bytes(argument, &capacities[index]);
+    torb_text_release(argument);
+  }
+  fflush(NULL);
+  ran = torb_platform_run_inheriting(name, (const char **)given, (size_t)count, &code, &message);
+  for (index = 0u; index < (size_t)count; index++) {
+    torb_raw_free(given[index], capacities[index]);
+  }
+  if (count != 0) {
+    torb_raw_free(given, (size_t)count * sizeof(char *));
+    torb_raw_free(capacities, (size_t)count * sizeof(size_t));
+  }
+  torb_raw_free(name, commandCapacity);
+  if (!ran) {
+    *failure = torb_text_from_cstring(message == NULL ? "the program could not be started" : message);
+    return -1;
+  }
+  return code;
+}
+
 void torb_process_exit(int64_t code) {
   torb_process_finish();
   fflush(stdout);

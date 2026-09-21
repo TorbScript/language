@@ -778,6 +778,16 @@ TORB_NORETURN void torb_process_exit(int64_t code);
  * which is what a `var` parameter of a native means (the wrapper passes a fresh empty text).
  */
 int64_t torb_process_run(torb_text command, torb_list arguments, torb_text *output, torb_text *failure);
+/**
+ * `Process.runInheriting(command, arguments, var failure)`: a program run to its end with **this program's own three
+ * streams**. The result is its exit code, nothing is collected, and **-1** means it could not be started at all, with
+ * the reason in `*failure` (owned).
+ *
+ * This is what a driver runs a program with. `torb run` hands a built binary the console it has, so the binary's
+ * output arrives while it is produced, its two streams stay apart and in order, and a program that reads standard
+ * input reads the one the user is typing into.
+ */
+int64_t torb_process_run_inheriting(torb_text command, torb_list arguments, torb_text *failure);
 
 /* -------------------------------------------------------------------------------------------------- files --- */
 
@@ -891,6 +901,19 @@ bool torb_platform_run_process(
   uint8_t **output,
   size_t *length,
   size_t *capacity,
+  const char **message
+);
+/**
+ * The same, with **this process's own three streams** handed to the child instead of a pipe: nothing is collected,
+ * what the child writes appears where this program's output appears while it writes it, and what it reads comes from
+ * the same place. `*code` is its exit code. False only where the process could not be started at all, with a libc
+ * message in `*message` (borrowed, static).
+ */
+bool torb_platform_run_inheriting(
+  const char *command,
+  const char **arguments,
+  size_t count,
+  int64_t *code,
   const char **message
 );
 /** A monotonic clock reading, in nanoseconds, from an unspecified origin. Never goes backwards within one process. */
