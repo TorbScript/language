@@ -2497,6 +2497,10 @@ Wenn nicht, was bedeutet, bewirkt es?
     neben dem Alias `type Meters = Float` nur am Anfangsbuchstaben hinge; und der Platz für verschachtelte oder
     assoziierte Typen wäre damit belegt. Ein späterer Wechsel ist EIN Wort an einer festen Stelle und damit eine
     `canon`-Regel - die Umstellungsrunde legt das Schlüsselwort deshalb in beiden Parsern an genau einer Stelle ab.
+  - **Wunsch (Nutzer, 2026-09-22), kommt mit der Umstellungsrunde:** ein `var fn` wird im Highlighting UNTERSTRICHEN
+    wie ein `var`-Feld - an der Deklaration und an jeder Aufrufstelle (`point.translate 5`), damit man Mutation im
+    Code sieht, ohne die Signatur zu kennen. Gehört in `torb highlight` (der Modifier, den `var`-Felder schon
+    tragen) und in die VS-Code-Extension.
 
 - (Zahlliteral im generischen Rumpf, 2026-09-22) **Befund der Back-End-Runde:** nicht das Lowering fehlt, sondern
   der Checker passt das Literal gar nicht an den Parameter an (`integerLiteralType` fällt bei einem Typparameter auf
