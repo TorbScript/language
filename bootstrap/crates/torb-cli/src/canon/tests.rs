@@ -159,14 +159,14 @@ fn the_body_of_a_match_arm_and_of_a_closure_are_command_positions() {
 /// "calling a function in a field always needs parentheses"). Neither direction may touch such a call.
 #[test]
 fn a_call_of_a_field_of_the_enclosing_type_is_left_exactly_as_it_is() {
-    unchanged("type Fold {\n  step: (Int) => Int\n  fn add(var self) {\n    state = step(1)\n  }\n}");
-    unchanged("type Fold {\n  step: (Int) => Int\n  fn add(var self) {\n    state = self.step(1)\n  }\n}");
-    unchanged("type Config {\n  port: Int\n  fn fill(var self) {\n    port 8080\n  }\n}");
-    unchanged("type Config {\n  port: Int\n  fn fill(var self) {\n    port port + 1\n  }\n}");
+    unchanged("type Fold {\n  step: (Int) => Int\n  var fn add() {\n    state = step(1)\n  }\n}");
+    unchanged("type Fold {\n  step: (Int) => Int\n  var fn add() {\n    state = self.step(1)\n  }\n}");
+    unchanged("type Config {\n  port: Int\n  var fn fill() {\n    port 8080\n  }\n}");
+    unchanged("type Config {\n  port: Int\n  var fn fill() {\n    port port + 1\n  }\n}");
     // A method of the same name as a field of another type is still converted
     assert_eq!(
-        canon("type Config {\n  port: Int\n  fn fill(var self) {\n    log(port)\n  }\n}"),
-        "type Config {\n  port: Int\n  fn fill(var self) {\n    log port\n  }\n}"
+        canon("type Config {\n  port: Int\n  var fn fill() {\n    log(port)\n  }\n}"),
+        "type Config {\n  port: Int\n  var fn fill() {\n    log port\n  }\n}"
     );
     // Outside of the type the name is nobody's field
     assert_eq!(canon("type Config {\n  port: Int\n}\nport(8080)"), "type Config {\n  port: Int\n}\nport 8080");

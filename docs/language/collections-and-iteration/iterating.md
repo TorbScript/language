@@ -24,7 +24,7 @@ implementing `Iterable` itself.
 type CountdownIterator with Iterator<Int> {
   var current: Int
 
-  fn next(var self): Int? {
+  var fn next(): Int? {
     if current <= 0 {
       return None
     }
@@ -36,7 +36,7 @@ type CountdownIterator with Iterator<Int> {
 type Countdown with Iterable<Int> {
   start: Int
 
-  fn iterator(self): Iterator<Int> {
+  fn iterator(): Iterator<Int> {
     CountdownIterator start
   }
 }
@@ -49,8 +49,8 @@ for value in Countdown(3) {
 ## Syntax
 
 ```text
-trait Iterator<Item> { fn next(var self): Item? }
-trait Iterable<Item> { fn iterator(self): Iterator<Item> }
+trait Iterator<Item> { var fn next(): Item? }
+trait Iterable<Item> { fn iterator(): Iterator<Item> }
 
 for <name> in <iterable> { ... }
 for (<name>, <name>) in <iterable of tuples> { ... }
@@ -58,7 +58,7 @@ for (<name>, <name>) in <iterable of tuples> { ... }
 
 ## Rules
 
-1. **`Iterator<Item>` has exactly one member, `next(var self): Item?`, which answers `None` once there is nothing
+1. **`Iterator<Item>` has exactly one member, `next(): Item?`, which answers `None` once there is nothing
    left.** `Iterable<Item>` has exactly one required member, `iterator(self): Iterator<Item>`; every other method a
    collection has (`map`, `filter`, `fold`, `toList()`, ...) is a default method built from those two.
 

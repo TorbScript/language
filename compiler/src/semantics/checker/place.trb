@@ -34,7 +34,7 @@ public type Mutation {
   case Write
   /** `port 8080`, `database { ... }`: a property command writes the field it names. */
   case Command(member: String)
-  /** `list.add(1)`: the member that declares `var self`. */
+  /** `list.add(1)`: the member that is a `var fn`. */
   case Receiver(member: String)
   /** A `var` parameter: which one, and of what. */
   case Argument(parameter: String, callee: String)
@@ -568,7 +568,7 @@ public fn checkSubject(var checker: Checker, value: Expression) {
 }
 
 /**
- * The receiver of a `var self` call. The access begins once every argument has been evaluated, and it stays open while
+ * The receiver of a `var fn` call. The access begins once every argument has been evaluated, and it stays open while
  * a closure argument runs - which is exactly what makes `root.div { root.attribute "lang", "en" }` a mistake while
  * `items.removeAt(items.length() - 1)` is legal.
  */
@@ -587,7 +587,7 @@ public fn openReceiverAccess(
   const at = receiverSpanOf callee
   const _ = checkNewAccess checker, place, at, call
   // The reason a place cannot be written is only built where there is one: the message costs a value and a string, and
-  // almost every receiver of a `var self` call is a plain `var` binding
+  // almost every receiver of a `var fn` call is a plain `var` binding
   if isMutable(checker, place) {
     checker.recordPlace at, place
   } else {
@@ -601,7 +601,7 @@ public fn openReceiverAccess(
   openAccess checker, place, member, at, call
 }
 
-/** What a `var self` call changes: the base of the member path, or `self` where the member was written bare. */
+/** What a `var fn` call changes: the base of the member path, or `self` where the member was written bare. */
 fn receiverPlaceOf(var checker: Checker, callee: Expression): Place {
   match callee.kind {
     .Member(base, _, isOptional) => {
@@ -836,7 +836,7 @@ public fn checkCallReads(
   if checker.accesses.isEmpty() || checker.runningClosures == 0 {
     return
   }
-  // The receiver of a `var self` call *is* the access, so reading it again is not a second one
+  // The receiver of a `var fn` call *is* the access, so reading it again is not a second one
   if !isVarReceiver {
     checkReads checker, callee
   }

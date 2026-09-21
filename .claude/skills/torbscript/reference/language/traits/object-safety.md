@@ -24,7 +24,7 @@ perfectly legal type to hold, pass and store.
 type Money with Show, Hash {
   cents: Int
 
-  fn hash(self): Int {
+  fn hash(): Int {
     cents
   }
 }
@@ -42,16 +42,16 @@ print describe(Money(3))
 ## Syntax
 
 ```text
-fn <name>(self, other: Self): <Type>       unsafe: needs a second value of the caller's own concrete type
-fn <name>(self): Self                      unsafe: promises to return the caller's own concrete type
-fn <name>(<parameters>): <Type>            unsafe: no `self` at all, so there is no value to dispatch on
-fn <name>(self, ...): <Type>               safe: `Self` appears nowhere but in `self`'s own position
+fn <name>(other: Self): <Type>             unsafe: needs a second value of the caller's own concrete type
+fn <name>(): Self                          unsafe: promises to return the caller's own concrete type
+static fn <name>(<parameters>): <Type>     unsafe: `static`, so there is no value to dispatch on
+fn <name>(...): <Type>                     safe: `Self` appears nowhere but in the receiver's own position
 ```
 
 ## Rules
 
 1. **A member that mentions `Self` in a parameter or in its result cannot be called on a trait-typed value.**
-   `Compare.min(self, other: Self): Self` takes and returns a second value of the caller's exact type, which a
+   `Compare.min(other: Self): Self` takes and returns a second value of the caller's exact type, which a
    trait-typed value does not carry.
 
    ```trb error
@@ -65,8 +65,8 @@ fn <name>(self, ...): <Type>               safe: `Self` appears nowhere but in `
    (`if lessThan(other) { self } else { other }`), and it is still rejected on a `Compare`-typed value, because the
    body is not what is checked - the signature is.
 
-3. **A member with no `self` at all has nothing to dispatch on, and is never called through a value.** `TryFrom.tryFrom`
-   and `From.from` are requirements without `self`; they are reached through the type's own name
+3. **A `static` member has nothing to dispatch on, and is never called through a value.** `TryFrom.tryFrom`
+   and `From.from` are `static` requirements; they are reached through the type's own name
    (`Money.tryFrom(text)`), never through a binding whose type happens to be the trait.
 
 4. **The trait stays a legal type regardless.** `List<Show & Hash>` and `fn describe(item: Show & Hash)` compile and
@@ -87,11 +87,11 @@ trait it was coerced to.
 type Money with Compare, Equals {
   cents: Int
 
-  fn compare(self, other: Money): Ordering {
+  fn compare(other: Money): Ordering {
     if cents < other.cents { .Less } else if cents > other.cents { .Greater } else { .Equal }
   }
 
-  fn equals(self, other: Money): Bool {
+  fn equals(other: Money): Bool {
     cents == other.cents
   }
 }
@@ -103,11 +103,11 @@ print Money(3).min(Money(5))
 type Money with Compare, Equals {
   cents: Int
 
-  fn compare(self, other: Money): Ordering {
+  fn compare(other: Money): Ordering {
     if cents < other.cents { .Less } else if cents > other.cents { .Greater } else { .Equal }
   }
 
-  fn equals(self, other: Money): Bool {
+  fn equals(other: Money): Bool {
     cents == other.cents
   }
 }

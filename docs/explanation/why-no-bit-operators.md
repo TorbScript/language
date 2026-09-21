@@ -96,7 +96,7 @@ type Point {
   x: Int
   y: Int
 
-  fn hash(self): Int {
+  fn hash(): Int {
     x.bitwiseExclusiveOr y.shiftedLeft(by: 1)
   }
 }

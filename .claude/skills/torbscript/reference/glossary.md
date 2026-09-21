@@ -133,7 +133,7 @@ imported and their exports are computed to a fixpoint; still an error between th
 ### Dead change
 
 A change that cannot have an effect: a `var` that is changed and never read afterwards, or the discarded result of a
-method that takes `self`. Both are compile errors, because with value semantics they are always mistakes.
+method that only reads its receiver. Both are compile errors, because with value semantics they are always mistakes.
 
 ### Decode
 
@@ -266,8 +266,9 @@ import has the same shape.
 
 ### Method
 
-A member of a type that declares `self`. Structurally it is a constant of the type that holds a receiver closure, which is
-why a field and a method cannot share a name. See [Methods and static functions](language/types/methods.md).
+A member of a type that works on a value of it. It does not list its receiver - `fn area(): Int` - and a `var fn`
+says it changes that receiver. Structurally it is a constant of the type that holds a receiver closure, which is why a
+field and a method cannot share a name. See [Methods and `static fn`s](language/types/methods.md).
 
 ### Module
 
@@ -290,7 +291,7 @@ for the same idea applied to a C library instead of the runtime.
 ### Object safety
 
 Whether a trait's member can be called on a value known only through the trait: a member that mentions `Self` in a
-parameter or its result, or that has no `self`, cannot be. See [Object safety](language/traits/object-safety.md).
+parameter or its result, or that is `static`, cannot be. See [Object safety](language/traits/object-safety.md).
 
 ### Option
 
@@ -299,7 +300,7 @@ implicit `Some`: a value never wraps itself into one. See [Option](language/valu
 
 ### OrElse
 
-The trait behind `a ?? b`, `fn orElse(self, fallback: lazy Value): Value`, in the prelude and implemented by `Option` and
+The trait behind `a ?? b`, `fn orElse(fallback: lazy Value): Value`, in the prelude and implemented by `Option` and
 `Result`. A type that does not come with it hears so at the operator. See
 [Optional chaining](language/errors/option-chaining.md).
 
@@ -363,7 +364,7 @@ somebody else's `var` path, but never through this one, and it cannot be widened
 
 ### Receiver closure
 
-A closure whose first parameter is called `self`, so names inside it resolve against that receiver. It is what a builder,
+A closure whose function type names its first parameter `self`, so names inside it resolve against that receiver. It is what a builder,
 a configuration block and a method all are. See
 [Receiver closures](language/configuration/receiver-closures.md).
 
@@ -436,10 +437,11 @@ The synchronous middle of a pipeline, `Stage<Input, Output>`, written once and d
 The Rust interpreter in `bootstrap/` that runs the self-hosted toolchain until it can compile itself. It has no type
 checker and is thrown away afterwards.
 
-### Static function
+### Static member
 
-A function declared on a `type` that does not take `self`, called as `Type.member(...)` rather than through an
-instance. See [Methods and static functions](language/types/methods.md).
+A member declared `static`: it belongs to the type and not to a value, so it is reached as `Type.member(...)` and
+never through an instance. `static fn` for a function, `static name = value` for a constant; `static var` does not
+exist. See [Methods and `static fn`s](language/types/methods.md).
 
 ### Stream
 
@@ -480,7 +482,7 @@ A name standing for a type, filled in at each use of a `fn`, `type`, `trait` or 
 
 ### Var path
 
-A path from a binding down to a value through which a change is legal: a `var` binding, `var` parameter or `var self`, then
+A path from a binding down to a value through which a change is legal: a `var` binding, `var` parameter or a `var fn` receiver, then
 `var` fields, indices and ranges all the way. Without one, nothing changes. See
 [Mutation and var paths](language/types/var-paths.md).
 
@@ -491,7 +493,7 @@ spreads a collection into it with `...`. See [Variadic parameters](language/func
 
 ### Verb
 
-A method that changes its receiver in place and declares `var self`, next to its [participle](#participle), which returns
+A method that changes its receiver in place and is a `var fn`, next to its [participle](#participle), which returns
 a changed copy. See [Verbs and participles](language/types/verbs-and-participles.md).
 
 ### Wildcard

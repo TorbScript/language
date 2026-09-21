@@ -27,9 +27,9 @@ At the end of this page you can declare a trait, implement it two ways, and use 
 
 ```trb
 trait Shape {
-  fn area(self): Float
+  fn area(): Float
 
-  fn describe(self): String {
+  fn describe(): String {
     "area {area()}"
   }
 }
@@ -37,7 +37,7 @@ trait Shape {
 type Square with Shape {
   side: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     side * side
   }
 }
@@ -60,7 +60,7 @@ type Circle {
 }
 
 extend Circle with Shape {
-  fn area(self): Float {
+  fn area(): Float {
     3.14159 * radius * radius
   }
 }
@@ -96,7 +96,7 @@ type Vector2 with Add {
   x: Float
   y: Float
 
-  fn add(self, other: Vector2): Vector2 {
+  fn add(other: Vector2): Vector2 {
     Vector2(x + other.x, y + other.y)
   }
 }

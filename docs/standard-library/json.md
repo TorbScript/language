@@ -47,10 +47,10 @@ match Json.decode<User>(text) {
 
 ```trb fragment
 public native type Json {
-  fn encode(value: Encode): String
-  fn decode<Value: Decode>(text: String): Result<Value, JsonError>
-  fn parse(text: String): Result<JsonValue, JsonError>
-  fn value<Value: Encode>(value: Value): JsonValue
+  static fn encode(value: Encode): String
+  static fn decode<Value: Decode>(text: String): Result<Value, JsonError>
+  static fn parse(text: String): Result<JsonValue, JsonError>
+  static fn value<Value: Encode>(value: Value): JsonValue
 }
 ```
 
@@ -82,11 +82,11 @@ A JSON document without a fixed shape. JSON does not distinguish an integer from
 
 ```trb fragment
 public type JsonError with Show, Error {
-  fn syntax(line: Int, message: String): JsonError
-  fn decodeFailed(cause: DecodeError): JsonError
-  fn invalidText(cause: Utf8Error): JsonError
-  fn isSyntaxError(self): Bool
-  fn cause(self): Error?
+  static fn syntax(line: Int, message: String): JsonError
+  static fn decodeFailed(cause: DecodeError): JsonError
+  static fn invalidText(cause: Utf8Error): JsonError
+  fn isSyntaxError(): Bool
+  fn cause(): Error?
 }
 ```
 

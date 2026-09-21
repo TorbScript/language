@@ -15,35 +15,35 @@ const newList = collections.emptyList()                      // `collections`: `
  * A trait: `interface`. `Show` and `Compare` below are traits used as bounds: `interface` again, at their use.
  */
 trait Describable {
-  fn describe(self): String                                 // A required method: `method`, `static` is not set
+  fn describe(): String                                     // A required method: `method`, `static` is not set
 }
 
 /** A type: `type`. `Item` and `Size` are its generics: `typeParameter`, at their declaration and every use. */
 shared type Buffer<Item, const Size: Int> with Describable {
   var length: Int = 0                                        // A `var` field: `property` + `mutable` (underline)
-  const capacity: Int = Size                                 // A `const` field: `property`, no underline
+  capacity: Int = Size                                       // A field: `property`, no underline
   step: Item                                                 // A field without `var`: `property`, readonly
 
   case Empty                                                 // A case: `enumMember`
   case Full(item: Item)                                      // A case with a field: `enumMember` + `property`
 
-  /** A method with `self`: `method`. `var self` also makes every `self` in its body `mutable` (underlined). */
-  fn push(var self, value: Item) {
+  /** A `var fn`: `method` + `mutable`, underlined at its declaration and at every call of it. */
+  var fn push(value: Item) {
     length = length + 1                                      // A bare field write: `property`, `mutable`
     step = value                                              // Another bare field: `property`
   }
 
-  /** A method without `self`: `method` + `static`. */
-  fn withCapacity(size: Size): Buffer<Item, Size> {
+  /** A `static fn`: `method` + `static`. */
+  static fn withCapacity(size: Size): Buffer<Item, Size> {
     Self size                                                 // `Self` used as a constructor: left to TextMate
   }
 
   /** Calling another method of the same type bare: still `method` (implicit `self`). */
-  fn isFull(self): Bool {
+  fn isFull(): Bool {
     length == capacity
   }
 
-  fn describe(self): String {
+  fn describe(): String {
     "Buffer({length}/{capacity})"                             // `length`/`capacity`: bare fields, `property`
   }
 }
@@ -89,6 +89,20 @@ moveTo(target: origin, to: Point(x: 1, y: 1))                // `target`, `to`: 
 fn methodVsFunction(point: Point) {
   const shown = point.describe()                             // `describe`: `method` (through a value, not a type)
   const also = identity(shown)                                // `identity`: `function` (bare)
+}
+
+/** A `var fn` is underlined where it is called, too, so mutation is visible without reading the signature. */
+type Counter {
+  var count: Int = 0
+
+  var fn grow(by: Int) {                                     // `grow`: `method` + `mutable` (underline)
+    count = count + by
+  }
+}
+
+fn useCounter() {
+  var counter = Counter()
+  counter.grow 1                                             // `grow` again: `method` + `mutable` (underline)
 }
 
 /** Closures, `for`, `if const`/`if var`, and a nested `fn` that cannot see the locals around it. */

@@ -61,7 +61,7 @@ fn <name>(value: <Trait>): ...                a trait-typed parameter - `value` 
    }
 
    trait Loud {
-     fn shout(self): String
+     fn shout(): String
    }
 
    fn announce(entry: Loud): String {

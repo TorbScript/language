@@ -48,19 +48,19 @@ fn totalLength(channel: Channel<String>): Task<Result<Int, Never>> {
 
 ```trb fragment
 public shared trait Source<Item, Failure> with Close {
-  fn next(var self): Task<Result<Item?, Failure>>
-  fn through<Output>(var self, stage: Stage<Item, Output>): Source<Output, Failure>
-  fn map<Output>(var self, transform: (value: Item) => Output): Source<Output, Failure>
-  fn filter(var self, predicate: (value: Item) => Bool): Source<Item, Failure>
-  fn then<Output>(var self, step: (value: Item) => Task<Result<Output, Failure>>): Source<Output, Failure>
-  fn mapFailure<Other>(var self, transform: (failure: Failure) => Other): Source<Item, Other>
-  fn collect<Output>(var self, collector: Collector<Item, Output>): Task<Result<Output, Failure>>
-  fn toList(var self): Task<Result<List<Item>, Failure>>
-  fn into(var self, var sink: Sink<Item, Failure>): Task<Result<Void, Failure>>
+  var fn next(): Task<Result<Item?, Failure>>
+  var fn through<Output>(stage: Stage<Item, Output>): Source<Output, Failure>
+  var fn map<Output>(transform: (value: Item) => Output): Source<Output, Failure>
+  var fn filter(predicate: (value: Item) => Bool): Source<Item, Failure>
+  var fn then<Output>(step: (value: Item) => Task<Result<Output, Failure>>): Source<Output, Failure>
+  var fn mapFailure<Other>(transform: (failure: Failure) => Other): Source<Item, Other>
+  var fn collect<Output>(collector: Collector<Item, Output>): Task<Result<Output, Failure>>
+  var fn toList(): Task<Result<List<Item>, Failure>>
+  var fn into(var sink: Sink<Item, Failure>): Task<Result<Void, Failure>>
 
-  fn from(items: Iterable<Item>): Source<Item, Failure>
-  fn pulling(step: () => Task<Result<Item?, Failure>>): Source<Item, Failure>
-  fn produce(
+  static fn from(items: Iterable<Item>): Source<Item, Failure>
+  static fn pulling(step: () => Task<Result<Item?, Failure>>): Source<Item, Failure>
+  static fn produce(
     capacity: Int = 0,
     body: (var sink: Sink<Item, Failure>) => Result<Void, Failure>,
   ): Source<Item, Failure> where Failure: From<ChannelClosed>
@@ -71,7 +71,7 @@ The reading end of a stream. `next()` answers `Ok(Some(item))` for the next item
 `Fail(problem)` for a failure that ends the stream for good. A source has an identity and is consumed once, so it is a
 `shared type`, and **a source that is read from sits in a `var` binding**; a `const` handle is the read-only view every
 shared object has (see [Shared types](../language/types/shared-types.md)). Wrapping (`map`, `filter`, `through`) needs
-`var self` too, because the wrapper keeps the source in a `var` field and pulls from it afterwards - a chain still
+`var fn`s too, because the wrapper keeps the source in a `var` field and pulls from it afterwards - a chain still
 reads as one expression, because a freshly produced object is a `var` path. Backpressure is the pull: nothing is read
 before somebody asks for it. `checked()` (an extension for `Source<Result<Item, Problem>, Failure>`) turns `Result`
 items into the stream's own failure, ending the stream there. `produce` is the one way to write a producer without
@@ -82,18 +82,18 @@ handing every item over directly, in lock-step with the consumer.
 
 ```trb fragment
 public shared trait Sink<Item, Failure> with Close {
-  fn add(var self, item: Item): Task<Result<Void, Failure>>
-  fn finish(var self): Task<Result<Void, Failure>>
-  fn addAll(var self, items: Iterable<Item>): Task<Result<Void, Failure>>
-  fn fill(var self, var source: Source<Item, Failure>): Task<Result<Void, Failure>>
-  fn mapFailure<Other>(var self, transform: (failure: Failure) => Other): Sink<Item, Other>
-  fn buffered(var self, capacity: Int = 64): Buffered<Item, Failure>
+  var fn add(item: Item): Task<Result<Void, Failure>>
+  var fn finish(): Task<Result<Void, Failure>>
+  var fn addAll(items: Iterable<Item>): Task<Result<Void, Failure>>
+  var fn fill(var source: Source<Item, Failure>): Task<Result<Void, Failure>>
+  var fn mapFailure<Other>(transform: (failure: Failure) => Other): Sink<Item, Other>
+  var fn buffered(capacity: Int = 64): Buffered<Item, Failure>
 
-  fn pushing(
+  static fn pushing(
     accept: (item: Item) => Task<Result<Void, Failure>>,
     complete: () => Task<Result<Void, Failure>>,
   ): Sink<Item, Failure>
-  fn discarding(): Sink<Item, Failure>
+  static fn discarding(): Sink<Item, Failure>
 }
 ```
 

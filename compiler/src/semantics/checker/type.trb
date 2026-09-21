@@ -119,7 +119,7 @@ public type LiteralValue {
 
 /**
  * One generic parameter of one declaration. The `Self` of a trait is one of these as well, because that is what makes
- * `fn combine(self, other: Self): Self` an ordinary signature instead of a special case.
+ * `fn combine(other: Self): Self` an ordinary signature instead of a special case.
  */
 public type ParameterDeclaration {
   name: String
@@ -152,7 +152,7 @@ public type TypeTable {
    * Interning. `formKey` is a full structural key although it is one level deep, because the children are ids
    * already - so this is O(size of the form), never O(size of the type).
    */
-  fn intern(var self, form: TypeForm): TypeId {
+  var fn intern(form: TypeForm): TypeId {
     const key = formKey form
     if const Some(existing) = identifiers.get(key) {
       return existing
@@ -163,16 +163,16 @@ public type TypeTable {
     identifier
   }
 
-  fn form(self, id: TypeId): TypeForm {
+  fn form(id: TypeId): TypeForm {
     forms[id.value]
   }
 
-  fn length(self): Int {
+  fn length(): Int {
     forms.length()
   }
 
   /** Ids are append-only and never renumbered, which is what keeps an incremental re-check possible. */
-  fn declareParameter(var self, declaration: ParameterDeclaration): ParameterId {
+  var fn declareParameter(declaration: ParameterDeclaration): ParameterId {
     if const Some(symbol) = declaration.symbol {
       if const Some(existing) = bySymbol.get(symbol.value) {
         return existing
@@ -186,11 +186,11 @@ public type TypeTable {
     identifier
   }
 
-  fn parameter(self, identifier: ParameterId): ParameterDeclaration {
+  fn parameter(identifier: ParameterId): ParameterDeclaration {
     declarations[identifier.value]
   }
 
-  fn parameterOf(self, symbol: SymbolId): ParameterId? {
+  fn parameterOf(symbol: SymbolId): ParameterId? {
     bySymbol.get symbol.value
   }
 }
@@ -428,7 +428,7 @@ public type Signature {
   bounds: List<Bound>
   /** The type whose member this is, `None` for a top-level function. */
   owner: TypeId?
-  /** `fn area(self)` against `fn square(size: Int)`. */
+  /** `fn area()` against `fn square(size: Int)`. */
   takesSelf: Bool
   isVarSelf: Bool
   /** A requirement of a trait and a `native` function have none. */
@@ -558,7 +558,7 @@ public type Resolved {
   /** Two implementations answer the same question. Both declarations are named in the message. */
   case Ambiguous(first: ImplementationId, second: ImplementationId)
 
-  fn isFound(self): Bool {
+  fn isFound(): Bool {
     match self {
       .Found(_, _) | .Bounded(_) => true
       _ => false
@@ -566,7 +566,7 @@ public type Resolved {
   }
 
   /** The arguments of the trait as they are for the type that was asked about. */
-  fn argumentsOf(self): List<TypeId>? {
+  fn argumentsOf(): List<TypeId>? {
     match self {
       .Found(_, arguments) => Some arguments
       .Bounded(arguments) => Some arguments
@@ -621,7 +621,7 @@ public type ImplementationTable {
   var bySpan: Map<String, Int> = [:]
   var isBuilt: Bool = false
 
-  fn at(self, id: ImplementationId): Implementation {
+  fn at(id: ImplementationId): Implementation {
     all[id.value]
   }
 
@@ -629,7 +629,7 @@ public type ImplementationTable {
    * Every index is written out here instead of through a helper: handing a field of `self` to another `var self`
    * method reads a place that has already been taken out, which stage 0 cannot see and cannot report.
    */
-  fn add(var self, implementation: Implementation, shape: TargetShape, capability: SymbolId?): ImplementationId {
+  var fn add(implementation: Implementation, shape: TargetShape, capability: SymbolId?): ImplementationId {
     all.add implementation
     const index = all.length() - 1
     if const .Concrete(head) = shape {
@@ -665,7 +665,7 @@ public type ImplementationTable {
     ImplementationId index
   }
 
-  fn candidatesOf(self, capability: SymbolId, head: SymbolId?): List<Int> {
+  fn candidatesOf(capability: SymbolId, head: SymbolId?): List<Int> {
     var found: List<Int> = []
     if const Some(symbol) = head {
       for index in byTraitAndHead.get((capability.value, symbol.value)) ?? [] {
@@ -685,7 +685,7 @@ public type ImplementationTable {
    * every question about the whole program goes through `candidatesOf`, which is keyed by the trait and therefore
    * short - scanning every blanket and every trait-targeted implementation for every type is what made the pass slow.
    */
-  fn declaredFor(self, head: SymbolId?): List<Int> {
+  fn declaredFor(head: SymbolId?): List<Int> {
     var found: List<Int> = []
     if const Some(symbol) = head {
       for index in byHead.get(symbol.value) ?? [] {
@@ -695,7 +695,7 @@ public type ImplementationTable {
     found
   }
 
-  fn inherentOf(self, head: SymbolId?): List<Int> {
+  fn inherentOf(head: SymbolId?): List<Int> {
     var found: List<Int> = []
     if const Some(symbol) = head {
       for index in inherent.get(symbol.value) ?? [] {

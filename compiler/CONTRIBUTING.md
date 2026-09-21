@@ -162,7 +162,7 @@ documentation anywhere else. One comment in full:
  *
  * - [Option.okOr] - the same step with a reason, for a caller that answers with a `Result`.
  */
-fn orElse(self, fallback: lazy Value): Value { ... }
+fn orElse(fallback: lazy Value): Value { ... }
 ```
 
 An example is checked as if it stood in a file next to the one it documents: it sees what that file imports and the
@@ -188,7 +188,7 @@ for them - which is what to set when a panic inside the toolchain has to be foun
    rule of the language:** exclusivity begins the `var` access of a call after all of its arguments have been evaluated
    (CONCEPT, `var` Paths), so all three lines above are legal TorbScript. The hoists stay until stage 0 is gone.
 2. The same one level down: `checker.list.add(Item(checker.other.length()))` has to be two statements, and a
-   `var self` method must not hand a field of `self` to another `var self` method.
+   `var fn` method must not hand a field of `self` to another `var fn` method.
 3. **Copy on write is O(n).** Never hold a second live copy of a big table across a write. Big tables live in one
    `var` owner and are passed as `var` parameters. Interning is a `Map` lookup, never a scan.
 4. Directly inside of the braces of a `match`, a line that starts with `.` is a new arm. A chain over several lines

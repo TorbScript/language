@@ -46,24 +46,24 @@ public type Polygon<Scalar: Numeric = Float> {
   corners: List<Vector2<Scalar>>
 
   /** The polygon of a triangle's three corners. */
-  fn ofTriangle(triangle: Triangle2<Scalar>): Polygon<Scalar> {
+  static fn ofTriangle(triangle: Triangle2<Scalar>): Polygon<Scalar> {
     Polygon([triangle.first, triangle.second, triangle.third])
   }
 
   /** The polygon of a rectangle's four corners, running from the first axis towards the second. */
-  fn ofRectangle(rectangle: Rectangle<Scalar>): Polygon<Scalar> {
+  static fn ofRectangle(rectangle: Rectangle<Scalar>): Polygon<Scalar> {
     const low = rectangle.minimum()
     const high = rectangle.maximum()
     Polygon([low, Vector2(high.x, low.y), high, Vector2(low.x, high.y)])
   }
 
   /** Whether the chain describes no area at all, which is the case below three corners. */
-  fn isEmpty(self): Bool {
+  fn isEmpty(): Bool {
     corners.length() < 3
   }
 
   /** The edges, in the order the corners are written, with the closing edge last. */
-  fn edges(self): List<Segment2<Scalar>> {
+  fn edges(): List<Segment2<Scalar>> {
     var found: List<Segment2<Scalar>> = []
     const count = corners.length()
     if count < 2 {
@@ -82,7 +82,7 @@ public type Polygon<Scalar: Numeric = Float> {
   }
 
   /** Twice the area, with a sign that says which way the corners run. This is the shoelace sum. */
-  fn signedDoubledArea(self): Scalar {
+  fn signedDoubledArea(): Scalar {
     if isEmpty() {
       return zeroOf corners[0].x
     }
@@ -101,7 +101,7 @@ public type Polygon<Scalar: Numeric = Float> {
   }
 
   /** The smallest rectangle that holds the polygon. Empty where there are no corners. */
-  fn bounds(self): Rectangle<Scalar> {
+  fn bounds(): Rectangle<Scalar> {
     if corners.isEmpty() {
       const nothing: Vector2<Scalar> = Vector2.filled zeroOf(signedDoubledArea())
       return Rectangle nothing, nothing
@@ -119,7 +119,7 @@ public type Polygon<Scalar: Numeric = Float> {
    * Whether every turn goes the same way, which is what makes the cheap tests correct. A polygon with fewer than three
    * corners is not convex.
    */
-  fn isConvex(self): Bool {
+  fn isConvex(): Bool {
     if isEmpty() {
       return false
     }
@@ -153,7 +153,7 @@ public type Polygon<Scalar: Numeric = Float> {
    *
    * Nothing checks that the polygon is convex; [Polygon.isConvex] is what a caller establishes once.
    */
-  fn containsConvex(self, point: Vector2<Scalar>): Bool {
+  fn containsConvex(point: Vector2<Scalar>): Bool {
     if isEmpty() {
       return false
     }
@@ -178,7 +178,7 @@ public type Polygon<Scalar: Numeric = Float> {
    *
    * A point exactly on an edge may come out either way, which is what a crossing count answers for one.
    */
-  fn contains(self, point: Vector2<Scalar>): Bool {
+  fn contains(point: Vector2<Scalar>): Bool {
     if isEmpty() {
       return false
     }
@@ -201,7 +201,7 @@ public type Polygon<Scalar: Numeric = Float> {
    * Whether the two **convex** polygons share a point, by the separating axis test: two convex shapes miss each other
    * exactly where some edge normal of one of them has all of one on one side and all of the other on the other.
    */
-  fn intersectsConvex(self, other: Polygon<Scalar>): Bool {
+  fn intersectsConvex(other: Polygon<Scalar>): Bool {
     if isEmpty() || other.isEmpty() {
       return false
     }
@@ -209,7 +209,7 @@ public type Polygon<Scalar: Numeric = Float> {
   }
 
   /** The same polygon moved. */
-  fn translated(self, by: Vector2<Scalar>): Polygon<Scalar> {
+  fn translated(by: Vector2<Scalar>): Polygon<Scalar> {
     Polygon(corners.map({ _.add(by) }).toList())
   }
 }
@@ -217,7 +217,7 @@ public type Polygon<Scalar: Numeric = Float> {
 /** What a sign buys: the area without its sign. */
 extend<Scalar: Signed> Polygon<Scalar> {
   /** Twice the area, without a sign. */
-  fn doubledArea(self): Scalar {
+  fn doubledArea(): Scalar {
     signedDoubledArea().absolute()
   }
 }
@@ -225,7 +225,7 @@ extend<Scalar: Signed> Polygon<Scalar> {
 /** What a halving buys: the area itself. */
 extend<Scalar: Real> Polygon<Scalar> {
   /** How much of the plane the polygon covers. */
-  fn area(self): Scalar {
+  fn area(): Scalar {
     signedDoubledArea().absolute().halved()
   }
 }

@@ -51,10 +51,10 @@ re-exports that one.
 ```text
 Sandbox.load<Value>(path, capabilities: (var self: SandboxCapabilities) => Void = {}): Result<Script<Value>, SandboxError>
 
-SandboxCapabilities.modules(var self, ...names: String)
-SandboxCapabilities.files(var self, readOnly: String = "", readWrite: String = "")
-SandboxCapabilities.environment(var self, ...patterns: String)
-SandboxCapabilities.limits(var self, steps: Int = 1_000_000, memory: Int = 64.megabytes(), time: Duration = 2.seconds())
+SandboxCapabilities.modules(...names: String)
+SandboxCapabilities.files(readOnly: String = "", readWrite: String = "")
+SandboxCapabilities.environment(...patterns: String)
+SandboxCapabilities.limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(), time: Duration = 2.seconds())
 ```
 
 ## Rules

@@ -117,7 +117,7 @@ public use <Type>.<Case> from "<path>"               re-exported under the same 
 ## What this is not
 
 **Importing a case is not opening the type's namespace.** Importing `Option.Some` does not also make `None` bare, and
-it does not touch a method or a static function of `Option` at all - those are still written `Option.member`, whether
+it does not touch a method or a `static fn` of `Option` at all - those are still written `Option.member`, whether
 or not the type itself is imported:
 
 ```trb check

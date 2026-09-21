@@ -40,18 +40,18 @@ what a document may say, the same reason `parse` exists next to a plain construc
 
 3. **Write `Encode` and `Decode` by hand only where a `private` field keeps the generated ones from working**,
    because a private field with no default makes the constructor unusable from outside. `encode` writes through
-   `Encoder`'s methods, named after the built-in types; `decode` is a static function that reads through `Decoder`
+   `Encoder`'s methods, named after the built-in types; `decode` is a `static fn` that reads through `Decoder`
    and answers a `Result`.
 
    ```trb fragment
    extend Percent with Encode {
-     fn encode(self, var encoder: Encoder) {
+     fn encode(var encoder: Encoder) {
        encoder.int value
      }
    }
 
    extend Percent with Decode {
-     fn decode(var decoder: Decoder): Result<Percent, DecodeError> {
+     static fn decode(var decoder: Decoder): Result<Percent, DecodeError> {
        const raw = decoder.int()?
        if raw < 0 || raw > 100 {
          return Fail DecodeError("{raw} is not a percent")
@@ -74,7 +74,7 @@ what a document may say, the same reason `parse` exists next to a plain construc
   for every level.
 - **Writing `Encode` without `Decode` is legal and common.** A type your program only ever sends outward has no
   reason to parse itself back.
-- **`Decode.decode` is a static function, not a method.** It takes the `Decoder` and answers `Self`; there is no
+- **`Decode.decode` is a `static fn`, not a method.** It takes the `Decoder` and answers `Self`; there is no
   `self` to call it on before a value exists.
 
 ## Full example
@@ -83,7 +83,7 @@ what a document may say, the same reason `parse` exists next to a plain construc
 type Percent {
   private value: Int
 
-  fn of(value: Int): Percent? {
+  static fn of(value: Int): Percent? {
     if value < 0 || value > 100 {
       return None
     }
@@ -92,13 +92,13 @@ type Percent {
 }
 
 extend Percent with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.int value
   }
 }
 
 extend Percent with Decode {
-  fn decode(var decoder: Decoder): Result<Percent, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<Percent, DecodeError> {
     const raw = decoder.int()?
     if raw < 0 || raw > 100 {
       return Fail DecodeError("{raw} is not a percent")

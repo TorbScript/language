@@ -15,7 +15,7 @@ use test, group from "std/test"
 use probe, problems, notes from "./harness"
 
 const counter = "type Counter \{\n  var count: Int = 0\n\n"
-  + "  fn increment(var self) \{\n    count = count + 1\n  \}\n\}\n\n"
+  + "  var fn increment() \{\n    count = count + 1\n  \}\n\}\n\n"
 
 group "The copy trap" {
   test "a copy out of a collection that is changed and never read" {
@@ -134,7 +134,7 @@ group "Top-level `var` bindings" {
   }
 
   test "a method of a type of the module reads it" {
-    const source = "type Report \{\n  fn show(self) \{\n    print total\n  \}\n\}\n\nvar total = 0\ntotal = 1\n"
+    const source = "type Report \{\n  fn show() \{\n    print total\n  \}\n\}\n\nvar total = 0\ntotal = 1\n"
     assert problems(source).isEmpty()
   }
 
@@ -152,7 +152,7 @@ group "Top-level `var` bindings" {
 
   test "a top-level `var` that holds a shared object has no entry at all (gap 48)" {
     const source = "shared type Handle \{\n  var open: Bool = true\n\n"
-      + "  fn close(var self) \{\n    open = false\n  \}\n\}\n\nvar handle = Handle()\nhandle.close()\n"
+      + "  var fn close() \{\n    open = false\n  \}\n\}\n\nvar handle = Handle()\nhandle.close()\n"
     assert problems(source).isEmpty()
   }
 
@@ -174,7 +174,7 @@ group "What the rule does not reach" {
   }
 
   test "`var self` does too" {
-    const source = "type Tally \{\n  var total: Int = 0\n\n  fn bump(var self) \{\n    total = total + 1\n  \}\n\}"
+    const source = "type Tally \{\n  var total: Int = 0\n\n  var fn bump() \{\n    total = total + 1\n  \}\n\}"
     assert problems(source).isEmpty()
   }
 

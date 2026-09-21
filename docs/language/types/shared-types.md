@@ -24,7 +24,7 @@ shared type Connection {
   url: String
   private(var) sent: Int = 0
 
-  fn send(var self, message: String) {
+  var fn send(message: String) {
     sent = sent + 1
   }
 }
@@ -57,7 +57,7 @@ shared type <Name> {
      url: String
      private(var) sent: Int = 0
 
-     fn send(var self, message: String) {
+     var fn send(message: String) {
        sent = sent + 1
      }
    }
@@ -75,7 +75,7 @@ shared type <Name> {
      url: String
      private(var) sent: Int = 0
 
-     fn send(var self, message: String) {
+     var fn send(message: String) {
        sent = sent + 1
      }
    }
@@ -105,15 +105,15 @@ shared type <Name> {
    // error: `isSame` compares identity, and a `Point` is a value
    ```
 
-6. **A `var self` method of a `shared type` may answer a `Task`; the same method on a value may not.** A `var` on a
+6. **A `var fn` method of a `shared type` may answer a `Task`; the same method on a value may not.** A `var` on a
    value is "copy in, copy out" that ends when the call returns, so a change made after the call answers would be
-   lost - a `var self` method that answers a `Task` is only sound where there is one object and no copy to lose.
+   lost - a `var fn` method that answers a `Task` is only sound where there is one object and no copy to lose.
 
    ```trb error
    type Counter {
      var count: Int = 0
 
-     fn tick(var self): Task<Void> {
+     var fn tick(): Task<Void> {
        count = count + 1
        spawn { void }
      }

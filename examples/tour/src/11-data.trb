@@ -19,7 +19,7 @@ type ParseError {
 type Email with TryFrom<String, ParseError> {
   private value: String
 
-  fn tryFrom(value: String): Result<Email, ParseError> {
+  static fn tryFrom(value: String): Result<Email, ParseError> {
     if !value.contains("@") {
       return Fail ParseError("'{value}' is not an email address")
     }
@@ -29,11 +29,11 @@ type Email with TryFrom<String, ParseError> {
 
 /** An Email is a plain string on the wire, not a record with one field. */
 extend Email with Encode, Decode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.string value                // An Email is a string on the wire, not a record with one field
   }
 
-  fn decode(var decoder: Decoder): Result<Email, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<Email, DecodeError> {
     const text = decoder.string()?
     Email.tryFrom(text).mapError { DecodeError _.message }
   }
@@ -69,7 +69,7 @@ match Json.decode<User>(r"""{"name": "Grace", "email": "not-an-email"}""") {
 
 // This is what the compiler generates for `User`. Nothing in it is special, it could be written by hand:
 //
-//   fn encode(self, var encoder: Encoder) {
+//   fn encode(var encoder: Encoder) {
 //     encoder.record("User") { fields =>
 //       fields.field("name", name)
 //       fields.field("email", email)
@@ -99,7 +99,7 @@ type LegacyUser {
 
 /** Reads the `LegacyUser` shape by hand: there is no annotation to bridge `mail` and the nested `contact.e_mail`. */
 extend LegacyUser with Decode {
-  fn decode(var decoder: Decoder): Result<LegacyUser, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<LegacyUser, DecodeError> {
     decoder.record "LegacyUser" { fields =>
       const contact: LegacyContact = fields.field("contact")?
       Ok LegacyUser(name: fields.field("user_name")?, mail: contact.mail)
@@ -114,7 +114,7 @@ type LegacyContact {
 
 /** Reads the field name this older format actually uses: `e_mail`, not `mail`. */
 extend LegacyContact with Decode {
-  fn decode(var decoder: Decoder): Result<LegacyContact, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<LegacyContact, DecodeError> {
     decoder.record "LegacyContact" { fields =>
       Ok LegacyContact(mail: fields.field("e_mail")?)
     }

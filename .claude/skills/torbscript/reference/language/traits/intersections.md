@@ -20,21 +20,21 @@ same `&` in a parameter's type, in a field's type, and in a bound.
 
 ```trb check
 trait Loud {
-  fn shout(self): String
+  fn shout(): String
 }
 
 trait Named {
-  fn name(self): String
+  fn name(): String
 }
 
 type Robot with Loud, Named {
   robotName: String
 
-  fn shout(self): String {
+  fn shout(): String {
     "BEEP"
   }
 
-  fn name(self): String {
+  fn name(): String {
     robotName
   }
 }
@@ -77,15 +77,15 @@ where <Item>: <Trait> & <Trait>                a bound
 
    ```trb error
    trait Loud {
-     fn shout(self): String
+     fn shout(): String
    }
 
    trait Named {
-     fn name(self): String
+     fn name(): String
    }
 
    type Robot with Loud {
-     fn shout(self): String {
+     fn shout(): String {
        "BEEP"
      }
    }
@@ -111,11 +111,11 @@ where <Item>: <Trait> & <Trait>                a bound
 type Robot with Loud, Named {
   robotName: String
 
-  fn shout(self): String {
+  fn shout(): String {
     "BEEP"
   }
 
-  fn name(self): String {
+  fn name(): String {
     robotName
   }
 }
@@ -123,11 +123,11 @@ type Robot with Loud, Named {
 
 ```trb error
 trait Loud {
-  fn shout(self): String
+  fn shout(): String
 }
 
 trait Named {
-  fn name(self): String
+  fn name(): String
 }
 
 fn announce(entry: Loud, Named) {

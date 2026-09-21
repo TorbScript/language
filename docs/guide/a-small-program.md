@@ -34,7 +34,7 @@ type Task {
   priority: Priority
   done: Bool = false
 
-  fn completed(self): Task {
+  fn completed(): Task {
     copy done: true
   }
 }

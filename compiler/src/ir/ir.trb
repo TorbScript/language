@@ -178,7 +178,7 @@ public type Ownership {
 public type IrParameter {
   name: String
   annotation: IrTypeId
-  /** A `var` parameter or `var self`: a reference into the caller's frame, never counted (BACKEND 2.3). */
+  /** A `var` parameter or a `var fn` receiver: a reference into the caller's frame, never counted (BACKEND 2.3). */
   isReference: Bool = false
   ownership: Ownership = Ownership.Borrowed
   /**
@@ -366,15 +366,15 @@ public type IrFunction {
   var blocks: List<Block> = []
   kind: FunctionKind = FunctionKind.Plain
 
-  fn typeOfSlot(self, slot: Slot): IrTypeId {
+  fn typeOfSlot(slot: Slot): IrTypeId {
     slots[slot.value].annotation
   }
 
-  fn hasSlot(self, slot: Slot): Bool {
+  fn hasSlot(slot: Slot): Bool {
     slot.value >= 0 && slot.value < slots.length()
   }
 
-  fn hasBlock(self, block: BlockId): Bool {
+  fn hasBlock(block: BlockId): Bool {
     block.value >= 0 && block.value < blocks.length()
   }
 }
@@ -447,7 +447,7 @@ public type WitnessRoot {
   /**
    * One of the witness pointers inside a trait-typed value: the place the value is at, and which of its bounds.
    *
-   * A **place** and not a slot, because a `var self` member reached through a table writes through the value the table
+   * A **place** and not a slot, because a `var fn` member reached through a table writes through the value the table
    * came from - `holder.items.add(x)` reads the table out of `holder.items` and hands the callee the payload inside
    * exactly that box. A bare slot is `Reference(slot, [])`.
    */
@@ -472,7 +472,7 @@ public type Capture {
   case Value(slot: Slot)
   /** A `var` binding that some closure captures: the `Box` is retained, so both sides see one variable. */
   case Boxed(slot: Slot)
-  /** A `var` parameter or `var self`, captured by a closure that provably does not escape. */
+  /** A `var` parameter or a `var fn` receiver, captured by a closure that provably does not escape. */
   case Place(reference: Reference)
 }
 
@@ -672,7 +672,7 @@ public type IrProgram {
 
   // --- Types
 
-  fn internType(var self, form: IrType): IrTypeId {
+  var fn internType(form: IrType): IrTypeId {
     const key = keyOfIrType form
     if const Some(existing) = typeIdentifiers.get(key) {
       return existing
@@ -683,21 +683,21 @@ public type IrProgram {
     identifier
   }
 
-  fn typeAt(self, id: IrTypeId): IrType {
+  fn typeAt(id: IrTypeId): IrType {
     types[id.value]
   }
 
-  fn typeCount(self): Int {
+  fn typeCount(): Int {
     types.length()
   }
 
-  fn hasType(self, id: IrTypeId): Bool {
+  fn hasType(id: IrTypeId): Bool {
     id.value >= 0 && id.value < types.length()
   }
 
   // --- Traits
 
-  fn internTrait(var self, applied: IrTrait): TraitId {
+  var fn internTrait(applied: IrTrait): TraitId {
     const key = keyOfTrait applied
     if const Some(existing) = traitIdentifiers.get(key) {
       return existing
@@ -708,13 +708,13 @@ public type IrProgram {
     identifier
   }
 
-  fn traitAt(self, id: TraitId): IrTrait {
+  fn traitAt(id: TraitId): IrTrait {
     traits[id.value]
   }
 
   // --- Signatures
 
-  fn internSignature(var self, signature: IrSignature): IrSignatureId {
+  var fn internSignature(signature: IrSignature): IrSignatureId {
     const key = keyOfSignature signature
     if const Some(existing) = signatureIdentifiers.get(key) {
       return existing
@@ -725,16 +725,16 @@ public type IrProgram {
     identifier
   }
 
-  fn signatureAt(self, id: IrSignatureId): IrSignature {
+  fn signatureAt(id: IrSignatureId): IrSignature {
     signatures[id.value]
   }
 
-  fn signatureCount(self): Int {
+  fn signatureCount(): Int {
     signatures.length()
   }
 
   /** Only `finishProgram` uses this, to fill in what follows from the finished layouts. */
-  fn setSignature(var self, id: IrSignatureId, signature: IrSignature) {
+  var fn setSignature(id: IrSignatureId, signature: IrSignature) {
     signatures.set id.value, signature
   }
 
@@ -744,7 +744,7 @@ public type IrProgram {
    * The id of the layout with this name, reserving one when it is new. A layout is reserved *before* its fields are
    * built, so a type that contains itself finds its own id instead of recursing forever.
    */
-  fn reserveLayout(var self, name: String, kind: LayoutKind): ReservedLayout {
+  var fn reserveLayout(name: String, kind: LayoutKind): ReservedLayout {
     if const Some(existing) = layoutIdentifiers.get(name) {
       return ReservedLayout existing, false
     }
@@ -754,26 +754,26 @@ public type IrProgram {
     ReservedLayout identifier, true
   }
 
-  fn layoutAt(self, id: LayoutId): Layout {
+  fn layoutAt(id: LayoutId): Layout {
     layouts[id.value]
   }
 
   /** The layout with this name, if the lowering built one. A name is the whole identity of a layout. */
-  fn layoutNamed(self, name: String): LayoutId? {
+  fn layoutNamed(name: String): LayoutId? {
     layoutIdentifiers.get name
   }
 
-  fn setLayout(var self, id: LayoutId, layout: Layout) {
+  var fn setLayout(id: LayoutId, layout: Layout) {
     layouts.set id.value, layout
   }
 
-  fn hasLayout(self, id: LayoutId): Bool {
+  fn hasLayout(id: LayoutId): Bool {
     id.value >= 0 && id.value < layouts.length()
   }
 
   // --- Locations
 
-  fn internLocation(var self, location: Location): LocationId {
+  var fn internLocation(location: Location): LocationId {
     const key = "{location.path}:{location.line}:{location.column}"
     if const Some(existing) = locationIdentifiers.get(key) {
       return existing
@@ -784,54 +784,54 @@ public type IrProgram {
     identifier
   }
 
-  fn locationAt(self, id: LocationId): Location {
+  fn locationAt(id: LocationId): Location {
     locations[id.value]
   }
 
-  fn hasLocation(self, id: LocationId): Bool {
+  fn hasLocation(id: LocationId): Bool {
     id.value >= 0 && id.value < locations.length()
   }
 
   // --- Everything else
 
-  fn addFunction(var self, function: IrFunction): FunctionId {
+  var fn addFunction(function: IrFunction): FunctionId {
     functions.add function
     FunctionId(functions.length() - 1)
   }
 
-  fn functionAt(self, id: FunctionId): IrFunction {
+  fn functionAt(id: FunctionId): IrFunction {
     functions[id.value]
   }
 
-  fn hasFunction(self, id: FunctionId): Bool {
+  fn hasFunction(id: FunctionId): Bool {
     id.value >= 0 && id.value < functions.length()
   }
 
-  fn addStatic(var self, value: StaticValue): StaticId {
+  var fn addStatic(value: StaticValue): StaticId {
     statics.add value
     StaticId(statics.length() - 1)
   }
 
-  fn staticAt(self, id: StaticId): StaticValue {
+  fn staticAt(id: StaticId): StaticValue {
     statics[id.value]
   }
 
-  fn hasStatic(self, id: StaticId): Bool {
+  fn hasStatic(id: StaticId): Bool {
     id.value >= 0 && id.value < statics.length()
   }
 
-  fn addWitnessTable(var self, table: WitnessTable): WitnessTableId {
+  var fn addWitnessTable(table: WitnessTable): WitnessTableId {
     witnessTables.add table
     witnessTableIdentifiers.set table.name, WitnessTableId(witnessTables.length() - 1)
     WitnessTableId(witnessTables.length() - 1)
   }
 
   /** The table with this name, if it is there already. A name is the whole identity of a table, as it is of a layout. */
-  fn witnessTableNamed(self, name: String): WitnessTableId? {
+  fn witnessTableNamed(name: String): WitnessTableId? {
     witnessTableIdentifiers.get name
   }
 
-  fn witnessTableAt(self, id: WitnessTableId): WitnessTable {
+  fn witnessTableAt(id: WitnessTableId): WitnessTable {
     witnessTables[id.value]
   }
 
@@ -840,50 +840,50 @@ public type IrProgram {
    * need the very same table - `extend<Item: Show> List<Item> with Show` reaches itself through its own item - and a
    * table that is not there yet would be built a second time.
    */
-  fn setWitnessTable(var self, id: WitnessTableId, table: WitnessTable) {
+  var fn setWitnessTable(id: WitnessTableId, table: WitnessTable) {
     witnessTables.set id.value, table
   }
 
-  fn witnessTableCount(self): Int {
+  fn witnessTableCount(): Int {
     witnessTables.length()
   }
 
-  fn hasWitnessTable(self, id: WitnessTableId): Bool {
+  fn hasWitnessTable(id: WitnessTableId): Bool {
     id.value >= 0 && id.value < witnessTables.length()
   }
 
-  fn addElement(var self, descriptor: ElementDescriptor): ElementId {
+  var fn addElement(descriptor: ElementDescriptor): ElementId {
     elements.add descriptor
     elementIdentifiers.set descriptor.name, ElementId(elements.length() - 1)
     ElementId(elements.length() - 1)
   }
 
   /** One descriptor per element type, whatever container asks for it: its mangled name is its whole identity. */
-  fn elementNamed(self, name: String): ElementId? {
+  fn elementNamed(name: String): ElementId? {
     elementIdentifiers.get name
   }
 
-  fn hasElement(self, id: ElementId): Bool {
+  fn hasElement(id: ElementId): Bool {
     id.value >= 0 && id.value < elements.length()
   }
 
-  fn elementAt(self, id: ElementId): ElementDescriptor {
+  fn elementAt(id: ElementId): ElementDescriptor {
     elements[id.value]
   }
 
-  fn setElement(var self, id: ElementId, descriptor: ElementDescriptor) {
+  var fn setElement(id: ElementId, descriptor: ElementDescriptor) {
     elements.set id.value, descriptor
   }
 
   /** An internal error of the compiler: the lowering produced something no back end can represent. */
-  fn reportProblem(var self, message: String) {
+  var fn reportProblem(message: String) {
     if !problems.contains(message) {
       problems.add message
     }
   }
 
   /** A construct that is well formed but not implemented yet. One root cause gets one message, however often. */
-  fn reportPlanned(var self, message: String) {
+  var fn reportPlanned(message: String) {
     if !planned.contains(message) {
       planned.add message
     }

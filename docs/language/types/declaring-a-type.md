@@ -28,24 +28,24 @@ type Point {
   var x: Int
   var y: Int
 
-  fn area(self): Int {
+  fn area(): Int {
     x * y
   }
 
-  fn translate(var self, deltaX: Int = 0, deltaY: Int = 0) {
+  var fn translate(deltaX: Int = 0, deltaY: Int = 0) {
     x = x + deltaX
     y = y + deltaY
   }
 
-  fn translated(self, deltaX: Int = 0, deltaY: Int = 0): Point {
+  fn translated(deltaX: Int = 0, deltaY: Int = 0): Point {
     copy(x: x + deltaX, y: y + deltaY)
   }
 
-  fn square(size: Int): Self {
+  static fn square(size: Int): Self {
     Self size, size
   }
 
-  const origin = Point 0, 0
+  static origin = Point 0, 0
 }
 
 var point = Point x: 10, y: 20
@@ -111,13 +111,13 @@ print "{point} {point.area()} {Point.origin}"
    order of the fields is not observable, and a default that depends on another field is what a factory is for.
 
 6. **The constructor is usable from outside if and only if every `private` field has a default.** Everything else is a
-   static factory function: a function that does not declare `self`.
+   static factory function: a member declared `static`.
 
    ```trb
    type Email with TryFrom<String, String> {
      private value: String
 
-     fn tryFrom(text: String): Result<Email, String> {
+     static fn tryFrom(text: String): Result<Email, String> {
        if !text.contains("@") {
          return Fail "'{text}' is not an email address"
        }
@@ -135,18 +135,18 @@ print "{point} {point.area()} {Point.origin}"
 8. **`copy` has the shape of the constructor with every field optional.** `point.copy(y: 30)` answers a new value;
    `private` fields are not passable from outside.
 
-9. **A method declares `self`; a static function does not.** `value.member(args)` is `Type.member(value, args)` when the
-   member takes `self`. `var self` marks a method that changes its receiver in place.
+9. **A method has a receiver, a `static fn` has none.** `value.member(args)` is `Type.member(value, args)` when the
+   member reads its receiver. `var fn` marks a method that changes its receiver in place.
 
-10. **A verb changes in place and its participle returns a changed copy.** `translate` declares `var self` and answers
-    nothing; `translated` takes `self` and answers a `Point`. Pick verbs whose participle is a different word.
+10. **A verb changes in place and its participle returns a changed copy.** `translate` is a `var fn` and answers
+    nothing; `translated` reads its receiver and answers a `Point`. Pick verbs whose participle is a different word.
 
     ```trb error
     type Point {
       var x: Int
       var y: Int
 
-      fn translate(var self, deltaX: Int) {
+      var fn translate(deltaX: Int) {
         x = x + deltaX
       }
     }
@@ -175,14 +175,14 @@ print "{point} {point.area()} {Point.origin}"
 ## What this is not
 
 **There are no getters, setters or properties.** A field is storage and a method computes, and the `()` tells a reader
-which one it is. There is no `get` prefix; a predicate is `isEmpty()` or `hasErrors()`, a mutator is a verb with
-`var self`.
+which one it is. There is no `get` prefix; a predicate is `isEmpty()` or `hasErrors()`, a mutator is a verb written
+`var fn`.
 
 ```trb
 type Account {
   private(var) balance: Int = 0
 
-  fn deposit(var self, amount: Int) {
+  var fn deposit(amount: Int) {
     balance = balance + amount
   }
 }

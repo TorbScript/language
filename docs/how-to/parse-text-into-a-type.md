@@ -34,7 +34,7 @@ only way in. Text is a source like any other, so there is no trait and no member
 
    ```trb fragment
    extend Email with TryFrom<String, EmailError> {
-     fn tryFrom(text: String): Result<Email, EmailError> {
+     static fn tryFrom(text: String): Result<Email, EmailError> {
        if !text.contains("@") {
          return Fail EmailError.NotAnAddress(text)
        }
@@ -47,7 +47,7 @@ only way in. Text is a source like any other, so there is no trait and no member
    say what it hands out - the text itself, or something derived from it.
 
    ```trb fragment
-   fn address(self): String {
+   fn address(): String {
      value
    }
    ```
@@ -84,7 +84,7 @@ only way in. Text is a source like any other, so there is no trait and no member
 type EmailError with Show, Error {
   case NotAnAddress(text: String)
 
-  fn show(self): String {
+  fn show(): String {
     match self {
       .NotAnAddress(text) => "'{text}' is not an email address"
     }
@@ -94,13 +94,13 @@ type EmailError with Show, Error {
 type Email {
   private value: String
 
-  fn address(self): String {
+  fn address(): String {
     value
   }
 }
 
 extend Email with TryFrom<String, EmailError> {
-  fn tryFrom(text: String): Result<Email, EmailError> {
+  static fn tryFrom(text: String): Result<Email, EmailError> {
     if !text.contains("@") {
       return Fail EmailError.NotAnAddress(text)
     }

@@ -103,7 +103,7 @@ Task.all(tasks: Iterable<Task<Value>>): Task<List<Value>>
    print "{first} {second}"
    ```
 
-6. **A `var self` method may answer a `Task` only when its type is a `shared type`.** A value's `var self` is a copy
+6. **A `var fn` method may answer a `Task` only when its type is a `shared type`.** A value's `var fn` receiver is a copy
    in and a copy back that ends with the call; a `Task` finishes later, so only an object - which has no copy to lose
    - can be changed this way. See [Shared types](../types/shared-types.md), rule 6.
 
@@ -148,5 +148,5 @@ fn ints(): Source<Int, Never> {
 
 - [Channels](channels.md) - the other shared type that connects two tasks.
 - [Streams](streams.md) - `Source` and `Sink`, whose verbs also answer a `Task`.
-- [Shared types](../types/shared-types.md) - why a `var self` method may answer a `Task` only for an object.
+- [Shared types](../types/shared-types.md) - why a `var fn` method may answer a `Task` only for an object.
 - [Result](../errors/result.md) - the vocabulary `Task` shares with `?`, `map` and `flatMap`.

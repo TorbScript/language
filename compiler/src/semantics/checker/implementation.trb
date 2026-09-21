@@ -17,6 +17,7 @@
  */
 
 use Span from "../../syntax/source"
+use staticKeyword from "../../syntax/token"
 use Diagnostic from "../../syntax/diagnostic"
 use Declaration, ExtendDeclaration, Visibility, UseItem from "../../syntax/ast"
 use FunctionDeclaration, TypeReference from "../../syntax/ast"
@@ -2405,7 +2406,7 @@ fn reportMissingMember(
   )
 }
 
-/** `fn name(self): String`, the way the trait writes the requirement down. */
+/** `fn name(): String`, `var fn name(...)`, `static fn name(...)`: the way the trait writes the requirement down. */
 fn describeRequirement(
   checker: Checker,
   name: String,
@@ -2413,10 +2414,14 @@ fn describeRequirement(
   isVarSelf: Bool,
   form: FunctionForm,
 ): String {
-  var parts: List<String> = []
-  if takesSelf {
-    parts.add(if isVarSelf { "var self" } else { "self" })
+  const keyword = if !takesSelf {
+    "{staticKeyword} fn"
+  } else if isVarSelf {
+    "var fn"
+  } else {
+    "fn"
   }
+  var parts: List<String> = []
   for parameter in form.parameters {
     const shown = describeType checker.types, checker.symbols, parameter.annotation
     const named = match parameter.name {
@@ -2433,7 +2438,7 @@ fn describeRequirement(
   const joined = parts.joined separator: ", "
   const returns = describeType checker.types, checker.symbols, form.result
   if returns == "Void" {
-    return "fn {name}({joined})"
+    return "{keyword} {name}({joined})"
   }
-  "fn {name}({joined}): {returns}"
+  "{keyword} {name}({joined}): {returns}"
 }

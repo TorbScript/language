@@ -24,7 +24,7 @@ database index lookup, a validation rule stored as data.
 type Unsupported with Show, Error {
   description: String
 
-  fn show(self): String {
+  fn show(): String {
     "cannot translate: {description}"
   }
 }

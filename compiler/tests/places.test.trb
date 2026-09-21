@@ -15,22 +15,22 @@ use test, group from "std/test"
 use probe, problems, notes from "./harness"
 
 const counter = "type Counter \{\n  var count: Int = 0\n  step: Int = 1\n\n"
-  + "  fn increment(var self) \{\n    count = count + step\n  \}\n\n"
-  + "  fn incremented(self): Counter \{\n    copy(count: count + 1)\n  \}\n\}\n\n"
+  + "  var fn increment() \{\n    count = count + step\n  \}\n\n"
+  + "  fn incremented(): Counter \{\n    copy(count: count + 1)\n  \}\n\}\n\n"
 
 const account = "type Account \{\n  private(var) balance: Int = 0\n  private var history: List<String> = []\n"
   + "  private(var) audits: List<String> = []\n\n"
-  + "  fn deposit(var self, amount: Int) \{\n    balance = balance + amount\n  \}\n\}\n\n"
+  + "  var fn deposit(amount: Int) \{\n    balance = balance + amount\n  \}\n\}\n\n"
 
 /** A stream-shaped pair: a `shared trait` whose verbs change the object, and a wrapper that keeps one in a field. */
-const producer = "shared trait Producer with Close \{\n  fn next(var self): Task<Int?>\n\n"
-  + "  fn doubled(var self): Producer \{\n    Doubling self\n  \}\n\}\n\n"
+const producer = "shared trait Producer with Close \{\n  var fn next(): Task<Int?>\n\n"
+  + "  var fn doubled(): Producer \{\n    Doubling self\n  \}\n\}\n\n"
   + "shared type Doubling with Producer \{\n  var upstream: Producer\n\n"
-  + "  fn next(var self): Task<Int?> \{\n    upstream.next().await()\n  \}\n\n"
-  + "  fn close(var self) \{\n    upstream.close()\n  \}\n\}\n\n"
+  + "  var fn next(): Task<Int?> \{\n    upstream.next().await()\n  \}\n\n"
+  + "  var fn close() \{\n    upstream.close()\n  \}\n\}\n\n"
   + "shared type Counting with Producer \{\n  var seen: Int = 0\n\n"
-  + "  fn next(var self): Task<Int?> \{\n    seen = seen + 1\n    Some(seen)\n  \}\n\n"
-  + "  fn close(var self) \{\n  \}\n\}\n\n"
+  + "  var fn next(): Task<Int?> \{\n    seen = seen + 1\n    Some(seen)\n  \}\n\n"
+  + "  var fn close() \{\n  \}\n\}\n\n"
 
 group "The root of a path" {
   test "a `var` binding can be changed, and the place is recorded" {
@@ -65,7 +65,7 @@ group "The root of a path" {
   }
 
   test "the receiver of a `var self` method is a place of its own" {
-    const source = "type Tally \{\n  var total: Int = 0\n\n  fn bump(var self) \{\n    self.total = total + 1\n  \}\n\}"
+    const source = "type Tally \{\n  var total: Int = 0\n\n  var fn bump() \{\n    self.total = total + 1\n  \}\n\}"
     assert problems(source).isEmpty()
     const found = probe source
     assert(found.placeOf("self.total") == "local self.total")
@@ -80,7 +80,7 @@ group "Fields" {
   }
 
   test "`private(var)` is written by the type itself and by an `extend` of it" {
-    const source = "{account}extend Account \{\n  fn raise(var self) \{\n    balance = balance + 1\n  \}\n\}"
+    const source = "{account}extend Account \{\n  var fn raise() \{\n    balance = balance + 1\n  \}\n\}"
     assert problems(source).isEmpty()
   }
 
@@ -134,7 +134,7 @@ group "Indexes and windows" {
   }
 
   test "a type that is only `Indexed` has no `var` path through `a[key]`" {
-    const source = "type Frozen with Indexed<Int, Int> \{\n  fn at(self, key: Int): Int \{\n    0\n  \}\n\}\n\n"
+    const source = "type Frozen with Indexed<Int, Int> \{\n  fn at(key: Int): Int \{\n    0\n  \}\n\}\n\n"
       + "fn probe(var frozen: Frozen) \{\n  frozen[0] = 1\n\}"
     assert(
       problems(source) == ["`Frozen` does not implement `MutableIndexed`, so `a[key]` is no `var` path"]
@@ -233,7 +233,7 @@ group "A shared object from a call (gap 52)" {
 
 group "`if var` binds into the subject (gap 3)" {
   const cursor = "type Cursor \{\n  var position: Int = 0\n\n"
-    + "  fn step(var self) \{\n    position = position + 1\n  \}\n\}\n\n"
+    + "  var fn step() \{\n    position = position + 1\n  \}\n\}\n\n"
 
   test "the subject has to be a place, and the place is recorded under it" {
     const source = "{cursor}type Holder \{\n  var current: Cursor? = None\n\}\n\n"
@@ -256,7 +256,7 @@ group "`if var` binds into the subject (gap 3)" {
 
 group "A shared object never widens (gap 20)" {
   const connection = "shared type Connection \{\n  url: String\n  private(var) sent: Int = 0\n\n"
-    + "  fn send(var self) \{\n    sent = sent + 1\n  \}\n\}\n\n"
+    + "  var fn send() \{\n    sent = sent + 1\n  \}\n\}\n\n"
   const holder = "type Holder \{\n  var held: Connection\n\}\n\n{connection}"
 
   test "a `var` binding may not be taken from a `const` path to a shared object" {
@@ -362,10 +362,10 @@ group "Closures that may outlive their call (BACKEND gap 14)" {
     assert(found.capturesOf("\{ total = 1 \}") == ["var total"])
   }
 
-  test "`var self` may not be carried off either" {
+  test "the receiver may not be carried off either" {
     const source = "type Tally \{\n  var total: Int = 0\n\n"
-      + "  fn later(var self): () => Void \{\n    \{ total = total + 1 \}\n  \}\n\}"
-    assert(problems(source) == ["This closure captures `var self` and may outlive the call"])
+      + "  var fn later(): () => Void \{\n    \{ total = total + 1 \}\n  \}\n\}"
+    assert(problems(source) == ["This closure captures the receiver `self` and may outlive the call"])
   }
 }
 

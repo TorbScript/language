@@ -133,7 +133,7 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | `language/types/construction.md` | Construction | reference | The one generated constructor, and where logic goes | `CONCEPT.md#construction` |
 | `language/types/copy-and-equality.md` | Copy and equality | reference | What `copy`, `==` and `hash` do without being written | `CONCEPT.md#values` |
 | `language/types/generated-show.md` | The generated Show | reference | The exact text a value prints as | `CONCEPT.md#values` |
-| `language/types/methods.md` | Methods and static functions | reference | Why `self` decides, and the one member namespace | `CONCEPT.md#members-a-method-is-a-constant-that-holds-a-closure` |
+| `language/types/methods.md` | Methods and `static fn`s | reference | `static` and `var fn`, and the one member namespace | `CONCEPT.md#members-a-method-is-a-constant-that-holds-a-closure` |
 | `language/types/verbs-and-participles.md` | Verbs and participles | reference | `sort` against `sorted`, and how to name a new pair | `CONCEPT.md#lexical-structure` |
 | `language/types/var-paths.md` | Mutation and var paths | reference | What has to be `var` from the binding down | `CONCEPT.md#var-paths-and-var-parameters` |
 | `language/types/exclusivity.md` | Exclusivity | reference | Which two accesses may not overlap | `CONCEPT.md#var-paths-and-var-parameters` |

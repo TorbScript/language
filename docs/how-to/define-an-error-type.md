@@ -49,7 +49,7 @@ error types without a line of code.
      case Missing(key: String)
      case Invalid(key: String, reason: String)
 
-     fn show(self): String {
+     fn show(): String {
        match self {
          .Missing(key) => "{key} is missing"
          .Invalid(key, reason) => "{key} is invalid: {reason}"
@@ -62,7 +62,7 @@ error types without a line of code.
    every case that carries nothing but its own data.
 
    ```trb fragment
-   fn cause(self): Error? {
+   fn cause(): Error? {
      match self {
        .Config(cause) => Some cause
        .Startup(_) => None
@@ -95,7 +95,7 @@ type ConfigError with Show, Error {
   case Missing(key: String)
   case Invalid(key: String, reason: String)
 
-  fn show(self): String {
+  fn show(): String {
     match self {
       .Missing(key) => "{key} is missing"
       .Invalid(key, reason) => "{key} is invalid: {reason}"
@@ -107,14 +107,14 @@ type AppError with Show, Error {
   case Config(cause: ConfigError)
   case Startup(message: String)
 
-  fn show(self): String {
+  fn show(): String {
     match self {
       .Config(cause) => "configuration problem: {cause}"
       .Startup(message) => "could not start: {message}"
     }
   }
 
-  fn cause(self): Error? {
+  fn cause(): Error? {
     match self {
       .Config(cause) => Some cause
       .Startup(_) => None

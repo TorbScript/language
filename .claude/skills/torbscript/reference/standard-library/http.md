@@ -82,7 +82,7 @@ public shared type Response {
   headers: Map<String, String> = [:]
   var body: Body
 
-  fn json<Value: Decode>(var self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>>
+  var fn json<Value: Decode>(limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>>
 }
 ```
 
@@ -94,15 +94,15 @@ same way a `File` does.
 
 ```trb fragment
 public shared type Body with Source<Bytes, HttpError> {
-  const defaultLimit: Int = 16777216
+  static defaultLimit: Int = 16777216
 
-  fn bytes(var self, limit: Int = Body.defaultLimit): Task<Result<Bytes, HttpError>>
-  fn text(var self, limit: Int = Body.defaultLimit): Task<Result<String, HttpError>>
-  fn json<Value: Decode>(var self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>>
-  fn lines(var self): Source<String, HttpError>
-  fn of(var source: Source<Bytes, HttpError>): Body
-  fn empty(): Body
-  fn jsonOf(value: Encode): Body
+  var fn bytes(limit: Int = Body.defaultLimit): Task<Result<Bytes, HttpError>>
+  var fn text(limit: Int = Body.defaultLimit): Task<Result<String, HttpError>>
+  var fn json<Value: Decode>(limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>>
+  var fn lines(): Source<String, HttpError>
+  static fn of(var source: Source<Bytes, HttpError>): Body
+  static fn empty(): Body
+  static fn jsonOf(value: Encode): Body
 }
 ```
 
@@ -115,17 +115,17 @@ machine; streaming with `of` past a `Source` is the way past it, not a bigger nu
 
 ```trb fragment
 public type HttpError with Show, Error {
-  fn timeout(): HttpError
-  fn connectionFailed(message: String): HttpError
-  fn status(code: Int, message: String): HttpError
-  fn invalidUrl(message: String): HttpError
-  fn decodeFailed(cause: JsonError): HttpError
-  fn tooLarge(limit: Int): HttpError
-  fn invalidText(cause: Utf8Error): HttpError
-  fn isTimeout(self): Bool
-  fn isRetryable(self): Bool
-  fn statusCode(self): Int?
-  fn cause(self): Error?
+  static fn timeout(): HttpError
+  static fn connectionFailed(message: String): HttpError
+  static fn status(code: Int, message: String): HttpError
+  static fn invalidUrl(message: String): HttpError
+  static fn decodeFailed(cause: JsonError): HttpError
+  static fn tooLarge(limit: Int): HttpError
+  static fn invalidText(cause: Utf8Error): HttpError
+  fn isTimeout(): Bool
+  fn isRetryable(): Bool
+  fn statusCode(): Int?
+  fn cause(): Error?
 }
 ```
 

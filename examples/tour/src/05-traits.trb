@@ -5,13 +5,13 @@
 
 /** Something with an area and a name; `describe` is a default built out of both. */
 trait Shape {
-  fn area(self): Float                   // Required
+  fn area(): Float                   // Required
 
-  fn describe(self): String {            // Default implementation
+  fn describe(): String {            // Default implementation
     "{name()} with area {area()}"
   }
 
-  fn name(self): String
+  fn name(): String
 }
 
 // Implement at the declaration...
@@ -19,8 +19,8 @@ trait Shape {
 type Square with Shape {
   side: Float
 
-  fn area(self): Float { side * side }
-  fn name(self): String { "Square" }
+  fn area(): Float { side * side }
+  fn name(): String { "Square" }
 }
 
 /** A circle, with [Shape] implemented afterwards below instead of at the declaration. */
@@ -31,14 +31,14 @@ type Circle {
 // ...or afterwards
 /** Implements [Shape] for a type that did not declare it itself. */
 extend Circle with Shape {
-  fn area(self): Float { Float.pi * radius * radius }
-  fn name(self): String { "Circle" }
+  fn area(): Float { Float.pi * radius * radius }
+  fn name(): String { "Circle" }
 }
 
 // Extension methods without a trait. Only visible where they are imported.
 /** An extension method with no trait behind it: `shout` is visible only where this module is imported. */
 extend String {
-  fn shout(self): String {
+  fn shout(): String {
     "{toUpperCase()}!"
   }
 }
@@ -48,12 +48,12 @@ print "hello".shout()
 // Supertraits
 /** Something with a name - the supertrait [Greeter] below builds a greeting out of it. */
 trait Named {
-  fn name(self): String
+  fn name(): String
 }
 
 /** Greets by name; `greet` is a default that needs nothing but [Named.name]. */
 trait Greeter with Named {
-  fn greet(self): String {
+  fn greet(): String {
     "Hello, {name()}"
   }
 }
@@ -84,10 +84,10 @@ type Vector2 with Add, Subtract, Negate, Multiply<Float> {
   x: Float
   y: Float
 
-  fn add(self, other: Vector2): Vector2 { Vector2(x + other.x, y + other.y) }
-  fn subtract(self, other: Vector2): Vector2 { Vector2(x - other.x, y - other.y) }
-  fn negate(self): Vector2 { Vector2(-x, -y) }
-  fn multiply(self, other: Float): Vector2 { Vector2(x * other, y * other) }
+  fn add(other: Vector2): Vector2 { Vector2(x + other.x, y + other.y) }
+  fn subtract(other: Vector2): Vector2 { Vector2(x - other.x, y - other.y) }
+  fn negate(): Vector2 { Vector2(-x, -y) }
+  fn multiply(other: Float): Vector2 { Vector2(x * other, y * other) }
 }
 
 const v = (Vector2(1.0, 2.0) + Vector2(3.0, 4.0)) * 2.0
@@ -98,11 +98,11 @@ print(-v)                                // Vector2(x: -8.0, y: -12.0). `print -
 type CaseInsensitive with Equals, Hash {
   text: String
 
-  fn equals(self, other: CaseInsensitive): Bool {
+  fn equals(other: CaseInsensitive): Bool {
     text.toLowerCase() == other.text.toLowerCase()
   }
 
-  fn hash(self): Int {
+  fn hash(): Int {
     text.toLowerCase().hash()
   }
 }
@@ -110,7 +110,7 @@ type CaseInsensitive with Equals, Hash {
 // Generic extension with a condition
 /** A generic extension with a condition: `totalArea` only exists on a `List` whose items implement [Shape]. */
 extend<Item> List<Item> where Item: Shape {
-  fn totalArea(self): Float {
+  fn totalArea(): Float {
     map { _.area() }.sum()
   }
 }
@@ -123,15 +123,15 @@ type Grid<Cell> with MutableIndexed<(Int, Int), Cell> {
   width: Int
   private var cells: List<Cell>
 
-  fn filled(width: Int, height: Int, value: Cell): Grid<Cell> {
+  static fn filled(width: Int, height: Int, value: Cell): Grid<Cell> {
     Self width, List.filled(width * height, value)
   }
 
-  fn get(self, key: (Int, Int)): Cell? {
+  fn get(key: (Int, Int)): Cell? {
     cells.get(key.1 * width + key.0)
   }
 
-  fn set(var self, key: (Int, Int), value: Cell) {
+  var fn set(key: (Int, Int), value: Cell) {
     cells[key.1 * width + key.0] = value
   }
 }

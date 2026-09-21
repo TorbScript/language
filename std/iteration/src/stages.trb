@@ -18,7 +18,7 @@ public type Mapped<Item, Output> with Iterable<Output> {
   transform: (value: Item) => Output
 
   /** A cursor that pulls one value from `source` and answers it transformed. */
-  fn iterator(self): Iterator<Output> {
+  fn iterator(): Iterator<Output> {
     MappedIterator source.iterator(), transform
   }
 }
@@ -27,7 +27,7 @@ type MappedIterator<Item, Output> with Iterator<Output> {
   var source: Iterator<Item>
   transform: (value: Item) => Output
 
-  fn next(var self): Output? {
+  var fn next(): Output? {
     source.next().map(transform)
   }
 }
@@ -42,7 +42,7 @@ public type Filtered<Item> with Iterable<Item> {
   predicate: (value: Item) => Bool
 
   /** A cursor that reads from `source` until it finds a value `predicate` keeps, or `source` is exhausted. */
-  fn iterator(self): Iterator<Item> {
+  fn iterator(): Iterator<Item> {
     FilteredIterator source.iterator(), predicate
   }
 }
@@ -51,7 +51,7 @@ type FilteredIterator<Item> with Iterator<Item> {
   var source: Iterator<Item>
   predicate: (value: Item) => Bool
 
-  fn next(var self): Item? {
+  var fn next(): Item? {
     while const Some(value) = source.next() {
       if predicate(value) {
         return Some value
@@ -71,7 +71,7 @@ public type FilterMapped<Item, Output> with Iterable<Output> {
   transform: (value: Item) => Output?
 
   /** A cursor that reads from `source` until `transform` answers `Some`, or `source` is exhausted. */
-  fn iterator(self): Iterator<Output> {
+  fn iterator(): Iterator<Output> {
     FilterMappedIterator source.iterator(), transform
   }
 }
@@ -80,7 +80,7 @@ type FilterMappedIterator<Item, Output> with Iterator<Output> {
   var source: Iterator<Item>
   transform: (value: Item) => Output?
 
-  fn next(var self): Output? {
+  var fn next(): Output? {
     while const Some(value) = source.next() {
       if const Some(result) = transform(value) {
         return Some result
@@ -98,7 +98,7 @@ public type MappedWhile<Item, Output> with Iterable<Output> {
   transform: (value: Item) => Output?
 
   /** A cursor that stops for good the moment `transform` answers `None`. */
-  fn iterator(self): Iterator<Output> {
+  fn iterator(): Iterator<Output> {
     MappedWhileIterator source.iterator(), transform
   }
 }
@@ -108,7 +108,7 @@ type MappedWhileIterator<Item, Output> with Iterator<Output> {
   transform: (value: Item) => Output?
   var done: Bool = false
 
-  fn next(var self): Output? {
+  var fn next(): Output? {
     if done {
       return None
     }
@@ -128,7 +128,7 @@ public type FlatMapped<Item, Output> with Iterable<Output> {
   transform: (value: Item) => Iterable<Output>
 
   /** A cursor that walks the Iterable `transform` produced for the current value, then moves to the next one. */
-  fn iterator(self): Iterator<Output> {
+  fn iterator(): Iterator<Output> {
     FlatMappedIterator source.iterator(), transform
   }
 }
@@ -138,7 +138,7 @@ type FlatMappedIterator<Item, Output> with Iterator<Output> {
   transform: (value: Item) => Iterable<Output>
   var current: Iterator<Output>? = None
 
-  fn next(var self): Output? {
+  var fn next(): Output? {
     loop {
       if var Some(inner) = current {
         if const Some(value) = inner.next() {
@@ -161,7 +161,7 @@ public type Taken<Item> with Iterable<Item> {
   amount: Int
 
   /** A cursor that never reads `source` again once `amount` values have come out - `source` can be infinite. */
-  fn iterator(self): Iterator<Item> {
+  fn iterator(): Iterator<Item> {
     TakenIterator source.iterator(), remaining: amount
   }
 }
@@ -170,7 +170,7 @@ type TakenIterator<Item> with Iterator<Item> {
   var source: Iterator<Item>
   var remaining: Int
 
-  fn next(var self): Item? {
+  var fn next(): Item? {
     if remaining <= 0 {
       return None                        // Does not touch the source again: `take` ends infinite sources
     }
@@ -187,7 +187,7 @@ public type Skipped<Item> with Iterable<Item> {
   amount: Int
 
   /** A cursor already advanced past the first `amount` values of `source`. */
-  fn iterator(self): Iterator<Item> {
+  fn iterator(): Iterator<Item> {
     var iterator = source.iterator()
     for _ in 0..amount {
       iterator.next()
@@ -204,7 +204,7 @@ public type TakenWhile<Item> with Iterable<Item> {
   predicate: (value: Item) => Bool
 
   /** A cursor that stops for good the moment `predicate` answers `false`. */
-  fn iterator(self): Iterator<Item> {
+  fn iterator(): Iterator<Item> {
     TakenWhileIterator source.iterator(), predicate
   }
 }
@@ -214,7 +214,7 @@ type TakenWhileIterator<Item> with Iterator<Item> {
   predicate: (value: Item) => Bool
   var done: Bool = false
 
-  fn next(var self): Item? {
+  var fn next(): Item? {
     if done {
       return None
     }
@@ -237,7 +237,7 @@ public type Zipped<Item, Output> with Iterable<(Item, Output)> {
   right: Iterable<Output>
 
   /** A cursor that reads one value from each side and stops as soon as either one runs out. */
-  fn iterator(self): Iterator<(Item, Output)> {
+  fn iterator(): Iterator<(Item, Output)> {
     ZippedIterator left.iterator(), right.iterator()
   }
 }
@@ -246,7 +246,7 @@ type ZippedIterator<Item, Output> with Iterator<(Item, Output)> {
   var left: Iterator<Item>
   var right: Iterator<Output>
 
-  fn next(var self): (Item, Output)? {
+  var fn next(): (Item, Output)? {
     Some((left.next()?, right.next()?))
   }
 }
@@ -264,7 +264,7 @@ public type Sorted<Item, Key: Compare> with Iterable<Item> {
   key: (value: Item) => Key
 
   /** Sorting needs all values: the buffer is filled when the iteration starts, not when the stage is created. */
-  fn iterator(self): Iterator<Item> {
+  fn iterator(): Iterator<Item> {
     var buffer = source.toList()
     buffer.sort by: key
     buffer.iterator()

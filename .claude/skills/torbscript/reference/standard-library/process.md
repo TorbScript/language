@@ -40,10 +40,10 @@ fn firstArgument(): String? {
 
 ```trb fragment
 public native type Process {
-  fn arguments(): List<String>
-  fn exit(code: Int): Never
-  fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError>
-  fn start(command: String, arguments: List<String>): Result<Child, IoError>
+  static fn arguments(): List<String>
+  static fn exit(code: Int): Never
+  static fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError>
+  static fn start(command: String, arguments: List<String>): Result<Child, IoError>
 }
 ```
 
@@ -62,7 +62,7 @@ public type ProcessOutput {
   standardOutput: String
   standardError: String
 
-  fn isSuccess(self): Bool
+  fn isSuccess(): Bool
 }
 ```
 
@@ -73,11 +73,11 @@ what it was asked (`exitCode == 0`).
 
 ```trb fragment
 public native shared type Child with Close {
-  fn input(self): Sink<Bytes, IoError>
-  fn output(self): Source<Bytes, IoError>
-  fn errors(self): Source<Bytes, IoError>
-  fn wait(self): Task<Result<Int, IoError>>
-  fn close(var self)
+  fn input(): Sink<Bytes, IoError>
+  fn output(): Source<Bytes, IoError>
+  fn errors(): Source<Bytes, IoError>
+  fn wait(): Task<Result<Int, IoError>>
+  var fn close()
 }
 ```
 

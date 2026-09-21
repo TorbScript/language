@@ -54,7 +54,7 @@ print total
    ```
 
 3. **The implicit parameter of a trailing closure can be named after the parameter name the function type itself
-   carries**, instead of `_`. `fn map<Output>(self, transform: (value: Item) => Output)` lets a caller write
+   carries**, instead of `_`. `fn map<Output>(transform: (value: Item) => Output)` lets a caller write
    `numbers.map { value * 2 }`, because the function type names its own parameter `value`.
 
    ```trb check

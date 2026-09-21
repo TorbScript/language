@@ -20,25 +20,25 @@ A supertrait is a trait that comes bundled with another one: a type that impleme
 
 ```trb check
 trait Named {
-  fn name(self): String
+  fn name(): String
 }
 
 trait Aged {
-  fn age(self): Int
+  fn age(): Int
 }
 
 trait Greeter with Named, Aged {
-  fn greet(self): String {
+  fn greet(): String {
     "Hello, {name()}. You are {age()}."
   }
 }
 
 type Person with Greeter {
-  fn name(self): String {
+  fn name(): String {
     "Ada"
   }
 
-  fn age(self): Int {
+  fn age(): Int {
     36
   }
 }
@@ -77,7 +77,7 @@ members from somewhere - the declaration itself, an `extend`, or generation.
 type Money with Compare {
   cents: Int
 
-  fn compare(self, other: Money): Ordering {
+  fn compare(other: Money): Ordering {
     if cents < other.cents { .Less } else if cents > other.cents { .Greater } else { .Equal }
   }
 }
@@ -85,13 +85,13 @@ type Money with Compare {
 
 ```trb error
 trait Loud {
-  fn shout(self): String
+  fn shout(): String
 }
 
 type Box with Compare {
   loud: Loud
 
-  fn compare(self, other: Self): Ordering {
+  fn compare(other: Self): Ordering {
     .Equal
   }
 }

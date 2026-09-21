@@ -21,15 +21,15 @@ namespaces into one is what makes the rest of the member syntax work at all.
 ## The decision
 
 **A type has one namespace of members, and a member is either a field or a constant that holds a closure.** A method
-is not a separate kind of thing: it is a constant (`const`, declared with the `fn` sugar) whose value is a *receiver
-closure* - a closure whose first parameter is `self`.
+is not a separate kind of thing: it is a constant of the type (declared with the `fn` sugar) whose value is a
+*receiver closure* - a closure whose first parameter is the receiver, which the declaration does not have to write.
 
 ```trb check
 type Point {
   x: Int
   y: Int
 
-  fn area(self): Int {
+  fn area(): Int {
     x * y
   }
 }
@@ -39,7 +39,7 @@ print p.area()
 print Point.area(p)
 ```
 
-- `p.area()` is `Type.member(value, args)` when the member takes `self` - not a separate call form, just what happens
+- `p.area()` is `Type.member(value, args)` when the member reads its receiver - not a separate call form, just what happens
   when the constant behind `area` is called with `p` as its first argument.
 - Because there is one namespace, a field and a method of the same type can never share a name.
 - An instance field can hold a function too (`onClick: () => Void`), and it is called exactly the same way a method
@@ -100,7 +100,7 @@ list that reads like data.
 type Server {
   var port: Int = 8080
 
-  fn describe(self): String {
+  fn describe(): String {
     "listening on {port}"
   }
 }
@@ -116,7 +116,7 @@ pipeline stage exactly as it would pass a free function.
 
 ## Related
 
-- [Methods and static functions](../language/types/methods.md) - `self` deciding method from static function, in
+- [Methods and `static fn`s](../language/types/methods.md) - `static` and `var`, the two words a member says, in
   full.
 - [Property commands](../language/types/property-commands.md) - the one rule this namespace makes possible: a
   command on a field writes it.

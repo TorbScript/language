@@ -39,12 +39,12 @@ public type Ray2<Scalar: Real = Float> {
   direction: Vector2<Scalar>
 
   /** The ray from one point towards another, with a direction of length one. */
-  fn towards(from: Vector2<Scalar>, to: Vector2<Scalar>): Ray2<Scalar> {
+  static fn towards(from: Vector2<Scalar>, to: Vector2<Scalar>): Ray2<Scalar> {
     Ray2(from, to.subtract(from).normalized())
   }
 
   /** The point that far along the ray. A negative distance reads backwards, behind the origin. */
-  fn at(self, distance: Scalar): Vector2<Scalar> {
+  fn at(distance: Scalar): Vector2<Scalar> {
     origin.add direction.multiply(distance)
   }
 
@@ -52,7 +52,7 @@ public type Ray2<Scalar: Real = Float> {
    * How far along the ray the disc is first met, or `None` where the ray misses it. A ray that starts inside answers
    * zero.
    */
-  fn hits(self, circle: Circle<Scalar>): Scalar? {
+  fn hits(circle: Circle<Scalar>): Scalar? {
     const along: Scalar = direction.lengthSquared()
     if along == zeroOf(along) {
       return None
@@ -79,7 +79,7 @@ public type Ray2<Scalar: Real = Float> {
    * How far along the ray the rectangle is first met, or `None` where the ray misses it. This is the slab test: the ray
    * enters the rectangle where the last axis lets it in and leaves where the first axis shuts it out.
    */
-  fn hitsRectangle(self, rectangle: Rectangle<Scalar>): Scalar? {
+  fn hitsRectangle(rectangle: Rectangle<Scalar>): Scalar? {
     const reach: Scalar = direction.lengthSquared()
     if rectangle.isEmpty() || reach == zeroOf(reach) {
       return None
@@ -126,7 +126,7 @@ public type Ray2<Scalar: Real = Float> {
   }
 
   /** How far along the ray the segment is met, or `None` where the ray misses it. */
-  fn hitsSegment(self, segment: Segment2<Scalar>): Scalar? {
+  fn hitsSegment(segment: Segment2<Scalar>): Scalar? {
     const across = segment.step()
     const twist: Scalar = direction.cross across
     if twist == zeroOf(twist) {

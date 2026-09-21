@@ -178,7 +178,7 @@ group "A `public fn` and a trait method never infer their result" {
   test "a trait requirement without a result type produces `Void`, as the concept writes it" {
     const source = r"""
       trait Sink {
-        fn write(var self, text: String)
+        var fn write(text: String)
       }
       """
     assert problems(source).isEmpty()
@@ -187,9 +187,9 @@ group "A `public fn` and a trait method never infer their result" {
   test "a default member of a trait does not infer either" {
     const source = r"""
       trait Sink {
-        fn write(var self, text: String)
+        var fn write(text: String)
 
-        fn writeTwice(var self, text: String) {
+        var fn writeTwice(text: String) {
           write(text)
           text.byteLength()
         }
@@ -207,7 +207,7 @@ group "A `public fn` and a trait method never infer their result" {
       type Counter {
         var value: Int = 0
 
-        fn step(var self) {
+        var fn step() {
           value = value + 1
         }
       }
@@ -218,7 +218,7 @@ group "A `public fn` and a trait method never infer their result" {
   test "a function without a body is a requirement of a trait or a `native` declaration" {
     const source = r"""
       type Counter {
-        fn step(var self): Void
+        var fn step(): Void
       }
       """
     assert(problems(source) == ["`step` has no body"])
@@ -264,9 +264,9 @@ group "An `extend` adds constants and functions (gap 39)" {
   test "a constant and a function are what it is for" {
     const source = r"""
       extend Counter {
-        const start: Int = 0
+        static start: Int = 0
 
-        fn doubled(self): Int {
+        fn doubled(): Int {
           value * 2
         }
       }
@@ -287,7 +287,7 @@ group "What cannot be extended, and what has no default" {
       type Status = "online" | "offline"
 
       extend Status {
-        fn label(self): String {
+        fn label(): String {
           "a status"
         }
       }
@@ -317,7 +317,7 @@ group "What cannot be extended, and what has no default" {
   }
 
   test "a `type` and a `trait` keep theirs (gap 6)" {
-    assert problems("trait Combine<Other = Self> \{\n  fn combine(self, other: Other): Self\n\}").isEmpty()
+    assert problems("trait Combine<Other = Self> \{\n  fn combine(other: Other): Self\n\}").isEmpty()
     assert problems("type Holder<Item = Int> \{\n  item: Item\n\}").isEmpty()
   }
 }
@@ -347,7 +347,7 @@ group "`native` belongs to the standard library (gap 22)" {
   test "a `native` member of an ordinary package" {
     const source = r"""
       type Handle {
-        native fn close(var self): Void
+        native var fn close(): Void
       }
       """
     assert(problems(source) == ["`native` is only allowed in a package of the standard library"])
@@ -360,7 +360,7 @@ group "`shared type` and `shared trait`" {
       shared type Connection with Show {
         url: String
 
-        fn show(self): String {
+        fn show(): String {
           url
         }
       }
@@ -377,7 +377,7 @@ group "`shared type` and `shared trait`" {
       shared type Connection with Close {
         var url: String
 
-        fn close(var self): Void {
+        var fn close(): Void {
           url = ""
         }
       }
@@ -388,7 +388,7 @@ group "`shared type` and `shared trait`" {
   test "an ordinary `type` may implement a `shared trait`: `Show` is one in the real prelude" {
     const source = r"""
       type Handle with Close {
-        fn close(var self): Void {}
+        var fn close(): Void {}
       }
       """
     assert problems(source).isEmpty()
@@ -397,14 +397,14 @@ group "`shared type` and `shared trait`" {
   /**
    * A `var` of a value is copy in, copy out, and the copy back happens when the call returns - before a task it
    * answered has run. For a shared object `var` is a permission and not an exclusive access, which is what lets
-   * `Source.next(var self)` answer a `Task` (docs/STREAMS.md).
+   * `Source.next()` answer a `Task` (docs/STREAMS.md).
    */
   test "a `var self` that answers a `Task` needs a shared type" {
     const source = r"""
       type Bag {
         var items: List<Int>
 
-        fn take(var self, value: Int): Task<Int> {
+        var fn take(value: Int): Task<Int> {
           items.add(value)
           items.length()
         }
@@ -432,7 +432,7 @@ group "`shared type` and `shared trait`" {
   test "an ordinary trait is not enough either: a value could implement it" {
     const source = r"""
       trait Counter {
-        fn bump(var self): Task<Int>
+        var fn bump(): Task<Int>
       }
       """
     assert(
@@ -450,13 +450,13 @@ group "`shared type` and `shared trait`" {
   test "a `shared trait` and a `shared type` may be changed by a task" {
     const source = r"""
       shared trait Ticking {
-        fn tick(var self): Task<Int>
+        var fn tick(): Task<Int>
       }
 
       shared type Clockwork with Ticking {
         var ticks: Int
 
-        fn tick(var self): Task<Int> {
+        var fn tick(): Task<Int> {
           ticks = ticks + 1
           ticks
         }
@@ -473,7 +473,7 @@ group "`shared type` and `shared trait`" {
   test "exclusivity says nothing about two changes of one shared object in a row" {
     const source = r"""
       shared trait Ticking {
-        fn tick(var self): Task<Int>
+        var fn tick(): Task<Int>
       }
 
       fn twice(var machine: Ticking): Task<Int> {
@@ -494,14 +494,14 @@ group "`shared type` and `shared trait`" {
   test "a `var` field of a shared object may be changed across an `await`" {
     const source = r"""
       shared trait Ticking {
-        fn tick(var self): Task<Int>
+        var fn tick(): Task<Int>
       }
 
       shared type Doubling with Ticking {
         var upstream: Ticking
         var seen: Int
 
-        fn tick(var self): Task<Int> {
+        var fn tick(): Task<Int> {
           const value = upstream.tick().await()
           seen = seen + 1
           value + value
@@ -515,7 +515,7 @@ group "`shared type` and `shared trait`" {
   test "a closure may take a shared object as a `var` parameter" {
     const source = r"""
       shared trait Ticking {
-        fn tick(var self): Task<Int>
+        var fn tick(): Task<Int>
       }
 
       fn drive(var machine: Ticking, body: (var machine: Ticking) => Result<Int, String>): Task<Int> {
@@ -578,7 +578,7 @@ group "`private(var)` is a modifier of a field (gap 30)" {
   test "not of a constant of a type" {
     const source = r"""
       type Counter {
-        private(var) const start: Int = 0
+        private(var) static start: Int = 0
       }
       """
     assert(problems(source) == ["`private(var)` is only a modifier of a field"])
@@ -704,7 +704,7 @@ group "One namespace of members" {
       type Report {
         title: String
 
-        fn title(self): String {
+        fn title(): String {
           "untitled"
         }
       }
@@ -729,9 +729,9 @@ group "One namespace of members" {
   test "a `const` and a `fn` cannot either" {
     const source = r"""
       type Report {
-        const width = 2
+        static width = 2
 
-        fn width(self): Int {
+        fn width(): Int {
           3
         }
       }
@@ -742,9 +742,9 @@ group "One namespace of members" {
   test "and neither can two members of a trait" {
     const source = r"""
       trait Sized {
-        fn size(self): Int
+        fn size(): Int
 
-        fn size(self, unit: String): Int
+        fn size(unit: String): Int
       }
       """
     assert(problems(source) == ["`size` is already declared in `Sized`"])
@@ -756,7 +756,7 @@ group "One namespace of members" {
         case Circle(radius: Int)
         case Square(radius: Int)
 
-        fn radius(self): Int {
+        fn radius(): Int {
           match self {
             .Circle(value) => value
             .Square(value) => value
@@ -768,13 +768,13 @@ group "One namespace of members" {
   }
 }
 
-group "A static function is reached through the type" {
+group "A `static fn` is reached through the type" {
   const rectangle = r"""
     type Rectangle {
       width: Int
       height: Int
 
-      fn square(size: Int): Rectangle {
+      static fn square(size: Int): Rectangle {
         Rectangle(size, size)
       }
     }
@@ -782,9 +782,9 @@ group "A static function is reached through the type" {
 
   test "an instance is not a way to it" {
     const source = "{rectangle}\nfn probe(rectangle: Rectangle): Int \{\n  rectangle.square(5).width\n\}"
-    assert(problems(source) == ["`square` has no `self`, so it is reached through the type: `Rectangle.square(...)`"])
+    assert(problems(source) == ["`square` is `static`: call it as `Rectangle.square(...)`"])
     assert(
-      notes(source) == ["A static function is a constant of the type, and a value of it is not a way to that constant"]
+      notes(source) == ["A `static` member belongs to the type, and a value of it is not a way to the type"]
     )
   }
 
@@ -793,13 +793,13 @@ group "A static function is reached through the type" {
     assert problems(source).isEmpty()
   }
 
-  test "a method is reached through the value as before" {
+  test "a method is reached through the value" {
     const source = r"""
       type Rectangle {
         width: Int
         height: Int
 
-        fn area(self): Int {
+        fn area(): Int {
           width * height
         }
       }
@@ -809,6 +809,25 @@ group "A static function is reached through the type" {
       }
       """
     assert problems(source).isEmpty()
+  }
+
+  test "the type is not a way to a method, and the message names the two ways out" {
+    const source = r"""
+      type Rectangle {
+        width: Int
+        height: Int
+
+        fn area(): Int {
+          width * height
+        }
+      }
+
+      fn probe(): Int {
+        Rectangle.area()
+      }
+      """
+    assert(problems(source) == ["`area` takes 1 argument, none were given"])
+    assert(notes(source) == ["`area` is a method: call it on a value, or declare it `static fn`"])
   }
 }
 

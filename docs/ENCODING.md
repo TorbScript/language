@@ -69,17 +69,17 @@ invariant is not protected by a rule about decoding; it is protected by the same
 ```trb
 /** A value writes itself. */
 public trait Encode {
-  fn encode<Target: Encoder>(self, var target: Target)
+  fn encode<Target: Encoder>(var target: Target)
 }
 
 /** A value reads itself back. */
 public trait Decode {
-  fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError>
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError>
 }
 
 /** A type describes its structure, without a value. */
 public trait Describe {
-  fn describe<Target: Describer>(var target: Target)
+  static fn describe<Target: Describer>(var target: Target)
 }
 ```
 
@@ -111,7 +111,7 @@ public type DecodeError with Show, Error {
   message: String
   path: List<String> = []
 
-  fn inside(self, segment: String): DecodeError { copy path: path.inserted(0, segment) }
+  fn inside(segment: String): DecodeError { copy path: path.inserted(0, segment) }
 }
 ```
 
@@ -163,49 +163,49 @@ implementation is a straight-line state machine and derived code is straight-lin
 
 ```trb
 public trait Encoder {
-  fn nothing(var self)
-  fn bool(var self, value: Bool)
-  fn int(var self, value: Int64)
-  fn unsigned(var self, value: UInt64)
-  fn float(var self, value: Float64)
-  fn decimal(var self, value: Decimal)
-  fn string(var self, value: String)
-  fn bytes(var self, value: List<UInt8>)
+  var fn nothing()
+  var fn bool(value: Bool)
+  var fn int(value: Int64)
+  var fn unsigned(value: UInt64)
+  var fn float(value: Float64)
+  var fn decimal(value: Decimal)
+  var fn string(value: String)
+  var fn bytes(value: List<UInt8>)
 
   /** `length` is known for a collection and unknown for a pipeline: a binary format writes it in front. */
-  fn sequence(var self, length: Int?)
-  fn map(var self, length: Int?)
+  var fn sequence(length: Int?)
+  var fn map(length: Int?)
   /** `typeName` is the qualified name of the declaration: the key a format finds a mapping by. */
-  fn record(var self, typeName: String)
-  fn variant(var self, typeName: String, name: String)
+  var fn record(typeName: String)
+  var fn variant(typeName: String, name: String)
   /** The name of the field whose value comes next. */
-  fn field(var self, name: String)
+  var fn field(name: String)
   /** Closes the innermost `sequence`, `map`, `record` or `variant`. */
-  fn finish(var self)
+  var fn finish()
 }
 
 public trait Decoder {
   /** Consumes a "nothing" if one is there. This is how `Option` decides between `None` and `Some`. */
-  fn nothing(var self): Bool
+  var fn nothing(): Bool
 
-  fn bool(var self): Result<Bool, DecodeError>
-  fn int(var self): Result<Int64, DecodeError>
-  fn unsigned(var self): Result<UInt64, DecodeError>
-  fn float(var self): Result<Float64, DecodeError>
-  fn decimal(var self): Result<Decimal, DecodeError>
-  fn string(var self): Result<String, DecodeError>
-  fn bytes(var self): Result<List<UInt8>, DecodeError>
+  var fn bool(): Result<Bool, DecodeError>
+  var fn int(): Result<Int64, DecodeError>
+  var fn unsigned(): Result<UInt64, DecodeError>
+  var fn float(): Result<Float64, DecodeError>
+  var fn decimal(): Result<Decimal, DecodeError>
+  var fn string(): Result<String, DecodeError>
+  var fn bytes(): Result<List<UInt8>, DecodeError>
 
-  fn sequence(var self): Result<Int?, DecodeError>
-  fn map(var self): Result<Int?, DecodeError>
+  var fn sequence(): Result<Int?, DecodeError>
+  var fn map(): Result<Int?, DecodeError>
   /** `true` while one more item of the open sequence or entry of the open map follows, and positions on it. */
-  fn hasNext(var self): Result<Bool, DecodeError>
-  fn record(var self, typeName: String): Result<Void, DecodeError>
+  var fn hasNext(): Result<Bool, DecodeError>
+  var fn record(typeName: String): Result<Void, DecodeError>
   /** Opens a variant and answers which case is there. */
-  fn variant(var self, typeName: String): Result<String, DecodeError>
+  var fn variant(typeName: String): Result<String, DecodeError>
   /** Positions on the field `name`. `false` when the input has no such field: the field's default applies. */
-  fn field(var self, name: String): Result<Bool, DecodeError>
-  fn finish(var self): Result<Void, DecodeError>
+  var fn field(name: String): Result<Bool, DecodeError>
+  var fn finish(): Result<Void, DecodeError>
 }
 ```
 
@@ -233,7 +233,7 @@ default applies" are the same thing, in every format, with one rule.
 | `SequenceEncoder`, `MapEncoder`, `RecordEncoder` | gone; `Encoder.field`, `Encoder.finish` | a sub-encoder needs an associated type the language does not have, and a trait-typed `var` closure parameter it cannot pass |
 | `SequenceDecoder`, `MapDecoder`, `RecordDecoder` | gone; `Decoder.hasNext`, `Decoder.field`, `Decoder.finish` | the same, plus `RecordDecoder.field<Value>` is not object safe |
 | `Decoder.record<Output>(typeName, read: (var fields) => ...)` | `Decoder.record(typeName)` + `finish` | a generic member with a closure over a trait-typed `var` is neither object safe nor passable |
-| `fn encode(self, var encoder: Encoder)` | `fn encode<Target: Encoder>(self, var target: Target)` | a `var` argument cannot be coerced to a trait-typed `var` parameter, and a format needs its own encoder back |
+| `fn encode(var encoder: Encoder)` | `fn encode<Target: Encoder>(var target: Target)` | a `var` argument cannot be coerced to a trait-typed `var` parameter, and a format needs its own encoder back |
 | `describe(value: Encode): String`, a `native` | `fn describe<Value: Encode>(value: Value): String`, written in TorbScript | it is a format like any other: an `Encoder` that builds an `EncodedValue` and shows it. One native fewer |
 | `XmlEncode` / `XmlDecode` | gone | XML is a mapping value in `std/xml`'s DSL. The other tens of thousands of formats get no trait of their own either |
 | `Format.encodeAll` / `decodeAll` | `format.encode value` / `format.decode<Type>(input)` | one entry per format per direction |
@@ -248,26 +248,26 @@ synchronously through the ordinary `Decode`.
 
 ```trb
 public trait Describer {
-  fn bool(var self)
-  fn int(var self)
-  fn unsigned(var self)
-  fn float(var self)
-  fn decimal(var self)
-  fn string(var self)
-  fn bytes(var self)
+  var fn bool()
+  var fn int()
+  var fn unsigned()
+  var fn float()
+  var fn decimal()
+  var fn string()
+  var fn bytes()
 
   /** The description that follows is the one that may be absent. */
-  fn optional(var self)
-  fn sequence(var self)
-  fn map(var self)
+  var fn optional()
+  var fn sequence()
+  var fn map()
   /** Opens a record. `false`: this target knows the type already and does not want the body again. */
-  fn record(var self, typeName: String): Bool
-  fn variant(var self, typeName: String): Bool
+  var fn record(typeName: String): Bool
+  var fn variant(typeName: String): Bool
   /** One case of the open variant. Its fields follow, `finish` closes it. */
-  fn variantCase(var self, name: String)
+  var fn variantCase(name: String)
   /** The next description belongs to this field. */
-  fn field(var self, description: FieldDescription)
-  fn finish(var self)
+  var fn field(description: FieldDescription)
+  var fn finish()
 }
 
 /** What the compiler knows about one constructor parameter, and a schema or a help text needs. */
@@ -422,7 +422,7 @@ carries two arguments. On the describing side a case is `variantCase(name)` insi
 
 ### What a format author writes to offer a DSL
 
-In the lab, XML's mapping DSL is **60 lines**: a mapping type with three `var self` methods (`element`, `attribute`,
+In the lab, XML's mapping DSL is **60 lines**: a mapping type with three `var fn` methods (`element`, `attribute`,
 `text`), a `roleOf` question over it, a builder type with one `map` method, and the validation loop in `Xml.format`.
 A format with one adjustment (CSV's `flatten`) is **12 lines**. That is the whole cost of "bring your own DSL", and it
 is ordinary TorbScript: a receiver closure over a `var` value, which the language already has and the configuration DSL
@@ -453,7 +453,7 @@ builds a `JsonEncoder`, hands it over, and then reads `target.output` out of it.
 concrete type is gone and there is nothing to read. Making the encoder a `shared type` would work and is wrong: an
 encoder is not an object with an identity, and every `Encode` implementation in the world would pay for the allocation.
 
-So the vocabulary is bounded generics — `fn encode<Target: Encoder>(self, var target: Target)` — and it is monomorphized
+So the vocabulary is bounded generics — `fn encode<Target: Encoder>(var target: Target)` — and it is monomorphized
 like every other generic. The derived `encode` of `Order` writing into a `JsonEncoder` is a direct call chain with no
 table lookup, which is the point.
 
@@ -463,7 +463,7 @@ object safe, and `List<Encode>` does not exist. Three places used it:
 | Used to be | Becomes |
 |------------|---------|
 | `RecordEncoder.field(name: String, value: Encode)` | gone. Derived code writes `target.field "name"` and then the value's own `encode`, with the field's static type |
-| `fn describe(value: Encode): String`, `Json.encode(value: Encode)` | `fn describe<Value: Encode>(value: Value): String`, `fn encode<Value: Encode>(self, value: Value): String`. Generic functions, not trait-typed parameters. The call site does not change |
+| `fn describe(value: Encode): String`, `Json.encode(value: Encode)` | `fn describe<Value: Encode>(value: Value): String`, `fn encode<Value: Encode>(value: Value): String`. Generic functions, not trait-typed parameters. The call site does not change |
 | `Expression.captures(): List<Encode>` | `List<EncodedValue>` |
 
 **`EncodedValue` is what replaces `Encode` as a type.** Not nothing, and not a tree every value travels through:
@@ -484,7 +484,7 @@ public type EncodedValue with Show, Encode, Decode {
   case Record(typeName: String, fields: List<EncodedField>)
   case Variant(typeName: String, name: String, fields: List<EncodedField>)
 
-  fn of<Value: Encode>(value: Value): EncodedValue
+  static fn of<Value: Encode>(value: Value): EncodedValue
 }
 ```
 
@@ -560,11 +560,11 @@ type Order {
 type Email with Encode by value, Describe by value, TryFrom<String, String> {
   private value: String
 
-  fn tryFrom(text: String): Result<Email, String> { … }
+  static fn tryFrom(text: String): Result<Email, String> { … }
 }
 
 extend Email with Decode {                            // reading goes through `parse`: the invariant holds
-  fn decode<Source: Decoder>(var source: Source): Result<Email, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Email, DecodeError> {
     source.record("acme/Email")?
     const text = source.string()?
     source.finish()?
@@ -594,7 +594,7 @@ not step 1.
 
 ```trb
 extend Duration with Encode, Decode {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.string iso8601()                           // `PT1H30M` in JSON, in CBOR, in a database row
   }
   …
@@ -769,7 +769,7 @@ Ordered by how much the design depends on it. Each with the smallest change that
 
 | # | What is missing | Smallest change | The design needs it for |
 |---|-----------------|-----------------|-------------------------|
-| 1 | **A trait method with type parameters of its own, monomorphized.** `witness.trb` refuses a derived `encode` because `Encoder`'s members are all `var self` and `Decoder.record<Output>` is not object safe | emit `Encode.encode<Target>` as a monomorphized call per (type, encoder) pair instead of a witness entry. The trait is never a type, so no table is needed | everything. Without it no format runs in a compiled binary |
+| 1 | **A trait method with type parameters of its own, monomorphized.** `witness.trb` refuses a derived `encode` because `Encoder`'s members are all `var fn`s and `Decoder.record<Output>` is not object safe | emit `Encode.encode<Target>` as a monomorphized call per (type, encoder) pair instead of a witness entry. The trait is never a type, so no table is needed | everything. Without it no format runs in a compiled binary |
 | 2 | **A static trait member reached through a bound at run time.** `Value.decode(source)`, `Item.describe target` | both back ends: monomorphize the call. Stage 0: it has no types at run time, so a derived `decode` of a generic type cannot run there at all — which is a reason to finish the self-hosted back end, not to change stage 0 | the decode and describe side of every generic type (`List<Item>`, `Option<Value>`, `Page<Item>`) |
 | 3 | **`typeName<Type>()`**, a compile-time constant | a checker intrinsic that folds to the declaration's qualified name. CONCEPT already names it under Quoted Expressions | `map<Price> { … }` in every format's DSL. Without it a mapping is keyed by a string the user types |
 | 4 | **Quoted expressions at run time**, and `nameOf` over them | stage 0 support for `Expression<Value>` parameters other than `assert`'s (it special-cases `assert` and hands a plain closure to everything else) | `attribute { _.currency }`. Without it a mapping names a field with a string, and the check moves from compile time to format-build time |

@@ -85,7 +85,7 @@ wrote the list out by hand.
 ```trb
 /** A path is what the text says it is. Whether it names a file is what the file system says when it is opened. */
 extend Path with From<String> {
-  fn from(value: String): Path
+  static fn from(value: String): Path
 }
 ```
 
@@ -147,49 +147,49 @@ public type Path with Show, Equals, Hash, Compare {
   components: List<String> = []
 
   /** Whether the path starts at a root. Its opposite is [Path.isRelative]. */
-  fn isAbsolute(self): Bool
+  fn isAbsolute(): Bool
 
   /** Whether the path has no root, so that it means something only against a base. */
-  fn isRelative(self): Bool
+  fn isRelative(): Bool
 
   /** The last component: the name of the file or of the directory. `None` for a root and for the empty path. */
-  fn name(self): String?
+  fn name(): String?
 
   /** The name without its extension and without the dot. `main` for `src/main.trb`. */
-  fn nameWithoutExtension(self): String?
+  fn nameWithoutExtension(): String?
 
   /** The extension of the name, without the dot. `None` where the name has none, and for `.gitignore`. */
-  fn extension(self): String?
+  fn extension(): String?
 
   /** The path one component up. `None` at a root and for the empty path: there is nothing above them. */
-  fn parent(self): Path?
+  fn parent(): Path?
 
   /** `relative` below this path. The root of `relative` is dropped, so the result never leaves `self`. */
-  fn joined(self, relative: Into<Path>): Path
+  fn joined(relative: Into<Path>): Path
 
   /** The same path with its last component replaced. `None` where there is no name to replace. */
-  fn withName(self, name: String): Path?
+  fn withName(name: String): Path?
 
   /** The same path with a different extension, added where there was none. An empty `extension` removes it. */
-  fn withExtension(self, extension: String): Path?
+  fn withExtension(extension: String): Path?
 
   /** Whether this path starts at the same root and with the same components as `prefix`. */
-  fn startsWith(self, prefix: Into<Path>): Bool
+  fn startsWith(prefix: Into<Path>): Bool
 
   /** This path as seen from `base`, with a `..` per component of `base` that is not shared. */
-  fn relativeTo(self, base: Into<Path>): Path?
+  fn relativeTo(base: Into<Path>): Path?
 
   /** `.` and empty components dropped and `..` resolved as text. It reads no disk and follows no link. */
-  fn normalized(self): Path
+  fn normalized(): Path
 
   /** This path resolved below `base`, refusing to leave it. */
-  fn resolved(self, inside: Into<Path>): Result<Path, PathError>
+  fn resolved(inside: Into<Path>): Result<Path, PathError>
 
   /** The path with `/` as the separator, on every platform. `.` for the empty path. */
-  fn show(self): String
+  fn show(): String
 
   /** Root first, then component by component, then by length. Case sensitive everywhere. */
-  fn compare(self, other: Path): Ordering
+  fn compare(other: Path): Ordering
 }
 
 /** What a path operation refuses. */
@@ -346,7 +346,7 @@ missing for it: there is no `lastIndexOf`, so `extension` splits the name on `.`
 
 ### Probe 1 — a single-method trait as a parameter type, with a coercion from `String`
 
-`trait PathValue { fn path(self): Path }`, `extend String with PathValue`, `extend Path with PathValue`,
+`trait PathValue { fn path(): Path }`, `extend String with PathValue`, `extend Path with PathValue`,
 `fn openByTrait(path: PathValue): String`, called with a literal and with a `Path`.
 
 ```text
@@ -364,7 +364,7 @@ opened /etc/hosts
 
 ### Probe 2 — a *generic* trait as a parameter type, the shape of `Into`
 
-The same, with `trait Convert<Target> { fn convert(self): Target }` and `fn open(path: Convert<Path>): String`:
+The same, with `trait Convert<Target> { fn convert(): Target }` and `fn open(path: Convert<Path>): String`:
 
 ```text
 ===== CHECK =====
@@ -522,16 +522,16 @@ construction rather than by a strip.
 
 ```trb
 public native shared type File with Close, Sink<Bytes, IoError> {
-  native fn open(path: Into<Path>): Result<File, IoError>
-  native fn create(path: Into<Path>): Result<File, IoError>
-  native fn readText(path: Into<Path>): Result<String, IoError>
-  native fn writeText(path: Into<Path>, text: String): Result<Void, IoError>
-  native fn exists(path: Into<Path>): Bool
-  native fn isDirectory(path: Into<Path>): Bool
-  native fn createDirectory(path: Into<Path>): Result<Void, IoError>
-  native fn absolutePath(path: Into<Path>): Result<Path, IoError>
+  native static fn open(path: Into<Path>): Result<File, IoError>
+  native static fn create(path: Into<Path>): Result<File, IoError>
+  native static fn readText(path: Into<Path>): Result<String, IoError>
+  native static fn writeText(path: Into<Path>, text: String): Result<Void, IoError>
+  native static fn exists(path: Into<Path>): Bool
+  native static fn isDirectory(path: Into<Path>): Bool
+  native static fn createDirectory(path: Into<Path>): Result<Void, IoError>
+  native static fn absolutePath(path: Into<Path>): Result<Path, IoError>
   /** The entries of a directory as paths below it, sorted by name. */
-  native fn list(path: Into<Path>): Result<List<Path>, IoError>
+  native static fn list(path: Into<Path>): Result<List<Path>, IoError>
 }
 
 /** What went wrong with which path. */
@@ -565,14 +565,14 @@ native fn start(command: String, arguments: List<String>, workingDirectory: Path
 
 ```trb
 /** This path resolved below `base`, refusing to leave it. */
-fn resolved(self, inside: Into<Path>): Result<Path, PathError>
+fn resolved(inside: Into<Path>): Result<Path, PathError>
 ```
 
 **"Inside" is defined lexically, in four steps, and nothing else happens.** Let `base` be `inside.normalized()`:
 
 1. `base` must be absolute, or the answer is `Fail PathError.NoBase(base)` — "inside" has nothing to be measured
    against otherwise.
-2. If `self` is relative, the candidate is `base.joined(self).normalized()`. If `self` is absolute, the candidate is
+2. If `self` is relative, the candidate is `base.joined().normalized()`. If `self` is absolute, the candidate is
    `self.normalized()`: an absolute path is not joined to anything, it is judged.
 3. If the candidate `startsWith(base)`, the answer is `Ok candidate`.
 4. Otherwise it is `Fail PathError.Outside(candidate, base)`.
@@ -598,13 +598,13 @@ belongs to `std/fs` and to the VM's own natives, because it is a file-system ope
 boundary on its own.
 
 **How `std/sandbox` uses it.** The one permission over paths today is
-`SandboxCapabilities.files(var self, readOnly: String = "", readWrite: String = "")` — two bare strings, one root
+`SandboxCapabilities.files(readOnly: String = "", readWrite: String = "")` — two bare strings, one root
 each, no containment check, and all six sandbox natives are still `.Planned` for 7.4. It becomes:
 
 ```trb
 public native type SandboxCapabilities {
   /** File system roots the script may reach. A side that is left out stays closed. */
-  native fn files(var self, readOnly: List<Path> = [], readWrite: List<Path> = [])
+  native var fn files(readOnly: List<Path> = [], readWrite: List<Path> = [])
 }
 ```
 

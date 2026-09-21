@@ -149,7 +149,7 @@ The language has value semantics; identity is the marked exception (`shared type
 |--------------------------------------------------|-------------------------------------------------------------------------------|
 | Small values (`Int`, `Float`, `Bool`, `Char`, small tuples and types, `Array<Item, Size>`) | Stored inline. Copied, never counted              |
 | Storage (`ArrayList`, `String`, tries, big types) | Reference counted buffer. A copy shares it. A write goes through "make unique": in place if the count is 1, copy first otherwise |
-| `var` parameters, `var self`, `a[i].x = 1`       | A reference into the frame of the caller. Never escapes (references are second-class), so it needs no counting and no lifetime tracking |
+| `var` parameters, a `var fn` receiver, `a[i].x = 1`       | A reference into the frame of the caller. Never escapes (references are second-class), so it needs no counting and no lifetime tracking |
 | `shared type`                                    | Reference counted object with interior mutability. The only thing that can form cycles |
 | Cycles                                           | Trial deletion (Bacon/Rajan) over `shared` objects only. Values are never scanned |
 

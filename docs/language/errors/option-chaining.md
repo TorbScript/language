@@ -40,7 +40,7 @@ print "{managerName} {name}"
 <option-expression>?.<member>          Option.map, or Option.flatMap if <member> itself answers an Option
 <expression> ?? <fallback>             OrElse.orElse: the value, or <fallback> (evaluated only if it is needed)
 
-trait OrElse<Value> { fn orElse(self, fallback: lazy Value): Value }
+trait OrElse<Value> { fn orElse(fallback: lazy Value): Value }
 ```
 
 ## Rules

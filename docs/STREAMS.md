@@ -35,12 +35,12 @@ signature names is one of its two **ends**, because at any point in a program yo
 
 ```trb
 public shared trait Source<Item, Failure> with Close {
-  fn next(var self): Task<Result<Item?, Failure>>
+  var fn next(): Task<Result<Item?, Failure>>
 }
 
 public shared trait Sink<Item, Failure> with Close {
-  fn add(var self, item: Item): Task<Result<Void, Failure>>
-  fn finish(var self): Task<Result<Void, Failure>>
+  var fn add(item: Item): Task<Result<Void, Failure>>
+  var fn finish(): Task<Result<Void, Failure>>
 }
 ```
 
@@ -58,11 +58,11 @@ nothing new has to be learned and the two worlds read alike:
 Five decisions carry everything below.
 
 **A stream has an identity and is consumed once**, so its ends are `shared type`s, and the verbs that consume take
-`var self` exactly as `Iterator.next` and `Accumulator.add` do. **A `var self` method of a shared type may answer a
-`Task`**: "a `var self` access cannot stay open across an `await`" is true for a *value*, where `var` is an exclusive
+`var fn`s exactly as `Iterator.next` and `Accumulator.add` do. **A `var fn` method of a shared type may answer a
+`Task`**: "an exclusive `var` access cannot stay open across an `await`" is true for a *value*, where `var` is an exclusive
 in-out access whose copy back ends with the call — for an object there is no copy, `var` is the permission to change the
 one object, and a permission survives an `await` (CONCEPT, "Identity"; TYPECHECKER gap 49). The reverse is an error with
-a message of its own: a `var self` or a `var` parameter of a **value** on a function that answers a `Task` would write its
+a message of its own: a `var fn` receiver or a `var` parameter of a **value** on a function that answers a `Task` would write its
 change back before the task has run.
 
 So **a source that is read from sits in a `var` binding** and a `const` handle is the read-only view every shared object
@@ -90,13 +90,13 @@ collectors, the terminal operations — is synchronous and shared with `Iterable
 ## 2. `Source`
 
 ```trb
-fn next(var self): Task<Result<Item?, Failure>>
+var fn next(): Task<Result<Item?, Failure>>
 ```
 
 `Ok(Some(item))` is the next item, `Ok(None)` the end of the stream, `Fail(problem)` a failure that ends it.
 
 **Whoever reads needs the permission — now or later.** `next`, `collect`, `toList`, `count`, `fold`, `forEach`, `find`
-and `into` read items, so they take `var self`. So do `through`, `map`, `filter`, `take`, `then`, `mapFailure` and
+and `into` read items, so they are `var fn`s. So do `through`, `map`, `filter`, `take`, `then`, `mapFailure` and
 `checked`: they hand the source to a wrapper that reads it from then on, which is the same permission one step later.
 One rule, no exceptions — and a `const` source cannot be consumed by wrapping it either, which is exactly what the
 read-only view of a shared object promises.
@@ -150,8 +150,8 @@ they happen, which is the same reason there is no `async` keyword in the languag
 ## 3. `Sink`
 
 ```trb
-fn add(var self, item: Item): Task<Result<Void, Failure>>
-fn finish(var self): Task<Result<Void, Failure>>
+var fn add(item: Item): Task<Result<Void, Failure>>
+var fn finish(): Task<Result<Void, Failure>>
 ```
 
 **The contract.**
@@ -179,9 +179,9 @@ A stage hangs on the **target**, not on the source:
 
 ```trb
 public trait Stage<Input, Output> {
-  fn onto<Final>(self, downstream: Accumulator<Output, Final>): Accumulator<Input, Final>
+  fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final>
 
-  fn then<Final>(self, other: Stage<Output, Final>): Stage<Input, Final>
+  fn then<Final>(other: Stage<Output, Final>): Stage<Input, Final>
 }
 ```
 
@@ -199,7 +199,7 @@ const fromBody = response.body.through(interesting).toList().await()?   // an HT
 `Accumulator` gains one member for it:
 
 ```trb
-fn isDone(self): Bool { false }
+fn isDone(): Bool { false }
 ```
 
 Whether more values would change the result. A driver asks **before it pulls the first value and after every `add`**,
@@ -230,7 +230,7 @@ stream's own failure and ends it there:
 
 ```trb
 extend<Item, Problem, Failure: From<Problem>> Source<Result<Item, Problem>, Failure> {
-  fn checked(self): Source<Item, Failure>
+  fn checked(): Source<Item, Failure>
 }
 ```
 
@@ -272,8 +272,8 @@ of the design (section 14), and `Decoder.sequence<Output>` in `std/encoding` has
 There are exactly **two** drivers, and they are the only place the two worlds differ:
 
 ```trb
-fn through<Output>(self, stage: Stage<Item, Output>): Iterable<Output>              // Iterable, a loop
-fn through<Output>(self, stage: Stage<Item, Output>): Source<Output, Failure>       // Source, a loop with `await`
+fn through<Output>(stage: Stage<Item, Output>): Iterable<Output>              // Iterable, a loop
+fn through<Output>(stage: Stage<Item, Output>): Source<Output, Failure>       // Source, a loop with `await`
 ```
 
 Each answer has two halves:
@@ -314,7 +314,7 @@ A reader that stops early — `take(5)`, a `find` that found it, a loop that bro
 what is above it, or a file handle or a socket stays open until the program ends. The language already has the
 mechanism, so streams use it and add nothing:
 
-- **`Source` and `Sink` both carry `Close`**, whose `close(var self)` is synchronous and cannot fail.
+- **`Source` and `Sink` both carry `Close`**, whose `var fn close()` is synchronous and cannot fail.
 - **Every derived end closes the one it came from.** Each wrapper holds its upstream in a `var` field and closes it:
   `Staged`, `Stepping` (`then`), `Remapped` (`mapFailure`), `Checked`, `Buffered`. `Pulling` and `Pushing`, the two
   closure-shaped escape hatches, hold whatever is above or below them as a `Close?`.
@@ -390,8 +390,8 @@ Text on a byte sink is an extension of the **instantiated** trait, so it is ther
 
 ```trb
 extend<Failure> Sink<Bytes, Failure> {
-  fn addText(self, text: String): Task<Result<Void, Failure>>
-  fn addLine(self, text: String = ""): Task<Result<Void, Failure>>
+  fn addText(text: String): Task<Result<Void, Failure>>
+  fn addLine(text: String = ""): Task<Result<Void, Failure>>
 }
 ```
 
@@ -409,10 +409,10 @@ Streaming happens one level up, at the level at which it happens in practice: **
 
 ```trb
 public trait Format<Failure> {
-  fn encodeAll(value: Encode): Bytes
-  fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, Failure>
-  fn items<Item: Decode>(): Stage<Bytes, Result<Item, Failure>>
-  fn encoded<Item: Encode>(): Stage<Item, Bytes>
+  static fn encodeAll(value: Encode): Bytes
+  static fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, Failure>
+  static fn items<Item: Decode>(): Stage<Bytes, Result<Item, Failure>>
+  static fn encoded<Item: Encode>(): Stage<Item, Bytes>
 }
 ```
 
@@ -524,14 +524,14 @@ capability tables need.
 ## 13. Open points
 
 **1. The state of a shared object, and the hand-over.**
-_Decision:_ **a `var self` method of a `shared type` or a `shared trait` may answer a `Task`** (gap 49), so every
+_Decision:_ **a `var fn` method of a `shared type` or a `shared trait` may answer a `Task`** (gap 49), so every
 stateful end here is an ordinary shared type with `var` fields: `Iterating` holds a cursor, `Staged` a queue and an
 accumulator chain, `Buffered` a list. `Pulling` and `Pushing` keep closures because a closure is what they are for. The
-reverse — a `var self` or a `var` parameter of a value on a function that answers a `Task` — is an error, because the
+reverse — a `var fn` receiver or a `var` parameter of a value on a function that answers a `Task` — is an error, because the
 copy back would happen before the task has run.
 
 _Decision:_ and **the hand-over needs no new language feature** (gap 52). A freshly produced object is a `var` path, so
-every member that reads — now or one wrapper later — takes `var self`, and a chain is still one expression. With that the
+every member that reads — now or one wrapper later — is a `var fn`, and a chain is still one expression. With that the
 design rests on no hole: gap 20 is enforced in all four places (a `var` binding, a `var` field through a generated
 constructor, a `var` argument, and a trait-typed value of a `shared trait`, which needed the two `isSharedType` helpers
 of the checker to become one). A `const` source can no longer be consumed at all, not even by wrapping it.

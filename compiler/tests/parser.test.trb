@@ -7,7 +7,7 @@ use test, group from "std/test"
 use SourceText from "../src/syntax/source"
 use Statement, StatementKind, Expression, ExpressionKind, CallStyle, InfixOperator, TypeKind, PatternKind from "../src/syntax/ast"
 use TraitClause from "../src/syntax/ast"
-use Visibility, UseItem from "../src/syntax/ast"
+use Visibility, UseItem, Member from "../src/syntax/ast"
 use parse from "../src/syntax/parser/parser"
 
 fn statements(text: String): List<Statement> {
@@ -34,6 +34,34 @@ fn bound(text: String): ExpressionKind {
 
 fn messages(text: String): List<String> {
   parse(SourceText.of(text)).diagnostics.map({ _.message }).toList()
+}
+
+/** The notes of every diagnostic, flattened: what a message offers instead of what it refused. */
+fn noteMessages(text: String): List<String> {
+  var found: List<String> = []
+  for diagnostic in parse(SourceText.of(text)).diagnostics {
+    found.addAll diagnostic.notes
+  }
+  found
+}
+
+/** The members of `type Probe { ... }`, whose body is the text. */
+fn membersOf(body: String): List<Member> {
+  match statements("type Probe \{\n{body}\n\}")[0].kind {
+    .Declare(declaration) => match declaration.kind {
+      .Type(declared) => declared.members
+      other => panic "Expected a type, found {other}"
+    }
+    other => panic "Unexpected tree: {other}"
+  }
+}
+
+/** The parameters of the one function such a body declares, each with `var` in front where it carries one. */
+fn memberParameters(body: String): List<String> {
+  match membersOf(body)[0].kind {
+    .Function(function) => function.parameters.map({ if _.isVar { "var {_.name.text}" } else { _.name.text } }).toList()
+    other => panic "Expected a function, found {other}"
+  }
 }
 
 /** The items of a file that consists of one `use` with a list of names. */
@@ -480,12 +508,96 @@ group "Trait lists" {
 
   test "`extend` has no field of its own to delegate to: a stray `by` is rejected" {
     assert(
-      messages("extend Meters with Add by value \{\n  fn add(self, other: Self): Self \{\n    self\n  \}\n\}")
+      messages("extend Meters with Add by value \{\n  fn add(other: Self): Self \{\n    self\n  \}\n\}")
         == ["`by` delegates to a field: only a `type` has fields to name"]
     )
   }
 
   test "a `trait`'s supertraits have no field either" {
     assert(messages("trait Numeric with Add by value \{\n\}") == ["`by` delegates to a field: only a `type` has fields to name"])
+  }
+}
+
+/**
+ * A member says what it is with two words: `static` belongs to the type, `var` may change. The receiver of a method
+ * is not written, so the parser puts it back - which is why every test here looks at the parameters.
+ */
+group "The members of a type" {
+  test "a method gets the receiver it does not write, at the span of its own name" {
+    assert(memberParameters("  fn area(): Int \{\n    1\n  \}") == ["self"])
+    match membersOf("  fn area(): Int \{\n    1\n  \}")[0].kind {
+      .Function(function) => assert(function.parameters[0].name.span == function.name.span)
+      other => panic "Expected a function, found {other}"
+    }
+  }
+
+  test "a `var fn` gets a `var` receiver" {
+    assert(memberParameters("  var fn translate(deltaX: Int) \{\n  \}") == ["var self", "deltaX"])
+  }
+
+  test "a `static fn` gets none" {
+    assert(memberParameters("  static fn square(size: Int): Self \{\n    Probe(size)\n  \}") == ["size"])
+  }
+
+  test "`static name = value` is a constant of the type, with or without `const`" {
+    match membersOf("  static origin = Probe(0)")[0].kind {
+      .Constant(binding) => assert(!binding.isVar)
+      other => panic "Expected a constant, found {other}"
+    }
+    match membersOf("  static const origin = Probe(0)")[0].kind {
+      .Constant(binding) => assert(!binding.isVar)
+      other => panic "Expected a constant, found {other}"
+    }
+  }
+
+  test "`const x: Int` is the long way to write the field `x: Int`" {
+    match membersOf("  const x: Int = 0")[0].kind {
+      .Field(field) => {
+        assert(field.name.text == "x")
+        assert(!field.isVar)
+      }
+      other => panic "Expected a field, found {other}"
+    }
+  }
+
+  test "a `foreign` block declares free functions, so its `fn` gets no receiver" {
+    const text = "foreign \"sqlite3\" \{\n  fn sqlite3_close(database: Int): Int32\n\}"
+    match statements(text)[0].kind {
+      .Declare(declaration) => match declaration.kind {
+        .Foreign(library) => match library.members[0].kind {
+          .Function(function) => assert(function.parameters.map({ _.name.text }).toList() == ["database"])
+          other => panic "Expected a function, found {other}"
+        }
+        other => panic "Expected a foreign block, found {other}"
+      }
+      other => panic "Unexpected tree: {other}"
+    }
+  }
+
+  test "a written `self` says what to write instead" {
+    const text = "type Probe \{\n  fn area(self): Int \{\n    1\n  \}\n\}"
+    assert(messages(text) == ["A method does not list `self`"])
+    assert(noteMessages(text) == ["Write `fn name(...)`: what stands in the parentheses is what the caller writes"])
+  }
+
+  test "a written `var self` says the other form" {
+    const text = "type Probe \{\n  fn grow(var self) \{\n  \}\n\}"
+    assert(noteMessages(text) == ["Write `var fn name(...)`: `var` says the method may change its receiver"])
+  }
+
+  test "`static var` does not exist: a type has no mutable state" {
+    const text = "type Probe \{\n  static var total = 0\n\}"
+    assert(messages(text)[0] == "`static var` does not exist")
+    assert(noteMessages(text)[0] == "A type has no mutable state: what belongs to the type is a constant of it")
+  }
+
+  test "`const x = 0` in a type body names neither reading, and the message offers both" {
+    const text = "type Probe \{\n  const x = 0\n\}"
+    assert(messages(text) == ["`x` is neither a field nor a constant of the type"])
+    assert(noteMessages(text) == ["A field is `x: Type`, a constant of the type is `static x = ...`"])
+  }
+
+  test "a trait cannot require a constant without a value yet" {
+    assert messages("trait Zero \{\n  static pi: Self\n\}").contains("A constant of the type needs a value")
   }
 }

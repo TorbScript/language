@@ -27,7 +27,7 @@ type Server {
   private(var) connections: Int = 0
   private var log: List<String> = []
 
-  fn record(var self, message: String) {
+  var fn record(message: String) {
     log.add message
   }
 }
@@ -112,7 +112,7 @@ member should have been a method from the start, not a reason to reach for `priv
 type Account {
   private(var) balance: Int = 0
 
-  fn deposit(var self, amount: Int) {
+  var fn deposit(amount: Int) {
     balance = balance + amount
   }
 }

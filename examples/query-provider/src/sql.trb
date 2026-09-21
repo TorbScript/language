@@ -10,27 +10,27 @@ public type Fragment {
   sql: String
   parameters: List<Encode> = []
 
-  fn raw(sql: String): Fragment {
+  static fn raw(sql: String): Fragment {
     Fragment sql
   }
 
-  fn parameter(value: Encode): Fragment {
+  static fn parameter(value: Encode): Fragment {
     Fragment "?", [value]
   }
 
   /** `a.join(" AND ", b)` -> `(a AND b)` */
-  fn join(self, keyword: String, other: Fragment): Fragment {
+  fn join(keyword: String, other: Fragment): Fragment {
     Fragment "({sql} {keyword} {other.sql})", parameters.addedAll(other.parameters)
   }
 
-  fn wrap(self, before: String, after: String = ""): Fragment {
+  fn wrap(before: String, after: String = ""): Fragment {
     copy sql: "{before}{sql}{after}"
   }
 }
 
 /** The parameters are `Encode` values and `Encode` does not require `Show`, so a fragment shows the count of them. */
 extend Fragment with Show {
-  fn show(self): String {
+  fn show(): String {
     if parameters.isEmpty() {
       return sql
     }

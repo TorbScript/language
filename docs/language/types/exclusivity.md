@@ -48,7 +48,7 @@ print items
 
 2. **Two `var` accesses of the *same* call may not target the same path.** Passing one path to two `var` parameters
    of one call (`swap(a, a)`), or two indices of one collection that the checker cannot tell apart
-   (`swap(items[i], items[j])`), are both rejected. `items.swapAt(i, j)` is the one `var self` access the standard
+   (`swap(items[i], items[j])`), are both rejected. `items.swapAt(i, j)` is the one exclusive `var` access the standard
    library offers instead of either.
 
    ```trb error
@@ -113,6 +113,6 @@ print items
 ## Related
 
 - [Mutation and var paths](var-paths.md) - the single-path rules that this rule builds on.
-- [Declaring a type](declaring-a-type.md) - `var self`, the receiver form this rule is meant to protect.
+- [Declaring a type](declaring-a-type.md) - `var fn`, the receiver form this rule is meant to protect.
 - [Why values instead of references](../../explanation/why-values-instead-of-references.md) - the argument this rule
   serves.

@@ -70,7 +70,7 @@ public native type Array<Item, const Size: Int>
   with Iterable<Item>, Length, MutableIndexed<Int, Item>
 {
   /** Every item set to `value`, with the length taken from the expected type: `const zeros: Array<Int, 8> = Array.filled(0)` */
-  native fn filled(value: Item): Array<Item, Size>
+  native static fn filled(value: Item): Array<Item, Size>
 
   /**
    * Every item from its index, with the length taken from the expected type: `produce` is called once per slot, from
@@ -85,28 +85,28 @@ public native type Array<Item, const Size: Int>
    *     const squares: Array<Int, 5> = Array.generated { index => index * index }
    *     print squares
    */
-  native fn generated(produce: (index: Int) => Item): Array<Item, Size>
+  native static fn generated(produce: (index: Int) => Item): Array<Item, Size>
 
   /** The Array built from `items`, or `None` if their count is not `Size`. The runtime-checked sibling of a literal. */
-  native fn from(items: Iterable<Item>): Array<Item, Size>?
+  native static fn from(items: Iterable<Item>): Array<Item, Size>?
 
   /** How many items there are: always `Size`. */
-  native fn length(self): Int
+  native fn length(): Int
 
   /** The item at `index`, or `None` if it is out of bounds. `array[index]` panics instead; see [Indexed.at]. */
-  native fn get(self, index: Int): Item?
+  native fn get(index: Int): Item?
 
   /** A cursor over the items, front to back. */
-  native fn iterator(self): Iterator<Item>
+  native fn iterator(): Iterator<Item>
 
   /** Changes the item at `index` in place. Needs a `var` path; see [MutableIndexed.set]. */
-  native fn set(var self, index: Int, value: Item)
+  native var fn set(index: Int, value: Item)
 
   /** Sets every item to `value`, in place. */
-  native fn fill(var self, value: Item)
+  native var fn fill(value: Item)
 
   /** Transforms every item into a new Array of the same length, so the result is an Array again. */
-  native fn mapped<Output>(self, transform: (value: Item) => Output): Array<Output, Size>
+  native fn mapped<Output>(transform: (value: Item) => Output): Array<Output, Size>
 }
 
 /**
@@ -117,14 +117,14 @@ public native type Array<Item, const Size: Int>
  * like a tuple: inline slots of a fixed width.
  */
 extend<Item: Equals, const Size: Int> Array<Item, Size> with Equals {
-  fn equals(self, other: Self): Bool {
+  fn equals(other: Self): Bool {
     zip(other).all { pair => pair.0 == pair.1 }
   }
 }
 
 /** The items in brackets, like a [List]: the size is in the type and would say nothing a reader cannot count. */
 extend<Item: Show, const Size: Int> Array<Item, Size> with Show {
-  fn show(self): String {
+  fn show(): String {
     const parts = map { _.showNested() }
     "[{parts.joined(separator: ", ")}]"
   }
@@ -132,7 +132,7 @@ extend<Item: Show, const Size: Int> Array<Item, Size> with Show {
 
 /** Order-dependent, like [List.hash]: an `Array` is an ordered sequence. */
 extend<Item: Hash, const Size: Int> Array<Item, Size> with Hash {
-  fn hash(self): Int {
+  fn hash(): Int {
     fold 0 { seed, item => combineHashes seed, item.hash() }
   }
 }

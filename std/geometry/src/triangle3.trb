@@ -34,12 +34,12 @@ public type Triangle3<Scalar: Numeric = Float> {
   third: Vector3<Scalar>
 
   /** The step from the first corner to the second. */
-  fn firstEdge(self): Vector3<Scalar> {
+  fn firstEdge(): Vector3<Scalar> {
     second.subtract first
   }
 
   /** The step from the first corner to the third. */
-  fn secondEdge(self): Vector3<Scalar> {
+  fn secondEdge(): Vector3<Scalar> {
     third.subtract first
   }
 
@@ -47,18 +47,18 @@ public type Triangle3<Scalar: Numeric = Float> {
    * The cross product of the two edges: a vector perpendicular to the triangle whose length is twice the area. Zero
    * where the three corners lie on one line.
    */
-  fn doubledAreaVector(self): Vector3<Scalar> {
+  fn doubledAreaVector(): Vector3<Scalar> {
     firstEdge().cross(secondEdge())
   }
 
   /** The smallest box that holds the triangle. */
-  fn bounds(self): Box<Scalar> {
+  fn bounds(): Box<Scalar> {
     const low = first.min(second).min(third)
     Box low, first.max(second).max(third).subtract(low)
   }
 
   /** The same triangle moved. */
-  fn translated(self, by: Vector3<Scalar>): Triangle3<Scalar> {
+  fn translated(by: Vector3<Scalar>): Triangle3<Scalar> {
     Triangle3 first.add(by), second.add(by), third.add(by)
   }
 }
@@ -66,22 +66,22 @@ public type Triangle3<Scalar: Numeric = Float> {
 /** What a root and a halving buy: the normal, the area, the plane and the nearest point. */
 extend<Scalar: Real> Triangle3<Scalar> {
   /** The direction perpendicular to the triangle, with length one, in the right-handed order of the corners. */
-  fn normal(self): Vector3<Scalar> {
+  fn normal(): Vector3<Scalar> {
     doubledAreaVector().normalized()
   }
 
   /** How much surface the triangle covers. */
-  fn area(self): Scalar {
+  fn area(): Scalar {
     doubledAreaVector().length().halved()
   }
 
   /** The plane the triangle lies in. */
-  fn plane(self): Plane<Scalar> {
+  fn plane(): Plane<Scalar> {
     Plane.ofPoints first, second, third
   }
 
   /** The midpoint of the three corners, which is where the triangle balances. */
-  fn center(self): Vector3<Scalar> {
+  fn center(): Vector3<Scalar> {
     const whole = first.x.unit()
     first.add(second).add(third).divide(whole + whole + whole)
   }
@@ -93,7 +93,7 @@ extend<Scalar: Real> Triangle3<Scalar> {
    * Every hit test against a triangle ends here, because this is what says whether a crossing of the plane is a
    * crossing of the *face*.
    */
-  fn weightsOf(self, point: Vector3<Scalar>): (first: Scalar, second: Scalar, third: Scalar) {
+  fn weightsOf(point: Vector3<Scalar>): (first: Scalar, second: Scalar, third: Scalar) {
     const along = firstEdge()
     const across = secondEdge()
     const gap = point.subtract first
@@ -113,7 +113,7 @@ extend<Scalar: Real> Triangle3<Scalar> {
   }
 
   /** Whether the point lies in the triangle, which for a point off the plane means its shadow on the plane does. */
-  fn contains(self, point: Vector3<Scalar>): Bool {
+  fn contains(point: Vector3<Scalar>): Bool {
     const weights = weightsOf point
     const nothing = zeroOf weights.first
     weights.first >= nothing && weights.second >= nothing && weights.third >= nothing

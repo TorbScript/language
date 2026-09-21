@@ -48,8 +48,7 @@ list[index] = value                      MutableIndexed.set
 
 1. **A verb changes the list in place through a `var` path, and its participle answers a changed copy and works on a
    `const` list too.** `add`/`added`, `insert`/`inserted`, `remove`/`removed`, `removeAt`/`removedAt`, `sort`/`sorted`,
-   `reverse`/`reversed`. A participle is built from its verb once, as a default method of `List`: `fn added(self,
-   value: Item): Self { var result = self; result.add value; result }`.
+   `reverse`/`reversed`. A participle is built from its verb once, as a default method of `List`: `fn added(value: Item): Self { var result = self; result.add value; result }`.
 
 2. **Reading `list[index]` panics if the index is out of range; `list.get(index)` answers an `Option` instead.**
    `[index]` is `Indexed.at`, which calls `get` and panics on `None`; `get` itself never panics.

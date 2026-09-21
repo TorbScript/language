@@ -36,8 +36,8 @@ document of semantic tokens for the `.vscode/extensions/torbscript` VS Code exte
 `SemanticTokensBuilder` wants), sorted, non-overlapping, single-line. `crates/torb-cli/src/highlight/resolver.rs` is
 a syntactic scope resolver over `torb_syntax`'s tree - not a type checker, there is none in stage 0 - that decides
 what a name is (`type`, `interface`, `typeParameter`, `enumMember`, `namespace`, `function`, `method`, `parameter`,
-`variable`, `property`) and whether it is `readonly`/`mutable` (`const` vs. `var`), `static` (a method without
-`self`) or `defaultLibrary` (a prelude name). It never panics - a file with syntax errors still yields every token
+`variable`, `property`) and whether it is `readonly`/`mutable` (`const` vs. `var`, and a `var fn` at its
+declaration as at every call), `static` (a `static` member) or `defaultLibrary` (a prelude name). It never panics - a file with syntax errors still yields every token
 the parser could resolve around the damage - and its doc comment lists exactly what it cannot know without a type
 checker (an arbitrary receiver's real type, a single-segment import's real kind). This is stage-0 tooling: milestone
 8's language server replaces it behind the *same* JSON protocol, so the extension does not need to change again when

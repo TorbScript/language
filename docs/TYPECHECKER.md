@@ -135,7 +135,7 @@ public type TypeTable {
   private var identifiers: Map<String, TypeId> = [:]
 
   /** Interning: `describe(form)` is a full structural key, because the children are already ids. */
-  fn intern(var self, form: TypeForm): TypeId {
+  var fn intern(form: TypeForm): TypeId {
     const key = describe(form)
     if const Some(existing) = identifiers.get(key) {
       return existing
@@ -146,7 +146,7 @@ public type TypeTable {
     identifier
   }
 
-  fn form(self, type: TypeId): TypeForm {
+  fn form(type: TypeId): TypeForm {
     forms[type.value]
   }
 }
@@ -172,7 +172,7 @@ public type Signature {
   bounds: List<Bound>
   /** The type whose member this is, `None` for a top-level function. */
   owner: TypeId?
-  /** `fn area(self)` vs. `fn square(size: Int)`. */
+  /** `fn area()` vs. `fn square(size: Int)`. */
   takesSelf: Bool
   isVarSelf: Bool
 }
@@ -249,7 +249,7 @@ instead of silently losing a type.
 ```trb
 public type Resolution {
   case Local(binding: BindingId)
-  /** A `fn`, a method, a trait method, a static function of a type or trait. */
+  /** A `fn`, a method, a trait method, a `static fn` of a type or trait. */
   case Callable(symbol: SymbolId, arguments: List<TypeId>, dispatch: Dispatch)
   case Field(owner: TypeId, field: SymbolId)
   case Constant(symbol: SymbolId, owner: TypeId?)
@@ -629,10 +629,10 @@ with escapes, `Option` as `Some(x)` / `None`.
 - `<Item: Hash & Equals>` and `where Item: Hash` are the same thing and both land in `Signature.bounds`.
 - A bound's subject may be any type mentioning the generic parameters (`where Target: From<Iterable<Item>>`,
   `where Item: Compare`), which is what the prelude needs.
-- A **member's** `where` clause makes that member conditionally available (`fn contains(self, value: Item) where Item:
-  Equals`, `fn toSet(self) where Item: Hash`). An unsatisfied condition is a member-not-available error naming the
+- A **member's** `where` clause makes that member conditionally available (`fn contains(value: Item) where Item:
+  Equals`, `fn toSet() where Item: Hash`). An unsatisfied condition is a member-not-available error naming the
   unmet bound; such a member is not a requirement for implementors.
-- A generic parameter is a namespace for the static members of its bounds: `Item.from(0)`, `Target.from(self)`,
+- A generic parameter is a namespace for the static members of its bounds: `Item.from(0)`, `Target.from()`,
   `Value.decode(decoder)`. Dispatch is `.Forwarded`.
 - Default type arguments (`trait Add<Other = Self, Output = Self>`) are filled in when the argument list is shorter
   than the parameter list. They are defaulted, never inferred (gap 6).
@@ -653,7 +653,7 @@ This resolves the open question in CONCEPT.md ("generic methods on a trait-typed
   `self`): the concrete type is not known, so `equals`, `compare`, `added` and `Type.from` have no meaning there. The
   message names the member and the value's type. This keeps `List<Show & Hash>` and `fn audit(entry: Show & Encode)`
   legal - those only hash and render the individual values - while rejecting `a == b` on two of them.
-  `fn field<Value: Decode>(var self, name: String)` on a `RecordDecoder` is fine: a generic method is object-safe
+  `var fn field<Value: Decode>(name: String)` on a `RecordDecoder` is fine: a generic method is object-safe
   because its witnesses are passed.
 - A `shared type` may only implement a `shared trait`, so a trait-typed value of a non-shared trait is always a value
   and may cross a task boundary. The checker enforces both directions.
@@ -718,12 +718,12 @@ public fn placeOf(var checker: Checker, expression: Expression): Place
 public fn isMutable(var checker: Checker, place: Place): Bool
 ```
 
-`isMutable` walks from the root: the root must be a `var` binding, a `var` parameter or a `var self`; every `Field`
+`isMutable` walks from the root: the root must be a `var` binding, a `var` parameter or a `var fn` receiver; every `Field`
 step must be a `var` field _and_ writable from here (`private(var)` outside the declaring type yields a const path,
 and const is deep: `config.routes.add(...)` is an error while `config.routes` reads and iterates); `Index` needs
 `MutableIndexed`, `Range` needs `MutableSlice`. `Temporary` is not mutable.
 
-What needs a mutable place: assignment, a `var self` method, a property command, a `var` argument, and `if var` /
+What needs a mutable place: assignment, a `var fn` method, a property command, a `var` argument, and `if var` /
 `while var` (gap 3). A `const` root gets "`q` is a `const`. Only a `var` binding can be changed"; a non-`var` field
 gets "`id` never changes after construction"; a `private(var)` field gets "`balance` can only be written by
 `Account`".
@@ -922,7 +922,7 @@ The catalogue (the ~40 that matter):
 | Recursive return type | ``` The return type of `parseExpression` cannot be inferred: it calls itself. Annotate it ``` |
 | Alias cycle | ``` `type Handler = Handler` is a cycle ``` |
 | Unmet bound | ``` `Square` does not implement `Hash` ``` / ``` `Item` is not `Hash`. Add the bound: `where Item: Hash` ``` |
-| Missing trait member | ``` `Square` implements `Shape` but has no `name`. `Shape` requires `fn name(self): String` ``` |
+| Missing trait member | ``` `Square` implements `Shape` but has no `name`. `Shape` requires `fn name(): String` ``` |
 | Supertrait | ``` `Compare` requires `Equals`. `Square` has neither an `equals` nor a derived one ``` |
 | Orphan | ``` `extend String with Show`: neither `String` nor `Show` belongs to this package ``` |
 | Overlap | ``` `String` already implements `Show` (in `std/prelude/src/convert`) ``` |
@@ -1188,7 +1188,7 @@ list. Everything else is as written.
   `LocalBinding` and `BodyState`. `Dispatch` has only `.Direct` and `Adaptation` only the cases 4.2 fills; 4.3 and 4.4
   add the rest. `Tables` is one per module, in `Checker.tables`, in the shape the type positions already use.
 - **Two traps of stage 0 shaped the code.** `f(checker, checker.x)` and `f(checker, g(checker, x))` read a place that
-  the `var` parameter has already taken out, and a `var self` method whose argument reads another field of `self` does
+  the `var` parameter has already taken out, and a `var fn` method whose argument reads another field of `self` does
   the same - so every such read is hoisted into a local first, and the short forms on `Checker` (`typed`, `resolved`,
   `adapted`, `reportHere`) write through their own path instead of calling the long form.
 
@@ -1288,7 +1288,7 @@ list. Everything else is as written.
   same list, so 4.3's empty lists are filled either way. The whole tree is memoized by the two interned ids.
 - **`Compare` is derived for a tuple, and `From<Self>` for every type.** An order is a decision and not a structure, so
   no `type` gets a derived `Compare` - but a tuple has no declaration anybody could write one in, and
-  `diagnostics.sort { (_.span.start, _.span.end) }` is the idiom of the language. And `fn sum(self): Item where Item:
+  `diagnostics.sort { (_.span.start, _.span.end) }` is the idiom of the language. And `fn sum(): Item where Item:
   Add & From<Int>` asks `Int64` for `From<Int64>`: every type converts from itself, and a reflexive `From` cannot be
   written as a blanket implementation because it would overlap with every other one.
 - **A supertrait requirement is satisfied by any implementation of the same target.**
@@ -1436,12 +1436,12 @@ list. Everything else is as written.
 - **A dead change needs the change to be the *only* effect.** Design 5.3 counts every change; the implementation
   counts a change to a place only where the call produces `Void`/`Never` or its result is thrown away, plus every
   assignment. `cursor.next()` hands its value on, so the change to `cursor` is not what the statement is for and
-  `fn first(self) { var cursor = iterator()  cursor.next() }` - the idiom gap 2 asks for - is not a mistake.
+  `fn first() { var cursor = iterator()  cursor.next() }` - the idiom gap 2 asks for - is not a mistake.
 - **A change through a step reads the old value; only `x = value` replaces the whole binding.** So the read that
   resolving the target produced stays for `x.part = value` and goes away for `x = value`, and the change itself is
   noted *after* the value has been read - otherwise `total = total + 1` would count its own right-hand side as the
   read that keeps it alive.
-- **A reference is exempt, and three things are one.** A `var` parameter, `var self` and the names an `if var` pattern
+- **A reference is exempt, and three things are one.** A `var` parameter, a `var fn` receiver and the names an `if var` pattern
   binds into its subject all write into a place of the caller, so `LocalBinding.isParameter` marks all three and the
   dead-change rule skips them. It is also what a closure may not carry off (BACKEND gap 14). A `const` binding and an
   exempt one are never recorded at all, which is what keeps the use list of one body short in a pass that names
@@ -1459,7 +1459,7 @@ list. Everything else is as written.
   callee", which needs an interprocedural answer the checker does not have; the conservative half is the one that
   matters, because a closure that is bound to a name, returned or built in a literal is exactly what may outlive the
   call. Naming the receiver - `self`, or a member of it written without it - now counts as capturing it, which is what
-  makes "`var self` may not be carried off" reportable at all.
+  makes "the receiver may not be carried off" reportable at all.
 - **`break` cannot leave a closure** is reported where the closure has a loop around it, which needs the loop depth
   *outside* the closure: `ClosureFrame.enclosingLoopDepth`. Without one the message stays 4.2's
   "`break` is only allowed inside of a `for` or a `while`".
@@ -1615,7 +1615,7 @@ list. Everything else is as written.
   declaration has the same head symbol *and* the current package declares it - which is exactly "the body of the type
   and every `extend` of it in the same package" (gap 29) without a separate table.
 - **"The result type is mandatory" means "it is never inferred", not "write `: Void`".** CONCEPT.md's own `trait
-  Collection<Item>` writes `fn add(var self, value: Item)` without one, so the rule cannot be that every signature
+  Collection<Item>` writes `var fn add(value: Item)` without one, so the rule cannot be that every signature
   spells `Void` out: for a `public` function and for a trait method an **omitted result type is `Void`**, and nothing is
   taken from the body. `public fn emit(var builder: Builder) { ... }` therefore stays exactly as it is written, and the
   error is at the value such a body produces: "A `public` function does not infer its result: declare it (`: Int64`)" (a
@@ -1652,7 +1652,7 @@ list. Everything else is as written.
   parameters are always the first scope of a body and its top level the second. A nested block and a closure keep their
   own scope.
 - **`self` without a receiver is reported.** It was silently `Deferred`, which made `height: Int = self.width` a field
-  default that nobody objected to. A static function gets the same message.
+  default that nobody objected to. A `static fn` gets the same message.
 - **Gap 22 was already recorded.** `Implementation.isNative` exists since 4.3 and `checkOneImplementation` skips a native
   implementation, so "a required trait member without a body in a `native type` is a requirement on the runtime" needed
   nothing but the test. What 4.9 adds is that only a package of the standard library may write `native` at all.
@@ -1856,7 +1856,7 @@ What the round changed, by root cause rather than by finding:
   parameter's item type without asking whether the parameter is variadic at all; an aliased case was looked up by the
   name that was *written* in both an expression and a pattern.
 - **Four rules of CONCEPT that nothing enforced:** `await()` (gap 58), `?` outside an `Option`/`Result` (gap 59), one
-  namespace of members, and a static function reached through a value. Plus the three small ones: a literal type cannot
+  namespace of members, and a `static fn` reached through a value. Plus the three small ones: a literal type cannot
   be extended, a `fn` type parameter has no default, and an `Array` index that is written out is held against the size
   in its type.
 - **Two things a closure did that it should not.** A closure whose body coerced into the expected result had its own
@@ -2007,8 +2007,8 @@ place where the language has subtyping, and leaving it implicit makes inference 
 _Decision:_ accepted.
 
 **9. Conditional members of a trait.**
-`iteration.trb` has `fn toSet(self): Set<Item> where Item: Hash`, `collection.trb` has
-`fn contains(self, value: Item): Bool where Item: Equals`, `map.trb` has `fn of(...) where Key: Hash`. The concept's
+`iteration.trb` has `fn toSet(): Set<Item> where Item: Hash`, `collection.trb` has
+`fn contains(value: Item): Bool where Item: Equals`, `map.trb` has `fn of(...) where Key: Hash`. The concept's
 "Traits" section knows `where` only on declarations.
 _Proposal:_ a member's `where` clause makes the member available only when it is satisfied; it is not a requirement
 for implementors; an unsatisfied use reports the unmet bound. _Reason:_ the collection traits cannot be written
@@ -2091,7 +2091,7 @@ more" true for the layout while preventing a silent swap.
 _Decision:_ accepted.
 
 **18. Which discarded values are errors?**
-"Bindings": "the discarded result of a method that takes `self` (`list.added(4)` as a statement)". That leaves
+"Bindings": "the discarded result of a method that only reads its receiver (`list.added(4)` as a statement)". That leaves
 `Email.tryFrom(text)` and `1 + 2` as statements undecided, while `parser.bump()` and `cursor.next()` (both discarded in
 `compiler/src/syntax/parser/parser.trb` and `std/prelude/src/stages.trb`) must stay legal.
 _Proposal:_ an expression statement must have type `Void` or `Never`, unless the call has a `var` receiver or a `var`
@@ -2101,7 +2101,7 @@ stays writable.
 _Decision:_ accepted.
 
 **19. A captured `var` binding is a reference that escapes.**
-"`var` Paths": "**References are second-class.** They only exist as a `var` parameter or `var self`" and "A captured
+"`var` Paths": "**References are second-class.** They only exist as a `var` parameter or a `var fn` receiver" and "A captured
 `var` binding is shared between the closure and its scope". A closure that captures a `var` and is returned or stored
 therefore _does_ escape, which the "Execution Model" confirms ("`var` bindings captured by closures are tracked by a
 cycle collector") and which "References are second-class" denies.
@@ -2162,7 +2162,7 @@ literals, never their type name" (CONCEPT, Decision Log). A nested `String` and 
 
 **24. `copy` has no written signature.**
 "Values": "`copy` is generated for every `type`" - with which parameters?
-_Proposal:_ `fn copy(self, <field>: <Type> = <the current value>, ...): Self`, all fields in declaration order, all
+_Proposal:_ `fn copy(<field>: <Type> = <the current value>, ...): Self`, all fields in declaration order, all
 optional, private fields not passable from outside (as for the constructor), and no `copy` for a `shared type`.
 _Reason:_ it is the only reading that matches `p.copy(y: 30)` and the visibility rules of the constructor.
 
@@ -2411,28 +2411,28 @@ holder and "nobody reads it here" is not evidence of anything.
 _Decision:_ accepted (`mutation.trb`, `isCounted`). A value that merely *contains* a shared object keeps the rule:
 changing the value is still a change of a copy, and only the object inside it is shared.
 
-**49. May a `var self` method answer a `Task`?**
-"Concurrency" and `docs/STREAMS.md` argued that it may not, because "a `var self` access cannot stay open across an
+**49. May a `var fn` method answer a `Task`?**
+"Concurrency" and `docs/STREAMS.md` argued that it may not, because "an exclusive `var` access cannot stay open across an
 `await`" - which is why `Source.next` first took `self` and every stateful source of `std/stream` had to hide its state
 in the `var` bindings its closures captured. But the sentence is only true for a **value**: there a `var` is an exclusive
 in-out access whose "copy in, copy out" ends with the call. For a `shared type` there is no copy, `var` is the permission
 to change the one object, and CONCEPT's own `Connection` example already hands out two `var` paths to one object.
-_Proposal:_ a `var self` method of a `shared type` or a `shared trait` may answer a `Task`, and exclusivity says nothing
-about a `var` access to a shared object across an `await`. The reverse is an error with a message of its own: a `var self`
+_Proposal:_ a `var fn` method of a `shared type` or a `shared trait` may answer a `Task`, and exclusivity says nothing
+about a `var` access to a shared object across an `await`. The reverse is an error with a message of its own: a `var fn` receiver
 or any `var` parameter whose type is a **value** on a function that answers a `Task`, because the copy back would happen
 when the call returns - before the task has run - and the change would be lost. An ordinary `trait` counts as a value,
 because a value may implement it.
 _Reason:_ it is the same distinction the language already makes everywhere else between a value and an object, and it is
-what lets `Source.next(var self)` mirror `Iterator.next(var self)` instead of hiding a cursor in a closure.
+what lets `Source.next()` mirror `Iterator.next()` instead of hiding a cursor in a closure.
 
-_Decision:_ accepted. The positive half needed no change - `var self` plus `Task` already checked, and so did two pulls
+_Decision:_ accepted. The positive half needed no change - a `var fn` plus `Task` already checked, and so did two pulls
 in a row, a `var` source handed to a function that awaits it, and a `var` field pulled across an `await`; tests in
 `compiler/tests/program-shape.test.trb` hold it. The negative half was silent and is now
 `` `take` changes `self` and answers a `Task`, and `Bag` is a value `` (and `` ... `Counter` is not a `shared trait` ``
 for a trait), in `signature.trb`, so it covers a trait requirement and a `native` declaration as well as a body.
 
-Two consequences for an API built on this. **Reading takes `var self`, wrapping takes `self`:** a temporary is no `var`
-path, so if `map`/`filter`/`through` took `var self` no pipeline could be written as one expression. Handing a source to
+Two consequences for an API built on this. **Reading is a `var fn`, wrapping only reads:** a temporary is no `var`
+path, so if `map`/`filter`/`through` were `var fn`s no pipeline could be written as one expression. Handing a source to
 a wrapper is therefore a hand-over, and the wrapper pulls from then on. **A pipeline that is read gets a name**
 (`var users = body.through(...).checked()` and then `users.toList()`), exactly as `var cursor = iterator()` does, and the
 message for forgetting it already says so.
@@ -2492,14 +2492,14 @@ one of its four places: a `var` binding of a named `shared type`. A `var` **fiel
 not checked - the constructor's parameters are values, so the `var` argument rule never saw them - and a trait-typed value
 of a `shared trait` was not recognised as shared at all, because `place.trb` and `declaration.trb` both had a helper
 called `isSharedType` and only one of them knew about `.Traits`.
-_Proposal:_ a temporary whose type has an identity counts as a `var` path, for a `var self` receiver and for a `var`
+_Proposal:_ a temporary whose type has an identity counts as a `var` path, for a `var fn` receiver and for a `var`
 argument alike; a temporary value keeps the error it has. Gap 20 is then enforced in all four places - binding, field
 (including through the generated constructor, and inside the declaring type as well), argument, and trait-typed value of
 a `shared trait` - which needs the two helpers to become one.
 _Reason:_ both halves say the same thing, which is that the promise is about a **path** and not about a type: what a
 `const` withholds is what goes through that one binding, field or argument, and a value that was just made has no such
 path behind it. With the pair in place the standard library needs no exception: everything that reads a stream, now or one
-wrapper later, takes `var self`, and nothing can be read through a `const` handle.
+wrapper later, is a `var fn`, and nothing can be read through a `const` handle.
 
 _Decision:_ accepted. `problemOfRoot` answers `Writable` for a temporary with an identity (`place.trb`), the single
 `isSharedType` lives in `declaration.trb` and answers precisely (a `shared type`, a trait-typed value whose every trait is
@@ -2872,7 +2872,7 @@ are their own round:** a `traitsOf` whose cache is invalidated when a derived im
 set that is merged at the call site instead of in the lookup.
 
 **69. Does member lookup see a blanket implementation, and is there an inherent one?**
-`extend<World: Query> World with Pairs { fn doubled(self): Int { ... } }` and then `game.doubled()` answered `` `Game`
+`extend<World: Query> World with Pairs { fn doubled(): Int { ... } }` and then `game.doubled()` answered `` `Game`
 has no member `doubled` ``, although `resolveTrait(Game, Pairs)` finds that very implementation: `traitsOf` - the list
 member lookup walks - skipped every implementation whose target is a bare parameter, because "a blanket target binds
 nothing from the type alone". The inherent form `extend<World: Query> World { ... }` checked clean and answered
@@ -2889,7 +2889,7 @@ _Decision:_ accepted, with two limits that the repository measured:
 
 - **Only for a concrete receiver.** What a generic parameter has is what its bounds say. Adding blankets to a
   parameter gives `Target` of `fn to<Target: From<Iterable<Item>>>` a second `From` - the `From<Never>` every type has
-  - and `Target.from(self)` becomes an ambiguity no call site can resolve.
+  - and `Target.from()` becomes an ambiguity no call site can resolve.
 - **Only where the type decides the trait`s own arguments.** `extend<Source, Target> Source with Into<Target>` would
   put `Into<Target>` with an open `Target` on every type at all, and what that means is decided at a call.
 
@@ -2917,7 +2917,7 @@ _Decision:_ two were, two were not, and both halves are recorded because a stale
   `fn total<Scalar: Zero & Add>` resolves and records `Dispatch.Forwarded`, and `generics.test.trb` has pinned it
   since 4.9 ("`Target.from(value)` reaches a static member of a bound"). What LINEAR quotes - `Unknown name `Scalar`` -
   is **stage 0**, not this pass; the lowering finds the witness in `Witness.Forwarded(parameter, bound)`.
-- **A member-level `where` on a method of a generic `type` (gap 11) works too.** `fn length(self): Int where Item:
+- **A member-level `where` on a method of a generic `type` (gap 11) works too.** `fn length(): Int where Item:
   Absolute` inside `type Pair<Item: Counted>` reaches `absolute()` in its own body, and a `Pair(Plain(1), Plain(2))`
   whose `Item` is not `Absolute` hears `` `Plain` does not implement `Absolute` `` at the call. `addBound` writes a
   member`s `where` into `parameterBounds` like an inline bound, which is what makes it visible in the body.

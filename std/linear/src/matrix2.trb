@@ -40,39 +40,39 @@ public type Matrix2<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   yAxis: Vector2<Scalar>
 
   /** A diagonal matrix: each axis scaled on its own, and nothing mixed. */
-  fn scaling(by: Vector2<Scalar>): Matrix2<Scalar> {
+  static fn scaling(by: Vector2<Scalar>): Matrix2<Scalar> {
     const nothing = zeroOf(by.x)
     Matrix2 Vector2(by.x, nothing), Vector2(nothing, by.y)
   }
 
   /** The two rows read as columns: the inverse of a rotation, and half of the inverse of anything else. */
-  fn transposed(self): Matrix2<Scalar> {
+  fn transposed(): Matrix2<Scalar> {
     Matrix2 Vector2(xAxis.x, yAxis.x), Vector2(xAxis.y, yAxis.y)
   }
 
   /** The factor the transformation multiplies an area by. Zero exactly where it collapses the plane onto a line. */
-  fn determinant(self): Scalar {
+  fn determinant(): Scalar {
     xAxis.x * yAxis.y - yAxis.x * xAxis.y
   }
 
   /** The cell in that row and that column. Panics outside `0..2`. */
-  fn at(self, row: Int, column: Int): Scalar {
+  fn at(row: Int, column: Int): Scalar {
     const axis = if column == 0 { xAxis } else { yAxis }
     if row == 0 { axis.x } else { axis.y }
   }
 
   /** Cell by cell. Adding two transformations is not composing them; `multiply` is. */
-  fn add(self, other: Matrix2<Scalar>): Matrix2<Scalar> {
+  fn add(other: Matrix2<Scalar>): Matrix2<Scalar> {
     Matrix2 xAxis.add(other.xAxis), yAxis.add(other.yAxis)
   }
 
   /** Cell by cell. */
-  fn subtract(self, other: Matrix2<Scalar>): Matrix2<Scalar> {
+  fn subtract(other: Matrix2<Scalar>): Matrix2<Scalar> {
     Matrix2 xAxis.subtract(other.xAxis), yAxis.subtract(other.yAxis)
   }
 
   /** The composition: `self` after `other`. */
-  fn multiply(self, other: Matrix2<Scalar>): Matrix2<Scalar> {
+  fn multiply(other: Matrix2<Scalar>): Matrix2<Scalar> {
     Matrix2 applied(to: other.xAxis), applied(to: other.yAxis)
   }
 
@@ -82,7 +82,7 @@ public type Matrix2<Scalar: Numeric = Float> with Add, Subtract, Multiply {
    * It is a method and not `matrix * vector`, because a type has one namespace of members and `multiply` is already the
    * composition of two matrices.
    */
-  fn applied(self, to: Vector2<Scalar>): Vector2<Scalar> {
+  fn applied(to: Vector2<Scalar>): Vector2<Scalar> {
     xAxis.multiply(to.x).add(yAxis.multiply(to.y))
   }
 }
@@ -90,7 +90,7 @@ public type Matrix2<Scalar: Numeric = Float> with Add, Subtract, Multiply {
 /** Every cell turned around. */
 extend<Scalar: Signed> Matrix2<Scalar> with Negate {
   /** Every cell with its sign flipped. */
-  fn negate(self): Matrix2<Scalar> {
+  fn negate(): Matrix2<Scalar> {
     Matrix2 xAxis.negate(), yAxis.negate()
   }
 }
@@ -98,7 +98,7 @@ extend<Scalar: Signed> Matrix2<Scalar> with Negate {
 /** What an angle and a division buy: rotations and the way back. */
 extend<Scalar: Real> Matrix2<Scalar> {
   /** The rotation by that angle, from the first axis towards the second. */
-  fn rotation(by: Angle<Scalar>): Matrix2<Scalar> {
+  static fn rotation(by: Angle<Scalar>): Matrix2<Scalar> {
     const sine = by.sine()
     const cosine = by.cosine()
     Matrix2 Vector2(cosine, sine), Vector2(-sine, cosine)
@@ -108,7 +108,7 @@ extend<Scalar: Real> Matrix2<Scalar> {
    * The transformation that undoes this one, or `None` where there is none - which is exactly where the determinant is
    * zero and the plane has been collapsed onto a line.
    */
-  fn inverse(self): Matrix2<Scalar>? {
+  fn inverse(): Matrix2<Scalar>? {
     const scale: Scalar = self.determinant()
     if scale == zeroOf(scale) {
       return None
@@ -117,7 +117,7 @@ extend<Scalar: Real> Matrix2<Scalar> {
   }
 
   /** Whether every cell is within `tolerance` of the other matrix's. */
-  fn isCloseTo(self, other: Matrix2<Scalar>, tolerance: Scalar): Bool {
+  fn isCloseTo(other: Matrix2<Scalar>, tolerance: Scalar): Bool {
     xAxis.isCloseTo(other.xAxis, tolerance: tolerance) && yAxis.isCloseTo(other.yAxis, tolerance: tolerance)
   }
 }
@@ -125,17 +125,17 @@ extend<Scalar: Real> Matrix2<Scalar> {
 /** The float matrix's identity. */
 extend Matrix2<Float> {
   /** The transformation that changes nothing. */
-  const identity: Matrix2<Float> = Matrix2 Vector2(1.0, 0.0), Vector2(0.0, 1.0)
+  static identity: Matrix2<Float> = Matrix2 Vector2(1.0, 0.0), Vector2(0.0, 1.0)
 }
 
 /** The grid matrix's identity. */
 extend Matrix2<Int> {
   /** The transformation that changes nothing. */
-  const identity: Matrix2<Int> = Matrix2 Vector2(1, 0), Vector2(0, 1)
+  static identity: Matrix2<Int> = Matrix2 Vector2(1, 0), Vector2(0, 1)
 }
 
 /** The deterministic matrix's identity. */
 extend Matrix2<Fixed> {
   /** The transformation that changes nothing. */
-  const identity: Matrix2<Fixed> = Matrix2 Vector2(Fixed(65536), Fixed(0)), Vector2(Fixed(0), Fixed(65536))
+  static identity: Matrix2<Fixed> = Matrix2 Vector2(Fixed(65536), Fixed(0)), Vector2(Fixed(0), Fixed(65536))
 }

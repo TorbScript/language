@@ -63,22 +63,22 @@ The full shape of `Real`:
 
 ```trb fragment
 public trait Real with Signed {
-  fn squareRoot(self): Self
-  fn sine(self): Self
-  fn cosine(self): Self
-  fn tangent(self): Self
-  fn arcSine(self): Self
-  fn arcCosine(self): Self
-  fn arcTangent(self): Self
-  fn arcTangentDivided(self, by: Self): Self
-  fn floor(self): Self
-  fn ceiling(self): Self
-  fn round(self): Self
-  fn halved(self): Self
-  fn radiansOfDegrees(self): Self
-  fn degreesOfRadians(self): Self
-  fn unit(self): Self
-  fn doubled(self): Self { self + self }
+  fn squareRoot(): Self
+  fn sine(): Self
+  fn cosine(): Self
+  fn tangent(): Self
+  fn arcSine(): Self
+  fn arcCosine(): Self
+  fn arcTangent(): Self
+  fn arcTangentDivided(by: Self): Self
+  fn floor(): Self
+  fn ceiling(): Self
+  fn round(): Self
+  fn halved(): Self
+  fn radiansOfDegrees(): Self
+  fn degreesOfRadians(): Self
+  fn unit(): Self
+  fn doubled(): Self { self + self }
 }
 ```
 
@@ -100,7 +100,7 @@ either. Each implementor carries its own exact factor, which for `Fixed` is a pr
 division.
 
 `Real` deliberately does **not** carry the constants `pi`, `tau` or `epsilon`. A trait cannot require a `const` at all
-("A binding needs a value: there are no uninitialized bindings"), and requiring them as static functions would clash with
+("A binding needs a value: there are no uninitialized bindings"), and requiring them as `static fn`s would clash with
 the `const pi: Float64` that `Float64` already has and is the nicer spelling. They stay `const`s on each scalar —
 `Float64.pi`, `Fixed.pi`, `Fixed.tau` — under exactly those names, so that a future trait constant can absorb them
 without renaming anything. Where generic code needs pi, it takes `arcCosine` of minus one, which is pi by definition;
@@ -416,7 +416,7 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
    either way.
 7. **A static member cannot be reached through a type parameter.** `Scalar.zero()` inside a generic body answers
    `Unknown name Scalar` in the interpreter, and `Vector2.from(other)` through `From` reports "a call of a trait member
-   without a receiver" in the back end. This is what makes `Real.unit(self)` an instance member that ignores `self`, and
+   without a receiver" in the back end. This is what makes `Real.unit()` an instance member that ignores `self`, and
    what makes a `From` between two instantiations unreachable.
 8. **`Float32` cannot carry `Real`.** It has no `squareRoot`, the C back end marks all eleven of its arithmetic members
    planned, and there is **no conversion from a `Float64` down to a `Float32`** at all, so no body can be written for one
@@ -428,7 +428,7 @@ type checks and which `torb build` rejects; the rest quote the diagnostic that i
 10. **A trait cannot require a constant.** `const pi: Self` inside a trait reports "A binding needs a value: there are no
     uninitialized bindings and no default values". With it, `Real` would carry `pi`, `tau` and `epsilon` under the names
     the scalars already use, and `Scalar.pi` would work in a generic body.
-11. **A member-level `where` clause on a method of a generic `type` adds nothing.** `fn manhattanLength(self): Scalar
+11. **A member-level `where` clause on a method of a generic `type` adds nothing.** `fn manhattanLength(): Scalar
     where Scalar: Signed` inside `type Vector2<Scalar: Numeric>` reports "`Scalar` has no member `absolute`" in its own
     body, although the documentation describes exactly that form for a trait member. The library uses a conditional
     `extend` instead, which is the better spelling anyway.

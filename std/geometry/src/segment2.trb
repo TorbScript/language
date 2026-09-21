@@ -32,17 +32,17 @@ public type Segment2<Scalar: Numeric = Float> {
   to: Vector2<Scalar>
 
   /** The step from one end to the other. */
-  fn step(self): Vector2<Scalar> {
+  fn step(): Vector2<Scalar> {
     to.subtract(from)
   }
 
   /** Which side of the segment's line the point is on: positive on the left of the step, zero exactly on the line. */
-  fn sideOf(self, point: Vector2<Scalar>): Scalar {
+  fn sideOf(point: Vector2<Scalar>): Scalar {
     step().cross(point.subtract(from))
   }
 
   /** The smallest rectangle that holds the segment. Its size is zero on an axis the segment does not cross. */
-  fn bounds(self): Rectangle<Scalar> {
+  fn bounds(): Rectangle<Scalar> {
     Rectangle.between(from, to)
   }
 
@@ -52,7 +52,7 @@ public type Segment2<Scalar: Numeric = Float> {
    * Two segments that lie on one line count as crossing only where they overlap, which is the case a sign test alone
    * cannot answer - so that case is decided by the bounding rectangles.
    */
-  fn intersects(self, other: Segment2<Scalar>): Bool {
+  fn intersects(other: Segment2<Scalar>): Bool {
     const nothing = zeroOf(from.x)
     const first = sideOf other.from
     const second = sideOf other.to
@@ -68,7 +68,7 @@ public type Segment2<Scalar: Numeric = Float> {
 /** What a sign buys: the length along the axes. */
 extend<Scalar: Signed> Segment2<Scalar> {
   /** The length of the step along the axes, `|x| + |y|`. */
-  fn manhattanLength(self): Scalar {
+  fn manhattanLength(): Scalar {
     step().manhattanLength()
   }
 }
@@ -76,27 +76,27 @@ extend<Scalar: Signed> Segment2<Scalar> {
 /** What a root buys: lengths, the nearest point and the crossing point. */
 extend<Scalar: Real> Segment2<Scalar> {
   /** How long the segment is. */
-  fn length(self): Scalar {
+  fn length(): Scalar {
     step().length()
   }
 
   /** The direction from one end to the other, with length one. A segment of no length answers a zero vector. */
-  fn direction(self): Vector2<Scalar> {
+  fn direction(): Vector2<Scalar> {
     step().normalized()
   }
 
   /** The midpoint. */
-  fn center(self): Vector2<Scalar> {
+  fn center(): Vector2<Scalar> {
     from.interpolated toward: to, by: from.x.unit().halved()
   }
 
   /** The point `factor` of the way along the segment: `0` is `from` and `1` is `to`. */
-  fn at(self, factor: Scalar): Vector2<Scalar> {
+  fn at(factor: Scalar): Vector2<Scalar> {
     from.interpolated toward: to, by: factor
   }
 
   /** The point of the segment that is nearest to the one given. */
-  fn closestPoint(self, to: Vector2<Scalar>): Vector2<Scalar> {
+  fn closestPoint(to: Vector2<Scalar>): Vector2<Scalar> {
     const along = step()
     const size: Scalar = along.lengthSquared()
     if size == zeroOf(size) {
@@ -108,7 +108,7 @@ extend<Scalar: Real> Segment2<Scalar> {
   }
 
   /** The distance from the point to the nearest point of the segment. */
-  fn distanceTo(self, point: Vector2<Scalar>): Scalar {
+  fn distanceTo(point: Vector2<Scalar>): Scalar {
     point.distanceTo closestPoint(to: point)
   }
 
@@ -118,7 +118,7 @@ extend<Scalar: Real> Segment2<Scalar> {
    *     const across = Segment2 Vector2(0.0, -1.0), Vector2(0.0, 1.0)
    *     print Segment2 Vector2(-1.0, 0.0), Vector2(1.0, 0.0)).intersection(across
    */
-  fn intersection(self, other: Segment2<Scalar>): Vector2<Scalar>? {
+  fn intersection(other: Segment2<Scalar>): Vector2<Scalar>? {
     const along = step()
     const across = other.step()
     const twist: Scalar = along.cross across

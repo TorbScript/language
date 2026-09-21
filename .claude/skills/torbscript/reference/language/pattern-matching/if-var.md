@@ -23,7 +23,7 @@ problem.
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -56,7 +56,7 @@ while var <pattern> = <place> { ... }
    argument of a `var` parameter is allowed here: a `var` binding, a field of one, an index, a slice. A `const`
    binding, a temporary, or the result of a call is not a `var` path, and none of them can stand after `if var`.
 
-3. **The body runs inside a `var` access to the matched part of `place`.** A method that needs `var self`, such as
+3. **The body runs inside a `var` access to the matched part of `place`.** A method that is a `var fn`, such as
    `increment` above, can be called on the bound name precisely because the pattern reached it through a `var` path
    and not through a copy.
 
@@ -74,7 +74,7 @@ difference, which is why picking the wrong one is easy to miss until a write sil
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -94,7 +94,7 @@ run()
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }

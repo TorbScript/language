@@ -33,7 +33,7 @@ public type Price {
 
 /** DERIVED for `Price`. */
 extend Price with Encode, Decode, Describe {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.record "lab/Price"
     target.field "amount"
     encoded amount, target
@@ -42,7 +42,7 @@ extend Price with Encode, Decode, Describe {
     target.finish()
   }
 
-  fn decode<Source: Decoder>(var source: Source): Result<Price, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Price, DecodeError> {
     source.record("lab/Price")?
     const amount = requiredField(source, "amount", { inner => inner.float() })?
     const currency = requiredField(source, "currency", { inner => inner.string() })?
@@ -50,7 +50,7 @@ extend Price with Encode, Decode, Describe {
     Ok Price(amount: amount, currency: currency)
   }
 
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     if !target.record("lab/Price") {
       return
     }
@@ -70,14 +70,14 @@ extend Price with Encode, Decode, Describe {
 public type Email with TryFrom<String, String> {
   private value: String
 
-  fn tryFrom(value: String): Result<Email, String> {
+  static fn tryFrom(value: String): Result<Email, String> {
     if !value.contains("@") {
       return Fail "'{value}' is not an email address"
     }
     Ok Self(value)
   }
 
-  fn text(self): String {
+  fn text(): String {
     value
   }
 }
@@ -93,20 +93,20 @@ public type Email with TryFrom<String, String> {
  * the invariant holds for a decoded value too.
  */
 extend Email with Encode, Decode, Describe {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.record "lab/Email"
     encoded value, target
     target.finish()
   }
 
-  fn decode<Source: Decoder>(var source: Source): Result<Email, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Email, DecodeError> {
     source.record("lab/Email")?
     const text = source.string()?
     source.finish()?
     Email.tryFrom(text).mapError { message => DecodeError message }
   }
 
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     if !target.record("lab/Email") {
       return
     }
@@ -127,7 +127,7 @@ public type Status {
 
 /** DERIVED for a type with cases: `variant` instead of `record`, and the case's own fields inside it. */
 extend Status with Encode, Decode, Describe {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     match self {
       .Draft => target.variant "lab/Status", "Draft"
       .Shipped => target.variant "lab/Status", "Shipped"
@@ -140,7 +140,7 @@ extend Status with Encode, Decode, Describe {
     target.finish()
   }
 
-  fn decode<Source: Decoder>(var source: Source): Result<Status, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Status, DecodeError> {
     const name = source.variant("lab/Status")?
     const found = match name {
       "Draft" => Status.Draft
@@ -154,7 +154,7 @@ extend Status with Encode, Decode, Describe {
     Ok found
   }
 
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     if !target.variant("lab/Status") {
       return
     }
@@ -200,7 +200,7 @@ public type Order {
  * of the constructor from outside and therefore not part of any of the three forms. No annotation said so.
  */
 extend Order with Encode, Decode, Describe {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.record "lab/Order"
     target.field "id"
     encoded id, target
@@ -219,7 +219,7 @@ extend Order with Encode, Decode, Describe {
     target.finish()
   }
 
-  fn decode<Source: Decoder>(var source: Source): Result<Order, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Order, DecodeError> {
     source.record("lab/Order")?
     const id = requiredField(source, "id", { inner => inner.int() })?
     const customer = requiredField(source, "customer", Email.decode)?
@@ -232,7 +232,7 @@ extend Order with Encode, Decode, Describe {
     Ok Order(id: id, customer: customer, price: price, status: status, note: note, tags: tags, logLabel: logLabel)
   }
 
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     if !target.record("lab/Order") {
       return
     }
@@ -303,7 +303,7 @@ public type Shipment {
 
 /** DERIVED for `Shipment`. */
 extend Shipment with Encode, Decode, Describe {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.record "lab/Shipment"
     target.field "orderId"
     encoded orderId, target
@@ -318,7 +318,7 @@ extend Shipment with Encode, Decode, Describe {
     target.finish()
   }
 
-  fn decode<Source: Decoder>(var source: Source): Result<Shipment, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Shipment, DecodeError> {
     source.record("lab/Shipment")?
     const orderId = requiredField(source, "orderId", { inner => inner.int() })?
     const recipient = requiredField(source, "recipient", Email.decode)?
@@ -329,7 +329,7 @@ extend Shipment with Encode, Decode, Describe {
     Ok Shipment(orderId: orderId, recipient: recipient, price: price, tracking: tracking, express: express)
   }
 
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     if !target.record("lab/Shipment") {
       return
     }
@@ -367,7 +367,7 @@ public type Page<Item> {
 
 /** DERIVED, and conditional: `Page<Order>` is `Encode` because `Order` is. */
 extend<Item: Encode> Page<Item> with Encode {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.record "lab/Page"
     target.field "items"
     encoded items, target
@@ -382,7 +382,7 @@ extend<Item: Encode> Page<Item> with Encode {
  * reached through a bound. It type checks. `main.trb` exercises the monomorphized form.
  */
 extend<Item: Decode> Page<Item> with Decode {
-  fn decode<Source: Decoder>(var source: Source): Result<Page<Item>, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Page<Item>, DecodeError> {
     source.record("lab/Page")?
     const items = requiredField(source, "items", { inner => decodeSequence inner, Item.decode })?
     const total = optionalField(source, "total", 0, { inner => inner.int() })?
@@ -393,7 +393,7 @@ extend<Item: Decode> Page<Item> with Decode {
 
 /** DERIVED, same condition and the same limit on stage 0. */
 extend<Item: Describe> Page<Item> with Describe {
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     if !target.record("lab/Page") {
       return
     }
@@ -421,7 +421,7 @@ public type Category {
 
 /** DERIVED. The second `record("lab/Category")` answers `false`, so the walk stops and refers to the name. */
 extend Category with Encode, Describe {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.record "lab/Category"
     target.field "name"
     encoded name, target
@@ -430,7 +430,7 @@ extend Category with Encode, Describe {
     target.finish()
   }
 
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     if !target.record("lab/Category") {
       return
     }

@@ -15,7 +15,7 @@ public type Component {
   case Tag(name: String)
 
   /** Components are stored by kind, an entity has at most one component of each kind. */
-  fn kind(self): ComponentKind {
+  fn kind(): ComponentKind {
     match self {
       .Transform(_, _) => ComponentKind.Transform
       .Velocity(_) => ComponentKind.Velocity
@@ -50,45 +50,45 @@ public type Entity {
   id: EntityId
   private(var) components: Map<ComponentKind, Component> = [:]
 
-  fn attach(var self, component: Component) {
+  var fn attach(component: Component) {
     components[component.kind()] = component
   }
 
-  fn detach(var self, kind: ComponentKind) {
+  var fn detach(kind: ComponentKind) {
     components.remove kind
   }
 
-  fn attached(self, component: Component): Entity {
+  fn attached(component: Component): Entity {
     var result = self
     result.attach component
     result
   }
 
-  fn detached(self, kind: ComponentKind): Entity {
+  fn detached(kind: ComponentKind): Entity {
     var result = self
     result.detach kind
     result
   }
 
-  fn has(self, kind: ComponentKind): Bool {
+  fn has(kind: ComponentKind): Bool {
     components.containsKey kind
   }
 
-  fn position(self): Vector2? {
+  fn position(): Vector2? {
     match components.get(ComponentKind.Transform) {
       Some(.Transform(position, _)) => Some position
       _ => None
     }
   }
 
-  fn velocity(self): Vector2? {
+  fn velocity(): Vector2? {
     match components.get(ComponentKind.Velocity) {
       Some(.Velocity(value)) => Some value
       _ => None
     }
   }
 
-  fn health(self): Int? {
+  fn health(): Int? {
     match components.get(ComponentKind.Health) {
       Some(.Health(current, _)) => Some current
       _ => None

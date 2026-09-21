@@ -22,7 +22,7 @@ is the only way to give somebody else's type new behaviour.
 
 ```trb check
 trait Shape {
-  fn area(self): Float
+  fn area(): Float
 }
 
 type Circle {
@@ -30,13 +30,13 @@ type Circle {
 }
 
 extend Circle with Shape {
-  fn area(self): Float {
+  fn area(): Float {
     Float.pi * radius * radius
   }
 }
 
 extend String {
-  fn shout(self): String {
+  fn shout(): String {
     "{toUpperCase()}!"
   }
 }
@@ -110,7 +110,7 @@ extend<<parameters>> <Name><<arguments>> [with <Trait>] [where <bounds>] { ... }
 
    ```trb check
    trait Loud {
-     fn shout(self): String
+     fn shout(): String
    }
 
    type Box<Item> {
@@ -118,7 +118,7 @@ extend<<parameters>> <Name><<arguments>> [with <Trait>] [where <bounds>] { ... }
    }
 
    extend<Item> Box<Item> with Loud where Item: Show {
-     fn shout(self): String {
+     fn shout(): String {
        "Box({item})"
      }
    }
@@ -134,7 +134,7 @@ the start.
 
 ```trb check
 extend String {
-  fn shout(self): String {
+  fn shout(): String {
     "{toUpperCase()}!"
   }
 }
@@ -144,17 +144,17 @@ print "hi".shout()
 
 ```trb error
 trait Loud {
-  fn shout(self): String
+  fn shout(): String
 }
 
 type Robot with Loud {
-  fn shout(self): String {
+  fn shout(): String {
     "BEEP"
   }
 }
 
 extend Robot with Loud {
-  fn shout(self): String {
+  fn shout(): String {
     "BOOP"
   }
 }

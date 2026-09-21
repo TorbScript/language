@@ -29,7 +29,7 @@ print "{fixed} {buffer}"
 
 That prints `[1, 2] [1, 2, 3]`. Assigning, passing and capturing a value is a **copy**, so two bindings never point at
 the same thing and a change happens exactly where it is written. Mutation needs a `var` all the way down: a `var`
-binding, `var` parameter or `var self`, then `var` fields. See [Bindings](reference/language/values-and-types/bindings.md) and
+binding, `var` parameter or a `var fn` receiver, then `var` fields. See [Bindings](reference/language/values-and-types/bindings.md) and
 [Why values instead of references](reference/explanation/why-values-instead-of-references.md).
 
 The one exception is a `shared type`, which has an identity: assigning it does not copy. Files, sockets and channels are
@@ -62,12 +62,16 @@ prints to standard error and exits with 101, and nothing else runs. See [Result]
 `type` is struct, class, enum and algebraic data type at once. Fields are `const` unless marked `var`; members are
 public unless marked `private`. `Equals`, `Hash`, `Show` and `copy` are generated.
 
+A member says what it is with two words in front of `fn`: nothing for a method, which does not list its receiver;
+`var fn` for one that changes it; `static` for one that belongs to the type (`static fn square(size: Int): Self`,
+`static origin = Point(0, 0)`). See [Methods and `static fn`s](reference/language/types/methods.md).
+
 ```trb
 type Shape {
   case Circle(radius: Float)
   case Rectangle(width: Float, height: Float)
 
-  fn area(self): Float {
+  fn area(): Float {
     match self {
       .Circle(radius) => math.pi * radius * radius
       .Rectangle(width, height) => width * height
@@ -98,13 +102,13 @@ There is no inheritance. A trait with one required method is named after that me
 
 ```trb
 trait Area {
-  fn area(self): Float
+  fn area(): Float
 }
 
 type Square with Area {
   side: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     side * side
   }
 }
@@ -147,7 +151,7 @@ higher-kinded types. A closure is always `{ parameters => body }`, and `_`, `_2`
 
 | Your habit | In TorbScript |
 |------------|---------------|
-| `let mut` / `mutating func` | `var`, on the binding or on `self` |
+| `let mut` / `mutating func` | `var`, on the binding or in front of the `fn` |
 | a borrow, `&mut` | a copy, or a `var` parameter for the duration of one call |
 | `null`, `nil`, `undefined` | `Option<Value>`, and there is no implicit `Some` |
 | `throw` / `try` / `catch` | `Result`, `?`, and `panic` only for bugs |

@@ -46,7 +46,7 @@ print script.isOk()
 
 ```trb fragment
 public native type Sandbox {
-  fn load<Value>(
+  static fn load<Value>(
     path: String,
     capabilities: (var self: SandboxCapabilities) => Void = {},
   ): Result<Script<Value>, SandboxError>
@@ -61,7 +61,7 @@ is reported by `Script.apply` instead. The trailing block grants capabilities be
 
 ```trb fragment
 public native type Script<Value> {
-  fn apply(self, var value: Value): Result<Void, SandboxError>
+  fn apply(var value: Value): Result<Void, SandboxError>
 }
 ```
 
@@ -73,10 +73,10 @@ that is recoverable, because the sandbox interprets the script and the script ha
 
 ```trb fragment
 public native type SandboxCapabilities {
-  fn modules(var self, ...names: String)
-  fn files(var self, readOnly: String = "", readWrite: String = "")
-  fn environment(var self, ...patterns: String)
-  fn limits(var self, steps: Int = 1_000_000, memory: Int = 64.megabytes(), time: Duration = 2.seconds())
+  var fn modules(...names: String)
+  var fn files(readOnly: String = "", readWrite: String = "")
+  var fn environment(...patterns: String)
+  var fn limits(steps: Int = 1_000_000, memory: Int = 64.megabytes(), time: Duration = 2.seconds())
 }
 ```
 

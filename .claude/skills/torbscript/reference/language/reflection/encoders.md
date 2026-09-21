@@ -30,7 +30,7 @@ type Point {
 }
 
 extend Point with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.record("Point", { fields =>
       fields.field "x", x
       fields.field "y", y
@@ -45,19 +45,19 @@ print Json.encode(Point(1, 2))
 
 ```text
 trait Encoder {
-  fn nothing(var self)
-  fn bool(var self, value: Bool)
-  fn int(var self, value: Int64)
-  fn unsigned(var self, value: UInt64)
-  fn float(var self, value: Float64)
-  fn decimal(var self, value: Decimal)
-  fn string(var self, value: String)
-  fn bytes(var self, value: List<UInt8>)
+  var fn nothing()
+  var fn bool(value: Bool)
+  var fn int(value: Int64)
+  var fn unsigned(value: UInt64)
+  var fn float(value: Float64)
+  var fn decimal(value: Decimal)
+  var fn string(value: String)
+  var fn bytes(value: List<UInt8>)
 
-  fn sequence(var self, length: Int?, write: (var items: SequenceEncoder) => Void)
-  fn map(var self, length: Int?, write: (var entries: MapEncoder) => Void)
-  fn record(var self, typeName: String, write: (var fields: RecordEncoder) => Void)
-  fn variant(var self, typeName: String, name: String, write: (var fields: RecordEncoder) => Void)
+  var fn sequence(length: Int?, write: (var items: SequenceEncoder) => Void)
+  var fn map(length: Int?, write: (var entries: MapEncoder) => Void)
+  var fn record(typeName: String, write: (var fields: RecordEncoder) => Void)
+  var fn variant(typeName: String, name: String, write: (var fields: RecordEncoder) => Void)
 }
 ```
 
@@ -100,7 +100,7 @@ type Pair {
 }
 
 extend Pair with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.record("Pair", { fields =>
       fields.field "first", first
       fields.field "second", second
@@ -118,7 +118,7 @@ type Pair {
 }
 
 extend Pair with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.first
   }
 }

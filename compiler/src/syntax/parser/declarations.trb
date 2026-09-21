@@ -3,13 +3,13 @@
  * `use` and `foreign`, and [parseFunction] for the parameter list and body a function and a member share.
  */
 
-use TokenKind, Keyword, TextPart from "../token"
+use TokenKind, Keyword, TextPart, staticKeyword from "../token"
 use Declaration, DeclarationKind, Modifiers, Visibility, UseDeclaration, UseItem, UseItems, UseSource from "../ast"
 use FunctionDeclaration, Parameter, GenericParameter, WhereClause, TypeReference, TraitClause from "../ast"
 use TypeDeclaration, AliasDeclaration, TraitDeclaration, ExtendDeclaration, ForeignDeclaration from "../ast"
-use Member, MemberKind, Field, CaseDeclaration, Name from "../ast"
+use Member, MemberKind, Field, CaseDeclaration, Name, TypeKind, ExpressionKind from "../ast"
 use Parser from "./parser"
-use parseBlock, parseBinding from "./statements"
+use parseBlock, parseBinding, parseBindingBody from "./statements"
 use parseType, parseSingleType from "./types"
 use parseExpression, parseCommandExpression from "./expressions"
 
@@ -202,13 +202,35 @@ fn parseParameter(var parser: Parser): Parameter {
   const doc = parser.takeDoc()
   const isVariadic = parser.eat TokenKind.Ellipsis
   const isVar = parser.eatKeyword Keyword.Var
-  const name = if parser.isAtKeyword(Keyword.SelfValue) { parser.nameOrKeyword() } else { parser.name() }
+  // A method does not list its receiver: the parameter list is what the caller writes. `self` still stands in a
+  // function *type* (`(var self: Config) => Void`), which is parsed in `types.trb` and never reaches here.
+  if parser.isAtKeyword(Keyword.SelfValue) {
+    return parseWrittenReceiver parser, doc, isVar, isVariadic
+  }
+  const name = parser.name()
   const annotation = if parser.eat(TokenKind.Colon) { Some parseType(parser) } else { None }
-  if annotation.isNone() && name.text != "self" && !name.text.isEmpty() {
+  if annotation.isNone() && !name.text.isEmpty() {
     parser.error "The parameter `{name.text}` needs a type", name.span
   }
   const default = if parser.eat(TokenKind.Equal) { Some parseExpression(parser) } else { None }
   Parameter doc, name, isVar, isVariadic, annotation, default
+}
+
+/**
+ * `fn area()` and `var fn translate(...)`: the two spellings the language traded for `fn area()` and
+ * `var fn translate(...)`, each with the line it is written as now.
+ */
+fn parseWrittenReceiver(var parser: Parser, doc: String?, isVar: Bool, isVariadic: Bool): Parameter {
+  const written = parser.nameOrKeyword()
+  const note = if isVar {
+    "Write `var fn name(...)`: `var` says the method may change its receiver"
+  } else {
+    "Write `fn name(...)`: what stands in the parentheses is what the caller writes"
+  }
+  parser.errorWithNote "A method does not list `self`", note, written.span
+  const annotation = if parser.eat(TokenKind.Colon) { Some parseType(parser) } else { None }
+  // An empty name is the parser's placeholder: the member keeps the receiver it was given, not this one
+  Parameter doc, Name("", written.span), isVar, isVariadic, annotation, None
 }
 
 /** `<Key: Hash & Equals, Value = Self>`, `<const Size: Int>` */
@@ -313,7 +335,7 @@ fn parseTypeDeclaration(var parser: Parser): DeclarationKind {
   }
   const traits = parseDelegatedTraitList parser
   const whereClauses = parseWhereClauses parser
-  DeclarationKind.Type TypeDeclaration(name, generics, traits, whereClauses, parseMembers(parser))
+  DeclarationKind.Type TypeDeclaration(name, generics, traits, whereClauses, parseMembers(parser, hasReceiver: true))
 }
 
 fn parseTrait(var parser: Parser): DeclarationKind {
@@ -321,7 +343,7 @@ fn parseTrait(var parser: Parser): DeclarationKind {
   const name = parser.name()
   const generics = parseGenericParameters parser
   const supertraits = parseTraitList parser
-  DeclarationKind.Trait TraitDeclaration(name, generics, supertraits, parseMembers(parser))
+  DeclarationKind.Trait TraitDeclaration(name, generics, supertraits, parseMembers(parser, hasReceiver: true))
 }
 
 fn parseExtend(var parser: Parser): DeclarationKind {
@@ -330,17 +352,20 @@ fn parseExtend(var parser: Parser): DeclarationKind {
   const target = parseType parser
   const traits = parseTraitList parser
   const whereClauses = parseWhereClauses parser
-  DeclarationKind.Extend ExtendDeclaration(generics, target, traits, whereClauses, parseMembers(parser))
+  DeclarationKind.Extend ExtendDeclaration(generics, target, traits, whereClauses, parseMembers(parser, hasReceiver: true))
 }
 
 fn parseForeign(var parser: Parser): DeclarationKind {
   parser.bump()
   const library = parsePlainText parser, "the name of a library"
-  DeclarationKind.Foreign ForeignDeclaration(library, parseMembers(parser))
+  DeclarationKind.Foreign ForeignDeclaration(library, parseMembers(parser, hasReceiver: false))
 }
 
-/** `{ ... }` of a type, trait or extension. A missing body is an empty one (`native type Bool`). */
-fn parseMembers(var parser: Parser): List<Member> {
+/**
+ * `{ ... }` of a type, trait or extension. A missing body is an empty one (`native type Bool`). `hasReceiver` is
+ * false for a `foreign` block: what it holds are free functions of a C library, with no type to belong to.
+ */
+fn parseMembers(var parser: Parser, hasReceiver: Bool): List<Member> {
   var members: List<Member> = []
   // The body may start on its own line, after a long `with ...` or `where ...`
   if parser.isAt(TokenKind.Newline) && parser.kindAt(1) == TokenKind.BraceOpen {
@@ -355,7 +380,7 @@ fn parseMembers(var parser: Parser): List<Member> {
       break
     }
     const before = parser.position
-    members.add parseMember(parser)
+    members.add parseMember(parser, hasReceiver)
     if !parser.isAtEndOfStatement() {
       const found = parser.kind().describe()
       parser.errorHere "Expected the end of the member, found {found}"
@@ -369,13 +394,18 @@ fn parseMembers(var parser: Parser): List<Member> {
   members
 }
 
-fn parseMember(var parser: Parser): Member {
+fn parseMember(var parser: Parser, hasReceiver: Bool): Member {
   const doc = parser.takeDoc()
   const start = parser.span()
   const modifiers = parseModifiers parser
   const kind = match parser.kind() {
-    .Reserved(.Fn) => MemberKind.Function parseFunction(parser)
-    .Reserved(.Const) => MemberKind.Constant parseBinding(parser)
+    .Reserved(.Static) if hasReceiver => parseStaticMember parser
+    .Reserved(.Fn) => MemberKind.Function parseMethod(parser, hasReceiver, isVar: false)
+    .Reserved(.Var) if hasReceiver && parser.kindAt(1) == TokenKind.Reserved(Keyword.Fn) => {
+      parser.bump()
+      MemberKind.Function parseMethod(parser, true, isVar: true)
+    }
+    .Reserved(.Const) => parseConstantMember parser
     .Reserved(.Case) => {
       parser.bump()
       const name = parser.name()
@@ -392,6 +422,73 @@ fn parseMember(var parser: Parser): Member {
     }
   }
   Member doc, modifiers, kind, start.to(parser.previousSpan())
+}
+
+/**
+ * `fn area(): Int` and `var fn translate(deltaX: Int)`: the receiver is not written, so it is put back here. Its
+ * span is the name of the function, which is where a message about the receiver has to point.
+ */
+fn parseMethod(var parser: Parser, hasReceiver: Bool, isVar: Bool): FunctionDeclaration {
+  const function = parseFunction parser
+  if !hasReceiver {
+    return function
+  }
+  var parameters = [Parameter(None, Name("self", function.name.span), isVar, false, None, None)]
+  parameters.addAll function.parameters
+  function.copy parameters: parameters
+}
+
+/**
+ * `static origin = Point(0, 0)`, `static fn square(size: Int): Self`. `const` is what a member is without a word of
+ * its own, so `static const origin = ...` is the same thing written out.
+ */
+fn parseStaticMember(var parser: Parser): MemberKind {
+  const keyword = parser.span()
+  parser.bump()
+  if parser.isAtKeyword(Keyword.Var) {
+    const at = keyword.to parser.span()
+    parser.bump()
+    const note = "A type has no mutable state: what belongs to the type is a constant of it"
+    parser.errorWithNote "`{staticKeyword} var` does not exist", note, at
+  } else {
+    parser.eatKeyword Keyword.Const
+  }
+  if parser.isAt(TokenKind.Reserved(Keyword.Fn)) {
+    return MemberKind.Function parseFunction(parser)
+  }
+  const binding = parseBindingBody parser, None, false
+  // `static pi: Self` without a value: a trait that requires a constant is not in the language yet. A pattern and not
+  // `==`: comparing an `ExpressionKind` would ask the whole syntax tree for `Equals`, which nothing else needs.
+  if const .Invalid = binding.value.kind {
+    if binding.annotation.isSome() {
+      const note = "A trait cannot require one without a value yet: declare it in every implementation"
+      parser.errorWithNote "A constant of the type needs a value", note, binding.pattern.span
+    }
+  }
+  MemberKind.Constant binding
+}
+
+/**
+ * `const x: Int` is the long way to write the field `x: Int`. Without a type it names neither reading, and the
+ * message offers both.
+ */
+fn parseConstantMember(var parser: Parser): MemberKind {
+  const keyword = parser.span()
+  parser.bump()
+  if parser.kindAt(1) != TokenKind.Colon {
+    const name = parser.name()
+    const at = keyword.to name.span
+    const note = "A field is `{name.text}: Type`, a constant of the type is `{staticKeyword} {name.text} = ...`"
+    parser.errorWithNote "`{name.text}` is neither a field nor a constant of the type", note, at
+    const annotation = TypeReference TypeKind.Invalid, name.span
+    const default = if parser.eat(TokenKind.Equal) {
+      Some parser.withTrailingClosures(true, parseCommandExpression)
+    } else {
+      None
+    }
+    return MemberKind.Field Field(None, name, false, annotation, default)
+  }
+  MemberKind.Field parseField(parser, false)
 }
 
 fn parseField(var parser: Parser, isVar: Bool): Field {

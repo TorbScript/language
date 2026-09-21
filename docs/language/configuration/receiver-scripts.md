@@ -42,7 +42,7 @@ fn loadConfig(path: String): Result<ServerConfig, SandboxError> {
 
 ```text
 Sandbox.load<Value>(path: String): Result<Script<Value>, SandboxError>
-Script.apply(self, var value: Value): Result<Void, SandboxError>
+Script.apply(var value: Value): Result<Void, SandboxError>
 ```
 
 ## Rules

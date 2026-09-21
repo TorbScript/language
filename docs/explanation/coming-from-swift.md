@@ -28,14 +28,14 @@ enum cases never need an import, and its protocols can grow an associated type t
 | `let x = 1` / `var x = 1` | `const x = 1` / `var x = 1` | the same two words, but `const` freezes deeper than `let` does for a class |
 | `struct Point { }` | `type Point { }` | one keyword for every value type; there is no second keyword to reach for |
 | `class Connection { }` | `shared type Connection { }` | identity is the exception that says so, not a second family of types |
-| `mutating func increment()` | `fn increment(var self)` | the marker moves from the call site's implicit rule to the parameter itself |
+| `mutating func increment()` | `var fn increment()` | the same idea, one word earlier: `var fn` is Swift's `mutating func` |
 | `enum Shape { case circle(Double) }` | `type Shape { case Circle(radius: Float) }` | one keyword for structs and enums; a case is `UpperCamelCase` |
 | `case .circle(let radius):` | `.Circle(radius) =>` | the leading dot is the same habit; `match` replaces `switch` |
 | `Optional<Value>` / `Value?` | `Option<Value>` / `Value?` | the sugar looks the same; wrapping a value into it is never implicit |
 | `let x: Int? = 5` | `const x: Int? = Some(5)` | there is no implicit `Some` |
 | `guard let x = opt else { return }` | `const x = opt?` | `?` is the early return itself, not a statement that needs one |
 | `.success(value)` / `.failure(error)` | `Ok(value)` / `Fail(error)` | `Error` is the name of the trait, so the case is `Fail` |
-| `protocol Shape { func area() -> Double }` | `trait Shape { fn area(self): Float }` | one word, `trait`, replaces `protocol` |
+| `protocol Shape { func area() -> Double }` | `trait Shape { fn area(): Float }` | one word, `trait`, replaces `protocol` |
 | `extension Square: Area { }` | `extend Square with Area { }` | `with` is the only word for "implements" |
 | `import AcmeText`, and its extensions come along | `use String.shout from "acme/text"` | a member of a foreign type is named one at a time |
 | `while true { ... }` | `loop { ... }` | the endless loop has a word of its own, and `while true` is an error |
@@ -64,7 +64,7 @@ shared type Connection {
   url: String
   private(var) sent: Int = 0
 
-  fn send(var self, message: String) {
+  var fn send(message: String) {
     sent = sent + 1
   }
 }
@@ -85,7 +85,7 @@ shared type Connection {
   url: String
   private(var) sent: Int = 0
 
-  fn send(var self, message: String) {
+  var fn send(message: String) {
     sent = sent + 1
   }
 }
@@ -98,18 +98,18 @@ view.send "nope"
 ### Mutation is marked on the declaration, not the call
 
 Swift writes `mutating` once, on the function, and the compiler checks every call site against whether the variable
-is a `var`. TorbScript writes the same idea as `var self` on the parameter list, and the call-site check is the same
+is a `var`. TorbScript writes the same idea as `var fn` in front of the declaration, and the call-site check is the same
 rule as for a `var` field or a `var` parameter - it is not a special case for methods:
 
 ```trb
 type Counter {
   var value: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     value = value + 1
   }
 
-  fn incremented(self): Counter {
+  fn incremented(): Counter {
     copy(value: value + 1)
   }
 }
@@ -127,7 +127,7 @@ the message names the non-mutating twin when the standard library has one:
 type Counter {
   var value: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     value = value + 1
   }
 }
@@ -195,7 +195,7 @@ a `type` or a `fn`, and the trait stays a plain type with that parameter filled 
 
 ```trb check
 trait Convert<Target> {
-  fn convert(self): Target
+  fn convert(): Target
 }
 
 type Fahrenheit {
@@ -205,7 +205,7 @@ type Fahrenheit {
 type Celsius with Convert<Float> {
   degrees: Float
 
-  fn convert(self): Float {
+  fn convert(): Float {
     degrees
   }
 }
@@ -227,7 +227,7 @@ lists what carries over would be an advertisement.
   optional anywhere. Unwrap with `?`, `??`, `expect(message)`, or take the value apart with `match`; see
   [Option](../language/values-and-types/option.md).
 - **`willSet`/`didSet` property observers.** A field has no hook that runs on assignment. Code that watched for a
-  change goes into the verb that makes the change (`fn deposit(var self, amount: Int) { ... }`) instead of reacting
+  change goes into the verb that makes the change (`var fn deposit(amount: Int) { ... }`) instead of reacting
   to it afterwards.
 - **Computed properties (`var area: Double { ... }`) and their `get`/`set` blocks.** There are no properties: a field
   is storage and a method computes, and the parentheses say which one you are looking at

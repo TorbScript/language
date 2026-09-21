@@ -141,7 +141,7 @@ type Lexer {
   var docs: List<DocComment> = []
   var diagnostics: List<Diagnostic> = []
 
-  fn run(var self) {
+  var fn run() {
     while const Some(character) = peek() {
       const start = position
       match character {
@@ -169,11 +169,11 @@ type Lexer {
     push TokenKind.EndOfFile, last
   }
 
-  fn peek(self): Char? {
+  fn peek(): Char? {
     peekAt 0
   }
 
-  fn peekAt(self, offset: Int): Char? {
+  fn peekAt(offset: Int): Char? {
     const index = position + offset
     if index < end {
       Some source.characters[index]
@@ -183,12 +183,12 @@ type Lexer {
   }
 
   /** Does the rest of the input start with this text? */
-  fn isAt(self, text: String): Bool {
+  fn isAt(text: String): Bool {
     textStartsAt position, text
   }
 
   /** Does the input starting at `offset` start with this text? */
-  fn textStartsAt(self, offset: Int, text: String): Bool {
+  fn textStartsAt(offset: Int, text: String): Bool {
     var index = offset
     for expected in text.chars() {
       if index >= end || source.characters[index] != expected {
@@ -200,26 +200,26 @@ type Lexer {
   }
 
   /** The span from a character index to the current position. */
-  fn spanFrom(self, start: Int): Span {
+  fn spanFrom(start: Int): Span {
     Span source.offsets[start], source.offsets[position]
   }
 
-  fn push(var self, kind: TokenKind, start: Int) {
+  var fn push(kind: TokenKind, start: Int) {
     tokens.add Token(kind, spanFrom(start))
   }
 
-  fn error(var self, message: String, start: Int) {
+  var fn error(message: String, start: Int) {
     const last = position.max(start + 1).min(source.characters.length())
     diagnostics.add Diagnostic.error(message, Span(source.offsets[start], source.offsets[last]))
   }
 
-  fn errorWithNote(var self, message: String, note: String, start: Int) {
+  var fn errorWithNote(message: String, note: String, start: Int) {
     const last = position.max(start + 1).min(source.characters.length())
     const problem = Diagnostic.error message, Span(source.offsets[start], source.offsets[last])
     diagnostics.add problem.withNote(note)
   }
 
-  fn skipLineComment(var self) {
+  var fn skipLineComment() {
     while const Some(character) = peek() {
       if character == '\n' {
         return
@@ -229,7 +229,7 @@ type Lexer {
   }
 
   /** Block comments do not nest: the first star-slash ends the comment. */
-  fn skipBlockComment(var self) {
+  var fn skipBlockComment() {
     const start = position
     position = position + 2
     while position < end {
@@ -251,7 +251,7 @@ type Lexer {
    * letters from another script in it is **one** diagnostic and not one per character, and the token stays an
    * `Identifier` so that nothing else is reported about the line it stands in.
    */
-  fn word(var self, start: Int) {
+  var fn word(start: Int) {
     while const Some(character) = peek() {
       if !isWordPart(character) {
         break
@@ -273,7 +273,7 @@ type Lexer {
     push kind, start
   }
 
-  fn number(var self, start: Int) {
+  var fn number(start: Int) {
     const isAfterDot = tokens.last()?.kind == Some(TokenKind.Dot)
     if isAt("0x") || isAt("0b") {
       position = position + 2
@@ -301,7 +301,7 @@ type Lexer {
     push kind, start
   }
 
-  fn digits(var self, accepts: (Char) => Bool) {
+  var fn digits(accepts: (Char) => Bool) {
     while const Some(character) = peek() {
       if character != '_' && !accepts(character) {
         break
@@ -310,7 +310,7 @@ type Lexer {
     }
   }
 
-  fn characterLiteral(var self, start: Int) {
+  var fn characterLiteral(start: Int) {
     position = position + 1
     const value = match peek() {
       Some('\\') => {
@@ -335,7 +335,7 @@ type Lexer {
   }
 
   /** Reads what follows a `\`. */
-  fn escape(var self): Char? {
+  var fn escape(): Char? {
     const start = position - 1
     const character = peek()?
     position = position + 1
@@ -355,7 +355,7 @@ type Lexer {
   }
 
   /** `\u{1F44B}`. The position is at the `{`. `None` if the `}` is missing. */
-  fn unicodeEscape(var self, start: Int): Char? {
+  var fn unicodeEscape(start: Int): Char? {
     var close = position
     while close < end && source.characters[close] != '}' {
       close = close + 1
@@ -376,7 +376,7 @@ type Lexer {
   }
 
   /** `"..."`, `"""..."""`, and their raw variants `r"..."`, `r"""..."""`. The position is at the first quote. */
-  fn textLiteral(var self, start: Int, raw: Bool) {
+  var fn textLiteral(start: Int, raw: Bool) {
     const quotes = if isAt("\"\"\"") { "\"\"\"" } else { "\"" }
     const isTripleQuoted = quotes != "\""
     position = position + quotes.byteLength()
@@ -445,7 +445,7 @@ type Lexer {
    * contains a raw line break before the closing quotes. An interpolation cannot contain one, so this is enough to
    * tell a one-line `"""text"""` apart from a real block. Leaves `position` unchanged.
    */
-  fn hasMultipleLines(var self, raw: Bool): Bool {
+  var fn hasMultipleLines(raw: Bool): Bool {
     const saved = position
     var found = false
     while const Some(character) = peek() {
@@ -476,7 +476,7 @@ type Lexer {
    * Advances past an escape sequence without decoding it. Used only to look for a raw line break before the real,
    * diagnostic-producing `escape` runs (which happens later, once dedenting is settled).
    */
-  fn skipRawEscape(var self) {
+  var fn skipRawEscape() {
     const character = peek()
     if character.isNone() {
       return
@@ -494,7 +494,7 @@ type Lexer {
   }
 
   /** The number of `' '`/`'\t'` characters starting at `position`. */
-  fn indentLength(self): Int {
+  fn indentLength(): Int {
     var offset = 0
     loop {
       if peekAt(offset) != Some(' ') && peekAt(offset) != Some('\t') {
@@ -508,7 +508,7 @@ type Lexer {
    * Rule 1 of multi-line strings: a line break directly after the opening `"""` (optionally after trailing
    * spaces) is not part of the string.
    */
-  fn skipLeadingLineBreak(var self) {
+  var fn skipLeadingLineBreak() {
     const length = indentLength()
     if peekAt(length) == Some('\r') && peekAt(length + 1) == Some('\n') {
       position = position + length + 2
@@ -523,7 +523,7 @@ type Lexer {
    * blank line, or the line of a lone closing `"""`). A line indented less than the reference, or whose
    * indentation is not the reference followed by more, is a lexer error and is left exactly as written.
    */
-  fn dedentLine(var self, var reference: String?) {
+  var fn dedentLine(var reference: String?) {
     const length = indentLength()
     const hasNoContent = peekAt(length) == Some('\n') || peekAt(length) == Some('\r') || textStartsAt(position + length, "\"\"\"")
     if hasNoContent {
@@ -549,7 +549,7 @@ type Lexer {
   }
 
   /** Moves behind the `}` that closes an interpolation. Braces and strings inside of it may nest. */
-  fn skipInterpolation(var self): Bool {
+  var fn skipInterpolation(): Bool {
     var depth = 1
     while const Some(character) = peek() {
       position = position + 1
@@ -573,7 +573,7 @@ type Lexer {
     false
   }
 
-  fn skipNestedString(var self) {
+  var fn skipNestedString() {
     while const Some(inner) = peek() {
       position = position + 1
       if inner == '\\' && peek().isSome() {
@@ -592,7 +592,7 @@ type Lexer {
    * as a place rather than a value (`Capture.Place`, see the note of 6.1 in docs/BACKEND.md), and this is the only
    * site in the compiler that needs it.
    */
-  fn punctuationAt(self): (String, TokenKind)? {
+  fn punctuationAt(): (String, TokenKind)? {
     for entry in punctuationTable {
       if isAt(entry.0) {
         return Some entry
@@ -601,7 +601,7 @@ type Lexer {
     None
   }
 
-  fn punctuation(var self, start: Int, character: Char) {
+  var fn punctuation(start: Int, character: Char) {
     const (text, kind) = match punctuationAt() {
       Some(entry) => entry
       None => {

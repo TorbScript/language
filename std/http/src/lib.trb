@@ -54,7 +54,7 @@ public shared type Response {
   /**
    * Decodes the body as JSON. A `Task`, because the body arrives over the network and decoding it means reading it.
    */
-  fn json<Value: Decode>(var self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
+  var fn json<Value: Decode>(limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
     body.json<Value>(limit: limit).await()
   }
 }
@@ -75,22 +75,22 @@ public shared type Body with Source<Bytes, HttpError> {
    * 16 MiB: large enough for any document a program means to hold in one piece, small enough that a response nobody
    * expected is refused instead of filling the machine. Streaming is the way past it, not a bigger number.
    */
-  const defaultLimit: Int = 16777216
+  static defaultLimit: Int = 16777216
 
   private var reading: Source<Bytes, HttpError>
 
   /** The next chunk, or `None` at the end of the body. Most callers reach for [Body.bytes] or [Body.text] instead. */
-  fn next(var self): Task<Result<Bytes?, HttpError>> {
+  var fn next(): Task<Result<Bytes?, HttpError>> {
     reading.next().await()
   }
 
   /** Releases the underlying connection without reading the rest of the body. */
-  fn close(var self) {
+  var fn close() {
     reading.close()
   }
 
   /** The whole body. More than `limit` bytes is an `HttpError` and the rest is not read. */
-  fn bytes(var self, limit: Int = Body.defaultLimit): Task<Result<Bytes, HttpError>> {
+  var fn bytes(limit: Int = Body.defaultLimit): Task<Result<Bytes, HttpError>> {
     var collected: Bytes = []
     while const Some(chunk) = next().await()? {
       if collected.length() + chunk.length() > limit {
@@ -102,19 +102,19 @@ public shared type Body with Source<Bytes, HttpError> {
   }
 
   /** The whole body as text. Bytes that are not UTF-8 are an `HttpError`, never a replacement character. */
-  fn text(var self, limit: Int = Body.defaultLimit): Task<Result<String, HttpError>> {
+  var fn text(limit: Int = Body.defaultLimit): Task<Result<String, HttpError>> {
     const raw = bytes(limit: limit).await()?
     textOf(raw).mapError(HttpError.invalidText)
   }
 
   /** The whole body, decoded as JSON: `response.body.json<User>().await()?` */
-  fn json<Value: Decode>(var self, limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
+  var fn json<Value: Decode>(limit: Int = Body.defaultLimit): Task<Result<Value, HttpError>> {
     const document = text(limit: limit).await()?
     Json.decode<Value>(document).mapError(HttpError.decodeFailed)
   }
 
   /** Lines of text, as a stream: a log, an event stream, a CSV of any size. */
-  fn lines(var self): Source<String, HttpError> {
+  var fn lines(): Source<String, HttpError> {
     through(streamLines()).checked()
   }
 
@@ -122,12 +122,12 @@ public shared type Body with Source<Bytes, HttpError> {
    * A body of any size - what an upload or a proxy hands on. Not `Body.from(source)`: `From.from` takes its argument by
    * value, and handing a stream over needs the permission to read it (`var`), because the `Body` reads it from now on.
    */
-  fn of(var source: Source<Bytes, HttpError>): Body {
+  static fn of(var source: Source<Bytes, HttpError>): Body {
     Body source
   }
 
   /** A body with nothing in it, e.g. for a `GET` request. */
-  fn empty(): Body {
+  static fn empty(): Body {
     const nothing: List<Bytes> = []
     Body Source.from(nothing)
   }
@@ -136,21 +136,21 @@ public shared type Body with Source<Bytes, HttpError> {
    * An `Encode` value as a JSON body. Not `Body.json(value)`: a type has one namespace for its members, and `json` is
    * taken by the reading side, where it matters more (`body.json<User>()`).
    */
-  fn jsonOf(value: Encode): Body {
+  static fn jsonOf(value: Encode): Body {
     Body.from Json.encode(value)
   }
 }
 
 /** `Body.from("hello")` - the text as UTF-8. */
 extend Body with From<String> {
-  fn from(value: String): Body {
+  static fn from(value: String): Body {
     Body.from value.bytes().toList()
   }
 }
 
 /** `Body.from(bytes)` - one chunk, already in memory. */
 extend Body with From<Bytes> {
-  fn from(value: Bytes): Body {
+  static fn from(value: Bytes): Body {
     Body Source.from([value])
   }
 }
@@ -165,42 +165,42 @@ public type HttpError with Show, Error {
   private kind: HttpErrorKind
 
   /** The server did not respond in time. */
-  fn timeout(): HttpError {
+  static fn timeout(): HttpError {
     Self kind: .Timeout
   }
 
   /** The request never reached a server (DNS, refused connection, broken transport, ...). */
-  fn connectionFailed(message: String): HttpError {
+  static fn connectionFailed(message: String): HttpError {
     Self kind: .ConnectionFailed(message)
   }
 
   /** The server responded, but not with success. */
-  fn status(code: Int, message: String): HttpError {
+  static fn status(code: Int, message: String): HttpError {
     Self kind: .Status(code, message)
   }
 
   /** `url` could not be parsed as a request at all. */
-  fn invalidUrl(message: String): HttpError {
+  static fn invalidUrl(message: String): HttpError {
     Self kind: .InvalidUrl(message)
   }
 
   /** `Response.json` failed: the body was not the JSON `Value` expected. */
-  fn decodeFailed(cause: JsonError): HttpError {
+  static fn decodeFailed(cause: JsonError): HttpError {
     Self kind: .Decode(cause)
   }
 
   /** A body that was read in one piece was longer than the limit that was given. */
-  fn tooLarge(limit: Int): HttpError {
+  static fn tooLarge(limit: Int): HttpError {
     Self kind: .TooLarge(limit)
   }
 
   /** The bytes of the body are not UTF-8, so they are not a `String`. */
-  fn invalidText(cause: Utf8Error): HttpError {
+  static fn invalidText(cause: Utf8Error): HttpError {
     Self kind: .InvalidText(cause)
   }
 
   /** Whether the server did not respond in time. */
-  fn isTimeout(self): Bool {
+  fn isTimeout(): Bool {
     match kind {
       .Timeout => true
       _ => false
@@ -208,7 +208,7 @@ public type HttpError with Show, Error {
   }
 
   /** Worth trying again unchanged: timeouts, connection failures, `5xx` responses. */
-  fn isRetryable(self): Bool {
+  fn isRetryable(): Bool {
     match kind {
       .Timeout => true
       .ConnectionFailed(_) => true
@@ -218,7 +218,7 @@ public type HttpError with Show, Error {
   }
 
   /** The status code, if the request reached the server at all. */
-  fn statusCode(self): Int? {
+  fn statusCode(): Int? {
     match kind {
       .Status(code, _) => Some code
       _ => None
@@ -226,7 +226,7 @@ public type HttpError with Show, Error {
   }
 
   /** A message naming what went wrong, e.g. `"404: Not Found"` or `"request timed out"`. */
-  fn show(self): String {
+  fn show(): String {
     match kind {
       .Timeout => "request timed out"
       .ConnectionFailed(message) => "connection failed: {message}"
@@ -239,7 +239,7 @@ public type HttpError with Show, Error {
   }
 
   /** The failure a rejected body carries, so a report can unwind the chain down to the field or the byte. */
-  fn cause(self): Error? {
+  fn cause(): Error? {
     match kind {
       .Decode(problem) => Some problem
       .InvalidText(problem) => Some problem
@@ -260,14 +260,14 @@ type HttpErrorKind {
 
 /** What makes `body.lines()` work: a stage over bytes, so it needs nothing of HTTP. */
 extend HttpError with From<Utf8Error> {
-  fn from(value: Utf8Error): HttpError {
+  static fn from(value: Utf8Error): HttpError {
     HttpError.invalidText value
   }
 }
 
 /** ...and what makes `body.through(Json.items<User>()).checked()` work without naming a second failure type. */
 extend HttpError with From<JsonError> {
-  fn from(value: JsonError): HttpError {
+  static fn from(value: JsonError): HttpError {
     HttpError.decodeFailed value
   }
 }

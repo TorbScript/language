@@ -48,8 +48,8 @@ public native type Expression<Value> {
   source: String
   location: SourceLocation
 
-  fn value(self): Value
-  fn captures(self): List<Encode>
+  fn value(): Value
+  fn captures(): List<Encode>
 }
 ```
 
@@ -93,7 +93,7 @@ public type ExpressionNode {
   case Items(items: List<ExpressionNode>, of: TypeReference)
   case Interpolation(parts: List<ExpressionNode>)
 
-  fn capturedNodes(self): List<ExpressionNode>
+  fn capturedNodes(): List<ExpressionNode>
 }
 ```
 

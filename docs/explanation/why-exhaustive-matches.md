@@ -66,11 +66,11 @@ is: closed.
 public type HttpError with Show {
   private kind: HttpErrorKind
 
-  fn timeout(): HttpError {
+  static fn timeout(): HttpError {
     HttpError kind: .Timeout
   }
 
-  fn isTimeout(self): Bool {
+  fn isTimeout(): Bool {
     match kind {
       .Timeout => true
       .ConnectionRefused => false

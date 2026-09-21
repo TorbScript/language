@@ -85,14 +85,14 @@ public type Program {
   problems: List<String>
 
   /** The names the prelude of the package of this module adds. */
-  fn preludeOf(self, id: ModuleId): Map<String, SymbolId> {
+  fn preludeOf(id: ModuleId): Map<String, SymbolId> {
     match preludeModules[graph.at(id).package] {
       Some(prelude) => scopes[prelude.value].exported
       None => [:]
     }
   }
 
-  fn lookUp(self, id: ModuleId, name: String): SymbolId? {
+  fn lookUp(id: ModuleId, name: String): SymbolId? {
     if const Some(symbol) = scopes[id.value].names.get(name) {
       return Some symbol
     }
@@ -100,12 +100,12 @@ public type Program {
   }
 
   /** What `use String.shout from "acme/text"` brought into this file for `owner` under the name `name`. */
-  fn memberImportsOf(self, id: ModuleId, owner: SymbolId, name: String): List<MemberImport> {
+  fn memberImportsOf(id: ModuleId, owner: SymbolId, name: String): List<MemberImport> {
     scopes[id.value].members.get(memberImportKey(owner, name)) ?? []
   }
 
   /** Whether this file named any member of `owner` that comes from `package`. */
-  fn importsMemberFrom(self, id: ModuleId, owner: SymbolId, package: Int): Bool {
+  fn importsMemberFrom(id: ModuleId, owner: SymbolId, package: Int): Bool {
     for (_, entries) in scopes[id.value].members {
       for entry in entries {
         if entry.owner == owner && entry.package == package {
@@ -178,7 +178,7 @@ type Binder {
   var scopes: List<ModuleScope>
   var isChanged: Bool = false
 
-  fn bindToFixpoint(var self) {
+  var fn bindToFixpoint() {
     isChanged = true
     while isChanged {
       isChanged = false
@@ -192,9 +192,9 @@ type Binder {
    * The prelude comes last: an import of a name the prelude also has shadows it, and so does a declaration of the
    * file. Adding it during the fixpoint would make the prelude win instead.
    */
-  fn addPreludes(var self) {
+  var fn addPreludes() {
     for index in 0..scopes.length() {
-      // The fields are read directly: two calls of a `self` method inside one `var self` method are trap 2 of stage 0
+      // The fields are read directly: two calls of a `self` method inside one `var fn` method are trap 2 of stage 0
       const package = graph.at(ModuleId(index)).package
       const source = match preludeModules[package] {
         Some(prelude) => scopes[prelude.value]
@@ -222,7 +222,7 @@ type Binder {
     }
   }
 
-  fn preludeNamesOf(self, id: ModuleId): Map<String, SymbolId> {
+  fn preludeNamesOf(id: ModuleId): Map<String, SymbolId> {
     match preludeModules[graph.at(id).package] {
       Some(prelude) => scopes[prelude.value].exported
       None => [:]
@@ -230,14 +230,14 @@ type Binder {
   }
 
   /** The name as the module sees it while the imports are being bound: its own names, then those of its prelude. */
-  fn visibleName(self, id: ModuleId, name: String): SymbolId? {
+  fn visibleName(id: ModuleId, name: String): SymbolId? {
     if const Some(symbol) = scopes[id.value].names.get(name) {
       return Some symbol
     }
     preludeNamesOf(id).get(name)
   }
 
-  fn bind(var self, id: ModuleId, name: String, symbol: SymbolId, isPublic: Bool) {
+  var fn bind(id: ModuleId, name: String, symbol: SymbolId, isPublic: Bool) {
     if name.isEmpty() {
       return
     }
@@ -257,7 +257,7 @@ type Binder {
     }
   }
 
-  fn bindImports(var self, id: ModuleId) {
+  var fn bindImports(id: ModuleId) {
     for statement in graph.at(id).file.statements {
       if const .Declare(declaration) = statement.kind {
         if const .Use(usage) = declaration.kind {
@@ -268,7 +268,7 @@ type Binder {
   }
 
   /** An imported member, if it is not there yet. The key keeps the type apart, so only the pair decides. */
-  fn bindMember(var self, id: ModuleId, key: String, entry: MemberImport, isPublic: Bool) {
+  var fn bindMember(id: ModuleId, key: String, entry: MemberImport, isPublic: Bool) {
     var scope = scopes[id.value]
     var hasChanged = false
     var here = scope.members.get(key) ?? []
@@ -296,7 +296,7 @@ type Binder {
    * package of the module attaches to the type. The type is resolved in the scope of the importing file - `String`
    * comes from the prelude, not from `acme/text` - and a module that re-exports such an import hands its entries on.
    */
-  fn bindMemberImport(var self, id: ModuleId, target: ModuleId, path: String, item: UseItem, isPublic: Bool) {
+  var fn bindMemberImport(id: ModuleId, target: ModuleId, path: String, item: UseItem, isPublic: Bool) {
     if item.path.length() < 2 {
       return
     }
@@ -324,7 +324,7 @@ type Binder {
     bindMember id, key, MemberImport(owner, item.name().text, package, path, item.name().span), isPublic
   }
 
-  fn bindOne(var self, id: ModuleId, usage: UseDeclaration, isPublic: Bool) {
+  var fn bindOne(id: ModuleId, usage: UseDeclaration, isPublic: Bool) {
     match usage.source {
       .Module(path) => {
         if const .Found(target) = resolveImport(graph, workspace, id, path) {
@@ -366,7 +366,7 @@ type Binder {
    * `String` of `use String.shout from "..."`: every segment but the last, resolved in the scope of the importing file.
    * `None` when it does not name a type or a trait, because nothing else has members.
    */
-  fn ownerOfPath(self, id: ModuleId, path: List<Name>): SymbolId? {
+  fn ownerOfPath(id: ModuleId, path: List<Name>): SymbolId? {
     var current = visibleName(id, path[0].text)?
     for index in 1..path.length() - 1 {
       current = stepInto(current, path[index].text)?
@@ -378,7 +378,7 @@ type Binder {
   }
 
   /** `Option.Some`, `shapes.Shape.Circle`: the remaining segments of a `use` path, from the symbol the first one named. */
-  fn walkPath(self, start: SymbolId?, path: List<Name>): SymbolId? {
+  fn walkPath(start: SymbolId?, path: List<Name>): SymbolId? {
     var current = start?
     for index in 1..path.length() {
       current = stepInto(current, path[index].text)?
@@ -387,7 +387,7 @@ type Binder {
   }
 
   /** One step of a `use` path: a name a namespace exports, or a case of a type. Nothing else has names of its own. */
-  fn stepInto(self, owner: SymbolId, name: String): SymbolId? {
+  fn stepInto(owner: SymbolId, name: String): SymbolId? {
     match symbols.at(owner).kind {
       .Namespace(module) => scopes[module.value].exported.get(name)
       .Type => symbols.caseNamed owner, name

@@ -35,12 +35,14 @@ has in the first place.
 | `data class Point(val x: Int, val y: Int)` | `type Point { x: Int; y: Int }` | every `type` gets `Equals`, `Hash`, `Show` and `copy`, not only ones marked `data` |
 | `sealed class Shape` plus subclasses | `type Shape { case Circle(radius: Float) }` | one type, cases instead of a subclass per variant |
 | `when (shape) { is Circle -> ... }` | `match shape { .Circle(radius) => ... }` | one keyword, and the compiler proves every arm is covered |
-| `fun Int.double() = this * 2` | `extend Int { fn double(self): Int { self * 2 } }` | `extend` always names the type; there is no bare receiver on a lone function |
+| `fun Int.double() = this * 2` | `extend Int { fn double(): Int { self * 2 } }` | `extend` always names the type; there is no bare receiver on a lone function |
 | `import acme.text.shout` | `use String.shout from "acme/text"` | the import carries the type the member hangs on |
 | `while (true) { ... }` | `loop { ... }` | the endless loop has a word of its own, and `while true` is an error |
 | `String.() -> Unit` | `(self: Receiver) => Void` | the receiver is a named, typed parameter, not a distinct function-type syntax |
 | `@DslMarker` | nothing to write | only the innermost receiver is ever implicit |
-| `interface Shape { fun area(): Double }` | `trait Shape { fn area(self): Float }` | one word, `trait`; a default method works the same way |
+| `interface Shape { fun area(): Double }` | `trait Shape { fn area(): Float }` | one word, `trait`; a default method works the same way |
+| a `fun` in a class that writes to a `var` field | `var fn` | mutation is on the declaration, so a reader sees it without the body |
+| `companion object { fun of() }` | `static fn of()` | one word instead of a nested object, and it is reached as `Type.of()` |
 | `Comparable<T>` | `Compare` | a single-method trait is named after its method |
 | `object Registry { }` | a `shared type` plus one instance you hold | identity is written down, not a keyword that hides an allocation |
 | `Result<T>` (wraps `Throwable`) | `Result<Value, Failure>` | the failure type is named at the signature, never fixed to one base type |
@@ -149,7 +151,7 @@ one builder inside another never adds the outer receiver to what a bare name can
 type Counter {
   var value: Int = 0
 
-  fn add(var self, amount: Int) {
+  var fn add(amount: Int) {
     value = value + amount
   }
 }
@@ -177,7 +179,7 @@ always:
 
 ```trb
 extend String {
-  fn shout(self): String {
+  fn shout(): String {
     "{toUpperCase()}!"
   }
 }

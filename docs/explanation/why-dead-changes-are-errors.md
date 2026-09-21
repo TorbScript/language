@@ -23,14 +23,14 @@ the compiler refuses to accept.
 function.** Two shapes of it are caught:
 
 - A `var` binding that is changed and never read afterwards.
-- The discarded result of a method that takes `self` and returns a value - the call ran for its result, and nothing
+- The discarded result of a method that reads its receiver and returns a value - the call ran for its result, and nothing
   used it.
 
 ```trb check
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -59,7 +59,7 @@ letting the program run and print the wrong number silently.
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -74,12 +74,12 @@ This program is *not* rejected: `first` is read on the last line, so the change 
 mistake is that the copy was the wrong thing to change, and the fix is to reach through the path
 (`counters[0].increment()`), not to add a read.
 
-**Because a discarded method result is the same mistake from the other direction.** A method that takes `self` and
+**Because a discarded method result is the same mistake from the other direction.** A method that reads its receiver and
 returns a value either produces information the caller asked for or it does not need to be called at all; discarding
 its result silently is the same "wrote something nobody looks at" shape as an unread `var`. An expression statement
 must have type `Void` or `Never` unless the call has a `var` receiver or a `var` argument - which is exactly the
 condition under which a call can be effectful without returning anything. `parser.bump()` is fine as a statement
-because `bump` takes `var self`; `numbers.sorted { _ }` as a bare statement is not, because `sorted` changes nothing
+because `bump` is a `var fn`; `numbers.sorted { _ }` as a bare statement is not, because `sorted` changes nothing
 and its whole point is the value it returns.
 
 **Because an unreachable `match` arm is rejected for the identical reason.** Value semantics rule out the class of bug

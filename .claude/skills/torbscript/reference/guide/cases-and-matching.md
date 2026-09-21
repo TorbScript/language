@@ -32,7 +32,7 @@ type Shape {
   case Rectangle(width: Float, height: Float)
   case Empty
 
-  fn area(self): Float {
+  fn area(): Float {
     match self {
       .Circle(radius) => 3.14159 * radius * radius
       .Rectangle(width, height) => width * height
@@ -59,7 +59,7 @@ type Shape {
   case Rectangle(width: Float, height: Float)
   case Empty
 
-  fn area(self): Float {
+  fn area(): Float {
     match self {
       .Circle(radius) => 3.14159 * radius * radius
       .Rectangle(width, height) => width * height

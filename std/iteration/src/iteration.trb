@@ -39,7 +39,7 @@ use Mapped, Filtered, FilterMapped, MappedWhile, FlatMapped, Taken, Skipped, Tak
  */
 public trait Iterator<Item> {
   /** The next value, or `None` once there is nothing left. */
-  fn next(var self): Item?
+  var fn next(): Item?
 }
 
 /**
@@ -53,15 +53,15 @@ public trait Iterator<Item> {
  */
 public trait Length {
   /** How many elements there are. */
-  fn length(self): Int
+  fn length(): Int
 
   /** Whether there are no elements. */
-  fn isEmpty(self): Bool {
+  fn isEmpty(): Bool {
     length() == 0
   }
 
   /** Whether there is at least one element. */
-  fn isNotEmpty(self): Bool {
+  fn isNotEmpty(): Bool {
     !isEmpty()
   }
 }
@@ -91,52 +91,52 @@ public trait Length {
  */
 public trait Iterable<Item> {
   /** A fresh cursor over the values, positioned before the first one. */
-  fn iterator(self): Iterator<Item>
+  fn iterator(): Iterator<Item>
 
   // --- Lazy stages -----------------------------------------------------------------------------
 
   /** Transforms every value into another one, in order. */
-  fn map<Output>(self, transform: (value: Item) => Output): Iterable<Output> {
+  fn map<Output>(transform: (value: Item) => Output): Iterable<Output> {
     Mapped self, transform
   }
 
   /** Keeps every value that answers the predicate, and drops the rest. */
-  fn filter(self, predicate: (value: Item) => Bool): Iterable<Item> {
+  fn filter(predicate: (value: Item) => Bool): Iterable<Item> {
     Filtered self, predicate
   }
 
   /** Transforms every value into its own Iterable, and flattens all of them into one sequence. */
-  fn flatMap<Output>(self, transform: (value: Item) => Iterable<Output>): Iterable<Output> {
+  fn flatMap<Output>(transform: (value: Item) => Iterable<Output>): Iterable<Output> {
     FlatMapped self, transform
   }
 
   /** `map` and `filter` in one: keeps the values of all `Some`. The bridge for functions that return an Option. */
-  fn filterMap<Output>(self, transform: (value: Item) => Output?): Iterable<Output> {
+  fn filterMap<Output>(transform: (value: Item) => Output?): Iterable<Output> {
     FilterMapped self, transform
   }
 
   /** Like `filterMap`, but ends the pipeline at the first `None`. */
-  fn mapWhile<Output>(self, transform: (value: Item) => Output?): Iterable<Output> {
+  fn mapWhile<Output>(transform: (value: Item) => Output?): Iterable<Output> {
     MappedWhile self, transform
   }
 
   /** The first `amount` values. Ends the pipeline there, so a source that never runs out still finishes. */
-  fn take(self, amount: Int): Iterable<Item> {
+  fn take(amount: Int): Iterable<Item> {
     Taken self, amount
   }
 
   /** Every value after the first `amount`, which are read and thrown away. */
-  fn skip(self, amount: Int): Iterable<Item> {
+  fn skip(amount: Int): Iterable<Item> {
     Skipped self, amount
   }
 
   /** Values up to, but not including, the first one that fails the predicate. */
-  fn takeWhile(self, predicate: (value: Item) => Bool): Iterable<Item> {
+  fn takeWhile(predicate: (value: Item) => Bool): Iterable<Item> {
     TakenWhile self, predicate
   }
 
   /** Pairs each value with the one at the same position of `other`; stops at the shorter of the two. */
-  fn zip<Output>(self, other: Iterable<Output>): Iterable<(Item, Output)> {
+  fn zip<Output>(other: Iterable<Output>): Iterable<(Item, Output)> {
     Zipped self, other
   }
 
@@ -150,12 +150,12 @@ public trait Iterable<Item> {
    *       print "{pair.index}: {pair.item}"
    *     }
    */
-  fn indexed(self): Iterable<(index: Int, item: Item)> {
+  fn indexed(): Iterable<(index: Int, item: Item)> {
     Zipped(0.., self)
   }
 
   /** Lazy as a stage, but has to buffer all values as soon as it is iterated. */
-  fn sorted<Key: Compare>(self, by: (value: Item) => Key): Iterable<Item> {
+  fn sorted<Key: Compare>(by: (value: Item) => Key): Iterable<Item> {
     Sorted self, by
   }
 
@@ -163,7 +163,7 @@ public trait Iterable<Item> {
    * Puts a `Stage` in front of the values: the one stage that is written once and works on a `Source` of `std/stream`
    * just as well (`body.through(Json.items<User>())`). Everything above is the same stage with a name of its own.
    */
-  fn through<Output>(self, stage: Stage<Item, Output>): Iterable<Output> {
+  fn through<Output>(stage: Stage<Item, Output>): Iterable<Output> {
     Staged self, stage
   }
 
@@ -175,7 +175,7 @@ public trait Iterable<Item> {
    * `isDone()` is asked before the first value and after every `add`, so a collector that has seen enough (`taking`,
    * `first`) stops the pull instead of reading a source to its end.
    */
-  fn collect<Output>(self, collector: Collector<Item, Output>): Output {
+  fn collect<Output>(collector: Collector<Item, Output>): Output {
     var accumulator = collector.start()
     if accumulator.isDone() {
       return accumulator.finish()
@@ -193,17 +193,17 @@ public trait Iterable<Item> {
    * Collects into whatever can be created from an Iterable: `.to<Set<Int>>()`, or
    * `const names: List<String> = pipeline.to()`. No special trait needed, this is plain `From<Iterable<Item>>`.
    */
-  fn to<Target: From<Iterable<Item>>>(self): Target {
+  fn to<Target: From<Iterable<Item>>>(): Target {
     Target.from self
   }
 
   /** The values, collected into a `List`. */
-  fn toList(self): List<Item> {
+  fn toList(): List<Item> {
     to<List<Item>>()
   }
 
   /** The values, collected into a `Set`, which drops the duplicates. */
-  fn toSet(self): Set<Item> where Item: Hash {
+  fn toSet(): Set<Item> where Item: Hash {
     to<Set<Item>>()
   }
 
@@ -216,7 +216,7 @@ public trait Iterable<Item> {
    * the same time - so joining a gigabyte needs two of them. `concatenated` says why appending to one accumulator would
    * be worse.
    */
-  fn joined(self, separator: String = ""): String where Item: Show {
+  fn joined(separator: String = ""): String where Item: Show {
     var pieces: List<String> = []
     for item in self {
       pieces.add item.show()
@@ -225,14 +225,14 @@ public trait Iterable<Item> {
   }
 
   /** Runs `action` once for every value, for a step that produces nothing itself. */
-  fn forEach(self, action: (value: Item) => Void) {
+  fn forEach(action: (value: Item) => Void) {
     for value in self {
       action value
     }
   }
 
   /** Combines every value into one, left to right, starting from `initial`. */
-  fn fold<State>(self, initial: State, combine: (State, Item) => State): State {
+  fn fold<State>(initial: State, combine: (State, Item) => State): State {
     var state = initial
     for value in self {
       state = combine state, value
@@ -241,7 +241,7 @@ public trait Iterable<Item> {
   }
 
   /** The first value that answers the predicate, or `None`. Stops pulling as soon as one is found. */
-  fn find(self, predicate: (value: Item) => Bool): Item? {
+  fn find(predicate: (value: Item) => Bool): Item? {
     for value in self {
       if predicate(value) {
         return Some value
@@ -251,33 +251,33 @@ public trait Iterable<Item> {
   }
 
   /** The first value, or `None` when there is none. */
-  fn first(self): Item? {
+  fn first(): Item? {
     var cursor = iterator()              // `next` needs a `var` path, a temporary is not one
     cursor.next()
   }
 
   /** Whether at least one value answers the predicate. Stops at the first one that does. */
-  fn any(self, predicate: (value: Item) => Bool): Bool {
+  fn any(predicate: (value: Item) => Bool): Bool {
     find(predicate).isSome()
   }
 
   /** Whether every value answers the predicate. Stops at the first one that does not. */
-  fn all(self, predicate: (value: Item) => Bool): Bool {
+  fn all(predicate: (value: Item) => Bool): Bool {
     !any { !predicate(_) }
   }
 
   /** How many values there are. Reads every one, even where nothing about them is kept. */
-  fn count(self): Int {
+  fn count(): Int {
     fold 0 { total, _ => total + 1 }
   }
 
   /** Every value, added together, starting from zero. */
-  fn sum(self): Item where Item: Add & From<Int> {
+  fn sum(): Item where Item: Add & From<Int> {
     fold Item.from(0) { a, b => a + b }
   }
 
   /** Shorthand for `collect(groupingBy(key))` */
-  fn groupBy<Key: Hash>(self, key: (value: Item) => Key): Map<Key, List<Item>> {
+  fn groupBy<Key: Hash>(key: (value: Item) => Key): Map<Key, List<Item>> {
     collect groupingBy(key)
   }
 }

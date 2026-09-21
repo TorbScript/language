@@ -37,7 +37,7 @@ when it runs.
    field is configured in place by a command with a block. Only a real operation needs a method.
 
    ```trb fragment
-   fn route(var self, path: String, to: String) {
+   var fn route(path: String, to: String) {
      routes.add Route(path, to)
    }
    ```
@@ -119,7 +119,7 @@ type ServerConfig {
   private(var) routes: List<Route> = []
 
   /** More than setting a field, so it is a method. */
-  fn route(var self, path: String, to: String) {
+  var fn route(path: String, to: String) {
     routes.add Route(path, to)
   }
 }

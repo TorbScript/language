@@ -148,7 +148,7 @@ and `var` is the only mutable form - there is no `let mut`.
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -162,7 +162,7 @@ print counters[0].count
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -269,11 +269,11 @@ expected of it.
 type Money with Equals, Hash {
   cents: Int
 
-  fn equals(self, other: Money): Bool {
+  fn equals(other: Money): Bool {
     cents == other.cents
   }
 
-  fn hash(self): Int {
+  fn hash(): Int {
     cents
   }
 }
@@ -460,7 +460,7 @@ type Square {
 }
 
 trait Draw<Shape> {
-  fn draw(self, shape: Shape): String
+  fn draw(shape: Shape): String
 }
 
 type Canvas {
@@ -468,7 +468,7 @@ type Canvas {
 }
 
 extend Canvas with Draw<Circle> {
-  fn draw(self, shape: Circle): String {
+  fn draw(shape: Circle): String {
     "circle of {shape.radius * scale}"
   }
 }
@@ -487,11 +487,11 @@ type Square {
 }
 
 type Canvas {
-  fn draw(self, shape: Circle): String {
+  fn draw(shape: Circle): String {
     "circle"
   }
 
-  fn draw(self, shape: Square): String {
+  fn draw(shape: Square): String {
     "square"
   }
 }
@@ -518,7 +518,7 @@ type Port {
 }
 
 extend Port with TryFrom<String, String> {
-  fn tryFrom(text: String): Result<Port, String> {
+  static fn tryFrom(text: String): Result<Port, String> {
     const number = Int.tryFrom(text).mapError({ _ => "{text} is not a number" })?
     if number < 1 || number > 65535 {
       return Fail "{number} is not a port"
@@ -542,6 +542,53 @@ for a `String`. A function named `parse` belongs to a **format** - `Json.parse(t
 value. See [Conversions](../language/types/conversions.md) and
 [Parse text into a type](../how-to/parse-text-into-a-type.md).
 
+### 21. A method does not list `self`, and `static` says what belongs to the type
+
+Rust writes `&self`, Python writes `self`, Swift infers it - so a model writes a receiver into the parameter list.
+Here a member says what it is with two words in front of `fn`, and the parameter list is what the caller writes.
+
+```trb check
+type Rectangle {
+  width: Int
+  height: Int
+  var scale: Int = 1
+
+  fn area(): Int {
+    width * height * scale
+  }
+
+  var fn grow(by: Int) {
+    scale = scale + by
+  }
+
+  static fn square(size: Int): Self {
+    Self size, size, 1
+  }
+}
+
+var rectangle = Rectangle.square 3
+rectangle.grow 2
+print rectangle.area()
+```
+
+```trb error
+type Rectangle {
+  width: Int
+  height: Int
+
+  fn area(self): Int {
+    width * height
+  }
+}
+// error: A method does not list `self`
+```
+
+`&mut self` becomes `var fn`, and a member written without a receiver becomes `static fn` - forgetting the `static`
+makes it a method, and the call through the type name then says so. `self` is still an expression inside the body,
+and a function *type* still names it: `(self: Point) => Int` and `(var self: Config) => Void` are what a
+[receiver closure](../language/configuration/receiver-closures.md) is. See
+[Methods and `static fn`s](../language/types/methods.md).
+
 ### The rest, in one table
 
 | Do not write | Write | Why |
@@ -564,6 +611,9 @@ value. See [Conversions](../language/types/conversions.md) and
 | `abs`, `sqrt`, `Expr` | `absolute`, `squareRoot`, `Expression` | names are written out |
 | a `for` loop that mutates the element | `items[index].field = value` | the loop variable is a `const` copy |
 | a getter like `getName()` | the field `name`, or a method `name()` | there are no properties and no `get` prefix |
+| `fn area(self)`, `fn grow(&mut self)` | `fn area()`, `var fn grow()` | a method does not list its receiver |
+| `fn of(): Self` inside a type body | `static fn of(): Self` | without `static` it is a method |
+| `const origin = Point(0, 0)` in a type body | `static origin = Point(0, 0)` | `const` in a type body is a field |
 | `type point`, `fn Distance` | `type Point`, `fn distance` | the first letter of a name is a rule, not a convention |
 
 ### How to check yourself

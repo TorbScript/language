@@ -51,20 +51,20 @@ A point in time. Only the difference between two `Instant`s is meaningful, never
 
 ```trb fragment
 public native type Duration with Compare, Show {
-  fn seconds(self): Float64
+  fn seconds(): Float64
 }
 ```
 
 The span between two `Instant`s, or a length of time asked for on its own. `2.seconds()` comes from
-`extend Int64 { fn seconds(self): Duration }`, which the prelude re-exports by name
+`extend Int64 { fn seconds(): Duration }`, which the prelude re-exports by name
 (`public use Int64.seconds from "std/time"`); mainly for sandbox and task limits.
 
 ### Clock
 
 ```trb fragment
 public native type Clock {
-  fn now(): Instant
-  fn milliseconds(): Int64
+  static fn now(): Instant
+  static fn milliseconds(): Int64
 }
 ```
 

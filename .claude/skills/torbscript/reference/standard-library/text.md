@@ -36,12 +36,12 @@ print shout
 
 ```trb fragment
 public native type Char with Equals, Compare, Hash, Show {
-  fn isDigit(self): Bool
-  fn isLetter(self): Bool
-  fn isWhitespace(self): Bool
-  fn byteLength(self): Int
-  fn toUpperCase(self): Char
-  fn toLowerCase(self): Char
+  fn isDigit(): Bool
+  fn isLetter(): Bool
+  fn isWhitespace(): Bool
+  fn byteLength(): Int
+  fn toUpperCase(): Char
+  fn toLowerCase(): Char
 }
 ```
 
@@ -56,26 +56,26 @@ belongs here, because not every `Int64` is a Unicode scalar value (surrogates, a
 public native type String
   with Equals, Compare, Hash, Show, Add, Slice
 {
-  fn chars(self): Iterable<Char>
-  fn bytes(self): Iterable<UInt8>
-  fn byteLength(self): Int
-  fn isEmpty(self): Bool
-  fn slice(self, range: Bounds<Int>): String
-  fn contains(self, part: String): Bool
-  fn startsWith(self, prefix: String): Bool
-  fn endsWith(self, suffix: String): Bool
-  fn indexOf(self, part: String): Int?
-  fn lastIndexOf(self, part: String): Int?
-  fn substringBefore(self, part: String): String?
-  fn substringAfter(self, part: String): String?
-  fn trim(self): String
-  fn toUpperCase(self): String
-  fn toLowerCase(self): String
-  fn replace(self, part: String, replacement: String): String
-  fn split(self, separator: String): List<String>
-  fn repeat(self, times: Int): String
-  fn isBlank(self): Bool
-  fn lines(self): List<String>
+  fn chars(): Iterable<Char>
+  fn bytes(): Iterable<UInt8>
+  fn byteLength(): Int
+  fn isEmpty(): Bool
+  fn slice(range: Bounds<Int>): String
+  fn contains(part: String): Bool
+  fn startsWith(prefix: String): Bool
+  fn endsWith(suffix: String): Bool
+  fn indexOf(part: String): Int?
+  fn lastIndexOf(part: String): Int?
+  fn substringBefore(part: String): String?
+  fn substringAfter(part: String): String?
+  fn trim(): String
+  fn toUpperCase(): String
+  fn toLowerCase(): String
+  fn replace(part: String, replacement: String): String
+  fn split(separator: String): List<String>
+  fn repeat(times: Int): String
+  fn isBlank(): Bool
+  fn lines(): List<String>
 }
 ```
 

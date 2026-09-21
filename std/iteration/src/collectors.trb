@@ -38,9 +38,9 @@ use concatenated from "./concatenate"
  */
 public trait Accumulator<Item, Output> {
   /** Pushes one more value in. */
-  fn add(var self, value: Item)
+  var fn add(value: Item)
   /** The result, once every value has been pushed in. Called exactly once, after the last `add`. */
-  fn finish(self): Output
+  fn finish(): Output
 
   /**
    * Whether more values would change the result. A driver asks before it pulls the first value and after every `add`,
@@ -50,7 +50,7 @@ public trait Accumulator<Item, Output> {
    * The default is `false`: an accumulator that sums, counts or collects is never done. A wrapper (`std/iteration`'s
    * stages) answers what the accumulator below it answers, plus whatever it knows itself.
    */
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     false
   }
 }
@@ -71,7 +71,7 @@ public trait Accumulator<Item, Output> {
  */
 public trait Collector<Item, Output> {
   /** A fresh `Accumulator` for one run. Called once per `collect`. */
-  fn start(self): Accumulator<Item, Output>
+  fn start(): Accumulator<Item, Output>
 }
 
 // --- Collecting into collections ------------------------------------------------------------------
@@ -95,7 +95,7 @@ public fn listing<Item>(): Collector<Item, List<Item>> {
 }
 
 type IntoCollector<Item, Target: From<Iterable<Item>>> with Collector<Item, Target> {
-  fn start(self): Accumulator<Item, Target> {
+  fn start(): Accumulator<Item, Target> {
     IntoAccumulator<Item, Target>()
   }
 }
@@ -104,11 +104,11 @@ type IntoCollector<Item, Target: From<Iterable<Item>>> with Collector<Item, Targ
 type IntoAccumulator<Item, Target: From<Iterable<Item>>> with Accumulator<Item, Target> {
   private var items: List<Item> = []
 
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     items.add value
   }
 
-  fn finish(self): Target {
+  fn finish(): Target {
     Target.from items
   }
 }
@@ -135,7 +135,7 @@ type FoldCollector<Item, State, Output> with Collector<Item, Output> {
   step: (State, Item) => State
   complete: (State) => Output
 
-  fn start(self): Accumulator<Item, Output> {
+  fn start(): Accumulator<Item, Output> {
     FoldAccumulator initial, step, complete
   }
 }
@@ -145,11 +145,11 @@ type FoldAccumulator<Item, State, Output> with Accumulator<Item, Output> {
   step: (State, Item) => State
   complete: (State) => Output
 
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     state = step(state, value)
   }
 
-  fn finish(self): Output {
+  fn finish(): Output {
     complete(state)
   }
 }
@@ -236,12 +236,12 @@ public type Grouping<Item, Key: Hash> with Collector<Item, Map<Key, List<Item>>>
   key: (value: Item) => Key
 
   /** Groups into a `List` per key, same as `then(listing())`. */
-  fn start(self): Accumulator<Item, Map<Key, List<Item>>> {
+  fn start(): Accumulator<Item, Map<Key, List<Item>>> {
     then(listing()).start()
   }
 
   /** Runs `downstream` once per group instead of collecting each one into a `List`. */
-  fn then<Output>(self, downstream: Collector<Item, Output>): Collector<Item, Map<Key, Output>> {
+  fn then<Output>(downstream: Collector<Item, Output>): Collector<Item, Map<Key, Output>> {
     GroupingInto key, downstream
   }
 }
@@ -250,7 +250,7 @@ type GroupingInto<Item, Key: Hash, Output> with Collector<Item, Map<Key, Output>
   key: (value: Item) => Key
   downstream: Collector<Item, Output>
 
-  fn start(self): Accumulator<Item, Map<Key, Output>> {
+  fn start(): Accumulator<Item, Map<Key, Output>> {
     GroupingAccumulator key, downstream
   }
 }
@@ -261,7 +261,7 @@ type GroupingAccumulator<Item, Key: Hash, Output> with Accumulator<Item, Map<Key
   downstream: Collector<Item, Output>
   var groups: Map<Key, Accumulator<Item, Output>> = [:]
 
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     const group = key(value)
     if !groups.containsKey(group) {
       groups[group] = downstream.start()
@@ -269,7 +269,7 @@ type GroupingAccumulator<Item, Key: Hash, Output> with Accumulator<Item, Map<Key
     groups[group].add(value)           // Through the path. `var copy = groups[group]` would fill a copy.
   }
 
-  fn finish(self): Map<Key, Output> {
+  fn finish(): Map<Key, Output> {
     groups.map { entry => (entry.key, entry.value.finish()) }.to<Map<Key, Output>>()
   }
 }

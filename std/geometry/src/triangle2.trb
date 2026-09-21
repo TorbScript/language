@@ -34,18 +34,18 @@ public type Triangle2<Scalar: Numeric = Float> {
   third: Vector2<Scalar>
 
   /** Twice the area, with a sign that says which way the corners run. Zero where the three lie on one line. */
-  fn signedArea(self): Scalar {
+  fn signedArea(): Scalar {
     second.subtract(first).cross(third.subtract(first))
   }
 
   /** The smallest rectangle that holds the triangle. */
-  fn bounds(self): Rectangle<Scalar> {
+  fn bounds(): Rectangle<Scalar> {
     const low = first.min(second).min(third)
     Rectangle low, first.max(second).max(third).subtract(low)
   }
 
   /** The three edges, in the order the corners are written. */
-  fn edges(self): List<Segment2<Scalar>> {
+  fn edges(): List<Segment2<Scalar>> {
     [Segment2(first, second), Segment2(second, third), Segment2(third, first)]
   }
 
@@ -55,7 +55,7 @@ public type Triangle2<Scalar: Numeric = Float> {
    * The test is the sign of the three edge cross products: a point is inside where it is on the same side of all three,
    * whichever way the corners run.
    */
-  fn contains(self, point: Vector2<Scalar>): Bool {
+  fn contains(point: Vector2<Scalar>): Bool {
     const nothing = zeroOf point.x
     const along = second.subtract(first).cross(point.subtract(first))
     const across = third.subtract(second).cross(point.subtract(second))
@@ -66,7 +66,7 @@ public type Triangle2<Scalar: Numeric = Float> {
   }
 
   /** The same triangle moved. */
-  fn translated(self, by: Vector2<Scalar>): Triangle2<Scalar> {
+  fn translated(by: Vector2<Scalar>): Triangle2<Scalar> {
     Triangle2 first.add(by), second.add(by), third.add(by)
   }
 }
@@ -74,7 +74,7 @@ public type Triangle2<Scalar: Numeric = Float> {
 /** What a sign buys: the area without its sign. */
 extend<Scalar: Signed> Triangle2<Scalar> {
   /** Twice the area, without a sign: the whole number a whole-number triangle has instead of a halved one. */
-  fn doubledArea(self): Scalar {
+  fn doubledArea(): Scalar {
     signedArea().absolute()
   }
 }
@@ -82,18 +82,18 @@ extend<Scalar: Signed> Triangle2<Scalar> {
 /** What a halving and a root buy: the area, the midpoint and the nearest point. */
 extend<Scalar: Real> Triangle2<Scalar> {
   /** How much of the plane the triangle covers. */
-  fn area(self): Scalar {
+  fn area(): Scalar {
     signedArea().absolute().halved()
   }
 
   /** The midpoint of the three corners, which is where the triangle balances. */
-  fn center(self): Vector2<Scalar> {
+  fn center(): Vector2<Scalar> {
     const three = first.x.unit() + first.x.unit() + first.x.unit()
     first.add(second).add(third).divide(three)
   }
 
   /** The point of the triangle that is nearest to the one given. */
-  fn closestPoint(self, to: Vector2<Scalar>): Vector2<Scalar> {
+  fn closestPoint(to: Vector2<Scalar>): Vector2<Scalar> {
     if contains(to) {
       return to
     }
@@ -111,7 +111,7 @@ extend<Scalar: Real> Triangle2<Scalar> {
   }
 
   /** The distance from the point to the nearest point of the triangle. Zero where it is inside. */
-  fn distanceTo(self, point: Vector2<Scalar>): Scalar {
+  fn distanceTo(point: Vector2<Scalar>): Scalar {
     point.distanceTo closestPoint(to: point)
   }
 }

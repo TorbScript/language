@@ -101,6 +101,14 @@ public fn parseBinding(var parser: Parser): Binding {
   const doc = parser.takeDoc()
   const isVar = parser.isAtKeyword Keyword.Var
   parser.bump()
+  parseBindingBody parser, doc, isVar
+}
+
+/**
+ * The part of a binding behind its keyword: `name: Type = value`. A constant of a type is written
+ * `static name = value`, so its binding starts here and not at a `const`.
+ */
+public fn parseBindingBody(var parser: Parser, doc: String?, isVar: Bool): Binding {
   const pattern = parsePattern parser
   const annotation = if parser.eat(TokenKind.Colon) { Some parseType(parser) } else { None }
   if !parser.isAt(TokenKind.Equal) {

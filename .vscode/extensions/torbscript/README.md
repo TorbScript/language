@@ -91,10 +91,11 @@ Token types: `type`, `interface`, `typeParameter`, `enumMember`, `namespace`, `f
 `variable`, `property` - all of them standard VS Code semantic token types. One modifier is not standard, though:
 
 - `mutable` (custom, declared in `package.json`'s `semanticTokenModifiers`): a `var` binding, a `var` field, a
-  `var` parameter, or `self` in a method declared `var self`. This is deliberately the *only* difference from a
+  `var` parameter, or a `var fn` - at its declaration and at every call of it. This is deliberately the *only*
+  difference from a
   `const`/non-`var` name of the same kind - too many colors was the complaint this design started from, so `var`
   vs. `const` is an underline, not a hue.
-- The standard modifiers `declaration`, `readonly` (a `const`/non-`var` name), `static` (a method without `self`)
+- The standard modifiers `declaration`, `readonly` (a `const`/non-`var` name), `static` (a `static` member)
   and `defaultLibrary` (`Some`/`None`/`Ok`/`Fail`, and the primitive types) are also set where they apply.
 
 ### The palette

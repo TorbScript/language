@@ -71,7 +71,7 @@ lowerCamelCase           a function, a method, a field, a parameter, a binding, 
    // error: A type starts with an uppercase letter: write `Point`
    ```
 
-4. **Everything else starts with a lowercase letter or `_`.** A function, a method, a static function, a field, a
+4. **Everything else starts with a lowercase letter or `_`.** A function, a method, a `static fn`, a field, a
    parameter, a tuple label, a `const`, a `var`, a module constant, a closure parameter.
 
    ```trb error

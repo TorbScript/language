@@ -47,17 +47,17 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   wAxis: Vector4<Scalar>
 
   /** The three rows and columns that are the linear part: the rotation, the scale and the shear, without the move. */
-  fn linearPart(self): Matrix3<Scalar> {
+  fn linearPart(): Matrix3<Scalar> {
     Matrix3 xAxis.toVector3(), yAxis.toVector3(), zAxis.toVector3()
   }
 
   /** The translation the transformation carries. */
-  fn translationPart(self): Vector3<Scalar> {
+  fn translationPart(): Vector3<Scalar> {
     wAxis.toVector3()
   }
 
   /** The rows read as columns. */
-  fn transposed(self): Matrix4<Scalar> {
+  fn transposed(): Matrix4<Scalar> {
     Matrix4(
       Vector4(xAxis.x, yAxis.x, zAxis.x, wAxis.x),
       Vector4(xAxis.y, yAxis.y, zAxis.y, wAxis.y),
@@ -67,7 +67,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** The column at that index. Panics outside `0..4`. */
-  fn column(self, index: Int): Vector4<Scalar> {
+  fn column(index: Int): Vector4<Scalar> {
     if index == 0 {
       return xAxis
     }
@@ -78,7 +78,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** The cell in that row and that column. Panics outside `0..4`. */
-  fn at(self, row: Int, index: Int): Scalar {
+  fn at(row: Int, index: Int): Scalar {
     const axis = column index
     if row == 0 {
       return axis.x
@@ -90,12 +90,12 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** The row at that index. Panics outside `0..4`. */
-  fn row(self, index: Int): Vector4<Scalar> {
+  fn row(index: Int): Vector4<Scalar> {
     Vector4 at(index, 0), at(index, 1), at(index, 2), at(index, 3)
   }
 
   /** Cell by cell. Adding two transformations is not composing them; `multiply` is. */
-  fn add(self, other: Matrix4<Scalar>): Matrix4<Scalar> {
+  fn add(other: Matrix4<Scalar>): Matrix4<Scalar> {
     Matrix4(
       xAxis.add(other.xAxis),
       yAxis.add(other.yAxis),
@@ -105,7 +105,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** Cell by cell. */
-  fn subtract(self, other: Matrix4<Scalar>): Matrix4<Scalar> {
+  fn subtract(other: Matrix4<Scalar>): Matrix4<Scalar> {
     Matrix4(
       xAxis.subtract(other.xAxis),
       yAxis.subtract(other.yAxis),
@@ -115,7 +115,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
   }
 
   /** The composition: `self` after `other`. */
-  fn multiply(self, other: Matrix4<Scalar>): Matrix4<Scalar> {
+  fn multiply(other: Matrix4<Scalar>): Matrix4<Scalar> {
     Matrix4(
       applied(to: other.xAxis),
       applied(to: other.yAxis),
@@ -130,12 +130,12 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
    * It is a method and not `matrix * vector`, because a type has one namespace of members and `multiply` is already the
    * composition of two matrices.
    */
-  fn applied(self, to: Vector4<Scalar>): Vector4<Scalar> {
+  fn applied(to: Vector4<Scalar>): Vector4<Scalar> {
     xAxis.multiply(to.x).add(yAxis.multiply(to.y)).add(zAxis.multiply(to.z)).add(wAxis.multiply(to.w))
   }
 
   /** A direction, turned by the transformation: the translation is not applied. */
-  fn transformedDirection(self, direction: Vector3<Scalar>): Vector3<Scalar> {
+  fn transformedDirection(direction: Vector3<Scalar>): Vector3<Scalar> {
     const turned = applied to: Vector4.of(direction, zeroOf(direction.x))
     turned.toVector3()
   }
@@ -146,7 +146,7 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
    *
    *     print Matrix4.scaling(by: Vector3(2.0, 3.0, 4.0)).determinant()
    */
-  fn determinant(self): Scalar {
+  fn determinant(): Scalar {
     minorsOf(self).determinant()
   }
 }
@@ -186,7 +186,7 @@ type Minors<Scalar: Numeric> {
   lastZW: Scalar
 
   /** The determinant of the whole matrix: each block of the first two columns against its complement in the last two. */
-  fn determinant(self): Scalar {
+  fn determinant(): Scalar {
     firstXY * lastZW - firstXZ * lastYW + firstXW * lastYZ + firstYZ * lastXW - firstYW * lastXZ + firstZW * lastXY
   }
 }
@@ -216,7 +216,7 @@ fn minorsOf<Scalar: Numeric>(matrix: Matrix4<Scalar>): Minors<Scalar> {
 /** Every cell turned around. */
 extend<Scalar: Signed> Matrix4<Scalar> with Negate {
   /** Every cell with its sign flipped. */
-  fn negate(self): Matrix4<Scalar> {
+  fn negate(): Matrix4<Scalar> {
     Matrix4 xAxis.negate(), yAxis.negate(), zAxis.negate(), wAxis.negate()
   }
 }
@@ -224,7 +224,7 @@ extend<Scalar: Signed> Matrix4<Scalar> with Negate {
 /** What a one and a division buy: the constructors, the points and the inverse of an affine transformation. */
 extend<Scalar: Real> Matrix4<Scalar> {
   /** A diagonal matrix: each axis scaled on its own, and the translation left at the origin. */
-  fn scaling(by: Vector3<Scalar>): Matrix4<Scalar> {
+  static fn scaling(by: Vector3<Scalar>): Matrix4<Scalar> {
     const nothing = zeroOf(by.x)
     Matrix4(
       Vector4(by.x, nothing, nothing, nothing),
@@ -239,7 +239,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
    *
    *     print Matrix4.translation of: Vector3(1.0, 0.0, 0.0)).translationPart(
    */
-  fn translation(of: Vector3<Scalar>): Matrix4<Scalar> {
+  static fn translation(of: Vector3<Scalar>): Matrix4<Scalar> {
     const nothing = zeroOf of.x
     const whole = of.x.unit()
     Matrix4(
@@ -251,7 +251,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
   }
 
   /** The affine transformation that applies the linear part and then moves by `by`. */
-  fn affine(linear: Matrix3<Scalar>, by: Vector3<Scalar>): Matrix4<Scalar> {
+  static fn affine(linear: Matrix3<Scalar>, by: Vector3<Scalar>): Matrix4<Scalar> {
     const nothing = zeroOf(by.x)
     Matrix4(
       Vector4.of(linear.xAxis, nothing),
@@ -262,7 +262,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
   }
 
   /** A point, moved by the transformation: the translation is applied. */
-  fn transformedPoint(self, point: Vector3<Scalar>): Vector3<Scalar> {
+  fn transformedPoint(point: Vector3<Scalar>): Vector3<Scalar> {
     const moved = applied to: Vector4.of(point, point.x.unit())
     moved.toVector3()
   }
@@ -273,7 +273,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
    *
    * It answers nothing about the bottom row, which an affine transformation has as `(0, 0, 0, 1)` by construction.
    */
-  fn inverseAffine(self): Matrix4<Scalar>? {
+  fn inverseAffine(): Matrix4<Scalar>? {
     const linear = linearPart()
     match linear.inverse() {
       Some(undone) => {
@@ -296,7 +296,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
    *     const move = Matrix4.translation of: Vector3(1.0, 2.0, 3.0)
    *     print move.inverse()?.translationPart()
    */
-  fn inverse(self): Matrix4<Scalar>? {
+  fn inverse(): Matrix4<Scalar>? {
     const blocks = minorsOf self
     const scale = blocks.determinant()
     if scale == zeroOf(scale) {
@@ -339,7 +339,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
   }
 
   /** Whether every cell is within `tolerance` of the other matrix's. */
-  fn isCloseTo(self, other: Matrix4<Scalar>, tolerance: Scalar): Bool {
+  fn isCloseTo(other: Matrix4<Scalar>, tolerance: Scalar): Bool {
     xAxis.isCloseTo(other.xAxis, tolerance: tolerance)
       && yAxis.isCloseTo(other.yAxis, tolerance: tolerance)
       && zAxis.isCloseTo(other.zAxis, tolerance: tolerance)
@@ -350,7 +350,7 @@ extend<Scalar: Real> Matrix4<Scalar> {
 /** The float matrix's identity. */
 extend Matrix4<Float> {
   /** The transformation that changes nothing. */
-  const identity: Matrix4<Float> = Matrix4(
+  static identity: Matrix4<Float> = Matrix4(
     Vector4(1.0, 0.0, 0.0, 0.0),
     Vector4(0.0, 1.0, 0.0, 0.0),
     Vector4(0.0, 0.0, 1.0, 0.0),
@@ -361,7 +361,7 @@ extend Matrix4<Float> {
 /** The deterministic matrix's identity. */
 extend Matrix4<Fixed> {
   /** The transformation that changes nothing. */
-  const identity: Matrix4<Fixed> = Matrix4(
+  static identity: Matrix4<Fixed> = Matrix4(
     Vector4(Fixed(65536), Fixed(0), Fixed(0), Fixed(0)),
     Vector4(Fixed(0), Fixed(65536), Fixed(0), Fixed(0)),
     Vector4(Fixed(0), Fixed(0), Fixed(65536), Fixed(0)),

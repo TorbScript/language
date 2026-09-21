@@ -9,9 +9,9 @@ prerequisites:
 keywords:
   - type
   - method
-  - self
-  - var self
-  - static function
+  - var fn
+  - static fn
+  - receiver
 source:
   - CONCEPT.md#types
   - examples/tour/src/03-types.trb
@@ -22,8 +22,8 @@ one declaration here. This page takes you from a first `type` to a method that c
 
 ## Goal
 
-At the end of this page you can declare a type with fields and methods, and know which method needs `var self` and
-which does not.
+At the end of this page you can declare a type with fields and methods, and know which method is a `var fn` and which
+is not.
 
 ## Declaring a type
 
@@ -45,14 +45,15 @@ A field is public unless marked `private`, and `const` unless marked `var`. The
 
 ## Adding a method
 
-A method is a function declared inside the type that names `self` as its receiver.
+A method is a function declared inside the type. It does not list its receiver: the parameter list is what the caller
+writes.
 
 ```trb
 type Rectangle {
   width: Int
   height: Int
 
-  fn area(self): Int {
+  fn area(): Int {
     width * height
   }
 }
@@ -61,19 +62,19 @@ const rectangle = Rectangle 3, 4
 print rectangle.area()
 ```
 
-Inside `area`, `width` and `height` resolve against `self` without writing `self.width`. A function declared on a type
-without `self` is a [static function](../language/types/methods.md), called through the type itself rather than
+Inside `area`, `width` and `height` resolve against the receiver without writing `self.width`. A member marked
+[`static`](../language/types/methods.md) belongs to the type instead, and is called through the type rather than
 through a value:
 
 ```trb
 type Circle {
   radius: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     3.14159 * radius * radius
   }
 
-  fn unit(): Circle {
+  static fn unit(): Circle {
     Circle 1.0
   }
 }
@@ -81,19 +82,19 @@ type Circle {
 print Circle.unit().area()
 ```
 
-## Changing a value in place: var self
+## Changing a value in place: `var fn`
 
-A method that changes its receiver declares `var self`, and is called a **verb**.
+A method that changes its receiver is a `var fn`, and is called a **verb**.
 
 ```trb
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 
-  fn incremented(self): Counter {
+  fn incremented(): Counter {
     copy(count: count + 1)
   }
 }
@@ -104,15 +105,15 @@ print counter.count
 ```
 
 `increment` needs `counter` to be a `var` binding, because a change always needs a
-[`var` path](../language/types/var-paths.md) from the binding down. Its **participle**, `incremented`, takes a plain
-`self` and answers a changed copy instead, using `copy`, which every type gets for free. Calling `increment` through a
+[`var` path](../language/types/var-paths.md) from the binding down. Its **participle**, `incremented`, is an ordinary
+`fn` and answers a changed copy instead, using `copy`, which every type gets for free. Calling `increment` through a
 `const` binding is a compile error:
 
 ```trb error
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }

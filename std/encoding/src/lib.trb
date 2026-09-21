@@ -12,14 +12,14 @@
  * constructor is usable from outside. The generated code is exactly what one would write by hand:
  *
  *     extend User with Encode, Decode {
- *       fn encode(self, var encoder: Encoder) {
+ *       fn encode(var encoder: Encoder) {
  *         encoder.record("User") { fields =>
  *           fields.field("name", name)
  *           fields.field("tags", tags)
  *         }
  *       }
  *
- *       fn decode(var decoder: Decoder): Result<User, DecodeError> {
+ *       static fn decode(var decoder: Decoder): Result<User, DecodeError> {
  *         decoder.record("User") { fields =>
  *           Ok(User(
  *             name: fields.field("name")?,
@@ -37,7 +37,7 @@ use Stage from "std/iteration"
 use Bytes from "std/stream"
 
 public trait Encode {
-  fn encode(self, var encoder: Encoder)
+  fn encode(var encoder: Encoder)
 }
 
 /**
@@ -64,23 +64,23 @@ public trait Encode {
  */
 public trait Format<Failure> {
   /** The whole value, as the bytes that go into a file or onto a wire. */
-  fn encodeAll(value: Encode): Bytes
+  static fn encodeAll(value: Encode): Bytes
 
   /** One whole value out of all of its bytes. */
-  fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, Failure>
+  static fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, Failure>
 
   /**
    * Bytes to items. Fallible, so the items are `Result`s - a `Stage` is synchronous and knows nothing about the
    * failure of the stream around it; `source.checked()` is where they become one.
    */
-  fn items<Item: Decode>(): Stage<Bytes, Result<Item, Failure>>
+  static fn items<Item: Decode>(): Stage<Bytes, Result<Item, Failure>>
 
   /** Items to bytes: the other direction, and the one that never fails. */
-  fn encoded<Item: Encode>(): Stage<Item, Bytes>
+  static fn encoded<Item: Encode>(): Stage<Item, Bytes>
 }
 
 public trait Decode {
-  fn decode(var decoder: Decoder): Result<Self, DecodeError>
+  static fn decode(var decoder: Decoder): Result<Self, DecodeError>
 }
 
 public type DecodeError with Show, Error {
@@ -88,11 +88,11 @@ public type DecodeError with Show, Error {
   path: List<String> = []
 
   /** `error.inside("email")`: errors collect the path on their way out. */
-  fn inside(self, segment: String): DecodeError {
+  fn inside(segment: String): DecodeError {
     copy path: path.inserted(0, segment)
   }
 
-  fn show(self): String {
+  fn show(): String {
     if path.isEmpty() {
       return message
     }
@@ -105,32 +105,32 @@ public type DecodeError with Show, Error {
 
 /** The methods are named after the types of the language. Narrow numbers are widened, so nothing is lost. */
 public trait Encoder {
-  fn nothing(var self)
-  fn bool(var self, value: Bool)
-  fn int(var self, value: Int64)
-  fn unsigned(var self, value: UInt64)
-  fn float(var self, value: Float64)
-  fn decimal(var self, value: Decimal)
-  fn string(var self, value: String)
-  fn bytes(var self, value: List<UInt8>)
+  var fn nothing()
+  var fn bool(value: Bool)
+  var fn int(value: Int64)
+  var fn unsigned(value: UInt64)
+  var fn float(value: Float64)
+  var fn decimal(value: Decimal)
+  var fn string(value: String)
+  var fn bytes(value: List<UInt8>)
 
   /** `length` is known for collections and unknown for pipelines. Items are written one by one: this streams. */
-  fn sequence(var self, length: Int?, write: (var items: SequenceEncoder) => Void)
-  fn map(var self, length: Int?, write: (var entries: MapEncoder) => Void)
-  fn record(var self, typeName: String, write: (var fields: RecordEncoder) => Void)
-  fn variant(var self, typeName: String, name: String, write: (var fields: RecordEncoder) => Void)
+  var fn sequence(length: Int?, write: (var items: SequenceEncoder) => Void)
+  var fn map(length: Int?, write: (var entries: MapEncoder) => Void)
+  var fn record(typeName: String, write: (var fields: RecordEncoder) => Void)
+  var fn variant(typeName: String, name: String, write: (var fields: RecordEncoder) => Void)
 }
 
 public trait SequenceEncoder {
-  fn item(var self, value: Encode)
+  var fn item(value: Encode)
 }
 
 public trait MapEncoder {
-  fn entry(var self, key: Encode, value: Encode)
+  var fn entry(key: Encode, value: Encode)
 }
 
 public trait RecordEncoder {
-  fn field(var self, name: String, value: Encode)
+  var fn field(name: String, value: Encode)
 }
 
 // --- What a format implements: reading ---------------------------------------------------------------------------
@@ -141,34 +141,30 @@ public trait RecordEncoder {
  */
 public trait Decoder {
   /** Consumes a "nothing" if there is one. This is how `Option` decides between `None` and `Some`. */
-  fn nothing(var self): Bool
+  var fn nothing(): Bool
 
-  fn bool(var self): Result<Bool, DecodeError>
-  fn int(var self): Result<Int64, DecodeError>
-  fn unsigned(var self): Result<UInt64, DecodeError>
-  fn float(var self): Result<Float64, DecodeError>
-  fn decimal(var self): Result<Decimal, DecodeError>
-  fn string(var self): Result<String, DecodeError>
-  fn bytes(var self): Result<List<UInt8>, DecodeError>
+  var fn bool(): Result<Bool, DecodeError>
+  var fn int(): Result<Int64, DecodeError>
+  var fn unsigned(): Result<UInt64, DecodeError>
+  var fn float(): Result<Float64, DecodeError>
+  var fn decimal(): Result<Decimal, DecodeError>
+  var fn string(): Result<String, DecodeError>
+  var fn bytes(): Result<List<UInt8>, DecodeError>
 
-  fn sequence<Output>(
-    var self,
+  var fn sequence<Output>(
     read: (var items: SequenceDecoder) => Result<Output, DecodeError>,
   ): Result<Output, DecodeError>
 
-  fn map<Output>(
-    var self,
+  var fn map<Output>(
     read: (var entries: MapDecoder) => Result<Output, DecodeError>,
   ): Result<Output, DecodeError>
 
-  fn record<Output>(
-    var self,
+  var fn record<Output>(
     typeName: String,
     read: (var fields: RecordDecoder) => Result<Output, DecodeError>,
   ): Result<Output, DecodeError>
 
-  fn variant<Output>(
-    var self,
+  var fn variant<Output>(
     typeName: String,
     read: (name: String, var fields: RecordDecoder) => Result<Output, DecodeError>,
   ): Result<Output, DecodeError>
@@ -176,16 +172,16 @@ public trait Decoder {
 
 public trait SequenceDecoder {
   /** `None` at the end of the sequence. */
-  fn next<Item: Decode>(var self): Result<Item?, DecodeError>
+  var fn next<Item: Decode>(): Result<Item?, DecodeError>
 }
 
 public trait MapDecoder {
-  fn next<Key: Decode, Value: Decode>(var self): Result<(Key, Value)?, DecodeError>
+  var fn next<Key: Decode, Value: Decode>(): Result<(Key, Value)?, DecodeError>
 }
 
 public trait RecordDecoder {
-  fn field<Value: Decode>(var self, name: String): Result<Value, DecodeError>
-  fn fieldOr<Value: Decode>(var self, name: String, default: lazy Value): Result<Value, DecodeError>
+  var fn field<Value: Decode>(name: String): Result<Value, DecodeError>
+  var fn fieldOr<Value: Decode>(name: String, default: lazy Value): Result<Value, DecodeError>
 }
 
 /** Any `Encode` value as readable text, for messages and debugging: `User(name: "Ada", tags: ["math"])` */
@@ -194,32 +190,32 @@ public native fn describe(value: Encode): String
 // --- The standard library describes itself, too --------------------------------------------------------------------
 
 extend Bool with Encode, Decode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.bool self
   }
 
-  fn decode(var decoder: Decoder): Result<Bool, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<Bool, DecodeError> {
     decoder.bool()
   }
 }
 
 extend Int64 with Encode, Decode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.int self
   }
 
-  fn decode(var decoder: Decoder): Result<Int64, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<Int64, DecodeError> {
     decoder.int()
   }
 }
 
 /** Narrow numbers travel as `Int64` and are checked on the way back. */
 extend Int8 with Encode, Decode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.int Int64.from(self)
   }
 
-  fn decode(var decoder: Decoder): Result<Int8, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<Int8, DecodeError> {
     const wide = decoder.int()?
     Int8.tryFrom(wide).mapError { DecodeError "{wide} does not fit into Int8" }
   }
@@ -232,78 +228,78 @@ extend Int8 with Encode, Decode {
  * these, a `Float64` field would make a whole syntax tree unshowable.
  */
 extend Int16 with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.int Int64.from(self)
   }
 }
 
 extend Int32 with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.int Int64.from(self)
   }
 }
 
 extend UInt8 with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.int Int64.from(self)
   }
 }
 
 extend UInt16 with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.int Int64.from(self)
   }
 }
 
 extend UInt32 with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.int Int64.from(self)
   }
 }
 
 extend UInt64 with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.unsigned self
   }
 }
 
 extend Float32 with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.float Float64.from(self)
   }
 }
 
 extend Float64 with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.float self
   }
 }
 
 extend Decimal with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.decimal self
   }
 }
 
 /** A `Char` travels as a text of one character: the formats of the language have no character of their own. */
 extend Char with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.string show()
   }
 }
 
 extend String with Encode, Decode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.string self
   }
 
-  fn decode(var decoder: Decoder): Result<String, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<String, DecodeError> {
     decoder.string()
   }
 }
 
 extend<Value: Encode> Option<Value> with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     match self {
       Some(value) => value.encode encoder
       None => encoder.nothing()
@@ -312,7 +308,7 @@ extend<Value: Encode> Option<Value> with Encode {
 }
 
 extend<Value: Decode> Option<Value> with Decode {
-  fn decode(var decoder: Decoder): Result<Value?, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<Value?, DecodeError> {
     if decoder.nothing() {
       return Ok None
     }
@@ -322,7 +318,7 @@ extend<Value: Decode> Option<Value> with Decode {
 
 /** Lists and sets are sequences. A `Set` stays a `Set`: the target type decides on the way back. */
 extend<Item: Encode> List<Item> with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.sequence Some(length()) { items =>
       for value in self {
         items.item value
@@ -332,13 +328,13 @@ extend<Item: Encode> List<Item> with Encode {
 }
 
 extend<Item: Encode> Set<Item> with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     toList().encode(encoder)
   }
 }
 
 extend<Key: Encode, Value: Encode> Map<Key, Value> with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.map Some(length()) { entries =>
       for (key, value) in self {
         entries.entry key, value
@@ -348,7 +344,7 @@ extend<Key: Encode, Value: Encode> Map<Key, Value> with Encode {
 }
 
 extend<Item: Decode> List<Item> with Decode {
-  fn decode(var decoder: Decoder): Result<List<Item>, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<List<Item>, DecodeError> {
     decoder.sequence { items =>
       var result: List<Item> = []
       while const Some(value) = items.next()? {
@@ -360,13 +356,13 @@ extend<Item: Decode> List<Item> with Decode {
 }
 
 extend<Item: Decode & Hash> Set<Item> with Decode {
-  fn decode(var decoder: Decoder): Result<Set<Item>, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<Set<Item>, DecodeError> {
     Ok((List<Item>.decode(decoder)?).toSet())
   }
 }
 
 extend<Key: Decode & Hash, Value: Decode> Map<Key, Value> with Decode {
-  fn decode(var decoder: Decoder): Result<Map<Key, Value>, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<Map<Key, Value>, DecodeError> {
     decoder.map { entries =>
       var result: Map<Key, Value> = [:]
       while const Some((key, value)) = entries.next()? {

@@ -1,13 +1,13 @@
 ---
 title: Verbs and participles
-summary: A verb changes its receiver in place and declares var self, and its participle answers a changed copy instead, so calling the verb through a const path names the participle in its error.
+summary: A verb changes its receiver in place and is a var fn, and its participle answers a changed copy instead, so calling the verb through a const path names the participle in its error.
 kind: reference
 status: stable
 order: 70
 keywords:
   - verb
   - participle
-  - var self
+  - var fn
   - naming
 source:
   - CONCEPT.md#lexical-structure
@@ -24,11 +24,11 @@ naming when it explains why a call was rejected.
 type Counter {
   var value: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     value = value + 1
   }
 
-  fn incremented(self): Counter {
+  fn incremented(): Counter {
     copy(value: value + 1)
   }
 }
@@ -42,16 +42,16 @@ print "{counter.value} {next.value}"
 ## Syntax
 
 ```text
-fn <verb>(var self, <parameters>)                    // Changes in place, answers nothing
-fn <participle>(self, <parameters>): <Type>          // Answers a changed copy, leaves self alone
+var fn <verb>(<parameters>)                          // Changes in place, answers nothing
+fn <participle>(<parameters>): <Type>                // Answers a changed copy, leaves the receiver alone
 ```
 
 ## Rules
 
-1. **A verb changes its receiver in place and declares `var self`.** `increment` needs a `var` path to run, exactly
-   like any other method that declares `var self`.
+1. **A verb changes its receiver in place and is a `var fn`.** `increment` needs a `var` path to run, exactly
+   like any other method that is a `var fn`.
 
-2. **A participle answers a changed copy and declares only `self`.** `incremented` never needs a `var` path, because
+2. **A participle answers a changed copy and is an ordinary `fn`.** `incremented` never needs a `var` path, because
    `counter` itself is untouched - `copy` already does the work of building the new value.
 
 3. **Calling a verb through a `const` path is an error that names the participle**, when the compiler can build one
@@ -61,7 +61,7 @@ fn <participle>(self, <parameters>): <Type>          // Answers a changed copy, 
    type Counter {
      var value: Int = 0
 
-     fn increment(var self) {
+     var fn increment() {
        value = value + 1
      }
    }
@@ -72,7 +72,7 @@ fn <participle>(self, <parameters>): <Type>          // Answers a changed copy, 
    ```
 
 4. **A noun never changes anything.** `union` and `intersection` read as operations, not as verbs, so neither one
-   needs `var self` - a name that could be misread as a verb is a naming mistake independent of what the member
+   is a `var fn` - a name that could be misread as a verb is a naming mistake independent of what the member
    actually does.
 
 5. **A verb is picked so that its participle is a different word.** The standard library avoids `put`, `cut` and
@@ -95,7 +95,7 @@ print counter.value
 type Counter {
   var value: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     value = value + 1
   }
 }
@@ -110,4 +110,4 @@ fn tick(counter: Counter) {
 
 - [Declaring a type](declaring-a-type.md) - where a verb and its participle first appear, `translate`/`translated`.
 - [Mutation and var paths](var-paths.md) - what makes a path a `var` path in the first place.
-- [Methods and static functions](methods.md) - `self` against no `self`, the more basic distinction.
+- [Methods and `static fn`s](methods.md) - `static` against a receiver, the more basic distinction.

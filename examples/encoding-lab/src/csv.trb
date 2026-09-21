@@ -19,7 +19,7 @@ public type CsvProblem with Show, Error {
   field: String
   reason: String
 
-  fn show(self): String {
+  fn show(): String {
     "the column `{field}` {reason}"
   }
 }
@@ -33,7 +33,7 @@ public type CsvFormat {
    * `price.currency`. With a quoted expression the field reference is type checked and a misspelling does not compile;
    * the lab checks the name against the type's own `Describe` instead, which is the same error one phase later.
    */
-  fn flatten(var self, field: String) {
+  var fn flatten(field: String) {
     flattened.add field
   }
 }
@@ -45,7 +45,7 @@ public type Csv {
   /**
    * The design writes `Csv.of<Shipment> { flatten { _.price } }`. Everything that can go wrong goes wrong here, once.
    */
-  fn of(
+  static fn of(
     describe: (var target: Structures) => Void,
     define: (var format: CsvFormat) => Void,
   ): Result<Csv, CsvProblem> {
@@ -64,13 +64,13 @@ public type Csv {
     Ok Csv(columns)
   }
 
-  fn header(self): String {
+  fn header(): String {
     const names = columns.map({ _.name }).toList()
     names.joined separator: ","
   }
 
   /** One row, in the column order. A cell that is `None` is empty, which is what a table means by absent. */
-  fn row<Value: Encode>(self, value: Value): Result<String, CsvProblem> {
+  fn row<Value: Encode>(value: Value): Result<String, CsvProblem> {
     var target = CsvEncoder()
     value.encode target
     const cells = columns.map { column => escaped(target.cells.get(column.path) ?? "") }
@@ -82,7 +82,6 @@ public type Csv {
    * of the column paths: that is the same mapping, read from the other side.
    */
   fn decode<Value>(
-    self,
     read: (var source: ValueDecoder) => Result<Value, DecodeError>,
     line: String,
   ): Result<Value, DecodeError> {
@@ -171,71 +170,71 @@ type CsvEncoder with Encoder {
   private var path: List<String> = []
   private var pending: String = ""
 
-  fn nothing(var self) {
+  var fn nothing() {
     put ""
   }
 
-  fn bool(var self, value: Bool) {
+  var fn bool(value: Bool) {
     put "{value}"
   }
 
-  fn int(var self, value: Int64) {
+  var fn int(value: Int64) {
     put "{value}"
   }
 
-  fn unsigned(var self, value: UInt64) {
+  var fn unsigned(value: UInt64) {
     put "{value}"
   }
 
-  fn float(var self, value: Float64) {
+  var fn float(value: Float64) {
     put "{value}"
   }
 
-  fn string(var self, value: String) {
+  var fn string(value: String) {
     put value
   }
 
-  fn bytes(var self, value: List<UInt8>) {
+  var fn bytes(value: List<UInt8>) {
     put "{value.length()} bytes"
   }
 
-  fn sequence(var self, length: Int?) {
+  var fn sequence(length: Int?) {
     const _length = length
     descend()
   }
 
-  fn map(var self, length: Int?) {
+  var fn map(length: Int?) {
     const _length = length
     descend()
   }
 
-  fn record(var self, typeName: String) {
+  var fn record(typeName: String) {
     const _typeName = typeName
     descend()
   }
 
-  fn variant(var self, typeName: String, name: String) {
+  var fn variant(typeName: String, name: String) {
     const _typeName = typeName
     put name
   }
 
-  fn field(var self, name: String) {
+  var fn field(name: String) {
     pending = name
   }
 
-  fn finish(var self) {
+  var fn finish() {
     if !path.isEmpty() {
       path = path.removedAt(path.length() - 1)
     }
   }
 
   /** Whatever opens takes the field name it sits in with it, so the path below is right. */
-  private fn descend(var self) {
+  private var fn descend() {
     path.add pending
     pending = ""
   }
 
-  private fn put(var self, value: String) {
+  private var fn put(value: String) {
     const full = if pending.isEmpty() { path } else { path.added pending }
     const key = full.filter({ !_.isEmpty() }).toList().joined(separator: ".")
     cells.set key, value

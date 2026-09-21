@@ -43,17 +43,17 @@ public type Path with Show, Equals, Hash, Compare {
   components: List<String> = []
 
   /** Whether the path starts at a root. Its opposite is [Path.isRelative]. */
-  fn isAbsolute(self): Bool {
+  fn isAbsolute(): Bool {
     root.isSome()
   }
 
   /** Whether the path has no root, so that it means something only against a base. */
-  fn isRelative(self): Bool {
+  fn isRelative(): Bool {
     root.isNone()
   }
 
   /** The last component: the name of the file or of the directory. `None` for a root and for the empty path. */
-  fn name(self): String? {
+  fn name(): String? {
     components.last()
   }
 
@@ -61,7 +61,7 @@ public type Path with Show, Equals, Hash, Compare {
    * The extension of the name, without the dot. `None` where the name has none, and for `.gitignore`, whose only
    * dot is the first character of the name.
    */
-  fn extension(self): String? {
+  fn extension(): String? {
     const found = name()?
     const dot = found.lastIndexOf(".")?
     if dot == 0 {
@@ -75,7 +75,7 @@ public type Path with Show, Equals, Hash, Compare {
   }
 
   /** The name without its extension and without the dot. `main` for `src/main.trb`. */
-  fn nameWithoutExtension(self): String? {
+  fn nameWithoutExtension(): String? {
     const found = name()?
     match extension() {
       Some(suffix) => Some found[0..(found.byteLength() - suffix.byteLength() - 1)]
@@ -84,7 +84,7 @@ public type Path with Show, Equals, Hash, Compare {
   }
 
   /** The path one component up. `None` at a root and for the empty path: there is nothing above them. */
-  fn parent(self): Path? {
+  fn parent(): Path? {
     if components.isEmpty() {
       return None
     }
@@ -92,18 +92,18 @@ public type Path with Show, Equals, Hash, Compare {
   }
 
   /** `relative` below this path. The root of `relative` is dropped, so the result never leaves `self`. */
-  fn joined(self, relative: Path): Path {
+  fn joined(relative: Path): Path {
     Path root, components.addedAll(relative.components)
   }
 
   /** The same path with its last component replaced. `None` where there is no name to replace. */
-  fn withName(self, name: String): Path? {
+  fn withName(name: String): Path? {
     const above = parent()?
     Some above.joined(Path(None, [name]))
   }
 
   /** The same path with a different extension, added where there was none. An empty `extension` removes it. */
-  fn withExtension(self, extension: String): Path? {
+  fn withExtension(extension: String): Path? {
     const stem = nameWithoutExtension()?
     if extension.isEmpty() {
       return withName stem
@@ -112,7 +112,7 @@ public type Path with Show, Equals, Hash, Compare {
   }
 
   /** Whether this path starts at the same root and with the same components as `prefix`. */
-  fn startsWith(self, prefix: Path): Bool {
+  fn startsWith(prefix: Path): Bool {
     if root != prefix.root || prefix.components.length() > components.length() {
       return false
     }
@@ -129,7 +129,7 @@ public type Path with Show, Equals, Hash, Compare {
    * roots differ - today's equivalent answers the absolute path there, and `None` lets the caller decide instead of
    * guessing for it.
    */
-  fn relativeTo(self, base: Path): Path? {
+  fn relativeTo(base: Path): Path? {
     if root != base.root {
       return None
     }
@@ -153,7 +153,7 @@ public type Path with Show, Equals, Hash, Compare {
    * relative path it stays. It reads no disk and follows no link, so `a/../b` normalized to `b` is a different file
    * wherever `a` is a symlink.
    */
-  fn normalized(self): Path {
+  fn normalized(): Path {
     var kept: List<String> = []
     for component in components {
       if component.isEmpty() || component == "." {
@@ -192,7 +192,7 @@ public type Path with Show, Equals, Hash, Compare {
    *   check and the open all defeat it. Closing that gap needs the operating system asked while it opens, which is
    *   `std/fs`'s business and not this package's.
    */
-  fn resolved(self, inside: Path): Result<Path, PathError> {
+  fn resolved(inside: Path): Result<Path, PathError> {
     const base = inside.normalized()
     if base.isRelative() {
       return Fail PathError.NoBase(base)
@@ -205,7 +205,7 @@ public type Path with Show, Equals, Hash, Compare {
   }
 
   /** The path with `/` as the separator, on every platform. `.` for the empty path. */
-  fn show(self): String {
+  fn show(): String {
     const body = components.joined separator: "/"
     match root {
       Some(found) => if body.isEmpty() { found.show() } else { "{found}{body}" }
@@ -214,7 +214,7 @@ public type Path with Show, Equals, Hash, Compare {
   }
 
   /** Root first, then component by component, then by the number of components. Case sensitive everywhere. */
-  fn compare(self, other: Path): Ordering {
+  fn compare(other: Path): Ordering {
     const here = rankOf root
     const there = rankOf other.root
     if here != there {
@@ -257,7 +257,7 @@ public type Path with Show, Equals, Hash, Compare {
  *   separator on every platform here. Name it with `Path(None, ["a\\b"])` or [Path.joined] instead.
  */
 extend Path with From<String> {
-  fn from(value: String): Path {
+  static fn from(value: String): Path {
     const slashed = value.replace "\\", "/"
     if const Some((root, rest)) = shareRootOf(slashed) {
       return Path Some(root), rest

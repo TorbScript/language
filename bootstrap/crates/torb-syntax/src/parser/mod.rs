@@ -321,6 +321,12 @@ impl<'source> Parser<'source> {
         let doc = self.take_doc();
         let is_var = self.at_keyword(Keyword::Var);
         self.bump();
+        self.binding_body(doc, is_var)
+    }
+
+    /// The part of a binding behind its keyword: `name: Type = value`. A constant of a type is written `static name =
+    /// value`, so its binding starts here and not at a `const`.
+    pub(super) fn binding_body(&mut self, doc: Option<String>, is_var: bool) -> Binding {
         let pattern = self.pattern();
         let annotation = self.eat(TokenKind::Colon).then(|| self.type_reference());
         if !self.at(TokenKind::Equal) {

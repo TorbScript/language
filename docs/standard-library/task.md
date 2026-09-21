@@ -50,10 +50,10 @@ print total
 
 ```trb fragment
 public native shared type Task<Value> {
-  fn await(self): Value
-  fn map<Output>(self, transform: (value: Value) => Output): Task<Output>
-  fn flatMap<Output>(self, transform: (value: Value) => Task<Output>): Task<Output>
-  fn all(tasks: Iterable<Task<Value>>): Task<List<Value>>
+  fn await(): Value
+  fn map<Output>(transform: (value: Value) => Output): Task<Output>
+  fn flatMap<Output>(transform: (value: Value) => Task<Output>): Task<Output>
+  static fn all(tasks: Iterable<Task<Value>>): Task<List<Value>>
 }
 ```
 
@@ -80,8 +80,8 @@ of the same type.
 public native shared type Channel<Item> {
   capacity: Int = 0
 
-  fn source(self): Source<Item, Never>
-  fn sink(self): Sink<Item, ChannelClosed>
+  fn source(): Source<Item, Never>
+  fn sink(): Sink<Item, ChannelClosed>
 }
 ```
 

@@ -47,15 +47,15 @@ print describe(point)
 
 ```trb fragment
 public trait Encode {
-  fn encode(self, var encoder: Encoder)
+  fn encode(var encoder: Encoder)
 }
 
 public trait Decode {
-  fn decode(var decoder: Decoder): Result<Self, DecodeError>
+  static fn decode(var decoder: Decoder): Result<Self, DecodeError>
 }
 ```
 
-`encode` writes `self` into whatever `encoder` is; `decode` is a static function through `Type.decode(decoder)` and
+`encode` writes `self` into whatever `encoder` is; `decode` is a `static fn` through `Type.decode(decoder)` and
 answers the failure a format's decoder produced. Both are generated for an ordinary type, and hand-written for a type
 that needs a shape a format does not have on its own (`JsonValue`, below).
 
@@ -66,7 +66,7 @@ public type DecodeError with Show, Error {
   message: String
   path: List<String> = []
 
-  fn inside(self, segment: String): DecodeError
+  fn inside(segment: String): DecodeError
 }
 ```
 
@@ -77,23 +77,23 @@ public type DecodeError with Show, Error {
 
 ```trb fragment
 public trait Encoder {
-  fn nothing(var self)
-  fn bool(var self, value: Bool)
-  fn int(var self, value: Int64)
-  fn unsigned(var self, value: UInt64)
-  fn float(var self, value: Float64)
-  fn decimal(var self, value: Decimal)
-  fn string(var self, value: String)
-  fn bytes(var self, value: List<UInt8>)
-  fn sequence(var self, length: Int?, write: (var items: SequenceEncoder) => Void)
-  fn map(var self, length: Int?, write: (var entries: MapEncoder) => Void)
-  fn record(var self, typeName: String, write: (var fields: RecordEncoder) => Void)
-  fn variant(var self, typeName: String, name: String, write: (var fields: RecordEncoder) => Void)
+  var fn nothing()
+  var fn bool(value: Bool)
+  var fn int(value: Int64)
+  var fn unsigned(value: UInt64)
+  var fn float(value: Float64)
+  var fn decimal(value: Decimal)
+  var fn string(value: String)
+  var fn bytes(value: List<UInt8>)
+  var fn sequence(length: Int?, write: (var items: SequenceEncoder) => Void)
+  var fn map(length: Int?, write: (var entries: MapEncoder) => Void)
+  var fn record(typeName: String, write: (var fields: RecordEncoder) => Void)
+  var fn variant(typeName: String, name: String, write: (var fields: RecordEncoder) => Void)
 }
 
-public trait SequenceEncoder { fn item(var self, value: Encode) }
-public trait MapEncoder { fn entry(var self, key: Encode, value: Encode) }
-public trait RecordEncoder { fn field(var self, name: String, value: Encode) }
+public trait SequenceEncoder { var fn item(value: Encode) }
+public trait MapEncoder { var fn entry(key: Encode, value: Encode) }
+public trait RecordEncoder { var fn field(name: String, value: Encode) }
 ```
 
 The methods of `Encoder` are named after the types of the language, and a narrow number is widened before it is
@@ -105,25 +105,25 @@ sequence instead of building one in memory.
 
 ```trb fragment
 public trait Decoder {
-  fn nothing(var self): Bool
-  fn bool(var self): Result<Bool, DecodeError>
-  fn int(var self): Result<Int64, DecodeError>
-  fn unsigned(var self): Result<UInt64, DecodeError>
-  fn float(var self): Result<Float64, DecodeError>
-  fn decimal(var self): Result<Decimal, DecodeError>
-  fn string(var self): Result<String, DecodeError>
-  fn bytes(var self): Result<List<UInt8>, DecodeError>
-  fn sequence<Output>(var self, read: (var items: SequenceDecoder) => Result<Output, DecodeError>): Result<Output, DecodeError>
-  fn map<Output>(var self, read: (var entries: MapDecoder) => Result<Output, DecodeError>): Result<Output, DecodeError>
-  fn record<Output>(var self, typeName: String, read: (var fields: RecordDecoder) => Result<Output, DecodeError>): Result<Output, DecodeError>
-  fn variant<Output>(var self, typeName: String, read: (name: String, var fields: RecordDecoder) => Result<Output, DecodeError>): Result<Output, DecodeError>
+  var fn nothing(): Bool
+  var fn bool(): Result<Bool, DecodeError>
+  var fn int(): Result<Int64, DecodeError>
+  var fn unsigned(): Result<UInt64, DecodeError>
+  var fn float(): Result<Float64, DecodeError>
+  var fn decimal(): Result<Decimal, DecodeError>
+  var fn string(): Result<String, DecodeError>
+  var fn bytes(): Result<List<UInt8>, DecodeError>
+  var fn sequence<Output>(read: (var items: SequenceDecoder) => Result<Output, DecodeError>): Result<Output, DecodeError>
+  var fn map<Output>(read: (var entries: MapDecoder) => Result<Output, DecodeError>): Result<Output, DecodeError>
+  var fn record<Output>(typeName: String, read: (var fields: RecordDecoder) => Result<Output, DecodeError>): Result<Output, DecodeError>
+  var fn variant<Output>(typeName: String, read: (name: String, var fields: RecordDecoder) => Result<Output, DecodeError>): Result<Output, DecodeError>
 }
 
-public trait SequenceDecoder { fn next<Item: Decode>(var self): Result<Item?, DecodeError> }
-public trait MapDecoder { fn next<Key: Decode, Value: Decode>(var self): Result<(Key, Value)?, DecodeError> }
+public trait SequenceDecoder { var fn next<Item: Decode>(): Result<Item?, DecodeError> }
+public trait MapDecoder { var fn next<Key: Decode, Value: Decode>(): Result<(Key, Value)?, DecodeError> }
 public trait RecordDecoder {
-  fn field<Value: Decode>(var self, name: String): Result<Value, DecodeError>
-  fn fieldOr<Value: Decode>(var self, name: String, default: lazy Value): Result<Value, DecodeError>
+  var fn field<Value: Decode>(name: String): Result<Value, DecodeError>
+  var fn fieldOr<Value: Decode>(name: String, default: lazy Value): Result<Value, DecodeError>
 }
 ```
 
@@ -135,10 +135,10 @@ value uses, so a field that was left out of the document is not an error.
 
 ```trb fragment
 public trait Format<Failure> {
-  fn encodeAll(value: Encode): Bytes
-  fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, Failure>
-  fn items<Item: Decode>(): Stage<Bytes, Result<Item, Failure>>
-  fn encoded<Item: Encode>(): Stage<Item, Bytes>
+  static fn encodeAll(value: Encode): Bytes
+  static fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, Failure>
+  static fn items<Item: Decode>(): Stage<Bytes, Result<Item, Failure>>
+  static fn encoded<Item: Encode>(): Stage<Item, Bytes>
 }
 ```
 

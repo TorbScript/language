@@ -99,7 +99,7 @@ print add(2, 3)
    print "{next()}, {next()}, {next()}"
    ```
 
-8. **Capturing a `var` parameter or `var self` is only legal in a closure that cannot outlive the call.** Such a
+8. **Capturing a `var` parameter or a `var fn` receiver is only legal in a closure that cannot outlive the call.** Such a
    closure is a reference to the caller's value, and a reference may not be stored or returned - only written
    directly as the argument of a call that runs the closure and does not keep it, which is what a control structure,
    a receiver closure and a pipeline stage all are.

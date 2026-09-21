@@ -22,13 +22,13 @@ trait it implements automatically, which is the one place the language has subty
 
 ```trb check
 trait Shape {
-  fn area(self): Float
+  fn area(): Float
 }
 
 type Square with Shape {
   side: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     side * side
   }
 }
@@ -36,7 +36,7 @@ type Square with Shape {
 type Circle with Shape {
   radius: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     Float.pi * radius * radius
   }
 }
@@ -75,13 +75,13 @@ const <name>: List<<Trait>> = [...]        a collection of a trait type
 
    ```trb error
    trait Shape {
-     fn area(self): Float
+     fn area(): Float
    }
 
    type Square with Shape {
      side: Float
 
-     fn area(self): Float {
+     fn area(): Float {
        side * side
      }
    }
@@ -96,7 +96,7 @@ const <name>: List<<Trait>> = [...]        a collection of a trait type
    [Witness tables](../generics/witnesses.md) for how a generic member reaches a trait-typed value at all.
 
 6. **Not every member of a trait can be called on a trait-typed value.** A member whose signature mentions `Self`, or
-   that has no `self`, is rejected at the call - the type stays a legal type even so. See
+   that is `static`, is rejected at the call - the type stays a legal type even so. See
    [Object safety](object-safety.md).
 
 ## What this is not
@@ -107,13 +107,13 @@ happens once, while the list is being built; nothing about the finished `List<Sh
 
 ```trb check
 trait Shape {
-  fn area(self): Float
+  fn area(): Float
 }
 
 type Square with Shape {
   side: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     side * side
   }
 }
@@ -124,13 +124,13 @@ const shapes: List<Shape> = [Square(3.0)]
 
 ```trb error
 trait Shape {
-  fn area(self): Float
+  fn area(): Float
 }
 
 type Square with Shape {
   side: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     side * side
   }
 }

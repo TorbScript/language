@@ -25,7 +25,7 @@ every time.
 
    ```trb fragment
    extend Celsius with From<Fahrenheit> {
-     fn from(value: Fahrenheit): Celsius {
+     static fn from(value: Fahrenheit): Celsius {
        Celsius((value.degrees - 32.0) / 1.8)
      }
    }
@@ -44,7 +44,7 @@ every time.
 
    ```trb fragment
    extend Percent with TryFrom<Int, PercentError> {
-     fn tryFrom(value: Int): Result<Percent, PercentError> {
+     static fn tryFrom(value: Int): Result<Percent, PercentError> {
        if value < 0 || value > 100 {
          return Fail PercentError.OutOfRange(value)
        }
@@ -95,7 +95,7 @@ type Fahrenheit {
 }
 
 extend Celsius with From<Fahrenheit> {
-  fn from(value: Fahrenheit): Celsius {
+  static fn from(value: Fahrenheit): Celsius {
     Celsius((value.degrees - 32.0) / 1.8)
   }
 }
@@ -103,7 +103,7 @@ extend Celsius with From<Fahrenheit> {
 type PercentError with Show, Error {
   case OutOfRange(value: Int)
 
-  fn show(self): String {
+  fn show(): String {
     match self {
       .OutOfRange(value) => "{value} is not between 0 and 100"
     }
@@ -115,7 +115,7 @@ type Percent {
 }
 
 extend Percent with TryFrom<Int, PercentError> {
-  fn tryFrom(value: Int): Result<Percent, PercentError> {
+  static fn tryFrom(value: Int): Result<Percent, PercentError> {
     if value < 0 || value > 100 {
       return Fail PercentError.OutOfRange(value)
     }

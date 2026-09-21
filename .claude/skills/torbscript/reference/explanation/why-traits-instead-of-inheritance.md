@@ -31,19 +31,19 @@ inherited from a parent.
 
 ```trb check
 trait Shape {
-  fn area(self): Float
+  fn area(): Float
 }
 
 type Square with Shape {
   side: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     side * side
   }
 }
 
 extend Square with Compare {
-  fn compare(self, other: Square): Ordering {
+  fn compare(other: Square): Ordering {
     side.compare other.side
   }
 }
@@ -113,7 +113,7 @@ print total
 ```
 
 **A type can gain a trait after the fact, in its own package or in another one that owns the trait, without touching
-the type's declaration.** `extend String { fn shout(self): String { "{toUpperCase()}!" } }` adds a capability to a
+the type's declaration.** `extend String { fn shout(): String { "{toUpperCase()}!" } }` adds a capability to a
 type this package does not own, the way inheritance never could without wrapping it in a new subclass first.
 
 ## Related

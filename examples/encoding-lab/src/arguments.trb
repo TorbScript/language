@@ -16,7 +16,7 @@ use DecodeError, EncodedField, EncodedValue, Structure, StructureField, Structur
 public type Arguments {
   private options: List<Option>
 
-  fn of(describe: (var target: Structures) => Void): Arguments {
+  static fn of(describe: (var target: Structures) => Void): Arguments {
     const structure = structureOf describe
     var options: List<Option> = []
     for field in structure.recordFields() {
@@ -26,7 +26,7 @@ public type Arguments {
   }
 
   /** One line per option: the flag, what it takes, the doc comment, and what happens when it is left out. */
-  fn help(self): String {
+  fn help(): String {
     var lines: List<String> = []
     for option in options {
       const takes = if option.flag { "" } else { " <{option.shape}>" }
@@ -42,7 +42,6 @@ public type Arguments {
    * type's own default applies - which is the same rule every other format in the lab follows.
    */
   fn decode<Value>(
-    self,
     read: (var source: ValueDecoder) => Result<Value, DecodeError>,
     given: List<String>,
   ): Result<Value, DecodeError> {
@@ -87,7 +86,7 @@ type Option {
   default: EncodedValue?
   required: Bool
 
-  fn suffix(self): String {
+  fn suffix(): String {
     if const Some(value) = default {
       return " (default: {value.plain()})"
     }

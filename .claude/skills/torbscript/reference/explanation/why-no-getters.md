@@ -28,7 +28,7 @@ type Account {
   owner: String
   private(var) balance: Int = 0
 
-  fn deposit(var self, amount: Int) {
+  var fn deposit(amount: Int) {
     balance = balance + amount
   }
 }
@@ -91,7 +91,7 @@ type Rectangle {
   width: Float
   height: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     width * height
   }
 }
@@ -120,5 +120,5 @@ happen as a breaking change to existing callers who already wrote `.x()`.
 
 - [Fields](../language/types/fields.md) - `var`, `private`, `private(var)`, and the table of four.
 - [Visibility](../language/modules-and-packages/visibility.md) - members public by default, and what that assumes.
-- [Methods and static functions](../language/types/methods.md) - why `self` is what makes a member a method.
+- [Methods and `static fn`s](../language/types/methods.md) - the two words a member says about itself.
 - [Why a method is a constant](why-one-member-namespace.md) - the one namespace a field and a method share.

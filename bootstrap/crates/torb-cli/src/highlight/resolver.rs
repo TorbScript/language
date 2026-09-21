@@ -55,6 +55,8 @@ struct FieldSymbol {
 #[derive(Debug, Clone, Copy)]
 struct MethodSymbol {
     has_self: bool,
+    /// A `var fn`: it changes its receiver, which the editor underlines like a `var` field
+    changes_the_receiver: bool,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -74,6 +76,10 @@ struct FileScope {
     /// added here, so it cannot leak into an unrelated scope the way `a_nested_fn_does_not_see_the_locals_around_it`
     /// checks for.
     functions: HashMap<String, ()>,
+    /// Every member name of the file that is a `var fn` everywhere it is declared. Without a type checker the
+    /// receiver of `counter.grow 1` has no type, so this is what makes a call of a `var fn` underlined all the same:
+    /// a name that is a `var fn` in one type and something else in another is left out and stays plain.
+    changing_methods: HashMap<String, bool>,
     /// Top-level `const`/`var` bindings (readonly unless `is_var`).
     globals: HashMap<String, bool>,
     /// `use * as name`
@@ -231,6 +237,7 @@ impl FileScope {
             }
             DeclarationKind::Type(type_declaration) => {
                 let info = type_info_of(&type_declaration.members, Some(GlobalKind::Type));
+                self.collect_changing_methods(&info);
                 self.types.insert(type_declaration.name.text.clone(), info);
             }
             DeclarationKind::Alias(alias) => {
@@ -238,11 +245,13 @@ impl FileScope {
             }
             DeclarationKind::Trait(trait_declaration) => {
                 let info = type_info_of(&trait_declaration.members, Some(GlobalKind::Trait));
+                self.collect_changing_methods(&info);
                 self.types.insert(trait_declaration.name.text.clone(), info);
             }
             DeclarationKind::Extend(extend) => {
                 if let Some(name) = simple_type_name(&extend.target) {
                     let addition = type_info_of(&extend.members, None);
+                    self.collect_changing_methods(&addition);
                     let entry = self.types.entry(name).or_default();
                     entry.fields.extend(addition.fields);
                     entry.methods.extend(addition.methods);
@@ -263,6 +272,14 @@ impl FileScope {
                     }
                 }
             }
+        }
+    }
+
+    /// A name stays in the table only while every declaration of it in this file agrees that it is a `var fn`.
+    fn collect_changing_methods(&mut self, info: &TypeInfo) {
+        for (name, method) in &info.methods {
+            let entry = self.changing_methods.entry(name.clone()).or_insert(method.changes_the_receiver);
+            *entry = *entry && method.changes_the_receiver;
         }
     }
 
@@ -302,8 +319,10 @@ fn type_info_of(members: &[Member], kind: Option<GlobalKind>) -> TypeInfo {
                 }
             }
             MemberKind::Function(function) => {
-                let has_self = function.parameters.first().is_some_and(|parameter| parameter.name.text == "self");
-                info.methods.insert(function.name.text.clone(), MethodSymbol { has_self });
+                let receiver = function.parameters.first().filter(|parameter| parameter.name.text == "self");
+                let symbol =
+                    MethodSymbol { has_self: receiver.is_some(), changes_the_receiver: receiver.is_some_and(|parameter| parameter.is_var) };
+                info.methods.insert(function.name.text.clone(), symbol);
             }
             MemberKind::Case(case) => {
                 info.cases.insert(case.name.text.clone(), ());
@@ -703,6 +722,10 @@ impl Resolver {
         if is_method && self_parameter.is_none() {
             modifiers.push("static");
         }
+        // A `var fn` is underlined at its declaration as at every call of it
+        if self_parameter.is_some_and(|parameter| parameter.is_var) {
+            modifiers.push("mutable");
+        }
         self.push(function.name.span, if is_method { "method" } else { "function" }, &modifiers);
 
         let saved_scopes = if fresh_scope { Some(std::mem::take(&mut self.scopes)) } else { None };
@@ -728,11 +751,10 @@ impl Resolver {
     }
 
     fn parameter(&mut self, parameter: &Parameter) {
-        // A plain `self` is left to TextMate (see `name_use`); `var self` still gets its `mutable` modifier here.
+        // The receiver of a method is not written, and its span is the name of the function, which carries the
+        // method's own token. Only a written parameter gets one here.
         if parameter.name.text != "self" {
             self.push(parameter.name.span, "parameter", &declaration_modifiers(parameter.is_var));
-        } else if parameter.is_var {
-            self.push(parameter.name.span, "parameter", &["declaration", "mutable"]);
         }
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(parameter.name.text.clone(), LocalSymbol { kind: LocalKind::Parameter, is_var: parameter.is_var });
@@ -1048,7 +1070,7 @@ impl Resolver {
                 return;
             }
             if let Some(method) = info.methods.get(text) {
-                let modifiers = if method.has_self { Vec::new() } else { vec!["static"] };
+                let modifiers = method_modifiers(method);
                 self.push(span, "method", &modifiers);
                 return;
             }
@@ -1105,7 +1127,7 @@ impl Resolver {
                         return;
                     }
                     if let Some(method) = info.methods.get(&name.text) {
-                        let modifiers = if method.has_self { Vec::new() } else { vec!["static"] };
+                        let modifiers = method_modifiers(method);
                         self.push(name.span, "method", &modifiers);
                         return;
                     }
@@ -1126,7 +1148,11 @@ impl Resolver {
                 }
             }
             MemberTargetKind::Other => {
-                self.push(name.span, if called { "method" } else { "property" }, &[]);
+                // The receiver has no type here, so only a name that is a `var fn` wherever this file declares it
+                // is underlined - see `FileScope::changing_methods`
+                let changes = called && self.file_scope.changing_methods.get(&name.text) == Some(&true);
+                let modifiers: &[&str] = if changes { &["mutable"] } else { &[] };
+                self.push(name.span, if called { "method" } else { "property" }, modifiers);
             }
         }
     }
@@ -1165,7 +1191,7 @@ impl Resolver {
         }
         if let Some(info) = self.current_type_info() {
             if let Some(method) = info.methods.get(text) {
-                let modifiers = if method.has_self { Vec::new() } else { vec!["static"] };
+                let modifiers = method_modifiers(method);
                 self.push(span, "method", &modifiers);
                 return false;
             }
@@ -1202,6 +1228,18 @@ fn declaration_modifiers(is_var: bool) -> Vec<&'static str> {
     let mut modifiers = vec!["declaration"];
     modifiers.push(if is_var { "mutable" } else { "readonly" });
     modifiers
+}
+
+/// What a call site of a member says about it: `static` for one that belongs to the type, `mutable` for a `var fn`,
+/// so that mutation is visible without reading the signature - exactly as it is on a `var` field.
+fn method_modifiers(method: &MethodSymbol) -> Vec<&'static str> {
+    if !method.has_self {
+        return vec!["static"];
+    }
+    match method.changes_the_receiver {
+        true => vec!["mutable"],
+        false => Vec::new(),
+    }
 }
 
 fn readonly_modifiers(is_var: bool) -> Vec<&'static str> {
@@ -1249,7 +1287,7 @@ mod tests {
 
     #[test]
     fn generic_parameters_are_typed_at_declaration_and_every_use_including_const_generics() {
-        let found = tokens("type Array<Item, const Size: Int> {\n  fn first(self): Item { .Empty }\n  fn size(self): Int { Size }\n}\n");
+        let found = tokens("type Array<Item, const Size: Int> {\n  fn first(): Item { .Empty }\n  fn size(): Int { Size }\n}\n");
         assert_eq!(nth(&found, "Item", 0).kind, "typeParameter");
         assert_eq!(nth(&found, "Item", 0).modifiers, vec!["declaration"]);
         assert_eq!(nth(&found, "Item", 1).kind, "typeParameter"); // the return type of `first`
@@ -1282,7 +1320,7 @@ mod tests {
 type Shape {
   case Circle(radius: Float)
 
-  fn area(self): Float {
+  fn area(): Float {
     match self {
       .Circle(radius) => radius
     }
@@ -1354,7 +1392,7 @@ const Point(a, b) = q
     fn a_dotted_call_is_a_method_a_bare_call_is_a_function() {
         let source = "\
 type Greeter {
-  fn greet(self): String { \"hi\" }
+  fn greet(): String { \"hi\" }
 }
 fn greet(): String { \"free\" }
 const g = Greeter()
@@ -1372,8 +1410,8 @@ const b = greet()
     fn a_bare_call_that_matches_a_method_of_the_enclosing_type_is_a_method() {
         let source = "\
 type Shape {
-  fn area(self): Float { 1.0 }
-  fn describe(self): String {
+  fn area(): Float { 1.0 }
+  fn describe(): String {
     area()
     \"shape\"
   }
@@ -1384,9 +1422,16 @@ type Shape {
     }
 
     #[test]
-    fn a_method_without_self_is_marked_static() {
-        let found = tokens("type Point {\n  fn origin(): Point { Point(0, 0) }\n  x: Int\n  y: Int\n}\n");
+    fn a_static_member_is_marked_static_and_a_var_fn_is_marked_mutable() {
+        let found = tokens("type Point {\n  static fn origin(): Point { Point(0, 0) }\n  x: Int\n  y: Int\n}\n");
         assert!(only(&found, "origin").modifiers.contains(&"static"));
+
+        // A `var fn` is underlined like a `var` field, at its declaration and at every call of it
+        let source =
+            "type Counter {\n  var count: Int = 0\n  var fn grow() { count = count + 1 }\n}\nfn step(var c: Counter) {\n  c.grow()\n}\n";
+        let found = tokens(source);
+        assert!(nth(&found, "grow", 0).modifiers.contains(&"mutable"));
+        assert!(nth(&found, "grow", 1).modifiers.contains(&"mutable"));
     }
 
     // --- Parameters, locals, fields -----------------------------------------------------------------------------
@@ -1406,7 +1451,7 @@ type Shape {
 type Counter {
   var sent: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     sent = sent + 1
   }
 }
@@ -1539,13 +1584,13 @@ move(to: p)
     fn an_extend_method_is_a_method_of_the_type_it_targets() {
         let source = "\
 trait Show {
-  fn show(self): String
+  fn show(): String
 }
 type Point {
   x: Int
 }
 extend Point with Show {
-  fn show(self): String {
+  fn show(): String {
     \"Point\"
   }
 }
@@ -1564,7 +1609,7 @@ fn describe(point: Point): String {
 
     #[test]
     fn a_delegate_named_by_with_by_is_a_property() {
-        let found = tokens("trait Show {\n  fn show(self): String\n}\ntype Wrapper {\n  inner: String\n}\ntype Boxed with Show by inner {\n  inner: String\n}\n");
+        let found = tokens("trait Show {\n  fn show(): String\n}\ntype Wrapper {\n  inner: String\n}\ntype Boxed with Show by inner {\n  inner: String\n}\n");
         assert_eq!(nth(&found, "inner", 1).kind, "property"); // the delegate name in `by inner`
     }
 

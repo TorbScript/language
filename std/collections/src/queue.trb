@@ -40,46 +40,46 @@ public trait Queue<Item>
   with Collection<Item>
 {
   /** Builds a queue from its arguments. The first item ends up at the front. */
-  fn of(...items: Item): Queue<Item> {
+  static fn of(...items: Item): Queue<Item> {
     ArrayQueue.from items
   }
 
   // --- In place ------------------------------------------------------------------------------------
 
   /** Adds an item at the back, in place. */
-  fn enqueue(var self, value: Item)
+  var fn enqueue(value: Item)
 
   /** Removes and answers the item at the front, or `None` if the queue is empty. */
-  fn dequeue(var self): Item?
+  var fn dequeue(): Item?
 
   /** The same as `enqueue`; see [Collection.add]. */
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     enqueue value
   }
 
   // --- Changed copies --------------------------------------------------------------------------------
 
   /** The participle of [Queue.enqueue]: a changed copy with the item added at the back. */
-  fn enqueued(self, value: Item): Self {
+  fn enqueued(value: Item): Self {
     added value
   }
 
   /** The next element and the remaining queue, or `None` if the queue is empty. */
-  fn dequeued(self): (Item, Self)? {
+  fn dequeued(): (Item, Self)? {
     var rest = self
     const next = rest.dequeue()?
     Some((next, rest))
   }
 
   /** The item at the front without removing it, or `None` if the queue is empty. */
-  fn peek(self): Item? {
+  fn peek(): Item? {
     first()
   }
 }
 
 /** The factory picks the default implementation: what `Queue.of` and a pipeline's `to<Queue<Item>>()` build. */
 extend<Item> Queue<Item> with From<Iterable<Item>> {
-  fn from(items: Iterable<Item>): Queue<Item> {
+  static fn from(items: Iterable<Item>): Queue<Item> {
     ArrayQueue.from items
   }
 }
@@ -91,7 +91,7 @@ extend<Item> Queue<Item> with From<Iterable<Item>> {
  * implementation carries the items is nobody's business.
  */
 extend<Item: Equals> Queue<Item> with Equals {
-  fn equals(self, other: Self): Bool {
+  fn equals(other: Self): Bool {
     length() == other.length() && zip(other).all { pair => pair.0 == pair.1 }
   }
 }
@@ -103,7 +103,7 @@ extend<Item: Equals> Queue<Item> with Equals {
  * `Hash` requires `Equals`, and the `Equals` implementation above satisfies that: `Item: Hash` implies `Item: Equals`.
  */
 extend<Item: Hash> Queue<Item> with Hash {
-  fn hash(self): Int {
+  fn hash(): Int {
     fold 0 { seed, item => combineHashes seed, item.hash() }
   }
 }
@@ -117,14 +117,14 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
   private var count: Int = 0
 
   /** Builds the queue from `items`, with the first one at the front. */
-  fn from(items: Iterable<Item>): ArrayQueue<Item> {
+  static fn from(items: Iterable<Item>): ArrayQueue<Item> {
     var queue = Self()
     queue.addAll items
     queue
   }
 
   /** Adds `value` at the back, in place; grows the buffer first if it is full. */
-  fn enqueue(var self, value: Item) {
+  var fn enqueue(value: Item) {
     if count == slots.length() {
       grow()
     }
@@ -133,7 +133,7 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
   }
 
   /** Removes and answers the item at the front, or `None` if empty. */
-  fn dequeue(var self): Item? {
+  var fn dequeue(): Item? {
     const next = slots[head]?            // Empty queue: the slot is `None`
     slots[head] = None                   // Release the value
     head = slot 1
@@ -142,27 +142,27 @@ public type ArrayQueue<Item> with Queue<Item>, From<Iterable<Item>> {
   }
 
   /** Removes every item, in place. */
-  fn clear(var self) {
+  var fn clear() {
     slots = List.filled 16, None
     head = 0
     count = 0
   }
 
   /** How many items there are. */
-  fn length(self): Int {
+  fn length(): Int {
     count
   }
 
   /** A cursor from front to back: the order of `dequeue`. */
-  fn iterator(self): Iterator<Item> {
+  fn iterator(): Iterator<Item> {
     (0..count).filterMap { slots[slot(_)] }.iterator()
   }
 
-  private fn slot(self, offset: Int): Int {
+  private fn slot(offset: Int): Int {
     (head + offset) % slots.length()
   }
 
-  private fn grow(var self) {
+  private var fn grow() {
     var larger: List<Item?> = List.filled(slots.length() * 2, None)
     for offset in 0..count {
       larger[offset] = slots[slot(offset)]

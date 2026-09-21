@@ -21,7 +21,7 @@ public type Naming {
   case SnakeCase
 
   /** The name as the format writes it. */
-  fn applied(self, name: String): String {
+  fn applied(name: String): String {
     match self {
       .AsWritten => name
       .SnakeCase => toSnakeCase name
@@ -29,7 +29,7 @@ public type Naming {
   }
 
   /** The name the type declared, out of what the format wrote. */
-  fn original(self, name: String): String {
+  fn original(name: String): String {
     match self {
       .AsWritten => name
       .SnakeCase => fromSnakeCase name
@@ -69,7 +69,7 @@ fn fromSnakeCase(name: String): String {
 public type Json {
   naming: Naming = Naming.AsWritten
 
-  fn encode<Value: Encode>(self, value: Value): String {
+  fn encode<Value: Encode>(value: Value): String {
     var target = JsonEncoder naming: naming
     value.encode target
     target.output
@@ -80,7 +80,6 @@ public type Json {
    * hands the type's own `decode` over as a function value; everything else is the same.
    */
   fn decode<Value>(
-    self,
     read: (var source: ValueDecoder) => Result<Value, DecodeError>,
     text: String,
   ): Result<Value, DecodeError> {
@@ -90,7 +89,7 @@ public type Json {
   }
 
   /** The document as data, for the case where nobody has a type for it: step 6 of the adjustment ladder. */
-  fn parse(self, text: String): Result<EncodedValue, DecodeError> {
+  fn parse(text: String): Result<EncodedValue, DecodeError> {
     var parser = JsonParser text.chars().toList(), naming: naming
     const value = parser.value()?
     parser.skipWhitespace()
@@ -107,38 +106,38 @@ public type JsonEncoder with Encoder {
   naming: Naming = Naming.AsWritten
   private var frames: List<JsonFrame> = []
 
-  fn nothing(var self) {
+  var fn nothing() {
     before()
     output = output + "null"
   }
 
-  fn bool(var self, value: Bool) {
+  var fn bool(value: Bool) {
     before()
     output = output + "{value}"
   }
 
-  fn int(var self, value: Int64) {
+  var fn int(value: Int64) {
     before()
     output = output + "{value}"
   }
 
-  fn unsigned(var self, value: UInt64) {
+  var fn unsigned(value: UInt64) {
     before()
     output = output + "{value}"
   }
 
-  fn float(var self, value: Float64) {
+  var fn float(value: Float64) {
     before()
     output = output + "{value}"
   }
 
-  fn string(var self, value: String) {
+  var fn string(value: String) {
     before()
     output = output + quoted(value)
   }
 
   /** JSON has no bytes, so they travel as a sequence of numbers - the one lossy step, and it is JSON's. */
-  fn bytes(var self, value: List<UInt8>) {
+  var fn bytes(value: List<UInt8>) {
     sequence Some(value.length())
     for byte in value {
       int Int64.from(byte)
@@ -146,14 +145,14 @@ public type JsonEncoder with Encoder {
     finish()
   }
 
-  fn sequence(var self, length: Int?) {
+  var fn sequence(length: Int?) {
     const _length = length
     before()
     output = output + "["
     frames.add JsonFrame(.Items)
   }
 
-  fn map(var self, length: Int?) {
+  var fn map(length: Int?) {
     const _length = length
     before()
     output = output + openBrace
@@ -164,20 +163,20 @@ public type JsonEncoder with Encoder {
    * A record opens on its first field, not here - because a record that announces no field at all is a **wrapper**
    * around one value (`with Encode by value`), and JSON writes that value and no braces.
    */
-  fn record(var self, typeName: String) {
+  var fn record(typeName: String) {
     const _typeName = typeName
     before()
     frames.add JsonFrame(.Fields)
   }
 
   /** Externally tagged: a case with fields is `{"Rejected": {...}}`, a case without fields is `"Draft"`. */
-  fn variant(var self, typeName: String, name: String) {
+  var fn variant(typeName: String, name: String) {
     const _typeName = typeName
     before()
     frames.add JsonFrame(.Variant, variantName: name)
   }
 
-  fn field(var self, name: String) {
+  var fn field(name: String) {
     const last = frames.length() - 1
     if frames[last].fields == 0 {
       match frames[last].kind {
@@ -200,7 +199,7 @@ public type JsonEncoder with Encoder {
     frames[last].expectingValue = true
   }
 
-  fn finish(var self) {
+  var fn finish() {
     const last = frames.length() - 1
     const frame = frames[last]
     frames = frames.removedAt last
@@ -227,7 +226,7 @@ public type JsonEncoder with Encoder {
   }
 
   /** The comma, the colon and nothing else: where one belongs is decided by the frame that is open. */
-  private fn before(var self) {
+  private var fn before() {
     if frames.isEmpty() {
       return
     }
@@ -292,17 +291,17 @@ type JsonParser {
   var position: Int = 0
   naming: Naming = Naming.AsWritten
 
-  fn atEnd(self): Bool {
+  fn atEnd(): Bool {
     position >= characters.length()
   }
 
-  fn skipWhitespace(var self) {
+  var fn skipWhitespace() {
     while !atEnd() && characters[position].isWhitespace() {
       position = position + 1
     }
   }
 
-  fn value(var self): Result<EncodedValue, DecodeError> {
+  var fn value(): Result<EncodedValue, DecodeError> {
     skipWhitespace()
     if atEnd() {
       return Fail DecodeError("the text ends where a value was expected")
@@ -323,7 +322,7 @@ type JsonParser {
     number()
   }
 
-  private fn object(var self): Result<EncodedValue, DecodeError> {
+  private var fn object(): Result<EncodedValue, DecodeError> {
     position = position + 1
     var fields: List<EncodedField> = []
     skipWhitespace()
@@ -349,7 +348,7 @@ type JsonParser {
     Ok EncodedValue.Record("", fields)
   }
 
-  private fn array(var self): Result<EncodedValue, DecodeError> {
+  private var fn array(): Result<EncodedValue, DecodeError> {
     position = position + 1
     var items: List<EncodedValue> = []
     skipWhitespace()
@@ -369,7 +368,7 @@ type JsonParser {
     Ok EncodedValue.Sequence(items)
   }
 
-  private fn text(var self): Result<String, DecodeError> {
+  private var fn text(): Result<String, DecodeError> {
     skipWhitespace()
     if atEnd() || characters[position] != '"' {
       return Fail DecodeError("a text in quotes was expected")
@@ -399,7 +398,7 @@ type JsonParser {
     Ok String.from(out)
   }
 
-  private fn word(var self): Result<EncodedValue, DecodeError> {
+  private var fn word(): Result<EncodedValue, DecodeError> {
     var out: List<Char> = []
     while !atEnd() && characters[position].isLetter() {
       out.add characters[position]
@@ -414,7 +413,7 @@ type JsonParser {
     }
   }
 
-  private fn number(var self): Result<EncodedValue, DecodeError> {
+  private var fn number(): Result<EncodedValue, DecodeError> {
     var out: List<Char> = []
     var floating = false
     while !atEnd() {

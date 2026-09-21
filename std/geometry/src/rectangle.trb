@@ -55,40 +55,40 @@ public type Rectangle<Scalar: Numeric = Float> {
    *
    *     print Rectangle.between Vector2(4, 4), Vector2(1, 2)
    */
-  fn between(first: Vector2<Scalar>, second: Vector2<Scalar>): Rectangle<Scalar> {
+  static fn between(first: Vector2<Scalar>, second: Vector2<Scalar>): Rectangle<Scalar> {
     const low = first.min second
     Rectangle low, first.max(second).subtract(low)
   }
 
   /** The corner with the smaller coordinates, which is inside the rectangle. */
-  fn minimum(self): Vector2<Scalar> {
+  fn minimum(): Vector2<Scalar> {
     origin
   }
 
   /** The corner with the larger coordinates, which is **outside** the rectangle. */
-  fn maximum(self): Vector2<Scalar> {
+  fn maximum(): Vector2<Scalar> {
     origin.add size
   }
 
   /** Whether the rectangle describes no points at all, which is the case as soon as a side is zero or negative. */
-  fn isEmpty(self): Bool {
+  fn isEmpty(): Bool {
     const nothing = zeroOf size.x
     size.x <= nothing || size.y <= nothing
   }
 
   /** How much the rectangle covers: cells for a whole-number scalar, area for one with fractions. */
-  fn area(self): Scalar {
+  fn area(): Scalar {
     size.x * size.y
   }
 
   /** Whether the point is inside, with the minimum edge in and the maximum edge out. */
-  fn contains(self, point: Vector2<Scalar>): Bool {
+  fn contains(point: Vector2<Scalar>): Bool {
     const far = maximum()
     origin.x <= point.x && point.x < far.x && origin.y <= point.y && point.y < far.y
   }
 
   /** Whether the other rectangle is inside this one, edges included. An empty rectangle is inside everything. */
-  fn encloses(self, other: Rectangle<Scalar>): Bool {
+  fn encloses(other: Rectangle<Scalar>): Bool {
     if other.isEmpty() {
       return true
     }
@@ -98,7 +98,7 @@ public type Rectangle<Scalar: Numeric = Float> {
   }
 
   /** Whether the two rectangles share at least one point. Touching along an edge is not sharing a point. */
-  fn intersects(self, other: Rectangle<Scalar>): Bool {
+  fn intersects(other: Rectangle<Scalar>): Bool {
     !intersection(other).isEmpty()
   }
 
@@ -108,14 +108,14 @@ public type Rectangle<Scalar: Numeric = Float> {
    *     const first = Rectangle Vector2(0, 0), Vector2(4, 4)
    *     print first.intersection(Rectangle(Vector2(2, 2), Vector2(4, 4)))
    */
-  fn intersection(self, other: Rectangle<Scalar>): Rectangle<Scalar> {
+  fn intersection(other: Rectangle<Scalar>): Rectangle<Scalar> {
     const low = origin.max other.origin
     const high = maximum().min(other.maximum())
     Rectangle low, high.subtract(low)
   }
 
   /** The smallest rectangle that covers both. An empty rectangle contributes nothing. */
-  fn combined(self, other: Rectangle<Scalar>): Rectangle<Scalar> {
+  fn combined(other: Rectangle<Scalar>): Rectangle<Scalar> {
     if isEmpty() {
       return other
     }
@@ -132,7 +132,7 @@ public type Rectangle<Scalar: Numeric = Float> {
    * Like `bounds`, it answers the **closed** hull: the point can come to lie exactly on the maximum edge, and
    * [Rectangle.contains] then answers `false` for it. A bounding rectangle is a bound and not a membership test.
    */
-  fn covering(self, point: Vector2<Scalar>): Rectangle<Scalar> {
+  fn covering(point: Vector2<Scalar>): Rectangle<Scalar> {
     const nothing = zeroOf size.x
     if isEmpty() {
       return Rectangle point, Vector2(nothing, nothing)
@@ -142,27 +142,27 @@ public type Rectangle<Scalar: Numeric = Float> {
   }
 
   /** The same rectangle moved. */
-  fn translated(self, by: Vector2<Scalar>): Rectangle<Scalar> {
+  fn translated(by: Vector2<Scalar>): Rectangle<Scalar> {
     Rectangle origin.add(by), size
   }
 
   /** The same rectangle with every side grown by that much on both ends. A negative amount shrinks it. */
-  fn grown(self, by: Vector2<Scalar>): Rectangle<Scalar> {
+  fn grown(by: Vector2<Scalar>): Rectangle<Scalar> {
     Rectangle origin.subtract(by), size.add(by).add(by)
   }
 
   /** The same rectangle with another size, from the same origin. */
-  fn withSize(self, value: Vector2<Scalar>): Rectangle<Scalar> {
+  fn withSize(value: Vector2<Scalar>): Rectangle<Scalar> {
     Rectangle origin, value
   }
 
   /** The point of the rectangle that is nearest to the one given, which is the point itself where it is inside. */
-  fn closestPoint(self, to: Vector2<Scalar>): Vector2<Scalar> {
+  fn closestPoint(to: Vector2<Scalar>): Vector2<Scalar> {
     to.clamped origin, maximum()
   }
 
   /** The rectangle itself: what every shape of this package answers, so that one broad phase can hold all of them. */
-  fn bounds(self): Rectangle<Scalar> {
+  fn bounds(): Rectangle<Scalar> {
     self
   }
 }
@@ -170,7 +170,7 @@ public type Rectangle<Scalar: Numeric = Float> {
 /** What a sign buys: the distance to a point, measured along the axes. */
 extend<Scalar: Signed> Rectangle<Scalar> {
   /** The distance from the point to the nearest point of the rectangle, along the axes. Zero where it is inside. */
-  fn manhattanDistanceTo(self, point: Vector2<Scalar>): Scalar {
+  fn manhattanDistanceTo(point: Vector2<Scalar>): Scalar {
     point.manhattanDistanceTo closestPoint(to: point)
   }
 }
@@ -178,22 +178,22 @@ extend<Scalar: Signed> Rectangle<Scalar> {
 /** What a root and a halving buy: the midpoint, a rectangle written from one, and the euclidean distance. */
 extend<Scalar: Real> Rectangle<Scalar> {
   /** The rectangle of that size whose midpoint is the point given. */
-  fn centered(at: Vector2<Scalar>, size: Vector2<Scalar>): Rectangle<Scalar> {
+  static fn centered(at: Vector2<Scalar>, size: Vector2<Scalar>): Rectangle<Scalar> {
     Rectangle at.subtract(Vector2(size.x.halved(), size.y.halved())), size
   }
 
   /** The midpoint. */
-  fn center(self): Vector2<Scalar> {
+  fn center(): Vector2<Scalar> {
     origin.add Vector2(size.x.halved(), size.y.halved())
   }
 
   /** The distance from the point to the nearest point of the rectangle. Zero where it is inside. */
-  fn distanceTo(self, point: Vector2<Scalar>): Scalar {
+  fn distanceTo(point: Vector2<Scalar>): Scalar {
     point.distanceTo closestPoint(to: point)
   }
 
   /** The square of [Rectangle.distanceTo], for a comparison that needs no root. */
-  fn distanceSquaredTo(self, point: Vector2<Scalar>): Scalar {
+  fn distanceSquaredTo(point: Vector2<Scalar>): Scalar {
     point.distanceSquaredTo closestPoint(to: point)
   }
 }

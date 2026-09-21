@@ -99,7 +99,7 @@ use Show from "std/core"
 type ParseError with Show {
   reason: String
 
-  fn show(self): String {
+  fn show(): String {
     reason
   }
 }
@@ -107,7 +107,7 @@ type ParseError with Show {
 type Email with Show by value, TryFrom<String, ParseError> {
   private value: String
 
-  fn tryFrom(text: String): Result<Email, ParseError> {
+  static fn tryFrom(text: String): Result<Email, ParseError> {
     if text.contains("@") {
       Ok Email(text)
     } else {

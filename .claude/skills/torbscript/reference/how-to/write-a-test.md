@@ -82,7 +82,7 @@ type Vector2 {
   x: Float
   y: Float
 
-  fn plus(self, other: Vector2): Vector2 {
+  fn plus(other: Vector2): Vector2 {
     Vector2(x + other.x, y + other.y)
   }
 }

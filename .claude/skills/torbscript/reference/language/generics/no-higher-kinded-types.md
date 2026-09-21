@@ -55,7 +55,7 @@ Same name, same shape of signature, two unrelated declarations - neither `extend
 
    ```trb error
    trait Functor<Item> {
-     fn map<Output>(self): Self<Output>
+     fn map<Output>(): Self<Output>
    }
    // error: `Self` takes no type arguments
    ```

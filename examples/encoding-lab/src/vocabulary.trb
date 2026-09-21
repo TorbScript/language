@@ -23,12 +23,12 @@
  * result out of it afterwards.
  */
 public trait Encode {
-  fn encode<Target: Encoder>(self, var target: Target)
+  fn encode<Target: Encoder>(var target: Target)
 }
 
 /** A value reads itself back. Derived under the same condition as `Encode`, so what is written can always be read. */
 public trait Decode {
-  fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError>
+  static fn decode<Source: Decoder>(var source: Source): Result<Self, DecodeError>
 }
 
 /**
@@ -37,7 +37,7 @@ public trait Decode {
  * whether the field has a default.
  */
 public trait Describe {
-  fn describe<Target: Describer>(var target: Target)
+  static fn describe<Target: Describer>(var target: Target)
 }
 
 /** What went wrong reading a value, with the field chain it went wrong in. */
@@ -46,11 +46,11 @@ public type DecodeError with Show, Error {
   path: List<String> = []
 
   /** `error.inside("price")`: an error collects its path on the way out, so the message names the field chain. */
-  fn inside(self, segment: String): DecodeError {
+  fn inside(segment: String): DecodeError {
     copy path: path.inserted(0, segment)
   }
 
-  fn show(self): String {
+  fn show(): String {
     if path.isEmpty() {
       return message
     }
@@ -69,22 +69,22 @@ public type DecodeError with Show, Error {
  * with `field` and its value is written right after.
  */
 public trait Encoder {
-  fn nothing(var self)
-  fn bool(var self, value: Bool)
-  fn int(var self, value: Int64)
-  fn unsigned(var self, value: UInt64)
-  fn float(var self, value: Float64)
-  fn string(var self, value: String)
-  fn bytes(var self, value: List<UInt8>)
+  var fn nothing()
+  var fn bool(value: Bool)
+  var fn int(value: Int64)
+  var fn unsigned(value: UInt64)
+  var fn float(value: Float64)
+  var fn string(value: String)
+  var fn bytes(value: List<UInt8>)
 
   /** `length` is known for a collection and unknown for a pipeline: a binary format writes it in front. */
-  fn sequence(var self, length: Int?)
-  fn map(var self, length: Int?)
+  var fn sequence(length: Int?)
+  var fn map(length: Int?)
   /** `typeName` is the qualified name of the declaration, which is how a format finds a mapping for this one type. */
-  fn record(var self, typeName: String)
-  fn variant(var self, typeName: String, name: String)
-  fn field(var self, name: String)
-  fn finish(var self)
+  var fn record(typeName: String)
+  var fn variant(typeName: String, name: String)
+  var fn field(name: String)
+  var fn finish()
 }
 
 // --- What a format implements: reading ------------------------------------------------------------------------------
@@ -95,26 +95,26 @@ public trait Encoder {
  */
 public trait Decoder {
   /** Consumes a "nothing" if one is there. This is how `Option` decides between `None` and `Some`. */
-  fn nothing(var self): Bool
+  var fn nothing(): Bool
 
-  fn bool(var self): Result<Bool, DecodeError>
-  fn int(var self): Result<Int64, DecodeError>
-  fn unsigned(var self): Result<UInt64, DecodeError>
-  fn float(var self): Result<Float64, DecodeError>
-  fn string(var self): Result<String, DecodeError>
-  fn bytes(var self): Result<List<UInt8>, DecodeError>
+  var fn bool(): Result<Bool, DecodeError>
+  var fn int(): Result<Int64, DecodeError>
+  var fn unsigned(): Result<UInt64, DecodeError>
+  var fn float(): Result<Float64, DecodeError>
+  var fn string(): Result<String, DecodeError>
+  var fn bytes(): Result<List<UInt8>, DecodeError>
 
   /** Opens a sequence and answers its length where the format writes one in front. */
-  fn sequence(var self): Result<Int?, DecodeError>
-  fn map(var self): Result<Int?, DecodeError>
+  var fn sequence(): Result<Int?, DecodeError>
+  var fn map(): Result<Int?, DecodeError>
   /** `true` while one more item of the open sequence or one more entry of the open map follows. */
-  fn hasNext(var self): Result<Bool, DecodeError>
-  fn record(var self, typeName: String): Result<Void, DecodeError>
+  var fn hasNext(): Result<Bool, DecodeError>
+  var fn record(typeName: String): Result<Void, DecodeError>
   /** Opens a variant and answers which case is there. */
-  fn variant(var self, typeName: String): Result<String, DecodeError>
+  var fn variant(typeName: String): Result<String, DecodeError>
   /** Positions on the field `name`. `false` when the input has no such field: the field's default applies. */
-  fn field(var self, name: String): Result<Bool, DecodeError>
-  fn finish(var self): Result<Void, DecodeError>
+  var fn field(name: String): Result<Bool, DecodeError>
+  var fn finish(): Result<Void, DecodeError>
 }
 
 // --- What a format implements: describing ---------------------------------------------------------------------------
@@ -125,24 +125,24 @@ public trait Decoder {
  * before the answer, so the target can refer to the type it declined.
  */
 public trait Describer {
-  fn bool(var self)
-  fn int(var self)
-  fn unsigned(var self)
-  fn float(var self)
-  fn string(var self)
-  fn bytes(var self)
+  var fn bool()
+  var fn int()
+  var fn unsigned()
+  var fn float()
+  var fn string()
+  var fn bytes()
 
   /** The description that follows is the one that may be absent. */
-  fn optional(var self)
-  fn sequence(var self)
-  fn map(var self)
-  fn record(var self, typeName: String): Bool
-  fn variant(var self, typeName: String): Bool
+  var fn optional()
+  var fn sequence()
+  var fn map()
+  var fn record(typeName: String): Bool
+  var fn variant(typeName: String): Bool
   /** One case of the open variant. Its fields follow, and `finish` closes it. */
-  fn variantCase(var self, name: String)
+  var fn variantCase(name: String)
   /** The next description belongs to this field. */
-  fn field(var self, description: FieldDescription)
-  fn finish(var self)
+  var fn field(description: FieldDescription)
+  var fn finish()
 }
 
 /** What the compiler knows about one constructor parameter, and a schema or a help text needs. */
@@ -172,60 +172,60 @@ public type FieldDefault {
  * constructor.
  */
 extend Bool with Encode, Decode, Describe {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.bool self
   }
 
-  fn decode<Source: Decoder>(var source: Source): Result<Bool, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Bool, DecodeError> {
     source.bool()
   }
 
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     target.bool()
   }
 }
 
 /** `Int64` writes, reads and describes itself through the vocabulary's own `int` method, the same way `Bool` does. */
 extend Int64 with Encode, Decode, Describe {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.int self
   }
 
-  fn decode<Source: Decoder>(var source: Source): Result<Int64, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Int64, DecodeError> {
     source.int()
   }
 
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     target.int()
   }
 }
 
 /** `Float64` writes, reads and describes itself through the vocabulary's own `float` method. */
 extend Float64 with Encode, Decode, Describe {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.float self
   }
 
-  fn decode<Source: Decoder>(var source: Source): Result<Float64, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<Float64, DecodeError> {
     source.float()
   }
 
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     target.float()
   }
 }
 
 /** `String` writes, reads and describes itself through the vocabulary's own `string` method. */
 extend String with Encode, Decode, Describe {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.string self
   }
 
-  fn decode<Source: Decoder>(var source: Source): Result<String, DecodeError> {
+  static fn decode<Source: Decoder>(var source: Source): Result<String, DecodeError> {
     source.string()
   }
 
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     target.string()
   }
 }
@@ -234,7 +234,7 @@ extend String with Encode, Decode, Describe {
 
 /** A list encodes as a `sequence`: its length in front, then every item written with its own `encode`. */
 extend<Item: Encode> List<Item> with Encode {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     target.sequence Some(length())
     for item in self {
       item.encode target
@@ -245,7 +245,7 @@ extend<Item: Encode> List<Item> with Encode {
 
 /** A list describes as a `sequence` around its item's structure: the shape is one item, repeated. */
 extend<Item: Describe> List<Item> with Describe {
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     target.sequence()
     Item.describe target
     target.finish()
@@ -254,7 +254,7 @@ extend<Item: Describe> List<Item> with Describe {
 
 /** `Some` encodes as its value; `None` encodes as `nothing()`, so the field's default applies on the way back in. */
 extend<Value: Encode> Option<Value> with Encode {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     match self {
       Some(value) => value.encode target
       None => target.nothing()
@@ -264,7 +264,7 @@ extend<Value: Encode> Option<Value> with Encode {
 
 /** An optional value describes as `optional()` around the value's own structure. */
 extend<Value: Describe> Option<Value> with Describe {
-  fn describe<Target: Describer>(var target: Target) {
+  static fn describe<Target: Describer>(var target: Target) {
     target.optional()
     Value.describe target
     target.finish()
@@ -380,13 +380,13 @@ public type EncodedValue with Show {
   case Variant(typeName: String, name: String, fields: List<EncodedField>)
 
   /** `EncodedValue.of(user)` - the value's own `encode` is an instance method, so no bound has to be looked up. */
-  fn of<Value: Encode>(value: Value): EncodedValue {
+  static fn of<Value: Encode>(value: Value): EncodedValue {
     var builder = Values()
     value.encode builder
     builder.result()
   }
 
-  fn show(self): String {
+  fn show(): String {
     match self {
       .Nothing => "None"
       .Bool(value) => "{value}"
@@ -403,7 +403,7 @@ public type EncodedValue with Show {
   }
 
   /** The unquoted text of a scalar, which is what a SQL default and a `--help` line want. */
-  fn plain(self): String {
+  fn plain(): String {
     match self {
       .String(value) => value
       other => other.show()
@@ -416,7 +416,7 @@ public type EncodedValue with Show {
  * SQL parameter, and a document nobody has a type for can be written out again.
  */
 extend EncodedValue with Encode {
-  fn encode<Target: Encoder>(self, var target: Target) {
+  fn encode<Target: Encoder>(var target: Target) {
     match self {
       .Nothing => target.nothing()
       .Bool(value) => target.bool value
@@ -466,7 +466,7 @@ public type EncodedField {
   name: String
   value: EncodedValue
 
-  fn show(self): String {
+  fn show(): String {
     "{name}: {value.show()}"
   }
 }
@@ -500,65 +500,65 @@ public type Values with Encoder {
   private var frames: List<ValueFrame> = []
   private var finished: EncodedValue? = None
 
-  fn result(self): EncodedValue {
+  fn result(): EncodedValue {
     match finished {
       Some(value) => value
       None => panic "nothing was encoded"
     }
   }
 
-  fn nothing(var self) {
+  var fn nothing() {
     complete EncodedValue.Nothing
   }
 
-  fn bool(var self, value: Bool) {
+  var fn bool(value: Bool) {
     complete EncodedValue.Bool(value)
   }
 
-  fn int(var self, value: Int64) {
+  var fn int(value: Int64) {
     complete EncodedValue.Int(value)
   }
 
-  fn unsigned(var self, value: UInt64) {
+  var fn unsigned(value: UInt64) {
     complete EncodedValue.Unsigned(value)
   }
 
-  fn float(var self, value: Float64) {
+  var fn float(value: Float64) {
     complete EncodedValue.Float(value)
   }
 
-  fn string(var self, value: String) {
+  var fn string(value: String) {
     complete EncodedValue.String(value)
   }
 
-  fn bytes(var self, value: List<UInt8>) {
+  var fn bytes(value: List<UInt8>) {
     complete EncodedValue.Bytes(value)
   }
 
-  fn sequence(var self, length: Int?) {
+  var fn sequence(length: Int?) {
     const _length = length
     frames.add ValueFrame(.Sequence)
   }
 
-  fn map(var self, length: Int?) {
+  var fn map(length: Int?) {
     const _length = length
     frames.add ValueFrame(.Mapping)
   }
 
-  fn record(var self, typeName: String) {
+  var fn record(typeName: String) {
     frames.add ValueFrame(.Record(typeName))
   }
 
-  fn variant(var self, typeName: String, name: String) {
+  var fn variant(typeName: String, name: String) {
     frames.add ValueFrame(.Variant(typeName, name))
   }
 
-  fn field(var self, name: String) {
+  var fn field(name: String) {
     const last = frames.length() - 1
     frames[last].pending = Some name
   }
 
-  fn finish(var self) {
+  var fn finish() {
     const last = frames.length() - 1
     const frame = frames[last]
     frames = frames.removedAt last
@@ -577,7 +577,7 @@ public type Values with Encoder {
     complete value
   }
 
-  private fn complete(var self, value: EncodedValue) {
+  private var fn complete(value: EncodedValue) {
     if frames.isEmpty() {
       finished = Some value
       return
@@ -626,11 +626,11 @@ public type ValueDecoder with Decoder {
   private var frames: List<ValueCursor> = []
   private lenient: Bool = false
 
-  fn of(value: EncodedValue, lenient: Bool = false): ValueDecoder {
+  static fn of(value: EncodedValue, lenient: Bool = false): ValueDecoder {
     Self root: Some(value), lenient: lenient
   }
 
-  fn nothing(var self): Bool {
+  var fn nothing(): Bool {
     match peek() {
       Some(.Nothing) => {
         const _taken = take()
@@ -640,7 +640,7 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn bool(var self): Result<Bool, DecodeError> {
+  var fn bool(): Result<Bool, DecodeError> {
     match take()? {
       .Bool(value) => Ok value
       .String(text) => {
@@ -653,7 +653,7 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn int(var self): Result<Int64, DecodeError> {
+  var fn int(): Result<Int64, DecodeError> {
     match take()? {
       .Int(value) => Ok value
       .Float(value) => Int64.tryFrom(value).mapError({ _ => DecodeError "{value} is not a whole number" })
@@ -662,14 +662,14 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn unsigned(var self): Result<UInt64, DecodeError> {
+  var fn unsigned(): Result<UInt64, DecodeError> {
     match take()? {
       .Unsigned(value) => Ok value
       other => Fail DecodeError("a count is needed, not {other.show()}")
     }
   }
 
-  fn float(var self): Result<Float64, DecodeError> {
+  var fn float(): Result<Float64, DecodeError> {
     match take()? {
       .Float(value) => Ok value
       .Int(value) => Ok Float64.from(value)
@@ -678,7 +678,7 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn string(var self): Result<String, DecodeError> {
+  var fn string(): Result<String, DecodeError> {
     match take()? {
       .String(value) => Ok value
       other => {
@@ -690,7 +690,7 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn bytes(var self): Result<List<UInt8>, DecodeError> {
+  var fn bytes(): Result<List<UInt8>, DecodeError> {
     match take()? {
       .Bytes(value) => Ok value
       .String(text) => Ok text.bytes().toList()
@@ -698,7 +698,7 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn sequence(var self): Result<Int?, DecodeError> {
+  var fn sequence(): Result<Int?, DecodeError> {
     match take()? {
       .Sequence(items) => {
         frames.add ValueCursor(.Items, items: items)
@@ -722,7 +722,7 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn map(var self): Result<Int?, DecodeError> {
+  var fn map(): Result<Int?, DecodeError> {
     match take()? {
       .Mapping(entries) => {
         frames.add ValueCursor(.Items, items: entries)
@@ -732,7 +732,7 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn hasNext(var self): Result<Bool, DecodeError> {
+  var fn hasNext(): Result<Bool, DecodeError> {
     if frames.isEmpty() {
       return Ok false
     }
@@ -746,7 +746,7 @@ public type ValueDecoder with Decoder {
    * A bare value where a record was asked for is a **wrapper** (`with Encode by value`): the value comes back as the
    * one thing the record holds, which is exactly what the writing side put there.
    */
-  fn record(var self, typeName: String): Result<Void, DecodeError> {
+  var fn record(typeName: String): Result<Void, DecodeError> {
     const _typeName = typeName
     match take()? {
       .Record(_, fields) => {
@@ -760,7 +760,7 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn variant(var self, typeName: String): Result<String, DecodeError> {
+  var fn variant(typeName: String): Result<String, DecodeError> {
     const _typeName = typeName
     match take()? {
       .Variant(_, name, fields) => {
@@ -797,7 +797,7 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn field(var self, name: String): Result<Bool, DecodeError> {
+  var fn field(name: String): Result<Bool, DecodeError> {
     const last = frames.length() - 1
     if last < 0 {
       return Fail DecodeError("no record is open")
@@ -811,7 +811,7 @@ public type ValueDecoder with Decoder {
     }
   }
 
-  fn finish(var self): Result<Void, DecodeError> {
+  var fn finish(): Result<Void, DecodeError> {
     if frames.isEmpty() {
       return Fail DecodeError("nothing is open")
     }
@@ -820,7 +820,7 @@ public type ValueDecoder with Decoder {
   }
 
   /** The value the next read consumes, without consuming it. */
-  private fn peek(self): EncodedValue? {
+  private fn peek(): EncodedValue? {
     if frames.isEmpty() {
       return root
     }
@@ -834,7 +834,7 @@ public type ValueDecoder with Decoder {
     None
   }
 
-  private fn take(var self): Result<EncodedValue, DecodeError> {
+  private var fn take(): Result<EncodedValue, DecodeError> {
     if frames.isEmpty() {
       const found = match root {
         Some(value) => value
@@ -923,14 +923,14 @@ public type Structure {
   case Reference(typeName: String)
 
   /** The fields of a record, or nothing for everything else: what a tabular or a row-shaped format starts from. */
-  fn recordFields(self): List<StructureField> {
+  fn recordFields(): List<StructureField> {
     match self {
       .Record(_, found) => found
       _ => []
     }
   }
 
-  fn declaredName(self): String {
+  fn declaredName(): String {
     match self {
       .Record(name, _) => name
       .Wrapper(name, _) => name
@@ -941,14 +941,14 @@ public type Structure {
   }
 
   /** `Int?` and `Int` describe the same column, so a schema asks what is underneath before it asks what it is. */
-  fn withoutOptional(self): Structure {
+  fn withoutOptional(): Structure {
     match self {
       .Optional(inner) => inner
       other => other
     }
   }
 
-  fn isOptional(self): Bool {
+  fn isOptional(): Bool {
     match self {
       .Optional(_) => true
       _ => false
@@ -961,19 +961,19 @@ public type StructureField {
   description: FieldDescription
   of: Structure
 
-  fn name(self): String {
+  fn name(): String {
     description.name
   }
 
   /** A field with a default may be missing from the input, which is what "required" means to a schema. */
-  fn isRequired(self): Bool {
+  fn isRequired(): Bool {
     match description.default {
       .Required => !of.isOptional()
       _ => false
     }
   }
 
-  fn defaultValue(self): EncodedValue? {
+  fn defaultValue(): EncodedValue? {
     match description.default {
       .Constant(value) => Some value
       _ => None
@@ -1005,50 +1005,50 @@ public type Structures with Describer {
   /** Every record and variant name that has been opened, so a type that contains itself stops at a `Reference`. */
   private var known: List<String> = []
 
-  fn result(self): Structure {
+  fn result(): Structure {
     match finished {
       Some(value) => value
       None => panic "nothing was described"
     }
   }
 
-  fn bool(var self) {
+  var fn bool() {
     complete Structure.Boolean
   }
 
-  fn int(var self) {
+  var fn int() {
     complete Structure.Integer
   }
 
-  fn unsigned(var self) {
+  var fn unsigned() {
     complete Structure.Natural
   }
 
-  fn float(var self) {
+  var fn float() {
     complete Structure.Floating
   }
 
-  fn string(var self) {
+  var fn string() {
     complete Structure.Text
   }
 
-  fn bytes(var self) {
+  var fn bytes() {
     complete Structure.Binary
   }
 
-  fn optional(var self) {
+  var fn optional() {
     frames.add StructureFrame(.Optional)
   }
 
-  fn sequence(var self) {
+  var fn sequence() {
     frames.add StructureFrame(.Sequence)
   }
 
-  fn map(var self) {
+  var fn map() {
     frames.add StructureFrame(.Mapping)
   }
 
-  fn record(var self, typeName: String): Bool {
+  var fn record(typeName: String): Bool {
     if known.contains(typeName) {
       complete Structure.Reference(typeName)
       return false
@@ -1058,7 +1058,7 @@ public type Structures with Describer {
     true
   }
 
-  fn variant(var self, typeName: String): Bool {
+  var fn variant(typeName: String): Bool {
     if known.contains(typeName) {
       complete Structure.Reference(typeName)
       return false
@@ -1068,16 +1068,16 @@ public type Structures with Describer {
     true
   }
 
-  fn variantCase(var self, name: String) {
+  var fn variantCase(name: String) {
     frames.add StructureFrame(.VariantCase(name))
   }
 
-  fn field(var self, description: FieldDescription) {
+  var fn field(description: FieldDescription) {
     const last = frames.length() - 1
     frames[last].pending = Some description
   }
 
-  fn finish(var self) {
+  var fn finish() {
     const last = frames.length() - 1
     const frame = frames[last]
     frames = frames.removedAt last
@@ -1092,19 +1092,19 @@ public type Structures with Describer {
   }
 
   /** A record that announced no field, but does hold one description, is a wrapper around it. */
-  private fn recordOf(self, typeName: String, frame: StructureFrame): Structure {
+  private fn recordOf(typeName: String, frame: StructureFrame): Structure {
     if frame.fields.isEmpty() && frame.children.length() == 1 {
       return Structure.Wrapper typeName, frame.children[0]
     }
     Structure.Record typeName, frame.fields
   }
 
-  private fn addCase(var self, found: StructureCase) {
+  private var fn addCase(found: StructureCase) {
     const last = frames.length() - 1
     frames[last].cases.add(found)
   }
 
-  private fn complete(var self, value: Structure) {
+  private var fn complete(value: Structure) {
     if frames.isEmpty() {
       finished = Some value
       return

@@ -82,7 +82,7 @@ public type TokenKind {
   case EndOfFile
 
   /** A line that ends with one of these continues on the next line. */
-  fn continuesLineAfter(self): Bool {
+  fn continuesLineAfter(): Bool {
     match self {
       .Comma | .Colon | .Dot | .QuestionDot | .Arrow | .Equal | .EqualEqual | .BangEqual | .Less | .LessEqual | .GreaterEqual => true
       .AndAnd | .OrOr | .QuestionQuestion | .Plus | .Ampersand | .Minus | .Star | .Slash | .Percent | .ParenOpen | .BracketOpen => true
@@ -91,7 +91,7 @@ public type TokenKind {
   }
 
   /** A line that starts with one of these continues the previous line. */
-  fn continuesLineBefore(self): Bool {
+  fn continuesLineBefore(): Bool {
     match self {
       .Dot | .QuestionDot | .AndAnd | .OrOr | .QuestionQuestion | .Plus | .Ampersand | .Star | .Slash | .Percent => true
       .EqualEqual | .BangEqual | .LessEqual | .GreaterEqual | .Equal => true
@@ -101,7 +101,7 @@ public type TokenKind {
   }
 
   /** For messages: "Expected a type, found `)`" */
-  fn describe(self): String {
+  fn describe(): String {
     match self {
       .Identifier => "a name"
       .Reserved(_) => "a keyword"
@@ -147,10 +147,19 @@ public type TokenKind {
   }
 }
 
+/**
+ * The one spelling of the keyword that says a member belongs to the type. It stands here alone, and every message
+ * that teaches it interpolates it, so that trading it for another word (`type fn`, `type const`) is this line and a
+ * `canon` rule and nothing else.
+ */
+public const staticKeyword = "static"
+
 /** Every reserved word of the language. `from`, `as` and `by` are not among them; see [Keyword.fromText]. */
 public type Keyword {
   case Const
   case Var
+  /** A member that belongs to the type and not to a value. See [staticKeyword]. */
+  case Static
   case Fn
   case Type
   case Trait
@@ -184,7 +193,11 @@ public type Keyword {
   case Where
 
   /** `from`, `as` and `by` are contextual: they are ordinary identifiers for the lexer. */
-  fn fromText(text: String): Keyword? {
+  static fn fromText(text: String): Keyword? {
+    // Not an arm of the match below: a bare name in a pattern binds, and [staticKeyword] is to stand in one place
+    if text == staticKeyword {
+      return Some Keyword.Static
+    }
     const keyword: Keyword = match text {
       "const" => .Const
       "var" => .Var

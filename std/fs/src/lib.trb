@@ -15,14 +15,14 @@ public type IoError with Show, Error {
   message: String
 
   /** `{path}: {message}`. */
-  fn show(self): String {
+  fn show(): String {
     "{path}: {message}"
   }
 }
 
 /** Bytes off a disk are not always UTF-8, and a `String` always is - so decoding is one of the ways reading fails. */
 extend IoError with From<Utf8Error> {
-  fn from(value: Utf8Error): IoError {
+  static fn from(value: Utf8Error): IoError {
     IoError "", value.show()
   }
 }
@@ -48,48 +48,48 @@ extend IoError with From<Utf8Error> {
  */
 public native shared type File with Close, Sink<Bytes, IoError> {
   /** Opens an existing file for reading. */
-  native fn open(path: String): Result<File, IoError>
+  native static fn open(path: String): Result<File, IoError>
 
   /** Creates the file, or empties it if it is there. The counterpart of `open`, for the writing side. */
-  native fn create(path: String): Result<File, IoError>
+  native static fn create(path: String): Result<File, IoError>
 
   /** The rest of the file as text, from wherever the cursor is. Fails if the bytes are not UTF-8. */
-  native fn readAll(var self): Result<String, IoError>
+  native var fn readAll(): Result<String, IoError>
 
   /** Releases the operating system handle. Synchronous and cannot fail, as every `Close` promises. */
-  native fn close(var self)
+  native var fn close()
 
   /**
    * The file as a stream of byte chunks of at most `size`. The one native of the reading side: everything above it
    * (`lines`, framing, decoding) is a `Stage` and therefore ordinary TorbScript.
    */
-  native fn chunks(var self, size: Int = 65536): Source<Bytes, IoError>
+  native var fn chunks(size: Int = 65536): Source<Bytes, IoError>
 
   /**
    * The lines of the file, as a stream. A read failure ends the stream and the reader sees it, because it is in the
    * type - it can never be swallowed halfway through.
    */
-  fn lines(var self): Source<String, IoError> {
+  var fn lines(): Source<String, IoError> {
     chunks().through(streamLines()).checked()
   }
 
   /** The writing end. A `File` is a `Sink<Bytes, IoError>`, so `addText`, `addLine` and `fill` are all there. */
-  native fn add(var self, item: Bytes): Task<Result<Void, IoError>>
+  native var fn add(item: Bytes): Task<Result<Void, IoError>>
 
   /** Flushes to the operating system and reports what a buffered write could only report now. */
-  native fn finish(var self): Task<Result<Void, IoError>>
+  native var fn finish(): Task<Result<Void, IoError>>
 
   /** A `String` is always valid UTF-8, so bytes that are not are an `IoError` and never a replacement character. */
-  native fn readText(path: String): Result<String, IoError>
+  native static fn readText(path: String): Result<String, IoError>
 
   /** Creates or empties `path` and writes `text` into it in one call - the writing counterpart of `readText`. */
-  native fn writeText(path: String, text: String): Result<Void, IoError>
+  native static fn writeText(path: String, text: String): Result<Void, IoError>
 
   /**
    * Creates `path` and writes everything `source` delivers into it, of any size and without holding it in memory:
    * `File.write(path, response.body.mapFailure(IoError.from)).await()?`
    */
-  fn write(path: String, var source: Source<Bytes, IoError>): Task<Result<Void, IoError>> {
+  static fn write(path: String, var source: Source<Bytes, IoError>): Task<Result<Void, IoError>> {
     var target = File.create(path)?
     const outcome = target.fill(source).await()
     target.close()
@@ -100,20 +100,20 @@ public native shared type File with Close, Sink<Bytes, IoError> {
    * The path as an absolute path, with `.` and `..` resolved against the working directory. The file does not have
    * to exist: this is text arithmetic, not a lookup, so it does not follow links either.
    */
-  native fn absolutePath(path: String): Result<String, IoError>
+  native static fn absolutePath(path: String): Result<String, IoError>
 
   /** Whether something exists at `path`, file or directory. */
-  native fn exists(path: String): Bool
+  native static fn exists(path: String): Bool
 
   /** Whether `path` is a directory rather than a file. */
-  native fn isDirectory(path: String): Bool
+  native static fn isDirectory(path: String): Bool
 
   /**
    * Creates the directory and every directory above it that is missing, and does nothing where it is already there -
    * so a caller that only wants a place to write does not have to ask first.
    */
-  native fn createDirectory(path: String): Result<Void, IoError>
+  native static fn createDirectory(path: String): Result<Void, IoError>
 
   /** The names of the entries of a directory, sorted. */
-  native fn list(path: String): Result<List<String>, IoError>
+  native static fn list(path: String): Result<List<String>, IoError>
 }

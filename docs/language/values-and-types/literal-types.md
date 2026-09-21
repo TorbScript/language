@@ -88,7 +88,7 @@ print status.show()
 type Status = "online" | "offline" | "away"
 
 extend Status {
-  fn shout(self): String {
+  fn shout(): String {
     "status"
   }
 }

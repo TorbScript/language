@@ -47,7 +47,7 @@ type <Name> with <Trait>, <Trait> & <Trait> by <field> { ... }   `by` binds to t
 
    ```trb error
    trait Loud {
-     fn shout(self): String
+     fn shout(): String
    }
 
    type Wrapper with Loud, Add by value {
@@ -76,7 +76,7 @@ unreadable from outside - `by` only wires the trait's members to it internally.
 type Email with Show by value, TryFrom<String, String> {
   private value: String
 
-  fn tryFrom(text: String): Result<Email, String> {
+  static fn tryFrom(text: String): Result<Email, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }
@@ -92,7 +92,7 @@ print email
 type Email with Show by value, TryFrom<String, String> {
   private value: String
 
-  fn tryFrom(text: String): Result<Email, String> {
+  static fn tryFrom(text: String): Result<Email, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }

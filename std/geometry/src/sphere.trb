@@ -33,23 +33,23 @@ public type Sphere<Scalar: Real = Float> {
    * The radius is a square root, so a scalar of limited resolution rounds it down and a corner can fall one step
    * outside. A broad phase that must not lose a corner grows the answer by one step.
    */
-  fn around(box: Box<Scalar>): Sphere<Scalar> {
+  static fn around(box: Box<Scalar>): Sphere<Scalar> {
     const middle = box.center()
     Sphere middle, middle.distanceTo(box.maximum())
   }
 
   /** Whether the radius is negative, in which case the ball describes no points. */
-  fn isEmpty(self): Bool {
+  fn isEmpty(): Bool {
     radius < zeroOf(radius)
   }
 
   /** Whether the point is in the ball, surface included. */
-  fn contains(self, point: Vector3<Scalar>): Bool {
+  fn contains(point: Vector3<Scalar>): Bool {
     center.distanceSquaredTo(point) <= radius * radius
   }
 
   /** Whether the other ball is inside this one, surface included. */
-  fn encloses(self, other: Sphere<Scalar>): Bool {
+  fn encloses(other: Sphere<Scalar>): Bool {
     if other.isEmpty() {
       return true
     }
@@ -58,13 +58,13 @@ public type Sphere<Scalar: Real = Float> {
   }
 
   /** Whether the two balls share a point, touching included. */
-  fn intersects(self, other: Sphere<Scalar>): Bool {
+  fn intersects(other: Sphere<Scalar>): Bool {
     const reach = radius + other.radius
     center.distanceSquaredTo(other.center) <= reach * reach
   }
 
   /** Whether the ball shares a point with the box, which is a test against the nearest point of the box. */
-  fn intersectsBox(self, other: Box<Scalar>): Bool {
+  fn intersectsBox(other: Box<Scalar>): Bool {
     if other.isEmpty() {
       return false
     }
@@ -72,7 +72,7 @@ public type Sphere<Scalar: Real = Float> {
   }
 
   /** The point of the ball that is nearest to the one given, which is the point itself where it is inside. */
-  fn closestPoint(self, to: Vector3<Scalar>): Vector3<Scalar> {
+  fn closestPoint(to: Vector3<Scalar>): Vector3<Scalar> {
     const step = to.subtract center
     if step.lengthSquared() <= radius * radius {
       return to
@@ -81,29 +81,29 @@ public type Sphere<Scalar: Real = Float> {
   }
 
   /** The distance from the point to the nearest point of the ball. Zero where it is inside. */
-  fn distanceTo(self, point: Vector3<Scalar>): Scalar {
+  fn distanceTo(point: Vector3<Scalar>): Scalar {
     const gap = center.distanceTo(point) - radius
     gap.max zeroOf(gap)
   }
 
   /** The same ball moved. */
-  fn translated(self, by: Vector3<Scalar>): Sphere<Scalar> {
+  fn translated(by: Vector3<Scalar>): Sphere<Scalar> {
     Sphere center.add(by), radius
   }
 
   /** The same ball with the radius grown by that much. A negative amount shrinks it. */
-  fn grown(self, by: Scalar): Sphere<Scalar> {
+  fn grown(by: Scalar): Sphere<Scalar> {
     Sphere(center, radius + by)
   }
 
   /** The smallest box that holds the ball. */
-  fn bounds(self): Box<Scalar> {
+  fn bounds(): Box<Scalar> {
     const reach = Vector3 radius, radius, radius
     Box center.subtract(reach), reach.add(reach)
   }
 
   /** The smallest ball that holds both. */
-  fn combined(self, other: Sphere<Scalar>): Sphere<Scalar> {
+  fn combined(other: Sphere<Scalar>): Sphere<Scalar> {
     if isEmpty() {
       return other
     }

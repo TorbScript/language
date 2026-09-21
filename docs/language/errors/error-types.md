@@ -53,7 +53,7 @@ type <Name> {
 
 type <Name> with Show, Error {           // to carry the trait every layer can hand a failure up through
   ...
-  fn show(self): String { ... }
+  fn show(): String { ... }
 }
 ```
 
@@ -105,7 +105,7 @@ type <Name> with Show, Error {           // to carry the trait every layer can h
      case Missing(key: String)
      case Invalid(key: String, reason: String)
 
-     fn show(self): String {
+     fn show(): String {
        match self {
          .Missing(key) => "{key} is missing"
          .Invalid(key, reason) => "{key} is invalid: {reason}"

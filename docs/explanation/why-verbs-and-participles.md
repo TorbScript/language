@@ -19,7 +19,7 @@ second name to learn, so this page argues for why the two words earn their keep.
 
 ## The decision
 
-**A verb changes its receiver in place and declares `var self`; its participle takes `self` and returns a changed
+**A verb changes its receiver in place and is a `var fn`; its participle reads its receiver and returns a changed
 copy, under a different name.** `add`/`added`, `sort`/`sorted`, `remove`/`removed`, `push`/`pushed`.
 
 - The participles are default members of the collection traits, written once in terms of the verb: copy, change the
@@ -88,12 +88,12 @@ type Point {
   var x: Int
   var y: Int
 
-  fn translate(var self, deltaX: Int, deltaY: Int) {
+  var fn translate(deltaX: Int, deltaY: Int) {
     x = x + deltaX
     y = y + deltaY
   }
 
-  fn translated(self, deltaX: Int, deltaY: Int): Point {
+  fn translated(deltaX: Int, deltaY: Int): Point {
     copy(x: x + deltaX, y: y + deltaY)
   }
 }
@@ -104,8 +104,8 @@ const moved = Point(x: 0, y: 0).translated(deltaX: 1, deltaY: 1)
 print "{point} {moved}"
 ```
 
-**A new verb/participle pair follows the same rule when a type introduces one of its own**: the verb takes `var self`
-and changes the receiver, the participle takes `self`, is named for what it returns, and is typically written in terms
+**A new verb/participle pair follows the same rule when a type introduces one of its own**: the verb is a `var fn`
+and changes the receiver, the participle only reads it, is named for what it returns, and is typically written in terms
 of the verb through `copy`.
 
 ## Related

@@ -40,46 +40,46 @@ public trait Stack<Item>
   with Collection<Item>
 {
   /** Builds a stack from its arguments. The last item ends up on top. */
-  fn of(...items: Item): Stack<Item> {
+  static fn of(...items: Item): Stack<Item> {
     ArrayStack.from items
   }
 
   // --- In place ------------------------------------------------------------------------------------
 
   /** Adds an item on top, in place. */
-  fn push(var self, value: Item)
+  var fn push(value: Item)
 
   /** Removes and answers the top item, or `None` if the stack is empty. */
-  fn pop(var self): Item?
+  var fn pop(): Item?
 
   /** The same as `push`; see [Collection.add]. */
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     push value
   }
 
   // --- Changed copies --------------------------------------------------------------------------------
 
   /** The participle of [Stack.push]: a changed copy with the item on top. */
-  fn pushed(self, value: Item): Self {
+  fn pushed(value: Item): Self {
     added value
   }
 
   /** The top element and the remaining stack, or `None` if the stack is empty. */
-  fn popped(self): (Item, Self)? {
+  fn popped(): (Item, Self)? {
     var rest = self
     const top = rest.pop()?
     Some((top, rest))
   }
 
   /** The top item without removing it, or `None` if the stack is empty. */
-  fn peek(self): Item? {
+  fn peek(): Item? {
     first()
   }
 }
 
 /** The factory picks the default implementation: what `Stack.of` and a pipeline's `to<Stack<Item>>()` build. */
 extend<Item> Stack<Item> with From<Iterable<Item>> {
-  fn from(items: Iterable<Item>): Stack<Item> {
+  static fn from(items: Iterable<Item>): Stack<Item> {
     ArrayStack.from items
   }
 }
@@ -92,7 +92,7 @@ extend<Item> Stack<Item> with From<Iterable<Item>> {
  * implementation carries the items is nobody's business.
  */
 extend<Item: Equals> Stack<Item> with Equals {
-  fn equals(self, other: Self): Bool {
+  fn equals(other: Self): Bool {
     length() == other.length() && zip(other).all { pair => pair.0 == pair.1 }
   }
 }
@@ -104,7 +104,7 @@ extend<Item: Equals> Stack<Item> with Equals {
  * `Hash` requires `Equals`, and the `Equals` implementation above satisfies that: `Item: Hash` implies `Item: Equals`.
  */
 extend<Item: Hash> Stack<Item> with Hash {
-  fn hash(self): Int {
+  fn hash(): Int {
     fold 0 { seed, item => combineHashes seed, item.hash() }
   }
 }
@@ -119,33 +119,33 @@ public type ArrayStack<Item> with Stack<Item>, From<Iterable<Item>> {
   private var items: List<Item> = []
 
   /** Builds the stack from `items`, with the last one on top. */
-  fn from(items: Iterable<Item>): ArrayStack<Item> {
+  static fn from(items: Iterable<Item>): ArrayStack<Item> {
     Self items.toList()
   }
 
   /** Adds `value` on top, in place. */
-  fn push(var self, value: Item) {
+  var fn push(value: Item) {
     items.add value
   }
 
   /** Removes and answers the top item, or `None` if empty. */
-  fn pop(var self): Item? {
+  var fn pop(): Item? {
     const last = items.length() - 1
     items.removeAt last
   }
 
   /** Removes every item, in place. */
-  fn clear(var self) {
+  var fn clear() {
     items.clear()
   }
 
   /** How many items there are. */
-  fn length(self): Int {
+  fn length(): Int {
     items.length()
   }
 
   /** A cursor from top to bottom: the reverse of insertion order. */
-  fn iterator(self): Iterator<Item> {
+  fn iterator(): Iterator<Item> {
     items.reversed().iterator()
   }
 }

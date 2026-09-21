@@ -23,14 +23,14 @@ declared, and answers a value or nothing else.
 type Email with TryFrom<String, String> {
   private value: String
 
-  fn tryFrom(text: String): Result<Email, String> {
+  static fn tryFrom(text: String): Result<Email, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }
     Ok Self(text)
   }
 
-  fn address(self): String {
+  fn address(): String {
     value
   }
 }
@@ -104,8 +104,7 @@ Self(<field>, ...)                   // The constructor, from inside the type
 6. **Inside the type, `Self(...)` is the constructor and every field can be passed**, `private` ones included - that is
    how `Email.tryFrom` builds the value nothing outside can.
 
-7. **Everything that is not the constructor is a static factory function**: a function declared on the type that does
-   not take `self`. `Email.tryFrom` answers a `Result` because a constructor cannot fail; a factory can.
+7. **Everything that is not the constructor is a static factory function**: a member of the type declared `static`. `Email.tryFrom` answers a `Result` because a constructor cannot fail; a factory can.
 
 ## What this is not
 
@@ -117,7 +116,7 @@ constructor rather than inside it.
 type Percent {
   private value: Int
 
-  fn tryFrom(value: Int): Result<Percent, String> {
+  static fn tryFrom(value: Int): Result<Percent, String> {
     if value < 0 || value > 100 {
       return Fail "{value} is not between 0 and 100"
     }
@@ -130,7 +129,7 @@ type Percent {
 type Percent {
   private value: Int
 
-  fn tryFrom(value: Int): Result<Percent, String> {
+  static fn tryFrom(value: Int): Result<Percent, String> {
     if value < 0 || value > 100 {
       return Fail "{value} is not between 0 and 100"
     }

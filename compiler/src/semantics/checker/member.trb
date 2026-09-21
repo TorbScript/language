@@ -15,6 +15,7 @@
  */
 
 use Span from "../../syntax/source"
+use staticKeyword from "../../syntax/token"
 use Diagnostic from "../../syntax/diagnostic"
 use ModuleId from "../module"
 use SymbolId from "../symbols"
@@ -63,12 +64,12 @@ public fn recordDelegation(var checker: Checker, at: Span, candidate: Candidate)
 /**
  * Object safety, checked **per call and not per type**: a trait may always be used as a type, and what cannot be
  * done with a value of one is call a member that needs a second value of the same concrete type (`equals`, `compare`) or
- * a member without `self` (`Type.from`). Everything else keeps its meaning, so `List<Show & Hash>` stays a legal type
+ * a `static` member (`Type.from`). Everything else keeps its meaning, so `List<Show & Hash>` stays a legal type
  * and `items.added(x)` stays a legal call - the result is a value of the same trait type.
  *
- * The second half holds for **every** receiver, not only a trait-typed one: a static function is reached through the
+ * The second half holds for **every** receiver, not only a trait-typed one: a `static fn` is reached through the
  * type and through nothing else (CONCEPT.md, "Types, Values and Reflection", names `Point.tryFrom(...)` as the one
- * bridge), so `rectangle.square(5)` - calling a static function on a value instead of the type - is reported here too.
+ * bridge), so `rectangle.square(5)` - calling a `static fn` on a value instead of on the type - is reported here too.
  *
  * Using the trait as a *namespace* (`List.from(pairs)`) is a different question and goes through the static lookup,
  * which never reaches this.
@@ -85,16 +86,16 @@ public fn requireObjectSafe(var checker: Checker, receiver: TypeId, candidate: C
     }
     if !candidate.takesSelf && isMethod(candidate) {
       checker.reportHere(
-        Diagnostic.error("`{name}` cannot be called on a `{shown}` value: it has no `self`", at)
-          .withNote("A member without `self` belongs to a concrete type, and a trait value does not name one")
+        Diagnostic.error("`{name}` is `{staticKeyword}`, so it cannot be called on a `{shown}` value", at)
+          .withNote("A `{staticKeyword}` member belongs to a concrete type, and a trait value does not name one")
       )
     }
     return
   }
   if !candidate.takesSelf && isMethod(candidate) {
     checker.reportHere(
-      Diagnostic.error("`{name}` has no `self`, so it is reached through the type: `{shown}.{name}(...)`", at)
-        .withNote("A static function is a constant of the type, and a value of it is not a way to that constant")
+      Diagnostic.error("`{name}` is `{staticKeyword}`: call it as `{shown}.{name}(...)`", at)
+        .withNote("A `{staticKeyword}` member belongs to the type, and a value of it is not a way to the type")
     )
   }
 }
@@ -129,7 +130,7 @@ public fn lookupMember(var checker: Checker, receiver: TypeId, name: String, at:
   lookupMemberAt checker, receiver, name, false, at
 }
 
-/** `Type.b`: a constant, a static function, a case, or a static member of a trait the type implements. */
+/** `Type.b`: a constant, a `static fn`, a case, or a static member of a trait the type implements. */
 public fn lookupStaticMember(var checker: Checker, owner: TypeId, name: String, at: Span? = None): Candidate? {
   lookupMemberAt checker, owner, name, true, at
 }
@@ -498,7 +499,7 @@ fn memberCandidate(
       dispatch: dispatch,
     )
   }
-  // A member without `self` is a constant of the type: a static function, or a `const`
+  // A `static` member is a constant of the type: a `static fn`, or a `static` value
   if signature.hasBody && form.parameters.isEmpty() && isConstantMember(checker, member) {
     // `const perimeter: (self: Rectangle) => Int`: a method *is* a constant that holds a receiver closure, so one that
     // was written that way is read exactly like a `fn` - `Rectangle.perimeter` is it, `rectangle.perimeter` is it bound
@@ -572,7 +573,7 @@ fn functionTypeOf(
   built
 }
 
-/** The function type a `const` holds, where its first parameter is a receiver: that is what a method is (CONCEPT.md). */
+/** The function type a `static` value holds, whose first parameter is a receiver: that is what a method is. */
 fn receiverFormOf(checker: Checker, annotation: TypeId): FunctionForm? {
   if const .Function(form) = checker.types.form(annotation) {
     if const Some(first) = form.parameters.first() {
@@ -591,7 +592,7 @@ fn isVarReceiver(mode: ParameterMode): Bool {
   }
 }
 
-/** A `const` member has no parameters and no `self`, which is exactly what `Signature` says about it. */
+/** A `static` value has no parameters and no receiver, which is exactly what `Signature` says about it. */
 fn isConstantMember(checker: Checker, member: SymbolId): Bool {
   match checker.symbolAt(member).kind {
     .Constant => true

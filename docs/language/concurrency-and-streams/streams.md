@@ -35,12 +35,12 @@ print total.await().orElse(0)
 
 ```text
 shared trait Source<Item, Failure> with Close {
-  fn next(var self): Task<Result<Item?, Failure>>
+  var fn next(): Task<Result<Item?, Failure>>
 }
 
 shared trait Sink<Item, Failure> with Close {
-  fn add(var self, item: Item): Task<Result<Void, Failure>>
-  fn finish(var self): Task<Result<Void, Failure>>
+  var fn add(item: Item): Task<Result<Void, Failure>>
+  var fn finish(): Task<Result<Void, Failure>>
 }
 
 while const Some(item) = source.next().await()? { ... }
@@ -108,4 +108,4 @@ fn printAll(source: Source<Int, Never>) {
 - [Channels](channels.md) - `Channel`, the one place a `Source` and a `Sink` are made from nothing else.
 - [Tasks](tasks.md) - `Task` and `await()`, which every verb of a stream answers with.
 - [Pipelines](../collections-and-iteration/pipelines.md) - the `Stage` values a stream reuses without change.
-- [Shared types](../types/shared-types.md) - why a `var self` method here may answer a `Task`.
+- [Shared types](../types/shared-types.md) - why a `var fn` method here may answer a `Task`.

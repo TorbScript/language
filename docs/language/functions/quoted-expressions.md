@@ -42,8 +42,8 @@ native type Expression<Value> {
   source: String
   location: SourceLocation
 
-  native fn value(self): Value
-  native fn captures(self): List<Encode>
+  native fn value(): Value
+  native fn captures(): List<Encode>
 }
 ```
 

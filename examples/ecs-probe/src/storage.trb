@@ -67,7 +67,7 @@ public type Column<Component> {
   private(var) clock: Int = 0
 
   /** Puts `value` under `entity`, replacing whatever was there. */
-  fn add(var self, entity: Entity, value: Component) {
+  var fn add(entity: Entity, value: Component) {
     clock = clock + 1
     match rows.get(entity) {
       Some(row) => {
@@ -84,7 +84,7 @@ public type Column<Component> {
   }
 
   /** Takes `entity`'s value out, swapping the last row into the hole. */
-  fn remove(var self, entity: Entity) {
+  var fn remove(entity: Entity) {
     const found = rows.get entity
     if const Some(row) = found {
       const last = values.length() - 1
@@ -103,43 +103,43 @@ public type Column<Component> {
   }
 
   /** The value under `entity`, or `None`. */
-  fn get(self, entity: Entity): Component? {
+  fn get(entity: Entity): Component? {
     match rows.get(entity) {
       Some(row) => values.get row
       None => None
     }
   }
 
-  fn has(self, entity: Entity): Bool {
+  fn has(entity: Entity): Bool {
     rows.containsKey entity
   }
 
-  fn length(self): Int {
+  fn length(): Int {
     values.length()
   }
 
-  fn ownerAt(self, row: Int): Entity {
+  fn ownerAt(row: Int): Entity {
     owners[row]
   }
 
-  fn valueAt(self, row: Int): Component {
+  fn valueAt(row: Int): Component {
     values[row]
   }
 
   /** What the clock stood at after the last write of any row. */
-  fn version(self): Int {
+  fn version(): Int {
     clock
   }
 
   /** The entities whose value was written after `stamp`. This is change detection, without a second data structure. */
-  fn changedSince(self, stamp: Int): Iterable<Entity> {
+  fn changedSince(stamp: Int): Iterable<Entity> {
     (0..values.length()).filterMap { row =>
       if stamps[row] > stamp { Some owners[row] } else { None }
     }
   }
 
   /** Every entity that has a value here, in the order the values lie. */
-  fn entities(self): Iterable<Entity> {
+  fn entities(): Iterable<Entity> {
     (0..values.length()).map { owners[_] }
   }
 }
@@ -160,14 +160,14 @@ public type World {
   private(var) nextIndex: Int = 1
 
   /** Hands out an [Entity] nothing else holds. */
-  fn spawn(var self): Entity {
+  var fn spawn(): Entity {
     const entity = Entity nextIndex
     nextIndex = nextIndex + 1
     entity
   }
 
   /** Takes every component of `entity` out of every column. */
-  fn despawn(var self, entity: Entity) {
+  var fn despawn(entity: Entity) {
     positions.remove entity
     globals.remove entity
     velocities.remove entity

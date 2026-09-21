@@ -26,7 +26,7 @@
    An expression passed to `lazy Value` is not evaluated at the call site. This one principle powers DSLs,
    custom control structures and query providers, without macros or annotations.
 2. **Mutation is always visible.** `var` bindings, `var` fields (`private(var)`: only the type itself), `var` parameters,
-   `var self` methods. Everything not marked does not change. Values are never aliased, so a mutation happens
+   `var fn` methods. Everything not marked does not change. Values are never aliased, so a mutation happens
    exactly where it is written and nowhere else.
 3. **One way to construct, many ways to create.** Constructors only initialize fields and never contain logic.
    Validation, parsing and conversion live in static factory functions (`Email.tryFrom`, `From`/`Into`).
@@ -208,7 +208,7 @@ Simple to use like npm, strict like Maven. The rules exist so that adding a depe
   (`Html`, `Json`, `Sql`, `Http`, `Int64`, `Bool`, `Char`, `min`/`max`). This holds for the standard library, and is a
   linter hint for user code. Type parameters are written out, too: `List<Item>`, `Map<Key, Value>`,
   `Result<Value, Failure>`, `fn map<Output>(...)` - not `T`, `K`, `V`, `E`, `U`.
-- **Verbs change, participles return.** A method that changes its receiver in place is a verb and declares `var self`
+- **Verbs change, participles return.** A method that changes its receiver in place is a verb and is a `var fn`
   (`add`, `remove`, `sort`, `translate`). The method that returns a changed copy instead is its participle (`added`,
   `removed`, `sorted`, `translated`). Pick verbs whose participle is a different word: the standard library avoids
   `put`, `cut`, `reset` as mutators, and `set` has the counterpart `updated`. Nouns never change
@@ -298,14 +298,14 @@ var b: Int          // Compile error: no implied default value
   are scopes of their own.
 - **Changes that cannot have an effect are compile errors,** because with value semantics they are always a mistake:
   a `var` that is changed but never read afterwards (`var first = list[0]` followed by `first.increment()` - the
-  message points to `list[0].increment()`), and the discarded result of a method that takes `self`
+  message points to `list[0].increment()`), and the discarded result of a method that only reads its receiver
   (`list.added(4)` as a statement - the message points to `add`). Discard on purpose with `const _ = ...`.
 - **An expression statement must have the type `Void` or `Never`,** unless the call has a `var` receiver or a `var`
   argument. That is the whole rule behind the one above: `parser.bump()` and `cursor.next()` change something and
   stay statements, `Email.tryFrom(text)` and `1 + 2` are values that go nowhere.
 
 `const` is deep from the perspective of the binding: through a `const` binding you can neither reassign, nor assign
-fields, nor call `var self` methods. `var` means "mutable through this path".
+fields, nor call `var fn` methods. `var` means "mutable through this path".
 
 Assignment is a statement, not an expression.
 
@@ -474,7 +474,7 @@ A type parameter can be a value instead of a type:
 type Matrix<const Rows: Int, const Columns: Int> {
   private var cells: Array<Array<Float, Columns>, Rows> = Array.filled(Array.filled(0.0))
 
-  fn multiplied<const Other: Int>(self, other: Matrix<Columns, Other>): Matrix<Rows, Other> { ... }
+  fn multiplied<const Other: Int>(other: Matrix<Columns, Other>): Matrix<Rows, Other> { ... }
 }
 
 const combined = Matrix<2, 3>().multiplied(Matrix<3, 4>())   // Matrix<2, 4>, checked by the compiler
@@ -547,7 +547,7 @@ type Seconds with Show, Add & Subtract by value, Compare by value {
 
 type Email with Show by value, TryFrom<String, ParseError> {
   private value: String                          // Private: only `Email.tryFrom` creates an Email
-  fn tryFrom(text: String): Result<Email, ParseError> { ... }
+  static fn tryFrom(text: String): Result<Email, ParseError> { ... }
 }
 
 const total = Seconds(5) + Seconds(2)          // Seconds(7)
@@ -585,7 +585,7 @@ fn sum(a: Int, b: Int): Int {
 - `fn` declarations are hoisted within their scope, so (mutual) recursion just works.
 - Type arguments can be given partially, from the left; the rest is inferred (`into<Set<Employee>>()`).
 - Parameter types are mandatory on `fn`. The return type can be inferred - except for `public` functions and trait
-  methods: **they never infer it.** Without a return type they return `Void` (`fn add(var self, value: Item)`), and a
+  methods: **they never infer it.** Without a return type they return `Void` (`var fn add(value: Item)`), and a
   body that produces a value is an error at that value. Whoever calls a public function must not have to read its
   body to know what it returns.
 - The last expression of the body is the return value. `return` exits early.
@@ -613,7 +613,7 @@ and without the other parameters. That is the same rule as for a field default (
 on an argument order that is not visible at the call site.
 
 Parameters are `const`. A `var` parameter allows mutation through it (`fn reset(var counter: Counter)`), the caller
-must pass something mutable. `var self` is just the most common case.
+must pass something mutable. The receiver of a `var fn` is just the most common case.
 
 ### Lambdas and Closures
 
@@ -658,7 +658,7 @@ numbers.fold(0) { sum, number => sum + number }
 The implicit parameter can be named by the _type of the function_:
 
 ```trb
-fn map<Output>(self, transform: (value: Item) => Output): Iterable<Output>
+fn map<Output>(transform: (value: Item) => Output): Iterable<Output>
 
 numbers.map { value * 2 }
 ```
@@ -787,8 +787,8 @@ native type Expression<Value> {
   tree: ExpressionNode                  // Static data, created at compile time
   source: String                  // "_.age >= minAge"
   location: SourceLocation
-  native fn value(self): Value               // The ordinary value/closure. Evaluated at most once for non-functions.
-  native fn captures(self): List<Encode> // Values of the captured variables
+  native fn value(): Value               // The ordinary value/closure. Evaluated at most once for non-functions.
+  native fn captures(): List<Encode> // Values of the captured variables
 }
 
 type ExpressionNode {
@@ -915,29 +915,29 @@ type Point {
   var x: Int                   // Fields are `const` unless marked `var`
   var y: Int
 
-  // Method: declares `self`. Member access through `self` is implicit.
-  fn area(self): Int {
+  // Method: it does not list its receiver. Member access through `self` is implicit.
+  fn area(): Int {
     x * y
   }
 
-  // A verb changes the value in place and says so: `var self`
-  fn translate(var self, deltaX: Int = 0, deltaY: Int = 0) {
+  // A verb changes the value in place and says so: `var fn`
+  var fn translate(deltaX: Int = 0, deltaY: Int = 0) {
     x = x + deltaX
     y = y + deltaY
   }
 
   // Its participle returns a changed copy
-  fn translated(self, deltaX: Int = 0, deltaY: Int = 0): Point {
+  fn translated(deltaX: Int = 0, deltaY: Int = 0): Point {
     copy(x: x + deltaX, y: y + deltaY)
   }
 
-  // Static function: does not declare `self`.
-  fn square(size: Int): Self {
+  // Of the type and not of a value: `static`.
+  static fn square(size: Int): Self {
     Self(size, size)
   }
 
   // Static constant
-  const origin = Point(0, 0)
+  static origin = Point(0, 0)
 }
 
 var p = Point(x: 10, y: 20)    // or positional: Point(10, 20)
@@ -955,7 +955,7 @@ p = p.copy(y: 30)              // `copy` is generated for every `type`
 - **Assigning, passing and capturing a value is a copy.** Two bindings never alias, so what happens through one `var`
   cannot be observed anywhere else. That is what makes "the binding decides" sound - and why a `const` list, map or
   point really never changes.
-- **Mutation needs a `var` path,** from the binding down to the field: a `var` binding, `var` parameter or `var self`,
+- **Mutation needs a `var` path,** from the binding down to the field: a `var` binding, `var` parameter or a `var fn` receiver,
   then `var` fields all the way. A field without `var` never changes after construction, not even in a `var`
   binding (`id`, `step`). `const` is deep: through a `const` binding nothing changes, whatever the type looks like.
 - Structural `Equals`, `Hash`, `Show` and `copy` are generated, there is no identity.
@@ -985,7 +985,7 @@ shared type Connection {
   url: String
   private(var) sent: Int = 0
 
-  fn send(var self, message: String) {
+  var fn send(message: String) {
     sent = sent + 1
   }
 }
@@ -1005,11 +1005,11 @@ it sees the same object. Typical cases are handles to the outside world (`File`,
 
 - The rule stays the same: mutation needs a `var` path. A `const` binding to a shared object is a read-only view
   (the object can still change, but not through this path).
-- **A `var self` method of a `shared type` may answer a `Task`.** For a value a `var` is an exclusive in-out access whose
+- **A `var fn` method of a `shared type` may answer a `Task`.** For a value a `var` is an exclusive in-out access whose
   "copy in, copy out" ends with the call, so a change made after the call has returned would be lost - and a `var` of a
   value on a function that answers a `Task` is therefore a compile error. For an object there is no copy: `var` is the
   *permission* to change the one object, two `var` paths to it may exist at once (as above), and a permission survives an
-  `await`. That is what lets `Source.next(var self)` of [Streams](#streams) mirror `Iterator.next(var self)` instead of
+  `await`. That is what lets `Source.next()` of [Streams](#streams) mirror `Iterator.next()` instead of
   hiding a cursor somewhere. An ordinary `trait` counts as a value here, because a value may implement it: only a
   `shared trait` may require such a member.
 - **A read-only view cannot be widened again.** A `var` binding, `var` field or `var` argument may not be
@@ -1055,12 +1055,12 @@ samples[1..4].sort { _ }             // A range is a path, too: sorts this part 
   back end; implementations pass a reference.
 - A path through `a[key]` (`MutableIndexed`) or `a[from..to]` (`MutableSlice`) means: take it out, change it, put it
   back - without a copy. This is what other languages need mutable slices and spans for.
-- **References are second-class.** They only exist as a `var` parameter or `var self`, for the duration of a call.
+- **References are second-class.** They only exist as a `var` parameter or a `var fn` receiver, for the duration of a call.
   They cannot be stored in a field, returned, or captured by a closure that is stored. So there are no lifetimes, no
   borrow checker, and nothing can dangle. (A captured `var` binding is the one thing that outlives a call, and it is
   not a reference - see below.)
 - **A closure that captures a reference may not escape, and the compiler decides that per closure.** A closure may
-  capture a `var` parameter or `var self` only when it cannot outlive the call; conservatively that is a closure
+  capture a `var` parameter or a `var fn` receiver only when it cannot outlive the call; conservatively that is a closure
   written directly as the argument of a call that does not store it, which is exactly what the receiver closures, the
   DSLs and the pipeline stages are. Everything else captures copies, or the shared box of a captured `var` binding
   (see below). The decision is recorded, because it is also what lets an implementation put the closure's environment
@@ -1105,7 +1105,7 @@ written by hand. **Constructors never contain logic.**
 - Outside of the type, `private` fields cannot be passed. So the constructor is usable from outside if and only if
   every private field has a default value. Inside of the type (`Self(...)`) all fields can be passed.
 - **`copy` has the shape of the constructor, with every field optional:**
-  `fn copy(self, <field>: <Type> = <the current value>, ...): Self`, all fields in declaration order, and `private`
+  `fn copy(<field>: <Type> = <the current value>, ...): Self`, all fields in declaration order, and `private`
   fields not passable from outside. There is no `copy` for a `shared type` - it has an identity, not a value.
 
 Everything else is a static factory function:
@@ -1114,7 +1114,7 @@ Everything else is a static factory function:
 type Email with TryFrom<String, ParseError> {
   private value: String                // Private without default: only `Email` itself can construct an `Email`
 
-  fn tryFrom(text: String): Result<Email, ParseError> {
+  static fn tryFrom(text: String): Result<Email, ParseError> {
     if !text.contains("@") {
       return Fail(ParseError("'{text}' is not an email address"))
     }
@@ -1137,7 +1137,7 @@ hand overlaps that blanket and is answered with the line to write instead.
 
 ```trb
 extend Celsius with From<Fahrenheit> {
-  fn from(value: Fahrenheit): Celsius {
+  static fn from(value: Fahrenheit): Celsius {
     Celsius((value.degrees - 32.0) / 1.8)
   }
 }
@@ -1155,7 +1155,7 @@ because a type named as an argument of the trait counts as owning the implementa
 
 **Every type has `From<Self>`**, and that conversion is the value itself. It is not written down anywhere and could not
 be: a blanket `extend<Value> Value with From<Value>` would overlap with every other implementation of `From`. It is what
-lets `fn sum(self): Item where Item: Add & From<Int>` be called with a list of `Int`.
+lets `fn sum(): Item where Item: Add & From<Int>` be called with a list of `Int`.
 
 The language has exactly **four coercions**, and all of them only apply where a type is expected - never to decide what
 an expression means on its own, and never to solve an inference variable:
@@ -1182,7 +1182,7 @@ type Account {
   private(var) balance: Int = 0           // Everybody reads, only Account writes
   private var history: List<String> = []                     // Invisible from outside
 
-  fn deposit(var self, amount: Int) {
+  var fn deposit(amount: Int) {
     balance = balance + amount
     history.add("deposit {amount}")
   }
@@ -1210,7 +1210,7 @@ account.balance = 1_000_000              // Compile error: only Account can writ
   The package is the unit of coherence, so it is the unit of privacy, too.
 - **There are no getters, setters or properties.** A field is storage, a method computes, and the `()` tells which one
   it is (`list.length()` may cost something, `point.x` never does). No `get` prefixes; predicates are called
-  `isEmpty()`/`hasX()`, mutators are verbs with `var self`.
+  `isEmpty()`/`hasX()`, mutators are verbs written `var fn`.
 - **A field is a promise about data, so replacing one by a method is a breaking change** - and a property would not
   save it: a field is also a parameter of the generated constructor, a position in patterns, a parameter of `copy`,
   a part of the generated `Encode`/`Decode` and a step of `var` paths. A property would cover reading and nothing
@@ -1232,25 +1232,27 @@ account.balance = 1_000_000              // Compile error: only Account can writ
 
 ### Members: a method is a constant that holds a closure
 
-A type has **one namespace** of members. A member is either an instance field, or a constant of the type (`const`,
-`fn`). There is nothing else:
+A type has **one namespace** of members. A member is either an instance field, or a constant of the type
+(`static`). There is nothing else, and two words say which is which: `static` belongs to the type and not to a value,
+`var` may change.
 
-- A static function is a constant of the type that holds a function.
-- A method is a constant of the type that holds a _receiver closure_ - the very same thing that powers the DSLs.
-  `fn` is the declaration form of it (adds hoisting, recursion, generics, a return type annotation):
+- A `static fn` is a constant of the type that holds a function; `static name = value` is one that holds a value.
+- A method is a constant of the type that holds a _receiver closure_ - the very same thing that powers the DSLs. It
+  does not list its receiver, and a `var fn` says it changes it. `fn` is the declaration form of it (adds hoisting,
+  recursion, generics, a return type annotation):
 
 ```trb
 type Point {
   x: Int
   y: Int
 
-  fn area(self): Int { x * y }
+  fn area(): Int { x * y }
   // is, structurally:
   // const area: (self: Point) => Int = { x * y }
 }
 
 const p = Point(10, 20)
-p.area()                       // `value.member(args)` is `Type.member(value, args)` if the member takes `self`
+p.area()                       // `value.member(args)` is `Type.member(value, args)` if the member reads its receiver
 Point.area(p)                  // The constant itself: (self: Point) => Int
 points.map(Point.area)
 const area = p.area            // Without a call: the function value, bound to `p`: () => Int
@@ -1299,7 +1301,7 @@ type Shape {
   case Rectangle(width: Float, height: Float)
   case Empty
 
-  fn area(self): Float {
+  fn area(): Float {
     match self {
       .Circle(radius) => Float.pi * radius * radius
       .Rectangle(width, height) => width * height
@@ -1356,8 +1358,8 @@ accepts everything that converts:
 public type HttpError with Show {
   private kind: HttpErrorKind            // The ADT stays private, variants can be added at any time
 
-  fn isTimeout(self): Bool { ... }
-  fn isRetryable(self): Bool { ... }
+  fn isTimeout(): Bool { ... }
+  fn isRetryable(): Bool { ... }
 }
 
 public fn fail<Failure: Into<HttpError>>(failure: Failure): HttpError {
@@ -1438,27 +1440,27 @@ parameters - are not part of it: nothing there can be mistaken for a comparison,
 
 ```trb
 trait Shape {
-  fn area(self): Float                     // Required
-  fn describe(self): String {              // Default implementation
+  fn area(): Float                     // Required
+  fn describe(): String {              // Default implementation
     "Shape with area {area()}"
   }
 }
 
 trait Compare with Equals {                        // Supertrait
-  fn compare(self, other: Self): Ordering
+  fn compare(other: Self): Ordering
 }
 
 type Square with Shape, Equals {         // Implement at the declaration...
   side: Float
-  fn area(self): Float { side * side }
+  fn area(): Float { side * side }
 }
 
 extend Point with Shape {                  // ...or afterwards
-  fn area(self): Float { Float.from(x * y) }
+  fn area(): Float { Float.from(x * y) }
 }
 
 extend String {                            // Extension methods without a trait
-  fn shout(self): String { "{toUpperCase()}!" }
+  fn shout(): String { "{toUpperCase()}!" }
 }
 
 extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters are declared on `extend`
@@ -1472,7 +1474,7 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
 - **Type parameters of a `type` and of a `trait` can have defaults** (`trait Add<Other = Self, Output = Self>`), so
   `with Add` means `Add<Self, Self>` and nobody writes it out. A default may name earlier parameters and `Self`, and
   it is filled in, never inferred. `fn` has no defaults: its type arguments come from the call.
-- **A member may carry a `where` clause of its own** (`fn toSet(self): Set<Item> where Item: Hash`). It is not a
+- **A member may carry a `where` clause of its own** (`fn toSet(): Set<Item> where Item: Hash`). It is not a
   requirement for implementors - the member simply exists only where the clause holds, and a use that does not
   satisfy it reports the unmet bound. Same rule as for a conditional `extend`.
 - **`Self` is allowed in every type position inside a trait,** including as a trait argument
@@ -1492,10 +1494,10 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
 - **An extension member is named where it is used.** A member is part of a type everywhere if the package of the *type*
   attached it - `type Circle with Shape`, an `extend` in that package, in whatever file it is written - and so is one
   the *using* package wrote itself, because a file sees what its own package declares. Everything else the file names:
-  - **`extend` without a trait on a foreign type** (`extend String { fn shout(self) ... }` in `acme/text`) is imported
+  - **`extend` without a trait on a foreign type** (`extend String { fn shout() ... }` in `acme/text`) is imported
     by path, the same form as a case: `use String.shout, String.slug from "acme/text"`,
     `use Int64.seconds from "std/time"`. A generic target is named by its head (`use List.totalArea from "..."`), and
-    constants and static functions of an `extend` are imported the same way. `as` renames the member
+    constants and `static fn`s of an `extend` are imported the same way. `as` renames the member
     (`use String.shout as yell from "acme/text"` makes it `"x".yell()`), which is how a conflict is resolved: two
     imported members of one name for one type stay a compile error at the *use*, and the message says to rename one.
   - **The members a trait puts on a type it does not own** (`extend String with Slug` in the package of `Slug`, blanket
@@ -1537,7 +1539,7 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
 - Because a trait is a type, it can be extended like one. `extend<Item> List<Item> with Show where Item: Show` makes every list
   showable, `extend<Item> List<Item> with From<Iterable<Item>>` makes `List<Item>` itself a valid target of `to<List<Item>>()`.
 - **Such an `extend` implements the trait for the trait-typed value, and reaches a concrete implementer only through the
-  receiver.** `show` takes `self`, so an `ArrayList<Int>` is showable through it: the receiver coerces to `List<Int>` and
+  receiver.** `show` reads its receiver, so an `ArrayList<Int>` is showable through it: the receiver coerces to `List<Int>` and
   the member is found. `From.from` has no `self` and answers `Self`, so an `ArrayList<Int>` does **not** get it - the
   `from` would answer "some `List`" where an `ArrayList` is required. So every member of the implemented trait has to
   take `self` and none of them may answer `Self`; a `Self` in a *parameter* is fine, because there the concrete value
@@ -1577,8 +1579,8 @@ What reflection is usually needed for (serialization, config mapping, database r
 more _generated trait pair_, in the same way `Equals`, `Hash` and `Show` are generated:
 
 ```trb
-trait Encode { fn encode(self, var encoder: Encoder) }
-trait Decode { fn decode(var decoder: Decoder): Result<Self, DecodeError> }
+trait Encode { fn encode(var encoder: Encoder) }
+trait Decode { static fn decode(var decoder: Decoder): Result<Self, DecodeError> }
 ```
 
 ```trb
@@ -1598,7 +1600,7 @@ nothing in it is special:
 
 ```trb
 extend User with Encode, Decode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.record("User") { fields =>
       fields.field("name", name)
       fields.field("email", email)
@@ -1606,7 +1608,7 @@ extend User with Encode, Decode {
     }
   }
 
-  fn decode(var decoder: Decoder): Result<User, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<User, DecodeError> {
     decoder.record("User") { fields =>
       Ok(User(
         name: fields.field("name")?,
@@ -1684,7 +1686,7 @@ panic "unreachable"                                      // Bugs. Not catchable,
 - **A panic aborts the process,** because the language has no supervision. The one exception is a sandboxed script: the
   VM is interpreting it and the script has a heap of its own, so the VM stops it and reports a `SandboxError`
   (see [Receiver Scripts and the Sandbox](#receiver-scripts-and-the-sandbox)).
-- **`Error` is a trait, not a base type.** `public trait Error with Show { fn cause(self): Error? { None } }` in the
+- **`Error` is a trait, not a base type.** `public trait Error with Show { fn cause(): Error? { None } }` in the
   prelude. Every error type that carries it fits into `Result<Value, Error>`, which is the "some error, hand it up"
   signature: `?` needs no new rule for that, because a concrete failure becomes the trait value through the ordinary
   conversion of a value to a trait-typed value. **Precise error types stay the norm for libraries** - a caller can
@@ -1748,7 +1750,7 @@ var index: Map<String, Int> = HashMap()                 // Trait as the type, im
   nobody can change a collection while somebody else reads it.
 - **Verbs and participles:**
 
-  | In place (`var self`)                       | Changed copy (`self`)                                  |
+  | In place (`var fn`)                         | Changed copy (`fn`)                                    |
   |---------------------------------------------|--------------------------------------------------------|
   | `add`, `addAll`, `insert`                   | `added`, `addedAll`, `inserted`                        |
   | `remove`, `removeAt`                        | `removed`, `removedAt`                                 |
@@ -1843,12 +1845,12 @@ const teams = employees.collect(groupingBy { _.department }.then(into<Set<Employ
 
 ```trb
 trait Collector<Item, Output> {             // A description
-  fn start(self): Accumulator<Item, Output>
+  fn start(): Accumulator<Item, Output>
 }
 
 trait Accumulator<Item, Output> {           // The state of one run, held in a `var`
-  fn add(var self, value: Item)
-  fn finish(self): Output
+  var fn add(value: Item)
+  fn finish(): Output
 }
 ```
 
@@ -1908,12 +1910,12 @@ stream", because at any point in a program you hold one end and not both. The tw
 
 ```trb
 shared trait Source<Item, Failure> with Close {              // reading: `next`, like an Iterator
-  fn next(var self): Task<Result<Item?, Failure>>
+  var fn next(): Task<Result<Item?, Failure>>
 }
 
 shared trait Sink<Item, Failure> with Close {                // writing: `add`/`finish`, like an Accumulator
-  fn add(var self, item: Item): Task<Result<Void, Failure>>
-  fn finish(var self): Task<Result<Void, Failure>>
+  var fn add(item: Item): Task<Result<Void, Failure>>
+  var fn finish(): Task<Result<Void, Failure>>
 }
 ```
 
@@ -1938,14 +1940,14 @@ while const Some(line) = lines.next().await()? {
 }
 ```
 
-- **A stream has an identity and is consumed once,** so both ends are `shared type`s, and the verbs that consume take
-  `var self` exactly as `Iterator.next` and `Accumulator.add` do. A `var self` method may answer a `Task` because for an
+- **A stream has an identity and is consumed once,** so both ends are `shared type`s, and the verbs that consume are
+  `var fn`s exactly as `Iterator.next` and `Accumulator.add` are. A `var fn` method may answer a `Task` because for an
   object `var` is a permission and not an exclusive access ([Identity](#identity-shared-type)). So **a source that is
   read from sits in a `var` binding**, and a `const` handle is the read-only view every shared object has. A consequence
   worth knowing: a source belongs to the task that made it, because shared objects do not cross task boundaries.
 - **Whoever reads needs the permission - now or later.** `next`, `collect`, `toList`, `count`, `find` and `into` read
   items, and `map`, `filter`, `through`, `then` and `checked` hand the source to a wrapper that reads it from then on:
-  all of them take `var self`. One rule, so a `const` source cannot be consumed by wrapping it either - which is what
+  all of them are `var fn`s. One rule, so a `const` source cannot be consumed by wrapping it either - which is what
   the read-only view promised. A chain is still one expression, because a freshly produced object is a `var` path
   ([Identity](#identity-shared-type)).
 
@@ -1970,8 +1972,8 @@ A stage does not hang on the source, it hangs on the target:
 
 ```trb
 trait Stage<Input, Output> {
-  fn onto<Final>(self, downstream: Accumulator<Output, Final>): Accumulator<Input, Final>
-  fn then<Final>(self, other: Stage<Output, Final>): Stage<Input, Final>
+  fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final>
+  fn then<Final>(other: Stage<Output, Final>): Stage<Input, Final>
 }
 ```
 
@@ -1986,7 +1988,7 @@ const fromList = users.through(activeNames).toList()                 // a list
 const fromBody = body.through(activeNames).toList().await()?         // an HTTP body
 ```
 
-- `Accumulator` has `fn isDone(self): Bool { false }` for it. A driver asks before the first value and after every
+- `Accumulator` has `fn isDone(): Bool { false }` for it. A driver asks before the first value and after every
   `add`, so `taking(10)`, `first()` and `find(...)` end a pipeline over an infinite or expensive source without pulling
   one value they will not deliver.
 - **The difference between the two worlds shrinks to two drivers:** `Iterable.through(stage)` (a loop) and
@@ -2114,7 +2116,7 @@ public use Stack, ArrayStack from "./collections/stack"      // Re-export
 
 ## Configuration DSL
 
-A _receiver closure_ is a closure whose first parameter is called `self`. Inside of it, names resolve against the
+A _receiver closure_ is a closure whose function type names its first parameter `self`. Inside of it, names resolve against the
 receiver, exactly like inside of a method. Together with command calls, trailing closures and property commands this
 gives Groovy-style builders that are completely statically typed.
 
@@ -2131,7 +2133,7 @@ type ServerConfig {
   private var routes: List<Route> = []
 
   // Only what is more than "set a field" or "configure a field" needs a method
-  fn route(var self, path: String, to: String) {
+  var fn route(path: String, to: String) {
     routes.add(Route(path, to))
   }
 }
@@ -2185,7 +2187,7 @@ script.apply(config)?                                           // The body of t
 - **Loading and running are two steps, and each has its own failures.**
   `Sandbox.load<Value>(path, capabilities): Result<Script<Value>, SandboxError>` reports what is wrong with the file:
   a syntax error, a type error against the receiver, a module the script may not import.
-  `Script.apply(self, var value: Value): Result<Void, SandboxError>` runs the body against a value of the caller's own
+  `Script.apply(var value: Value): Result<Void, SandboxError>` runs the body against a value of the caller's own
   and reports what went wrong while it ran: a step, memory or time limit, or a panic inside the script. A sandbox whose
   failures aborted the host would not be a sandbox - and the panic that can be recovered from is exactly the one that
   happens inside an interpreter with a heap of its own.
@@ -2262,7 +2264,7 @@ const channel = Channel<Int>(capacity: 8)        // a stream in memory: `channel
 - **A `Channel` hands out the two ends of a stream:** `channel.source()` and `channel.sink()` are ordinary
   `Source`/`Sink` values, so everything of [Streams](#streams) works between two tasks without a second vocabulary. Each
   end is read or written through a `var` binding, because its verbs change it.
-- **A `var self` method may answer a `Task` when its type is shared, and only then** - see
+- **A `var fn` method may answer a `Task` when its type is shared, and only then** - see
   [Identity](#identity-shared-type). This is what lets a task change an object it holds; a value would have to write its
   change back when the call returns, which is before the task has run.
 
@@ -2289,7 +2291,7 @@ const channel = Channel<Int>(capacity: 8)        // a stream in memory: `channel
   still replace an ordinary function of the standard library by something faster, which is its private business and
   not visible in the source.
 - _Planned, after the compiler compiles itself:_ **the body of a `native fn` is IR**
-  (`native fn add(self, other: Int64): Int64 { ... }`), and `native { ... }` is a block of IR inside of an ordinary
+  (`native fn add(other: Int64): Int64 { ... }`), and `native { ... }` is a block of IR inside of an ordinary
   function. Then the standard library itself says which operation `Int64.add` is, instead of a table of names in
   the compiler, and the kernel every back end must provide is a short list of IR intrinsics. A `native fn` without a
   body stays what the platform provides (files, clock, processes). `native` is to TorbScript what `unsafe` is to
@@ -2307,9 +2309,9 @@ foreign "sqlite3" {
 public shared type Database with Close {
   private handle: Pointer<Void>
 
-  fn open(path: String): Result<Database, SqliteError> { ... }
+  static fn open(path: String): Result<Database, SqliteError> { ... }
 
-  fn close(var self) {
+  var fn close() {
     sqlite3_close(handle)
   }
 }
@@ -2446,7 +2448,8 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - **A stream is a word, not a type: what a signature names is one of its two ends,** `Source<Item, Failure>` or
   `Sink<Item, Failure>`. They are the asynchronous siblings of `Iterator` and `Accumulator` and carry the same verbs
   (`next`, `add`, `finish`), and both are `shared trait`s with `Close`, because a stream has an identity and is consumed
-  once. `next` and `add` take `self` and not `var self`: an exclusive access cannot stay open across an `await`.
+  once. `next` and `add` read their receiver and do not change it: an exclusive access cannot stay open across an
+  `await`.
 - **A failure ends a stream and stands in the type, on both ends** (`Never` for an end that cannot fail), instead of in
   the item as in Rust. There, "what happens after an `Err`" has to be answered per implementation and every combinator
   exists twice.
@@ -2472,19 +2475,19 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   and a `sink`.
 - **No `for` over a source in v1:** a `for` head has no place for the `?` that the pull needs, and
   `while const Some(item) = source.next().await()? { ... }` keeps both `await` and `?` where they happen.
-- **A `var self` method of a `shared type` may answer a `Task`; for a value it is an error.** "A `var self` access cannot
+- **A `var fn` method of a `shared type` may answer a `Task`; for a value it is an error.** "A `var` access cannot
   stay open across an `await`" holds for values, where `var` is an exclusive in-out access that ends with the call. For an
   object `var` is a permission, and the language already hands out two `var` paths to one object. So `Source.next` and
-  `Sink.add` take `var self` like their synchronous siblings, every stateful end of `std/stream` is an ordinary shared
-  type with `var` fields, and *reading* a stream needs a `var` binding while *wrapping* one hands it over and takes
-  `self` - which is what keeps a pipeline one expression.
+  `Sink.add` are `var fn`s like their synchronous siblings, every stateful end of `std/stream` is an ordinary shared
+  type with `var` fields, and *reading* a stream needs a `var` binding while *wrapping* one hands it over and only
+  reads - which is what keeps a pipeline one expression.
 - **Every type can be made from a `Never`** (`extend<Target> Target with From<Never>` in `std/core`), so `?` works on a
   `Result<Value, Never>`. The conversion is total and its body is forced, and without it the infallible case - the
   reading end of a `Channel` - would be the awkward one.
 - **A freshly produced object is a `var` path, and there is no "handed over" modifier.** "A temporary is not a `var`
   path" protects values: the change would be lost with the copy. An object has no copy and nobody else holds a view of
   what was just made, so the full permission is the caller's to give - which is what lets every stream member that reads
-  take `var self` and a pipeline still be one expression. With that, "a read-only view cannot be widened" holds in all
+  be a `var fn` and a pipeline still be one expression. With that, "a read-only view cannot be widened" holds in all
   four places (binding, field through the generated constructor, argument, trait-typed value of a `shared trait`) and
   the standard library needs none of the gaps that were there before. The view stays a promise about a *path*: a
   function that hands an object out hands out a `var`, because there are no const types.
@@ -2515,7 +2518,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   island. Document trees are library types now (`JsonValue`).
 - No uniform function call syntax. `value.f(x)` never means `f(value, x)`: it would turn every function name into a
   possible member, against "one namespace of members" and against the visibility rule of extensions, and it would be
-  a second way next to `extend`. Who wants `parser.expression()` writes `extend Parser { fn expression(var self) ... }`.
+  a second way next to `extend`. Who wants `parser.expression()` writes `extend Parser { var fn expression() ... }`.
 - No overloading by parameter type. A call has one signature, and that signature says how its arguments are read:
   `.Case`, `None`, a list literal as an `Array`, `{ _ + 1 }`, a `lazy` or quoted parameter, a `var` place and the
   receiver of a receiver closure all get their meaning from the one parameter they are passed to. With several
@@ -2523,9 +2526,9 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   that stay coherent: a name per **receiver** (`List.first`, `Queue.first` - methods and `extend`) and a trait with a
   **parameter** (`From<Source>`, `Multiply<Other, Output>`: `Int.from(small)`, `matrix * vector`, `matrix * 2.0`).
   Arity is a default parameter, and a second constructor is a named static function (`Color.hex("...")`).
-- **Decided, being migrated:** a member of a type says two things with two words. `static` says it belongs to the
+- **Decided and in force:** a member of a type says two things with two words. `static` says it belongs to the
   type and not to a value (`static origin = Point(0, 0)`, `static fn square(size: Int): Self`); `var` says it may
-  change (`var y: Int`, `var fn translate(deltaX: Int)`). A method no longer lists `self`: its parameter list is what
+  change (`var y: Int`, `var fn translate(deltaX: Int)`). A method does not list `self`: its parameter list is what
   the caller writes, `self` is still an expression inside the body, and a function *type* keeps it
   (`(self: Point) => Int`, `(var self: Config) => Void`), which is what a receiver closure is. `const` is optional on
   a field and on a static value (`x: Int` is `const x: Int`), exactly as a parameter is constant unless it says `var`;
@@ -2630,7 +2633,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - Type parameters are written out (`Item`, `Key`, `Value`, `Failure`, `Output`)
 - `nameOf(expression)` through `Expression<Value>`, `typeName<Value>()` as a compile-time function
 - Variadics never unpack implicitly, spread (`...`) works on `Iterable`
-- `self` in the signature distinguishes methods from static functions, `var self` marks mutation, access is implicit
+- `static` marks what belongs to the type, `var fn` marks mutation, access through the receiver is implicit
 - Members are public by default, `private` is explicit - one rule for fields and methods (was: fields private,
   methods public; 142 of 160 fields in the examples had to say `public`). Immutability made private-by-default
   pointless for reading. Top-level declarations stay opt-in (`public`).
@@ -2649,7 +2652,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - `shared type` for identity (was `var type`, which would be misleading now that every type can be changed through a
   `var`). Same mutation rule as for values - unlike Swift, where `let` does not protect the content of a class.
   No inheritance, no `weak`, no actors (for now).
-- References are second-class (`var` parameters and `var self` only) instead of lifetimes, borrow checking or span
+- References are second-class (`var` parameters and `var fn` only) instead of lifetimes, borrow checking or span
   types. A mutable slice is a `var` path to a range.
 - No marker for `var` arguments at the call site (`fill(buffer)`, not `fill(var buffer)`): the signature and the
   tooling show it, and a marker would make DSLs and method calls inconsistent (`buffer.add(1)` has none either).
@@ -2750,7 +2753,7 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - No destructors. `Close` is a method, `using` a function, and the only observable destruction order is the nesting of
   `using` blocks. A destructor would need drop flags, a field order rule and a story for a panic inside one, and
   `using` already covers everything that has to be deterministic.
-- `Sandbox.load` returns a `Script<Value>` instead of a closure, and `Script.apply(self, var value: Value)` returns a
+- `Sandbox.load` returns a `Script<Value>` instead of a closure, and `Script.apply(var value: Value)` returns a
   `Result<Void, SandboxError>`. A closure of type `(var self: Value) => Void` has nowhere to say that the step limit
   was hit or that the script panicked, and a sandbox whose failures abort the host is not a sandbox.
 - A parameter default is evaluated at the call site, at every call, in the scope of the declaration - the same rule as

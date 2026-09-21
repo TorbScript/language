@@ -32,8 +32,9 @@ use isDeclaredVar from "./place"
 // --- Dead changes ---------------------------------------------------------------------------------------------------
 
 /**
- * Every read of a local `var` binding, in source order. A `const` cannot be changed and a `var` parameter or `var self`
- * is exempt from the rule, so neither is worth an entry - which is what keeps the list of one body short even in a pass
+ * Every read of a local `var` binding, in source order. A `const` cannot be changed, and a `var` parameter and the
+ * receiver of a `var fn` are exempt from the rule, so none is worth an entry - which keeps the list of one body short
+ * even in a pass
  * that names `checker` on every second line.
  */
 public fn noteRead(var checker: Checker, binding: BindingId, at: Span) {
@@ -290,8 +291,8 @@ public fn markReferenceBindings(var checker: Checker, from: Int) {
  * argument of a call - which is what every receiver closure, every DSL block and every pipeline stage is - and it can
  * everywhere else: bound to a name, stored in a field, returned, or built inside a collection literal.
  *
- * A closure that may escape may not capture a `var` parameter or `var self`: those are references, and a reference is
- * second-class. Everything else it captures is a value or the shared box of a `var` binding.
+ * A closure that may escape may not capture a `var` parameter or the receiver of a `var fn`: those are references,
+ * and a reference is second-class. Everything else it captures is a value or the shared box of a `var` binding.
  */
 public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture>) {
   const isLocal = checker.argumentClosures.containsKey at
@@ -305,7 +306,7 @@ public fn noteClosureKind(var checker: Checker, at: Span, captures: List<Capture
     if !binding.isParameter || !binding.isVar {
       continue
     }
-    const held = if binding.isReceiver { "`var self`" } else { "the `var` parameter `{binding.name}`" }
+    const held = if binding.isReceiver { "the receiver `self`" } else { "the `var` parameter `{binding.name}`" }
     checker.reportHere(
       Diagnostic.error("This closure captures {held} and may outlive the call", at)
         .withNote("A reference is second-class: only a closure written straight as an argument of a call may hold one")

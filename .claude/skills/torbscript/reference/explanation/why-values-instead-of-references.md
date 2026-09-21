@@ -25,8 +25,8 @@ Swift's structs and in Hylo.
 
 - Assigning, passing and capturing a value is a copy. Two bindings never refer to the same value.
 - `const` is deep: through a `const` binding nothing changes.
-- Mutation needs a `var` path - a `var` binding, `var` parameter or `var self`, then `var` fields all the way down.
-- References are second-class: they exist only as a `var` parameter or `var self`, for the duration of one call. They
+- Mutation needs a `var` path - a `var` binding, `var` parameter or a `var fn` receiver, then `var` fields all the way down.
+- References are second-class: they exist only as a `var` parameter or a `var fn` receiver, for the duration of one call. They
   cannot be stored in a field, returned, or captured by a closure that escapes.
 - Identity is the marked exception: a `shared type` is not copied when it is assigned.
 
@@ -80,7 +80,7 @@ the copy changed and the list did not.
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -99,7 +99,7 @@ is not reported, because the change has an effect - on the copy. The fix is to r
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -110,7 +110,7 @@ print counters[0].count
 ```
 
 **A method that changes and a method that returns a copy are different words.** `sort` and `sorted`, `add` and `added`,
-`remove` and `removed`. The verb declares `var self`; the participle takes `self` and answers a new value. The
+`remove` and `removed`. The verb is a `var fn`; the participle reads its receiver and answers a new value. The
 participles are default members of the collection traits, so an implementation writes only the verbs.
 
 **There are no getters and no defensive copies.** `private(var)` hands an outsider a `const` path to a field, and `const`

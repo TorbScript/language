@@ -30,16 +30,16 @@ public native shared type Task<Value> {
    * Waits for the value. Allowed in functions that return a `Task`, in closures passed to `spawn` and at the top
    * level of entry files and scripts.
    */
-  native fn await(self): Value
+  native fn await(): Value
 
   /** Changes the value once the task finishes, without waiting for it here. */
-  native fn map<Output>(self, transform: (value: Value) => Output): Task<Output>
+  native fn map<Output>(transform: (value: Value) => Output): Task<Output>
 
   /** Continues with another task once this one finishes, and keeps one level: the async form of [Result.flatMap]. */
-  native fn flatMap<Output>(self, transform: (value: Value) => Task<Output>): Task<Output>
+  native fn flatMap<Output>(transform: (value: Value) => Task<Output>): Task<Output>
 
   /** A task for every item, running at the same time. The values arrive in the order of the tasks. */
-  native fn all(tasks: Iterable<Task<Value>>): Task<List<Value>>
+  native static fn all(tasks: Iterable<Task<Value>>): Task<List<Value>>
 }
 
 /** Runs the closure as a new task, in parallel. It gets copies of what it captures and cannot capture a `var`. */
@@ -68,10 +68,10 @@ public native shared type Channel<Item> {
   capacity: Int = 0
 
   /** Pulls items in the order they were added, and ends when the writing end is finished or closed. */
-  native fn source(self): Source<Item, Never>
+  native fn source(): Source<Item, Never>
 
   /** `add` waits while the channel is full, `finish()` tells the reading end that the stream ended. */
-  native fn sink(self): Sink<Item, ChannelClosed>
+  native fn sink(): Sink<Item, ChannelClosed>
 }
 
 /**
@@ -80,7 +80,7 @@ public native shared type Channel<Item> {
  */
 public type ChannelClosed with Show, Error {
   /** `"the channel is closed"`. */
-  fn show(self): String {
+  fn show(): String {
     "the channel is closed"
   }
 }

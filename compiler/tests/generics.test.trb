@@ -15,7 +15,7 @@ const declarations = r"""
   type Holder<Item> {
     item: Item
 
-    fn map<Output>(self, transform: (value: Item) => Output): Holder<Output> {
+    fn map<Output>(transform: (value: Item) => Output): Holder<Output> {
       Holder(transform(item))
     }
   }
@@ -29,7 +29,7 @@ const declarations = r"""
   }
 
   extend Square with Show {
-    fn show(self): String {
+    fn show(): String {
       "square"
     }
   }
@@ -102,7 +102,7 @@ group "A bound on a type's own generic parameter" {
   }
 
   test "a trait carries the bounds of its parameters the same way" {
-    const source = "trait Table<Key: Hash, Value> \{\n  fn at(self, key: Key): Value\n\}\n\n"
+    const source = "trait Table<Key: Hash, Value> \{\n  fn at(key: Key): Value\n\}\n\n"
       + "fn probe(table: Table<Float, String>): String \{\n  table.at(1.0)\n\}"
     assert(problems(source) == ["`Float64` does not implement `Hash`"])
   }
@@ -309,13 +309,13 @@ group "Trait-typed values and object safety (gap 7)" {
   test "every member of a trait value is known, so a member it has not is named" {
     // The bounds, their defaults, their supertraits and every visible `extend Shape` are the whole list, and no call
     // site adds to it - so this is the ordinary missing-member message and not something the checker stays quiet about
-    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+    const source = "trait Shape \{\n  fn area(): Int\n\}\n\n"
       + "fn probe(shape: Shape): Int \{\n  shape.perimeter()\n\}"
     assert(problems(source) == ["`Shape` has no member `perimeter`"])
   }
 
   test "and a near miss gets the same note a concrete type gets" {
-    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
+    const source = "trait Shape \{\n  fn area(): Int\n\}\n\n"
       + "fn probe(shape: Shape): Int \{\n  shape.aera()\n\}"
     assert(problems(source) == ["`Shape` has no member `aera`"])
     assert(notes(source) == ["Did you mean `area`?"])
@@ -333,8 +333,8 @@ group "Trait-typed values and object safety (gap 7)" {
  * reports, and for the same reason.
  */
 group "A trait-typed value never becomes a type parameter" {
-  const shapes = "trait Area \{\n  fn area(self): Int\n\}\n\n"
-    + "type Round with Area \{\n  radius: Int\n\n  fn area(self): Int \{\n    radius * radius\n  \}\n\}\n\n"
+  const shapes = "trait Area \{\n  fn area(): Int\n\}\n\n"
+    + "type Round with Area \{\n  radius: Int\n\n  fn area(): Int \{\n    radius * radius\n  \}\n\}\n\n"
 
   test "the result of a generic function is not a place for a trait value" {
     const source = "{shapes}fn bare<Value>(shape: Area): Value \{\n  shape\n\}"
@@ -405,7 +405,7 @@ group "A trait-typed value never becomes a type parameter" {
    */
   test "a `const` parameter read as a value is its declared type" {
     const source = "type Grid<const Rows: Int> \{\n  name: String\n\n"
-      + "  fn total(self): Int \{\n    var sum = 0\n    for row in 0..Rows \{\n      sum = sum + row\n    \}\n"
+      + "  fn total(): Int \{\n    var sum = 0\n    for row in 0..Rows \{\n      sum = sum + row\n    \}\n"
       + "    sum\n  \}\n\}"
     assert problems(source).isEmpty()
   }
@@ -428,9 +428,9 @@ group "A trait-typed value never becomes a type parameter" {
 group "`using` and other generic functions of the prelude" {
   test "`using` with a temporary checks: a temporary is a valid argument for a `var` parameter (gap 2)" {
     const source = "type File with Close \{\n  path: String\n\n"
-      + "  fn open(path: String): Result<File, String> \{\n    Ok(File(path))\n  \}\n\n"
-      + "  fn readAll(self): String \{\n    path\n  \}\n\n"
-      + "  fn close(var self) \{\n  \}\n\}\n\n"
+      + "  static fn open(path: String): Result<File, String> \{\n    Ok(File(path))\n  \}\n\n"
+      + "  fn readAll(): String \{\n    path\n  \}\n\n"
+      + "  var fn close() \{\n  \}\n\}\n\n"
       + "fn probe(path: String): Result<String, String> \{\n"
       + "  const text = using File.open(path)? \{ file => file.readAll() \}\n  Ok(text)\n\}"
     assert problems(source).isEmpty()
@@ -442,7 +442,7 @@ group "`using` and other generic functions of the prelude" {
 
   test "`into()` and `to<Target>()` take their target from the expectation" {
     const source = "type Meters \{\n  value: Int\n\}\n\n"
-      + "extend Meters with From<Int> \{\n  fn from(value: Int): Meters \{\n    Meters(value)\n  \}\n\}\n\n"
+      + "extend Meters with From<Int> \{\n  static fn from(value: Int): Meters \{\n    Meters(value)\n  \}\n\}\n\n"
       + "fn probe() \{\n  const distance: Meters = 5.into()\n\}"
     assert problems(source).isEmpty()
     const found = probe source
@@ -481,8 +481,8 @@ group "an unknown static member of a generic type" {
  */
 group "A type parameter's default reaches a member of a concrete `extend`" {
   const pair = "type Pair<Item: Numeric = Float64> \{\n  first: Item\n  second: Item\n\}\n\n"
-    + "extend Pair<Float64> \{\n  const zero: Pair<Float64> = Pair(0.0, 0.0)\n\n"
-    + "  fn unit(): Pair<Float64> \{\n    Pair(1.0, 1.0)\n  \}\n\}\n\n"
+    + "extend Pair<Float64> \{\n  static zero: Pair<Float64> = Pair(0.0, 0.0)\n\n"
+    + "  static fn unit(): Pair<Float64> \{\n    Pair(1.0, 1.0)\n  \}\n\}\n\n"
 
   test "a constant of the concrete `extend`" {
     const source = "{pair}fn probe() \{\n  const origin: Pair<Float64> = Pair.zero\n  print origin.first\n\}"
@@ -500,7 +500,7 @@ group "A type parameter's default reaches a member of a concrete `extend`" {
 
   test "a parameter without a default still says which member is missing" {
     const source = "type Box<Item> \{\n  item: Item\n\}\n\n"
-      + "extend Box<Int64> \{\n  const zero: Box<Int64> = Box(0)\n\}\n\n"
+      + "extend Box<Int64> \{\n  static zero: Box<Int64> = Box(0)\n\}\n\n"
       + "fn probe() \{\n  const origin: Box<Int64> = Box.zero\n  print origin.item\n\}"
     assert(problems(source) == ["`Box` has no member `zero`"])
   }

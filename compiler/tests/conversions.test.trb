@@ -45,8 +45,8 @@ group "`?` on a `Result`" {
    * ever apply to one, because nobody extends a trait type. So `?` falls back to the coercion of a value to a
    * trait-typed value, which is what makes a precise error type fit a signature that only reports.
    */
-  const withTrait = "trait Problem with Show \{\n  fn cause(self): Problem? \{\n    None\n  \}\n\}\n\n"
-    + "type IoError with Show, Problem \{\n  path: String\n\n  fn show(self): String \{\n    path\n  \}\n\}\n\n"
+  const withTrait = "trait Problem with Show \{\n  fn cause(): Problem? \{\n    None\n  \}\n\}\n\n"
+    + "type IoError with Show, Problem \{\n  path: String\n\n  fn show(): String \{\n    path\n  \}\n\}\n\n"
     + "fn read(): Result<Int, IoError> \{\n  Ok(1)\n\}\n\n"
 
   test "a trait-typed failure takes a concrete error through the trait-value coercion" {
@@ -58,8 +58,8 @@ group "`?` on a `Result`" {
   }
 
   test "an error that does not carry the trait is reported like any failed coercion" {
-    const source = "trait Problem with Show \{\n  fn cause(self): Problem? \{\n    None\n  \}\n\}\n\n"
-      + "type IoError with Show \{\n  path: String\n\n  fn show(self): String \{\n    path\n  \}\n\}\n\n"
+    const source = "trait Problem with Show \{\n  fn cause(): Problem? \{\n    None\n  \}\n\}\n\n"
+      + "type IoError with Show \{\n  path: String\n\n  fn show(): String \{\n    path\n  \}\n\}\n\n"
       + "fn read(): Result<Int, IoError> \{\n  Ok(1)\n\}\n\n"
       + "fn probe(): Result<Int, Problem> \{\n  const value = read()?\n  Ok(value)\n\}"
     assert(problems(source) == ["`IoError` does not implement `Problem`"])
@@ -75,7 +75,7 @@ group "`?` on a `Result`" {
 
   test "a hand-written `From` is found like any other implementation" {
     const source = "type IoError \{\n  path: String\n\}\n\ntype AppError \{\n  message: String\n\}\n\n"
-      + "extend AppError with From<IoError> \{\n  fn from(value: IoError): AppError \{\n    AppError(value.path)\n  \}\n\}\n\n"
+      + "extend AppError with From<IoError> \{\n  static fn from(value: IoError): AppError \{\n    AppError(value.path)\n  \}\n\}\n\n"
       + "fn read(): Result<Int, IoError> \{\n  Ok(1)\n\}\n\n"
       + "fn probe(): Result<Int, AppError> \{\n  const value = read()?\n  Ok(value)\n\}"
     assert problems(source).isEmpty()
@@ -171,7 +171,7 @@ group "`??`" {
     assert(problems(source) == ["`Int64` does not implement `OrElse`, so `a ?? b` has no meaning for it"])
     assert(notes(source) == ["Operators are traits: a type has the ones it comes `with`, and nothing else"])
     // A type of a program that says `with OrElse<Value>` gets `??`, and the fallback is its `Value`
-    const own = "type Box \{\n  value: Int\n\}\n\nextend Box with OrElse<Int> \{\n  fn orElse(self, fallback: lazy Int): Int \{\n    value\n  \}\n\}\n\n"
+    const own = "type Box \{\n  value: Int\n\}\n\nextend Box with OrElse<Int> \{\n  fn orElse(fallback: lazy Int): Int \{\n    value\n  \}\n\}\n\n"
       + "fn probe(box: Box) \{\n  const found = box ?? 0\n\}"
     assert problems(own).isEmpty()
     assert(probe(own).typeOf("box ?? 0") == "Int64")
@@ -186,7 +186,7 @@ group "`??`" {
 
 group "`?.`" {
   test "a member that gives back an ordinary value becomes an `Option` of it: `map`" {
-    const source = "type User \{\n  name: String\n\n  fn label(self): String \{\n    name\n  \}\n\}\n\n"
+    const source = "type User \{\n  name: String\n\n  fn label(): String \{\n    name\n  \}\n\}\n\n"
       + "fn find(): User? \{\n  None\n\}\n\nfn probe() \{\n  const shown = find()?.label()\n\}"
     assert problems(source).isEmpty()
     const found = probe source
@@ -196,7 +196,7 @@ group "`?.`" {
   }
 
   test "a member that gives back an `Option` is flattened, never nested (gap 12)" {
-    const source = "type User \{\n  name: String\n\n  fn nickname(self): String? \{\n    Some(name)\n  \}\n\}\n\n"
+    const source = "type User \{\n  name: String\n\n  fn nickname(): String? \{\n    Some(name)\n  \}\n\}\n\n"
       + "fn find(): User? \{\n  None\n\}\n\nfn probe() \{\n  const shown = find()?.nickname()\n\}"
     assert problems(source).isEmpty()
     const found = probe source
@@ -324,7 +324,7 @@ group "`into()`, `tryInto()` and their traits" {
   test "writing `TryInto` by hand names the `TryFrom` to write instead" {
     const source = "type Port \{\n  value: Int\n\}\n\n"
       + "extend Port with TryInto<Int, String> \{\n"
-      + "  fn tryInto(self): Result<Int, String> \{\n    Ok(value)\n  \}\n\}"
+      + "  fn tryInto(): Result<Int, String> \{\n    Ok(value)\n  \}\n\}"
     assert(problems(source) == ["`TryInto` comes from `TryFrom` for every type"])
     assert(
       notes(source)

@@ -20,7 +20,7 @@ public type ProcessOutput {
   standardError: String
 
   /** The usual question about a child process: did it do what it was asked. */
-  fn isSuccess(self): Bool {
+  fn isSuccess(): Bool {
     exitCode == 0
   }
 }
@@ -51,28 +51,28 @@ public type ProcessOutput {
  */
 public native shared type Child with Close {
   /** What the child reads. `finish()` closes its standard input, which is how most filters learn that they are done. */
-  native fn input(self): Sink<Bytes, IoError>
+  native fn input(): Sink<Bytes, IoError>
 
   /** What the child writes to standard output. */
-  native fn output(self): Source<Bytes, IoError>
+  native fn output(): Source<Bytes, IoError>
 
   /** What the child writes to standard error, kept apart from [Child.output]. */
-  native fn errors(self): Source<Bytes, IoError>
+  native fn errors(): Source<Bytes, IoError>
 
   /** The exit code, once the program has ended. */
-  native fn wait(self): Task<Result<Int, IoError>>
+  native fn wait(): Task<Result<Int, IoError>>
 
   /** Releases the three pipes and stops waiting for the child; see the type's own pitfall about killing it. */
-  native fn close(var self)
+  native var fn close()
 }
 
 /** The running program: its command line, how it exits, and the child processes it starts. */
 public native type Process {
   /** The command line arguments, without the program itself. */
-  native fn arguments(): List<String>
+  native static fn arguments(): List<String>
 
   /** Ends the program. Open resources are not closed: prefer to return from the entry file. */
-  native fn exit(code: Int): Never
+  native static fn exit(code: Int): Never
 
   /**
    * Runs a program to its end and collects everything about it. The arguments are passed as they are: nothing about
@@ -87,7 +87,7 @@ public native type Process {
    * [ProcessOutput.standardError] is always empty. A caller that needs the two streams kept apart reaches for
    * [Process.start] instead, which hands out real pipes.
    */
-  fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError> {
+  static fn run(command: String, arguments: List<String>): Result<ProcessOutput, IoError> {
     var output = ""
     var failure = ""
     // The runtime has one list, and it takes it as the buffer it is: a trait-typed `List<String>` says nothing about
@@ -105,7 +105,7 @@ public native type Process {
    * all, and then `failure` says why. The one shape a runtime function can have for this: a `Result` and a
    * `ProcessOutput` are types of the program, and starting a process is the operating system.
    */
-  native fn runCollecting(
+  native static fn runCollecting(
     command: String,
     arguments: ArrayList<String>,
     var output: String,
@@ -116,5 +116,5 @@ public native type Process {
    * Starts a program and hands back its pipes, for output that is too big to collect or that has to be read while it
    * arrives. `run` is the short form for everything else.
    */
-  native fn start(command: String, arguments: List<String>): Result<Child, IoError>
+  native static fn start(command: String, arguments: List<String>): Result<Child, IoError>
 }

@@ -24,9 +24,9 @@ through `extend`. There is no inheritance, no base class and no `implements` key
 
 ```trb
 trait Area {
-  fn area(self): Float
+  fn area(): Float
 
-  fn describe(self): String {
+  fn describe(): String {
     "a shape with area {area()}"
   }
 }
@@ -34,13 +34,13 @@ trait Area {
 type Square with Area {
   side: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     side * side
   }
 }
 
 extend Square with Show {
-  fn show(self): String {
+  fn show(): String {
     "Square({side})"
   }
 }
@@ -84,7 +84,7 @@ fn sum<Item: Add>(values: List<Item>)       a bound
    its own, and then the member exists only where the clause holds - it is not a requirement on implementors.
 
    ```trb fragment
-   fn toSet(self): Set<Item> where Item: Hash
+   fn toSet(): Set<Item> where Item: Hash
    ```
 
 5. **`extend` adds constants and functions, and nothing else.** A field or a `case` in an `extend` is an error, because
@@ -92,7 +92,7 @@ fn sum<Item: Add>(values: List<Item>)       a bound
 
    ```trb
    extend String {
-     fn shout(self): String {
+     fn shout(): String {
        "{toUpperCase()}!"
      }
    }
@@ -117,13 +117,13 @@ fn sum<Item: Add>(values: List<Item>)       a bound
 
    ```trb
    trait Area {
-     fn area(self): Float
+     fn area(): Float
    }
 
    type Square with Area {
      side: Float
 
-     fn area(self): Float {
+     fn area(): Float {
        side * side
      }
    }
@@ -133,7 +133,7 @@ fn sum<Item: Add>(values: List<Item>)       a bound
    ```
 
 10. **Object safety is checked per call, not per type.** A member that mentions `Self` in a parameter or in its result, or
-    that has no `self`, cannot be called on a trait-typed value - but the type stays usable as a type, so
+    that is `static`, cannot be called on a trait-typed value - but the type stays usable as a type, so
     `List<Show & Hash>` is legal and only the calls that have no meaning are rejected.
 
 11. **Operators are traits.** `+` is `Add.add`, `-` is `Subtract.subtract`, `==` is `Equals.equals`, `<` is
@@ -153,8 +153,8 @@ fn sum<Item: Add>(values: List<Item>)       a bound
 
     ```trb check
     trait Store<Component> {
-      fn valueOf(self): Component?
-      fn attach(self, value: Component): Int
+      fn valueOf(): Component?
+      fn attach(value: Component): Int
     }
 
     type Game {
@@ -163,21 +163,21 @@ fn sum<Item: Add>(values: List<Item>)       a bound
     }
 
     extend Game with Store<Int> {
-      fn valueOf(self): Int? {
+      fn valueOf(): Int? {
         Some number
       }
 
-      fn attach(self, value: Int): Int {
+      fn attach(value: Int): Int {
         value
       }
     }
 
     extend Game with Store<String> {
-      fn valueOf(self): String? {
+      fn valueOf(): String? {
         Some text
       }
 
-      fn attach(self, value: String): Int {
+      fn attach(value: String): Int {
         value.byteLength()
       }
     }
@@ -227,11 +227,11 @@ implementation. A type either provides a member or takes the trait's default.
 type Money with Equals, Hash {
   cents: Int
 
-  fn equals(self, other: Money): Bool {
+  fn equals(other: Money): Bool {
     cents == other.cents
   }
 
-  fn hash(self): Int {
+  fn hash(): Int {
     cents
   }
 }

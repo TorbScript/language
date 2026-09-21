@@ -23,11 +23,11 @@ place to clean up, and that place is the only one the language promises anything
 shared type Connection with Close {
   var isOpen: Bool = true
 
-  fn send(self, message: String) {
+  fn send(message: String) {
     print message
   }
 
-  fn close(var self) {
+  var fn close() {
     isOpen = false
   }
 }
@@ -38,7 +38,7 @@ using Connection() { connection => connection.send "hello" }
 ## Syntax
 
 ```text
-public shared trait Close { fn close(var self) }
+public shared trait Close { var fn close() }
 public fn using<Resource: Close, Value>(var resource: Resource, body: (var Resource) => Value): Value
 ```
 
@@ -70,7 +70,7 @@ through `using`.
 
 ```trb check
 shared type Connection with Close {
-  fn close(var self) {}
+  var fn close() {}
 }
 
 fn withConnection(body: (var Connection) => Void) {
@@ -82,7 +82,7 @@ withConnection { connection => print "using it" }
 
 ```trb check
 shared type Connection with Close {
-  fn close(var self) {}
+  var fn close() {}
 }
 
 var connection = Connection()

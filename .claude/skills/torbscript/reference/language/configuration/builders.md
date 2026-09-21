@@ -75,7 +75,7 @@ fn <builder>(configure: (var self: <Receiver>) => Void): <Receiver> {
    type Menu {
      private var items: List<String> = []
 
-     fn item(var self, name: String) {
+     var fn item(name: String) {
        items.add name
      }
    }

@@ -75,7 +75,7 @@ did not declare.
 type Circle {
   radius: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     radius * radius * 3.14159
   }
 }
@@ -83,7 +83,7 @@ type Circle {
 type Square {
   side: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     side * side
   }
 }
@@ -104,7 +104,7 @@ type Fahrenheit {
 }
 
 extend Celsius with From<Fahrenheit> {
-  fn from(value: Fahrenheit): Celsius {
+  static fn from(value: Fahrenheit): Celsius {
     Celsius((value.degrees - 32.0) / 1.8)
   }
 }
@@ -130,7 +130,7 @@ type Square {
 }
 
 trait Draw<Shape> {
-  fn draw(self, shape: Shape): String
+  fn draw(shape: Shape): String
 }
 
 type Canvas {
@@ -138,13 +138,13 @@ type Canvas {
 }
 
 extend Canvas with Draw<Circle> {
-  fn draw(self, shape: Circle): String {
+  fn draw(shape: Circle): String {
     "circle of {shape.radius * scale}"
   }
 }
 
 extend Canvas with Draw<Square> {
-  fn draw(self, shape: Square): String {
+  fn draw(shape: Square): String {
     "square of {shape.side * scale}"
   }
 }
@@ -173,7 +173,7 @@ type Color {
   green: Int
   blue: Int
 
-  fn gray(level: Int): Color {
+  static fn gray(level: Int): Color {
     Color level, level, level
   }
 }
@@ -189,7 +189,7 @@ body says so:
 
 ```trb error
 trait Draw<Shape> {
-  fn draw(self, shape: Shape): String
+  fn draw(shape: Shape): String
 }
 
 type Circle {
@@ -203,11 +203,11 @@ type Square {
 type Canvas with Draw<Circle> & Draw<Square> {
   scale: Float
 
-  fn draw(self, shape: Circle): String {
+  fn draw(shape: Circle): String {
     "circle"
   }
 
-  fn draw(self, shape: Square): String {
+  fn draw(shape: Square): String {
     "square"
   }
 }
@@ -221,8 +221,8 @@ not have to be the first parameter, and it does not have to be a parameter at al
 
 ```trb check
 trait Store<Component> {
-  fn valueOf(self): Component?
-  fn attachAt(self, slot: Bool, value: Component): Int
+  fn valueOf(): Component?
+  fn attachAt(slot: Bool, value: Component): Int
 }
 
 type Game {
@@ -231,21 +231,21 @@ type Game {
 }
 
 extend Game with Store<Int> {
-  fn valueOf(self): Int? {
+  fn valueOf(): Int? {
     Some number
   }
 
-  fn attachAt(self, slot: Bool, value: Int): Int {
+  fn attachAt(slot: Bool, value: Int): Int {
     value
   }
 }
 
 extend Game with Store<String> {
-  fn valueOf(self): String? {
+  fn valueOf(): String? {
     Some text
   }
 
-  fn attachAt(self, slot: Bool, value: String): Int {
+  fn attachAt(slot: Bool, value: String): Int {
     value.byteLength()
   }
 }

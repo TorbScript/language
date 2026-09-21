@@ -52,23 +52,23 @@ a decoding failure into an `IoError` automatically.
 
 ```trb fragment
 public native shared type File with Close, Sink<Bytes, IoError> {
-  fn open(path: String): Result<File, IoError>
-  fn create(path: String): Result<File, IoError>
-  fn readAll(var self): Result<String, IoError>
-  fn close(var self)
-  fn chunks(var self, size: Int = 65536): Source<Bytes, IoError>
-  fn lines(var self): Source<String, IoError>
-  fn add(var self, item: Bytes): Task<Result<Void, IoError>>
-  fn finish(var self): Task<Result<Void, IoError>>
+  static fn open(path: String): Result<File, IoError>
+  static fn create(path: String): Result<File, IoError>
+  var fn readAll(): Result<String, IoError>
+  var fn close()
+  var fn chunks(size: Int = 65536): Source<Bytes, IoError>
+  var fn lines(): Source<String, IoError>
+  var fn add(item: Bytes): Task<Result<Void, IoError>>
+  var fn finish(): Task<Result<Void, IoError>>
 
-  fn readText(path: String): Result<String, IoError>
-  fn writeText(path: String, text: String): Result<Void, IoError>
-  fn write(path: String, var source: Source<Bytes, IoError>): Task<Result<Void, IoError>>
-  fn absolutePath(path: String): Result<String, IoError>
-  fn exists(path: String): Bool
-  fn isDirectory(path: String): Bool
-  fn createDirectory(path: String): Result<Void, IoError>
-  fn list(path: String): Result<List<String>, IoError>
+  static fn readText(path: String): Result<String, IoError>
+  static fn writeText(path: String, text: String): Result<Void, IoError>
+  static fn write(path: String, var source: Source<Bytes, IoError>): Task<Result<Void, IoError>>
+  static fn absolutePath(path: String): Result<String, IoError>
+  static fn exists(path: String): Bool
+  static fn isDirectory(path: String): Bool
+  static fn createDirectory(path: String): Result<Void, IoError>
+  static fn list(path: String): Result<List<String>, IoError>
 }
 ```
 

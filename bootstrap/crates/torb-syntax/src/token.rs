@@ -81,6 +81,8 @@ pub enum TextPart {
 pub enum Keyword {
     Const,
     Var,
+    /// A member that belongs to the type and not to a value. See [`STATIC`].
+    Static,
     Fn,
     Type,
     Trait,
@@ -114,12 +116,18 @@ pub enum Keyword {
     Where,
 }
 
+/// The one spelling of the keyword that says a member belongs to the type. It stands here alone, and every message
+/// that teaches it interpolates it, so that trading it for another word (`type fn`, `type const`) is this line and a
+/// `canon` rule and nothing else.
+pub const STATIC: &str = "static";
+
 impl Keyword {
     /// `from`, `as` and `by` are contextual: they are ordinary identifiers for the lexer.
     pub fn from_text(text: &str) -> Option<Keyword> {
         Some(match text {
             "const" => Keyword::Const,
             "var" => Keyword::Var,
+            STATIC => Keyword::Static,
             "fn" => Keyword::Fn,
             "type" => Keyword::Type,
             "trait" => Keyword::Trait,

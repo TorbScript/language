@@ -73,7 +73,7 @@ function, converting the error type through `From`. `map`, `flatMap` and `forEac
 
 ```trb fragment
 public trait Error with Show {
-  fn cause(self): Error? {
+  fn cause(): Error? {
     None
   }
 }
@@ -141,10 +141,10 @@ public native type RangeTo<Value> {
 }
 
 public trait Bounds<Value: Compare> {
-  fn lowest(self): Value?
-  fn highest(self): Value?
-  fn includesHighest(self): Bool
-  fn contains(self, value: Value): Bool
+  fn lowest(): Value?
+  fn highest(): Value?
+  fn includesHighest(): Bool
+  fn contains(value: Value): Bool
 }
 ```
 
@@ -160,12 +160,12 @@ brackets.
 public native type Array<Item, const Size: Int>
   with Iterable<Item>, Length, MutableIndexed<Int, Item>
 {
-  fn filled(value: Item): Array<Item, Size>
-  fn generated(produce: (index: Int) => Item): Array<Item, Size>
-  fn from(items: Iterable<Item>): Array<Item, Size>?
-  fn set(var self, index: Int, value: Item)
-  fn fill(var self, value: Item)
-  fn mapped<Output>(self, transform: (value: Item) => Output): Array<Output, Size>
+  static fn filled(value: Item): Array<Item, Size>
+  static fn generated(produce: (index: Int) => Item): Array<Item, Size>
+  static fn from(items: Iterable<Item>): Array<Item, Size>?
+  var fn set(index: Int, value: Item)
+  var fn fill(value: Item)
+  fn mapped<Output>(transform: (value: Item) => Output): Array<Output, Size>
 }
 ```
 
@@ -195,7 +195,7 @@ public fn do<Value>(body: () => Value): Value
 public fn unless(condition: Bool, body: () => Void)
 public fn retry<Value, Failure>(times: Int, action: () => Result<Value, Failure>): Result<Value, Failure>
 public fn using<Resource: Close, Value>(var resource: Resource, body: (var Resource) => Value): Value
-public shared trait Close { fn close(var self) }
+public shared trait Close { var fn close() }
 ```
 
 `using` takes a `var` resource and a receiver closure over it, so the body reaches the resource's members without naming

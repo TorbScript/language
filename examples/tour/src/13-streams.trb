@@ -25,23 +25,23 @@ type User {
 type ImportError with Show, Error {
   private kind: ImportErrorKind
 
-  fn requestFailed(cause: HttpError): ImportError {
+  static fn requestFailed(cause: HttpError): ImportError {
     Self kind: .Request(cause)
   }
 
-  fn fileFailed(cause: IoError): ImportError {
+  static fn fileFailed(cause: IoError): ImportError {
     Self kind: .File(cause)
   }
 
-  fn documentFailed(cause: JsonError): ImportError {
+  static fn documentFailed(cause: JsonError): ImportError {
     Self kind: .Document(cause)
   }
 
-  fn producerStopped(cause: ChannelClosed): ImportError {
+  static fn producerStopped(cause: ChannelClosed): ImportError {
     Self kind: .Stopped(cause)
   }
 
-  fn show(self): String {
+  fn show(): String {
     match kind {
       .Request(cause) => "the download failed: {cause}"
       .File(cause) => "the file failed: {cause}"
@@ -50,7 +50,7 @@ type ImportError with Show, Error {
     }
   }
 
-  fn cause(self): Error? {
+  fn cause(): Error? {
     match kind {
       .Request(problem) => Some problem
       .File(problem) => Some problem
@@ -70,28 +70,28 @@ type ImportErrorKind {
 
 /** Lets `?` convert a failed request into an [ImportError]. */
 extend ImportError with From<HttpError> {
-  fn from(value: HttpError): ImportError {
+  static fn from(value: HttpError): ImportError {
     ImportError.requestFailed value
   }
 }
 
 /** Lets `?` convert a failed file operation into an [ImportError]. */
 extend ImportError with From<IoError> {
-  fn from(value: IoError): ImportError {
+  static fn from(value: IoError): ImportError {
     ImportError.fileFailed value
   }
 }
 
 /** Lets `?` convert a failed decode into an [ImportError]. */
 extend ImportError with From<JsonError> {
-  fn from(value: JsonError): ImportError {
+  static fn from(value: JsonError): ImportError {
     ImportError.documentFailed value
   }
 }
 
 /** Lets `?` convert a closed channel into an [ImportError]. */
 extend ImportError with From<ChannelClosed> {
-  fn from(value: ChannelClosed): ImportError {
+  static fn from(value: ChannelClosed): ImportError {
     ImportError.producerStopped value
   }
 }

@@ -38,7 +38,7 @@ print(home ?? "not set")
 
 ```trb fragment
 public native type Environment {
-  fn get(name: String): String?
+  static fn get(name: String): String?
 }
 ```
 

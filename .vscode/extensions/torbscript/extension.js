@@ -7,7 +7,7 @@
 
 const KEYWORDS = new Set([
   'if', 'else', 'match', 'for', 'in', 'while', 'loop', 'break', 'continue', 'return',
-  'const', 'var', 'fn', 'type', 'trait', 'extend', 'foreign', 'case', 'use', 'from', 'as',
+  'const', 'var', 'static', 'fn', 'type', 'trait', 'extend', 'foreign', 'case', 'use', 'from', 'as',
   'public', 'private', 'native', 'shared', 'lazy', 'with', 'where', 'by',
 ]);
 const LITERALS = new Set(['true', 'false', 'void', 'self', 'Self']);

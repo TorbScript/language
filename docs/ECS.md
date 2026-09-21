@@ -89,13 +89,13 @@ A probe confirms that the route is not merely unwise, it is closed, and that the
 
 ```trb fragment
 public trait AnyColumn {
-  fn length(self): Int
+  fn length(): Int
 }
 
 public type World {
   private(var) columns: Map<String, AnyColumn> = [:]
 
-  fn columnOf<Component>(self, name: String): Column<Component>? {
+  fn columnOf<Component>(name: String): Column<Component>? {
     match columns.get(name) {
       Some(column) => Some column                   // a trait value where `Column<Component>` is expected
       None => None
@@ -144,9 +144,9 @@ public type World {
 ```trb fragment
 /** A world that keeps a column of `Component`. */
 public trait Store<Component> {
-  fn attach(var self, value: Component, to: Entity)
-  fn detach(var self, key: ComponentKey, from: Entity)
-  fn column(self): Column<Component>
+  var fn attach(value: Component, to: Entity)
+  var fn detach(key: ComponentKey, from: Entity)
+  fn column(): Column<Component>
 }
 ```
 
@@ -328,7 +328,7 @@ owns the column, because `private(var)` hands outsiders a read-only path:
 
 ```trb fragment
 extend Column<Position> {
-  fn slide(var self) {
+  var fn slide() {
     for index in 0..values.length() {
       values[index].x = values[index].x + 1.0
     }
@@ -357,7 +357,7 @@ Change detection is a stamp per row and a clock per column, which is Bevy's mech
 
 ```trb fragment
 /** The entities whose value was written after `stamp`. */
-fn changedSince(self, stamp: Int): Iterable<Entity>
+fn changedSince(stamp: Int): Iterable<Entity>
 ```
 
 The probe runs it: `changed since the frame began: 1`.
@@ -752,7 +752,7 @@ language:
 public type Registry<World> {
   private(var) installers: Map<ComponentKey, (var world: World, entity: Entity, value: EncodedValue) => Void> = [:]
 
-  fn register(var self, key: ComponentKey, install: (var world: World, entity: Entity, value: EncodedValue) => Void) {
+  var fn register(key: ComponentKey, install: (var world: World, entity: Entity, value: EncodedValue) => Void) {
     installers[key] = install
   }
 }
@@ -908,9 +908,9 @@ keeps a column of `Position` *and* a column of `Velocity`".
 
 ```trb fragment
 public trait Store<Component> {
-  fn valueOf(self): Component?
-  fn attach(var self, value: Component)
-  fn attachAt(var self, slot: Bool, value: Component)
+  fn valueOf(): Component?
+  var fn attach(value: Component)
+  var fn attachAt(slot: Bool, value: Component)
 }
 
 extend Game with Store<Int> { … }
@@ -949,7 +949,7 @@ a tuple type, and as the subject of a bound — with no indexing, no length arit
 
 ```trb fragment
 extend<World: Query> World with Pairs {
-  fn doubled(self): Int {
+  fn doubled(): Int {
     size() * 2
   }
 }

@@ -38,9 +38,11 @@ computed from another type - none of which exists here.
 | `Readonly<T>` | `const` on the binding | `readonly` freezes reassignment of one field; `const` freezes everything reachable through the binding |
 | `T extends U ? A : B` | not expressible | generics are declarative; a type parameter is never computed from another type |
 | `{ [K in keyof T]: ... }` | not expressible | types are not values, so nothing iterates over a type's keys |
-| `get x() { return this._x }` | `fn x(self): Int { ... }`, called `x()` | there are no computed properties; the parentheses say a method ran |
+| `get x() { return this._x }` | `fn x(): Int { ... }`, called `x()` | there are no computed properties; the parentheses say a method ran |
+| `static of(...)` in a class | `static fn of(...)` | the same word, and it is the only way such a member is reached |
+| a method that writes `this.x` | `var fn` | mutation is written on the declaration, and the caller needs a `var` path |
 | `enum Color { Red, Green }` | `type Color { case Red; case Green }` | a case can carry data; a TypeScript enum member cannot |
-| `interface Shape { area(): number }`, fit structurally | `trait Shape { fn area(self): Float }`, given with `with`/`extend` | a type states which traits it has; nothing satisfies one by accident |
+| `interface Shape { area(): number }`, fit structurally | `trait Shape { fn area(): Float }`, given with `with`/`extend` | a type states which traits it has; nothing satisfies one by accident |
 | `function identity<T>(x: T): T` | `fn identity<Value>(value: Value): Value` | the same inference model, without conditional or mapped types layered on top |
 | `String.prototype.shout = ...` | `extend String { ... }`, named with `use String.shout from "acme/text"` | a member is added at compile time, and the file that uses a foreign one names it |
 | `while (true)`, `for (;;)` | `loop { ... }` | the endless loop has a word of its own, and `while true` is an error |

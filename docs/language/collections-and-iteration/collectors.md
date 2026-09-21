@@ -32,11 +32,11 @@ print byParity
 ## Syntax
 
 ```text
-trait Collector<Item, Output> { fn start(self): Accumulator<Item, Output> }
+trait Collector<Item, Output> { fn start(): Accumulator<Item, Output> }
 trait Accumulator<Item, Output> {
-  fn add(var self, value: Item)
-  fn finish(self): Output
-  fn isDone(self): Bool { false }
+  var fn add(value: Item)
+  fn finish(): Output
+  fn isDone(): Bool { false }
 }
 
 source.collect(collector)
@@ -90,7 +90,7 @@ source.collect(collector)
      var min: Item? = None
      var max: Item? = None
 
-     fn add(var self, value: Item) {
+     var fn add(value: Item) {
        min = match min {
          Some(current) if current <= value => min
          _ => Some value
@@ -101,13 +101,13 @@ source.collect(collector)
        }
      }
 
-     fn finish(self): (Item?, Item?) {
+     fn finish(): (Item?, Item?) {
        (min, max)
      }
    }
 
    type ExtremesCollector<Item: Compare> with Collector<Item, (Item?, Item?)> {
-     fn start(self): Accumulator<Item, (Item?, Item?)> {
+     fn start(): Accumulator<Item, (Item?, Item?)> {
        Extremes<Item>()
      }
    }

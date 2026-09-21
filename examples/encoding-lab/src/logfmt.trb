@@ -12,14 +12,13 @@ use DecodeError, Encode, EncodedField, EncodedValue, Encoder, ValueDecoder from 
 
 /** logfmt as a format. It has no options, so it has no mapping DSL either. */
 public type Logfmt {
-  fn encode<Value: Encode>(self, value: Value): String {
+  fn encode<Value: Encode>(value: Value): String {
     var target = LogfmtEncoder()
     value.encode target
     target.pairs.joined separator: " "
   }
 
   fn decode<Value>(
-    self,
     read: (var source: ValueDecoder) => Result<Value, DecodeError>,
     line: String,
   ): Result<Value, DecodeError> {
@@ -34,71 +33,71 @@ type LogfmtEncoder with Encoder {
   private var path: List<String> = []
   private var pending: String = ""
 
-  fn nothing(var self) {
+  var fn nothing() {
     pending = ""
   }
 
-  fn bool(var self, value: Bool) {
+  var fn bool(value: Bool) {
     put "{value}"
   }
 
-  fn int(var self, value: Int64) {
+  var fn int(value: Int64) {
     put "{value}"
   }
 
-  fn unsigned(var self, value: UInt64) {
+  var fn unsigned(value: UInt64) {
     put "{value}"
   }
 
-  fn float(var self, value: Float64) {
+  var fn float(value: Float64) {
     put "{value}"
   }
 
-  fn string(var self, value: String) {
+  var fn string(value: String) {
     put value
   }
 
-  fn bytes(var self, value: List<UInt8>) {
+  var fn bytes(value: List<UInt8>) {
     put "{value.length()}"
   }
 
-  fn sequence(var self, length: Int?) {
+  var fn sequence(length: Int?) {
     const _length = length
     descend()
   }
 
-  fn map(var self, length: Int?) {
+  var fn map(length: Int?) {
     const _length = length
     descend()
   }
 
-  fn record(var self, typeName: String) {
+  var fn record(typeName: String) {
     const _typeName = typeName
     descend()
   }
 
-  fn variant(var self, typeName: String, name: String) {
+  var fn variant(typeName: String, name: String) {
     const _typeName = typeName
     descend()
     put name
   }
 
-  fn field(var self, name: String) {
+  var fn field(name: String) {
     pending = name
   }
 
-  fn finish(var self) {
+  var fn finish() {
     if !path.isEmpty() {
       path = path.removedAt(path.length() - 1)
     }
   }
 
-  private fn descend(var self) {
+  private var fn descend() {
     path.add pending
     pending = ""
   }
 
-  private fn put(var self, value: String) {
+  private var fn put(value: String) {
     const full = if pending.isEmpty() { path } else { path.added pending }
     const key = full.filter({ !_.isEmpty() }).toList().joined(separator: ".")
     pending = ""

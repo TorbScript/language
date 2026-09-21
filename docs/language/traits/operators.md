@@ -25,19 +25,19 @@ type Vector2 with Add, Subtract, Negate, Multiply<Float> {
   x: Float
   y: Float
 
-  fn add(self, other: Vector2): Vector2 {
+  fn add(other: Vector2): Vector2 {
     Vector2(x + other.x, y + other.y)
   }
 
-  fn subtract(self, other: Vector2): Vector2 {
+  fn subtract(other: Vector2): Vector2 {
     Vector2(x - other.x, y - other.y)
   }
 
-  fn negate(self): Vector2 {
+  fn negate(): Vector2 {
     Vector2(-x, -y)
   }
 
-  fn multiply(self, other: Float): Vector2 {
+  fn multiply(other: Float): Vector2 {
     Vector2(x * other, y * other)
   }
 }
@@ -92,13 +92,13 @@ a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
    }
 
    extend Board with Multiply<Scale, Board> {
-     fn multiply(self, other: Scale): Board {
+     fn multiply(other: Scale): Board {
        Board(size * other.factor)
      }
    }
 
    extend Board with Multiply<Board, Board> {
-     fn multiply(self, other: Board): Board {
+     fn multiply(other: Board): Board {
        Board(size * other.size)
      }
    }
@@ -119,13 +119,13 @@ a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
    }
 
    extend Board with Multiply<Scale, Board> {
-     fn multiply(self, other: Scale): Board {
+     fn multiply(other: Scale): Board {
        Board(size * other.factor)
      }
    }
 
    extend Board with Multiply<Board, Board> {
-     fn multiply(self, other: Board): Board {
+     fn multiply(other: Board): Board {
        Board(size * other.size)
      }
    }
@@ -153,7 +153,7 @@ a ?? b       OrElse.orElse(a, b)         "{a}"   Show.show(a)
    type Setting with OrElse<String> {
      written: String
 
-     fn orElse(self, fallback: lazy String): String {
+     fn orElse(fallback: lazy String): String {
        if written.isEmpty() { fallback } else { written }
      }
    }

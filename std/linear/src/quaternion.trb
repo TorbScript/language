@@ -61,7 +61,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
    *
    *     print Quaternion.rotation(around: Vector3(0.0, 1.0, 0.0), by: Angle.degrees(180.0)).w
    */
-  fn rotation(around: Vector3<Scalar>, by: Angle<Scalar>): Quaternion<Scalar> {
+  static fn rotation(around: Vector3<Scalar>, by: Angle<Scalar>): Quaternion<Scalar> {
     const axis = around.normalized()
     if axis.isZero() {
       const nothing = zeroOf around.x
@@ -73,32 +73,32 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   }
 
   /** The axis part, without the fourth number. */
-  fn axisPart(self): Vector3<Scalar> {
+  fn axisPart(): Vector3<Scalar> {
     Vector3 x, y, z
   }
 
   /** The rotation that undoes this one, for a quaternion of length one. */
-  fn conjugate(self): Quaternion<Scalar> {
+  fn conjugate(): Quaternion<Scalar> {
     Quaternion(-x, -y, -z, w)
   }
 
   /** Every number with its sign flipped, which turns space the same way and is therefore not the inverse. */
-  fn negate(self): Quaternion<Scalar> {
+  fn negate(): Quaternion<Scalar> {
     Quaternion(-x, -y, -z, -w)
   }
 
   /** The sum of the four squares, which is one for every rotation. */
-  fn lengthSquared(self): Scalar {
+  fn lengthSquared(): Scalar {
     x * x + y * y + z * z + w * w
   }
 
   /** The length over all four numbers. */
-  fn length(self): Scalar {
+  fn length(): Scalar {
     lengthSquared().squareRoot()
   }
 
   /** The same rotation with the length put back to one. A zero quaternion answers no rotation. */
-  fn normalized(self): Quaternion<Scalar> {
+  fn normalized(): Quaternion<Scalar> {
     const size: Scalar = self.length()
     if size == zeroOf(size) {
       const nothing = zeroOf size
@@ -108,7 +108,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   }
 
   /** The composition: `self` after `other`, the same order [Matrix3] composes in. */
-  fn multiply(self, other: Quaternion<Scalar>): Quaternion<Scalar> {
+  fn multiply(other: Quaternion<Scalar>): Quaternion<Scalar> {
     Quaternion(
       w * other.x + x * other.w + y * other.z - z * other.y,
       w * other.y - x * other.z + y * other.w + z * other.x,
@@ -123,7 +123,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
    *     const turn = Quaternion.rotation around: Vector3(0.0, 0.0, 1.0), by: Angle.degrees(90.0)
    *     print turn.applied(to: Vector3(2.0, 0.0, 0.0))
    */
-  fn applied(self, to: Vector3<Scalar>): Vector3<Scalar> {
+  fn applied(to: Vector3<Scalar>): Vector3<Scalar> {
     // `to + 2 * w * (axis x to) + 2 * (axis x (axis x to))`, which is the rotation written without a matrix
     const axis = axisPart()
     const once = axis.cross to
@@ -132,7 +132,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   }
 
   /** The same rotation as a matrix, which is the form a shader and a scene graph want. */
-  fn toMatrix3(self): Matrix3<Scalar> {
+  fn toMatrix3(): Matrix3<Scalar> {
     const whole = w.unit()
     const two = whole.doubled()
     Matrix3(
@@ -146,7 +146,7 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
    * The rotation `factor` of the way from here to there, along the straight line between the four numbers and then
    * back onto the sphere. It takes the shorter of the two ways around, which is what an animation means by it.
    */
-  fn interpolated(self, toward: Quaternion<Scalar>, by: Scalar): Quaternion<Scalar> {
+  fn interpolated(toward: Quaternion<Scalar>, by: Scalar): Quaternion<Scalar> {
     const nearest = if dot(toward) < zeroOf(w) { toward.negate() } else { toward }
     const mixed = Quaternion(
       x + (nearest.x - x) * by,
@@ -158,12 +158,12 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
   }
 
   /** The dot product of the four numbers: the cosine of half the rotation between the two. */
-  fn dot(self, other: Quaternion<Scalar>): Scalar {
+  fn dot(other: Quaternion<Scalar>): Scalar {
     x * other.x + y * other.y + z * other.z + w * other.w
   }
 
   /** Whether every number is within `tolerance` of the other quaternion's. */
-  fn isCloseTo(self, other: Quaternion<Scalar>, tolerance: Scalar): Bool {
+  fn isCloseTo(other: Quaternion<Scalar>, tolerance: Scalar): Bool {
     (x - other.x).absolute() <= tolerance
       && (y - other.y).absolute() <= tolerance
       && (z - other.z).absolute() <= tolerance
@@ -174,11 +174,11 @@ public type Quaternion<Scalar: Real = Float> with Multiply, Negate {
 /** The float rotation's identity. */
 extend Quaternion<Float> {
   /** No rotation. */
-  const identity: Quaternion<Float> = Quaternion 0.0, 0.0, 0.0, 1.0
+  static identity: Quaternion<Float> = Quaternion 0.0, 0.0, 0.0, 1.0
 }
 
 /** The deterministic rotation's identity. */
 extend Quaternion<Fixed> {
   /** No rotation. */
-  const identity: Quaternion<Fixed> = Quaternion Fixed(0), Fixed(0), Fixed(0), Fixed(65536)
+  static identity: Quaternion<Fixed> = Quaternion Fixed(0), Fixed(0), Fixed(0), Fixed(65536)
 }

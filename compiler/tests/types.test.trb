@@ -35,19 +35,19 @@ const workspace = [
     public type Int = Int64
 
     public trait Show {
-      fn show(self): String
+      fn show(): String
     }
 
     public trait Hash {
-      fn hash(self): Int
+      fn hash(): Int
     }
 
     public trait Compare {
-      fn compare(self, other: Self): Int
+      fn compare(other: Self): Int
     }
 
     public trait Add<Other = Self, Output = Self> {
-      fn add(self, other: Other): Output
+      fn add(other: Other): Output
     }
 
     public type Option<Value> {
@@ -88,16 +88,16 @@ type Probed {
    * The type of the position `written`. The source has to contain `written` exactly once, which is what makes its
    * span known without parsing it a second time.
    */
-  fn at(self, written: String): TypeId {
+  fn at(written: String): TypeId {
     const start = source.indexOf(written).expect("`{written}` in the source")
     checker.typePositions[module.value].get(Span(start, start + written.byteLength())).expect("a type at `{written}`")
   }
 
-  fn show(self, id: TypeId): String {
+  fn show(id: TypeId): String {
     checker.describe id
   }
 
-  fn symbolNamed(self, name: String): SymbolId {
+  fn symbolNamed(name: String): SymbolId {
     checker.program.lookUp(module, name).expect("the declaration `{name}`")
   }
 }
@@ -251,10 +251,10 @@ group "Forms of a type" {
   }
 
   test "`Self` is the trait's own parameter inside a trait, and the target everywhere else" {
-    assert(typeIn("trait Combine \{\n  fn combine(self, other: Self): Bool\n\}", "Self") == "Self")
-    assert(typeIn("type Amount \{\n  fn same(self, other: Self): Bool\n\}", "Self") == "Amount")
-    assert(typeIn("type Pair<Key> \{\n  fn same(self, other: Self): Bool\n\}", "Self") == "Pair<Key>")
-    assert(typeIn("extend List<Int> \{\n  fn same(self, other: Self): Bool\n\}", "Self") == "List<Int64>")
+    assert(typeIn("trait Combine \{\n  fn combine(other: Self): Bool\n\}", "Self") == "Self")
+    assert(typeIn("type Amount \{\n  fn same(other: Self): Bool\n\}", "Self") == "Amount")
+    assert(typeIn("type Pair<Key> \{\n  fn same(other: Self): Bool\n\}", "Self") == "Pair<Key>")
+    assert(typeIn("extend List<Int> \{\n  fn same(other: Self): Bool\n\}", "Self") == "List<Int64>")
   }
 
   test "a default type argument is filled in where the list is shorter, never inferred" {
@@ -305,7 +305,7 @@ group "Signatures" {
   }
 
   test "`self` is not a parameter of the form, it is what the signature says about itself" {
-    const source = "type Counter \{\n  var value: Int\n\n  fn increment(var self)\n\n  fn area(self): Int\n\}"
+    const source = "type Counter \{\n  var value: Int\n\n  var fn increment()\n\n  fn area(): Int\n\}"
     assert(memberSignatureIn(source, "Counter", "increment") == "() => Void, var self")
     assert(memberSignatureIn(source, "Counter", "area") == "() => Int64, self")
   }
@@ -318,7 +318,7 @@ group "Signatures" {
   }
 
   test "a member sees the parameters of its type" {
-    const source = "type Holder<Item> \{\n  item: Item\n\n  fn mapped<Output>(self, change: (value: Item) => Output): Output\n\}"
+    const source = "type Holder<Item> \{\n  item: Item\n\n  fn mapped<Output>(change: (value: Item) => Output): Output\n\}"
     assert(memberSignatureIn(source, "Holder", "mapped") == "(change: (value: Item) => Output) => Output, self")
   }
 
@@ -335,7 +335,7 @@ group "Signatures" {
   }
 
   test "the shape of a type: its fields, its traits and its members" {
-    const source = "type Point with Show, Hash \{\n  x: Int\n  var y: Int = 0\n  private label: String\n\n  fn area(self): Int\n\}"
+    const source = "type Point with Show, Hash \{\n  x: Int\n  var y: Int = 0\n  private label: String\n\n  fn area(): Int\n\}"
     var found = probe source
     const symbol = found.symbolNamed "Point"
     const shape = typeSignatureOf found.checker, symbol
@@ -401,7 +401,7 @@ group "Equality and substitution" {
   }
 
   test "substitution replaces a parameter and gives a closed type back unchanged" {
-    const source = "type Holder<Item> \{\n  items: List<Item>\n\n  fn plain(self): List<Bool>\n\}\n\ntype Probe \{\n  field: Int\n\}"
+    const source = "type Holder<Item> \{\n  items: List<Item>\n\n  fn plain(): List<Bool>\n\}\n\ntype Probe \{\n  field: Int\n\}"
     var found = probe source
     const symbol = found.symbolNamed "Holder"
     const shape = typeSignatureOf found.checker, symbol

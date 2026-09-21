@@ -30,6 +30,8 @@ produce TorbScript that parses and does not compile, or compiles and means somet
 | `Shape::Circle(r)` | `Shape.Circle r` | `.` for everything, and a command call |
 | `Circle(r)` after `use Shape::*` | `use Shape.Circle`, then `Circle r` | there is no glob import of cases |
 | `impl Trait for Type { }` | `extend Type with Trait { }` | `with` is the only word for "implements" |
+| `fn area(&self)` / `fn grow(&mut self)` | `fn area()` / `var fn grow()` | the receiver is not a parameter; `var fn` is `&mut self` |
+| `fn new() -> Self` in an `impl` | `static fn of(): Self` | `static` says it belongs to the type, instead of the absence of `self` saying it |
 | `use acme::Shout` to reach a method | `use String.shout from "acme/text"` | the member is named by its own path; only what a trait attaches needs the trait |
 | `loop { ... }` | `loop { ... }` | the same word, and `while true` is an error that names it |
 | `let n = loop { break 1 }` | a `var` written before the loop | a `break` carries no value |
@@ -81,7 +83,7 @@ The trap is the mirror image of Rust's: `var first = counters[0]` compiles in Ru
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -167,19 +169,19 @@ style option - `torb canon --check` reports every file that disagrees.
 
 ```trb
 trait Area {
-  fn area(self): Float
+  fn area(): Float
 }
 
 type Square with Area {
   side: Float
 
-  fn area(self): Float {
+  fn area(): Float {
     side * side
   }
 }
 
 extend Square with Show {
-  fn show(self): String {
+  fn show(): String {
     "Square({side})"
   }
 }
@@ -240,7 +242,7 @@ associated types and anything higher-kinded: `Option`, `Result`, `Task` and `Ite
 These are the things Rust has that TorbScript does not, and what to reach for instead. This list is the honest half of the
 comparison.
 
-- **Lifetimes, borrows and `&`.** Gone. A reference exists only as a `var` parameter or `var self`, for one call, and
+- **Lifetimes, borrows and `&`.** Gone. A reference exists only as a `var` parameter or a `var fn` receiver, for one call, and
   cannot be stored, returned or captured by an escaping closure. If you want a long-lived shared thing, that is a
   `shared type` and it has an identity.
 - **`unsafe`.** There is none for user code. `native` is the equivalent and is reserved for the standard library; `foreign`

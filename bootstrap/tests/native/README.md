@@ -101,7 +101,7 @@ expectation files. The leak gate does not run on them, because every one of them
 | `boxed-copy.trb` | A copy of a value whose layout is `Boxed` may not see a change made through the other one |
 | `records.trb` | Records, fields, defaults and nesting |
 | `reassignment.trb` | Assignment to a counted local releases what the slot held before the new value lands |
-| `places.trb` | `var` parameters and `var self` receivers: the callee works on the caller's value |
+| `places.trb` | `var` parameters and `var fn` receivers: the callee works on the caller's value |
 | `place-counted.trb` | `var` paths through counted storage, and copy on write on every one of them |
 | `counted.trb` | Counted values through every position the ownership pass decides about |
 
@@ -164,7 +164,7 @@ expectation files. The leak gate does not run on them, because every one of them
 | Program | What it pins |
 |---------|--------------|
 | `traits.trb` | Traits, trait-typed values, default members, generics with bounds |
-| `trait-values.trb` | A `var self` member reached through a witness table |
+| `trait-values.trb` | A `var fn` member reached through a witness table |
 | `generics.trb` | A generic type with methods, a generic function with a bound, a generic `extend` |
 | `generic-operators.trb` | Every operator on a generic type is the member of its trait, for `Int`, `Float` and `Fixed`, and inside a generic body as well |
 | `derived.trb` | The generated `Show`, `Equals` and `Hash` of a record, a case and a tuple |

@@ -42,7 +42,7 @@ use Error from "./error"
  */
 public trait From<Source> {
   /** Makes a `Self` from a `Source`. This is what `Self.from(source)` calls, and what [Into.into] calls through it. */
-  fn from(value: Source): Self
+  static fn from(value: Source): Self
 }
 
 /**
@@ -58,12 +58,12 @@ public trait From<Source> {
  */
 public trait Into<Target> {
   /** Makes a `Target` from `self`. */
-  fn into(self): Target
+  fn into(): Target
 }
 
 /** The blanket implementation that gives every [From] its [Into] for free: nothing implements `Into` by hand. */
 extend<Source, Target> Source with Into<Target> where Target: From<Source> {
-  fn into(self): Target {
+  fn into(): Target {
     Target.from self
   }
 }
@@ -74,7 +74,7 @@ extend<Source, Target> Source with Into<Target> where Target: From<Source> {
  * fail, and without this every use of one would have to take the `Result` apart with a pattern.
  */
 extend<Target> Target with From<Never> {
-  fn from(value: Never): Target {
+  static fn from(value: Never): Target {
     value
   }
 }
@@ -104,7 +104,7 @@ public trait TryFrom<Source, Failure> {
    * Makes a `Self` from a `Source`, or answers why it could not. This is what `Self.tryFrom(source)` calls, and what
    * [TryInto.tryInto] calls through it.
    */
-  fn tryFrom(value: Source): Result<Self, Failure>
+  static fn tryFrom(value: Source): Result<Self, Failure>
 }
 
 /**
@@ -138,12 +138,12 @@ public trait TryFrom<Source, Failure> {
  */
 public trait TryInto<Target, Failure> {
   /** Makes a `Target` from `self`, or answers why it could not. */
-  fn tryInto(self): Result<Target, Failure>
+  fn tryInto(): Result<Target, Failure>
 }
 
 /** The blanket implementation that gives every [TryFrom] its [TryInto] for free: nothing implements `TryInto` by hand. */
 extend<Source, Target, Failure> Source with TryInto<Target, Failure> where Target: TryFrom<Source, Failure> {
-  fn tryInto(self): Result<Target, Failure> {
+  fn tryInto(): Result<Target, Failure> {
     Target.tryFrom self
   }
 }
@@ -160,7 +160,7 @@ public type LiteralParseError with Show, Error {
   expected: List<String>
 
   /** `'away' is not one of "online", "offline"` */
-  fn show(self): String {
+  fn show(): String {
     const options = expected.map { option => "\"{option}\"" }
     "'{text}' is not one of {options.joined(separator: ", ")}"
   }
@@ -178,14 +178,14 @@ public type LiteralParseError with Show, Error {
  */
 public shared trait Show {
   /** The text a value shows as: what string interpolation calls, and what `print` calls through it. */
-  fn show(self): String
+  fn show(): String
 
   /**
    * How the value looks _inside_ of another value: in a list, in a field of a generated `Show`, in a tuple.
    * Only `String` (quoted, with escapes) and `Char` (in single quotes) differ from `show()`, so that
    * `["a", "b"]` stays readable while `"{name}"` is still the text itself.
    */
-  fn showNested(self): String {
+  fn showNested(): String {
     show()
   }
 }

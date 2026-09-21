@@ -84,7 +84,7 @@ outside this type touch this member" separately.
 public type Meters {
   private value: Float64
 
-  fn zero(): Meters {
+  static fn zero(): Meters {
     Meters 0.0
   }
 }

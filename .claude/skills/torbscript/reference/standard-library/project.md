@@ -51,8 +51,8 @@ public type Project {
   var test: Test = Test()
   var workspace: Workspace = Workspace()
 
-  fn authors(var self, ...names: String)
-  fn registry(var self, owner: String, url: String)
+  var fn authors(...names: String)
+  var fn registry(owner: String, url: String)
 }
 ```
 
@@ -66,8 +66,8 @@ readable, which is what lets a project file compute from what it already said:
 
 ```trb fragment
 public type Dependencies {
-  fn runtime(var self, ...requirements: String)
-  fn development(var self, ...requirements: String)
+  var fn runtime(...requirements: String)
+  var fn development(...requirements: String)
 }
 ```
 
@@ -97,7 +97,7 @@ bindings. `Test.coverageThreshold` is the share of lines a test run has to cover
 
 ```trb fragment
 public type Workspace {
-  fn members(var self, ...patterns: String)
+  var fn members(...patterns: String)
 }
 ```
 

@@ -55,8 +55,10 @@ match load("project.trb") {
 const name = value                          an immutable binding
 var name: Type = value                      a mutable binding with an annotation
 fn name(a: Int, b: Int = 1): Int { ... }     a function; a default is evaluated at every call
-fn name(self): Int { ... }                   a method
-fn name(var self) { ... }                    a method that changes its receiver in place
+fn name(): Int { ... }                       a method, inside a type body; it does not list `self`
+var fn name() { ... }                        a method that changes its receiver in place
+static fn name(): Self { ... }               a member of the type itself, reached as `Type.name()`
+static name = value                          a constant of the type
 fn name(var target: Counter) { ... }         a parameter the function may change
 fn name(...rest: Int): Int { ... }           a variadic parameter; `rest` is a `List<Int>`
 type Name { ... }                            a type
@@ -182,10 +184,10 @@ panic "message"                               aborts with exit code 101
 10. **`{` in expression position is always a closure**, never a block. `do { ... }` evaluates a block immediately.
 11. **A `match` is exhaustive, and an unreachable arm is an error.**
 12. **An expression statement has to be `Void` or `Never`**, unless the call has a `var` receiver or a `var` argument.
-13. **Mutation needs a `var` path from the binding down**: a `var` binding, `var` parameter or `var self`, then `var`
+13. **Mutation needs a `var` path from the binding down**: a `var` binding, `var` parameter or a `var fn` receiver, then `var`
     fields.
 14. **A `var` that is changed and never read afterwards is a compile error**, and so is the discarded result of a method
-    that takes `self`.
+    that reads its receiver.
 15. **An endless loop is `loop`.** `loop { ... }` has the type `Never` without a `break` that targets it and `Void` with
     one, a `break` carries no value, and `while true` is an error that names `loop`.
 16. **A `use` names what it imports, and a member of a foreign `extend` is one of those names.**

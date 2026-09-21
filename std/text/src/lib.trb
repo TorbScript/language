@@ -22,14 +22,14 @@ use Iterable, Length, concatenated from "std/iteration"
  */
 public native type Char with Equals, Compare, Hash, Show {
   /** Whether the character is a decimal digit: `0` to `9`, and nothing else. */
-  native fn isDigit(self): Bool
+  native fn isDigit(): Bool
   /** Whether the character is a letter. Exact for ASCII, and by the division Latin-1 itself makes above it. */
-  native fn isLetter(self): Bool
+  native fn isLetter(): Bool
   /** Whether the character is whitespace: the ASCII ones, plus the `White_Space` code points a text really carries. */
-  native fn isWhitespace(self): Bool
+  native fn isWhitespace(): Bool
 
   /** The number of bytes of the character in UTF-8 (1 to 4): what it adds to an offset into a `String`. */
-  native fn byteLength(self): Int
+  native fn byteLength(): Int
   /**
    * The same character in upper case, or itself where there is no single upper-case code point for it.
    *
@@ -42,12 +42,12 @@ public native type Char with Equals, Compare, Hash, Show {
    * Upper-casing a text character by character is therefore not the same as a full Unicode mapping, and is what
    * [String.toUpperCase] does today.
    */
-  native fn toUpperCase(self): Char
+  native fn toUpperCase(): Char
   /** The same character in lower case, or itself where there is none. The mirror of [Char.toUpperCase]. */
-  native fn toLowerCase(self): Char
+  native fn toLowerCase(): Char
 
   /** `'A'`: inside of another value a character is written in single quotes, with escapes. */
-  native fn showNested(self): String
+  native fn showNested(): String
 }
 
 /**
@@ -80,7 +80,7 @@ public native type String
    * a witness table, which C code cannot do. So it collects the characters and hands them to [concatenated]: a `String`
    * is a value, so appending to one in a loop copies everything that is already in it, which is `O(n²)` in the bytes.
    */
-  fn from(value: Iterable<Char>): String {
+  static fn from(value: Iterable<Char>): String {
     var pieces: List<String> = []
     for character in value {
       pieces.add character.show()
@@ -89,12 +89,12 @@ public native type String
   }
 
   /** The characters, decoded one at a time: `for character in text.chars()`. Ordinary TorbScript, see [Characters]. */
-  fn chars(self): Iterable<Char> {
+  fn chars(): Iterable<Char> {
     Characters self
   }
 
   /** The bytes of the UTF-8, in order. */
-  fn bytes(self): Iterable<UInt8> {
+  fn bytes(): Iterable<UInt8> {
     TextBytes self
   }
 
@@ -102,18 +102,18 @@ public native type String
    * The character that begins at this byte offset, or `None` at and past the end. Offsets come from searching
    * (`indexOf`) and from `Char.byteLength()`, and an offset *inside* a character panics like every other bad offset.
    */
-  native fn charAt(self, offset: Int): Char?
+  native fn charAt(offset: Int): Char?
 
   /** The byte at this offset, or `None` at and past the end. A byte is never inside anything, so this never panics. */
-  native fn byteAt(self, offset: Int): UInt8?
+  native fn byteAt(offset: Int): UInt8?
 
   /** How many bytes the text takes up in UTF-8. There is no shortcut for the number of characters: that means decoding. */
-  native fn byteLength(self): Int
+  native fn byteLength(): Int
   /** Whether the text has no bytes at all. [String.isBlank] also treats pure whitespace as empty. */
-  native fn isEmpty(self): Bool
+  native fn isEmpty(): Bool
 
   /** `"a\nb"`: inside of another value a string is quoted, with escapes. `show()` is the text itself. */
-  native fn showNested(self): String
+  native fn showNested(): String
 
   /**
    * `text[from..to]` with byte offsets. An offset on a UTF-8 continuation byte, an offset greater than
@@ -124,7 +124,7 @@ public native type String
    * it arrived at. An inclusive range (`0..=3`) takes the byte *after* its end, which is the same arithmetic every
    * other slice does.
    */
-  fn slice(self, range: Bounds<Int>): String {
+  fn slice(range: Bounds<Int>): String {
     const from = range.lowest() ?? 0
     const written = range.highest() ?? byteLength()
     const to = if range.includesHighest() { written + 1 } else { written }
@@ -132,14 +132,14 @@ public native type String
   }
 
   /** The bytes from one offset to another. The one form the runtime has, and what `slice` decides its offsets for. */
-  native fn sliceBytes(self, from: Int, to: Int): String
+  native fn sliceBytes(from: Int, to: Int): String
 
   /** Whether `part` occurs anywhere in the text. */
-  native fn contains(self, part: String): Bool
+  native fn contains(part: String): Bool
   /** Whether the text begins with `prefix`. */
-  native fn startsWith(self, prefix: String): Bool
+  native fn startsWith(prefix: String): Bool
   /** Whether the text ends with `suffix`. */
-  native fn endsWith(self, suffix: String): Bool
+  native fn endsWith(suffix: String): Bool
   /**
    * The byte offset of the first occurrence of `part`, or `None` if it does not occur. An empty part is at offset `0`.
    *
@@ -147,7 +147,7 @@ public native type String
    *
    *     print "a/b/c".indexOf("/")
    */
-  native fn indexOf(self, part: String): Int?
+  native fn indexOf(part: String): Int?
 
   /**
    * The byte offset of the **last** occurrence of `part`, or `None` if it does not occur. An empty part is at the end
@@ -161,20 +161,20 @@ public native type String
    *
    * - [String.indexOf] - the same search from the front.
    */
-  native fn lastIndexOf(self, part: String): Int?
+  native fn lastIndexOf(part: String): Int?
 
   /** Everything before the first occurrence of `part`, or `None` if it does not occur. */
-  fn substringBefore(self, part: String): String? {
+  fn substringBefore(part: String): String? {
     indexOf(part).map { self[0.._] }
   }
 
   /** Everything after the first occurrence of `part`, or `None` if it does not occur. */
-  fn substringAfter(self, part: String): String? {
+  fn substringAfter(part: String): String? {
     indexOf(part).map { self[(_ + part.byteLength())..] }
   }
 
   /** The text with leading and trailing whitespace removed. */
-  native fn trim(self): String
+  native fn trim(): String
   /**
    * The text in upper case: [Char.toUpperCase] for every character, and nothing more.
    *
@@ -182,23 +182,23 @@ public native type String
    * the text. A full Unicode mapping may make a text *longer* (`ß` becomes `SS`), and this one therefore leaves such a
    * character alone.
    */
-  native fn toUpperCase(self): String
+  native fn toUpperCase(): String
   /** The text in lower case: [Char.toLowerCase] for every character. The mirror of [String.toUpperCase]. */
-  native fn toLowerCase(self): String
+  native fn toLowerCase(): String
   /** Every occurrence of `part`, replaced with `replacement`. */
-  native fn replace(self, part: String, replacement: String): String
+  native fn replace(part: String, replacement: String): String
   /** The text cut apart at every occurrence of `separator`, which is dropped. */
-  native fn split(self, separator: String): List<String>
+  native fn split(separator: String): List<String>
   /** The text, written after itself `times` times: `"ab".repeat(3)` is `"ababab"`. */
-  native fn repeat(self, times: Int): String
+  native fn repeat(times: Int): String
 
   /** Whether the text is empty or holds nothing but whitespace. */
-  fn isBlank(self): Bool {
+  fn isBlank(): Bool {
     trim().isEmpty()
   }
 
   /** The text cut apart at every `\n`. */
-  fn lines(self): List<String> {
+  fn lines(): List<String> {
     split "\n"
   }
 }
@@ -215,7 +215,7 @@ public native type String
 type Characters with Iterable<Char> {
   text: String
 
-  fn iterator(self): Iterator<Char> {
+  fn iterator(): Iterator<Char> {
     CharacterIterator text
   }
 }
@@ -224,7 +224,7 @@ type CharacterIterator with Iterator<Char> {
   text: String
   var offset: Int = 0
 
-  fn next(var self): Char? {
+  var fn next(): Char? {
     const found = text.charAt offset
     if const Some(character) = found {
       offset = offset + character.byteLength()
@@ -238,7 +238,7 @@ type CharacterIterator with Iterator<Char> {
 type TextBytes with Iterable<UInt8> {
   text: String
 
-  fn iterator(self): Iterator<UInt8> {
+  fn iterator(): Iterator<UInt8> {
     TextByteIterator text
   }
 }
@@ -247,7 +247,7 @@ type TextByteIterator with Iterator<UInt8> {
   text: String
   var offset: Int = 0
 
-  fn next(var self): UInt8? {
+  var fn next(): UInt8? {
     const found = text.byteAt offset
     if const Some(byte) = found {
       offset = offset + 1
@@ -262,5 +262,5 @@ type TextByteIterator with Iterator<UInt8> {
 
 /** Not every number is a Unicode scalar value (surrogates, everything above 0x10FFFF). */
 extend Char with TryFrom<Int64, NumberRangeError> {
-  native fn tryFrom(value: Int64): Result<Char, NumberRangeError>
+  native static fn tryFrom(value: Int64): Result<Char, NumberRangeError>
 }

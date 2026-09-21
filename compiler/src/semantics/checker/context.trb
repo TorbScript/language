@@ -49,34 +49,34 @@ public type TypeScope {
   records: Bool = true
 
   /** An ordinary type position: a field, a result, a type argument. */
-  fn forType(self): TypeScope {
+  fn forType(): TypeScope {
     copy position: TypePosition.Type, subject: None
   }
 
   /** `with Show`, `where Item: Hash`: the trait, plus what it is asked of. */
-  fn forBound(self, of: TypeId): TypeScope {
+  fn forBound(of: TypeId): TypeScope {
     copy position: TypePosition.Type, subject: Some(of)
   }
 
   /** The argument of a `const` parameter. */
-  fn forConstant(self): TypeScope {
+  fn forConstant(): TypeScope {
     copy position: TypePosition.Constant, subject: None
   }
 
   /** The explicit type arguments of an expression, where the callee is not resolved yet. */
-  fn forEither(self): TypeScope {
+  fn forEither(): TypeScope {
     copy position: TypePosition.Either, subject: None
   }
 
   /** A const argument is one value. Where the checker does not know yet, a lone literal is taken as one. */
-  fn takesConstant(self): Bool {
+  fn takesConstant(): Bool {
     match position {
       .Type => false
       _ => true
     }
   }
 
-  fn takesType(self): Bool {
+  fn takesType(): Bool {
     match position {
       .Constant => false
       _ => true
@@ -131,7 +131,7 @@ public type LocalKind {
  */
 public type Resolution {
   case Local(binding: BindingId)
-  /** A `fn`, a method, a static function of a type, or a field that holds a closure that is being called. */
+  /** A `fn`, a method, a `static fn` of a type, or a field that holds a closure that is being called. */
   case Callable(symbol: SymbolId, arguments: List<TypeId>, dispatch: Dispatch)
   case Field(owner: TypeId, field: SymbolId)
   case Constant(symbol: SymbolId, owner: TypeId?)
@@ -394,7 +394,7 @@ public type PlaceStep {
 }
 
 /**
- * A path from a root to one value: what an assignment writes, what a `var` argument hands over, what a `var self` call
+ * A path from a root to one value: what an assignment writes, what a `var` argument hands over, what a `var fn` call
  * changes, and what the pattern of an `if var` binds into. The lowering needs nothing else to form the reference.
  */
 public type Place {
@@ -555,7 +555,7 @@ public type Tables {
    */
   var matches: Map<Span, MatchPlan> = [:]
   /**
-   * Per assignment, `var` argument, `var self` receiver and `if var` subject: the place that is changed there. This is
+   * Per assignment, `var` argument, `var fn` receiver and `if var` subject: the place that is changed there. This is
    * the table that tells the lowering where a copy is a move and where a path becomes a reference (design 7.1).
    */
   var places: Map<Span, Place> = [:]
@@ -592,7 +592,7 @@ public type Expectation {
   case Statement
 
   /** The type that is expected, if any. */
-  fn annotationOf(self): TypeId? {
+  fn annotationOf(): TypeId? {
     match self {
       .Type(annotation) => Some annotation
       _ => None
@@ -600,14 +600,14 @@ public type Expectation {
   }
 
   /** The type a `?` above this expression will unwrap to, if one said so. */
-  fn unwrappedOf(self): TypeId? {
+  fn unwrappedOf(): TypeId? {
     match self {
       .Unwrapped(annotation) => Some annotation
       _ => None
     }
   }
 
-  fn isStatement(self): Bool {
+  fn isStatement(): Bool {
     match self {
       .Statement => true
       _ => false
@@ -626,7 +626,7 @@ public type ResultRule {
   case TraitMethod
 
   /** How a message names the declaration that will not infer, `None` where inference is allowed. */
-  fn describe(self): String? {
+  fn describe(): String? {
     match self {
       .PublicFunction => Some "A `public` function"
       .TraitMethod => Some "A trait method"
@@ -681,7 +681,7 @@ public type Statistics {
   typed: Int
   deferred: Int
 
-  fn total(self): Int {
+  fn total(): Int {
     typed + deferred
   }
 }
@@ -782,7 +782,7 @@ public type Checker {
   /** The innermost receiver: the type whose members a bare name may mean. Only one is ever implicit. */
   var receiverType: TypeId? = None
   var receiverBinding: BindingId? = None
-  /** What `Self` means in the body that is being checked. A static function has one without having a receiver. */
+  /** What `Self` means in the body that is being checked. A `static fn` has one without having a receiver. */
   var selfType: TypeId? = None
   /** The closures that are being checked, innermost last: what a name may capture and what `_` means. */
   var closureFrames: List<ClosureFrame> = []
@@ -927,112 +927,112 @@ public type Checker {
   var importedModules: Map<Int, Bool> = [:]
   var hasImportedModules: Bool = false
 
-  fn symbolAt(self, id: SymbolId): Symbol {
+  fn symbolAt(id: SymbolId): Symbol {
     symbols.at id
   }
 
   /** What a name in a type position, or the name of a declaration, resolved to. */
-  fn resolvedName(self, module: ModuleId, at: Span): SymbolId? {
+  fn resolvedName(module: ModuleId, at: Span): SymbolId? {
     if const Some(found) = resolutions[module.value].get(at) {
       return Some found
     }
     definitions[module.value].get(at)
   }
 
-  fn describe(self, id: TypeId): String {
+  fn describe(id: TypeId): String {
     describeType types, symbols, id
   }
 
-  fn nominal(var self, symbol: SymbolId, arguments: List<TypeId>): TypeId {
+  var fn nominal(symbol: SymbolId, arguments: List<TypeId>): TypeId {
     types.intern TypeForm.Nominal(symbol, arguments)
   }
 
-  fn signature(self, id: SignatureId): Signature {
+  fn signature(id: SignatureId): Signature {
     signatures[id.value]
   }
 
-  fn typeSignature(self, id: TypeSignatureId): TypeSignature {
+  fn typeSignature(id: TypeSignatureId): TypeSignature {
     typeSignatures[id.value]
   }
 
-  fn addSignature(var self, signature: Signature): SignatureId {
+  var fn addSignature(signature: Signature): SignatureId {
     signatures.add signature
     SignatureId(signatures.length() - 1)
   }
 
-  fn addTypeSignature(var self, signature: TypeSignature): TypeSignatureId {
+  var fn addTypeSignature(signature: TypeSignature): TypeSignatureId {
     typeSignatures.add signature
     TypeSignatureId(typeSignatures.length() - 1)
   }
 
   /** What every failed lookup returns: `Invalid` everywhere, so nothing after it says anything again. */
-  fn brokenSignature(self): SignatureId {
+  fn brokenSignature(): SignatureId {
     SignatureId 0
   }
 
-  fn brokenTypeSignature(self): TypeSignatureId {
+  fn brokenTypeSignature(): TypeSignatureId {
     TypeSignatureId 0
   }
 
   /** One message per span, as in the parser: a second one at the same position is a consequence of the first. */
-  fn report(var self, module: ModuleId, problem: Diagnostic) {
+  var fn report(module: ModuleId, problem: Diagnostic) {
     if diagnostics[module.value].any({ _.span == problem.span }) {
       return
     }
     diagnostics[module.value].add(problem)
   }
 
-  fn recordType(var self, module: ModuleId, at: Span, id: TypeId) {
+  var fn recordType(module: ModuleId, at: Span, id: TypeId) {
     typePositions[module.value].set(at, id)
   }
 
   // --- The tables of one module ---------------------------------------------------------------------------------------
 
   /** The type of one expression. Every expression the checker looks at lands here, `Deferred` included. */
-  fn recordExpression(var self, module: ModuleId, at: Span, id: TypeId) {
+  var fn recordExpression(module: ModuleId, at: Span, id: TypeId) {
     tables[module.value].expressionTypes.set(at, id)
   }
 
-  fn expressionType(self, module: ModuleId, at: Span): TypeId? {
+  fn expressionType(module: ModuleId, at: Span): TypeId? {
     tables[module.value].expressionTypes.get(at)
   }
 
-  fn recordPattern(var self, module: ModuleId, at: Span, id: TypeId) {
+  var fn recordPattern(module: ModuleId, at: Span, id: TypeId) {
     tables[module.value].patternTypes.set(at, id)
   }
 
-  fn patternType(self, module: ModuleId, at: Span): TypeId? {
+  fn patternType(module: ModuleId, at: Span): TypeId? {
     tables[module.value].patternTypes.get(at)
   }
 
-  fn recordResolution(var self, module: ModuleId, at: Span, resolution: Resolution) {
+  var fn recordResolution(module: ModuleId, at: Span, resolution: Resolution) {
     tables[module.value].resolutions.set(at, resolution)
   }
 
-  fn resolutionAt(self, module: ModuleId, at: Span): Resolution? {
+  fn resolutionAt(module: ModuleId, at: Span): Resolution? {
     tables[module.value].resolutions.get(at)
   }
 
   /** Adaptations apply in the order they were added, which is the order the lowering has to replay them in. */
-  fn recordAdaptation(var self, module: ModuleId, at: Span, adaptation: Adaptation) {
+  var fn recordAdaptation(module: ModuleId, at: Span, adaptation: Adaptation) {
     const known = tables[module.value].adaptations.get(at) ?? []
     tables[module.value].adaptations.set(at, known.added(adaptation))
   }
 
-  fn adaptationsAt(self, module: ModuleId, at: Span): List<Adaptation> {
+  fn adaptationsAt(module: ModuleId, at: Span): List<Adaptation> {
     tables[module.value].adaptations.get(at) ?? []
   }
 
-  fn recordArgumentTargets(var self, module: ModuleId, at: Span, targets: List<Int>) {
+  var fn recordArgumentTargets(module: ModuleId, at: Span, targets: List<Int>) {
     tables[module.value].argumentTargets.set(at, targets)
   }
 
-  fn argumentTargetsAt(self, module: ModuleId, at: Span): List<Int>? {
+  fn argumentTargetsAt(module: ModuleId, at: Span): List<Int>? {
     tables[module.value].argumentTargets.get(at)
   }
 
   /** How many expressions of a module are typed, and how many are still `Deferred`. */
-  fn statisticsOf(self, module: ModuleId): Statistics {
+  fn statisticsOf(module: ModuleId): Statistics {
     var typed = 0
     var deferred = 0
     for (_, id) in tables[module.value].expressionTypes {
@@ -1049,7 +1049,7 @@ public type Checker {
    * The first expression of a module that has no type. `Deferred` is reachable only from a construct a message was
    * already given about, so this is what a module without any message must not have.
    */
-  fn uncheckedSpanOf(self, module: ModuleId): Span? {
+  fn uncheckedSpanOf(module: ModuleId): Span? {
     var found: Span? = None
     for (at, id) in tables[module.value].expressionTypes {
       if id != deferredType {
@@ -1070,11 +1070,11 @@ public type Checker {
 
   /**
    * The short forms for the module that is being checked. Every one of them writes through its own path instead of
-   * calling the version above: a `var self` method whose argument reads another field of `self` would read a place
+   * calling the version above: a `var fn` method whose argument reads another field of `self` would read a place
    * that has already been taken out, which the interpreter of stage 0 cannot see and cannot report.
    */
   /** Whether anything has been said about this span already, which is what a consequence asks before it adds itself. */
-  fn hasDiagnosticAt(self, at: Span): Bool {
+  fn hasDiagnosticAt(at: Span): Bool {
     diagnostics[module.value].any({ _.span == at })
   }
 
@@ -1083,7 +1083,7 @@ public type Checker {
    * say the same thing, and the reader needs it once; two that have different things to say about one expression are two
    * findings, and dropping the second one hides it.
    */
-  fn reportHere(var self, problem: Diagnostic) {
+  var fn reportHere(problem: Diagnostic) {
     const shown = problem.message
     const at = problem.span
     if diagnostics[module.value].any({ found => found.span == at && found.message == shown }) {
@@ -1093,7 +1093,7 @@ public type Checker {
   }
 
   /** Records the type of an expression and gives it back, which is what every branch of the checker ends with. */
-  fn typed(var self, at: Span, id: TypeId): TypeId {
+  var fn typed(at: Span, id: TypeId): TypeId {
     tables[module.value].expressionTypes.set(at, id)
     if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add at
@@ -1101,21 +1101,21 @@ public type Checker {
     id
   }
 
-  fn typedPattern(var self, at: Span, id: TypeId) {
+  var fn typedPattern(at: Span, id: TypeId) {
     tables[module.value].patternTypes.set(at, id)
     if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add at
     }
   }
 
-  fn resolved(var self, at: Span, resolution: Resolution) {
+  var fn resolved(at: Span, resolution: Resolution) {
     tables[module.value].resolutions.set(at, resolution)
     if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add at
     }
   }
 
-  fn adapted(var self, at: Span, adaptation: Adaptation) {
+  var fn adapted(at: Span, adaptation: Adaptation) {
     const known = tables[module.value].adaptations.get(at) ?? []
     tables[module.value].adaptations.set(at, known.added(adaptation))
     if hasVariables && pendingSpans.last() != Some(at) {
@@ -1128,7 +1128,7 @@ public type Checker {
    * Picking the right `Int.from` reads its argument before it checks it against the parameter, which would otherwise
    * leave two `Literal` adaptations at one span.
    */
-  fn adaptedLiteral(var self, at: Span, annotation: TypeId) {
+  var fn adaptedLiteral(at: Span, annotation: TypeId) {
     var kept: List<Adaptation> = []
     for adaptation in tables[module.value].adaptations.get(at) ?? [] {
       if const .Literal(_) = adaptation {
@@ -1143,235 +1143,235 @@ public type Checker {
     }
   }
 
-  fn recordArguments(var self, at: Span, targets: List<Int>) {
+  var fn recordArguments(at: Span, targets: List<Int>) {
     tables[module.value].argumentTargets.set(at, targets)
   }
 
   /** The type arguments one call was instantiated with: what the lowering monomorphizes from. */
-  fn recordTypeArguments(var self, at: Span, arguments: List<TypeId>) {
+  var fn recordTypeArguments(at: Span, arguments: List<TypeId>) {
     tables[module.value].typeArguments.set(at, arguments)
     if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add at
     }
   }
 
-  fn typeArgumentsAt(self, module: ModuleId, at: Span): List<TypeId>? {
+  fn typeArgumentsAt(module: ModuleId, at: Span): List<TypeId>? {
     tables[module.value].typeArguments.get(at)
   }
 
   /** One witness per trait of every bound of the callee, in the order of `Signature.bounds`. */
-  fn recordWitnesses(var self, at: Span, found: List<Witness>) {
+  var fn recordWitnesses(at: Span, found: List<Witness>) {
     tables[module.value].witnesses.set(at, found)
     if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add at
     }
   }
 
-  fn witnessesAt(self, module: ModuleId, at: Span): List<Witness>? {
+  fn witnessesAt(module: ModuleId, at: Span): List<Witness>? {
     tables[module.value].witnesses.get(at)
   }
 
   /** Which bindings of the scope around a closure its body reads, and which of them are `var`. */
-  fn recordCaptures(var self, at: Span, found: List<Capture>) {
+  var fn recordCaptures(at: Span, found: List<Capture>) {
     tables[module.value].captures.set(at, found)
   }
 
-  fn capturesAt(self, module: ModuleId, at: Span): List<Capture>? {
+  fn capturesAt(module: ModuleId, at: Span): List<Capture>? {
     tables[module.value].captures.get(at)
   }
 
   /** One quotation site: the tree and the captures the lowering builds an `Expression<Value>` from. */
-  fn recordQuotation(var self, at: Span, found: Quotation) {
+  var fn recordQuotation(at: Span, found: Quotation) {
     tables[module.value].quotations.set(at, found)
   }
 
-  fn quotationAt(self, module: ModuleId, at: Span): Quotation? {
+  fn quotationAt(module: ModuleId, at: Span): Quotation? {
     tables[module.value].quotations.get(at)
   }
 
   /** The receiver of one receiver closure, which is the one binding a bare name in it may look members up on. */
-  fn recordReceiver(var self, at: Span, found: ReceiverClosure) {
+  var fn recordReceiver(at: Span, found: ReceiverClosure) {
     tables[module.value].receivers.set(at, found)
   }
 
-  fn receiverAt(self, module: ModuleId, at: Span): ReceiverClosure? {
+  fn receiverAt(module: ModuleId, at: Span): ReceiverClosure? {
     tables[module.value].receivers.get(at)
   }
 
   /** The plan of one `match`, `if const` or `while const`: what the lowering builds its decision tree from. */
-  fn recordMatch(var self, at: Span, plan: MatchPlan) {
+  var fn recordMatch(at: Span, plan: MatchPlan) {
     tables[module.value].matches.set(at, plan)
   }
 
-  fn matchAt(self, module: ModuleId, at: Span): MatchPlan? {
+  fn matchAt(module: ModuleId, at: Span): MatchPlan? {
     tables[module.value].matches.get(at)
   }
 
-  /** The place an assignment, a `var` argument, a `var self` receiver or an `if var` subject named (design 7.1). */
-  fn recordPlace(var self, at: Span, place: Place) {
+  /** The place an assignment, a `var` argument, a `var fn` receiver or an `if var` subject named (design 7.1). */
+  var fn recordPlace(at: Span, place: Place) {
     tables[module.value].places.set(at, place)
   }
 
-  fn placeAt(self, module: ModuleId, at: Span): Place? {
+  fn placeAt(module: ModuleId, at: Span): Place? {
     tables[module.value].places.get(at)
   }
 
   /** Whether a closure may outlive the call it stands in, which decides where its environment lives. */
-  fn recordClosureKind(var self, at: Span, kind: ClosureKind) {
+  var fn recordClosureKind(at: Span, kind: ClosureKind) {
     tables[module.value].closureKinds.set(at, kind)
   }
 
-  fn closureKindAt(self, module: ModuleId, at: Span): ClosureKind? {
+  fn closureKindAt(module: ModuleId, at: Span): ClosureKind? {
     tables[module.value].closureKinds.get(at)
   }
 
   /** What one collection literal became: the default collection, inline array slots, or `Target.from`. */
-  fn recordCollectionLiteral(var self, at: Span, found: CollectionLiteral) {
+  var fn recordCollectionLiteral(at: Span, found: CollectionLiteral) {
     tables[module.value].collectionLiterals.set(at, found)
     if hasVariables && pendingSpans.last() != Some(at) {
       pendingSpans.add at
     }
   }
 
-  fn collectionLiteralAt(self, module: ModuleId, at: Span): CollectionLiteral? {
+  fn collectionLiteralAt(module: ModuleId, at: Span): CollectionLiteral? {
     tables[module.value].collectionLiterals.get(at)
   }
 
   /** `a?.m` where `m` answers an `Option` already: `flatMap` and not `map`, so the arm hands its value on. */
-  fn recordFlattenedOptional(var self, at: Span, flattened: Bool) {
+  var fn recordFlattenedOptional(at: Span, flattened: Bool) {
     tables[module.value].flattenedOptionals.set(at, flattened)
   }
 
-  fn flattenedOptionalAt(self, module: ModuleId, at: Span): Bool? {
+  fn flattenedOptionalAt(module: ModuleId, at: Span): Bool? {
     tables[module.value].flattenedOptionals.get(at)
   }
 
   /** A variable that was solved: every table of the statement is walked once at its end, through these. */
-  fn expressionTypeHere(self, at: Span): TypeId? {
+  fn expressionTypeHere(at: Span): TypeId? {
     tables[module.value].expressionTypes.get(at)
   }
 
-  fn patternTypeHere(self, at: Span): TypeId? {
+  fn patternTypeHere(at: Span): TypeId? {
     tables[module.value].patternTypes.get(at)
   }
 
-  fn adaptationsHere(self, at: Span): List<Adaptation> {
+  fn adaptationsHere(at: Span): List<Adaptation> {
     tables[module.value].adaptations.get(at) ?? []
   }
 
-  fn setExpressionType(var self, at: Span, id: TypeId) {
+  var fn setExpressionType(at: Span, id: TypeId) {
     tables[module.value].expressionTypes.set(at, id)
   }
 
-  fn setPatternType(var self, at: Span, id: TypeId) {
+  var fn setPatternType(at: Span, id: TypeId) {
     tables[module.value].patternTypes.set(at, id)
   }
 
-  fn setAdaptations(var self, at: Span, found: List<Adaptation>) {
+  var fn setAdaptations(at: Span, found: List<Adaptation>) {
     tables[module.value].adaptations.set(at, found)
   }
 
-  fn setResolution(var self, at: Span, resolution: Resolution) {
+  var fn setResolution(at: Span, resolution: Resolution) {
     tables[module.value].resolutions.set(at, resolution)
   }
 
-  fn setTypeArguments(var self, at: Span, arguments: List<TypeId>) {
+  var fn setTypeArguments(at: Span, arguments: List<TypeId>) {
     tables[module.value].typeArguments.set(at, arguments)
   }
 
-  fn setWitnesses(var self, at: Span, found: List<Witness>) {
+  var fn setWitnesses(at: Span, found: List<Witness>) {
     tables[module.value].witnesses.set(at, found)
   }
 
   // --- Unification variables ------------------------------------------------------------------------------------------
 
   /** A fresh variable for one generic parameter of one call. Ids are never reused: an interned form names one. */
-  fn newVariable(var self, name: String, owner: String, at: Span, isConst: Bool = false): TypeId {
+  var fn newVariable(name: String, owner: String, at: Span, isConst: Bool = false): TypeId {
     variables.add VariableState(name, owner, at, isConst: isConst)
     const identifier = VariableId(variables.length() - 1)
     hasVariables = true
     types.intern TypeForm.Variable(identifier)
   }
 
-  fn variableState(self, variable: VariableId): VariableState {
+  fn variableState(variable: VariableId): VariableState {
     variables[variable.value]
   }
 
-  fn solutionOf(self, variable: VariableId): TypeId? {
+  fn solutionOf(variable: VariableId): TypeId? {
     variables[variable.value].solution
   }
 
-  fn solveVariable(var self, variable: VariableId, id: TypeId) {
+  var fn solveVariable(variable: VariableId, id: TypeId) {
     const solved = variables[variable.value].copy(solution: Some(id))
     variables.set variable.value, solved
   }
 
-  fn markReported(var self, variable: VariableId) {
+  var fn markReported(variable: VariableId) {
     const reported = variables[variable.value].copy(isReported: true)
     variables.set variable.value, reported
   }
 
-  fn resolutionHere(self, at: Span): Resolution? {
+  fn resolutionHere(at: Span): Resolution? {
     tables[module.value].resolutions.get(at)
   }
 
   // --- The types of the literals -------------------------------------------------------------------------------------
 
   /** A workspace without a prelude has no `Int64`; what is missing was reported where the name did not resolve. */
-  fn nominalOrInvalid(var self, symbol: SymbolId?): TypeId {
+  var fn nominalOrInvalid(symbol: SymbolId?): TypeId {
     match symbol {
       Some(found) => types.intern TypeForm.Nominal(found, [])
       None => invalidType
     }
   }
 
-  fn integerType(var self): TypeId {
+  var fn integerType(): TypeId {
     const symbol = wellKnown.integer
     nominalOrInvalid symbol
   }
 
-  fn floatType(var self): TypeId {
+  var fn floatType(): TypeId {
     const symbol = wellKnown.float
     nominalOrInvalid symbol
   }
 
-  fn stringType(var self): TypeId {
+  var fn stringType(): TypeId {
     const symbol = wellKnown.string
     nominalOrInvalid symbol
   }
 
-  fn booleanType(var self): TypeId {
+  var fn booleanType(): TypeId {
     const symbol = wellKnown.boolean
     nominalOrInvalid symbol
   }
 
-  fn charType(var self): TypeId {
+  var fn charType(): TypeId {
     const symbol = wellKnown.character
     nominalOrInvalid symbol
   }
 
   // --- Types the checker builds over and over ------------------------------------------------------------------------
 
-  fn isBroken(self, id: TypeId): Bool {
+  fn isBroken(id: TypeId): Bool {
     id == invalidType || id == deferredType
   }
 
   /** `Never` fits everywhere, and nothing is ever said about what is broken already. */
-  fn absorbs(self, id: TypeId): Bool {
+  fn absorbs(id: TypeId): Bool {
     id == invalidType || id == deferredType || id == neverType
   }
 
-  fn functionType(var self, form: FunctionForm): TypeId {
+  var fn functionType(form: FunctionForm): TypeId {
     types.intern TypeForm.Function(form)
   }
 
   // --- Scopes --------------------------------------------------------------------------------------------------------
 
-  fn openScope(var self) {
+  var fn openScope() {
     scopeStarts.add locals.length()
   }
 
-  fn closeScope(var self) {
+  var fn closeScope() {
     const top = scopeStarts.length() - 1
     const start = scopeStarts.removeAt(top) ?? 0
     while locals.length() > start {
@@ -1381,7 +1381,7 @@ public type Checker {
   }
 
   /** A binding gets an id, and the name it is reachable under. */
-  fn declareBinding(var self, binding: LocalBinding): BindingId {
+  var fn declareBinding(binding: LocalBinding): BindingId {
     bindings.add binding
     const identifier = BindingId(bindings.length() - 1)
     if !binding.name.isEmpty() && binding.name != "_" {
@@ -1391,18 +1391,18 @@ public type Checker {
   }
 
   /** A `fn`, `type` or `trait` of a block, and a generic parameter: a name of the scope that is not a value. */
-  fn declareLocalSymbol(var self, name: String, symbol: SymbolId) {
+  var fn declareLocalSymbol(name: String, symbol: SymbolId) {
     if !name.isEmpty() {
       locals.add Local(name, LocalKind.Declared(symbol))
     }
   }
 
-  fn binding(self, identifier: BindingId): LocalBinding {
+  fn binding(identifier: BindingId): LocalBinding {
     bindings[identifier.value]
   }
 
   /** The innermost hit wins: a nested scope may shadow, the same scope may not redeclare. */
-  fn findLocal(self, name: String): LocalKind? {
+  fn findLocal(name: String): LocalKind? {
     var index = locals.length() - 1
     while index >= 0 {
       if locals[index].name == name {
@@ -1416,8 +1416,7 @@ public type Checker {
   // --- One body at a time --------------------------------------------------------------------------------------------
 
   /** Starts a body from scratch and gives back what was there, so that a nested one can put it back. */
-  fn enterBody(
-    var self,
+  var fn enterBody(
     inside: ModuleId,
     result: TypeId,
     isInferred: Bool,
@@ -1469,7 +1468,7 @@ public type Checker {
     saved
   }
 
-  fn leaveBody(var self, saved: BodyState) {
+  var fn leaveBody(saved: BodyState) {
     module = saved.module
     locals = saved.locals
     scopeStarts = saved.scopeStarts
@@ -1493,7 +1492,7 @@ public type Checker {
   }
 
   /** `self` in a method and in a receiver closure: the one binding a bare name may look members up on. */
-  fn setReceiver(var self, binding: BindingId) {
+  var fn setReceiver(binding: BindingId) {
     receiverBinding = Some binding
     receiverType = Some bindings[binding.value].annotation
   }
@@ -1503,7 +1502,7 @@ public type Checker {
    * body. `enterBody` clears the scopes, so the parameters are always the first scope of a body and its top level the
    * second: the two are one scope, and a `const` there may not shadow a parameter.
    */
-  fn shadowsParameter(self, name: String): Bool {
+  fn shadowsParameter(name: String): Bool {
     if scopeStarts.length() != 2 {
       return false
     }
@@ -1523,7 +1522,7 @@ public type Checker {
    * checked, exactly the names that pattern gave the body. For alternatives that is the one set the body sees, because
    * `alternativePatterns` declares the names of the first branch once for the whole arm.
    */
-  fn bindingsHere(self): List<BindingId> {
+  fn bindingsHere(): List<BindingId> {
     const start = scopeStarts.last() ?? 0
     var found: List<BindingId> = []
     for index in start..locals.length() {
@@ -1535,15 +1534,15 @@ public type Checker {
   }
 
   /** Every name in an expression is a read of what it names, and that is all "read" means in the rule below. */
-  fn noteBindingRead(var self, binding: BindingId) {
+  var fn noteBindingRead(binding: BindingId) {
     readBindings.set binding.value, true
   }
 
-  fn isBindingRead(self, binding: BindingId): Bool {
+  fn isBindingRead(binding: BindingId): Bool {
     readBindings.containsKey binding.value
   }
 
-  fn isDeclaredHere(self, name: String): Bool {
+  fn isDeclaredHere(name: String): Bool {
     const start = scopeStarts.last() ?? 0
     var index = locals.length() - 1
     while index >= start {
@@ -1555,11 +1554,11 @@ public type Checker {
     false
   }
 
-  fn siteOf(self, symbol: SymbolId): DeclarationSite? {
+  fn siteOf(symbol: SymbolId): DeclarationSite? {
     sites.get symbol
   }
 
-  fn addSite(var self, symbol: SymbolId, site: DeclarationSite) {
+  var fn addSite(symbol: SymbolId, site: DeclarationSite) {
     if !sites.containsKey(symbol) {
       sites.set symbol, site
     }

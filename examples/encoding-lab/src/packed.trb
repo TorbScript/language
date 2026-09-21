@@ -23,7 +23,7 @@ public type PackedProblem with Show, Error {
   typeName: String
   field: String
 
-  fn show(self): String {
+  fn show(): String {
     "`{typeName}` has no field `{field}`"
   }
 }
@@ -37,12 +37,12 @@ public type PackedFormat {
    * `numbers<Price> { field 1, { _.currency }  field 2, { _.amount } }` in the design. The list form here says the same
    * thing: the number of a field is its position in this list, counting from one.
    */
-  fn numbers(var self, typeName: String, fields: List<String>) {
+  var fn numbers(typeName: String, fields: List<String>) {
     numbering.set typeName, fields
   }
 
   /** The lab needs the type's own fields to check the mapping against; a type argument would carry both. */
-  fn checked(var self, typeName: String, describe: (var target: Structures) => Void) {
+  var fn checked(typeName: String, describe: (var target: Structures) => Void) {
     const structure = structureOf describe
     described.set typeName, structure.recordFields().map({ _.name() }).toList()
   }
@@ -52,7 +52,7 @@ public type PackedFormat {
 public type Packed {
   private numbering: Map<String, List<String>> = [:]
 
-  fn format(define: (var format: PackedFormat) => Void): Result<Packed, PackedProblem> {
+  static fn format(define: (var format: PackedFormat) => Void): Result<Packed, PackedProblem> {
     var built = PackedFormat()
     define built
     for (typeName, fields) in built.numbering {
@@ -69,14 +69,13 @@ public type Packed {
     Ok Packed(built.numbering)
   }
 
-  fn encode<Value: Encode>(self, value: Value): List<Int64> {
+  fn encode<Value: Encode>(value: Value): List<Int64> {
     var target = PackedEncoder numbering: numbering
     value.encode target
     target.output
   }
 
   fn decode<Value>(
-    self,
     read: (var source: PackedDecoder) => Result<Value, DecodeError>,
     bytes: List<Int64>,
   ): Result<Value, DecodeError> {
@@ -97,29 +96,29 @@ public type PackedEncoder with Encoder {
   numbering: Map<String, List<String>> = [:]
   private var frames: List<PackedFrame> = []
 
-  fn nothing(var self) {
+  var fn nothing() {
     // An absent field is not on the wire at all: no key, no payload, and the reader falls back to the default
   }
 
-  fn bool(var self, value: Bool) {
+  var fn bool(value: Bool) {
     varint(if value { 1 } else { 0 })
   }
 
-  fn int(var self, value: Int64) {
+  var fn int(value: Int64) {
     varint zigzag(value)
   }
 
   /** No `UInt8.tryFrom(Int64)`, so a count travels as its decimal text. See the module comment. */
-  fn unsigned(var self, value: UInt64) {
+  var fn unsigned(value: UInt64) {
     string "{value}"
   }
 
   /** No bit access to a `Float64` either, so a number travels as its decimal text. */
-  fn float(var self, value: Float64) {
+  var fn float(value: Float64) {
     string "{value}"
   }
 
-  fn string(var self, value: String) {
+  var fn string(value: String) {
     const codes = value.chars().map({ Int64.from _ }).toList()
     var payload: List<Int64> = []
     for code in codes {
@@ -128,7 +127,7 @@ public type PackedEncoder with Encoder {
     block payload
   }
 
-  fn bytes(var self, value: List<UInt8>) {
+  var fn bytes(value: List<UInt8>) {
     var payload: List<Int64> = []
     for byte in value {
       appendVarint payload, Int64.from(byte)
@@ -136,29 +135,29 @@ public type PackedEncoder with Encoder {
     block payload
   }
 
-  fn sequence(var self, length: Int?) {
+  var fn sequence(length: Int?) {
     const _length = length
     open PackedFrameKind.Items
   }
 
-  fn map(var self, length: Int?) {
+  var fn map(length: Int?) {
     const _length = length
     open PackedFrameKind.Items
   }
 
-  fn record(var self, typeName: String) {
+  var fn record(typeName: String) {
     open PackedFrameKind.Fields(numbering.get(typeName) ?? [])
   }
 
   /** A case is field number one, its own fields follow from two: a `oneof` without a schema to agree on. */
-  fn variant(var self, typeName: String, name: String) {
+  var fn variant(typeName: String, name: String) {
     open PackedFrameKind.Fields(numbering.get(typeName) ?? [])
     const last = frames.length() - 1
     frames[last].number = 1
     string name
   }
 
-  fn field(var self, name: String) {
+  var fn field(name: String) {
     const last = frames.length() - 1
     const fields = match frames[last].kind {
       .Fields(names) => names
@@ -171,7 +170,7 @@ public type PackedEncoder with Encoder {
     }
   }
 
-  fn finish(var self) {
+  var fn finish() {
     const last = frames.length() - 1
     const frame = frames[last]
     frames = frames.removedAt last
@@ -187,26 +186,26 @@ public type PackedEncoder with Encoder {
     }
   }
 
-  private fn open(var self, kind: PackedFrameKind) {
+  private var fn open(kind: PackedFrameKind) {
     frames.add PackedFrame(kind)
   }
 
   /** One varint value, with its key when it sits in a record. */
-  private fn varint(var self, value: Int64) {
+  private var fn varint(value: Int64) {
     var payload: List<Int64> = []
     appendVarint payload, value
     put payload, varintWire
   }
 
   /** One length-delimited block: the length, then the payload. */
-  private fn block(var self, payload: List<Int64>) {
+  private var fn block(payload: List<Int64>) {
     var body: List<Int64> = []
     appendVarint body, payload.length()
     body.addAll payload
     put body, blockWire
   }
 
-  private fn put(var self, payload: List<Int64>, wire: Int64) {
+  private var fn put(payload: List<Int64>, wire: Int64) {
     if frames.isEmpty() {
       output.addAll payload
       return
@@ -285,30 +284,30 @@ public type PackedDecoder with Decoder {
   numbering: Map<String, List<String>> = [:]
   private var frames: List<PackedCursor> = []
 
-  fn nothing(var self): Bool {
+  var fn nothing(): Bool {
     // The field was not on the wire at all, so `field` already answered `false` and this is never reached for a record
     false
   }
 
-  fn bool(var self): Result<Bool, DecodeError> {
+  var fn bool(): Result<Bool, DecodeError> {
     Ok(readVarint()? != 0)
   }
 
-  fn int(var self): Result<Int64, DecodeError> {
+  var fn int(): Result<Int64, DecodeError> {
     Ok unzigzag(readVarint()?)
   }
 
-  fn unsigned(var self): Result<UInt64, DecodeError> {
+  var fn unsigned(): Result<UInt64, DecodeError> {
     const text = string()?
     Fail DecodeError("`{text}` cannot become a count: the language has no `UInt64.tryFrom` for the lab to call")
   }
 
-  fn float(var self): Result<Float64, DecodeError> {
+  var fn float(): Result<Float64, DecodeError> {
     const text = string()?
     Float64.tryFrom(text).mapError { _ => DecodeError "`{text}` is not a number" }
   }
 
-  fn string(var self): Result<String, DecodeError> {
+  var fn string(): Result<String, DecodeError> {
     const length = readVarint()?
     const end = position + length
     var out: List<Char> = []
@@ -320,23 +319,23 @@ public type PackedDecoder with Decoder {
     Ok String.from(out)
   }
 
-  fn bytes(var self): Result<List<UInt8>, DecodeError> {
+  var fn bytes(): Result<List<UInt8>, DecodeError> {
     const text = string()?
     Fail DecodeError("`{text}` cannot become bytes: the language has no `UInt8.tryFrom(Int64)`")
   }
 
-  fn sequence(var self): Result<Int?, DecodeError> {
+  var fn sequence(): Result<Int?, DecodeError> {
     const _length = readVarint()?
     const count = readVarint()?
     frames.add PackedCursor(.Items, remaining: count)
     Ok Some(count)
   }
 
-  fn map(var self): Result<Int?, DecodeError> {
+  var fn map(): Result<Int?, DecodeError> {
     sequence()
   }
 
-  fn hasNext(var self): Result<Bool, DecodeError> {
+  var fn hasNext(): Result<Bool, DecodeError> {
     if frames.isEmpty() {
       return Ok false
     }
@@ -350,14 +349,14 @@ public type PackedDecoder with Decoder {
   }
 
   /** Every record carries its own length, the outermost one too: a message can be concatenated with the next. */
-  fn record(var self, typeName: String): Result<Void, DecodeError> {
+  var fn record(typeName: String): Result<Void, DecodeError> {
     const names = numbering.get(typeName) ?? []
     const length = readVarint()?
     frames.add PackedCursor(.Fields(names), end: position + length)
     Ok void
   }
 
-  fn variant(var self, typeName: String): Result<String, DecodeError> {
+  var fn variant(typeName: String): Result<String, DecodeError> {
     record(typeName)?
     if !field("")? {
       return Fail DecodeError("a case was expected")
@@ -365,7 +364,7 @@ public type PackedDecoder with Decoder {
     string()
   }
 
-  fn field(var self, name: String): Result<Bool, DecodeError> {
+  var fn field(name: String): Result<Bool, DecodeError> {
     const last = frames.length() - 1
     if last < 0 {
       return Fail DecodeError("no record is open")
@@ -389,7 +388,7 @@ public type PackedDecoder with Decoder {
     Ok false
   }
 
-  fn finish(var self): Result<Void, DecodeError> {
+  var fn finish(): Result<Void, DecodeError> {
     if frames.isEmpty() {
       return Fail DecodeError("nothing is open")
     }
@@ -402,7 +401,7 @@ public type PackedDecoder with Decoder {
     Ok void
   }
 
-  private fn numberOf(self, frame: PackedCursor, name: String): Int64 {
+  private fn numberOf(frame: PackedCursor, name: String): Int64 {
     const names = match frame.kind {
       .Fields(found) => found
       _ => []
@@ -413,7 +412,7 @@ public type PackedDecoder with Decoder {
     }
   }
 
-  private fn skip(var self, wire: Int64): Result<Void, DecodeError> {
+  private var fn skip(wire: Int64): Result<Void, DecodeError> {
     if wire == varintWire {
       const _value = readVarint()?
       return Ok void
@@ -423,7 +422,7 @@ public type PackedDecoder with Decoder {
     Ok void
   }
 
-  private fn readVarint(var self): Result<Int64, DecodeError> {
+  private var fn readVarint(): Result<Int64, DecodeError> {
     var result: Int64 = 0
     var scale: Int64 = 1
     while position < input.length() {

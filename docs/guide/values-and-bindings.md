@@ -60,7 +60,7 @@ print "{list} {fixed}"
 
 `list.add 3` works because `list` is a `var`. `fixed.add 3` would not compile, and not because the *binding* cannot be
 reassigned - because `const` is **deep**. Through a `const` binding you cannot reassign, cannot assign a field, and
-cannot call a method that takes `var self`.
+cannot call a method that is a `var fn`.
 
 ```trb error
 const fixed = [1, 2]
@@ -69,7 +69,7 @@ fixed.add 3
 ```
 
 The diagnostic names the other half of the rule. A method that changes its receiver in place is a **verb** and declares
-`var self`; the method that returns a changed copy instead is its **participle**. So `list.sort { _ }` sorts in place and
+a `var fn`; the method that returns a changed copy instead is its **participle**. So `list.sort { _ }` sorts in place and
 `list.sorted { _ }` answers a new list, `add` and `added`, `remove` and `removed`.
 
 There is no `MutableList`, no `ImmutableList` and no read-only view. A `const` binding *is* the immutable list.
@@ -103,7 +103,7 @@ This is the one mistake everybody makes once, and it is the price of value seman
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -124,7 +124,7 @@ path instead:
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -141,7 +141,7 @@ fields and indices as deep as you like (`world.entities[id].health = 5`), and ev
 
 Three things have to line up for a change to be legal:
 
-1. the **binding** is a `var`, or you are inside a `var` parameter or a `var self` method,
+1. the **binding** is a `var`, or you are inside a `var` parameter or a `var fn` method,
 2. every **field** on the way is declared `var`,
 3. the value you reach is reached through that path and not through a copy of it.
 

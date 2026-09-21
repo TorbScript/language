@@ -64,7 +64,7 @@ public type Result<Value, Failure> with OrElse<Value> {
   case Fail(error: Failure)
 
   /** Whether the operation worked. For the value itself, `match` or `?` instead. */
-  fn isOk(self): Bool {
+  fn isOk(): Bool {
     match self {
       Ok(_) => true
       Fail(_) => false
@@ -72,12 +72,12 @@ public type Result<Value, Failure> with OrElse<Value> {
   }
 
   /** Whether the operation failed. */
-  fn isError(self): Bool {
+  fn isError(): Bool {
     !isOk()
   }
 
   /** Changes the value of an `Ok` and leaves a `Fail` alone: one more step on the way that worked. */
-  fn map<Output>(self, transform: (value: Value) => Output): Result<Output, Failure> {
+  fn map<Output>(transform: (value: Value) => Output): Result<Output, Failure> {
     match self {
       Ok(value) => .Ok(transform(value))
       Fail(error) => .Fail(error)
@@ -95,7 +95,7 @@ public type Result<Value, Failure> with OrElse<Value> {
    *     const parsed = Int.tryFrom "nine"
    *     print parsed.mapError({ _ => "nine is not a number" })
    */
-  fn mapError<OtherFailure>(self, transform: (error: Failure) => OtherFailure): Result<Value, OtherFailure> {
+  fn mapError<OtherFailure>(transform: (error: Failure) => OtherFailure): Result<Value, OtherFailure> {
     match self {
       Ok(value) => Ok value
       Fail(error) => Fail transform(error)
@@ -103,7 +103,7 @@ public type Result<Value, Failure> with OrElse<Value> {
   }
 
   /** Continues with a step that can fail itself and keeps one level: the explicit form of what `?` does. */
-  fn flatMap<Output>(self, transform: (value: Value) => Result<Output, Failure>): Result<Output, Failure> {
+  fn flatMap<Output>(transform: (value: Value) => Result<Output, Failure>): Result<Output, Failure> {
     match self {
       Ok(value) => transform value
       Fail(error) => Fail error
@@ -111,19 +111,19 @@ public type Result<Value, Failure> with OrElse<Value> {
   }
 
   /** Runs the action if the operation worked: the statement form of [Result.map]. */
-  fn forEach(self, action: (value: Value) => Void) {
+  fn forEach(action: (value: Value) => Void) {
     if const Ok(value) = self {
       action value
     }
   }
 
   /** Into the world of pipelines: a list with the value of an `Ok`, and an empty one for a `Fail`. */
-  fn toList(self): List<Value> {
+  fn toList(): List<Value> {
     ok().toList()
   }
 
   /** The value as an [Option], which drops the reason: for a caller that only wants to know whether there is one. */
-  fn ok(self): Value? {
+  fn ok(): Value? {
     match self {
       Ok(value) => Some value
       Fail(_) => None
@@ -140,7 +140,7 @@ public type Result<Value, Failure> with OrElse<Value> {
    *     const parsed = Int.tryFrom "nine"
    *     print parsed.orElse(0)
    */
-  fn orElse(self, fallback: lazy Value): Value {
+  fn orElse(fallback: lazy Value): Value {
     match self {
       Ok(value) => value
       Fail(_) => fallback
@@ -155,7 +155,7 @@ public type Result<Value, Failure> with OrElse<Value> {
    * When the result is a `Fail`. The panic prints the message and the error, so the message says what was expected of
    * the operation, not that it failed.
    */
-  fn expect(self, message: String): Value where Failure: Show {
+  fn expect(message: String): Value where Failure: Show {
     match self {
       Ok(value) => value
       Fail(error) => panic "{message}: {error}"
@@ -165,7 +165,7 @@ public type Result<Value, Failure> with OrElse<Value> {
 
 /** `Ok(value)` or `Fail(failure)`. */
 extend<Value: Show, Failure: Show> Result<Value, Failure> with Show {
-  fn show(self): String {
+  fn show(): String {
     match self {
       Ok(value) => "Ok({value.showNested()})"
       Fail(error) => "Fail({error.showNested()})"
@@ -183,7 +183,7 @@ extend<Value: Show, Failure: Show> Result<Value, Failure> with Show {
  * nothing more.
  */
 extend<Value, Failure, Target: From<Iterable<Value>>> Result<Target, Failure> with From<Iterable<Result<Value, Failure>>> {
-  fn from(value: Iterable<Result<Value, Failure>>): Result<Target, Failure> {
+  static fn from(value: Iterable<Result<Value, Failure>>): Result<Target, Failure> {
     var failure: Failure? = None
     const target = Target.from(value.mapWhile { item =>
       match item {                       // The pipeline is lazy: this runs while `Target.from` pulls

@@ -23,9 +23,9 @@ type Shape {
   case Circle(radius: Int)
   case Square(side: Int)
 
-  const unit = Shape.Circle 1
+  static unit = Shape.Circle 1
 
-  fn area(self): Int {
+  fn area(): Int {
     match self {
       .Circle(radius) => radius * radius
       .Square(side) => side * side
@@ -59,7 +59,7 @@ Point.area            a method reference
 3. **Exactly four syntactic forms bridge a type and a value, and all four are resolved at compile time.** A
    constructor call (`Point(1, 2)`), a static member (`Point.origin`, `Point.tryFrom(text)`), a case
    (`Shape.Circle`), and a method reference (`Point.area`, the unbound function value - see
-   [Methods and static functions](../types/methods.md)). None of them look a name up while the program runs.
+   [Methods and `static fn`s](../types/methods.md)). None of them look a name up while the program runs.
 
 4. **There is no runtime reflection**, because it could not mean the same thing in every back end: monomorphized and
    boxed generics would stop being interchangeable the moment a program could ask what a type parameter was, and
@@ -99,7 +99,7 @@ on, whatever the member is called.
 
 ## Related
 
-- [Methods and static functions](../types/methods.md) - `Type.member` as a call and as a value.
+- [Methods and `static fn`s](../types/methods.md) - `Type.member` as a call and as a value.
 - [Cases and match](../pattern-matching/cases-and-match.md) - matching a case without ever asking for a type.
 - [Encode and Decode](encode-and-decode.md) - what covers serialization instead of reflection.
 - [Type parameters](../generics/type-parameters.md) - where a name stands for a type instead of a value.

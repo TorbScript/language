@@ -89,7 +89,7 @@ result type, following the same names as the standard library's:
 type Box<Value> {
   value: Value
 
-  fn map<Output>(self, transform: (value: Value) => Output): Box<Output> {
+  fn map<Output>(transform: (value: Value) => Output): Box<Output> {
     Box transform(value)
   }
 }

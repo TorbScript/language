@@ -51,13 +51,13 @@ print numbers.reversed()
 public trait Collection<Item>
   with Iterable<Item>, Length, Accumulator<Item, Self>
 {
-  fn add(var self, value: Item)
-  fn clear(var self)
-  fn addAll(var self, values: Iterable<Item>)
-  fn added(self, value: Item): Self
-  fn addedAll(self, values: Iterable<Item>): Self
-  fn contains(self, value: Item): Bool where Item: Equals
-  fn containsAll(self, values: Iterable<Item>): Bool where Item: Equals
+  var fn add(value: Item)
+  var fn clear()
+  var fn addAll(values: Iterable<Item>)
+  fn added(value: Item): Self
+  fn addedAll(values: Iterable<Item>): Self
+  fn contains(value: Item): Bool where Item: Equals
+  fn containsAll(values: Iterable<Item>): Bool where Item: Equals
 }
 ```
 
@@ -72,18 +72,18 @@ channel or an event stream. `added`/`addedAll` are the participles of `add`/`add
 public trait List<Item>
   with Collection<Item>, MutableIndexed<Int, Item>, MutableSlice
 {
-  fn of(...items: Item): List<Item>
-  fn filled(count: Int, value: Item): List<Item>
-  fn insert(var self, index: Int, value: Item)
-  fn removeAt(var self, index: Int): Item?
-  fn reverse(var self)
-  fn sort<Key: Compare>(var self, by: (value: Item) => Key)
-  fn remove(var self, value: Item): Bool where Item: Equals
-  fn swapAt(var self, first: Int, second: Int)
-  fn update(var self, index: Int, change: (var element: Item) => Void)
-  fn first(self): Item?
-  fn last(self): Item?
-  fn indexOf(self, value: Item): Int? where Item: Equals
+  static fn of(...items: Item): List<Item>
+  static fn filled(count: Int, value: Item): List<Item>
+  var fn insert(index: Int, value: Item)
+  var fn removeAt(index: Int): Item?
+  var fn reverse()
+  var fn sort<Key: Compare>(by: (value: Item) => Key)
+  var fn remove(value: Item): Bool where Item: Equals
+  var fn swapAt(first: Int, second: Int)
+  var fn update(index: Int, change: (var element: Item) => Void)
+  fn first(): Item?
+  fn last(): Item?
+  fn indexOf(value: Item): Int? where Item: Equals
 }
 ```
 
@@ -99,15 +99,15 @@ versions at once, and is a documented alias of `ArrayList` until the trie exists
 public trait Map<Key, Value>
   with Collection<(Key, Value)>, MutableIndexed<Key, Value>
 {
-  fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash
-  fn remove(var self, key: Key): Value?
-  fn merge(var self, other: Iterable<(Key, Value)>)
-  fn getOrInsert(var self, key: Key, fallback: lazy Value): Value
-  fn update(var self, key: Key, fallback: lazy Value, change: (var Value) => Void)
-  fn containsKey(self, key: Key): Bool
-  fn keys(self): Iterable<Key>
-  fn values(self): Iterable<Value>
-  fn mapValues<Output>(self, transform: (value: Value) => Output): Map<Key, Output> where Key: Hash
+  static fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash
+  var fn remove(key: Key): Value?
+  var fn merge(other: Iterable<(Key, Value)>)
+  var fn getOrInsert(key: Key, fallback: lazy Value): Value
+  var fn update(key: Key, fallback: lazy Value, change: (var Value) => Void)
+  fn containsKey(key: Key): Bool
+  fn keys(): Iterable<Key>
+  fn values(): Iterable<Value>
+  fn mapValues<Output>(transform: (value: Value) => Output): Map<Key, Output> where Key: Hash
 }
 ```
 
@@ -124,15 +124,15 @@ shared table on a write.
 public trait Set<Item>
   with Collection<Item>
 {
-  fn of(...items: Item): Set<Item> where Item: Hash
-  fn contains(self, value: Item): Bool
-  fn remove(var self, value: Item): Bool
-  fn removeAll(var self, values: Iterable<Item>)
-  fn retainAll(var self, values: Set<Item>)
-  fn union(self, other: Iterable<Item>): Self
-  fn intersection(self, other: Set<Item>): Self
-  fn difference(self, other: Iterable<Item>): Self
-  fn isSubsetOf(self, other: Set<Item>): Bool
+  static fn of(...items: Item): Set<Item> where Item: Hash
+  fn contains(value: Item): Bool
+  var fn remove(value: Item): Bool
+  var fn removeAll(values: Iterable<Item>)
+  var fn retainAll(values: Set<Item>)
+  fn union(other: Iterable<Item>): Self
+  fn intersection(other: Set<Item>): Self
+  fn difference(other: Iterable<Item>): Self
+  fn isSubsetOf(other: Set<Item>): Bool
 }
 ```
 
@@ -147,19 +147,19 @@ A collection without duplicates; `add` of a value already present does nothing. 
 public trait Stack<Item>
   with Collection<Item>
 {
-  fn push(var self, value: Item)
-  fn pop(var self): Item?
-  fn popped(self): (Item, Self)?
-  fn peek(self): Item?
+  var fn push(value: Item)
+  var fn pop(): Item?
+  fn popped(): (Item, Self)?
+  fn peek(): Item?
 }
 
 public trait Queue<Item>
   with Collection<Item>
 {
-  fn enqueue(var self, value: Item)
-  fn dequeue(var self): Item?
-  fn dequeued(self): (Item, Self)?
-  fn peek(self): Item?
+  var fn enqueue(value: Item)
+  var fn dequeue(): Item?
+  fn dequeued(): (Item, Self)?
+  fn peek(): Item?
 }
 ```
 

@@ -18,12 +18,12 @@ const account = r"""
     private(var) balance: Int = 0
     private var history: String = ""
 
-    fn deposit(var self, amount: Int): Void {
+    var fn deposit(amount: Int): Void {
       balance = balance + amount
       history = history + "deposit"
     }
 
-    fn spent(self): String {
+    fn spent(): String {
       history
     }
   }
@@ -52,7 +52,7 @@ const otherPackage = [
       label: String = ""
       private hidden: Int = 0
 
-      fn peek(self): Int {
+      fn peek(): Int {
         hidden
       }
     }
@@ -107,7 +107,7 @@ group "A `private` member" {
         use Account from "./account"
 
         extend Account {
-          fn shown(self): String {
+          fn shown(): String {
             history
           }
         }
@@ -126,7 +126,7 @@ group "A `private` member" {
   test "is invisible in an `extend` of another package" {
     const files = withOtherPackage(r"""
       extend Thing {
-        fn peeked(self): Int {
+        fn peeked(): Int {
           hidden
         }
       }
@@ -161,11 +161,11 @@ group "A `private` member" {
       type Counter {
         var value: Int = 0
 
-        private fn step(self): Int {
+        private fn step(): Int {
           value + offset
         }
 
-        private const offset: Int = 1
+        private static offset: Int = 1
       }
       """
     assert(problems(source) == ["`step` is private to `Counter`"])
@@ -178,7 +178,7 @@ group "A `private` member" {
       }
 
       type Counter {
-        private const offset: Int = 1
+        private static offset: Int = 1
       }
       """
     assert(problems(source) == ["`offset` is private to `Counter`"])
@@ -264,7 +264,7 @@ group "The constructor and `copy` (gap 24)" {
       type Email {
         private value: String
 
-        fn of(text: String): Email {
+        static fn of(text: String): Email {
           Self(text)
         }
       }
@@ -368,7 +368,7 @@ group "Patterns read fields, so `private` reaches them" {
         x: Int
         private y: Int = 0
 
-        fn sum(self): Int {
+        fn sum(): Int {
           match self {
             Point(a, b) => a + b
           }
@@ -428,7 +428,7 @@ group "What `public` promises about its types" {
       public type Report {
         private helper: Helper
 
-        fn total(self): Int {
+        fn total(): Int {
           helper.value
         }
       }

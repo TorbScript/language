@@ -52,28 +52,28 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
   parts: Int64
 
   /** How many parts one whole is: `65536`, which is what makes this Q16.16. */
-  const partsPerWhole: Int64 = 65536
+  static partsPerWhole: Int64 = 65536
 
   /** The largest value the type holds. Arithmetic on it overflows long before this. */
-  const largest: Fixed = Fixed 9223372036854775807
+  static largest: Fixed = Fixed 9223372036854775807
 
   /** The smallest value the type holds. */
-  const smallest: Fixed = Fixed(-9223372036854775807 - 1)
+  static smallest: Fixed = Fixed(-9223372036854775807 - 1)
 
   /** The smallest step between two values: `1/65536`. */
-  const step: Fixed = Fixed 1
+  static step: Fixed = Fixed 1
 
   /** The value nothing: no parts at all. */
-  const zero: Fixed = Fixed 0
+  static zero: Fixed = Fixed 0
 
   /** The whole, which is 65536 parts. */
-  const one: Fixed = Fixed 65536
+  static one: Fixed = Fixed 65536
 
   /** The ratio of a circle's circumference to its diameter, to the nearest part. */
-  const pi: Fixed = Fixed 205887
+  static pi: Fixed = Fixed 205887
 
   /** A full turn in radians, to the nearest part. */
-  const tau: Fixed = Fixed 411775
+  static tau: Fixed = Fixed 411775
 
   /**
    * The value a `Float64` is closest to, rounded to the nearest part.
@@ -88,7 +88,7 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
    * When the value is not a number, or when its magnitude is above about `140737488355327` - the overflow of the
    * multiplication by `65536`, which is an overflow like any other.
    */
-  fn approximating(value: Float64): Fixed {
+  static fn approximating(value: Float64): Fixed {
     const scaled = value * 65536.0
     match Int64.tryFrom(scaled.round()) {
       Ok(parts) => Fixed parts
@@ -97,62 +97,62 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
   }
 
   /** The value as the nearest `Float64`. Exact for every `Fixed` whose magnitude is below `2^37`. */
-  fn toFloat(self): Float64 {
+  fn toFloat(): Float64 {
     Float64.from(parts) / 65536.0
   }
 
   /** The whole part, truncated towards zero: what `Int` this value is, ignoring everything after the point. */
-  fn toInt(self): Int64 {
+  fn toInt(): Int64 {
     parts / partsPerWhole
   }
 
   /** The sum: two counts of parts added, exactly. */
-  fn add(self, other: Fixed): Fixed {
+  fn add(other: Fixed): Fixed {
     Fixed(parts + other.parts)
   }
 
   /** The difference: two counts of parts subtracted, exactly. */
-  fn subtract(self, other: Fixed): Fixed {
+  fn subtract(other: Fixed): Fixed {
     Fixed(parts - other.parts)
   }
 
   /** The product, scaled back down. Panics where the intermediate `parts * other.parts` leaves the range of an `Int`. */
-  fn multiply(self, other: Fixed): Fixed {
+  fn multiply(other: Fixed): Fixed {
     Fixed(parts * other.parts / partsPerWhole)
   }
 
   /** The quotient, truncated towards zero. Panics on a division by zero and where `parts * 65536` overflows. */
-  fn divide(self, other: Fixed): Fixed {
+  fn divide(other: Fixed): Fixed {
     Fixed(parts * partsPerWhole / other.parts)
   }
 
   /** What is left after dividing out as many of the other as fit, with the sign of this value. */
-  fn remainder(self, other: Fixed): Fixed {
+  fn remainder(other: Fixed): Fixed {
     Fixed(parts % other.parts)
   }
 
   /** The value with its sign flipped. */
-  fn negate(self): Fixed {
+  fn negate(): Fixed {
     Fixed(-parts)
   }
 
   /** The value without its sign. */
-  fn absolute(self): Fixed {
+  fn absolute(): Fixed {
     Fixed parts.absolute()
   }
 
   /** Whether the two hold the same count of parts, which is exact equality. */
-  fn equals(self, other: Fixed): Bool {
+  fn equals(other: Fixed): Bool {
     parts == other.parts
   }
 
   /** Which of the two is the smaller, as a total order with no value like a `nan` in it. */
-  fn compare(self, other: Fixed): Ordering {
+  fn compare(other: Fixed): Ordering {
     parts.compare other.parts
   }
 
   /** The count of parts itself: two values that are equal hold the same count. */
-  fn hash(self): Int {
+  fn hash(): Int {
     parts
   }
 
@@ -162,7 +162,7 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
    *
    *     print Fixed.tryFrom("0.1").expect("a tenth parses")
    */
-  fn show(self): String {
+  fn show(): String {
     const whole = parts.absolute() / partsPerWhole
     var fraction = parts.absolute() % partsPerWhole
     var digits = ""
@@ -188,7 +188,7 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
    *
    * - [NumberParseError] where the text is not a decimal, or where its whole part does not fit.
    */
-  fn tryFrom(text: String): Result<Fixed, NumberParseError> {
+  static fn tryFrom(text: String): Result<Fixed, NumberParseError> {
     const trimmed = text.trim()
     const negative = trimmed.startsWith "-"
     const unsigned = if negative { trimmed.substringAfter("-") ?? "" } else { trimmed }
@@ -216,7 +216,7 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
   }
 
   /** The non-negative square root, to the nearest part below the true one. Negative input answers zero. */
-  fn squareRoot(self): Fixed {
+  fn squareRoot(): Fixed {
     if parts <= 0 {
       return Fixed 0
     }
@@ -224,12 +224,12 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
   }
 
   /** The sine of this many radians, within about two parts of the true value. */
-  fn sine(self): Fixed {
+  fn sine(): Fixed {
     Fixed circular(parts).sine
   }
 
   /** The cosine of this many radians, within about two parts of the true value. */
-  fn cosine(self): Fixed {
+  fn cosine(): Fixed {
     Fixed circular(parts).cosine
   }
 
@@ -240,7 +240,7 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
    *
    * At a quarter turn and at three quarters, where the cosine is zero - a division by zero like any other.
    */
-  fn tangent(self): Fixed {
+  fn tangent(): Fixed {
     const turned = circular parts
     Fixed(turned.sine * partsPerWhole / turned.cosine)
   }
@@ -253,7 +253,7 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
    * Outside `[-1, 1]`, where there is no such angle. `Float64.arcSine` answers `nan` there, because that is what the
    * platform's mathematics library answers; the two implementors of [Real] differ here and `docs/LINEAR.md` records it.
    */
-  fn arcSine(self): Fixed {
+  fn arcSine(): Fixed {
     if parts.absolute() > partsPerWhole {
       panic "the arc sine of {show()} does not exist: the sine of an angle is between -1 and 1"
     }
@@ -268,34 +268,34 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
    *
    * Outside `[-1, 1]`, where there is no such angle, through [Fixed.arcSine].
    */
-  fn arcCosine(self): Fixed {
+  fn arcCosine(): Fixed {
     Fixed(102944 - arcSine().parts)
   }
 
   /** The angle in radians whose tangent this is. */
-  fn arcTangent(self): Fixed {
+  fn arcTangent(): Fixed {
     Fixed direction(partsPerWhole, parts)
   }
 
   /** The angle in radians of the point `(by, self)`, in `(-pi, pi]`. */
-  fn arcTangentDivided(self, by: Fixed): Fixed {
+  fn arcTangentDivided(by: Fixed): Fixed {
     Fixed direction(by.parts, parts)
   }
 
   /** The value rounded towards negative infinity. */
-  fn floor(self): Fixed {
+  fn floor(): Fixed {
     const left = parts % partsPerWhole
     if left == 0 || parts > 0 { Fixed(parts - left) } else { Fixed(parts - left - partsPerWhole) }
   }
 
   /** The value rounded towards positive infinity. */
-  fn ceiling(self): Fixed {
+  fn ceiling(): Fixed {
     const left = parts % partsPerWhole
     if left == 0 || parts < 0 { Fixed(parts - left) } else { Fixed(parts - left + partsPerWhole) }
   }
 
   /** The value rounded to the nearest whole number, halves away from zero. */
-  fn round(self): Fixed {
+  fn round(): Fixed {
     const half = partsPerWhole / 2
     if parts >= 0 {
       Fixed((parts + half) / partsPerWhole * partsPerWhole)
@@ -305,39 +305,39 @@ public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseErro
   }
 
   /** Half the value, rounded towards zero by the last part. */
-  fn halved(self): Fixed {
+  fn halved(): Fixed {
     Fixed(parts / 2)
   }
 
   /** The angle in radians that this many degrees is, rounded to the nearest part. */
-  fn radiansOfDegrees(self): Fixed {
+  fn radiansOfDegrees(): Fixed {
     Fixed(parts * 205887 / 180 / 65536)
   }
 
   /** The angle in degrees that this many radians is, rounded to the nearest part. */
-  fn degreesOfRadians(self): Fixed {
+  fn degreesOfRadians(): Fixed {
     Fixed(parts * 180 * 65536 / 205887)
   }
 
   /** The value one. */
-  fn unit(self): Fixed {
+  fn unit(): Fixed {
     Fixed 65536
   }
 
   /** Twice the value. */
-  fn doubled(self): Fixed {
+  fn doubled(): Fixed {
     Fixed(parts + parts)
   }
 
   /** Whether the two values are within `tolerance` of each other. The default is about `0.001`. */
-  fn isCloseTo(self, other: Fixed, tolerance: Fixed = Fixed(66)): Bool {
+  fn isCloseTo(other: Fixed, tolerance: Fixed = Fixed(66)): Bool {
     (parts - other.parts).absolute() <= tolerance.parts
   }
 }
 
 /** A whole number is exact as a `Fixed` while its magnitude stays below `2^47`; above that the multiplication panics. */
 extend Fixed with From<Int64> {
-  fn from(value: Int64): Fixed {
+  static fn from(value: Int64): Fixed {
     Fixed(value * 65536)
   }
 }

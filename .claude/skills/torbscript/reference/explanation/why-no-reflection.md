@@ -88,7 +88,7 @@ about the mechanism is special:
 type Email with TryFrom<String, String> {
   private value: String
 
-  fn tryFrom(text: String): Result<Email, String> {
+  static fn tryFrom(text: String): Result<Email, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }
@@ -97,11 +97,11 @@ type Email with TryFrom<String, String> {
 }
 
 extend Email with Encode, Decode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     encoder.string value
   }
 
-  fn decode(var decoder: Decoder): Result<Email, DecodeError> {
+  static fn decode(var decoder: Decoder): Result<Email, DecodeError> {
     const text = decoder.string()?
     Email.tryFrom(text).mapError { message => DecodeError message }
   }

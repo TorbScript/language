@@ -35,7 +35,7 @@ public type Staged<Input, Item> with Iterable<Item> {
    * and after every push, so a pipeline that ends in `taking(10)` reads eleven values from the source at most - and
    * an infinite source works.
    */
-  fn collect<Final>(self, collector: Collector<Item, Final>): Final {
+  fn collect<Final>(collector: Collector<Item, Final>): Final {
     var accumulator = stage.onto collector.start()
     if accumulator.isDone() {
       return accumulator.finish()
@@ -50,12 +50,12 @@ public type Staged<Input, Item> with Iterable<Item> {
   }
 
   /** Composes instead of stacking, so a chain of `through` calls stays one driver over one stage and stays fused. */
-  fn through<Output>(self, other: Stage<Item, Output>): Iterable<Output> {
+  fn through<Output>(other: Stage<Item, Output>): Iterable<Output> {
     source.through stage.then(other)
   }
 
   /** The queued path: pushes one source value at a time into the stage and hands out what comes back out. */
-  fn iterator(self): Iterator<Item> {
+  fn iterator(): Iterator<Item> {
     var queue: Shared<List<Item>> = Shared([])
     StagedIterator source.iterator(), stage.onto(Queueing(queue)), queue
   }
@@ -71,12 +71,12 @@ public type Queueing<Item> with Accumulator<Item, Void> {
   var box: Shared<List<Item>>
 
   /** Appends the value to the queue the driver reads from. */
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     box.update { items => items.added value }
   }
 
   /** Nothing to do: the values are already in the box. */
-  fn finish(self) {}
+  fn finish() {}
 }
 
 type StagedIterator<Input, Item> with Iterator<Item> {
@@ -86,7 +86,7 @@ type StagedIterator<Input, Item> with Iterator<Item> {
   var finished: Bool = false
 
   /** Deliver what is queued; when nothing is queued, push one more value in and look again. */
-  fn next(var self): Item? {
+  var fn next(): Item? {
     loop {
       if const Some(ready) = dequeue() {
         return Some ready
@@ -107,7 +107,7 @@ type StagedIterator<Input, Item> with Iterator<Item> {
     }
   }
 
-  fn dequeue(var self): Item? {
+  var fn dequeue(): Item? {
     var waiting = queue.value
     if waiting.isEmpty() {
       return None
@@ -117,7 +117,7 @@ type StagedIterator<Input, Item> with Iterator<Item> {
     first
   }
 
-  fn stop(var self) {
+  var fn stop() {
     pushing.finish()
     finished = true
   }

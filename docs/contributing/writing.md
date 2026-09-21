@@ -26,7 +26,7 @@ The shape of a rule, in the form every reference page uses.
 
 ```md
 3. **A `const` binding is deep.** Through a `const` binding nothing changes: no reassignment, no field assignment and no
-   `var self` method. `const` on a `List` therefore means the list never changes, not that the binding cannot be
+   `var fn` method. `const` on a `List` therefore means the list never changes, not that the binding cannot be
    reassigned.
 
    ```trb
@@ -144,7 +144,7 @@ This is the same content as a page:
 ## Rules
 
 1. **A `const` binding cannot be reassigned, and nothing below it can be changed.** `const` is deep: assignment to a
-   field and a call of a `var self` method are both errors through a `const` path.
+   field and a call of a `var fn` method are both errors through a `const` path.
 ```
 
 The first one costs a reader three sentences to reach the rule and gives a retrieval system nothing to match. It also

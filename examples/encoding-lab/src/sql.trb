@@ -31,7 +31,7 @@ public type ColumnType {
   case Varchar(length: Int)
   case Numeric(precision: Int, scale: Int)
 
-  fn sql(self): String {
+  fn sql(): String {
     match self {
       .Integer => "BIGINT"
       .Real => "DOUBLE PRECISION"
@@ -50,7 +50,7 @@ public type SqlProblem with Show, Error {
   field: String
   reason: String
 
-  fn show(self): String {
+  fn show(): String {
     "the column `{field}` {reason}"
   }
 }
@@ -61,17 +61,17 @@ public type SqlFormat {
   private(var) keys: List<String> = []
   private(var) overrides: Map<String, ColumnType> = [:]
 
-  fn table(var self, name: String) {
+  var fn table(name: String) {
     tableName = name
   }
 
   /** `primaryKey { _.orderId }` in the design. */
-  fn primaryKey(var self, field: String) {
+  var fn primaryKey(field: String) {
     keys.add field
   }
 
   /** The column type of one type, everywhere it appears: `column<Instant> Timestamp`. */
-  fn column(var self, typeName: String, kind: ColumnType) {
+  var fn column(typeName: String, kind: ColumnType) {
     overrides.set typeName, kind
   }
 }
@@ -88,7 +88,7 @@ public type Sql {
   columns: List<SqlColumn>
   keys: List<String>
 
-  fn of(
+  static fn of(
     describe: (var target: Structures) => Void,
     define: (var format: SqlFormat) => Void,
   ): Result<Sql, SqlProblem> {
@@ -108,7 +108,7 @@ public type Sql {
     Ok Sql(name, columns, format.keys)
   }
 
-  fn createTable(self): String {
+  fn createTable(): String {
     var lines: List<String> = []
     for column in columns {
       const required = if column.required { " NOT NULL" } else { "" }
@@ -127,7 +127,7 @@ public type Sql {
   }
 
   /** The row: the values in the column order, as parameters, never as text in the statement. */
-  fn insert<Value: Encode>(self, value: Value): SqlStatement {
+  fn insert<Value: Encode>(value: Value): SqlStatement {
     var target = ColumnEncoder()
     value.encode target
     const names = columns.map({ _.name }).toList()
@@ -224,71 +224,71 @@ type ColumnEncoder with Encoder {
   private var path: List<String> = []
   private var pending: String = ""
 
-  fn nothing(var self) {
+  var fn nothing() {
     put EncodedValue.Nothing
   }
 
-  fn bool(var self, value: Bool) {
+  var fn bool(value: Bool) {
     put EncodedValue.Bool(value)
   }
 
-  fn int(var self, value: Int64) {
+  var fn int(value: Int64) {
     put EncodedValue.Int(value)
   }
 
-  fn unsigned(var self, value: UInt64) {
+  var fn unsigned(value: UInt64) {
     put EncodedValue.Unsigned(value)
   }
 
-  fn float(var self, value: Float64) {
+  var fn float(value: Float64) {
     put EncodedValue.Float(value)
   }
 
-  fn string(var self, value: String) {
+  var fn string(value: String) {
     put EncodedValue.String(value)
   }
 
-  fn bytes(var self, value: List<UInt8>) {
+  var fn bytes(value: List<UInt8>) {
     put EncodedValue.Bytes(value)
   }
 
-  fn sequence(var self, length: Int?) {
+  var fn sequence(length: Int?) {
     const _length = length
     descend()
   }
 
-  fn map(var self, length: Int?) {
+  var fn map(length: Int?) {
     const _length = length
     descend()
   }
 
-  fn record(var self, typeName: String) {
+  var fn record(typeName: String) {
     const _typeName = typeName
     descend()
   }
 
-  fn variant(var self, typeName: String, name: String) {
+  var fn variant(typeName: String, name: String) {
     const _typeName = typeName
     descend()
     put EncodedValue.String(name)
   }
 
-  fn field(var self, name: String) {
+  var fn field(name: String) {
     pending = name
   }
 
-  fn finish(var self) {
+  var fn finish() {
     if !path.isEmpty() {
       path = path.removedAt(path.length() - 1)
     }
   }
 
-  private fn descend(var self) {
+  private var fn descend() {
     path.add pending
     pending = ""
   }
 
-  private fn put(var self, value: EncodedValue) {
+  private var fn put(value: EncodedValue) {
     const full = if pending.isEmpty() { path } else { path.added pending }
     const key = full.filter({ !_.isEmpty() }).toList().joined(separator: ".")
     values.set key, value

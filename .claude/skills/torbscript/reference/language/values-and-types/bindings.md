@@ -56,7 +56,7 @@ has to be one thing (see [Top-level code](../modules-and-packages/top-level-code
    ```
 
 2. **`const` is deep from the perspective of the binding.** Through a `const` binding you can neither reassign, nor
-   assign a field, nor call a method that declares `var self`. `var` means "changeable through this path".
+   assign a field, nor call a method that is a `var fn`. `var` means "changeable through this path".
 
    ```trb error
    const fixed = [1, 2]
@@ -112,7 +112,7 @@ has to be one thing (see [Top-level code](../modules-and-packages/top-level-code
    closure are scopes of their own. There is no silent shadowing anywhere in the language.
 
 8. **A change that cannot have an effect is a compile error.** A `var` that is changed and never read afterwards, and the
-   discarded result of a method that takes `self`, are both errors: with value semantics they are always mistakes rather
+   discarded result of a method that only reads its receiver, are both errors: with value semantics they are always mistakes rather
    than defensive lines. Discard on purpose with `const _ = ...`.
 
 9. **An expression statement has the type `Void` or `Never`**, unless the call has a `var` receiver or a `var` argument.
@@ -151,7 +151,7 @@ changed and then read is a legal program that does something else than was meant
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -165,7 +165,7 @@ print counters[0].count
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }

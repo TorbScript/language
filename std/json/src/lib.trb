@@ -30,7 +30,7 @@ public type JsonValue {
 
 /** A `JsonValue` describes itself to any `Encoder`, not only `Json`'s own. */
 extend JsonValue with Encode {
-  fn encode(self, var encoder: Encoder) {
+  fn encode(var encoder: Encoder) {
     match self {
       .Null => encoder.nothing()
       .Bool(value) => encoder.bool value
@@ -58,29 +58,29 @@ public type JsonError with Show, Error {
   private kind: JsonErrorKind
 
   /** The text was not well-formed JSON. */
-  fn syntax(line: Int, message: String): JsonError {
+  static fn syntax(line: Int, message: String): JsonError {
     Self kind: .Syntax(line, message)
   }
 
   /** The text was well-formed JSON, but `Decode` rejected it. */
-  fn decodeFailed(cause: DecodeError): JsonError {
+  static fn decodeFailed(cause: DecodeError): JsonError {
     Self kind: .Decode(cause)
   }
 
   /** JSON is text, and the bytes that arrived are not UTF-8 - so there was no text to parse in the first place. */
-  fn invalidText(cause: Utf8Error): JsonError {
+  static fn invalidText(cause: Utf8Error): JsonError {
     Self kind: .Text(cause)
   }
 
   /** `true` for malformed JSON text, as opposed to well-formed JSON that did not fit the target type. */
-  fn isSyntaxError(self): Bool {
+  fn isSyntaxError(): Bool {
     match kind {
       .Syntax(_, _) => true
       _ => false
     }
   }
 
-  fn show(self): String {
+  fn show(): String {
     match kind {
       .Syntax(line, message) => "line {line}: {message}"
       .Decode(cause) => "{cause}"
@@ -89,7 +89,7 @@ public type JsonError with Show, Error {
   }
 
   /** The `DecodeError` a rejected document failed on, so a report can unwind the chain down to the field. */
-  fn cause(self): Error? {
+  fn cause(): Error? {
     match kind {
       .Syntax(_, _) => None
       .Decode(problem) => Some problem
@@ -100,7 +100,7 @@ public type JsonError with Show, Error {
 
 /** What `checked()` needs to lift a broken byte sequence into the failure of a JSON stream. */
 extend JsonError with From<Utf8Error> {
-  fn from(value: Utf8Error): JsonError {
+  static fn from(value: Utf8Error): JsonError {
     JsonError.invalidText value
   }
 }
@@ -114,7 +114,7 @@ type JsonErrorKind {
 /** JSON reading and writing. A format is an implementation of `Encoder`/`Decoder` and never sees a type. */
 public native type Json {
   /** Renders any `Encode` value as JSON text. */
-  native fn encode(value: Encode): String
+  native static fn encode(value: Encode): String
 
   /**
    * Parses `text` and decodes it as `Value`. Fails on malformed JSON as well as on JSON that does not fit `Value`.
@@ -124,13 +124,13 @@ public native type Json {
    *       Fail(error) => print "Rejected: {error}"
    *     }
    */
-  native fn decode<Value: Decode>(text: String): Result<Value, JsonError>
+  native static fn decode<Value: Decode>(text: String): Result<Value, JsonError>
 
   /** Parses `text` into a `JsonValue`, without knowing its shape. */
-  native fn parse(text: String): Result<JsonValue, JsonError>
+  native static fn parse(text: String): Result<JsonValue, JsonError>
 
   /** Any `Encode` value as a `JsonValue` tree, e.g. to diff two versions of it structurally. */
-  native fn value<Value: Encode>(value: Value): JsonValue
+  native static fn value<Value: Encode>(value: Value): JsonValue
 }
 
 // --- JSON as a `Format`: the streaming side -------------------------------------------------------------------------
@@ -141,11 +141,11 @@ public native type Json {
  * is ordinary code, and a native would have to be rebuilt by every back end (CONTRIBUTING, "Natives stay few").
  */
 extend Json with Format<JsonError> {
-  fn encodeAll(value: Encode): Bytes {
+  static fn encodeAll(value: Encode): Bytes {
     Json.encode(value).bytes().toList()
   }
 
-  fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, JsonError> {
+  static fn decodeAll<Value: Decode>(bytes: Bytes): Result<Value, JsonError> {
     const text = textOf(bytes).mapError(JsonError.invalidText)?
     Json.decode<Value>(text)
   }
@@ -157,7 +157,7 @@ extend Json with Format<JsonError> {
    *
    * Memory is one element - what has arrived of the one being read, and nothing else.
    */
-  fn items<Item: Decode>(): Stage<Bytes, Result<Item, JsonError>> {
+  static fn items<Item: Decode>(): Stage<Bytes, Result<Item, JsonError>> {
     JsonItems<Item>()
   }
 
@@ -165,14 +165,13 @@ extend Json with Format<JsonError> {
    * Items to bytes, one value per line (NDJSON). Not an array: a stream has no end at which a closing bracket could be
    * written, and a reader would have to hold the whole thing to find one.
    */
-  fn encoded<Item: Encode>(): Stage<Item, Bytes> {
+  static fn encoded<Item: Encode>(): Stage<Item, Bytes> {
     mapping { "{Json.encode(_)}\n".bytes().toList() }
   }
 }
 
 type JsonItems<Item: Decode> with Stage<Bytes, Result<Item, JsonError>> {
   fn onto<Final>(
-    self,
     downstream: Accumulator<Result<Item, JsonError>, Final>,
   ): Accumulator<Bytes, Final> {
     JsonFramer downstream
@@ -197,7 +196,7 @@ type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
   var opened: Bool = false
   var atStart: Bool = true
 
-  fn add(var self, value: Bytes) {
+  var fn add(value: Bytes) {
     for byte in value {
       if downstream.isDone() {
         return
@@ -207,7 +206,7 @@ type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
   }
 
   /** What is left at the end is one last element without a separator behind it: NDJSON without a final newline. */
-  fn finish(self): Final {
+  fn finish(): Final {
     var tail = self
     if tail.started && tail.depth == 0 {
       tail.emit()
@@ -216,11 +215,11 @@ type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
     below.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     downstream.isDone()
   }
 
-  private fn step(var self, byte: UInt8) {
+  private var fn step(byte: UInt8) {
     if !started {
       begin byte
       return
@@ -255,7 +254,7 @@ type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
     }
   }
 
-  private fn stepInString(var self, byte: UInt8) {
+  private var fn stepInString(byte: UInt8) {
     if escaped {
       escaped = false
       return
@@ -273,7 +272,7 @@ type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
   }
 
   /** Between elements: whitespace and commas are nothing, and the very first `[` of the stream is the array itself. */
-  private fn begin(var self, byte: UInt8) {
+  private var fn begin(byte: UInt8) {
     if isWhitespaceByte(byte) || byte == commaByte {
       return
     }
@@ -302,7 +301,7 @@ type JsonFramer<Item: Decode, Final> with Accumulator<Bytes, Final> {
     }
   }
 
-  private fn emit(var self) {
+  private var fn emit() {
     const text = textOf(element).mapError(JsonError.invalidText)
     const decoded = text.flatMap { Json.decode<Item>(_) }
     element = []

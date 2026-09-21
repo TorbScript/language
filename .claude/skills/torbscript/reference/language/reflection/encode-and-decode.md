@@ -36,7 +36,7 @@ print text
 ## Syntax
 
 ```text
-trait Encode { fn encode(self, var encoder: Encoder) }
+trait Encode { fn encode(var encoder: Encoder) }
 trait Decode { fn decode(var decoder: Decoder): Result<Self, DecodeError> }
 ```
 
@@ -59,7 +59,7 @@ trait Decode { fn decode(var decoder: Decoder): Result<Self, DecodeError> }
    type Email with TryFrom<String, ParseError> {
      private value: String
 
-     fn tryFrom(text: String): Result<Email, ParseError> {
+     static fn tryFrom(text: String): Result<Email, ParseError> {
        if !text.contains("@") {
          return Fail ParseError("'{text}' is not an email address")
        }
@@ -68,11 +68,11 @@ trait Decode { fn decode(var decoder: Decoder): Result<Self, DecodeError> }
    }
 
    extend Email with Encode, Decode {
-     fn encode(self, var encoder: Encoder) {
+     fn encode(var encoder: Encoder) {
        encoder.string value
      }
 
-     fn decode(var decoder: Decoder): Result<Email, DecodeError> {
+     static fn decode(var decoder: Decoder): Result<Email, DecodeError> {
        const text = decoder.string()?
        Email.tryFrom(text).mapError { DecodeError _.message }
      }

@@ -33,7 +33,7 @@ public type LoggingConfig {
   var level: LogLevel = .Info
   private(var) redacted: Set<String> = Set.of()              // Readable for the application, only `redact` writes
 
-  fn redact(var self, ...keys: String) {
+  var fn redact(...keys: String) {
     for key in keys {
       redacted.add key
     }
@@ -55,20 +55,20 @@ public type ServerConfig {
   private secrets: Map<String, String> = [:]
 
   /** The host application decides which secrets a config script can see. */
-  fn withSecrets(secrets: Map<String, String>): ServerConfig {
+  static fn withSecrets(secrets: Map<String, String>): ServerConfig {
     Self secrets: secrets
   }
 
-  fn route(var self, path: String, to: String) {
+  var fn route(path: String, to: String) {
     routes.add Route(path, handler: to)
   }
 
-  fn secret(self, key: String): String {
+  fn secret(key: String): String {
     secrets.get(key) ?? ""
   }
 
 
-  fn validate(self): Result<ServerConfig, ConfigError> {
+  fn validate(): Result<ServerConfig, ConfigError> {
     if database.url.isBlank() {
       return Fail ConfigError("database.url is required")
     }

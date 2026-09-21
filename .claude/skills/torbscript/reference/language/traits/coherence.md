@@ -21,7 +21,7 @@ looking at the others.
 
 ```trb check
 trait Loud {
-  fn shout(self): String
+  fn shout(): String
 }
 
 type Robot {
@@ -29,7 +29,7 @@ type Robot {
 }
 
 extend Robot with Loud {
-  fn shout(self): String {
+  fn shout(): String {
     "{name.toUpperCase()}!"
   }
 }
@@ -63,7 +63,7 @@ extend<Source, Target> Source with <Trait><Target> where <bounds> { ... }   a bl
    }
 
    extend Float64 with From<Celsius> {
-     fn from(value: Celsius): Float64 {
+     static fn from(value: Celsius): Float64 {
        value.degrees
      }
    }
@@ -81,7 +81,7 @@ extend<Source, Target> Source with <Trait><Target> where <bounds> { ... }   a bl
 
    ```trb error
    extend UInt8 with Negate {
-     fn negate(self): UInt8 {
+     fn negate(): UInt8 {
        self
      }
    }
@@ -92,7 +92,7 @@ extend<Source, Target> Source with <Trait><Target> where <bounds> { ... }   a bl
 
    ```trb error
    extend Float64 with From<Int8> {
-     fn from(value: Int8): Float64 {
+     static fn from(value: Int8): Float64 {
        1.0
      }
    }
@@ -104,17 +104,17 @@ extend<Source, Target> Source with <Trait><Target> where <bounds> { ... }   a bl
 
    ```trb error
    trait Loud {
-     fn shout(self): String
+     fn shout(): String
    }
 
    type Robot with Loud {
-     fn shout(self): String {
+     fn shout(): String {
        "BEEP"
      }
    }
 
    extend Robot with Loud {
-     fn shout(self): String {
+     fn shout(): String {
        "BOOP"
      }
    }
@@ -141,7 +141,7 @@ extend<Source, Target> Source with <Trait><Target> where <bounds> { ... }   a bl
    }
 
    extend Celsius with Into<Float64> {
-     fn into(self): Float64 {
+     fn into(): Float64 {
        degrees
      }
    }
@@ -165,7 +165,7 @@ write, never what the program means.
 
 ```trb check
 trait Loud {
-  fn shout(self): String
+  fn shout(): String
 }
 
 type Robot {
@@ -173,7 +173,7 @@ type Robot {
 }
 
 extend Robot with Loud {
-  fn shout(self): String {
+  fn shout(): String {
     "{name.toUpperCase()}!"
   }
 }
@@ -183,7 +183,7 @@ print Robot("wall-e").shout()
 
 ```trb error
 trait Loud {
-  fn shout(self): String
+  fn shout(): String
 }
 
 type Robot {
@@ -191,13 +191,13 @@ type Robot {
 }
 
 extend Robot with Loud {
-  fn shout(self): String {
+  fn shout(): String {
     "{name.toUpperCase()}!"
   }
 }
 
 extend Robot with Loud {
-  fn shout(self): String {
+  fn shout(): String {
     "BOOP"
   }
 }

@@ -48,13 +48,13 @@ print total
 
 ```trb fragment
 public trait Iterator<Item> {
-  fn next(var self): Item?
+  var fn next(): Item?
 }
 
 public trait Length {
-  fn length(self): Int
-  fn isEmpty(self): Bool
-  fn isNotEmpty(self): Bool
+  fn length(): Int
+  fn isEmpty(): Bool
+  fn isNotEmpty(): Bool
 }
 ```
 
@@ -65,33 +65,33 @@ just a count, shared by every collection and by `Range<Int>`.
 
 ```trb fragment
 public trait Iterable<Item> {
-  fn iterator(self): Iterator<Item>
-  fn map<Output>(self, transform: (value: Item) => Output): Iterable<Output>
-  fn filter(self, predicate: (value: Item) => Bool): Iterable<Item>
-  fn flatMap<Output>(self, transform: (value: Item) => Iterable<Output>): Iterable<Output>
-  fn filterMap<Output>(self, transform: (value: Item) => Output?): Iterable<Output>
-  fn mapWhile<Output>(self, transform: (value: Item) => Output?): Iterable<Output>
-  fn take(self, amount: Int): Iterable<Item>
-  fn skip(self, amount: Int): Iterable<Item>
-  fn takeWhile(self, predicate: (value: Item) => Bool): Iterable<Item>
-  fn zip<Output>(self, other: Iterable<Output>): Iterable<(Item, Output)>
-  fn indexed(self): Iterable<(index: Int, item: Item)>
-  fn sorted<Key: Compare>(self, by: (value: Item) => Key): Iterable<Item>
-  fn through<Output>(self, stage: Stage<Item, Output>): Iterable<Output>
-  fn collect<Output>(self, collector: Collector<Item, Output>): Output
-  fn to<Target: From<Iterable<Item>>>(self): Target
-  fn toList(self): List<Item>
-  fn toSet(self): Set<Item> where Item: Hash
-  fn joined(self, separator: String = ""): String where Item: Show
-  fn forEach(self, action: (value: Item) => Void)
-  fn fold<State>(self, initial: State, combine: (State, Item) => State): State
-  fn find(self, predicate: (value: Item) => Bool): Item?
-  fn first(self): Item?
-  fn any(self, predicate: (value: Item) => Bool): Bool
-  fn all(self, predicate: (value: Item) => Bool): Bool
-  fn count(self): Int
-  fn sum(self): Item where Item: Add & From<Int>
-  fn groupBy<Key: Hash>(self, key: (value: Item) => Key): Map<Key, List<Item>>
+  fn iterator(): Iterator<Item>
+  fn map<Output>(transform: (value: Item) => Output): Iterable<Output>
+  fn filter(predicate: (value: Item) => Bool): Iterable<Item>
+  fn flatMap<Output>(transform: (value: Item) => Iterable<Output>): Iterable<Output>
+  fn filterMap<Output>(transform: (value: Item) => Output?): Iterable<Output>
+  fn mapWhile<Output>(transform: (value: Item) => Output?): Iterable<Output>
+  fn take(amount: Int): Iterable<Item>
+  fn skip(amount: Int): Iterable<Item>
+  fn takeWhile(predicate: (value: Item) => Bool): Iterable<Item>
+  fn zip<Output>(other: Iterable<Output>): Iterable<(Item, Output)>
+  fn indexed(): Iterable<(index: Int, item: Item)>
+  fn sorted<Key: Compare>(by: (value: Item) => Key): Iterable<Item>
+  fn through<Output>(stage: Stage<Item, Output>): Iterable<Output>
+  fn collect<Output>(collector: Collector<Item, Output>): Output
+  fn to<Target: From<Iterable<Item>>>(): Target
+  fn toList(): List<Item>
+  fn toSet(): Set<Item> where Item: Hash
+  fn joined(separator: String = ""): String where Item: Show
+  fn forEach(action: (value: Item) => Void)
+  fn fold<State>(initial: State, combine: (State, Item) => State): State
+  fn find(predicate: (value: Item) => Bool): Item?
+  fn first(): Item?
+  fn any(predicate: (value: Item) => Bool): Bool
+  fn all(predicate: (value: Item) => Bool): Bool
+  fn count(): Int
+  fn sum(): Item where Item: Add & From<Int>
+  fn groupBy<Key: Hash>(key: (value: Item) => Key): Map<Key, List<Item>>
 }
 ```
 
@@ -106,8 +106,8 @@ is iterated, unlike the rest.
 
 ```trb fragment
 public trait Stage<Input, Output> {
-  fn onto<Final>(self, downstream: Accumulator<Output, Final>): Accumulator<Input, Final>
-  fn then<Final>(self, other: Stage<Output, Final>): Stage<Input, Final>
+  fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final>
+  fn then<Final>(other: Stage<Output, Final>): Stage<Input, Final>
 }
 ```
 
@@ -124,13 +124,13 @@ generic member reached through a trait-typed value (`onto<Final>`); until then t
 
 ```trb fragment
 public trait Accumulator<Item, Output> {
-  fn add(var self, value: Item)
-  fn finish(self): Output
-  fn isDone(self): Bool
+  var fn add(value: Item)
+  fn finish(): Output
+  fn isDone(): Bool
 }
 
 public trait Collector<Item, Output> {
-  fn start(self): Accumulator<Item, Output>
+  fn start(): Accumulator<Item, Output>
 }
 ```
 

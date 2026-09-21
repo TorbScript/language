@@ -55,12 +55,12 @@ type Local {
 type Scope {
   locals: List<Local>
 
-  fn adding(self, name: String, symbol: SymbolId): Scope {
+  fn adding(name: String, symbol: SymbolId): Scope {
     Scope locals.added(Local(name, symbol))
   }
 
   /** The innermost wins: a generic parameter of a method shadows one of its type. */
-  fn find(self, name: String): SymbolId? {
+  fn find(name: String): SymbolId? {
     var index = locals.length() - 1
     while index >= 0 {
       if locals[index].name == name {
@@ -80,21 +80,21 @@ type Walk {
   var names: Map<Span, SymbolId> = [:]
   var diagnostics: List<Diagnostic> = []
 
-  fn fileNames(self): Map<String, SymbolId> {
+  fn fileNames(): Map<String, SymbolId> {
     program.scopes[module.value].names
   }
 
-  fn define(var self, name: Name, kind: SymbolKind): SymbolId {
+  var fn define(name: Name, kind: SymbolKind): SymbolId {
     const symbol = symbols.add Symbol(name.text, kind, false, Some(module), name.span)
     names.set name.span, symbol
     symbol
   }
 
-  fn record(var self, at: Span, symbol: SymbolId) {
+  var fn record(at: Span, symbol: SymbolId) {
     names.set at, symbol
   }
 
-  fn error(var self, problem: Diagnostic) {
+  var fn error(problem: Diagnostic) {
     diagnostics.add problem
   }
 }

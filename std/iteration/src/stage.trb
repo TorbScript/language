@@ -41,10 +41,10 @@ public trait Stage<Input, Output> {
    * `downstream`. The wrapper has to pass `finish()` on exactly once, and `isDone()` from `downstream` upwards, so
    * that `taking` and `first` end the pipeline instead of pulling into nothing.
    */
-  fn onto<Final>(self, downstream: Accumulator<Output, Final>): Accumulator<Input, Final>
+  fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final>
 
   /** `filtering { ... }.then(mapping { ... })`: two stages as one, which is what makes a pipeline a value. */
-  fn then<Final>(self, other: Stage<Output, Final>): Stage<Input, Final> {
+  fn then<Final>(other: Stage<Output, Final>): Stage<Input, Final> {
     Composition self, other
   }
 }
@@ -54,7 +54,7 @@ type Composition<Input, Middle, Output> with Stage<Input, Output> {
   second: Stage<Middle, Output>
 
   /** Right to left: the value walks through `first` and then through `second`, so `second` wraps the target. */
-  fn onto<Final>(self, downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
+  fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
     first.onto second.onto(downstream)
   }
 }
@@ -124,7 +124,7 @@ public fn chunking<Item>(size: Int): Stage<Item, List<Item>> {
 type Mapping<Input, Output> with Stage<Input, Output> {
   transform: (value: Input) => Output
 
-  fn onto<Final>(self, downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
+  fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
     MappingAccumulator transform, downstream
   }
 }
@@ -133,15 +133,15 @@ type MappingAccumulator<Input, Output, Final> with Accumulator<Input, Final> {
   transform: (value: Input) => Output
   var downstream: Accumulator<Output, Final>
 
-  fn add(var self, value: Input) {
+  var fn add(value: Input) {
     downstream.add transform(value)
   }
 
-  fn finish(self): Final {
+  fn finish(): Final {
     downstream.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     downstream.isDone()
   }
 }
@@ -151,7 +151,7 @@ type MappingAccumulator<Input, Output, Final> with Accumulator<Input, Final> {
 type Filtering<Item> with Stage<Item, Item> {
   predicate: (value: Item) => Bool
 
-  fn onto<Final>(self, downstream: Accumulator<Item, Final>): Accumulator<Item, Final> {
+  fn onto<Final>(downstream: Accumulator<Item, Final>): Accumulator<Item, Final> {
     FilteringAccumulator predicate, downstream
   }
 }
@@ -160,17 +160,17 @@ type FilteringAccumulator<Item, Final> with Accumulator<Item, Final> {
   predicate: (value: Item) => Bool
   var downstream: Accumulator<Item, Final>
 
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     if predicate(value) {
       downstream.add value
     }
   }
 
-  fn finish(self): Final {
+  fn finish(): Final {
     downstream.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     downstream.isDone()
   }
 }
@@ -180,7 +180,7 @@ type FilteringAccumulator<Item, Final> with Accumulator<Item, Final> {
 type FilterMapping<Input, Output> with Stage<Input, Output> {
   transform: (value: Input) => Output?
 
-  fn onto<Final>(self, downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
+  fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
     FilterMappingAccumulator transform, downstream
   }
 }
@@ -189,17 +189,17 @@ type FilterMappingAccumulator<Input, Output, Final> with Accumulator<Input, Fina
   transform: (value: Input) => Output?
   var downstream: Accumulator<Output, Final>
 
-  fn add(var self, value: Input) {
+  var fn add(value: Input) {
     if const Some(result) = transform(value) {
       downstream.add result
     }
   }
 
-  fn finish(self): Final {
+  fn finish(): Final {
     downstream.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     downstream.isDone()
   }
 }
@@ -207,7 +207,7 @@ type FilterMappingAccumulator<Input, Output, Final> with Accumulator<Input, Fina
 type MappingWhile<Input, Output> with Stage<Input, Output> {
   transform: (value: Input) => Output?
 
-  fn onto<Final>(self, downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
+  fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
     MappingWhileAccumulator transform, downstream
   }
 }
@@ -217,7 +217,7 @@ type MappingWhileAccumulator<Input, Output, Final> with Accumulator<Input, Final
   var downstream: Accumulator<Output, Final>
   var stopped: Bool = false
 
-  fn add(var self, value: Input) {
+  var fn add(value: Input) {
     match transform(value) {
       Some(result) => downstream.add result
       None => {
@@ -226,11 +226,11 @@ type MappingWhileAccumulator<Input, Output, Final> with Accumulator<Input, Final
     }
   }
 
-  fn finish(self): Final {
+  fn finish(): Final {
     downstream.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     stopped || downstream.isDone()
   }
 }
@@ -240,7 +240,7 @@ type MappingWhileAccumulator<Input, Output, Final> with Accumulator<Input, Final
 type FlatMapping<Input, Output> with Stage<Input, Output> {
   transform: (value: Input) => Iterable<Output>
 
-  fn onto<Final>(self, downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
+  fn onto<Final>(downstream: Accumulator<Output, Final>): Accumulator<Input, Final> {
     FlatMappingAccumulator transform, downstream
   }
 }
@@ -250,7 +250,7 @@ type FlatMappingAccumulator<Input, Output, Final> with Accumulator<Input, Final>
   var downstream: Accumulator<Output, Final>
 
   /** The one stage that answers many values for one, so it is also the one that has to watch `isDone` itself. */
-  fn add(var self, value: Input) {
+  var fn add(value: Input) {
     for inner in transform(value) {
       if downstream.isDone() {
         return
@@ -259,11 +259,11 @@ type FlatMappingAccumulator<Input, Output, Final> with Accumulator<Input, Final>
     }
   }
 
-  fn finish(self): Final {
+  fn finish(): Final {
     downstream.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     downstream.isDone()
   }
 }
@@ -273,7 +273,7 @@ type FlatMappingAccumulator<Input, Output, Final> with Accumulator<Input, Final>
 type Taking<Item> with Stage<Item, Item> {
   amount: Int
 
-  fn onto<Final>(self, downstream: Accumulator<Item, Final>): Accumulator<Item, Final> {
+  fn onto<Final>(downstream: Accumulator<Item, Final>): Accumulator<Item, Final> {
     TakingAccumulator downstream, remaining: amount
   }
 }
@@ -282,7 +282,7 @@ type TakingAccumulator<Item, Final> with Accumulator<Item, Final> {
   var downstream: Accumulator<Item, Final>
   var remaining: Int
 
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     if remaining <= 0 {
       return
     }
@@ -290,12 +290,12 @@ type TakingAccumulator<Item, Final> with Accumulator<Item, Final> {
     downstream.add value
   }
 
-  fn finish(self): Final {
+  fn finish(): Final {
     downstream.finish()
   }
 
   /** Done at zero, which is what keeps a driver from asking the source for the value behind the last one. */
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     remaining <= 0 || downstream.isDone()
   }
 }
@@ -303,7 +303,7 @@ type TakingAccumulator<Item, Final> with Accumulator<Item, Final> {
 type TakingWhile<Item> with Stage<Item, Item> {
   predicate: (value: Item) => Bool
 
-  fn onto<Final>(self, downstream: Accumulator<Item, Final>): Accumulator<Item, Final> {
+  fn onto<Final>(downstream: Accumulator<Item, Final>): Accumulator<Item, Final> {
     TakingWhileAccumulator predicate, downstream
   }
 }
@@ -313,7 +313,7 @@ type TakingWhileAccumulator<Item, Final> with Accumulator<Item, Final> {
   var downstream: Accumulator<Item, Final>
   var stopped: Bool = false
 
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     if predicate(value) {
       downstream.add value
       return
@@ -321,11 +321,11 @@ type TakingWhileAccumulator<Item, Final> with Accumulator<Item, Final> {
     stopped = true
   }
 
-  fn finish(self): Final {
+  fn finish(): Final {
     downstream.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     stopped || downstream.isDone()
   }
 }
@@ -333,7 +333,7 @@ type TakingWhileAccumulator<Item, Final> with Accumulator<Item, Final> {
 type Skipping<Item> with Stage<Item, Item> {
   amount: Int
 
-  fn onto<Final>(self, downstream: Accumulator<Item, Final>): Accumulator<Item, Final> {
+  fn onto<Final>(downstream: Accumulator<Item, Final>): Accumulator<Item, Final> {
     SkippingAccumulator downstream, remaining: amount
   }
 }
@@ -342,7 +342,7 @@ type SkippingAccumulator<Item, Final> with Accumulator<Item, Final> {
   var downstream: Accumulator<Item, Final>
   var remaining: Int
 
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     if remaining > 0 {
       remaining = remaining - 1
       return
@@ -350,11 +350,11 @@ type SkippingAccumulator<Item, Final> with Accumulator<Item, Final> {
     downstream.add value
   }
 
-  fn finish(self): Final {
+  fn finish(): Final {
     downstream.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     downstream.isDone()
   }
 }
@@ -362,7 +362,7 @@ type SkippingAccumulator<Item, Final> with Accumulator<Item, Final> {
 // --- indexing, chunking ---------------------------------------------------------------------------------------------
 
 type Indexing<Item> with Stage<Item, (Int, Item)> {
-  fn onto<Final>(self, downstream: Accumulator<(Int, Item), Final>): Accumulator<Item, Final> {
+  fn onto<Final>(downstream: Accumulator<(Int, Item), Final>): Accumulator<Item, Final> {
     IndexingAccumulator downstream
   }
 }
@@ -371,17 +371,17 @@ type IndexingAccumulator<Item, Final> with Accumulator<Item, Final> {
   var downstream: Accumulator<(Int, Item), Final>
   var index: Int = 0
 
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     const at = index
     index = index + 1
     downstream.add((at, value))
   }
 
-  fn finish(self): Final {
+  fn finish(): Final {
     downstream.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     downstream.isDone()
   }
 }
@@ -389,7 +389,7 @@ type IndexingAccumulator<Item, Final> with Accumulator<Item, Final> {
 type Chunking<Item> with Stage<Item, List<Item>> {
   size: Int
 
-  fn onto<Final>(self, downstream: Accumulator<List<Item>, Final>): Accumulator<Item, Final> {
+  fn onto<Final>(downstream: Accumulator<List<Item>, Final>): Accumulator<Item, Final> {
     ChunkingAccumulator downstream, size
   }
 }
@@ -400,7 +400,7 @@ type ChunkingAccumulator<Item, Final> with Accumulator<Item, Final> {
   size: Int
   var group: List<Item> = []
 
-  fn add(var self, value: Item) {
+  var fn add(value: Item) {
     group.add value
     if group.length() >= size.max(1) {
       const full = group
@@ -409,7 +409,7 @@ type ChunkingAccumulator<Item, Final> with Accumulator<Item, Final> {
     }
   }
 
-  fn finish(self): Final {
+  fn finish(): Final {
     var tail = downstream
     if !group.isEmpty() {
       tail.add group
@@ -417,7 +417,7 @@ type ChunkingAccumulator<Item, Final> with Accumulator<Item, Final> {
     tail.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     downstream.isDone()
   }
 }

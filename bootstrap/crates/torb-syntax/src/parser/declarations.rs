@@ -164,13 +164,32 @@ impl Parser<'_> {
         let doc = self.take_doc();
         let is_variadic = self.eat(TokenKind::Ellipsis);
         let is_var = self.eat_keyword(Keyword::Var);
-        let name = if self.at_keyword(Keyword::SelfValue) { self.name_or_keyword() } else { self.name() };
+        // A method does not list its receiver: the parameter list is what the caller writes. `self` still stands in a
+        // function *type* (`(var self: Config) => Void`), which is parsed in `types.rs` and never reaches here.
+        if self.at_keyword(Keyword::SelfValue) {
+            return self.written_receiver(doc, is_var, is_variadic);
+        }
+        let name = self.name();
         let annotation = self.eat(TokenKind::Colon).then(|| self.type_reference());
-        if annotation.is_none() && name.text != "self" && !name.text.is_empty() {
+        if annotation.is_none() && !name.text.is_empty() {
             self.error(format!("The parameter `{}` needs a type", name.text), name.span);
         }
         let default = self.eat(TokenKind::Equal).then(|| self.expression());
         Parameter { doc, name, is_var, is_variadic, annotation, default }
+    }
+
+    /// `fn area(self)` and `fn translate(var self, ...)`: the two spellings the language traded for `fn area()` and
+    /// `var fn translate(...)`, each with the line it is written as now.
+    fn written_receiver(&mut self, doc: Option<String>, is_var: bool, is_variadic: bool) -> Parameter {
+        let written = self.name_or_keyword();
+        let note = match is_var {
+            true => "Write `var fn name(...)`: `var` says the method may change its receiver",
+            false => "Write `fn name(...)`: what stands in the parentheses is what the caller writes",
+        };
+        self.error_with_note("A method does not list `self`", note, written.span);
+        let annotation = self.eat(TokenKind::Colon).then(|| self.type_reference());
+        // An empty name is the parser's placeholder: the member keeps the receiver it was given, not this one
+        Parameter { doc, name: Name { text: String::new(), span: written.span }, is_var, is_variadic, annotation, default: None }
     }
 
     /// `<Key: Hash & Equals, Value = Self>`
@@ -269,7 +288,7 @@ impl Parser<'_> {
         }
         let traits = self.delegated_trait_list();
         let where_clauses = self.where_clauses();
-        let members = self.members();
+        let members = self.members(true);
         DeclarationKind::Type(TypeDeclaration { name, generics, traits, where_clauses, members })
     }
 
@@ -278,7 +297,7 @@ impl Parser<'_> {
         let name = self.name();
         let generics = self.generic_parameters();
         let supertraits = self.trait_list();
-        let members = self.members();
+        let members = self.members(true);
         DeclarationKind::Trait(TraitDeclaration { name, generics, supertraits, members })
     }
 
@@ -288,18 +307,19 @@ impl Parser<'_> {
         let target = self.type_reference();
         let traits = self.trait_list();
         let where_clauses = self.where_clauses();
-        let members = self.members();
+        let members = self.members(true);
         DeclarationKind::Extend(ExtendDeclaration { generics, target, traits, where_clauses, members })
     }
 
     fn foreign_declaration(&mut self) -> DeclarationKind {
         self.bump();
         let library = self.plain_text("the name of a library");
-        DeclarationKind::Foreign(ForeignDeclaration { library, members: self.members() })
+        DeclarationKind::Foreign(ForeignDeclaration { library, members: self.members(false) })
     }
 
-    /// `{ ... }` of a type, trait or extension. A missing body is an empty one (`native type Bool`).
-    fn members(&mut self) -> Vec<Member> {
+    /// `{ ... }` of a type, trait or extension. A missing body is an empty one (`native type Bool`). `receiver` is
+    /// false for a `foreign` block: what it holds are free functions of a C library, with no type to belong to.
+    fn members(&mut self, receiver: bool) -> Vec<Member> {
         let mut members = Vec::new();
         // The body may start on its own line, after a long `with ...` or `where ...`
         if self.at(TokenKind::Newline) && *self.kind_at(1) == TokenKind::BraceOpen {
@@ -314,7 +334,7 @@ impl Parser<'_> {
                 break;
             }
             let before = self.position;
-            members.push(self.member());
+            members.push(self.member(receiver));
             if !matches!(self.kind(), TokenKind::Newline | TokenKind::BraceClose | TokenKind::EndOfFile) {
                 self.error_here(format!("Expected the end of the member, found {}", self.kind().describe()));
                 self.recover_to_line_end();
@@ -327,13 +347,18 @@ impl Parser<'_> {
         members
     }
 
-    fn member(&mut self) -> Member {
+    fn member(&mut self, receiver: bool) -> Member {
         let doc = self.take_doc();
         let start = self.span();
         let modifiers = self.modifiers();
         let kind = match self.kind() {
-            TokenKind::Keyword(Keyword::Fn) => MemberKind::Function(self.function()),
-            TokenKind::Keyword(Keyword::Const) => MemberKind::Constant(self.binding()),
+            TokenKind::Keyword(Keyword::Static) if receiver => self.static_member(),
+            TokenKind::Keyword(Keyword::Fn) => MemberKind::Function(self.method(receiver, false)),
+            TokenKind::Keyword(Keyword::Var) if *self.kind_at(1) == TokenKind::Keyword(Keyword::Fn) && receiver => {
+                self.bump();
+                MemberKind::Function(self.method(true, true))
+            }
+            TokenKind::Keyword(Keyword::Const) => self.constant_member(),
             TokenKind::Keyword(Keyword::Case) => {
                 self.bump();
                 let name = self.name();
@@ -350,6 +375,69 @@ impl Parser<'_> {
             }
         };
         Member { doc, modifiers, kind, span: start.to(self.previous_span()) }
+    }
+
+    /// `fn area(): Int` and `var fn translate(deltaX: Int)`: the receiver is not written, so it is put back here. Its
+    /// span is the name of the function, which is where a message about the receiver has to point.
+    fn method(&mut self, receiver: bool, is_var: bool) -> FunctionDeclaration {
+        let mut function = self.function();
+        if !receiver {
+            return function;
+        }
+        let name = Name { text: "self".to_string(), span: function.name.span };
+        function.parameters.insert(0, Parameter { doc: None, name, is_var, is_variadic: false, annotation: None, default: None });
+        function
+    }
+
+    /// `static origin = Point(0, 0)`, `static fn square(size: Int): Self`. `const` is what a member is without a word
+    /// of its own, so `static const origin = ...` is the same thing written out.
+    fn static_member(&mut self) -> MemberKind {
+        let keyword = self.span();
+        self.bump();
+        if self.at_keyword(Keyword::Var) {
+            let span = keyword.to(self.span());
+            self.bump();
+            self.error_with_note(
+                format!("`{} var` does not exist", crate::token::STATIC),
+                "A type has no mutable state: what belongs to the type is a constant of it",
+                span,
+            );
+        } else {
+            self.eat_keyword(Keyword::Const);
+        }
+        if self.at(TokenKind::Keyword(Keyword::Fn)) {
+            return MemberKind::Function(self.function());
+        }
+        let binding = self.binding_body(None, false);
+        // `static pi: Self` without a value: a trait that requires a constant is not in the language yet
+        if matches!(binding.value.kind, ExpressionKind::Error) && binding.annotation.is_some() {
+            self.error_with_note(
+                "A constant of the type needs a value",
+                "A trait cannot require one without a value yet: declare it in every implementation",
+                binding.pattern.span,
+            );
+        }
+        MemberKind::Constant(binding)
+    }
+
+    /// `const x: Int` is the long way to write the field `x: Int`. Without a type it names neither reading, and the
+    /// message offers both.
+    fn constant_member(&mut self) -> MemberKind {
+        let keyword = self.span();
+        self.bump();
+        if *self.kind_at(1) != TokenKind::Colon {
+            let name = self.name();
+            let span = keyword.to(name.span);
+            self.error_with_note(
+                format!("`{}` is neither a field nor a constant of the type", name.text),
+                format!("A field is `{0}: Type`, a constant of the type is `{1} {0} = ...`", name.text, crate::token::STATIC),
+                span,
+            );
+            let annotation = TypeReference { kind: TypeKind::Error, span: name.span };
+            let default = self.eat(TokenKind::Equal).then(|| self.with_trailing_closures(true, Self::command_expression));
+            return MemberKind::Field(Field { doc: None, name, is_var: false, annotation, default });
+        }
+        MemberKind::Field(self.field(false))
     }
 
     fn field(&mut self, is_var: bool) -> Field {

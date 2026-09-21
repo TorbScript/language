@@ -33,7 +33,7 @@ decides this on every file and there is no option to turn it around.
 type Email with TryFrom<String, String> {
   private value: String
 
-  fn tryFrom(text: String): Result<Email, String> {
+  static fn tryFrom(text: String): Result<Email, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }

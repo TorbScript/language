@@ -10,19 +10,19 @@ type Quoted {
   tree: ExpressionNode
   captures: List<Encode>
 
-  fn of<Row>(expression: Expression<Row>): Quoted {
+  static fn of<Row>(expression: Expression<Row>): Quoted {
     Quoted expression.tree, expression.captures()
   }
 
   /** `{ _.age >= 18 }` arrives as a `Lambda` node, the translator wants its body. */
-  fn body(self): ExpressionNode {
+  fn body(): ExpressionNode {
     match tree {
       .Lambda(_, body, _) => body
       other => other
     }
   }
 
-  fn toSql(self): Result<Fragment, QueryError> {
+  fn toSql(): Result<Fragment, QueryError> {
     translate body(), captures
   }
 }
@@ -37,19 +37,19 @@ public type Query<Row> {
   private ordering: List<Quoted> = []
   private limit: Int? = None
 
-  fn filter(self, predicate: Expression<(row: Row) => Bool>): Query<Row> {
+  fn filter(predicate: Expression<(row: Row) => Bool>): Query<Row> {
     copy conditions: conditions.added(Quoted.of(predicate))
   }
 
-  fn sorted<Key: Compare>(self, by: Expression<(row: Row) => Key>): Query<Row> {
+  fn sorted<Key: Compare>(by: Expression<(row: Row) => Key>): Query<Row> {
     copy ordering: ordering.added(Quoted.of(by))
   }
 
-  fn take(self, amount: Int): Query<Row> {
+  fn take(amount: Int): Query<Row> {
     copy limit: Some(amount)
   }
 
-  fn toSql(self): Result<Fragment, QueryError> {
+  fn toSql(): Result<Fragment, QueryError> {
     var statement = Fragment.raw "SELECT * FROM {table}"
 
     var keyword = " WHERE "

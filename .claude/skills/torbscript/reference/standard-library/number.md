@@ -43,16 +43,16 @@ public trait Numeric
 
 public trait Signed
   with Numeric, Negate {
-  fn absolute(self): Self
+  fn absolute(): Self
 }
 
 public trait Bits {
-  fn bitwiseAnd(self, other: Self): Self
-  fn bitwiseOr(self, other: Self): Self
-  fn bitwiseExclusiveOr(self, other: Self): Self
-  fn bitwiseNot(self): Self
-  fn shiftedLeft(self, by: Int64): Self
-  fn shiftedRight(self, by: Int64): Self
+  fn bitwiseAnd(other: Self): Self
+  fn bitwiseOr(other: Self): Self
+  fn bitwiseExclusiveOr(other: Self): Self
+  fn bitwiseNot(): Self
+  fn shiftedLeft(by: Int64): Self
+  fn shiftedRight(by: Int64): Self
 }
 ```
 
@@ -65,22 +65,22 @@ every other operation that leaves its range.
 
 ```trb fragment
 public trait Real with Signed {
-  fn squareRoot(self): Self
-  fn sine(self): Self
-  fn cosine(self): Self
-  fn tangent(self): Self
-  fn arcSine(self): Self
-  fn arcCosine(self): Self
-  fn arcTangent(self): Self
-  fn arcTangentDivided(self, by: Self): Self
-  fn floor(self): Self
-  fn ceiling(self): Self
-  fn round(self): Self
-  fn halved(self): Self
-  fn radiansOfDegrees(self): Self
-  fn degreesOfRadians(self): Self
-  fn unit(self): Self
-  fn doubled(self): Self
+  fn squareRoot(): Self
+  fn sine(): Self
+  fn cosine(): Self
+  fn tangent(): Self
+  fn arcSine(): Self
+  fn arcCosine(): Self
+  fn arcTangent(): Self
+  fn arcTangentDivided(by: Self): Self
+  fn floor(): Self
+  fn ceiling(): Self
+  fn round(): Self
+  fn halved(): Self
+  fn radiansOfDegrees(): Self
+  fn degreesOfRadians(): Self
+  fn unit(): Self
+  fn doubled(): Self
 }
 ```
 

@@ -33,7 +33,7 @@ type Fahrenheit {
 }
 
 extend Celsius with From<Fahrenheit> {
-  fn from(value: Fahrenheit): Celsius {
+  static fn from(value: Fahrenheit): Celsius {
     Celsius((value.degrees - 32.0) / 1.8)
   }
 }
@@ -70,7 +70,7 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
    type Percent {
      value: Int
 
-     fn tryFrom(value: Int): Result<Percent, String> {
+     static fn tryFrom(value: Int): Result<Percent, String> {
        if value < 0 || value > 100 {
          return Fail "{value} is not between 0 and 100"
        }
@@ -91,7 +91,7 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
    }
 
    extend Port with TryFrom<Int, String> {
-     fn tryFrom(value: Int): Result<Port, String> {
+     static fn tryFrom(value: Int): Result<Port, String> {
        if value < 1 {
          return Fail "{value} is not a port"
        }
@@ -119,13 +119,13 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
    }
 
    extend Port with TryFrom<String, String> {
-     fn tryFrom(value: String): Result<Port, String> {
+     static fn tryFrom(value: String): Result<Port, String> {
        Ok Port(1)
      }
    }
 
    extend Port with TryFrom<Int, String> {
-     fn tryFrom(value: Int): Result<Port, String> {
+     static fn tryFrom(value: Int): Result<Port, String> {
        Ok Port(value)
      }
    }
@@ -147,7 +147,7 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
    }
 
    extend Float64 with From<Celsius> {
-     fn from(value: Celsius): Float64 {
+     static fn from(value: Celsius): Float64 {
        value.degrees
      }
    }
@@ -202,7 +202,7 @@ instead: `extend Celsius with Into<Float64>` is `` `Into` comes from `From` for 
 
 ```trb
 extend Celsius with From<Fahrenheit> {
-  fn from(value: Fahrenheit): Celsius {
+  static fn from(value: Fahrenheit): Celsius {
     Celsius((value.degrees - 32.0) / 1.8)
   }
 }

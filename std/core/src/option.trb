@@ -59,7 +59,7 @@ public type Option<Value> with OrElse<Value> {
   case None
 
   /** Whether there is a value. For the value itself, `match` or `??` instead. */
-  fn isSome(self): Bool {
+  fn isSome(): Bool {
     match self {
       Some(_) => true
       None => false
@@ -67,7 +67,7 @@ public type Option<Value> with OrElse<Value> {
   }
 
   /** Whether the value is absent. */
-  fn isNone(self): Bool {
+  fn isNone(): Bool {
     !isSome()
   }
 
@@ -79,7 +79,7 @@ public type Option<Value> with OrElse<Value> {
    *     const name: String? = Some "ada"
    *     print name.map({ _.toUpperCase() })
    */
-  fn map<Output>(self, transform: (value: Value) => Output): Output? {
+  fn map<Output>(transform: (value: Value) => Output): Output? {
     match self {
       Some(value) => .Some(transform(value))
       None => .None
@@ -95,7 +95,7 @@ public type Option<Value> with OrElse<Value> {
    *     const initial = names.get("ada").flatMap({ _.chars().first() })
    *     print initial
    */
-  fn flatMap<Output>(self, transform: (value: Value) => Output?): Output? {
+  fn flatMap<Output>(transform: (value: Value) => Output?): Output? {
     match self {
       Some(value) => transform value
       None => .None
@@ -103,7 +103,7 @@ public type Option<Value> with OrElse<Value> {
   }
 
   /** Keeps the value only if it answers the question, and turns it into `None` if it does not. */
-  fn filter(self, predicate: (value: Value) => Bool): Value? {
+  fn filter(predicate: (value: Value) => Bool): Value? {
     match self {
       Some(value) if predicate(value) => self
       _ => .None
@@ -111,14 +111,14 @@ public type Option<Value> with OrElse<Value> {
   }
 
   /** Runs the action if there is a value: the statement form of [Option.map], for a step that answers with nothing. */
-  fn forEach(self, action: (value: Value) => Void) {
+  fn forEach(action: (value: Value) => Void) {
     if const Some(value) = self {
       action value
     }
   }
 
   /** Into the world of pipelines: a list with no or one element. */
-  fn toList(self): List<Value> {
+  fn toList(): List<Value> {
     match self {
       Some(value) => [value]
       None => []
@@ -136,7 +136,7 @@ public type Option<Value> with OrElse<Value> {
    *     const missing: Int? = None
    *     print missing.orElse(0)
    */
-  fn orElse(self, fallback: lazy Value): Value {
+  fn orElse(fallback: lazy Value): Value {
     match self {
       Some(value) => value
       None => fallback
@@ -151,7 +151,7 @@ public type Option<Value> with OrElse<Value> {
    *     const found: Int? = None
    *     print found.okOr("there is no number")
    */
-  fn okOr<Failure>(self, error: lazy Failure): Result<Value, Failure> {
+  fn okOr<Failure>(error: lazy Failure): Result<Value, Failure> {
     match self {
       Some(value) => Ok value
       None => Fail error
@@ -166,7 +166,7 @@ public type Option<Value> with OrElse<Value> {
    * When there is no value. Nothing else runs after that, so [Option.orElse] or [Option.okOr] is what a program that
    * has to carry on uses instead.
    */
-  fn expect(self, message: String): Value {
+  fn expect(message: String): Value {
     match self {
       Some(value) => value
       None => panic message
@@ -176,7 +176,7 @@ public type Option<Value> with OrElse<Value> {
 
 /** `Some(value)` or the bare `None` - a case with fields is written out, a case without one is its name. */
 extend<Value: Show> Option<Value> with Show {
-  fn show(self): String {
+  fn show(): String {
     match self {
       Some(value) => "Some({value.showNested()})"
       None => "None"
@@ -189,7 +189,7 @@ extend<Value: Show> Option<Value> with Show {
  * Stops pulling at the first `None`.
  */
 extend<Value, Target: From<Iterable<Value>>> Option<Target> with From<Iterable<Value?>> {
-  fn from(value: Iterable<Value?>): Target? {
+  static fn from(value: Iterable<Value?>): Target? {
     var complete = true
     const target = Target.from(value.mapWhile { item =>
       complete = item.isSome()           // The pipeline is lazy: this runs while `Target.from` pulls

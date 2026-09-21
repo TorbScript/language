@@ -36,44 +36,44 @@ public type Plane<Scalar: Real = Float> {
   distance: Scalar
 
   /** The plane through that point with that normal. The normal is normalized. */
-  fn through(point: Vector3<Scalar>, normal: Vector3<Scalar>): Plane<Scalar> {
+  static fn through(point: Vector3<Scalar>, normal: Vector3<Scalar>): Plane<Scalar> {
     const facing = normal.normalized()
     Plane facing, facing.dot(point)
   }
 
   /** The plane through those three points, with the normal in the right-handed sense of their order. */
-  fn ofPoints(first: Vector3<Scalar>, second: Vector3<Scalar>, third: Vector3<Scalar>): Plane<Scalar> {
+  static fn ofPoints(first: Vector3<Scalar>, second: Vector3<Scalar>, third: Vector3<Scalar>): Plane<Scalar> {
     Plane.through first, normal: second.subtract(first).cross(third.subtract(first))
   }
 
   /** How far the point is in front of the plane: negative behind it, zero exactly on it. */
-  fn signedDistanceTo(self, point: Vector3<Scalar>): Scalar {
+  fn signedDistanceTo(point: Vector3<Scalar>): Scalar {
     normal.dot(point) - distance
   }
 
   /** How far the point is from the plane, without a side. */
-  fn distanceTo(self, point: Vector3<Scalar>): Scalar {
+  fn distanceTo(point: Vector3<Scalar>): Scalar {
     signedDistanceTo(point).absolute()
   }
 
   /** Whether the point is in front of the plane. A point exactly on it is not in front of it. */
-  fn isInFront(self, point: Vector3<Scalar>): Bool {
+  fn isInFront(point: Vector3<Scalar>): Bool {
     const gap = signedDistanceTo point
     gap > zeroOf(gap)
   }
 
   /** The point of the plane that is nearest to the one given. */
-  fn closestPoint(self, to: Vector3<Scalar>): Vector3<Scalar> {
+  fn closestPoint(to: Vector3<Scalar>): Vector3<Scalar> {
     to.subtract normal.multiply(signedDistanceTo(to))
   }
 
   /** The point mirrored in the plane. */
-  fn mirrored(self, point: Vector3<Scalar>): Vector3<Scalar> {
+  fn mirrored(point: Vector3<Scalar>): Vector3<Scalar> {
     point.subtract normal.multiply(signedDistanceTo(point).doubled())
   }
 
   /** The same plane with the front on the other side. */
-  fn flipped(self): Plane<Scalar> {
+  fn flipped(): Plane<Scalar> {
     Plane(normal.negate(), -distance)
   }
 }

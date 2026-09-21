@@ -34,21 +34,21 @@ public type XmlMapping {
   /** The field that is the element's text content, if any. */
   private(var) textField: String = ""
 
-  fn element(var self, name: String) {
+  var fn element(name: String) {
     elementName = name
   }
 
   /** `attribute { _.currency }` in the design. */
-  fn attribute(var self, field: String) {
+  var fn attribute(field: String) {
     attributes.add field
   }
 
   /** `text { _.amount }` in the design: this field is the element's content, not a child. */
-  fn text(var self, field: String) {
+  var fn text(field: String) {
     textField = field
   }
 
-  fn roleOf(self, field: String): XmlRole {
+  fn roleOf(field: String): XmlRole {
     if attributes.contains(field) {
       return XmlRole.Attribute
     }
@@ -75,7 +75,7 @@ public type XmlFormat {
    * `map<Price> { ... }` in the design, where the type argument gives both the qualified name and the field names to
    * check against. The lab passes the name and the type's `describe`, which is where both of those come from anyway.
    */
-  fn map(var self, typeName: String, describe: (var target: Structures) => Void, define: (var mapping: XmlMapping) => Void) {
+  var fn map(typeName: String, describe: (var target: Structures) => Void, define: (var mapping: XmlMapping) => Void) {
     var mapping = XmlMapping()
     define mapping
     mappings.set typeName, mapping
@@ -89,7 +89,7 @@ public type XmlProblem with Show, Error {
   typeName: String
   field: String
 
-  fn show(self): String {
+  fn show(): String {
     "`{typeName}` has no field `{field}`"
   }
 }
@@ -100,7 +100,7 @@ public type Xml {
   /** Element name to type name, so the decode side finds the same mapping the encode side used. */
   private byElement: Map<String, String> = [:]
 
-  fn format(define: (var format: XmlFormat) => Void): Result<Xml, XmlProblem> {
+  static fn format(define: (var format: XmlFormat) => Void): Result<Xml, XmlProblem> {
     var built = XmlFormat()
     define built
     var byElement: Map<String, String> = [:]
@@ -119,7 +119,7 @@ public type Xml {
     Ok Xml(built.mappings, byElement)
   }
 
-  fn encode<Value: Encode>(self, value: Value): String {
+  fn encode<Value: Encode>(value: Value): String {
     var target = XmlEncoder mappings: mappings
     value.encode target
     target.output
@@ -127,7 +127,6 @@ public type Xml {
 
   /** Tolerant on purpose: a field arrives whether it was written as an attribute, as text or as a child element. */
   fn decode<Value>(
-    self,
     read: (var source: ValueDecoder) => Result<Value, DecodeError>,
     text: String,
   ): Result<Value, DecodeError> {
@@ -217,57 +216,57 @@ public type XmlEncoder with Encoder {
   mappings: Map<String, XmlMapping> = [:]
   private var frames: List<XmlFrame> = []
 
-  fn nothing(var self) {
+  var fn nothing() {
     // An absent value is an element that is not there, which is what XML says and what `field` then does not find
     clearPending()
   }
 
-  fn bool(var self, value: Bool) {
+  var fn bool(value: Bool) {
     put "{value}"
   }
 
-  fn int(var self, value: Int64) {
+  var fn int(value: Int64) {
     put "{value}"
   }
 
-  fn unsigned(var self, value: UInt64) {
+  var fn unsigned(value: UInt64) {
     put "{value}"
   }
 
-  fn float(var self, value: Float64) {
+  var fn float(value: Float64) {
     put "{value}"
   }
 
-  fn string(var self, value: String) {
+  var fn string(value: String) {
     put escaped(value)
   }
 
-  fn bytes(var self, value: List<UInt8>) {
+  var fn bytes(value: List<UInt8>) {
     put "{value.length()}"
   }
 
-  fn sequence(var self, length: Int?) {
+  var fn sequence(length: Int?) {
     const _length = length
     const name = pendingName()
     clearPending()
     frames.add XmlFrame(.Items, elementName: name)
   }
 
-  fn map(var self, length: Int?) {
+  var fn map(length: Int?) {
     const _length = length
     const name = pendingName()
     clearPending()
     frames.add XmlFrame(.Entries, elementName: name)
   }
 
-  fn record(var self, typeName: String) {
+  var fn record(typeName: String) {
     const mapping = mappings.get(typeName) ?? XmlMapping()
     const name = elementNameFor typeName, mapping
     clearPending()
     frames.add XmlFrame(.Element, elementName: name, mapping: mapping)
   }
 
-  fn variant(var self, typeName: String, name: String) {
+  var fn variant(typeName: String, name: String) {
     const mapping = mappings.get(typeName) ?? XmlMapping()
     const element = elementNameFor typeName, mapping
     clearPending()
@@ -276,12 +275,12 @@ public type XmlEncoder with Encoder {
     frames.add frame
   }
 
-  fn field(var self, name: String) {
+  var fn field(name: String) {
     const last = frames.length() - 1
     frames[last].pending = name
   }
 
-  fn finish(var self) {
+  var fn finish() {
     const last = frames.length() - 1
     const frame = frames[last]
     frames = frames.removedAt last
@@ -293,7 +292,7 @@ public type XmlEncoder with Encoder {
   }
 
   /** The element name: the mapping decides, then the field it sits in, then the short type name. */
-  private fn elementNameFor(self, typeName: String, mapping: XmlMapping): String {
+  private fn elementNameFor(typeName: String, mapping: XmlMapping): String {
     if !mapping.elementName.isEmpty() {
       return mapping.elementName
     }
@@ -304,14 +303,14 @@ public type XmlEncoder with Encoder {
     shortName typeName
   }
 
-  private fn pendingName(self): String {
+  private fn pendingName(): String {
     if frames.isEmpty() {
       return ""
     }
     frames[frames.length() - 1].pending
   }
 
-  private fn clearPending(var self) {
+  private var fn clearPending() {
     if frames.isEmpty() {
       return
     }
@@ -319,7 +318,7 @@ public type XmlEncoder with Encoder {
   }
 
   /** One scalar, into the place the mapping gives its field. */
-  private fn put(var self, value: String) {
+  private var fn put(value: String) {
     if frames.isEmpty() {
       output = output + value
       return
@@ -355,7 +354,7 @@ public type XmlEncoder with Encoder {
   }
 
   /** A finished element, into whatever is around it. */
-  private fn emit(var self, name: String, element: String) {
+  private var fn emit(name: String, element: String) {
     if frames.isEmpty() {
       output = output + element
       return
@@ -421,7 +420,7 @@ type XmlParser {
   characters: List<Char>
   var position: Int = 0
 
-  fn element(var self): Result<XmlNode, DecodeError> {
+  var fn element(): Result<XmlNode, DecodeError> {
     skipWhitespace()
     if atEnd() || characters[position] != '<' {
       return Fail DecodeError("an element was expected")
@@ -472,17 +471,17 @@ type XmlParser {
     Ok XmlNode(name, attributes, unescaped(String.from(text).trim()), children)
   }
 
-  private fn atEnd(self): Bool {
+  private fn atEnd(): Bool {
     position >= characters.length()
   }
 
-  private fn skipWhitespace(var self) {
+  private var fn skipWhitespace() {
     while !atEnd() && characters[position].isWhitespace() {
       position = position + 1
     }
   }
 
-  private fn word(var self): String {
+  private var fn word(): String {
     var out: List<Char> = []
     while !atEnd() {
       const character = characters[position]
@@ -495,7 +494,7 @@ type XmlParser {
     String.from out
   }
 
-  private fn quotedValue(var self): Result<String, DecodeError> {
+  private var fn quotedValue(): Result<String, DecodeError> {
     skipWhitespace()
     if atEnd() || characters[position] != '"' {
       return Fail DecodeError("an attribute value in quotes was expected")

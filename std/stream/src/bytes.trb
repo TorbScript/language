@@ -32,7 +32,7 @@ public type Utf8Error with Show, Error {
   offset: Int
 
   /** `invalid UTF-8 at byte {offset}` - what a caller prints or logs. */
-  fn show(self): String {
+  fn show(): String {
     "invalid UTF-8 at byte {offset}"
   }
 }
@@ -132,12 +132,12 @@ public fn encodedText(): Stage<String, Bytes> {
  */
 extend<Failure> Sink<Bytes, Failure> {
   /** Encodes `text` as UTF-8 and writes it - the text form of `add`. */
-  fn addText(var self, text: String): Task<Result<Void, Failure>> {
+  var fn addText(text: String): Task<Result<Void, Failure>> {
     add(text.bytes().toList()).await()
   }
 
   /** `\n`, not the line break of the platform: a stream is bytes on a wire, not a text file of an operating system. */
-  fn addLine(var self, text: String = ""): Task<Result<Void, Failure>> {
+  var fn addLine(text: String = ""): Task<Result<Void, Failure>> {
     addText("{text}\n").await()
   }
 }
@@ -146,7 +146,6 @@ extend<Failure> Sink<Bytes, Failure> {
 
 type Lines with Stage<Bytes, Result<String, Utf8Error>> {
   fn onto<Final>(
-    self,
     downstream: Accumulator<Result<String, Utf8Error>, Final>,
   ): Accumulator<Bytes, Final> {
     LinesAccumulator downstream
@@ -157,7 +156,7 @@ type LinesAccumulator<Final> with Accumulator<Bytes, Final> {
   var downstream: Accumulator<Result<String, Utf8Error>, Final>
   var pending: Bytes = []
 
-  fn add(var self, value: Bytes) {
+  var fn add(value: Bytes) {
     pending.addAll value
     while const Some(at) = indexOfNewline(pending) {
       const line = pending[0..at]
@@ -168,7 +167,7 @@ type LinesAccumulator<Final> with Accumulator<Bytes, Final> {
   }
 
   /** What is left without a line break is the last line - dropping it would lose data nobody asked to lose. */
-  fn finish(self): Final {
+  fn finish(): Final {
     var tail = downstream
     if !pending.isEmpty() {
       tail.add decodeLine(pending)
@@ -176,7 +175,7 @@ type LinesAccumulator<Final> with Accumulator<Bytes, Final> {
     tail.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     downstream.isDone()
   }
 }
@@ -206,7 +205,6 @@ const carriageReturn: UInt8 = 13
 
 type DecodedText with Stage<Bytes, Result<String, Utf8Error>> {
   fn onto<Final>(
-    self,
     downstream: Accumulator<Result<String, Utf8Error>, Final>,
   ): Accumulator<Bytes, Final> {
     DecodedTextAccumulator downstream
@@ -219,7 +217,7 @@ type DecodedTextAccumulator<Final> with Accumulator<Bytes, Final> {
   /** How many bytes of the stream are decoded and gone: the stream offset of the first byte of `pending` */
   var consumed: Int = 0
 
-  fn add(var self, value: Bytes) {
+  var fn add(value: Bytes) {
     pending.addAll value
     match decodeUtf8(pending) {
       Ok((text, used)) => {
@@ -244,7 +242,7 @@ type DecodedTextAccumulator<Final> with Accumulator<Bytes, Final> {
    * Bytes that are still incomplete at the end of the stream are broken UTF-8, not something to wait for. Everything
    * complete is already gone, so `consumed` is where the incomplete sequence starts.
    */
-  fn finish(self): Final {
+  fn finish(): Final {
     var tail = downstream
     if !pending.isEmpty() {
       tail.add Fail(Utf8Error(consumed))
@@ -252,7 +250,7 @@ type DecodedTextAccumulator<Final> with Accumulator<Bytes, Final> {
     tail.finish()
   }
 
-  fn isDone(self): Bool {
+  fn isDone(): Bool {
     downstream.isDone()
   }
 }

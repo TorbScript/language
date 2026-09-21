@@ -228,11 +228,11 @@ Every page of the reference, with what it answers. Open the one page that answer
 - `language/types/fields.md` - **Fields** (reference): A field is const unless marked var, and private or private(var) decide who may read it and who may write it, independently of each other.
 - `language/types/generated-show.md` - **The generated Show** (reference): Show is generated for every type without being written, and its text is fixed so that two implementations of the language print the same thing for the same value.
 - `language/types/index.md` - **Types** (index): Declaring a type, its fields, its methods, what is generated for it, and how one is changed.
-- `language/types/methods.md` - **Methods and static functions** (reference): Declaring self makes a function a method instead of a static function, and a type has one namespace of members, so a field and a method can never share a name.
+- `language/types/methods.md` - **Methods and `static fn`s** (reference): A member says what it is with two words - static belongs to the type, var may change - and a type has one namespace of members, so a field and a method can never share a name.
 - `language/types/property-commands.md` - **Property commands** (reference): A command call on a field writes it instead of calling it, which is what lets a configuration block read like plain data without a single hand-written setter.
 - `language/types/shared-types.md` - **Shared types** (reference): A shared type has an identity instead of a value, so assigning it never copies, isSame compares which object rather than which content, and Equals, Hash and copy are not generated for it.
-- `language/types/var-paths.md` - **Mutation and var paths** (reference): A change needs an unbroken var path from the binding down to the field being changed, and a var parameter or var self is a reference that cannot outlive the call it belongs to.
-- `language/types/verbs-and-participles.md` - **Verbs and participles** (reference): A verb changes its receiver in place and declares var self, and its participle answers a changed copy instead, so calling the verb through a const path names the participle in its error.
+- `language/types/var-paths.md` - **Mutation and var paths** (reference): A change needs an unbroken var path from the binding down to the field being changed, and a var parameter or a var fn receiver is a reference that cannot outlive the call it belongs to.
+- `language/types/verbs-and-participles.md` - **Verbs and participles** (reference): A verb changes its receiver in place and is a var fn, and its participle answers a changed copy instead, so calling the verb through a const path names the participle in its error.
 
 ## language/values-and-types
 

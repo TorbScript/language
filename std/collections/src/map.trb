@@ -43,7 +43,7 @@ use Collection from "./collection"
  *
  *     type Counter {
  *       var count: Int = 0
- *       fn increment(var self) {
+ *       var fn increment() {
  *         count = count + 1
  *       }
  *     }
@@ -67,25 +67,25 @@ public trait Map<Key, Value>
   with Collection<(key: Key, value: Value)>, MutableIndexed<Key, Value>
 {
   /** Builds a map from its arguments: `Map.of(("a", 1), ("b", 2))`. */
-  fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash {
+  static fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash {
     TrieMap.from entries
   }
 
   // --- In place ------------------------------------------------------------------------------------
 
   /** Removes the entry for `key` and answers its value, or `None` if there was none. */
-  fn remove(var self, key: Key): Value?
+  var fn remove(key: Key): Value?
 
   /**
    * Adds an entry: the same as `set(entry.key, entry.value)`. What lets a `Map` be filled by a collector or a
    * channel like any other [Collection].
    */
-  fn add(var self, entry: (key: Key, value: Value)) {
+  var fn add(entry: (key: Key, value: Value)) {
     set entry.key, entry.value
   }
 
   /** Adds every entry of `other`, in place; a repeated key is overwritten by the later entry. */
-  fn merge(var self, other: Iterable<(Key, Value)>) {
+  var fn merge(other: Iterable<(Key, Value)>) {
     addAll other
   }
 
@@ -111,7 +111,7 @@ public trait Map<Key, Value>
    *
    * - [Map.update] - the same insert, with the stored value changed in place.
    */
-  fn getOrInsert(var self, key: Key, fallback: lazy Value): Value {
+  var fn getOrInsert(key: Key, fallback: lazy Value): Value {
     if const Some(existing) = get(key) {
       return existing
     }
@@ -133,7 +133,7 @@ public trait Map<Key, Value>
    *
    * - [Map.getOrInsert] - the same insert, answering the value instead of changing it.
    */
-  fn update(var self, key: Key, fallback: lazy Value, change: (var Value) => Void) {
+  var fn update(key: Key, fallback: lazy Value, change: (var Value) => Void) {
     var value = get(key) ?? fallback
     change value
     set key, value
@@ -142,21 +142,21 @@ public trait Map<Key, Value>
   // --- Changed copies --------------------------------------------------------------------------------
 
   /** The participle of `set` is `set`, so this one is called `updated`. */
-  fn updated(self, key: Key, value: Value): Self {
+  fn updated(key: Key, value: Value): Self {
     var result = self
     result.set key, value
     result
   }
 
   /** The participle of [Map.remove]: a changed copy with the entry for `key` gone. */
-  fn removed(self, key: Key): Self {
+  fn removed(key: Key): Self {
     var result = self
     result.remove key
     result
   }
 
   /** The participle of [Map.merge]: a changed copy with every entry of `other` added. */
-  fn merged(self, other: Iterable<(Key, Value)>): Self {
+  fn merged(other: Iterable<(Key, Value)>): Self {
     var result = self
     result.merge other
     result
@@ -165,36 +165,36 @@ public trait Map<Key, Value>
   // --- Reading -----------------------------------------------------------------------------------------
 
   /** Whether there is an entry for `key`. */
-  fn containsKey(self, key: Key): Bool {
+  fn containsKey(key: Key): Bool {
     get(key).isSome()
   }
 
   /** Every key, in insertion order. */
-  fn keys(self): Iterable<Key> {
+  fn keys(): Iterable<Key> {
     map { entry => entry.key }
   }
 
   /** Every value, in insertion order. */
-  fn values(self): Iterable<Value> {
+  fn values(): Iterable<Value> {
     map { entry => entry.value }
   }
 
   /** Transforms every value, keeping the keys: `ages.mapValues { age => age + 1 }`. */
-  fn mapValues<Output>(self, transform: (value: Value) => Output): Map<Key, Output> where Key: Hash {
+  fn mapValues<Output>(transform: (value: Value) => Output): Map<Key, Output> where Key: Hash {
     Map.from(map { entry => (entry.key, transform(entry.value)) })
   }
 }
 
 /** The factory picks the default implementation. This is what makes `Map.from` and the literal `["a": 1]` work. */
 extend<Key: Hash, Value> Map<Key, Value> with From<Iterable<(Key, Value)>> {
-  fn from(entries: Iterable<(Key, Value)>): Map<Key, Value> {
+  static fn from(entries: Iterable<(Key, Value)>): Map<Key, Value> {
     TrieMap.from entries
   }
 }
 
 /** `["a": 1, "b": 2]`, and `[:]` when it is empty - the format of the literal. */
 extend<Key: Show, Value: Show> Map<Key, Value> with Show {
-  fn show(self): String {
+  fn show(): String {
     if isEmpty() {
       return "[:]"
     }
@@ -205,7 +205,7 @@ extend<Key: Show, Value: Show> Map<Key, Value> with Show {
 
 /** Equal when they hold the same entries, regardless of insertion order. */
 extend<Key, Value: Equals> Map<Key, Value> with Equals {
-  fn equals(self, other: Self): Bool {
+  fn equals(other: Self): Bool {
     length() == other.length() && all { entry =>
       match other.get(entry.key) {
         Some(value) => value == entry.value
@@ -223,7 +223,7 @@ extend<Key, Value: Equals> Map<Key, Value> with Equals {
  * `Value: Equals`.
  */
 extend<Key: Hash, Value: Hash> Map<Key, Value> with Hash {
-  fn hash(self): Int {
+  fn hash(): Int {
     fold 0 { seed, entry => seed.bitwiseExclusiveOr combineHashes(entry.key.hash(), entry.value.hash()) }
   }
 }
@@ -248,7 +248,7 @@ public type MapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Value)
   var position: Int = 0
 
   /** The next entry, or `None` once the table is exhausted. */
-  fn next(var self): (key: Key, value: Value)? {
+  var fn next(): (key: Key, value: Value)? {
     // The position travels through a local because stage 0 takes a `var` argument before it evaluates the receiver
     var found = position
     const entry = entries.entryAfter found
@@ -265,7 +265,7 @@ public type HashMapIterator<Key: Hash, Value> with Iterator<(key: Key, value: Va
   var position: Int = 0
 
   /** Same as [MapIterator.next]. */
-  fn next(var self): (key: Key, value: Value)? {
+  var fn next(): (key: Key, value: Value)? {
     var found = position
     const entry = entries.entryAfter found
     position = found
@@ -289,23 +289,23 @@ public native type TrieMap<Key: Hash, Value>
    * table, and it is the one native the lowering answers itself - the element descriptors a table needs are a function of
    * the language and no declaration can name one.
    */
-  fn from(entries: Iterable<(Key, Value)>): TrieMap<Key, Value> {
+  static fn from(entries: Iterable<(Key, Value)>): TrieMap<Key, Value> {
     var result: TrieMap<Key, Value> = TrieMap.withCapacity 0
     result.addAll entries
     result
   }
 
   /** The empty table, with room for `capacity` entries before it has to grow again. */
-  native fn withCapacity(capacity: Int): TrieMap<Key, Value>
+  native static fn withCapacity(capacity: Int): TrieMap<Key, Value>
 
   /** How many entries there are. */
-  native fn length(self): Int
+  native fn length(): Int
 
   /** The value for `key`, or `None` if there is none. `map[key]` panics instead; see [Indexed.at]. */
-  native fn get(self, key: Key): Value?
+  native fn get(key: Key): Value?
 
   /** Ordinary TorbScript over `entryAfter`: see [MapIterator]. */
-  fn iterator(self): Iterator<(key: Key, value: Value)> {
+  fn iterator(): Iterator<(key: Key, value: Value)> {
     MapIterator self
   }
 
@@ -314,19 +314,19 @@ public native type TrieMap<Key: Hash, Value>
    * table needs beyond `get` and `set`: the tombstones a removal leaves are the storage's business and nothing else can
    * skip them.
    */
-  native fn entryAfter(self, var cursor: Int): (key: Key, value: Value)?
+  native fn entryAfter(var cursor: Int): (key: Key, value: Value)?
 
   /**
    * Changes the value for `key`, or adds a new entry if there was none, in place. `map[key] = value` goes through
    * this; see [MutableIndexed.set].
    */
-  native fn set(var self, key: Key, value: Value)
+  native var fn set(key: Key, value: Value)
 
   /** Removes the entry for `key` and answers its value, or `None` if there was none. */
-  native fn remove(var self, key: Key): Value?
+  native var fn remove(key: Key): Value?
 
   /** Removes every entry, in place. */
-  native fn clear(var self)
+  native var fn clear()
 }
 
 /**
@@ -337,35 +337,35 @@ public native type HashMap<Key: Hash, Value>
   with Map<Key, Value>, From<Iterable<(Key, Value)>>
 {
   /** Same as [TrieMap.from]. */
-  fn from(entries: Iterable<(Key, Value)>): HashMap<Key, Value> {
+  static fn from(entries: Iterable<(Key, Value)>): HashMap<Key, Value> {
     var result: HashMap<Key, Value> = HashMap.withCapacity 0
     result.addAll entries
     result
   }
 
   /** Same as [TrieMap.withCapacity]. */
-  native fn withCapacity(capacity: Int): HashMap<Key, Value>
+  native static fn withCapacity(capacity: Int): HashMap<Key, Value>
 
   /** Same as [TrieMap.length]. */
-  native fn length(self): Int
+  native fn length(): Int
 
   /** Same as [TrieMap.get]. */
-  native fn get(self, key: Key): Value?
+  native fn get(key: Key): Value?
 
   /** A cursor over the entries, in insertion order; see [HashMapIterator]. */
-  fn iterator(self): Iterator<(key: Key, value: Value)> {
+  fn iterator(): Iterator<(key: Key, value: Value)> {
     HashMapIterator self
   }
 
   /** Same as [TrieMap.entryAfter]. */
-  native fn entryAfter(self, var cursor: Int): (key: Key, value: Value)?
+  native fn entryAfter(var cursor: Int): (key: Key, value: Value)?
 
   /** Same as [TrieMap.set]. */
-  native fn set(var self, key: Key, value: Value)
+  native var fn set(key: Key, value: Value)
 
   /** Same as [TrieMap.remove]. */
-  native fn remove(var self, key: Key): Value?
+  native var fn remove(key: Key): Value?
 
   /** Same as [TrieMap.clear]. */
-  native fn clear(var self)
+  native var fn clear()
 }

@@ -2501,6 +2501,19 @@ Wenn nicht, was bedeutet, bewirkt es?
     wie ein `var`-Feld - an der Deklaration und an jeder Aufrufstelle (`point.translate 5`), damit man Mutation im
     Code sieht, ohne die Signatur zu kennen. Gehört in `torb highlight` (der Modifier, den `var`-Felder schon
     tragen) und in die VS-Code-Extension.
+  - **Erledigt (2026-09-21), im Zweig grün.** Beide Parser lesen die neue Form und bilden sie auf den unveränderten
+    AST ab: eine Methode bekommt ein synthetisches `self` mit der Spanne ihres eigenen NAMENS, ein `var fn` ein
+    `var self`, `static fn` keines, `static name = wert` ist die heutige Typkonstante. Ein `foreign`-Block bekommt
+    keinen Empfänger - seine Mitglieder sind freie C-Funktionen. Das Schlüsselwort steht pro Parser an genau einer
+    Stelle (`STATIC` in `bootstrap/crates/torb-syntax/src/token.rs`, `staticKeyword` in
+    `compiler/src/syntax/token.trb`); jede Meldung, die es lehrt, interpoliert diese Konstante. Die Umstellung lief
+    als einmalige `canon`-Regel `members` (gegen die ALTE Lesart, danach wieder entfernt) plus zwei Wegwerf-Skripten
+    für die ```trb-Blöcke der `.md`-Dateien und für TorbScript in String-Literalen der Tests. Checker, IR, Back-End
+    und Interpreter brauchten nur neue Worte: einzige Ausnahme war eine SPALTE in einem IR-Panic-Site
+    (`types.trb:265:6` → `265:10`, weil `var fn add` den Namen verschiebt). Highlighting: ein `var fn` trägt jetzt
+    `mutable` an der Deklaration und an jeder Aufrufstelle, die TextMate-Grammatik kennt `static` und `var fn`.
+    Nicht gebaut: `static pi: Self` als Trait-Anforderung ohne Wert (der Parser meldet es sauber), `const` vor
+    einem Parameter.
 
 - (**Erledigt: der Typprüfer-Durchgang - zwei Soundness-Löcher, Überladung über einen Trait-Parameter, Blanket-Lookup
   und vier kleine Lücken**, 2026-09-21)

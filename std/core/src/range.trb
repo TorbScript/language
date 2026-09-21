@@ -95,14 +95,14 @@ public native type RangeTo<Value> with Equals, Hash {
  */
 public trait Bounds<Value: Compare> {
   /** The low end, or `None` where the range is open at the start. */
-  fn lowest(self): Value?
+  fn lowest(): Value?
   /** The high end, or `None` where the range is open at the end. */
-  fn highest(self): Value?
+  fn highest(): Value?
   /** Whether [Bounds.highest] itself lies inside. A range that has no high end answers `false`, which says nothing. */
-  fn includesHighest(self): Bool
+  fn includesHighest(): Bool
 
   /** Whether the value lies within the range's bounds. An open end never excludes anything on its side. */
-  fn contains(self, value: Value): Bool {
+  fn contains(value: Value): Bool {
     if const Some(low) = lowest() {
       if value < low {
         return false
@@ -117,45 +117,45 @@ public trait Bounds<Value: Compare> {
 
 /** Both ends are there, and `inclusive` says whether the high one is inside. */
 extend<Value: Compare> Range<Value> with Bounds<Value> {
-  fn lowest(self): Value? {
+  fn lowest(): Value? {
     Some start
   }
 
-  fn highest(self): Value? {
+  fn highest(): Value? {
     Some end
   }
 
-  fn includesHighest(self): Bool {
+  fn includesHighest(): Bool {
     inclusive
   }
 }
 
 /** Open at the end, so there is no high end to include. */
 extend<Value: Compare> RangeFrom<Value> with Bounds<Value> {
-  fn lowest(self): Value? {
+  fn lowest(): Value? {
     Some start
   }
 
-  fn highest(self): Value? {
+  fn highest(): Value? {
     None
   }
 
-  fn includesHighest(self): Bool {
+  fn includesHighest(): Bool {
     false
   }
 }
 
 /** Open at the start. */
 extend<Value: Compare> RangeTo<Value> with Bounds<Value> {
-  fn lowest(self): Value? {
+  fn lowest(): Value? {
     None
   }
 
-  fn highest(self): Value? {
+  fn highest(): Value? {
     Some end
   }
 
-  fn includesHighest(self): Bool {
+  fn includesHighest(): Bool {
     inclusive
   }
 }
@@ -166,12 +166,12 @@ extend<Value: Compare> RangeTo<Value> with Bounds<Value> {
  * inside of it, but there is no "the next value after `a`" in general.
  */
 extend Range<Int> with Iterable<Int>, Length {
-  fn iterator(self): Iterator<Int> {
+  fn iterator(): Iterator<Int> {
     RangeIterator start, Some(end), inclusive
   }
 
   /** How many values the range covers, never below zero: `(5..3).length()` is `0`. */
-  fn length(self): Int {
+  fn length(): Int {
     const span = if inclusive { end - start + 1 } else { end - start }
     span.max 0
   }
@@ -179,7 +179,7 @@ extend Range<Int> with Iterable<Int>, Length {
 
 /** `0..` counts on forever, which is what makes `for index in 0..` and `(0..).take(3)` work. */
 extend RangeFrom<Int> with Iterable<Int> {
-  fn iterator(self): Iterator<Int> {
+  fn iterator(): Iterator<Int> {
     RangeIterator start, None, false
   }
 }
@@ -198,7 +198,7 @@ public type RangeIterator with Iterator<Int> {
   inclusive: Bool
 
   /** The next value, or `None` once `current` has passed `end`. */
-  fn next(var self): Int? {
+  var fn next(): Int? {
     if const Some(highest) = end {
       const isDone = if inclusive { current > highest } else { current >= highest }
       if isDone {
@@ -220,7 +220,7 @@ public type RangeIterator with Iterator<Int> {
  * something unshowable is still a range.
  */
 extend<Value: Show> Range<Value> with Show {
-  fn show(self): String {
+  fn show(): String {
     const dots = if inclusive { "..=" } else { ".." }
     "{start.show()}{dots}{end.show()}"
   }
@@ -228,14 +228,14 @@ extend<Value: Show> Range<Value> with Show {
 
 /** `0..`, the source form. */
 extend<Value: Show> RangeFrom<Value> with Show {
-  fn show(self): String {
+  fn show(): String {
     "{start.show()}.."
   }
 }
 
 /** `..10`, `..=10`, the source form. */
 extend<Value: Show> RangeTo<Value> with Show {
-  fn show(self): String {
+  fn show(): String {
     const dots = if inclusive { "..=" } else { ".." }
     "{dots}{end.show()}"
   }

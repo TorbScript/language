@@ -97,7 +97,7 @@ fn lines() {
 
 #[test]
 fn declarations() {
-    let file = parse_ok("public shared type Connection with Close {\n  url: String\n  private(var) sent: Int = 0\n  fn send(var self, message: String) { sent = sent + 1 }\n}");
+    let file = parse_ok("public shared type Connection with Close {\n  url: String\n  private(var) sent: Int = 0\n  var fn send(message: String) { sent = sent + 1 }\n}");
     let StatementKind::Declaration(declaration) = &file.statements[0].kind else { panic!() };
     assert!(declaration.modifiers.shared);
     let DeclarationKind::Type(declaration) = &declaration.kind else { panic!() };
@@ -106,9 +106,7 @@ fn declarations() {
 
     parse_ok("type Meters with Add & Compare by value {\n  value: Float\n}");
     parse_ok("type Handler = (request: String, var context: Context) => Result<String, Failure>");
-    parse_ok(
-        "extend<Source, Target> Source with Into<Target> where Target: From<Source> {\n  fn into(self): Target { Target.from(self) }\n}",
-    );
+    parse_ok("extend<Source, Target> Source with Into<Target> where Target: From<Source> {\n  fn into(): Target { Target.from(self) }\n}");
     parse_ok("use * as http from \"std/net/http\"\npublic use Stack, ArrayStack from \"./collections/stack\"");
     // `void` is the one value of `Void` and therefore a keyword, in an expression and in a pattern
     parse_ok("const nothing = void\nconst isNothing = match nothing { void => 1 }");
@@ -151,7 +149,7 @@ fn trait_clause_delegation() {
     assert!(matches!(declaration.traits[1].capability.kind, TypeKind::Intersection(ref members) if members.len() == 2));
 
     // `extend` and a `trait`'s supertraits have no field of their own to delegate to
-    assert!(first_error("extend Meters with Add by value {\n  fn add(self, other: Self): Self { self }\n}")
+    assert!(first_error("extend Meters with Add by value {\n  fn add(other: Self): Self { self }\n}")
         .contains("only a `type` has fields to name"));
     assert!(first_error("trait Numeric with Add by value {\n}").contains("only a `type` has fields to name"));
 }
@@ -272,4 +270,78 @@ fn loop_is_a_statement_of_its_own_and_a_reserved_word() {
     // A reserved word is no name, in a binding and in a parameter alike
     assert!(first_error("const loop = 1").contains("Expected a pattern"));
     assert!(first_error("fn f(loop: Int) {}").contains("keyword"));
+}
+
+/// The members of `type Probe { <body> }`.
+fn members(body: &str) -> Vec<Member> {
+    let mut file = parse_ok(&format!("type Probe {{\n{body}\n}}"));
+    let StatementKind::Declaration(declaration) = file.statements.remove(0).kind else { panic!() };
+    let DeclarationKind::Type(declaration) = declaration.kind else { panic!() };
+    declaration.members
+}
+
+/// The parameters of the one function such a body declares, each with `var` in front where it carries one.
+fn member_parameters(body: &str) -> Vec<String> {
+    let MemberKind::Function(function) = members(body).remove(0).kind else { panic!() };
+    function
+        .parameters
+        .iter()
+        .map(|parameter| match parameter.is_var {
+            true => format!("var {}", parameter.name.text),
+            false => parameter.name.text.clone(),
+        })
+        .collect()
+}
+
+fn notes(source: &str) -> Vec<String> {
+    torb_syntax::parse(source).diagnostics.into_iter().flat_map(|diagnostic| diagnostic.notes).collect()
+}
+
+/// A member says what it is with two words: `static` belongs to the type, `var` may change. The receiver of a method
+/// is not written, so the parser puts it back - which is why every case here looks at the parameters.
+#[test]
+fn the_members_of_a_type() {
+    // The synthesized receiver stands at the name of the function, which is where a message about it has to point
+    assert_eq!(member_parameters("  fn area(): Int { 1 }"), ["self"]);
+    let MemberKind::Function(function) = members("  fn area(): Int { 1 }").remove(0).kind else { panic!() };
+    assert_eq!(function.parameters[0].name.span, function.name.span);
+
+    assert_eq!(member_parameters("  var fn translate(deltaX: Int) {}"), ["var self", "deltaX"]);
+    assert_eq!(member_parameters("  static fn square(size: Int): Self { Probe(size) }"), ["size"]);
+
+    // `const` is what a member is without a word of its own, on a constant of the type as on a field
+    assert!(matches!(members("  static origin = Probe(0)").remove(0).kind, MemberKind::Constant(_)));
+    assert!(matches!(members("  static const origin = Probe(0)").remove(0).kind, MemberKind::Constant(_)));
+    let MemberKind::Field(field) = members("  const x: Int = 0").remove(0).kind else { panic!() };
+    assert_eq!(field.name.text, "x");
+    assert!(!field.is_var);
+
+    // A `foreign` block holds free functions of a C library, which have no receiver
+    let mut file = parse_ok("foreign \"sqlite3\" {\n  fn sqlite3_close(database: Int): Int32\n}");
+    let StatementKind::Declaration(declaration) = file.statements.remove(0).kind else { panic!() };
+    let DeclarationKind::Foreign(library) = declaration.kind else { panic!() };
+    let MemberKind::Function(function) = &library.members[0].kind else { panic!() };
+    assert_eq!(function.parameters.len(), 1);
+    assert_eq!(function.parameters[0].name.text, "database");
+}
+
+#[test]
+fn what_a_member_may_not_say() {
+    let written = "type Probe {\n  fn area(self): Int { 1 }\n}";
+    assert_eq!(first_error(written), "A method does not list `self`");
+    assert_eq!(notes(written), ["Write `fn name(...)`: what stands in the parentheses is what the caller writes"]);
+
+    let changing = "type Probe {\n  fn grow(var self) {}\n}";
+    assert_eq!(notes(changing), ["Write `var fn name(...)`: `var` says the method may change its receiver"]);
+
+    let global = "type Probe {\n  static var total = 0\n}";
+    assert_eq!(first_error(global), "`static var` does not exist");
+    assert_eq!(notes(global)[0], "A type has no mutable state: what belongs to the type is a constant of it");
+
+    let neither = "type Probe {\n  const x = 0\n}";
+    assert_eq!(first_error(neither), "`x` is neither a field nor a constant of the type");
+    assert_eq!(notes(neither), ["A field is `x: Type`, a constant of the type is `static x = ...`"]);
+
+    // A trait that requires a constant without a value is not in the language yet
+    assert!(notes("trait Zero {\n  static pi: Self\n}").iter().any(|note| note.contains("declare it in every implementation")));
 }

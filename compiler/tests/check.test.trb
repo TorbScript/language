@@ -215,7 +215,7 @@ group "Modules" {
   }
 
   test "a member of a foreign type is imported by its path, and `as` renames it" {
-    const extension = "extend Text \{\n  fn shout(self): Text \{\n    self\n  \}\n\}"
+    const extension = "extend Text \{\n  fn shout(): Text \{\n    self\n  \}\n\}"
     const named = [
       "app/src/text.trb": extension,
       "app/src/main.trb": "use Text.shout from \"./text\"\n\nfn probe(value: Text): Text \{\n  value.shout()\n\}",
@@ -230,7 +230,7 @@ group "Modules" {
 
   test "an import of a member the package does not add is reported at the `use` line" {
     const files = [
-      "app/src/text.trb": "extend Text \{\n  fn shout(self): Text \{\n    self\n  \}\n\}",
+      "app/src/text.trb": "extend Text \{\n  fn shout(): Text \{\n    self\n  \}\n\}",
       "app/src/main.trb": "use Text.whisper from \"./text\"\n",
     ]
     assert(messages(files) == ["`./text` adds no member `whisper` to `Text`"])
@@ -495,11 +495,11 @@ group "Cases" {
         public type Shape {
           case Circle(radius: Int)
 
-          fn area(self): Int { 0 }
+          fn area(): Int { 0 }
         }
         public type Point {
           x: Int
-          const origin: Int = 0
+          static origin: Int = 0
         }
         """,
       "app/src/main.trb": "use Shape.area from \"./shapes\"",
@@ -599,7 +599,7 @@ group "Type positions" {
             key: Key
             value: Value
 
-            fn mapped<Output>(self, transform: (value: Value) => Output): Pair<Key, Output> where Output: Show {
+            fn mapped<Output>(transform: (value: Value) => Output): Pair<Key, Output> where Output: Show {
               Pair(key, transform(value))
             }
           }
@@ -613,19 +613,19 @@ group "Type positions" {
       problems(
         r"""
           trait Combine {
-            fn combine(self, other: Self): Self
+            fn combine(other: Self): Self
           }
 
           type Amount with Combine {
             value: Int
 
-            fn combine(self, other: Self): Self {
+            fn combine(other: Self): Self {
               Amount(value)
             }
           }
 
           extend Int with Combine {
-            fn combine(self, other: Self): Self {
+            fn combine(other: Self): Self {
               self
             }
           }

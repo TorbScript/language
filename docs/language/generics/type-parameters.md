@@ -39,7 +39,7 @@ type Pair<Left, Right> {
 }
 
 trait Convert<Target> {
-  fn convert(self): Target
+  fn convert(): Target
 }
 
 const pair = Pair 1, "one"
@@ -76,7 +76,7 @@ A call or a construction that writes the arguments out uses the same angle brack
 
    ```trb check
    extend<Item> List<Item> where Item: Compare {
-     fn largest(self): Item? {
+     fn largest(): Item? {
        get(0).map { first => fold first { a, b => a.max b } }
      }
    }

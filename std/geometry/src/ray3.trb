@@ -39,17 +39,17 @@ public type Ray3<Scalar: Real = Float> {
   direction: Vector3<Scalar>
 
   /** The ray from one point towards another, with a direction of length one. */
-  fn towards(from: Vector3<Scalar>, to: Vector3<Scalar>): Ray3<Scalar> {
+  static fn towards(from: Vector3<Scalar>, to: Vector3<Scalar>): Ray3<Scalar> {
     Ray3(from, to.subtract(from).normalized())
   }
 
   /** The point that far along the ray. A negative distance reads backwards, behind the origin. */
-  fn at(self, distance: Scalar): Vector3<Scalar> {
+  fn at(distance: Scalar): Vector3<Scalar> {
     origin.add direction.multiply(distance)
   }
 
   /** How far along the ray the ball is first met, or `None` where the ray misses it. Inside answers zero. */
-  fn hits(self, sphere: Sphere<Scalar>): Scalar? {
+  fn hits(sphere: Sphere<Scalar>): Scalar? {
     const along: Scalar = direction.lengthSquared()
     if along == zeroOf(along) {
       return None
@@ -73,7 +73,7 @@ public type Ray3<Scalar: Real = Float> {
   }
 
   /** How far along the ray the plane is crossed, or `None` where the ray runs parallel to it or points away from it. */
-  fn hitsPlane(self, plane: Plane<Scalar>): Scalar? {
+  fn hitsPlane(plane: Plane<Scalar>): Scalar? {
     const towards: Scalar = plane.normal.dot direction
     if towards == zeroOf(towards) {
       return None
@@ -84,7 +84,7 @@ public type Ray3<Scalar: Real = Float> {
   }
 
   /** How far along the ray the box is first met, or `None` where the ray misses it. This is the slab test in space. */
-  fn hitsBox(self, box: Box<Scalar>): Scalar? {
+  fn hitsBox(box: Box<Scalar>): Scalar? {
     const reach: Scalar = direction.lengthSquared()
     if box.isEmpty() || reach == zeroOf(reach) {
       return None
@@ -136,7 +136,7 @@ public type Ray3<Scalar: Real = Float> {
    * It crosses the triangle's plane first and then asks the triangle whether that point is inside it, which is the same
    * two steps every ray-triangle test takes.
    */
-  fn hitsTriangle(self, triangle: Triangle3<Scalar>): Scalar? {
+  fn hitsTriangle(triangle: Triangle3<Scalar>): Scalar? {
     match hitsPlane(triangle.plane()) {
       Some(found) => {
         if triangle.contains(at(found)) { Some found } else { None }

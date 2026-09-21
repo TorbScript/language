@@ -11,6 +11,7 @@
  */
 
 use Span from "../../syntax/source"
+use staticKeyword from "../../syntax/token"
 use Diagnostic from "../../syntax/diagnostic"
 use Expression, Argument, CallStyle from "../../syntax/ast"
 use editDistance from "../resolve-types"
@@ -101,7 +102,7 @@ public fn checkCall(
   }
   // A private field cannot be passed from outside the type, which is what makes a constructor usable or not
   checkConstruction checker, target, arguments, expression.span
-  // Places and the mutation rules. The receiver of a `var self` call stays an open access while the
+  // Places and the mutation rules. The receiver of a `var fn` call stays an open access while the
   // arguments are evaluated and while a closure argument runs, which is what makes the DSL rule work; every `var`
   // argument joins it as it is checked; and at the end everything the call *reads* is held against all of them
   const openAccesses = checker.accesses.length()
@@ -948,7 +949,22 @@ fn reportArity(var checker: Checker, name: String, parameters: List<ParameterFor
   } else {
     "{given} were given"
   }
-  checker.reportHere Diagnostic.error("`{name}` takes {takes}, {was}", at)
+  var report = Diagnostic.error "`{name}` takes {takes}, {was}", at
+  // `Point.area()`: a method read through its type is the unbound function, so its receiver is one of the arguments
+  if given == required - 1 && takesReceiver(parameters) {
+    report = report.withNote "`{name}` is a method: call it on a value, or declare it `{staticKeyword} fn`"
+  }
+  checker.reportHere report
+}
+
+/** Whether the first parameter is the receiver: what tells a method from a function of the same shape. */
+fn takesReceiver(parameters: List<ParameterForm>): Bool {
+  if const Some(first) = parameters.get(0) {
+    if const .Receiver(_) = first.mode {
+      return true
+    }
+  }
+  false
 }
 
 fn reportTypeArity(var checker: Checker, name: String, expected: Int, given: Int, at: Span) {

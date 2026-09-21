@@ -23,7 +23,7 @@ named `self` reads and writes that receiver the same way a method body does.
 type Counter {
   var value: Int = 0
 
-  fn add(var self, amount: Int) {
+  var fn add(amount: Int) {
     value = value + amount
   }
 }
@@ -129,7 +129,7 @@ the closure exists only as a value at the call site of `grid`, and `Row` itself 
 type Row {
   var cells: List<Int> = []
 
-  fn cell(var self, value: Int) {
+  var fn cell(value: Int) {
     cells.add value
   }
 }

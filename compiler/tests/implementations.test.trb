@@ -52,47 +52,47 @@ fn withOtherPackage(library: String, main: String): Map<String, String> {
 
 group "What an implementation has to provide" {
   test "a required member that is nowhere is named, together with the signature the trait asks for" {
-    const source = "trait Shape \{\n  fn name(self): String\n\}\n\ntype Square with Shape \{\n  side: Int\n\}"
+    const source = "trait Shape \{\n  fn name(): String\n\}\n\ntype Square with Shape \{\n  side: Int\n\}"
     assert(problems(source) == ["`Square` implements `Shape` but has no `name`"])
-    assert(notes(source) == ["`Shape` requires `fn name(self): String`"])
+    assert(notes(source) == ["`Shape` requires `fn name(): String`"])
   }
 
   test "a default member is no requirement, and neither is a member with a `where` clause (gap 9)" {
-    const source = "trait Shape \{\n  fn area(self): Int\n\n  fn describe(self): String \{\n    \"shape\"\n  \}\n\n"
-      + "  fn sorted<Key: Compare>(self, by: Key): Int where Key: Show \{\n    0\n  \}\n\}\n\n"
-      + "type Square with Shape \{\n  fn area(self): Int \{\n    1\n  \}\n\}"
+    const source = "trait Shape \{\n  fn area(): Int\n\n  fn describe(): String \{\n    \"shape\"\n  \}\n\n"
+      + "  fn sorted<Key: Compare>(by: Key): Int where Key: Show \{\n    0\n  \}\n\}\n\n"
+      + "type Square with Shape \{\n  fn area(): Int \{\n    1\n  \}\n\}"
     assert problems(source).isEmpty()
   }
 
   test "a member an `extend` of the type provides counts, wherever it is written" {
-    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\ntype Square with Shape \{\n  side: Int\n\}\n\n"
-      + "extend Square \{\n  fn area(self): Int \{\n    side * side\n  \}\n\}"
+    const source = "trait Shape \{\n  fn area(): Int\n\}\n\ntype Square with Shape \{\n  side: Int\n\}\n\n"
+      + "extend Square \{\n  fn area(): Int \{\n    side * side\n  \}\n\}"
     assert problems(source).isEmpty()
   }
 
   test "a signature that does not match the trait is a mistake" {
-    const source = "trait Shape \{\n  fn name(self): String\n\}\n\n"
-      + "type Square with Shape \{\n  fn name(self): Int \{\n    1\n  \}\n\}"
+    const source = "trait Shape \{\n  fn name(): String\n\}\n\n"
+      + "type Square with Shape \{\n  fn name(): Int \{\n    1\n  \}\n\}"
     assert(problems(source) == ["`Square.name` does not match `Shape`"])
-    assert(notes(source) == ["`Shape` requires `fn name(self): String`"])
+    assert(notes(source) == ["`Shape` requires `fn name(): String`"])
   }
 
   test "a supertrait is a requirement on the implementing type, and the message says who asked" {
-    const source = "trait Named \{\n  fn name(self): String\n\}\n\ntrait Shape with Named \{\n  fn area(self): Int\n\}\n\n"
-      + "type Square with Shape \{\n  fn area(self): Int \{\n    1\n  \}\n\}"
+    const source = "trait Named \{\n  fn name(): String\n\}\n\ntrait Shape with Named \{\n  fn area(): Int\n\}\n\n"
+      + "type Square with Shape \{\n  fn area(): Int \{\n    1\n  \}\n\}"
     assert(problems(source) == ["`Shape` requires `Named`, and `Square` has no `name`"])
     assert(
       notes(source)
         == [
-          "`Named` requires `fn name(self): String`. A supertrait is a requirement on the implementing type",
+          "`Named` requires `fn name(): String`. A supertrait is a requirement on the implementing type",
         ]
     )
   }
 
   test "a default of the trait in between satisfies the requirement of its supertrait" {
-    const source = "trait Named \{\n  fn name(self): String\n\}\n\n"
-      + "trait Shape with Named \{\n  fn area(self): Int\n\n  fn name(self): String \{\n    \"shape\"\n  \}\n\}\n\n"
-      + "type Square with Shape \{\n  fn area(self): Int \{\n    1\n  \}\n\}"
+    const source = "trait Named \{\n  fn name(): String\n\}\n\n"
+      + "trait Shape with Named \{\n  fn area(): Int\n\n  fn name(): String \{\n    \"shape\"\n  \}\n\}\n\n"
+      + "type Square with Shape \{\n  fn area(): Int \{\n    1\n  \}\n\}"
     assert problems(source).isEmpty()
   }
 
@@ -100,21 +100,21 @@ group "What an implementation has to provide" {
     // Only a package of the standard library may declare `native`, so `Pixel` lives in one
     const files = [
       "std/graphics/project.trb": "name \"std/graphics\"\n",
-      "std/graphics/src/lib.trb": "trait Shape \{\n  fn area(self): Int\n\}\n\npublic native type Pixel with Shape \{\}\n",
+      "std/graphics/src/lib.trb": "trait Shape \{\n  fn area(): Int\n\}\n\npublic native type Pixel with Shape \{\}\n",
     ]
     assert problemsAt(files, ["std/graphics"]).isEmpty()
   }
 
   test "a trait as the target of an implementation asks nothing of the trait itself" {
-    const source = "trait Shape \{\n  fn area(self): Int\n\}\n\n"
-      + "extend Shape with Show \{\n  fn show(self): String \{\n    \"shape\"\n  \}\n\}"
+    const source = "trait Shape \{\n  fn area(): Int\n\}\n\n"
+      + "extend Shape with Show \{\n  fn show(): String \{\n    \"shape\"\n  \}\n\}"
     assert problems(source).isEmpty()
   }
 }
 
 group "Coherence" {
   test "`extend X with Trait` needs the package to own `X` or `Trait`" {
-    const source = "extend String with Show \{\n  fn show(self): String \{\n    self\n  \}\n\}"
+    const source = "extend String with Show \{\n  fn show(): String \{\n    self\n  \}\n\}"
     assert(problems(source) == ["`extend String with Show`: neither `String` nor `Show` belongs to this package"])
     assert(
       notes(source)
@@ -126,22 +126,22 @@ group "Coherence" {
   }
 
   test "owning either side is enough" {
-    const own = "trait Loud \{\n  fn shout(self): String\n\}\n\n"
-      + "extend String with Loud \{\n  fn shout(self): String \{\n    self\n  \}\n\}"
+    const own = "trait Loud \{\n  fn shout(): String\n\}\n\n"
+      + "extend String with Loud \{\n  fn shout(): String \{\n    self\n  \}\n\}"
     assert problems(own).isEmpty()
     const other = "type Amount \{\n  value: Int\n\}\n\n"
-      + "extend Amount with Show \{\n  fn show(self): String \{\n    \"amount\"\n  \}\n\}"
+      + "extend Amount with Show \{\n  fn show(): String \{\n    \"amount\"\n  \}\n\}"
     assert problems(other).isEmpty()
   }
 
   test "an `extend` without a trait has no orphan rule: it only adds members" {
-    assert problems("extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}").isEmpty()
+    assert problems("extend String \{\n  fn shout(): String \{\n    self\n  \}\n\}").isEmpty()
   }
 
   test "two implementations of one trait for one type overlap" {
-    const source = "trait Loud \{\n  fn shout(self): String\n\}\n\ntype Amount \{\n  value: Int\n\}\n\n"
-      + "extend Amount with Loud \{\n  fn shout(self): String \{\n    \"a\"\n  \}\n\}\n\n"
-      + "extend Amount with Loud \{\n  fn shout(self): String \{\n    \"b\"\n  \}\n\}"
+    const source = "trait Loud \{\n  fn shout(): String\n\}\n\ntype Amount \{\n  value: Int\n\}\n\n"
+      + "extend Amount with Loud \{\n  fn shout(): String \{\n    \"a\"\n  \}\n\}\n\n"
+      + "extend Amount with Loud \{\n  fn shout(): String \{\n    \"b\"\n  \}\n\}"
     assert(problems(source) == ["`Amount` already implements `Loud` (in `app/src/main.trb`)"])
     assert(
       notes(source)
@@ -151,14 +151,14 @@ group "Coherence" {
 
   test "two arguments of the same trait are two implementations and do not overlap" {
     const source = "type Wide \{\n  value: Int\n\}\n\n"
-      + "extend Wide with From<Int8> \{\n  fn from(value: Int8): Wide \{\n    Wide(1)\n  \}\n\}\n\n"
-      + "extend Wide with From<UInt8> \{\n  fn from(value: UInt8): Wide \{\n    Wide(2)\n  \}\n\}"
+      + "extend Wide with From<Int8> \{\n  static fn from(value: Int8): Wide \{\n    Wide(1)\n  \}\n\}\n\n"
+      + "extend Wide with From<UInt8> \{\n  static fn from(value: UInt8): Wide \{\n    Wide(2)\n  \}\n\}"
     assert problems(source).isEmpty()
   }
 
   test "a type of this package as an argument of the trait is the third way in" {
     const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
-      + "extend Float64 with From<Celsius> \{\n  fn from(value: Celsius): Float64 \{\n    value.degrees\n  \}\n\}"
+      + "extend Float64 with From<Celsius> \{\n  static fn from(value: Celsius): Float64 \{\n    value.degrees\n  \}\n\}"
     assert problems(source).isEmpty()
   }
 
@@ -174,7 +174,7 @@ group "Coherence" {
   }
 
   test "a package that owns none of the three is still refused, and the note names all three ways" {
-    const source = "extend Float64 with From<Int8> \{\n  fn from(value: Int8): Float64 \{\n    1.0\n  \}\n\}"
+    const source = "extend Float64 with From<Int8> \{\n  static fn from(value: Int8): Float64 \{\n    1.0\n  \}\n\}"
     assert(
       problems(source) == ["`extend Float64 with From<Int8>`: neither `Float64` nor `From<Int8>` belongs to this package"]
     )
@@ -188,7 +188,7 @@ group "Coherence" {
   }
 
   test "a trait without arguments keeps the note it had, because there is no third way" {
-    const source = "extend String with Show \{\n  fn show(self): String \{\n    self\n  \}\n\}"
+    const source = "extend String with Show \{\n  fn show(): String \{\n    self\n  \}\n\}"
     assert(
       notes(source)
         == [
@@ -200,7 +200,7 @@ group "Coherence" {
 
   test "a trait that has a blanket implementation says which trait to implement instead" {
     const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
-      + "extend Celsius with Into<Float64> \{\n  fn into(self): Float64 \{\n    degrees\n  \}\n\}"
+      + "extend Celsius with Into<Float64> \{\n  fn into(): Float64 \{\n    degrees\n  \}\n\}"
     assert(problems(source) == ["`Into` comes from `From` for every type"])
     assert(
       notes(source)
@@ -213,21 +213,21 @@ group "Coherence" {
 
   test "the line it names is coherent, because the argument of the trait is a type of this package" {
     const source = "type Celsius \{\n  degrees: Float\n\}\n\n"
-      + "extend Float64 with From<Celsius> \{\n  fn from(value: Celsius): Float64 \{\n    value.degrees\n  \}\n\}\n\n"
+      + "extend Float64 with From<Celsius> \{\n  static fn from(value: Celsius): Float64 \{\n    value.degrees\n  \}\n\}\n\n"
       + inBody("  const degrees: Float64 = Celsius(100.0).into()")
     assert problems(source).isEmpty()
   }
 
   test "a blanket whose condition is not one trait bound keeps the plain overlap message" {
-    const source = "trait Loud \{\n  fn shout(self): String\n\}\n\n"
-      + "extend<Value> Value with Loud \{\n  fn shout(self): String \{\n    \"any\"\n  \}\n\}\n\n"
+    const source = "trait Loud \{\n  fn shout(): String\n\}\n\n"
+      + "extend<Value> Value with Loud \{\n  fn shout(): String \{\n    \"any\"\n  \}\n\}\n\n"
       + "type Amount \{\n  value: Int\n\}\n\n"
-      + "extend Amount with Loud \{\n  fn shout(self): String \{\n    \"a\"\n  \}\n\}"
+      + "extend Amount with Loud \{\n  fn shout(): String \{\n    \"a\"\n  \}\n\}"
     assert(problems(source) == ["`Amount` already implements `Loud` (in `app/src/main.trb`)"])
   }
 
   test "a blanket implementation covers every type, so it needs the trait" {
-    const source = "extend<Source> Source with Show \{\n  fn show(self): String \{\n    \"any\"\n  \}\n\}"
+    const source = "extend<Source> Source with Show \{\n  fn show(): String \{\n    \"any\"\n  \}\n\}"
     assert(problems(source) == ["`extend Source with Show`: neither `Source` nor `Show` belongs to this package"])
   }
 }
@@ -263,9 +263,9 @@ group "Delegation with `by`" {
   }
 
   test "`by` binds to one element of the `with` list: derived, a delegated group, a delegated trait alone, and a hand-written one all coexist" {
-    const source = "trait Named \{\n  fn name(self): String\n\}\n\n"
+    const source = "trait Named \{\n  fn name(): String\n\}\n\n"
       + "type Seconds with Show, Add<Seconds, Seconds> & Subtract<Seconds, Seconds> by value, Compare by value, Named \{\n"
-      + "  value: Int\n\n  fn name(self): String \{\n    \"seconds\"\n  \}\n\}\n\n"
+      + "  value: Int\n\n  fn name(): String \{\n    \"seconds\"\n  \}\n\}\n\n"
       + inBody(
         "  const sum = Seconds(1) + Seconds(2)\n"
           + "  const difference = Seconds(3) - Seconds(1)\n"
@@ -286,18 +286,18 @@ group "Delegation with `by`" {
 
   test "`by` needs a type with a single field" {
     const source = "type Money with Show by amount \{\n  amount: Int\n  currency: String\n\n"
-      + "  fn show(self): String \{\n    \"money\"\n  \}\n\}"
+      + "  fn show(): String \{\n    \"money\"\n  \}\n\}"
     assert(problems(source) == ["`by` needs a type with a single field: `Money` has `amount` and `currency`"])
   }
 
   test "`by` names the field of the type" {
-    const source = "type Seconds with Show by amount \{\n  value: Int\n\n  fn show(self): String \{\n    \"seconds\"\n  \}\n\}"
+    const source = "type Seconds with Show by amount \{\n  value: Int\n\n  fn show(): String \{\n    \"seconds\"\n  \}\n\}"
     assert(problems(source) == ["`by` names the field of the type: `Seconds` has `value`, not `amount`"])
   }
 
   test "a type with cases cannot delegate" {
     const source = "type Shape with Show by value \{\n  case Circle(value: Int)\n  case Empty\n\n"
-      + "  fn show(self): String \{\n    \"shape\"\n  \}\n\}"
+      + "  fn show(): String \{\n    \"shape\"\n  \}\n\}"
     assert(problems(source) == ["`by` needs a type with a single field: `Shape` has cases, not fields"])
   }
 }
@@ -321,7 +321,7 @@ group "Derived implementations" {
 
   test "a hand-written member wins over the derived one, per member" {
     const source = "type Amount with Show \{\n  value: Int\n\n"
-      + "  fn show(self): String \{\n    \"amount\"\n  \}\n\}\n\n"
+      + "  fn show(): String \{\n    \"amount\"\n  \}\n\}\n\n"
       + inBody("  const shown = \"\{Amount(1)\}\"")
     const found = probe source
     assert(found.adaptationsOf("Amount(1)") == ["show through Amount: Show"])
@@ -379,7 +379,7 @@ group "The visibility of an `extend`" {
   test "an extension of a type of your own package is part of the type everywhere" {
     const files = [
       "app/src/text.trb": "public fn unused(): Int \{\n  0\n\}\n\n"
-        + "extend Amount \{\n  fn doubled(self): Int \{\n    value * 2\n  \}\n\}\n\n"
+        + "extend Amount \{\n  fn doubled(): Int \{\n    value * 2\n  \}\n\}\n\n"
         + "public type Amount \{\n  value: Int\n\}",
       "app/src/main.trb": "use Amount from \"./text\"\n\nfn probe() \{\n  print Amount(1).doubled()\n\}",
     ]
@@ -388,13 +388,13 @@ group "The visibility of an `extend`" {
 
   test "an extension of a foreign type is named where it is used, and the message is the line to write" {
     const files = withOtherPackage(
-      "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
+      "extend String \{\n  fn shout(): String \{\n    self\n  \}\n\}",
       "fn probe() \{\n  print \"a\".shout()\n\}",
     )
     assert(problemsIn(files) == ["`other/library` adds `shout` to `String`, and this file does not name it"])
     assert(notesIn(files) == ["Write `use String.shout from \"other/library\"` at the top of the file"])
     const named = withOtherPackage(
-      "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
+      "extend String \{\n  fn shout(): String \{\n    self\n  \}\n\}",
       "use String.shout from \"other/library\"\n\nfn probe() \{\n  print \"a\".shout()\n\}",
     )
     assert problemsIn(named).isEmpty()
@@ -402,8 +402,8 @@ group "The visibility of an `extend`" {
 
   test "two members of one name for one type are an ambiguity at the use, and `as` is the fix" {
     const files = [
-      "app/src/one.trb": "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
-      "app/src/two.trb": "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
+      "app/src/one.trb": "extend String \{\n  fn shout(): String \{\n    self\n  \}\n\}",
+      "app/src/two.trb": "extend String \{\n  fn shout(): String \{\n    self\n  \}\n\}",
       "app/src/main.trb": "fn probe() \{\n  print \"a\".shout()\n\}",
     ]
     assert(problemsIn(files) == ["`shout` comes from `acme/app/one` and from `acme/app/two`"])
@@ -415,15 +415,15 @@ group "The visibility of an `extend`" {
 
   test "`as` renames a member of this package too, so a conflict has a way out" {
     const files = [
-      "app/src/one.trb": "extend String \{\n  fn shout(self): String \{\n    self\n  \}\n\}",
+      "app/src/one.trb": "extend String \{\n  fn shout(): String \{\n    self\n  \}\n\}",
       "app/src/main.trb": "use String.shout as yell from \"./one\"\n\nfn probe() \{\n  print \"a\".yell()\n\}",
     ]
     assert problemsIn(files).isEmpty()
   }
 
   test "what a trait puts on a type it does not own needs the trait to be a name of the file" {
-    const library = "public trait Slug \{\n  fn slug(self): String\n\}\n\n"
-      + "extend String with Slug \{\n  fn slug(self): String \{\n    self\n  \}\n\}"
+    const library = "public trait Slug \{\n  fn slug(): String\n\}\n\n"
+      + "extend String with Slug \{\n  fn slug(): String \{\n    self\n  \}\n\}"
     const files = withOtherPackage library, "fn probe() \{\n  print \"a\".slug()\n\}"
     assert(problemsIn(files) == ["`slug` comes from `Slug`, which is not a name in this file"])
     assert(
@@ -447,13 +447,13 @@ group "The visibility of an `extend`" {
  * why there is no inherent blanket: without a trait there is nothing to own and nothing a using file could name.
  */
 group "Member lookup through a blanket implementation" {
-  const query = "trait Query \{\n  fn size(self): Int\n\}\n\n"
-    + "trait Pairs \{\n  fn doubled(self): Int\n\}\n\n"
-    + "type Game with Query \{\n  count: Int\n\n  fn size(self): Int \{\n    count\n  \}\n\}\n\n"
+  const query = "trait Query \{\n  fn size(): Int\n\}\n\n"
+    + "trait Pairs \{\n  fn doubled(): Int\n\}\n\n"
+    + "type Game with Query \{\n  count: Int\n\n  fn size(): Int \{\n    count\n  \}\n\}\n\n"
 
   test "a concrete type that satisfies the bound has the member" {
     const source = "{query}extend<World: Query> World with Pairs \{\n"
-      + "  fn doubled(self): Int \{\n    size() * 2\n  \}\n\}\n\n"
+      + "  fn doubled(): Int \{\n    size() * 2\n  \}\n\}\n\n"
       + "fn probe() \{\n  const game = Game(2)\n  print game.doubled()\n\}"
     assert problems(source).isEmpty()
     const found = probe source
@@ -462,7 +462,7 @@ group "Member lookup through a blanket implementation" {
 
   test "a type that does not satisfy it does not" {
     const source = "{query}extend<World: Query> World with Pairs \{\n"
-      + "  fn doubled(self): Int \{\n    size() * 2\n  \}\n\}\n\n"
+      + "  fn doubled(): Int \{\n    size() * 2\n  \}\n\}\n\n"
       + "type Other \{\n  count: Int\n\}\n\n"
       + "fn probe() \{\n  const other = Other(2)\n  print other.doubled()\n\}"
     assert(problems(source) == ["`Other` has no member `doubled`"])
@@ -470,7 +470,7 @@ group "Member lookup through a blanket implementation" {
 
   test "an inherent blanket `extend` is not a form of the language" {
     const source = "{query}extend<World: Query> World \{\n"
-      + "  fn doubled(self): Int \{\n    size() * 2\n  \}\n\}\n\n"
+      + "  fn doubled(): Int \{\n    size() * 2\n  \}\n\}\n\n"
       + "fn probe() \{\n  const game = Game(2)\n  print game.doubled()\n\}"
     assert(problems(source) == ["`World` is a type parameter, so this `extend` needs a trait"])
     assert(
@@ -489,7 +489,7 @@ group "Member lookup through a blanket implementation" {
    */
   test "a `where` clause whose subject is a concrete type is not a fact the body may use yet" {
     const source = "type Path \{\n  text: String\n\}\n\n"
-      + "extend Path with From<String> \{\n  fn from(value: String): Path \{\n    Path(value)\n  \}\n\}\n\n"
+      + "extend Path with From<String> \{\n  static fn from(value: String): Path \{\n    Path(value)\n  \}\n\}\n\n"
       + "fn open<Source>(path: Source): Path where Path: From<Source> \{\n  Path.from path\n\}\n\n"
       + "fn probe() \{\n  print open(\"a\").text\n\}"
     assert(problems(source) == ["Expected `String`, found `Source`"])

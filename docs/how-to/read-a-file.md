@@ -89,7 +89,7 @@ type ConfigError with Show, Error {
   case Io(cause: IoError)
   case Empty(path: String)
 
-  fn show(self): String {
+  fn show(): String {
     match self {
       .Io(cause) => "{cause}"
       .Empty(path) => "{path} is empty"

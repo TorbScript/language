@@ -1,6 +1,6 @@
 ---
 title: Mutation and var paths
-summary: A change needs an unbroken var path from the binding down to the field being changed, and a var parameter or var self is a reference that cannot outlive the call it belongs to.
+summary: A change needs an unbroken var path from the binding down to the field being changed, and a var parameter or a var fn receiver is a reference that cannot outlive the call it belongs to.
 kind: reference
 status: stable
 order: 80
@@ -16,7 +16,7 @@ source:
 ---
 
 Nothing in the language is changed through an alias. A change always goes through a **var path**: a `var` binding,
-`var` parameter or `var self`, then `var` fields, indices and ranges all the way down to the value that changes.
+`var` parameter or a `var fn` receiver, then `var` fields, indices and ranges all the way down to the value that changes.
 
 ## Example
 
@@ -24,7 +24,7 @@ Nothing in the language is changed through an alias. A change always goes throug
 type Counter {
   var count: Int = 0
 
-  fn increment(var self) {
+  var fn increment() {
     count = count + 1
   }
 }
@@ -55,7 +55,7 @@ print counter.count
    type Counter {
      var count: Int = 0
 
-     fn increment(var self) {
+     var fn increment() {
        count = count + 1
      }
    }
@@ -73,7 +73,7 @@ print counter.count
 2. **A path through `a[key]` or `a[from..to]` changes the collection in place, without a copy.** `samples[1..4].sort {
    value => value }` sorts that slice of `samples` itself, the same way a field step would.
 
-3. **A reference is second-class: it exists only as a `var` parameter or `var self`, for the duration of one call.**
+3. **A reference is second-class: it exists only as a `var` parameter or a `var fn` receiver, for the duration of one call.**
    It cannot be stored in a field, returned, or captured by a closure that outlives the call - which is exactly what
    keeps the language free of lifetimes and dangling references.
 
@@ -81,11 +81,11 @@ print counter.count
    type Counter {
      var count: Int = 0
 
-     fn watcher(var self): () => Void {
+     var fn watcher(): () => Void {
        { count = count + 1 }
      }
    }
-   // error: This closure captures `var self` and may outlive the call
+   // error: This closure captures the receiver `self` and may outlive the call
    ```
 
 4. **A captured `var` binding is the one exception, and it is a shared box, not a reference.** A closure that captures
@@ -99,7 +99,7 @@ print counter.count
    type Counter {
      var count: Int = 0
 
-     fn increment(var self) {
+     var fn increment() {
        count = count + 1
      }
    }
@@ -141,5 +141,5 @@ print counters[0].count
 
 - [Exclusivity](exclusivity.md) - the rule for when two `var` accesses to the same path may not overlap.
 - [Fields](fields.md) - which field modifier a path is allowed to end on.
-- [Declaring a type](declaring-a-type.md) - `var self` on a verb, and its participle that needs no path at all.
+- [Declaring a type](declaring-a-type.md) - `var fn` on a verb, and its participle that needs no path at all.
 - [Bindings](../values-and-types/bindings.md) - `const` and `var` on the binding a path starts from.

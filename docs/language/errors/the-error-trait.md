@@ -23,7 +23,7 @@ hand it further up and eventually report it.
 type ConfigError with Show, Error {
   case Missing(key: String)
 
-  fn show(self): String {
+  fn show(): String {
     match self {
       .Missing(key) => "missing: {key}"
     }
@@ -47,7 +47,7 @@ print start()
 
 ```text
 public trait Error with Show {
-  fn cause(self): Error? { None }
+  fn cause(): Error? { None }
 }
 
 type <Name> with Show, Error {
@@ -74,7 +74,7 @@ type <Name> with Show, Error {
    type ConfigError with Show, Error {
      case Missing(key: String)
 
-     fn show(self): String {
+     fn show(): String {
        match self {
          .Missing(key) => "missing: {key}"
        }
@@ -99,7 +99,7 @@ stack unwinding anywhere in the language; a value with `Error` travels exactly t
 type ConfigError with Show, Error {
   case Missing(key: String)
 
-  fn show(self): String {
+  fn show(): String {
     match self {
       .Missing(key) => "missing: {key}"
     }
@@ -120,7 +120,7 @@ report ConfigError.Missing("port")
 type ConfigError with Show, Error {
   case Missing(key: String)
 
-  fn show(self): String {
+  fn show(): String {
     match self {
       .Missing(key) => "missing: {key}"
     }

@@ -346,7 +346,7 @@ compares this text catches an ownership regression far earlier than a C-level te
 | `Integer`, `Float`, `Bool`, `Char`, `Void`, `FixedArray` of such, `Inline` layout of such | no | copied, never touched |
 | `Text`, `Runtime` (list, map, set, Task, Channel), `Boxed` layout, `Object`, `Closure` with an environment | yes | `Retain`/`Release`/`MakeUnique` |
 | `Shared`, `Box`                                    | yes, plus a color for the cycle collector | as above |
-| `Reference` (`var` parameter, `var self`, `var` path) | **no**  | section 2.5                                      |
+| `Reference` (`var` parameter, a `var fn` receiver, `var` path) | **no**  | section 2.5                                      |
 
 - **A slot has exactly one owner.** Every operand position is `Borrowed` (the value must be live at that point; no
   count changes) or `Owned` (the position takes the count).
@@ -357,7 +357,7 @@ compares this text catches an ownership regression far earlier than a C-level te
   2. `Construct`, `BoxNew`, `TraitValue` and `Return` are always `Owned` positions.
   3. A **summary** per function, computed from the already lowered body (section 2.2, phase 2): a parameter whose
      only use is a `Copy` into a slot that is later `MakeUnique`d or returned is `Owned`.
-     Rule 3 is exactly what makes the participles free: `fn added(self, value: Item): Self { var result = self  result.add(value)  result }`
+     Rule 3 is exactly what makes the participles free: `fn added(value: Item): Self { var result = self  result.add(value)  result }`
      receives `self` owned, so at a call site where the receiver is dead the `Copy` is a `Move`, the count stays 1,
      `MakeUnique` is a no-op, and `list = list.added(x)` changes in place. This is the promise of
      [docs/ARCHITECTURE.md](ARCHITECTURE.md) ("Last use is a move"), and it is a property of the IR, not of a back end.
@@ -856,9 +856,9 @@ run against **stage 0, the C back end and later the VM** by the same runner.
 | **5.4** | **Done.** Ownership: the summary pass, liveness, `Copy`/`Move`/`Retain`/`Release` insertion, edge splitting, `MakeUnique`, and the verifier's ownership invariants | `ir/liveness.trb`, `ir/operand.trb`, `ir/ownership.trb`, `ir/ownership-verify.trb` | IR snapshots pinning every insertion point (45 tests in `ownership`, `liveness`, `operand`, `make-unique` and `ownership-verify`); hand-built wrong IR against every message of the verifier; the live-block counter is zero after every conformance script (from 5.3 on) | 5.2 |
 | **5.5** | **Done.** ADTs: variant layouts, the niche, `MatchPlan` to decision trees, guards and fallbacks, case constructors, `Option`/`Result`, `?` with its conversion, `??`, `if const`/`while const`, destructuring bindings | `ir/decision.trb`, `ir/lower/match.trb` | `compiler/tests/decision.test.trb` (6 decision trees as text), `lower-match.test.trb` (10 IR snapshots, every one through `verifyOwnedProgram`), `emit-c` additions; `bootstrap/tests/native/{adts,errors,matching,states}.trb` run natively with zero live blocks | 5.2, 5.4 |
 | **5.6** | **Done.** Generics: instance keys with type arguments, the worklist, witness tables, trait-typed values, per-bound sharing, derived `Show`/`Equals`/`Hash`/`compare`, trait defaults and overrides. **Gate: `bootstrap/tests/native/{traits,generics,derived}.trb`** - `basics.trb` needs 5.7 to 5.10 as well (see the note below) | `ir/witness.trb`, `ir/lower/generic.trb`, `ir/lower/derive.trb`, `backend/c/emit.trb` | `compiler/tests/lower-generics.test.trb` (8, instance counts among them), `emit-c` additions (5 pinned C snippets), three native gate programs with zero live blocks | 5.5 |
-| **5.7** | **The lists run.** The ABI of the containers, `var self` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterator`/`length`/`show` as TorbScript. **Still open:** the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention, which also blocks every map and set literal), index paths, variadics and the spread. **Done in the long tail of 6.1:** list patterns, `String.chars`/`bytes`/`from` and `String.slice` (see the note at the end). **Gate: `bootstrap/tests/native/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `bootstrap/tests/native/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
+| **5.7** | **The lists run.** The ABI of the containers, `var fn` members of a **trait-typed value**, the witness of a value as a *place*, element descriptors, `ContainerNew`, the list literal, `a[key]` reads, `for` over a collection, a range as a value; then **the bound on the instance set** (a default nothing overrides is no slot of a table), **nested tables**, `ArrayList.from` and `Range.iterator`/`length`/`show` as TorbScript. **Still open:** the map/set cursor (one new runtime function plus a `bool`-plus-two-outs convention, which also blocks every map and set literal), index paths, variadics and the spread. **Done in the long tail of 6.1:** list patterns, `String.chars`/`bytes`/`from` and `String.slice` (see the note at the end). **Gate: `bootstrap/tests/native/{collections,ranges,collection-index}.trb}` - `language.trb` is a stage-0 script and not a checked program (see the note)** | `ir/element.trb`, `ir/lower/{native,collection}.trb`, `ir/witness.trb`, `backend/c/{natives,emit}.trb`, `std/collections/src/list.trb`, `std/core/src/range.trb` | `bootstrap/tests/native/{natives,reassignment,trait-values,collections,ranges,collection-index}.trb`, `compiler/tests/{lower-natives,ir-elements,lower-generics}.test.trb`; `07-collections.trb` is two index-path findings away | 5.3, 5.6, 5.8 |
 | **5.8** | **Done.** Closures: closure conversion, environments, escaping or not, boxes for captured `var` bindings, `lazy` cells, function values, receiver closures, property commands. **Gate: `bootstrap/tests/native/{closures,counted-closures,dsl}.trb`** - `examples/config-dsl` loads a receiver *script* (7.4) and needs 5.7 and 5.10 besides (see the note below) | `ir/lower/closure.trb`, `ir/capture.trb` | `compiler/tests/lower-closures.test.trb` (19: the IR text, the pinned C, the findings); three native gate programs with zero live blocks | 5.6 |
-| **5.9a** | **Done.** `var` parameters and `var self` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
+| **5.9a** | **Done.** `var` parameters and `var fn` receivers: a place as an argument, interior projections through fields, assignment and property commands through a path, `MakeUnique` per counted owner of the path | `ir/lower/place.trb` | `compiler/tests/lower-places.test.trb` (23: the IR text, the pinned C, the verifier's invariants); `bootstrap/tests/native/{places,place-counted}.trb` run natively with zero live blocks | 5.4 |
 | **5.9b** | The rest of the `var` paths: index paths (`TakeOut`/`PutBack`), slices as windows, `if var`/`while var`, `shared type` objects with their headers and trace functions, `FixedArray`, `Close`/`using` | `ir/lower/place.trb`, `runtime/memory.c` | `01-bindings-and-values.trb`, `03-types.trb`, `08-control-flow.trb` | 5.9a, 5.7 |
 | **5.10** | **Done, except what needs a collection.** Text: interpolation, `print`/`printError`, `Show` for every shape in the format of gap 23, float formatting in both back ends, `?.`. **Still open:** `describe`, derived `Encode`/`Decode` and the `std/json` natives, which all wait for 5.7 (see the note below) | `ir/lower/text.trb`, `ir/lower/match.trb`, `runtime/text.c`, `bootstrap/crates/torb-interpreter` | `compiler/tests/lower-text.test.trb` (19); `bootstrap/tests/native/{interpolation,floats,optional-chain}.trb` run natively, compared with stage 0, zero live blocks | 5.6, 5.7 |
 | **5.11** | **The gate holds.** `assert` is lowered, `test`/`group` are functions of the runtime with a recovery point, `torb test <directory>` builds **one** binary for every test file and runs it, and `\n` is `\n` on both implementations. **Gate: `compiler/tests/*.test.trb` run from the native binary - 1482 passed, 0 failed (55 files), the same report as stage 0 line for line.** **Still open:** an `Expression<Value>` as a value - the static tree, `value()`, `captures()` - which nothing of `compiler/` needs | `ir/lower/quote.trb`, `ir/lower/match.trb`, `runtime/test.c`, `runtime/panic.c`, `runtime/console.c`, `cli/test.trb`, `backend/c/emit.trb` | `bootstrap/tests/native/{tests,test-failure,assert-values,nested-list-patterns}.trb`, `binary-only/assert-compound-capture.trb`, and `cargo test --release --test suite -- --ignored` | 5.10 |
@@ -1092,7 +1092,7 @@ can run, the code won and this is the list. Everything else is as written.
 - **A runtime native is called only where the manifest's prototype says it can be.** The prototype text of
   `NativeEntry` is taken apart and compared to the signature the lowering built, spelling by spelling. That is what
   catches the two conventions of 5.R1 before the C compiler does: a native whose result is an `Option` or a `Result`
-  answers `bool` and writes its payload through an out parameter, and one that takes a `var self` takes a pointer -
+  answers `bool` and writes its payload through an out parameter, and one that is a `var fn` takes a pointer -
   both need a wrapper the lowering does not build yet, and both are a finding that names the symbol.
 - **`Instruction.Call` carries no location, so a native that takes one cannot be called yet.** `torb_text_slice`,
   `torb_text_repeat` and `torb_list_with_capacity` take a `torb_location` for the panic they may raise, and the
@@ -1331,13 +1331,13 @@ portable C can express, the code won and this is the list. Everything else is as
   the value carries - so a path through nested tables could not be spelled at all. The order is: the members of the trait
   in declaration order, then the same of every supertrait in declaration order, deduplicated by name.
 - **A default member is a slot of the table.** Section 1.4 says a default is not in one. But an implementation may
-  *override* a default (`Show.showNested` for a `String`, and any `extend X with T { fn aDefault(self) ... }`), and which
+  *override* a default (`Show.showNested` for a `String`, and any `extend X with T { fn aDefault() ... }`), and which
   of the two a trait-typed value reaches is only known at run time. So every object-safe member is in the table, with the
   override where there is one and an instance of the default body for the target type otherwise. Gap 14 still falls out:
   a delegated implementation declares no override, so `by` forwards the required members only.
 - **Three kinds of member are left out of a table**, and every one of them is a member object safety already forbids on a
   trait-typed value: one that mentions `Self` anywhere but as its receiver (`equals`, `compare`, `min`), a static one,
-  and one with generic parameters or a `where` clause of its own, whose call would need witnesses appended. A `var self`
+  and one with generic parameters or a `where` clause of its own, whose call would need witnesses appended. A `var fn` receiver
   member is left out as well until 5.9 (`List.add`). Calling one on a trait-typed value is the finding "`add`, which is
   not in the witness table of a trait-typed value".
 - **A table is `{ drop, members }` and every member is a thunk.** Section 3.1 writes `Object(bounds)` as
@@ -1378,7 +1378,7 @@ portable C can express, the code won and this is the list. Everything else is as
   needs it for `Less` and `Greater` as well, because a `Char` is a code point and not a number. Where the kind is absent
   the verifier demands that both operands have the same type, as it already did for equality.
 - **A runtime native that answers the other signedness of the same width is converted, not refused.**
-  `Hash.hash(self): Int` against `uint64_t torb_hash_i64(int64_t)` is the one difference between a declaration of `std/`
+  `Hash.hash(): Int` against `uint64_t torb_hash_i64(int64_t)` is the one difference between a declaration of `std/`
   and its runtime symbol that is a cast and not a wrapper, because the bits are the hash either way
   (`PrototypeMatch.Converted`).
 - **`torb build` and `torb ir` ask the checker for every body, not only for the requested modules.** A lowering may reach
@@ -1403,7 +1403,7 @@ portable C can express, the code won and this is the list. Everything else is as
   (`Iterable<Float64>` does not implement `Show`, because `map` answers an `Iterable` and only a named collection is
   `Show`), so the file is a stage-0 script and not a checked program. What is left of it after that is blocked by 5.7
   (list and map literals, `a[key]`, `for` over a collection, the variadic list of `print`), 5.8 (closures), 5.9
-  (`var self`, `var` parameters, assignment to a place) and 5.10 (string interpolation). The gate of this sub-milestone is
+  (a `var fn` receiver, `var` parameters, assignment to a place) and 5.10 (string interpolation). The gate of this sub-milestone is
   therefore `bootstrap/tests/native/traits.trb`, `generics.trb` and `derived.trb`, each compiled, run, compared with
   stage 0 and asserted to leave zero live blocks.
 
@@ -1544,7 +1544,7 @@ allows, the code won and this is the list. Everything else is as written.
 
 Sections 1 to 3 are the plan; where they did not fit what the checker records, what 5.1 to 5.5 built or what stage 0 can
 run, the code won and this is the list. Everything else is as written. 5.9a is the first half of the row: `var`
-parameters and `var self` receivers, which need nothing of 5.6 and 5.7 at all.
+parameters and `var fn` receivers, which need nothing of 5.6 and 5.7 at all.
 
 - **One file, and the place comes from the checker.** `ir/lower/place.trb` is the whole sub-milestone. It reads
   `Tables.places` - the `Place` 4.6 recorded under the span of every argument, receiver, assignment target and `if var`
@@ -1620,7 +1620,7 @@ parameters and `var self` receivers, which need nothing of 5.6 and 5.7 at all.
 
 **5.7 is not finished, and it came in two rounds.** The first round is the ABI the containers need - the two conventions
 of `runtime/` as a generated wrapper, and the leak an assignment used to be - plus the measurement of what the rest of
-the row really waits for. The second round is that chain, walked as far as it goes without closures: a `var self` member
+the row really waits for. The second round is that chain, walked as far as it goes without closures: a `var fn` member
 of a trait-typed value, element descriptors, `ContainerNew`, and the container literals. What is still open is listed
 after both.
 
@@ -1672,7 +1672,7 @@ after both.
   sub-milestone. `closedReceiver` now answers `None` for a function type, and `staticDispatch`'s existing fallback (the
   target of the implementation) takes over.
 
-**The second round of 5.7: a `var self` member of a trait-typed value, and what that made possible.**
+**The second round of 5.7: a `var fn` member of a trait-typed value, and what that made possible.**
 
 - **The witness table carries everything about the erased target that `torb_release` and `torb_make_unique` need.**
   `{ drop, retainChildren, size, nested, members }`, and `MakeUnique` of an `Object` slot is
@@ -1681,7 +1681,7 @@ after both.
   `add` made through the other. Every bound of one value describes the same payload, so the **first** table answers; and
   every trait-typed payload is boxed (5.6 pins `T_payload__X` to `Boxed`), so there is no inline-payload shape that could
   skip the uniqueness.
-- **A `var self` member is in a table again.** Its thunk takes the **address** of the payload inside the box and the box
+- **A `var fn` member is in a table again.** Its thunk takes the **address** of the payload inside the box and the box
   is not `const`. The erased receiver is `void *` in *every* thunk, including a read-only one, because a call site knows
   the member's index and not its declaration - one spelling is what makes the cast back well defined C, and the `const`
   of a read-only member is kept one line further in, on the box the thunk unwraps. A native whose ABI is not the
@@ -1782,7 +1782,7 @@ first, plus the two findings that were hiding behind each other.
   records nothing. Unwrapping `.Generic` then uncovered `Target.from self` in `Iterable.to`: a **static** member of a
   generic parameter that turned out to be a trait type. There is no value there to erase, `Traits([List<Int>])` is a
   closed type like any other and `witnessFor` names the one implementation of it, so `.Forwarded` goes dynamic only for a
-  member that takes `self` now. Object safety says the same thing from the other side: a static member is never in a
+  member with a receiver now. Object safety says the same thing from the other side: a static member is never in a
   table.
 - **`a[key]` is `Indexed.at`, and the panic on a missing key is the language's own.** `at` is a *default* of `std/core`
   whose body is `get(key).expect("Key does not exist")`, so what an index out of range does is decided once and is the
@@ -1791,7 +1791,7 @@ first, plus the two findings that were hiding behind each other.
   for it - became `lowerDispatched`, so an index hands its two slots to the one place that knows those five shapes;
   `lowerWitnessCall` and `lowerNativeCall` take a `Span` instead of an `Expression`, which is all they read out of one.
 - **`for` over a collection is BACKEND 1.6 exactly**, and three properties make it correct without a rule of the `for`:
-  the cursor is a **`var` local of the frame**, so `Iterator.next(var self)` is an ordinary place and a trait-typed cursor
+  the cursor is a **`var` local of the frame**, so `Iterator.next()` is an ordinary place and a trait-typed cursor
   has its payload box made unique first; the cursor holds the subject **by value**, so changing the collection inside the
   body does not change what the loop walks; and a counted item is read into the same slot every round, which makes it
   dead on the back edge and its drop an ordinary edge drop. `continue` jumps to the head, where the next value is pulled,
@@ -1958,7 +1958,7 @@ written.
     origin of an implementation says who wrote it down, not who writes the body.
 - **The gate is not `language.trb`**, and it cannot be: like `basics.trb` before it, it is a stage-0 **script** and not a
   checked program. Eleven of its lines are refused by the type checker itself and by no back end - `onStart { "...{port}" }`
-  captures `var self` in a closure that may outlive the call, `print counters.map({ _.count })` asks `Iterable<Int>` for
+  captures the receiver `self` in a closure that may outlive the call, `print counters.map({ _.count })` asks `Iterable<Int>` for
   `Show`, `samples[1..4].sort()` calls `sort` without its `by`, `Seconds` implements none of `Add`, `Compare` or
   `Subtract`, `match` does not handle `[_, _, ...]`, and `visit`/`seen`/`limit`/`toMap` are names that are not there. So
   5.7's row needs a gate that is a program: `bootstrap/tests/native/{collections,ranges,collection-index}.trb` are it -
@@ -2017,7 +2017,7 @@ path *is*.
   and an insert, and it is what makes `grid[y][x] = v` fall out of nothing: everything in front of the last index is an
   ordinary place, taken out and put back around the `set` by the very machinery a `var` argument uses.
 - **Copy on write needs no rule of its own,** which is the test of the design. The element the frame holds shares its
-  storage with the copy the container still has, so the access - a `Write` through the element's slot, or a `var self`
+  storage with the copy the container still has, so the access - a `Write` through the element's slot, or a `var fn` receiver
   callee writing through the pointer it was handed - makes it unique for the ordinary reason, and `set` releases what the
   container had there. `bootstrap/tests/native/collection-places.trb` proves it: the copy of a list taken before
   `numbers[0] = 9` still reads `[1, 2, 3]`, and the same for a list of counted elements and for a nested one.
@@ -2109,10 +2109,10 @@ that were all one missing cursor.
   answered: `answersBorrowedValue` in `ir/ownership.trb` makes the pass walk such a function, and `decideOperand` then
   emits the one `Retain` in front of the `return` that it always would have. Nothing else about those functions changes.
 - **Decision: `slice` is a default of `List`, and a member whose result is `Self` stays out of every table.**
-  `Slice.slice(self, range: Bounds<Int>): Self` is a **required** member that mentions `Self` as its **result**, so no table
+  `Slice.slice(range: Bounds<Int>): Self` is a **required** member that mentions `Self` as its **result**, so no table
   can hold it: the thunk of one would have to box that result, which it can do for *one* bound - its own - and not for a
   value that carries several (`List<Item> & Show` calling `slice` would need the `Show` table of a type the thunk has
-  erased). `Self` as a **parameter** (`MutableSlice.replace(var self, range, values: Self)`) can never be in a table at
+  erased). `Self` as a **parameter** (`MutableSlice.replace(range, values: Self)`) can never be in a table at
   all, because a thunk would have to unbox an argument whose type it cannot check. So the answer is the same one `sort`
   got: **write it in `std/collections` and let the trait type dispatch it statically.** `ArrayList` keeps its native, where
   a slice is O(1) and shares the storage; a trait-typed `List<Item>` reaches the default, which is `var result = self`,
@@ -2192,9 +2192,9 @@ longer than "the pipelines need closures":
    on ``. `iterator` is a required member of `Iterable`, so it is in every collection's table.
 3. **`iterator` should be TorbScript and not a runtime function** ("natives stay few"): a `ListIterator<Item>` over the
    list and an index, whose `next` is `items.get(index)` - which the `.Optional` convention above now makes callable.
-4. **But `Iterator.next(var self)` is a `var self` member**, and a `var self` member is still left out of a witness table
+4. **But `Iterator.next()` is a `var fn` member**, and a `var fn` member is still left out of a witness table
    (5.6's list). So `for x in xs` cannot pull from a trait-typed iterator.
-5. **And putting `var self` back into a table needs one thing the IR cannot express: making the payload box of a
+5. **And putting a `var fn` member back into a table needs one thing the IR cannot express: making the payload box of a
    trait-typed value unique.** A `Copy` of an `Object` retains the box, so two copies share it; a write through a table
    without a `MakeUnique` of that box would change both, which is observable. The box's size and its `R_`/`D_` pair are a
    property of the *target* type, which a trait-typed value has erased - so the **witness table has to carry them**.
@@ -2306,7 +2306,7 @@ or what the two back ends can *both* write, the code won and this is the list. E
   fix belongs in `std/core/src/range.trb` (a `show` of its own that writes `0..10`, `0..`, `0..=10`), not in a back end.
 - **`describe`, the derived `Encode`/`Decode` and the `std/json` natives wait for 5.7, not for 5.10.** Measured rather
   than guessed: every member of `Encoder`, `SequenceEncoder`, `MapEncoder`, `RecordEncoder` and `Decoder` takes a
-  **`var self`**, which is what a witness table cannot hold until the payload box of a trait-typed value can be made
+  **a `var fn` member**, which is what a witness table cannot hold until the payload box of a trait-typed value can be made
   unique (step 5 of 5.7's chain). A derived `decode` needs one thing more that **no milestone plans yet**:
   `Decoder.record<Output>` has a generic parameter of its own, so it is not object safe and can never be in a table at
   all - either the trait hands the closure a *concrete* decoder, or `decode` takes its decoder as a generic parameter
@@ -2318,7 +2318,7 @@ or what the two back ends can *both* write, the code won and this is the list. E
   there).
 - **The gate is not `11-data.trb`.** Two of its eight functions were lowered on this branch, and 60 of its 93 (64%) with
   5.7's collections merged in. What blocks the rest is not text: `Email` and `User` describe themselves to an `Encoder`
-  (`encoder.string`, `fields.field`) and `Json.encode`/`Json.value` drive one, which is the `var self` chain above; its
+  (`encoder.string`, `fields.field`) and `Json.encode`/`Json.value` drive one, which is the `var fn` chain above; its
   top-level code needs `for` over a collection, `a[key]` as a `var` argument and `a.keys().toSet().union(...)`, which is
   the rest of 5.7; and its `const user = User(..., Email.tryFrom(...)?)` is the top-level `?` of 5.13. One more thing it
   shows and nothing else does: `a == b` on two `JsonValue`s records **no resolution at all**, because a `JsonValue`
@@ -2599,7 +2599,7 @@ holds a pointer, so the const belongs to that pointer: `{spelling} const *`.
 **A copy of a boxed value saw a change made through the other one.** The one bug that made the first binary misparse
 itself, and the most important sentence of this round.
 
-- The lowering forms the path of a `var self` member of a trait-typed value **before the representations are decided** - a
+- The lowering forms the path of a `var fn` member of a trait-typed value **before the representations are decided** - a
   representation is a fixpoint over the whole layout table that `finishProgram` settles - so `makeOwnersUnique` asked "is
   this record counted" of a layout that still said `inline size 0` and left the box out of the `MakeUnique` chain. It was
   the same trap `isStaticLayout` describes one section above, in a second place.
@@ -3048,7 +3048,7 @@ has to say which entries are not written yet; a planned native reads `` `X`, whi
   everything allocated inside one immortal as well, or a read of the constant that is released will free the value under
   the next reader.
 - **A counter for immortal blocks is what keeps a leak report honest.** Two numbers, not one.
-- **A trait member is `(the name, whether it takes `self`)`.** A table entry resolved by name alone can land on a field
+- **A trait member is `(the name, whether it has a receiver)`.** A table entry resolved by name alone can land on a field
   of the target that carries the member's name.
 
 **Two more entries for 5.14's list of differences between stage 0 and the binary**, both found here and neither fixed:
@@ -3400,7 +3400,7 @@ checker rightly rejected in 11 places; repairing it was worth more than replacin
 exercises traits, delegation, patterns, receiver closures and value semantics in one run is a different kind of test from
 57 small ones. What it needed: `.toList()` on four pipelines that were printed, `sort({ _ })` instead of `sort()`, a `fn`
 inside a block turned into a top-level function with parameters (a `fn` in a block is not a closure), a map built with a
-loop instead of a `toMap` that does not exist, a closure that no longer captures `var self`, and the three hand-written
+loop instead of a `toMap` that does not exist, a closure that no longer captures the receiver `self`, and the three hand-written
 operator traits deleted in favour of the prelude's - which is why `Add`, `Subtract`, `Multiply`, `Divide`, `Remainder`,
 `Negate` and `Compare` are in stage 0's `prelude.trb` now: `a + b` means the *prelude's* `Add`, and a script that
 declares a trait of its own name does not get the operator. `bootstrap/tests/scripts/` and `bootstrap/tests/native/` are
@@ -3826,7 +3826,7 @@ _Decision:_ accepted.
 body* runs when the host applies that closure, and a closure of type `(var self: Value) => Void` cannot say that the
 step limit was hit or that the script panicked.
 _Proposal:_ `Sandbox.load<Value>(path, capabilities): Result<Script<Value>, SandboxError>` with
-`Script.apply(self, var value: Value): Result<Void, SandboxError>`. Load-time failures (syntax, types, a module the
+`Script.apply(var value: Value): Result<Void, SandboxError>`. Load-time failures (syntax, types, a module the
 script may not import) come from `load`, run-time failures (steps, memory, time, a panic inside the script) from
 `apply`. _Reason:_ a sandbox whose failures abort the host is not a sandbox, and the panic that is recoverable is
 exactly the one that happens inside an interpreter with its own heap.
@@ -3844,10 +3844,10 @@ to the call site, and a default cannot depend on an argument order that is not v
 _Decision:_ accepted.
 
 **14. A closure that captures a `var` reference may not escape, and nobody records it.** `var` Paths: "References are
-second-class. They only exist as a `var` parameter or `var self` ... They cannot be stored in a field, returned, or
+second-class. They only exist as a `var` parameter or a `var fn` receiver ... They cannot be stored in a field, returned, or
 captured by a closure that is stored."
 _Proposal:_ the checker records per closure whether it escapes, and a closure may capture a `var` parameter or
-`var self` **only** when it does not: conservatively, when it is written directly as an argument of a call and is not
+the receiver of a `var fn` **only** when it does not: conservatively, when it is written directly as an argument of a call and is not
 stored by the callee. Everything else captures values and `Box`es. `ClosureKind.Local | .Escaping` goes into the
 tables. _Reason:_ the lowering needs it to choose a stack environment (which is also the optimization that makes the
 DSL and the pipelines free), and without it the rule quoted above is unenforced.
@@ -3864,7 +3864,7 @@ that says "shared", and adding one for a single function is worse than one speci
 _Decision:_ accepted.
 
 **16. `Expression` quoting is not free after all.** Quoted Expressions: "Static data, created at compile time.
-Quoting costs nothing at runtime", and `native fn captures(self): List<Encode>`.
+Quoting costs nothing at runtime", and `native fn captures(): List<Encode>`.
 _Proposal:_ correct the sentence: the **tree** is static data and costs nothing; the captures are collected at the
 quotation site into a list of trait-typed values, so quoting a closure with captures costs one small allocation per
 evaluation. _Reason:_ `captures()` has to return the current values, which cannot be static, and `assert` is in every

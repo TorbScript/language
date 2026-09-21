@@ -16,8 +16,8 @@ use check from "../src/semantics/check"
 use Probed, probe, problems, notes, workspace from "./harness"
 
 const element = "\ntype Element \{\n  var tag: String = \"\"\n  private var texts: List<String> = []\n\n"
-  + "  fn text(var self, content: String) \{\n    texts.add(content)\n  \}\n\n"
-  + "  fn child(var self, build: (var self: Element) => Void) \{\n"
+  + "  var fn text(content: String) \{\n    texts.add(content)\n  \}\n\n"
+  + "  var fn child(build: (var self: Element) => Void) \{\n"
   + "    var inner = Element()\n    build(inner)\n  \}\n\}\n\n"
   + "fn html(build: (var self: Element) => Void): Element \{\n"
   + "  var root = Element()\n  build(root)\n  root\n\}\n"
@@ -87,7 +87,7 @@ group "A receiver closure" {
 
   test "a closure inside it that escapes may not carry the receiver off (BACKEND gap 14)" {
     const source = inHtml "    const later: () => Void = \{ text \"hello\" \}"
-    assert(problems(source) == ["This closure captures `var self` and may outlive the call"])
+    assert(problems(source) == ["This closure captures the receiver `self` and may outlive the call"])
     const probed = probe source
     assert(probed.capturesOf("\{ text \"hello\" \}") == ["var self"])
   }
@@ -105,7 +105,7 @@ group "Only the innermost receiver is implicit (gap 4)" {
     const source = "fn probe() \{\n  const page = html \{\n    child \{\n      poolSize 20\n    \}\n  \}\n\}\n"
       + "\ntype Inner \{\n  var poolSize: Int = 1\n\}\n"
       + "\ntype Element \{\n  var poolSize: Int = 1\n\n"
-      + "  fn child(var self, build: (var self: Inner) => Void) \{\n"
+      + "  var fn child(build: (var self: Inner) => Void) \{\n"
       + "    var made = Inner()\n    build(made)\n  \}\n\}\n\n"
       + "fn html(build: (var self: Element) => Void): Element \{\n"
       + "  var root = Element()\n  build(root)\n  root\n\}\n"
@@ -130,7 +130,7 @@ group "Only the innermost receiver is implicit (gap 4)" {
 
   test "a method of the type around the closure is not implicit inside it either" {
     const source = "\ntype Page \{\n  var title: String = \"\"\n\n"
-      + "  fn build(self): Element \{\n    html \{\n      tag title\n    \}\n  \}\n\}\n{element}"
+      + "  fn build(): Element \{\n    html \{\n      tag title\n    \}\n  \}\n\}\n{element}"
     assert(problems(source) == ["Cannot find `title` here"])
   }
 
@@ -161,7 +161,7 @@ group "Only the innermost receiver is implicit (gap 4)" {
 
 group "A method is a constant that holds a receiver closure" {
   const rectangle = "\ntype Rectangle \{\n  width: Int\n  height: Int\n\n"
-    + "  const perimeter: (self: Rectangle) => Int = \{ 2 * (width + height) \}\n\}\n"
+    + "  static perimeter: (self: Rectangle) => Int = \{ 2 * (width + height) \}\n\}\n"
 
   test "the closure of such a constant is checked against its own type" {
     const source = "fn probe(made: Rectangle) \{\n  const found = made.perimeter()\n\}\n{rectangle}"
@@ -216,7 +216,7 @@ fn probeScript(files: Map<String, String>, path: String): Probed {
   Probed files[path], checked.checker, module
 }
 
-const loader = "type Sandbox \{\n  fn load<Value>(path: String): Int \{\n    0\n  \}\n\}\n\n"
+const loader = "type Sandbox \{\n  static fn load<Value>(path: String): Int \{\n    0\n  \}\n\}\n\n"
   + "public type Config \{\n  var port: Int = 8080\n  var host: String = \"\"\n\}\n\n"
   + "const script = Sandbox.load<Config>(\"./config.trb\")\n"
 
@@ -280,7 +280,7 @@ group "Sandbox.load makes a file part of the project" {
   }
 
   test "a path that is not a literal is not checked here: only the sandbox can know it" {
-    const dynamic = "type Sandbox \{\n  fn load<Value>(path: String): Int \{\n    0\n  \}\n\}\n\n"
+    const dynamic = "type Sandbox \{\n  static fn load<Value>(path: String): Int \{\n    0\n  \}\n\}\n\n"
       + "public type Config \{\n  var port: Int = 8080\n\}\n\n"
       + "fn open(path: String): Int \{\n  Sandbox.load<Config>(path)\n\}\n"
     const files = ["app/src/main.trb": dynamic, "app/config.trb": "nonsense 1\n"]
