@@ -2633,3 +2633,19 @@ Wenn nicht, was bedeutet, bewirkt es?
     Laufzeit, `read`/`open(path: Path)` dynamischer Pfad (Nutzerdatei, `--config`), nicht compiler-bekannt.
   - **Wird gelöst:** Überarbeitung von `docs/PROJECT.md` plus ein eigenes `docs/RESOURCES.md` (läuft als
     Design-Agent); Umsetzung in Slices NACH der Umstellung auf `static`/`var fn`.
+
+- (Generierte Konstruktoren - Entscheidungen, 2026-09-22) **Entschieden (Nutzer):**
+  1. Ein optionales Feld OHNE Default bleibt Pflicht, `None` wird ausgeschrieben; weglassen kann man nur Felder mit
+     Default. Wird in `construction.md` aufgeschrieben.
+  2. Ein Pattern darf den Rest mit einem ausdrücklichen `...` auslassen (`Config(host, ...)`), wie im Listen-Pattern.
+     Wird gelöst (beide Parser, Checker/Exhaustiveness, Lowering, Stage 0, Doku) - danach bricht eine Feld-Ergänzung
+     nur noch Patterns, die bewusst alle Felder nennen.
+  3. Das generierte `Show` druckt ALLE Felder, auch private; wer das nicht will, schreibt sein `Show` selbst.
+  4. Ein Feld-Default liest KEINE anderen Felder (Gefahr: unerwartet teure Berechnung im Konstruktor) - ein
+     abgeleitetes/gecachtes Feld gehört in eine Factory-Funktion. Die Meldung wird besser ("a field default cannot
+     read another field: compute it in a `static fn`" statt "Cannot find `items` here"). Ein `private` Feld darf NICHT
+     heißen wie eine Methode (ein Wechsel public<->private bräche sonst Aufrufer) - das löst man mit Benennung und
+     Kapselung.
+  - **Offen (Punkt 5, mein Vorschlag liegt beim Nutzer):** "Daten oder Kapsel" als ausdrückliche Zweiteilung, und
+    `Encode`/`Decode` eines gekapselten Typs abgeleitet über sein EINES Konversionspaar (`TryFrom<Source>` hinein,
+    `From<Typ>` am `Source` hinaus); `std/path` wird dann selbst eine Kapsel (Felder privat, `root()`/`components()`).
