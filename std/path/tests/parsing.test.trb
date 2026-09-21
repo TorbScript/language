@@ -1,0 +1,89 @@
+/**
+ * Every row of `docs/PATH.md` section 2's parse table, each checked by its value and by what it shows as, plus the
+ * `normalized()` rules that resolve `..` as text. The imports are relative, because the interpreter resolves no
+ * package import at all and reads a module of `std/` only by its path.
+ */
+
+use test, group from "std/test"
+use Path from "../src/path"
+use Root from "../src/root"
+
+group "Path.from" {
+  test "the empty string and a single dot both parse to the empty relative path" {
+    assert(Path.from("") == Path())
+    assert(Path.from(".") == Path())
+    assert(Path.from("").show() == ".")
+    assert(Path.from(".").show() == ".")
+  }
+
+  test "a trailing separator is dropped" {
+    assert(Path.from("src/") == Path(None, ["src"]))
+    assert(Path.from("src/").show() == "src")
+  }
+
+  test "a doubled separator collapses to one component boundary" {
+    assert(Path.from("src//main.trb") == Path(None, ["src", "main.trb"]))
+    assert(Path.from("src//main.trb").show() == "src/main.trb")
+  }
+
+  test "'.' components are dropped wherever they occur" {
+    assert(Path.from("./src/./x") == Path(None, ["src", "x"]))
+    assert(Path.from("./src/./x").show() == "src/x")
+  }
+
+  test "a leading '..' is kept, because dropping it would be a guess" {
+    assert(Path.from("../src") == Path(None, ["..", "src"]))
+    assert(Path.from("../src").show() == "../src")
+  }
+
+  test "a lone slash is the Unix root with no components" {
+    assert(Path.from("/") == Path(Some(Root.Unix)))
+    assert(Path.from("/").show() == "/")
+  }
+
+  test "an absolute Unix path" {
+    assert(Path.from("/usr/bin") == Path(Some(Root.Unix), ["usr", "bin"]))
+    assert(Path.from("/usr/bin").show() == "/usr/bin")
+  }
+
+  test "a backslash separates exactly like a forward slash, and the drive letter is upper-cased" {
+    assert(Path.from("c:\\x") == Path(Some(Root.Drive('C')), ["x"]))
+    assert(Path.from("c:\\x").show() == "C:/x")
+  }
+
+  test "a bare drive has no components and shows with its trailing separator" {
+    assert(Path.from("C:") == Path(Some(Root.Drive('C'))))
+    assert(Path.from("C:").show() == "C:/")
+  }
+
+  test "drive-relative reads as absolute on that drive, which is the one form Path cannot hold" {
+    assert(Path.from("C:foo") == Path(Some(Root.Drive('C')), ["foo"]))
+    assert(Path.from("C:foo").show() == "C:/foo")
+  }
+
+  test "a UNC share names its server and its share as the root, and everything after it as components" {
+    assert(Path.from("//server/share/x") == Path(Some(Root.Share("server", "share")), ["x"]))
+    assert(Path.from("//server/share/x").show() == "//server/share/x")
+  }
+}
+
+group "Path.normalized" {
+  test "'..' against the root vanishes, because no file system has a parent of its root" {
+    assert(Path.from("/../a").normalized() == Path(Some(Root.Unix), ["a"]))
+    assert(Path.from("/a/../b").normalized() == Path(Some(Root.Unix), ["b"]))
+  }
+
+  test "a leading '..' of a relative path stays, because there is nothing to resolve it against" {
+    assert(Path.from("../a").normalized() == Path(None, ["..", "a"]))
+    assert(Path.from("a/../../b").normalized() == Path(None, ["..", "b"]))
+  }
+
+  test "empty and '.' components a hand-written Path can still carry are removed" {
+    assert(Path(None, ["a", "", ".", "b"]).normalized() == Path(None, ["a", "b"]))
+  }
+
+  test "a drive and a share root behave exactly like the Unix root" {
+    assert(Path.from("C:/../x").normalized() == Path(Some(Root.Drive('C')), ["x"]))
+    assert(Path.from("//server/share/../x").normalized() == Path(Some(Root.Share("server", "share")), ["x"]))
+  }
+}

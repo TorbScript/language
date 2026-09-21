@@ -1,0 +1,307 @@
+/**
+ * [Path], a root plus the components between its separators - never a string - and [Path.from], the infallible
+ * parse that builds one out of text.
+ *
+ * Everything else follows from the type: [Path.joined] cannot be given a root, [Path.parent] cannot fall off the
+ * top, and `..` is only ever resolved on purpose, by [Path.normalized] or [Path.resolved]. `show()` is the one text
+ * form, always with `/`; the operating system's own form is `std/fs`'s business, not this package's.
+ */
+
+use Show, Equals, Hash, Compare, Ordering, From from "std/core"
+use Char from "std/text"
+use Root from "./root"
+use PathError from "./error"
+
+/**
+ * A file path: where it starts, and the components between the separators.
+ *
+ * A `Path` is a value, built from text with [Path.from] and read back with [Path.show]. It knows nothing about a
+ * disk - whether it names a real file is a question for `std/fs` - and it is [Equals], [Hash] and [Compare], all
+ * three lexical and case sensitive on every platform: two paths that differ only in case are two different values,
+ * because whether they name the same file is a question for a file system and not for this type.
+ *
+ * # Examples
+ *
+ *     const module = Path.from "std/path/src/lib.trb"
+ *     print "{module.name()} {module.parent()}"
+ *
+ * # Pitfalls
+ *
+ * - The constructor is public and a hand-written component may be empty, `.` or `..` - `Path(None, ["", "src"])`
+ *   shows with a doubled separator. [Path.from] and every other member of this package only ever produce a
+ *   component that is none of those; [Path.normalized] removes them from a value built by hand.
+ *
+ * # Related
+ *
+ * - [Root] - what `root` can be.
+ * - [PathError] - what [Path.resolved] refuses.
+ */
+public type Path with Show, Equals, Hash, Compare {
+  /** Where the path starts, and `None` for a relative path. */
+  root: Root? = None
+  /** The components between the separators, outermost first. */
+  components: List<String> = []
+
+  /** Whether the path starts at a root. Its opposite is [Path.isRelative]. */
+  fn isAbsolute(self): Bool {
+    root.isSome()
+  }
+
+  /** Whether the path has no root, so that it means something only against a base. */
+  fn isRelative(self): Bool {
+    root.isNone()
+  }
+
+  /** The last component: the name of the file or of the directory. `None` for a root and for the empty path. */
+  fn name(self): String? {
+    components.last()
+  }
+
+  /**
+   * The extension of the name, without the dot. `None` where the name has none, and for `.gitignore`, whose only
+   * dot is the first character of the name.
+   */
+  fn extension(self): String? {
+    const found = name()?
+    const dot = found.lastIndexOf(".")?
+    if dot == 0 {
+      return None
+    }
+    const suffix = found[(dot + 1)..]
+    if suffix.isEmpty() {
+      return None
+    }
+    Some suffix
+  }
+
+  /** The name without its extension and without the dot. `main` for `src/main.trb`. */
+  fn nameWithoutExtension(self): String? {
+    const found = name()?
+    match extension() {
+      Some(suffix) => Some found[0..(found.byteLength() - suffix.byteLength() - 1)]
+      None => Some found
+    }
+  }
+
+  /** The path one component up. `None` at a root and for the empty path: there is nothing above them. */
+  fn parent(self): Path? {
+    if components.isEmpty() {
+      return None
+    }
+    Some Path(root, components.take(components.length() - 1).toList())
+  }
+
+  /** `relative` below this path. The root of `relative` is dropped, so the result never leaves `self`. */
+  fn joined(self, relative: Path): Path {
+    Path root, components.addedAll(relative.components)
+  }
+
+  /** The same path with its last component replaced. `None` where there is no name to replace. */
+  fn withName(self, name: String): Path? {
+    const above = parent()?
+    Some above.joined(Path(None, [name]))
+  }
+
+  /** The same path with a different extension, added where there was none. An empty `extension` removes it. */
+  fn withExtension(self, extension: String): Path? {
+    const stem = nameWithoutExtension()?
+    if extension.isEmpty() {
+      return withName stem
+    }
+    withName "{stem}.{extension}"
+  }
+
+  /** Whether this path starts at the same root and with the same components as `prefix`. */
+  fn startsWith(self, prefix: Path): Bool {
+    if root != prefix.root || prefix.components.length() > components.length() {
+      return false
+    }
+    for index in 0..prefix.components.length() {
+      if components[index] != prefix.components[index] {
+        return false
+      }
+    }
+    true
+  }
+
+  /**
+   * This path as seen from `base`, with a `..` per component of `base` that is not shared. `None` where the two
+   * roots differ - today's equivalent answers the absolute path there, and `None` lets the caller decide instead of
+   * guessing for it.
+   */
+  fn relativeTo(self, base: Path): Path? {
+    if root != base.root {
+      return None
+    }
+    var common = 0
+    while common < base.components.length() && common < components.length()
+      && base.components[common] == components[common] {
+      common = common + 1
+    }
+    var walked: List<String> = []
+    for _ in common..base.components.length() {
+      walked.add ".."
+    }
+    for index in common..components.length() {
+      walked.add components[index]
+    }
+    Some Path(None, walked)
+  }
+
+  /**
+   * `.` and empty components dropped and `..` resolved as text: against the root it vanishes, at the front of a
+   * relative path it stays. It reads no disk and follows no link, so `a/../b` normalized to `b` is a different file
+   * wherever `a` is a symlink.
+   */
+  fn normalized(self): Path {
+    var kept: List<String> = []
+    for component in components {
+      if component.isEmpty() || component == "." {
+        continue
+      }
+      if component != ".." {
+        kept.add component
+        continue
+      }
+      const above = kept.last() ?? ".."
+      if above != ".." {
+        kept.removeAt(kept.length() - 1)
+        continue
+      }
+      if root.isNone() {
+        kept.add ".."
+      }
+    }
+    Path root, kept
+  }
+
+  /**
+   * This path resolved below `base`, refusing to leave it. `base` is `inside.normalized()`; a relative `self` is
+   * joined under it and an absolute one is judged on its own, both normalized; the answer is `Ok` where the result
+   * [Path.startsWith] `base` and `Fail` otherwise.
+   *
+   * # Errors
+   *
+   * - [PathError.NoBase] where `base` has no root, so "inside" has nothing to be measured against.
+   * - [PathError.Outside] where the candidate leaves `base`.
+   *
+   * # Pitfalls
+   *
+   * - This is a lexical check: it says the *text* of this path does not leave `base`, not that the file it opens is
+   *   under `base`. A symlink inside `base` that points outside it, a hard link, a bind mount and a race between the
+   *   check and the open all defeat it. Closing that gap needs the operating system asked while it opens, which is
+   *   `std/fs`'s business and not this package's.
+   */
+  fn resolved(self, inside: Path): Result<Path, PathError> {
+    const base = inside.normalized()
+    if base.isRelative() {
+      return Fail PathError.NoBase(base)
+    }
+    const candidate = if isAbsolute() { normalized() } else { base.joined(self).normalized() }
+    if candidate.startsWith(base) {
+      return Ok candidate
+    }
+    Fail PathError.Outside(candidate, base)
+  }
+
+  /** The path with `/` as the separator, on every platform. `.` for the empty path. */
+  fn show(self): String {
+    const body = components.joined separator: "/"
+    match root {
+      Some(found) => if body.isEmpty() { found.show() } else { "{found}{body}" }
+      None => if body.isEmpty() { "." } else { body }
+    }
+  }
+
+  /** Root first, then component by component, then by the number of components. Case sensitive everywhere. */
+  fn compare(self, other: Path): Ordering {
+    const here = rankOf root
+    const there = rankOf other.root
+    if here != there {
+      return here.compare there
+    }
+    if const Some(found) = root {
+      const answer = found.show().compare(other.root?.show() ?? "")
+      if answer != .Equal {
+        return answer
+      }
+    }
+    var index = 0
+    while index < components.length() && index < other.components.length() {
+      const answer = components[index].compare(other.components[index])
+      if answer != .Equal {
+        return answer
+      }
+      index = index + 1
+    }
+    components.length().compare(other.components.length())
+  }
+}
+
+/**
+ * A path is what the text says it is. Whether it names a file is what the file system says when it is opened.
+ *
+ * Both `/` and `\` separate, on every platform, so the same program behaves the same on stage 0, in a compiled
+ * binary and on every platform. Empty components and `.` are dropped, `..` is kept, a trailing separator is
+ * dropped, and `C:foo` reads as `C:/foo` - drive-relative is the one form this type cannot hold, and an infallible
+ * parse cannot reject it either.
+ *
+ * # Examples
+ *
+ *     print Path.from("src/../main.trb")
+ *     print Path.from("C:foo")
+ *
+ * # Pitfalls
+ *
+ * - A POSIX file name that literally contains a backslash cannot be named through this conversion, because `\` is a
+ *   separator on every platform here. Name it with `Path(None, ["a\\b"])` or [Path.joined] instead.
+ */
+extend Path with From<String> {
+  fn from(value: String): Path {
+    const slashed = value.replace "\\", "/"
+    if const Some((root, rest)) = shareRootOf(slashed) {
+      return Path Some(root), rest
+    }
+    if slashed.byteLength() >= 2 && slashed[1..2] == ":" {
+      const letter = slashed.chars().first() ?? 'C'
+      return Path Some(Root.Drive(letter.toUpperCase())), componentsOf(slashed[2..])
+    }
+    if slashed.startsWith("/") {
+      return Path Some(Root.Unix), componentsOf(slashed)
+    }
+    Path None, componentsOf(slashed)
+  }
+}
+
+/** The components of a text between its `/` separators, with the empty ones and every `.` dropped. */
+fn componentsOf(text: String): List<String> {
+  var kept: List<String> = []
+  for component in text.split("/") {
+    if !component.isEmpty() && component != "." {
+      kept.add component
+    }
+  }
+  kept
+}
+
+/** `//server/share` at the front of a text, and the components after it. `None` where the text has no share root. */
+fn shareRootOf(text: String): (Root, List<String>)? {
+  if !text.startsWith("//") {
+    return None
+  }
+  const parts = componentsOf text
+  if parts.length() < 2 {
+    return None
+  }
+  Some((Root.Share(parts[0], parts[1]), parts.skip(2).toList()))
+}
+
+/** Where a root sorts: the absent root of a relative path sorts before `Unix`, `Drive` and `Share`, in that order. */
+fn rankOf(root: Root?): Int {
+  match root {
+    None => -1
+    Some(.Unix) => 0
+    Some(.Drive(_)) => 1
+    Some(.Share(_, _)) => 2
+  }
+}

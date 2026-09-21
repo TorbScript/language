@@ -1,0 +1,238 @@
+/**
+ * The members of `Path` beyond parsing: `isAbsolute`/`isRelative`, `name`/`nameWithoutExtension`/`extension`,
+ * `parent`, `joined`, `withName`/`withExtension`, `startsWith`, `relativeTo`, `resolved(inside:)`, and `==`/`hash`/
+ * `compare` through a `Map` key, a `Set` and a sort. The imports are relative, because the interpreter resolves no
+ * package import at all and reads a module of `std/` only by its path.
+ */
+
+use test, group from "std/test"
+use Path from "../src/path"
+use Root from "../src/root"
+use PathError from "../src/error"
+
+group "isAbsolute and isRelative" {
+  test "a rooted path is absolute, a bare one is relative" {
+    assert Path.from("/usr").isAbsolute()
+    assert(!Path.from("/usr").isRelative())
+    assert Path.from("usr").isRelative()
+    assert(!Path.from("usr").isAbsolute())
+  }
+}
+
+group "name" {
+  test "the last component is the name" {
+    assert(Path.from("src/main.trb").name() == Some("main.trb"))
+  }
+
+  test "a root and the empty path have no name" {
+    assert(Path.from("/").name() == None)
+    assert(Path().name() == None)
+  }
+
+  test "a leading '..' is still a component, and can be the name" {
+    assert(Path.from("..").name() == Some(".."))
+    assert(Path.from("../a").name() == Some("a"))
+  }
+}
+
+group "extension and nameWithoutExtension" {
+  test "the extension is the text after the last dot" {
+    assert(Path.from("src/main.trb").extension() == Some("trb"))
+    assert(Path.from("src/main.trb").nameWithoutExtension() == Some("main"))
+  }
+
+  test "a name with several dots keeps only the last one as the extension" {
+    assert(Path.from("archive.tar.gz").extension() == Some("gz"))
+    assert(Path.from("archive.tar.gz").nameWithoutExtension() == Some("archive.tar"))
+  }
+
+  test "a dot file has no extension, because its only dot is the first character" {
+    assert(Path.from(".gitignore").extension() == None)
+    assert(Path.from(".gitignore").nameWithoutExtension() == Some(".gitignore"))
+  }
+
+  test "a name with no dot at all has no extension" {
+    assert(Path.from("README").extension() == None)
+    assert(Path.from("README").nameWithoutExtension() == Some("README"))
+  }
+
+  test "a root and the empty path have no extension and no name to strip one from" {
+    assert(Path.from("/").extension() == None)
+    assert(Path.from("/").nameWithoutExtension() == None)
+    assert(Path().extension() == None)
+    assert(Path().nameWithoutExtension() == None)
+  }
+}
+
+group "parent" {
+  test "the parent drops the last component" {
+    assert(Path.from("a/b/c").parent() == Some(Path.from("a/b")))
+  }
+
+  test "the parent of a single relative component is the empty path" {
+    assert(Path.from("a").parent() == Some(Path()))
+  }
+
+  test "a leading '..' has a parent too, all the way down to the empty path" {
+    assert(Path.from("../a").parent() == Some(Path.from("..")))
+    assert(Path.from("..").parent() == Some(Path()))
+  }
+
+  test "a root and the empty path have nothing above them" {
+    assert(Path.from("/").parent() == None)
+    assert(Path().parent() == None)
+  }
+}
+
+group "joined" {
+  test "the components of 'relative' land below self, in order" {
+    assert(Path.from("a/b").joined(Path.from("c")) == Path.from("a/b/c"))
+  }
+
+  test "the argument's root is dropped, so the base's root and components are always kept" {
+    const base = Path.from "/a"
+    const escape = Path.from "/etc/passwd"
+    const joined = base.joined escape
+    assert(joined == Path.from("/a/etc/passwd"))
+    assert(joined.root == base.root)
+    assert joined.startsWith(base)
+  }
+
+  test "joining does not resolve '..', which is text arithmetic for normalized() instead" {
+    assert(Path.from("a").joined(Path.from("../../etc")) == Path.from("a/../../etc"))
+  }
+}
+
+group "withName" {
+  test "the last component is replaced" {
+    assert(Path.from("src/main.trb").withName("other.trb") == Some(Path.from("src/other.trb")))
+  }
+
+  test "a single relative component is replaced below the empty path" {
+    assert(Path.from("src").withName("other") == Some(Path.from("other")))
+  }
+
+  test "a root and the empty path have no name to replace" {
+    assert(Path.from("/").withName("x") == None)
+    assert(Path().withName("x") == None)
+  }
+}
+
+group "withExtension" {
+  test "a different extension replaces the old one" {
+    assert(Path.from("src/main.trb").withExtension("c") == Some(Path.from("src/main.c")))
+  }
+
+  test "an empty extension removes it" {
+    assert(Path.from("src/main.trb").withExtension("") == Some(Path.from("src/main")))
+  }
+
+  test "an extension is added where there was none, even on a dot file" {
+    assert(Path.from("src/.gitignore").withExtension("bak") == Some(Path.from("src/.gitignore.bak")))
+  }
+
+  test "a path without a name has no extension to change" {
+    assert(Path.from("/").withExtension("txt") == None)
+  }
+}
+
+group "startsWith" {
+  test "a path starts with each of its own prefixes" {
+    assert Path.from("/usr/local/bin").startsWith(Path.from("/usr/local"))
+    assert Path.from("/usr/local/bin").startsWith(Path.from("/usr/local/bin"))
+  }
+
+  test "a prefix longer than the path never matches" {
+    assert(!Path.from("/usr/local").startsWith(Path.from("/usr/local/bin")))
+  }
+
+  test "a component match is whole, never partial" {
+    assert(!Path.from("/usr/local").startsWith(Path.from("/usr/locale")))
+  }
+
+  test "two different roots never start with one another" {
+    assert(!Path.from("usr/local").startsWith(Path.from("/usr")))
+  }
+}
+
+group "relativeTo" {
+  test "the common prefix is dropped and a '..' is added per component of base that is not shared" {
+    assert(Path.from("/a/b/c").relativeTo(Path.from("/a/x/y")) == Some(Path.from("../../b/c")))
+  }
+
+  test "one path already below the other needs no '..' at all" {
+    assert(Path.from("/a/b/c").relativeTo(Path.from("/a")) == Some(Path.from("b/c")))
+  }
+
+  test "two relative paths that both start with '..' still share a prefix" {
+    assert(Path.from("../a").relativeTo(Path.from("../b")) == Some(Path.from("../a")))
+  }
+
+  test "two different roots share nothing to be relative to" {
+    assert(Path.from("/a").relativeTo(Path.from("a")) == None)
+  }
+}
+
+group "normalized" {
+  test "the theorem of section 4: joined then normalized never leaves the base when the argument has no '..'" {
+    const base = Path.from "/srv/app"
+    assert(base.joined(Path.from("data/x")).normalized() == Path.from("/srv/app/data/x"))
+  }
+}
+
+group "resolved" {
+  const base = Path.from "/srv/app"
+
+  test "a relative path lands below the base" {
+    assert(Path.from("data/x").resolved(inside: base) == Ok(Path.from("/srv/app/data/x")))
+  }
+
+  test "an internal '..' that stays below the base still resolves" {
+    assert(Path.from("a/../b").resolved(inside: base) == Ok(Path.from("/srv/app/b")))
+  }
+
+  test "an absolute path outside the base is refused" {
+    const escape = Path.from "/etc/passwd"
+    assert(escape.resolved(inside: base) == Fail(PathError.Outside(escape, base)))
+  }
+
+  test "enough leading '..' to climb out of the base is refused" {
+    const climbedOut = Path.from "/etc"
+    assert(Path.from("../../etc").resolved(inside: base) == Fail(PathError.Outside(climbedOut, base)))
+  }
+
+  test "an absolute path on another root is refused, because the roots already differ" {
+    const onAnotherRoot = Path.from "C:/x"
+    assert(onAnotherRoot.resolved(inside: base) == Fail(PathError.Outside(onAnotherRoot, base)))
+  }
+
+  test "a relative base has nothing to measure 'inside' against" {
+    const relativeBase = Path.from "srv"
+    assert(Path.from("x").resolved(inside: relativeBase) == Fail(PathError.NoBase(relativeBase)))
+  }
+}
+
+group "equality, hashing and order" {
+  test "a trailing separator makes no difference, but case does" {
+    assert(Path.from("src") == Path.from("src/"))
+    assert(Path.from("src") != Path.from("SRC"))
+  }
+
+  test "a Path works as a Map key" {
+    const seen: Map<Path, Int> = [Path.from("a/b"): 1]
+    assert(seen.get(Path.from("a/b")) == Some(1))
+    assert(seen.get(Path.from("a/B")) == None)
+  }
+
+  test "a Path works in a Set, and a trailing separator is the same member" {
+    const unique = Set.of Path.from("a"), Path.from("a/"), Path.from("b")
+    assert(unique.length() == 2)
+    assert unique.contains(Path.from("a/"))
+  }
+
+  test "compare orders by root first, then component by component, then by length" {
+    var order = [Path.from("b"), Path.from("/a"), Path.from("a"), Path.from("C:/a")]
+    order.sort { _ }
+    assert(order == [Path.from("a"), Path.from("b"), Path.from("/a"), Path.from("C:/a")])
+  }
+}

@@ -1926,7 +1926,28 @@ Wenn nicht, was bedeutet, bewirkt es?
         dann durch denselben Weg wie `print`.
       - **Bitte einmal von dir prüfen (ich sehe keine echte Konsole):** in `cmd` `chcp 850`, dann ein mit
         `torb build` gebautes Programm mit `print "grüße 日本"` starten.
-
+  - **Erledigt (Slice 1):** das Paket selbst, in einem eigenen Arbeitsbaum. `std/path/{project.trb,
+    src/{lib,path,root,error}.trb, tests/{parsing,members}.test.trb}` - `Path`, `Root`, `PathError` und jedes Member
+    aus `docs/PATH.md` Abschnitt 1-4, wortgleich zur dort verlinkten Probe. 57 Tests, alle grün (15 für jede Zeile der
+    Parse-Tabelle plus `normalized()`, 42 für die Member, `resolved(inside:)`, `==`/`hash` als `Map`-Schlüssel/`Set`
+    und `sort`). Gate-Programm `bootstrap/tests/native/paths.trb`: Stage 0 und das kompilierte Binary schreiben
+    byte-identische Ausgabe, `TORB_REPORT_LEAKS=1` meldet `live blocks at exit: 0`. Referenzseite
+    `docs/standard-library/path.md`, beide Doku-Gates grün, `torb docs source ../std/path --tree std` ebenfalls
+    (6 Dateien, 28 Deklarationen, 3 Beispiele, no problems). `torb test ../compiler/tests` weiterhin 1482 grün,
+    `torb canon --check` 0 Dateien.
+    - **Entschieden (`joined`/`startsWith`/`relativeTo`/`resolved(inside:)` nehmen `Path` statt `Into<Path>`):**
+      der Checker wurde NICHT angefasst - Slice 1 erlaubt genau das (Abschnitt 5/8). Ein Aufrufer mit einem
+      String-Literal braucht deshalb noch ein zusätzliches `Path.from(...)` an der Aufrufstelle
+      (`current.joined(Path.from("project.trb"))` statt `current.joined("project.trb")`); das Gate-Programm zeigt
+      alle zehn Aufrufstellen in dieser Form.
+    - **Entschieden (`extension`/`nameWithoutExtension` nutzen `String.lastIndexOf`):** existiert inzwischen in
+      `std/text`, die Probe hatte es noch nicht und hat stattdessen auf `.` gesplittet.
+    - **Entschieden (Backslash-Ersetzung über `String.replace`):** die Probe hat Zeichen für Zeichen verkettet;
+      `value.replace("\\", "/")` ist derselbe Wert, kürzer und ein einziger nativer Aufruf statt einer Schleife.
+    - **Entschieden (Felder von `Path` bleiben öffentlich mit Default):** Abschnitt 1 sagt das bereits explizit
+      (der Konstruktor ist öffentlich nutzbar, `normalized()` räumt einen von Hand gebauten Wert auf) - keine eigene
+      Entscheidung nötig, nur befolgt.
+    - `cargo test --release --test native` (die volle Konformanz-Suite) läuft noch.
 
 - (**Erledigt: Meilenstein 5.14 - zwei Implementierungen, ein beobachtbares Verhalten**, 2026-09-20)
   **Die Konformitäts-Suite vergleicht jetzt alles, was ein Programm beobachtbar tut, und nichts ist ausgenommen**:

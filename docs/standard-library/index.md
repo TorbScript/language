@@ -43,6 +43,7 @@ What does not belong here: the language rules that a type participates in, which
 - **[std/geometry](geometry.md)** - The shapes of the plane and of space, with the half-open rule that makes a row of rectangles a tiling and the ray tests that answer a distance.
 - **[std/json](json.md)** - Json for encoding and decoding, and JsonValue for the rare document whose shape is not known ahead of time.
 - **[std/time](time.md)** - Instant and Duration, the two time values, plus Clock and sleep, which read and wait on the wall clock.
+- **[std/path](path.md)** - Path, a root and a list of components, never a string, plus Root and PathError - the type behind Path.resolved.
 - **[std/fs](fs.md)** - File and IoError - whole-file helpers for what fits in memory, and a File as both ends of a byte stream.
 - **[std/io](io.md)** - Standard input and the streams every process is started with - readLine for the short form, Source and Sink for the rest.
 - **[std/process](process.md)** - Process for arguments and exiting, Child for a running program's pipes, and ProcessOutput for what it left behind.

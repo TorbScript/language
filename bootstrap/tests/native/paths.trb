@@ -1,0 +1,86 @@
+/**
+ * `std/path` compiled to a native binary: every row of `docs/PATH.md` section 2's parse table, every member of
+ * section 3, `resolved(inside:)` in each of its outcomes, and the ten call-site rewrites of section 4 with
+ * synthetic data that stands in for `compiler/src`'s own paths.
+ *
+ * The module is imported by path, because the interpreter resolves no package import at all.
+ */
+
+use Path from "../../../std/path/src/path"
+
+// The parse table of section 2, one row per line
+print Path.from("")
+print Path.from(".")
+print Path.from("src/")
+print Path.from("src//main.trb")
+print Path.from("./src/./x")
+print Path.from("../src")
+print Path.from("/")
+print Path.from("/usr/bin")
+print Path.from("c:\\x")
+print Path.from("C:")
+print Path.from("C:foo")
+print Path.from("//server/share/x")
+
+// The members of section 3
+const module = Path.from "std/path/src/lib.trb"
+print "{module.name()} {module.nameWithoutExtension()} {module.extension()}"
+print "{module.parent()} {module.joined(Path.from("deeper"))} {module.joined(Path.from("/etc/passwd"))}"
+print "{module.withExtension("c")} {module.withName("other.trb")}"
+print "{module.startsWith(Path.from("std/path"))} {module.relativeTo(Path.from("std/fs/src"))}"
+print "{Path.from("/a/../b").normalized()} {Path.from("/../a").normalized()}"
+print "{Path.from("a/../../b").normalized()} {Path.from("../a").normalized()}"
+
+const base = Path.from "/srv/app"
+print Path.from("data/x").resolved(inside: base)
+print Path.from("/etc/passwd").resolved(inside: base)
+print Path.from("../../etc").resolved(inside: base)
+print Path.from("a/../b").resolved(inside: base)
+print Path.from("x").resolved(inside: Path.from("srv"))
+
+print(Path.from("src") == Path.from("src/"))
+print(Path.from("src") == Path.from("SRC"))
+const seen: Map<Path, Int> = [Path.from("a/b"): 1]
+print seen.get(Path.from("a/b"))
+var order = [Path.from("b"), Path.from("/a"), Path.from("a"), Path.from("C:/a")]
+order.sort { _ }
+print order
+
+// The ten call sites of section 4, with the interim concrete signature: a literal component needs one `Path.from`
+// of its own, because `joined`, `startsWith` and `relativeTo` take a `Path` and not yet an `Into<Path>`.
+const current = Path.from "/repository/std/fs"
+print current.joined(Path.from("project.trb"))   // 1: project/read.trb:53
+
+const entry = "main.trb"
+print current.joined(Path.from(entry))   // 2: project/read.trb:87
+
+var walking = Path.from "/repository/std/fs/src"
+while const Some(above) = walking.parent() {
+  walking = above
+}
+print walking   // 3: project/read.trb:63,66 - the walk up to the root
+
+const directory = Path.from "/repository/std/fs"
+print directory.joined(Path.from("src"))   // 4: project/workspace.trb:123
+print directory.joined(Path.from("project.trb"))   // 5: project/workspace.trb:139
+
+const paths = [Path.from("std/fs/project.trb"), Path.from("std/path/project.trb"), Path.from("README.md")]
+print paths.filter({ _.name() == Some("project.trb") }).filterMap({ _.parent() }).toList()   // 6: workspace.trb:62
+
+const pattern = "std/*"
+const repository = Path.from "/repository"
+print repository.joined(Path.from(pattern).parent() ?? Path())   // 7: workspace.trb:103
+
+const manifests = [Path.from("/repository"), Path.from("/repository/std/fs")]
+const owned = Path.from "/repository/std/fs/src"
+print manifests.filter({ owned.startsWith _ }).toList().reversed()   // 8: workspace.trb:52
+
+const source = Path.from "std/path"
+const target = Path.from "std/path/src/path.trb"
+if const Some(relative) = target.relativeTo(source) {
+  print relative   // 9: ir/instantiate.trb:526
+}
+
+const buildTarget = "release"
+const binaryName = "torb"
+print directory.joined(Path.from("build")).joined(Path.from(buildTarget)).joined(Path.from(binaryName))   // 10: cli/build.trb:199

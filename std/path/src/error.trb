@@ -1,0 +1,27 @@
+/** [PathError], what [Path.resolved] refuses and why. */
+
+use Show, Error from "std/core"
+use Path from "./path"
+
+/**
+ * What a path operation refuses. `Path` has only one member that can fail - [Path.resolved] - and these are the two
+ * things it refuses.
+ *
+ * # Related
+ *
+ * - [Path.resolved] - the member that answers this.
+ */
+public type PathError with Show, Error {
+  /** [Path.resolved] would have left `base`. */
+  case Outside(path: Path, base: Path)
+  /** [Path.resolved] was given a base that has no root, so "inside" has nothing to be measured against. */
+  case NoBase(base: Path)
+
+  /** What went wrong, in one line. */
+  fn show(self): String {
+    match self {
+      .Outside(path, base) => "{path} is not inside {base}"
+      .NoBase(base) => "{base} is not an absolute path"
+    }
+  }
+}

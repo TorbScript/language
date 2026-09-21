@@ -1,0 +1,37 @@
+/**
+ * [Root], the four things a path can start at - nothing, the file system, a drive or a share - and the text each of
+ * them shows as.
+ */
+
+use Show, Equals, Hash from "std/core"
+use Char from "std/text"
+use Path from "./path"
+
+/**
+ * Where a path starts. A path without one is relative.
+ *
+ * # Examples
+ *
+ *     print Root.Drive('C').show()
+ *
+ * # Related
+ *
+ * - [Path] - the root plus the components below it.
+ */
+public type Root with Show, Equals, Hash {
+  /** `/`: the root of the file system, and on Windows the root of the current drive. */
+  case Unix
+  /** `C:/`: one drive, with an absolute path on it. The letter is upper case. */
+  case Drive(letter: Char)
+  /** `//server/share`: a UNC share. */
+  case Share(server: String, share: String)
+
+  /** The text the root shows as, including its trailing separator. */
+  fn show(self): String {
+    match self {
+      .Unix => "/"
+      .Drive(letter) => "{letter}:/"
+      .Share(server, share) => "//{server}/{share}/"
+    }
+  }
+}

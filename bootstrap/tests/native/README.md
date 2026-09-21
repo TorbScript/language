@@ -171,6 +171,12 @@ expectation files. The leak gate does not run on them, because every one of them
 | `show-compound.trb` | `Show` of everything compound, and of a type whose field carries the name of a member |
 | `tuple-compare.trb` | The generated `compare` of a tuple: lexicographic, each field through its own `Compare` |
 
+**Paths** - `std/path`'s `Path`: a root and a list of components, never a string, and nothing about a disk.
+
+| Program | What it pins |
+|---------|--------------|
+| `paths.trb` | Every row of the parse table, every member, `resolved(inside:)` in each of its outcomes, and the ten call-site rewrites of `docs/PATH.md` section 4 |
+
 **Tests** - `test` and `group` of `std/test`, whose report both implementations write from the same place.
 
 | Program | What it pins |
