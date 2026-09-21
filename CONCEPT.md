@@ -2531,7 +2531,8 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
   a field and on a static value (`x: Int` is `const x: Int`), exactly as a parameter is constant unless it says `var`;
   `static var` does not exist, because there is no global mutable state. Before this, `const` in a type body meant
   "of the type" while `var` meant "a mutable field", and a function was static by *not* declaring `self` - two
-  questions answered by one word, and one question answered in two ways.- No `default` keyword and no `Default` trait. A value of a type comes from its constructor and from nowhere else:
+  questions answered by one word, and one question answered in two ways.
+- No `default` keyword and no `Default` trait. A value of a type comes from its constructor and from nowhere else:
   a zeroed value (`default(T)` of C#) skips the constructor, which breaks every validated type and is `null` under
   another name. A `Default` trait puts five meanings under one word, and each has its own: a configuration is
   **field defaults** (`Config(port: 1)`), a replacement is written where it is used (`value ?? 0`,
