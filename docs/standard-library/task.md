@@ -37,8 +37,8 @@ const numbers: List<Int> = [1, 2, 3, 4]
 // Stages are lazy: without `toList()` nothing would be spawned until somebody iterates
 const tasks = numbers.map { number => spawn { number * number } }.toList()
 
-// Top-level `await()` is allowed in entry files and scripts
-const total = tasks.map { _.await() }.sum()
+// Top-level `await()` is allowed in entry files and scripts. `Task.all` waits for all of them at once
+const total = Task.all(tasks).await().sum()
 print total
 ```
 

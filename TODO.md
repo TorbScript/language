@@ -3042,3 +3042,14 @@ Wenn nicht, was bedeutet, bewirkt es?
     normal - das ist wahrscheinlich die meistgenutzte Funktion jeder Konfigurationsdatei in trb, noch vor dem
     Dateilesen. `torb publish` nennt die gelesenen Variablen beim Hochladen (mit Namen), verlangt aber weder Flag
     noch Bestätigung. Damit ist in `docs/PROJECT.md` und `docs/RESOURCES.md` nichts mehr offen.
+- (`await()` in einer Closure, 2026-09-22) Frage des Nutzers zum Tour-Beispiel
+  `const total = tasks.map { _.await() }.sum()`: das ist kein Top-Level-`await()`.
+  - **Antwort: stimmt, und es ist nach CONCEPT sogar ein Compile-Fehler.** `await()` ist nur erlaubt in Funktionen,
+    die `Task` liefern, in `spawn`-Closures und auf Top-Level von Entry-Dateien. Die Closure an `map` ist keins davon
+    (`map` ruft sie synchron, sie kann keine Zustandsmaschine werden). Die Tasks liefen wegen `toList()` zwar schon
+    alle, das Warten wäre also max und nicht Summe gewesen - aber die Form ist falsch. `tasks.sum().await()` geht
+    nicht (`Task<Int>` ist nicht `Numeric`); richtig ist `Task.all(tasks).await().sum()`.
+  - **Erledigt:** `examples/tour/src/10-async.trb` und `docs/standard-library/task.md` korrigiert.
+  - **Wird gelöst (Checker-Folgerunde):** der Checker erzwingt die `await()`-Regel nicht - das alte Snippet lief als
+    `trb check` durch. Regel: `await()` nur in Task-Funktion, `spawn`-Closure, Top-Level; sonst Fehler mit Hinweis
+    auf `Task.all` / `Task.map`.
