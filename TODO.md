@@ -2526,3 +2526,31 @@ Wenn nicht, was bedeutet, bewirkt es?
   eigene Parameter unter ihren deklarierten Namen im Scope (`extend Option with Show where Value: Show`), Preis: die
   Parameternamen werden API. **Zurückgestellt (Nutzer: "lassen wir erst mal so wie es ist")** - beides bleibt als
   Kandidat notiert, nichts wird umgestellt.
+
+- (`project.trb`, 2026-09-21) **Erledigt:** Design-Dokument `docs/PROJECT.md` (in `docs/internals/index.md`
+  eingetragen, `docs check` und `docs index --check` grün). **Kern:** die Dateinamen sagen, was ein Paket
+  herstellt, und `project.trb` sagt nur, was kein Dateiname sagen kann. **Entschieden:** (1) `build { input }`
+  und `test { input }` fallen weg - `src/lib.trb` ist die Bibliothek (höchstens eine, denn der Paketname IST der
+  Importname), jede `main.trb` ist ein Programm, jede `*.test.trb` ein Testeinstieg; zum Paket gehört alles unter
+  seinem Verzeichnis, nicht nur `src/`. (2) Eine Datei mit Top-Level-Code ist nie importierbar: `"owner/name/main"`
+  wird ein Fehler (heute geht es, Sonde 17). (3) `target "release"` wird zu zwei Wörtern: PROFIL (`dev`/`release`,
+  CLI-Flag plus `profile "release" { ... }`-Block) und ZIEL (Plattform, nur `--target`); `build { output }` wird
+  gelöscht, der Pfad ist `build/<profil>/<programm>` plus `--output`. (4) Grammatik für den Text hinter `from`,
+  mit `scheme:` und punkthaltigen Ownern als RESERVIERT und je eigener Meldung. (5) Neun Einstellungen müssen
+  statisch lesbar sein (einfache String-Literale); ein interpoliertes `name` wird ein Fehler statt still leer.
+  **Befunde aus 18 Sonden:** `build { input "src/lib.trb"` - was 32 `project.trb` schreiben - macht `lib.trb` zur
+  Entry-Datei und schaltet damit die Top-Level-Code-Regel für genau die Datei ab, die sie schützen soll;
+  `use X from "https://..."` meldet ``There is no package `https:/` ``; `use logo from "./logo.png"` findet eine
+  Datei `logo.png.trb`, wenn es sie gibt; ein bloßer Name ohne Owner wird nirgends beanstandet.
+  **Drei offene Fragen für dich:** (a) Wo liegt ein zweites Programm - `src/<name>/main.trb` (Empfehlung, "mehrere
+  `main`s") oder `programs/<name>.trb`? Für den Compiler hieße die Empfehlung `compiler/src/torb/main.trb`, dann
+  braucht der Binärname keine Einstellung. (b) Ort einer Abhängigkeit in `project.trb` (Empfehlung) oder im
+  `use` wie gewünscht (`"https://git.acme.test/..."`)? Das entscheidende Argument dagegen ist nicht die
+  Reproduzierbarkeit, sondern dass `use` im TYPECHECKER aufgelöst wird - eine URL dort heißt: Typprüfen öffnet
+  einen Socket, gegen drei Zusagen aus CONCEPT. Deno hat genau das zurückgebaut. Host-qualifizierte NAMEN
+  (`github.com/project/x`, Go-Modell) bleiben als Mittelweg möglich. (c) Assets: ein compiler-bekannter
+  Parametertyp `Resource` (Empfehlung, im Geist von `lazy`/`Expression<Value>`: `Sandbox.load<Config>("./config.trb")`,
+  Literal-Pflicht, fehlende Datei = Compile-Fehler, der Build kennt jede Datei) - oder Loader per Dateiendung?
+  Loader sind ehrlich gesagt drei CONCEPT-Nicht-Ziele auf einmal (Build-Skript, ein Import der etwas ausführt,
+  Typen aus laufendem Code) und haben das Node-Bundler-Versagen. Abschnitt 13 von `docs/PROJECT.md` hat alle
+  drei mit Konsequenzen; nichts davon ist implementiert, die Migration steht dort in sieben Scheiben.
