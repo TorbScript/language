@@ -10,6 +10,7 @@ can be observed doing:
 | standard output  | `<program>.expected`     |
 | standard error   | `<program>.stderr`, and no file means "nothing at all" |
 | the exit code    | `<program>.exit`         |
+| whether the leak gate applies | `<program>.leaks`, which holds the reason it does not |
 
 Plus two things that are checked on the compiled side alone, because there is nothing to compare them with:
 
@@ -18,6 +19,11 @@ Plus two things that are checked on the compiled side alone, because there is no
   is output") and what it leaves behind is not a leak. The report has a second line, `immortal blocks at exit: N`: the
   value of a module constant is built once into a block that is never freed by construction, and counting those apart is
   what keeps the first number exact. Both lines are asserted.
+
+  A program that **recovers** a panic is exempt for the same reason and says so in a `<program>.leaks` file beside it,
+  which holds the sentence why. There is one: a test whose body panics is reported and the next test runs, and the
+  frames the jump left behind released nothing. The file is the whole exemption, so one that nobody can justify cannot
+  be added without a reader seeing it.
 - **The emitted C is a pure function of the program.** `--emit-c` twice gives the same bytes, and no absolute path of
   any machine is in it.
 
@@ -66,6 +72,17 @@ exist for it to move up one directory, and moving it is the whole change.
 | Program | Why it waits |
 |---------|--------------|
 | `error-chain.trb` | A top-level `?` whose error carries `Error` prints one `  caused by:` line per link of `cause()`. The back end's `reportFailure` writes the first line and exits; the loop over `cause()` on top of it is not lowered yet |
+
+## `binary-only/`
+
+The other side of the same coin, and the other thing that is not an exception: a program lands there when the two
+implementations answer **deliberately** differently, so there is nothing to compare and the divergence is still pinned
+instead of being untested. The runner builds and runs those programs as a binary alone and reads the same three
+expectation files. The leak gate does not run on them, because every one of them ends in a recovered panic.
+
+| Program | What differs, and why |
+|---------|-----------------------|
+| `assert-compound-capture.trb` | A failing `assert` shows a capture that is not a scalar by its **name and its type** (`found: Point`) and stage 0 shows its value. Showing a value of the program needs `Encode` for its type and for every type under it - one implementation in the binary per captured type, and one unshowable type anywhere refuses the whole build, which is what the compiler's own 2801 assertions over its own types would mean. It closes when a capture is an `EncodedValue` |
 
 ## The programs
 
@@ -146,6 +163,14 @@ exist for it to move up one directory, and moving it is the whole change.
 | `constants.trb` | Top-level `const`s of every shape, from a function and from the top level, and the mutated copy of one |
 | `show-compound.trb` | `Show` of everything compound, and of a type whose field carries the name of a member |
 | `tuple-compare.trb` | The generated `compare` of a tuple: lexicographic, each field through its own `Compare` |
+
+**Tests** - `test` and `group` of `std/test`, whose report both implementations write from the same place.
+
+| Program | What it pins |
+|---------|--------------|
+| `tests.trb` | One line per test, the group names in front of it with ` > ` between them, and groups that nest |
+| `test-failure.trb` | A test fails when its body panics: the name, the message indented under it, the site, and the next test still runs. `assert` names the source of the condition and every scalar it read |
+| `assert-values.trb` | What a failed `assert` shows for each kind of scalar: `the Int 1`, `the String "hi"`, `the Char 'a'`, `the Float 1.5`, `the Bool true` |
 
 **Errors**
 

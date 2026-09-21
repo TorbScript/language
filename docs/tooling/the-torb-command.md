@@ -107,6 +107,12 @@ Runs every `*.test.trb` file of a directory, one process per file, as many at a 
 runs them one after another in one process, which is what you want when the output order of a crash matters. The output is
 passed on in the order of the files, so it never depends on which finished first.
 
+`test` and `group` themselves are not a command's: they are ordinary functions of `std/test`, and both the interpreter
+and the compiled binary write the report from the same place - one line per test, `  ok      ` or `  FAILED  ` with the
+group names in front of it. So a test file that is **built** (`torb build one.test.trb`) runs its tests the same way,
+which is what the language's own conformance suite compares. The command itself still runs on stage 0: driving all the
+files of a directory from one native binary is the half of milestone 5.11 that is not built yet.
+
 ### `docs`
 
 Four commands over the documentation: `check` is the gate, `index` writes the generated part of every `index.md`, `skill`

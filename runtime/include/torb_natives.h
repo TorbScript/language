@@ -201,6 +201,10 @@ torb_text torb_show_u64(uint64_t value);
 torb_text torb_show_void(torb_void value);
 /* Float64.squareRoot */
 double torb_square_root_f64(double value);
+/* test */
+void torb_test_case(torb_text name, torb_closure body);
+/* group */
+void torb_test_group(torb_text name, torb_closure body);
 /* String.byteAt */
 bool torb_text_byte_at(torb_text text, int64_t offset, uint8_t *out);
 /* String.charAt */

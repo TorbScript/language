@@ -2136,3 +2136,59 @@ Wenn nicht, was bedeutet, bewirkt es?
     "no problems", `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `sh runtime/build.sh` 98 Tests,
     `torb test ../compiler/tests` 1453 Tests, volle `cargo test --release`, und **der Fixpoint hält**: Stage 1 und
     Stage 2 sind sich über 57289851 Bytes C einig (250,1 s / 108,1 s), Stage 3 emittiert sie noch einmal (22,0 s).
+
+- **Erledigt (5.11, erste Hälfte: `assert` wird gelowert, `test`/`group` sind Runtime-Funktionen, 2026-09-21)** - alle
+  gelaufenen Gates grün. Die zweite Hälfte (`torb test` aus einem Binary) steht unten unter "Nicht geschafft".
+  - **Die 58 Findings `a quoted expression` in `compiler/tests/` sind 0.** `torb ir --statistics ../compiler/tests` lowert
+    jetzt **12318 von 12319 Funktionen**; das eine, das bleibt, ist `a list pattern inside another pattern` in
+    `parser.test.trb:178` und hat mit Quotierungen nichts zu tun (notiert, nicht angefasst).
+  - **`assert` wird vom Lowering gebaut, und die Quotierung dahinter wird nie als Wert erzeugt.**
+    `assert(condition)` braucht drei Dinge - ob die Bedingung hielt, was der Leser geschrieben hat, und was die Bedingung
+    aus ihrer Umgebung las - und ein `Expression<Bool>`-Wert trägt keins davon billiger, als das Lowering es ohnehin hat:
+    die Bedingung ist das gewöhnliche `Bool`, die Quelle sind die Bytes ihrer Span, die Captures stehen in
+    `Quotation.captures`. Der Rumpf, den `std/expression` schreibt, ist der, der **nicht** gelowert werden kann: er reicht
+    jede Capture als `Encode` weiter und fragt `describe` nach dem Text - eine `Encode`-Implementierung pro gefangenem Typ
+    im Binary, und ein einziger nicht zeigbarer Typ verweigert den ganzen Build. Das ist genau der Preis, den 2801
+    Assertions über die Compiler-eigenen Typen bedeutet hätten. Neu: `compiler/src/ir/lower/quote.trb`.
+  - **Was ein fehlgeschlagenes `assert` zeigt, ist *eine* Funktion** (`describedCapture`), und das ist die Naht, auf der
+    `EncodedValue` später landet. Heute: ein **Skalar** (jeder Integer-, jeder Float-Typ, `Bool`, `Char`, `String`) als
+    `left = the Int 1` - zeichengleich mit der Beschreibung, die der Interpreter selbst schreibt -, alles andere als
+    `found: Point`, Name und Typ. Das Wort nach `the` ist der Name der *Art* von Wert und nicht der des Typs (`Int` für
+    ein `Int64`), weil das die Vokabel von Stage 0 ist und der Text verglichen wird.
+  - **Stage 0s `assert` paniked jetzt**, statt als *Interpreter* zu scheitern (`error:`, Code 1). Das war eine Art zu
+    enden, zu der ein kompiliertes Programm kein Gegenstück hat, also war ein fehlschlagendes `assert` vorher überhaupt
+    nicht vergleichbar. Jetzt schreiben beide `panic: Assertion failed: ...`, dieselbe Stelle und 101.
+  - **`test` und `group` sind Funktionen der Runtime** (`runtime/test.c`), weil die Runtime eine Closure aufrufen kann.
+    Was darüber hinaus fehlte, war ein **Wiedereinstiegspunkt**: `torb_begin_recovery` in `runtime/panic.c` lässt
+    `torb_finish_panic` eine `torb_recovery` füllen und in den Frame springen, der den Test ausführt, statt nach stderr zu
+    schreiben und das Programm zu beenden. Der Punkt wird vor dem Sprung abgeräumt, also ist eine Panik *während* der
+    Meldung eine gewöhnliche Panik. Der Report - `  ok      <gruppe> > <name>` und die vier Zeilen eines Fehlschlags -
+    steht an *einer* Stelle, aus demselben Grund, aus dem `print` seine Teile in der Runtime zusammenfügt.
+  - **Ein Lauf, der eine Panik auffängt, leakt, und das Gate sagt es, statt gelockert zu werden.** Eine aufgefangene Panik
+    führt auf dem Weg hinaus nichts aus - kein Release, kein `Close`, kein Destruktor -, genau wie eine gewöhnliche Panik.
+    `bootstrap/tests/native/test-failure.trb` meldet `live blocks at exit: 1` und trägt eine `.leaks`-Datei neben sich,
+    die diesen Satz enthält; der Runner liest sie und lässt das Leak-Gate für genau dieses Programm aus. README der Suite
+    und BACKEND sagen beides.
+  - **Drei neue Gate-Programme.** `tests.trb` (eine Zeile pro Test, Gruppennamen davor, Gruppen schachteln) und
+    `test-failure.trb` (ein Test scheitert, wenn sein Rumpf paniked: Name, Meldung eingerückt darunter, Stelle, und der
+    nächste Test läuft) sind byte-gleich auf beiden Seiten. Für die *bewusste* Abweichung gibt es ein neues
+    Unterverzeichnis `bootstrap/tests/native/binary-only/` - das Gegenstück zu `stage-0-only/` -, in dem ein Programm
+    liegt, wenn die beiden Implementierungen absichtlich verschieden antworten: `assert-compound-capture.trb` wird gebaut
+    und als Binary allein geprüft, und README und BACKEND sagen, was abweicht und wann es zugeht.
+  - **Nicht geschafft, mit exaktem Stand:** (1) ein `Expression<Value>` als **Wert** - der statische `ExpressionNode`-Baum,
+    `value()`, `captures()`; die beiden Einträge sind weiter `.Planned("5.11")`, und eine Quotierung, die nicht das
+    Argument von `assert` ist, ist weiter `a quoted expression`. Der Entwurf steht unverändert in BACKEND ("What 5.11
+    needs"), und der unsterbliche Static, den der Baum braucht, ist da. (2) `torb test` aus **einem** Binary über alle 55
+    Dateien: eine kompilierte Testdatei läuft für sich allein schon nativ und schreibt, was Stage 0 schreibt - was fehlt,
+    ist der Treiber (eine erzeugte Entry, die alle Module in Pfadreihenfolge aufruft, `emitProgram` mit mehr als einem
+    Entry-Namen, und die Zähler der Summenzeile neben `test` in `runtime/`). (3) Damit auch die beiden 5.14-Punkte
+    (`cause()`-Kette, `Show` eines Funktionswerts), die erst danach drankommen sollten.
+  - **Gates:** `cargo build --release`, `check ..` 315 Dateien "no problems", `check tests/native tests/scripts`
+    73 Dateien, `check --statistics ..` 195546 von 195546 Ausdrücken, 0 deferred, `canon --check` 0 von 383 Dateien,
+    `docs check` 222 Seiten, `docs index --check` 24 Indizes, `docs source` über
+    `ir`/`backend`/`cli`/`std/test`/`std/expression` 45 Dateien "no problems", `cargo fmt --check`,
+    `cargo clippy --all-targets -- -D warnings`, `sh runtime/build.sh` 108 Tests, `torb test ../compiler/tests` **1469**,
+    `torb test ../std/linear/tests` 93, `torb test ../std/geometry/tests` 71,
+    `cargo test --release --test native` (die ganze Konformitätssuite, drei Tests, 1688,6 s) grün, und
+    **der Fixpoint hält**: Stage 1 und Stage 2 sind sich über 57455864 Bytes C einig (279,2 s / 106,2 s),
+    Stage 3 emittiert sie noch einmal (21,9 s). Nicht gelaufen: die volle `cargo test --release`.

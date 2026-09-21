@@ -322,6 +322,8 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
   // `?` converts the error out of the very adaptation this would refuse, and a `??` inlines the thunk of its fallback
   const convertsItself = isTryExpression expression
   const inlinesThunk = lowering.inlinedThunks.containsKey at
+  // `assert` lowers its condition as the ordinary expression it was checked as, and owns the message of a failure
+  const inlinesQuotation = lowering.inlinedQuotations.containsKey at
   // An interpolated part and an argument of `print` are shown by `ir/lower/text.trb`, which records the span first
   const isShown = showsHere lowering, at
   for adaptation in adaptations {
@@ -330,7 +332,7 @@ fn canReplayAdaptations(var lowering: Lowering, expression: Expression): Bool {
       .ShowValue(_) => if isShown { "" } else { "a value shown outside of an interpolation" }
       .Delegate(_) => "`by` delegation"
       .Lazy => if inlinesThunk { "" } else { "a `lazy` argument" }
-      .Quote(_) => "a quoted expression"
+      .Quote(_) => if inlinesQuotation { "" } else { "a quoted expression" }
       .Spread => ""
       .Variadic(_, _) => ""
       _ => ""

@@ -45,6 +45,7 @@ use emitIntrinsic, receiverSlot from "./expression"
 use Dispatched, dispatchedMember, dispatchedOn, preludeType from "./generic"
 use lowerClosureCall, lowerLazyArgument, lazyParametersOf, lowerConstructorValue from "./closure"
 use printOperationOf, lowerPrint from "./text"
+use isAssertion, lowerAssertion from "./quote"
 use lowerItemList, listBoundFor from "./collection"
 
 /**
@@ -145,6 +146,10 @@ fn lowerCallable(
   // the parts are shown here instead, on the fast path `ir/lower/text.trb` explains
   if const Some(operation) = printOperationOf(lowering, symbol) {
     return lowerPrint lowering, builder, destination, expression, arguments, operation
+  }
+  // `assert` holds an `Expression<Bool>`, and what a failed one shows is one decision of the lowering
+  if isAssertion(lowering, symbol) {
+    return lowerAssertion lowering, builder, destination, expression, arguments
   }
   const dispatched = match dispatchedMember(lowering, symbol, typeArguments, dispatch, receiver, at) {
     Some(found) => found

@@ -334,6 +334,11 @@ impl Interpreter {
         self.located(Err(failure(message)), environment, span)
     }
 
+    /// The language's panic at the site the expression stands on: what a failed `assert` is.
+    fn panic_at<T>(&self, environment: &Environment, span: Span, message: impl Into<String>) -> Eval<T> {
+        self.located(Err(panicked(message)), environment, span)
+    }
+
     // --- Statements -------------------------------------------------------------------------------------------------
 
     pub fn exec_block(&mut self, block: &'static Block, environment: &Rc<Environment>) -> Eval {
@@ -1562,7 +1567,12 @@ impl Interpreter {
         }
     }
 
-    /// `assert` takes an `Expression<Bool>`: the message shows the source.
+    /// `assert` takes an `Expression<Bool>`: the message shows the source, and a failure **panics**.
+    ///
+    /// It is a panic and not a failure of the interpreter because that is what the language says about `assert`, and it
+    /// is what the C back end emits - so a failed assertion reads the same way and leaves with the same code on both
+    /// implementations (`ir/lower/quote.trb`). A condition that is not a `Bool` at all stays a failure of the
+    /// interpreter: stage 1 rejects every program that reaches one.
     fn assert(&mut self, arguments: &'static [Argument], environment: &Rc<Environment>, span: Span) -> Eval {
         let Some(condition) = arguments.first() else { return self.fail(environment, span, "`assert` needs a condition") };
         match self.eval(&condition.value, environment)? {
@@ -1581,7 +1591,7 @@ impl Interpreter {
                         }
                     }
                 }
-                self.fail(environment, span, message)
+                self.panic_at(environment, span, message)
             }
             other => self.fail(environment, span, format!("`assert` needs a Bool, this is {}", self.describe(&other))),
         }

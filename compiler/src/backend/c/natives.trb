@@ -588,6 +588,19 @@ fn consoleEntries(var entries: List<NativeEntry>) {
   entries.add runtimeOf("panic", "torb_panic", "void torb_panic(torb_text message, torb_location at);")
 }
 
+/**
+ * `test` and `group` of `std/test`. Both are functions of the runtime because the runtime can call a closure - a closure
+ * value's `code` points at a thunk with an erased environment - and because a test needs a **recovery point**: a body
+ * that panics is reported and the next test runs, which `runtime/test.c` sets up around every body.
+ *
+ * The report is one format for both back ends for the same reason `print` joins its parts in the runtime: two
+ * implementations of one format are two chances to disagree, and `torb test` compares the two line by line.
+ */
+fn testEntries(var entries: List<NativeEntry>) {
+  entries.add runtimeOf("test", "torb_test_case", "void torb_test_case(torb_text name, torb_closure body);")
+  entries.add runtimeOf("group", "torb_test_group", "void torb_test_group(torb_text name, torb_closure body);")
+}
+
 // --- The collections ------------------------------------------------------------------------------------------------
 
 /**
@@ -950,8 +963,6 @@ fn plannedPackageEntries(var entries: List<NativeEntry>) {
 
   entries.add plannedRuntimeOf("Expression.value", "torb_expression_value", "5.11")
   entries.add plannedRuntimeOf("Expression.captures", "torb_expression_captures", "5.11")
-  entries.add plannedRuntimeOf("test", "torb_test_case", "5.11")
-  entries.add plannedRuntimeOf("group", "torb_test_group", "5.11")
 
   /*
    * `describe` and the four members of `Json` drive `Encode`, and every member of `Encoder`, `RecordEncoder` and
@@ -990,6 +1001,7 @@ public fn nativeEntries(): List<NativeEntry> {
   compareEntries entries
   textEntries entries
   consoleEntries entries
+  testEntries entries
   collectionEntries entries
   fileEntries entries
   mathEntries entries

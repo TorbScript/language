@@ -18,6 +18,7 @@
 #ifndef TORB_H
 #define TORB_H
 
+#include <setjmp.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -179,6 +180,33 @@ void torb_leave_frame(void);
  */
 typedef void (*torb_panic_hook)(const char *message);
 void torb_set_panic_hook(torb_panic_hook hook);
+
+/**
+ * Where a panic goes instead of leaving the process: the recovery point a test runner sets up around one test body, so
+ * that a test that panics is reported and the next test still runs.
+ *
+ * **A recovered panic runs nothing on the way out** - no release, no `Close`, no destructor, exactly as an ordinary
+ * panic runs nothing - so everything the aborted frames held stays allocated. A program that recovers therefore leaks
+ * by construction and the leak gate of the conformance suite does not apply to a run with a failed test
+ * (`bootstrap/tests/native/README.md`).
+ *
+ * `message` and `at` are filled in before the jump. The message is the panic's own, without the `panic: ` in front of
+ * it, so a runner can print it in its own format.
+ */
+typedef struct torb_recovery {
+  jmp_buf destination;
+  char message[1024];
+  torb_location at;
+} torb_recovery;
+
+/**
+ * Makes `point` the recovery point of every panic until it is ended, and answers the one that was active before.
+ * The caller calls `setjmp(point->destination)` itself, because `setjmp` may only be used in the frame that owns it.
+ */
+torb_recovery *torb_begin_recovery(torb_recovery *point);
+
+/** Restores the recovery point `torb_begin_recovery` answered. Pass `NULL` to leave a panic leaving the process. */
+void torb_end_recovery(torb_recovery *previous);
 
 /* ------------------------------------------------------------------------------------------------ allocation --- */
 
@@ -691,6 +719,19 @@ void torb_print_error_parts(const torb_text *parts, size_t count);
 
 /** `readLine(): String?`: false at end of input. The trailing `\n` (and a `\r` before it) is removed. */
 bool torb_read_line(torb_text *out);
+
+/* ------------------------------------------------------------------------------------------------- the tests --- */
+
+/**
+ * `test "name" { ... }` and `group "name" { ... }` of `std/test`. `name` borrowed, `body` borrowed.
+ *
+ * One line per test to stdout, `  ok      <group> > <name>` or `  FAILED  <name>` plus the message and the site: the
+ * format lives in the runtime so that the interpreter and the binary print one report. A body that panics is caught by
+ * a recovery point around it and the next test runs - and because a recovered panic releases nothing, a run with a
+ * failed test leaks what the aborted frames held.
+ */
+void torb_test_case(torb_text name, torb_closure body);
+void torb_test_group(torb_text name, torb_closure body);
 
 /** Called by the generated `main` before anything else. `argument_values` borrowed for the whole run. */
 void torb_process_start(int argument_count, char **argument_values);

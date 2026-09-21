@@ -133,7 +133,12 @@ fn every_native_program_behaves_like_it_does_on_stage_0() {
         // The second number is the **immortal** blocks: the value of a module constant is built once into a block that is
         // never freed by construction, and counting those apart is what keeps the first number exact. Both lines are
         // asserted, so the accounting cannot be turned off without a test saying so.
-        if expected_file(file, "stderr").is_none() {
+        //
+        // A `.leaks` file beside the program is the one exemption, and it is not a hole in the gate: it says that the
+        // run **recovers** a panic - a test whose body panicked - and a recovered panic releases nothing on the way
+        // out, exactly as an ordinary panic releases nothing. The file holds the reason, so an exemption nobody can
+        // justify cannot be added silently.
+        if expected_file(file, "stderr").is_none() && expected_file(file, "leaks").is_none() {
             let counted = Command::new(&binary).env("TORB_REPORT_LEAKS", "1").output().expect("the compiled program runs");
             assert!(
                 text(&counted.stderr).contains("live blocks at exit: 0\n"),
@@ -209,6 +214,46 @@ fn every_stage_0_only_program_matches_its_expectations() {
             None => assert!(reported.is_empty(), "{name} writes to stderr and has no `.stderr` file:\n{reported}"),
         }
     }
+}
+
+/// The programs of `bootstrap/tests/native/binary-only/`, which are built and run as a binary alone.
+///
+/// A program lands there when the two implementations **deliberately** answer differently, so there is nothing to
+/// compare and the divergence is still pinned instead of being untested. There is one, and the README names it: a
+/// failing `assert` shows a capture that is not a scalar by its name and its type, where stage 0 shows its value. Each
+/// program says in its doc comment why it is there and what would close the difference.
+///
+/// The leak gate does not run here: every one of these ends in a failed test, which is a recovered panic.
+#[test]
+fn every_binary_only_program_matches_its_expectations() {
+    let root = repository();
+    let directory = root.join("bootstrap/tests/native/binary-only");
+    let files = programs(&directory);
+    assert!(!files.is_empty(), "expected the programs that only the binary can be compared against");
+    let output = scratch("torb-native-binary-only");
+    let compiler_path = root.join("compiler");
+    let compiler_path = compiler_path.to_str().expect("UTF-8 path");
+    for file in &files {
+        let name = file.file_stem().expect("a file name").to_str().expect("UTF-8 name").to_string();
+        let target = output.join(&name);
+        let target_text = target.to_str().expect("UTF-8 path").to_string();
+        let built = torb(&["run", compiler_path, "build", file.to_str().expect("UTF-8 path"), "--output", &target_text]);
+        assert!(built.status.success(), "torb build {name} failed:\n{}\n{}", text(&built.stdout), text(&built.stderr));
+        let native = Command::new(binary_of(&target)).output().expect("the compiled program runs");
+        let code = native.status.code().expect("an exit code");
+        if let Some(expected) = expected_file(file, "expected") {
+            assert!(text(&native.stdout) == expected, "unexpected output of {name}:\n{}", text(&native.stdout));
+        }
+        if let Some(expected) = expected_file(file, "exit") {
+            assert!(code.to_string() == expected.trim(), "{name} left with {code}, expected {}", expected.trim());
+        }
+        let reported = without_library_positions(&text(&native.stderr));
+        match expected_file(file, "stderr") {
+            Some(expected) => assert!(reported == expected, "unexpected stderr of {name}:\n{reported}"),
+            None => assert!(reported.is_empty(), "{name} writes to stderr and has no `.stderr` file:\n{reported}"),
+        }
+    }
+    let _ = std::fs::remove_dir_all(&output);
 }
 
 /// A panic inside the standard library names a line of `std/`, and that line moves whenever a comment above it is

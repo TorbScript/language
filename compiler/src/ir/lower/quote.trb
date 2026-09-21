@@ -1,0 +1,230 @@
+/**
+ * `assert(condition)`: the one quotation the back end builds by itself, and what a failed one prints.
+ *
+ * `assert` takes an `Expression<Bool>`, so the argument is a **quotation** - the expression that was written, together
+ * with the values it reads from around it. Its body in `std/expression` cannot be translated: it hands every capture on
+ * as an `Encode` and asks `describe` for the text, which would put one `Encode` implementation into the binary per
+ * captured type and refuse the whole build for a single type that has none. The compiler's own tests capture whole
+ * checkers and whole IR programs, so that is not a price this call may cost.
+ *
+ * So the call is lowered here instead: the condition is the ordinary `Bool` it was checked as, and the message of a
+ * failure is built from the source text of the condition and the captures the checker recorded. **How a capture is
+ * shown is this one decision and nothing else knows it**, which is what keeps the redesign of `Encode` local: when a
+ * capture is an `EncodedValue`, only [describedCapture] changes.
+ *
+ * **What a capture shows.** A scalar - an integer, a float, a `Bool`, a `Char` or a `String` - is shown by its value,
+ * in the words the interpreter uses (`the Int 3`, `the String "a"`), so that a failing assertion reads the same way on
+ * both implementations. Everything else is its name and its type (`found: LoweredProgram`): a value of the program
+ * shown in full needs `Encode` per type, which is the cost above.
+ */
+
+use Span from "../../syntax/source"
+use Expression, Argument from "../../syntax/ast"
+use SymbolId from "../../semantics/symbols"
+use TypeId, TypeForm from "../../semantics/checker/type"
+use QuotationCapture from "../../semantics/checker/context"
+use Slot, Instruction, Terminator, IrTypeId, borrowed from "../ir"
+use FunctionBuilder, addTemporary, addBlock, emit from "../build"
+use Lowering, reportUnsupported, locationOf, finishBlock, continueIn, substituted, irTypeOf from "./context"
+use unsupportedSlot, abandonedSlot, voidSlot, lowerValue from "./expression"
+use textSlot, showSlot, concatenatedSlot from "./text"
+use bindingReferenceOf from "./closure"
+
+/** Whether a call reaches the `assert` of the standard library, which is the one call lowered here. */
+public fn isAssertion(lowering: Lowering, symbol: SymbolId): Bool {
+  lowering.checker.wellKnown.symbolNamed("assert") == Some(symbol)
+}
+
+/**
+ * `assert(condition)`: the condition, a branch, and a `panic` whose message names the source and every capture.
+ *
+ * The quotation is *not* built as a value - nothing reads its tree here - so the condition is lowered as the ordinary
+ * expression it was checked as, with the `Adaptation.Quote` at its span replayed by this very function.
+ */
+public fn lowerAssertion(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  destination: Slot?,
+  expression: Expression,
+  arguments: List<Argument>,
+): Slot {
+  const at = expression.span
+  const written = match arguments.first() {
+    Some(found) => found.value
+    None => {
+      return unsupportedSlot lowering, builder, destination, "`assert` without a condition", at
+    }
+  }
+  const module = lowering.module
+  const quotation = match lowering.checker.quotationAt(module, written.span) {
+    Some(found) => found
+    None => {
+      return unsupportedSlot lowering, builder, destination, "an `assert` the checker did not quote", at
+    }
+  }
+  lowering.inlinedQuotations.set written.span, true
+  const condition = lowerValue lowering, builder, written
+  if !lowering.isSupported {
+    return abandonedSlot lowering, builder, destination
+  }
+  const location = locationOf lowering, at
+  const failed = addBlock builder, "assert.failed", Some(location)
+  const held = addBlock builder, "assert.held", Some(location)
+  finishBlock lowering, builder, Terminator.Branch(condition, held, failed)
+  continueIn lowering, builder, failed
+  const message = assertionMessage lowering, builder, written, quotation.captures
+  if lowering.isSupported {
+    emit builder, Instruction.Panic(borrowed(message), location)
+  }
+  finishBlock lowering, builder, Terminator.Unreachable
+  continueIn lowering, builder, held
+  match destination {
+    Some(_) => voidSlot lowering, builder, destination
+    None => abandonedSlot lowering, builder, destination
+  }
+}
+
+/**
+ * `Assertion failed: <the source of the condition>`, and one indented line per capture.
+ *
+ * The source text is the bytes of the condition's span, which is what the reader wrote; nothing is re-printed from the
+ * syntax tree, so a spelling the formatter would change stays what it is in the message.
+ */
+fn assertionMessage(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  written: Expression,
+  captures: List<QuotationCapture>,
+): Slot {
+  const source = sourceTextOf lowering, written.span
+  var parts = [textSlot(lowering, builder, "Assertion failed: {source}")]
+  for capture in captures {
+    const value = match captureSlot(lowering, builder, capture, written.span) {
+      Some(found) => found
+      None => {
+        return abandonedSlot lowering, builder, None
+      }
+    }
+    parts.addAll describedCapture(lowering, builder, capture, value, written.span)
+    if !lowering.isSupported {
+      return abandonedSlot lowering, builder, None
+    }
+  }
+  concatenatedSlot lowering, builder, parts, written.span
+}
+
+/**
+ * One capture, as the line a failed assertion shows for it: `\n  name = the Int 3` for a scalar, and
+ * `\n  name: LoweredProgram` for everything else.
+ *
+ * A `String` and a `Char` are quoted, which is what the interpreter's own description of one does - and the word in
+ * front of the value is the language's name for the kind of value, not the name of the type, so that the two
+ * implementations agree on the text of a failure.
+ */
+fn describedCapture(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  capture: QuotationCapture,
+  value: Slot,
+  at: Span,
+): List<Slot> {
+  const annotation = substituted lowering, capture.annotation
+  const name = capture.name
+  const kind = scalarKindOf lowering, annotation
+  if kind.isEmpty() {
+    const shown = lowering.checker.describe annotation
+    return [textSlot(lowering, builder, "\n  {name}: {shown}")]
+  }
+  const shown = showSlot lowering, builder, value, annotation, at
+  if !lowering.isSupported {
+    return []
+  }
+  const quotes = quotesOfKind kind
+  if quotes.isEmpty() {
+    return [textSlot(lowering, builder, "\n  {name} = the {kind} "), shown]
+  }
+  [
+    textSlot(lowering, builder, "\n  {name} = the {kind} {quotes}"),
+    shown,
+    textSlot(lowering, builder, quotes),
+  ]
+}
+
+/** What a `String` and a `Char` are wrapped in, and nothing for the kinds that are shown bare. */
+fn quotesOfKind(kind: String): String {
+  if kind == "String" {
+    return "\""
+  }
+  if kind == "Char" {
+    return "'"
+  }
+  ""
+}
+
+/**
+ * The word a scalar is described with, or an empty text for a type that is not one: every integer type is an `Int` and
+ * every float a `Float`, because that is the vocabulary a failed assertion is read in and the one the interpreter has.
+ */
+fn scalarKindOf(lowering: Lowering, annotation: TypeId): String {
+  const symbol = match lowering.checker.types.form(annotation) {
+    .Nominal(found, _) => found
+    _ => {
+      return ""
+    }
+  }
+  const known = lowering.checker.wellKnown
+  if const Some(numeric) = known.numericNamed(symbol) {
+    if numeric == "Decimal" {
+      return ""
+    }
+    return if numeric.startsWith("Float") { "Float" } else { "Int" }
+  }
+  if known.boolean == Some(symbol) {
+    return "Bool"
+  }
+  if known.character == Some(symbol) {
+    return "Char"
+  }
+  if known.string == Some(symbol) {
+    return "String"
+  }
+  ""
+}
+
+/** The value of one captured binding, read the way an ordinary name of it would be. */
+fn captureSlot(
+  var lowering: Lowering,
+  var builder: FunctionBuilder,
+  capture: QuotationCapture,
+  at: Span,
+): Slot? {
+  const declared = lowering.checker.binding(capture.binding).at
+  if const Some(place) = bindingReferenceOf(lowering, builder, declared) {
+    const annotation = irTypeOf lowering, capture.annotation
+    const target = addTemporary builder, annotation
+    emit builder, Instruction.Read(target, place)
+    return Some target
+  }
+  match lowering.slots.get(declared) {
+    Some(found) => Some found
+    None => {
+      reportUnsupported lowering, "an `assert` over a binding the back end cannot reach", at
+      None
+    }
+  }
+}
+
+/** The bytes a span covers, out of the source of the module that is being lowered. */
+fn sourceTextOf(lowering: Lowering, at: Span): String {
+  const index = lowering.module.value
+  const modules = lowering.checker.program.graph.modules
+  if index < 0 || index >= modules.length() {
+    return ""
+  }
+  const text = modules[index].source.text
+  const end = at.end.min text.byteLength()
+  if at.start >= end {
+    return ""
+  }
+  text.slice(at.start..end)
+}

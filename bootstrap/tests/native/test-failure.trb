@@ -1,0 +1,36 @@
+/**
+ * A test that fails, and the one after it that still runs.
+ *
+ * A test fails when its body panics, and the runner catches that per test: the name, the message of the panic indented
+ * under it, the site, and then the next test. That is the whole reason a test runner needs a recovery point - without
+ * one, the first failing test would end the run.
+ *
+ * `assert` is the panic every test file writes, and its message names the source of the condition and every value the
+ * condition read from around it: `left = the Int 1`, in the words a value is described in. A capture that is not a
+ * scalar is its name and its type instead, which is a difference between the two implementations and the reason that
+ * case is not in this file (`bootstrap/tests/native/README.md`).
+ *
+ * The run leaves with **0**: what counts the failures and decides an exit code is `torb test`, and this program is one
+ * file run on its own.
+ */
+use Process from "std/process"
+use test, group from "std/test"
+
+group "a failure" {
+  test "a failed assertion shows the source and the captured values" {
+    const left = 1
+    const right = 2
+    assert(left == right)
+  }
+
+  test "a body that panics is a failure too" {
+    panic "not built yet"
+  }
+
+  test "and the next test still runs" {
+    const yes = true
+    assert yes
+  }
+}
+
+Process.exit 0

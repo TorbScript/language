@@ -112,9 +112,12 @@ behaviour, compiled to a native binary, run, and compared with itself on stage 0
 exit code, byte for byte, with nothing about what a program does exempt. It is a workspace of its own whose only members
 are `std/`, so `torb check ..` over the repository does not look at it; `torb run ../compiler check tests/native`
 checks it, and that is a gate. **`bootstrap/tests/native/README.md` is the contract**: what is compared, what is not and
-why, how a program is added, and which program pins which behaviour. Its one subdirectory, `stage-0-only/`, is a waiting
-room: a program lands there when the back end cannot produce the behaviour yet and stage 0 already answers what the
-language says, and the runner compares it on stage 0 alone until it can move up one directory.
+why, how a program is added, and which program pins which behaviour. It has two subdirectories, and neither is an
+exception to the contract: `stage-0-only/` is a waiting room - a program lands there when the back end cannot produce
+the behaviour yet and stage 0 already answers what the language says, and the runner compares it on stage 0 alone until
+it can move up one directory - and `binary-only/` is the other side, where the two implementations answer
+**deliberately** differently and the runner builds and runs the program as a binary alone. `cargo test --release --test
+native` runs all three.
 
 `bootstrap/tests/scripts/` is the other half: long programs that run on stage 0 alone and are compared with their
 `.expected` by `crates/torb-cli/tests/self_hosted.rs`. A behaviour both back ends have to agree on belongs in

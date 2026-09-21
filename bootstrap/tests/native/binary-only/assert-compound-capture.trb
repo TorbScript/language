@@ -1,0 +1,27 @@
+/**
+ * A failing `assert` over a capture that is not a scalar: `found: Point`, its name and its type.
+ *
+ * The language says a failed assertion names every value the condition read. A scalar is shown by its value on both
+ * implementations; a value of the program is not, because showing one needs `Encode` for its type and for the type of
+ * every field under it - one implementation in the binary per captured type, and one unshowable type anywhere refuses
+ * the whole build. The compiler's own tests capture whole checkers, so that is the price this decides against
+ * (docs/BACKEND.md, "What 5.11 decided").
+ *
+ * So the binary writes the name and the type, the interpreter writes the value, and there is nothing to compare - which
+ * is why this program is here and not one directory up. It moves up the day a capture is an `EncodedValue`.
+ */
+use Process from "std/process"
+use test from "std/test"
+
+type Point {
+  x: Int
+  y: Int
+}
+
+test "a capture that is not a scalar is its name and its type" {
+  const found = Point 1, 2
+  const wanted = 3
+  assert(found.x == wanted)
+}
+
+Process.exit 0
