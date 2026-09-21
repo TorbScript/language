@@ -2911,3 +2911,20 @@ Wenn nicht, was bedeutet, bewirkt es?
     Abschnitt in `docs/ENCODING.md`. **Wird gelöst - Runde "Kapsel", startet sobald die Umstellung auf
     `static`/`var fn` gelandet ist** (die fasst gerade jede `.trb`-Datei an; ein paralleler Zweig in alter Syntax
     wäre ein einziger Konflikt). Parallel dazu dann die Runde "Konstruktor-Bugs + `...` im Pattern".
+
+- (`project.trb` - Umgebung und Lock, 2026-09-22) **Entschieden (Nutzer), korrigiert `docs/PROJECT.md` Abschnitt 8:**
+  1. **`project.trb` darf Umgebungsvariablen lesen** ("natürlich") - neben dem lesenden Dateizugriff unterhalb des
+     Projektverzeichnisses. Weiter zu: Netz, Schreiben, Uhr.
+  2. **Es gibt genau zwei Dateien: `project.trb` (die man selbst pflegt) und `project.lock.trb` (das gesperrte
+     Manifest).** Kein `project.source.trb`, kein eingefrorenes `project.trb` im Paket: das ausgewertete, rein
+     literale Manifest steht IM Lock, neben den festgenagelten Abhängigkeiten. Verbraucher, Registry und Editor
+     lesen bei einem fremden Paket das Lock und werten dessen `project.trb` nie aus.
+  - **Meine technischen Festlegungen dazu (gehen so ins Dokument):** Umgebung lesen darf nur das Projekt, in dem
+    `torb` aufgerufen wird, samt seiner Workspace-Mitglieder - eine `git:`/`path:`-Abhängigkeit wird mit
+    Dateizugriff auf IHR Verzeichnis ausgewertet, aber OHNE Umgebung (sie könnte ein Geheimnis in ihre Einstellungen
+    und damit ins Binary tragen). Gelesene Variablen werden für den inkrementellen Build mit NAMEN und HASH
+    festgehalten, nie mit Wert. Der Einstellungs-Teil des Locks wird beim Paketieren/Publizieren geschrieben (und
+    von `torb lock`), NICHT bei jedem Build - sonst ändert eine `BUILD_NUMBER` das eingecheckte Lock in jedem CI-Lauf;
+    der Abhängigkeits-Teil ändert sich wie bisher nur durch `torb add`/`torb update`. Pitfall für die Doku: was aus
+    der Umgebung in eine Einstellung fließt, wird mit dem Paket veröffentlicht.
+  - **Wird gelöst:** Überarbeitung von `docs/PROJECT.md` (Design-Agent fortgesetzt).
