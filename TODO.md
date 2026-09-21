@@ -2803,3 +2803,11 @@ Wenn nicht, was bedeutet, bewirkt es?
     reine Daten: billig, total, ohne Code. Damit bleibt für Invarianten nur die Kapsel als STANDARD (kein neues
     Konstrukt): private Felder, Factory (`from`/`tryFrom`), Accessoren. Offen ist allein noch die EINE neue Regel,
     die die Kapsel bezahlbar macht: `Encode`/`Decode` über das Konversionspaar ableiten.
+  - **Entschieden (Nutzer: "Bau das mal ein, dann schaue ich es mir in Ruhe an"):** die Regel kommt -
+    ist der Konstruktor von außen zu, werden `Encode`/`Decode` über das EINE Konversionspaar abgeleitet (`Decode`:
+    Quellwert lesen, `tryFrom`/`from`, Fehler wird `DecodeError`; `Encode`: die Rückrichtung; kein Paar oder mehrere
+    -> nichts abgeleitet, mit Meldung). Dazu: `std/path` wird eine Kapsel (Felder privat, `root()`/`components()`,
+    der `==`-Pitfall verschwindet), die Doku-Seite "Daten oder Kapsel", die Benennungskonvention in CONTRIBUTING, der
+    Abschnitt in `docs/ENCODING.md`. **Wird gelöst - Runde "Kapsel", startet sobald die Umstellung auf
+    `static`/`var fn` gelandet ist** (die fasst gerade jede `.trb`-Datei an; ein paralleler Zweig in alter Syntax
+    wäre ein einziger Konflikt). Parallel dazu dann die Runde "Konstruktor-Bugs + `...` im Pattern".
