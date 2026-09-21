@@ -9,6 +9,7 @@ documents:
   - ../ARCHITECTURE.md
   - ../TYPECHECKER.md
   - ../BACKEND.md
+  - ../PERFORMANCE.md
   - ../STREAMS.md
   - ../ENCODING.md
   - ../LINEAR.md
@@ -50,6 +51,7 @@ a rule nothing holds either side to.
 - **[TorbScript Implementation Architecture](../ARCHITECTURE.md)**
 - **[The Type Checker (Milestone 4)](../TYPECHECKER.md)**
 - **[The Back Ends (Milestones 5-7)](../BACKEND.md)**
+- **[Performance](../PERFORMANCE.md)**
 - **[Streams](../STREAMS.md)**
 - **[Encoding](../ENCODING.md)**
 - **[Linear Algebra and Geometry](../LINEAR.md)**

@@ -3157,3 +3157,60 @@ Wenn nicht, was bedeutet, bewirkt es?
   - Schon bekannt: verschachteltes Schreiben kopiert die innere Liste; jeder `List`-Zugriff ist ein `callWitness`
     auf einem `traitValue`, obwohl `ArrayList` statisch feststeht (Devirtualisierung).
   - Danach: die Befunde gehen als eigene Runden in die Warteschlange, VOR der VM (7.x), soweit sie die IR betreffen.
+
+- (Performance-Audit, 2026-09-22) Der obige Befund war der Anlass für eine systematische Messung: wo tut der erzeugte
+  Code vermeidbare Arbeit? Ergebnis sind `docs/PERFORMANCE.md` (Kostenmodell, Zero-Cost-Vertrag mit hält/hält-nicht,
+  14 Befunde nach (Nutzen x Häufigkeit)/Aufwand, Messtabelle, Rundenplan P1-P12) und `benchmarks/` (12 Programme, zu
+  jedem ein handgeschriebener C-Zwilling, `run.sh` mit Zeit, Verhältnis und Allokationszähler über `ld --wrap`).
+  Gemessen auf dieser Maschine, gcc 13.2, `-O2`, Zeiten abzüglich des Prozess-Bodens.
+  - **Der Zero-Cost-Vertrag hält da, wo du ihn gefordert hast.** Ein-Feld-Typ 1.02x, Closure-Aufruf 1.05x, Arithmetik
+    1.09x gegen C. Ebenso: verschachtelte Inline-Records (ein `write`), `copy(...)` (nur ein `construct`), `Option`
+    eines Zeigertyps (Niche, 16 Bytes wie der `String` selbst), Enum ohne Payload (4 Bytes), generische Mathematik
+    nach Monomorphisierung (`Vector2<Int>` ist `struct { int64_t, int64_t }`, Direktaufrufe), `static`-Member,
+    Methodenaufruf auf konkretem Typ, `for i in 0..n` (kein `Range`, kein Iterator - dieselben drei Blöcke wie die
+    `while`-Schleife), Closure ohne Capture (`environment = NULL`).
+  - **Eine Ursache erklärt fast alle Verluste.** Ein Sammlungsliteral hat den Typ des TRAITS (`List<Int>`), im IR also
+    `Object(List<Int64>)`: eine Heap-Box über der Liste plus Witness-Zeiger. Daraus folgt alles andere - jeder Zugriff
+    ist ein indirekter Aufruf (`list-index` 34x, `list-iterate` 50x, `record-write` 71x, `pipeline` 22x), `x[i][j] = v`
+    kann nicht über die Elementadresse schreiben (steht wörtlich so in `compiler/src/ir/lower/place.trb`), und jede
+    Witness-Tabelle instanziiert ALLE Member. Drei Zeilen `const numbers = [1, 2, 3]` + `numbers.length()` emittieren
+    66830 Bytes C in 77 Definitionen, davon 48 Witness-Thunks; dasselbe Programm ohne Liste: 3748 Bytes, 3
+    Definitionen, 0 Thunks. Vorschlag: ein Devirtualisierungs-Peephole über das IR einer Funktion (neue
+    `compiler/src/ir/devirtualize.trb`, Runde P5) - der Rest fällt danach als kleine Runden heraus.
+  - **Der billigste große Befund, sofort machbar (Runde P1):** `x = f(x)` emittiert `retain %1` vor dem Aufruf, also
+    kopiert das `makeUnique` in `f`. Grund: `Instruction.Write` steht nicht in `definedSlot`
+    (`compiler/src/ir/verify.trb:507`) und seine Basis ist ein *borrowed* Operand (`compiler/src/ir/operand.trb:137`) -
+    die Zuweisung gilt der Liveness als Lesen, nicht als Definition. Gemessen: 120006 Allokationen und 20 GB kopiert
+    für 60000 Appends (C: 16 Allokationen, 1 MB). Zwei Dateien, eine Regel, und damit stimmt "Last use is a move" für
+    die Partizip-Form, in der die Sprache geschrieben ist.
+  - **Überraschung 1: die Overflow-Prüfungen sind nicht gratis, wenn sonst nichts los ist.** In einer Schleife, die an
+    einer Multiplikation und einer Division hängt, kosten sie 1.09x; in einer Rekursion, deren ganzer Rumpf drei
+    Rechenoperationen und zwei Aufrufe ist, 2.42x. Eine C-Probe trennt es auf: dieselbe Rekursion ohne Prüfungen
+    0.21 s, mit allen drei 0.38 s, mit nur der Addition (die einzige, die überlaufen kann) 0.28 s - und ob die
+    Quellposition als Struktur oder als Zeiger übergeben wird, ändert nichts. Die Hälfte ist also durch eine lokale
+    Intervallanalyse beweisbar wegzulassen (Runde P8). Die Aufrufkonvention selbst ist 1:1 wie C.
+  - **Überraschung 2: `torb_retain`/`torb_release`/`torb_make_unique` inline zu machen ist KEIN sicherer Gewinn.**
+    Gemessen mit einer Kopie von `runtime/`, deren schnelle Pfade `static inline` im Header stehen, gegen dasselbe
+    `program.c`: `pipeline` -14%, `record-write` -5%, `list-index` -2%, `list-iterate` **+6%**. Der Aufruf über die
+    Übersetzungseinheitsgrenze ist also nicht das, woraus die Verhältnisse oben bestehen - das sind die indirekten
+    Aufrufe und die Kopien. Deshalb keine Runde dafür, sondern eine Wiederholung der Messung nach P5-P7 (P12).
+  - **Gefunden, und es ist kein Performance-Problem sondern ein Fehler:** `adder(4)(1)` - der Aufruf des Ergebnisses
+    eines Aufrufs - typprüft sauber und läuft auf Stage 0 richtig (`5`), aber das Lowering lässt den zweiten Aufruf
+    fallen und der Verifier meldet `internal error: ... the result is Closure((Int64) -> Int64) and %1 is Int64`.
+    `const add4 = adder 4` + `add4(1)` geht. Gehört in die Lowering-Folgerunde.
+  - **Fragen an dich, bevor die Runden laufen:** (1) Abschnitt 6 schlägt vier Dinge als Gate vor - IR-Snapshots pro
+    Befund, ein **Allokationsbudget** pro Konformanzprogramm (eine zweite Zahl im `TORB_REPORT_LEAKS`-Bericht: wie
+    viele Blöcke das Programm insgesamt angefordert hat), ein Größenbudget für das emittierte C, und ein weit
+    gefasstes Verhältnis-Budget. Das Allokationsbudget ist das einzige, das nicht mit der Maschine wandert - soll es
+    kommen? (2) `torb build --explain-copies` ist in Abschnitt 6 ausgeschrieben (deine zurückgestellte Idee von oben,
+    jetzt mit der Stelle im IR, an der es steht: ein `MakeUnique` auf einer Referenz, deren Basis danach noch lebt).
+    Als Flag oder als Teil eines späteren Profilers?
+- (Indexzugriff und Panics, 2026-09-22) Frage des Nutzers: Indexzugriff ist panic-belastet - wie löst Rust das?
+  - **Antwort:** Rust macht es wie TorbScript (`v[i]` panict, `v.get(i)` ist `Option`); sicher wird es dort, weil man
+    selten indiziert (Iteratoren, `windows`/`chunks`/`zip`, Slice-Patterns) und der Optimierer Prüfungen entfernt.
+    `list[i]` bleibt das Versprechen, `get` die Frage (Panic-Regel der std/core-Runde).
+  - **Wird gelöst - Checker-Folgerunde:** ein konstanter Index außerhalb eines Literals oder eines
+    `Array<Item, Size>` ist ein Compile-Fehler statt ein Panic.
+  - **Wird gelöst - Performance-Runde P8 (Bereichsanalyse):** in `for index in 0..list.count()` ist `list[index]`
+    beweisbar gültig, solange der Rumpf die Liste nicht verändert - Wertsemantik macht den Beweis leicht.
+  - **Zu prüfen nach dem Audit:** welche indexfreien Helfer fehlen (`windows`, `chunks`, `zip`, `enumerate`, `splitAt`).

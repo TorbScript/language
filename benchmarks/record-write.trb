@@ -1,0 +1,38 @@
+/**
+ * Writing one field of a record that lives in a list: `points[index].x = value` against `points[index].x = value`
+ * in C.
+ *
+ * The element is read out into a temporary, the field is written there, and the temporary is written back, so a store
+ * of eight bytes is a read, a copy and a store through two indirect calls.
+ */
+const size = 1000000
+const rounds = 30
+
+type Point {
+  var x: Int
+  var y: Int
+}
+
+fn points(): List<Point> {
+  var made: List<Point> = []
+  for index in 0..size {
+    made.add Point(index, 0)
+  }
+  made
+}
+
+fn shifted(var made: List<Point>): Int {
+  for _round in 0..rounds {
+    for index in 0..size {
+      made[index].y = made[index].x + 1
+    }
+  }
+  var sum = 0
+  for index in 0..size {
+    sum = (sum + made[index].y) % 1000003
+  }
+  sum
+}
+
+var made = points()
+print "record-write {shifted(made)}"

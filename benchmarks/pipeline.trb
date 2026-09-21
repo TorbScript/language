@@ -1,0 +1,26 @@
+/**
+ * A lazy pipeline against the loop it stands for: `map`, `filter` and `sum` against one C loop.
+ *
+ * Each stage is a record behind a trait-typed value on the heap and each turn pulls a value through one indirect call
+ * per stage, so this measures what the stages cost that a fused loop would not have.
+ */
+const size = 2000000
+const rounds = 20
+
+fn filled(): List<Int> {
+  var numbers: List<Int> = []
+  for index in 0..size {
+    numbers.add(index % 97)
+  }
+  numbers
+}
+
+fn total(numbers: List<Int>): Int {
+  var sum = 0
+  for _round in 0..rounds {
+    sum = (sum + numbers.map({ _ * 2 }).filter({ _ % 3 == 0 }).sum()) % 1000003
+  }
+  sum
+}
+
+print "pipeline {total(filled())}"

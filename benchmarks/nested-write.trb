@@ -1,0 +1,41 @@
+/**
+ * Writing through two index steps: `grid[row][column] = grid[row][column] + 1` against the same two stores in C.
+ *
+ * The row is read out of the grid before it is written, so the grid and the reading slot both hold it and the write
+ * copies the whole row. The cost of the program is therefore quadratic in the width of a row.
+ *
+ * Each turn reads the cell it writes, so neither compiler may drop a round as a dead store. The C side is still under
+ * a few milliseconds of work, which is inside the noise of the process floor, so its ratio is a lower bound.
+ */
+const side = 800
+const rounds = 6
+
+fn grid(): List<List<Int>> {
+  var rows: List<List<Int>> = []
+  for _row in 0..side {
+    var cells: List<Int> = []
+    for _column in 0..side {
+      cells.add 0
+    }
+    rows.add cells
+  }
+  rows
+}
+
+fn filled(): Int {
+  var rows = grid()
+  for _round in 0..rounds {
+    for row in 0..side {
+      for column in 0..side {
+        rows[row][column] = rows[row][column] + 1
+      }
+    }
+  }
+  var sum = 0
+  for row in 0..side {
+    sum = sum + rows[row][side - 1]
+  }
+  sum
+}
+
+print "nested-write {filled()}"
