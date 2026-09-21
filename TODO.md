@@ -1275,6 +1275,58 @@ Wenn nicht, was bedeutet, bewirkt es?
     Plattform und in jedem Back-End (Lockstep, Replays), was Floats wegen `sin`/`cos` der jeweiligen libm und wegen
     des JS-Back-Ends nie garantieren. Im Design-Dokument zu prüfen: Bound plus Default an einem Typparameter
     (`Scalar: Numeric = Float`), `From` zwischen `Vector2<Source>` und `Vector2<Target>` gegen die Blanket-Regel.
+  - **Erledigt:** Design-Dokument `docs/ECS.md` (14 Abschnitte, Recherche Bevy/flecs/Unity DOTS/Godot/EnTT) plus
+    `examples/ecs-probe` - prüft, läuft auf Stage 0, baut nativ, und beide Ausgaben sind gleich. Alle Gates grün
+    (`check ..` 317 Dateien, `--statistics` 195885/195885 und 0 deferred, `canon --check` 0 von 389, `docs check`
+    222 Seiten, `docs index --check` 24 Indizes).
+    - **Die vier wichtigsten Entscheidungen.** (1) **Nichts wird typgelöscht.** Die Welt ist der EIGENE Typ des
+      Programms mit einer `Column<Component>` je Komponententyp; `std/ecs` greift über `trait Store<Component>`
+      darauf zu, und der Typschlüssel `componentKey<Component>()` ist nur ein NAME (Szenendatei, Inspector,
+      Zugriffsmenge), nie ein Weg zum Speicher. Die offensichtliche Alternative (`Map<Key, AnyColumn>` plus
+      Downcast) ist zu, und der Checker tut heute nur so, als wäre sie offen (siehe Lücke 5). (2) **Dichte Spalten
+      mit Sparse-Index** (EnTTs Modell), keine Archetyp-Tabellen: eine Archetyp-Tabelle müsste Werte zwischen
+      Tabellen verschieben, und der Code, der sie verschiebt, hat ihren Typ vergessen. (3) **Kein Command-Buffer.**
+      Das Subjekt eines `for` wird einmal in ein Temporary ausgewertet, also läuft eine Query über eine KOPIE der
+      Welt und Spawn/Despawn landen in der lebenden - im gebauten Binary nachgewiesen. Und weil eine Welt ein WERT
+      ist, ist ein Snapshot eine Bindung und ein Rollback eine Zuweisung; das hat keines der recherchierten Systeme.
+      (4) **Die Szene ist eine `.trb`-Datei** über ein Receiver-Skript (`Sandbox.load<Scene<World>>`, Verschachtelung
+      IST die Eltern-Beziehung, `instance` mit Overrides wie Godots `.tscn`). Gespeichert wird als
+      `attach Position(Vector2(...))` - ein Wert ist sein Konstruktoraufruf -, und ein Name findet seinen Decoder
+      über eine Registry aus Closures, die dort geschrieben wurden, wo der Typ bekannt war: kein `TypeRegistry` wie
+      Bevy, kein `ecs_meta` wie flecs, keine Reflection.
+    - **Die schlimmsten Sprachlücken** (Abschnitt 11, nach Schmerz geordnet, jeweils mit Reproduktion):
+      (1) **Zwei Implementierungen EINES Traits mit verschiedenen Argumenten an EINEM Typ sind nicht erreichbar.**
+      Nur ein Member, dessen Trait-Argument im ERSTEN Parameter steht, löst auf; über den Ergebnistyp
+      (`valueOf(self): Component?`) oder einen späteren Parameter nimmt die Auflösung stumm die erstdeklarierte
+      Implementierung ("Expected `Option<String>`, found `Option<Int64>`"), und über eine Schranke
+      `World: Store<First> & Store<Second>` prüft es grün, Stage 0 liefert zweimal denselben Wert und das Back-End
+      meldet einen internen Fehler. Das ist Lücke 12 aus `docs/LINEAR.md` - dort eine Unbequemlichkeit, hier die
+      tragende Wand: OHNE sie kann ein Programm gar nicht sagen "diese Welt hat eine Spalte `Position` UND eine
+      Spalte `Velocity`". (2) **Keine variadischen Typparameter** (`fn tuples<...Components>()` sind fünf
+      Parse-Fehler), deshalb `query2`/`query3`/`query4`; kleinste ehrliche Form: ein Pack, das NUR als Elementliste
+      eines Tupeltyps und als Subjekt einer Schranke expandiert, ohne Indizierung und ohne Längenarithmetik.
+      (3) **Ein Member einer Blanket-Implementierung wird an einem konkreten Typ nicht gefunden**
+      ("`Game` has no member `doubled`"), auch ohne Generics am Member - deshalb ist heute JEDE Query eine freie
+      Funktion und `world.query2<Position, Velocity>()` ist gar nicht schreibbar. (4) **Eine Closure kann keinen
+      `var`-Parameter binden**: `{ var position => ... }` meldet "A binding needs a value"; der Parametertyp
+      `(var value: Component) => Void` wird akzeptiert und ein benanntes `fn` funktioniert, aber das kann nicht
+      capturen. (5) **Soundness-Loch: ein trait-typisierter Wert wird akzeptiert, wo ein Typparameter erwartet
+      wird.** `fn bare<Value>(shape: Area): Value { shape }` prüft grün, Stage 0 druckt `Square(side: 3)`, der
+      Back-End-Verifier meldet "`return` carries `Object(Area)`" - ein BENANNTER Typ lehnt dieselbe Zeile korrekt ab.
+    - **Daneben gefunden:** `spawn` fehlt auf Stage 0 ganz, und der Checker AKZEPTIERT eine `var`-Bindung, die eine
+      `spawn`-Closure captured, obwohl CONCEPT es verbietet; das Back-End lehnt "ein `var`-Argument über ein
+      Top-Level-`var`" ab - parallele Systeme sind heute in keiner Form prüfbar (dieselbe Lücke wie datenparallele
+      Schleifen bei `std/tensor`, eine Reparatur bedient beide). `Sandbox` fehlt auf Stage 0, also wartet die
+      Lese-Hälfte von `std/scene` auf die VM (7.x). Stage 0 löst KEINEN Typ-Alias über einen Import auf
+      ("`./ecs/world` does not declare `System`"), weshalb `examples/game-engine` dort gar nicht läuft. Ein lokales
+      `type` kompiliert und läuft nativ, Stage 0 lehnt es ab. Ein `Array<Int, 4>`-Literal baut das C-Back-End nicht
+      (Lücke 9 aus LINEAR). **Und ein kompiliertes Binary schreibt unter Windows CRLF, wo Stage 0 LF schreibt** -
+      allgemein, nicht ECS-spezifisch, aber es macht einen Byte-Vergleich der beiden Stufen unter Windows unmöglich.
+    - **Offene Fragen an dich** stehen in Abschnitt 14 von `docs/ECS.md` (nur Geschmack und Richtung): `query2/3/4`
+      oder `query`/`pairs`/`triples`; soll `std/ecs` je eine eigene `World` mitbringen (heute unmöglich, und nach
+      der Reparatur immer noch nicht richtig); `std/scene` eigenes Paket oder Modul; darf eine Szenendatei
+      `std/linear` und `std/time` nennen; gehören Events ins Paket; ist `GlobalTransform2` eine Komponente oder ein
+      Feld; und wem gehört die Frame-Schleife.
 
 - (ML/KI in der std, 2026-09-21) **Wunsch (Nutzer), eingeplant für Meilenstein 10, gemeinsam mit den Engine-Paketen:**
   Training und Inferenz sollen mit der std möglich sein. **Entschieden (ich): kein eigener Turm, sondern dasselbe

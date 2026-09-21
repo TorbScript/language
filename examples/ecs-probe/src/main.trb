@@ -1,0 +1,184 @@
+/**
+ * Five systems over the storage of `storage.trb`, and the three claims of `docs/ECS.md` that only a compiled program
+ * can make: a query is a snapshot, so a structural change during iteration needs no command buffer; a world copy is
+ * a rollback; and a name finds its installer through a registry of closures, without reflection.
+ *
+ * `torb run ../compiler check .`, `torb run .` and `torb run ../compiler build . --output build/ecs-probe` are all
+ * green, and the interpreter and the binary print the same bytes. What the language cannot do yet is in
+ * `docs/ECS.md` section 10 and not in this package, because a package that does not build proves nothing.
+ */
+
+use Entity, Vector2, Position, GlobalPosition, Velocity, Collider, Lifetime, Parent from "./storage"
+use Column, World, moving, bodies from "./storage"
+
+/** Moves everything that has a position and a velocity. The first system anybody writes. */
+fn movement(var world: World, elapsed: Float) {
+  for (entity, position, velocity) in moving(world) {
+    const moved = Vector2(position.value.x + velocity.value.x * elapsed, position.value.y + velocity.value.y * elapsed)
+    world.positions.add entity, Position(moved)
+  }
+}
+
+/**
+ * Writes every entity's position in the space of the world.
+ *
+ * The order is what makes it one pass: `depthOrder` puts every parent in front of its children, so a child reads a
+ * global its parent has already written. This is the one place the ECS owns an order; `std/transform` owns the
+ * composition it applies in it.
+ */
+fn propagate(var world: World) {
+  for entity in depthOrder(world) {
+    const local = world.positions.get(entity)?.value ?? Vector2(0.0, 0.0)
+    const base = match world.parents.get(entity) {
+      Some(parent) => world.globals.get(parent.entity)?.value ?? Vector2(0.0, 0.0)
+      None => Vector2 0.0, 0.0
+    }
+    world.globals.add entity, GlobalPosition(Vector2(base.x + local.x, base.y + local.y))
+  }
+}
+
+/** Every entity with a position, parents in front of their children. */
+fn depthOrder(world: World): List<Entity> {
+  var ordered: List<Entity> = []
+  var placed: Set<Entity> = Set.of()
+  for entity in world.positions.entities() {
+    place entity, world, ordered, placed
+  }
+  ordered
+}
+
+/** Puts `entity` behind its parent chain, and every entity of that chain behind its own. */
+fn place(entity: Entity, world: World, var ordered: List<Entity>, var placed: Set<Entity>) {
+  if placed.contains(entity) {
+    return
+  }
+  placed.add entity
+  if const Some(parent) = world.parents.get(entity) {
+    place parent.entity, world, ordered, placed
+  }
+  ordered.add entity
+}
+
+/** Damages nothing and only counts: the pair loop, over the shorter column, each pair once. */
+fn collisions(world: World): Int {
+  const all = bodies(world).toList()
+  var touching = 0
+  for first in 0..all.length() {
+    for second in (first + 1)..all.length() {
+      const (_here, hereGlobal, hereCollider) = all[first]
+      const (_there, thereGlobal, thereCollider) = all[second]
+      const distanceX = hereGlobal.value.x - thereGlobal.value.x
+      const distanceY = hereGlobal.value.y - thereGlobal.value.y
+      const reach = hereCollider.radius + thereCollider.radius
+      if distanceX * distanceX + distanceY * distanceY <= reach * reach {
+        touching = touching + 1
+      }
+    }
+  }
+  touching
+}
+
+/**
+ * Spawns one bullet per moving entity, while the query over the moving entities is running.
+ *
+ * The subject of a `for` is evaluated once into a temporary, so the loop walks a copy of the world and the bullets
+ * land in the live one. That is what a command buffer is for elsewhere, and here it is the evaluation rule.
+ */
+fn fire(var world: World) {
+  for (_entity, position, velocity) in moving(world) {
+    const bullet = world.spawn()
+    world.positions.add bullet, position
+    world.velocities.add bullet, Velocity(Vector2(velocity.value.x * 4.0, velocity.value.y * 4.0))
+    world.lifetimes.add bullet, Lifetime(0.05)
+  }
+}
+
+/** Counts every lifetime down and despawns what has run out - again while the query is running. */
+fn expire(var world: World, elapsed: Float) {
+  for row in 0..world.lifetimes.length() {
+    const entity = world.lifetimes.ownerAt row
+    const remaining = world.lifetimes.valueAt(row).remaining - elapsed
+    if remaining <= 0.0 {
+      world.despawn entity
+    } else {
+      world.lifetimes.add entity, Lifetime(remaining)
+    }
+  }
+}
+
+/**
+ * What a component name in a scene file does to a world.
+ *
+ * The map has forgotten the component type; the closure under the name never did, because it was written where the
+ * type was known. That is the whole registry, and it needs nothing from the language that is not here.
+ */
+public type Registry<Receiver> {
+  private(var) installers: Map<String, (var world: Receiver, entity: Entity, numbers: List<Float>) => Void> = [:]
+
+  fn register(var self, name: String, install: (var world: Receiver, entity: Entity, numbers: List<Float>) => Void) {
+    installers[name] = install
+  }
+
+  /** Runs the installer `name` against `world`. Answers `false` when no such name is registered. */
+  fn install(self, name: String, var world: Receiver, entity: Entity, numbers: List<Float>): Bool {
+    match installers.get(name) {
+      Some(installer) => {
+        installer world, entity, numbers
+        true
+      }
+      None => false
+    }
+  }
+}
+
+var world = World()
+
+const ship = world.spawn()
+world.positions.add ship, Position(Vector2(0.0, 0.0))
+world.velocities.add ship, Velocity(Vector2(1.0, 0.0))
+world.colliders.add ship, Collider(0.5)
+
+const turret = world.spawn()
+world.positions.add turret, Position(Vector2(0.25, 0.0))
+world.parents.add turret, Parent(ship)
+world.colliders.add turret, Collider(0.5)
+
+const rock = world.spawn()
+world.positions.add rock, Position(Vector2(1.0, 0.0))
+world.colliders.add rock, Collider(0.5)
+
+const frameTime = 0.5
+const stamp = world.positions.version()
+
+movement world, frameTime
+propagate world
+print "moved: {world.globals.get(ship)} {world.globals.get(turret)}"
+print "changed since the frame began: {world.positions.changedSince(stamp).count()}"
+print "touching pairs: {collisions(world)}"
+
+// A structural change while the query is running: the query walks a copy, the bullets land in the live world.
+const before = moving(world).count()
+fire world
+print "moving before: {before}, entities with a velocity after: {world.velocities.length()}"
+
+// A world is a value, so this is a snapshot and nothing was copied that nobody wrote to.
+const snapshot = world
+expire world, 1.0
+print "after expiring: {world.velocities.length()}, in the snapshot: {snapshot.velocities.length()}"
+
+world = snapshot
+print "after the rollback: {world.velocities.length()}"
+
+// A name finds its installer, and the map never learns what a `Position` is.
+var registry: Registry<World> = Registry()
+registry.register("Position", { target, entity, numbers =>
+  target.positions.add entity, Position(Vector2(numbers[0], numbers[1]))
+})
+registry.register("Velocity", { target, entity, numbers =>
+  target.velocities.add entity, Velocity(Vector2(numbers[0], numbers[1]))
+})
+
+const loaded = world.spawn()
+const wrotePosition = registry.install "Position", world, loaded, [7.0, 8.0]
+const wroteVelocity = registry.install "Velocity", world, loaded, [0.0, 1.0]
+print "installed: {wrotePosition} {wroteVelocity} -> {world.positions.get(loaded)}"

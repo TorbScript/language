@@ -1,0 +1,213 @@
+/**
+ * The storage `docs/ECS.md` is designed around: [Column] is one component type's dense column, [World] is the
+ * program's own value with one column per component type, and [Entity] is what a column stores a value under.
+ *
+ * Nothing here is erased. Every value sits in a field whose type names its component type, so no member ever has to
+ * ask what it is holding - which is what an open component set costs in a language without reflection.
+ */
+
+/** What components are attached to. Stable across every copy of a world, so a system may keep one. */
+public type Entity {
+  index: Int
+}
+
+/** A point in the plane. Local, because stage 0 resolves no package import: `std/linear` owns the real one. */
+public type Vector2 {
+  x: Float
+  y: Float
+}
+
+/** Where something is, in the space of its parent. */
+public type Position {
+  value: Vector2
+}
+
+/** Where something is, in the space of the world. Written by `propagate`, never by hand. */
+public type GlobalPosition {
+  value: Vector2
+}
+
+/** How fast something moves, in units per second. */
+public type Velocity {
+  value: Vector2
+}
+
+/** How far something reaches when it is asked whether it touches another body. */
+public type Collider {
+  radius: Float
+}
+
+/** How long something still exists, in seconds. */
+public type Lifetime {
+  remaining: Float
+}
+
+/** Whose space a [Position] is written in. */
+public type Parent {
+  entity: Entity
+}
+
+/**
+ * One component type's dense column: the values in insertion order, the entity each row belongs to, and the row
+ * each entity occupies.
+ *
+ * The values are dense, so a query walks them without a gap; `rows` is the sparse half that answers "does this
+ * entity have one". Removing swaps the last row into the hole, so neither half ever shifts.
+ *
+ * # Pitfalls
+ *
+ * Removing changes the order of the rows, so a system must not remember a row number across a `remove`.
+ */
+public type Column<Component> {
+  private(var) owners: List<Entity> = []
+  private(var) values: List<Component> = []
+  private(var) rows: Map<Entity, Int> = [:]
+  /** Counts up on every write, so `changedSince` can answer without comparing values. */
+  private(var) stamps: List<Int> = []
+  private(var) clock: Int = 0
+
+  /** Puts `value` under `entity`, replacing whatever was there. */
+  fn add(var self, entity: Entity, value: Component) {
+    clock = clock + 1
+    match rows.get(entity) {
+      Some(row) => {
+        values[row] = value
+        stamps[row] = clock
+      }
+      None => {
+        rows[entity] = values.length()
+        owners.add entity
+        values.add value
+        stamps.add clock
+      }
+    }
+  }
+
+  /** Takes `entity`'s value out, swapping the last row into the hole. */
+  fn remove(var self, entity: Entity) {
+    const found = rows.get entity
+    if const Some(row) = found {
+      const last = values.length() - 1
+      const moved = owners[last]
+      owners[row] = moved
+      values[row] = values[last]
+      stamps[row] = stamps[last]
+      owners.removeAt last
+      values.removeAt last
+      stamps.removeAt last
+      rows.remove entity
+      if row != last {
+        rows[moved] = row
+      }
+    }
+  }
+
+  /** The value under `entity`, or `None`. */
+  fn get(self, entity: Entity): Component? {
+    match rows.get(entity) {
+      Some(row) => values.get row
+      None => None
+    }
+  }
+
+  fn has(self, entity: Entity): Bool {
+    rows.containsKey entity
+  }
+
+  fn length(self): Int {
+    values.length()
+  }
+
+  fn ownerAt(self, row: Int): Entity {
+    owners[row]
+  }
+
+  fn valueAt(self, row: Int): Component {
+    values[row]
+  }
+
+  /** What the clock stood at after the last write of any row. */
+  fn version(self): Int {
+    clock
+  }
+
+  /** The entities whose value was written after `stamp`. This is change detection, without a second data structure. */
+  fn changedSince(self, stamp: Int): Iterable<Entity> {
+    (0..values.length()).filterMap { row =>
+      if stamps[row] > stamp { Some owners[row] } else { None }
+    }
+  }
+
+  /** Every entity that has a value here, in the order the values lie. */
+  fn entities(self): Iterable<Entity> {
+    (0..values.length()).map { owners[_] }
+  }
+}
+
+/**
+ * The program's own world: one [Column] per component type, and the counter that hands out [Entity] values.
+ *
+ * `std/ecs` never declares this type - a program does, because the set of component types is the program's. A world
+ * is an ordinary value, so `const snapshot = world` is a snapshot and `world = snapshot` is a rollback.
+ */
+public type World {
+  var positions: Column<Position> = Column()
+  var globals: Column<GlobalPosition> = Column()
+  var velocities: Column<Velocity> = Column()
+  var colliders: Column<Collider> = Column()
+  var lifetimes: Column<Lifetime> = Column()
+  var parents: Column<Parent> = Column()
+  private(var) nextIndex: Int = 1
+
+  /** Hands out an [Entity] nothing else holds. */
+  fn spawn(var self): Entity {
+    const entity = Entity nextIndex
+    nextIndex = nextIndex + 1
+    entity
+  }
+
+  /** Takes every component of `entity` out of every column. */
+  fn despawn(var self, entity: Entity) {
+    positions.remove entity
+    globals.remove entity
+    velocities.remove entity
+    colliders.remove entity
+    lifetimes.remove entity
+    parents.remove entity
+  }
+}
+
+/**
+ * Every entity that has both a [Position] and a [Velocity], with both values.
+ *
+ * This is the shape `query2` has in `docs/ECS.md`: it walks the shorter column and probes the other, and it answers
+ * a plain `Iterable`, so `filter` is what an ECS calls a "without" filter.
+ *
+ * # Examples
+ *
+ *     var world = World()
+ *     const entity = world.spawn()
+ *     world.positions.add entity, Position(Vector2(0.0, 0.0))
+ *     world.velocities.add entity, Velocity(Vector2(1.0, 0.0))
+ *     assert(moving(world).count() == 1)
+ */
+public fn moving(world: World): Iterable<(Entity, Position, Velocity)> {
+  (0..world.velocities.length()).filterMap { row =>
+    const entity = world.velocities.ownerAt row
+    match world.positions.get(entity) {
+      Some(position) => Some((entity, position, world.velocities.valueAt(row)))
+      None => None
+    }
+  }
+}
+
+/** Every entity that has both a [GlobalPosition] and a [Collider], with both values. */
+public fn bodies(world: World): Iterable<(Entity, GlobalPosition, Collider)> {
+  (0..world.colliders.length()).filterMap { row =>
+    const entity = world.colliders.ownerAt row
+    match world.globals.get(entity) {
+      Some(global) => Some((entity, global, world.colliders.valueAt(row)))
+      None => None
+    }
+  }
+}

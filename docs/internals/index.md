@@ -12,6 +12,7 @@ documents:
   - ../STREAMS.md
   - ../ENCODING.md
   - ../LINEAR.md
+  - ../ECS.md
 
   - ../PATH.md
 ---
@@ -50,6 +51,7 @@ a rule nothing holds either side to.
 - **[Streams](../STREAMS.md)**
 - **[Encoding](../ENCODING.md)**
 - **[Linear Algebra and Geometry](../LINEAR.md)**
+- **[Entities, Components and Scenes](../ECS.md)**
 - **[File Paths](../PATH.md)**
 
 <!-- torb:index:end -->
