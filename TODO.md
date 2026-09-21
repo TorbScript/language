@@ -2460,3 +2460,9 @@ Wenn nicht, was bedeutet, bewirkt es?
     `var fn`"), Stage 0, `torb canon --rule members` für die Umstellung, CONCEPT, Doku, Skill, VS-Code-Grammatik.
   - Offen gelassen, falls du es willst: `const` auch vor einem PARAMETER zuzulassen (heute nur `value: Int` und
     `var value: Int`) - der Symmetrie wegen, ohne Nutzen. Ich baue es nicht, solange du es nicht sagst.
+  - **Entschieden (Nutzer, 2026-09-22): das Wort ist vorerst `static`**, `self`/`Self` bleiben. **Kandidat, bewusst
+    offen gehalten:** `type fn square(...)` / `type const origin = ...` (Swift nennt es "type methods/properties",
+    kein neues Schlüsselwort). Bedingung dafür: nach `type` ist `const` PFLICHT, weil `type origin = Point(0, 0)`
+    neben dem Alias `type Meters = Float` nur am Anfangsbuchstaben hinge; und der Platz für verschachtelte oder
+    assoziierte Typen wäre damit belegt. Ein späterer Wechsel ist EIN Wort an einer festen Stelle und damit eine
+    `canon`-Regel - die Umstellungsrunde legt das Schlüsselwort deshalb in beiden Parsern an genau einer Stelle ab.
