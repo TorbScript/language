@@ -3136,3 +3136,15 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Wird gelöst - Checker-Folgerunde:** beide Checker, die drei Meldungen (`is private to`, `cannot be passed from
     here`, `this pattern cannot read it`), `fields.md` Regel 5, `visibility.md` Regel 4, `data-or-capsule.md`, CONCEPT
     (Regel + Entscheidungslog). Nicht jetzt, weil die Konstruktor-Runde gerade `checker/declaration.trb` anfasst.
+- (Verschachteltes Schreiben kopiert die innere Liste, 2026-09-22) Frage des Nutzers: wird
+  `var a = x[1][1]` / `a = a * 2` / `x[1][1] = a` auf `x[1][1] = x[1][1] * 2` reduziert?
+  - **Antwort:** `a` ist ein `Int` und wird ein Register - beide Formen geben dieselbe IR, da gibt es nichts zu
+    reduzieren. **Gefunden (IR-Ausgabe):** das Schreiben `x[1][1] = a` wird als `%22 = x.get(1)` (Retain) /
+    `makeUnique %22` / `%22.set(1, a)` / `makeUnique x` / `x.set(1, %22)` gelowert. Weil `x` die Zeile noch hält, ist
+    sie nicht exklusiv und wird bei JEDEM verschachtelten Schreiben kopiert (O(Zeilenlänge)); die äußere Liste nie.
+  - **Wird gelöst - Lowering-Folgerunde:** verschachtelter Platz (`x[i][j] = v`, `x.items[i] = v`, `x[i].field = v`):
+    die Zeile per Move herausnehmen und zurücklegen, oder über die Elementadresse schreiben
+    (`torb_list_element_reference` gibt es in `runtime/list.c` schon). Gate: ein natives Programm mit `.leaks`-Datei
+    und ein IR-Test, der zeigt, dass kein `makeUnique` auf einer geteilten Zeile übrig bleibt.
+  - **Idee, zurückgestellt:** Diagnose/Profiler-Hinweis "hier wird eine geteilte Liste beschrieben (O(n)-Kopie)" -
+    die einzige echte Schwäche von Copy-on-Write ist, dass man die Kopie nicht sieht.
