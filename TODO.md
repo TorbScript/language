@@ -3125,3 +3125,14 @@ Wenn nicht, was bedeutet, bewirkt es?
     `private constructor` (eine Rumpfzeile ohne Logik: öffentliche, lesbare Felder, aber Konstruktor, `copy` und
     Feldzuweisung nur im Typ selbst; die Kapsel-Regel hinge dann an dieser Zeile). Wieder aufnehmen, falls die
     Zugriffsmethoden-Boilerplate in der Praxis stört.
+- (`private` auf Datei-Ebene, 2026-09-22) **Entschieden (Nutzer):** `private` soll generell auf Datei-Ebene arbeiten,
+  nicht auf Package-Ebene. Anlass: ein `extend Path` in einer ANDEREN Datei desselben Packages darf heute
+  `Self(storedRoot: ..., storedComponents: ...)` schreiben (Regel 5 in `docs/language/types/fields.md`).
+  - **Gemessen:** `isInsideDeclaration` testweise auf "gleiche Datei" gestellt - `check ..` (326 Dateien) und
+    `check tests/native tests/scripts ../examples` (127 Dateien) ohne einen Fehler. Niemand nutzt die Package-Reichweite.
+  - **Meine Auslegung von "generell":** EINE Regel - was `private` ist, sieht man in seiner Datei; also auch eine
+    freie Funktion derselben Datei (heute verboten), wie bei Top-Level-Deklarationen. Die Grenze "nur Typ-Rumpf und
+    `extend`" entfällt.
+  - **Wird gelöst - Checker-Folgerunde:** beide Checker, die drei Meldungen (`is private to`, `cannot be passed from
+    here`, `this pattern cannot read it`), `fields.md` Regel 5, `visibility.md` Regel 4, `data-or-capsule.md`, CONCEPT
+    (Regel + Entscheidungslog). Nicht jetzt, weil die Konstruktor-Runde gerade `checker/declaration.trb` anfasst.
