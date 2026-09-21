@@ -2782,6 +2782,106 @@ Wenn nicht, was bedeutet, bewirkt es?
     Laufzeit, `read`/`open(path: Path)` dynamischer Pfad (Nutzerdatei, `--config`), nicht compiler-bekannt.
   - **Wird gelöst:** Überarbeitung von `docs/PROJECT.md` plus ein eigenes `docs/RESOURCES.md` (läuft als
     Design-Agent); Umsetzung in Slices NACH der Umstellung auf `static`/`var fn`.
+  - **Erledigt:** `docs/PROJECT.md` überarbeitet (jetzt 14 Abschnitte) und `docs/RESOURCES.md` geschrieben; beide
+    in `docs/internals/index.md` eingetragen, `docs check` 223 Seiten, `docs index --check` 24 Indizes, `check ..`
+    326 Dateien - alles grün, kein Code angefasst. Beide Dokumente schreiben schon `static`/`var fn` und sagen das
+    oben einmal.
+    - **PROJECT.md, Programme:** `program "name", entry: "...", output: "..."` ist eine Methode mit Labels und
+      KEINEM Trailing-Block - alle drei Einstellungen gehören zu den statisch gelesenen, und ein Receiver-Closure
+      wird ausgewertet, ist also nicht statisch lesbar. Der Block bleibt reserviert für die erste Einstellung, die
+      wirklich nicht statisch ist. Zehn Diagnosen ausgeschrieben (Doppelname, zwei Umbenennungen, `entry` fehlt /
+      liegt außerhalb / ist `src/lib.trb`, zwei Programme auf ein `output`, interpoliertes `output`). Ein `entry`,
+      den ein Modul importiert, meldet der MODULGRAPH an der `use`-Zeile, nicht das Manifest - das Manifest kann es
+      nicht sehen. Ein Programmname ist ein `segment`, deshalb ist `torb run <argument>` ohne Plattenzugriff
+      entscheidbar (`/`, `\` oder `.trb` heißt Pfad, sonst Name). `torb build` auf einer reinen Bibliothek ist KEIN
+      Fehler mehr, sondern "geprüft, nichts zu bauen" (heute Sonde 7: Fehler) - sonst scheitert `torb build` im
+      Workspace an 26 Bibliotheken. **Gewinn:** `compiler/project.trb` schreibt nur `program "torb"`,
+      `compiler/src/main.trb` zieht NICHT um, die 19 relativen Importe bleiben - die alte Empfehlung
+      `compiler/src/torb/main.trb` fällt ersatzlos weg.
+    - **PROJECT.md, lesendes Manifest:** Die Toolchain ruft `Sandbox.load<Project>` mit genau
+      `modules "std/fs", "std/text"` und `files readOnly: <Projektverzeichnis>` auf; `docs/PATH.md` Abschnitt 7 ist
+      die Definition von "unterhalb" (lexikalisch plus Link-Verweigerung beim Öffnen). `environment`: NEIN, mit drei
+      unabhängigen Gründen, und der Ausweg für CI ist eine Datei (`VERSION`), die der Job vorher schreibt.
+      **Eingefrorenes Manifest:** es heißt `project.trb` (EIN Name, eine Bedeutung - sonst braucht jeder Leser eine
+      Vorrangregel), das ausgewertete Original fährt als `project.source.trb` mit; das Format ist das Vokabular
+      zurückgedruckt ("ein Wert ist sein Konstruktoraufruf" eine Ebene höher), und `torb publish` liest es mit dem
+      STATISCHEN Leser gegen. **Eine Regel für alles:** ein Paket, das du aus Quelltext baust, wird ausgewertet
+      (Workspace-Mitglied, `path:`, `git:` - je auf SEIN Verzeichnis beschränkt); ein Paket, das du installierst,
+      ist eingefroren. Literal-only für Mitglieder wurde verworfen: das wären zwei Dialekte einer Datei in einem
+      Repository. **`version` ist NICHT mehr statisch** (es ist das Beispiel des Nutzers) - die statischen Acht sind
+      jetzt `toolchain`, `name`, `prelude`, `dependencies`, `source`, `registry`, `workspace`, `program`. Ein
+      Manifest, das nichts Berechnetes sagt, wird GAR NICHT ausgewertet, also zahlt nur, wer es benutzt. Die Eingaben
+      einer Auswertung (`project.trb` plus jede gelesene Datei mit Hash) landen in `build/manifest-inputs.trb`, damit
+      inkrementell gebaut werden kann. Stage 0 hat keine Sandbox (Sonde 21), deshalb bleiben die Manifeste im
+      Repository literal, bis die VM da ist - Slice 7 ändert keine Datei im Baum.
+    - **PROJECT.md, Orte:** aus der offenen Frage ist eine Entscheidung geworden (Namen im Quelltext, Orte im
+      Manifest, host-qualifizierte Namen als NAME erlaubt); das Argument (`use` wird im Typprüfer aufgelöst, eine URL
+      dort heißt Socket beim Typprüfen) steht unverändert da. Migration jetzt ACHT Scheiben (7 = lesendes Manifest,
+      braucht die VM; 8 = RESOURCES.md).
+    - **RESOURCES.md, Kern:** ein String-LITERAL, dessen erwarteter Typ ein Ressourcentyp ist, IST eine Ressource -
+      wie `1` ein `Float` ist, wo ein `Float` erwartet wird. Eine `String`-Variable konvertiert nie, kein
+      `Into<Resource>`. Zählt: Literal, Literal mit Label, jedes Element eines Listenliterals, ein Parameter-Default
+      (löst gegen die DEKLARIERENDE Datei auf). Zählt NICHT: interpoliert, `+`-verkettet, und **auch keine Konstante,
+      die mit einem Literal initialisiert ist** - `const one = 1` passt auch nicht auf `Float`, und der Wunsch
+      dahinter (Assets an einer Stelle benennen) hat die bessere Antwort
+      `static hero = SpriteSheet.embedded("./hero.png")`, wo die Konstante das GELADENE Blatt hält statt eines Pfades.
+    - **RESOURCES.md, drei Typen, eine Parameter-Art:** `Resource` (mitgeliefert, zur Laufzeit gelesen, fehlbar,
+      wartend), `EmbeddedBytes` und `EmbeddedText`. Der Einbettungstyp ist ZWEI Typen, weil ein Lesen aus dem Binary
+      nicht fehlschlagen kann: mit EINEM Typ müsste `text()` fehlbar sein für eine Tatsache (UTF-8), die der Build in
+      der Hand hatte. `Resource` bleibt EIN Typ, weil sein Lesen ohnehin fehlbar ist. Die Alternative "ein Typ, das
+      aufgerufene Mitglied entscheidet" ist abgelehnt: sie braucht Flussanalyse über das ganze Programm (ein
+      `Resource` durch drei Funktionen, in ein Feld, in eine Liste - unentscheidbar), und ihr Fehlermodus ist still
+      (ein 16 MB zu großes Binary oder eine fehlende Datei beim Kunden).
+    - **RESOURCES.md, `Resource` WARTET** (`Task<Result<Bytes, ResourceError>>`) auf JEDEM Ziel, weil es im Web ein
+      Fetch ist und dieselbe Quelle sonst auf zwei Back-Ends zwei Signaturen hätte. Das ist bewusst eine Einfärbung;
+      der Ausweg ist genau der Einbettungstyp, und das ist der Grund, dass es zwei Typen gibt statt eines mit zwei
+      Modi.
+    - **RESOURCES.md, drei Verben:** `embedded(...)` Compile-Zeit, `load(resource)` mitgeliefert, `read`/`open(path:
+      Path)` dynamisch. `Sandbox` braucht alle drei: **das heutige `Sandbox.load` wird `Sandbox.read`** (ein Pfad,
+      der erst zur Laufzeit feststeht - genau das, was es heute tut), und der kurze Name `load` geht an den
+      mitgelieferten Fall. Kostet nichts: Sonde 4 zeigt, dass `Sandbox` auf KEINER Implementierung läuft.
+      `project.trb` ist damit ein `read`, eine Szenendatei ein `load`.
+    - **RESOURCES.md, L2:** `Sandbox.load`/`embedded` VERLANGEN einen statisch lesbaren Capability-Block (jede
+      Anweisung ein Kommando-Aufruf eines `SandboxCapabilities`-Mitglieds mit reinen Literalen) - sonst Fehler mit
+      Verweis auf `Sandbox.read`. Eine Prüfregel, die MANCHMAL an ist, wäre schlimmer als keine. Ein `.trb`-Resource
+      ist ein BLATT des Modulgraphen: drei Kanten (Datei, Empfängertyp, Allowlist), Cache-Schlüssel (stabiler Name,
+      Empfängertyp, Allowlist), kein Teil des Export-Fixpunkts, Zyklus unmöglich.
+    - **RESOURCES.md, L3 und ein Befund:** `static hero = SpriteSheet.embedded("./hero.png")` **prüft heute NICHT** -
+      die Reinheitsregel einer Modul-/Typkonstante erlaubt keinen Funktionsaufruf (Sonde 2, wörtliche Meldung im
+      Dokument). Die Regel bleibt, wie sie ist, bis die VM da ist; dann bekommt sie GENAU einen neuen Fall (ein
+      Aufruf, den der Compiler zur Build-Zeit auswerten kann). Bis dahin ist ein Loader ein `fn` und kein `static`.
+      "Rein" ist in sechs Bedingungen ausgeschrieben (terminiert; liest nur Argumente und Konstanten - ein
+      `EmbeddedBytes` ist KEIN IO, ein `Resource` kann NIE gefaltet werden; deterministisch; paniked nicht - eine
+      Panik ist ein Build-Fehler mit ihrer eigenen Meldung; nichts `shared`; kein Funktionswert), dazu, was der Typ
+      können muss (Rundreise durch den eigenen Konstruktor, also abgeleitetes `Encode` - ein handgeschriebenes
+      `Encode` disqualifiziert). NICHT versprochen: dass gefaltet wird, ein Schlüsselwort, das es erzwingt, oder ein
+      kleineres Binary.
+    - **RESOURCES.md, relativ wozu:** zur Datei, die das Literal SCHREIBT. Die Laufzeit-Identität ist der **stabile
+      Name** `<owner>/<name>/<Pfad im Paket>` - derselbe Text, den die Panik-Pfade schon benutzen; Layout
+      `build/<profile>/<programm>.resources/<stabiler Name>`. Zwei Literale auf eine Datei sind EINE Ressource.
+      **Groß-/Kleinschreibung byteweise auf jeder Plattform** (der Compiler löst gegen das Verzeichnis-LISTING auf,
+      nicht gegen das Matching des Dateisystems), sonst baut es beim Autor und fällt beim Deployment um. Eine
+      Ressource außerhalb des Paketverzeichnisses: Fehler. **Verzeichnisse/Globs: noch nicht** - bis jemand hundert
+      Level hat, ist ein Listenliteral die Antwort; `ResourceDirectory` hätte Fragen zu beantworten, die dieses
+      Design nicht hat.
+    - **Vier Sonden, wörtlich im Dokument:** (1) ein String-Literal passt sich heute an NICHTS an
+      (``Expected `Resource`, found `String` ``), und `native` geht außerhalb von `std` nicht - es gibt also nichts,
+      worauf man aufbauen könnte. (2) Ein String-Literal als Modulkonstante wird als STATISCHE DATEN emittiert
+      (unsterblicher Block plus `static const torb_text`), KEIN `ConstantCell` - und eine INTERPOLATION wird ebenfalls
+      gefaltet; `"a" + "b"` ist dagegen keine compile-time-Konstante. (3) Größe im C-Back-End, gcc 13.2, 16 Kerne:
+      1 MB Text ergibt 6,29 MB C, check 9,1 s, emit 16,4 s, build 20,9 s, Binary 1,21 MB; **16 MB Text ergibt
+      100,7 MB C, check 66,0 s, emit 143,0 s, build 195,7 s, Binary 16,94 MB** - nichts bricht, es ist linear (rund
+      6 Byte C pro Byte Nutzlast) und steil. Die 4095-Zeichen-Grenze von C gilt nicht, weil der Emitter nie ein
+      String-Literal schreibt, sondern ein Byte-Array. (4) `Sandbox.load` prüft heute ALLES grün (auch ein nicht
+      existierender Pfad und eine `String`-VARIABLE), läuft aber auf KEINER Seite: Stage 0
+      ``Unknown name `Sandbox` ``, nativ ``the type `Script` is not supported by the native back end yet``.
+    - **Deine offenen Fragen (nur diese):** PROJECT: (a) `torb build` per Default `dev` oder `release`? (b) Ist
+      `toolchain` eine Einstellung wert, bevor es zwei Toolchain-Versionen gibt? (c) Soll `project.source.trb`
+      überhaupt mitfahren, und heißt es so? RESOURCES: (d) `EmbeddedBytes`/`EmbeddedText` oder EIN `Embedded` (Preis:
+      `text(): String?`, ein Build-Fehler wird ein `Option`)? An der Aufrufstelle schreibt den Namen niemand, nur wer
+      eine Signatur verfasst. (e) Ist der `Task` bei `Resource.bytes()` der richtige Tausch - die Alternative gibt
+      "ein Programm, beide Back-Ends" für jedes Programm auf, das eine Datei liest. (f) Soll `torb build` ab einer
+      Einbettungsgröße ABLEHNEN oder nur berichten? Das Dokument berichtet nur.
 
 - (Generierte Konstruktoren - Entscheidungen, 2026-09-22) **Entschieden (Nutzer):**
   1. Ein optionales Feld OHNE Default bleibt Pflicht, `None` wird ausgeschrieben; weglassen kann man nur Felder mit

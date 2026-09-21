@@ -16,6 +16,7 @@ documents:
 
   - ../PATH.md
   - ../PROJECT.md
+  - ../RESOURCES.md
 ---
 
 The toolchain is written in TorbScript and lives in `compiler/`. Until it compiles itself it runs on stage 0, an untyped
@@ -55,5 +56,6 @@ a rule nothing holds either side to.
 - **[Entities, Components and Scenes](../ECS.md)**
 - **[File Paths](../PATH.md)**
 - **[The Project File](../PROJECT.md)**
+- **[Resources](../RESOURCES.md)**
 
 <!-- torb:index:end -->
