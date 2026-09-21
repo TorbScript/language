@@ -3214,3 +3214,21 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Wird gelöst - Performance-Runde P8 (Bereichsanalyse):** in `for index in 0..list.count()` ist `list[index]`
     beweisbar gültig, solange der Rumpf die Liste nicht verändert - Wertsemantik macht den Beweis leicht.
   - **Zu prüfen nach dem Audit:** welche indexfreien Helfer fehlen (`windows`, `chunks`, `zip`, `enumerate`, `splitAt`).
+- (Rust raus, leichtere Gates, 2026-09-22) **Entschieden (Nutzer):** der Rust-Bootstrap soll so schnell wie möglich
+  raus, TorbScript soll "rein" sein (der selbst-gehostete Compiler geht allein von der IR zum nativen Programm). Die
+  Gates sollen bis dahin nicht bremsen und werden DANACH festgezurrt; der Workflow darf nicht blockieren; niemand nutzt
+  die Sprache, wir schulden niemandem Kompatibilität. Die Performance-Ideen findet er gut (Allokationsbudget,
+  `--explain-copies`) - aber nicht als Bremse.
+  - **Meine Lesart:** Rust (`bootstrap/crates`, ~14 400 Zeilen) wird gelöscht; C-Back-End und C-Runtime bleiben, ein
+    C-Compiler ist das eine externe Werkzeug. Den Interpreter liefert später die VM (7.x) in TorbScript. Direkt
+    Maschinencode ohne C wäre ein eigener, großer Meilenstein - nicht jetzt.
+  - **Gate-Regel ab sofort:** Stufe A jede Runde (Build, `check`, Compiler-Tests, betroffene std-Tests, `canon --check`,
+    Doku-Gates bei Doku-Änderungen). Stufe B (native Konformanz, Suite, Fixpunkt) nur bei IR/Back-End/Runtime-Runden und
+    nur EINMAL (im Agenten, nicht nochmal auf master); auf master höchstens einmal pro Merge-Stapel im Hintergrund, rot
+    wird nach vorn repariert. **Stage 0 ist eingefroren:** ein Sprach-Feature kommt dort nur noch hinein, wenn der
+    Compiler selbst es zum Bauen braucht; Meldungs-Parität beider Checker ist kein Ziel mehr. Performance-Zahlen werden
+    pro Runde PROTOKOLLIERT, nicht erzwungen.
+  - **Wird gelöst - läuft:** Runde "Rust-Ausstieg, Scheibe 1" (Opus): Inventar `docs/RUST-EXIT.md` (wofür Stage 0 noch
+    gebraucht wird, was nativ fehlt, Tempo-Vergleich), Seed-Entscheidung + `tools/bootstrap.sh`, nativer Treiber
+    (`torb run` = bauen + ausführen, `torb test` für jedes Testpaket). Fehlend danach: `canon` und `highlight` nach
+    TorbScript portieren, Gates auf den nativen Compiler umstellen, `bootstrap/crates` löschen.
