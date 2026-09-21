@@ -17,11 +17,15 @@
 use Span from "../syntax/source"
 use Expression, Argument, TextSegment, PrefixOperator, InfixOperator from "../syntax/ast"
 use SymbolId from "../semantics/symbols"
-use LiteralValue from "../semantics/checker/type"
-use bindingOfSite, resultOf from "../semantics/checker/signature"
+use LiteralValue, TypeId, ParameterId from "../semantics/checker/type"
+use bindingOfSite, resultOf, signatureOf from "../semantics/checker/signature"
+use matchTypePattern from "../semantics/checker/implementation"
+use substitute from "../semantics/checker/unify"
 use integerLiteral from "../semantics/checker/lowering"
-use IrTypeId, LayoutId, StaticId, StaticContents from "./ir"
+use IrTypeId, LayoutId, StaticId, StaticContents, Instance from "./ir"
+use instanceKeyOf, isClosedType from "./instances"
 use Lowering, irTypeOf, typeAtSpan, internStatic, namedStatic, reportProblem from "./lower/context"
+use irTypeOfClosed, substituted from "./lower/context"
 use numericKindOf, layoutOfType from "./verify"
 use isStaticLayout from "./layout"
 use describeIrType from "./print"
@@ -421,8 +425,8 @@ fn namedConstant(var lowering: Lowering, expression: Expression, annotation: IrT
   const module = lowering.module
   const resolution = lowering.checker.resolutionAt(module, expression.span)?
   match resolution {
-    .Constant(symbol, _) => {
-      const identifier = staticOfConstant(lowering, symbol)?
+    .Constant(symbol, owner) => {
+      const identifier = staticOfConstant(lowering, symbol, owner)?
       const value = lowering.program.staticAt identifier
       Some ConstantValue(value.contents, value.annotation)
     }
@@ -505,38 +509,86 @@ fn callConstant(
   None
 }
 
-// --- A top-level `const` of a module --------------------------------------------------------------------------------
+// --- A `const` of a module or of a type -------------------------------------------------------------------------------
 
 /**
- * The static value of a top-level `const`, evaluated once. There is no module initialization, ever: a constant is
+ * Which instance of a `const` a read reaches: the declaration, plus the type arguments of the type it is a member of.
+ *
+ * A `const` of a **generic type** is one value per type argument - `Box<Int>.empty` and `Box<String>.empty` are two
+ * lists of two element types - so the declaration alone does not name it, exactly as it does not name a method. The
+ * type the constant was reached on decides, and the checker writes it beside the resolution (`Resolution.Constant`).
+ *
+ * `None` where the read left a parameter open, which is the clean finding "this read did not decide everything the
+ * declaration needs". A `const` of no type and a `const` of a concrete one have no parameters and reach the same
+ * instance from everywhere.
+ */
+public fn constantInstanceOf(var lowering: Lowering, symbol: SymbolId, owner: TypeId?): ConstantInstance? {
+  const identifier = signatureOf lowering.checker, symbol
+  const signature = lowering.checker.signature identifier
+  var mapping: Map<ParameterId, TypeId> = [:]
+  const nothing: List<IrTypeId> = []
+  if signature.generics.isEmpty() {
+    return Some ConstantInstance(instanceKeyOf(Instance(symbol, nothing, [])), nothing, mapping)
+  }
+  const declared = signature.owner?
+  const reached = substituted(lowering, owner?)
+  const _ = matchTypePattern lowering.checker, declared, reached, signature.generics, mapping
+  var arguments: List<IrTypeId> = []
+  for parameter in signature.generics {
+    const given = mapping.get(parameter)?
+    if !isClosedType(lowering, given) {
+      return None
+    }
+    arguments.add irTypeOfClosed(lowering, given)
+  }
+  Some ConstantInstance(instanceKeyOf(Instance(symbol, arguments, [])), arguments, mapping)
+}
+
+/** One instantiation of a `const`: what the caches are keyed by, what its name carries, and what its body sees. */
+public type ConstantInstance {
+  /** The declaration and its arguments, keyed the way a function instance is keyed. */
+  key: String
+  /** The arguments, which the name of the static and of the cell is built from. */
+  arguments: List<IrTypeId>
+  /** The substitution the initializer is read and lowered under. */
+  mapping: Map<ParameterId, TypeId>
+}
+
+/**
+ * The static value of one instance of a `const`, evaluated once. There is no module initialization, ever: a constant is
  * static data with a name, and `Instruction.Constant` names it.
  */
-public fn staticOfConstant(var lowering: Lowering, symbol: SymbolId): StaticId? {
-  if const Some(known) = lowering.constants.get(symbol.value) {
+public fn staticOfConstant(var lowering: Lowering, symbol: SymbolId, owner: TypeId? = None): StaticId? {
+  const instance = constantInstanceOf(lowering, symbol, owner)?
+  if const Some(known) = lowering.constants.get(instance.key) {
     return Some known
   }
   // A constant that could not be evaluated is not evaluated a second time: one root cause gets one message, however
   // many uses of it there are, and a constant in terms of itself has to stop somewhere
-  if lowering.evaluating.containsKey(symbol.value) {
+  if lowering.evaluating.containsKey(instance.key) {
     return None
   }
-  lowering.evaluating.set symbol.value, true
+  lowering.evaluating.set instance.key, true
   const site = lowering.checker.siteOf(symbol)?
   const binding = bindingOfSite(site)?
   const declared = resultOf lowering.checker, symbol
   if lowering.checker.isBroken(declared) {
     return None
   }
-  const annotation = irTypeOf lowering, declared
+  const applied = substitute lowering.checker.types, declared, instance.mapping
+  const annotation = irTypeOf lowering, applied
   const path = symbolPathOf lowering.checker, symbol
-  const name = staticName lowering.program, path, []
+  const name = staticName lowering.program, path, instance.arguments
   const outer = lowering.module
+  const around = lowering.substitution
   lowering.module = site.module
+  lowering.substitution = instance.mapping
   const value = evaluateConstant lowering, binding.value
   lowering.module = outer
+  lowering.substitution = around
   const found = value?
   const identifier = namedStatic lowering, name, found.contents, annotation
-  lowering.constants.set symbol.value, identifier
+  lowering.constants.set instance.key, identifier
   Some identifier
 }
 

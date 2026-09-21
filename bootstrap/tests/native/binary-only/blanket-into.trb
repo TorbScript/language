@@ -1,0 +1,42 @@
+/**
+ * `into()` through the **blanket** implementation of `Into`, which nobody writes by hand:
+ * `extend<Source, Target> Source with Into<Target> where Target: From<Source>`.
+ *
+ * The language says a parameter of type `Into<Path>` takes everything a `Path` can be made from, and that the body
+ * `Target.from self` runs for it. A binary builds the instance of that body for each source: the implementation
+ * declares `Source` and `Target` itself, the receiver decides `Source`, and the bound the call resolved decides
+ * `Target` - so `"a/b.txt".into()` inside `open` is the ordinary call `Path.from(text)`.
+ *
+ * The interpreter has no types, and `into` is the one member whose target type is written nowhere near the call: a
+ * `String` value in hand says nothing about whether a `Path`, a `Name` or anything else is wanted, so stage 0 answers
+ * ``the String "a/b.txt" has no method `into` `` and stops. That is not a bug that can be closed in an untyped
+ * interpreter - it closes with the VM, which runs the compiler's own instances - which is why this program is here and
+ * not one directory up.
+ */
+use Process from "std/process"
+use From, Into from "std/core"
+
+/** A path of this program, so that the conversion belongs to nobody else. */
+type Path {
+  /** What the path is made of. */
+  text: String
+}
+
+extend Path with From<String> {
+  fn from(value: String): Path {
+    Path value
+  }
+}
+
+/** Takes everything a `Path` can be made from, and says what it got. */
+fn open(path: Into<Path>): Path {
+  const found: Path = path.into()
+  print found.text
+  found
+}
+
+const first = open "a/b.txt"
+const second = open Path("c/d.txt").text
+print "{first.text == "a/b.txt"} {second.text == "c/d.txt"}"
+
+Process.exit(first.text.byteLength() - 7)

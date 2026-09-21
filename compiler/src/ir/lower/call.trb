@@ -34,7 +34,7 @@ use layoutOfType, conversionKindOf from "../verify"
 use describeIrType from "../print"
 use memberInValue, derivedKindOf, generatedKindOf from "../witness"
 use generatedFunctionOf from "./derive"
-use instanceFor, needsReference, isMonomorphic from "../instances"
+use instanceFor, needsReference, isMonomorphic, isClosedType from "../instances"
 use nativeFunctionOf from "./native"
 use Lowering, Generated, reportUnsupported, locationOf, nativeNamed, producesValue, substituted from "./context"
 use irTypeOfClosed from "./context"
@@ -1363,14 +1363,16 @@ fn sourceKindOf(
 }
 
 /**
- * An operator the checker accepted and recorded no **member** for. A tuple is the one case: `List<Item>` has
- * `extend<Item: Equals> List<Item> with Equals` and therefore a symbol, while the `Equals` and the `Compare` of a tuple
- * are *structural* and belong to no declaration at all - `lookupMember` finds nothing for one, so `recordTraitCall`
- * records nothing, although `traitArgumentsOf` says the type has both and the comparison is accepted.
+ * An operator the checker accepted and recorded no **member** for. `==` and `<` are where this happens: the `Equals`
+ * and the `Compare` of a **tuple** are structural and belong to no declaration at all, and the generated ones of a
+ * record are reached through the implementation the language writes rather than through a member of the type - in both
+ * cases `lookupMember` finds nothing, so `recordTraitCall` records nothing, although `traitArgumentsOf` says the type
+ * has the trait and the comparison is accepted.
  *
  * The lowering asks the question its own `for` asks instead (`dispatchedOn`), which reaches the body `derive.trb`
- * generates for that very tuple: `equalsBody` field by field, `compareTupleBody` lexicographically. Anything else that
- * arrives here without a resolution stays the finding it was.
+ * generates for that very type: `equalsBody` field by field, `compareTupleBody` lexicographically. An operand that is
+ * neither a tuple nor a nominal type - and every arithmetic operator, which has no member name here - stays the
+ * finding it was.
  */
 fn structuralOperator(
   var lowering: Lowering,
@@ -1390,7 +1392,7 @@ fn structuralOperator(
     }
   }
   const subject = substituted lowering, written
-  if memberName.isEmpty() || !isTupleOperand(lowering, subject) {
+  if memberName.isEmpty() || !isDerivableOperand(lowering, subject) {
     return unsupportedSlot lowering, builder, destination, unresolved, at
   }
   const capability = if memberName == "equals" { "Equals" } else { "Compare" }
@@ -1412,9 +1414,10 @@ fn structuralOperator(
   lowerDispatched lowering, builder, destination, at, dispatched, operands, places, annotation
 }
 
-fn isTupleOperand(var lowering: Lowering, subject: TypeId): Bool {
+/** Whether an operand is a type whose comparison the language can write itself: a tuple, or a record or a case. */
+fn isDerivableOperand(var lowering: Lowering, subject: TypeId): Bool {
   match lowering.checker.types.form(subject) {
-    .Tuple(_) => true
+    .Tuple(_) | .Nominal(_, _) => true
     _ => false
   }
 }
@@ -1423,20 +1426,34 @@ fn isTupleOperand(var lowering: Lowering, subject: TypeId): Bool {
  * What the left operand of an operator is, as a checker type. An operator has no callee expression, so the dispatch is
  * what says it where it can: an implementation names its own target. Where it cannot - `Dispatch.Object`, which is what
  * `==` between two trait-typed values is - the **written operand** answers, and a dispatch without one is a finding.
+ *
+ * A **generic** implementation names a target that is not closed: `extend<Item: Numeric> Pair<Item> with Add` says
+ * `Pair<Item>`, and an instance cannot be built for a parameter. The written operand carries the same type with the
+ * arguments of the enclosing instance in it (`Pair<Int64>`), so it is the better answer wherever the target still holds
+ * a parameter - which is what makes `a + b` reach the instance `a.add(b)` reaches.
  */
 fn operandTypeOf(var lowering: Lowering, dispatch: Dispatch, operand: TypeId?): TypeId? {
-  if const .Implementation(implementation, _) = dispatch {
-    const found = lowering.checker.implementations.at implementation
-    return Some found.target
-  }
   // `a == b` on two `List<TypeId>`s: the member is reached on the **left operand**, which is the receiver an operator has.
   // `Equals.equals` mentions `Self` as a parameter and is therefore in no table, so what this decides is not whether the
   // call is dynamic but which type's `equals` runs - `dynamicDispatch` then finds the body and instantiates it statically
-  if const Some(found) = operand {
-    const applied = substituted lowering, found
-    return Some applied
+  const written = writtenOperandOf lowering, operand
+  if const .Implementation(implementation, _) = dispatch {
+    const found = lowering.checker.implementations.at implementation
+    if isClosedType(lowering, found.target) {
+      return Some found.target
+    }
+    if const Some(applied) = written {
+      return Some applied
+    }
+    return Some found.target
   }
-  None
+  written
+}
+
+/** The type of the left operand as this instance sees it, with its own type arguments substituted. */
+fn writtenOperandOf(var lowering: Lowering, operand: TypeId?): TypeId? {
+  const found = operand?
+  Some substituted(lowering, found)
 }
 
 fn lowerNativeOperator(

@@ -18,7 +18,7 @@ source:
 
 `std/geometry` is the shapes and what they answer about each other: what contains a point, what two of them share, how
 far apart they are, which axis-aligned box holds one, and what a ray hits. In the plane: `Rectangle`, `Circle`,
-`Segment`, `Ray2`, `Triangle2`, `Polygon`. In space: `Box`, `Sphere`, `Ray3`, `Plane`, `Triangle3`.
+`Segment2`, `Ray2`, `Triangle2`, `Polygon`. In space: `Box`, `Sphere`, `Ray3`, `Plane`, `Triangle3`.
 
 Every shape is generic over its scalar the way `std/linear`'s vectors are: a `Rectangle<Int>` is the pixel or tile
 rectangle and a `Rectangle` is the continuous one, and the tests that need a square root or an angle live under `Real`
@@ -27,7 +27,7 @@ while everything else works with whole numbers. It is a pure value library and d
 ## Import
 
 ```trb fragment
-use Rectangle, Circle, Segment, Ray2, Triangle2, Polygon from "std/geometry"
+use Rectangle, Circle, Segment2, Ray2, Triangle2, Polygon from "std/geometry"
 use Box, Sphere, Ray3, Plane, Triangle3 from "std/geometry"
 ```
 
@@ -88,22 +88,22 @@ A disc or a ball: a `center` and a `radius`, with the boundary inside. `contains
 `translated`, `grown`, `bounds`, `combined`, and for a circle `area` and `circumference`. `Sphere.around(box)` is the ball
 through the corners of a box.
 
-### `Segment`, `Ray2`, `Ray3`
+### `Segment2`, `Ray2`, `Ray3`
 
 ```trb fragment
-public type Segment<Scalar: Numeric = Float>
+public type Segment2<Scalar: Numeric = Float>
 public type Ray2<Scalar: Real = Float>
 public type Ray3<Scalar: Real = Float>
 ```
 
-A `Segment` is the straight piece of line between two points, with both ends belonging to it: `step`, `sideOf`, `bounds`
+A `Segment2` is the straight piece of line between two points, with both ends belonging to it: `step`, `sideOf`, `bounds`
 and `intersects` under `Numeric`, and `length`, `direction`, `center`, `at`, `closestPoint`, `distanceTo` and
 `intersection` (the crossing point) under `Real`.
 
 A ray is a half-line, and **every hit test answers how far along the ray the hit is**, measured in the length of
 `direction` - not the point. That is what a caller compares to find the nearest of several hits, and `ray.at(distance)`
 turns it back into a point. A ray with a `direction` of length one therefore answers distances. `Ray2` hits a `Circle`, a
-`Rectangle` (the slab test) and a `Segment`; `Ray3` hits a `Sphere`, a `Plane`, a `Box` and a `Triangle3`. A ray that
+`Rectangle` (the slab test) and a `Segment2`; `Ray3` hits a `Sphere`, a `Plane`, a `Box` and a `Triangle3`. A ray that
 starts inside a shape answers `0`, and a ray with no direction answers `None`.
 
 ### `Triangle2`, `Triangle3`

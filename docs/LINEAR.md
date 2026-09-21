@@ -128,7 +128,7 @@ without renaming anything. Where generic code needs pi, it takes `arcCosine` of 
 |------|--------|-------|-------|
 | `Rectangle<Scalar>` | `origin`, `size` | `Numeric` | half-open |
 | `Circle<Scalar>` | `center`, `radius` | `Real` | closed |
-| `Segment<Scalar>` | `from`, `to` | `Numeric` | both ends belong to it |
+| `Segment2<Scalar>` | `from`, `to` | `Numeric` | both ends belong to it |
 | `Ray2<Scalar>` | `origin`, `direction` | `Real` | hits answer a distance |
 | `Triangle2<Scalar>` | `first`, `second`, `third` | `Numeric` | winding not fixed |
 | `Polygon<Scalar>` | `corners: List<Vector2<Scalar>>` | `Numeric` | convex tests first |
@@ -162,7 +162,7 @@ Short form; the docblocks are the full list.
 | `filled`, `isZero`, `sum`, `largestComponent` | | |
 | `Matrix.transposed`, `determinant`, `multiply`, `applied(to:)`, `at`, `column`, `row`, `scaling` | `Matrix.negate` | `Matrix.rotation`, `inverse`, `affine`, `translation`, `transformedPoint`, `isCloseTo` |
 | `Rectangle`/`Box`: `contains`, `encloses`, `intersects`, `intersection`, `combined`, `covering`, `translated`, `grown`, `closestPoint`, `bounds`, `area`/`volume`, `isEmpty` | `manhattanDistanceTo` | `center`, `centered`, `distanceTo`, `distanceSquaredTo` |
-| `Segment`: `step`, `sideOf`, `bounds`, `intersects` | `manhattanLength` | `length`, `direction`, `center`, `at`, `closestPoint`, `distanceTo`, `intersection` |
+| `Segment2`: `step`, `sideOf`, `bounds`, `intersects` | `manhattanLength` | `length`, `direction`, `center`, `at`, `closestPoint`, `distanceTo`, `intersection` |
 | `Triangle2`: `signedArea`, `bounds`, `edges`, `contains`, `translated` | `doubledArea` | `area`, `center`, `closestPoint`, `distanceTo` |
 | `Polygon`: `edges`, `signedDoubledArea`, `bounds`, `isConvex`, `contains`, `containsConvex`, `intersectsConvex` | `doubledArea` | `area` |
 | `Triangle3`: `firstEdge`, `secondEdge`, `doubledAreaVector`, `bounds` | | `normal`, `area`, `plane`, `center`, `weightsOf`, `contains` |
@@ -187,8 +187,9 @@ Two entries in that table are compromises and say so in their `# Open`:
 - A transition between scalar kinds is explicit and named after its target: `Vector2<Int>.toFloat()`,
   `Vector2<Int>.toFixed()`, `Vector2<Float>.rounded()`, `.floored()`, `.ceiling()`, `Fixed.toFloat()`, `Fixed.toInt()`,
   `Fixed.approximating(aFloat)`. There is no implicit conversion anywhere.
-- `Segment` carries no digit because there is no `Segment3` yet, while `Ray2`/`Ray3` and `Triangle2`/`Triangle3` do
-  because both exist. `Rectangle`/`Box` and `Circle`/`Sphere` are the pairs whose names differ by themselves.
+- `Segment2` carries the digit that `Ray2`/`Ray3` and `Triangle2`/`Triangle3` carry, because a segment of space has no
+  word of its own the way `Rectangle`/`Box` and `Circle`/`Sphere` have one. A `Segment3` therefore lands beside it
+  rather than renaming it.
 - **A conversion is never given the same name in two instantiations of one type.** `toFloat` exists on
   `Vector2<Int>` and nowhere else, `toFixed` on `Vector2<Int>` and nowhere else, `rounded`/`floored`/`ceiling` on
   `Vector2<Float>` and nowhere else. The reason is the interpreter, which has no types and therefore cannot tell
@@ -376,26 +377,27 @@ every line of geometry deterministic by changing one type argument.
 
 ## 12. What the language and the compiler must provide
 
-In the order it hurt, each with a reproduction. The first four are in `examples/generic-scalar/`, which type checks and
-which `torb build` rejects; the rest quote the diagnostic that is the reproduction.
+In the order it hurt, each with a reproduction. The ones that are still open are in `examples/generic-scalar/`, which
+type checks and which `torb build` rejects; the rest quote the diagnostic that is the reproduction.
 
-1. **An operator on a generic type does not lower.** `a + b` where `Add` is implemented for `Pair<Item>` reports "not
-   supported by the back end yet: a generic function or a member of a generic type", while `a.add(b)` on the same value
-   compiles. The cause is in `compiler/src/ir/lower/call.trb`: `operandTypeOf` prefers the *implementation's* target,
-   which for a generic implementation is `Pair<Item>` and not a closed type, so `dispatchedMember` never learns
-   `Item = Int64`. The written operand, which the function already receives, carries the closed type. **Smallest change:**
-   prefer the written operand where the implementation's target is not closed. Reproduction: `examples/generic-scalar/src/main.trb`, the two
-   lines under comment 1.
-2. **A numeric literal in a generic body keeps the type it had before the instance was built.** The checker accepts
-   `fn oneOf<Scalar: Numeric>(): Scalar { 1 }` and adapts the literal to the parameter; the back end then reports
-   "the function returns `Float64` and `return` carries `Int64`" for the `Float64` instance. Everything in
-   [section 1](#1-the-scalar-tower) about `unit`, `halved` and `zeroOf` exists only because of this. **Smallest change:**
-   substitute the instance's type arguments into the type of a literal the same way they are substituted into every other
-   expression. Reproduction: `examples/generic-scalar/src/main.trb`, `oneOf` and `doubled`.
-3. **A `const` member of a generic type is not instantiated per type argument.** `const zero: Vector2<Scalar> =
-   Vector2(0, 0)` inside the type reports "The generic parameter `Scalar` was not substituted before the back end saw
-   it", and the interpreter answers the same wrong value for every scalar. This is why the constants live in concrete
-   `extend`s. Reproduction: `examples/generic-scalar/src/main.trb`, `Pair.nothing`.
+1. ~~An operator on a generic type does not lower.~~ **Closed.** `a + b` is `Add.add`, and which `add` runs is decided
+   by the **operand** and not by the implementation that declares it: `extend<Scalar: Signed> Vector2<Scalar> with
+   Negate` names a target that still holds a parameter, while the value in front of the operator carries the enclosing
+   instance's arguments. `operandTypeOf` in `compiler/src/ir/lower/call.trb` therefore prefers the written operand
+   wherever the target is not closed, and the operator form and the method form of one call are the same function -
+   inside a generic body as well. `bootstrap/tests/native/generic-operators.trb` is the gate.
+2. **A numeric literal in a generic body is never adapted to the parameter.** `fn oneOf<Scalar: Numeric>(): Scalar
+   { 1 }` type checks, the checker records `Int64` for the literal, and the back end then reports "the function returns
+   `Float64` and `return` carries `Int64`" for the `Float64` instance. The substitution is not what is missing - there
+   is no parameter in the recorded type to substitute - so this is the **checker's** half of item 14, and it closes
+   there: the literal has to adapt to the parameter, and the back end then does with it exactly what it does with
+   `const x: Float = 1`, which compiles today. Everything in [section 1](#1-the-scalar-tower) about `unit`, `halved` and
+   `zeroOf` exists only because of this. Reproduction: `examples/generic-scalar/src/main.trb`, `oneOf` and `doubled`.
+3. ~~A `const` member of a generic type is not instantiated per type argument.~~ **Closed in the back end.**
+   `Box<Int>.empty` and `Box<String>.empty` are one declaration and two values, and a binary keeps one cell per
+   instance, named after the arguments the read decided. The interpreter still answers the same value for every scalar,
+   which is item 6 seen from another side and is why the constants of this library live in concrete `extend`s.
+   `bootstrap/tests/native/generic-constants.trb` is the gate.
 4. **A type parameter's default is not used to reach a member of a concrete `extend`.** `Vector2.zero` where `zero` is
    declared in `extend Vector2<Float>` reports "Cannot infer `Scalar` of `Vector2`" *even with the annotation*
    `const origin: Vector2<Float> = Vector2.zero`; `Vector2<Float>.zero` works. Since the declaration says
@@ -438,6 +440,22 @@ which `torb build` rejects; the rest quote the diagnostic that is the reproducti
 13. **Two small checker reports.** `const size = self.length()` inside a conditional `extend` does not infer the
     parameter although the annotation form does; and `print(x).round()` answers "The checker did not work out the type of
     this expression — this is a bug of the compiler" where it means "`Void` has no member `round`".
+14. **A type parameter accepts a value of any type at all.** `fn oneOf<Item: Numeric>(): Item { 1 }` type checks, and so
+    does `fn textOf<Item: Numeric>(): Item { "x" }` and `fn boundless<Item>(): Item { 1 }`. The literal is not adapted to
+    the parameter - the checker records `Int64` for it - and the return is then accepted against `Item` although nothing
+    makes it one. That is the real cause of item 2: the back end has no fact to substitute, and the IR verifier is what
+    catches the program. The checker has to record the parameter as the literal's adapted type and reject the others;
+    what an integer literal means at a **user** implementor of `Numeric` such as `Fixed` is a language question that has
+    no answer yet, so that instance stays a finding of the back end until it has one.
+15. **`==` on a generic type records no member for some instantiations.** `Vector2<Float>.equals` is not found by
+    `lookupMember`, so `recordTraitCall` records nothing and the lowering has no resolution to read; `Vector2<Int>` has
+    one. The smallest reproduction is a generic type plus a concrete `extend` of it whose body constructs the type. The
+    lowering answers it the way it answers a tuple's structural comparison - it asks `dispatchedOn` itself - so no
+    program is blocked by it, and the missing record is still a record the checker owes.
+16. **Two `From` implementations on one type collide in the back end.** `extend Path with From<String>` next to
+    `extend Path with From<Name>` are two declarations with one mangled name (`Path.from` carries no arguments of its
+    own), and the C compiler rejects the second prototype. It is the same shape as item 12 seen from the emitter's end,
+    and `compiler/src/ir/mangle.trb` is where a name would have to carry the implementation's own arguments.
 
 ## 13. The package cut for what follows
 
@@ -457,10 +475,11 @@ which is what a character controller is. It answers *contacts* — a point, a no
 `trait Bounds` and a `trait Contains` earn their place, because a broad phase wants to hold shapes of different kinds in
 one list.
 
-**`std/path`.** Polylines, quadratic and cubic Bézier curves, Catmull-Rom and B-splines, arcs; length by subdivision,
-the point and the tangent at a parameter, and flattening to a polyline within a tolerance. The same paths serve a canvas
-or an SVG *and* a motion along a curve, which is why it is one package and not two. `Fixed` matters here: a path followed
-in lockstep has to land on the same point on both machines.
+**`std/curve`.** Polylines, quadratic and cubic Bézier curves, Catmull-Rom and B-splines, arcs; length by subdivision,
+the point and the tangent at a parameter, and flattening to a polyline within a tolerance. The same curves serve a canvas
+or an SVG *and* a motion along one, which is why it is one package and not two. `Fixed` matters here: a curve followed
+in lockstep has to land on the same point on both machines. The name is `std/curve` and not `std/path`, because
+`std/path` is the package of **file paths** ([docs/PATH.md](PATH.md)) and one word may mean one thing.
 
 **`std/animation`.** Easing functions, keyframes, tracks, tweens and a state machine, over a `trait Interpolate` that
 `Vector2`, `Quaternion`, `Angle`, `Fixed` and a colour all carry — `interpolated(toward:by:)` is already spelled that way
@@ -480,13 +499,13 @@ Interpolation happens in a space the caller names, conversion is explicit, and `
 2. **`interpolated(toward:by:)` or `lerp`?** `lerp` is what every other library calls it and an abbreviation this
    language does not otherwise allow. `interpolated` is the full word and reads well at a call
    (`here.interpolated(toward: there, by: 0.5)`).
-3. **`Segment` or `Segment2`?** `Segment` follows the plan; a `Segment3` will make `Segment`/`Segment3` a wart, and
-   renaming then is a breaking change.
+3. ~~**`Segment` or `Segment2`?**~~ Decided: `Segment2`. `Ray2`/`Ray3` and `Triangle2`/`Triangle3` carry the digit,
+   and a segment of space has no word of its own the way a `Box` and a `Sphere` have one.
 4. **Should the four vector constants stay on every instantiation?** They are the one place where a program that runs on
    the interpreter reads the wrong scalar's value ([section 12](#12-what-the-language-and-the-compiler-must-provide),
    item 6). Keeping them on `Float` alone would remove the trap and cost `Vector2<Int>.zero`.
-5. **Should `Matrix4` carry a general inverse?** Only `inverseAffine` is there, on the argument that a matrix which is
-   not affine is in practice a projection and there are no projections here. Sixteen cofactors is about forty lines.
+5. ~~**Should `Matrix4` carry a general inverse?**~~ Decided: yes. `Matrix4.inverse` is the general one by cofactors
+   and `inverseAffine` stays beside it as the short way for the matrices a scene graph is made of.
 6. **`Quaternion.interpolated` takes the straight path and renormalizes**, not the constant-speed path along the sphere.
    The difference shows in the middle of a long rotation. A constant-speed version needs an arc cosine whose accuracy
    near a zero angle should be measured on `Fixed` before it is written.

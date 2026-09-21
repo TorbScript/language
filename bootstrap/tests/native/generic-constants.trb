@@ -1,0 +1,36 @@
+/**
+ * A `const` of a generic type is one value per type argument.
+ *
+ * `Box<Int>.empty` and `Box<String>.empty` are the same declaration and two different values: the list inside them
+ * holds elements of two different types, and a binary keeps two cells for them, named after the arguments the read
+ * decided. The type the constant is reached on is what says which one, exactly as it says which `plus` runs - a
+ * declaration alone names an instance of neither.
+ *
+ * The interpreter has no types and keeps one cell per declaration, which costs nothing here because the value of an
+ * empty box is the same either way; `docs/BACKEND.md` lists what that does cost, under the conformance divergences.
+ */
+use Process from "std/process"
+
+/** A box of items, generic over them. */
+type Box<Item> {
+  /** What is in it. */
+  items: List<Item>
+
+  /** The empty box, which is a value of its own for every item type. */
+  const empty: Box<Item> = Box([])
+
+  /** The same box with one more item at the end. */
+  fn plus(self, item: Item): Box<Item> {
+    var found = items
+    found.add item
+    Box found
+  }
+}
+
+const numbers = Box<Int>.empty.plus(1).plus(2)
+const words = Box<String>.empty.plus("a")
+print "{Box<Int>.empty.items} {Box<String>.empty.items}"
+print "{numbers.items} {words.items}"
+print "{Box<Int>.empty.items.isEmpty()} {Box<String>.empty.items.isEmpty()}"
+
+Process.exit(numbers.items.length() + words.items.length() - 3)

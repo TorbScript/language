@@ -253,21 +253,25 @@ public type Lowering {
    * has no roots to derive it from.
    */
   var programPackages: Map<Int, Bool> = [:]
-  /** The static value of every module constant, by `SymbolId.value`. */
-  var constants: Map<Int, StaticId> = [:]
+  /**
+   * The static value of every constant, by the key of its instance (`constantInstanceOf` in `ir/constant.trb`): a
+   * `const` of a generic type is one value per type argument, so the declaration alone does not name it.
+   */
+  var constants: Map<String, StaticId> = [:]
   /** The constants whose initializer is being evaluated right now: a `const` in terms of itself is a cycle. */
-  var evaluating: Map<Int, Bool> = [:]
+  var evaluating: Map<String, Bool> = [:]
   /**
-   * The constants whose initializer is being lowered **at a use site** right now, by `SymbolId.value`: the same cycle
-   * one level further on. A `const` that is not static data has no static value to stop at, so the recursion needs its
-   * own guard - and a cycle is a diagnostic of the checker, so hitting this one is a clean finding and never a hang.
+   * The constants whose initializer is being lowered **at a use site** right now, by the key of their instance: the same
+   * cycle one level further on. A `const` that is not static data has no static value to stop at, so the recursion needs
+   * its own guard - and a cycle is a diagnostic of the checker, so hitting this one is a clean finding and never a hang.
    */
-  var inlinedConstants: Map<Int, Bool> = [:]
+  var inlinedConstants: Map<String, Bool> = [:]
   /**
-   * The accessor of every constant whose value is an **immortal counted static**, by `SymbolId.value`: one cell and one
-   * initializer per declaration, however many modules read it (`lowerImmortalConstant` in `ir/lower/expression.trb`).
+   * The accessor of every constant whose value is an **immortal counted static**, by the key of its instance: one cell
+   * and one initializer per instance, however many modules read it (`lowerImmortalConstant` in
+   * `ir/lower/expression.trb`).
    */
-  var constantCells: Map<Int, FunctionId> = [:]
+  var constantCells: Map<String, FunctionId> = [:]
 }
 
 /** A lowering for one checked program. `paths` holds one path per module, in the order of `program.graph.modules`. */

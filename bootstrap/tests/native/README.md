@@ -89,6 +89,7 @@ expectation files. The leak gate does not run on them, because every one of them
 | Program | What differs, and why |
 |---------|-----------------------|
 | `assert-compound-capture.trb` | A failing `assert` shows a capture that is not a scalar by its **name and its type** (`found: Point`) and stage 0 shows its value. Showing a value of the program needs `Encode` for its type and for every type under it - one implementation in the binary per captured type, and one unshowable type anywhere refuses the whole build, which is what the compiler's own 2801 assertions over its own types would mean. It closes when a capture is an `EncodedValue` |
+| `blanket-into.trb` | `into()` through the blanket implementation of `Into`. The binary builds the instance of `Target.from self` for each source; stage 0 has no types and `into` is the one member whose target type stands nowhere near the call, so it answers ``the String "a/b.txt" has no method `into` ``. It closes with the VM, not in an untyped interpreter |
 
 ## The programs
 
@@ -165,9 +166,11 @@ expectation files. The leak gate does not run on them, because every one of them
 | `traits.trb` | Traits, trait-typed values, default members, generics with bounds |
 | `trait-values.trb` | A `var self` member reached through a witness table |
 | `generics.trb` | A generic type with methods, a generic function with a bound, a generic `extend` |
+| `generic-operators.trb` | Every operator on a generic type is the member of its trait, for `Int`, `Float` and `Fixed`, and inside a generic body as well |
 | `derived.trb` | The generated `Show`, `Equals` and `Hash` of a record, a case and a tuple |
 | `case-defaults.trb` | A case constructor whose field takes its default |
 | `constants.trb` | Top-level `const`s of every shape, from a function and from the top level, and the mutated copy of one |
+| `generic-constants.trb` | A `const` of a generic type is one value per type argument, named after the arguments the read decided |
 | `show-compound.trb` | `Show` of everything compound, and of a type whose field carries the name of a member |
 | `tuple-compare.trb` | The generated `compare` of a tuple: lexicographic, each field through its own `Compare` |
 

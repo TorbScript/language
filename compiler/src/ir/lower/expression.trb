@@ -18,6 +18,7 @@ use PrefixOperator, InfixOperator from "../../syntax/ast"
 use SymbolId from "../../semantics/symbols"
 use ModuleId from "../../semantics/module"
 use TypeId, LiteralValue from "../../semantics/checker/type"
+use substitute from "../../semantics/checker/unify"
 use Adaptation, BindingId from "../../semantics/checker/context"
 use IrTypeId, IrType, Slot, BlockId, LocationId, Instruction, Terminator, Reference, PathStep from "../ir"
 use FunctionId, FunctionKind, IrSignature, WitnessSource, borrowed from "../ir"
@@ -26,7 +27,7 @@ use FunctionBuilder, addTemporary, addBlock, emit, newFunction, finishFunction, 
 use numericKindOf, layoutOfType from "../verify"
 use describeIrType from "../print"
 use bindingOfSite, signatureOf from "../../semantics/checker/signature"
-use evaluateConstant, staticOfConstant from "../constant"
+use evaluateConstant, staticOfConstant, constantInstanceOf, ConstantInstance from "../constant"
 use functionName, mangledName from "../mangle"
 use symbolPathOf from "../instantiate"
 use Lowering, reportUnsupported, locationOf, typeAtSpan, voidTypeOf from "./context"
@@ -453,7 +454,9 @@ fn lowerReference(
   }
   match resolution {
     .Local(binding) => lowerLocalRead lowering, builder, destination, expression, binding, annotation
-    .Constant(symbol, _) => lowerConstantReference lowering, builder, destination, symbol, expression.span
+    .Constant(symbol, owner) => {
+      lowerConstantReference lowering, builder, destination, symbol, expression.span, owner
+    }
     .Field(_, field) => lowerFieldRead lowering, builder, destination, expression, field, annotation
     .TupleField(_, index) => lowerTupleRead lowering, builder, destination, expression, index, annotation
     .Callable(symbol, _, _) => {
@@ -552,6 +555,7 @@ fn lowerConstantReference(
   destination: Slot?,
   symbol: SymbolId,
   at: Span,
+  owner: TypeId?,
 ): Slot {
   // A top-level binding of the entry file is a local of the entry function, not a static value
   if const Some(slot) = lowering.entryLocals.get(symbol.value) {
@@ -561,10 +565,10 @@ fn lowerConstantReference(
     const what = "a top-level `var` read from a function"
     return unsupportedSlot lowering, builder, destination, what, at
   }
-  const identifier = match staticOfConstant(lowering, symbol) {
+  const identifier = match staticOfConstant(lowering, symbol, owner) {
     Some(found) => found
     None => {
-      return lowerImmortalConstant lowering, builder, destination, symbol, at
+      return lowerImmortalConstant lowering, builder, destination, symbol, at, owner
     }
   }
   const annotation = lowering.program.staticAt(identifier).annotation
@@ -606,8 +610,9 @@ fn lowerImmortalConstant(
   destination: Slot?,
   symbol: SymbolId,
   at: Span,
+  owner: TypeId?,
 ): Slot {
-  const accessor = match constantAccessorOf(lowering, symbol, at) {
+  const accessor = match constantAccessorOf(lowering, symbol, at, owner) {
     Some(found) => found
     None => {
       return abandonedSlot lowering, builder, destination
@@ -622,15 +627,23 @@ fn lowerImmortalConstant(
 }
 
 /**
- * The accessor of one constant, built the first time the constant is read. One per declaration, however many modules
- * read it: the cell is the value of the constant and not of the read.
+ * The accessor of one constant, built the first time the constant is read. One per **instance**, however many modules
+ * read it: the cell is the value of the constant and not of the read, and a `const` of a generic type is one value per
+ * type argument (`constantInstanceOf` in `ir/constant.trb`).
  *
  * The initializer is lowered **here** rather than through the worklist, because a construct the back end does not
  * translate yet has to abandon the body that reads the constant - which is what the reader's `isSupported` carries, and
  * what a worklist entry drained later could not reach any more.
  */
-fn constantAccessorOf(var lowering: Lowering, symbol: SymbolId, at: Span): FunctionId? {
-  if const Some(known) = lowering.constantCells.get(symbol.value) {
+fn constantAccessorOf(var lowering: Lowering, symbol: SymbolId, at: Span, owner: TypeId?): FunctionId? {
+  const instance = match constantInstanceOf(lowering, symbol, owner) {
+    Some(found) => found
+    None => {
+      reportUnsupported lowering, "a constant of a generic type the read did not decide the arguments of", at
+      return None
+    }
+  }
+  if const Some(known) = lowering.constantCells.get(instance.key) {
     return Some known
   }
   const site = match lowering.checker.siteOf(symbol) {
@@ -648,11 +661,11 @@ fn constantAccessorOf(var lowering: Lowering, symbol: SymbolId, at: Span): Funct
     }
   }
   // A constant in terms of itself is a cycle the checker reports; stopping here keeps the lowering from recursing on one
-  if lowering.inlinedConstants.containsKey(symbol.value) {
+  if lowering.inlinedConstants.containsKey(instance.key) {
     reportUnsupported lowering, "a constant that names itself", at
     return None
   }
-  const declared = match constantTypeOf(lowering, symbol) {
+  const declared = match constantTypeOf(lowering, symbol, instance) {
     Some(found) => found
     None => {
       reportUnsupported lowering, "a constant whose type the checker did not decide", at
@@ -660,10 +673,9 @@ fn constantAccessorOf(var lowering: Lowering, symbol: SymbolId, at: Span): Funct
     }
   }
   const path = symbolPathOf lowering.checker, symbol
-  const noArguments: List<IrTypeId> = []
-  const accessorName = functionName lowering.program, path, noArguments
+  const accessorName = functionName lowering.program, path, instance.arguments
   const initializerName = mangledName "t", ["constant"], accessorName
-  const shape = LoweredConstant symbol, binding, site.module, initializerName, declared
+  const shape = LoweredConstant symbol, binding, site.module, initializerName, declared, instance
   const initializer = match loweredConstantInitializer(lowering, shape) {
     Some(found) => found
     None => {
@@ -675,7 +687,7 @@ fn constantAccessorOf(var lowering: Lowering, symbol: SymbolId, at: Span): Funct
   const empty = accessor.function
   accessor.function = empty.copy blocks: [], kind: FunctionKind.ConstantCell(initializer)
   const added = finishFunction lowering.program, accessor
-  lowering.constantCells.set symbol.value, added
+  lowering.constantCells.set instance.key, added
   Some added
 }
 
@@ -694,9 +706,9 @@ fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant)
   const saved = savedFrame lowering
   enterBody lowering, constant.name
   lowering.module = constant.module
-  lowering.substitution = [:]
+  lowering.substitution = constant.instance.mapping
   lowering.capturedVariables = [:]
-  lowering.inlinedConstants.set symbol.value, true
+  lowering.inlinedConstants.set constant.instance.key, true
   const location = locationOf lowering, value.span
   setBlockLocation inner, BlockId(0), Some(location)
   const slot = lowerExpression lowering, inner, value, None
@@ -705,7 +717,7 @@ fn loweredConstantInitializer(var lowering: Lowering, constant: LoweredConstant)
     finishBlock lowering, inner, Terminator.Return(Some(borrowed(slot)))
   }
   const isSupported = lowering.isSupported
-  const _ = lowering.inlinedConstants.remove symbol.value
+  const _ = lowering.inlinedConstants.remove constant.instance.key
   restoreFrame lowering, saved
   if !isSupported {
     lowering.isSupported = false
@@ -726,16 +738,19 @@ type LoweredConstant {
   name: String
   /** The declared type, which the signature starts out as until the body says what it really produces. */
   declared: IrTypeId
+  /** Which instantiation of the declaration this is, and therefore what its body sees for a type parameter. */
+  instance: ConstantInstance
 }
 
 /** The declared type of a constant, which is what the initializer's signature starts out as. */
-fn constantTypeOf(var lowering: Lowering, symbol: SymbolId): IrTypeId? {
+fn constantTypeOf(var lowering: Lowering, symbol: SymbolId, instance: ConstantInstance): IrTypeId? {
   const identifier = signatureOf lowering.checker, symbol
   const declared = lowering.checker.signature(identifier).form.result
   if lowering.checker.isBroken(declared) {
     return None
   }
-  Some irTypeOfClosed(lowering, declared)
+  const applied = substitute lowering.checker.types, declared, instance.mapping
+  Some irTypeOfClosed(lowering, applied)
 }
 
 /**

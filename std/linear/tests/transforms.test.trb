@@ -211,6 +211,84 @@ group "Matrix4" {
     const move = Matrix4.translation of: deep(1, 2, 3)
     assert(move.transposed().transposed() == move)
   }
+
+  test "the determinant is the volume a scaling multiplies by, and one for a move" {
+    assert(Matrix4.scaling(by: deep(2, 3, 4)).determinant() == exact(24))
+    assert(Matrix4.translation(of: deep(1, 2, 3)).determinant() == Fixed.one)
+    assert(Matrix4<Fixed>.identity.determinant() == Fixed.one)
+  }
+
+  test "the general inverse undoes an affine transformation" {
+    const move = Matrix4.affine Matrix3.scaling(by: deep(2, 2, 2)), by: deep(4, 0, 0)
+    match move.inverse() {
+      Some(undone) => {
+        const there = move.transformedPoint deep(1, 1, 1)
+        assert undone.transformedPoint(there).isCloseTo(deep(1, 1, 1), tolerance: nearly)
+      }
+      None => assert false
+    }
+  }
+
+  test "the general inverse undoes a matrix whose bottom row is not the affine one" {
+    const skewed = Matrix4(
+      Vector4(exact(2), Fixed.zero, Fixed.zero, Fixed.one),
+      Vector4(Fixed.zero, exact(3), Fixed.zero, Fixed.zero),
+      Vector4(Fixed.zero, Fixed.zero, exact(1), Fixed.zero),
+      Vector4(Fixed.zero, Fixed.zero, Fixed.zero, exact(2)),
+    )
+    match skewed.inverse() {
+      Some(undone) => {
+        const forwards = skewed * undone
+        const backwards = undone * skewed
+        assert forwards.isCloseTo(Matrix4<Fixed>.identity, tolerance: nearly)
+        assert backwards.isCloseTo(Matrix4<Fixed>.identity, tolerance: nearly)
+      }
+      None => assert false
+    }
+  }
+
+  test "a matrix that flattens space has no inverse" {
+    const flattening = Matrix4(
+      Vector4(exact(1), Fixed.zero, Fixed.zero, Fixed.zero),
+      Vector4(exact(2), Fixed.zero, Fixed.zero, Fixed.zero),
+      Vector4(Fixed.zero, Fixed.zero, exact(1), Fixed.zero),
+      Vector4(Fixed.zero, Fixed.zero, Fixed.zero, exact(1)),
+    )
+    assert(flattening.determinant() == Fixed.zero)
+    assert(flattening.inverse() == None)
+  }
+
+  test "the general inverse over `Float`, where the scalar is not the deterministic one" {
+    // The identity is written out rather than read from `Matrix4<Float>.identity`, because the interpreter cannot tell
+    // two instantiations of one `extend` apart and would answer the deterministic one here
+    const same = Matrix4(
+      Vector4(1.0, 0.0, 0.0, 0.0),
+      Vector4(0.0, 1.0, 0.0, 0.0),
+      Vector4(0.0, 0.0, 1.0, 0.0),
+      Vector4(0.0, 0.0, 0.0, 1.0),
+    )
+    const skewed = Matrix4(
+      Vector4(2.0, 0.0, 0.0, 1.0),
+      Vector4(0.0, 4.0, 0.0, 0.0),
+      Vector4(0.0, 0.0, 1.0, 0.0),
+      Vector4(3.0, 0.0, 0.0, 2.0),
+    )
+    assert(skewed.determinant() == 4.0)
+    match skewed.inverse() {
+      Some(undone) => {
+        const forwards = skewed * undone
+        assert forwards.isCloseTo(same, tolerance: 0.000001)
+      }
+      None => assert false
+    }
+    const flattening = Matrix4(
+      Vector4(1.0, 0.0, 0.0, 0.0),
+      Vector4(0.0, 0.0, 0.0, 0.0),
+      Vector4(0.0, 0.0, 2.0, 0.0),
+      Vector4(0.0, 0.0, 0.0, 1.0),
+    )
+    assert(flattening.inverse() == None)
+  }
 }
 
 group "Quaternion" {

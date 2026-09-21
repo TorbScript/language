@@ -94,7 +94,8 @@ left as it does in mathematics.
 transformation of the plane (`affine`, `linearPart`, `translationPart`, `transformedPoint`, `transformedDirection`), and
 `Matrix4` is the affine transformation of space. `transposed`, `determinant`, `at`, `column`, `row`, `scaling` and
 `applied(to:)` are everywhere; `rotation` (`rotationAroundX`/`Y`/`Z` for `Matrix3`), `inverse` and `isCloseTo` need a
-`Real` scalar, and `Matrix4` answers `inverseAffine` rather than a general inverse.
+`Real` scalar. `Matrix4` answers both a general `inverse` - the adjugate over the determinant, for a matrix of any
+shape - and `inverseAffine`, the short way for the matrices a scene graph is made of.
 
 **The matrix-vector product is `applied(to:)` and not `*`**: a type has one namespace of members, and `multiply` is
 already the composition of two matrices.

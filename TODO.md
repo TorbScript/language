@@ -2098,6 +2098,37 @@ Wenn nicht, was bedeutet, bewirkt es?
     **Zurückgestellt:** Lücke 5/6 (Paket-Importe und Instanzierungen in Stage 0) - Stage 0 ist der Bootstrap, die
     Antwort ist die VM (7.x) bzw. `main.exe test`; Lücke 8 (`Float32`-Arithmetik), 9 (`Array` läuft nirgends - hängt
     an der kleinen Runde und dem Back-End), 10 (ein Trait fordert ein `const` - Kandidat, eigene Entscheidung).
+    - **Erledigt (Runde "generische Zahlen", Zweig `generic-numbers`):**
+      - **Lücke 1** ist zu: `a + b` auf einem generischen Typ erreicht genau die Funktion, die `a.add(b)` erreicht.
+        Der **Operand** entscheidet, nicht das Ziel der Implementierung - das trägt bei einer generischen
+        Implementierung noch einen Parameter. Gate `bootstrap/tests/native/generic-operators.trb`: jeder Operator
+        über `Vector2<Int>`, `<Float>` und `<Fixed>`, jeweils neben der ausgeschriebenen Methode, auch im generischen
+        Rumpf. Dabei mit zu: `==`/`<` auf einem generischen Record hatte für manche Instanzierungen gar keine
+        Auflösung; die Senkung fragt jetzt selbst (`dispatchedOn`), wie sie es für ein Tupel schon tat.
+      - **Lücke 3** ist im Back-End zu: ein `const` eines generischen Typs ist EIN Wert je Typargument, benannt nach
+        den Argumenten, die die Lesestelle entschieden hat. Gate `generic-constants.trb`. In Stage 0 NICHT reparabel
+        (der Interpreter hat keine Typen) - steht als Konformitäts-Abweichung in `docs/BACKEND.md`.
+      - **Die Blankett-`Into`** baut: `extend<Source, Target> Source with Into<Target>` deklariert ihre Parameter
+        selbst, also füllen die Trait-Argumente sie nicht in Deklarationsreihenfolge. Gate
+        `bootstrap/tests/native/binary-only/blanket-into.trb` - binary-only, weil Stage 0 `into()` überhaupt nicht
+        auflösen kann (der Zieltyp steht nirgends in der Nähe des Aufrufs).
+      - **`Segment` -> `Segment2`**, **`Matrix4.inverse`** (allgemein, per Kofaktoren, mit Tests über `Fixed` und
+        `Float` und einer singulären Matrix), **`std/curve`** im Text von `docs/LINEAR.md` Abschnitt 13.
+      - Die `# Open`-Absätze über den Operator sind aus `std/linear` raus; `linear.trb`, `grid-vectors.trb` und die
+        Vektor-Tests schreiben `a + b` (Ausgabe byteweise unverändert).
+    - **NICHT erledigt - Lücke 2 (Zahlliteral im generischen Rumpf) liegt im TYPECHECKER, nicht im Back-End.**
+      Der Prüfer passt das Literal NICHT an den Parameter an: er notiert `Int64` und lässt es durch, wo `Item`
+      erwartet wird - `fn textOf<Item: Numeric>(): Item { "x" }` und `fn boundless<Item>(): Item { 1 }` gehen genauso
+      durch. Die Senkung hat also gar keine Tatsache zum Einsetzen; ihre Hälfte ist fertig (`const x: Float = 1`
+      kompiliert heute). Neu als Punkt 14 in `docs/LINEAR.md` Abschnitt 12. **Sprachfrage für dich:** was ein
+      Ganzzahl-Literal bei einem NICHT-primitiven `Numeric` wie `Fixed` bedeutet. Der Prüfer sieht nur die
+      Deklaration und kann "nur primitive" nicht entscheiden - das kann erst die Monomorphisierung. Vorschlag:
+      der Prüfer passt das Literal an den Parameter an, und das Back-End meldet sauber, wo die Instanz ein Nutzertyp
+      ist, bis die Sprache dafür eine Antwort hat (ein Literal-Trait `fn from(value: Int): Self` in `Numeric` wäre
+      eine; dann hieße `1` in einem generischen Rumpf `Scalar.from(1)`).
+    - **Daneben gefunden** (neu in `docs/LINEAR.md` Abschnitt 12 als 15 und 16): zwei `From`-Implementierungen an
+      EINEM Typ kollidieren im Back-End im gemangelten Namen (`Path.from` trägt keine eigenen Argumente), und der
+      Prüfer notiert für `==` auf manchen Instanzierungen eines generischen Typs kein Mitglied.
 
 - (`Default`, 2026-09-21) **Entschieden (mit dir besprochen, "Ok passt"): kein `default`-Schlüsselwort, kein
   `Default`-Trait.** Steht im Decision-Log von CONCEPT. C#s `default(T)` ist genullter Speicher am Konstruktor vorbei
@@ -2466,3 +2497,28 @@ Wenn nicht, was bedeutet, bewirkt es?
     neben dem Alias `type Meters = Float` nur am Anfangsbuchstaben hinge; und der Platz für verschachtelte oder
     assoziierte Typen wäre damit belegt. Ein späterer Wechsel ist EIN Wort an einer festen Stelle und damit eine
     `canon`-Regel - die Umstellungsrunde legt das Schlüsselwort deshalb in beiden Parsern an genau einer Stelle ab.
+
+- (Zahlliteral im generischen Rumpf, 2026-09-22) **Befund der Back-End-Runde:** nicht das Lowering fehlt, sondern
+  der Checker passt das Literal gar nicht an den Parameter an (`integerLiteralType` fällt bei einem Typparameter auf
+  `Int64` zurück) - und akzeptiert es dann trotzdem gegen `Item`. Dahinter steckt das breiteste der Soundness-Löcher:
+  **ein Typparameter nimmt heute einen Wert JEDES Typs** (`fn textOf<Item: Numeric>(): Item { "x" }` prüft grün, erst
+  der IR-Verifier fängt es). Ist an die laufende Checker-Runde gegeben, zusammen mit `Into<Path>`, das einen `Path`
+  annimmt, obwohl `From` nicht reflexiv ist.
+  - **Entschieden (technisch):** ein Zahlliteral, dessen erwarteter Typ ein Typparameter mit `Numeric`-Bound ist
+    (Gleitkomma: `Real`), passt sich an den PARAMETER an; der Checker zeichnet den Parameter auf, das Lowering
+    setzt ein. Für eine primitive Instanzierung ist das das Literal selbst. Für einen Nutzertyp wie `Fixed` heißt
+    `1` dann `Scalar.from(1)`: `Numeric` fordert dafür `From<Int64>`, `Real` zusätzlich `From<Float64>` - das ist
+    dasselbe Idiom, das CONCEPT bei `sum` schon zeigt (`where Item: Add & From<Int>`), also kein Literal-Trait und
+    keine neue Sprachregel. Ohne solchen Bound ist `1` ein `Int64` und passt NICHT auf `Item`.
+  - **Wird gelöst:** Checker-Hälfte in der laufenden Checker-Runde (falls noch Platz, sonst in der nächsten),
+    Lowering-Hälfte (`Scalar.from(literal)`, konstant gefaltet) danach; dann fallen `unit`/`halved`/`doubled`/`zeroOf`
+    und `examples/generic-scalar` baut. Dazu aus derselben Runde: zwei `From`-Implementierungen an einem Typ ergeben
+    EIN C-Symbol (`ir/mangle.trb` muss die Argumente der Implementierung tragen) - LINEAR Punkt 16.
+
+- (Lesbarkeit generischer `extend`-Köpfe, 2026-09-22) **Anlass (Nutzer):**
+  `extend<Value, Target: From<Iterable<Value>>> Option<Target> with From<Iterable<Value?>>` ist schwer lesbar (Rust
+  leidet an derselben Stelle). Besprochen: (1) Konvention + `canon`-Regel "ein Bound mit eigenen Typargumenten steht
+  im `where` auf eigener Zeile" - heute schon legal; (2) Swifts Regel: im `extend` eines generischen Typs sind dessen
+  eigene Parameter unter ihren deklarierten Namen im Scope (`extend Option with Show where Value: Show`), Preis: die
+  Parameternamen werden API. **Zurückgestellt (Nutzer: "lassen wir erst mal so wie es ist")** - beides bleibt als
+  Kandidat notiert, nichts wird umgestellt.

@@ -3636,6 +3636,59 @@ runs on the one target whose own code page was never going to render a `String`'
 `runtime/tests/platform_test.c` is what holds the two conversions and the one threshold; `runtime/tests/console_test.c`
 holds the console's own chunk boundary and its fallback, the parts of this that do not need a console to test.
 
+### What generic numbers decided: the value in hand says which instance
+
+A library that is generic over its number type - `std/linear`, `std/geometry` - asks the lowering four questions, and
+all four have one answer: **the type the call site really has is what names the instance**, and a declaration that
+still holds a parameter names none.
+
+**An operator is dispatched on its operand and not on the implementation that declares it.** `a + b` is `Add.add`, and
+the dispatch has two candidates for "which type is this reached on": the target of the implementation the checker
+resolved, and the written left operand. For an ordinary `extend Int64 with Add` they are the same type; for
+`extend<Scalar: Signed> Vector2<Scalar> with Negate` the target is `Vector2<Scalar>`, which no instance can be built
+from, while the operand is `Vector2<Int64>` with the enclosing instance's arguments already in it. So `operandTypeOf`
+in `ir/lower/call.trb` prefers the operand wherever the target is not closed, and `a + b` reaches exactly the function
+`a.add(b)` reaches - inside a generic body as well, where the scalar is the caller's parameter. `generic-operators.trb`
+is the gate. **The VM needs nothing new for it**: the instance set is the one the method form already produced.
+
+**`==` and `<` on a record go through the implementation the language generates.** The checker records a *member* for an
+operator only where `lookupMember` finds a declaration, and a generated `equals` is not one - the same hole a tuple's
+structural comparison has always been in. `structuralOperator` therefore asks the question a `for` asks about
+`iterator` (`dispatchedOn`) for a nominal operand as well as for a tuple, which reaches the body `ir/lower/derive.trb`
+writes. Whether the checker should record the member instead is a question of the checker; the lowering answers the
+same way either way.
+
+**A `const` of a generic type is one value per type argument.** `Box<Int>.empty` and `Box<String>.empty` are one
+declaration and two values, whose lists hold elements of two different types. The caches of `ir/constant.trb` and of
+the immortal cell in `ir/lower/expression.trb` are therefore keyed by the **instance** - the declaration plus the
+arguments the read decided, exactly as a function instance is keyed - the name of the static and of the cell is built
+from those arguments, and the initializer is lowered under the substitution they make. `Resolution.Constant` carries
+the type the constant was reached on, which is where the arguments come from; a read that leaves one open is a clean
+finding and not an unsubstituted parameter reaching the back end. `generic-constants.trb` is the gate.
+
+**The blanket `Into` builds.** `extend<Source, Target> Source with Into<Target> where Target: From<Source>` declares its
+own parameters, so the trait's arguments do not fill them in declaration order: the receiver decides `Source`, and
+`Target` comes out of matching the implementation's `with` clause against the bound the call resolved.
+`memberMappingOf` in `ir/witness.trb` therefore asks the parameter whether it is the `Self` of a trait, which is
+declared in no source, or one an `extend` wrote down, and matches the capability against the bound for the second.
+Filling them in the trait's order instead binds `Source` to the trait's argument and leaves `Target` with nothing, and
+an instance cannot be built from that. The inner witness the `where` asks for needs no entry of its own: once the two
+are bound, the body `Target.from self` is the ordinary static call `Path.from(text)`. The gate is
+`binary-only/blanket-into.trb`, for the reason below.
+
+**Two conformance divergences this records**, both of them stage 0's and both of them closing with the VM:
+
+- **Stage 0 cannot resolve `into()` at all.** The target type of the conversion stands nowhere near the call - a
+  `String` value in hand says nothing about whether a `Path` or something else is wanted - and an untyped interpreter
+  has no other source for it, so it answers ``the String "a/b.txt" has no method `into` ``. It is not a bug that can be
+  fixed in the interpreter; it closes when the VM runs the compiler's own instances.
+  `bootstrap/tests/native/binary-only/blanket-into.trb` pins the compiled side.
+- **Stage 0 keeps one cell per `const` declaration and not one per type argument.** It has no types, so
+  `Box<Int>.empty` and `Box<String>.empty` are one value there - which is the same cause as `extend Vector2<Float>` and
+  `extend Vector2<Int>` being indistinguishable for it (docs/LINEAR.md, section 12). `generic-constants.trb` stays a
+  program both implementations run because the value it reads is empty either way, and `std/linear` keeps every
+  instantiation's constants in a concrete `extend` for the same reason.
+
 ---
 
 ## 7. Risks and spec gaps

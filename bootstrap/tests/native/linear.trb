@@ -8,8 +8,9 @@
  * arithmetic, so the interpreter and the binary have to agree on all of them, down to the last part - which is exactly
  * the promise the type exists for.
  *
- * The trait methods are written out (`a.add(b)` rather than `a + b`) because a compiled program cannot lower an operator
- * on a generic type yet. The modules are imported by path, because the interpreter resolves no package import.
+ * The arithmetic is written as the operators it is, which is a call of the same trait member: `generic-operators.trb`
+ * is what pins the two to each other. The modules are imported by path, because the interpreter resolves no package
+ * import.
  *
  * Nothing here calls a trigonometric function on a `Float`: those live in `std/number`'s implementation of `Real`, which
  * the interpreter does not load at all - so `Fixed` is what the angles are measured in, and it is the implementor whose
@@ -43,8 +44,8 @@ fn deep(x: Int, y: Int, z: Int): Vector3<Fixed> {
 
 // The float vector: arithmetic, the dot product and the square root, all of them exactly specified by IEEE-754
 const step = Vector2 3.0, 4.0
-print "{step} {step.add(step)} {step.subtract(Vector2(1.0, 1.0))} {step.multiply(2.0)}"
-print "{step.length()} {step.lengthSquared()} {step.normalized()} {step.negate()}"
+print "{step} {step + step} {step - Vector2(1.0, 1.0)} {step * 2.0}"
+print "{step.length()} {step.lengthSquared()} {step.normalized()} {-step}"
 print "{step.dot(step)} {step.cross(step.perpendicular())} {step.absolute()}"
 print "{step.min(Vector2(1.0, 9.0))} {step.max(Vector2(1.0, 9.0))}"
 print "{step.interpolated(toward: Vector2(5.0, 6.0), by: 0.5)} {step.withLength(10.0)}"
@@ -60,7 +61,7 @@ print "{wide} {wide.projected()} {wide.toVector3()} {wide.lengthSquared()}"
 // The deterministic scalar, digit for digit
 print "{exact(3)} {exact(3).squareRoot()} {Fixed.pi} {Fixed.tau} {Fixed.step}"
 print "{Fixed.tryFrom("0.1")} {Fixed.tryFrom("-2.25")} {Fixed.tryFrom("nonsense")}"
-print "{exact(3).multiply(Fixed.tryFrom("0.5").expect("half parses"))} {exact(7).divide(exact(2))}"
+print "{exact(3) * Fixed.tryFrom("0.5").expect("half parses")} {exact(7) / exact(2)}"
 print "{exact(-5).floor()} {exact(-5).absolute()} {Fixed.approximating(1.25)}"
 
 const quarter = Angle.degrees exact(90)
@@ -73,7 +74,7 @@ print "{turned} {flat(1, 1).angle().toDegrees()} {flat(1, 0).angleTo(flat(0, 1))
 // The matrices: a column is where a basis vector lands, and a composition is applied right to left
 const scale = Matrix2.scaling by: flat(2, 3)
 print "{scale} {scale.determinant()} {scale.applied(to: flat(1, 1))}"
-print "{scale.transposed()} {scale.multiply(scale).applied(to: flat(1, 1))} {scale.inverse()}"
+print "{scale.transposed()} {(scale * scale).applied(to: flat(1, 1))} {scale.inverse()}"
 print Matrix2.rotation(by: quarter).applied(to: flat(1, 0))
 
 const move = Matrix3.affine Matrix2<Fixed>.identity, by: flat(3, 4)
@@ -85,11 +86,11 @@ print Matrix3.scaling(by: deep(2, 4, 8)).inverse()
 
 const shift = Matrix4.translation of: deep(1, 2, 3)
 print "{shift.transformedPoint(deep(0, 0, 0))} {shift.transformedDirection(deep(1, 0, 0))}"
-print "{shift.multiply(shift).translationPart()} {shift.row(0)} {shift.inverseAffine()}"
+print "{(shift * shift).translationPart()} {shift.row(0)} {shift.inverseAffine()}"
 
 // The quaternion: the same rotation as a matrix, out of four numbers
 const spin = Quaternion.rotation around: deep(0, 0, 1), by: quarter
 print "{spin} {spin.applied(to: deep(1, 0, 0))} {spin.lengthSquared()}"
-print "{spin.multiply(spin).applied(to: deep(1, 0, 0))} {spin.conjugate().applied(to: deep(0, 1, 0))}"
+print "{(spin * spin).applied(to: deep(1, 0, 0))} {spin.conjugate().applied(to: deep(0, 1, 0))}"
 print spin.toMatrix3().applied(to: deep(1, 0, 0))
 print Quaternion<Fixed>.identity.interpolated(toward: spin, by: Fixed.one)

@@ -1,0 +1,75 @@
+/**
+ * An operator on a generic type is the member of its trait, for every scalar the type was instantiated with.
+ *
+ * `a + b` is `Add.add`, and which `add` runs is decided by the **operand**: `extend<Scalar: Signed> Vector2<Scalar>
+ * with Negate` names `Vector2<Scalar>` as its target, which is no type a binary can hold, while the value in front of
+ * the operator says `Scalar = Int64`. So the operator form and the written-out method form of one call are the same
+ * function, and the program below says so for `Int`, for `Float` and for `Fixed` - including inside a generic body,
+ * where the scalar is still a parameter of the caller.
+ *
+ * The four constants of `Vector2` are deliberately not used: the interpreter cannot tell two instantiations of one
+ * `extend` apart, which is a gap of stage 0 and has nothing to do with operators.
+ */
+
+use Process from "std/process"
+use Numeric, Signed from "std/number"
+use Fixed from "../../../std/linear/src/fixed"
+use Vector2 from "../../../std/linear/src/vector2"
+
+/** A deterministic scalar from a whole number. */
+fn exact(value: Int): Fixed {
+  Fixed.from value
+}
+
+/** Twice the vector, written as the operator inside a body whose scalar is a parameter. */
+fn doubled<Scalar: Numeric>(value: Vector2<Scalar>): Vector2<Scalar> {
+  value + value
+}
+
+/** The difference the other way round: a unary operator on a generic body's parameter. */
+fn back<Scalar: Signed>(first: Vector2<Scalar>, second: Vector2<Scalar>): Vector2<Scalar> {
+  -(first - second)
+}
+
+/** Whether every operator answers exactly what the method of its trait answers. */
+fn agrees<Scalar: Signed>(first: Vector2<Scalar>, second: Vector2<Scalar>, factor: Scalar): Bool {
+  first + second == first.add(second)
+    && first - second == first.subtract(second)
+    && first * factor == first.multiply(factor)
+    && first / factor == first.divide(factor)
+    && -first == first.negate()
+}
+
+// The grid vector: every operator, and the method form of each beside it
+const tile = Vector2 6, 8
+const step = Vector2 2, 4
+print "{tile + step} {tile - step} {tile * 2} {tile / 2} {-tile}"
+print "{tile.add(step)} {tile.subtract(step)} {tile.multiply(2)} {tile.divide(2)} {tile.negate()}"
+print "{tile == Vector2(6, 8)} {tile == step} {doubled(tile)} {back(tile, step)}"
+
+// The float vector
+const point = Vector2 6.0, 8.0
+const move = Vector2 2.0, 4.0
+print "{point + move} {point - move} {point * 2.0} {point / 2.0} {-point}"
+print "{point.add(move)} {point.subtract(move)} {point.multiply(2.0)} {point.divide(2.0)} {point.negate()}"
+print "{point == Vector2(6.0, 8.0)} {point == move} {doubled(point)} {back(point, move)}"
+
+// The deterministic vector
+const spot = Vector2 exact(6), exact(8)
+const shift = Vector2 exact(2), exact(4)
+print "{spot + shift} {spot - shift} {spot * exact(2)} {spot / exact(2)} {-spot}"
+print "{spot.add(shift)} {spot.subtract(shift)} {spot.multiply(exact(2))} {spot.divide(exact(2))} {spot.negate()}"
+print "{spot == Vector2(exact(6), exact(8))} {spot == shift} {doubled(spot)} {back(spot, shift)}"
+
+/** How many of the three scalars answer the same for the operator and for the method. */
+fn agreements(): Int {
+  var total = 0
+  for one in [agrees(tile, step, 2), agrees(point, move, 2.0), agrees(spot, shift, exact(2))] {
+    if one {
+      total = total + 1
+    }
+  }
+  total
+}
+
+Process.exit(3 - agreements())

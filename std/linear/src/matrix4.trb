@@ -29,11 +29,7 @@ use Matrix3 from "./matrix3"
  *
  * # Open
  *
- * - The operators are declared and type check; a compiled program writes `a.multiply(b)` until a back end lowers an
- *   operator on a generic type.
  * - [Matrix4.identity] needs its scalar written out: `Matrix4<Float>.identity`.
- * - There is no general inverse, only [Matrix4.inverseAffine]. A full 4x4 inverse is sixteen cofactors and is only
- *   needed for a matrix that is not affine, which in practice is a projection - and there is no projection here.
  *
  * # Related
  *
@@ -143,6 +139,78 @@ public type Matrix4<Scalar: Numeric = Float> with Add, Subtract, Multiply {
     const turned = applied to: Vector4.of(direction, zeroOf(direction.x))
     turned.toVector3()
   }
+
+  /**
+   * The factor by which the transformation scales a volume of the homogeneous space, negative where it turns space
+   * inside out and zero exactly where it flattens one - which is where [Matrix4.inverse] answers `None`.
+   *
+   *     print Matrix4.scaling(by: Vector3(2.0, 3.0, 4.0)).determinant()
+   */
+  fn determinant(self): Scalar {
+    minorsOf(self).determinant()
+  }
+}
+
+/**
+ * The twelve two-by-two determinants that a four-by-four determinant and its adjugate are both made of: six from the
+ * first two columns and six from the last two. Each name says which two rows its block is taken from, so `firstXY` is
+ * rows `x` and `y` of the first two columns and `lastZW` is rows `z` and `w` of the last two.
+ *
+ * They are one value because the determinant is the first thing an inverse asks for, and asking the matrix separately
+ * would do half of the work twice.
+ */
+type Minors<Scalar: Numeric> {
+  /** Rows `x` and `y` of the first two columns. */
+  firstXY: Scalar
+  /** Rows `x` and `z` of the first two columns. */
+  firstXZ: Scalar
+  /** Rows `x` and `w` of the first two columns. */
+  firstXW: Scalar
+  /** Rows `y` and `z` of the first two columns. */
+  firstYZ: Scalar
+  /** Rows `y` and `w` of the first two columns. */
+  firstYW: Scalar
+  /** Rows `z` and `w` of the first two columns. */
+  firstZW: Scalar
+  /** Rows `x` and `y` of the last two columns. */
+  lastXY: Scalar
+  /** Rows `x` and `z` of the last two columns. */
+  lastXZ: Scalar
+  /** Rows `x` and `w` of the last two columns. */
+  lastXW: Scalar
+  /** Rows `y` and `z` of the last two columns. */
+  lastYZ: Scalar
+  /** Rows `y` and `w` of the last two columns. */
+  lastYW: Scalar
+  /** Rows `z` and `w` of the last two columns. */
+  lastZW: Scalar
+
+  /** The determinant of the whole matrix: each block of the first two columns against its complement in the last two. */
+  fn determinant(self): Scalar {
+    firstXY * lastZW - firstXZ * lastYW + firstXW * lastYZ + firstYZ * lastXW - firstYW * lastXZ + firstZW * lastXY
+  }
+}
+
+/** The twelve blocks of one matrix, in the order the type declares them. */
+fn minorsOf<Scalar: Numeric>(matrix: Matrix4<Scalar>): Minors<Scalar> {
+  const first = matrix.xAxis
+  const second = matrix.yAxis
+  const third = matrix.zAxis
+  const fourth = matrix.wAxis
+  Minors(
+    first.x * second.y - second.x * first.y,
+    first.x * second.z - second.x * first.z,
+    first.x * second.w - second.x * first.w,
+    first.y * second.z - second.y * first.z,
+    first.y * second.w - second.y * first.w,
+    first.z * second.w - second.z * first.w,
+    third.x * fourth.y - fourth.x * third.y,
+    third.x * fourth.z - fourth.x * third.z,
+    third.x * fourth.w - fourth.x * third.w,
+    third.y * fourth.z - fourth.y * third.z,
+    third.y * fourth.w - fourth.y * third.w,
+    third.z * fourth.w - fourth.z * third.w,
+  )
 }
 
 /** Every cell turned around. */
@@ -214,6 +282,60 @@ extend<Scalar: Real> Matrix4<Scalar> {
       }
       None => None
     }
+  }
+
+  /**
+   * The transformation that undoes this one, for a matrix of **any** shape: the adjugate - the transpose of the
+   * sixteen cofactors - divided by the determinant. `None` where the determinant is zero, which is exactly where the
+   * transformation flattens space and nothing can undo it.
+   *
+   * [Matrix4.inverseAffine] is the short way for the matrices a scene graph is made of, and the two answer the same
+   * transformation for one whose bottom row is `(0, 0, 0, 1)`. Reach for this one where the bottom row is not that -
+   * which in practice means a projection.
+   *
+   *     const move = Matrix4.translation of: Vector3(1.0, 2.0, 3.0)
+   *     print move.inverse()?.translationPart()
+   */
+  fn inverse(self): Matrix4<Scalar>? {
+    const blocks = minorsOf self
+    const scale = blocks.determinant()
+    if scale == zeroOf(scale) {
+      return None
+    }
+    const first = xAxis
+    const second = yAxis
+    const third = zAxis
+    const fourth = wAxis
+    const undoneX = Vector4(
+      second.y * blocks.lastZW - second.z * blocks.lastYW + second.w * blocks.lastYZ,
+      first.z * blocks.lastYW - first.y * blocks.lastZW - first.w * blocks.lastYZ,
+      fourth.y * blocks.firstZW - fourth.z * blocks.firstYW + fourth.w * blocks.firstYZ,
+      third.z * blocks.firstYW - third.y * blocks.firstZW - third.w * blocks.firstYZ,
+    )
+    const undoneY = Vector4(
+      second.z * blocks.lastXW - second.x * blocks.lastZW - second.w * blocks.lastXZ,
+      first.x * blocks.lastZW - first.z * blocks.lastXW + first.w * blocks.lastXZ,
+      fourth.z * blocks.firstXW - fourth.x * blocks.firstZW - fourth.w * blocks.firstXZ,
+      third.x * blocks.firstZW - third.z * blocks.firstXW + third.w * blocks.firstXZ,
+    )
+    const undoneZ = Vector4(
+      second.x * blocks.lastYW - second.y * blocks.lastXW + second.w * blocks.lastXY,
+      first.y * blocks.lastXW - first.x * blocks.lastYW - first.w * blocks.lastXY,
+      fourth.x * blocks.firstYW - fourth.y * blocks.firstXW + fourth.w * blocks.firstXY,
+      third.y * blocks.firstXW - third.x * blocks.firstYW - third.w * blocks.firstXY,
+    )
+    const undoneW = Vector4(
+      second.y * blocks.lastXZ - second.x * blocks.lastYZ - second.z * blocks.lastXY,
+      first.x * blocks.lastYZ - first.y * blocks.lastXZ + first.z * blocks.lastXY,
+      fourth.y * blocks.firstXZ - fourth.x * blocks.firstYZ - fourth.z * blocks.firstXY,
+      third.x * blocks.firstYZ - third.y * blocks.firstXZ + third.z * blocks.firstXY,
+    )
+    Some(Matrix4(
+      undoneX.divide(scale),
+      undoneY.divide(scale),
+      undoneZ.divide(scale),
+      undoneW.divide(scale),
+    ))
   }
 
   /** Whether every cell is within `tolerance` of the other matrix's. */

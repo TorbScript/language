@@ -482,10 +482,16 @@ public fn memberMappingOf(
     }
   }
   if const .Parameter(parameter) = lowering.checker.types.form(owner) {
+    mapping.set parameter, subject
+    // A **blanket** implementation declares the parameter itself, and then its own list and the trait's are two
+    // different lists (`addBlanketArguments`)
+    if isDeclaredParameter(lowering, parameter) {
+      addBlanketArguments lowering, mapping, signature.generics, subject, bound
+      return mapping
+    }
     // A member of the trait itself: `Self` is the target, and the trait's own arguments come out of the trait that
     // *declares* the member for that target - the bound a call resolved may be a subtrait, whose arguments say nothing
     // about this one (`Int64 with Signed` is what provides `TryFrom<String, NumberParseError>`)
-    mapping.set parameter, subject
     const applied = appliedArgumentsOf lowering, parameter, subject, bound
     addTraitArguments lowering, mapping, signature.generics, applied
     return mapping
@@ -514,6 +520,47 @@ fn appliedArgumentsOf(
     .Nominal(_, given) => given
     _ => []
   }
+}
+
+/**
+ * Whether the parameter an owner is stands in a source: the `Self` of a trait is declared nowhere and everything else
+ * is written in a `fn`, a `type`, a `trait` or an `extend`.
+ */
+fn isDeclaredParameter(var lowering: Lowering, parameter: ParameterId): Bool {
+  lowering.checker.types.parameter(parameter).symbol.isSome()
+}
+
+/**
+ * A member a **blanket** implementation owns:
+ * `extend<Source, Target> Source with Into<Target> where Target: From<Source>` is the one the language ships. Its
+ * parameters are its own, so the trait's arguments do not fill them in declaration order: the receiver decides
+ * `Source`, and `Target` comes out of matching the implementation's `with` clause against the bound the call resolved -
+ * `Into<Target>` against `Into<Path>`. Filling them in the trait's order instead binds `Source` to `Path` and leaves
+ * `Target` with nothing, and no instance can be built from that.
+ *
+ * The inner witness the `where` asks for needs no entry of its own: once `Target` is `Path` and `Source` is `String`,
+ * the body `Target.from self` is the ordinary static call `Path.from(text)`.
+ */
+fn addBlanketArguments(
+  var lowering: Lowering,
+  var mapping: Map<ParameterId, TypeId>,
+  generics: List<ParameterId>,
+  subject: TypeId,
+  bound: TypeId,
+) {
+  const implementation = match witnessFor(lowering.checker, subject, bound) {
+    .Implementation(found, _, _) => found
+    _ => {
+      return
+    }
+  }
+  const capability = match lowering.checker.implementations.at(implementation).capability {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const _ = matchTypePattern lowering.checker, capability, bound, generics, mapping
 }
 
 /** `trait Iterable<Item>`: the arguments of the trait fill its own parameters, in declaration order. */

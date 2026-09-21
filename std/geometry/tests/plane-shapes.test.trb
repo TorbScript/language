@@ -11,7 +11,7 @@ use Fixed from "../../linear/src/fixed"
 use Vector2 from "../../linear/src/vector2"
 use Rectangle from "../src/rectangle"
 use Circle from "../src/circle"
-use Segment from "../src/segment"
+use Segment2 from "../src/segment2"
 use Ray2 from "../src/ray2"
 use Triangle2 from "../src/triangle2"
 use Polygon from "../src/polygon"
@@ -181,9 +181,9 @@ group "Circle" {
   }
 }
 
-group "Segment" {
+group "Segment2" {
   test "the step, the side and the bounds" {
-    const wall = Segment Vector2(0, 0), Vector2(4, 0)
+    const wall = Segment2 Vector2(0, 0), Vector2(4, 0)
     assert(wall.step() == Vector2(4, 0))
     assert(wall.sideOf(Vector2(2, 1)) > 0)
     assert(wall.sideOf(Vector2(2, -1)) < 0)
@@ -193,29 +193,29 @@ group "Segment" {
   }
 
   test "two segments that cross, and two that do not" {
-    const across = Segment Vector2(0, -1), Vector2(0, 1)
-    assert Segment(Vector2(-1, 0), Vector2(1, 0)).intersects(across)
-    assert(!Segment(Vector2(2, 0), Vector2(4, 0)).intersects(across))
+    const across = Segment2 Vector2(0, -1), Vector2(0, 1)
+    assert Segment2(Vector2(-1, 0), Vector2(1, 0)).intersects(across)
+    assert(!Segment2(Vector2(2, 0), Vector2(4, 0)).intersects(across))
   }
 
   test "two segments on one line cross only where they overlap" {
-    const first = Segment Vector2(0, 0), Vector2(4, 0)
-    assert first.intersects(Segment(Vector2(2, 0), Vector2(6, 0)))
-    assert(!first.intersects(Segment(Vector2(5, 0), Vector2(6, 0))))
+    const first = Segment2 Vector2(0, 0), Vector2(4, 0)
+    assert first.intersects(Segment2(Vector2(2, 0), Vector2(6, 0)))
+    assert(!first.intersects(Segment2(Vector2(5, 0), Vector2(6, 0))))
   }
 
   test "the crossing point, and none for two parallel segments" {
-    const across = Segment point(0, -1), point(0, 1)
-    const along = Segment point(-1, 0), point(1, 0)
+    const across = Segment2 point(0, -1), point(0, 1)
+    const along = Segment2 point(-1, 0), point(1, 0)
     match along.intersection(across) {
       Some(found) => assert found.isCloseTo(point(0, 0), tolerance: nearly)
       None => assert false
     }
-    assert(along.intersection(Segment(point(-1, 1), point(1, 1))) == None)
+    assert(along.intersection(Segment2(point(-1, 1), point(1, 1))) == None)
   }
 
   test "lengths, the midpoint and the nearest point" {
-    const wall = Segment point(0, 0), point(4, 0)
+    const wall = Segment2 point(0, 0), point(4, 0)
     assert(wall.length() == exact(4))
     assert(wall.center() == point(2, 0))
     assert(wall.at(Fixed.zero) == point(0, 0))
@@ -261,11 +261,11 @@ group "Ray2" {
 
   test "a ray hits a segment across it" {
     const look = Ray2 point(0, 0), point(1, 0)
-    match look.hitsSegment(Segment(point(3, -1), point(3, 1))) {
+    match look.hitsSegment(Segment2(point(3, -1), point(3, 1))) {
       Some(found) => assert found.isCloseTo(exact(3), tolerance: nearly)
       None => assert false
     }
-    assert(look.hitsSegment(Segment(point(-3, -1), point(-3, 1))) == None)
+    assert(look.hitsSegment(Segment2(point(-3, -1), point(-3, 1))) == None)
   }
 
   test "a ray towards a point has a direction of length one, and at reads back" {

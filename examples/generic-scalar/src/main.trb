@@ -1,12 +1,17 @@
 /**
- * The four things a library that is generic over a number type cannot do in a compiled program, each in as few lines as
- * it takes. `torb check .` answers "no problems"; `torb build .` names the **first** of them and stops, so the next one
- * becomes visible when the line above it is deleted. `docs/LINEAR.md` section 12 lists all four with the smallest change
- * that would close each, and `std/linear` is written around them.
+ * What a library that is generic over a number type runs into, in as few lines as it takes. `torb check .` answers
+ * "no problems"; `torb build .` names what is left and stops. `docs/LINEAR.md` section 12 is the list this comes from,
+ * and `std/linear` is written around it.
  *
- * The interpreter runs the whole file, and two of its four lines of output are wrong: `Pair.nothing()` answers
- * `Pair(value: 0)` for a `Float` wrapper, and `Pair<Float>.zero` would answer the first-declared instantiation's value
- * whichever one was asked for. The interpreter has no types, which is the same cause seen from the other side.
+ * **The operator and the constant are closed** and stay here as the lines that would say so if they came back:
+ * `one + one` reaches the very function `one.add(one)` reaches, and a `const` of a generic type is one value per type
+ * argument. What is left is the **numeric literal in a generic body**: the checker types `1` as an `Int64` and accepts
+ * it where the type parameter is expected, so the back end is handed a program whose types do not line up and its
+ * verifier says so. Section 12, items 2 and 14, are the two halves of that.
+ *
+ * The interpreter runs the whole file, and one of its four lines of output is wrong: `Pair<Float>.nothing()` answers
+ * `Pair(value: 0)` because an untyped interpreter has nothing to adapt the literal to either - the same cause seen
+ * from the other side.
  */
 
 use Numeric from "std/number"
@@ -30,15 +35,16 @@ public type Pair<Item: Numeric = Float> with Add {
   }
 }
 
-/** The constant this wrapper is asked for most often, and the one no back end instantiates per type argument. */
+/** The constant this wrapper is asked for most often. */
 extend Pair<Float> {
   /** The wrapper of nothing. */
   const zero: Pair<Float> = Pair 0.0
 }
 
 /**
- * A literal in a body that is generic over its number type. The checker adapts it to the parameter; the back end keeps
- * the type it had before the instance was built, and reports it for the `Float64` instance.
+ * A literal in a body that is generic over its number type. The checker types the literal `Int64` and lets it pass
+ * where `Item` is expected; the back end then has no type to substitute and reports the mismatch for the `Float64`
+ * instance.
  */
 public fn oneOf<Item: Numeric>(): Item {
   1
@@ -49,24 +55,33 @@ public fn doubled<Item: Numeric>(value: Item): Item {
   value * 2
 }
 
-// 1. An operator on a generic type: `not supported by the back end yet: a generic function or a member of a generic
-//    type`. The method form of the very same call compiles, which is why `std/linear`'s gate programs are written in it.
-//    This is the one the build stops at; delete the two lines below it to see the next
+/** A box whose constant needs no literal, which is the half of a generic `const` that a binary already builds. */
+public type Box<Item> {
+  /** What is in it. */
+  items: List<Item>
+
+  /** The empty box, one value per item type. */
+  const empty: Box<Item> = Box([])
+}
+
+// An operator on a generic type, and the method form of the same call beside it: one function, either way
 const one = Pair 1
 const sum = one + one
 print "{sum} {one.add(one)}"
 
-// 2. A numeric literal in a generic body: `the function returns Float64 and return carries Int64`, and
-//    `multiply.f64 works on Float64, and %1 is Int64`
+// A `const` of a generic type, once per type argument
+print "{Box<Int>.empty.items} {Box<String>.empty.items}"
+
+// A numeric literal in a generic body: `the function returns Float64 and return carries Int64`, and
+// `multiply.f64 works on Float64, and %1 is Int64`. This is what the build stops at
 const whole: Int = oneOf()
 const fractional: Float = oneOf()
 print "{whole} {fractional} {doubled(3)} {doubled(1.5)}"
 
-// 3. A static member of a generic type whose body holds a literal: the same cause as 2, one level in
+// The same one level in: a static member of a generic type whose body holds a literal
 const empty: Pair<Float> = Pair.nothing()
 print empty
 
-// 4. A constant of a concrete `extend` of a generic type: `Pair.zero` does not resolve at all without the type argument,
-//    although the declaration says `Item: Numeric = Float` - and the interpreter cannot tell two instantiations of one
-//    `extend` apart, so it reads whichever was declared first
+// A constant of a concrete `extend` of a generic type. It needs the type argument written out, although the
+// declaration says `Item: Numeric = Float`, because a bare type name does not fall back to the declared default
 print Pair<Float>.zero
