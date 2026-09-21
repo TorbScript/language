@@ -3115,3 +3115,13 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Wird gelöst (Checker-Folgerunde):** der Checker erzwingt die `await()`-Regel nicht - das alte Snippet lief als
     `trb check` durch. Regel: `await()` nur in Task-Funktion, `spawn`-Closure, Top-Level; sonst Fehler mit Hinweis
     auf `Task.all` / `Task.map`.
+- (Kapsel - Sichtbarkeit des Konstruktors, 2026-09-22) Frage des Nutzers zu `std/path`: warum `storedRoot` + `root()`
+  statt öffentlicher Felder, und kann man `Path` nicht einfach von überall konstruieren?
+  - **Antwort:** nein - ein privates Feld kann von außen weder an den Konstruktor noch an `copy` übergeben noch
+    gelesen werden (drei Meldungen, per Probe bestätigt); ein Typ mit privatem Feld ohne Default ist von außen nicht
+    instanziierbar. Die Felder sind privat, weil sonst `Path(root: None, components: ["a/b", ""])` die Invariante
+    des Parsers umgeht.
+  - **Entschieden (Nutzer): bleibt so**, "eigentlich ein sauberes Design". **Zurückgestellt:** mein Vorschlag
+    `private constructor` (eine Rumpfzeile ohne Logik: öffentliche, lesbare Felder, aber Konstruktor, `copy` und
+    Feldzuweisung nur im Typ selbst; die Kapsel-Regel hinge dann an dieser Zeile). Wieder aufnehmen, falls die
+    Zugriffsmethoden-Boilerplate in der Praxis stört.
