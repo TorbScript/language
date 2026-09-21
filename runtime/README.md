@@ -144,6 +144,15 @@ no release, no `Close`, no destructor (decided gap 9). The message is rendered i
 so a panic still works when the heap is exhausted. `_exit` is used where it exists; where it does not, `exit` is the
 same thing because the runtime registers no `atexit` handler.
 
+**Console output on Windows goes through `WriteConsoleW`, only where the target is a live console.** `print`,
+`printError` and `readLine` write and read raw UTF-8 bytes everywhere else, exactly as before; where the standard
+handle is a real console (`GetConsoleMode`, asked once per stream and cached), the text crosses to UTF-16 through
+`torb_platform_wide`/`torb_platform_utf8` and is written or read with `WriteConsoleW`/`ReadConsoleW` instead, because
+the console's own code page - not `SetConsoleOutputCP`, which is the console's own setting and would outlive this
+process - is what a byte-for-byte write would otherwise be at the mercy of (`docs/BACKEND.md`, "What the boundary to
+the operating system decided"). A pipe or a file is never a console, so the conformance suite's byte comparison never
+takes this path.
+
 **Overflow.** Checked in every profile, because it is semantics and not a diagnostic. The 64 bit operations use
 `__builtin_*_overflow` where it exists and a portable bit test otherwise, selected by `TORB_HAS_OVERFLOW_BUILTINS`,
 so MSVC works. The narrow widths compute in 64 bits and check the range, which is exact and needs no builtin.
@@ -225,3 +234,8 @@ file - which an OS that locks open files (Windows) would refuse if the handle we
   interpreted. Two consequences of the difference, both on 5.14's list: a program that cannot be started at all is a
   **failure** on Windows (what `std/process` promises) and the shell's own exit code on POSIX, and `fork` plus `execvp`
   is what would make POSIX shell free as well - which is `Process.start`'s job at 7.3.
+- **A `String` printed to a live Windows console truncates at an embedded NUL byte.** `torb_platform_wide` is NUL
+  terminated, because every other caller of it hands it a path, which never holds one; `print` reuses it rather than
+  duplicating the conversion, so the rare `String` built with a NUL inside it (`U+0000` is otherwise ordinary UTF-8)
+  stops there on that one target. A pipe or a file gets the whole `String` regardless, because that path never
+  converts at all - the gap is only ever visible on the console a byte-for-byte write was already wrong on.

@@ -1789,6 +1789,22 @@ Wenn nicht, was bedeutet, bewirkt es?
       UTF-8-Bytes: in eine Pipe ist das genau richtig (die Suite vergleicht Bytes), in einer Konsole mit Codepage 850
       sieht Nicht-ASCII falsch aus - der Fix wäre `WriteConsoleW`, wenn das Handle eine Konsole ist (`console.c`, kleine
       eigene Runde), nie eine globale Codepage-Umstellung.
+    - **Erledigt:** Konsolenausgabe geht jetzt über `WriteConsoleW`/`ReadConsoleW`, wenn das Standard-Handle laut
+      `GetConsoleMode` eine echte Konsole ist (einmal pro Stream geprüft und gecacht) - konvertiert über
+      `torb_platform_wide`/`torb_platform_utf8`, in Stücken, die nie ein Surrogatpaar zerschneiden
+      (`torb_console_chunk_length`, pur und ohne Konsole testbar). Eine Pipe oder eine Datei bekommt weiterhin genau
+      die rohen Bytes, ungeprüftes UTF-8 auch (`torb_platform_wide` scheitert daran und ist der Fallback-Grund), und
+      `SetConsoleOutputCP` läuft nach wie vor nie. Neun neue Tests in `runtime/tests/console_test.c`
+      (118 Runtime-Tests), ein Absatz in `docs/BACKEND.md`. Offen, weil von hier aus nicht beobachtbar: eine echte
+      Konsole zeigt jetzt tatsächlich `grüße 日本` statt Mojibake - das kann nur wer mit einem echten Konsolenfenster
+      gegenprüfen (`chcp 850` und `torb build`/`cmd`).
+      - **Nachgebessert beim Merge (2026-09-21):** `readLine` an der Konsole schrieb den Terminator bei einer
+        Eingabe ohne Zeilenende genau hinter den vollen Puffer - eine Einheit bleibt jetzt frei.
+      - **Wird gelöst (nach Schwanz 5, das gerade in `runtime/` arbeitet):** der Panic-Report schreibt mit
+        `fprintf(stderr, ...)` an `console.c` vorbei, erscheint in einer Konsole also weiter in der Codepage; er geht
+        dann durch denselben Weg wie `print`.
+      - **Bitte einmal von dir prüfen (ich sehe keine echte Konsole):** in `cmd` `chcp 850`, dann ein mit
+        `torb build` gebautes Programm mit `print "grüße 日本"` starten.
 
 
 - (**Erledigt: Meilenstein 5.14 - zwei Implementierungen, ein beobachtbares Verhalten**, 2026-09-20)

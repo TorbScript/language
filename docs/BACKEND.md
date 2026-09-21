@@ -3439,13 +3439,21 @@ way the working directory happens to, and `canonicalize` needs the file to exist
 **A directory entry whose name has no UTF-8 spelling is an `IoError`** that names the directory, on both sides: a
 `String` is always valid UTF-8, so there is no value for such a name and no replacement character is invented.
 
-**Standard output is raw bytes and no code page is set.** `print` writes the UTF-8 bytes of a `String` as they are, which
-is what the conformance suite compares through a pipe; how a console renders them is the code page of that console, which
-belongs to the terminal and not to a program that may be writing to a file.
+**Standard output is raw bytes into a pipe or a file, and no code page is ever set.** `print` writes the UTF-8 bytes of a
+`String` as they are, which is what the conformance suite compares through a pipe; `SetConsoleOutputCP` never runs,
+because it is a setting of the console window that outlives this process, not one of the program writing to it.
+
+**A live Windows console is read and written as UTF-16 instead.** `runtime/console.c` asks `GetConsoleMode` on the
+handle behind each standard stream once, cached for the life of the process, to tell a real console from a pipe or a
+file; where it is one, `print` converts the UTF-8 text with `torb_platform_wide` and writes it with `WriteConsoleW` in
+chunks that never split a surrogate pair, and `readLine` converts the other way with `ReadConsoleW`. A pipe, a file,
+and text that turns out not to be valid UTF-8 all still get the raw bytes exactly as before - the conversion only ever
+runs on the one target whose own code page was never going to render a `String`'s bytes correctly.
 
 `bootstrap/tests/native/non-ascii-paths.trb`, `long-paths.trb`, `absolute-path-form.trb` and
 `process-non-ascii-argument.trb` are what hold the two implementations to all of it, and
-`runtime/tests/platform_test.c` is what holds the two conversions and the one threshold.
+`runtime/tests/platform_test.c` is what holds the two conversions and the one threshold; `runtime/tests/console_test.c`
+holds the console's own chunk boundary and its fallback, the parts of this that do not need a console to test.
 
 ---
 
