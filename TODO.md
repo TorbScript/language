@@ -2599,3 +2599,37 @@ Wenn nicht, was bedeutet, bewirkt es?
     eine Methode (`private items` neben `fn items()`), weil `()` sie überall unterscheidet. Beides sind Regeln, keine
     Features. (e) Offen bleibt danach nur NORMALISIERUNG/VALIDIERUNG bei offenem Konstruktor - dazu mache ich dir
     einen eigenen Vorschlag, wenn du (d) gesehen hast.
+
+- (`project.trb` - Entscheidungen zu `docs/PROJECT.md`, 2026-09-22) **Entschieden (Nutzer: "deine Punkte passen so"):**
+  1. **Programme stehen in der Konfiguration, nicht in einer Pfad-Konvention** (kommt selten vor und blockiert sonst
+     Namen): `src/main.trb` bleibt das eine semantische Default-Programm; weitere per
+     `program "migrate", entry: "tools/migrate.trb"`, optional `output: "dist/migrate"` (wörtlich, nicht
+     interpoliert; ohne `output` gilt `build/<profile>/<name>`); `program "torb"` ohne `entry` benennt das
+     Default-Programm um. `entry` ist ein schlichtes Literal, damit der Checker Entry-Dateien statisch kennt; "Top-Level-
+     Code <=> nie importierbar" gilt hart (`entry: "src/lib.trb"` ist ein Fehler).
+  2. **`project.trb` darf LESEN**, und nur das: die Toolchain ist der Aufrufer dieses Receiver-Skripts und vergibt
+     genau ein Recht - lesend unterhalb des Projektverzeichnisses (`version File.readText("VERSION")?.trimmed()`).
+     Kein Netz, kein Schreiben, keine Uhr, keine Umgebung. **Beim Publizieren wird das Manifest ausgewertet und als
+     rein literales, eingefrorenes Manifest ins Paket gelegt** - Verbraucher werten fremde Projektdateien nie aus,
+     "Installieren führt nie Code aus" bleibt wahr. `name`, `dependencies`, `workspace` (und die `entry`-Pfade)
+     bleiben schlichte Literale für `torb add`, Editor, Registry und Stage 0; `version` und der Rest dürfen berechnet
+     sein. Die Sandbox selbst kann IO längst (`files readOnly:`, `environment`, `modules`), vergeben an der
+     Aufrufstelle.
+  3. **Ressourcen in Schichten, keine Extension-Loader, kein `use logo from "./logo.png"`:** L1 ein compiler-bekannter
+     Typ `Resource`; L2 ist die Ressource ein `.trb`-Skript mit statischem Typargument, prüft der Compiler es schon
+     bei `torb check` gegen den Typ (Szenen, mitgelieferte Konfiguration) - ausgeführt wird weiter zur Laufzeit in
+     der Sandbox; L3 der "Loader" ist eine gewöhnliche Funktion, ihr Rückgabetyp ist der Typ; mit der VM darf ein
+     reiner `static`-Initializer zur Build-Zeit gefaltet und das Ergebnis eingebettet werden ("ein Wert ist sein
+     Konstruktoraufruf" ist das Einbettungsformat).
+  - **Ergänzt (Nutzer):** an einen Ressourcen-Parameter übergibt man einfach ein String-LITERAL -
+    `SpriteSheet.load("./some/sheet.spr")` - und der Compiler löst es auf (dieselbe Regel wie beim Zahlliteral: ein
+    Literal hat seinen Typ vom Parameter; eine `String`-VARIABLE konvertiert nie). Und: **Laufzeit-`load` (IO,
+    fehlbar, wartend/async) und Compile-Zeit-`embed` unterscheiden.** Meine Überlegung dazu, geht so ins Dokument:
+    ZWEI compiler-bekannte Parametertypen, damit die Signatur an der Aufrufstelle entscheidet (ohne Flussanalyse):
+    `Resource` = mitgelieferte Datei, zur Laufzeit gelesen, der Build legt sie neben das Programm und die Runtime
+    findet sie relativ zum PROGRAMM, nicht zum Arbeitsverzeichnis (im Web ist das ein Fetch - deshalb wartend);
+    und ein Einbettungstyp (Name offen: `Embedded`), dessen Bytes im Binary liegen, synchron und unfehlbar. Dazu
+    eine std-Namenskonvention in drei Verben: `embedded(...)` Compile-Zeit, `load(resource)` mitgeliefert zur
+    Laufzeit, `read`/`open(path: Path)` dynamischer Pfad (Nutzerdatei, `--config`), nicht compiler-bekannt.
+  - **Wird gelöst:** Überarbeitung von `docs/PROJECT.md` plus ein eigenes `docs/RESOURCES.md` (läuft als
+    Design-Agent); Umsetzung in Slices NACH der Umstellung auf `static`/`var fn`.
