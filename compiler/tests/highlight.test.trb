@@ -1,0 +1,548 @@
+/**
+ * What `torb highlight` answers about every name of a file: the kind of each token, the modifiers on it, and the
+ * JSON document the editor extension reads.
+ */
+
+use test, group from "std/test"
+use SourceText from "../src/syntax/source"
+use parse from "../src/syntax/parser/parser"
+use resolveFile from "../src/highlight/resolve"
+use highlightJson from "../src/highlight/command"
+
+/** One token with the text it covers, which is what an assertion below names it by. */
+type Found {
+  text: String
+  kind: String
+  modifiers: List<String>
+}
+
+fn tokensOf(source: String): List<Found> {
+  const parsed = parse SourceText.of(source)
+  var found: List<Found> = []
+  for token in resolveFile(parsed.file) {
+    found.add Found(source[token.span.start..token.span.end], token.kind, token.modifiers)
+  }
+  found
+}
+
+/**
+ * The occurrence (0-based) of the token whose text is exactly `text`. The sources below reuse a name on purpose - a
+ * declaration and its uses - so most assertions ask for one occurrence rather than for the first.
+ *
+ * # Panics
+ *
+ * When there is no such occurrence.
+ */
+fn nth(found: List<Found>, text: String, index: Int): Found {
+  var seen = 0
+  for token in found {
+    if token.text == text {
+      if seen == index {
+        return token
+      }
+      seen = seen + 1
+    }
+  }
+  panic "no occurrence {index} of `{text}` among {found}"
+}
+
+/**
+ * The one token whose text is `text`.
+ *
+ * # Panics
+ *
+ * When there is not exactly one.
+ */
+fn only(found: List<Found>, text: String): Found {
+  const matching = found.filter({ _.text == text }).toList()
+  if matching.length() != 1 {
+    panic "expected exactly one `{text}`, found {matching.length()} among {found}"
+  }
+  matching[0]
+}
+
+/** How often a name got a token at all. `0` is the answer for a name this tool deliberately does not place. */
+fn count(found: List<Found>, text: String): Int {
+  found.filter({ _.text == text }).count()
+}
+
+group "Highlight: generic parameters" {
+  test "a type parameter is typed at its declaration and at every use, a const parameter included" {
+    const source = r"""
+      type Array<Item, const Size: Int> {
+        fn first(): Item { .Empty }
+        fn size(): Int { Size }
+      }
+      """
+    const found = tokensOf source
+    assert(nth(found, "Item", 0).kind == "typeParameter")
+    assert(nth(found, "Item", 0).modifiers == ["declaration"])
+    // The return type of `first`
+    assert(nth(found, "Item", 1).kind == "typeParameter")
+    assert(nth(found, "Size", 0).kind == "typeParameter")
+    assert(nth(found, "Size", 0).modifiers == ["declaration"])
+    // Used as an ordinary expression value
+    assert(nth(found, "Size", 1).kind == "typeParameter")
+  }
+
+  test "a function's own type parameter is typed too" {
+    const source = r"""
+      fn identity<Value>(value: Value): Value {
+        value
+      }
+      """
+    const found = tokensOf source
+    // `Value` stands three times: its declaration, the parameter's annotation, the result
+    assert(nth(found, "Value", 0).kind == "typeParameter")
+    assert(nth(found, "Value", 1).kind == "typeParameter")
+    assert(nth(found, "Value", 2).kind == "typeParameter")
+  }
+}
+
+group "Highlight: types, traits and cases" {
+  test "a type declaration and a trait declaration are colored apart" {
+    const found = tokensOf(r"""
+      type Shape {}
+      trait Show {}
+      """)
+    assert(only(found, "Shape").kind == "type")
+    assert(only(found, "Show").kind == "interface")
+  }
+
+  test "a case is its own kind in every written form" {
+    const source = r"""
+      type Shape {
+        case Circle(radius: Float)
+
+        fn area(): Float {
+          match self {
+            .Circle(radius) => radius
+          }
+        }
+      }
+      const unit = Shape.Circle(1.0)
+      const other: Shape = .Circle(2.0)
+      """
+    const found = tokensOf source
+    // `case Circle(...)`
+    assert(nth(found, "Circle", 0).kind == "enumMember")
+    assert(nth(found, "Circle", 0).modifiers == ["declaration"])
+    // `.Circle(radius)` in the match arm
+    assert(nth(found, "Circle", 1).kind == "enumMember")
+    // `Shape.Circle(1.0)`, and the `Shape` in front of it
+    assert(nth(found, "Circle", 2).kind == "enumMember")
+    assert(nth(found, "Shape", 1).kind == "type")
+    // `.Circle(2.0)`, the short form where the expected type says which type is meant
+    assert(nth(found, "Circle", 3).kind == "enumMember")
+  }
+
+  test "a prelude case is bare everywhere, with a defaultLibrary modifier" {
+    const source = r"""
+      fn parse(text: String): Result<Int, String> {
+        match Int.tryParse(text) {
+          Some(value) => Ok(value)
+          None => Fail("bad")
+        }
+      }
+      """
+    const found = tokensOf source
+    for name in ["Some", "Ok", "None", "Fail"] {
+      const token = nth found, name, 0
+      assert(token.kind == "enumMember")
+      assert token.modifiers.contains("defaultLibrary")
+    }
+  }
+
+  test "a type used as a constructor stays a type, in an expression and in a pattern" {
+    const source = r"""
+      type Point {
+        x: Int
+        y: Int
+      }
+      const p = Point(1, 2)
+      const q = Point 1, 2
+      const Point(a, b) = q
+      """
+    const found = tokensOf source
+    // The declaration, the call, the command call, and the positional destructure
+    assert(nth(found, "Point", 0).kind == "type")
+    assert(nth(found, "Point", 1).kind == "type")
+    assert(nth(found, "Point", 2).kind == "type")
+    assert(nth(found, "Point", 3).kind == "type")
+    // The names the destructure binds are variables, never types
+    assert(only(found, "a").kind == "variable")
+    assert(only(found, "b").kind == "variable")
+  }
+
+  test "an upper-case pattern name this file cannot place gets no token" {
+    const source = r"""
+      fn run(value: Something) {
+        match value {
+          NotImported(x) => x
+        }
+      }
+      """
+    // A documented blind spot: placing this name needs another file, which this tool never opens. No token at all,
+    // so the TextMate grammar's own guess - a capitalized bare word is a type - is what shows
+    assert(count(tokensOf(source), "NotImported") == 0)
+  }
+}
+
+group "Highlight: functions and methods" {
+  test "command style and call style produce the same token" {
+    const source = r"""
+      fn greet(name: String): String {
+        "hi"
+      }
+      const a = greet("x")
+      const b = greet "y"
+      """
+    const found = tokensOf source
+    assert(nth(found, "greet", 1).kind == "function")
+    assert(nth(found, "greet", 2).kind == "function")
+    assert(nth(found, "greet", 1).modifiers == nth(found, "greet", 2).modifiers)
+  }
+
+  test "a dotted call is a method, a bare call a function" {
+    const source = r"""
+      type Greeter {
+        fn greet(): String { "hi" }
+      }
+      fn greet(): String { "free" }
+      const g = Greeter()
+      const a = g.greet()
+      const b = greet()
+      """
+    const found = tokensOf source
+    // The declaration inside the type, the top-level declaration, `g.greet()`, bare `greet()`
+    assert(nth(found, "greet", 0).kind == "method")
+    assert(nth(found, "greet", 1).kind == "function")
+    assert(nth(found, "greet", 2).kind == "method")
+    assert(nth(found, "greet", 3).kind == "function")
+  }
+
+  test "a bare call that names a method of the enclosing type is a method" {
+    const source = r"""
+      type Shape {
+        fn area(): Float { 1.0 }
+        fn describe(): String {
+          area()
+          "shape"
+        }
+      }
+      """
+    const found = tokensOf source
+    // The call through the implicit `self` inside `describe`
+    assert(nth(found, "area", 1).kind == "method")
+  }
+
+  test "a static fn is marked static and a var fn is marked mutable" {
+    const statics = tokensOf(r"""
+      type Point {
+        static fn origin(): Point { Point(0, 0) }
+        x: Int
+        y: Int
+      }
+      """)
+    assert only(statics, "origin").modifiers.contains("static")
+
+    // A `var fn` is underlined like a `var` field, at its declaration and at every call of it
+    const source = r"""
+      type Counter {
+        var count: Int = 0
+        var fn grow() { count = count + 1 }
+      }
+      fn step(var c: Counter) {
+        c.grow()
+      }
+      """
+    const found = tokensOf source
+    assert nth(found, "grow", 0).modifiers.contains("mutable")
+    assert nth(found, "grow", 1).modifiers.contains("mutable")
+  }
+
+  test "a static value is a static property where it is declared and where it is read" {
+    const source = r"""
+      type Point {
+        x: Int
+        static origin = Point(0)
+        fn isOrigin(): Bool { x == origin.x }
+      }
+      print Point.origin
+      """
+    const found = tokensOf source
+    for index in 0..3 {
+      const token = nth found, "origin", index
+      assert(token.kind == "property")
+      assert token.modifiers.contains("static")
+      assert token.modifiers.contains("readonly")
+    }
+    assert nth(found, "origin", 0).modifiers.contains("declaration")
+    // An ordinary field carries no `static`
+    assert(!nth(found, "x", 0).modifiers.contains("static"))
+  }
+}
+
+group "Highlight: parameters, locals and fields" {
+  test "a parameter is typed at its declaration and at every use, apart from a local" {
+    const source = r"""
+      fn add(a: Int, b: Int): Int {
+        const total = a + b
+        total
+      }
+      """
+    const found = tokensOf source
+    assert(nth(found, "a", 0).kind == "parameter")
+    assert(nth(found, "a", 1).kind == "parameter")
+    assert(nth(found, "total", 0).kind == "variable")
+    assert(nth(found, "total", 1).kind == "variable")
+  }
+
+  test "a field read bare inside a method of its own type is a property" {
+    const source = r"""
+      type Counter {
+        var sent: Int = 0
+
+        var fn increment() {
+          sent = sent + 1
+        }
+      }
+      """
+    const found = tokensOf source
+    // The field declaration, the assignment target, the read on the right
+    assert(nth(found, "sent", 0).kind == "property")
+    assert nth(found, "sent", 0).modifiers.contains("mutable")
+    assert(nth(found, "sent", 1).kind == "property")
+    assert nth(found, "sent", 1).modifiers.contains("mutable")
+    assert(nth(found, "sent", 2).kind == "property")
+  }
+
+  test "a field read through a value is a property, apart from the parameter it is read through" {
+    const source = r"""
+      type Point {
+        x: Int
+      }
+      fn getX(point: Point): Int {
+        point.x
+      }
+      """
+    const found = tokensOf source
+    assert(nth(found, "point", 0).kind == "parameter")
+    assert(nth(found, "point", 1).kind == "parameter")
+    assert(nth(found, "x", 0).kind == "property")
+    assert(nth(found, "x", 1).kind == "property")
+  }
+
+  test "a var binding and a const binding share a kind and differ only by a modifier" {
+    const found = tokensOf(r"""
+      const a = 1
+      var b = 2
+      """)
+    assert(only(found, "a").kind == "variable")
+    assert(only(found, "b").kind == "variable")
+    assert only(found, "a").modifiers.contains("readonly")
+    assert(!only(found, "a").modifiers.contains("mutable"))
+    assert only(found, "b").modifiers.contains("mutable")
+    assert(!only(found, "b").modifiers.contains("readonly"))
+  }
+
+  test "the implicit parameters of a closure are parameters" {
+    const found = tokensOf(r"""
+      fn run(): Int {
+        [1, 2].map({ _ + 1 }).length()
+      }
+      """)
+    assert(only(found, "_").kind == "parameter")
+  }
+}
+
+group "Highlight: scopes" {
+  test "a closure parameter shadows a local around it" {
+    const found = tokensOf(r"""
+      fn run(): Int {
+        const x = 1
+        [1, 2].map({ x => x + 1 }).length()
+      }
+      """)
+    // The outer `const x`, the closure parameter, and the use inside the closure
+    assert(nth(found, "x", 0).kind == "variable")
+    assert(nth(found, "x", 1).kind == "parameter")
+    assert(nth(found, "x", 2).kind == "parameter")
+  }
+
+  test "a nested fn does not see the locals around it" {
+    const found = tokensOf(r"""
+      fn outer(): Int {
+        const x = 1
+        fn inner(): Int {
+          x
+        }
+        inner()
+      }
+      """)
+    // `x` inside `inner` cannot resolve to `outer`'s local, so it gets no token - not even a wrong one
+    assert(nth(found, "x", 0).kind == "variable")
+    assert(count(found, "x") == 1)
+    assert(nth(found, "inner", 0).kind == "function")
+    assert(nth(found, "inner", 1).kind == "function")
+  }
+
+  test "a for binding is a variable, scoped to the body of the loop" {
+    const found = tokensOf(r"""
+      fn run(list: List<Int>) {
+        for item in list {
+          item
+        }
+      }
+      """)
+    assert(nth(found, "item", 0).kind == "variable")
+    assert(nth(found, "item", 1).kind == "variable")
+  }
+
+  test "if const binds inside the then block alone" {
+    const found = tokensOf(r"""
+      fn run(value: Int?) {
+        if const Some(found) = value {
+          found
+        }
+      }
+      """)
+    assert(nth(found, "found", 0).kind == "variable")
+    assert(nth(found, "found", 0).modifiers == ["declaration", "readonly"])
+    assert(nth(found, "found", 1).kind == "variable")
+  }
+
+  test "if var marks the bound place mutable" {
+    const found = tokensOf(r"""
+      fn run(value: Int?) {
+        if var Some(found) = value {
+          found
+        }
+      }
+      """)
+    assert nth(found, "found", 0).modifiers.contains("mutable")
+  }
+
+  test "a match arm binding is scoped to its own arm" {
+    // Not a raw string: the arm of this source interpolates, and a raw string has no interpolation to show
+    const head = "fn describe(shape: Shape): String \{\n  match shape \{\n"
+    const arms = "    .Circle(radius) => \"r=\{radius\}\"\n    .Empty => \"empty\"\n"
+    const source = head + arms + "  \}\n\}\n"
+    const found = tokensOf source
+    // `radius` stands twice: the pattern of the arm, and its use in the interpolated string
+    assert(nth(found, "radius", 0).kind == "variable")
+    assert(nth(found, "radius", 1).kind == "variable")
+  }
+
+  test "the label of a case pattern field is a property" {
+    const found = tokensOf(r"""
+      fn run(shape: Shape) {
+        match shape {
+          Point(x: a, y: b) => a
+        }
+      }
+      """)
+    assert(only(found, "x").kind == "property")
+    assert(only(found, "y").kind == "property")
+    // `a` stands twice: the pattern of the arm, and the body of the arm
+    assert(nth(found, "a", 0).kind == "variable")
+    assert(nth(found, "a", 1).kind == "variable")
+  }
+}
+
+group "Highlight: labels, extend and namespaces" {
+  test "a labeled argument of a constructor is a property, of a function call a parameter" {
+    const source = r"""
+      type Point {
+        x: Int
+        y: Int
+      }
+      fn move(to: Point) {}
+      const p = Point(x: 1, y: 2)
+      move(to: p)
+      """
+    const found = tokensOf source
+    // The field declaration and the constructor's label share the name `x`, and both are a property
+    assert(nth(found, "x", 0).kind == "property")
+    assert(nth(found, "x", 1).kind == "property")
+    // The parameter declaration of `move`, and the label at the call
+    assert(nth(found, "to", 0).kind == "parameter")
+    assert(nth(found, "to", 1).kind == "parameter")
+  }
+
+  test "a member an extend adds is a method of the type it targets" {
+    const source = r"""
+      trait Show {
+        fn show(): String
+      }
+      type Point {
+        x: Int
+      }
+      extend Point with Show {
+        fn show(): String {
+          "Point"
+        }
+      }
+      fn describe(point: Point): String {
+        point.show()
+      }
+      """
+    const found = tokensOf source
+    assert(nth(found, "Show", 0).kind == "interface")
+    assert(nth(found, "Show", 1).kind == "interface")
+    // The requirement of the trait, the implementation, and the call through a value of the type
+    assert(nth(found, "show", 0).kind == "method")
+    assert(nth(found, "show", 1).kind == "method")
+    assert(nth(found, "show", 2).kind == "method")
+  }
+
+  test "the delegate of a with by clause is a property" {
+    const found = tokensOf(r"""
+      trait Show {
+        fn show(): String
+      }
+      type Wrapper {
+        inner: String
+      }
+      type Boxed with Show by inner {
+        inner: String
+      }
+      """)
+    // The delegate name in `by inner`
+    assert(nth(found, "inner", 1).kind == "property")
+  }
+
+  test "use star as alias is a namespace, and a call through it is a function" {
+    const found = tokensOf(r"""
+      use * as http from "std/http"
+      const response = http.get("/")
+      """)
+    assert(nth(found, "http", 0).kind == "namespace")
+    assert(nth(found, "http", 0).modifiers == ["declaration"])
+    assert(nth(found, "http", 1).kind == "namespace")
+    assert(only(found, "get").kind == "function")
+  }
+}
+
+group "Highlight: the JSON document" {
+  test "an empty source prints an empty list" {
+    assert(highlightJson("") == "\{\"tokens\":[]\}")
+  }
+
+  test "a file that is only syntax errors still prints valid JSON" {
+    const json = highlightJson "fn (((( this is not valid"
+    assert json.startsWith("\{\"tokens\":[")
+    assert json.endsWith("]\}")
+  }
+
+  test "a column counts UTF-16 code units, so a string earlier on the line does not shift it" {
+    const json = highlightJson "const greeting = \"héllo wörld 🎉\"\nfn helper() \{\}\n"
+    assert json.contains("\"function\"")
+    assert json.startsWith("\{\"tokens\":[[")
+
+    // A character that takes four bytes in UTF-8 is two UTF-16 units, and a byte-based column would drift here:
+    // `label` stands at byte 8 of its line and at unit 6 of it
+    const interpolated = highlightJson "fn show(label: String): String \{\n  \"🎉\{label\}\"\n\}\n"
+    assert interpolated.contains("[1,6,5,\"parameter\",")
+  }
+}

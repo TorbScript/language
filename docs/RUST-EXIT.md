@@ -30,7 +30,7 @@ suites beside it. Every use of it in the repository:
 | `torb test` for any other package (`std/*/tests`, `examples/*/tests`) | Native `torb test <path>...`, several packages in one run | no - done |
 | `torb canon --check --rule ...` - the formatter canon, five rules, 1 341 lines of Rust with 561 more of tests | `canon` ported to TorbScript on the self-hosted parser (slice 3), then milestone 8's `torb format` | **yes** - it is a tier-A gate and there is no second implementation |
 | `torb canon ..` - writing the canon | the same | **yes** |
-| `torb highlight --stdin` - the editor extension's semantic tokens | `highlight` ported to TorbScript (slice 4), resolved by the *checker* rather than by a second resolver | **yes** - the only thing outside the repository that calls stage 0 |
+| `torb highlight --stdin` - the editor extension's semantic tokens | The native binary's own `highlight` (slice 4) | no - done |
 | `cargo test --test native` - the conformance suite, 74 programs run both ways and compared | A gate runner that builds and runs each program natively and compares it with `.expected`, `.stderr`, `.exit` and the leak count (slice 2) | **yes** - the gate has to keep running, though what it compares against changes |
 | `cargo test --test suite` - stage 0's test report against the binary's, line by line | Nothing. Its subject is the agreement of two implementations, and after the exit there is one | no |
 | `cargo test --test self_hosted` - the self-hosted front end's `tokens`/`ast`/`parse` against the Rust front end's, over every `.trb` of the repository | Nothing, for the same reason. What it defends (the parser accepts the whole repository) is `torb parse ..` plus the parser's own tests | no |
@@ -42,16 +42,15 @@ suites beside it. Every use of it in the repository:
 | `bootstrap/tests/native/stage-0-only/` - one program whose behaviour only stage 0 produces | The C back end lowering the `cause()` loop of a top-level `?` (slice 5), after which the program moves up one directory | **yes**, but it is one program and one loop |
 | `bootstrap/tests/lexer-cases/`, `parser-cases/` | Fixtures of the Rust front end; they go with it after the grammar cases are read | no |
 | `.vscode/tasks.json` - two tasks that run `cargo run --release -q -- ...` | The same two commands on the native binary | no |
-| `.vscode/extensions/torbscript` - `torb highlight --stdin`, and a setting that searches `bootstrap/target/release/torb` | The setting points at the new binary; the extension itself does not change (slice 4) | tied to `highlight` |
+| `.vscode/extensions/torbscript` - `torb highlight --stdin`, and a search for the binary | The search looks under `build/release/` first and keeps the two old locations behind it (slice 4) | no - done |
 | `benchmarks/run.sh` - `$torb` is `bootstrap/target/release/torb`, used to build each program | The native binary or the seed | no |
 | `runtime/build.sh` - checks `torb_natives.h` against the headers, and names `torb natives --header` in a comment | Already independent: the check is C against C. Only the comment mentions the command | no |
 | `docs/` front matter - ten pages carry `bootstrap/README.md` or a `bootstrap/crates/...` path in `source:`, and the docs gate asserts those paths exist | Repointed at the compiler's own sources (slice 6). `torb-run.md` and `torb-test.md` are already repointed | no |
 | `compiler/CONTRIBUTING.md`, `bootstrap/README.md`, `docs/ARCHITECTURE.md`, `docs/BACKEND.md` - the command lists and the description of the two-stage world | Rewritten in slice 6 | no |
 
-**Five things block the exit**, and three of them are one piece of work each: `canon`, `highlight`, the conformance
-runner. The fourth is one lowering gap (`error-chain.trb`). The fifth is not in the table because it is not a use of
-stage 0 at all but a property of it: stage 0 is what **produces** the first `torb` today, and section 4 is about
-replacing that.
+**Four things block the exit**, and two of them are one piece of work each: `canon` and the conformance runner. The
+third is one lowering gap (`error-chain.trb`). The fourth is not in the table because it is not a use of stage 0 at all
+but a property of it: stage 0 is what **produces** the first `torb` today, and section 4 is about replacing that.
 
 ---
 
@@ -298,15 +297,53 @@ Each slice is one agent, in order. The estimate is the work, not the machine tim
 | 1 | **The seed and the native driver.** `torb run` (build into a cache keyed on the sources, then execute with the arguments, the streams and the exit code passed through), `torb test` for any test package and several at once, `tools/bootstrap.sh`, `seed/` ignored, `Process.runInheriting` in the runtime | Tier A on the native binary; the chain seed -> `torb` -> `torb` with byte-identical C | **this round** |
 | 2 | **The gates run on the native compiler.** A gate runner - TorbScript, or `sh` where it only sequences commands - that replaces the three `cargo test` suites: conformance compares a native run against `.expected`/`.stderr`/`.exit`/`.leaks` and no longer against stage 0; the fixpoint becomes `tools/bootstrap.sh`; `suite` and `self_hosted` are dropped with a note in this document saying what they defended | The conformance suite green from the runner, on the same 74 programs | 1 round |
 | 3 | **`canon` ported to TorbScript.** The five rules in `bootstrap/crates/torb-cli/src/canon` (1 341 lines plus 561 lines of tests) on the self-hosted parser, with the same rule flags, the same `--check`, and the same "apply one edit, parse again, keep it only if the tree is unchanged" safety | `torb canon --check ..` from the native binary reports the same files stage 0's reports - zero | 1-2 rounds. The rules are mechanical; the safety check needs the tree comparison that erases spans and call styles |
-| 4 | **`highlight` ported.** `bootstrap/crates/torb-cli/src/highlight` (~1 850 lines, of which the resolver is 1 663) and the extension pointed at the new binary. The port is not a translation: the self-hosted side has a **type checker**, so what the Rust resolver approximates - is this name a field, a local, a case, a method - it can answer | The extension colours `samples/tokens.trb` the way it does now, and better where the resolver guessed | 1-2 rounds |
+| 4 | **`highlight` ported.** `compiler/src/highlight/` - 1 717 lines of TorbScript, and 545 more for the 32 tests the Rust file carried inside it - and the extension looking for the native binary first | Both implementations answer with the same JSON over every `.trb` file of the repository | **done** |
 | 5 | **The one lowering gap.** `reportFailure` walks `cause()` and writes one `  caused by:` line per link, after which `bootstrap/tests/native/stage-0-only/error-chain.trb` moves up one directory | The conformance suite with 75 programs and no `stage-0-only/` | half a round |
 | 6 | **The deletion.** `bootstrap/tests/` moves to `tests/`, `bootstrap/crates` is deleted, and every reference is rewritten: `compiler/CONTRIBUTING.md`, `bootstrap/README.md` (what survives of it), `docs/ARCHITECTURE.md`, `docs/BACKEND.md`, the ten `source:` entries in `docs/`, `.vscode/tasks.json`, `benchmarks/run.sh`, and this document | Every gate green from the native binary alone, with no Rust toolchain on the machine | 1 round |
 
-**Five rounds after this one**, if nothing else is found. The two that could each become two are 3 and 4, and both are
-ports of code that exists and has tests, which is the cheapest kind of work there is.
+**Four rounds after slice 1**, if nothing else is found. The one that could become two is 3, a port of code that exists
+and has tests, which is the cheapest kind of work there is.
 
 Slices 3 and 4 do not depend on each other and do not touch the same files, so they can run in parallel. Slice 5 is
-independent of all of them. Slice 6 needs 2, 3, 4 and 5.
+independent of all of them. Slice 6 needs 2, 3 and 5.
+
+### 5.1 What slice 4 decided, and what it measured
+
+The plan above asked for the resolver's guesses to be replaced by the **checker's** answers. Measuring said no, and the
+port is the syntax-only resolver with the seam for the checker written into it:
+
+| One `highlight` request | The native binary | Stage 0 |
+|---|---|---|
+| 36 lines | 15 ms | 14 ms |
+| 1 000 lines | 55-61 ms | 14 ms |
+| 1 802 lines | 96 ms | 18 ms |
+| 2 878 lines - the largest file of the repository | 140-168 ms | 20 ms |
+
+Of the 55 ms for a thousand lines, 13 ms is starting the process and 29 ms is the lexer and the parser, which every
+command pays; the resolver itself is 19 ms. **The checker is three orders of magnitude away**: `check` over the
+workspace is 8 s, and even one file cannot be checked without the modules it imports. A language server changes that
+and nothing else does - it holds the workspace between requests and re-checks the one file that changed - so the
+decision belongs to the round that builds one. The seam is `memberTargetOf` in `compiler/src/highlight/resolve.trb`:
+it classifies the target of a `.name`, today into a type of this file, a namespace of this file, or an unknown
+receiver, and a checker would answer the third case instead. Every modifier below it follows from the member that is
+found, so nothing else moves.
+
+The two implementations were run over **every `.trb` file of the repository** (431 files) and over 1 308 deliberately
+damaged sources - each file cut at three fractions of its length, plus fifteen hand-written malformed ones. The JSON is
+**byte for byte the same**, with two differences, both explained:
+
+- **A file that starts with a UTF-8 BOM.** The self-hosted lexer reads the BOM as the first character of a name and
+  reports the diagnostic that a name is ASCII; the Rust lexer skips it. Nothing parses after that, so the port
+  colours nothing in such a file while stage 0 colours it. This is a property of the **front end** and not of the
+  highlighter - `torb check`, `torb parse` and `torb tokens` say the same thing about the same file - and it belongs to
+  a round of the lexer. No file in the repository has a BOM.
+- **`--stdin` with CRLF line breaks.** The only native that reads standard input today is `readLine`, which strips the
+  line break, so the source is rebuilt with `\n` (`standardInput()` is `NativeState.Planned(7.3)`). Every position this
+  command prints is a line and a column, and both survive that - the one shape that does not is a token whose span falls
+  **on the line break itself**, which only a malformed `case` with no name produces, because the parser puts the
+  missing name on the token that ends the line. Stage 0 puts it one column further
+  right, behind the `\r`; the port puts it where it stands whatever the line breaks are. `torb highlight <path>` reads
+  the bytes and is byte-exact even there.
 
 ---
 

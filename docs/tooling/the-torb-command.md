@@ -11,8 +11,10 @@ keywords:
   - run
   - test
   - canon
+  - highlight
 source:
   - compiler/src/main.trb
+  - compiler/src/highlight/command.trb
   - bootstrap/README.md
   - CONCEPT.md#toolchain
 ---
@@ -30,6 +32,7 @@ torb ir <path>...      Print the typed IR the back end lowers
 torb parse <path>...   Check the syntax of files or directories
 torb tokens <file>     Print the tokens of a file
 torb ast <file>        Print the syntax tree of a file
+torb highlight <file>  Print the semantic tokens of a file as JSON, for an editor
 torb docs <command>    Check, index, and derive the documentation
 torb canon [path]...   Write the formatter canon over the syntax tree
 torb test [path]...    Run the *.test.trb files below the paths
@@ -86,6 +89,27 @@ The four windows into the front end. `parse` checks syntax only, recursively ove
 lexer and parser output of one file in a deterministic format - the same format stage 0 prints, which is what the
 differential tests compare. `ir` prints the typed intermediate representation the back end lowers, with `--statistics` for
 the counts alone.
+
+### `highlight`
+
+Prints the semantic tokens of one file as a single JSON document, which is what an editor colors a name with when the
+TextMate grammar cannot tell a field from a local or a case from a type. `torb highlight --stdin` reads the source from
+standard input instead of a file, for a buffer that was never saved.
+
+```text
+{"tokens": [[line, startCharacter, length, "kind", ["modifier", ...]], ...]}
+```
+
+`line` and `startCharacter` are 0-based, and `startCharacter` and `length` count UTF-16 code units, which is what VS
+Code's semantic token protocol takes. The tokens are sorted, never overlap and never cross a line break.
+
+It answers from the syntax tree alone and opens no other file, so it costs a parse and not a type check - tens of
+milliseconds for a thousand lines, which is what lets an editor ask on every pause in typing. That is also the list of
+what it cannot know: the type of an arbitrary receiver, and what a single-segment `use` names in the module it comes
+from. A name it cannot place gets **no token**, never a guess, so the grammar's own color stands.
+
+The command never fails: a file with syntax errors is colored as far as it parsed, a file that cannot be read prints an
+empty list, and the only exit code is `0`.
 
 ### `canon`
 

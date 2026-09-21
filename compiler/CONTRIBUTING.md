@@ -2,8 +2,8 @@
 
 The compiler is written in TorbScript and **compiles itself**: `sh tools/bootstrap.sh` builds `torb` from a seed and
 then builds it again with itself. Stage 0 (`bootstrap/`), the **untyped** tree-walking interpreter in Rust, is what ran
-it until it could, and it is on its way out ([docs/RUST-EXIT.md](../docs/RUST-EXIT.md)) - it still owns `canon` and
-`highlight`, and its traps still apply to every line the compiler's own sources contain, because it still runs them.
+it until it could, and it is on its way out ([docs/RUST-EXIT.md](../docs/RUST-EXIT.md)) - it still owns `canon`, and its
+traps still apply to every line the compiler's own sources contain, because it still runs them.
 
 These are the rules of the code base and those traps.
 

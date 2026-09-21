@@ -3360,3 +3360,22 @@ Wenn nicht, was bedeutet, bewirkt es?
     auf oberster Ebene, weil es keine Tests eines Pakets sind? (3) `torb run` liest und hasht bei jedem Start das
     ganze Workspace (0,17 s warm). Ist das der richtige Handel, oder soll der Schlüssel später nur die wirklich
     importierten Dateien umfassen und dafür einen Abhängigkeitsindex auf Platte pflegen?
+  - **Erledigt:** Scheibe 4 - `torb highlight` ist portiert und läuft als Befehl des selbstgehosteten Compilers
+    (`compiler/src/highlight/`, 1 717 Zeilen TorbScript und 545 Zeilen Tests gegen 1 850 Zeilen Rust, die ihre Tests
+    mit drin trugen). **Architektur: der reine Syntax-Resolver, nicht der Typprüfer** - gemessen, nicht geraten: eine
+    Anfrage über 1 000 Zeilen kostet nativ **55-61 ms** (davon 13 ms Start, 29 ms Lexer plus Parser und 19 ms der
+    Resolver selbst), Stage 0 braucht 14 ms; `check` über das Workspace kostet dagegen 8 s, also das Hundertfache
+    dessen, was zwischen zwei Tastenanschlägen Platz hat. Der Typprüfer wird erst mit einem inkrementellen Sprachserver bezahlbar, und die
+    eine Stelle, an der er einsteigen würde, ist im Code benannt (`memberTargetOf`). **Beweis der Gleichheit:**
+    beide Implementierungen über **jede** `.trb`-Datei des Repositories (431 Dateien) und über 1 308 absichtlich
+    beschädigte Quellen - **byteweise dasselbe JSON**, mit zwei erklärten Ausnahmen: (1) eine Datei mit UTF-8-BOM,
+    wo der selbstgehostete **Lexer** das BOM als Namensanfang nimmt und einen Fehler meldet, während Rust es
+    überspringt - das ist eine Eigenschaft des Frontends, `torb check` sagt über dieselbe Datei dasselbe, und es
+    gehört in eine Lexer-Runde; (2) bei `--stdin` mit CRLF landet der leere Namensplatz eines kaputten `case` eine
+    Spalte früher, weil `readLine` das `\r` entfernt - die portierte Antwort ist die, die nicht vom Zeilenende
+    abhängt. Alle 32 Rust-Tests portiert, als 31 Tests in 7 Gruppen (zwei fragen dieselbe Quelle und sind einer
+    geworden), plus eine Zusicherung über die UTF-16-Spalte hinter einem Emoji, die Rust nicht hatte
+    (`compiler/tests/highlight.test.trb`). Die Erweiterung sucht zuerst
+    `build/release/torb[.exe]` und fällt auf Stage 0 zurück, solange es das noch gibt. **Nebenbei gefunden:** das
+    native Back-End lowert ein Literal, das über `Set.from` gebaut wird, noch nicht, deshalb stehen die beiden
+    Tabellenkonstanten des Highlighters als `List<String>` da.

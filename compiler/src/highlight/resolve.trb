@@ -1,0 +1,1026 @@
+/**
+ * The resolver behind `torb highlight`: one walk over the syntax tree that decides, for every name, whether it is a
+ * type, a trait, a case, a type parameter, a function, a method, a parameter, a local, a field or a namespace - and
+ * whether it is `readonly`, `mutable` or `static`.
+ *
+ * It reads the [FileScope] of `./scope` and a stack of local scopes, and nothing else: no module graph, no symbol
+ * table, no types. That is what makes it answer in the time between two keystrokes, and it is also the whole list
+ * of what it cannot know. The receiver of `value.member` has no type here, so a dotted name is a `method` when a
+ * call follows it and a `property` when none does - a syntactic rule, taken from the shape of the source. A name a
+ * single-segment `use` brings in is placed by the case of its first letter, because the module it comes from is
+ * never opened.
+ *
+ * **A name this resolver cannot place gets no token at all**, never a guess that might be wrong: the editor layers
+ * semantic tokens on top of its TextMate grammar, so no token means the grammar's own color stands.
+ *
+ * The step a type checker would add is written down at the one place it would enter: [memberTargetOf], which
+ * classifies the target of a `.name` and today answers [MemberTarget.UnknownReceiver] for everything that is not a
+ * type or a namespace of this file. A checker that already has the file's types would answer that case instead,
+ * and every modifier below it follows from the member it finds.
+ *
+ * # Related
+ *
+ * - [FileScope] - the global names this measures against.
+ * - [HighlightToken] - what comes out.
+ */
+
+use SourceFile, Statement, Declaration, Member, Block, Binding, Condition from "../syntax/ast"
+use Expression, Argument, Closure, Pattern, FieldPattern, Name, Parameter from "../syntax/ast"
+use FunctionDeclaration, TypeDeclaration, TraitDeclaration, ExtendDeclaration from "../syntax/ast"
+use TraitClause, GenericParameter, WhereClause, TypeReference from "../syntax/ast"
+use Span from "../syntax/source"
+use HighlightToken, declarationModifiers, readonlyModifiers from "./token"
+use FileScope, TypeInfo, FieldSymbol, MethodSymbol, GlobalKind from "./scope"
+use fileScopeOf, simpleTypeName, patternNames, startsUpperCase, receiverOf from "./scope"
+use primitiveTypes, preludeCases from "./scope"
+
+/** What a name bound inside a block is, which decides both its token kind and how it is looked up. */
+public type LocalKind {
+  /** A `const`/`var` binding, a `for` pattern, an `if const` pattern, a match arm's pattern. */
+  case Variable
+  /** A parameter of a function or of a closure. */
+  case Parameter
+  /** A `fn` written inside a block: a local name, but a `function` token and never a `variable`. */
+  case NestedFunction
+}
+
+/** One name that is in scope inside the body being walked. */
+public type LocalSymbol {
+  name: String
+  kind: LocalKind
+  isVar: Bool
+}
+
+/**
+ * What the target of a `.name` is, as far as the syntax says. The one place a type checker would answer more: today
+ * every receiver that is not a type or a namespace of this file is [MemberTarget.UnknownReceiver].
+ */
+public type MemberTarget {
+  /** `Type.member`, and `self.member` inside a body: the members of that type can be looked up. */
+  case KnownType(name: String)
+  /** `http.get(...)`, through a `use * as http`. */
+  case KnownNamespace
+  /** An arbitrary value, whose type only a type checker could name. */
+  case UnknownReceiver
+}
+
+/**
+ * The state of one walk: the file's global names, the open local scopes, the open `<...>` frames, the type body a
+ * member is being resolved in, and the tokens produced so far.
+ *
+ * The local scopes are one flat list with the start of every open scope beside it, rather than a list of tables:
+ * a lookup walks it backwards and leaving a scope cuts it back, which is both the cheapest shape and the one that
+ * makes shadowing fall out of the order.
+ */
+public type Resolver {
+  fileScope: FileScope
+  var locals: List<LocalSymbol> = []
+  /** Where every open scope begins in `locals`. Empty outside of every scope, which is true at the file level. */
+  var scopeStarts: List<Int> = []
+  /** Every type parameter of every open `<...>`, a `const` parameter included - `Array<Item, Size>` colors both. */
+  var genericNames: List<String> = []
+  var genericStarts: List<Int> = []
+  /** The name of the `type`, `trait` or `extend` body a member is being resolved in. */
+  var currentType: String? = None
+  /**
+   * `Some(isVar)` inside a method, `None` outside of one, so that a `var self` colors every `self` of its body
+   * `mutable` and not only its declaration.
+   */
+  var selfIsVar: Bool? = None
+  var tokens: List<HighlightToken> = []
+}
+
+/**
+ * Every semantic token of one parsed file, in the order the tree is walked. A file the parser only half understood
+ * is walked exactly as far as it parsed: what survived recovery is colored, the rest simply has no nodes.
+ */
+public fn resolveFile(file: SourceFile): List<HighlightToken> {
+  const scope = fileScopeOf file
+  var resolver = Resolver scope
+  resolveStatements resolver, file.statements
+  resolver.tokens
+}
+
+// --- The tables -------------------------------------------------------------------------------------------------
+
+fn pushToken(var resolver: Resolver, span: Span, kind: String, modifiers: List<String>) {
+  resolver.tokens.add HighlightToken(span, kind, modifiers)
+}
+
+fn isGeneric(resolver: Resolver, name: String): Bool {
+  resolver.genericNames.contains name
+}
+
+fn findLocal(locals: List<LocalSymbol>, name: String): LocalSymbol? {
+  var index = locals.length() - 1
+  while index >= 0 {
+    const local = locals[index]
+    if local.name == name {
+      return Some local
+    }
+    index = index - 1
+  }
+  None
+}
+
+fn currentTypeInfo(resolver: Resolver): TypeInfo? {
+  if const Some(name) = resolver.currentType {
+    return resolver.fileScope.types.get name
+  }
+  None
+}
+
+fn isKnownCase(resolver: Resolver, name: String): Bool {
+  if preludeCases.contains(name) || resolver.fileScope.importedCases.contains(name) {
+    return true
+  }
+  resolver.fileScope.declaredCases.contains name
+}
+
+fn isKnownType(resolver: Resolver, name: String): Bool {
+  if primitiveTypes.contains(name) || resolver.fileScope.importedTypes.contains(name) {
+    return true
+  }
+  resolver.fileScope.types.containsKey name
+}
+
+fn pushScope(var resolver: Resolver) {
+  const depth = resolver.locals.length()
+  resolver.scopeStarts.add depth
+}
+
+fn popScope(var resolver: Resolver) {
+  const last = resolver.scopeStarts.length() - 1
+  const start = resolver.scopeStarts.removeAt(last) ?? 0
+  // Cut back rather than slice: a scope leaves a handful of names behind and a slice would copy the whole stack
+  while resolver.locals.length() > start {
+    const top = resolver.locals.length() - 1
+    resolver.locals.removeAt top
+  }
+}
+
+/** A name only enters a scope while one is open. At the file level there is none, and globals answer instead. */
+fn declareLocal(var resolver: Resolver, name: String, kind: LocalKind, isVar: Bool) {
+  if resolver.scopeStarts.isEmpty() {
+    return
+  }
+  resolver.locals.add LocalSymbol(name, kind, isVar)
+}
+
+fn pushGenerics(var resolver: Resolver, generics: List<GenericParameter>) {
+  const depth = resolver.genericNames.length()
+  resolver.genericStarts.add depth
+  for parameter in generics {
+    resolver.genericNames.add parameter.name.text
+  }
+  // A second pass, so a bound may name a parameter that is declared after it
+  for parameter in generics {
+    pushToken resolver, parameter.name.span, "typeParameter", ["declaration"]
+    for bound in parameter.bounds {
+      resolveTypeReference resolver, bound
+    }
+    if const Some(default) = parameter.default {
+      resolveTypeReference resolver, default
+    }
+  }
+}
+
+fn popGenerics(var resolver: Resolver) {
+  const last = resolver.genericStarts.length() - 1
+  const start = resolver.genericStarts.removeAt(last) ?? 0
+  while resolver.genericNames.length() > start {
+    const top = resolver.genericNames.length() - 1
+    resolver.genericNames.removeAt top
+  }
+}
+
+fn tokenKindOf(kind: LocalKind): String {
+  match kind {
+    .Variable => "variable"
+    .Parameter => "parameter"
+    .NestedFunction => "function"
+  }
+}
+
+/** What a call site of a member says about it: `static` for one that belongs to the type, `mutable` for a `var fn`. */
+fn methodModifiers(method: MethodSymbol): List<String> {
+  if !method.hasReceiver {
+    return ["static"]
+  }
+  if method.changesReceiver {
+    ["mutable"]
+  } else {
+    []
+  }
+}
+
+/** What a use of a field says about it, with `static` on top for a value that belongs to the type. */
+fn fieldModifiers(field: FieldSymbol): List<String> {
+  var modifiers = readonlyModifiers field.isVar
+  if field.isStatic {
+    modifiers.add "static"
+  }
+  modifiers
+}
+
+fn preludeModifiers(name: String): List<String> {
+  if preludeCases.contains(name) {
+    ["defaultLibrary"]
+  } else {
+    []
+  }
+}
+
+// --- Statements -------------------------------------------------------------------------------------------------
+
+fn resolveStatements(var resolver: Resolver, statements: List<Statement>) {
+  // Hoisted, so a nested `fn` is visible to every statement of its own block, itself included for recursion. Its
+  // body gets a fresh scope stack in `resolveFunction`, so it never sees the locals around it
+  for statement in statements {
+    if const .Declare(declaration) = statement.kind {
+      if const .Function(function) = declaration.kind {
+        declareLocal resolver, function.name.text, .NestedFunction, isVar: false
+      }
+    }
+  }
+  for statement in statements {
+    resolveStatement resolver, statement
+  }
+}
+
+fn resolveStatement(var resolver: Resolver, statement: Statement) {
+  match statement.kind {
+    .Declare(declaration) => resolveDeclaration resolver, declaration
+    .Bind(binding) => resolveBinding resolver, binding
+    .Assign(target, value) => {
+      resolveExpression resolver, target
+      resolveExpression resolver, value
+    }
+    .For(pattern, iterable, body) => {
+      resolveExpression resolver, iterable
+      pushScope resolver
+      resolvePattern resolver, pattern, .Variable, isVar: false
+      resolveStatements resolver, body.statements
+      popScope resolver
+    }
+    .While(condition, body) => resolveConditionAndBlock resolver, condition, body
+    .Loop(body) => {
+      pushScope resolver
+      resolveStatements resolver, body.statements
+      popScope resolver
+    }
+    .Return(value) => {
+      if const Some(expression) = value {
+        resolveExpression resolver, expression
+      }
+    }
+    .Evaluate(expression) => resolveExpression resolver, expression
+    _ => {}
+  }
+}
+
+fn resolveBinding(var resolver: Resolver, binding: Binding) {
+  resolveExpression resolver, binding.value
+  if const Some(annotation) = binding.annotation {
+    resolveTypeReference resolver, annotation
+  }
+  // A top-level binding is already a global; only a local one needs a slot of its own
+  if resolver.scopeStarts.isEmpty() {
+    patternTokensOnly resolver, binding.pattern, .Variable, isVar: binding.isVar
+  } else {
+    resolvePattern resolver, binding.pattern, .Variable, isVar: binding.isVar
+  }
+}
+
+/** The tokens of a pattern whose names are global already, in a scope that is thrown away right after. */
+fn patternTokensOnly(var resolver: Resolver, pattern: Pattern, role: LocalKind, isVar: Bool) {
+  pushScope resolver
+  resolvePattern resolver, pattern, role, isVar: isVar
+  popScope resolver
+}
+
+fn resolveConditionAndBlock(var resolver: Resolver, condition: Condition, body: Block) {
+  match condition {
+    .Test(expression) => {
+      resolveExpression resolver, expression
+      resolveBlock resolver, body
+    }
+    // The pattern and the body share one scope: what `if const Some(found) = ...` binds is read in the block
+    .Bind(isVar, pattern, value) => {
+      resolveExpression resolver, value
+      pushScope resolver
+      resolvePattern resolver, pattern, .Variable, isVar: isVar
+      resolveStatements resolver, body.statements
+      popScope resolver
+    }
+  }
+}
+
+// --- Declarations -----------------------------------------------------------------------------------------------
+
+fn resolveDeclaration(var resolver: Resolver, declaration: Declaration) {
+  match declaration.kind {
+    // The names of a `use` are colored where they are used and not at the `use` line: without opening the module
+    // they come from, their kind is unknown. `use * as name` is the exception, and is always a namespace
+    .Use(useDeclaration) => {
+      if const .All(alias) = useDeclaration.items {
+        pushToken resolver, alias.span, "namespace", ["declaration"]
+      }
+    }
+    // A `fn` reached here stands at the top level or in a block, never in a type body - those are members and go
+    // through `resolveMember`. It is a `function`, and it sees no implicit `self`
+    .Function(function) => {
+      const outer = resolver.currentType
+      resolver.currentType = None
+      resolveFunction resolver, function, isMethod: false
+      resolver.currentType = outer
+    }
+    .Type(typeDeclaration) => resolveTypeDeclaration resolver, typeDeclaration
+    .Alias(alias) => {
+      pushToken resolver, alias.name.span, "type", ["declaration"]
+      pushGenerics resolver, alias.generics
+      resolveTypeReference resolver, alias.target
+      popGenerics resolver
+    }
+    .Trait(traitDeclaration) => resolveTraitDeclaration resolver, traitDeclaration
+    .Extend(extension) => resolveExtendDeclaration resolver, extension
+    .Foreign(library) => {
+      for member in library.members {
+        resolveForeignMember resolver, member
+      }
+    }
+    .Constant(binding) => resolveConstantBinding resolver, binding
+  }
+}
+
+fn resolveConstantBinding(var resolver: Resolver, binding: Binding) {
+  resolveExpression resolver, binding.value
+  if const Some(annotation) = binding.annotation {
+    resolveTypeReference resolver, annotation
+  }
+  patternTokensOnly resolver, binding.pattern, .Variable, isVar: binding.isVar
+}
+
+/** A `foreign` block declares functions and fields of the library, and no member has a receiver. */
+fn resolveForeignMember(var resolver: Resolver, member: Member) {
+  match member.kind {
+    .Function(function) => resolveFunction resolver, function, isMethod: false
+    .Field(field) => {
+      pushToken resolver, field.name.span, "property", declarationModifiers(field.isVar)
+      resolveTypeReference resolver, field.annotation
+    }
+    .Constant(binding) => resolveConstantBinding resolver, binding
+    _ => {}
+  }
+}
+
+fn resolveTypeDeclaration(var resolver: Resolver, declaration: TypeDeclaration) {
+  pushToken resolver, declaration.name.span, "type", ["declaration"]
+  pushGenerics resolver, declaration.generics
+  for clause in declaration.traits {
+    resolveTraitClause resolver, clause
+  }
+  resolveWhereClauses resolver, declaration.whereClauses
+  resolveMembers resolver, declaration.members, declaration.name.text
+  popGenerics resolver
+}
+
+fn resolveTraitDeclaration(var resolver: Resolver, declaration: TraitDeclaration) {
+  pushToken resolver, declaration.name.span, "interface", ["declaration"]
+  pushGenerics resolver, declaration.generics
+  for supertrait in declaration.supertraits {
+    resolveTypeReference resolver, supertrait
+  }
+  resolveMembers resolver, declaration.members, declaration.name.text
+  popGenerics resolver
+}
+
+fn resolveExtendDeclaration(var resolver: Resolver, declaration: ExtendDeclaration) {
+  pushGenerics resolver, declaration.generics
+  resolveTypeReference resolver, declaration.target
+  for reference in declaration.traits {
+    resolveTypeReference resolver, reference
+  }
+  resolveWhereClauses resolver, declaration.whereClauses
+  if const Some(name) = simpleTypeName(declaration.target) {
+    resolveMembers resolver, declaration.members, name
+  }
+  popGenerics resolver
+}
+
+fn resolveTraitClause(var resolver: Resolver, clause: TraitClause) {
+  resolveTypeReference resolver, clause.capability
+  if const Some(delegate) = clause.delegate {
+    pushToken resolver, delegate.span, "property", []
+  }
+}
+
+fn resolveWhereClauses(var resolver: Resolver, clauses: List<WhereClause>) {
+  for clause in clauses {
+    resolveTypeReference resolver, clause.subject
+    for bound in clause.bounds {
+      resolveTypeReference resolver, bound
+    }
+  }
+}
+
+fn resolveMembers(var resolver: Resolver, members: List<Member>, typeName: String) {
+  const outer = resolver.currentType
+  resolver.currentType = Some typeName
+  for member in members {
+    resolveMember resolver, member
+  }
+  resolver.currentType = outer
+}
+
+fn resolveMember(var resolver: Resolver, member: Member) {
+  match member.kind {
+    .Field(field) => {
+      pushToken resolver, field.name.span, "property", declarationModifiers(field.isVar)
+      resolveTypeReference resolver, field.annotation
+      if const Some(default) = field.default {
+        resolveExpression resolver, default
+      }
+    }
+    // `static origin = Point(0, 0)`: a value of the type, read as a property everywhere
+    .Constant(binding) => {
+      resolveExpression resolver, binding.value
+      if const Some(annotation) = binding.annotation {
+        resolveTypeReference resolver, annotation
+      }
+      for bound in patternNames(binding.pattern) {
+        pushToken resolver, bound.span, "property", ["declaration", "readonly", "static"]
+      }
+    }
+    .Function(function) => resolveFunction resolver, function, isMethod: true
+    .Case(caseDeclaration) => {
+      pushToken resolver, caseDeclaration.name.span, "enumMember", ["declaration"]
+      for field in caseDeclaration.fields {
+        pushToken resolver, field.name.span, "property", declarationModifiers(field.isVar)
+        resolveTypeReference resolver, field.annotation
+        if const Some(default) = field.default {
+          resolveExpression resolver, default
+        }
+      }
+    }
+  }
+}
+
+/**
+ * A `fn`, with a scope stack of its own: parameters and body share one frame, and the frames around the function
+ * are put aside so that a nested `fn` cannot read the locals it is written between.
+ */
+fn resolveFunction(var resolver: Resolver, function: FunctionDeclaration, isMethod: Bool) {
+  const receiver = receiverOf function
+  const changesReceiver = receiver.map({ _.isVar }) ?? false
+  var modifiers = ["declaration"]
+  if isMethod && receiver.isNone() {
+    modifiers.add "static"
+  }
+  // A `var fn` is underlined at its declaration as at every call of it
+  if changesReceiver {
+    modifiers.add "mutable"
+  }
+  const kind = if isMethod {
+    "method"
+  } else {
+    "function"
+  }
+  pushToken resolver, function.name.span, kind, modifiers
+
+  const savedLocals = resolver.locals
+  const savedStarts = resolver.scopeStarts
+  const savedSelf = resolver.selfIsVar
+  resolver.locals = []
+  resolver.scopeStarts = []
+  resolver.selfIsVar = receiver.map({ _.isVar })
+  pushScope resolver
+  pushGenerics resolver, function.generics
+  for parameter in function.parameters {
+    resolveParameter resolver, parameter
+  }
+  if const Some(returnType) = function.returnType {
+    resolveTypeReference resolver, returnType
+  }
+  resolveWhereClauses resolver, function.whereClauses
+  if const Some(body) = function.body {
+    resolveStatements resolver, body.statements
+  }
+  popGenerics resolver
+  popScope resolver
+  resolver.selfIsVar = savedSelf
+  resolver.locals = savedLocals
+  resolver.scopeStarts = savedStarts
+}
+
+fn resolveParameter(var resolver: Resolver, parameter: Parameter) {
+  // The receiver of a method is not written: its span is the name of the function, which already carries the
+  // method's own token. Only a written parameter gets one here
+  if parameter.name.text != "self" {
+    pushToken resolver, parameter.name.span, "parameter", declarationModifiers(parameter.isVar)
+  }
+  declareLocal resolver, parameter.name.text, .Parameter, isVar: parameter.isVar
+  if const Some(annotation) = parameter.annotation {
+    resolveTypeReference resolver, annotation
+  }
+  if const Some(default) = parameter.default {
+    resolveExpression resolver, default
+  }
+}
+
+// --- Types ------------------------------------------------------------------------------------------------------
+
+fn resolveTypeReference(var resolver: Resolver, reference: TypeReference) {
+  match reference.kind {
+    .Named(path, arguments) => {
+      resolveTypePath resolver, path
+      for argument in arguments {
+        resolveTypeReference resolver, argument
+      }
+    }
+    .Optional(inner) | .Lazy(inner) => resolveTypeReference resolver, inner
+    .TupleType(fields) => {
+      for field in fields {
+        if const Some(label) = field.label {
+          pushToken resolver, label.span, "property", ["declaration"]
+        }
+        resolveTypeReference resolver, field.annotation
+      }
+    }
+    .Literals(values) => {
+      for value in values {
+        resolveExpression resolver, value
+      }
+    }
+    .Intersection(members) => {
+      for member in members {
+        resolveTypeReference resolver, member
+      }
+    }
+    .FunctionType(parameters, result) => {
+      for parameter in parameters {
+        if const Some(name) = parameter.name {
+          pushToken resolver, name.span, "parameter", ["declaration"]
+        }
+        resolveTypeReference resolver, parameter.annotation
+      }
+      resolveTypeReference resolver, result
+    }
+    _ => {}
+  }
+}
+
+/**
+ * `List<Int>`, `http.Response`, `Self`. `Self` is left to the TextMate grammar, which already has a scope of its
+ * own for it, and so is the member of a namespace: this tool never opens `"std/http"` to learn what it exports.
+ */
+fn resolveTypePath(var resolver: Resolver, path: List<Name>) {
+  if path.isEmpty() {
+    return
+  }
+  if path.length() > 1 {
+    // A namespaced type: the namespace segment is colored where it is known, the rest is left to the grammar
+    if resolver.fileScope.namespaces.contains(path[0].text) {
+      pushToken resolver, path[0].span, "namespace", []
+    }
+    return
+  }
+  const name = path[0]
+  if name.text == "Self" {
+    return
+  }
+  if isGeneric(resolver, name.text) {
+    pushToken resolver, name.span, "typeParameter", []
+    return
+  }
+  if const Some(info) = resolver.fileScope.types.get(name.text) {
+    const kind = match info.kind {
+      Some(.DeclaredTrait) => "interface"
+      _ => "type"
+    }
+    pushToken resolver, name.span, kind, []
+    return
+  }
+  if primitiveTypes.contains(name.text) {
+    pushToken resolver, name.span, "type", ["defaultLibrary"]
+    return
+  }
+  if resolver.fileScope.importedTypes.contains(name.text) {
+    pushToken resolver, name.span, "type", []
+  }
+}
+
+// --- Patterns ---------------------------------------------------------------------------------------------------
+
+fn resolvePattern(var resolver: Resolver, pattern: Pattern, role: LocalKind, isVar: Bool) {
+  match pattern.kind {
+    .Binding(text) => {
+      pushToken resolver, pattern.span, tokenKindOf(role), declarationModifiers(isVar)
+      declareLocal resolver, text, role, isVar: isVar
+    }
+    .Literal(expression) => resolveExpression resolver, expression
+    .RangePattern(start, end, _) => {
+      resolveExpression resolver, start
+      resolveExpression resolver, end
+    }
+    .TuplePattern(items) => {
+      for item in items {
+        resolvePattern resolver, item, role, isVar: isVar
+      }
+    }
+    .ListPattern(items, rest) => {
+      for item in items {
+        resolvePattern resolver, item, role, isVar: isVar
+      }
+      if const Some(tail) = rest {
+        if const Some(name) = tail.name {
+          pushToken resolver, name.span, tokenKindOf(role), declarationModifiers(isVar)
+          declareLocal resolver, name.text, role, isVar: isVar
+        }
+      }
+    }
+    .Alternatives(patterns) => {
+      for alternative in patterns {
+        resolvePattern resolver, alternative, role, isVar: isVar
+      }
+    }
+    .Variant(path, fields) => {
+      resolveVariantPath resolver, path
+      resolvePatternFields resolver, fields, role, isVar: isVar
+    }
+    .ImplicitVariant(name, fields) => {
+      const modifiers = preludeModifiers name.text
+      pushToken resolver, name.span, "enumMember", modifiers
+      resolvePatternFields resolver, fields, role, isVar: isVar
+    }
+    // A pattern of these shapes writes no name of its own. Listed rather than left to `_`, so a pattern the
+    // language gains is a compile error here instead of a name that silently keeps no color
+    .Wildcard => {}
+    .Invalid => {}
+  }
+}
+
+fn resolvePatternFields(var resolver: Resolver, fields: List<FieldPattern>, role: LocalKind, isVar: Bool) {
+  for field in fields {
+    if const Some(label) = field.label {
+      pushToken resolver, label.span, "property", []
+    }
+    resolvePattern resolver, field.pattern, role, isVar: isVar
+  }
+}
+
+/**
+ * `value` (a positional destructure of a type's fields), `None` (an imported case), `Shape.Circle` (a case, always -
+ * a positional destructure never has more than one segment).
+ */
+fn resolveVariantPath(var resolver: Resolver, path: List<Name>) {
+  if path.isEmpty() {
+    return
+  }
+  if path.length() > 1 {
+    const lastIndex = path.length() - 1
+    for index in 0..lastIndex {
+      resolveTypePath resolver, [path[index]]
+    }
+    const caseName = path[lastIndex]
+    pushToken resolver, caseName.span, "enumMember", []
+    return
+  }
+  const name = path[0]
+  if isKnownCase(resolver, name.text) {
+    const modifiers = preludeModifiers name.text
+    pushToken resolver, name.span, "enumMember", modifiers
+  } else if isKnownType(resolver, name.text) {
+    pushToken resolver, name.span, "type", []
+  }
+  // Otherwise an upper-case name this tool cannot place without opening another file: no token, so the TextMate
+  // grammar's own guess - a capitalized bare word is a type - is what shows
+}
+
+// --- Expressions ------------------------------------------------------------------------------------------------
+
+fn resolveExpression(var resolver: Resolver, expression: Expression) {
+  match expression.kind {
+    .TextLiteral(segments) => {
+      for segment in segments {
+        if const .Interpolated(inner) = segment {
+          resolveExpression resolver, inner
+        }
+      }
+    }
+    .Name(text) => resolveNameUse resolver, text, expression.span
+    .ImplicitMember(name) => {
+      const modifiers = preludeModifiers name.text
+      pushToken resolver, name.span, "enumMember", modifiers
+    }
+    .Generic(target, arguments) => {
+      resolveExpression resolver, target
+      for argument in arguments {
+        resolveTypeReference resolver, argument
+      }
+    }
+    .TupleLiteral(items) | .ListLiteral(items) => {
+      for item in items {
+        resolveArgument resolver, item
+      }
+    }
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        resolveExpression resolver, key
+        resolveExpression resolver, value
+      }
+    }
+    .Member(target, name, _) => resolveMemberAccess resolver, target, name, called: false
+    .Index(target, index) => {
+      resolveExpression resolver, target
+      resolveExpression resolver, index
+    }
+    .Call(callee, arguments, _) => resolveCall resolver, callee, arguments
+    .Unary(_, operand) => resolveExpression resolver, operand
+    .Binary(_, left, right) => {
+      resolveExpression resolver, left
+      resolveExpression resolver, right
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(from) = start {
+        resolveExpression resolver, from
+      }
+      if const Some(to) = end {
+        resolveExpression resolver, to
+      }
+    }
+    .Try(inner) => resolveExpression resolver, inner
+    .Closure(closure) => resolveClosure resolver, closure
+    .If(condition, then, otherwise) => {
+      resolveConditionAndBlock resolver, condition, then
+      if const Some(alternative) = otherwise {
+        resolveExpression resolver, alternative
+      }
+    }
+    .Match(subject, arms) => {
+      resolveExpression resolver, subject
+      for arm in arms {
+        pushScope resolver
+        resolvePattern resolver, arm.pattern, .Variable, isVar: false
+        if const Some(guard) = arm.guard {
+          resolveExpression resolver, guard
+        }
+        resolveExpression resolver, arm.body
+        popScope resolver
+      }
+    }
+    .Block(block) => resolveBlock resolver, block
+    _ => {}
+  }
+}
+
+/** The label of a tuple or list item names a field, never a parameter: there is no callee to take one. */
+fn resolveArgument(var resolver: Resolver, argument: Argument) {
+  if const Some(label) = argument.label {
+    pushToken resolver, label.span, "property", []
+  }
+  resolveExpression resolver, argument.value
+}
+
+fn resolveClosure(var resolver: Resolver, closure: Closure) {
+  pushScope resolver
+  for parameter in closure.parameters {
+    resolvePattern resolver, parameter.pattern, .Parameter, isVar: false
+    if const Some(annotation) = parameter.annotation {
+      resolveTypeReference resolver, annotation
+    }
+  }
+  resolveStatements resolver, closure.body.statements
+  popScope resolver
+}
+
+fn resolveBlock(var resolver: Resolver, block: Block) {
+  pushScope resolver
+  resolveStatements resolver, block.statements
+  popScope resolver
+}
+
+/**
+ * A bare name in expression position: `_` and `_2` (the implicit closure parameters), a local, a field or method of
+ * `self`, a case, a type used as a value, a function, a namespace, a global - or nothing this tool can place.
+ */
+fn resolveNameUse(var resolver: Resolver, text: String, span: Span) {
+  if text == "self" {
+    // Colored only for its `mutable` modifier; a plain `self` is left to the TextMate grammar's own scope for it,
+    // so it does not fight the legend's default
+    if const Some(isVar) = resolver.selfIsVar {
+      if isVar {
+        pushToken resolver, span, "parameter", ["mutable"]
+      }
+    }
+    return
+  }
+  if text == "Self" {
+    return
+  }
+  if isImplicitParameter(text) {
+    pushToken resolver, span, "parameter", []
+    return
+  }
+  if isGeneric(resolver, text) {
+    pushToken resolver, span, "typeParameter", []
+    return
+  }
+  if const Some(local) = findLocal(resolver.locals, text) {
+    pushLocalToken resolver, span, local
+    return
+  }
+  if const Some(info) = currentTypeInfo(resolver) {
+    if const Some(field) = info.fields.get(text) {
+      const modifiers = fieldModifiers field
+      pushToken resolver, span, "property", modifiers
+      return
+    }
+    if const Some(method) = info.methods.get(text) {
+      const modifiers = methodModifiers method
+      pushToken resolver, span, "method", modifiers
+      return
+    }
+  }
+  if startsUpperCase(text) {
+    if isKnownCase(resolver, text) {
+      const modifiers = preludeModifiers text
+      pushToken resolver, span, "enumMember", modifiers
+    } else if isKnownType(resolver, text) {
+      pushToken resolver, span, "type", []
+    }
+    return
+  }
+  if resolver.fileScope.functions.contains(text) || resolver.fileScope.importedFunctions.contains(text) {
+    pushToken resolver, span, "function", []
+    return
+  }
+  if resolver.fileScope.namespaces.contains(text) {
+    pushToken resolver, span, "namespace", []
+    return
+  }
+  if const Some(isVar) = resolver.fileScope.globals.get(text) {
+    pushToken resolver, span, "variable", readonlyModifiers(isVar)
+  }
+}
+
+/** `_`, `_2`, `_3`: the parameters a closure does not name. */
+fn isImplicitParameter(text: String): Bool {
+  if !text.startsWith("_") {
+    return false
+  }
+  for character in text[1..].chars() {
+    if !character.isDigit() {
+      return false
+    }
+  }
+  true
+}
+
+fn pushLocalToken(var resolver: Resolver, span: Span, local: LocalSymbol) {
+  match local.kind {
+    .NestedFunction => pushToken resolver, span, "function", []
+    .Variable => pushToken resolver, span, "variable", readonlyModifiers(local.isVar)
+    .Parameter => pushToken resolver, span, "parameter", readonlyModifiers(local.isVar)
+  }
+}
+
+/**
+ * What the target of a `.name` is. This is where a type checker would enter: it would answer the type of any
+ * receiver instead of [MemberTarget.UnknownReceiver], and everything below would follow unchanged.
+ */
+fn memberTargetOf(resolver: Resolver, target: Expression): MemberTarget {
+  if const .Name(text) = target.kind {
+    if text == "self" || text == "Self" {
+      if const Some(current) = resolver.currentType {
+        return MemberTarget.KnownType current
+      }
+    }
+    if findLocal(resolver.locals, text).isNone() {
+      if resolver.fileScope.types.containsKey(text) {
+        return MemberTarget.KnownType text
+      }
+      if resolver.fileScope.namespaces.contains(text) {
+        return MemberTarget.KnownNamespace
+      }
+    }
+  }
+  MemberTarget.UnknownReceiver
+}
+
+fn resolveMemberAccess(var resolver: Resolver, target: Expression, name: Name, called: Bool) {
+  resolveExpression resolver, target
+  const targetKind = memberTargetOf resolver, target
+  match targetKind {
+    .KnownType(typeName) => resolveTypeMember resolver, typeName, name, called: called
+    .KnownNamespace => {
+      if called {
+        pushToken resolver, name.span, "function", []
+      }
+    }
+    .UnknownReceiver => {
+      // The receiver has no type here, so only a name that is a `var fn` wherever this file declares it is
+      // underlined - see `FileScope.changingMethods`
+      const changes = called && resolver.fileScope.changingMethods.get(name.text) == Some(true)
+      const modifiers = if changes {
+        ["mutable"]
+      } else {
+        []
+      }
+      const kind = if called {
+        "method"
+      } else {
+        "property"
+      }
+      pushToken resolver, name.span, kind, modifiers
+    }
+  }
+}
+
+fn resolveTypeMember(var resolver: Resolver, typeName: String, name: Name, called: Bool) {
+  if const Some(info) = resolver.fileScope.types.get(typeName) {
+    if const Some(field) = info.fields.get(name.text) {
+      const modifiers = fieldModifiers field
+      pushToken resolver, name.span, "property", modifiers
+      return
+    }
+    if const Some(method) = info.methods.get(name.text) {
+      const modifiers = methodModifiers method
+      pushToken resolver, name.span, "method", modifiers
+      return
+    }
+    if info.cases.contains(name.text) {
+      pushToken resolver, name.span, "enumMember", []
+      return
+    }
+  }
+  if called {
+    pushToken resolver, name.span, "method", []
+  } else if preludeCases.contains(name.text) {
+    pushToken resolver, name.span, "enumMember", ["defaultLibrary"]
+  }
+}
+
+/**
+ * A call of a dotted name is a method, of a bare name a function - unless the bare name is a local, a method of the
+ * enclosing type, or a type used as a constructor. Answers whether it was a constructor, so a labeled argument is
+ * colored as a field rather than as a parameter.
+ */
+fn resolveCall(var resolver: Resolver, callee: Expression, arguments: List<Argument>) {
+  const isConstructor = match callee.kind {
+    .Member(target, name, _) => {
+      resolveMemberAccess resolver, target, name, called: true
+      false
+    }
+    .Name(text) => resolveCallName resolver, text, callee.span
+    _ => {
+      resolveExpression resolver, callee
+      false
+    }
+  }
+  const labelKind = if isConstructor {
+    "property"
+  } else {
+    "parameter"
+  }
+  for argument in arguments {
+    if const Some(label) = argument.label {
+      pushToken resolver, label.span, labelKind, []
+    }
+    resolveExpression resolver, argument.value
+  }
+}
+
+fn resolveCallName(var resolver: Resolver, text: String, span: Span): Bool {
+  if const Some(local) = findLocal(resolver.locals, text) {
+    pushLocalToken resolver, span, local
+    return false
+  }
+  if const Some(info) = currentTypeInfo(resolver) {
+    if const Some(method) = info.methods.get(text) {
+      const modifiers = methodModifiers method
+      pushToken resolver, span, "method", modifiers
+      return false
+    }
+  }
+  if startsUpperCase(text) {
+    if isKnownCase(resolver, text) {
+      const modifiers = preludeModifiers text
+      pushToken resolver, span, "enumMember", modifiers
+      return false
+    }
+    if isKnownType(resolver, text) {
+      pushToken resolver, span, "type", []
+      return true
+    }
+    return false
+  }
+  if resolver.fileScope.functions.contains(text) || resolver.fileScope.importedFunctions.contains(text) {
+    pushToken resolver, span, "function", []
+    return false
+  }
+  if const Some(isVar) = resolver.fileScope.globals.get(text) {
+    pushToken resolver, span, "variable", readonlyModifiers(isVar)
+  }
+  false
+}

@@ -143,8 +143,16 @@ function log(vscode, message) {
   outputChannel.appendLine(message);
 }
 
-/** `torbscript.executablePath`, or a `torb`/`torb.exe` this looks for under the open workspace folders'
- * `bootstrap/target/{release,debug}`, or finally the bare command name to try on `PATH`. */
+// Where a `torb` is looked for under a workspace folder, in the order it is preferred: the self-hosted compiler
+// `sh tools/bootstrap.sh` writes first, then the two profiles of the Rust bootstrap while that still exists.
+const EXECUTABLE_CANDIDATES = [
+  ['build', 'release'],
+  ['bootstrap', 'target', 'release'],
+  ['bootstrap', 'target', 'debug'],
+];
+
+/** `torbscript.executablePath`, or the first `torb`/`torb.exe` of `EXECUTABLE_CANDIDATES` that exists under an open
+ * workspace folder, or finally the bare command name to try on `PATH`. */
 function findExecutable(vscode, fs, path) {
   const vscode_config = vscode.workspace.getConfiguration('torbscript');
   const configured = vscode_config.get('executablePath');
@@ -153,8 +161,8 @@ function findExecutable(vscode, fs, path) {
   }
   const exeName = process.platform === 'win32' ? 'torb.exe' : 'torb';
   for (const folder of vscode.workspace.workspaceFolders || []) {
-    for (const profile of ['release', 'debug']) {
-      const candidate = path.join(folder.uri.fsPath, 'bootstrap', 'target', profile, exeName);
+    for (const parts of EXECUTABLE_CANDIDATES) {
+      const candidate = path.join(folder.uri.fsPath, ...parts, exeName);
       try {
         if (fs.existsSync(candidate)) {
           return candidate;

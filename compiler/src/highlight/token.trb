@@ -1,0 +1,45 @@
+/**
+ * What `torb highlight` produces for one name: [HighlightToken], and the two modifier lists almost every token
+ * carries.
+ *
+ * A kind and a modifier are the names of VS Code's semantic token protocol - `type`, `method`, `parameter`,
+ * `declaration`, `mutable` - and the editor extension declares the same words in its legend. They travel as text
+ * from here into the JSON document and are never interpreted on the way, so a kind this compiler learns is one the
+ * extension may ignore rather than one that breaks it.
+ */
+
+use Span from "../syntax/source"
+
+/** One semantic token: the range of the name, the kind of thing it is, and what is true about it. */
+public type HighlightToken {
+  span: Span
+  kind: String
+  modifiers: List<String>
+}
+
+/**
+ * The modifiers of a name where it is *declared*: that it is a declaration, and whether it can be written.
+ *
+ * # Related
+ *
+ * - [readonlyModifiers] - the same answer without `declaration`, for a use of the name.
+ */
+public fn declarationModifiers(isVar: Bool): List<String> {
+  if isVar {
+    ["declaration", "mutable"]
+  } else {
+    ["declaration", "readonly"]
+  }
+}
+
+/**
+ * The modifiers of a name where it is *used*: whether it can be written. `mutable` is the one difference the editor
+ * draws between a `var` name and a `const` one, which is an underline rather than a second color.
+ */
+public fn readonlyModifiers(isVar: Bool): List<String> {
+  if isVar {
+    ["mutable"]
+  } else {
+    ["readonly"]
+  }
+}

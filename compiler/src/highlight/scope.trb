@@ -1,0 +1,434 @@
+/**
+ * The global names of one file, collected before a single token is produced: [FileScope], and [fileScopeOf], which
+ * walks a [SourceFile] into one.
+ *
+ * The highlighter answers about the file in front of it and opens no other, so this table is what a name is
+ * measured against: the types, traits and aliases the file declares, the members of each of them, its top-level
+ * functions and constants, and the local name every `use` binds. A `use` says nothing about *what* it imports, so
+ * a single-segment one is placed by the case of its first letter and a longer one is a case - only a case is ever
+ * imported through a type.
+ *
+ * A declaration written inside of a block is collected as if it stood at the top level. That is an
+ * over-approximation - such a declaration really is scoped to its block - and it is deliberate: it keeps this pass
+ * one walk without a scope stack, and the name it may wrongly place is one a file would have to declare twice for
+ * the difference to show. A `const`/`var` binding is the exception and is only global when it really is top level,
+ * because a local leaking into a sibling scope would color an unrelated name.
+ *
+ * The resolver of `./resolve` is what turns these names into tokens; this file only says what the file declares.
+ */
+
+use SourceFile, Statement, Declaration, Member, Condition, Expression from "../syntax/ast"
+use FunctionDeclaration, Parameter, Pattern, Name from "../syntax/ast"
+use UseDeclaration, TypeReference from "../syntax/ast"
+
+/** The types of the language itself, known in every file whatever it declares or imports. */
+public const primitiveTypes: List<String> = [
+  "Int",
+  "Int8",
+  "Int16",
+  "Int32",
+  "Int64",
+  "UInt",
+  "UInt8",
+  "UInt16",
+  "UInt32",
+  "UInt64",
+  "Float",
+  "Float32",
+  "Float64",
+  "Decimal",
+  "Bool",
+  "Char",
+  "String",
+  "Void",
+  "Never",
+]
+
+/** `Some`, `None`, `Ok` and `Fail`: the prelude imports them into every file, so they stand bare everywhere. */
+public const preludeCases: List<String> = ["Some", "None", "Ok", "Fail"]
+
+/** Whether a name the file declares is a `type` or a `trait`. The two get different token kinds. */
+public type GlobalKind {
+  case DeclaredType
+  case DeclaredTrait
+}
+
+/** A field of a type, or a `static` value of it, as far as the syntax alone says. */
+public type FieldSymbol {
+  isVar: Bool
+  /** A `static` value of the type, and not a field of every value of it. */
+  isStatic: Bool
+}
+
+/** A member `fn` of a type: whether it has a receiver at all, and whether it changes it. */
+public type MethodSymbol {
+  /** False for a `static fn`, whose call sites carry `static` instead. */
+  hasReceiver: Bool
+  /** A `var fn`, which the editor underlines like a `var` field. */
+  changesReceiver: Bool
+}
+
+/** What one `type`, `trait` or `extend` body of the file declares. */
+public type TypeInfo {
+  /** `None` for an `extend` of a type another module declares, and for an alias. */
+  var kind: GlobalKind? = None
+  var fields: Map<String, FieldSymbol> = [:]
+  var methods: Map<String, MethodSymbol> = [:]
+  var cases: Set<String> = Set.of()
+}
+
+/** Every name of one file that is not local to a block. */
+public type FileScope {
+  /**
+   * `type`, `trait` and `type X = ...` declarations, plus the types an `extend` adds to - which may be declared
+   * somewhere else entirely, and then carry no [GlobalKind].
+   */
+  var types: Map<String, TypeInfo> = [:]
+  /** Top-level `fn` declarations. A nested one is a local name and is never in here. */
+  var functions: Set<String> = Set.of()
+  /**
+   * Every member name of the file that is a `var fn` in every declaration of it. Without a type checker the
+   * receiver of `counter.grow 1` has no type, so this is what underlines the call all the same; a name that is a
+   * `var fn` in one type and something else in another answers `false` and stays plain.
+   */
+  var changingMethods: Map<String, Bool> = [:]
+  /** Top-level `const` and `var` bindings, by whether they can be written. */
+  var globals: Map<String, Bool> = [:]
+  /** `use * as name`. */
+  var namespaces: Set<String> = Set.of()
+  /** The local name of a `use` whose path has more than one segment, or of one that starts upper case. */
+  var importedCases: Set<String> = Set.of()
+  /** A single-segment `use` whose first letter is upper case. */
+  var importedTypes: Set<String> = Set.of()
+  /** A single-segment `use` whose first letter is lower case. */
+  var importedFunctions: Set<String> = Set.of()
+  /**
+   * Every case name of every type of the file, in one set. A case is looked up far more often than a type is
+   * declared, so the union is built while the types are and never searched for again.
+   */
+  var declaredCases: Set<String> = Set.of()
+}
+
+/** The global names of a file, in one walk over its tree. */
+public fn fileScopeOf(file: SourceFile): FileScope {
+  var scope = FileScope()
+  collectStatements scope, file.statements, topLevel: true
+  scope
+}
+
+/**
+ * The name an `extend`'s target, or a `Shape.Circle` path, ultimately refers to: the last segment of a written
+ * type, so `http.Response` answers `Response`.
+ */
+public fn simpleTypeName(reference: TypeReference): String? {
+  if const .Named(path, _) = reference.kind {
+    return path.last().map({ _.text })
+  }
+  None
+}
+
+/**
+ * Every name a pattern binds, with its span. Used for a binding (`const (a, b) = pair`) and for the pattern of a
+ * `static` member, which is a binding too in case it ever destructures.
+ *
+ * Every branch of an alternative is walked and not only the first, because this answers "which names does the
+ * source write here" rather than "which names are in scope afterwards".
+ */
+public fn patternNames(pattern: Pattern): List<Name> {
+  var found: List<Name> = []
+  collectPatternNames pattern, found
+  found
+}
+
+/** `A` to `Z`, the rule the parser uses to tell a binding from a case. A name is ASCII, so nothing else fits. */
+public fn startsUpperCase(text: String): Bool {
+  match text.chars().first() {
+    Some(first) => first >= 'A' && first <= 'Z'
+    None => false
+  }
+}
+
+fn collectPatternNames(pattern: Pattern, var found: List<Name>) {
+  match pattern.kind {
+    .Binding(name) => found.add Name(name, pattern.span)
+    .TuplePattern(items) => {
+      for item in items {
+        collectPatternNames item, found
+      }
+    }
+    .ListPattern(items, rest) => {
+      for item in items {
+        collectPatternNames item, found
+      }
+      if const Some(tail) = rest {
+        if const Some(name) = tail.name {
+          found.add name
+        }
+      }
+    }
+    .Alternatives(patterns) => {
+      for alternative in patterns {
+        collectPatternNames alternative, found
+      }
+    }
+    .Variant(_, fields) | .ImplicitVariant(_, fields) => {
+      for field in fields {
+        collectPatternNames field.pattern, found
+      }
+    }
+    // Nothing a pattern of these shapes writes is a name it binds. Listed rather than left to `_`, so a
+    // pattern the language gains cannot pass through this walk unnoticed
+    .Wildcard => {}
+    .Literal(_) => {}
+    .RangePattern(_, _, _) => {}
+    .Invalid => {}
+  }
+}
+
+fn collectStatements(var scope: FileScope, statements: List<Statement>, topLevel: Bool) {
+  for statement in statements {
+    collectStatement scope, statement, topLevel: topLevel
+  }
+}
+
+fn collectStatement(var scope: FileScope, statement: Statement, topLevel: Bool) {
+  match statement.kind {
+    .Declare(declaration) => collectDeclaration scope, declaration, topLevel: topLevel
+    .Bind(binding) => {
+      if topLevel {
+        for bound in patternNames(binding.pattern) {
+          scope.globals.set bound.text, binding.isVar
+        }
+      }
+      collectExpression scope, binding.value
+    }
+    .Assign(target, value) => {
+      collectExpression scope, target
+      collectExpression scope, value
+    }
+    .For(_, iterable, body) => {
+      collectExpression scope, iterable
+      collectStatements scope, body.statements, topLevel: false
+    }
+    .While(condition, body) => {
+      collectCondition scope, condition
+      collectStatements scope, body.statements, topLevel: false
+    }
+    .Loop(body) => collectStatements scope, body.statements, topLevel: false
+    .Return(value) => {
+      if const Some(expression) = value {
+        collectExpression scope, expression
+      }
+    }
+    .Evaluate(expression) => collectExpression scope, expression
+    _ => {}
+  }
+}
+
+fn collectCondition(var scope: FileScope, condition: Condition) {
+  match condition {
+    .Test(expression) => collectExpression scope, expression
+    .Bind(_, _, value) => collectExpression scope, value
+  }
+}
+
+/**
+ * Descends into every place a declaration can stand inside of an expression, so a `use` or a `type` written in a
+ * closure or an `if` is known in the whole file. See the module comment for why that is an over-approximation.
+ */
+fn collectExpression(var scope: FileScope, expression: Expression) {
+  match expression.kind {
+    .TextLiteral(segments) => {
+      for segment in segments {
+        if const .Interpolated(inner) = segment {
+          collectExpression scope, inner
+        }
+      }
+    }
+    .Generic(target, _) => collectExpression scope, target
+    .TupleLiteral(items) | .ListLiteral(items) => {
+      for item in items {
+        collectExpression scope, item.value
+      }
+    }
+    .MapLiteral(entries) => {
+      for (key, value) in entries {
+        collectExpression scope, key
+        collectExpression scope, value
+      }
+    }
+    .Member(target, _, _) => collectExpression scope, target
+    .Index(target, index) => {
+      collectExpression scope, target
+      collectExpression scope, index
+    }
+    .Call(callee, arguments, _) => {
+      collectExpression scope, callee
+      for argument in arguments {
+        collectExpression scope, argument.value
+      }
+    }
+    .Unary(_, operand) => collectExpression scope, operand
+    .Binary(_, left, right) => {
+      collectExpression scope, left
+      collectExpression scope, right
+    }
+    .RangeLiteral(start, end, _) => {
+      if const Some(from) = start {
+        collectExpression scope, from
+      }
+      if const Some(to) = end {
+        collectExpression scope, to
+      }
+    }
+    .Try(inner) => collectExpression scope, inner
+    .Closure(closure) => collectStatements scope, closure.body.statements, topLevel: false
+    .If(condition, then, otherwise) => {
+      collectCondition scope, condition
+      collectStatements scope, then.statements, topLevel: false
+      if const Some(alternative) = otherwise {
+        collectExpression scope, alternative
+      }
+    }
+    .Match(subject, arms) => {
+      collectExpression scope, subject
+      for arm in arms {
+        if const Some(guard) = arm.guard {
+          collectExpression scope, guard
+        }
+        collectExpression scope, arm.body
+      }
+    }
+    .Block(block) => collectStatements scope, block.statements, topLevel: false
+    _ => {}
+  }
+}
+
+fn collectDeclaration(var scope: FileScope, declaration: Declaration, topLevel: Bool) {
+  match declaration.kind {
+    .Use(useDeclaration) => collectUse scope, useDeclaration
+    .Function(function) => {
+      if topLevel {
+        scope.functions.add function.name.text
+      }
+      // A function's own body is never top level, whatever surrounds the function
+      if const Some(body) = function.body {
+        collectStatements scope, body.statements, topLevel: false
+      }
+    }
+    .Type(typeDeclaration) => {
+      const info = typeInfoOf typeDeclaration.members, Some(GlobalKind.DeclaredType)
+      rememberMembers scope, info
+      scope.types.set typeDeclaration.name.text, info
+    }
+    .Alias(alias) => {
+      if !scope.types.containsKey(alias.name.text) {
+        scope.types.set alias.name.text, TypeInfo()
+      }
+    }
+    .Trait(traitDeclaration) => {
+      const info = typeInfoOf traitDeclaration.members, Some(GlobalKind.DeclaredTrait)
+      rememberMembers scope, info
+      scope.types.set traitDeclaration.name.text, info
+    }
+    .Extend(extension) => {
+      if const Some(name) = simpleTypeName(extension.target) {
+        const addition = typeInfoOf extension.members, None
+        rememberMembers scope, addition
+        addTo scope, name, addition
+      }
+    }
+    .Foreign(library) => {
+      for member in library.members {
+        if const .Function(function) = member.kind {
+          scope.functions.add function.name.text
+        }
+      }
+    }
+    .Constant(binding) => {
+      if topLevel {
+        for bound in patternNames(binding.pattern) {
+          scope.globals.set bound.text, binding.isVar
+        }
+      }
+    }
+  }
+}
+
+/** The members of an `extend` join whatever the type already has, so a type and its extensions read as one. */
+fn addTo(var scope: FileScope, name: String, addition: TypeInfo) {
+  var entry = scope.types.get(name) ?? TypeInfo()
+  entry.fields.merge addition.fields
+  entry.methods.merge addition.methods
+  entry.cases.addAll addition.cases
+  scope.types.set name, entry
+}
+
+/**
+ * What one type body adds to the two tables that are keyed by member name rather than by type: the cases of every
+ * type in one set, and the methods that are a `var fn` everywhere.
+ *
+ * A method name stays in [FileScope.changingMethods] as `true` only while every declaration of it in this file
+ * agrees that it is a `var fn`.
+ */
+fn rememberMembers(var scope: FileScope, info: TypeInfo) {
+  scope.declaredCases.addAll info.cases
+  for entry in info.methods {
+    const changes = entry.value.changesReceiver
+    const known = scope.changingMethods.get(entry.key) ?? changes
+    scope.changingMethods.set(entry.key, known && changes)
+  }
+}
+
+fn collectUse(var scope: FileScope, useDeclaration: UseDeclaration) {
+  match useDeclaration.items {
+    .All(alias) => scope.namespaces.add alias.text
+    .Names(items) => {
+      for item in items {
+        const localName = item.localName().text
+        if item.path.length() > 1 {
+          scope.importedCases.add localName
+        } else if startsUpperCase(localName) {
+          scope.importedTypes.add localName
+        } else {
+          scope.importedFunctions.add localName
+        }
+      }
+    }
+  }
+}
+
+/** Reads the members of a `type`, `trait` or `extend` body once, for the table and for the resolver alike. */
+fn typeInfoOf(members: List<Member>, kind: GlobalKind?): TypeInfo {
+  var info = TypeInfo kind
+  for member in members {
+    match member.kind {
+      .Field(field) => info.fields.set field.name.text, FieldSymbol(field.isVar, isStatic: false)
+      .Constant(binding) => {
+        for bound in patternNames(binding.pattern) {
+          info.fields.set bound.text, FieldSymbol(false, isStatic: true)
+        }
+      }
+      .Function(function) => {
+        const receiver = receiverOf function
+        const changes = receiver.map({ _.isVar }) ?? false
+        info.methods.set function.name.text, MethodSymbol(receiver.isSome(), changesReceiver: changes)
+      }
+      .Case(caseDeclaration) => info.cases.add caseDeclaration.name.text
+    }
+  }
+  info
+}
+
+/**
+ * The receiver a member `fn` was parsed with. The parser writes `self` back as the first parameter of a method and
+ * leaves a `static fn` without one, so this is the whole difference between the two.
+ */
+public fn receiverOf(function: FunctionDeclaration): Parameter? {
+  if const Some(parameter) = function.parameters.first() {
+    if parameter.name.text == "self" {
+      return Some parameter
+    }
+  }
+  None
+}

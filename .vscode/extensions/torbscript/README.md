@@ -57,21 +57,21 @@ where to check what changed.
 
 A TextMate grammar is regular expressions over the raw text: it cannot know whether `x` is a field, a local or a
 parameter, whether `Circle` is a case or a type, or whether `describe` is a method or a free function - all of that
-needs the syntax tree. `torb highlight` (`bootstrap/crates/torb-cli/src/highlight/`, documented in
-`bootstrap/README.md`) is stage 0's answer: it parses the file with `torb_syntax` and prints one JSON document of
-semantic tokens, which `extension.js` turns into a `vscode.SemanticTokensBuilder` result through a
-`DocumentSemanticTokensProvider` registered for the `trb` language. VS Code layers semantic tokens on top of the
-TextMate grammar, so a name this provider does not color (an unresolved import, an arbitrary receiver's field) just
-keeps its TextMate color instead of going blank.
+needs the syntax tree. `torb highlight` (`compiler/src/highlight/`, documented in
+[docs/tooling/the-torb-command](../../../docs/tooling/the-torb-command.md)) is the answer: it parses the file with the
+compiler's own front end and prints one JSON document of semantic tokens, which `extension.js` turns into a
+`vscode.SemanticTokensBuilder` result through a `DocumentSemanticTokensProvider` registered for the `trb` language.
+VS Code layers semantic tokens on top of the TextMate grammar, so a name this provider does not color (an unresolved
+import, an arbitrary receiver's field) just keeps its TextMate color instead of going blank.
 
-**What it can tell apart** (see `resolver.rs`'s doc comment for the exact rules): types, traits, generic parameters
-(including `const` ones), cases (`case Circle`, `.Circle`, `Shape.Circle`, and the prelude's `Some`/`None`/`Ok`/
-`Fail` bare), namespaces (`use * as name`), functions vs. methods (a dotted call is a method, a bare one a function
-- in both command style and call style, which always color the same), parameters vs. locals vs. fields (a bare
-field inside one of its type's own methods included, e.g. `sent = sent + 1`), and `const` vs. `var` (a modifier, not
-a color - see the palette below).
+**What it can tell apart** (see the module comment of `compiler/src/highlight/resolve.trb` for the exact rules):
+types, traits, generic parameters (including `const` ones), cases (`case Circle`, `.Circle`, `Shape.Circle`, and the
+prelude's `Some`/`None`/`Ok`/`Fail` bare), namespaces (`use * as name`), functions vs. methods (a dotted call is a
+method, a bare one a function - in both command style and call style, which always color the same), parameters vs.
+locals vs. fields (a bare field inside one of its type's own methods included, e.g. `sent = sent + 1`), and `const`
+vs. `var` (a modifier, not a color - see the palette below).
 
-**What it cannot tell**, because there is no type checker in stage 0: the real type of an arbitrary receiver
+**What it cannot tell**, because it answers from the syntax tree alone: the real type of an arbitrary receiver
 (`value.field` is *assumed* to be a field, `value.method()` a method, purely because of the call after the dot -
 that is also all a real type checker's answer would look like from here, so this rarely shows), and what a
 single-segment `use Name from "..."` actually names in the file it comes from (guessed from the first letter's
@@ -82,7 +82,7 @@ reasonable) is what shows.
 
 | Setting                                       | Default | Meaning |
 |------------------------------------------------|---------|---------|
-| `torbscript.executablePath`                    | `""`    | Path to `torb`. Empty searches `bootstrap/target/release/torb[.exe]`, then `bootstrap/target/debug/torb[.exe]`, under every open workspace folder, then falls back to `torb` on `PATH`. |
+| `torbscript.executablePath`                    | `""`    | Path to `torb`. Empty searches `build/release/torb[.exe]` first, then `bootstrap/target/release/torb[.exe]` and `bootstrap/target/debug/torb[.exe]`, under every open workspace folder, then falls back to `torb` on `PATH`. |
 | `torbscript.semanticHighlighting.enabled`      | `true`  | Turn semantic highlighting off entirely (only the TextMate grammar's colors show). Also what happens automatically if `torb` cannot be found or run - never an error popup, only one line in the "TorbScript" output channel (View > Output). |
 
 ### The legend
@@ -145,8 +145,8 @@ already used for comments in most themes, including this grammar's).
 - **`extension.js` / `package.json`**: also "Developer: Reload Window" (this is a workspace extension, not running
   under the Extension Development Host, so there is no separate debug window to restart).
 - **The `torb` binary**: no reload needed - the semantic tokens provider spawns a fresh process for every request
-  (VS Code already debounces those while typing), so a rebuilt `bootstrap/target/release/torb` takes effect on the
-  next keystroke or file switch. If nothing changes, check the "TorbScript" output channel (View > Output) first:
+  (VS Code already debounces those while typing), so a rebuilt `build/release/torb` takes effect on the next
+  keystroke or file switch. If nothing changes, check the "TorbScript" output channel (View > Output) first:
   the provider never pops up an error, only logs one line there.
 
 ## Tasks
