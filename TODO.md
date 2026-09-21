@@ -3038,3 +3038,7 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Damit ist in `docs/PROJECT.md` nur noch EINE Frage offen** (braucht `torb publish` ein `--from-environment`,
     wenn eine Einstellung an einer Umgebungsvariablen hing?); `docs/RESOURCES.md` hat gar keine mehr. Gates:
     `docs check` 223 Seiten / 947 Snippets, `docs index --check` 24 Indizes, `check ..` 326 Dateien - grün.
+  - **Entschieden (Nutzer, 2026-09-22): KEIN `--from-environment`.** `project.trb` liest Umgebungsvariablen ganz
+    normal - das ist wahrscheinlich die meistgenutzte Funktion jeder Konfigurationsdatei in trb, noch vor dem
+    Dateilesen. `torb publish` nennt die gelesenen Variablen beim Hochladen (mit Namen), verlangt aber weder Flag
+    noch Bestätigung. Damit ist in `docs/PROJECT.md` und `docs/RESOURCES.md` nichts mehr offen.

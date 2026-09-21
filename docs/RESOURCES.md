@@ -778,6 +778,3 @@ Nothing is open in this document. The three questions the previous round left �
 the `Task` on `Resource.bytes()` is the right trade, and whether an oversized embedding is a note or an error — are
 answered above and in `docs/PROJECT.md` section 9: two types, the `Task` stays (a return value is not a colour), and
 two configurable levels of which the upper one fails the build.
-
-The one question that remains anywhere belongs to `docs/PROJECT.md` section 14 — whether `torb publish` needs a flag
-when a setting came from an environment variable — and it is about nothing here.

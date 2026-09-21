@@ -641,9 +641,9 @@ anyway, so they are written down as pitfalls rather than as a prohibition. Both 
    locked manifest below, which is the file a registry, a consumer and an editor read. A manifest that writes
    `description Environment.get("NPM_TOKEN") ?? ""` publishes the token, and no mechanism can tell a token from a tag.
    What the design can do is make it visible at the moment it matters: the locked manifest records **which** variables
-   were read (by name), and `torb publish` prints that list before it uploads. A non-interactive publish whose
-   settings depended on a variable needs `--from-environment`, which is the same shape CONCEPT already uses for an
-   update that gains a capability.
+   were read (by name), and `torb publish` prints that list before it uploads. It asks for no flag and no
+   confirmation: reading a variable is the most ordinary thing a configuration file written in TorbScript does - more
+   ordinary than reading a file - and a manifest that does it is not doing anything that needs permission.
 2. **A build is reproducible only together with the variables it read.** Two checkouts of one commit with two
    environments are two packages. That is not a defect of the grant, it is what the grant is *for* — but it means "the
    commit" stops being the whole input, and a bug report that says "it builds here and not there" has one more place
@@ -1137,7 +1137,7 @@ every `.trb` file and nothing should be rebased across it.
 | 5 | **The specifier grammar.** One function that takes a specifier apart, with a message per shape: a dot in a relative component, a `scheme:`, a host-qualified owner, a `..` inside a package path, a climb out of the package | `compiler/src/semantics/graph.trb`, `compiler/src/semantics/scope.trb`, `compiler/tests/check.test.trb` | **Low**, and it is the slice with the most new diagnostics, so it is mostly tests with exact messages |
 | 6 | **Sources and the static subset.** `source` in `std/project` and in the static reader; a plain-string rule with a diagnostic for the nine static settings; `language`, `description`, `license`, `repository` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/tests/project.test.trb` | **Low** on its own. It does not resolve anything — resolution needs the registry protocol, which is CONCEPT's open question |
 | 7 | **The manifest that reads.** The toolchain becomes a `Sandbox` caller: the grant of section 8 (files, the environment for the invoked project and its members only, three modules), the evaluation only when the static read is not enough, `build/manifest-inputs.trb` by name and hash, the diagnostics for a failing script | `compiler/src/project/*`, `compiler/src/cli/*`, `std/sandbox`, `std/environment`, the VM | **Highest, and blocked.** Probe 21: `Sandbox` runs on neither implementation, so this slice cannot start before 7.x. Nothing in the repository's own manifests needs it, which is what makes waiting free |
-| 8 | **The locked manifest.** `Lock` in `std/project` with its `settings` and `graph` sections; the deterministic printer that writes an evaluated `Project` back as literals in a fixed order; `torb lock` and `torb lock --check`; `torb publish` writing and verifying `settings`, printing `from` and asking for `--from-environment`; both files travelling in an archive; the consumer side reading a dependency's `settings` instead of its `project.trb` | `std/project/src/lib.trb`, `compiler/src/project/*`, `compiler/src/cli/*` | **Medium, and it needs slice 7 in front of it.** The printer is the interesting half: "a value is its constructor call" has to hold for the whole vocabulary, `torb lock --check` is the gate that says it is deterministic, and `torb publish`'s static re-read is the one that says it round-trips |
+| 8 | **The locked manifest.** `Lock` in `std/project` with its `settings` and `graph` sections; the deterministic printer that writes an evaluated `Project` back as literals in a fixed order; `torb lock` and `torb lock --check`; `torb publish` writing and verifying `settings` and printing `from`; both files travelling in an archive; the consumer side reading a dependency's `settings` instead of its `project.trb` | `std/project/src/lib.trb`, `compiler/src/project/*`, `compiler/src/cli/*` | **Medium, and it needs slice 7 in front of it.** The printer is the interesting half: "a value is its constructor call" has to hold for the whole vocabulary, `torb lock --check` is the gate that says it is deterministic, and `torb publish`'s static re-read is the one that says it round-trips |
 | 9 | **Resources.** `docs/RESOURCES.md`'s slices, which are a plan of their own | see that document | see that document |
 
 **The prose.** `docs/tooling/project-trb.md` (the settings table is rewritten), `torb-build.md`, `torb-run.md`,
@@ -1179,9 +1179,4 @@ already done, so that `docs check` never sees a design document nothing links to
 ## 14. Open
 
 Everything technical above is decided, and so is the one naming question this document used to carry: the
-minimum-version setting is `language` (section 10). What is left is a single question of direction.
-
-1. **Should `torb publish` need `--from-environment` when a setting came from a variable?** Section 8 says yes,
-   because CI is exactly where the first pitfall bites and exactly where nobody reads output, and because CONCEPT
-   already asks for an explicit confirmation when an update gains a capability. The case against is that it is one
-   more flag in one more CI file, and that the `from` section of the lock records the names either way.
+minimum-version setting is `language` (section 10). Nothing is open here.
