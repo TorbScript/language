@@ -3018,3 +3018,23 @@ Wenn nicht, was bedeutet, bewirkt es?
     - **Migration jetzt neun Scheiben:** 7 = lesendes Manifest (braucht die VM), 8 = das gesperrte Manifest samt
       deterministischem Drucker und `torb lock --check`, 9 = `docs/RESOURCES.md`. `docs/RESOURCES.md` hat keine
       offenen Fragen mehr.
+  - **Entschieden (Nutzer): die Einstellung heißt `language "0.3.0"`** - nicht `torb`, nicht `toolchain`. **Sein
+    Argument, und es steht jetzt als DAS Argument im Dokument:** die Standardbibliothek gehört hier zur SPRACHE und
+    ist keine Schicht daneben - `std` kommt mit jeder Toolchain, wird nie getrennt gewählt oder gepinnt, und was ein
+    Programm nicht benutzt, wird ohnehin wegerasiert, also gibt es keinen Preis, der ein abtrennbares `std` lohnen
+    würde. Genau darin unterscheidet es sich von Rust, wo `std` eine echte Schicht ist (`no_std` ist etwas, das man
+    sein kann, ein Target kann es nicht haben). Sprachversion und `std`-Version fallen deshalb immer zusammen: EINE
+    Zahl, und ihr Name ist der der Sprache.
+  - **Erledigt:** `language` ersetzt `torb` überall (Beispiel-Manifest, `settings`-Block des Locks, Vokabular-Tabelle
+    samt "statisch"-Begründung, Sortierreihenfolge des deterministischen Locks, Migrationsscheibe 6). Der
+    Namens-Unterabschnitt von Abschnitt 10 ist jetzt eine ENTSCHEIDUNG: die Vergleichstabelle der anderen Ökosysteme
+    (`rust-version`, `go 1.21`, Node `engines`, Dart `environment: sdk`, Swifts `// swift-tools-version`) bleibt, die
+    Kandidatentabelle heißt "was erwogen wurde" mit `language` an erster Stelle. Dazu ausgeschrieben, was die Meldung
+    einer ZU ALTEN Toolchain sagen muss, weil es das Einzige ist, was sie je über das Projekt sagen wird:
+    ``error: This project needs language 0.3.0, this is 0.2.1`` - beide Zahlen in dieser Reihenfolge, plus die Notiz
+    "Nothing else in this file was read", damit niemand nach einem zweiten Problem sucht, bis zu dem die Toolchain nie
+    gekommen ist. Das Prosa-Wort **toolchain** für das Programm, das die Datei liest, bleibt: die Toolchain ist, was
+    man installiert, die Sprache ist, was sie implementiert, und die Einstellung ist eine Aussage über das Zweite.
+  - **Damit ist in `docs/PROJECT.md` nur noch EINE Frage offen** (braucht `torb publish` ein `--from-environment`,
+    wenn eine Einstellung an einer Umgebungsvariablen hing?); `docs/RESOURCES.md` hat gar keine mehr. Gates:
+    `docs check` 223 Seiten / 947 Snippets, `docs index --check` 24 Indizes, `check ..` 326 Dateien - grün.

@@ -674,7 +674,7 @@ of two `project.trb` files you are holding.
 ```trb
 // project.lock.trb - written by `torb add`, `torb update`, `torb lock` and `torb publish`. Do not edit.
 
-torb "0.3.0"
+language "0.3.0"
 
 settings "acme/shop" {
   version "1.4.2"
@@ -708,7 +708,7 @@ graph {
   `project.lock.trb`, at the root" already asks for: one resolution for everybody (`graph`, once) and one set of
   settings per package (`settings`, per member). A published archive carries a lock with exactly one `settings` block
   and no `graph`.
-- **`settings` carries what a *consumer* needs and nothing else**: `torb`, `version`, `prelude`,
+- **`settings` carries what a *consumer* needs and nothing else**: `language`, `version`, `prelude`,
   `dependencies`, the `program` lines, the metadata, and the resource list (`docs/RESOURCES.md`, so a consumer sees
   every non-code file a dependency carries without opening the archive). It carries **no `source` and no `registry`**
   — where a package comes from is the *building* project's decision, and a dependency that could republish its own
@@ -735,7 +735,7 @@ graph {
 aspiration, because the file is checked into a repository, reviewed in a diff and compared by a registry, and a file
 that differs between two machines is a file everybody learns to ignore.
 
-- **A fixed order, everywhere.** The sections in the order `torb`, `settings`, `graph`; one `settings` block per
+- **A fixed order, everywhere.** The sections in the order `language`, `settings`, `graph`; one `settings` block per
   package, sorted by package name; the settings inside a block in the vocabulary's own declaration order (section 10's
   table, top to bottom), never in the order the manifest happened to write them; `from` entries by kind and then by
   name; `graph` packages by name; `program` lines in the order the manifest declares them, which is the one order that
@@ -834,7 +834,7 @@ this section runs until the VM does (7.x), and stage 0's reading of a `project.t
 `name "..."`, used to build the stable path in a panic message.
 
 **What works before the VM exists is the static subset, which is every setting in the repository's own thirty-five
-manifests.** `torb`, `name`, `prelude`, `dependencies`, `source`, `registry`, `workspace` and `program` — section
+manifests.** `language`, `name`, `prelude`, `dependencies`, `source`, `registry`, `workspace` and `program` — section
 10's static nine rows — are plain literals, read from the syntax tree, and a `version` written as a literal is read by
 the same pass. A manifest that computes anything is
 refused by a toolchain without a VM, with a message that says so — rather than the current behaviour, which is to
@@ -918,7 +918,7 @@ running anything, and what the checker needs before it checks a file.
 
 | Setting | Type | Default | Static | Error |
 |---|---|---|---|---|
-| `torb "0.3.0"` | `String` | none | **yes** | an older toolchain refuses the project, and says so before reading anything else |
+| `language "0.3.0"` | `String` | none | **yes** | an older toolchain refuses the project, and says so before reading anything else |
 | `name "owner/name"` | `String` | none | **yes** | missing, not `owner/name`, or not a plain string |
 | `prelude "std/prelude"` | `String` | `"std/prelude"` | **yes** | not a package specifier; the package must exist |
 | `dependencies { runtime "..." }` | variadic | none | **yes** | not `owner/name[:requirement]` |
@@ -948,15 +948,40 @@ is exactly the setting that must be allowed to compute. What a registry and a co
 again. A tool that wants the version of a project it is not building reads that lock; a tool that wants the version of
 a project it *is* building evaluates the manifest. There is no third answer and there does not need to be.
 
-### The minimum-version setting, and what it is called
+### `language`, the minimum-version setting
 
-**The setting exists, and what it versions is one thing, which is why it is one number.** The compiler, the runtime
-and the standard library ship together: a `torb` binary is a front end, a back end, `runtime/*.c` and `std/*` built
-from one commit, and a project cannot have one without the others. So there is nothing to version separately — no
-"language edition" next to a "tool version", no SDK next to a compiler — and the setting says one thing: *this project
-needs a toolchain at least this new*. It is the one setting an **older** toolchain has to understand, which is why it
-is read first, before anything else in the file, and why adding it late would mean the versions that cannot read it
-already exist.
+```trb
+language "0.3.0"
+```
+
+**The setting versions one thing, which is why it is one number, and that thing is the language.** The standard
+library is part of the language here, not a layer beside it: `std` ships with every toolchain, it is never chosen or
+pinned separately, and everything a program does not use is erased from the binary anyway, so there is no cost that
+would make a separable `std` worth having. That is the difference from Rust, where `std` is a real layer — `no_std` is
+a thing you can be, a target can lack it, and a crate can be written against a language edition without it. Nothing
+here is like that. **The language version and the `std` version always coincide, so the number is the language's and
+so is its name.**
+
+A `torb` binary is a front end, a back end, `runtime/*.c` and `std/*` built from one commit. There is nothing to
+version separately — no "language edition" next to a "tool version", no SDK next to a compiler — and the setting says
+one thing: *this project needs the language at least this new*. It is the one setting an **older** toolchain has to
+understand, which is why it is read first, before anything else in the file, and why adding it late would mean the
+versions that cannot read it already exist.
+
+**The message an older toolchain prints is the one thing to get right**, because it is the only thing that toolchain
+will ever say about the project:
+
+```text
+error: This project needs language 0.3.0, this is 0.2.1
+ --> project.trb:1:10
+  |
+1 | language "0.3.0"
+  |          ^^^^^^^
+  = Nothing else in this file was read. Install a newer toolchain
+```
+
+Both numbers, in that order, and the note says that nothing else was read — so nobody goes looking for a second
+problem that the toolchain never got far enough to find.
 
 | Ecosystem | What it is called | What it versions |
 |---|---|---|
@@ -971,19 +996,20 @@ in a *comment*, on the first line, because `Package.swift` is a program and the 
 program can be parsed. A `project.trb` needs no such hack — the setting is a static command call (section 8), read
 from the syntax tree before anything is evaluated, so it can be an ordinary line like every other setting.
 
-**The name is the open question**, and the candidates are:
+**What was considered**, with `language` first:
 
 | Candidate | For | Against |
 |---|---|---|
-| `torb "0.3.0"` | the tool's own name is the thing you installed; nothing to explain, nothing to look up; full word | a reader might briefly expect it to *configure* `torb` rather than to require a version of it — and `program "torb"` exists three lines away in one repository |
-| `toolchain "0.3.0"` | what Rust calls it and what this document calls it in prose | "toolchain" is a word a user has to learn maps to "the thing you installed" |
-| `torbscript "0.3.0"` | the language's name | the setting is not about the language: there is one language and it does not have versions of its own |
+| **`language "0.3.0"`** — decided | names what is actually versioned, once `std` is understood as part of the language; a full word that needs no gloss; nothing in the sentence "this project needs language 0.3.0" has to be looked up | it is not the name of the thing you install, so a user who has to *act* on the message installs "torb" — which the note in the diagnostic says |
+| `torb "0.3.0"` | the tool's own name is the thing you installed | it versions the tool rather than what the tool implements, and a reader might briefly expect it to *configure* `torb`, with `program "torb"` three lines away in one repository |
+| `toolchain "0.3.0"` | what Rust calls it and what this document still calls the program in prose | "toolchain" is a word a user has to learn maps to "the thing you installed", and it names the packaging rather than the contract |
+| `torbscript "0.3.0"` | the language's name, spelled out | the language's name in a file of that language is noise, and it reads like a dependency on a package called `torbscript` |
 | `minimumVersion "0.3.0"` | precise about the comparison | silent about the minimum version *of what*, which is the only interesting part |
 | `requires "0.3.0"` | short | reads like a dependency, and dependencies are two lines below |
 
-**The document uses `torb "0.3.0"`** — "this project needs torb 0.3.0 or newer" — because it is the only candidate
-that needs no sentence of explanation, and because the objection against it is a momentary one that the first
-diagnostic settles for good.
+The prose in this document and in the toolchain's own messages still says **toolchain** for the program that reads the
+file, and that is not a contradiction: the toolchain is what you install, the language is what it implements, and the
+setting is a statement about the second.
 
 **Which file the static reader is pointed at depends on whose package it is**, and that is the whole of section 8 in
 one table:
@@ -1109,7 +1135,7 @@ every `.trb` file and nothing should be rebased across it.
 | 3 | **Programs.** `Program` and `Project.program` in `std/project`; the static reader reads `program` lines; `torb run <name>`, `torb build <name>`, the "name one" diagnostic, the library-only "nothing to build"; the ten diagnostics of section 4; `"owner/name/main"` and an imported `entry` become errors; `compiler/project.trb` writes `program "torb"` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/src/cli/{build,run,test}.trb`, `compiler/src/semantics/graph.trb`, `compiler/project.trb` | **Low.** No file moves and no import changes. The one thing to watch is stage 0's hardcoded `src/main.trb` for a directory argument (`bootstrap/crates/torb-cli/src/main.rs`), which has to learn the `program` lines so that `torb run <dir>` of a renamed default still finds it |
 | 4 | **Profiles and targets.** `--profile`, `--release`, `--target`, with `dev` as the default; `build/<profile>/<program>`; the `profile` block in the vocabulary and in the static reader; `output` on a `program` taken literally | `compiler/src/cli/build.trb`, `std/project/src/lib.trb`, `compiler/src/project/manifest.trb` | **Low.** `buildTarget = "release"` is one constant today, and the layout already has the shape |
 | 5 | **The specifier grammar.** One function that takes a specifier apart, with a message per shape: a dot in a relative component, a `scheme:`, a host-qualified owner, a `..` inside a package path, a climb out of the package | `compiler/src/semantics/graph.trb`, `compiler/src/semantics/scope.trb`, `compiler/tests/check.test.trb` | **Low**, and it is the slice with the most new diagnostics, so it is mostly tests with exact messages |
-| 6 | **Sources and the static subset.** `source` in `std/project` and in the static reader; a plain-string rule with a diagnostic for the nine static settings; `torb`, `description`, `license`, `repository` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/tests/project.test.trb` | **Low** on its own. It does not resolve anything — resolution needs the registry protocol, which is CONCEPT's open question |
+| 6 | **Sources and the static subset.** `source` in `std/project` and in the static reader; a plain-string rule with a diagnostic for the nine static settings; `language`, `description`, `license`, `repository` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/tests/project.test.trb` | **Low** on its own. It does not resolve anything — resolution needs the registry protocol, which is CONCEPT's open question |
 | 7 | **The manifest that reads.** The toolchain becomes a `Sandbox` caller: the grant of section 8 (files, the environment for the invoked project and its members only, three modules), the evaluation only when the static read is not enough, `build/manifest-inputs.trb` by name and hash, the diagnostics for a failing script | `compiler/src/project/*`, `compiler/src/cli/*`, `std/sandbox`, `std/environment`, the VM | **Highest, and blocked.** Probe 21: `Sandbox` runs on neither implementation, so this slice cannot start before 7.x. Nothing in the repository's own manifests needs it, which is what makes waiting free |
 | 8 | **The locked manifest.** `Lock` in `std/project` with its `settings` and `graph` sections; the deterministic printer that writes an evaluated `Project` back as literals in a fixed order; `torb lock` and `torb lock --check`; `torb publish` writing and verifying `settings`, printing `from` and asking for `--from-environment`; both files travelling in an archive; the consumer side reading a dependency's `settings` instead of its `project.trb` | `std/project/src/lib.trb`, `compiler/src/project/*`, `compiler/src/cli/*` | **Medium, and it needs slice 7 in front of it.** The printer is the interesting half: "a value is its constructor call" has to hold for the whole vocabulary, `torb lock --check` is the gate that says it is deterministic, and `torb publish`'s static re-read is the one that says it round-trips |
 | 9 | **Resources.** `docs/RESOURCES.md`'s slices, which are a plan of their own | see that document | see that document |
@@ -1152,15 +1178,10 @@ already done, so that `docs check` never sees a design document nothing links to
 
 ## 14. Open
 
-Everything technical above is decided. These are taste or direction, and only the owner answers them.
+Everything technical above is decided, and so is the one naming question this document used to carry: the
+minimum-version setting is `language` (section 10). What is left is a single question of direction.
 
-1. **What is the minimum-version setting called?** Section 10 says what it versions — one number, because the
-   compiler, the runtime and the standard library ship together — and lays the candidates out against what five other
-   ecosystems call theirs. The document writes **`torb "0.3.0"`**, because it is the only candidate that needs no
-   sentence of explanation; `toolchain` is Rust's word and one more thing to learn, `torbscript` names the language
-   rather than the tool, and `minimumVersion` is silent about the minimum version *of what*. That the setting is not
-   decided yet costs nothing, because it is one word in one place and a `canon` rule.
-2. **Should `torb publish` need `--from-environment` when a setting came from a variable?** Section 8 says yes,
+1. **Should `torb publish` need `--from-environment` when a setting came from a variable?** Section 8 says yes,
    because CI is exactly where the first pitfall bites and exactly where nobody reads output, and because CONCEPT
    already asks for an explicit confirmation when an update gains a capability. The case against is that it is one
    more flag in one more CI file, and that the `from` section of the lock records the names either way.
