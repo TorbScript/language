@@ -25,11 +25,11 @@ second time, in a weaker language, and they go.
 - **[5. Profiles and targets](#5-profiles-and-targets)** — two words for two things, and where the binary lands
 - **[6. The specifier grammar](#6-the-specifier-grammar)** — what may stand in the quotes, and what is reserved
 - **[7. Where a dependency comes from](#7-where-a-dependency-comes-from)** — names in source, locations in the manifest
-- **[8. What a project file may read](#8-what-a-project-file-may-read)** — one capability, and the frozen manifest that keeps installing free of code
+- **[8. What a project file may read](#8-what-a-project-file-may-read)** — files and the environment, and the locked manifest that keeps installing free of code
 - **[9. Resources, as far as the project file is concerned](#9-resources-as-far-as-the-project-file-is-concerned)** — the output layout and the file list; `docs/RESOURCES.md` has the rest
 - **[10. The vocabulary](#10-the-vocabulary)** — every setting, its type, its default, and whether it is read statically
 - **[11. Workspaces and the lock file](#11-workspaces-and-the-lock-file)** — what a member inherits, what the lock pins
-- **[12. Migration](#12-migration)** — eight slices, each green on its own
+- **[12. Migration](#12-migration)** — nine slices, each green on its own
 - **[13. What this is not](#13-what-this-is-not)**
 - **[14. Open](#14-open)**
 
@@ -412,7 +412,7 @@ configured program costs one line in one manifest and moves no file.
   compile there, which is what `native` and `foreign` already make visible.
 
 ```text
-torb build --profile dev            the default
+torb build --profile dev            the default, decided
 torb build --release                the shorthand for --profile release
 torb build --target linux-x64       cross-compile; the default is the host
 ```
@@ -424,6 +424,11 @@ profile "release" {
   panicFrames false
 }
 ```
+
+**`dev` is the default and `release` is explicit.** That is Cargo's and Zig's default and the opposite of what the
+toolchain does today (`buildTarget = "release"` is one hardcoded constant): the first build somebody runs should be
+fast and its panics should carry frames, and the one place that pays is the toolchain building itself, which passes
+`--release` in a script that already exists.
 
 `profile` is a method on `Project` taking a name and a receiver closure, so the vocabulary does not grow a field per
 profile and a fourth profile name is a diagnostic rather than a parse error. A setting a back end does not have yet
@@ -583,12 +588,12 @@ is not a version — and `hash` is required for `archive:`, because there is no 
 
 ## 8. What a project file may read
 
-**A `project.trb` may read files below its own directory. It may do nothing else.** No network, no writing, no clock,
-no environment, no processes, no foreign functions.
+**A `project.trb` may read files below its own directory and the environment it was started in. It may do nothing
+else.** No network, no writing, no clock, no processes, no foreign functions.
 
 ```trb
 name "acme/shop"
-version File.readText("VERSION")?.trim()
+version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION")?.trim() ?? "0.0.0"
 ```
 
 The toolchain is the **caller** of this receiver script, and a caller grants capabilities at the call site — which is
@@ -598,80 +603,187 @@ line and is therefore *not* known when the toolchain is compiled:
 
 ```trb
 const manifest = Sandbox.read<Project>(projectDirectory.joined("project.trb")) {
-  modules "std/fs", "std/text"
+  modules "std/fs", "std/text", "std/environment"
   files readOnly: <the project directory>
+  environment "*"
   limits steps: 1_000_000, memory: 16.megabytes(), time: 2.seconds()
 }?
 ```
 
-- **Two modules and no more.** `std/fs` is the reading; `std/text` is what you do with the text you read
-  (`trim`, `lines`, `split`). `std/time` would be a clock, `std/environment` a machine, `std/process` a shell,
-  `std/http` a network: each of those is a way for two evaluations of one commit to disagree, and the manifest is the
-  one file where they must not.
+- **Three modules and no more.** `std/fs` is the file reading; `std/text` is what you do with the text you read
+  (`trim`, `lines`, `split`); `std/environment` is `Environment.get(name): String?` and nothing else. `std/time`
+  would be a clock, `std/process` a shell, `std/http` a network: each of those is a way for a manifest to reach
+  something the project neither contains nor was handed, which is the line this grant draws.
 - **`files readOnly:` is the project directory, and `docs/PATH.md` section 7 is what "below" means.** The check is
   lexical — the *text* of the path does not leave the root — and the sandbox's own natives additionally refuse a
   component that is a symbolic link at open time, because section 7 names the sandbox as the one caller that must not
   accept the lexical gap. So `File.readText("../../etc/passwd")` is a `SandboxError` naming the path and the root, and
   so is a `VERSION` that is a link out of the tree. What is *not* promised is anything about the file's content: a
   manifest may read a file the project owns, and the project owns whatever is in its directory.
+- **`environment "*"` — every variable, and the narrower pattern is rejected.** A pattern has to be written somewhere,
+  and there are only two places, both wrong. In the manifest itself it would be the script granting itself a
+  capability, which CONCEPT forbids in so many words ("a script that could grant itself capabilities would not be a
+  sandbox"). Fixed in the toolchain as, say, `TORB_*`, it would exclude every variable anybody actually has:
+  `CI_COMMIT_TAG`, `GITHUB_REF_NAME`, `BUILD_NUMBER` share no prefix and never will. And the sandbox here is not
+  protecting the user from the manifest — the user wrote it and is about to compile the code it names. What the
+  sandbox protects is that the toolchain *knows what the manifest did*, and that is served by recording the names
+  read, not by narrowing the set.
 - **The limits are the toolchain's, and they are why `loop { }` in a manifest is a diagnostic and not a hang.**
 
-### No environment, and what to write instead
+### Reading the environment, and its two pitfalls
 
-The one real argument for an exception is CI: a version number that comes from a tag, through `CI_TAG` or
-`GITHUB_REF_NAME`. The answer is still no, for three reasons that do not depend on each other.
+Reading a variable is what a CI job actually wants: a version that comes from a tag, without a commit that changes
+`VERSION` before every release. It is granted, and the two things that used to be arguments against it are true
+anyway, so they are written down as pitfalls rather than as a prohibition. Both belong in
+`docs/tooling/project-trb.md` under `# Pitfalls`.
 
-1. **It makes the manifest a function of the machine.** Two checkouts of one commit would evaluate to two different
-   packages, and the frozen manifest below would be a photograph of whichever CI run happened to publish. Every other
-   thing in this design is reproducible from the tree; `version` is the worst possible place to give that up.
-2. **The file is already the answer.** A CI job that wants the tag in the version writes the tag into `VERSION`
-   before it builds — one line of the job, inside the one capability, and the file is then *in the tree* the package
-   is built from, which is exactly what makes the result reproducible afterwards.
-3. **Every grant is something four other readers have to emulate.** `torb add`, `torb update`, an editor and a
-   registry all read a manifest. An environment read means each of them has to decide what the environment *is* when
-   they read it, and there is no answer that is right for all four.
+1. **Whatever flows from the environment into a setting is published with the package.** `version` ends up in the
+   locked manifest below, which is the file a registry, a consumer and an editor read. A manifest that writes
+   `description Environment.get("NPM_TOKEN") ?? ""` publishes the token, and no mechanism can tell a token from a tag.
+   What the design can do is make it visible at the moment it matters: the locked manifest records **which** variables
+   were read (by name), and `torb publish` prints that list before it uploads. A non-interactive publish whose
+   settings depended on a variable needs `--from-environment`, which is the same shape CONCEPT already uses for an
+   update that gains a capability.
+2. **A build is reproducible only together with the variables it read.** Two checkouts of one commit with two
+   environments are two packages. That is not a defect of the grant, it is what the grant is *for* — but it means "the
+   commit" stops being the whole input, and a bug report that says "it builds here and not there" has one more place
+   to look. The locked manifest and `build/manifest-inputs.trb` both name the variables, so the place to look is
+   written down; nothing makes it unnecessary.
 
-### The frozen manifest: installing still never runs code
+**A dependency does not get the environment.** The grant above is for the project `torb` was invoked in and for its
+workspace members, and for nothing else. A `git:` or `path:` dependency is evaluated with file access to **its own**
+directory and **without `std/environment` in `modules`** — so a dependency's manifest that reads a variable fails to
+load, with the sandbox's own "a module the script may not import" naming the module and the dependency. Refusing the
+*module* rather than handing back `None` is deliberate: `Environment.get` answers `None` both for a variable that is
+unset and for one the sandbox denied (`std/environment` says so under `# Pitfalls`), so a silent denial would let a
+dependency fall back to some default and nothing would ever say why. The reason for the refusal is the first pitfall
+read backwards: a dependency that could read your environment could carry your secret into its own settings, and from
+there into your binary.
 
-**When a package is published, its manifest is evaluated once and the result is written back as a purely literal
-manifest, and that is the `project.trb` the package carries.** The file that was evaluated ships beside it as
-`project.source.trb`, which nothing reads and a human may.
+### The locked manifest: installing still never runs code
 
-- **One name, one meaning.** A consumer's toolchain, an editor and a registry all look for `project.trb`. If the
-  frozen file had a name of its own, every one of them would need a rule for which to prefer, and there is a version
-  of each that has the wrong rule. Instead: **the `project.trb` of a published package is literal**, so reading it is
-  the static read of section 10 and nothing else runs. That is CONCEPT's "installing never runs code", kept exactly.
-- **The format is the vocabulary, printed back.** The frozen manifest is the evaluated `Project` value written as the
-  command calls that would produce it, in a fixed order, every argument a plain string or number literal. This is
-  `docs/ENCODING.md`'s principle one level up: a value is its constructor call, and a receiver script is its settings.
-  There is no second format, no `.toml` and no generated JSON.
-- **`torb publish` verifies it.** It re-reads the frozen manifest with the *static* reader and refuses if any setting
-  did not survive, which makes "a published manifest is statically readable" a checked property rather than a hope.
-- **The file list is part of it.** The frozen manifest lists the resources the package's own code names
-  (`docs/RESOURCES.md`), so a consumer knows every non-code file the package carries without evaluating anything.
+**There are exactly two files.** `project.trb` is the one a person maintains. `project.lock.trb` is the locked
+manifest: the evaluated, purely literal settings *and* the pinned dependency graph, in one file, in the same
+vocabulary printed back. There is no third file, no frozen copy under another name, and no frozen file that is also
+called `project.trb`.
 
-### Which manifests are evaluated, and which are frozen
+**A consumer, a registry and an editor read the lock of a foreign package and never evaluate its `project.trb`.**
+That is CONCEPT's "installing never runs code", kept exactly, and it is now one sentence instead of a rule about which
+of two `project.trb` files you are holding.
 
-**A package you build from source is evaluated; a package you install is frozen.** That is the whole rule, and every
-case falls out of it.
+```trb
+// project.lock.trb - written by `torb add`, `torb update`, `torb lock` and `torb publish`. Do not edit.
 
-| The package | What the toolchain does |
-|---|---|
-| the project itself | evaluated, under the grant above, scoped to its own directory |
-| a workspace member | evaluated, under the same grant, scoped to **the member's** directory |
-| a `path:` source | the same |
-| a `git:` source | the same, scoped to the checkout — it is source you chose to build from |
-| a registry package | **never evaluated.** Its `project.trb` is the frozen one, and the static reader is all that touches it |
+torb "0.3.0"
+
+settings "acme/shop" {
+  version "1.4.2"
+  description "A shop"
+  license "MIT"
+  authors "Ada Lovelace"
+  prelude "std/prelude"
+  program "shop", entry: "src/main.trb"
+  program "migrate", entry: "tools/migrate.trb"
+  dependencies {
+    runtime "acme/http:^1.2.3"
+  }
+  resource "acme/shop/src/templates/invoice.html"
+  from {
+    file "VERSION", hash: "sha256:..."
+    variable "CI_COMMIT_TAG", hash: "sha256:..."
+  }
+}
+
+graph {
+  package "acme/http", version: "1.2.5", registry: "acme", hash: "sha256:..."
+  package "acme/json", version: "2.0.1", registry: "acme", hash: "sha256:..."
+  package "acme/local", path: "../local"
+}
+```
+
+- **`settings` is the evaluated `Project`, printed back as the command calls that would produce it**, in a fixed
+  order, every argument a plain string or number literal. This is `docs/ENCODING.md`'s principle one level up: a value
+  is its constructor call, and a receiver script is its settings. There is no second format, no `.toml`, no JSON.
+- **`settings` names its package, so a workspace root's lock has one block per member.** That is what CONCEPT's "one
+  `project.lock.trb`, at the root" already asks for: one resolution for everybody (`graph`, once) and one set of
+  settings per package (`settings`, per member). A published archive carries a lock with exactly one `settings` block
+  and no `graph`.
+- **`settings` carries what a *consumer* needs and nothing else**: `torb`, `version`, `prelude`,
+  `dependencies`, the `program` lines, the metadata, and the resource list (`docs/RESOURCES.md`, so a consumer sees
+  every non-code file a dependency carries without opening the archive). It carries **no `source` and no `registry`**
+  — where a package comes from is the *building* project's decision, and a dependency that could republish its own
+  `source` lines would be dependency confusion by another route — and **no `workspace`**, which is about a tree the
+  consumer does not have, and no `profile` or `test`, which are about a build the consumer is not running.
+- **`from` is the provenance of the evaluation**: which files and which variables the script read, each by name and by
+  a hash of what it answered. It is what makes pitfall 1 visible and pitfall 2 diagnosable, and it is the published
+  half of `build/manifest-inputs.trb`, which has the same two line shapes.
+- **`graph` is what CONCEPT's lock file already pins** (section 11), unchanged.
+- **A published package carries both files, whole.** `project.trb` travels so that a person can read how the version
+  was computed and what the author actually wrote; `project.lock.trb` travels because it is the only thing the
+  toolchain reads. npm and Bun ship the pair for the same reason, and it is what makes the third file unnecessary.
+  **The `graph` section travels with it and is information, not resolution:** it records what the package was built
+  and tested against, which is the first thing a bug report wants, and a consumer resolves its own graph from its own
+  root lock and never from a dependency's.
+- **`torb publish` verifies the settings section with the *static* reader** and refuses if a setting did not survive
+  being printed back — which makes "a published manifest is statically readable" a checked property rather than a
+  hope.
+- **A package without a `project.lock.trb` is not installable.** There is nothing a consumer may read, and evaluating
+  a foreign `project.trb` is the one thing this design does not do. `torb publish` writes the file, so the case only
+  arises for an archive somebody assembled by hand, and the message says which file is missing.
+
+**Writing the lock is deterministic: the same inputs produce a byte-identical file.** That is a requirement and not an
+aspiration, because the file is checked into a repository, reviewed in a diff and compared by a registry, and a file
+that differs between two machines is a file everybody learns to ignore.
+
+- **A fixed order, everywhere.** The sections in the order `torb`, `settings`, `graph`; one `settings` block per
+  package, sorted by package name; the settings inside a block in the vocabulary's own declaration order (section 10's
+  table, top to bottom), never in the order the manifest happened to write them; `from` entries by kind and then by
+  name; `graph` packages by name; `program` lines in the order the manifest declares them, which is the one order that
+  is itself meaningful (section 4: `torb build` builds them in it).
+- **Nothing about the machine, ever.** No timestamp, no tool build identifier, no absolute path, no user name, no
+  locale-dependent formatting. A `path:` source is written relative to the lock file. This is the same rule the C back
+  end already lives under — "no path of this machine, no time and no build id is in it, so two runs of the compiler
+  write the same bytes", which the generated C says in its own header.
+- **One spelling per value.** Hashes as `sha256:` plus lowercase hex; numbers in the canonical form `torb canon`
+  already defines for a literal; strings with `canon`'s escapes; UTF-8, LF, no BOM, exactly one trailing newline.
+- **How it is checked.** `torb lock --check` writes the file into memory and compares it byte for byte with the one on
+  disk, failing with a diff — which is exactly the shape of `canon --check` and `docs index --check`, two gates this
+  repository already runs on every change, so it costs a gate and no new machinery. Two further checks fall out of it
+  for free: writing the lock twice must produce the same bytes (idempotence, asserted in the toolchain's own tests),
+  and once the VM exists, stage 0 and the compiled `torb` must write the same bytes for one project — which is the
+  conformance suite's contract applied to a file instead of to standard output.
+
+### Which manifest is evaluated, and which is read from a lock
+
+**A package you build from source is evaluated; a package you install is read from its lock.** That is the whole rule.
+
+| The package | What the toolchain does | The environment |
+|---|---|---|
+| the project itself | its `project.trb` is evaluated, scoped to its own directory | **yes** |
+| a workspace member | its `project.trb` is evaluated, scoped to **the member's** directory | **yes**, the same one |
+| a `path:` source | the same, scoped to its directory | **no** |
+| a `git:` source | the same, scoped to the checkout — it is source you chose to build from | **no** |
+| a registry package | **never evaluated.** The `settings` section of its `project.lock.trb` is all the toolchain reads; its `project.trb` ships for a human and the toolchain does not parse it | — |
 
 The alternative for members and `path:`/`git:` sources — require them to be literal-only — was considered and
 rejected: it creates two dialects of one file inside one repository, which is the disease section 1 is a list of, and
-it buys no security at all, because the grant is identical and the source is already code you are about to compile.
-The honest note is the one the lock file already makes (section 11): a `path:` source is not reproducible, and a
-reviewer sees that on the line that declares it.
+it buys nothing, because the grant is file access to a directory whose source you are about to compile anyway. The
+environment is the one capability where the line *is* worth drawing, and the table draws it.
 
 **A member's grant is its own directory, not the root's.** A member that wants the workspace's version *inherits* it
 (section 11), which already works and needs no read; a member that reads `../../VERSION` gets a `SandboxError`. That
 keeps the rule one sentence and makes the common case free.
+
+**Your own lock's `settings` section is never read by your own build.** It is written for other people. What is in
+your tree is `project.trb`, and a build evaluates it — so an absent or stale `settings` section in your own lock is
+not an error, not a warning and not something a build fixes on the way past. The reason is pitfall 2 turned into a
+rule: if every build rewrote the section, a `BUILD_NUMBER` would change a checked-in file on every CI run, and the one
+file that is supposed to be stable would be the noisiest thing in the repository. So:
+
+- **`settings` is written by `torb publish`, by `torb pack`, and by an explicit `torb lock`.** Nothing else writes it.
+- **`graph` is written by `torb add`, `torb remove` and `torb update`**, exactly as CONCEPT already says.
+- **`torb run`, `build`, `test` and `check` read `graph`, never write it, and refuse when it does not match
+  `project.trb`** — also exactly as CONCEPT already says — and they ignore `settings` completely.
 
 ### Errors, determinism and caching
 
@@ -686,10 +798,34 @@ keeps the rule one sentence and makes the common case free.
   file writes — which is true of every manifest in this repository today — the toolchain has the whole `Project`
   already and starting a VM would be work with no result. So the cost of section 8 is paid only by the projects that
   use it.
-- **The inputs of an evaluation are recorded.** `project.trb` plus every file the script read, each with a content
-  hash, written to `build/manifest-inputs.trb` as `input "VERSION", hash: "..."` lines. An incremental build
-  re-evaluates the manifest when one of them changed and not otherwise. That is sound precisely because the grant is
-  read-only and there is no clock and no environment: given the same inputs, the evaluation has the same result.
+- **The inputs of an evaluation are recorded, by name and by hash, never by value.**
+
+  ```trb
+  // build/manifest-inputs.trb - written by the build. Do not edit.
+  file "project.trb", hash: "sha256:..."
+  file "VERSION", hash: "sha256:..."
+  variable "CI_COMMIT_TAG", hash: "sha256:..."
+  variable "BUILD_NUMBER", unset: true
+  ```
+
+  An incremental build re-evaluates the manifest when one of the hashes no longer matches and not otherwise. That is
+  sound precisely because the grant has no clock, no network and no writing: given the same files and the same
+  variables, the evaluation has the same result.
+
+  **A variable is never recorded by value.** A manifest may legitimately read something that is a secret in a build
+  that is not publishing, and a build artifact that held the value would be a place a secret ends up without anybody
+  deciding that it should. The hash is taken over the name and the value together, so two variables that happen to
+  hold one string do not look alike. The honest limit: a hash of a low-entropy value — a flag, a four-digit number —
+  is guessable, so this file is a local build artifact under `build/`, which `.gitignore` already covers and which
+  nothing publishes, and it is never an input to anything that leaves the machine.
+
+  **A variable that was *not* set is recorded too.** `Environment.get "BUILD_NUMBER"` answering `None` is a read whose
+  answer changes the moment somebody sets it, so `unset: true` is an input like any other. Without it, exporting a
+  variable would not invalidate the cache and the first build after it would be wrong.
+
+  The lock file's `from { }` section (above) has the same two line shapes for the same two kinds of input. The
+  difference is lifetime and audience: `build/manifest-inputs.trb` is rewritten by every build and read by the next
+  one, and `from { }` is written when the package is locked and read by whoever looks at the package.
 
 ### Stage 0 has no sandbox
 
@@ -698,8 +834,9 @@ this section runs until the VM does (7.x), and stage 0's reading of a `project.t
 `name "..."`, used to build the stable path in a panic message.
 
 **What works before the VM exists is the static subset, which is every setting in the repository's own thirty-five
-manifests.** `name`, `version`, `prelude`, `dependencies`, `source`, `registry`, `workspace`, `program` and the rest
-of section 10's static nine are plain literals, read from the syntax tree. A manifest that computes anything is
+manifests.** `torb`, `name`, `prelude`, `dependencies`, `source`, `registry`, `workspace` and `program` — section
+10's static nine rows — are plain literals, read from the syntax tree, and a `version` written as a literal is read by
+the same pass. A manifest that computes anything is
 refused by a toolchain without a VM, with a message that says so — rather than the current behaviour, which is to
 read an empty value and say nothing (section 1, findings 3 and 4). **The repository's own manifests therefore stay
 literal until the VM exists**, and the slice that switches evaluation on (section 12, slice 7) changes no manifest in
@@ -726,10 +863,50 @@ specifier grammar have to say about it.
   ```
 
   A `program` line's `output` moves both: `output: "dist/migrate"` is `dist/migrate` and `dist/migrate.resources/`.
-- **The published package's file list.** The frozen manifest (section 8) carries every resource path the package's own
-  code names, so a consumer can see the non-code files of a dependency without evaluating anything and `torb publish`
-  can refuse a package whose code names a file the archive does not contain.
-- **Nothing in `project.trb` configures a resource.** No `assets:` list, no loader table, no per-file setting. A
+- **The published package's file list.** The `settings` section of `project.lock.trb` (section 8) carries every
+  resource path the package's own code names, as `resource "..."` lines, so a consumer can see the non-code files of a
+  dependency without evaluating anything and `torb publish` can refuse a package whose code names a file the archive
+  does not contain.
+- **The one thing `project.trb` says about resources is a budget for what gets embedded.**
+
+  ```trb
+  resources {
+    embeddedWarningAbove 4.megabytes()
+    embeddedErrorAbove 64.megabytes()
+  }
+  ```
+
+  **What is measured is the embedded total per program** — the sum of every `EmbeddedBytes` and `EmbeddedText` that
+  ends up in that program's binary. Above the first number the build report says so; above the second the build fails
+  and names the three largest contributors. **A single file gets no limit of its own**, deliberately: one oversized
+  file blows the total as well, so a per-file limit catches nothing extra, while the case it *would* be needed for — a
+  hundred files of two hundred kilobytes each — is exactly the case a per-file limit does not catch. One number for
+  the thing that actually costs build time is better than two numbers that disagree about which one fired.
+
+  **The defaults are `4.megabytes()` and `64.megabytes()`, argued from measurement** (`docs/RESOURCES.md` probe 3:
+  1 MB embeds in a 21 s build, 16 MB in a 196 s build, so a megabyte of payload is about twelve seconds of build
+  time). Four megabytes is roughly a minute of build — the point at which somebody notices a rebuild and deserves to
+  be told why. Sixty-four is roughly thirteen minutes and about four hundred megabytes of generated C, which is past
+  "slow" and into "the CI job is broken and nobody knows it"; that is the accident — an `assets/` directory embedded
+  by a loop somebody wrote without thinking — and an accident is worth a stop. Raising either is one line.
+
+  **The "warning" is a line on the build report, not a new diagnostic severity.** The toolchain has errors and notes
+  and nothing in between today, and one budget is not a reason to introduce a third severity with the flags that come
+  with it. `torb build` already reports what it wrote; this is one more line of that report. If a warning severity
+  ever arrives for a reason of its own, this becomes one and the setting does not change.
+
+  **Neither setting is static** (section 10): nothing before evaluation needs them, no editor, registry or `torb add`
+  reads them, and they are about *your* build rather than about the package, so they are not in the lock's `settings`
+  either — the same place `profile` and `test` sit.
+
+  **`megabytes()` moves.** `kilobytes`, `megabytes` and `gigabytes` on `Int64` live in `std/sandbox` today, where
+  `SandboxCapabilities.limits` needs them. They belong in `std/number`, which the prelude already exports, so that a
+  `project.trb` can write `4.megabytes()` with no import and there is still exactly one definition for both callers.
+- **Nothing else in `project.trb` configures a resource, and a budget is not the exception it looks like.** No
+  `assets:` list, no loader table, no per-file setting. The objection this design makes to SwiftPM's `resources:` is
+  that it is a second source of truth about *which files exist*, which can disagree with the call sites; a budget
+  says nothing about which files exist and cannot disagree with anything — it is a limit on a number the build
+  computes from the call sites themselves. A
   manifest that listed assets would be a second source of truth about the same files, which is section 1's disease,
   and a manifest that configured loaders would be a build script, which is CONCEPT's non-goal.
 
@@ -741,7 +918,7 @@ running anything, and what the checker needs before it checks a file.
 
 | Setting | Type | Default | Static | Error |
 |---|---|---|---|---|
-| `toolchain "0.1"` | `String` | none | **yes** | a toolchain older than this refuses the project, and says so before reading anything else |
+| `torb "0.3.0"` | `String` | none | **yes** | an older toolchain refuses the project, and says so before reading anything else |
 | `name "owner/name"` | `String` | none | **yes** | missing, not `owner/name`, or not a plain string |
 | `prelude "std/prelude"` | `String` | `"std/prelude"` | **yes** | not a package specifier; the package must exist |
 | `dependencies { runtime "..." }` | variadic | none | **yes** | not `owner/name[:requirement]` |
@@ -757,22 +934,74 @@ running anything, and what the checker needs before it checks a file.
 | `repository "https://..."` | `String` | the workspace root's | no | — |
 | `profile "release" { ... }` | method | the built-in profiles | no | an unknown profile name |
 | `test { coverageThreshold 80 }` | `Int` | `0` | no | outside `0..100` |
+| `resources { embeddedWarningAbove }` | `Int64` | `4.megabytes()` | no | negative, or above `embeddedErrorAbove` |
+| `resources { embeddedErrorAbove }` | `Int64` | `64.megabytes()` | no | negative |
 
 The first nine are **static**, and that is a promise with teeth: they are top-level command calls whose arguments are
 plain string literals. Everything below them may be computed, because nothing is read before the file can be
 evaluated.
 
 **`version` moved.** The previous round listed it among the static settings. Section 8's whole point is that
-`version File.readText("VERSION")?.trim()` is the motivating example, so `version` is exactly the setting that must be
-allowed to compute. What a registry and a lock file need is the version of a *published* package, and that comes from
-the frozen manifest, where it is a literal again. A tool that wants the version of a project it is not building
-evaluates the manifest or reads the lock; there is no third answer and there does not need to be.
+`version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION")?.trim()` is the motivating example, so `version`
+is exactly the setting that must be allowed to compute. What a registry and a consumer need is the version of a
+*published* package, and that comes from the `settings` section of its `project.lock.trb`, where it is a literal
+again. A tool that wants the version of a project it is not building reads that lock; a tool that wants the version of
+a project it *is* building evaluates the manifest. There is no third answer and there does not need to be.
+
+### The minimum-version setting, and what it is called
+
+**The setting exists, and what it versions is one thing, which is why it is one number.** The compiler, the runtime
+and the standard library ship together: a `torb` binary is a front end, a back end, `runtime/*.c` and `std/*` built
+from one commit, and a project cannot have one without the others. So there is nothing to version separately — no
+"language edition" next to a "tool version", no SDK next to a compiler — and the setting says one thing: *this project
+needs a toolchain at least this new*. It is the one setting an **older** toolchain has to understand, which is why it
+is read first, before anything else in the file, and why adding it late would mean the versions that cannot read it
+already exist.
+
+| Ecosystem | What it is called | What it versions |
+|---|---|---|
+| **Rust** | `rust-version = "1.75"` in `[package]` | the toolchain: compiler plus `std` |
+| **Go** | `go 1.21` in `go.mod` | the language version *and* the toolchain, in one line |
+| **Node** | `"engines": { "node": ">=18" }` | the runtime only; the compiler is somebody else's |
+| **Dart** | `environment: sdk: '>=3.0.0'` in `pubspec.yaml` | the SDK: compiler, runtime and core libraries |
+| **Swift** | `// swift-tools-version:5.9`, a **comment on the first line** of `Package.swift` | the manifest format itself |
+
+Dart is the closest match, because its SDK is the same bundle ours is. Swift is the instructive one: the version lives
+in a *comment*, on the first line, because `Package.swift` is a program and the version has to be readable before the
+program can be parsed. A `project.trb` needs no such hack — the setting is a static command call (section 8), read
+from the syntax tree before anything is evaluated, so it can be an ordinary line like every other setting.
+
+**The name is the open question**, and the candidates are:
+
+| Candidate | For | Against |
+|---|---|---|
+| `torb "0.3.0"` | the tool's own name is the thing you installed; nothing to explain, nothing to look up; full word | a reader might briefly expect it to *configure* `torb` rather than to require a version of it — and `program "torb"` exists three lines away in one repository |
+| `toolchain "0.3.0"` | what Rust calls it and what this document calls it in prose | "toolchain" is a word a user has to learn maps to "the thing you installed" |
+| `torbscript "0.3.0"` | the language's name | the setting is not about the language: there is one language and it does not have versions of its own |
+| `minimumVersion "0.3.0"` | precise about the comparison | silent about the minimum version *of what*, which is the only interesting part |
+| `requires "0.3.0"` | short | reads like a dependency, and dependencies are two lines below |
+
+**The document uses `torb "0.3.0"`** — "this project needs torb 0.3.0 or newer" — because it is the only candidate
+that needs no sentence of explanation, and because the objection against it is a momentary one that the first
+diagnostic settles for good.
+
+**Which file the static reader is pointed at depends on whose package it is**, and that is the whole of section 8 in
+one table:
+
+| What is being read | The file | How |
+|---|---|---|
+| the project `torb` was invoked in | its `project.trb` | statically; then evaluated if a setting is not a literal |
+| a workspace member | its `project.trb` | the same |
+| a `path:` or `git:` dependency | its `project.trb` | the same, without the environment |
+| a **registry package** | its `project.lock.trb`, `settings` section | statically, always — its `project.trb` is never parsed by the toolchain |
+| the dependency graph of the build | the root's `project.lock.trb`, `graph` section | statically |
+| an editor or a registry looking at a foreign package | its `project.lock.trb`, `settings` section | statically |
 
 So a project file may do this —
 
 ```trb
 name "acme/shop"
-version File.readText("VERSION")?.trim()
+version Environment.get("CI_COMMIT_TAG") ?? File.readText("VERSION")?.trim() ?? "0.0.0"
 
 const threshold = if version.startsWith("0.") { 50 } else { 80 }
 
@@ -836,7 +1065,9 @@ file.
 build, not of whoever happens to import it; two members resolving one name to two places is the thing the lock file
 exists to make impossible.
 
-**One `project.lock.trb`, at the root, for every member.** What it pins, per package:
+**One `project.lock.trb`, at the root, for every member — and it is the workspace's own lock, with one `graph`
+section and one `settings` section per member.** Section 8 has the shape of the file; this is what the `graph` section
+pins, per package:
 
 | Source | Pinned |
 |---|---|
@@ -851,7 +1082,8 @@ is the honest half of what a lock file can promise about a directory somebody is
 **The lock pins the version a package was resolved *at*, which for a source-built package is the version its evaluated
 manifest answered.** That is the one place section 8 reaches the lock file: a `git:` dependency whose manifest computes
 its version from a file in its own tree is pinned by commit and content hash, so the computed version is reproducible
-for the same reason the tree is. A registry package's version is a literal in its frozen manifest and needs nothing.
+for the same reason the tree is. A registry package's version is a literal in the `settings` section of its own lock
+and needs nothing.
 
 `torb run`, `build`, `test` and `check` read the lock and never write it, and refuse when it does not match
 `project.trb`. `torb add`, `torb remove` and `torb update` write it. Both halves are already CONCEPT's position; what
@@ -863,9 +1095,9 @@ resolve against yet. What is decided here is what has to be pinned, not how it i
 
 ## 12. Migration
 
-Eight slices. Each one lands with the repository checking green, `torb test` passing, `canon --check` clean and the
-conformance suite comparing the two implementations. Slices 1 to 6 need nothing that does not exist; slice 7 needs the
-VM; slice 8 is `docs/RESOURCES.md`'s own plan.
+Nine slices. Each one lands with the repository checking green, `torb test` passing, `canon --check` clean and the
+conformance suite comparing the two implementations. Slices 1 to 6 need nothing that does not exist; slices 7 and 8
+need the VM; slice 9 is `docs/RESOURCES.md`'s own plan.
 
 **All of this lands after the repository has moved to `static` and `var fn`**, because that round touches practically
 every `.trb` file and nothing should be rebased across it.
@@ -875,11 +1107,12 @@ every `.trb` file and nothing should be rebased across it.
 | 1 | **The names decide.** `isEntryFile` stops reading `buildInput` and reads the file name; `isLibraryModule` and it stop disagreeing; `packageAt` takes the whole package directory instead of `src/` plus `testInput`; `torb build` picks its entry from the programs; `torb test` collects `*.test.trb` below the package. `Manifest` loses `buildInput` and `testInput` | `compiler/src/project/{manifest,workspace}.trb`, `compiler/src/semantics/graph.trb`, `compiler/src/semantics/checker/declaration.trb`, `compiler/src/cli/{build,test}.trb`, `compiler/tests/project.test.trb` | **Medium.** Probe 18 says the thirty-two `build { input "src/lib.trb" }` blocks are currently switching a rule off; removing them turns that rule back on, so every `src/lib.trb` in the repository is checked for top-level code for the first time |
 | 2 | **The manifests.** The `build { }` and `test { input }` blocks go out of all thirty-five `project.trb` files; `Build` is deleted from `std/project` and `Test` keeps only `coverageThreshold` | `std/project/src/lib.trb`, every `project.trb`, `docs/standard-library/project.md` | **Low**, and it is the slice that proves slice 1, because nothing may change behaviour |
 | 3 | **Programs.** `Program` and `Project.program` in `std/project`; the static reader reads `program` lines; `torb run <name>`, `torb build <name>`, the "name one" diagnostic, the library-only "nothing to build"; the ten diagnostics of section 4; `"owner/name/main"` and an imported `entry` become errors; `compiler/project.trb` writes `program "torb"` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/src/cli/{build,run,test}.trb`, `compiler/src/semantics/graph.trb`, `compiler/project.trb` | **Low.** No file moves and no import changes. The one thing to watch is stage 0's hardcoded `src/main.trb` for a directory argument (`bootstrap/crates/torb-cli/src/main.rs`), which has to learn the `program` lines so that `torb run <dir>` of a renamed default still finds it |
-| 4 | **Profiles and targets.** `--profile`, `--release`, `--target`; `build/<profile>/<program>`; the `profile` block in the vocabulary and in the static reader; `output` on a `program` taken literally | `compiler/src/cli/build.trb`, `std/project/src/lib.trb`, `compiler/src/project/manifest.trb` | **Low.** `buildTarget = "release"` is one constant today, and the layout already has the shape |
+| 4 | **Profiles and targets.** `--profile`, `--release`, `--target`, with `dev` as the default; `build/<profile>/<program>`; the `profile` block in the vocabulary and in the static reader; `output` on a `program` taken literally | `compiler/src/cli/build.trb`, `std/project/src/lib.trb`, `compiler/src/project/manifest.trb` | **Low.** `buildTarget = "release"` is one constant today, and the layout already has the shape |
 | 5 | **The specifier grammar.** One function that takes a specifier apart, with a message per shape: a dot in a relative component, a `scheme:`, a host-qualified owner, a `..` inside a package path, a climb out of the package | `compiler/src/semantics/graph.trb`, `compiler/src/semantics/scope.trb`, `compiler/tests/check.test.trb` | **Low**, and it is the slice with the most new diagnostics, so it is mostly tests with exact messages |
-| 6 | **Sources and the static subset.** `source` in `std/project` and in the static reader; a plain-string rule with a diagnostic for the nine static settings; `toolchain`, `description`, `license`, `repository` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/tests/project.test.trb` | **Low** on its own. It does not resolve anything — resolution needs the registry protocol, which is CONCEPT's open question |
-| 7 | **The manifest that reads.** The toolchain becomes a `Sandbox` caller: the grant of section 8, the evaluation only when the static read is not enough, `build/manifest-inputs.trb`, the diagnostics for a failing script, the frozen manifest and `torb publish`'s verification | `compiler/src/project/*`, `compiler/src/cli/*`, `std/sandbox`, the VM | **Highest, and blocked.** Probe 21: `Sandbox` runs on neither implementation, so this slice cannot start before 7.x. Nothing in the repository's own manifests needs it, which is what makes waiting free |
-| 8 | **Resources.** `docs/RESOURCES.md`'s slices, which are a plan of their own | see that document | see that document |
+| 6 | **Sources and the static subset.** `source` in `std/project` and in the static reader; a plain-string rule with a diagnostic for the nine static settings; `torb`, `description`, `license`, `repository` | `std/project/src/lib.trb`, `compiler/src/project/manifest.trb`, `compiler/tests/project.test.trb` | **Low** on its own. It does not resolve anything — resolution needs the registry protocol, which is CONCEPT's open question |
+| 7 | **The manifest that reads.** The toolchain becomes a `Sandbox` caller: the grant of section 8 (files, the environment for the invoked project and its members only, three modules), the evaluation only when the static read is not enough, `build/manifest-inputs.trb` by name and hash, the diagnostics for a failing script | `compiler/src/project/*`, `compiler/src/cli/*`, `std/sandbox`, `std/environment`, the VM | **Highest, and blocked.** Probe 21: `Sandbox` runs on neither implementation, so this slice cannot start before 7.x. Nothing in the repository's own manifests needs it, which is what makes waiting free |
+| 8 | **The locked manifest.** `Lock` in `std/project` with its `settings` and `graph` sections; the deterministic printer that writes an evaluated `Project` back as literals in a fixed order; `torb lock` and `torb lock --check`; `torb publish` writing and verifying `settings`, printing `from` and asking for `--from-environment`; both files travelling in an archive; the consumer side reading a dependency's `settings` instead of its `project.trb` | `std/project/src/lib.trb`, `compiler/src/project/*`, `compiler/src/cli/*` | **Medium, and it needs slice 7 in front of it.** The printer is the interesting half: "a value is its constructor call" has to hold for the whole vocabulary, `torb lock --check` is the gate that says it is deterministic, and `torb publish`'s static re-read is the one that says it round-trips |
+| 9 | **Resources.** `docs/RESOURCES.md`'s slices, which are a plan of their own | see that document | see that document |
 
 **The prose.** `docs/tooling/project-trb.md` (the settings table is rewritten), `torb-build.md`, `torb-run.md`,
 `torb-test.md`, `docs/language/modules-and-packages/{packages,top-level-code,use,workspaces}.md`,
@@ -896,9 +1129,10 @@ already done, so that `docs check` never sees a design document nothing links to
 - **Not a build system.** There are no rules, no targets that depend on targets, no code generation and no hooks. A
   `project.trb` describes a package; it does not describe how to make one.
 - **Not a manifest that is a program you run.** A project file is code and section 8 lets it read, which is one step
-  towards `Package.swift` and exactly one: the grant is read-only, below one directory, with two modules and a step
-  limit, and a published package carries a frozen manifest that nobody evaluates at all. There is no way to write, to
-  fetch, to spawn or to ask the machine what day it is, and there is no place to hang one.
+  towards `Package.swift` and exactly one: the grant is read-only, below one directory, plus the environment, with
+  three modules and a step limit, and a published package carries a locked manifest that nobody evaluates at all.
+  There is no way to write, to fetch, to spawn or to ask the machine what day it is, and there is no place to hang
+  one.
 - **Not a place for capabilities.** What a script may do is granted at the call site that loads it — including
   when the caller is the toolchain and the script is `project.trb`. What a package may touch is visible from its
   imports. Neither is a setting.
@@ -908,9 +1142,10 @@ already done, so that `docs check` never sees a design document nothing links to
   interprets; `std/path`'s `Path` is for files, and `docs/PATH.md` says why the two stay apart.
 - **Not a change to what `public` means.** A package's surface is still its `public` declarations, reached through
   `"owner/name"` and `"owner/name/path"`. Nothing here adds a way to hide a module or to expose one twice.
-- **Not a second manifest format.** `project.lock.trb`, the frozen `project.trb` and `build/manifest-inputs.trb` are
-  all receiver scripts in the same vocabulary, and there is no `.toml`, no `.json` and no generated file that is not
-  TorbScript.
+- **Not a second manifest format, and not a third file.** There are two files a project has: `project.trb`, which a
+  person maintains, and `project.lock.trb`, which the toolchain writes and which holds both the locked settings and
+  the pinned graph. `build/manifest-inputs.trb` is a build artifact, not a manifest. All of them are receiver scripts
+  in the same vocabulary, and there is no `.toml`, no `.json` and no generated file that is not TorbScript.
 - **Not a convention for a second program.** There is no `src/<name>/main.trb` and no `programs/<name>.trb`. A second
   program is rare, and a convention that reserves a directory name in every package forever to shorten a rare line is
   a bad trade.
@@ -919,14 +1154,13 @@ already done, so that `docs check` never sees a design document nothing links to
 
 Everything technical above is decided. These are taste or direction, and only the owner answers them.
 
-1. **Does `torb build` default to `dev` or to `release`?** Section 5 says `dev`, which is Cargo's and Zig's default
-   and the opposite of what the toolchain does today. `release` by default makes the first build somebody runs slow
-   and makes a panic less useful; `dev` by default means the compiler builds itself with `--release` in one more
-   place.
-2. **Is `toolchain` worth a setting before there are two toolchain versions?** It is the only setting an *older*
-   toolchain has to understand, so adding it late means the versions that cannot read it already exist. The document
-   includes it for that reason alone.
-3. **Is `project.source.trb` the right name for the file that was evaluated, and should it ship at all?** Section 8
-   ships it because a reader of a published package should be able to see how the version was computed, and it costs
-   one file nothing reads. The alternative is to ship only the frozen `project.trb`, which is smaller and loses the
-   answer to "where did this version come from".
+1. **What is the minimum-version setting called?** Section 10 says what it versions — one number, because the
+   compiler, the runtime and the standard library ship together — and lays the candidates out against what five other
+   ecosystems call theirs. The document writes **`torb "0.3.0"`**, because it is the only candidate that needs no
+   sentence of explanation; `toolchain` is Rust's word and one more thing to learn, `torbscript` names the language
+   rather than the tool, and `minimumVersion` is silent about the minimum version *of what*. That the setting is not
+   decided yet costs nothing, because it is one word in one place and a `canon` rule.
+2. **Should `torb publish` need `--from-environment` when a setting came from a variable?** Section 8 says yes,
+   because CI is exactly where the first pitfall bites and exactly where nobody reads output, and because CONCEPT
+   already asks for an explicit confirmation when an update gains a capability. The case against is that it is one
+   more flag in one more CI file, and that the `from` section of the lock records the names either way.

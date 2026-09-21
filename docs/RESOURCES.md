@@ -378,7 +378,9 @@ and nothing about a call is a function of what happens to its result.**
 ### Why `Resource` waits
 
 `Resource.bytes()` returns a `Task`, on every target, including the ones where the file is on a local disk and the
-read is instantaneous. That is a colouring decision and it is made on purpose.
+read is instantaneous. A `Task<Value>` is a return value like any other — the language has no `async` keyword and
+nothing about a signature is "coloured" by one — so the only question is whether waiting is part of what this call
+does, and it is.
 
 - **The web forces it.** In a page, a shipped file is a `fetch` and there is no way to block. If the native signature
   were synchronous, the same source would need a different signature on the web target, and "one program, both back
@@ -386,15 +388,18 @@ read is instantaneous. That is a colouring decision and it is made on purpose.
 - **CONCEPT already has the rule.** "Asynchrony lives in the type system, not in a keyword. A function that returns
   `Task<Value>` may call `await()`." A `Task` whose value is already there is exactly what `File.add` returns today
   on native, so the shape and its runtime exist.
+- **What a caller writes is one method call.** `const bytes = sheet.bytes().await()?` — `await()` inside a function
+  that itself returns a `Task`, and `?` for the `Result` inside it, both of which are visible where they happen. That
+  is the whole of what the `Task` asks of a caller.
 - **The escape is the point of the split.** Code that must not be a `Task` — a decoder, a `Describe` implementation, a
   `static` initializer — uses `EmbeddedText`/`EmbeddedBytes` and is synchronous and infallible. The two types are not
   an optimization with the same interface; they are the two answers to "may this wait", and choosing one is the whole
   decision a caller makes.
 
-The honest cost: a library that reads one shipped configuration file becomes a library whose function returns a
-`Task`, and every caller of it does too. CONCEPT worries about exactly this colouring for decoders and refuses it
-there. The difference is that a decoder is handed bytes somebody else read, so it has a choice; a resource read *is*
-the IO, so it has none.
+The comparison worth drawing is `docs/ENCODING.md`, where a decoder deliberately does *not* return a `Task`: a decoder
+is handed bytes somebody else read, so waiting is not part of what it does and a `Task` there would describe the call
+wrongly. A resource read *is* the IO, so the `Task` describes it correctly. The rule is the same in both places — the
+return type says what the call does — and it lands on opposite answers because the calls are different.
 
 ## 5. Three verbs across `std`
 
@@ -410,7 +415,7 @@ looking anything up:
 **The third row is the one that carries a capability, and the first two are the ones that do not.** That is worth
 being explicit about, because it looks like a security claim and is not one: an `EmbeddedBytes` is bytes the build put
 in the binary, and a `Resource` is a file the build put beside it — in both cases the *author of the program* chose
-the file, at compile time, and a reader can see every one of them in the frozen manifest. Reading them grants nothing
+the file, at compile time, and a reader can see every one of them in the locked manifest. Reading them grants nothing
 that compiling the program did not already grant. `std/fs` stays the import that means "this program reads files the
 user names", and nothing in this design weakens it.
 
@@ -449,7 +454,7 @@ public native type Sandbox {
 - **Changing it costs nothing.** Probe 4: `Sandbox` runs on neither implementation, so there is no program to break.
 - **`project.trb` is a `read`, not a `load`.** The toolchain is handed a directory on a command line and finds a
   `project.trb` in it; that path is not known when the toolchain is compiled. `docs/PROJECT.md` section 8's grant is
-  therefore written against `read`, and the frozen manifest changes nothing about that.
+  therefore written against `read`, and the locked manifest changes nothing about that.
 - **A scene file is a `load`.** `docs/ECS.md` writes `Sandbox.load<Scene<World>>("./scenes/level.trb")`, and under
   this design that literal is a `Resource`: the scene ships beside the game, the compiler type checks it at build time
   (section 7), and `instance "scenes/asteroid.trb"` stays what ECS says it is — a method of the receiver, resolved by
@@ -463,7 +468,8 @@ works: a library's `SpriteSheet.embedded("./hero.png")` must find the library's 
 an application's `SpriteSheet.load("./hero.png")` must find the application's.
 
 - **A library's assets travel in its package.** They are files below the package directory, so they are part of what
-  is published (`docs/PROJECT.md` section 3), and the frozen manifest lists every one the package's own code names.
+  is published (`docs/PROJECT.md` section 3), and the `settings` section of its `project.lock.trb` lists every one
+  the package's own code names.
 - **An application's literal is the application's file**, even when it is passed to a library's function. The literal
   is written in the application, so it resolves there. Nothing about the library's location enters into it.
 - **The resolution happens once, in the checker, and what is recorded is a name.**
@@ -624,7 +630,10 @@ program behaves identically either way — and it turns a corrupt asset into a b
    draw a second time: `embedded` folds, `load` never does.
 3. **It is deterministic.** No clock, no environment, no process, no randomness, and no iteration order that depends
    on the address of anything — a map whose order came from pointer identity would make two builds of one commit
-   differ, which is the one property the whole toolchain is built on.
+   differ, which is the one property the whole toolchain is built on. **The environment is closed here even though
+   `docs/PROJECT.md` section 8 opens it for a `project.trb`**, and the two are not in tension: a manifest's
+   environment read produces a *setting*, which is recorded by name in the lock and visible to everybody who reads the
+   package, while a folded initializer produces a value inside the binary that nothing records and nobody can see.
 4. **It does not panic.** A panic while folding is a **build error at the line of the constant**, carrying the panic's
    own message. That is the feature and not the cost: a truncated PNG stops the build instead of crashing on a
    customer's machine.
@@ -670,9 +679,10 @@ every item below is.
 
 - **Packaging.** Each `Resource` is copied to `<program>.resources/<stable name>`; each `EmbeddedBytes` and
   `EmbeddedText` is emitted as static data. Nothing is guessed and nothing is listed twice.
-- **The published package's file list.** Every literal in the package's *own* files goes into the frozen manifest
-  (`docs/PROJECT.md` section 8), so a consumer sees the non-code files of a dependency without evaluating anything,
-  and `torb publish` refuses a package whose code names a file the archive does not contain.
+- **The published package's file list.** Every literal in the package's *own* files becomes a `resource "..."` line
+  in the `settings` section of its `project.lock.trb` (`docs/PROJECT.md` section 8), so a consumer sees the non-code
+  files of a dependency without evaluating anything, and `torb publish` refuses a package whose code names a file the
+  archive does not contain.
 - **Watch mode.** The resource set is a file set, so `torb build --watch` watches it. Today it can only watch `.trb`
   files, because they are the only files it knows exist.
 - **Stage 0.** `torb run` interprets from the source tree, so **the file is simply there**: a `Resource` resolves to
@@ -681,9 +691,24 @@ every item below is.
   rewrites its own asset while it runs would see the new bytes on stage 0 and the old ones in a binary — which belongs
   in the stage-0-versus-binary list, not in the language.
 - **The C back end.** Static data, measured in probe 3: about six bytes of C per byte of payload, nothing breaking at
-  1 MB or at 16 MB, 21 s and 196 s of build time respectively. So `torb build` reports the embedded total, and a
-  program whose embedded bytes pass a threshold gets a note that names `Resource` as the other option. A note and not
-  an error: it is the author's trade to make, and the numbers are the argument.
+  1 MB or at 16 MB, 21 s and 196 s of build time respectively — about **twelve seconds of build time per embedded
+  megabyte**. `torb build` reports the embedded total per program, and the project file sets two levels on it:
+
+  ```trb
+  resources {
+    embeddedWarningAbove 4.megabytes()
+    embeddedErrorAbove 64.megabytes()
+  }
+  ```
+
+  Above the first, the build report says so and names `Resource` as the other option; above the second, the build
+  fails and names the three largest contributors. The defaults come straight from the measurement: four megabytes is
+  about a minute of build, which is when somebody notices a rebuild and deserves to be told why, and sixty-four is
+  about thirteen minutes and four hundred megabytes of generated C, which is the accident — an `assets/` directory
+  embedded by a loop — rather than a trade anybody made. **The total is what is measured and a single file has no
+  limit of its own**: one oversized file blows the total too, while a hundred files of two hundred kilobytes is
+  exactly what a per-file limit would miss. `docs/PROJECT.md` section 9 has the vocabulary, why the low level is a
+  line on the build report rather than a new diagnostic severity, and why neither setting is static.
 - **The conformance suite.** One program per behaviour, byte-identical on both implementations: an embedded text, an
   embedded binary whose bytes are not UTF-8, a shipped resource read successfully, a shipped resource that is missing
   at run time, and a program that prints a resource's `name`. The last one matters most, because the stable name is in
@@ -707,7 +732,7 @@ which files belong to a package.
 | 1 | **The parameter kind.** `std/resource` with `Resource`, `EmbeddedBytes`, `EmbeddedText`, `ResourceError`; the checker's literal rule and its four diagnostics; resolution against the writing file with a directory listing for case; the recorded stable name in the IR | `std/resource/*`, `compiler/src/semantics/checker/{expression,call}.trb`, `compiler/src/ir/*`, `compiler/tests/check.test.trb` | **Highest of the six.** It is a new parameter kind, which touches the machinery `lazy` and `Expression<Value>` use, and probe 1 says there is nothing there to build on |
 | 2 | **Embedding.** `EmbeddedBytes.bytes()` and `EmbeddedText.text()` as static data in the C back end and in stage 0; the UTF-8 check at the literal; the first conformance programs | `compiler/src/backend/c/*`, `bootstrap/crates/torb-interpreter/src/natives.rs`, `bootstrap/tests/native/` | **Low.** Probe 2 says the emitter already writes exactly this shape for a string literal |
 | 3 | **Shipping.** `<program>.resources/`, the run time finding the program's own directory, `Resource.bytes()` as a ready `Task`, `ResourceError`; stage 0 reads from the tree | `runtime/*`, `compiler/src/cli/build.trb`, `bootstrap/crates/torb-cli/*` | **Medium.** "Where is my own binary" is a platform call on each platform, and the two implementations must agree on the error text |
-| 4 | **The build's file set.** Packaging, `torb publish`'s list in the frozen manifest, `--watch`, the embedded total in `--statistics` | `compiler/src/cli/*`, `compiler/src/project/*` | **Low**, and it is the slice that pays for slice 1 |
+| 4 | **The build's file set.** Packaging, the `resource` lines of the lock's `settings` section, `--watch`, the embedded total in the build report and in `--statistics`, the `resources { }` budget and its two levels, the move of `kilobytes`/`megabytes`/`gigabytes` from `std/sandbox` to `std/number` | `compiler/src/cli/*`, `compiler/src/project/*` | **Low**, and it is the slice that pays for slice 1 |
 | 5 | **L2.** `Sandbox.embedded`/`load`/`read`; the literal capability block and its diagnostic; the script as a leaf of the module graph with its three edges and its cache key | `std/sandbox/src/lib.trb`, `compiler/src/semantics/{graph,check}.trb`, the VM | **Blocked.** Probe 4: `Sandbox` runs on neither implementation |
 | 6 | **L3.** The one new case in the module-constant purity rule; folding a pure initializer in the VM; the embedding through `Encode`; the six conditions as diagnostics | `compiler/src/semantics/checker/declaration.trb`, `compiler/src/ir/*`, the VM | **Blocked, and the largest.** It is compile-time evaluation with a fence around it, and every one of the six conditions is a message somebody will read |
 
@@ -735,7 +760,7 @@ CONCEPT's decision log gains one entry; `docs/internals/index.md` lists this doc
 - **Not a list in the manifest.** SwiftPM's `resources:` and Flutter's `assets:` are a second source of truth that can
   disagree with the call sites, and the disagreement is a run-time failure with a string in it.
 - **Not a capability.** An `Embedded*` is data in the binary and a `Resource` is a file the build shipped; in both
-  cases the author chose the file at compile time and every one is listed in the frozen manifest. `use File from
+  cases the author chose the file at compile time and every one is listed in the locked manifest. `use File from
   "std/fs"` stays the import that means "this program reads files the user names", and nothing here weakens it.
 - **Not a virtual file system.** There is no mounted tree, no `open("res://…")`, no run-time lookup by string. A
   resource is reached through the value the literal produced, and a program cannot ask for a resource it did not name.
@@ -749,18 +774,10 @@ CONCEPT's decision log gains one entry; `docs/internals/index.md` lists this doc
 
 ## 12. Open
 
-Everything technical above is decided. These are taste or direction, and only the owner answers them.
+Nothing is open in this document. The three questions the previous round left — one embedding type or two, whether
+the `Task` on `Resource.bytes()` is the right trade, and whether an oversized embedding is a note or an error — are
+answered above and in `docs/PROJECT.md` section 9: two types, the `Task` stays (a return value is not a colour), and
+two configurable levels of which the upper one fails the build.
 
-1. **`EmbeddedBytes` and `EmbeddedText`, or one `Embedded` with both members?** The document splits them, because one
-   type would make `text()` fallible for a fact the build had in its hands (section 4). The cost is two names in `std`
-   instead of one — though a caller writes neither, since `SpriteSheet.embedded("./hero.png")` names no type at all;
-   only the author of a signature ever types them. If one name is wanted anyway, the price is `text(): String?`, and
-   a build error becomes an `Option` somebody unwraps.
-2. **Is `Resource.bytes()` returning a `Task` the right trade?** Section 4 argues it is forced by the web and is what
-   the two types exist to let a caller escape. It is still a colouring decision, and CONCEPT refuses the same
-   colouring for decoders in so many words. The alternative is a synchronous `Resource` on native with a different
-   signature on the web, which gives up "one program, both back ends" for the programs that read a file.
-3. **Should `torb build` refuse an embedded total above some size, or only say so?** Probe 3 measured the cost: 1 MB
-   embeds in 21 s, 16 MB in 196 s. The document reports it and does not refuse, because the trade is the author's.
-   A threshold that errors would catch the accident — a whole `assets/` directory embedded by a loop somebody wrote
-   without thinking — at the price of a flag to turn it off.
+The one naming question that remains belongs to `docs/PROJECT.md` section 14 and is about the minimum-version
+setting, not about anything here.

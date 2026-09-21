@@ -2936,3 +2936,85 @@ Wenn nicht, was bedeutet, bewirkt es?
     `EmbeddedBytes` und `EmbeddedText`. (5) `Task<X>` ist KEINE Funktionsfarbe - "ein Return Value wie jeder andere,
     wir haben keine Async-Keywords"; `Resource.bytes()` liefert also ein `Task`. (6) Einbettungsgröße: ZWEI Ebenen,
     Warnung und Fehler, beide in der Projektdatei einstellbar (Vokabular und Defaults schlägt das Dokument vor).
+
+  - **Erledigt:** `docs/PROJECT.md` Abschnitt 8 umgeschrieben und die sechs beantworteten Fragen eingearbeitet;
+    `docs/RESOURCES.md` nachgezogen. Gates: `docs check` 223 Seiten / 947 Snippets, `docs index --check` 24 Indizes,
+    `check ..` 326 Dateien - grün, kein Code angefasst.
+    - **Umgebung:** die Toolchain vergibt `modules "std/fs", "std/text", "std/environment"`,
+      `files readOnly: <Projektverzeichnis>` und **`environment "*"`**. Ein engeres Muster ist abgelehnt, weil es nur
+      zwei Orte hätte: im Manifest selbst wäre es ein Skript, das sich selbst Rechte gibt (von CONCEPT verboten), und
+      fest in der Toolchain (`TORB_*`) würde es genau die Variablen ausschließen, die es gibt - `CI_COMMIT_TAG`,
+      `GITHUB_REF_NAME`, `BUILD_NUMBER` teilen kein Präfix. Die Sandbox schützt hier nicht den Nutzer vor seinem
+      eigenen Manifest, sondern die Zusage, dass die Toolchain WEISS, was das Manifest getan hat - und das leistet
+      das Aufzeichnen der Namen, nicht das Verkleinern der Menge.
+    - **Zwei Pitfalls statt eines Verbots** (gehen in `docs/tooling/project-trb.md` unter `# Pitfalls`): (1) was aus
+      der Umgebung in eine Einstellung fließt, wird mit dem Paket veröffentlicht - ein Token sieht aus wie ein Tag,
+      und das Lock hält deshalb fest, WELCHE Variablen gelesen wurden; `torb publish` druckt diese Liste, und ein
+      nicht-interaktives Publizieren, dessen Einstellungen an einer Variable hingen, braucht `--from-environment`
+      (dieselbe Form, die CONCEPT für ein Update mit neuer Capability schon verlangt). (2) Ein Build ist nur zusammen
+      mit den Variablen reproduzierbar, die er gelesen hat - "der Commit" ist nicht mehr die ganze Eingabe.
+    - **Abweichung von der Vorgabe, bewusst:** eine `git:`/`path:`-Abhängigkeit bekommt nicht etwa eine leere
+      Umgebung, sondern **`std/environment` gar nicht erst in `modules`**. Grund: `Environment.get` antwortet laut
+      eigenem Doc-Kommentar mit `None` sowohl für "nicht gesetzt" als auch für "verweigert" - eine stille
+      Verweigerung ließe die Abhängigkeit auf irgendeinen Default zurückfallen, ohne dass je etwas sagt warum. So
+      scheitert stattdessen das Laden mit der Sandbox-Meldung "a module the script may not import", die das Modul und
+      die Abhängigkeit nennt.
+    - **Genau zwei Dateien.** `project.trb` (pflegt man selbst) und `project.lock.trb` (Toolchain schreibt es), das
+      Lock mit `settings "acme/shop" { ... }` je Paket plus EINEM `graph { ... }`. `settings` trägt, was ein
+      VERBRAUCHER braucht - `torb`, `version`, `prelude`, `dependencies`, die `program`-Zeilen, Metadaten, die
+      `resource`-Zeilen -, und ausdrücklich **kein `source`, kein `registry`** (woher ein Paket kommt, entscheidet
+      das BAUENDE Projekt; eine Abhängigkeit, die ihre eigenen `source`-Zeilen mitveröffentlicht, wäre Dependency
+      Confusion auf Umwegen), **kein `workspace`, kein `profile`, kein `test`, kein `resources`-Budget**. Neu:
+      `from { file "VERSION", hash: ... / variable "CI_COMMIT_TAG", hash: ... }` als Herkunft der Auswertung - das
+      ist es, was Pitfall 1 sichtbar und Pitfall 2 diagnostizierbar macht.
+    - **Beide Dateien fahren im Paket mit** (npm/Bun), und damit auch `graph` - als INFORMATION ("wogegen wurde das
+      Paket gebaut und getestet"), nie als Auflösung; ein Verbraucher löst aus seinem eigenen Root-Lock auf. Damit
+      ist die frühere Festlegung "Publizieren lässt `graph` weg" zurückgenommen: EIN Format, das überall dasselbe
+      bedeutet, ist mehr wert als ein gespartes Feld.
+    - **Das Lock zu schreiben ist DETERMINISTISCH** - gleiche Eingaben, byte-gleiche Datei -, als Anforderung
+      aufgeschrieben: feste Reihenfolge (Sektionen; `settings` nach Paketnamen; die Einstellungen in der Reihenfolge
+      der Vokabular-Tabelle, nicht in der des Manifests; `from` nach Art und Name; `graph` nach Name; `program` in
+      Deklarationsreihenfolge, weil DIE bedeutungstragend ist), kein Zeitstempel, keine Maschinenpfade, kein
+      Build-Id, `path:` relativ zum Lock, `sha256:` in Kleinbuchstaben, UTF-8/LF/kein BOM/ein abschließender
+      Zeilenumbruch. Geprüft durch **`torb lock --check`** (schreibt in den Speicher und vergleicht byte-weise) -
+      dieselbe Form wie `canon --check` und `docs index --check`, also ein Gate und keine neue Maschinerie; dazu
+      Idempotenz und später Stage 0 gegen das gebaute `torb`.
+    - **Eigener Lock-Teil, nur für andere:** das `settings` des EIGENEN Baums wird vom eigenen Build nie gelesen. Es
+      schreiben `torb publish`, `torb pack` und ein ausdrückliches `torb lock`; `graph` schreiben weiter nur
+      `torb add`/`remove`/`update`; `run`/`build`/`test`/`check` lesen `graph`, schreiben nie und ignorieren
+      `settings`. Ein fehlendes oder veraltetes `settings` im eigenen Baum ist deshalb weder Fehler noch Warnung -
+      sonst änderte eine `BUILD_NUMBER` die eingecheckte Datei in jedem CI-Lauf.
+    - **`build/manifest-inputs.trb`** hält Eingaben mit NAMEN und HASH fest, nie mit Wert (`file "VERSION", hash: ...`,
+      `variable "CI_COMMIT_TAG", hash: ...`, `variable "BUILD_NUMBER", unset: true`). Der Hash geht über Name UND
+      Wert, damit zwei Variablen mit gleichem Inhalt nicht gleich aussehen; ehrliche Grenze: ein Hash über einen Wert
+      mit wenig Entropie ist ratbar, deshalb liegt die Datei unter `build/` (gitignored, wird nie publiziert). Eine
+      NICHT gesetzte Variable wird mitgeschrieben - sonst invalidiert ein `export` den Cache nicht.
+    - **`version` ist nicht mehr statisch**, die statischen Neun sind jetzt `torb`, `name`, `prelude`, `dependencies`
+      (zwei Zeilen), `source`, `registry`, `workspace`, `program`. Neue Tabelle "welcher Leser liest welche Datei".
+    - **Die sechs beantworteten Fragen sind eingearbeitet:** (1) `torb build` per Default `dev`, `release`
+      ausdrücklich - steht jetzt als Entscheidung in Abschnitt 5. (2) Mindestversions-Einstellung: EIN Absatz, was sie
+      versioniert (Compiler, Runtime und `std` kommen aus EINEM Commit, also EINE Zahl; es gibt keine Sprachedition
+      neben einer Werkzeugversion), plus Tabelle `rust-version` / `go 1.21` / Node `engines` / Dart `environment:
+      sdk` / Swifts `// swift-tools-version` (das steht in einem KOMMENTAR in Zeile 1, weil `Package.swift` ein
+      Programm ist - wir brauchen den Trick nicht, weil die Einstellung ein statischer Kommando-Aufruf ist). Das
+      Dokument schreibt jetzt **`torb "0.3.0"`**; Kandidatentabelle mit Für und Wider steht daneben, die NAMENSFRAGE
+      ist die einzige offene in beiden Dokumenten. (3) erledigt, siehe oben. (4) `EmbeddedBytes`/`EmbeddedText`
+      entschieden. (5) Der `Task` bleibt; die Einfärbungs-Klage ist raus, stattdessen ein Satz, was der Aufrufer
+      schreibt (`sheet.bytes().await()?`) und ein Vergleich mit `docs/ENCODING.md`, wo ein Decoder bewusst KEIN `Task`
+      zurückgibt - dieselbe Regel (der Rückgabetyp sagt, was der Aufruf tut), zwei verschiedene Aufrufe. (6) Budget:
+      `resources { embeddedWarningAbove 4.megabytes(); embeddedErrorAbove 64.megabytes() }`.
+    - **Zum Budget, mit Begründung aus Sonde 3:** gemessen sind rund **zwölf Sekunden Build pro eingebettetem
+      Megabyte** (1 MB = 21 s, 16 MB = 196 s). 4 MB ist etwa eine Minute - da merkt man einen Rebuild und soll
+      erfahren warum; 64 MB ist etwa dreizehn Minuten und 400 MB C - das ist nicht mehr ein Tausch, den jemand macht,
+      sondern der Unfall (ein `assets/`-Verzeichnis per Schleife eingebettet). **Gemessen wird die Einbettungssumme
+      PRO PROGRAMM; eine einzelne Datei bekommt KEIN eigenes Limit** - eine zu große Datei sprengt die Summe ohnehin,
+      und der Fall, für den ein Datei-Limit gedacht wäre (hundert Dateien à 200 KB), ist genau der, den es nicht
+      fängt. Beide Werte sind **nicht statisch** (niemand braucht sie vor der Auswertung) und stehen deshalb auch
+      nicht im Lock. **Befund:** die Toolchain hat gar keine Warnstufe (nur Fehler und Notizen) - die untere Stufe ist
+      deshalb eine ZEILE IM BUILD-REPORT und keine neue Severity; kommt je eine Warnstufe aus eigenem Anlass, wird es
+      eine, ohne dass die Einstellung sich ändert. **Und:** `kilobytes`/`megabytes`/`gigabytes` stehen heute als
+      `extend Int64` in `std/sandbox`; sie ziehen nach `std/number` um (das Prelude exportiert es schon), damit ein
+      `project.trb` `4.megabytes()` ohne Import schreiben kann und es trotzdem EINE Definition gibt.
+    - **Migration jetzt neun Scheiben:** 7 = lesendes Manifest (braucht die VM), 8 = das gesperrte Manifest samt
+      deterministischem Drucker und `torb lock --check`, 9 = `docs/RESOURCES.md`. `docs/RESOURCES.md` hat keine
+      offenen Fragen mehr.
