@@ -1327,6 +1327,31 @@ Wenn nicht, was bedeutet, bewirkt es?
       der Reparatur immer noch nicht richtig); `std/scene` eigenes Paket oder Modul; darf eine Szenendatei
       `std/linear` und `std/time` nennen; gehören Events ins Paket; ist `GlobalTransform2` eine Komponente oder ein
       Feld; und wem gehört die Frame-Schleife.
+  - **Richtungsfrage an dich (2026-09-21, die wichtigste des Entwurfs):** die Welt ist der EIGENE Typ des Programms
+    mit einem `Column<Component>`-Feld je Komponententyp. Das hält alles statisch getypt - aber ein fremdes Paket
+    (Physik, Animation) kann seine Komponenten nicht selbst in die Welt hängen, der Nutzer deklariert die Felder.
+    Reicht dir das für "Unity/Godot-Niveau", oder sollen Pakete Komponenten mitbringen können? Das hieße ein
+    kontrolliertes, in der Sprache verankertes `Any` mit geprüftem Downcast (heute von CONCEPT verboten, und die Probe
+    zeigt, dass der Weg im Back-End bricht). Bis du antwortest, baue ich nichts davon.
+  - **Entschieden / Wird gelöst (technisch, 2026-09-21):**
+    - **Zwei Soundness-Löcher im Checker, Vorrang vor allem ECS-Bau:** ein Trait-Wert geht als Typparameter durch
+      (`fn bare<Value>(shape: Area): Value { shape }` prüft grün und bricht den Verifier), und zwei
+      `spawn`-Closures dürfen dieselbe `var`-Welt fangen (CONCEPT verbietet es). Beide in die nächste Checker-Runde
+      ("generische Zahlen"), mit Tests.
+    - **Zwei Implementierungen EINES Traits mit verschiedenen Argumenten an einem Typ** (LINEAR Lücke 12, hier die
+      tragende Wand) und die **Mitgliedssuche über Blanket-Implementierungen**: dieselbe Runde. Überladung per
+      Trait-Parameter ist eine der zwei Formen, die das Decision-Log behält - sie muss also ganz funktionieren
+      (jedes Argument UND der erwartete Typ entscheiden, Mehrdeutigkeit wird gemeldet).
+    - **`var` vor einem Closure-Parameter** (`{ var position => ... }`): der Parametertyp `(var value: T) => Void`
+      existiert schon, also ist das eine Parserlücke in beiden Parsern - kleine Runde.
+    - **Zeilenenden:** ein kompiliertes Binary schreibt unter Windows CRLF in eine Pipe/Datei, Stage 0 LF (der
+      Konformitätstest normalisiert das heute weg). Entschieden: `
+` bleibt überall `
+` - die Runtime stellt
+      stdout/stderr auf Binärmodus, die Normalisierung im Test fällt danach weg. Kommt mit Schwanz 6.
+    - **Zurückgestellt, eigene Sprachentscheidung:** variadische Typparameter (kleinste Form: ein Pack, das nur als
+      Elementliste eines Tupels und als Subjekt einer Bound expandiert). Bis dahin `query`/`query2`/`query3`/`query4`.
+      `typeName<Type>()` kommt mit dem Encoding-Umbau (ENCODING Lücke 3).
 
 - (ML/KI in der std, 2026-09-21) **Wunsch (Nutzer), eingeplant für Meilenstein 10, gemeinsam mit den Engine-Paketen:**
   Training und Inferenz sollen mit der std möglich sein. **Entschieden (ich): kein eigener Turm, sondern dasselbe

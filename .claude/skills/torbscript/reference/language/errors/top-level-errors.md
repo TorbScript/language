@@ -86,10 +86,10 @@ describe()
 
 Both end the program; only the message, the exit code, and what a supervising process should conclude from it differ.
 
-**This page describes the specified format. The native back end does not build it yet.** A top-level `?` in an entry
-file refuses to build (`` not supported by the back end yet: `?` at the top level of an entry file, whose `error:`
-report is the driver's `` - milestone 5.13); `torb check` accepts every example on this page, which is what they are
-verified against.
+**The native back end builds the first line of the report and not the chain yet.** `error: <the error>` and exit code 1
+are what a compiled program prints; the `caused by:` lines and the locations of the debug profile are the specified
+format that is still being built. `torb check` accepts every example on this page, which is what they are verified
+against.
 
 ## Related
 
