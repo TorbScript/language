@@ -174,14 +174,14 @@ public fn memberFunctionOf(
   const owner = manifestOwnerOf lowering, subject, implementation, provider
   // A native whose ABI is not the declaration's already has a function of the program around it, and that wrapper *is*
   // what the table points at - a second one around it would only be one call more (`ir/lower/native.trb`)
-  if const Some(entry) = nativeNamed(lowering, owner, name) {
+  if const Some(entry) = nativeNamed(lowering, owner, name, signature) {
     if const .Runtime(symbol) = entry.target {
       if needsNativeWrapper(lowering, provider, mapping, entry) {
         return nativeFunctionOf lowering, provider, mapping, entry, symbol, at
       }
     }
   }
-  const kind = generatedKindOf(lowering, provider, owner, implementation, at)?
+  const kind = generatedKindOf(lowering, provider, owner, implementation, signature, at)?
   generatedFunctionOf lowering, kind, provider, subject, bound, mapping, at
 }
 
@@ -334,10 +334,11 @@ public fn generatedKindOf(
   member: SymbolId,
   owner: String,
   implementation: ImplementationId,
+  signature: Signature,
   at: Span,
 ): Generated? {
   const name = lowering.checker.symbolAt(member).name
-  if const Some(entry) = nativeNamed(lowering, owner, name) {
+  if const Some(entry) = nativeNamed(lowering, owner, name, signature) {
     if const .Planned(_) = entry.state {
       reportUnsupported lowering, "`{entry.name}`", at, "the runtime does not provide it"
       return None
@@ -483,7 +484,7 @@ public fn memberMappingOf(
   if const .Parameter(parameter) = lowering.checker.types.form(owner) {
     // A member of the trait itself: `Self` is the target, and the trait's own arguments come out of the trait that
     // *declares* the member for that target - the bound a call resolved may be a subtrait, whose arguments say nothing
-    // about this one (`Int64 with Signed` is what provides `Parse<NumberParseError>`)
+    // about this one (`Int64 with Signed` is what provides `TryFrom<String, NumberParseError>`)
     mapping.set parameter, subject
     const applied = appliedArgumentsOf lowering, parameter, subject, bound
     addTraitArguments lowering, mapping, signature.generics, applied
@@ -495,7 +496,7 @@ public fn memberMappingOf(
 }
 
 /**
- * The arguments the trait that declares a member has for one type: `Parse<NumberParseError>` for an `Int64`, whatever
+ * The arguments the trait that declares a member has for one type: `TryFrom<String, NumberParseError>` for an `Int64`, whatever
  * bound a call site happened to resolve. The bound's own arguments stand in where the declaring trait cannot be found.
  */
 fn appliedArgumentsOf(

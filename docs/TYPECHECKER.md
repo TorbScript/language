@@ -532,7 +532,7 @@ For a receiver of type `T` and a name `n`:
 | `Traits`           | Members of the bounds and their supertraits, plus `extend Trait` members visible here                  |
 | `Tuple`            | `.0`, `.1`, …, labels. No extensions (a tuple has no nominal head)                                      |
 | `Function`         | Nothing                                                                                                |
-| `Literals`         | The members of the base type, plus the generated `parse`/`show`/`into`                                  |
+| `Literals`         | The members of the base type, plus the generated `tryFrom`/`show`/`into`                                |
 | `Void`, `Never`    | Nothing; `Never` absorbs the access without a message                                                   |
 
 Two candidates in the same step are an ambiguity error, and the fix is to rename one with `as` where it is imported.
@@ -616,7 +616,7 @@ public fn resolveBound(var checker: Checker, type: TypeId, bound: TypeId): Resol
 | `Encode`                | every `type` all of whose fields are `Encode`                            | `shared type`                                |
 | `Decode`                | the same, and only if the constructor is usable from outside              | a type with a private field without a default |
 | `From<Field>`           | a case that wraps exactly one value of a type no other case wraps         | -                                            |
-| `Parse`, `Show`, `Equals`, `Hash`, `Encode`, `Decode`, `Into<base>` | a literal type                     | -                                            |
+| `TryFrom<String, _>`, `Show`, `Equals`, `Hash`, `Encode`, `Decode`, `Into<base>` | a literal type       | -                                            |
 
 A hand-written member always wins over the derived one, per member (`CaseInsensitive` writes `equals` and `hash`).
 The generated `Show` format is fixed, because the differential tests of the AST compare it:
@@ -782,7 +782,7 @@ Two rules, both errors, both with a fix in the message:
 2. **A discarded value.** An expression statement must have type `Void` or `Never`, unless the call it consists of has
    a `var` receiver or a `var` argument - then the mutation is the effect and the result may be dropped
    (`parser.bump()`, `cursor.next()`, `list.removeAt(0)`). So `list.added(4)` as a statement is an error
-   ("The result of `added` is not used. Did you mean `add`?") and so is `Email.parse(text)`. `const _ = ...` discards
+   ("The result of `added` is not used. Did you mean `add`?") and so is `Email.tryFrom(text)`. `const _ = ...` discards
    on purpose. A `match` or `if` used as a statement checks each arm as a statement.
 
 ### 5.4 Definite return, `Never`, and the value of a block
@@ -1245,7 +1245,7 @@ list. Everything else is as written.
 - **`?` says nothing where the enclosing result is neither an `Option` nor a `Result`.** `fetchUser(id).await()?` stands
   in a function that returns a `Task<Result<...>>`, and that rule belongs to milestone 7. The design's one error - an
   `Option` in a function that returns a `Result` - is reported.
-- **A literal type is not reported about.** `Status.parse(text)` needs the generated `Parse` of a literal type, and
+- **A literal type is not reported about.** `Status.tryFrom(text)` needs the generated `TryFrom<String, _>` of a literal type, and
   nothing writes down what its failure type is, so `isFullyKnown` says no for a `Literals` form and the generated
   members of a literal type wait for 4.10.
 - **`checkExtension` reads its members back out of the index.** Building the index gives every member of an `extend` its
@@ -1699,10 +1699,11 @@ list. Everything else is as written.
   in `Result<Int, Failure>` the case's owner is `Result` whatever the failure turns out to be - and stays silent.
 - **A literal type's `parse` is generated, and its members are reportable.** `directTraitsOf` gives a `.Literals` form
   the traits of its base **minus** the base's `Parse` **plus** `Parse<LiteralParseError>`, which is what makes
-  `Status.parse(text)` the literal type's own (`0 | 1 | 3` must not inherit `Int64`'s `Parse<NumberParseError>` - both
+  `Status.tryFrom(text)` the literal type's own (`0 | 1 | 3` must not inherit `Int64`'s `Parse<NumberParseError>` - both
   take a `String` and the overload could not be resolved). `searchMember` asks the traits before it falls back to the
   base, so the `Self` of `parse` is the literal type. `canDerive` no longer says yes to every trait for a literal type
-  but to exactly the seven the concept names (`Parse`, `Show`, `Equals`, `Hash`, `Encode`, `Decode`, `Into<base>`) -
+  but to exactly the seven the concept names (`TryFrom<String, _>`, `Show`, `Equals`, `Hash`, `Encode`, `Decode`,
+  `Into<base>`) -
   `Compare` is not among them, because an order over three strings is a decision exactly as it is for a `type`. And
   `isFullyKnown` now holds for a literal type, so a member it does not have is reported like any other.
 - **`value.into` is typed, not deferred.** The callee of the one call the receiver alone cannot answer is
@@ -2042,7 +2043,7 @@ sentence.
 _Decision:_ accepted.
 
 **13. `??` on a `Result`.**
-`examples/tour/src/12-type-system.trb:14` writes `Status.parse(text) ?? "offline"`, which is a `Result`. The concept
+`examples/tour/src/12-type-system.trb:14` writes `Status.tryFrom(text) ?? "offline"`, which is a `Result`. The concept
 lists `??` only under "One Vocabulary" for both, without saying that the operator covers both.
 _Proposal:_ `a ?? b` is `orElse` on `Option` and on `Result`, `b` is `lazy` and is checked against the `Value`.
 _Reason:_ both types have `orElse` already; anything else would be an arbitrary restriction.
@@ -2091,7 +2092,7 @@ _Decision:_ accepted.
 
 **18. Which discarded values are errors?**
 "Bindings": "the discarded result of a method that takes `self` (`list.added(4)` as a statement)". That leaves
-`Email.parse(text)` and `1 + 2` as statements undecided, while `parser.bump()` and `cursor.next()` (both discarded in
+`Email.tryFrom(text)` and `1 + 2` as statements undecided, while `parser.bump()` and `cursor.next()` (both discarded in
 `compiler/src/syntax/parser/parser.trb` and `std/prelude/src/stages.trb`) must stay legal.
 _Proposal:_ an expression statement must have type `Void` or `Never`, unless the call has a `var` receiver or a `var`
 argument. _Reason:_ one rule instead of a list, it catches the real mistakes, and everything a `var` makes effectful
@@ -2731,12 +2732,9 @@ an expected `Result<Target, Failure>`; the receiver is the `Source`; and the con
 of the target, exactly as `into()` uses the `From` of its target.
 _Reason:_ it is the same rule as `into()` and needs no new inference, only a second reading of the expected type.
 
-_Decision:_ accepted (`fallibleConversionType` in `expression.trb`, `WellKnown.tryFrom`). **What it does not reach is a
-`?` on the call:** `tryType` infers its operand without an expectation, so `const small: Int8 = wide.tryInto()?` has no
-`Result` to read. Pushing an expectation through `?` would mean deriving the failure from the enclosing function's error
-type, which is a change to inference and not to one call, so the case says so plainly instead: "The target of
-`tryInto()` is not known here", with the note that names `Target.tryFrom(value)`. A call with no annotation at all gets
-the same message, which is the honest answer there too.
+_Decision:_ accepted (`fallibleConversionType` in `expression.trb`, `WellKnown.tryFrom`). A `?` on the call says the
+target alone; entry 64 is where the failure comes from there. A call with nothing above it that says a type gets "The
+target of `tryInto()` is not known here", with the note that names `Target.tryFrom(value)`.
 
 No blanket makes every `From` a `TryFrom` with `Never` as the failure: it would overlap every hand-written `TryFrom`,
 because disjointness is proved by heads alone.
@@ -2759,3 +2757,40 @@ text. **Two neighbouring holes stay open and are not this entry:** `path.into()`
 checks and reaches neither back end, and a `where` clause whose *subject* is a concrete type is not honoured -
 `fn open<Source>(path: Source): Path where Path: From<Source> { Path.from path }` answers
 `` `Path` has no member `from` ``.
+
+**64. What does a `?` tell the expression under it?**
+`tryType` infers its operand with no expectation, so `const port: Int = text.tryInto()?` leaves `tryInto()` without a
+target although the binding names one. It is *the* way to read text once `TryFrom<String, Failure>` is the only one, so
+the call has to work.
+_Proposal:_ a `?` passes what is expected of **itself** down as `Expectation.Unwrapped(annotation)` - a fact and not an
+expected type. Nothing is checked against it, no literal adapts to it, and the one reader is `fallibleConversionType`:
+the target is that annotation, and the failure is the one of the target's `TryFrom<Source, Failure>` implementations
+that takes the receiver's type.
+_Reason:_ the operand of a `?` is an `Option` or a `Result` *of* what is expected, and which of the two only the operand
+says - so an ordinary expected type would report a mismatch at every `?` that stands over an `Option`. A separate case
+says exactly as much as is true, and therefore cannot change an inference that works without it.
+
+_Decision:_ accepted (`Expectation.Unwrapped`, `conversionPartsOf` and `soleConversionFailure` in `expression.trb`,
+`fallibleFailuresOf` in `implementation.trb`). The failure is looked up the way `iterableSourceOf` looks up the `From`
+that takes an `Iterable`: `TryFrom` is a trait a type implements several times, so "the arguments of `TryFrom` for this
+type" is `Ambiguous` while "the failure for *this* source" has one answer wherever the list has one entry. None says
+`` `Int64` does not convert into `Port` `` with the `extend` to write; several say `` `String` converts into `Port` in
+more than one way `` and name them, because only a written-out `Result<Target, Failure>` tells them apart.
+
+**65. Which type does a range literal have?**
+One `Range<Value>` with two `Option` ends makes "this range has a start" a fact about a field, so `for index in ..10`
+and `(0..).length()` could only be found at run time - and a panic in std is for a caller's mistake that no type can
+express.
+_Proposal:_ one type per pair of ends, chosen by the syntax: `a..b`/`a..=b` is a `Range<Value>`, `a..` a
+`RangeFrom<Value>`, `..b`/`..=b` a `RangeTo<Value>`. `rangeLiteralType` picks by which ends were written, and the
+implementations follow: `Range<Int>` is `Iterable` and `Length`, `RangeFrom<Int>` is `Iterable` alone, `RangeTo<Int>`
+is neither. What accepts every form takes the trait `Bounds<Value>`.
+_Reason:_ both mistakes become the ordinary messages the checker already has - "`RangeTo<Int64>` is not `Iterable`"
+and "`RangeFrom<Int64>` has no member `length`" - each with a note that names the missing end, and no `expect` is
+left in `std/core/src/range.trb`.
+
+_Decision:_ accepted (`rangeLiteralType` and `isRange` in `expression.trb`, `WellKnown.rangeFrom`/`rangeTo`/`bounds`).
+`a[from..to]` coerces the range to `Bounds<Int>` at the brackets (`coerceToBounds`), because that is what
+`Slice.slice` declares - so a range of anything but an `Int` is reported there and the witness the back ends call
+`lowest`/`highest` through is recorded on the index expression. `inclusive` stays a `Bool` field of `Range` and
+`RangeTo`: the type answers "which ends", not "which ends and whether the last one counts", which would be six types.

@@ -1,6 +1,6 @@
 ---
 title: Convert between types
-summary: Implement From when the conversion cannot fail, TryFrom when it can, Parse specifically for text, and call to<Target>() to collect a pipeline into any type built from one.
+summary: Implement From when the conversion cannot fail and TryFrom when it can - text is a source like any other - and call to<Target>() to collect a pipeline into any type built from one.
 kind: how-to
 status: stable
 order: 100
@@ -8,14 +8,15 @@ keywords:
   - From
   - Into
   - TryFrom
-  - Parse
+  - TryInto
   - to
 source:
   - CONCEPT.md#conversions
 ---
 
-Every conversion in the language is one of four traits, chosen by whether it can fail and what it converts from. There
-is no separate cast syntax: implementing the trait is the whole job, and the call site is the same shape every time.
+Every conversion in the language is one of four traits, chosen by whether it can fail and in which direction it is
+written. There is no separate cast syntax: implementing the trait is the whole job, and the call site is the same shape
+every time.
 
 ## Steps
 
@@ -52,9 +53,10 @@ is no separate cast syntax: implementing the trait is the whole job, and the cal
    }
    ```
 
-4. **Implement `Parse<Failure>` instead of `TryFrom<String, Failure>` when the source is specifically text.**
-   [Parse text into a type](parse-text-into-a-type.md) is this step on its own, with the constructor and factory
-   rules it depends on.
+4. **Text is a source like any other: `TryFrom<String, Failure>` is how a value is read from it.** A type may
+   implement `TryFrom` several times, once per source, and the argument decides which one a call means -
+   `Int.tryFrom("42")` reads text and `Int.tryFrom(3.0)` narrows a number. [Parse text into a
+   type](parse-text-into-a-type.md) is this step on its own, with the constructor rules it depends on.
 
 5. **Collect a pipeline into any type at all with `to<Target>()`, not only a `List`.** Every collection implements
    `From<Iterable<Item>>`, so `to<Target>()` works for `Set`, `Map` (of a pipeline of pairs), or a type of your own
@@ -137,6 +139,7 @@ print unique.length()
 ## Related
 
 - [Conversions](../language/types/conversions.md) - `From`, `Into`, `TryFrom`, the four coercions and `From<Self>` in full.
-- [Parse text into a type](parse-text-into-a-type.md) - `Parse<Failure>`, the trait this page only names.
+- [Parse text into a type](parse-text-into-a-type.md) - `TryFrom<String, Failure>` with the private field that makes it
+  the only way in.
 - [Pipelines](../language/collections-and-iteration/pipelines.md) - `to<Target>()` alongside the rest of a pipeline's
   terminal operations.

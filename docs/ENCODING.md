@@ -61,7 +61,7 @@ it is not part of any of the three forms. A cache, a memo, a derived summary: th
 so with `private`.
 
 **A validated type opts out of all three at once.** `Email` has a `private value: String` with no default, so the
-constructor is not usable from outside, so nothing is derived, so a decoded `Email` cannot skip `Email.parse`. The
+constructor is not usable from outside, so nothing is derived, so a decoded `Email` cannot skip `Email.tryFrom`. The
 invariant is not protected by a rule about decoding; it is protected by the same rule that protects construction.
 
 ## 2. The three traits
@@ -139,7 +139,7 @@ the field — so a `private(var)` field **is** part of all three forms.
 | a passable parameter whose type lacks the trait | none, and the error at the call site names the chain | |
 | `type` with cases | all three, as a `variant` over the cases, each case over its own fields | a case is a constructor too |
 | a generic `type` (`Page<Item>`) | conditional: `Page<Order>` has what `Order` has | one implementation, monomorphized per instantiation |
-| a literal type (`type Status = "draft" \| "sent"`) | all three, as its base | it already has `Show`, `Equals`, `Hash`, `Parse` |
+| a literal type (`type Status = "draft" \| "sent"`) | all three, as its base | it already has `Show`, `Equals`, `Hash`, `TryFrom<String, _>` |
 | a tuple `(Int, String)` | all three, over its positions | it has no declaration anybody could write them in |
 | `Option<Value>` | conditional on `Value` | `None` is `nothing()`, `Some(v)` is `v` |
 | `List`, `Set`, `Map` | conditional on the item, key and value | `sequence` and `map` |
@@ -557,10 +557,10 @@ type Order {
 **3 — delegation.** A wrapper is its value, and keeps its name.
 
 ```trb
-type Email with Encode by value, Describe by value {
+type Email with Encode by value, Describe by value, TryFrom<String, String> {
   private value: String
 
-  fn parse(text: String): Result<Email, String> { … }
+  fn tryFrom(text: String): Result<Email, String> { … }
 }
 
 extend Email with Decode {                            // reading goes through `parse`: the invariant holds
@@ -568,7 +568,7 @@ extend Email with Decode {                            // reading goes through `p
     source.record("acme/Email")?
     const text = source.string()?
     source.finish()?
-    Email.parse(text).mapError { message => DecodeError message }
+    Email.tryFrom(text).mapError { message => DecodeError message }
   }
 }
 ```

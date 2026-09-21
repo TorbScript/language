@@ -39,7 +39,7 @@ print value.absolute()
 
 ```trb fragment
 public trait Numeric
-  with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show, Parse<NumberParseError> {}
+  with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show, TryFrom<String, NumberParseError> {}
 
 public trait Signed
   with Numeric, Negate {
@@ -110,7 +110,8 @@ public type NumberRangeError with Error {
 }
 ```
 
-What a `Parse` or a `TryFrom` of a number fails with.
+What a conversion of a number fails with: `NumberParseError` where text is not a number, `NumberRangeError` where a
+value does not fit the target width.
 
 ### The integer and floating-point types
 

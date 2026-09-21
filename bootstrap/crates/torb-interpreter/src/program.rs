@@ -277,7 +277,8 @@ pub fn builtin_type(name: &str) -> Option<&'static str> {
         "Set" | "HashSet" | "TrieSet" => "Set",
         "Option" => "Option",
         "Result" => "Result",
-        "Range" => "Range",
+        // One value type for all three: the interpreter has no types, and a range value carries which ends it has
+        "Range" | "RangeFrom" | "RangeTo" => "Range",
         "File" => "File",
         "Process" => "Process",
         "Environment" => "Environment",

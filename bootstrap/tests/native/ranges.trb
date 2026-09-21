@@ -1,15 +1,15 @@
 use Process from "std/process"
 
 /**
- * A `Range` as a value, iterated, measured and shown - all four spellings of one.
+ * The three ranges as values, iterated, measured, shown and sliced with - all five spellings of one.
  *
- * `Range<Int>.iterator` and `length` are **TorbScript** since the fourth round of 5.7 (`RangeIterator` in
- * `std/core/src/range.trb`), and `Show` writes the *source* form rather than the fields: a reader writes `0..10`, so that
- * is what both back ends print. Keeping the two identical is what made stage 0 remember whether a start was written and
- * whether the range was inclusive at all.
+ * **Which ends a range has is its type** (`std/core/src/range.trb`): `Range` iterates and has a length, `RangeFrom`
+ * iterates forever, `RangeTo` does neither, and all three are `Bounds`, which is what a slice takes. `Show` writes the
+ * *source* form rather than the fields: a reader writes `0..10`, so that is what both back ends print.
  *
  * A range of anything but `Int` is deliberately not here: stage 0's own `Range` holds two integers and nothing else, so
  * `"a".."c"` is a value it cannot build at all, and a program that uses one cannot be compared with the interpreter.
+ * The list side of slicing is `collection-places.trb`.
  */
 
 fn shown() {
@@ -21,6 +21,8 @@ fn shown() {
   print fromHere
   const upTo = ..4
   print upTo
+  const upToInclusive = ..=4
+  print upToInclusive
 }
 
 fn measured() {
@@ -56,17 +58,35 @@ fn walked() {
   print collected
 }
 
+/** `contains` is the default of `Bounds`, and an end the range does not have never excludes anything on its side. */
 fn contained() {
   const half = 2..5
   print half.contains(2)
   print half.contains(5)
   const inclusive = 2..=5
   print inclusive.contains(5)
+  const fromHere = 3..
+  print "{fromHere.contains(2)} {fromHere.contains(1000000)}"
+  const upTo = ..10
+  print "{upTo.contains(-5)} {upTo.contains(10)}"
+  const upToInclusive = ..=10
+  print upToInclusive.contains(10)
+}
+
+/** All five spellings in brackets, on a `String`: the value in them becomes a `Bounds<Int>` where it is written. */
+fn sliced() {
+  const text = "abcdef"
+  print text[1..3]
+  print text[1..=3]
+  print text[..2]
+  print text[3..]
+  print text[0..6]
 }
 
 shown()
 measured()
 walked()
 contained()
+sliced()
 
 Process.exit 0

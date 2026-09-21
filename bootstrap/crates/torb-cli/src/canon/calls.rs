@@ -4,7 +4,7 @@
 //! A call is a command when all of this holds:
 //!
 //! 1. it stands in command position (see `walk.rs`),
-//! 2. the callee is a name or a member path (`Ok`, `Email.parse`, `roles.map`; not `a?.b`, not `pair.0`, not
+//! 2. the callee is a name or a member path (`Ok`, `Email.tryFrom`, `roles.map`; not `a?.b`, not `pair.0`, not
 //!    `load<Config>`),
 //! 3. it has at least one argument, and the first one is not a spread,
 //! 4. the first argument starts with a token the grammar accepts after the callee of a command

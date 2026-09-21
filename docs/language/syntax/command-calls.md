@@ -45,7 +45,7 @@ print "role: {role}, names: {names.length()}"
 <callee> { ... }                             a call whose only argument is a trailing closure
 ```
 
-A callee is a name or a member path: `print`, `Ok`, `Email.parse`, `server.route`, `self.builder.add`.
+A callee is a name or a member path: `print`, `Ok`, `Email.tryFrom`, `server.route`, `self.builder.add`.
 
 ## Rules
 

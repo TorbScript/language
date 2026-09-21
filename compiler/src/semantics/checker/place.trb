@@ -24,6 +24,7 @@ use isFullyKnown from "./name"
 use typeSignatureOf from "./signature"
 use resolveType from "./unify"
 use traitArgumentsOf from "./implementation"
+use isRange from "./expression"
 use noteChange, dropRead from "./mutation"
 use isInsideType, isSharedType from "./declaration"
 
@@ -125,7 +126,7 @@ fn memberPlace(var checker: Checker, base: Expression, at: Span, isOptional: Boo
 fn indexPlace(var checker: Checker, target: Expression, index: Expression): Place {
   const base = checker.expressionTypeHere(target.span) ?? checker.deferredType
   const key = checker.expressionTypeHere(index.span) ?? checker.deferredType
-  if isRangeType(checker, key) {
+  if isRange(checker, key) {
     return stepped checker, target, PlaceStep.Range(base, index.span)
   }
   const written = literalKeyOf index
@@ -139,13 +140,6 @@ fn stepped(var checker: Checker, base: Expression, step: PlaceStep): Place {
     return inner
   }
   Place inner.root, inner.steps.added(step), inner.at
-}
-
-fn isRangeType(checker: Checker, annotation: TypeId): Bool {
-  if const .Nominal(symbol, _) = checker.types.form(annotation) {
-    return checker.wellKnown.range == Some(symbol)
-  }
-  false
 }
 
 /**

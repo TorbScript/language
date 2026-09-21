@@ -30,10 +30,10 @@ decides this on every file and there is no option to turn it around.
   `if`/`for`/`while`/`match` - keeps its parentheses.
 
 ```trb check
-type Email {
+type Email with TryFrom<String, String> {
   private value: String
 
-  fn parse(text: String): Result<Email, String> {
+  fn tryFrom(text: String): Result<Email, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }
@@ -48,7 +48,7 @@ fn checked(value: Int): Result<Int, String> {
   Ok value
 }
 
-const email = Email.parse "user@example.test"
+const email = Email.tryFrom "user@example.test"
 print checked(5)
 ```
 

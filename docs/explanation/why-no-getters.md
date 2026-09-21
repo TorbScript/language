@@ -41,7 +41,7 @@ print "{account.owner}: {account.balance}"
 - `private(var)` replaces the getter-and-setter pair: it hands out a read-only, `const` path to the field while
   keeping the write to the type itself, with no method written for either direction.
 - There are no validating setters: a setter cannot return a `Result`, so validation lives in a factory
-  (`Email.parse`) or in a method that can fail (`account.withdraw(amount)`).
+  (`Email.tryFrom`) or in a method that can fail (`account.withdraw(amount)`).
 
 ## Why
 

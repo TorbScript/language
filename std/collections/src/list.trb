@@ -185,16 +185,15 @@ public trait List<Item>
    *
    * # Panics
    *
-   * If `range` reaches outside the list, or starts after it ends. The two messages are the runtime's, word for word:
-   * a back end may not disagree with the other about them.
+   * When the range reaches outside the list, or starts after it ends. The two messages are the runtime's, word for
+   * word: a back end may not disagree with the other about them.
    */
-  fn slice(self, range: Range<Int>): Self {
+  fn slice(self, range: Bounds<Int>): Self {
     const count = length()
-    const from = range.start ?? 0
-    const last = match range.end {
-      Some(end) => if range.inclusive { end + 1 } else { end }
-      None => count
-    }
+    // What an open end means is the receiver's decision, and for a list it is the first and the last index
+    const from = range.lowest() ?? 0
+    const written = range.highest() ?? count
+    const last = if range.includesHighest() { written + 1 } else { written }
     if from < 0 || last > count {
       const shown = if from < 0 { from } else { last }
       panic "index {shown} is out of bounds for a length of {count}"
@@ -369,7 +368,7 @@ public native type ArrayList<Item>
    * The native, O(1) slice: shares storage with the receiver. See [List.slice] for the shared default a
    * trait-typed `List` reaches instead.
    */
-  native fn slice(self, range: Range<Int>): ArrayList<Item>
+  native fn slice(self, range: Bounds<Int>): ArrayList<Item>
 
   /** Ordinary TorbScript over `get`: see [ListIterator]. */
   fn iterator(self): Iterator<Item> {
@@ -392,7 +391,7 @@ public native type ArrayList<Item>
    * Replaces the items of `range` with `values`, in place; the two need not be the same length. What
    * `list[from..to] = values` goes through; see [MutableSlice.replace].
    */
-  native fn replace(var self, range: Range<Int>, values: ArrayList<Item>)
+  native fn replace(var self, range: Bounds<Int>, values: ArrayList<Item>)
 
   /** Reverses the order, in place. */
   native fn reverse(var self)
@@ -427,7 +426,7 @@ public native type TrieList<Item>
   native fn iterator(self): Iterator<Item>
 
   /** Same as [ArrayList.slice]. */
-  native fn slice(self, range: Range<Int>): TrieList<Item>
+  native fn slice(self, range: Bounds<Int>): TrieList<Item>
 
   /** Same as [ArrayList.add]. */
   native fn add(var self, value: Item)
@@ -442,7 +441,7 @@ public native type TrieList<Item>
   native fn removeAt(var self, index: Int): Item?
 
   /** Same as [ArrayList.replace]. */
-  native fn replace(var self, range: Range<Int>, values: TrieList<Item>)
+  native fn replace(var self, range: Bounds<Int>, values: TrieList<Item>)
 
   /** Same as [ArrayList.reverse]. */
   native fn reverse(var self)

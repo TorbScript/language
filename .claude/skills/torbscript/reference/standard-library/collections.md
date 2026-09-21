@@ -102,7 +102,8 @@ public trait Map<Key, Value>
   fn of(...entries: (Key, Value)): Map<Key, Value> where Key: Hash
   fn remove(var self, key: Key): Value?
   fn merge(var self, other: Iterable<(Key, Value)>)
-  fn getOrSet(var self, key: Key, create: () => Value): Value
+  fn getOrInsert(var self, key: Key, fallback: lazy Value): Value
+  fn update(var self, key: Key, fallback: lazy Value, change: (var Value) => Void)
   fn containsKey(self, key: Key): Bool
   fn keys(self): Iterable<Key>
   fn values(self): Iterable<Value>

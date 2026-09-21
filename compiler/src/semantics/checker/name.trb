@@ -490,11 +490,30 @@ fn reportUnknownName(var checker: Checker, text: String, at: Span, expected: Typ
  * `a.b` where `b` is not there. Answers whether it said anything: a type that still holds an unsolved variable says
  * nothing about what it has, so nothing is said about it either.
  */
-public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: String, at: Span): Bool {
-  if !isFullyKnown(checker, receiver) {
+public fn reportUnknownMember(
+  var checker: Checker,
+  receiver: TypeId,
+  text: String,
+  at: Span,
+  isTypeName: Bool = false,
+): Bool {
+  // A **static** access is written on a type name, and the variables in `Array<?1, ?2>` are the checker's own: nothing
+  // at this call site was ever going to solve them, so "has no member" is the answer and not "cannot infer `Item`"
+  if isTypeName {
+    if checker.absorbs(receiver) {
+      return false
+    }
+  } else if !isFullyKnown(checker, receiver) {
     return false
   }
-  const shown = checker.describe receiver
+  if isTypeName {
+    // One root cause, one message: the variables of `Array<?1, ?2>` would each say "Cannot infer" at the end of the
+    // statement, about a call that has no meaning anyway
+    silenceVariables checker, receiver, 0
+  }
+  const shown = if isTypeName { writtenNameOf(checker, receiver) ?? checker.describe(receiver) } else {
+    checker.describe receiver
+  }
   var problem = Diagnostic.error "`{shown}` has no member `{text}`", at
   // A generic parameter has exactly what the traits in its bounds declare, and the bounds stand at its declaration
   if const .Parameter(_) = checker.types.form(receiver) {
@@ -533,11 +552,76 @@ public fn reportUnknownMember(var checker: Checker, receiver: TypeId, text: Stri
     )
     return true
   }
+  // `(0..).length()`: the member is missing because of which ends the range has, so the message says that and not
+  // the name of a member that looks similar
+  if const Some(reason) = openRangeNote(checker, receiver, text) {
+    checker.reportHere problem.withNote(reason)
+    return true
+  }
   if const Some(similar) = nearestMember(checker, receiver, text) {
     problem = problem.withNote "Did you mean `{similar}`?"
   }
   checker.reportHere problem
   true
+}
+
+/**
+ * The name a **type name** was written under: `Array`, `List`. A trait used as a namespace is a `Traits` form of one
+ * bound, and the bound's own name is what stands in the source - `List<_>` is the instantiation and not what anybody
+ * wrote.
+ */
+fn writtenNameOf(checker: Checker, of: TypeId): String? {
+  if const .Traits(bounds) = checker.types.form(of) {
+    if bounds.length() == 1 {
+      return typeNameOf checker, bounds[0]
+    }
+    return None
+  }
+  typeNameOf checker, of
+}
+
+/** Every unification variable inside a type, marked as reported: their message would be a consequence of this one. */
+fn silenceVariables(var checker: Checker, of: TypeId, depth: Int) {
+  if depth > 8 {
+    return
+  }
+  match checker.types.form(of) {
+    .Variable(variable) => checker.markReported variable
+    .Nominal(_, arguments) => {
+      for argument in arguments {
+        silenceVariables(checker, argument, depth + 1)
+      }
+    }
+    .Traits(bounds) => {
+      for bound in bounds {
+        silenceVariables(checker, bound, depth + 1)
+      }
+    }
+    _ => {}
+  }
+}
+
+/**
+ * Why a range has no `length` and no `iterator`: which ends it has *is* its type, so an end the range does not have
+ * is the whole answer. `(0..).length()` and `(..10).iterator()` are the two the language itself can name.
+ */
+fn openRangeNote(checker: Checker, receiver: TypeId, text: String): String? {
+  const symbol = match checker.types.form(receiver) {
+    .Nominal(found, _) => found
+    _ => {
+      return None
+    }
+  }
+  const named = Some symbol
+  if checker.wellKnown.rangeFrom == named && (text == "length" || text == "isEmpty") {
+    return Some "`0..` has no end, so it has no length: write one (`0..10`)"
+  }
+  if checker.wellKnown.rangeTo == named {
+    if text == "length" || text == "isEmpty" || text == "iterator" {
+      return Some "`..10` has neither a start nor a length: write the start (`0..10`)"
+    }
+  }
+  None
 }
 
 /**

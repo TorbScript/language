@@ -25,7 +25,7 @@ an example first, then the syntax, then numbered rules, then what the construct 
 - **[Decimal](decimal.md)** _(planned)_ - Decimal is designed for exact base-ten arithmetic such as money, and a decimal literal adapts to it the way it adapts to Float - but no back end implements it yet.
 - **[Strings](strings.md)** - A String has no length() and no text[i], because "length" and "the i-th character" each have three different answers and two of them are slow.
 - **[Tuples](tuples.md)** - A tuple is positional and accessed by .0, .1; a label makes a position easier to read but is not part of the type, so a labelled and an unlabelled tuple of the same shape are the same type.
-- **[Ranges](ranges.md)** - A Range has two optional ends and an inclusive flag; an open end is only checked when something asks for it, so iterating a range without a start or measuring one without both ends panics instead of failing to compile.
+- **[Ranges](ranges.md)** - The ends a range has are its type - Range, RangeFrom or RangeTo - so nothing is optional and nothing panics; what accepts every form takes the Bounds trait.
 - **[Option](option.md)** - Absence is a value, Some(value) or None, and there is no null and no implicit Some - a value has to be wrapped and unwrapped on purpose.
 - **[Void and Never](void-and-never.md)** - Void has exactly one value, the keyword literal void, the way true and false are the values of Bool; Never has no value at all and converts to every type, which is why panic fits into any expression.
 - **[Literal types](literal-types.md)** - `"tcp" | "udp"` is a type made only of specific values of one base type; only literals combine with `|`, because there are no unions of types.

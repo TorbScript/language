@@ -15,7 +15,7 @@ use Span, LineIndex from "../../syntax/source"
 use Diagnostic from "../../syntax/diagnostic"
 use ModuleId from "../../semantics/module"
 use SymbolId from "../../semantics/symbols"
-use TypeId, ParameterId from "../../semantics/checker/type"
+use TypeId, ParameterId, Signature from "../../semantics/checker/type"
 use Checker from "../../semantics/checker/context"
 use NativeEntry, nativeEntries from "../../backend/c/natives"
 use IrProgram, IrTypeId, IrType, Slot, BlockId, StaticId, StaticValue, StaticContents from "../ir"
@@ -534,11 +534,33 @@ public fn borrowedArguments(slots: List<Slot>, places: List<Reference?> = []): L
 
 // --- The natives manifest -------------------------------------------------------------------------------------------
 
-/** `"Int64.add"`, `"print"`: what a `native` declaration becomes, looked up by owner and member name. */
-public fn nativeNamed(lowering: Lowering, owner: String, member: String): NativeEntry? {
+/**
+ * `"Int64.add"`, `"print"`: what a `native` declaration becomes, looked up by owner and member name.
+ *
+ * A member a type has **once per source** is keyed by that source as well: `Int64.tryFrom` reads text and narrows a
+ * `Float64`, and those are two functions of the runtime that the member name alone cannot tell apart. The manifest
+ * writes every row of such a member with its source in parentheses and none without one - so the plain name is asked
+ * first and misses, and the qualified name is what answers.
+ */
+public fn nativeNamed(lowering: Lowering, owner: String, member: String, signature: Signature): NativeEntry? {
   const key = if owner.isEmpty() { member } else { "{owner}.{member}" }
-  const index = lowering.nativeIndex.get(key)?
+  if const Some(index) = lowering.nativeIndex.get(key) {
+    return lowering.natives.get index
+  }
+  const source = conversionSourceOf lowering, signature
+  if source.isEmpty() {
+    return None
+  }
+  const index = lowering.nativeIndex.get("{key}({source})")?
   lowering.natives.get index
+}
+
+/** The type the one value of a conversion comes from, as the manifest writes it. Empty for every other member. */
+fn conversionSourceOf(lowering: Lowering, signature: Signature): String {
+  if signature.takesSelf || signature.form.parameters.length() != 1 {
+    return ""
+  }
+  lowering.checker.describe signature.form.parameters[0].annotation
 }
 
 // --- Blocks ---------------------------------------------------------------------------------------------------------

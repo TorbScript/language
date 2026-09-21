@@ -42,7 +42,7 @@ fn command_calls() {
     assert!(matches!(arguments[1].value.kind, ExpressionKind::Closure(_)));
 
     // On the right of `=`, and with an `if` as the argument
-    assert_eq!(call("const user = Email.parse text").0, CallStyle::Command);
+    assert_eq!(call("const user = Email.tryFrom text").0, CallStyle::Command);
     assert_eq!(call("port if secure { 8443 } else { 8080 }").1.len(), 1);
 
     // Not commands: `f -1` is a subtraction, `f [1]` is indexing

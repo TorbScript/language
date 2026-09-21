@@ -38,6 +38,7 @@ text.chars()                             an Iterable<Char>: Unicode scalar value
 text.bytes()                             an Iterable<UInt8>: the raw UTF-8 bytes
 text.byteLength()                        the byte count, O(1)
 text.indexOf(part)                       Some(byteOffset) or None; a byte offset, from searching
+text.lastIndexOf(part)                   the same for the last occurrence
 text[from..to]                           a slice by byte offset, O(1), shares storage
 ```
 

@@ -42,7 +42,7 @@ print shapes.map({ _.area() }).toList()
 ```text
 Point(1, 2)          the constructor
 Point.origin          a static member
-Point.parse(text)     a static member
+Point.tryFrom(text)     a static member
 Shape.Circle          a case
 Point.area            a method reference
 ```
@@ -57,7 +57,7 @@ Point.area            a method reference
    values; `Bool` and `Void` are types, and neither can stand where the other is expected.
 
 3. **Exactly four syntactic forms bridge a type and a value, and all four are resolved at compile time.** A
-   constructor call (`Point(1, 2)`), a static member (`Point.origin`, `Point.parse(text)`), a case
+   constructor call (`Point(1, 2)`), a static member (`Point.origin`, `Point.tryFrom(text)`), a case
    (`Shape.Circle`), and a method reference (`Point.area`, the unbound function value - see
    [Methods and static functions](../types/methods.md)). None of them look a name up while the program runs.
 

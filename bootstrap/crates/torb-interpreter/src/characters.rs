@@ -40,7 +40,7 @@ pub fn to_lower_case(character: char) -> char {
     char::from_u32(mapped).unwrap_or(character)
 }
 
-/// Whether the character is one of `0` to `9`. Only those: a digit is what `Int.parse` reads.
+/// Whether the character is one of `0` to `9`. Only those: a digit is what `Int.tryFrom` reads.
 pub fn is_digit(character: char) -> bool {
     character.is_ascii_digit()
 }

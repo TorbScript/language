@@ -81,14 +81,14 @@ trait OrElse<Value> { fn orElse(self, fallback: lazy Value): Value }
 
    ```trb check
    fn parseOr(text: String, fallback: Int): Int {
-     Int.parse(text) ?? fallback
+     Int.tryFrom(text) ?? fallback
    }
 
    print parseOr("12", 0)
    print parseOr("nonsense", 0)
    ```
 
-6. **The right side of `??` is checked against the `Value`, not against the whole `Option` or `Result`.** `Int.parse(text)
+6. **The right side of `??` is checked against the `Value`, not against the whole `Option` or `Result`.** `Int.tryFrom(text)
    ?? 0` needs a plain `Int` on the right, not a `Some(0)` or an `Ok(0)`. The `Value` is the argument of the receiver's
    `OrElse<Value>`.
 

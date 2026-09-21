@@ -34,7 +34,7 @@ type ConfigError {
 
 fn readPort(settings: Map<String, String>): Result<Int, ConfigError> {
   const raw = settings.get("port").okOr(ConfigError.Missing("port"))?
-  const port = Int.parse(raw).mapError { ConfigError.Invalid "port", "not a number" }?
+  const port = Int.tryFrom(raw).mapError { ConfigError.Invalid "port", "not a number" }?
   if port < 1 || port > 65535 {
     return Fail ConfigError.Invalid("port", "out of range")
   }
@@ -56,7 +56,7 @@ case of any other type with cases.
 
 `?` on a line by itself unwraps an `Ok` and returns the `Fail` from the surrounding function immediately - that is
 what `readPort` above already uses twice, once on an `Option` turned into a `Result` with `okOr`, once on the
-`Result` that `Int.parse` answers.
+`Result` that `Int.tryFrom` answers.
 
 ```trb
 type AppError {

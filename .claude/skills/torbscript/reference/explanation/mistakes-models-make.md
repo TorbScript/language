@@ -21,11 +21,11 @@ right line first and the wrong one after it.
 
 ## The decision
 
-Read this list before writing TorbScript, and check your work against it afterwards. Eighteen mistakes cover nearly
+Read this list before writing TorbScript, and check your work against it afterwards. Twenty mistakes cover nearly
 everything: the call form, a bare case, `Err` instead of `Fail`, semicolons, `let`, taking a copy out of a collection,
 string length, bit operators, casts, an implicit `Some`, a trait name ending in `-able`, a `match` with a `default`, a
-`MAX_SIZE` constant, a name that is not ASCII, an arm binding nothing reads, a `use` without names, `while true`, and an
-extension member the file never names.
+`MAX_SIZE` constant, a name that is not ASCII, an arm binding nothing reads, a `use` without names, `while true`, an
+extension member the file never names, an overload, and `Type.parse(text)`.
 
 ## Why
 
@@ -506,6 +506,41 @@ parameter. An `Array` comes from a list literal whose items are counted against 
 `Array.generated { index => ... }`, which take `Size` from the expected type, or from `Array.from(items)`, which counts
 at run time and answers an `Option`. See [where are my overloads](where-are-my-overloads.md) and
 [Arrays and const parameters](../language/values-and-types/arrays.md).
+
+### 20. There is no `parse` on a type: text is a source like any other
+
+Rust has `str::parse` and a `FromStr` trait beside `From`, so a model reaches for `Type.parse(text)`. TorbScript has one
+fallible conversion and text is one of its sources.
+
+```trb check
+type Port {
+  number: Int
+}
+
+extend Port with TryFrom<String, String> {
+  fn tryFrom(text: String): Result<Port, String> {
+    const number = Int.tryFrom(text).mapError({ _ => "{text} is not a number" })?
+    if number < 1 || number > 65535 {
+      return Fail "{number} is not a port"
+    }
+    Ok Port(number)
+  }
+}
+
+print Port.tryFrom("8080")
+print Port.tryFrom("nope")
+```
+
+```trb error
+print Int64.parse("42")
+// error: `Int64` has no member `parse`
+```
+
+`Type.tryFrom(text)` is the call, and `tryInto()` is the same conversion in a chain: under a `?` the annotation says
+the target alone (`const port: Int = text.tryInto()?`) and the failure follows from the one `TryFrom` the target has
+for a `String`. A function named `parse` belongs to a **format** - `Json.parse(text)` reads a document - never to a
+value. See [Conversions](../language/types/conversions.md) and
+[Parse text into a type](../how-to/parse-text-into-a-type.md).
 
 ### The rest, in one table
 

@@ -73,10 +73,10 @@ type <Name> with <Trait>, <Trait> & <Trait> by <field> { ... }   `by` binds to t
 unreadable from outside - `by` only wires the trait's members to it internally.
 
 ```trb check
-type Email with Show by value {
+type Email with Show by value, TryFrom<String, String> {
   private value: String
 
-  fn parse(text: String): Result<Email, String> {
+  fn tryFrom(text: String): Result<Email, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }
@@ -84,15 +84,15 @@ type Email with Show by value {
   }
 }
 
-const email = Email.parse "info@example.test"
+const email = Email.tryFrom "info@example.test"
 print email
 ```
 
 ```trb error
-type Email with Show by value {
+type Email with Show by value, TryFrom<String, String> {
   private value: String
 
-  fn parse(text: String): Result<Email, String> {
+  fn tryFrom(text: String): Result<Email, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }
@@ -100,7 +100,7 @@ type Email with Show by value {
   }
 }
 
-const email = Email.parse("info@example.test").expect("bad email")
+const email = Email.tryFrom("info@example.test").expect("bad email")
 print email.value
 // error: `value` is private to `Email`
 ```

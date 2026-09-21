@@ -1,7 +1,8 @@
 /**
  * Conversion between types: [From]/[Into] for a conversion that always works, [TryFrom]/[TryInto] for one that can
- * fail, and [Parse] for the one from text. [Show] is the direction into a `String` for printing, and
- * [LiteralParseError] is what a generated [Parse] of a literal type answers.
+ * fail. Text is a source like any other, so `Int.tryFrom("42")` is a [TryFrom] too. [Show] is the direction into a
+ * `String` for printing, and [LiteralParseError] is what the generated `TryFrom<String, ...>` of a literal type
+ * answers.
  *
  * One direction of each pair is the one to implement: [From] and [TryFrom]. [Into] and [TryInto] come from a blanket
  * implementation over them, so an `extend` that writes one by hand is reported with the line to write instead.
@@ -82,10 +83,16 @@ extend<Target> Target with From<Never> {
  * Fallible conversion: the [From] for a source that may not represent a valid value. Implement this one, `TryInto`
  * comes for free.
  *
+ * A type may implement it several times, once per source: `Int8.tryFrom(300)` narrows a number and
+ * `Int8.tryFrom("42")` reads text, and the argument decides which one is meant. **Text is a source like any other** -
+ * there is no separate trait for it, and no `parse` on a type.
+ *
  * # Examples
  *
  *     const narrow: Result<Int8, NumberRangeError> = Int8.tryFrom 300
  *     print narrow.isError()
+ *     const read: Result<Int8, NumberParseError> = Int8.tryFrom "42"
+ *     print read.isError()
  *
  * # Related
  *
@@ -104,12 +111,20 @@ public trait TryFrom<Source, Failure> {
  * The other direction of [TryFrom], gained for free wherever `Target: TryFrom<Self, Failure>`.
  *
  * Write the target out. `tryInto()` answers a `Result`, so a `?` in front of the annotation is what a reader sees
- * first and the target itself has nowhere else to come from:
+ * first and the target itself has nowhere else to come from. Under a `?` the annotation is the target alone, and the
+ * failure is the one the target's `TryFrom` from this source answers with:
  *
  * # Examples
  *
  *     const narrow: Result<Int8, NumberRangeError> = 300.tryInto()
  *     print narrow.isError()
+ *
+ *     fn port(text: String): Result<Int8, NumberParseError> {
+ *       const number: Int8 = text.tryInto()?
+ *       Ok number
+ *     }
+ *
+ *     print port("42")
  *
  * # Pitfalls
  *
@@ -134,19 +149,7 @@ extend<Source, Target, Failure> Source with TryInto<Target, Failure> where Targe
 }
 
 /**
- * Fallible conversion from text: `Int.parse "42"`, `Email.parse "info@example.test"`.
- *
- * # Related
- *
- * - [LiteralParseError] - what a generated `Parse` of a literal type fails with.
- */
-public trait Parse<Failure> {
-  /** Makes a `Self` from text, or answers why the text does not describe one. */
-  fn parse(text: String): Result<Self, Failure>
-}
-
-/**
- * What `Status.parse(text)` fails with when `text` is not one of a literal type's members:
+ * What `Status.tryFrom(text)` fails with when `text` is not one of a literal type's members:
  *
  *     'away' is not one of "online", "offline"
  */

@@ -67,7 +67,7 @@ public fn recordDelegation(var checker: Checker, at: Span, candidate: Candidate)
  * and `items.added(x)` stays a legal call - the result is a value of the same trait type.
  *
  * The second half holds for **every** receiver, not only a trait-typed one: a static function is reached through the
- * type and through nothing else (CONCEPT.md, "Types, Values and Reflection", names `Point.parse(...)` as the one
+ * type and through nothing else (CONCEPT.md, "Types, Values and Reflection", names `Point.tryFrom(...)` as the one
  * bridge), so `rectangle.square(5)` - calling a static function on a value instead of the type - is reported here too.
  *
  * Using the trait as a *namespace* (`List.from(pairs)`) is a different question and goes through the static lookup,
@@ -190,8 +190,8 @@ fn searchMember(var checker: Checker, receiver: TypeId, name: String, isStatic: 
     }
     return None
   }
-  // A literal type has the generated members - `parse`, `show`, `equals`, `hash`, `encode`, `decode` - plus the members
-  // of its base (design 4.1). The generated ones come first, because `Status.parse` is the one of the literal type and
+  // A literal type has the generated members - `tryFrom`, `show`, `equals`, `hash`, `encode`, `decode` - plus the members
+  // of its base (design 4.1). The generated ones come first, because `Status.tryFrom` is the one of the literal type and
   // not the one of `String` or of `Int64`, and its `Self` is the literal type (concept, Literal Types)
   if const .Literals(base, _) = checker.types.form(receiver) {
     if const Some(found) = traitMember(checker, receiver, name, isStatic) {
@@ -399,6 +399,11 @@ fn dispatchOf(var checker: Checker, receiver: TypeId, capability: SymbolId, boun
      * (`From<Char>`), so asking `resolveBound` is what tells `Int.from('A')` which implementation it reaches. Without it
      * the call was `Direct` with the *trait's* requirement as its member, which has no body anywhere - and a back end
      * then has nothing to call.
+     *
+     * This is also why every conversion a type has is a **direct** implementation of it and never one a supertrait
+     * requires: `Int64` implements `TryFrom<String, NumberParseError>` itself, although `Numeric` already asks for it,
+     * because otherwise `TryFrom` would have exactly one direct implementation on `Int64` and the symbol alone would
+     * answer that one for both calls (docs/BACKEND.md, "One conversion, one implementation").
      */
     _ => {
       if const .Found(implementation, _) = resolveBound(checker, receiver, bound) {

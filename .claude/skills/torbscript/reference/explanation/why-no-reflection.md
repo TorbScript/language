@@ -85,10 +85,10 @@ fields are all `Encode`; a hand-written `encode`/`decode` pair looks exactly lik
 about the mechanism is special:
 
 ```trb check
-type Email {
+type Email with TryFrom<String, String> {
   private value: String
 
-  fn parse(text: String): Result<Email, String> {
+  fn tryFrom(text: String): Result<Email, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }
@@ -103,13 +103,13 @@ extend Email with Encode, Decode {
 
   fn decode(var decoder: Decoder): Result<Email, DecodeError> {
     const text = decoder.string()?
-    Email.parse(text).mapError { message => DecodeError message }
+    Email.tryFrom(text).mapError { message => DecodeError message }
   }
 }
 ```
 
 **`Decode` is not generated for a type with a private constructor.** A type whose invariants are checked in a factory
-- `Email.parse` above - has to write `decode` by hand, so a decoded value cannot skip the check the constructor never
+- `Email.tryFrom` above - has to write `decode` by hand, so a decoded value cannot skip the check the constructor never
 lets a caller skip either. See [Encode and Decode](../language/reflection/encode-and-decode.md).
 
 **A format with a document model of its own - XML, HTML - gets its own traits in addition, because attributes,

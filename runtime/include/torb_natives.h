@@ -27,7 +27,7 @@ bool torb_char_is_whitespace(torb_char character);
 torb_char torb_char_to_lower_case(torb_char character);
 /* Char.toUpperCase */
 torb_char torb_char_to_upper_case(torb_char character);
-/* Char.tryFrom */
+/* Char.tryFrom(Int64) */
 bool torb_char_try_from_i64(int64_t value, torb_char *out, torb_text *message);
 /* Clock.milliseconds */
 int64_t torb_clock_milliseconds(void);
@@ -35,9 +35,9 @@ int64_t torb_clock_milliseconds(void);
 torb_instant torb_clock_now(void);
 /* Float64.compare */
 int32_t torb_compare_f64(double first, double second);
-/* Int64.tryFrom */
+/* Int64.tryFrom(Float64) */
 bool torb_convert_f64_i64_checked(double value, int64_t *out, torb_text *message);
-/* Int32.tryFrom */
+/* Int32.tryFrom(Int64) */
 bool torb_convert_i64_i32_checked(int64_t value, int32_t *out, torb_text *message);
 /* Duration.compare */
 int32_t torb_duration_compare(torb_duration first, torb_duration second);
@@ -151,13 +151,13 @@ double torb_math_tangent(double value);
 uint64_t torb_multiplied_wrapping_u64(uint64_t first, uint64_t second);
 /* panic */
 void torb_panic(torb_text message, torb_location at);
-/* Float64.parse */
+/* Float64.tryFrom(String) */
 bool torb_parse_f64(torb_text text, double *out);
-/* Int16.parse, Int32.parse, Int64.parse, Int8.parse */
+/* Int16.tryFrom(String), Int32.tryFrom(String), Int64.tryFrom(String), Int8.tryFrom(String) */
 bool torb_parse_i64(torb_text text, int64_t *out);
 /* Int64.parseDigits */
 bool torb_parse_i64_digits(torb_text text, int64_t radix, int64_t *out);
-/* UInt16.parse, UInt32.parse, UInt64.parse, UInt8.parse */
+/* UInt16.tryFrom(String), UInt32.tryFrom(String), UInt64.tryFrom(String), UInt8.tryFrom(String) */
 bool torb_parse_u64(torb_text text, uint64_t *out);
 /* printError */
 void torb_print_error_parts(const torb_text *parts, size_t count);
@@ -219,6 +219,8 @@ uint64_t torb_text_hash(torb_text text);
 bool torb_text_index_of(torb_text text, torb_text part, int64_t *out);
 /* String.isEmpty */
 bool torb_text_is_empty(torb_text text);
+/* String.lastIndexOf */
+bool torb_text_last_index_of(torb_text text, torb_text part, int64_t *out);
 /* String.repeat */
 torb_text torb_text_repeat(torb_text text, int64_t times, torb_location at);
 /* String.replace */

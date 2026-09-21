@@ -29,7 +29,7 @@
    `var self` methods. Everything not marked does not change. Values are never aliased, so a mutation happens
    exactly where it is written and nowhere else.
 3. **One way to construct, many ways to create.** Constructors only initialize fields and never contain logic.
-   Validation, parsing and conversion live in static factory functions (`Email.parse`, `From`/`Into`).
+   Validation, parsing and conversion live in static factory functions (`Email.tryFrom`, `From`/`Into`).
 4. **No whitespace-sensitive parsing.** Whitespace never changes the meaning of a token sequence
    (newlines end statements, that is all).
 5. **Nothing observable may differ between interpreter and compiled binary.** Features that cannot be
@@ -302,7 +302,7 @@ var b: Int          // Compile error: no implied default value
   (`list.added(4)` as a statement - the message points to `add`). Discard on purpose with `const _ = ...`.
 - **An expression statement must have the type `Void` or `Never`,** unless the call has a `var` receiver or a `var`
   argument. That is the whole rule behind the one above: `parser.bump()` and `cursor.next()` change something and
-  stay statements, `Email.parse(text)` and `1 + 2` are values that go nowhere.
+  stay statements, `Email.tryFrom(text)` and `1 + 2` are values that go nowhere.
 
 `const` is deep from the perspective of the binding: through a `const` binding you can neither reassign, nor assign
 fields, nor call `var self` methods. `var` means "mutable through this path".
@@ -321,7 +321,7 @@ const someTuple = (1, "one")               // (Int, String), access with `.0`, `
 const someBounds = (lowest: 1, highest: 9) // Named tuple: `.lowest` is a name for `.0`, nothing more
 const someList = [1, 2, 3]                 // List<Int>
 const someMap = ["a": 1, "b": 2]           // Map<String, Int>
-const someRange = 0..10                    // Range<Int>, `0..=10` is inclusive, `0..` and `..10` are open
+const someRange = 0..10                    // Range<Int>; `0..` is a RangeFrom<Int>, `..10` a RangeTo<Int>
 const someOption: Int? = None            // `Value?` is sugar for `Option<Value>`
 const someFunction = { x: Int => x * 2 } // (Int) => Int
 const emptyList: List<Int> = []          // Empty literals need a type from context
@@ -379,13 +379,14 @@ const emptyMap: Map<String, Int> = [:]
   without a result type returns `Void`, a block that ends in a statement has the value `void`, and `Ok(void)` passes it
   on. `Void` in an expression is an error that says so. `Never` has no value at all and converts to every type, which is
   why `panic "..."` fits into any expression.
-- `Void`, `Never` and `Range<Value>` are declared in the prelude like every other type. `0..10` is
-  `Range(start: Some(0), end: Some(10))`, `0..=10` sets `inclusive`, and `0..` and `..10` leave one end `None`.
-  `list[from..to]` is a `Range` passed to `Slice.slice`.
-- **`Range<Int>` is `Iterable<Int>` and `Length`, and the open ends are checked at runtime,** because "has a start" is
-  a property of a field and not of the type: `iterator()` panics for a range without a start ("a range without a start
-  has no first value"), `length()` panics for a range without both ends, and `0..` iterates forever. A compile-time
-  version of that condition would need dependent types.
+- `Void`, `Never` and the three ranges are declared in the prelude like every other type. **Which ends a range has is
+  its type**, chosen by the syntax: `a..b` and `a..=b` are a `Range(start, end, inclusive)`, `a..` a
+  `RangeFrom(start)`, `..b` and `..=b` a `RangeTo(end, inclusive)`. No field is optional in any of them.
+- **`Range<Int>` is `Iterable<Int>` and `Length`, `RangeFrom<Int>` is `Iterable<Int>` and endless, `RangeTo<Int>` is
+  neither** - so `for index in ..10` and `(0..).length()` are refused where they are written, each with the reason, and
+  nothing has to panic. What accepts every form takes the trait `Bounds<Value>` (`lowest()`, `highest()`,
+  `includesHighest()`, `contains` as a default), which is what `list[from..to]` passes to `Slice.slice`. `inclusive`
+  stays a `Bool` field: in the type as well it would give six range types for a distinction no body makes.
 
 ### Strings
 
@@ -446,7 +447,7 @@ type Status = "online" | "offline" | "away"
 var status: Status = "online"              // Literals adapt to the expected type, like `const z: Float = 1`
 status = "busy"                            // Compile error: not one of the three
 status = someString                        // Compile error: a String is not a Status
-status = Status.parse(someString)?         // Generated, like `Show`, `Equals`, `Hash`, `Encode`, `Decode`
+status = Status.tryFrom(someString)?         // Generated, like `Show`, `Equals`, `Hash`, `Encode`, `Decode`
 
 fn connect(host: String, transport: "tcp" | "udp" = "tcp") { ... }   // They work inline, too
 ```
@@ -457,7 +458,7 @@ fn connect(host: String, transport: "tcp" | "udp" = "tcp") { ... }   // They wor
   **only literals can be combined with `|`**. There are no unions of types (`Int | String`): use a type with cases,
   or accept `<Value: Into<Width>>`.
 - `match` on a literal type is exhaustive without `_`. Back to the base type: interpolation or `status.into()`.
-- The generated implementation is `Parse<LiteralParseError>`: `LiteralParseError { text, expected }` names the text
+- The generated implementation is `TryFrom<String, LiteralParseError>`: `LiteralParseError { text, expected }` names the text
   that did not match and the members it could have been, and shows as `'away' is not one of "online", "offline"`.
 - Two literal types are the same type if they have the same members. A subset is not assignable (no subtyping).
   That identity is structural, so a literal type has no owner and **cannot be extended**: `extend "tcp" | "udp"` is
@@ -544,9 +545,9 @@ type Seconds with Show, Add & Subtract by value, Compare by value {
   value: Int
 }
 
-type Email with Show by value {
-  private value: String                          // Private: only `Email.parse` creates an Email
-  fn parse(text: String): Result<Email, ParseError> { ... }
+type Email with Show by value, TryFrom<String, ParseError> {
+  private value: String                          // Private: only `Email.tryFrom` creates an Email
+  fn tryFrom(text: String): Result<Email, ParseError> { ... }
 }
 
 const total = Seconds(5) + Seconds(2)          // Seconds(7)
@@ -681,7 +682,7 @@ Rules:
   after `=>`.
 - Never inside parentheses, brackets, operators or argument lists. Commands do not nest: the arguments of a command
   are ordinary expressions (`print describe(numbers)`, not `print describe numbers`).
-- The callee is a name or a member path (`print`, `Email.parse`, `server.route`).
+- The callee is a name or a member path (`print`, `Email.tryFrom`, `server.route`).
 - Arguments are separated by `,`. The first argument must not start with `(`, `[`, `-`, `!` or `.`
   (`f [1]` is always indexing, `f -1` is always subtraction, `f .Case` is always the member `f.Case`). Use
   parentheses in these cases.
@@ -703,7 +704,7 @@ enforces this, and there is no option to turn it around.
 
 1. it stands in command position (start of a statement, right of `=` in a binding or an assignment, after `return`,
    after `=>`),
-2. the callee is a name or a member path (`Ok`, `Email.parse`, `roles.map`),
+2. the callee is a name or a member path (`Ok`, `Email.tryFrom`, `roles.map`),
 3. it has at least one argument, and the first one does not start with `(`, `[`, `-`, `!` or `.`,
 4. no argument has an operator at its top level,
 5. the arguments are on one line - a trailing closure may go over several.
@@ -712,7 +713,7 @@ Everything else has parentheses. That is every nested call, because only command
 
 ```trb
 const role = Role name
-const email = Email.parse text
+const email = Email.tryFrom text
 names.map Role
 builder.add CStatement.Break
 print "Hello"
@@ -1110,10 +1111,10 @@ written by hand. **Constructors never contain logic.**
 Everything else is a static factory function:
 
 ```trb
-type Email {
+type Email with TryFrom<String, ParseError> {
   private value: String                // Private without default: only `Email` itself can construct an `Email`
 
-  fn parse(text: String): Result<Email, ParseError> {
+  fn tryFrom(text: String): Result<Email, ParseError> {
     if !text.contains("@") {
       return Fail(ParseError("'{text}' is not an email address"))
     }
@@ -1121,13 +1122,16 @@ type Email {
   }
 }
 
-const email = Email.parse("info@example.test")?
+const email = Email.tryFrom("info@example.test")?
 ```
 
 ### Conversions
 
 Conversions follow the `From`/`Into` principle. Implementing `From` provides `Into` for free, fallible conversions use
-`TryFrom`, which provides `TryInto` the same way, and text uses `Parse`. One direction of each pair is the one to
+`TryFrom`, which provides `TryInto` the same way. **Text is a source like any other**, so reading a value from it is a
+`TryFrom<String, Failure>` and there is no `parse` on a type; a function named `parse` belongs to a format
+(`Json.parse`). A type may implement `TryFrom` once per source - `Int.tryFrom("42")` reads text, `Int.tryFrom(3.0)`
+narrows a number - and the argument decides which one a call means. One direction of each pair is the one to
 implement: `Into` and `TryInto` come from a blanket implementation over the other, so an `extend` that writes one by
 hand overlaps that blanket and is answered with the line to write instead.
 
@@ -1214,7 +1218,7 @@ account.balance = 1_000_000              // Compile error: only Account can writ
   is mechanical, the compiler finds every place, and the tools do it for a whole workspace (see `deprecated` in the
   Open Questions).
 - There are no validating setters, because a setter cannot fail properly in a language without exceptions.
-  Validation lives in types and factories (`Email.parse`, `Port.tryFrom(8080)`) or in a method that returns a `Result`
+  Validation lives in types and factories (`Email.tryFrom`, `Port.tryFrom(8080)`) or in a method that returns a `Result`
   (`account.withdraw(amount)`).
 - **Top-level declarations are private to their file unless marked `public`.** This is a different question - the
   surface of a module is opt-in, `lib.trb` defines the API of a package.
@@ -1528,7 +1532,7 @@ extend<Item> List<Item> with Show where Item: Show { ... }   // Type parameters 
   parameter or in its result, or that has no `self`, cannot be called on a trait-typed value. So `List<Show & Hash>`
   and `fn audit(entry: Show & Encode)` stay legal, and only calls that have no meaning are rejected.
 - Functions without `self` in a trait: without a body they are a requirement for the implementing types
-  (`From.from`, `Parse.parse`). With a body they are functions of the trait itself - the place for factories that pick
+  (`From.from`, `TryFrom.tryFrom`). With a body they are functions of the trait itself - the place for factories that pick
   a default implementation (`List.of(1, 2)`, `Set.of("a")`).
 - Because a trait is a type, it can be extended like one. `extend<Item> List<Item> with Show where Item: Show` makes every list
   showable, `extend<Item> List<Item> with From<Iterable<Item>>` makes `List<Item>` itself a valid target of `to<List<Item>>()`.
@@ -1563,7 +1567,7 @@ Types and values are strictly separate worlds:
 - A type never flows as a value. There is no `Type` type, no `typeof`, no `value is Value` on generic `Value`, no
   `Class.forName`. Types appear only in type positions (after `:`, in `<>`, after `with`/`where`, right of `type X =`).
   The values of the built-in types are lowercase literals (`true`, `false`, `void`), never their type name.
-- The only bridges are syntactic: `Point(...)` (constructor), `Point.origin` / `Point.parse(...)` (static members),
+- The only bridges are syntactic: `Point(...)` (constructor), `Point.origin` / `Point.tryFrom(...)` (static members),
   `Shape.Circle` (variants), `Point.area` (method reference).
 - So there is **no runtime reflection**. It could not be implemented identically in all back ends (monomorphized vs.
   boxed generics would become observable), it keeps every type's metadata alive in compiled binaries, and it is the
@@ -1624,7 +1628,7 @@ extend User with Encode, Decode {
 - `Encode` is generated for every `type` whose fields are all `Encode`.
 - `Decode` is only generated if the constructor is usable from outside (see [Construction](#construction)).
   A type with a private constructor has invariants, so it writes `decode` by hand and the invariant holds for
-  decoded values, too (`Email.decode` calls `Email.parse`).
+  decoded values, too (`Email.decode` calls `Email.tryFrom`).
 - Different field names, skipped fields, versioning: write the two functions by hand, there are no annotations.
   What is a convention of the format and not of the type is an option of the format (`Json.encode(user, naming: .SnakeCase)`).
 - **`Encode`/`Decode` are data binding, for every format whose model is "values, sequences, maps, records"**: JSON,
@@ -1669,7 +1673,7 @@ panic "unreachable"                                      // Bugs. Not catchable,
   produces a nested Option: `first()?.position()` is a `Vector2?`, whatever `position()` returns. It is not
   defined on `Result`.
 - **`??` is `OrElse.orElse`, on `Option` and on `Result` alike.** The right side is `lazy` and is checked against the
-  `Value`, so `Status.parse(text) ?? "offline"` needs no `.ok()` in between. It is the trait that decides, not the two
+  `Value`, so `Status.tryFrom(text) ?? "offline"` needs no `.ok()` in between. It is the trait that decides, not the two
   types: a type of a program that comes `with OrElse<Value>` gets `??`, and one that does not hears "`X` does not
   implement `OrElse`, so `a ?? b` has no meaning for it".
 - **A panic is output, so its format is part of the language:** to standard error, `panic: <message>`, then
@@ -2652,6 +2656,13 @@ Source -> Parse -> Resolve + Typecheck -> Typed IR -+-> Bytecode VM          (to
 - A trait that has a blanket implementation is never implemented by hand, and the message is built from the blanket's
   own `where` clause with the concrete types put in: `extend Celsius with Into<Float64>` answers "`Into` comes from
   `From` for every type" and names `extend Float64 with From<Celsius>`
+- **No trait for text.** A value is read from text through `TryFrom<String, Failure>` like any other fallible
+  conversion, so there is exactly one way and no rule anybody has to watch. Rejected: a `Parse<Failure>` trait beside
+  `Show`. `Show` is the language's `toString()` - display and debugging in one - and not the partner of a parser; the
+  derived `Show` of a record reads nothing back either, so the pairing was the weaker argument, and keeping
+  `TryFrom<String, _>` and `Parse` apart would have needed a lint to hold. A function named `parse` belongs to a
+  **format** (`Json.parse`) and stays. Under a `?` the annotation says the target alone and the failure follows from
+  the one `TryFrom` the target has for that source (`const port: Int = text.tryInto()?`)
 - One member namespace. A method is structurally a constant of the type that holds a receiver closure, `fn` is its
   declaration form. Not a per-instance field: methods cost no memory per instance, cannot be swapped at runtime, and
   value types stay plain data. (Rejected: separate namespaces for fields and methods, Java style.)

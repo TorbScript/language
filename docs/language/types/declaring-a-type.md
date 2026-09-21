@@ -114,10 +114,10 @@ print "{point} {point.area()} {Point.origin}"
    static factory function: a function that does not declare `self`.
 
    ```trb
-   type Email {
+   type Email with TryFrom<String, String> {
      private value: String
 
-     fn parse(text: String): Result<Email, String> {
+     fn tryFrom(text: String): Result<Email, String> {
        if !text.contains("@") {
          return Fail "'{text}' is not an email address"
        }
@@ -125,7 +125,7 @@ print "{point} {point.area()} {Point.origin}"
      }
    }
 
-   const email = Email.parse "info@example.test"
+   const email = Email.tryFrom "info@example.test"
    print email
    ```
 
@@ -203,7 +203,7 @@ account.balance = 1_000_000
 ```
 
 **A constructor is not a place for logic.** Validation, parsing and conversion are static factory functions, because a
-constructor cannot fail in a language without exceptions. `Email.parse` answers a `Result`; `Email(...)` cannot exist from
+constructor cannot fail in a language without exceptions. `Email.tryFrom` answers a `Result`; `Email(...)` cannot exist from
 outside, because `value` is `private` and has no default.
 
 **A field is not a candidate for becoming a method later.** A field is a promise: it is a parameter of the generated

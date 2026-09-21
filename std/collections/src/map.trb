@@ -89,14 +89,54 @@ public trait Map<Key, Value>
     addAll other
   }
 
-  /** The value for `key`, computing and storing it with `create` on a miss: `cache.getOrSet(key) { expensive(key) }`. */
-  fn getOrSet(var self, key: Key, create: () => Value): Value {
+  /**
+   * The value for `key`, storing `fallback` first where there is none. The fallback is `lazy`, so a value that costs
+   * something is only built on a miss.
+   *
+   * This is what other languages spell `entry().or_default()`, with the replacement **written out**: there is no
+   * `Default` trait, so what an absent key becomes stands at the call.
+   *
+   * # Examples
+   *
+   *     var counts: Map<String, Int> = [:]
+   *     print counts.getOrInsert("a", 0)
+   *
+   * # Pitfalls
+   *
+   * - The answer is a **copy**, as every value is. `groups.getOrInsert(city, []).add(user)` changes nothing and the
+   *   compiler says so ("a temporary is not a `var` path"): a method cannot answer a place, because a place is a path
+   *   and not a value. [Map.update] is the one that changes what is stored.
+   *
+   * # Related
+   *
+   * - [Map.update] - the same insert, with the stored value changed in place.
+   */
+  fn getOrInsert(var self, key: Key, fallback: lazy Value): Value {
     if const Some(existing) = get(key) {
       return existing
     }
-    const value = create()
+    const value = fallback
     set key, value
     value
+  }
+
+  /**
+   * Changes the value for `key` in place, storing `fallback` first where there is none. This is the grouping loop:
+   *
+   *     var groups: Map<String, List<String>> = [:]
+   *     groups.update("north", []) { names => names.add("Ada") }
+   *     print groups
+   *
+   * The fallback is `lazy`, so it is only built on a miss.
+   *
+   * # Related
+   *
+   * - [Map.getOrInsert] - the same insert, answering the value instead of changing it.
+   */
+  fn update(var self, key: Key, fallback: lazy Value, change: (var Value) => Void) {
+    var value = get(key) ?? fallback
+    change value
+    set key, value
   }
 
   // --- Changed copies --------------------------------------------------------------------------------

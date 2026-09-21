@@ -87,7 +87,7 @@ Fail(error)    Fail problem     the failure case
 
    ```trb
    fn parseOr(text: String, fallback: Int): Int {
-     Int.parse(text) ?? fallback
+     Int.tryFrom(text) ?? fallback
    }
 
    print parseOr("12", 0)

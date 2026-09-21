@@ -648,6 +648,29 @@ public type NativeState {
 - `native` types that ask the runtime for trait members (`public native type Int64 with Signed, Hash {}`) are
   `.Intrinsic` or `.Derived` entries, one per member per width.
 
+#### One conversion, one implementation
+
+The manifest is keyed by `"{owner}.{member}"`, and a type may have one member name for **several** conversions:
+`Int64.tryFrom` reads text and narrows a `Float64`, which are two functions of the runtime. Two rules keep that
+unambiguous, and both of them matter for the same reason - the name alone is not the question.
+
+- **Every row of such a member carries its source in parentheses**, and none of them is written without one:
+  `Int64.tryFrom(String)` and `Int64.tryFrom(Float64)`. `nativeNamed` asks the plain name first and the qualified one
+  after it, so nothing else in the manifest pays for this and a member that has only one row is found as before. A
+  source that has **no** row is then a clean finding instead of the other row's function: `Int8.tryFrom(300)` says the
+  back end does not support it, where an unqualified `Int8.tryFrom` row would have narrowed text.
+- **A type implements every conversion it has directly**, and never leaves one to a trait that requires it. `Numeric`
+  requires `TryFrom<String, NumberParseError>`, and each numeric type still writes that `extend` itself: with only the
+  requirement, `TryFrom` would have exactly one *direct* implementation on `Int64` - the narrowing one - and
+  `resolveTrait` would answer that one for both calls rather than `Ambiguous`, which is what makes the checker fall
+  back to the applied bound (`dispatchOf` in `semantics/checker/member.trb`). The remaining hole is a **user** type in
+  that shape: a `type` that gets `TryFrom<String, _>` from a trait it comes `with` and writes another `TryFrom` of its
+  own reaches the wrong implementation, and the IR verifier is what catches it.
+
+`Int64.from` is in the same family and is **not** qualified: its single row converts through
+`IntrinsicOperation.Convert`, which is the same cast for every one of its seven sources, so the one row is right for
+all of them. The rows `Int64.fromChar` and `Float64.fromFloat32` are named after no member and are reached by nothing.
+
 ### 3.8 `runtime/` and its tests
 
 ```text
@@ -1619,7 +1642,7 @@ after both.
   (`RuntimeShape`, `shapedSignature` in `ir/instances.trb`); the wrapper gets the new mangling prefix **`n`**, because
   both are in the program at once and only the wrapper is ever emitted or called.
 - **The failure of a `.Fallible` native is built from the error type's own fields, each taken from the parameter of the
-  same name.** `Int.parse(text)` fails with `NumberParseError(text)`, which is exactly what the runtime cannot answer
+  same name.** `Int.tryFrom(text)` fails with `NumberParseError(text)`, which is exactly what the runtime cannot answer
   and what the wrapper has in hand. An error type with a field no parameter names is a clean finding and no guess - which
   is why `Int32.tryFrom` (`NumberRangeError { message }` against `tryFrom(value)`) stays one.
 - **`IrParameter.isOut` was added**, and it is the only new field in the IR. An out parameter is a `var` parameter the
@@ -1642,10 +1665,10 @@ after both.
   section 2 wrote down for a write. Only `containsCountedType` slots go through it, so the arithmetic half of a program
   is byte for byte what it was, and it removes the read-and-write prepass from `total = total + part` (one instruction
   fewer). `bootstrap/tests/native/reassignment.trb` is the gate.
-- **One bug of the *dispatch*, found on the way.** What stands in front of the dot of `Int.parse(text)` is a **type**,
+- **One bug of the *dispatch*, found on the way.** What stands in front of the dot of `Int.tryFrom(text)` is a **type**,
   and the checker records the type of its *constructor* there (`() => Int64`). That function type was accepted as a
-  receiver, so the `Self` of `trait Parse<Failure>` was bound to it, the trait's own arguments were not found for it and
-  `Failure` was never substituted - which is why `Int.parse` and `Float.parse` were "not monomorphic" long before this
+  receiver, so the `Self` of the conversion trait was bound to it, the trait's own arguments were not found for it and
+  `Failure` was never substituted - which is why `Int.tryFrom` and `Float.tryFrom` were "not monomorphic" long before this
   sub-milestone. `closedReceiver` now answers `None` for a function type, and `staticDispatch`'s existing fallback (the
   target of the implementation) takes over.
 
@@ -1888,7 +1911,7 @@ written.
 - **`ArrayList.withCapacity(0)` also needed the *type* of a static member of a generic type.** `ArrayList.from` calls it
   on `ArrayList` written as a bare name, and what the checker records in front of the dot is the type of the type's
   **constructor** (`(capacity: Int) => ArrayList<Item>`). 5.7's first round made `closedReceiver` answer `None` for a
-  function type, which was right for `Int.parse` (`Int64` has no arguments) and leaves a *generic* owner with nothing:
+  function type, which was right for `Int.tryFrom` (`Int64` has no arguments) and leaves a *generic* owner with nothing:
   `constructedReceiver` takes the constructor's **result** as the type the member is reached on, and only where its head
   is the head of the member's own owner - so `show` on a closure value is still not dispatched on the closure's result.
 - **`Range<Int>.iterator` and `length` are TorbScript** (`RangeIterator` in `std/core/src/range.trb`, 20 lines), which is
@@ -2086,7 +2109,7 @@ that were all one missing cursor.
   answered: `answersBorrowedValue` in `ir/ownership.trb` makes the pass walk such a function, and `decideOperand` then
   emits the one `Retain` in front of the `return` that it always would have. Nothing else about those functions changes.
 - **Decision: `slice` is a default of `List`, and a member whose result is `Self` stays out of every table.**
-  `Slice.slice(self, range: Range<Int>): Self` is a **required** member that mentions `Self` as its **result**, so no table
+  `Slice.slice(self, range: Bounds<Int>): Self` is a **required** member that mentions `Self` as its **result**, so no table
   can hold it: the thunk of one would have to box that result, which it can do for *one* bound - its own - and not for a
   value that carries several (`List<Item> & Show` calling `slice` would need the `Show` table of a type the thunk has
   erased). `Self` as a **parameter** (`MutableSlice.replace(var self, range, values: Self)`) can never be in a table at
@@ -2297,7 +2320,7 @@ or what the two back ends can *both* write, the code won and this is the list. E
   5.7's collections merged in. What blocks the rest is not text: `Email` and `User` describe themselves to an `Encoder`
   (`encoder.string`, `fields.field`) and `Json.encode`/`Json.value` drive one, which is the `var self` chain above; its
   top-level code needs `for` over a collection, `a[key]` as a `var` argument and `a.keys().toSet().union(...)`, which is
-  the rest of 5.7; and its `const user = User(..., Email.parse(...)?)` is the top-level `?` of 5.13. One more thing it
+  the rest of 5.7; and its `const user = User(..., Email.tryFrom(...)?)` is the top-level `?` of 5.13. One more thing it
   shows and nothing else does: `a == b` on two `JsonValue`s records **no resolution at all**, because a `JsonValue`
   carries a `List<JsonValue>` and a `Map<String, JsonValue>` and the standard library has no `Equals` for its collections
   - which TYPECHECKER 4.3 deliberately does not report. That is a gap of `std/`, not of the back end. The gate of this
@@ -3722,15 +3745,20 @@ test - the cost should be written down rather than discovered.
 
 _Decision:_ accepted. The Decision Log entry about quoting being free is corrected with it.
 
-**17. `for x in ..10` and `Range.length()` of an open range.** `range.trb`: `extend Range<Int> with Iterable<Int>,
-Length` with the comment "Panics for a range without both ends", and CONCEPT ("A `Range<Int>` with a start is
-`Iterable<Int>`") makes it a type-level condition that the type cannot express (the ends are `Option` fields).
-_Proposal:_ `iterator()` on a range without a start panics ("a range without a start has no first value"), `length()`
-on a range without both ends panics, `0..` iterates forever, and both messages are pinned by the conformance suite.
-_Reason:_ the condition is about a field's value, so it belongs at runtime; a compile-time version would need
-dependent types.
+**17. `for x in ..10` and `Range.length()` of an open range.** A range with two `Option` ends makes "has a start" a
+condition about a field's value, so `iterator()` and `length()` could only panic.
+_Proposal:_ **the type says which ends there are**, chosen by the syntax: `a..b` is a `Range`, `a..` a `RangeFrom`,
+`..b` a `RangeTo`. No field is optional, `Range<Int>` is `Iterable` and `Length`, `RangeFrom<Int>` is `Iterable` and
+endless, `RangeTo<Int>` is neither - so `for index in ..10` and `(0..).length()` are refused where they are written,
+each with the reason. What accepts every form takes the trait `Bounds<Value>` (`lowest`, `highest`,
+`includesHighest`, `contains` as a default), which is what `Slice.slice` declares.
+_Reason:_ a panic in std is only for a caller's mistake that no type can express, and this one a type expresses
+(`compiler/CONTRIBUTING.md`, "What panics in std"). `inclusive` stays a `Bool` field: pulling it into the type as well
+would give six types for a distinction no body makes.
 
-_Decision:_ accepted.
+_Decision:_ accepted. The cost is one box per slice, because `Bounds<Int>` in `Slice.slice` is a trait-typed
+parameter: a slice is not in an inner loop, and a generic parameter there would need a type argument at every
+`a[from..to]` the checker records.
 
 **18. The manifest of natives is also a list of what does not exist yet.** Decided gap 22 requires that a missing
 intrinsic is a compile error. Today `std/` declares `Decimal`, `Float32` arithmetic, `TrieList`/`TrieMap`/`TrieSet`

@@ -306,7 +306,7 @@ group "`into()`, `tryInto()` and their traits" {
     )
   }
 
-  test "nothing that says the target is a message of its own, and a `?` passes none down" {
+  test "nothing that says the target is a message of its own" {
     const source = "type Port \{\n  value: Int\n\}\n\n"
       + "extend Port with TryFrom<Int, String> \{\n"
       + "  fn tryFrom(value: Int): Result<Port, String> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
@@ -315,8 +315,8 @@ group "`into()`, `tryInto()` and their traits" {
     assert(
       notes(source)
         == [
-          "It comes from the `Result<Target, Failure>` that is expected of the call, and a `?` on the call passes"
-            + " none down: annotate that `Result`, or write `Target.tryFrom(value)` - the source is `Int64`",
+          "It comes from the `Result<Target, Failure>` that is expected of the call, or from the type a `?` on it"
+            + " unwraps to: annotate one of the two, or write `Target.tryFrom(value)` - the source is `Int64`",
         ]
     )
   }
@@ -372,5 +372,99 @@ group "`into()`, `tryInto()` and their traits" {
   test "`Some` is what wraps it, and `None` takes its type from what is expected" {
     const source = "fn probe() \{\n  const maybe: Int? = Some(1)\n  const empty: Int? = None\n\}"
     assert problems(source).isEmpty()
+  }
+}
+
+/**
+ * `const port: Int = text.tryInto()?`: the `?` says the target and nothing about the failure, so the failure comes out
+ * of the one `TryFrom` the target has for this source. This is how text becomes a value, so every position that says a
+ * type is pinned here.
+ */
+group "`tryInto()` under a `?`" {
+  /** `Port` from text, and from a number with a failure of its own, for the "more than one way" message. */
+  const fromText = "type Port \{\n  number: Int\n\}\n\n"
+    + "extend Port with TryFrom<String, String> \{\n"
+    + "  fn tryFrom(value: String): Result<Port, String> \{\n    Ok(Port(1))\n  \}\n\}\n\n"
+
+  const alsoFromNumber = fromText
+    + "extend Port with TryFrom<Int64, Int64> \{\n"
+    + "  fn tryFrom(value: Int64): Result<Port, Int64> \{\n    Ok(Port(value))\n  \}\n\}\n\n"
+
+  const twiceFromText = fromText
+    + "extend Port with TryFrom<String, Int64> \{\n"
+    + "  fn tryFrom(value: String): Result<Port, Int64> \{\n    Ok(Port(2))\n  \}\n\}\n\n"
+
+  test "an annotated binding says the target, and the failure is the one implementation" {
+    const source = fromText
+      + "fn probe(): Result<Void, String> \{\n  const port: Port = \"80\".tryInto()?\n  print(port)\n  Ok(void)\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("\"80\".tryInto()") == "Result<Port, String>")
+    assert(found.adaptationsOf("\"80\".tryInto()") == ["convert tryFrom through Port: TryFrom<String, String>"])
+  }
+
+  test "the parameter of a call says it" {
+    const source = fromText + "fn open(port: Port) \{\n  print(port)\n\}\n\n"
+      + "fn probe(): Result<Void, String> \{\n  open(\"80\".tryInto()?)\n  Ok(void)\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("\"80\".tryInto()") == "Result<Port, String>")
+  }
+
+  test "the result of the function says it at a `return`" {
+    const source = fromText
+      + "fn probe(): Result<Port, String> \{\n  return Ok(\"80\".tryInto()?)\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("\"80\".tryInto()") == "Result<Port, String>")
+  }
+
+  test "a field of a constructor call says it" {
+    const source = fromText + "type Setting \{\n  port: Port\n\}\n\n"
+      + "fn probe(): Result<Setting, String> \{\n  Ok(Setting(\"80\".tryInto()?))\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.typeOf("\"80\".tryInto()") == "Result<Port, String>")
+  }
+
+  /** The other source is beside it and is not confused with it: the failure is picked by the receiver's type. */
+  test "another `TryFrom` from another source changes nothing" {
+    const source = alsoFromNumber
+      + "fn probe(): Result<Void, String> \{\n  const port: Port = \"80\".tryInto()?\n  print(port)\n  Ok(void)\n\}"
+    assert problems(source).isEmpty()
+    const found = probe source
+    assert(found.adaptationsOf("\"80\".tryInto()") == ["convert tryFrom through Port: TryFrom<String, String>"])
+  }
+
+  test "two failures from one source leave the call without a meaning, and the message says which" {
+    const source = twiceFromText
+      + "fn probe(): Result<Void, String> \{\n  const port: Port = \"80\".tryInto()?\n  print(port)\n  Ok(void)\n\}"
+    assert(problems(source) == ["`String` converts into `Port` in more than one way"])
+    assert(
+      notes(source)
+        == [
+          "A `?` says the target and not the failure, and there are several: `String`, `Int64`."
+            + " Annotate the `Result<Port, Failure>` that is meant",
+        ]
+    )
+  }
+
+  test "no implementation from this source says how to provide one" {
+    const source = fromText
+      + "fn probe(): Result<Void, String> \{\n  const port: Port = 80.tryInto()?\n  print(port)\n  Ok(void)\n\}"
+    assert(problems(source) == ["`Int64` does not convert into `Port`"])
+    assert(
+      notes(source)
+        == [
+          "`tryInto()` is the `TryFrom` of the target: `extend Port with TryFrom<Int64, Failure>` provides it",
+        ]
+    )
+  }
+
+  /** Nothing above the `?` says a type, so the `?` has nothing to pass down and the open-target message stands. */
+  test "a `?` with nothing above it still says the target is not known" {
+    const source = fromText
+      + "fn probe(): Result<Void, String> \{\n  const port = \"80\".tryInto()?\n  print(port)\n  Ok(void)\n\}"
+    assert(problems(source) == ["The target of `tryInto()` is not known here"])
   }
 }

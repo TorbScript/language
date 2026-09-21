@@ -352,3 +352,26 @@ group "`using` and other generic functions of the prelude" {
     assert(found.adaptationsOf("5.into()") == ["convert from through Meters: From<Int64>"])
   }
 }
+
+/**
+ * `Array.of(1, 2, 3)`: a **static** member that is not there, on a type whose parameters nothing has filled in. The
+ * variables in `Array<?1, ?2>` are the checker's own - what the writer wrote is a type name - so the message is about
+ * the member, and the "cannot infer" of each parameter would be a consequence of it.
+ */
+group "an unknown static member of a generic type" {
+  test "the type is named as it was written, and the open parameters say nothing" {
+    const source = "fn probe() \{\n  const values = Array.of(1, 2, 3)\n  print(values)\n\}"
+    assert(problems(source) == ["`Array` has no member `of`"])
+  }
+
+  test "a trait used as a namespace is named without its instantiation" {
+    const source = "fn probe() \{\n  const values = List.nothingLikeThis(1, 2)\n  print(values)\n\}"
+    assert(problems(source) == ["`List` has no member `nothingLikeThis`"])
+    assert notes(source).isEmpty()
+  }
+
+  test "an instance access on a value whose type is genuinely open stays silent" {
+    const source = "fn probe() \{\n  const empty = []\n  print(empty.nothingLikeThis())\n\}"
+    assert(problems(source) == ["Cannot infer the type of this collection"])
+  }
+}

@@ -58,7 +58,7 @@ my-project/
    ```trb check
    use Int from "std/prelude"
 
-   print Int.parse("42")
+   print Int.tryFrom("42")
    ```
 
 4. **`project.lock.trb` pins the whole graph: the exact version, content hash and registry of every dependency,

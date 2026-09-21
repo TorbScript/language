@@ -20,10 +20,10 @@ declared, and answers a value or nothing else.
 ## Example
 
 ```trb
-type Email {
+type Email with TryFrom<String, String> {
   private value: String
 
-  fn parse(text: String): Result<Email, String> {
+  fn tryFrom(text: String): Result<Email, String> {
     if !text.contains("@") {
       return Fail "'{text}' is not an email address"
     }
@@ -35,7 +35,7 @@ type Email {
   }
 }
 
-const email = Email.parse "info@example.test"
+const email = Email.tryFrom "info@example.test"
 match email {
   Ok(address) => print "Parsed: {address.address()}"
   Fail(reason) => print "Rejected: {reason}"
@@ -102,10 +102,10 @@ Self(<field>, ...)                   // The constructor, from inside the type
    ```
 
 6. **Inside the type, `Self(...)` is the constructor and every field can be passed**, `private` ones included - that is
-   how `Email.parse` builds the value nothing outside can.
+   how `Email.tryFrom` builds the value nothing outside can.
 
 7. **Everything that is not the constructor is a static factory function**: a function declared on the type that does
-   not take `self`. `Email.parse` answers a `Result` because a constructor cannot fail; a factory can.
+   not take `self`. `Email.tryFrom` answers a `Result` because a constructor cannot fail; a factory can.
 
 ## What this is not
 

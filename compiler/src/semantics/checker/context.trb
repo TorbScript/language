@@ -579,6 +579,15 @@ public type Expectation {
   /** Nothing says what the type should be: infer it. */
   case None
   case Type(annotation: TypeId)
+  /**
+   * The operand of a `?` whose own value is expected to be `annotation`: the operand itself is an `Option` or a
+   * `Result` *of* that type, and which of the two it is only the operand says.
+   *
+   * This is not an expected type - nothing is checked against it, and no literal adapts to it - it is the one fact a
+   * `?` can pass down: what will be left once it has unwrapped. `const port: Int = text.tryInto()?` is what needs it,
+   * because the target of `tryInto()` has nowhere else to come from.
+   */
+  case Unwrapped(annotation: TypeId)
   /** The arms of a `match` that is used as a statement, and the body of a `for`: a value is not wanted. */
   case Statement
 
@@ -586,6 +595,14 @@ public type Expectation {
   fn annotationOf(self): TypeId? {
     match self {
       .Type(annotation) => Some annotation
+      _ => None
+    }
+  }
+
+  /** The type a `?` above this expression will unwrap to, if one said so. */
+  fn unwrappedOf(self): TypeId? {
+    match self {
+      .Unwrapped(annotation) => Some annotation
       _ => None
     }
   }

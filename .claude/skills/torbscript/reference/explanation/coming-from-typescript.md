@@ -196,7 +196,7 @@ still cannot express: a type constructor with a hole in it.
 These are things TypeScript has that TorbScript deliberately does not, and what replaces them.
 
 - **Type assertions (`value as Type`, `<Type>value`).** Nothing bypasses the checker. A conversion that can fail is
-  `TryFrom` or `Parse`, and both answer a `Result` instead of trusting the assertion. See
+  `TryFrom` - from a number or from text - and it answers a `Result` instead of trusting the assertion. See
   [Conversions](../language/types/conversions.md).
 - **The non-null assertion `!`.** There is no operator that turns an `Option` back into its value on the promise that
   it is not `None`. `expect(message)` does the same job and names why the absence would be a bug.

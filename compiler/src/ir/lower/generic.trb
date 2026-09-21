@@ -64,7 +64,7 @@ public fn dispatchedMember(
   receiver: TypeId?,
   at: Span,
 ): Dispatched? {
-  // A receiver that is not a closed type is no receiver at all: the base of `Int.parse(text)` is a *type* and the checker
+  // A receiver that is not a closed type is no receiver at all: the base of `Int.tryFrom(text)` is a *type* and the checker
   // records whatever it has for it, so the implementation's own target is what says which type the member is reached on
   const subject = subjectOfReceiver lowering, receiver, symbol
   match dispatch {
@@ -132,12 +132,12 @@ fn takesSelf(var lowering: Lowering, symbol: SymbolId): Bool {
 }
 
 /**
- * The receiver, where there is one. What stands in front of the dot of `Int.parse(text)` is a **type**, and the checker
+ * The receiver, where there is one. What stands in front of the dot of `Int.tryFrom(text)` is a **type**, and the checker
  * records the type of its *constructor* there (`() => Int64`) - a function type is never a receiver, so such a call has
  * none at all and the target of the implementation says which type the member is reached on (`staticDispatch`).
  *
- * Without this the `Self` of `trait Parse<Failure>` would be bound to that function type, the trait's own arguments
- * would not be found for it, and `Int.parse` would come out as "not monomorphic".
+ * Without this the `Self` of `trait TryFrom<Source, Failure>` would be bound to that function type, the trait's own
+ * arguments would not be found for it, and `Int.tryFrom` would come out as "not monomorphic".
  */
 fn closedReceiver(var lowering: Lowering, found: TypeId): TypeId? {
   if const .Function(_) = lowering.checker.types.form(found) {
@@ -177,8 +177,8 @@ fn staticDispatch(
   subject: TypeId?,
   at: Span,
 ): Dispatched? {
-  // A **static** member has no receiver (`Int.parse(text)`), and then the target of the implementation is what the member
-  // is reached on: `extend Int64 with Parse<NumberParseError>` says both the type and the arguments of the trait
+  // A **static** member has no receiver (`Int.tryFrom(text)`), and then the target of the implementation is what the member
+  // is reached on: `extend Int64 with TryFrom<String, NumberParseError>` says both the type and the arguments of the trait
   const target = match subject {
     Some(found) => Some found
     None => targetOfImplementation lowering, implementation
@@ -191,7 +191,7 @@ fn staticDispatch(
  * The type a **type name** in front of the dot builds. The checker records the type of the type's *constructor* there
  * (`(capacity: Int) => ArrayList<Item>`), and the result of that function is the type the member is reached on - which is
  * the only thing that says what `Item` is for `ArrayList.withCapacity(0)` written inside `ArrayList.from`. For
- * `Int.parse(text)` the target of the implementation answered it already, because `Int64` has no arguments.
+ * `Int.tryFrom(text)` the target of the implementation answered it already, because `Int64` has no arguments.
  *
  * A function **value** must not be mistaken for a type name, or `show` on a closure would be dispatched on the closure's
  * result. So the result is only taken where its head is the head of the member's own owner, which is exactly the
@@ -436,7 +436,7 @@ fn mappingOfCall(
       return mapping
     }
   }
-  // A member of a *trait* reached on a concrete type - `Int.parse(text)` - has the trait's `Self` as its owner, and the
+  // A member of a *trait* reached on a concrete type - `Int.tryFrom(text)` - has the trait's `Self` as its owner, and the
   // one thing that says what `Self` and the trait's own arguments are is the type the member was reached on
   if const .Parameter(_) = lowering.checker.types.form(owner) {
     const unknown = lowering.checker.invalidType

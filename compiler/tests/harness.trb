@@ -73,12 +73,12 @@ public const preludeSource = r"""
   }
 
   public trait Slice {
-    fn slice(self, range: Range<Int>): Self
+    fn slice(self, range: Bounds<Int>): Self
   }
 
   /** `samples[0..100].sort()`: a window into the original, which is what a range as a `var` path is. */
   public trait MutableSlice with Slice {
-    fn replace(var self, range: Range<Int>, values: Self)
+    fn replace(var self, range: Bounds<Int>, values: Self)
   }
 
   public trait Iterable<Item> {
@@ -207,13 +207,76 @@ public const preludeSource = r"""
     }
   }
 
+  /** One type per pair of ends, exactly as `std/core` declares them. */
   public type Range<Value> {
-    start: Value?
-    end: Value?
+    start: Value
+    end: Value
     inclusive: Bool = false
   }
 
+  public type RangeFrom<Value> {
+    start: Value
+  }
+
+  public type RangeTo<Value> {
+    end: Value
+    inclusive: Bool = false
+  }
+
+  /** What all three are, and what `Slice.slice` takes. */
+  public trait Bounds<Value: Compare> {
+    fn lowest(self): Value?
+    fn highest(self): Value?
+    fn includesHighest(self): Bool
+  }
+
+  extend<Value: Compare> Range<Value> with Bounds<Value> {
+    fn lowest(self): Value? {
+      Some(start)
+    }
+
+    fn highest(self): Value? {
+      Some(end)
+    }
+
+    fn includesHighest(self): Bool {
+      inclusive
+    }
+  }
+
+  extend<Value: Compare> RangeFrom<Value> with Bounds<Value> {
+    fn lowest(self): Value? {
+      Some(start)
+    }
+
+    fn highest(self): Value? {
+      None
+    }
+
+    fn includesHighest(self): Bool {
+      false
+    }
+  }
+
+  extend<Value: Compare> RangeTo<Value> with Bounds<Value> {
+    fn lowest(self): Value? {
+      None
+    }
+
+    fn highest(self): Value? {
+      Some(end)
+    }
+
+    fn includesHighest(self): Bool {
+      inclusive
+    }
+  }
+
   extend Range<Int> with Iterable<Int> {
+    native fn iterator(self): Iterator<Int>
+  }
+
+  extend RangeFrom<Int> with Iterable<Int> {
     native fn iterator(self): Iterator<Int>
   }
 
@@ -415,7 +478,8 @@ public const workspace = [
     public use Add, Subtract, Multiply, Divide, Remainder, Indexed, Slice from "./types"
     public use MutableIndexed, MutableSlice, OrElse from "./types"
     public use Numeric, Signed, Int8, Int32, Int64, UInt8, Float32, Float64 from "./types"
-    public use Bool, Char, String, Int, Float, Option, Result, Range, List, ArrayList, Map, Array from "./types"
+    public use Bool, Char, String, Int, Float, Option, Result, List, ArrayList, Map, Array from "./types"
+    public use Range, RangeFrom, RangeTo, Bounds from "./types"
     public use Set, TrieSet, TrieMap, TrieList from "./types"
     public use From, Into, TryFrom, TryInto, Encode, Length, Close, Task from "./types"
     public use print, printError, panic, using, do, assert, nameOf, Expression from "./types"

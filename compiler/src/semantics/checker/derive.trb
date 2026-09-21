@@ -16,7 +16,7 @@ use TypeId, ParameterId, FieldSignature from "./type"
 use Checker from "./context"
 use typeSignatureOf from "./signature"
 use substitute, sameType from "./unify"
-use implementsBound, literalParseBound from "./implementation"
+use implementsBound, literalConversionBound from "./implementation"
 
 /** The members a derived implementation of `capability` for `target` would generate, or `None`. */
 public fn derivableMembers(
@@ -125,7 +125,7 @@ fn canDerive(
     return false
   }
   match checker.types.form(target) {
-    // A literal type has exactly what the concept's "Literal Types" names - `Parse<LiteralParseError>`, `Show`,
+    // A literal type has exactly what the concept's "Literal Types" names - `TryFrom<String, LiteralParseError>`, `Show`,
     // `Equals`, `Hash`, `Encode`, `Decode`, and the `Into` of its base above - and nothing else. `Compare` is
     // not among them: an order over three strings is a decision, exactly as it is for a `type`
     .Literals(_, _) => isLiteralTrait checker, name, wanted
@@ -157,12 +157,13 @@ fn canDerive(
 }
 
 /**
- * The traits a literal type carries. `Parse` is the one whose argument is fixed: a literal type fails to parse with a
- * `LiteralParseError` and with nothing else, so `Status with Parse<NumberParseError>` is not generated.
+ * The traits a literal type carries. `TryFrom` is the one whose arguments are fixed: a literal type is read from text
+ * and fails with a `LiteralParseError` and with nothing else, so `Status with TryFrom<Int64, NumberRangeError>` is not
+ * generated even where the base has one.
  */
 fn isLiteralTrait(var checker: Checker, name: String, wanted: TypeId?): Bool {
-  if name == "Parse" {
-    const generated = match literalParseBound(checker) {
+  if name == "TryFrom" {
+    const generated = match literalConversionBound(checker) {
       Some(found) => found
       None => {
         return false

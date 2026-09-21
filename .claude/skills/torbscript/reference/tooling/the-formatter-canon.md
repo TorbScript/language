@@ -35,7 +35,7 @@ its top level; and every argument is on one line, except a trailing closure, whi
 
 ```trb
 const role = Role name
-const email = Email.parse text
+const email = Email.tryFrom text
 names.map Role
 print "Hello"
 ```

@@ -97,6 +97,15 @@ language *means* changes the page that says so - `docs check` names the page who
   is why `public fn emit(var builder: Builder) { ... }` needs no annotation; a body that ends in a value or returns one
   has to declare which type that is. Everything that is not `public` infers as usual. A `fn` inside of a block is not a
   closure: it sees its parameters and the file, not the bindings around it.
+- **What panics in `std/`.** A panic there is only for a caller's mistake that **no type can express**: an index out of
+  range, an integer overflow, a division by zero. Where a type *can* say it, the type says it - an `Option`, a
+  `Result`, a narrower parameter type, or a split type as with `Range`/`RangeFrom`/`RangeTo`, where "this range has a
+  start" became the type instead of an `expect` in `iterator()`. A panic a body **writes** is a promise: its docblock
+  carries a `# Panics` section that names the condition, and the conformance suite pins the message word for word,
+  because the two back ends may not disagree about it. A member that only passes one on - an overflow of the `Int`
+  arithmetic under it, an index it hands to a container - says so in its sentence instead. `Option.expect` and
+  `Result.expect` are the escape hatch a *caller* reaches for, and `a[key]` is the operator whose contract is the
+  panic: `get(key)` is the typed answer beside it.
 - Diagnostics are data (`Diagnostic(message, span, notes)`), in the tone of the ones that exist: one root cause, one
   message, the error type absorbs what follows.
 - Tests are in-memory programs (`compiler/tests/harness.trb`). Every diagnostic has a test with its exact message,

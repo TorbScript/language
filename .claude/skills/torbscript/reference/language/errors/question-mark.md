@@ -140,7 +140,7 @@ instead of leaving on it matches on the `Result` itself:
 fn parseAll(values: List<String>): List<Int> {
   var parsed: List<Int> = []
   for value in values {
-    match Int.parse(value) {
+    match Int.tryFrom(value) {
       Ok(number) => parsed.add number
       Fail(_) => {}
     }
@@ -156,13 +156,13 @@ print parseAll(["1", "x", "3"])
 checker rejecting exactly the shortcut of skipping that step.
 
 **`?` is illegal in a function whose result is neither an `Option` nor a `Result`.** `fn total(values: List<String>):
-List<Int>` cannot receive the failure `Int.parse(value)?` would hand back, and the checker rejects it there:
+List<Int>` cannot receive the failure `Int.tryFrom(value)?` would hand back, and the checker rejects it there:
 
 ```trb error
 fn total(values: List<String>): List<Int> {
   var result: List<Int> = []
   for value in values {
-    result.add Int.parse(value)?
+    result.add Int.tryFrom(value)?
   }
   result
 }

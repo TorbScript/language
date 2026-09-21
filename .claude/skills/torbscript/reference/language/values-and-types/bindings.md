@@ -116,7 +116,7 @@ has to be one thing (see [Top-level code](../modules-and-packages/top-level-code
    than defensive lines. Discard on purpose with `const _ = ...`.
 
 9. **An expression statement has the type `Void` or `Never`**, unless the call has a `var` receiver or a `var` argument.
-   That is the rule behind rule 8: `parser.bump()` changes something and stays a statement, while `Email.parse(text)` and
+   That is the rule behind rule 8: `parser.bump()` changes something and stays a statement, while `Email.tryFrom(text)` and
    `1 + 2` are values that go nowhere.
 
 10. **Assignment is a statement, not an expression.** `a = b = c` does not parse, and `if x = y` is not a comparison that

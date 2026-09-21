@@ -1717,6 +1717,30 @@ Wenn nicht, was bedeutet, bewirkt es?
     Arguments unterscheiden), Tour, Encoding-Labor, Doku. Funktionen, die bei einem FORMAT `parse` heißen
     (`Json.parse`), sind kein Trait und bleiben. **Eigene Runde, NACH Schwanz 3 und der Konformitätsrunde** (beide
     arbeiten in genau diesen Dateien). `TryInto` kommt wie besprochen schon mit der kleinen Runde.
+  - **Erledigt (Aufräumrunde `std/core`):** `Parse` ist weg. Text wird über `TryFrom<String, Failure>` zum Wert -
+    `Int.tryFrom("42")`, `Email.tryFrom(text)`, `Status.tryFrom(text)` -, `Numeric` fordert
+    `TryFrom<String, NumberParseError>`, und das abgeleitete `Parse` der Literaltypen ist ein abgeleitetes
+    `TryFrom<String, LiteralParseError>` (`literalConversionBound`, `isTextConversionBound`). Stage 0 unterscheidet in
+    `Int.tryFrom`/`Float.tryFrom` nach dem Laufzeittyp; `Int.parseDigits` bleibt, `Json.parse` auch.
+  - **Zwei Löcher, die dabei aufgingen, und beide sind zu:** (a) die Natives-Manifest ist nach `"{Typ}.{Member}"`
+    verschlüsselt, und `Int64.tryFrom` gibt es jetzt zweimal (aus Text, aus `Float64`). Jede Zeile eines solchen
+    Members trägt jetzt ihre Quelle im Namen (`Int64.tryFrom(String)`), und `nativeNamed` fragt erst den nackten Namen
+    und dann den qualifizierten. (b) Der **Wrapper-Name** eines Natives kam aus Pfad + Instanzargumenten, die für die
+    zwei gleich sind - der zweite Aufruf fand den ersten Wrapper und das Programm rechnete falsch (der IR-Verifier hat
+    es gefangen). Der Schlüssel nimmt jetzt den Quelltyp dazu. Beides steht in docs/BACKEND.md, "One conversion, one
+    implementation".
+  - **Jeder Zahlentyp implementiert die Textkonversion selbst**, obwohl `Numeric` sie schon fordert: hätte `Int64` nur
+    EINE direkte `TryFrom`-Implementierung (die verengende), dann fände `resolveTrait` genau die - für beide Aufrufe -
+    statt `Ambiguous` zu sagen, und erst `Ambiguous` bringt den Checker dazu, den angewandten Bound zu fragen.
+    **Offen geblieben:** ein NUTZER-Typ in derselben Form (`TryFrom<String, _>` über einen Trait geerbt, daneben ein
+    eigenes `TryFrom<Anderes, _>`) greift die falsche Implementierung; der IR-Verifier fängt es. Notiert in
+    docs/BACKEND.md.
+  - **`NumberParseError.text` heißt weiter `text`**, und die Implementierungen nennen ihren Parameter deshalb `text`
+    statt `value` - die `.Fallible`-Konvention baut den Fehler aus dem Parameter GLEICHEN NAMENS, und der Checker
+    erlaubt einer Implementierung einen anderen Parameternamen als dem Trait.
+  - **Bemerkt, nicht angefasst:** `Int64.from` hat sieben Quellen und EINE Manifest-Zeile; das geht gut, weil
+    `IntrinsicOperation.Convert` für alle sieben derselbe Cast ist. Die Zeilen `Int64.fromChar` und
+    `Float64.fromFloat32` heißen nach keinem Member und werden von nichts gefunden.
 
 - (Offene Ranges und Panics in std, 2026-09-23) **Anlass (Nutzer):** die `expect`s in `Range<Int>.iterator`/`length`
   gefallen ihm gar nicht. Zu Recht - und der Kommentar daneben ("would need dependent types") ist falsch.
@@ -1732,6 +1756,26 @@ Wenn nicht, was bedeutet, bewirkt es?
     werden in derselben Runde durchgesehen.
   - **Wird gelöst:** eine Aufräumrunde `std/core` zusammen mit der `Parse`-Streichung, NACH Schwanz 3 und der
     Konformitätsrunde (beide arbeiten im Lowering und in Stage 0).
+  - **Erledigt (Aufräumrunde `std/core`):** drei Typen, je einer pro Paar von Enden - `Range(start, end, inclusive)`,
+    `RangeFrom(start)`, `RangeTo(end, inclusive)`. Kein Feld ist mehr optional, in `std/core/src/range.trb` steht kein
+    `expect` mehr, und `for index in ..10` und `(0..).length()` sind Compile-Fehler an der Schreibstelle, jeder mit
+    einer Note, die das fehlende Ende nennt ("`..10` has no start, so there is no first value to count from",
+    "`0..` has no end, so it has no length"). `Range<Int>` ist `Iterable` + `Length`, `RangeFrom<Int>` nur `Iterable`
+    (endlos), `RangeTo<Int>` keins von beiden.
+  - **`Bounds<Value: Compare>`** hat `lowest(): Value?`, `highest(): Value?`, `includesHighest(): Bool` und `contains`
+    als Default. `Slice.slice` und `MutableSlice.replace` nehmen es, und der Checker coerct den Bereich in den
+    Klammern dorthin (`coerceToBounds`). **Preis: eine Box pro Slice**, weil `Bounds<Int>` dort ein Trait-Wert ist -
+    ein generischer Parameter bräuchte ein Typargument an jedem `a[from..to]`, das der Checker aufzeichnet, und das
+    ist Lowering-Arbeit in genau den Dateien, in denen Schwanz 4 sitzt. In docs/BACKEND.md, Lücke 17, notiert.
+  - **Gepinnt:** `bootstrap/tests/native/ranges.trb` (die drei Formen, `length`, `contains`, `show`, und alle fünf
+    Schreibweisen auf einem `String`); die Listen-Slices standen schon in `collection-places.trb`. Der
+    "skipped"-Eintrag der Doku-Gate für `ranges.md` ist weg.
+  - **`inclusive` bleibt ein `Bool`-Feld** von `Range` und `RangeTo`, wie besprochen.
+  - **Die std-Panic-Regel steht in `compiler/CONTRIBUTING.md`** ("What panics in `std/`"), und die Durchsicht steht im
+    Bericht: zwei `expect`s sind durch die Typen ersetzt (die beiden in `range.trb`), acht Stellen bleiben, vier davon
+    haben einen neuen `# Panics`-Abschnitt bekommen (`Indexed.at`, `Fixed.approximating`, `Fixed.tangent`,
+    `Fixed.arcSine`/`arcCosine`, `wholeOf`). **Bemerkt:** `Fixed.arcSine` panikt außerhalb von `[-1, 1]`, wo
+    `Float64.arcSine` `nan` antwortet - die zwei Implementierer von `Real` sind sich dort uneinig.
 - (Validierte Typen, 2026-09-23) **Antwort:** das gibt es schon - ein `private` Feld ohne Default macht den Konstruktor
   von außen unbenutzbar ("`Email` cannot be constructed here: `value` is private and has no default", durch ein
   Doku-Snippet festgenagelt); `copy` und das abgeleitete `Decode` folgen derselben Regel. Preis: das Feld ist von
@@ -2042,6 +2086,13 @@ Wenn nicht, was bedeutet, bewirkt es?
   - **Wird gelöst:** `Map.getOrInsert(key, fallback: lazy Value)` in der Aufräumrunde `std/core` (das ist Rusts
     `entry().or_default()`, mit sichtbarem Ersatz). Das Literal im generischen Rumpf ist Lücke 2 der Runde
     "generische Zahlen".
+  - **Erledigt (Aufräumrunde `std/core`):** `Map.getOrInsert(key, fallback: lazy Value)` ist da und ERSETZT
+    `getOrSet(key) { ... }` - `lazy` kann alles, was die Closure konnte, und zwei Namen für eine Sache wollten wir
+    nicht. **Eine Methode kann keinen PLATZ antworten** (ein Platz ist ein Pfad - Wurzel plus Feld-/Index-/Slice-
+    Schritte -, kein Wert; es gibt keine Referenzen), also ändert `groups.getOrInsert(city, []).add user` nichts und
+    der Compiler sagt das ("a temporary is not a `var` path"). Die ehrliche Form daneben ist
+    `Map.update(key, fallback) { value => ... }` mit `(var Value) => Void`, die den gespeicherten Wert an Ort und
+    Stelle ändert; Stage 0 bindet den Parameter dafür als `var` (`call_changing`, `call_closure_with`).
   - **Kandidat, erst bei zwei konkreten Bedarfsstellen:** ein implizit abgeleiteter Fakt "ohne Argumente
     konstruierbar" (`Type()`), nach derselben Logik wie das abgeleitete `Encode`.
 
@@ -2083,6 +2134,13 @@ Wenn nicht, was bedeutet, bewirkt es?
     machen heißt, eine Erwartung durch `?` zu schieben und den Fehlertyp aus der umgebenden Funktion zu holen - eine
     Änderung an der Inferenz, nicht an einem Aufruf. Der Fall sagt es deshalb klar: "The target of `tryInto()` is not
     known here", mit `Target.tryFrom(value)` in der Notiz. **Frage an dich: soll das eine eigene kleine Runde werden?**
+    - **Erledigt (Aufräumrunde `std/core`):** ein `?` reicht das, was von IHM erwartet wird, als
+      `Expectation.Unwrapped` nach unten - eine Tatsache, kein erwarteter Typ, also wird nichts dagegen geprüft, kein
+      Literal passt sich daran an, und keine Inferenz, die ohne es funktioniert, kann sich ändern (Grund: der Operand
+      eines `?` ist ein `Option` ODER ein `Result` davon, und welches von beiden sagt nur der Operand). `tryInto()`
+      liest das Ziel daraus, und der Fehler folgt aus der EINEN `TryFrom<Source, Failure>`-Implementierung des Ziels
+      für den Typ des Empfängers; keine und mehrere sagen es beide beim Namen. `const port: Int = text.tryInto()?`
+      geht damit, was nach der `Parse`-Streichung der Weg ist, Text zu lesen. docs/TYPECHECKER.md, Eintrag 64.
   - Nachgesehen: **nichts in `std/`, `compiler/` oder `examples/` implementiert `TryFrom<String, _>`.** Kein Blanket,
     das jedes `From` zu einem `TryFrom` mit `Never` macht - es würde jedes handgeschriebene `TryFrom` überlappen.
   - **Noch gefunden, nicht behoben (zwei Meldungen, die fehlen):**
@@ -2092,6 +2150,10 @@ Wenn nicht, was bedeutet, bewirkt es?
        Schreiber. `List.nothingLikeThis 1, 2` hat dasselbe Loch, `String.nothingLikeThis` (nicht generisch) meldet
        richtig. Ein echter Fehlalarm-in-die-andere-Richtung, aber die Unterscheidung "statischer Zugriff" gehört in
        eine eigene Runde.
+       **Erledigt (Aufräumrunde `std/core`):** `reportUnknownMember` bekommt `isTypeName`, meldet dann trotz offener
+       Argumente, nennt den Typ so, wie er geschrieben steht (`Array`, `List` - nicht `List<_>`), und markiert die
+       Variablen des Empfängers als gemeldet, damit "Cannot infer" nicht als Folge daneben steht. Ein Instanzzugriff
+       auf einen wirklich offenen Typ schweigt weiter.
     2. `names.map(String.toUpperCase)` TYPPRÜFT, läuft aber auf Stage 0 nicht ("does not know
        `String.toUpperCase`"). Deshalb steht es NICHT in der neuen Erklärseite. Ebenso: `into()` wird von Stage 0
        überhaupt nicht aufgelöst ("a `Celsius` has no method `into`"), auch nicht für eigene Typen - also war für

@@ -32,7 +32,7 @@ use Checker, TypeScope from "./context"
 use typeSignatureOf, declareParameters, boundsOf, traitList from "./signature"
 use extensionMembers, signatureOf, functionOfSite from "./signature"
 use typeFromReference from "./lowering"
-use substitute, substituteFunction, sameType, sameFunction from "./unify"
+use substitute, substituteFunction, sameType, sameFunction, resolveType from "./unify"
 use derivableMembers from "./derive"
 
 // --- Building the index ---------------------------------------------------------------------------------------------
@@ -492,6 +492,46 @@ public fn iterableSourceOf(var checker: Checker, annotation: TypeId, iterable: S
       continue
     }
     found = Some item
+  }
+  found
+}
+
+/**
+ * The `Failure` of every `TryFrom<Source, Failure>` a type has for one source, without duplicates.
+ *
+ * `TryFrom` is a trait a type may implement several times - `Int64` takes a wider integer and text - so "what are the
+ * arguments of `TryFrom` for this type" has no single answer and `resolveTrait` rightly says `Ambiguous`. "Which
+ * failure does it have for *this* source" has one wherever the list has one entry, and that is what `tryInto()` under
+ * a `?` asks: the `?` says the target and nothing about the failure.
+ */
+public fn fallibleFailuresOf(var checker: Checker, annotation: TypeId, source: TypeId): List<TypeId> {
+  buildImplementations checker
+  const conversion = match checker.wellKnown.tryFrom {
+    Some(symbol) => symbol
+    None => {
+      return []
+    }
+  }
+  const head = headSymbolOf checker, annotation
+  const candidates = checker.implementations.candidatesOf conversion, head
+  var found: List<TypeId> = []
+  for index in candidates {
+    const given = match applies(checker, index, annotation, None) {
+      Some(arguments) => arguments
+      None => {
+        continue
+      }
+    }
+    if given.length() != 2 {
+      continue
+    }
+    if resolveType(checker, given[0]) != resolveType(checker, source) {
+      continue
+    }
+    const failure = resolveType checker, given[1]
+    if !found.contains(failure) {
+      found.add failure
+    }
   }
   found
 }
@@ -1039,19 +1079,20 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
       }
     }
     .Parameter(parameter) => checker.parameterBounds.get(parameter.value) ?? []
-    // A literal type has the traits of its base plus the `Parse` the language generates for it, which replaces the
-    // base's own: `Status.parse(text)` fails with a `LiteralParseError` and not with a `NumberParseError`
+    // A literal type has the traits of its base plus the `TryFrom<String, LiteralParseError>` the language generates for
+    // it, which replaces the base's own conversion from text: `Status.tryFrom(text)` fails with a `LiteralParseError`
+    // and not with a `NumberParseError`. Every other `TryFrom` of the base stays what it is
     .Literals(base, _) => {
       const inherited = directTraitsOf checker, base
-      const parse = literalParseBound checker
+      const conversion = literalConversionBound checker
       var found: List<TypeId> = []
       for bound in inherited {
-        if parse.isSome() && isParseBound(checker, bound) {
+        if conversion.isSome() && isTextConversionBound(checker, bound) {
           continue
         }
         found.add bound
       }
-      if const Some(generated) = parse {
+      if const Some(generated) = conversion {
         if !found.contains(generated) {
           found.add generated
         }
@@ -1088,24 +1129,32 @@ fn directTraitsOf(var checker: Checker, annotation: TypeId): List<TypeId> {
 }
 
 /**
- * `Parse<LiteralParseError>`: the one member of a literal type that is not already a member of its base. The failure
- * names the text and the members it could have been, which is what `LiteralParseError` is for (concept, Literal Types).
+ * `TryFrom<String, LiteralParseError>`: how a literal type is read from text, which is the one member it has that its
+ * base does not. The failure names the text and the members it could have been, which is what `LiteralParseError` is
+ * for (concept, Literal Types).
  */
-public fn literalParseBound(var checker: Checker): TypeId? {
-  const parse = checker.wellKnown.symbolNamed("Parse")?
+public fn literalConversionBound(var checker: Checker): TypeId? {
+  const conversion = checker.wellKnown.tryFrom?
+  const text = checker.wellKnown.symbolNamed("String")?
   const failure = checker.wellKnown.symbolNamed("LiteralParseError")?
-  const argument = checker.nominal failure, []
-  Some checker.nominal(parse, [argument])
+  Some checker.nominal(conversion, [checker.nominal(text, []), checker.nominal(failure, [])])
 }
 
-fn isParseBound(checker: Checker, bound: TypeId): Bool {
-  const symbol = match checker.types.form(bound) {
-    .Nominal(found, _) => found
+/** Whether a bound is a `TryFrom` **from text**, which is the one a literal type's generated conversion replaces. */
+fn isTextConversionBound(var checker: Checker, bound: TypeId): Bool {
+  const (symbol, arguments) = match checker.types.form(bound) {
+    .Nominal(found, given) => (found, given)
     _ => {
       return false
     }
   }
-  checker.wellKnown.symbolNamed("Parse") == Some(symbol)
+  if checker.wellKnown.tryFrom != Some(symbol) || arguments.length() != 2 {
+    return false
+  }
+  match checker.types.form(arguments[0]) {
+    .Nominal(source, _) => checker.wellKnown.string == Some(source)
+    _ => false
+  }
 }
 
 /** Whether a type is concrete enough to say "it does not implement that": no parameter, no variable, nothing open. */

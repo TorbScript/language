@@ -220,6 +220,19 @@ TORB_TEST(searching_a_text) {
   TORB_CHECK(torb_text_index_of(text, part, &at));
   TORB_CHECK_INTEGER(at, 10);
   TORB_CHECK(!torb_text_index_of(text, missing, &at));
+  TORB_CHECK(torb_text_last_index_of(text, part, &at));
+  TORB_CHECK_INTEGER(at, 10);
+  TORB_CHECK(!torb_text_last_index_of(text, missing, &at));
+  {
+    torb_text repeated = text_of("a/b/c");
+    torb_text separator = text_of("/");
+    TORB_CHECK(torb_text_index_of(repeated, separator, &at));
+    TORB_CHECK_INTEGER(at, 1);
+    TORB_CHECK(torb_text_last_index_of(repeated, separator, &at));
+    TORB_CHECK_INTEGER(at, 3);
+    torb_text_release(repeated);
+    torb_text_release(separator);
+  }
   {
     torb_text prefix = text_of("the");
     torb_text suffix = text_of("fox");

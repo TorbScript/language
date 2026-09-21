@@ -132,32 +132,32 @@ print connection.sent                // 1
 const readOnly = connection          // Same rule as everywhere: no `var` path, no mutation
 // readOnly.send("nope")             // Compile error
 
-// --- Construction without logic: factories, parse, From/Into -----------------
+// --- Construction without logic: factories, TryFrom, From/Into ---------------
 
-/** Why `Email.parse` or `Percent.tryFrom` below refused a value. */
+/** Why `Email.tryFrom` or `Percent.tryFrom` below refused a value. */
 type ParseError {
   message: String
 }
 
-/** An email address, validated once in `parse` and never again: the field is private, so only a checked value exists. */
-type Email with Parse<ParseError> {
+/** An email address, validated once and never again: the field is private, so only a checked value exists. */
+type Email with TryFrom<String, ParseError> {
   private value: String              // Private without default: only `Email` can call `Email(...)`
 
-  fn parse(text: String): Result<Email, ParseError> {
-    const trimmed = text.trim()
+  fn tryFrom(value: String): Result<Email, ParseError> {
+    const trimmed = value.trim()
     if !trimmed.contains("@") {
-      return Fail ParseError("'{text}' is not an email address")
+      return Fail ParseError("'{value}' is not an email address")
     }
     Ok Self(trimmed.toLowerCase())
   }
 
   fn domain(self): String {
-    value.substringAfter("@").expect("Validated in parse")
+    value.substringAfter("@").expect("Validated in tryFrom")
   }
 }
 
 // const invalid = Email("nope")     // Compile error: constructor is not accessible
-const email = Email.parse "Info@Example.test"
+const email = Email.tryFrom "Info@Example.test"
 match email {
   Ok(address) => print "Domain: {address.domain()}"
   Fail(error) => print "Invalid: {error.message}"

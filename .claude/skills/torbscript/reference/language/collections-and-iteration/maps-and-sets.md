@@ -96,8 +96,20 @@ Set.of(1, 2, 3)                          from arguments, needs Item: Hash
    print evenPrimes
    ```
 
-6. **`containsKey`, `keys()`, `values()` and `mapValues` read a `Map` without changing it**, and `getOrSet(key) { ...
-   }` reads or, on a miss, computes the value once and stores it.
+6. **`containsKey`, `keys()`, `values()` and `mapValues` read a `Map` without changing it.**
+
+7. **`getOrInsert(key, fallback)` reads the value, storing the fallback where there is none, and `update` changes the
+   stored value in place.** The fallback is `lazy`, so it is only built on a miss - this is what other languages spell
+   `entry().or_default()`, with the replacement written out because there is no `Default` trait. What `getOrInsert`
+   answers is a **copy**, as every value is, so the grouping loop goes through `update`:
+
+   ```trb check
+   var groups: Map<String, List<String>> = [:]
+   for name in ["Ada", "Alan", "Grace"] {
+     groups.update name[0..1], [] { names => names.add name }
+   }
+   print groups
+   ```
 
 ## What this is not
 

@@ -8,22 +8,22 @@
 
 use Json, JsonValue, JsonError from "std/json"
 
-/** Why [Email.parse] refused a value. */
+/** Why [Email.tryFrom] refused a value. */
 type ParseError {
   message: String
 }
 
 // Private constructor: `Email` has an invariant, so `Decode` is NOT generated. It is written by hand
-// and goes through `parse` - a decoded Email is as valid as any other.
-/** An email address with a private constructor: `Decode` is written by hand and goes through `parse`. */
-type Email {
+// and goes through `tryFrom` - a decoded Email is as valid as any other.
+/** An email address with a private constructor: `Decode` is written by hand and goes through `tryFrom`. */
+type Email with TryFrom<String, ParseError> {
   private value: String
 
-  fn parse(text: String): Result<Email, ParseError> {
-    if !text.contains("@") {
-      return Fail ParseError("'{text}' is not an email address")
+  fn tryFrom(value: String): Result<Email, ParseError> {
+    if !value.contains("@") {
+      return Fail ParseError("'{value}' is not an email address")
     }
-    Ok Self(text.toLowerCase())
+    Ok Self(value.toLowerCase())
   }
 }
 
@@ -35,7 +35,7 @@ extend Email with Encode, Decode {
 
   fn decode(var decoder: Decoder): Result<Email, DecodeError> {
     const text = decoder.string()?
-    Email.parse(text).mapError { DecodeError _.message }
+    Email.tryFrom(text).mapError { DecodeError _.message }
   }
 }
 
@@ -54,7 +54,7 @@ type User {
   tags: List<String> = []
 }
 
-const user = User("Ada", Email.parse("ada@example.test")?, tags: ["math"])
+const user = User("Ada", Email.tryFrom("ada@example.test")?, tags: ["math"])
 
 // --- Formats are ordinary libraries: implementations of `Encoder` and `Decoder` ------------------------
 

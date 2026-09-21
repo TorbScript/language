@@ -17,7 +17,7 @@ source:
 ---
 
 `std/core` is what every other package builds on: the types the language itself refers to - `Option` behind `Value?`,
-`Result` behind `?`, `Range` behind `a..b`, `Array` as the inline storage a list literal adapts to - the traits the
+`Result` behind `?`, the three ranges behind `a..b`, `Array` as the inline storage a list literal adapts to - the traits the
 operators and the conversions go through, and the control flow that is an ordinary function. Everything in it is
 re-exported by the prelude, so a file rarely imports it by name.
 
@@ -103,14 +103,16 @@ members include `min` and `max`. `Ordering` is what `compare` answers. `Hash` ha
 hand-written `hash` folds with. `Float32` and `Float64` are deliberately not `Hash`, so a float can never be a `Map` key
 and the `nan` key does not exist.
 
-### From, Into, TryFrom, TryInto, Parse, Show, LiteralParseError
+### From, Into, TryFrom, TryInto, Show, LiteralParseError
 
 Conversions follow `From` and `Into`: implementing `From` provides `Into` for free through a blanket implementation.
-`TryFrom` is the fallible form and provides `TryInto` the same way; `Parse` is the one for text. One direction of each
+`TryFrom` is the fallible form and provides `TryInto` the same way, and text is a source like any other
+(`Int.tryFrom("42")`). One direction of each
 pair is the one to implement, and an `extend` that writes `Into` or `TryInto` by hand is told which `From` or `TryFrom`
 to write instead. Every type has `From<Self>`, and that conversion is the
 value itself. `Show` has `show` and is what string interpolation calls; `showNested` is what a value inside another value
-uses, and only `String` and `Char` override it. `LiteralParseError` is what a generated `Parse` of a literal type answers.
+uses, and only `String` and `Char` override it. `LiteralParseError` is what the generated `TryFrom<String, ...>` of a
+literal type answers.
 
 ### The operator traits
 
@@ -120,19 +122,37 @@ is `Indexed.at`, `a[i] = v` is `MutableIndexed.set`, `a[from..to]` is `Slice.sli
 `MutableSlice.replace`, and `a ?? b` is `OrElse.orElse`, whose `fallback` is `lazy` so that it is only evaluated where
 there is nothing to give back.
 
-### Range
+### Range, RangeFrom, RangeTo, Bounds
 
 ```trb fragment
-public type Range<Value> {
-  start: Value?
-  end: Value?
-  isInclusive: Bool = false
+public native type Range<Value> {
+  start: Value
+  end: Value
+  inclusive: Bool = false
+}
+
+public native type RangeFrom<Value> {
+  start: Value
+}
+
+public native type RangeTo<Value> {
+  end: Value
+  inclusive: Bool = false
+}
+
+public trait Bounds<Value: Compare> {
+  fn lowest(self): Value?
+  fn highest(self): Value?
+  fn includesHighest(self): Bool
+  fn contains(self, value: Value): Bool
 }
 ```
 
-`0..10` is `Range(start: Some(0), end: Some(10))`, `0..=10` sets `isInclusive`, and `0..` and `..10` leave one end `None`.
-`Range<Int>` is `Iterable<Int>` and `Length`, and the open ends are checked at runtime: `iterator()` panics for a range
-without a start, `length()` panics for a range without both ends, and `0..` iterates forever.
+**Which ends a range has is its type**, chosen by the syntax: `a..b` and `a..=b` are a `Range`, `a..` a `RangeFrom`,
+`..b` and `..=b` a `RangeTo`. Nothing is optional, so `for index in ..10` and `(0..).length()` are compile errors where
+they are written: `Range<Int>` is `Iterable<Int>` and `Length`, `RangeFrom<Int>` is `Iterable<Int>` and endless,
+`RangeTo<Int>` is neither. `Bounds<Value>` is what all three are and what `Slice.slice` takes, so every spelling works in
+brackets.
 
 ### Array
 

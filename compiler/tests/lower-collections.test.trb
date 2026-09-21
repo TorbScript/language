@@ -280,9 +280,10 @@ group "which of the three shapes a literal is" {
 group "a range as a value" {
   /**
    * A `Range` is an ordinary record - the one `native type` that declares fields and is no `RuntimeKind` (5.1's note) -
-   * so a range literal is one `Construct` of its three fields, with an `Option` around each end.
+   * so a range literal is one `Construct` of the ends that were written. Nothing is optional: which ends a range has is
+   * its type.
    */
-  test "a range with both ends is one `Construct` of two `Some` and the flag" {
+  test "a range with both ends is one `Construct` of the two ends and the flag" {
     const source = r"""
       fn span(): Range<Int> {
         3..7
@@ -291,31 +292,28 @@ group "a range as a value" {
     assert(
       irOf(source, "t_acme_x2f_app_main_span") == r"""
         fn t_acme_x2f_app_main_span() -> Record(T_std_x2f_prelude_types_Range__Int64) {
-          slot %0 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
+          slot %0 temporary: Int64
           slot %1 temporary: Int64
-          slot %2 temporary: Variant(T_std_x2f_prelude_types_Option__Int64)
-          slot %3 temporary: Int64
-          slot %4 temporary: Bool
-          slot %5 temporary: Record(T_std_x2f_prelude_types_Range__Int64)
+          slot %2 temporary: Bool
+          slot %3 temporary: Record(T_std_x2f_prelude_types_Range__Int64)
         b0: # acme/app/src/main.trb:1 body
-          %1 = constant s_literal__Int64_3
-          %0 = construct T_std_x2f_prelude_types_Option__Int64.Some (%1 borrowed)
-          %3 = constant s_literal__Int64_7
-          %2 = construct T_std_x2f_prelude_types_Option__Int64.Some (%3 borrowed)
-          %4 = constant s_literal__Bool_false
-          %5 = construct T_std_x2f_prelude_types_Range__Int64 (%0 borrowed, %2 borrowed, %4 borrowed)
-          return %5 borrowed
+          %0 = constant s_literal__Int64_3
+          %1 = constant s_literal__Int64_7
+          %2 = constant s_literal__Bool_false
+          %3 = construct T_std_x2f_prelude_types_Range__Int64 (%0 borrowed, %1 borrowed, %2 borrowed)
+          return %3 borrowed
         }"""
     )
   }
 
-  /** An end that is not written is `None`, and `0..=10` sets the flag. */
-  test "an open end is `None` and an inclusive range sets the flag" {
-    const open = irOf "fn span(): Range<Int> \{\n  3..\n\}", "t_acme_x2f_app_main_span"
-    assert open.contains("construct T_std_x2f_prelude_types_Option__Int64.None ()")
-    assert open.contains("constant s_literal__Bool_false")
-    const closed = irOf "fn span(): Range<Int> \{\n  3..=7\n\}", "t_acme_x2f_app_main_span"
-    assert closed.contains("%4 = constant s_literal__Bool_true")
+  /** `3..` builds a `RangeFrom` of one field, `..=7` a `RangeTo` of an end and the flag. */
+  test "the open forms build their own types, with only the fields they have" {
+    const open = irOf "fn span(): RangeFrom<Int> \{\n  3..\n\}", "t_acme_x2f_app_main_span"
+    assert open.contains("%1 = construct T_std_x2f_prelude_types_RangeFrom__Int64 (%0 borrowed)")
+    assert(!open.contains("Bool"))
+    const upTo = irOf "fn span(): RangeTo<Int> \{\n  ..=7\n\}", "t_acme_x2f_app_main_span"
+    assert upTo.contains("%1 = constant s_literal__Bool_true")
+    assert upTo.contains("%2 = construct T_std_x2f_prelude_types_RangeTo__Int64 (%0 borrowed, %1 borrowed)")
   }
 }
 

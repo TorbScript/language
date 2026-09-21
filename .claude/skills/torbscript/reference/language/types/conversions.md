@@ -1,6 +1,6 @@
 ---
 title: Conversions
-summary: From provides Into for free and TryFrom provides TryInto, Parse is for text, and the language has exactly four coercions that apply only where a type is expected.
+summary: From provides Into for free and TryFrom provides TryInto, text is a source like any other, and the language has exactly four coercions that apply only where a type is expected.
 kind: reference
 status: stable
 order: 110
@@ -9,7 +9,7 @@ keywords:
   - Into
   - TryFrom
   - TryInto
-  - Parse
+  - TryInto
   - coercion
 source:
   - CONCEPT.md#conversions
@@ -53,7 +53,7 @@ extend <Target> with From<Source> {
 value.into()                          // Free, once From is implemented
 Target.tryFrom(value)                 // Result<Target, Failure>
 value.tryInto()                       // Free, once TryFrom is implemented
-Target.parse(text)                    // Result<Target, Failure>, text specifically
+Target.tryFrom(text)                  // Text is a source like any other
 
 extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
 ```
@@ -103,11 +103,14 @@ extend <Foreign> with From<Mine> { ... }   // Your type into somebody else's
    print port.isOk()
    ```
 
-   A `?` on the call passes no target down, so `const small: Port = 8080.tryInto()?` has nothing to go on and is told
-   so; annotate the `Result`, or write `Port.tryFrom(8080)`.
+   A `?` on the call says the target and not the failure, and the failure then follows from the one `TryFrom` the
+   target has for this source: `const small: Port = 8080.tryInto()?` is the same conversion written in a chain. Where
+   the target has several conversions from one source, the message says so and the `Result` has to be written out.
 
-3. **A conversion from text is `Parse`, not `From` or `TryFrom`.** `Int.parse "42"` and `Email.parse
-   "info@example.test"` both answer a `Result`, and the argument is always a `String`.
+3. **A conversion from text is a `TryFrom<String, Failure>` like any other.** `Int.tryFrom "42"` and
+   `Email.tryFrom "info@example.test"` both answer a `Result`, and there is no `parse` on a type: a function named
+   `parse` belongs to a **format** (`Json.parse`), never to a value. A type may implement `TryFrom` once per source,
+   and the argument decides which one a call means.
 
 4. **Converting your own type into a foreign one is `extend Foreign with From<Mine>`.** A package owns an
    implementation when it owns the type, the trait, **or** a type named as an argument of the trait - so the package
@@ -190,11 +193,11 @@ const value: Int = "42"
 ```
 
 A `String` never becomes an `Int` on its own either, for the same reason: there is no coercion from one concrete type
-to another, only `Int.parse("42")` written out. `Int` is an alias for `Int64`, which is the name the diagnostic uses.
+to another, only `Int.tryFrom("42")` written out. `Int` is an alias for `Int64`, which is the name the diagnostic uses.
 
 ## Related
 
-- [Construction](construction.md) - the static factory functions `TryFrom` and `Parse` are examples of.
+- [Construction](construction.md) - the static factory functions `From` and `TryFrom` are examples of.
 - [Declaring a type](declaring-a-type.md) - where `Self` and `extend` are introduced.
 - [Result](../errors/result.md) - what every fallible conversion in this page answers with.
 - [Coherence](../traits/coherence.md) - which package may write which implementation, and the blanket message.

@@ -64,7 +64,7 @@ pub fn is_mutating(receiver: &Value, name: &str) -> bool {
             name,
             "add" | "addAll" | "insert" | "remove" | "removeAt" | "clear" | "reverse" | "sort" | "swapAt" | "set" | "compact"
         ),
-        Value::Map(_) => matches!(name, "add" | "addAll" | "set" | "remove" | "clear" | "merge" | "getOrSet"),
+        Value::Map(_) => matches!(name, "add" | "addAll" | "set" | "remove" | "clear" | "merge" | "getOrInsert" | "update"),
         Value::Set(_) => matches!(name, "add" | "addAll" | "remove" | "clear" | "removeAll" | "retainAll"),
         _ => false,
     }
@@ -112,6 +112,14 @@ fn bytes_bounds(from: i64, to: i64, length: usize) -> Eval<(usize, usize)> {
         return Err(panicked(crate::interpreter::reversed_range_message(from, to)));
     }
     Ok((from as usize, to as usize))
+}
+
+/// `Int.tryFrom(text)` and `Int.parseDigits(text, radix:)`: the digits in one base, or a `NumberParseError`.
+fn int_of_digits(interpreter: &Interpreter, text: &str, radix: i64) -> Value {
+    match i64::from_str_radix(&text.replace('_', ""), radix as u32) {
+        Ok(value) => Value::ok(Value::Int(value)),
+        Err(_) => Value::error(prelude_object(interpreter, "NumberParseError", vec![Value::text(text)])),
+    }
 }
 
 fn prelude_object(interpreter: &Interpreter, name: &str, fields: Vec<Value>) -> Value {
@@ -230,16 +238,13 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
             Ok(Value::text(&interpreter.show(&value, true)?))
         }
 
-        ("Int", "parse" | "parseDigits") => {
+        ("Int", "parseDigits") => {
             let text = text_of(&arguments.required(0, "text")?, "text")?;
-            let radix = if name == "parseDigits" { int_of(&arguments.required(1, "radix")?, "radix")? } else { 10 };
+            let radix = int_of(&arguments.required(1, "radix")?, "radix")?;
             if !(2..=36).contains(&radix) {
                 return Err(failure("`radix` must be between 2 and 36"));
             }
-            Ok(match i64::from_str_radix(&text.replace('_', ""), radix as u32) {
-                Ok(value) => Value::ok(Value::Int(value)),
-                Err(_) => Value::error(prelude_object(interpreter, "NumberParseError", vec![Value::text(&text)])),
-            })
+            Ok(int_of_digits(interpreter, &text, radix))
         }
         ("Int", "from") => match arguments.required(0, "value")? {
             Value::Char(character) => Ok(Value::Int(i64::from(u32::from(character)))),
@@ -247,19 +252,24 @@ pub fn call_static(interpreter: &mut Interpreter, owner: &str, name: &str, argum
             Value::Bool(value) => Ok(Value::Int(i64::from(value))),
             other => Err(failure(format!("There is no `Int.from` for {}. For a Float, use `Int.tryFrom`", interpreter.describe(&other)))),
         },
+        // `Int` has a `TryFrom` per source - text and a wider number - and which one is meant is the argument's type.
+        // The compiled back end picks the implementation at compile time; here the runtime type does it.
         ("Int", "tryFrom") => match arguments.required(0, "value")? {
+            Value::Text(text) => Ok(int_of_digits(interpreter, text.as_str(), 10)),
             Value::Float(value) if value.fract() == 0.0 && value.abs() < 9.2e18 => Ok(Value::ok(Value::Int(value as i64))),
             Value::Float(value) => Ok(Value::error(prelude_object(interpreter, "NumberRangeError", vec![Value::text(&value.to_string())]))),
             Value::Int(value) => Ok(Value::ok(Value::Int(value))),
             other => Err(failure(format!("There is no `Int.tryFrom` for {}", interpreter.describe(&other)))),
         },
-        ("Float", "parse") => {
-            let text = text_of(&arguments.required(0, "text")?, "text")?;
-            Ok(match text.replace('_', "").parse::<f64>() {
+        ("Float", "tryFrom") => match arguments.required(0, "value")? {
+            Value::Text(text) => Ok(match text.as_str().replace('_', "").parse::<f64>() {
                 Ok(value) => Value::ok(Value::Float(value)),
-                Err(_) => Value::error(prelude_object(interpreter, "NumberParseError", vec![Value::text(&text)])),
-            })
-        }
+                Err(_) => Value::error(prelude_object(interpreter, "NumberParseError", vec![Value::text(text.as_str())])),
+            }),
+            Value::Int(value) => Ok(Value::ok(Value::Float(value as f64))),
+            Value::Float(value) => Ok(Value::ok(Value::Float(value))),
+            other => Err(failure(format!("There is no `Float.tryFrom` for {}", interpreter.describe(&other)))),
+        },
         ("Float", "from") => match arguments.required(0, "value")? {
             Value::Int(value) => Ok(Value::Float(value as f64)),
             Value::Float(value) => Ok(Value::Float(value)),
@@ -499,11 +509,20 @@ pub fn call_method(interpreter: &mut Interpreter, receiver: &mut Value, name: &s
         Value::List(_) => list_method(interpreter, receiver, name, &arguments)?,
         Value::Map(_) => map_method(interpreter, receiver, name, &arguments)?,
         Value::Set(_) => set_method(receiver, name, &arguments)?,
+        // `Bounds` in `std/core/src/range.trb`: the two ends and whether the high one is inside. `end` is exclusive
+        // here already, so the value `highest()` answers is one below it for an inclusive range.
         Value::Range(range) => match (name, range.end) {
             ("contains", end) => {
                 let value = int_of(&arguments.required(0, "value")?, "value")?;
-                Some(Value::Bool(value >= range.start && end.is_none_or(|end| value < end)))
+                let above = !range.has_start || value >= range.start;
+                Some(Value::Bool(above && end.is_none_or(|end| value < end)))
             }
+            ("lowest", _) => Some(if range.has_start { Value::some(Value::Int(range.start)) } else { Value::NONE }),
+            ("highest", end) => Some(match end {
+                Some(end) => Value::some(Value::Int(if range.inclusive { end - 1 } else { end })),
+                None => Value::NONE,
+            }),
+            ("includesHighest", _) => Some(Value::Bool(range.inclusive)),
             ("length", Some(end)) => Some(Value::Int((end - range.start).max(0))),
             _ => None,
         },
@@ -656,6 +675,7 @@ fn text_method(interpreter: &mut Interpreter, receiver: &Value, name: &str, argu
         "startsWith" => Value::Bool(text.starts_with(&part(0, "prefix")?)),
         "endsWith" => Value::Bool(text.ends_with(&part(0, "suffix")?)),
         "indexOf" => Value::from_option(text.find(&part(0, "part")?).map(|position| Value::Int(position as i64))),
+        "lastIndexOf" => Value::from_option(text.rfind(&part(0, "part")?).map(|position| Value::Int(position as i64))),
         "substringBefore" => {
             let found = text.find(&part(0, "part")?);
             Value::from_option(found.and_then(|position| receiver_text.slice(0, position)).map(Value::Text))
@@ -843,14 +863,27 @@ fn map_method(interpreter: &mut Interpreter, receiver: &mut Value, name: &str, a
             Rc::make_mut(table).clear();
             Value::Void
         }
-        "getOrSet" => {
+        // The fallback is `lazy` in `std/collections`, and `Interpreter::call_method` is what keeps it unevaluated on
+        // a hit - by the time it arrives here it is the value the key is to get
+        "getOrInsert" => {
             let key = arguments.required(0, "key")?;
             if let Some(existing) = table.get(&key) {
                 return Ok(Some(existing.clone()));
             }
-            let created = interpreter.call_function(&arguments.required(1, "create")?, Vec::new())?;
-            Rc::make_mut(table).insert(key, created.clone());
-            created
+            let fallback = arguments.required(1, "fallback")?;
+            Rc::make_mut(table).insert(key, fallback.clone());
+            fallback
+        }
+        "update" => {
+            let key = arguments.required(0, "key")?;
+            let value = match table.get(&key) {
+                Some(existing) => existing.clone(),
+                None => arguments.required(1, "fallback")?,
+            };
+            let changed = interpreter.call_changing(&arguments.required(2, "change")?, value)?;
+            let Value::Map(table) = receiver else { return Ok(None) };
+            Rc::make_mut(table).insert(key, changed);
+            Value::Void
         }
         "mapValues" => {
             let transform = arguments.required(0, "transform")?;

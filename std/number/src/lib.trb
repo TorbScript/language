@@ -7,14 +7,18 @@
  */
 
 use Equals, Compare, Hash from "std/core"
-use From, TryFrom, Parse, Show from "std/core"
+use From, TryFrom, Show from "std/core"
 use Error from "std/core"
 use Add, Subtract, Multiply, Divide, Remainder, Negate from "std/core"
 use * as math from "std/math"
 
-/** The arithmetic and comparison every number has: `+`, `-`, `*`, `/`, `%`, `==`, `<`, and parsing from text. */
+/**
+ * The arithmetic and comparison every number has: `+`, `-`, `*`, `/`, `%`, `==`, `<`, and reading one from text.
+ *
+ * Text is a source like any other, so `Int.tryFrom("42")` is the conversion and there is no `parse` beside it.
+ */
 public trait Numeric
-  with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show, Parse<NumberParseError> {}
+  with Add, Subtract, Multiply, Divide, Remainder, Equals, Compare, Show, TryFrom<String, NumberParseError> {}
 
 /** [Numeric] plus a sign: the unary `-` and [Signed.absolute]. What every signed number has beyond an unsigned one. */
 public trait Signed
@@ -159,9 +163,13 @@ public trait Bits {
   fn shiftedRight(self, by: Int64): Self
 }
 
-/** What [Numeric.parse] fails with: the text is not a valid number. */
+/** What `Int.tryFrom(text)` fails with: the text is not a valid number. */
 public type NumberParseError with Error {
-  /** The text that failed to parse. */
+  /**
+   * The text that does not describe a number. Every conversion that fails with it names its parameter `text`, which is
+   * what lets a back end build the failure without knowing anything about this type (docs/BACKEND.md, "the parameter of
+   * the same name").
+   */
   text: String
 }
 
@@ -432,6 +440,67 @@ extend Float64 with From<Int64> {
 /** Every `Float32` widens to `Float64` without loss. */
 extend Float64 with From<Float32> {
   native fn from(value: Float32): Float64
+}
+
+/*
+ * Reading a number from text, once per type. `Numeric` requires it, so a body that is generic over the number can read
+ * one - and every type implements it **directly** rather than leaving it to that requirement, because a type whose only
+ * direct `TryFrom` were the narrowing one below would reach that one for both calls (docs/BACKEND.md, "One conversion,
+ * one implementation").
+ */
+/** Fails with a [NumberParseError] when the text is not a whole number, or does not fit an `Int8`. */
+extend Int8 with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<Int8, NumberParseError>
+}
+
+/** Fails with a [NumberParseError] when the text is not a whole number, or does not fit an `Int16`. */
+extend Int16 with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<Int16, NumberParseError>
+}
+
+/** Fails with a [NumberParseError] when the text is not a whole number, or does not fit an `Int32`. */
+extend Int32 with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<Int32, NumberParseError>
+}
+
+/** Fails with a [NumberParseError] when the text is not a whole number, or does not fit an `Int64`. */
+extend Int64 with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<Int64, NumberParseError>
+}
+
+/** Fails with a [NumberParseError] when the text is not a non-negative whole number, or does not fit a `UInt8`. */
+extend UInt8 with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<UInt8, NumberParseError>
+}
+
+/** Fails with a [NumberParseError] when the text is not a non-negative whole number, or does not fit a `UInt16`. */
+extend UInt16 with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<UInt16, NumberParseError>
+}
+
+/** Fails with a [NumberParseError] when the text is not a non-negative whole number, or does not fit a `UInt32`. */
+extend UInt32 with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<UInt32, NumberParseError>
+}
+
+/** Fails with a [NumberParseError] when the text is not a non-negative whole number, or does not fit a `UInt64`. */
+extend UInt64 with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<UInt64, NumberParseError>
+}
+
+/** Fails with a [NumberParseError] when the text is not a decimal number. */
+extend Float32 with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<Float32, NumberParseError>
+}
+
+/** Fails with a [NumberParseError] when the text is not a decimal number. */
+extend Float64 with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<Float64, NumberParseError>
+}
+
+/** Fails with a [NumberParseError] when the text is not a decimal number. */
+extend Decimal with TryFrom<String, NumberParseError> {
+  native fn tryFrom(text: String): Result<Decimal, NumberParseError>
 }
 
 // ...narrowing conversions are not.

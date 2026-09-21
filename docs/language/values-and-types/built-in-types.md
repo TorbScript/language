@@ -48,7 +48,8 @@ Void Never                                    the type with one value, the type 
 (Int, String)                                 a tuple
 (lowest: Int, highest: Int)                   a labelled tuple; the labels are not part of the type
 List<Item> Map<Key, Value> Set<Item>          the collection traits
-Range<Int>                                    `0..10`, `0..=10`, `0..`, `..10`
+Range<Int>                                    `0..10`, `0..=10`
+RangeFrom<Int>, RangeTo<Int>                  `0..`, and `..10`/`..=10`
 Value?                                        `Option<Value>`
 (value: Int) => Int                           a function type
 Array<Item, const Size: Int>                  a fixed-size array; the size is part of the type

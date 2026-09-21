@@ -65,9 +65,9 @@ fn <name>(self, ...): <Type>               safe: `Self` appears nowhere but in `
    (`if lessThan(other) { self } else { other }`), and it is still rejected on a `Compare`-typed value, because the
    body is not what is checked - the signature is.
 
-3. **A member with no `self` at all has nothing to dispatch on, and is never called through a value.** `Parse.parse`
+3. **A member with no `self` at all has nothing to dispatch on, and is never called through a value.** `TryFrom.tryFrom`
    and `From.from` are requirements without `self`; they are reached through the type's own name
-   (`Money.parse(text)`), never through a binding whose type happens to be the trait.
+   (`Money.tryFrom(text)`), never through a binding whose type happens to be the trait.
 
 4. **The trait stays a legal type regardless.** `List<Show & Hash>` and `fn describe(item: Show & Hash)` compile and
    run: `Show.show` and `Hash.hash` both take only `self`, so both are safe, and nothing about `Compare`'s unsafe

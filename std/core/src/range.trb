@@ -1,6 +1,10 @@
 /**
- * [Range], the two ends of `0..10`, `0..=10`, `0..` and `..10`, and what it takes to walk one: [RangeIterator] for a
- * range of integers, which is the one kind of range that is also a sequence.
+ * The three ranges the syntax writes - [Range] for `0..10`, [RangeFrom] for `0..`, [RangeTo] for `..10` - the trait
+ * [Bounds] that reads any of them, and [RangeIterator], what it takes to walk a range of integers.
+ *
+ * **The type says which ends there are.** `a..b` has both, `a..` has a start, `..b` has an end, and no field is
+ * optional anywhere - so `for index in ..10` and `(0..).length()` are refused where they are written and nothing has
+ * to panic at run time.
  */
 
 use Equals, Compare, Hash from "./compare"
@@ -8,12 +12,8 @@ use Show from "./convert"
 use Iterator, Iterable, Length from "std/iteration"
 
 /**
- * `0..10`, `0..=10`, `0..`, `..10`. A range is an ordinary value with two ends; what it means is up to whoever
- * takes one. `Range<Int>` is what `Slice` and `MutableSlice` take (`text[3..]`, `samples[0..100]`), and a range of
- * integers is what `for index in 0..list.length()` counts through.
- *
- * Both ends are optional, because a range may be open on either side. What an open end means is decided by the
- * receiver: for a slice it is the start or the end of the value, for `for` it is a source without an end.
+ * `0..10`, `0..=10`: a range with both ends. What `for index in 0..list.length()` counts through, and what a slice of
+ * a known part takes (`samples[0..100]`).
  *
  * # Examples
  *
@@ -24,49 +24,163 @@ use Iterator, Iterable, Length from "std/iteration"
  *
  * # Related
  *
- * - [RangeIterator] - what `for x in 0..10` pulls through.
+ * - [RangeFrom] - `0..`, open at the end.
+ * - [RangeTo] - `..10`, open at the start.
+ * - [Bounds] - what a receiver takes to accept all three.
  */
 public native type Range<Value> with Equals, Hash {
-  /** `None` for a range that is open at the start: `..10` */
-  start: Value?
-  /** `None` for a range that is open at the end: `0..` */
-  end: Value?
+  /** The first value the range covers. */
+  start: Value
+  /** The last value, which `inclusive` says whether the range covers itself. */
+  end: Value
   /** `0..=10` contains its end, `0..10` does not. An adjective, because it is data and not a question. */
   inclusive: Bool = false
+}
+
+/**
+ * `0..`: a range with a start and no end. What a slice to the end of a value takes (`text[2..]`), and the one range
+ * that iterates forever.
+ *
+ * # Examples
+ *
+ *     const fromThree = 3..
+ *     print fromThree.contains(1000)
+ *
+ * # Related
+ *
+ * - [Range] - `0..10`, the range with both ends.
+ */
+public native type RangeFrom<Value> with Equals, Hash {
+  /** The first value the range covers. */
+  start: Value
+}
+
+/**
+ * `..10`, `..=10`: a range with an end and no start. What a slice from the beginning of a value takes (`items[..3]`).
+ *
+ * It is not a sequence: there is no first value to start counting at, which is why `for index in ..10` is refused
+ * where it is written.
+ *
+ * # Examples
+ *
+ *     const upToTen = ..10
+ *     print upToTen.contains(9)
+ *
+ * # Related
+ *
+ * - [Range] - `0..10`, the range with both ends.
+ */
+public native type RangeTo<Value> with Equals, Hash {
+  /** The last value, which `inclusive` says whether the range covers itself. */
+  end: Value
+  /** `..=10` contains its end, `..10` does not. */
+  inclusive: Bool = false
+}
+
+/**
+ * What every range has in common: the two ends, each `None` where the range is open on that side.
+ *
+ * This is what a receiver takes that accepts all three forms - a slice does (`text[2..]`, `items[..3]`,
+ * `items[1..=2]`), because an open end has a meaning there: the start or the end of the value. Whoever needs a start
+ * takes a [Range] or a [RangeFrom] instead and lets the type refuse the rest.
+ *
+ * # Examples
+ *
+ *     fn width(span: Bounds<Int>): String {
+ *       "{span.lowest()} {span.highest()} {span.includesHighest()}"
+ *     }
+ *
+ *     print width(2..=5)
+ *     print width(2..)
+ */
+public trait Bounds<Value: Compare> {
+  /** The low end, or `None` where the range is open at the start. */
+  fn lowest(self): Value?
+  /** The high end, or `None` where the range is open at the end. */
+  fn highest(self): Value?
+  /** Whether [Bounds.highest] itself lies inside. A range that has no high end answers `false`, which says nothing. */
+  fn includesHighest(self): Bool
 
   /** Whether the value lies within the range's bounds. An open end never excludes anything on its side. */
-  fn contains(self, value: Value): Bool where Value: Compare {
-    if const Some(lowest) = start {
-      if value < lowest {
+  fn contains(self, value: Value): Bool {
+    if const Some(low) = lowest() {
+      if value < low {
         return false
       }
     }
-    if const Some(highest) = end {
-      return if inclusive { value <= highest } else { value < highest }
+    if const Some(high) = highest() {
+      return if includesHighest() { value <= high } else { value < high }
     }
     true
   }
 }
 
-/**
- * A range of integers is a sequence. Other ranges are bounds and nothing more: `'a'..'z'` says what is inside of it,
- * but there is no "the next value after `a`" in general.
- *
- * "Has a start" and "has both ends" are properties of a field, not of the type, so the open cases are checked where
- * they are used and not by the checker (a compile-time version would need dependent types).
- */
-extend Range<Int> with Iterable<Int>, Length {
-  /** Panics for a range without a start: `..10` has no first value. `0..` iterates forever. */
-  fn iterator(self): Iterator<Int> {
-    RangeIterator start.expect("a range without a start has no first value"), end, inclusive
+/** Both ends are there, and `inclusive` says whether the high one is inside. */
+extend<Value: Compare> Range<Value> with Bounds<Value> {
+  fn lowest(self): Value? {
+    Some start
   }
 
-  /** Panics for a range without both ends: `0..` has no length. */
+  fn highest(self): Value? {
+    Some end
+  }
+
+  fn includesHighest(self): Bool {
+    inclusive
+  }
+}
+
+/** Open at the end, so there is no high end to include. */
+extend<Value: Compare> RangeFrom<Value> with Bounds<Value> {
+  fn lowest(self): Value? {
+    Some start
+  }
+
+  fn highest(self): Value? {
+    None
+  }
+
+  fn includesHighest(self): Bool {
+    false
+  }
+}
+
+/** Open at the start. */
+extend<Value: Compare> RangeTo<Value> with Bounds<Value> {
+  fn lowest(self): Value? {
+    None
+  }
+
+  fn highest(self): Value? {
+    Some end
+  }
+
+  fn includesHighest(self): Bool {
+    inclusive
+  }
+}
+
+/**
+ * A range of integers with both ends is a sequence with a length. Other ranges of integers are less: `0..` iterates
+ * and has no length, `..10` does neither. Ranges of other types are bounds and nothing more - `'a'..'z'` says what is
+ * inside of it, but there is no "the next value after `a`" in general.
+ */
+extend Range<Int> with Iterable<Int>, Length {
+  fn iterator(self): Iterator<Int> {
+    RangeIterator start, Some(end), inclusive
+  }
+
+  /** How many values the range covers, never below zero: `(5..3).length()` is `0`. */
   fn length(self): Int {
-    const lowest = start.expect "a range without both ends has no length"
-    const highest = end.expect "a range without both ends has no length"
-    const span = if inclusive { highest - lowest + 1 } else { highest - lowest }
+    const span = if inclusive { end - start + 1 } else { end - start }
     span.max 0
+  }
+}
+
+/** `0..` counts on forever, which is what makes `for index in 0..` and `(0..).take(3)` work. */
+extend RangeFrom<Int> with Iterable<Int> {
+  fn iterator(self): Iterator<Int> {
+    RangeIterator start, None, false
   }
 }
 
@@ -78,7 +192,7 @@ extend Range<Int> with Iterable<Int>, Length {
 public type RangeIterator with Iterator<Int> {
   /** The next value to hand out, one past the last one that was. */
   var current: Int
-  /** `None` for a range without an end, which is what makes `0..` iterate forever. */
+  /** `None` for a `RangeFrom`, which is what makes `0..` iterate forever. */
   end: Int?
   /** Whether `end` itself is still inside the range. */
   inclusive: Bool
@@ -98,24 +212,31 @@ public type RangeIterator with Iterator<Int> {
 }
 
 /**
- * The source form, and not the fields: `0..10`, `0..=10`, `..10`, `0..`. A `Show` of its own rather than the derived one
- * because a reader writes a range that way, and because the interpreter has printed it that way all along - the two have
- * to agree to the character (design principle 5).
+ * The source form, and not the fields: `0..10`, `0..=10`. A `Show` of its own rather than the derived one because a
+ * reader writes a range that way, and because the interpreter has printed it that way all along - the two have to
+ * agree to the character (design principle 5).
  *
  * It is **conditional** on `Value: Show`, which is why it cannot be a member of the `native type` itself: a range of
  * something unshowable is still a range.
  */
 extend<Value: Show> Range<Value> with Show {
   fn show(self): String {
-    const first = match start {
-      Some(value) => value.show()
-      None => ""
-    }
-    const last = match end {
-      Some(value) => value.show()
-      None => ""
-    }
     const dots = if inclusive { "..=" } else { ".." }
-    "{first}{dots}{last}"
+    "{start.show()}{dots}{end.show()}"
+  }
+}
+
+/** `0..`, the source form. */
+extend<Value: Show> RangeFrom<Value> with Show {
+  fn show(self): String {
+    "{start.show()}.."
+  }
+}
+
+/** `..10`, `..=10`, the source form. */
+extend<Value: Show> RangeTo<Value> with Show {
+  fn show(self): String {
+    const dots = if inclusive { "..=" } else { ".." }
+    "{dots}{end.show()}"
   }
 }

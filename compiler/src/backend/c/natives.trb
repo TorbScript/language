@@ -79,7 +79,7 @@ public type NativeResult {
   case Optional
   /**
    * The same for a declaration that answers a `Result`: `Ok(out)`, and a failure the wrapper builds from the fields of
-   * the error type, each taken from the parameter of the **same name** - `Int.parse(text)` fails with
+   * the error type, each taken from the parameter of the **same name** - `Int.tryFrom(text)` fails with
    * `NumberParseError(text)`. An error type whose fields no parameter names is a clean finding.
    */
   case Fallible
@@ -273,8 +273,12 @@ fn numericSuffix(kind: NumericKind): String {
 
 /**
  * The members of `Numeric` for one width, which every integer and float type comes `with`. Arithmetic is an
- * intrinsic, and `show` and `parse` are the runtime's. `compare` is not here: on the integers it is generated, on
- * `Float64` it is a runtime function, because a total order with `nan` in it is not a comparison intrinsic.
+ * intrinsic, and `show` and the conversion from text are the runtime's. `compare` is not here: on the integers it is
+ * generated, on `Float64` it is a runtime function, because a total order with `nan` in it is not a comparison
+ * intrinsic.
+ *
+ * The conversion is named **with its source**, because a type has one `TryFrom` per source and the member name alone
+ * does not say which of them a call means (`Int64.tryFrom` reads text and narrows a `Float64`).
  */
 fn numericMembers(var entries: List<NativeEntry>, owner: String, kind: NumericKind, showFunction: String,
                   showPrototype: String, parseFunction: String, parsePrototype: String) {
@@ -285,7 +289,7 @@ fn numericMembers(var entries: List<NativeEntry>, owner: String, kind: NumericKi
   entries.add numericOf("{owner}.remainder", IntrinsicOperation.Remainder, kind)
   entries.add numericOf("{owner}.equals", IntrinsicOperation.Equal, kind)
   entries.add runtimeOf("{owner}.show", showFunction, showPrototype)
-  entries.add fallibleRuntimeOf("{owner}.parse", parseFunction, parsePrototype)
+  entries.add fallibleRuntimeOf("{owner}.tryFrom(String)", parseFunction, parsePrototype)
 }
 
 /** `Signed` adds `negate` and `absolute` on top of `Numeric`. */
@@ -368,21 +372,22 @@ fn floatEntries(var entries: List<NativeEntry>) {
 
   // `Float32` arithmetic is not implemented: everything narrows to `Float64` for now.
   const float32Members = [
-    "add", "subtract", "multiply", "divide", "remainder", "negate", "absolute", "equals", "compare", "show", "parse",
+    "add", "subtract", "multiply", "divide", "remainder", "negate", "absolute", "equals", "compare", "show",
   ]
   for member in float32Members {
     entries.add plannedRuntimeOf("Float32.{member}", "torb_{member}_f32", "8")
   }
+  entries.add plannedRuntimeOf("Float32.tryFrom(String)", "torb_parse_f32", "8")
 }
 
 fn decimalEntries(var entries: List<NativeEntry>) {
   const members = [
-    "add", "subtract", "multiply", "divide", "remainder", "negate", "absolute", "equals", "compare", "show", "parse",
-    "hash",
+    "add", "subtract", "multiply", "divide", "remainder", "negate", "absolute", "equals", "compare", "show", "hash",
   ]
   for member in members {
     entries.add plannedRuntimeOf("Decimal.{member}", "torb_decimal_{member}", "8")
   }
+  entries.add plannedRuntimeOf("Decimal.tryFrom(String)", "torb_decimal_parse", "8")
 }
 
 fn conversionEntries(var entries: List<NativeEntry>) {
@@ -400,12 +405,12 @@ fn conversionEntries(var entries: List<NativeEntry>) {
   // A `NumberRangeError` carries a `message` and no parameter of `tryFrom` names it, so the runtime writes it through one
   // more out parameter - the `.Fallible` convention, exactly as the `message` of an `IoError` arrives
   entries.add(fallibleRuntimeOf(
-    "Int32.tryFrom",
+    "Int32.tryFrom(Int64)",
     "torb_convert_i64_i32_checked",
     "bool torb_convert_i64_i32_checked(int64_t value, int32_t *out, torb_text *message);",
   ))
   entries.add(fallibleRuntimeOf(
-    "Int64.tryFrom",
+    "Int64.tryFrom(Float64)",
     "torb_convert_f64_i64_checked",
     "bool torb_convert_f64_i64_checked(double value, int64_t *out, torb_text *message);",
   ))
@@ -478,7 +483,7 @@ fn textEntries(var entries: List<NativeEntry>) {
     "torb_char torb_char_to_lower_case(torb_char character);",
   ))
   entries.add(fallibleRuntimeOf(
-    "Char.tryFrom",
+    "Char.tryFrom(Int64)",
     "torb_char_try_from_i64",
     "bool torb_char_try_from_i64(int64_t value, torb_char *out, torb_text *message);",
   ))
@@ -521,6 +526,11 @@ fn textEntries(var entries: List<NativeEntry>) {
     "String.indexOf",
     "torb_text_index_of",
     "bool torb_text_index_of(torb_text text, torb_text part, int64_t *out);",
+  ))
+  entries.add(optionalRuntimeOf(
+    "String.lastIndexOf",
+    "torb_text_last_index_of",
+    "bool torb_text_last_index_of(torb_text text, torb_text part, int64_t *out);",
   ))
   entries.add runtimeOf("String.trim", "torb_text_trim", "torb_text torb_text_trim(torb_text text);")
   entries.add(runtimeOf(

@@ -60,11 +60,12 @@ public native type String
   fn bytes(self): Iterable<UInt8>
   fn byteLength(self): Int
   fn isEmpty(self): Bool
-  fn slice(self, range: Range<Int>): String
+  fn slice(self, range: Bounds<Int>): String
   fn contains(self, part: String): Bool
   fn startsWith(self, prefix: String): Bool
   fn endsWith(self, suffix: String): Bool
   fn indexOf(self, part: String): Int?
+  fn lastIndexOf(self, part: String): Int?
   fn substringBefore(self, part: String): String?
   fn substringAfter(self, part: String): String?
   fn trim(self): String

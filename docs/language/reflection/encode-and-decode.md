@@ -56,10 +56,10 @@ trait Decode { fn decode(var decoder: Decoder): Result<Self, DecodeError> }
      message: String
    }
 
-   type Email {
+   type Email with TryFrom<String, ParseError> {
      private value: String
 
-     fn parse(text: String): Result<Email, ParseError> {
+     fn tryFrom(text: String): Result<Email, ParseError> {
        if !text.contains("@") {
          return Fail ParseError("'{text}' is not an email address")
        }
@@ -74,11 +74,11 @@ trait Decode { fn decode(var decoder: Decoder): Result<Self, DecodeError> }
 
      fn decode(var decoder: Decoder): Result<Email, DecodeError> {
        const text = decoder.string()?
-       Email.parse(text).mapError { DecodeError _.message }
+       Email.tryFrom(text).mapError { DecodeError _.message }
      }
    }
 
-   const encoded = Json.encode(Email.parse("ada@example.test")?)
+   const encoded = Json.encode(Email.tryFrom("ada@example.test")?)
    print Json.decode<Email>(encoded)
    ```
 

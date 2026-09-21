@@ -115,7 +115,7 @@ have. `Quaternion.rotation(around:by:)` builds one from an axis and an `Angle`, 
 ### `Fixed`
 
 ```trb fragment
-public type Fixed with Signed, Real, Hash, Show, Parse<NumberParseError>
+public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseError>
 ```
 
 A number held as a whole number of `1/65536` parts - the Q16.16 scalar - and the only `Real` whose answers are the same
@@ -127,8 +127,8 @@ That is what a lockstep simulation, a replay and a checksum over a world state n
 `Rectangle<Fixed>` and every intersection test of `std/geometry` accept it in place of `Float` with no other change to
 the code.
 
-`Fixed.from(anInt)` is exact, `Fixed.parse(text)` rounds to the nearest part, `Fixed.approximating(aFloat)` is the bridge
-out of floating point, and `show` writes the exact decimal the value is - so `Fixed.parse("0.1")` shows as
+`Fixed.from(anInt)` is exact, `Fixed.tryFrom(text)` rounds to the nearest part, `Fixed.approximating(aFloat)` is the bridge
+out of floating point, and `show` writes the exact decimal the value is - so `Fixed.tryFrom("0.1")` shows as
 `0.100006103515625`, because that is the number.
 
 <!-- torb:declarations:end -->

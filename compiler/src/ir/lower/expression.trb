@@ -932,68 +932,36 @@ fn lowerRangeLiteral(
       return unsupportedSlot lowering, builder, destination, "a range whose type has no layout", at
     }
   }
+  // One type per pair of ends (`std/core/src/range.trb`), so the fields are exactly the ends that were written plus
+  // the `inclusive` flag wherever there is a high end at all
   const fields = lowering.program.layoutAt(layout).fields
-  if fields.length() != 3 {
-    return unsupportedSlot lowering, builder, destination, "a range with other fields than the two ends", at
+  var written: List<Expression> = []
+  if const Some(found) = from {
+    written.add found
   }
-  const first = match rangeEndSlot(lowering, builder, from, fields[0].annotation, at) {
-    Some(found) => found
-    None => {
+  if const Some(found) = to {
+    written.add found
+  }
+  const hasFlag = to.isSome()
+  const wanted = if hasFlag { written.length() + 1 } else { written.length() }
+  if fields.length() != wanted {
+    return unsupportedSlot lowering, builder, destination, "a range with other fields than its ends", at
+  }
+  var arguments: List<Slot> = []
+  for index in 0..written.length() {
+    const value = lowerValue lowering, builder, written[index]
+    if !lowering.isSupported {
       return abandonedSlot lowering, builder, destination
     }
+    arguments.add value
   }
-  const second = match rangeEndSlot(lowering, builder, to, fields[1].annotation, at) {
-    Some(found) => found
-    None => {
-      return abandonedSlot lowering, builder, destination
-    }
+  if hasFlag {
+    const contents = StaticContents.Literal LiteralValue.Boolean(isInclusive)
+    arguments.add constantSlot(lowering, builder, None, contents, fields[written.length()].annotation)
   }
-  const contents = StaticContents.Literal LiteralValue.Boolean(isInclusive)
-  const flag = constantSlot lowering, builder, None, contents, fields[2].annotation
   const target = valueSlot lowering, builder, destination, annotation
-  lowerConstruct lowering, builder, target, layout, 0, [first, second, flag]
+  lowerConstruct lowering, builder, target, layout, 0, arguments
   target
-}
-
-/** One end of a range: `Some(value)` where it is written, and `None` where the range is open on that side. */
-fn rangeEndSlot(
-  var lowering: Lowering,
-  var builder: FunctionBuilder,
-  written: Expression?,
-  annotation: IrTypeId,
-  at: Span,
-): Slot? {
-  const layout = match variantLayoutOfType(lowering, annotation) {
-    Some(found) => found
-    None => {
-      reportUnsupported lowering, "a range whose end is not an `Option`", at
-      return None
-    }
-  }
-  const target = addTemporary builder, annotation
-  const inner = match written {
-    Some(found) => found
-    None => {
-      const empty = variantNamed lowering, layout, "None"
-      if empty < 0 {
-        reportUnsupported lowering, "a range whose end has no `None`", at
-        return None
-      }
-      lowerConstruct lowering, builder, target, layout, empty, []
-      return Some target
-    }
-  }
-  const some = variantNamed lowering, layout, "Some"
-  if some < 0 {
-    reportUnsupported lowering, "a range whose end has no `Some`", at
-    return None
-  }
-  const value = lowerValue lowering, builder, inner
-  if !lowering.isSupported {
-    return None
-  }
-  lowerConstruct lowering, builder, target, layout, some, [value]
-  Some target
 }
 
 // --- Operators ------------------------------------------------------------------------------------------------------

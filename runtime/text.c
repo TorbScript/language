@@ -419,6 +419,34 @@ bool torb_text_index_of(torb_text text, torb_text part, int64_t *out) {
   return true;
 }
 
+/** The last occurrence, found by walking backwards from the last offset the part can still start at. */
+static int64_t torb_find_last(torb_text text, torb_text part) {
+  const uint8_t *bytes = torb_text_data(text);
+  const uint8_t *needle = torb_text_data(part);
+  uint32_t position;
+  if (part.length == 0u) {
+    return (int64_t)text.length;
+  }
+  if (part.length > text.length) {
+    return -1;
+  }
+  for (position = text.length - part.length + 1u; position > 0u; position -= 1u) {
+    if (memcmp(bytes + (position - 1u), needle, (size_t)part.length) == 0) {
+      return (int64_t)(position - 1u);
+    }
+  }
+  return -1;
+}
+
+bool torb_text_last_index_of(torb_text text, torb_text part, int64_t *out) {
+  int64_t found = torb_find_last(text, part);
+  if (found < 0) {
+    return false;
+  }
+  *out = found;
+  return true;
+}
+
 /* ------------------------------------------------------------------------------------------- transformations --- */
 
 /**

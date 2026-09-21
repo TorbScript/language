@@ -11,21 +11,21 @@
 
 use Numeric, Signed, Real, NumberParseError from "std/number"
 use Add, Subtract, Multiply, Divide, Remainder, Negate from "std/core"
-use Equals, Compare, Ordering, Hash, From, Parse, Show from "std/core"
+use Equals, Compare, Ordering, Hash, From, TryFrom, Show from "std/core"
 
 /**
  * A number held as a whole number of `1/65536` parts: the Q16.16 fixed-point scalar, and the only [Real] whose answers
  * are the same bits on every platform and out of every back end.
  *
  * The field is the raw count, so `Fixed(65536)` is one and `Fixed(1)` is the smallest step there is. Build a value
- * with [Fixed.from], [Fixed.approximating] or [Fixed.parse] rather than by counting parts.
+ * with [Fixed.from], [Fixed.approximating] or [Fixed.tryFrom] rather than by counting parts.
  *
  * `Fixed` carries [Real], so `Vector2<Fixed>`, `Rectangle<Fixed>` and every intersection test of `std/geometry` accept
  * it in place of `Float` with no other change to the code.
  *
  * # Examples
  *
- *     const half = Fixed.parse("0.5").expect("half parses")
+ *     const half = Fixed.tryFrom("0.5").expect("half parses")
  *     const three = Fixed.from 3
  *     print "{three * half} {three.squareRoot()}"
  *
@@ -39,7 +39,7 @@ use Equals, Compare, Ordering, Hash, From, Parse, Show from "std/core"
  * - [Fixed.smallest] cannot be shown or negated. Its count of parts is the smallest `Int` there is, and that one has no
  *   positive counterpart - so `absolute` on it overflows, here as everywhere.
  * - Every step is a multiple of `1/65536`, so a value that a decimal writes exactly is usually not one a `Fixed`
- *   holds exactly: `Fixed.parse("0.1")` is `0.100006103515625`, and [Fixed.show] writes that, because that is the
+ *   holds exactly: `Fixed.tryFrom("0.1")` is `0.100006103515625`, and [Fixed.show] writes that, because that is the
  *   number.
  *
  * # Related
@@ -47,7 +47,7 @@ use Equals, Compare, Ordering, Hash, From, Parse, Show from "std/core"
  * - [Real] - the trait that makes this and `Float64` interchangeable.
  * - [Fixed.parts] - the raw count, for a checksum or a wire format.
  */
-public type Fixed with Signed, Real, Hash, Show, Parse<NumberParseError> {
+public type Fixed with Signed, Real, Hash, Show, TryFrom<String, NumberParseError> {
   /** The value counted in `1/65536` parts. `Fixed(65536)` is one, and `Fixed(1)` is the smallest step. */
   parts: Int64
 
@@ -82,6 +82,11 @@ public type Fixed with Signed, Real, Hash, Show, Parse<NumberParseError> {
    * conversion that loses information says so at the call.
    *
    *     print Fixed.approximating 0.5
+   *
+   * # Panics
+   *
+   * When the value is not a number, or when its magnitude is above about `140737488355327` - the overflow of the
+   * multiplication by `65536`, which is an overflow like any other.
    */
   fn approximating(value: Float64): Fixed {
     const scaled = value * 65536.0
@@ -155,7 +160,7 @@ public type Fixed with Signed, Real, Hash, Show, Parse<NumberParseError> {
    * The exact decimal the value is, with at least one digit after the point. A `Fixed` is a multiple of `1/65536`, so
    * the expansion always ends, after at most sixteen digits.
    *
-   *     print Fixed.parse("0.1").expect("a tenth parses")
+   *     print Fixed.tryFrom("0.1").expect("a tenth parses")
    */
   fn show(self): String {
     const whole = parts.absolute() / partsPerWhole
@@ -177,13 +182,13 @@ public type Fixed with Signed, Real, Hash, Show, Parse<NumberParseError> {
    * Reads a decimal, rounding to the nearest part. At most nine digits after the point are read; what follows them is
    * below the resolution of the type anyway.
    *
-   *     print Fixed.parse("-2.25")
+   *     print Fixed.tryFrom("-2.25")
    *
    * # Errors
    *
    * - [NumberParseError] where the text is not a decimal, or where its whole part does not fit.
    */
-  fn parse(text: String): Result<Fixed, NumberParseError> {
+  fn tryFrom(text: String): Result<Fixed, NumberParseError> {
     const trimmed = text.trim()
     const negative = trimmed.startsWith "-"
     const unsigned = if negative { trimmed.substringAfter("-") ?? "" } else { trimmed }
@@ -191,7 +196,7 @@ public type Fixed with Signed, Real, Hash, Show, Parse<NumberParseError> {
     if unsigned.isEmpty() || pieces.length() > 2 {
       return Fail NumberParseError(text)
     }
-    const whole = match Int64.parse(pieces[0]) {
+    const whole = match Int64.tryFrom(pieces[0]) {
       Ok(found) => found
       Fail(_) => {
         return Fail NumberParseError(text)
@@ -228,13 +233,26 @@ public type Fixed with Signed, Real, Hash, Show, Parse<NumberParseError> {
     Fixed circular(parts).cosine
   }
 
-  /** The sine over the cosine. Panics where the cosine is zero, which is a division by zero like any other. */
+  /**
+   * The sine over the cosine.
+   *
+   * # Panics
+   *
+   * At a quarter turn and at three quarters, where the cosine is zero - a division by zero like any other.
+   */
   fn tangent(self): Fixed {
     const turned = circular parts
     Fixed(turned.sine * partsPerWhole / turned.cosine)
   }
 
-  /** The angle whose sine this is. Panics outside `[-1, 1]`, where there is no such angle. */
+  /**
+   * The angle whose sine this is.
+   *
+   * # Panics
+   *
+   * Outside `[-1, 1]`, where there is no such angle. `Float64.arcSine` answers `nan` there, because that is what the
+   * platform's mathematics library answers; the two implementors of [Real] differ here and `docs/LINEAR.md` records it.
+   */
   fn arcSine(self): Fixed {
     if parts.absolute() > partsPerWhole {
       panic "the arc sine of {show()} does not exist: the sine of an angle is between -1 and 1"
@@ -243,7 +261,13 @@ public type Fixed with Signed, Real, Hash, Show, Parse<NumberParseError> {
     Fixed direction(cosine, parts)
   }
 
-  /** The angle whose cosine this is. Panics outside `[-1, 1]`, where there is no such angle. */
+  /**
+   * The angle whose cosine this is.
+   *
+   * # Panics
+   *
+   * Outside `[-1, 1]`, where there is no such angle, through [Fixed.arcSine].
+   */
   fn arcCosine(self): Fixed {
     Fixed(102944 - arcSine().parts)
   }

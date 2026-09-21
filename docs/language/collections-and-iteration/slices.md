@@ -54,9 +54,10 @@ value[from..to].compact()                gives the slice storage of its own, siz
    buffer. `header.compact()` gives it storage of its own, exactly as big as the slice needs, for the case where a
    small slice of something big is kept for a long time.
 
-4. **A `Range<Int>` with an open end reads as "to the start" or "to the end of the value" when it is used as a
-   slice.** `samples[..2]` and `samples[3..]` are legal even though [a `Range` used for iteration treats an open end
-   differently](../values-and-types/ranges.md): what an open end means is decided by whoever takes the range.
+4. **A slice takes `Bounds<Int>`, so all five spellings work**, and an end the range leaves open reads as "from the
+   start" or "to the end of the value". `samples[..2]` is a `RangeTo<Int>` and `samples[3..]` a `RangeFrom<Int>` -
+   [neither of them is a sequence](../values-and-types/ranges.md), and here neither has to be: what an open end means
+   is decided by whoever takes the range.
 
    ```trb check
    var samples = [5, 3, 9, 1, 7, 2]
@@ -102,5 +103,5 @@ samples[1..4].sort { value => value }
 ## Related
 
 - [Lists](lists.md) - the type most slices are taken from.
-- [Ranges](../values-and-types/ranges.md) - the four forms of `from..to`, and what an open end means elsewhere.
+- [Ranges](../values-and-types/ranges.md) - the three range types, and what an open end means elsewhere.
 - [Mutation and var paths](../types/var-paths.md) - the rule that makes a slice a window instead of a copy.

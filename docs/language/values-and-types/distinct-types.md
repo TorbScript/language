@@ -104,10 +104,10 @@ type ParseError with Show {
   }
 }
 
-type Email with Show by value {
+type Email with Show by value, TryFrom<String, ParseError> {
   private value: String
 
-  fn parse(text: String): Result<Email, ParseError> {
+  fn tryFrom(text: String): Result<Email, ParseError> {
     if text.contains("@") {
       Ok Email(text)
     } else {
@@ -116,7 +116,7 @@ type Email with Show by value {
   }
 }
 
-match Email.parse("ada@example.test") {
+match Email.tryFrom("ada@example.test") {
   Ok(email) => print email
   Fail(problem) => print problem
 }

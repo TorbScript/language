@@ -31,7 +31,7 @@ fn a_call_in_command_position_loses_its_parentheses() {
     assert_eq!(canon("var role = Role(name)"), "var role = Role name");
     assert_eq!(canon("public const role = Role(name)"), "public const role = Role name");
     assert_eq!(canon("fn f() {\n  role = Role(name)\n}"), "fn f() {\n  role = Role name\n}");
-    assert_eq!(canon("const email = Email.parse(text)"), "const email = Email.parse text");
+    assert_eq!(canon("const email = Email.tryFrom(text)"), "const email = Email.tryFrom text");
     assert_eq!(canon("names.map(Role)"), "names.map Role");
     assert_eq!(canon("builder.add(CStatement.Break)"), "builder.add CStatement.Break");
     assert_eq!(canon("self.builder.add(item)"), "self.builder.add item");

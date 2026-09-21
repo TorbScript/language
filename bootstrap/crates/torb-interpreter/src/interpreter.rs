@@ -1923,6 +1923,12 @@ impl Interpreter {
     }
 
     fn call_closure(&mut self, closure: &Closure, arguments: Vec<Value>) -> Eval<(Value, Rc<Environment>)> {
+        self.call_closure_with(closure, arguments, false)
+    }
+
+    /// `first_is_var` binds the first parameter as a `var`: a native that takes a `(var Value) => Void` knows that from
+    /// the declaration in `std/`, where a closure the interpreter is handed carries no signature of its own.
+    fn call_closure_with(&mut self, closure: &Closure, arguments: Vec<Value>, first_is_var: bool) -> Eval<(Value, Rc<Environment>)> {
         profile::count("call.closure");
         let scope = self.scope(&closure.environment);
         let parameters = &closure.ast.parameters;
@@ -1937,17 +1943,19 @@ impl Interpreter {
                             name.text
                         )));
                     }
-                    scope.declare(&name.text, value.clone(), signature.is_some_and(|parameter| parameter.is_var));
+                    let is_var = (first_is_var && position == 0) || signature.is_some_and(|parameter| parameter.is_var);
+                    scope.declare(&name.text, value.clone(), is_var);
                 }
                 let implicit = if position == 0 { "_" } else { crate::program::intern(&format!("_{}", position + 1)) };
-                scope.declare(implicit, value, false);
+                scope.declare(implicit, value, first_is_var && position == 0);
             }
         } else {
             if parameters.len() != arguments.len() {
                 return Err(failure(format!("This closure takes {} parameters, it was called with {}", parameters.len(), arguments.len())));
             }
             for (position, (parameter, value)) in parameters.iter().zip(arguments).enumerate() {
-                let is_var = closure.signature.and_then(|signature| signature.get(position)).is_some_and(|parameter| parameter.is_var);
+                let is_var = (first_is_var && position == 0)
+                    || closure.signature.and_then(|signature| signature.get(position)).is_some_and(|parameter| parameter.is_var);
                 let value = adapt(value, parameter.annotation.as_ref());
                 if !self.bind_pattern(&parameter.pattern, &value, &scope, is_var)? {
                     return Err(failure(format!("The parameter pattern does not match {}", self.describe(&value))));
@@ -1956,6 +1964,34 @@ impl Interpreter {
         }
         let result = self.run_closure_body(closure, &scope)?;
         Ok((result, scope))
+    }
+
+    /// Calls a closure of one `var` parameter and answers what that parameter holds afterwards: `Map.update` passes
+    /// the stored value in, and what the body left there is what goes back into the map.
+    pub fn call_changing(&mut self, function: &Value, value: Value) -> Eval {
+        let Value::Function(inner) = function else {
+            return Err(failure(format!("`change` must be a closure, this is {}", self.describe(function))));
+        };
+        let inner = Rc::clone(inner);
+        let Function::Closure(closure) = &*inner else {
+            return Err(failure("`change` must be a closure that takes the value as a `var` parameter"));
+        };
+        let name = match closure.ast.parameters.first() {
+            Some(parameter) => self.closure_parameter_name(&parameter.pattern),
+            None => Some("_"),
+        };
+        let (_, scope) = self.call_closure_with(closure, vec![value], true)?;
+        let changed = name.and_then(|name| scope.lookup(name)).unwrap_or(Value::Void);
+        self.release(scope);
+        Ok(changed)
+    }
+
+    /// The one name a closure parameter binds, where its pattern is a plain name.
+    fn closure_parameter_name(&self, pattern: &'static Pattern) -> Option<&'static str> {
+        match &pattern.kind {
+            PatternKind::Name(name) => Some(name),
+            _ => None,
+        }
     }
 
     /// Calls a function value with evaluated arguments. This is what native functions use for their callbacks.

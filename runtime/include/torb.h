@@ -489,6 +489,8 @@ bool torb_text_starts_with(torb_text text, torb_text prefix);
 bool torb_text_ends_with(torb_text text, torb_text suffix);
 /** `indexOf`: false when the part is not there. The lowering builds the `Int?` around it. */
 bool torb_text_index_of(torb_text text, torb_text part, int64_t *out);
+/** `lastIndexOf`: the same for the last occurrence. An empty part is at the end of the text. */
+bool torb_text_last_index_of(torb_text text, torb_text part, int64_t *out);
 
 /** All borrowed, all results owned. */
 torb_text torb_text_trim(torb_text text);

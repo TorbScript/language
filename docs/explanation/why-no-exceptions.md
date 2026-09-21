@@ -33,7 +33,7 @@ and `Fail(error)`, and there is no `throw`, `try` or `catch`.
 
 ```trb check
 fn parsePort(text: String): Result<Int, String> {
-  const value = Int.parse(text).mapError { _ => "not a number" }?
+  const value = Int.tryFrom(text).mapError { _ => "not a number" }?
   if value < 1 || value > 65535 {
     return Fail "out of range"
   }
@@ -93,7 +93,7 @@ a discarded value.
 
 ```trb check
 fn readCount(text: String): Result<Int, String> {
-  Int.parse(text).mapError { _ => "not a number" }
+  Int.tryFrom(text).mapError { _ => "not a number" }
 }
 
 fn total(values: List<String>): Result<Int, String> {

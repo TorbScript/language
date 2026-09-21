@@ -49,7 +49,7 @@ What each instantiation *can do* is decided by three bounds, and the bounds are 
 
 | Bound | Declared in | What it adds | Who carries it |
 |-------|-------------|--------------|----------------|
-| `Numeric` | `std/number` | `+ - * / %`, `==`, `<`, `Show`, `Parse` | every integer type, `Float32`, `Float64`, `Decimal`, `Fixed` |
+| `Numeric` | `std/number` | `+ - * / %`, `==`, `<`, `Show`, `TryFrom<String, _>` | every integer type, `Float32`, `Float64`, `Decimal`, `Fixed` |
 | `Signed` | `std/number` | unary `-`, `absolute` | the signed integers, the floats, `Fixed` |
 | `Real` | `std/number` (new) | `squareRoot`, the eight trigonometric functions, `floor`/`ceiling`/`round`, `halved`, `unit`, the two degree conversions | `Float64`, `Fixed` |
 
@@ -348,7 +348,7 @@ zero add up to the angle. `arcSine` goes through it with `squareRoot(1 - x²)` a
 a quarter turn minus that.
 
 **`show` writes the exact decimal.** A `Fixed` is a multiple of `1/65536`, so its expansion always ends, after at most
-sixteen digits — and `Fixed.parse("0.1")` shows as `0.100006103515625`, because that is the number. `parse` reads at most
+sixteen digits — and `Fixed.tryFrom("0.1")` shows as `0.100006103515625`, because that is the number. `parse` reads at most
 nine digits after the point and rounds to the nearest part.
 
 **What this buys.** `Vector2<Fixed>`, `Rectangle<Fixed>`, `Circle<Fixed>`, `Ray3<Fixed>`, `Matrix4<Fixed>` and

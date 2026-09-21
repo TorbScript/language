@@ -65,16 +65,16 @@ extend Price with Encode, Decode, Describe {
 /**
  * An address that has been checked. The field is `private` and has no default, so the constructor is not usable from
  * outside and **none of the three forms is derived**: an `Email` that came out of a decoder would otherwise skip the
- * check that `parse` exists to force.
+ * check that `tryFrom` exists to force.
  */
-public type Email {
+public type Email with TryFrom<String, String> {
   private value: String
 
-  fn parse(text: String): Result<Email, String> {
-    if !text.contains("@") {
-      return Fail "'{text}' is not an email address"
+  fn tryFrom(value: String): Result<Email, String> {
+    if !value.contains("@") {
+      return Fail "'{value}' is not an email address"
     }
-    Ok Self(text)
+    Ok Self(value)
   }
 
   fn text(self): String {
@@ -103,7 +103,7 @@ extend Email with Encode, Decode, Describe {
     source.record("lab/Email")?
     const text = source.string()?
     source.finish()?
-    Email.parse(text).mapError { message => DecodeError message }
+    Email.tryFrom(text).mapError { message => DecodeError message }
   }
 
   fn describe<Target: Describer>(var target: Target) {

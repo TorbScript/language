@@ -6,12 +6,12 @@ use Environment from "std/environment"
  * one that takes an element by address (BACKEND 5.R1). Both are a wrapper the lowering generates, and both have to leave
  * `live blocks at exit: 0`.
  *
- * `Int.parse` is the one the back end was blocked on by exactly that convention: the runtime answers
+ * `Int.tryFrom` from text is the one the back end was blocked on by exactly that convention: the runtime answers
  * `bool torb_parse_i64(torb_text, int64_t *)` and the `Result<Int64, NumberParseError>` around it is the wrapper's.
  */
 
 fn parsed(text: String): Int {
-  match Int.parse(text) {
+  match Int.tryFrom(text) {
     Ok(value) => value
     .Fail(_) => -1
   }
@@ -19,7 +19,7 @@ fn parsed(text: String): Int {
 
 /** The failure carries the text it was given, which is what the wrapper builds it from. */
 fn refusedText(text: String): Int {
-  match Int.parse(text) {
+  match Int.tryFrom(text) {
     Ok(_) => 0
     .Fail(problem) => problem.text.byteLength()
   }
@@ -35,6 +35,14 @@ fn digits(text: String): Int {
 /** `indexOf` answers an `Int?` through the same convention. */
 fn indexIn(text: String, part: String): Int {
   match text.indexOf(part) {
+    Some(found) => found
+    None => -1
+  }
+}
+
+/** `lastIndexOf` is the same search from the back, through the same convention. */
+fn lastIndexIn(text: String, part: String): Int {
+  match text.lastIndexOf(part) {
     Some(found) => found
     None => -1
   }
@@ -56,6 +64,8 @@ total = total + refusedText("abcd")
 total = total + digits("ff")
 total = total + indexIn("hello", "ll")
 total = total + indexIn("hello", "zz")
+total = total + lastIndexIn("a/b/c", "/")
+total = total + lastIndexIn("a/b/c", "z")
 total = total + variable("TORB_A_VARIABLE_NOTHING_SETS")
 
 Process.exit(total % 200)

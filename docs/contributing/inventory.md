@@ -103,7 +103,7 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | `language/values-and-types/decimal.md` | Decimal | reference | Exact base-ten arithmetic, and that it is planned | `CONCEPT.md#built-in-types` |
 | `language/values-and-types/strings.md` | Strings | reference | Why a `String` has no `length()` and no `text[i]` | `CONCEPT.md#strings` |
 | `language/values-and-types/tuples.md` | Tuples | reference | Positional and labelled tuples, and what a label is not | `CONCEPT.md#built-in-types` |
-| `language/values-and-types/ranges.md` | Ranges | reference | The four forms, and what an open end panics on | `CONCEPT.md#built-in-types` |
+| `language/values-and-types/ranges.md` | Ranges | reference | The three range types, and the `Bounds` trait | `CONCEPT.md#built-in-types` |
 | `language/values-and-types/option.md` | Option | reference | How absence is modelled without `null` | `std/core/src/option.trb` |
 | `language/values-and-types/void-and-never.md` | Void and Never | reference | The one value `void`, and the type with none | `CONCEPT.md#built-in-types` |
 | `language/values-and-types/literal-types.md` | Literal types | reference | `"tcp" \| "udp"` and why only literals combine with `\|` | `CONCEPT.md#literal-types` |
@@ -138,7 +138,7 @@ The learning path, in order, mirroring `examples/tour/src/*.trb`. Every page has
 | `language/types/var-paths.md` | Mutation and var paths | reference | What has to be `var` from the binding down | `CONCEPT.md#var-paths-and-var-parameters` |
 | `language/types/exclusivity.md` | Exclusivity | reference | Which two accesses may not overlap | `CONCEPT.md#var-paths-and-var-parameters` |
 | `language/types/shared-types.md` | Shared types | reference | When a value has an identity instead | `CONCEPT.md#identity-shared-type` |
-| `language/types/conversions.md` | Conversions | reference | `From`, `Into`, `TryFrom`, `Parse`, and the four coercions | `CONCEPT.md#conversions` |
+| `language/types/conversions.md` | Conversions | reference | `From`, `Into`, `TryFrom`, `TryInto`, and the four coercions | `CONCEPT.md#conversions` |
 | `language/types/property-commands.md` | Property commands | reference | Why `port 8080` writes a field | `CONCEPT.md#members-a-method-is-a-constant-that-holds-a-closure` |
 
 ### Package 5: traits and generics
@@ -261,7 +261,7 @@ markers so that milestone 8's `torb doc` can fill it.
 | `how-to/read-a-file.md` | Read a file | done | done |
 | `how-to/write-a-configuration-file.md` | Write a configuration file | done | done |
 | `how-to/define-an-error-type.md` | Define an error type | One type with cases that every layer can hand up | `CONCEPT.md#error-handling` |
-| `how-to/parse-text-into-a-type.md` | Parse text into a type | A private field plus a `parse` factory | `CONCEPT.md#construction` |
+| `how-to/parse-text-into-a-type.md` | Parse text into a type | A private field plus `TryFrom<String, _>` | `CONCEPT.md#construction` |
 | `how-to/write-a-test.md` | Write a test | `test`, `group`, `assert` and where the file goes | `std/test` |
 | `how-to/build-a-native-binary.md` | Build a native binary | `torb build`, the C back end, the output path | `compiler/src/cli/build.trb` |
 | `how-to/add-a-dependency.md` | Add a dependency | `project.trb`, the lock file, the capabilities | `CONCEPT.md#packages-and-the-supply-chain` |

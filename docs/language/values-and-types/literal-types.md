@@ -7,7 +7,7 @@ order: 19
 keywords:
   - literal type
   - union
-  - Parse
+  - TryFrom
 source:
   - CONCEPT.md#literal-types
   - examples/tour/src/12-type-system.trb
@@ -26,7 +26,7 @@ var status: Status = "online"
 status = "away"
 
 const text = "online"
-status = Status.parse(text) ?? "offline"
+status = Status.tryFrom(text) ?? "offline"
 
 const label = match status {
   "online" => "here"

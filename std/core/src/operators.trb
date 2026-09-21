@@ -73,7 +73,14 @@ public trait Indexed<Key, Value> {
   /** The value at the key, or `None` if there is none. This is what `get` on a `Map` or a `List` calls. */
   fn get(self, key: Key): Value?
 
-  /** `a[key]` panics if the key does not exist. Use `get` if absence is expected. */
+  /**
+   * The value at the key. This is `a[key]`.
+   *
+   * # Panics
+   *
+   * When the key is not there. That is what `a[key]` promises - [Indexed.get] is the same question with an `Option`
+   * for an answer, for a caller who expects the key to be missing.
+   */
   fn at(self, key: Key): Value {
     get(key).expect("Key does not exist")
   }
@@ -88,10 +95,15 @@ public trait MutableIndexed<Key, Value> with Indexed<Key, Value> {
   fn set(var self, key: Key, value: Value)
 }
 
-/** `a[from..to]`. The slice shares the storage and starts at index 0 again. */
+/**
+ * `a[from..to]`. The slice shares the storage and starts at index 0 again.
+ *
+ * It takes [Bounds] and not one range type, because all five spellings have a meaning here: an end the range leaves
+ * open is the start or the end of the value, which is the receiver's decision and not the range's.
+ */
 public trait Slice {
   /** The part of the value the range covers. This is `a[from..to]`. */
-  fn slice(self, range: Range<Int>): Self
+  fn slice(self, range: Bounds<Int>): Self
 }
 
 /**
@@ -105,7 +117,7 @@ public trait Slice {
  */
 public trait MutableSlice with Slice {
   /** Overwrites the part of the value the range covers with `values`. This is `a[from..to] = values`. */
-  fn replace(var self, range: Range<Int>, values: Self)
+  fn replace(var self, range: Bounds<Int>, values: Self)
 
   /**
    * Gives the value a storage of its own that is exactly as big as needed. For the small slice of something

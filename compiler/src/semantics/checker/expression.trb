@@ -19,6 +19,7 @@ use Target, deferredTarget, resolveName, symbolTarget, targetOfCandidate from ".
 use formOf, reportUnknownMember, isFullyKnown from "./name"
 use lookupMember, lookupStaticMember, recordDelegation, traitDispatchOf, requireObjectSafe from "./member"
 use traitArgumentsOf, witnessFor, isConcrete, implementsBound, iterableSourceOf from "./implementation"
+use fallibleFailuresOf from "./implementation"
 use typeFromReference, integerLiteral from "./lowering"
 use sameType, unify, resolveType, resolveTypes, hasVariable, openVariableOf, suppressVariables from "./unify"
 use checkCall, instantiateTarget, checkBounds, withInstantiation from "./call"
@@ -128,7 +129,7 @@ fn evaluateExpression(var checker: Checker, expression: Expression, expected: Ex
       valueOfTarget checker, target, expression.span
     }
     .Closure(closure) => checkClosure checker, closure, expression.span, annotation
-    .Try(inner) => tryType checker, inner, expression.span
+    .Try(inner) => tryType checker, inner, expression.span, expected
     .Invalid => checker.invalidType
   }
 }
@@ -229,7 +230,7 @@ fn memberTarget(
       }
     }
   }
-  // `Point.origin`, `Shape.Circle`, `Email.parse`: a constant, a static function or a case of the type
+  // `Point.origin`, `Shape.Circle`, `Email.tryFrom`: a constant, a static function or a case of the type
   if const Some(own) = owner.constructs {
     match lookupStaticMember(checker, own, text, Some(at)) {
       Some(candidate) => {
@@ -237,7 +238,7 @@ fn memberTarget(
         return found.copy arguments: explicit
       }
       None => {
-        const _ = reportUnknownMember checker, own, text, at
+        const _ = reportUnknownMember checker, own, text, at, isTypeName: true
         return Target Resolution.Deferred, checker.deferredType, name: text
       }
     }
@@ -430,6 +431,9 @@ fn indexType(var checker: Checker, target: Expression, index: Expression, at: Sp
       }
     }
     if traitArgumentsOf(checker, receiver, slice).isSome() {
+      // `Slice.slice` takes `Bounds<Int>` and not one of the three range types, so the value in the brackets becomes
+      // a trait value here - which is what records the witness the back ends call `lowest`/`highest` through
+      coerceToBounds checker, key, index.span
       recordTraitCall checker, at, receiver, slice, "slice"
       return receiver
     }
@@ -546,9 +550,29 @@ fn reportMissingOperator(var checker: Checker, receiver: TypeId, capability: Str
   )
 }
 
-fn isRange(checker: Checker, annotation: TypeId): Bool {
+/**
+ * `items[1..3]`, `text[2..]`: the range becomes a `Bounds<Int>` where it is written, because that is what
+ * `Slice.slice` declares. A range of something other than `Int` is reported here, at the brackets.
+ */
+fn coerceToBounds(var checker: Checker, key: TypeId, at: Span) {
+  const bounds = match checker.wellKnown.bounds {
+    Some(found) => found
+    None => {
+      return
+    }
+  }
+  const applied = checker.nominal bounds, [checker.integerType()]
+  const wanted = checker.types.intern TypeForm.Traits([applied])
+  const _ = checkValue checker, key, wanted, at
+}
+
+/** Whether the value in the brackets is one of the three ranges, which is what makes `a[...]` a slice. */
+public fn isRange(checker: Checker, annotation: TypeId): Bool {
   if const .Nominal(symbol, _) = checker.types.form(annotation) {
-    return checker.wellKnown.range == Some(symbol)
+    const found = Some symbol
+    return checker.wellKnown.range == found
+      || checker.wellKnown.rangeFrom == found
+      || checker.wellKnown.rangeTo == found
   }
   false
 }
@@ -1331,6 +1355,11 @@ fn reportOpenSpread(var checker: Checker, given: TypeId, at: Span) {
   )
 }
 
+/**
+ * `0..10`, `0..`, `..10`: **the ends decide the type**, so a range that has no start has no `start` to read and a
+ * range that has no end is not a `Length`. The three types have no field in common and nothing is optional in any of
+ * them; what accepts all three takes the `Bounds` trait.
+ */
 fn rangeLiteralType(var checker: Checker, start: Expression?, end: Expression?): TypeId {
   var value = checker.deferredType
   if const Some(from) = start {
@@ -1343,8 +1372,13 @@ fn rangeLiteralType(var checker: Checker, start: Expression?, end: Expression?):
       value = other
     }
   }
-  match checker.wellKnown.range {
-    Some(range) => checker.nominal range, [value]
+  const symbol = match (start.isSome(), end.isSome()) {
+    (true, true) => checker.wellKnown.range
+    (true, false) => checker.wellKnown.rangeFrom
+    _ => checker.wellKnown.rangeTo
+  }
+  match symbol {
+    Some(found) => checker.nominal found, [value]
     None => checker.deferredType
   }
 }
@@ -1781,8 +1815,8 @@ fn armResult(var checker: Checker, arms: List<TypeId>): TypeId {
  * differ, the error is converted through `From` - which is what makes the generated `From<IoError>` of a wrapper case
  * work without anybody writing it (section 4.6).
  */
-fn tryType(var checker: Checker, inner: Expression, at: Span): TypeId {
-  const subject = inferExpression checker, inner
+fn tryType(var checker: Checker, inner: Expression, at: Span, expected: Expectation): TypeId {
+  const subject = checkExpression checker, inner, unwrappedExpectation(expected)
   const found = matchedFailure checker, subject
   if checker.absorbs(found) {
     return checker.deferredType
@@ -1831,6 +1865,20 @@ fn tryType(var checker: Checker, inner: Expression, at: Span): TypeId {
   }
   requireTryResult checker, result, at
   value
+}
+
+/**
+ * What the operand of a `?` is told: the type the `?` itself is expected to have, as [Expectation.Unwrapped].
+ *
+ * It is not handed down as an expected type, because the operand is an `Option` or a `Result` *of* it and which of
+ * the two only the operand says - so a type here would report a mismatch at every `?`. What it is for is the one call
+ * whose meaning the expectation decides, `tryInto()`.
+ */
+fn unwrappedExpectation(expected: Expectation): Expectation {
+  match expected.annotationOf() {
+    Some(annotation) => Expectation.Unwrapped annotation
+    None => Expectation.None
+  }
 }
 
 /**
@@ -1937,8 +1985,9 @@ fn convertError(var checker: Checker, error: TypeId, wanted: TypeId, at: Span) {
  * `extend<Source, Target, Failure> Source with TryInto<Target, Failure>` of the prelude says.
  *
  * Unlike `into()`, nothing here can be read from a target alone: the receiver says the `Source`, and the `Result` that
- * is expected says both the `Target` and the `Failure`. Where the expected type is not a `Result` of two known types,
- * the message says so and names the call to write instead.
+ * is expected says both the `Target` and the `Failure`. Under a `?` there is no such `Result` - `const port: Int =
+ * text.tryInto()?` writes only the target - and then the failure is the one the target's single `TryFrom` from this
+ * source answers with. Where neither says enough, the message says so and names the call to write instead.
  */
 fn isFallibleConversionCall(checker: Checker, callee: Expression, arguments: List<Argument>): Bool {
   if !arguments.isEmpty() {
@@ -1968,20 +2017,19 @@ fn fallibleConversionType(
   if hasMemberNamed(checker, source, "tryInto") {
     return checkCall checker, expression, callee, arguments, style, expected
   }
-  const wanted = expected.annotationOf()
-  const answer = wanted ?? checker.deferredType
-  // `value.tryInto` is `(self: Source) => Result<Target, Failure>`: a fact about this call, so the callee is typed
-  const form = FunctionForm([ParameterForm(Some("self"), ParameterMode.Value, source)], answer)
-  const shown = checker.functionType form
-  const _ = checker.typed callee.span, shown
-  const parts = resultArgumentsOf checker, wanted
+  const parts = conversionPartsOf checker, source, expected, expression.span
   const (target, failure) = match parts {
     Some(found) => found
     None => {
-      reportOpenConversionTarget checker, source, expression.span
+      // The message was given where the parts were looked for; the callee still gets a type, so that nothing after
+      // this asks about a span that was never written down
+      typeFallibleCallee checker, callee, source, checker.invalidType
       return checker.invalidType
     }
   }
+  const answer = expected.annotationOf() ?? resultTypeOf(checker, target, failure)
+  // `value.tryInto` is `(self: Source) => Result<Target, Failure>`: a fact about this call, so the callee is typed
+  typeFallibleCallee checker, callee, source, answer
   if checker.absorbs(source) {
     return answer
   }
@@ -2025,6 +2073,71 @@ fn hasMemberNamed(var checker: Checker, receiver: TypeId, name: String): Bool {
   lookupMember(checker, receiver, name).isSome()
 }
 
+/**
+ * The `Target` and the `Failure` of a `tryInto()`: the two arguments of the `Result` that is expected of the call, or
+ * - under a `?`, which leaves only the target - the target and the failure of the one `TryFrom` that target has for
+ * this source. Answers `None` where neither says enough, and says why where it does.
+ */
+fn conversionPartsOf(var checker: Checker, source: TypeId, expected: Expectation, at: Span): (TypeId, TypeId)? {
+  if const Some(found) = resultArgumentsOf(checker, expected.annotationOf()) {
+    return Some found
+  }
+  if const Some(wanted) = expected.unwrappedOf() {
+    const target = resolveType checker, wanted
+    if isConcrete(checker, target) {
+      return soleConversionFailure checker, source, target, at
+    }
+  }
+  reportOpenConversionTarget checker, source, at
+  None
+}
+
+/**
+ * `const port: Int = text.tryInto()?`: the `?` says the target and nothing about the failure, so the failure is the
+ * one the target's single `TryFrom` from this source answers with. None and several are both reported here, because
+ * both leave the call without a meaning.
+ */
+fn soleConversionFailure(var checker: Checker, source: TypeId, target: TypeId, at: Span): (TypeId, TypeId)? {
+  const failures = fallibleFailuresOf checker, target, source
+  if failures.length() == 1 {
+    return Some((target, failures[0]))
+  }
+  const given = checker.describe source
+  const wanted = checker.describe target
+  if failures.isEmpty() {
+    checker.reportHere(
+      Diagnostic.error("`{given}` does not convert into `{wanted}`", at)
+        .withNote(
+          "`tryInto()` is the `TryFrom` of the target: `extend {wanted} with TryFrom<{given}, Failure>` provides it"
+        )
+    )
+    return None
+  }
+  var shown: List<String> = []
+  for failure in failures {
+    shown.add "`{checker.describe(failure)}`"
+  }
+  const listed = shown.joined separator: ", "
+  checker.reportHere(
+    Diagnostic.error("`{given}` converts into `{wanted}` in more than one way", at)
+      .withNote(
+        "A `?` says the target and not the failure, and there are several: {listed}."
+          + " Annotate the `Result<{wanted}, Failure>` that is meant"
+      )
+  )
+  None
+}
+
+/**
+ * `value.tryInto` is `(self: Source) => Result<Target, Failure>`: a fact about this call and not about the member, so
+ * the callee's span carries it.
+ */
+fn typeFallibleCallee(var checker: Checker, callee: Expression, source: TypeId, answer: TypeId) {
+  const form = FunctionForm([ParameterForm(Some("self"), ParameterMode.Value, source)], answer)
+  const shown = checker.functionType form
+  const _ = checker.typed callee.span, shown
+}
+
 /** The `Value` and the `Failure` of an expected `Result<Value, Failure>`, where both of them are known. */
 fn resultArgumentsOf(var checker: Checker, expected: TypeId?): (TypeId, TypeId)? {
   const result = checker.wellKnown.result?
@@ -2040,17 +2153,29 @@ fn resultArgumentsOf(var checker: Checker, expected: TypeId?): (TypeId, TypeId)?
   None
 }
 
+/** `Result<Target, Failure>` as a type, for a `tryInto()` whose parts the `?` above it did not write out. */
+fn resultTypeOf(var checker: Checker, value: TypeId, failure: TypeId): TypeId {
+  const result = match checker.wellKnown.result {
+    Some(symbol) => symbol
+    None => {
+      return checker.invalidType
+    }
+  }
+  checker.nominal result, [value, failure]
+}
+
 /**
- * `wide.tryInto()` where nothing says what to convert into. `tryInto()` reads its target *and* its failure out of the
- * `Result` that is expected of it, so a call whose result goes nowhere annotated has nothing to go on.
+ * `wide.tryInto()` where nothing says what to convert into. `tryInto()` reads its target out of the `Result` that is
+ * expected of it or out of the type a `?` on it unwraps to, so a call whose result goes nowhere annotated has nothing
+ * to go on.
  */
 fn reportOpenConversionTarget(var checker: Checker, source: TypeId, at: Span) {
   const given = checker.describe source
   checker.reportHere(
     Diagnostic.error("The target of `tryInto()` is not known here", at)
       .withNote(
-        "It comes from the `Result<Target, Failure>` that is expected of the call, and a `?` on the call passes none"
-          + " down: annotate that `Result`, or write `Target.tryFrom(value)` - the source is `{given}`"
+        "It comes from the `Result<Target, Failure>` that is expected of the call, or from the type a `?` on it"
+          + " unwraps to: annotate one of the two, or write `Target.tryFrom(value)` - the source is `{given}`"
       )
   )
 }

@@ -68,8 +68,11 @@ public fn nativeFunctionOf(
       return None
     }
   }
+  const identifier = signatureOf lowering.checker, member
+  const signature = lowering.checker.signature identifier
+  const declared = irSignatureUnder lowering, signature, mapping
   const path = symbolPathOf lowering.checker, member
-  const name = nativeWrapperName lowering.program, path, arguments
+  const name = nativeWrapperName lowering.program, path, wrapperKeyOf(entry, arguments, declared)
   if const Some(found) = lowering.nativeWrappers.get(name) {
     return Some found
   }
@@ -80,10 +83,26 @@ public fn nativeFunctionOf(
       return None
     }
   }
-  const identifier = signatureOf lowering.checker, member
-  const signature = lowering.checker.signature identifier
-  const declared = irSignatureUnder lowering, signature, mapping
   buildWrapper lowering, name, member, declared, raw, entry, crossing, at
+}
+
+/**
+ * What tells one wrapper of a member from another: its instance arguments, plus the type it converts **from** where
+ * the manifest holds the member once per source.
+ *
+ * `Int64.tryFrom` reads text and narrows a `Float64`, and both are declared as `tryFrom` on `Int64` in one module - so
+ * the path and the instance arguments are the same for the two, and without the source the second call would reach the
+ * first wrapper. The manifest says which members these are by writing the source into the row's name
+ * (docs/BACKEND.md, "One conversion, one implementation").
+ */
+fn wrapperKeyOf(entry: NativeEntry, arguments: List<IrTypeId>, declared: IrSignature): List<IrTypeId> {
+  if !entry.name.contains("(") {
+    return arguments
+  }
+  match declared.parameters.first() {
+    Some(parameter) => arguments.added parameter.annotation
+    None => arguments
+  }
 }
 
 /**
@@ -216,7 +235,7 @@ type OutParameter {
  *    `File.writeText` answers `Result<Void, IoError>` and its symbol takes no out for it.
  * 2. One per field of the **failure** type that no parameter of the declaration names. That is exactly the `message`
  *    of every `IoError` of `std/fs`: its `path` *is* the parameter `path`, and the reason is something only the
- *    operating system knows. `Int.parse` needs none of them - `NumberParseError(text)` is the parameter `text`.
+ *    operating system knows. `Int.tryFrom(text)` needs none of them - `NumberParseError(text)` is the parameter `text`.
  *
  * An `Option` has no failure fields at all (`None` carries nothing), so for one this is the payload alone, which is
  * what the first round of 5.7 built.
@@ -506,7 +525,7 @@ fn isVoidResult(var lowering: Lowering, annotation: IrTypeId): Bool {
 /**
  * The failing case. `None` carries nothing; the `Fail` of a `Result` carries the error the declaration names, and the
  * runtime gives nothing for it - so the wrapper builds it from the error type's own **fields, each taken from the
- * parameter of the same name**: `Int.parse(text)` fails with `NumberParseError(text)`. An error type with a field no
+ * parameter of the same name**: `Int.tryFrom(text)` fails with `NumberParseError(text)`. An error type with a field no
  * parameter names is a clean finding and no guess.
  */
 /**
